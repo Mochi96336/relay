@@ -24,7 +24,13 @@
         <button id="stop" disabled>Stop</button>
       </div>
 
-      <p class="note">手機麥克風需要 HTTPS；開發時可把本機 HTTP 服務透過 HTTPS tunnel 暴露出去。</p>
+      <label class="gain-control" for="monitor-gain">
+        <span>Monitor gain</span>
+        <input id="monitor-gain" type="range" min="0" max="30" step="1" value="12" />
+        <output id="monitor-gain-value" for="monitor-gain">+12 dB</output>
+      </label>
+
+      <p class="note">手機麥克風需要 HTTPS；開發時可把本機 HTTP 服務透過 HTTPS tunnel 暴露出去。Monitor gain 只影響電腦監聽，不會改寫原始麥克風資料。</p>
     </main>
     <script type="module" src="/app.js"></script>
   </body>

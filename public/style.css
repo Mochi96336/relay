@@ -20,5 +20,8 @@ button:hover:not(:disabled) { background: #27292d; }
 button.primary { background: #f4f4f5; color: #111214; border-color: #f4f4f5; }
 button.primary:hover:not(:disabled) { background: #dedee1; }
 button:disabled { opacity: .35; cursor: default; }
+.gain-control { margin-top: 14px; padding: 14px 16px; border: 1px solid #34363a; border-radius: 12px; display: grid; grid-template-columns: auto 1fr 58px; align-items: center; gap: 12px; font-size: 14px; }
+.gain-control input { width: 100%; }
+.gain-control output { text-align: right; font-variant-numeric: tabular-nums; opacity: .72; }
 .note { margin: 16px 2px 0; font-size: 13px; line-height: 1.55; opacity: .5; }
-@media (max-width: 540px) { .actions { grid-template-columns: 1fr 1fr; } #stop { grid-column: 1 / -1; } }
+@media (max-width: 540px) { .actions { grid-template-columns: 1fr 1fr; } #stop { grid-column: 1 / -1; } .gain-control { grid-template-columns: 1fr auto; } .gain-control input { grid-column: 1 / -1; grid-row: 2; } }

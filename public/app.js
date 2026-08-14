@@ -3,16 +3,31 @@ const monitorButton = document.querySelector('#start-monitor');
 const stopButton = document.querySelector('#stop');
 const status = document.querySelector('#status');
 const details = document.querySelector('#details');
+const monitorGain = document.querySelector('#monitor-gain');
+const monitorGainValue = document.querySelector('#monitor-gain-value');
 
 let socket = null;
 let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
+let monitorGainNode = null;
 let sourceSampleRate = null;
 
 function setStatus(title, body = '') {
   status.textContent = title;
   details.textContent = body;
+}
+
+function dbToGain(db) {
+  return 10 ** (db / 20);
+}
+
+function updateMonitorGain() {
+  const db = Number(monitorGain.value);
+  monitorGainValue.value = `${db >= 0 ? '+' : ''}${db} dB`;
+  if (monitorGainNode && audioContext) {
+    monitorGainNode.gain.setTargetAtTime(dbToGain(db), audioContext.currentTime, 0.01);
+  }
 }
 
 function wsUrl() {
@@ -74,6 +89,7 @@ async function stop(setIdle = true) {
     } catch {}
     activeNode = null;
   }
+  monitorGainNode = null;
   if (audioContext) {
     await audioContext.close();
     audioContext = null;
@@ -162,12 +178,14 @@ async function startMonitor() {
     numberOfOutputs: 1,
     outputChannelCount: [1],
   });
-  playback.connect(audioContext.destination);
+  monitorGainNode = audioContext.createGain();
+  monitorGainNode.gain.value = dbToGain(Number(monitorGain.value));
+  playback.connect(monitorGainNode).connect(audioContext.destination);
   activeNode = playback;
 
   playback.port.onmessage = (event) => {
     if (event.data?.type === 'buffering') setStatus('Monitor buffering…', 'Waiting for enough microphone audio.');
-    if (event.data?.type === 'playing') setStatus('Monitor playing', `Output: ${audioContext.sampleRate} Hz`);
+    if (event.data?.type === 'playing') setStatus('Monitor playing', `Output: ${audioContext.sampleRate} Hz · gain ${monitorGainValue.value}`);
   };
 
   socket = await connectSocket();
@@ -221,4 +239,6 @@ stopButton.addEventListener('click', () => {
   stop().catch(console.error);
 });
 
+monitorGain.addEventListener('input', updateMonitorGain);
+updateMonitorGain();
 setStatus('Idle', 'On the phone choose Microphone; on the computer choose Monitor.');

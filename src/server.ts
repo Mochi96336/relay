@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
+import { analyzeTimingCalibration } from './timing-calibration.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,6 +22,9 @@ const TEST_PREBUFFER_MS = 800;
 const LIVE_MIX_PREBUFFER_MS = 800;
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
+const TIMING_CALIBRATION_MS = 6_000;
+const TIMING_CALIBRATION_SAMPLES = Math.round((MIX_SAMPLE_RATE * TIMING_CALIBRATION_MS) / 1000);
+const MAX_VOCAL_FINE_TUNE_MS = 100;
 const YOUTUBE_BACKING_LOOKAHEAD_MS = 40;
 
 const app = express();
@@ -78,6 +82,8 @@ type TimelineStatus = {
   transportEstimateMs?: number;
 };
 
+type TimingCalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
+
 let publisher: RelaySocket | null = null;
 let publisherSampleRate: number | null = null;
 let backing: RelaySocket | null = null;
@@ -94,6 +100,16 @@ let liveSourceActive = false;
 let liveSourceStartedAt = 0;
 let liveSourceFrameIndex = 0;
 let liveMicNetworkCompMs = 0;
+let calibratedMicLagMs: number | null = null;
+let vocalFineTuneMs = 0;
+let timingCalibrationPhase: TimingCalibrationPhase = 'idle';
+let timingCalibrationError: string | null = null;
+let timingCalibrationConfidence: number | null = null;
+let timingCalibrationSegmentLagsMs: number[] = [];
+let timingCalibrationMicChunks: Int16Array[] = [];
+let timingCalibrationBackingChunks: Int16Array[] = [];
+let timingCalibrationMicSamples = 0;
+let timingCalibrationBackingSamples = 0;
 const micHistory: PcmHistory = { chunks: [], totalSamples: 0 };
 const backingHistory: PcmHistory = { chunks: [], totalSamples: 0 };
 
@@ -129,13 +145,44 @@ function publisherStatusPayload() {
 }
 
 function sourceStatusPayload() {
+  const timingBaseMs = calibratedMicLagMs ?? liveMicNetworkCompMs;
   return {
     type: 'source-status',
     connected: backing?.readyState === WebSocket.OPEN,
+    micConnected: publisher?.readyState === WebSocket.OPEN,
     sampleRate: backingSampleRate,
     active: liveSourceActive,
     prebufferMs: LIVE_MIX_PREBUFFER_MS,
     micNetworkCompensationMs: liveMicNetworkCompMs,
+    calibratedMicLagMs,
+    timingMode: calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+    vocalFineTuneMs,
+    appliedMicAdvanceMs: timingBaseMs - vocalFineTuneMs,
+  };
+}
+
+function timingCalibrationStatusPayload() {
+  const capturedSamples = Math.min(timingCalibrationMicSamples, timingCalibrationBackingSamples);
+  const progress = timingCalibrationPhase === 'collecting'
+    ? Math.max(0, Math.min(1, capturedSamples / TIMING_CALIBRATION_SAMPLES))
+    : timingCalibrationPhase === 'complete'
+      ? 1
+      : 0;
+  const timingBaseMs = calibratedMicLagMs ?? liveMicNetworkCompMs;
+
+  return {
+    type: 'timing-calibration-status',
+    state: timingCalibrationPhase,
+    progress,
+    durationMs: TIMING_CALIBRATION_MS,
+    micLagMs: calibratedMicLagMs,
+    confidence: timingCalibrationConfidence,
+    segmentLagsMs: timingCalibrationSegmentLagsMs,
+    error: timingCalibrationError,
+    timingMode: calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+    fallbackNetworkMs: liveMicNetworkCompMs,
+    vocalFineTuneMs,
+    appliedMicAdvanceMs: timingBaseMs - vocalFineTuneMs,
   };
 }
 
@@ -203,6 +250,90 @@ function clearMixHistories() {
   clearHistory(backingHistory);
 }
 
+function clearTimingCalibrationCapture() {
+  timingCalibrationMicChunks = [];
+  timingCalibrationBackingChunks = [];
+  timingCalibrationMicSamples = 0;
+  timingCalibrationBackingSamples = 0;
+}
+
+function flattenChunks(chunks: Int16Array[], totalSamples: number) {
+  const output = new Int16Array(totalSamples);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+function failTimingCalibration(message: string) {
+  timingCalibrationPhase = 'failed';
+  timingCalibrationError = message;
+  timingCalibrationConfidence = null;
+  timingCalibrationSegmentLagsMs = [];
+  clearTimingCalibrationCapture();
+  broadcastJson(timingCalibrationStatusPayload());
+}
+
+function finishTimingCalibration() {
+  timingCalibrationPhase = 'idle';
+  try {
+    const mic = flattenChunks(timingCalibrationMicChunks, TIMING_CALIBRATION_SAMPLES);
+    const backingCapture = flattenChunks(timingCalibrationBackingChunks, TIMING_CALIBRATION_SAMPLES);
+    const result = analyzeTimingCalibration(mic, backingCapture, MIX_SAMPLE_RATE);
+    calibratedMicLagMs = result.micLagMs;
+    timingCalibrationConfidence = result.confidence;
+    timingCalibrationSegmentLagsMs = result.segmentLagsMs;
+    timingCalibrationError = null;
+    timingCalibrationPhase = 'complete';
+  } catch (error) {
+    timingCalibrationPhase = 'failed';
+    timingCalibrationError = error instanceof Error ? error.message : String(error);
+    timingCalibrationConfidence = null;
+    timingCalibrationSegmentLagsMs = [];
+  } finally {
+    clearTimingCalibrationCapture();
+  }
+
+  broadcastJson(timingCalibrationStatusPayload());
+  broadcastJson(sourceStatusPayload());
+}
+
+function appendTimingCalibrationSamples(kind: 'mic' | 'backing', samples: Int16Array) {
+  if (timingCalibrationPhase !== 'collecting' || samples.length === 0) return;
+
+  const isMic = kind === 'mic';
+  const current = isMic ? timingCalibrationMicSamples : timingCalibrationBackingSamples;
+  const remaining = Math.max(0, TIMING_CALIBRATION_SAMPLES - current);
+  if (remaining === 0) return;
+
+  const kept = samples.length <= remaining ? samples : samples.slice(0, remaining);
+  if (isMic) {
+    timingCalibrationMicChunks.push(kept);
+    timingCalibrationMicSamples += kept.length;
+  } else {
+    timingCalibrationBackingChunks.push(kept);
+    timingCalibrationBackingSamples += kept.length;
+  }
+
+  if (
+    timingCalibrationMicSamples >= TIMING_CALIBRATION_SAMPLES &&
+    timingCalibrationBackingSamples >= TIMING_CALIBRATION_SAMPLES
+  ) {
+    finishTimingCalibration();
+  }
+}
+
+function startTimingCalibration() {
+  timingCalibrationPhase = 'collecting';
+  timingCalibrationError = null;
+  timingCalibrationConfidence = null;
+  timingCalibrationSegmentLagsMs = [];
+  clearTimingCalibrationCapture();
+  broadcastJson(timingCalibrationStatusPayload());
+}
+
 function resampleToMixRate(buffer: Buffer, sourceRate: number) {
   const inputLength = Math.floor(buffer.byteLength / 2);
   if (inputLength <= 0) return new Int16Array(0);
@@ -229,11 +360,12 @@ function resampleToMixRate(buffer: Buffer, sourceRate: number) {
 }
 
 function appendHistory(history: PcmHistory, buffer: Buffer, sourceRate: number | null) {
-  if (!sourceRate) return;
+  if (!sourceRate) return new Int16Array(0);
   const samples = resampleToMixRate(buffer, sourceRate);
-  if (samples.length === 0) return;
+  if (samples.length === 0) return samples;
   history.chunks.push({ start: history.totalSamples, samples });
   history.totalSamples += samples.length;
+  return samples;
 }
 
 function firstChunkAtOrBefore(history: PcmHistory, sampleIndex: number) {
@@ -365,12 +497,13 @@ function clickMixedFrame(frameIndex: number) {
 
 function liveMixedFrame(frameIndex: number) {
   const startSample = frameIndex * MIX_FRAME_SAMPLES;
-  // The phone mic packet reaches Relay after the singer heard that moment. The
-  // YouTube telemetry RTT/2 gives us a useful first-order network compensation;
-  // voiceOffsetMs remains the manual fine adjustment on top of it.
-  const effectiveOffsetMs = voiceOffsetMs - liveMicNetworkCompMs;
-  const offsetSamples = Math.round((effectiveOffsetMs * MIX_SAMPLE_RATE) / 1000);
-  const mic = readHistoryRange(micHistory, startSample - offsetSamples, MIX_FRAME_SAMPLES);
+  // Positive mic lag means the same musical event appears later in the phone
+  // microphone stream. Read that many milliseconds further ahead in the mic
+  // buffer. Until acoustic calibration succeeds, RTT/2 remains the fallback.
+  const timingBaseMs = calibratedMicLagMs ?? liveMicNetworkCompMs;
+  const micAdvanceMs = timingBaseMs - vocalFineTuneMs;
+  const advanceSamples = Math.round((micAdvanceMs * MIX_SAMPLE_RATE) / 1000);
+  const mic = readHistoryRange(micHistory, startSample + advanceSamples, MIX_FRAME_SAMPLES);
   const song = readHistoryRange(backingHistory, startSample, MIX_FRAME_SAMPLES);
   const micGain = 10 ** (micGainDb / 20);
   const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
@@ -446,21 +579,41 @@ function stopYoutubeBacking() {
   broadcastStatus();
 }
 
-function startLiveSource() {
-  if (testActive) stopSyncTest();
-  if (youtubeBackingActive) stopYoutubeBacking();
+function refreshLiveMicNetworkCompensation() {
   const timeline = currentTimelineStatus();
   const transportEstimateMs = Number(timeline.transportEstimateMs);
   liveMicNetworkCompMs = Number.isFinite(transportEstimateMs)
     ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs))
     : 0;
-  liveSourceActive = true;
+}
+
+function resetLiveMixEpoch() {
   liveSourceStartedAt = Date.now();
   liveSourceFrameIndex = 0;
   clearMixHistories();
+}
+
+function startLiveSource() {
+  if (testActive) stopSyncTest();
+  if (youtubeBackingActive) stopYoutubeBacking();
+  refreshLiveMicNetworkCompensation();
+  liveSourceActive = true;
+  resetLiveMixEpoch();
   broadcastJson(sourceStatusPayload());
   broadcastJson(testStatusPayload());
   broadcastJson(mixSettingsPayload());
+  broadcastJson(timingCalibrationStatusPayload());
+}
+
+function restartLiveSourceAfterMicReconnect() {
+  if (!liveSourceActive || backing?.readyState !== WebSocket.OPEN) return;
+  refreshLiveMicNetworkCompensation();
+  resetLiveMixEpoch();
+  if (timingCalibrationPhase === 'collecting') {
+    failTimingCalibration('Microphone reconnected during calibration. Start calibration again.');
+  }
+  broadcastJson(sourceStatusPayload());
+  broadcastJson(testStatusPayload());
 }
 
 function stopLiveSource() {
@@ -489,6 +642,11 @@ const mixerTimer = setInterval(() => {
   }
 
   if (liveSourceActive) {
+    // Keep the captured Source alive while the phone reconnects, but do not
+    // advance the shared mix clock without a publisher. Registration resets
+    // both histories to a fresh epoch, so reopening Source is unnecessary.
+    if (publisher?.readyState !== WebSocket.OPEN) return;
+
     const elapsed = Date.now() - liveSourceStartedAt - LIVE_MIX_PREBUFFER_MS;
     if (elapsed < 0) return;
 
@@ -523,6 +681,9 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(youtubeTimeline.statusPayload());
     broadcastJson(youtubeBackingStatusPayload());
   }
+  if (timingCalibrationPhase === 'collecting') {
+    broadcastJson(timingCalibrationStatusPayload());
+  }
 }, 250);
 
 function validSampleRate(value: unknown) {
@@ -547,7 +708,8 @@ wss.on('connection', (rawSocket) => {
 
       if (socket === publisher && socket.role === 'publisher') {
         if (testActive || liveSourceActive) {
-          appendHistory(micHistory, buffer, publisherSampleRate);
+          const samples = appendHistory(micHistory, buffer, publisherSampleRate);
+          if (liveSourceActive) appendTimingCalibrationSamples('mic', samples);
         } else if (!youtubeBackingActive) {
           broadcastToMonitors(buffer, true);
         }
@@ -555,7 +717,10 @@ wss.on('connection', (rawSocket) => {
       }
 
       if (socket === backing && socket.role === 'backing' && liveSourceActive) {
-        appendHistory(backingHistory, buffer, backingSampleRate);
+        if (publisher?.readyState === WebSocket.OPEN) {
+          const samples = appendHistory(backingHistory, buffer, backingSampleRate);
+          appendTimingCalibrationSamples('backing', samples);
+        }
       }
       return;
     }
@@ -601,6 +766,42 @@ wss.on('connection', (rawSocket) => {
       return;
     }
 
+    if (payload.type === 'timing-calibration-status-request') {
+      sendJson(socket, timingCalibrationStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'start-timing-calibration') {
+      const timeline = currentTimelineStatus();
+      if (
+        !liveSourceActive ||
+        backing?.readyState !== WebSocket.OPEN ||
+        publisher?.readyState !== WebSocket.OPEN
+      ) {
+        failTimingCalibration('Connect both phone Microphone and Desktop Source before calibration.');
+        return;
+      }
+      if (!timeline.connected || Number(timeline.state) !== 1) {
+        failTimingCalibration('Play YouTube on the phone before calibration.');
+        return;
+      }
+      startTimingCalibration();
+      return;
+    }
+
+    if (payload.type === 'set-vocal-fine-tune') {
+      const nextFineTune = Number(payload.valueMs);
+      if (Number.isFinite(nextFineTune)) {
+        vocalFineTuneMs = Math.max(
+          -MAX_VOCAL_FINE_TUNE_MS,
+          Math.min(MAX_VOCAL_FINE_TUNE_MS, nextFineTune),
+        );
+        broadcastJson(sourceStatusPayload());
+        broadcastJson(timingCalibrationStatusPayload());
+      }
+      return;
+    }
+
     if (payload.type === 'youtube-backing-status-request') {
       sendJson(socket, youtubeBackingStatusPayload());
       return;
@@ -639,12 +840,14 @@ wss.on('connection', (rawSocket) => {
       socket.sampleRate = sampleRate;
       publisher = socket;
       publisherSampleRate = sampleRate;
+      restartLiveSourceAfterMicReconnect();
       sendJson(socket, { type: 'registered', role: 'publisher' });
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeBackingStatusPayload());
       sendJson(socket, sourceStatusPayload());
+      sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
       return;
     }
@@ -675,6 +878,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, { type: 'registered', role: 'monitor' });
       sendJson(socket, publisherStatusPayload());
       sendJson(socket, sourceStatusPayload());
+      sendJson(socket, timingCalibrationStatusPayload());
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
@@ -716,6 +920,9 @@ wss.on('connection', (rawSocket) => {
       publisher = null;
       publisherSampleRate = null;
       clearHistory(micHistory);
+      if (timingCalibrationPhase === 'collecting') {
+        failTimingCalibration('Microphone disconnected during calibration.');
+      }
       if (testActive) stopSyncTest();
       broadcastStatus();
     }
@@ -723,6 +930,9 @@ wss.on('connection', (rawSocket) => {
     if (socket === backing) {
       backing = null;
       backingSampleRate = null;
+      if (timingCalibrationPhase === 'collecting') {
+        failTimingCalibration('Desktop Source disconnected during calibration.');
+      }
       stopLiveSource();
     }
   });

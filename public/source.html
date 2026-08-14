@@ -64,6 +64,28 @@
       <section class="test-panel">
         <div class="test-heading">
           <div>
+            <strong>Vocal timing calibration</strong>
+            <span>用 6 秒手機喇叭漏進 Mic 的同一段音樂，自動量出 Mic 相對 Desktop Source 晚多少。</span>
+          </div>
+          <div class="test-actions">
+            <button id="start-timing-calibration" disabled>Calibrate timing</button>
+          </div>
+        </div>
+
+        <p id="timing-calibration-status" class="hint">先連上手機 Microphone 與 Chrome Source，手機播放中即可校準。</p>
+        <p class="hint">校準時：手機關耳機、開喇叭約 50–70%，6 秒內不要說話。完成後可以戴回耳機正常唱。</p>
+
+        <label class="gain-control" for="vocal-fine-tune">
+          <span>Vocal fine tune</span>
+          <input id="vocal-fine-tune" type="range" min="-100" max="100" step="5" value="0" />
+          <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
+        </label>
+        <p class="hint">負值讓人聲更早，正值讓人聲更晚；自動校準完成後通常只需要很小的微調。</p>
+      </section>
+
+      <section class="test-panel">
+        <div class="test-heading">
+          <div>
             <strong>Chrome capture</strong>
             <span>在這個分頁按 Relay 擴充功能圖示。連上後，它會把 tab audio 轉成 PCM 丟回本機 Relay。</span>
           </div>
@@ -71,7 +93,7 @@
         <p id="capture-state" class="hint">Capture not connected.</p>
       </section>
 
-      <p class="note">順序只要一次：手機開始 YouTube → 這頁按 Enable source audio → 在這頁點擴充功能。之後手機的 Pause / Resume / Seek 都由 timeline 自動跟。</p>
+      <p class="note">順序只要一次：手機開始 YouTube → 這頁按 Enable source audio → 在這頁點擴充功能。Mic 暫時斷線後可直接重連，不需要重新 Open source。</p>
     </main>
     <script type="module" src="/source.js"></script>
   </body>

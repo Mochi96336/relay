@@ -8,6 +8,10 @@ const sourceVolume = document.querySelector('#source-volume');
 const sourceVolumeValue = document.querySelector('#source-volume-value');
 const sourceMicGain = document.querySelector('#source-mic-gain');
 const sourceMicGainValue = document.querySelector('#source-mic-gain-value');
+const timingButton = document.querySelector('#start-timing-calibration');
+const timingStatus = document.querySelector('#timing-calibration-status');
+const vocalFineTune = document.querySelector('#vocal-fine-tune');
+const vocalFineTuneValue = document.querySelector('#vocal-fine-tune-value');
 
 const STATE_NAMES = new Map([
   [-1, 'waiting'],
@@ -24,6 +28,8 @@ let player = null;
 let playerReady = false;
 let armed = false;
 let latestTimeline = null;
+let latestSourceStatus = null;
+let latestCalibration = null;
 let loadedVideoId = null;
 let lastSeekAt = 0;
 let applyTimer = null;
@@ -41,6 +47,11 @@ function formatTime(seconds) {
   const minutes = Math.floor(whole / 60);
   const remainder = whole % 60;
   return `${minutes}:${String(remainder).padStart(2, '0')}`;
+}
+
+function signed(value, suffix = '') {
+  const number = Math.round(Number(value) || 0);
+  return `${number > 0 ? '+' : ''}${number}${suffix}`;
 }
 
 function send(payload) {
@@ -76,6 +87,56 @@ function applyBalance() {
   }
 }
 
+function applyFineTune(sendToServer = true) {
+  const valueMs = Math.max(-100, Math.min(100, Number(vocalFineTune.value) || 0));
+  vocalFineTuneValue.value = signed(valueMs, ' ms');
+  if (sendToServer) send({ type: 'set-vocal-fine-tune', valueMs });
+}
+
+function renderCalibration() {
+  const sourceConnected = Boolean(latestSourceStatus?.connected);
+  const micConnected = Boolean(latestSourceStatus?.micConnected);
+  const phonePlaying = Boolean(latestTimeline?.connected) && Number(latestTimeline?.state) === 1;
+  const collecting = latestCalibration?.state === 'collecting';
+  timingButton.disabled = collecting || !sourceConnected || !micConnected || !phonePlaying;
+
+  if (collecting) {
+    const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
+    timingButton.textContent = `Calibrating… ${progress}%`;
+    timingStatus.textContent = `Collecting ${progress}% · 手機保持喇叭播放，先不要說話。`;
+    return;
+  }
+
+  timingButton.textContent = 'Calibrate timing';
+
+  if (latestCalibration?.state === 'complete') {
+    const confidence = Number(latestCalibration.confidence);
+    const windows = Array.isArray(latestCalibration.segmentLagsMs)
+      ? latestCalibration.segmentLagsMs.map((value) => `${signed(value)} ms`).join(' / ')
+      : '';
+    timingStatus.textContent = `✓ Mic path ${signed(latestCalibration.micLagMs, ' ms')} · confidence ${Number.isFinite(confidence) ? confidence.toFixed(2) : '--'}${windows ? ` · windows ${windows}` : ''}`;
+    return;
+  }
+
+  if (latestCalibration?.state === 'failed') {
+    timingStatus.textContent = `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
+    return;
+  }
+
+  if (latestSourceStatus?.timingMode === 'acoustic-calibration') {
+    timingStatus.textContent = `Applied acoustic calibration · Mic path ${signed(latestSourceStatus.calibratedMicLagMs, ' ms')} · fine tune ${signed(latestSourceStatus.vocalFineTuneMs, ' ms')}`;
+    return;
+  }
+
+  if (!sourceConnected || !micConnected) {
+    timingStatus.textContent = '先連上手機 Microphone 與 Chrome Source。';
+  } else if (!phonePlaying) {
+    timingStatus.textContent = '手機播放 YouTube 後即可按 Calibrate timing。';
+  } else {
+    timingStatus.textContent = `Ready · 目前先用 network estimate ${signed(latestSourceStatus?.micNetworkCompensationMs, ' ms')}。`;
+  }
+}
+
 function renderTimeline() {
   const timeline = latestTimeline;
   const connected = Boolean(timeline?.connected);
@@ -94,6 +155,7 @@ function renderTimeline() {
     detailNode.textContent = '手機開始播放 YouTube 後，這裡會自動找到同一支影片。';
     mirrorState.textContent = 'waiting';
     mirrorTimeline.textContent = '--:-- · Δ -- ms';
+    renderCalibration();
     return;
   }
 
@@ -101,6 +163,7 @@ function renderTimeline() {
   detailNode.textContent = `${videoId} · phone ${STATE_NAMES.get(state) ?? state} · target ${formatTime(target)}`;
   mirrorState.textContent = `${STATE_NAMES.get(state) ?? state}${armed ? ' · following' : ' · muted until enabled'}`;
   mirrorTimeline.textContent = `${formatTime(current)} / target ${formatTime(target)} · Δ ${Number.isFinite(deltaMs) ? `${Math.round(deltaMs)} ms` : '-- ms'}`;
+  renderCalibration();
 }
 
 function applyTimeline() {
@@ -149,6 +212,24 @@ function applyTimeline() {
   renderTimeline();
 }
 
+function renderSourceStatus(message) {
+  latestSourceStatus = message;
+  const micState = message.micConnected ? 'Mic connected' : 'Mic disconnected';
+  const timing = message.timingMode === 'acoustic-calibration'
+    ? `calibrated ${signed(message.calibratedMicLagMs, ' ms')}`
+    : `network ${signed(message.micNetworkCompensationMs, ' ms')}`;
+
+  captureState.textContent = message.connected
+    ? `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`
+    : 'Capture not connected · click the Relay extension icon on this tab.';
+
+  if (Number.isFinite(Number(message.vocalFineTuneMs))) {
+    vocalFineTune.value = String(Number(message.vocalFineTuneMs));
+    applyFineTune(false);
+  }
+  renderCalibration();
+}
+
 function connect() {
   clearTimeout(reconnectTimer);
   const next = new WebSocket(wsUrl());
@@ -158,6 +239,7 @@ function connect() {
     if (socket !== next) return;
     send({ type: 'youtube-timeline-request' });
     send({ type: 'source-status-request' });
+    send({ type: 'timing-calibration-status-request' });
     if (armed) applyBalance();
   });
 
@@ -178,9 +260,18 @@ function connect() {
     }
 
     if (message.type === 'source-status') {
-      captureState.textContent = message.connected
-        ? `● Capture connected · ${message.sampleRate ?? '--'} Hz · Server mix buffer ${message.prebufferMs ?? '--'} ms · mic network comp ${Math.round(Number(message.micNetworkCompensationMs) || 0)} ms`
-        : 'Capture not connected · click the Relay extension icon on this tab.';
+      renderSourceStatus(message);
+      return;
+    }
+
+    if (message.type === 'timing-calibration-status') {
+      latestCalibration = message;
+      renderCalibration();
+      return;
+    }
+
+    if (message.type === 'error') {
+      timingStatus.textContent = message.message ?? 'Relay error.';
     }
   });
 
@@ -188,6 +279,7 @@ function connect() {
     if (socket !== next) return;
     socket = null;
     latestTimeline = null;
+    latestSourceStatus = null;
     renderTimeline();
     reconnectTimer = setTimeout(connect, 1_000);
   });
@@ -207,6 +299,12 @@ armButton.addEventListener('click', () => {
 
 sourceVolume.addEventListener('input', applyBalance);
 sourceMicGain.addEventListener('input', applyBalance);
+vocalFineTune.addEventListener('input', () => applyFineTune(true));
+timingButton.addEventListener('click', () => {
+  if (!send({ type: 'start-timing-calibration' })) {
+    timingStatus.textContent = 'Server 尚未連線。';
+  }
+});
 
 window.onYouTubeIframeAPIReady = () => {
   player = new window.YT.Player('source-player', {
@@ -239,5 +337,6 @@ document.head.append(apiScript);
 applyTimer = setInterval(applyTimeline, 250);
 window.addEventListener('beforeunload', () => clearInterval(applyTimer), { once: true });
 applyBalance();
+applyFineTune(false);
 renderTimeline();
 connect();

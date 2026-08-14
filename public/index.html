@@ -10,8 +10,8 @@
   <body>
     <main class="shell">
       <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
-      <h1>Phone mic → computer</h1>
-      <p class="intro">第一階段只驗證即時收音與播放。沒有 Discord、沒有 YouTube、沒有混音。</p>
+      <h1>Phone mic → mixer</h1>
+      <p class="intro">第二階段加入 Server 端測試伴奏與人聲 offset。仍然沒有 Discord，也還沒有 YouTube。</p>
 
       <section class="panel" aria-live="polite">
         <strong id="status">Idle</strong>
@@ -24,13 +24,39 @@
         <button id="stop" disabled>Stop</button>
       </div>
 
+      <section class="test-panel">
+        <div class="test-heading">
+          <div>
+            <strong>Sync test</strong>
+            <span>手機與 Server 各自播放 120 BPM click；對著手機 click 拍手或說「搭」。</span>
+          </div>
+          <div class="test-actions">
+            <button id="start-sync-test" disabled>Start test</button>
+            <button id="stop-sync-test" disabled>Stop test</button>
+          </div>
+        </div>
+
+        <label class="gain-control" for="mic-gain">
+          <span>Mic gain</span>
+          <input id="mic-gain" type="range" min="0" max="36" step="1" value="30" disabled />
+          <output id="mic-gain-value" for="mic-gain">+30 dB</output>
+        </label>
+
+        <label class="gain-control" for="voice-offset">
+          <span>Voice offset</span>
+          <input id="voice-offset" type="range" min="-500" max="500" step="10" value="0" disabled />
+          <output id="voice-offset-value" for="voice-offset">0 ms</output>
+        </label>
+        <p class="hint">人聲聽起來比 click 晚，就往負值調；比 click 早，就往正值調。Server 保留 800 ms safety buffer，所以可即時前後移動。</p>
+      </section>
+
       <label class="gain-control" for="monitor-gain">
         <span>Monitor gain</span>
-        <input id="monitor-gain" type="range" min="0" max="30" step="1" value="12" />
-        <output id="monitor-gain-value" for="monitor-gain">+12 dB</output>
+        <input id="monitor-gain" type="range" min="0" max="30" step="1" value="30" />
+        <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
       </label>
 
-      <p class="note">手機麥克風需要 HTTPS；開發時可把本機 HTTP 服務透過 HTTPS tunnel 暴露出去。Monitor gain 只影響電腦監聽，不會改寫原始麥克風資料。</p>
+      <p class="note">手機麥克風需要 HTTPS。測 Sync test 時請戴耳機，避免手機播放的 click 又被手機麥克風直接收到。</p>
     </main>
     <script type="module" src="/app.js"></script>
   </body>

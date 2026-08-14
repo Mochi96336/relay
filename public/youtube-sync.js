@@ -112,6 +112,8 @@ function renderTimeline(message) {
   const age = optionalNumber(message.ageMs);
   const youtubeTime = optionalNumber(message.youtubeTime);
   const serverTime = optionalNumber(message.serverTime);
+  const reanchors = Number(message.reanchors) || 0;
+  const corrections = Number(message.corrections ?? message.hardResyncs) || 0;
 
   serverState.textContent = `Server timeline · ${connected ? state : 'stale'} · ${message.lastReason ?? 'tracking'}`;
   serverValues.textContent = youtubeTime !== null && serverTime !== null
@@ -121,7 +123,7 @@ function renderTimeline(message) {
   const driftText = drift !== null ? `${signed(drift, 1)} ms/min` : 'collecting';
   const rttText = rtt !== null ? `${rtt.toFixed(0)} ms RTT` : 'clock sync…';
   const ageText = age !== null ? `${age.toFixed(0)} ms old` : 'age --';
-  serverNote.textContent = `Drift ${driftText} · ${rttText} · ${ageText} · hard resyncs ${Number(message.hardResyncs) || 0}`;
+  serverNote.textContent = `Drift ${driftText} · ${rttText} · ${ageText} · reanchors ${reanchors} · corrections ${corrections}`;
 }
 
 function handleMessage(event) {

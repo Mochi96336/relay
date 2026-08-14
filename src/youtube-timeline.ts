@@ -42,7 +42,8 @@ export class YouTubeTimelineTracker {
   private anchor: TimelineAnchor | null = null;
   private latest: LatestTelemetry | null = null;
   private errorHistory: ErrorSample[] = [];
-  private hardResyncs = 0;
+  private reanchors = 0;
+  private corrections = 0;
   private lastReason = 'waiting';
 
   get hasTelemetry() {
@@ -90,9 +91,14 @@ export class YouTubeTimelineTracker {
     const videoChanged = !this.anchor || this.anchor.videoId !== videoId;
     const explicitJump = Math.abs(timelineDeltaSeconds) > 0.4;
     const largeError = errorMs !== null && Math.abs(errorMs) > HARD_RESYNC_THRESHOLD_MS;
+    const correction = explicitJump || largeError;
 
-    if (videoChanged || stateChanged || rateChanged || explicitJump || largeError || errorMs === null) {
-      if (this.anchor) this.hardResyncs += 1;
+    if (videoChanged || stateChanged || rateChanged || correction || errorMs === null) {
+      if (this.anchor) {
+        if (correction) this.corrections += 1;
+        else this.reanchors += 1;
+      }
+
       this.anchor = {
         videoId,
         positionSeconds: currentTime,
@@ -103,7 +109,7 @@ export class YouTubeTimelineTracker {
       this.errorHistory = [];
       this.lastReason = videoChanged
         ? 'video'
-        : explicitJump || largeError
+        : correction
           ? 'seek/jump'
           : stateChanged
             ? 'state'
@@ -150,7 +156,9 @@ export class YouTubeTimelineTracker {
       driftMsPerMinute: this.estimateDriftMsPerMinute(),
       clockRttMs: this.latest.clockRttMs,
       ageMs,
-      hardResyncs: this.hardResyncs,
+      reanchors: this.reanchors,
+      corrections: this.corrections,
+      hardResyncs: this.corrections,
       lastReason: this.lastReason,
     };
   }

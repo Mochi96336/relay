@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
+import { YouTubeTimelineTracker } from './youtube-timeline.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
 const port = Number(process.env.PORT ?? 3000);
@@ -26,6 +28,7 @@ app.get('/healthz', (_req, res) => {
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+const youtubeTimeline = new YouTubeTimelineTracker();
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -296,6 +299,12 @@ const mixerTimer = setInterval(() => {
   }
 }, 5);
 
+const youtubeTimelineTimer = setInterval(() => {
+  if (youtubeTimeline.hasTelemetry) {
+    broadcastJson(youtubeTimeline.statusPayload());
+  }
+}, 250);
+
 wss.on('connection', (rawSocket) => {
   const socket = rawSocket as RelaySocket;
   socket.role = 'unknown';
@@ -328,6 +337,30 @@ wss.on('connection', (rawSocket) => {
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
 
+    if (payload.type === 'clock-ping') {
+      const serverReceivedAtMs = Date.now();
+      sendJson(socket, {
+        type: 'clock-pong',
+        id: payload.id,
+        clientSentAtMs: payload.clientSentAtMs,
+        serverReceivedAtMs,
+        serverSentAtMs: Date.now(),
+      });
+      return;
+    }
+
+    if (payload.type === 'youtube-telemetry') {
+      if (youtubeTimeline.update(payload)) {
+        broadcastJson(youtubeTimeline.statusPayload());
+      }
+      return;
+    }
+
+    if (payload.type === 'youtube-timeline-request') {
+      sendJson(socket, youtubeTimeline.statusPayload());
+      return;
+    }
+
     if (payload.type === 'register' && payload.role === 'publisher') {
       if (publisher && publisher !== socket && publisher.readyState === WebSocket.OPEN) {
         sendJson(socket, { type: 'error', message: 'A publisher is already connected.' });
@@ -347,6 +380,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, { type: 'registered', role: 'publisher' });
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
+      sendJson(socket, youtubeTimeline.statusPayload());
       broadcastStatus();
       return;
     }
@@ -357,6 +391,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, publisherStatusPayload());
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
+      sendJson(socket, youtubeTimeline.statusPayload());
       return;
     }
 
@@ -409,6 +444,7 @@ const heartbeat = setInterval(() => {
 wss.on('close', () => {
   clearInterval(heartbeat);
   clearInterval(mixerTimer);
+  clearInterval(youtubeTimelineTimer);
 });
 
 server.listen(port, '0.0.0.0', () => {

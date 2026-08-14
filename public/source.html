@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Relay · Desktop YouTube Source</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <p class="eyebrow">RELAY / DESKTOP SOURCE</p>
+      <h1>YouTube source</h1>
+      <p class="intro">這個分頁只跑在 Relay 電腦上。它讀 Server timeline，自動載入手機正在播的同一支 YouTube，然後讓 Chrome 擴充功能擷取這個分頁的實際輸出。</p>
+
+      <section class="panel" aria-live="polite">
+        <strong id="source-state">Waiting for phone timeline</strong>
+        <span id="source-detail">手機開始播放 YouTube 後，這裡會自動找到同一支影片。</span>
+      </section>
+
+      <div class="actions">
+        <button id="arm-source" class="primary" disabled>Enable source audio</button>
+      </div>
+
+      <section class="test-panel youtube-panel">
+        <div class="test-heading">
+          <div>
+            <strong>Server-side browser player</strong>
+            <span>影片由官方 YouTube IFrame Player API 播放；Relay 只控制 video ID、play / pause / seek。</span>
+          </div>
+        </div>
+        <div class="youtube-player-shell">
+          <div id="source-player"></div>
+        </div>
+        <div class="youtube-readout" aria-live="polite">
+          <strong id="mirror-state">not loaded</strong>
+          <span id="mirror-timeline">--:-- · Δ -- ms</span>
+        </div>
+      </section>
+
+      <section class="test-panel">
+        <div class="test-heading">
+          <div>
+            <strong>Chrome capture</strong>
+            <span>在這個分頁按 Relay 擴充功能圖示。連上後，它會把 tab audio 轉成 PCM 丟回本機 Relay。</span>
+          </div>
+        </div>
+        <p id="capture-state" class="hint">Capture not connected.</p>
+      </section>
+
+      <p class="note">順序只要一次：手機開始 YouTube → 這頁按 Enable source audio → 在這頁點擴充功能。之後手機的 Pause / Resume / Seek 都由 timeline 自動跟。</p>
+    </main>
+    <script type="module" src="/source.js"></script>
+  </body>
+</html>

@@ -18,6 +18,8 @@ const MIX_FRAME_MS = 20;
 const MIX_FRAME_SAMPLES = Math.round((MIX_SAMPLE_RATE * MIX_FRAME_MS) / 1000);
 const TEST_BPM = 120;
 const TEST_PREBUFFER_MS = 800;
+const LIVE_MIX_PREBUFFER_MS = 800;
+const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
 const YOUTUBE_BACKING_LOOKAHEAD_MS = 40;
 
@@ -50,16 +52,21 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-type ClientRole = 'publisher' | 'monitor' | 'unknown';
+type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';
 type RelaySocket = WebSocket & {
   role: ClientRole;
   sampleRate?: number;
   isAlive: boolean;
 };
 
-type MicChunk = {
+type PcmChunk = {
   start: number;
   samples: Int16Array;
+};
+
+type PcmHistory = {
+  chunks: PcmChunk[];
+  totalSamples: number;
 };
 
 type TimelineStatus = {
@@ -68,10 +75,13 @@ type TimelineStatus = {
   state?: number;
   serverTime?: number;
   playbackRate?: number;
+  transportEstimateMs?: number;
 };
 
 let publisher: RelaySocket | null = null;
 let publisherSampleRate: number | null = null;
+let backing: RelaySocket | null = null;
+let backingSampleRate: number | null = null;
 let micGainDb = 30;
 let voiceOffsetMs = 0;
 let testActive = false;
@@ -80,8 +90,12 @@ let testFrameIndex = 0;
 let youtubeBackingActive = false;
 let youtubeBackingStartedAt = 0;
 let youtubeBackingFrameIndex = 0;
-let micHistory: MicChunk[] = [];
-let micTotalSamples = 0;
+let liveSourceActive = false;
+let liveSourceStartedAt = 0;
+let liveSourceFrameIndex = 0;
+let liveMicNetworkCompMs = 0;
+const micHistory: PcmHistory = { chunks: [], totalSamples: 0 };
+const backingHistory: PcmHistory = { chunks: [], totalSamples: 0 };
 
 function sendJson(socket: WebSocket, payload: unknown) {
   if (socket.readyState === WebSocket.OPEN) {
@@ -114,15 +128,37 @@ function publisherStatusPayload() {
   };
 }
 
+function sourceStatusPayload() {
+  return {
+    type: 'source-status',
+    connected: backing?.readyState === WebSocket.OPEN,
+    sampleRate: backingSampleRate,
+    active: liveSourceActive,
+    prebufferMs: LIVE_MIX_PREBUFFER_MS,
+    micNetworkCompensationMs: liveMicNetworkCompMs,
+  };
+}
+
 function testStatusPayload() {
-  const mode = testActive ? 'click' : youtubeBackingActive ? 'youtube-backing' : 'off';
+  const mode = testActive
+    ? 'click'
+    : youtubeBackingActive
+      ? 'youtube-backing'
+      : liveSourceActive
+        ? 'tab-source'
+        : 'off';
+
   return {
     type: 'test-status',
     active: mode !== 'off',
     mode,
     bpm: testActive ? TEST_BPM : 0,
     sampleRate: MIX_SAMPLE_RATE,
-    prebufferMs: testActive ? TEST_PREBUFFER_MS : 0,
+    prebufferMs: testActive
+      ? TEST_PREBUFFER_MS
+      : liveSourceActive
+        ? LIVE_MIX_PREBUFFER_MS
+        : 0,
   };
 }
 
@@ -154,11 +190,17 @@ function youtubeBackingStatusPayload(nowMs = performance.now()) {
 
 function broadcastStatus() {
   broadcastToMonitors(JSON.stringify(publisherStatusPayload()));
+  broadcastJson(sourceStatusPayload());
 }
 
-function clearMicHistory() {
-  micHistory = [];
-  micTotalSamples = 0;
+function clearHistory(history: PcmHistory) {
+  history.chunks = [];
+  history.totalSamples = 0;
+}
+
+function clearMixHistories() {
+  clearHistory(micHistory);
+  clearHistory(backingHistory);
 }
 
 function resampleToMixRate(buffer: Buffer, sourceRate: number) {
@@ -186,22 +228,22 @@ function resampleToMixRate(buffer: Buffer, sourceRate: number) {
   return output;
 }
 
-function appendMic(buffer: Buffer) {
-  if (!publisherSampleRate) return;
-  const samples = resampleToMixRate(buffer, publisherSampleRate);
+function appendHistory(history: PcmHistory, buffer: Buffer, sourceRate: number | null) {
+  if (!sourceRate) return;
+  const samples = resampleToMixRate(buffer, sourceRate);
   if (samples.length === 0) return;
-  micHistory.push({ start: micTotalSamples, samples });
-  micTotalSamples += samples.length;
+  history.chunks.push({ start: history.totalSamples, samples });
+  history.totalSamples += samples.length;
 }
 
-function firstChunkAtOrBefore(sampleIndex: number) {
+function firstChunkAtOrBefore(history: PcmHistory, sampleIndex: number) {
   let low = 0;
-  let high = micHistory.length - 1;
+  let high = history.chunks.length - 1;
   let result = 0;
 
   while (low <= high) {
     const mid = (low + high) >> 1;
-    if (micHistory[mid].start <= sampleIndex) {
+    if (history.chunks[mid].start <= sampleIndex) {
       result = mid;
       low = mid + 1;
     } else {
@@ -212,9 +254,9 @@ function firstChunkAtOrBefore(sampleIndex: number) {
   return result;
 }
 
-function readMicRange(startSample: number, count: number) {
+function readHistoryRange(history: PcmHistory, startSample: number, count: number) {
   const output = new Int16Array(count);
-  if (micHistory.length === 0) return output;
+  if (history.chunks.length === 0) return output;
 
   let outputOffset = 0;
   let cursor = startSample;
@@ -225,11 +267,11 @@ function readMicRange(startSample: number, count: number) {
     cursor += silence;
   }
 
-  if (outputOffset >= count || cursor >= micTotalSamples) return output;
+  if (outputOffset >= count || cursor >= history.totalSamples) return output;
 
-  let chunkIndex = firstChunkAtOrBefore(cursor);
-  while (chunkIndex < micHistory.length && outputOffset < count) {
-    const chunk = micHistory[chunkIndex];
+  let chunkIndex = firstChunkAtOrBefore(history, cursor);
+  while (chunkIndex < history.chunks.length && outputOffset < count) {
+    const chunk = history.chunks[chunkIndex];
     const chunkEnd = chunk.start + chunk.samples.length;
 
     if (cursor >= chunkEnd) {
@@ -256,12 +298,12 @@ function readMicRange(startSample: number, count: number) {
   return output;
 }
 
-function trimMicHistory(beforeSample: number) {
-  while (micHistory.length > 1) {
-    const chunk = micHistory[0];
+function trimHistory(history: PcmHistory, beforeSample: number) {
+  while (history.chunks.length > 1) {
+    const chunk = history.chunks[0];
     const end = chunk.start + chunk.samples.length;
     if (end >= beforeSample) break;
-    micHistory.shift();
+    history.chunks.shift();
   }
 }
 
@@ -298,23 +340,50 @@ function youtubeTimecodeSample(mediaSeconds: number) {
   return Math.sin(2 * Math.PI * frequency * pulsePhase) * amplitude * envelope;
 }
 
-function mixedFrame(frameIndex: number) {
+function writeMixedSample(output: Buffer, index: number, value: number) {
+  const mixed = Math.max(-1, Math.min(1, value));
+  const intSample = mixed < 0 ? Math.round(mixed * 32768) : Math.round(mixed * 32767);
+  output.writeInt16LE(intSample, index * 2);
+}
+
+function clickMixedFrame(frameIndex: number) {
   const startSample = frameIndex * MIX_FRAME_SAMPLES;
   const offsetSamples = Math.round((voiceOffsetMs * MIX_SAMPLE_RATE) / 1000);
-  const mic = readMicRange(startSample - offsetSamples, MIX_FRAME_SAMPLES);
+  const mic = readHistoryRange(micHistory, startSample - offsetSamples, MIX_FRAME_SAMPLES);
   const gain = 10 ** (micGainDb / 20);
   const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
 
   for (let i = 0; i < MIX_FRAME_SAMPLES; i += 1) {
     const micValue = (mic[i] / 32768) * gain;
-    const backingValue = clickSample(startSample + i);
-    const mixed = Math.max(-1, Math.min(1, micValue + backingValue));
-    const intSample = mixed < 0 ? Math.round(mixed * 32768) : Math.round(mixed * 32767);
-    output.writeInt16LE(intSample, i * 2);
+    writeMixedSample(output, i, micValue + clickSample(startSample + i));
   }
 
   const retentionSamples = Math.round(((MAX_OFFSET_MS + 1000) * MIX_SAMPLE_RATE) / 1000);
-  trimMicHistory(startSample - retentionSamples);
+  trimHistory(micHistory, startSample - retentionSamples);
+  return output;
+}
+
+function liveMixedFrame(frameIndex: number) {
+  const startSample = frameIndex * MIX_FRAME_SAMPLES;
+  // The phone mic packet reaches Relay after the singer heard that moment. The
+  // YouTube telemetry RTT/2 gives us a useful first-order network compensation;
+  // voiceOffsetMs remains the manual fine adjustment on top of it.
+  const effectiveOffsetMs = voiceOffsetMs - liveMicNetworkCompMs;
+  const offsetSamples = Math.round((effectiveOffsetMs * MIX_SAMPLE_RATE) / 1000);
+  const mic = readHistoryRange(micHistory, startSample - offsetSamples, MIX_FRAME_SAMPLES);
+  const song = readHistoryRange(backingHistory, startSample, MIX_FRAME_SAMPLES);
+  const micGain = 10 ** (micGainDb / 20);
+  const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
+
+  for (let i = 0; i < MIX_FRAME_SAMPLES; i += 1) {
+    const micValue = (mic[i] / 32768) * micGain;
+    const songValue = (song[i] / 32768) * LIVE_BACKING_GAIN;
+    writeMixedSample(output, i, micValue + songValue);
+  }
+
+  const retentionSamples = Math.round(((MAX_OFFSET_MS + 1000) * MIX_SAMPLE_RATE) / 1000);
+  trimHistory(micHistory, startSample - retentionSamples);
+  trimHistory(backingHistory, startSample - MIX_SAMPLE_RATE);
   return output;
 }
 
@@ -328,40 +397,41 @@ function youtubeBackingFrame(frameAtMs: number) {
   for (let i = 0; i < MIX_FRAME_SAMPLES; i += 1) {
     const mediaSeconds = mediaStart + (i / MIX_SAMPLE_RATE) * playbackRate;
     const value = playing ? youtubeTimecodeSample(mediaSeconds) : 0;
-    const intSample = value < 0 ? Math.round(value * 32768) : Math.round(value * 32767);
-    output.writeInt16LE(intSample, i * 2);
+    writeMixedSample(output, i, value);
   }
 
   return output;
 }
 
 function startSyncTest() {
+  if (liveSourceActive) return false;
   if (youtubeBackingActive) stopYoutubeBacking();
   testActive = true;
   testStartedAt = Date.now();
   testFrameIndex = 0;
-  clearMicHistory();
+  clearHistory(micHistory);
   broadcastJson(testStatusPayload());
   broadcastJson(mixSettingsPayload());
+  return true;
 }
 
 function stopSyncTest() {
   if (!testActive) return;
   testActive = false;
-  clearMicHistory();
+  clearHistory(micHistory);
   broadcastJson(testStatusPayload());
   broadcastStatus();
 }
 
 function startYoutubeBacking() {
   const timeline = currentTimelineStatus();
-  if (!timeline.connected || !timeline.videoId) return false;
+  if (!timeline.connected || !timeline.videoId || liveSourceActive) return false;
 
   if (testActive) stopSyncTest();
   youtubeBackingActive = true;
   youtubeBackingStartedAt = performance.now();
   youtubeBackingFrameIndex = 0;
-  clearMicHistory();
+  clearHistory(micHistory);
   broadcastJson(youtubeBackingStatusPayload());
   broadcastJson(testStatusPayload());
   return true;
@@ -370,8 +440,35 @@ function startYoutubeBacking() {
 function stopYoutubeBacking() {
   if (!youtubeBackingActive) return;
   youtubeBackingActive = false;
-  clearMicHistory();
+  clearHistory(micHistory);
   broadcastJson(youtubeBackingStatusPayload());
+  broadcastJson(testStatusPayload());
+  broadcastStatus();
+}
+
+function startLiveSource() {
+  if (testActive) stopSyncTest();
+  if (youtubeBackingActive) stopYoutubeBacking();
+  const timeline = currentTimelineStatus();
+  const transportEstimateMs = Number(timeline.transportEstimateMs);
+  liveMicNetworkCompMs = Number.isFinite(transportEstimateMs)
+    ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs))
+    : 0;
+  liveSourceActive = true;
+  liveSourceStartedAt = Date.now();
+  liveSourceFrameIndex = 0;
+  clearMixHistories();
+  broadcastJson(sourceStatusPayload());
+  broadcastJson(testStatusPayload());
+  broadcastJson(mixSettingsPayload());
+}
+
+function stopLiveSource() {
+  if (!liveSourceActive) return;
+  liveSourceActive = false;
+  liveMicNetworkCompMs = 0;
+  clearMixHistories();
+  broadcastJson(sourceStatusPayload());
   broadcastJson(testStatusPayload());
   broadcastStatus();
 }
@@ -384,8 +481,22 @@ const mixerTimer = setInterval(() => {
     const expectedFrames = Math.floor(elapsed / MIX_FRAME_MS) + 1;
     let framesToSend = Math.min(5, expectedFrames - testFrameIndex);
     while (framesToSend > 0) {
-      broadcastToMonitors(mixedFrame(testFrameIndex), true);
+      broadcastToMonitors(clickMixedFrame(testFrameIndex), true);
       testFrameIndex += 1;
+      framesToSend -= 1;
+    }
+    return;
+  }
+
+  if (liveSourceActive) {
+    const elapsed = Date.now() - liveSourceStartedAt - LIVE_MIX_PREBUFFER_MS;
+    if (elapsed < 0) return;
+
+    const expectedFrames = Math.floor(elapsed / MIX_FRAME_MS) + 1;
+    let framesToSend = Math.min(5, expectedFrames - liveSourceFrameIndex);
+    while (framesToSend > 0) {
+      broadcastToMonitors(liveMixedFrame(liveSourceFrameIndex), true);
+      liveSourceFrameIndex += 1;
       framesToSend -= 1;
     }
     return;
@@ -414,6 +525,13 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 }, 250);
 
+function validSampleRate(value: unknown) {
+  const sampleRate = Number(value);
+  return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000
+    ? sampleRate
+    : null;
+}
+
 wss.on('connection', (rawSocket) => {
   const socket = rawSocket as RelaySocket;
   socket.role = 'unknown';
@@ -425,12 +543,19 @@ wss.on('connection', (rawSocket) => {
 
   socket.on('message', (data, isBinary) => {
     if (isBinary) {
-      if (socket !== publisher || socket.role !== 'publisher') return;
       const buffer = data as Buffer;
-      if (testActive) {
-        appendMic(buffer);
-      } else if (!youtubeBackingActive) {
-        broadcastToMonitors(buffer, true);
+
+      if (socket === publisher && socket.role === 'publisher') {
+        if (testActive || liveSourceActive) {
+          appendHistory(micHistory, buffer, publisherSampleRate);
+        } else if (!youtubeBackingActive) {
+          broadcastToMonitors(buffer, true);
+        }
+        return;
+      }
+
+      if (socket === backing && socket.role === 'backing' && liveSourceActive) {
+        appendHistory(backingHistory, buffer, backingSampleRate);
       }
       return;
     }
@@ -471,6 +596,11 @@ wss.on('connection', (rawSocket) => {
       return;
     }
 
+    if (payload.type === 'source-status-request') {
+      sendJson(socket, sourceStatusPayload());
+      return;
+    }
+
     if (payload.type === 'youtube-backing-status-request') {
       sendJson(socket, youtubeBackingStatusPayload());
       return;
@@ -480,7 +610,9 @@ wss.on('connection', (rawSocket) => {
       if (!startYoutubeBacking()) {
         sendJson(socket, {
           type: 'error',
-          message: 'YouTube timeline is not live yet. Load and play a video first.',
+          message: liveSourceActive
+            ? 'Captured tab source is active. Stop it before using the old timecode follower.'
+            : 'YouTube timeline is not live yet. Load and play a video first.',
         });
       }
       return;
@@ -497,8 +629,8 @@ wss.on('connection', (rawSocket) => {
         return;
       }
 
-      const sampleRate = Number(payload.sampleRate);
-      if (!Number.isFinite(sampleRate) || sampleRate < 8_000 || sampleRate > 192_000) {
+      const sampleRate = validSampleRate(payload.sampleRate);
+      if (!sampleRate) {
         sendJson(socket, { type: 'error', message: 'Invalid sample rate.' });
         return;
       }
@@ -512,7 +644,29 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeBackingStatusPayload());
+      sendJson(socket, sourceStatusPayload());
       broadcastStatus();
+      return;
+    }
+
+    if (payload.type === 'register' && payload.role === 'backing') {
+      if (backing && backing !== socket && backing.readyState === WebSocket.OPEN) {
+        sendJson(socket, { type: 'error', message: 'A captured backing source is already connected.' });
+        return;
+      }
+
+      const sampleRate = validSampleRate(payload.sampleRate);
+      if (!sampleRate) {
+        sendJson(socket, { type: 'error', message: 'Invalid backing sample rate.' });
+        return;
+      }
+
+      socket.role = 'backing';
+      socket.sampleRate = sampleRate;
+      backing = socket;
+      backingSampleRate = sampleRate;
+      sendJson(socket, { type: 'registered', role: 'backing' });
+      startLiveSource();
       return;
     }
 
@@ -520,6 +674,7 @@ wss.on('connection', (rawSocket) => {
       socket.role = 'monitor';
       sendJson(socket, { type: 'registered', role: 'monitor' });
       sendJson(socket, publisherStatusPayload());
+      sendJson(socket, sourceStatusPayload());
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
@@ -532,7 +687,9 @@ wss.on('connection', (rawSocket) => {
         sendJson(socket, { type: 'error', message: 'Only the microphone device can start the sync test.' });
         return;
       }
-      startSyncTest();
+      if (!startSyncTest()) {
+        sendJson(socket, { type: 'error', message: 'Captured tab source is active.' });
+      }
       return;
     }
 
@@ -547,7 +704,9 @@ wss.on('connection', (rawSocket) => {
       const nextOffset = Number(payload.voiceOffsetMs);
 
       if (Number.isFinite(nextGain)) micGainDb = Math.max(0, Math.min(36, nextGain));
-      if (Number.isFinite(nextOffset)) voiceOffsetMs = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, nextOffset));
+      if (Number.isFinite(nextOffset)) {
+        voiceOffsetMs = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, nextOffset));
+      }
       broadcastJson(mixSettingsPayload());
     }
   });
@@ -556,8 +715,15 @@ wss.on('connection', (rawSocket) => {
     if (socket === publisher) {
       publisher = null;
       publisherSampleRate = null;
-      stopSyncTest();
+      clearHistory(micHistory);
+      if (testActive) stopSyncTest();
       broadcastStatus();
+    }
+
+    if (socket === backing) {
+      backing = null;
+      backingSampleRate = null;
+      stopLiveSource();
     }
   });
 });

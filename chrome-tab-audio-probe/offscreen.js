@@ -1,13 +1,138 @@
 let stream = null;
 let audioContext = null;
 let source = null;
-let analyser = null;
-let meterTimer = null;
+let captureNode = null;
+let silentGain = null;
+let relaySocket = null;
+let relayReady = false;
+let relayPageUrl = null;
+let reconnectTimer = null;
 let activeTabId = null;
+let meterSumSquares = 0;
+let meterSamples = 0;
+let lastMeterAt = 0;
+
+function relayWsUrl(pageUrl) {
+  const url = new URL(pageUrl);
+  const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const key = url.searchParams.get('key');
+  const query = key ? `?key=${encodeURIComponent(key)}` : '';
+  return `${protocol}//${url.host}/ws${query}`;
+}
+
+function reportState(state) {
+  if (!Number.isInteger(activeTabId)) return;
+  chrome.runtime.sendMessage({
+    target: 'service-worker',
+    type: 'relay-state',
+    tabId: activeTabId,
+    state,
+  }).catch(() => {});
+}
+
+function closeRelay() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  relayReady = false;
+  if (relaySocket) {
+    const socket = relaySocket;
+    relaySocket = null;
+    try {
+      socket.close();
+    } catch {}
+  }
+}
+
+function connectRelay() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  relayReady = false;
+  if (!relayPageUrl || !audioContext || !Number.isInteger(activeTabId)) return;
+
+  const socket = new WebSocket(relayWsUrl(relayPageUrl));
+  relaySocket = socket;
+  reportState('connecting');
+
+  socket.addEventListener('open', () => {
+    if (relaySocket !== socket || !audioContext) return;
+    socket.send(JSON.stringify({
+      type: 'register',
+      role: 'backing',
+      sampleRate: audioContext.sampleRate,
+    }));
+  });
+
+  socket.addEventListener('message', (event) => {
+    if (relaySocket !== socket || typeof event.data !== 'string') return;
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    if (message.type === 'registered' && message.role === 'backing') {
+      relayReady = true;
+      reportState('sending');
+      return;
+    }
+
+    if (message.type === 'error') {
+      console.error('Relay rejected tab source:', message.message);
+      reportState('error');
+    }
+  });
+
+  socket.addEventListener('close', () => {
+    if (relaySocket !== socket) return;
+    relaySocket = null;
+    relayReady = false;
+    reportState('disconnected');
+    if (stream && Number.isInteger(activeTabId)) {
+      reconnectTimer = setTimeout(connectRelay, 1_000);
+    }
+  });
+
+  socket.addEventListener('error', () => socket.close());
+}
+
+function handlePcm(buffer) {
+  if (!(buffer instanceof ArrayBuffer)) return;
+
+  const samples = new Int16Array(buffer);
+  for (let i = 0; i < samples.length; i += 1) {
+    const normalized = samples[i] / (samples[i] < 0 ? 32768 : 32767);
+    meterSumSquares += normalized * normalized;
+  }
+  meterSamples += samples.length;
+
+  const now = performance.now();
+  if (now - lastMeterAt >= 250 && meterSamples > 0 && Number.isInteger(activeTabId)) {
+    const rms = Math.sqrt(meterSumSquares / meterSamples);
+    const dbfs = rms > 0 ? 20 * Math.log10(rms) : -100;
+    chrome.runtime.sendMessage({
+      target: 'service-worker',
+      type: 'audio-level',
+      tabId: activeTabId,
+      dbfs,
+      sending: relayReady,
+    }).catch(() => {});
+    meterSumSquares = 0;
+    meterSamples = 0;
+    lastMeterAt = now;
+  }
+
+  if (
+    relayReady &&
+    relaySocket?.readyState === WebSocket.OPEN &&
+    relaySocket.bufferedAmount < 512 * 1024
+  ) {
+    relaySocket.send(buffer);
+  }
+}
 
 async function stopCapture(notify = false) {
-  clearInterval(meterTimer);
-  meterTimer = null;
+  closeRelay();
 
   if (stream) {
     for (const track of stream.getTracks()) track.stop();
@@ -15,10 +140,17 @@ async function stopCapture(notify = false) {
   }
 
   try {
+    captureNode?.disconnect();
+  } catch {}
+  try {
+    silentGain?.disconnect();
+  } catch {}
+  try {
     source?.disconnect();
   } catch {}
+  captureNode = null;
+  silentGain = null;
   source = null;
-  analyser = null;
 
   if (audioContext) {
     await audioContext.close().catch(() => {});
@@ -33,36 +165,16 @@ async function stopCapture(notify = false) {
     }).catch(() => {});
   }
 
+  relayPageUrl = null;
+  meterSumSquares = 0;
+  meterSamples = 0;
   activeTabId = null;
 }
 
-function startMeter() {
-  const samples = new Float32Array(analyser.fftSize);
-
-  meterTimer = setInterval(() => {
-    if (!analyser || !Number.isInteger(activeTabId)) return;
-
-    analyser.getFloatTimeDomainData(samples);
-    let sumSquares = 0;
-    for (let i = 0; i < samples.length; i += 1) {
-      sumSquares += samples[i] * samples[i];
-    }
-
-    const rms = Math.sqrt(sumSquares / samples.length);
-    const dbfs = rms > 0 ? 20 * Math.log10(rms) : -100;
-
-    chrome.runtime.sendMessage({
-      target: 'service-worker',
-      type: 'audio-level',
-      tabId: activeTabId,
-      dbfs,
-    }).catch(() => {});
-  }, 250);
-}
-
-async function startCapture(streamId, tabId) {
+async function startCapture(streamId, tabId, pageUrl) {
   await stopCapture(false);
   activeTabId = tabId;
+  relayPageUrl = pageUrl;
 
   stream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -79,27 +191,33 @@ async function startCapture(streamId, tabId) {
   audioTrack.addEventListener('ended', () => stopCapture(true), { once: true });
 
   audioContext = new AudioContext({ latencyHint: 'interactive' });
+  await audioContext.audioWorklet.addModule(chrome.runtime.getURL('capture-worklet.js'));
   await audioContext.resume();
 
   source = audioContext.createMediaStreamSource(stream);
-  analyser = audioContext.createAnalyser();
-  analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.2;
+  captureNode = new AudioWorkletNode(audioContext, 'relay-tab-capture', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+  });
+  silentGain = audioContext.createGain();
+  silentGain.gain.value = 0;
+  captureNode.port.onmessage = (event) => handlePcm(event.data);
 
-  // tabCapture removes the tab from normal playback. Reconnect it so the
-  // user keeps hearing exactly what Chrome is capturing during the probe.
-  source.connect(analyser);
+  // tabCapture removes this tab from Chrome's normal output. Route the captured
+  // stream back to the speakers while a second silent branch produces PCM.
   source.connect(audioContext.destination);
+  source.connect(captureNode).connect(silentGain).connect(audioContext.destination);
 
-  startMeter();
+  connectRelay();
 }
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.target !== 'offscreen') return;
 
   if (message.type === 'start-capture') {
-    startCapture(message.streamId, message.tabId).catch(async (error) => {
-      console.error('Tab audio probe failed', error);
+    startCapture(message.streamId, message.tabId, message.pageUrl).catch(async (error) => {
+      console.error('Relay tab source failed', error);
       const tabId = message.tabId;
       await stopCapture(false);
       chrome.runtime.sendMessage({

@@ -19,7 +19,7 @@ async function ensureOffscreenDocument() {
   creatingOffscreen = chrome.offscreen.createDocument({
     url: OFFSCREEN_URL,
     reasons: ['USER_MEDIA'],
-    justification: 'Analyze the audio MediaStream captured from the active tab.',
+    justification: 'Capture the Relay source tab and forward its rendered audio to the local Relay mixer.',
   });
 
   try {
@@ -29,10 +29,21 @@ async function ensureOffscreenDocument() {
   }
 }
 
+function supportedRelayPage(tab) {
+  if (!tab.url) return false;
+  try {
+    const url = new URL(tab.url);
+    return (url.hostname === 'localhost' || url.hostname === '127.0.0.1') &&
+      url.pathname.endsWith('/source.html');
+  } catch {
+    return false;
+  }
+}
+
 async function clearBadge(tabId) {
   if (!Number.isInteger(tabId)) return;
   await chrome.action.setBadgeText({ tabId, text: '' });
-  await chrome.action.setTitle({ tabId, title: 'Start Relay tab-audio probe' });
+  await chrome.action.setTitle({ tabId, title: 'Start Relay tab audio source' });
 }
 
 async function stopCapture() {
@@ -51,21 +62,31 @@ chrome.action.onClicked.addListener(async (tab) => {
       return;
     }
 
+    if (!supportedRelayPage(tab)) {
+      await chrome.action.setBadgeText({ tabId: tab.id, text: 'SRC' });
+      await chrome.action.setTitle({
+        tabId: tab.id,
+        title: 'Open http://localhost:3000/source.html and click the extension there.',
+      });
+      return;
+    }
+
     await ensureOffscreenDocument();
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     activeTabId = tab.id;
 
     await chrome.action.setBadgeText({ tabId: tab.id, text: '…' });
-    await chrome.action.setTitle({ tabId: tab.id, title: 'Relay tab-audio probe · starting…' });
+    await chrome.action.setTitle({ tabId: tab.id, title: 'Relay tab source · starting…' });
 
     chrome.runtime.sendMessage({
       target: 'offscreen',
       type: 'start-capture',
       streamId,
       tabId: tab.id,
+      pageUrl: tab.url,
     });
   } catch (error) {
-    console.error('Could not start tab capture', error);
+    console.error('Could not start Relay tab source', error);
     await clearBadge(tab.id);
     activeTabId = null;
   }
@@ -74,6 +95,21 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.target !== 'service-worker') return;
 
+  if (message.type === 'relay-state' && message.tabId === activeTabId) {
+    const labels = {
+      connecting: 'WS',
+      sending: 'ON',
+      disconnected: 'WS',
+      error: 'ERR',
+    };
+    chrome.action.setBadgeText({ tabId: activeTabId, text: labels[message.state] ?? '…' }).catch(() => {});
+    chrome.action.setTitle({
+      tabId: activeTabId,
+      title: `Relay tab source · ${message.state}`,
+    }).catch(() => {});
+    return;
+  }
+
   if (message.type === 'audio-level' && message.tabId === activeTabId) {
     const db = Number(message.dbfs);
     const text = Number.isFinite(db) && db > -80 ? String(Math.round(db)) : '--';
@@ -81,8 +117,8 @@ chrome.runtime.onMessage.addListener((message) => {
     chrome.action.setTitle({
       tabId: activeTabId,
       title: Number.isFinite(db)
-        ? `Relay tab-audio probe · ${db.toFixed(1)} dBFS`
-        : 'Relay tab-audio probe · silence',
+        ? `Relay tab source · ${message.sending ? 'sending' : 'not connected'} · ${db.toFixed(1)} dBFS`
+        : 'Relay tab source · silence',
     }).catch(() => {});
     return;
   }

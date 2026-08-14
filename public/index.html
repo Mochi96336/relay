@@ -11,7 +11,7 @@
     <main class="shell">
       <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
       <h1>Phone mic → mixer</h1>
-      <p class="intro">手機 YouTube 留在本機播放；Relay 讀它的媒體時間，Server 可以用同一條 timeline 驅動自己的測試 backing。YouTube 音訊本身不會被擷取或送到 Server。</p>
+      <p class="intro">手機 YouTube 給歌手自己聽；Relay 把它的 timeline 交給電腦上的 Source 分頁。Source 播同一支 YouTube，Chrome 再把那個分頁的實際聲音送回 Server，和手機 Mic 混在一起。</p>
 
       <section class="panel" aria-live="polite">
         <strong id="status">Idle</strong>
@@ -28,7 +28,7 @@
         <div class="test-heading">
           <div>
             <strong>YouTube monitor</strong>
-            <span>播放器完整保留在手機頁面。Relay 只讀播放狀態與媒體時間，不擷取 YouTube 音訊。</span>
+            <span>歌手手機用這個可見播放器正常聽歌；Relay 讀播放狀態與媒體時間。</span>
           </div>
         </div>
 
@@ -51,32 +51,44 @@
       <section class="test-panel">
         <div class="test-heading">
           <div>
-            <strong>Server backing follower</strong>
-            <span>Server 依照 YouTube timeline 產生一條可聽的 timecode 測試音。它不是 YouTube 音訊，也不需要先開 Microphone。</span>
+            <strong>Desktop YouTube source</strong>
+            <span>電腦另外開一個 Source 分頁，它會自動跟手機的 video / play / pause / seek。Chrome 擴充功能只擷取這個分頁。</span>
           </div>
           <div class="test-actions">
-            <button id="start-youtube-backing" disabled>Start follower</button>
-            <button id="stop-youtube-backing" disabled>Stop follower</button>
+            <button type="button" onclick="window.open('/source.html' + location.search, '_blank')">Open source</button>
           </div>
         </div>
-        <p id="youtube-backing-status" class="hint">先在手機 Load 並播放 YouTube。</p>
-        <p class="hint">最簡單測法：電腦先按 Monitor；手機播放 YouTube 後按 Start follower。Pause / buffering 時 Server 測試音會停，Resume 會繼續，Seek 會跳到新的 timecode 位置。</p>
+        <p class="hint">手機開始播放後：Open source → Enable source audio → 在 Source 分頁點 Relay Tab Audio Source 擴充功能。</p>
       </section>
 
       <section class="test-panel">
         <div class="test-heading">
           <div>
             <strong>Solo recording</strong>
-            <span>電腦端直接錄下 Server 輸出，不包含本機 Monitor gain；講完可以立刻回放。</span>
+            <span>直接錄 Server 輸出。Source capture 連著時，這裡錄到的是 YouTube tab audio + 手機 Mic。</span>
           </div>
           <div class="test-actions">
             <button id="start-recording">● Record</button>
             <button id="stop-recording" disabled>■ Stop</button>
           </div>
         </div>
-        <p id="recording-status" class="hint">手機開 Microphone 後，電腦直接按 Record 就能單人測試。</p>
+        <p id="recording-status" class="hint">先把手機 Mic 與 Desktop source 接好，再按 Record 做一次完整 take。</p>
         <audio id="recording-player" controls hidden style="width: 100%; margin-top: 12px"></audio>
         <a id="download-recording" class="note" hidden>Download recording</a>
+      </section>
+
+      <section class="test-panel">
+        <div class="test-heading">
+          <div>
+            <strong>Legacy timecode follower</strong>
+            <span>先前驗證 timeline → Server audio 的嗶聲測試，現在不用再碰。</span>
+          </div>
+          <div class="test-actions">
+            <button id="start-youtube-backing" disabled>Start follower</button>
+            <button id="stop-youtube-backing" disabled>Stop follower</button>
+          </div>
+        </div>
+        <p id="youtube-backing-status" class="hint">保留作工程診斷。</p>
       </section>
 
       <section class="test-panel">
@@ -102,7 +114,7 @@
           <input id="voice-offset" type="range" min="-500" max="500" step="10" value="0" disabled />
           <output id="voice-offset-value" for="voice-offset">0 ms</output>
         </label>
-        <p class="hint">這組 gain / offset 目前仍只作用於舊 click mixer；Server backing follower 先單獨驗證 backing 跟 timeline 的行為。</p>
+        <p class="hint">Live source 會先用手機 RTT/2 補掉第一階網路延遲；Voice offset 是之後做固定聲學校正時的微調。</p>
       </section>
 
       <label class="gain-control" for="monitor-gain">
@@ -111,7 +123,7 @@
         <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
       </label>
 
-      <p class="note">手機麥克風需要 HTTPS。YouTube monitor 與 Server backing follower 是兩條不同音源：YouTube 只在手機本機播放，Server 只接收 timeline telemetry。</p>
+      <p class="note">手機 Mic 仍需要 HTTPS；Desktop source 則固定用本機 Relay (`localhost`) 讓 Chrome 擴充功能只把聲音送回本機 Server。</p>
     </main>
     <script type="module" src="/app.js"></script>
     <script type="module" src="/recorder.js"></script>

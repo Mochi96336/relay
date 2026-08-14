@@ -1,31 +1,30 @@
 # Relay
 
-Experimental low-latency audio relay for a future browser-to-Discord karaoke flow.
+Experimental browser-to-server audio relay for a karaoke-style flow.
 
-## Current milestone
+## Current architecture
 
-The prototype now has three independent pieces:
-
-```text
-phone browser microphone -> WebSocket relay -> computer monitor / recorder
-```
+The prototype now has a real browser-audio source path in addition to the phone microphone path:
 
 ```text
-phone visible YouTube IFrame -> local listening + local timeline telemetry
+Singer phone
+├─ visible YouTube IFrame -> singer listens normally
+├─ YouTube media timeline -> Relay server
+└─ microphone PCM ---------> Relay server
+
+Desktop Relay source tab
+└─ visible YouTube IFrame
+   └─ follows the phone's video / play / pause / seek timeline
+      └─ Chrome tabCapture extension -> rendered tab audio PCM -> Relay server
+
+Relay server
+└─ captured YouTube tab audio + phone microphone
+   └─ 48 kHz buffered mix -> Monitor / Solo Record
 ```
 
-and the older controlled click mixer:
+The desktop source uses the same visible YouTube player surface; Relay does not download a media file or use a YouTube audio-download endpoint. The Chrome extension captures the final rendered audio of the local `source.html` tab after an explicit extension-button click.
 
-```text
-phone local 120 BPM click -> singer
-                              |
-                              v
-phone microphone -> server buffer -> mic gain / voice offset --+
-                                                             +--> server mix -> computer monitor
-server 120 BPM click ----------------------------------------+
-```
-
-Discord and real server-side backing tracks are still intentionally excluded.
+Discord output is not connected yet.
 
 ## Run
 
@@ -33,72 +32,73 @@ Requires Node.js 20.19 or newer.
 
 ```bash
 npm install
+npm run check
 npm run dev
 ```
 
 Open `http://localhost:3000` on the computer.
 
-For a phone, microphone capture requires a secure context. During development, expose the local HTTP server through an HTTPS tunnel, open that HTTPS URL on the phone, and choose **Microphone**.
+For the phone, microphone capture requires HTTPS. During development, expose Relay through an HTTPS tunnel and open that URL on the phone.
 
-If the tunnel is public, set an optional shared key before starting the server:
+If the tunnel is public, set a shared key:
 
 ```bash
 RELAY_KEY=some-random-string npm run dev
 ```
 
-Then open the page with `?key=some-random-string`. The audio WebSocket upgrade is rejected when the key does not match.
+Use the same `?key=some-random-string` query on the phone and on `source.html`.
 
-## YouTube monitor experiment
+## Desktop YouTube source
 
-The YouTube integration deliberately uses the official visible IFrame Player API only.
+Load the unpacked Chrome extension from `chrome-tab-audio-probe/` once in `chrome://extensions`.
 
-1. On the phone, paste a YouTube URL or 11-character video ID and press **Load**.
-2. Start playback from the normal controls inside the visible YouTube player.
-3. Press **Microphone** and confirm the YouTube playback keeps running while microphone PCM still reaches Relay.
-4. Try the reverse order once: start **Microphone** first, then start YouTube playback.
-5. Watch the local readout for player state, `getCurrentTime()`, duration, playback rate, buffering, and obvious timeline jumps.
-6. On the computer, use **Record** if you want to confirm microphone transport stayed alive while YouTube was playing on the phone.
+For an integrated run:
 
-The YouTube module emits local telemetry every 250 ms. A separate WebSocket client forwards that telemetry to Relay without sharing the microphone PCM path.
+1. On the computer, open **Monitor** or start **Solo recording** on the normal Relay page.
+2. On the phone, load YouTube in Relay, start playback, and start **Microphone** if you want voice in the mix.
+3. On the computer, open `http://localhost:3000/source.html` (with the same `?key=` when used).
+4. The source page automatically mirrors the phone's YouTube video ID and media timeline.
+5. Press **Enable source audio** once on the source page. This is the browser user gesture that allows the mirrored player to make sound.
+6. While `source.html` is the active tab, click the **Relay Tab Audio Source** extension icon.
+7. The extension captures that tab's rendered audio, converts it to mono Int16 PCM, and registers it with Relay as the `backing` source.
+8. Relay automatically switches Monitor / Solo Record to the 48 kHz live mix path. Stop the extension capture to return to the normal raw microphone path.
 
-Relay maintains a free-running server media timeline. Play, pause, buffering, rate, and video changes create normal re-anchors. Seek/discontinuity jumps are counted separately as corrections. Seek detection checks media continuity across YouTube state changes because scrubbing commonly passes through `buffering` before returning to `playing`.
+The source follower uses the existing server media clock. Large source/phone differences are corrected with `seekTo`; play, pause, buffering and deliberate seeks follow the phone timeline.
 
-Drift measurement does not align browser and server wall clocks. It compares YouTube media-time progression against server monotonic receive-time progression over a rolling window. RTT is used only as an approximate transport estimate for the displayed phase and is not part of drift measurement. The UI also reports measurement jitter.
+## Live mix timing
 
-Important boundary: YouTube audio is not extracted, downloaded, separated, or sent to the Relay server. The IFrame stays visible and YouTube remains the singer-side monitor only.
+The live mix keeps an 800 ms server buffer. This is intentional: the singer does not monitor the returned vocal, so end-to-end output latency can be traded for enough room to align the remote microphone with the local captured song.
 
-Also, `getCurrentTime()` is a media timeline value. It does not tell Relay the exact instant at which a sample becomes audible through the phone speaker or headphones, so a device/output calibration offset will still be needed later.
+Relay uses the phone timeline RTT/2 as a first-order microphone network compensation when the captured tab source connects. The existing `Voice offset` remains the manual fine adjustment on top of that estimate.
+
+This does **not** yet prove final acoustic alignment. `getCurrentTime()` is a media timeline value, not the exact moment a sample becomes audible from the phone output, so a later fixed device/output calibration is still needed.
+
+## YouTube media clock
+
+The phone-side visible YouTube IFrame reports video ID, player state, current media time, duration, playback rate and buffering. Relay forwards that telemetry over a separate WebSocket and maintains a free-running server media timeline.
+
+Normal video/state/rate transitions are counted as re-anchors. Seek/discontinuity jumps are counted separately as corrections. Drift is measured from YouTube media-time progression against the server monotonic receive clock; RTT is used only for approximate transport/phase information.
 
 ## Solo recording
 
-The computer can record the server output without enabling audible Monitor playback:
+Solo recording opens an independent monitor connection and records the Server output before local Monitor gain. With the captured tab source connected, that output is the live song + microphone mix. Without it, recording falls back to the normal microphone relay.
 
-1. Start **Microphone** on the phone.
-2. Press **Record** on the computer.
-3. Speak for a short take.
-4. Press **Stop** and play back the result in-page.
+## Legacy diagnostics
 
-Recording is taken before the computer's local Monitor gain.
+The older 120 BPM click mixer and synthetic YouTube timecode follower remain in the prototype as engineering diagnostics. They are no longer the primary product path.
 
-## Legacy click sync test
+## What has been proved so far
 
-The 120 BPM click test is still available as a lower-level engineering diagnostic. It keeps an 800 ms server safety buffer and supports live voice offset adjustment across a +/-500 ms window. It is no longer the preferred first test.
-
-## What this proves so far
-
-- mobile browser microphone capture
+- iPhone browser microphone capture over HTTPS
 - binary PCM transport over WebSocket
-- handling different browser audio sample rates
-- bounded live buffering instead of ever-growing latency
-- server-side microphone gain and click mixing
-- independent solo recording
-- visible YouTube IFrame loading on the same page as microphone capture
-- YouTube playback and browser microphone capture coexist on the tested iPhone
-- direct access to YouTube media time and playback-state telemetry without touching YouTube audio
-- server-side free-running media timeline with state re-anchors
-- media-clock drift measurement against server monotonic time with jitter reporting
-- seek/discontinuity classification across YouTube state transitions
+- YouTube playback and microphone capture can coexist on the tested phone
+- server-side YouTube media timeline with play / pause / seek handling
+- seek/discontinuity classification across buffering transitions
+- Chrome can capture the rendered audio of a Relay tab containing a YouTube IFrame
+- a desktop mirrored YouTube source can be controlled from the phone timeline
+- captured desktop tab audio can be forwarded to Relay as PCM
+- Relay has a buffered 48 kHz path for combining captured song audio with the phone microphone
 
 ## Next milestone
 
-If the media clock remains stable over real-device testing, add a controlled server-side backing source that follows the YouTube timeline for play, pause, seek, buffering, and playback-rate changes. After that, calibrate the fixed device/output phase offset before introducing Discord output.
+Run one integrated real-device take and inspect the resulting recording. Once the full song + microphone path is stable, calibrate the remaining fixed acoustic/output offset, then add Discord as the final output transport.

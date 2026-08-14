@@ -1,19 +1,23 @@
 {
   "manifest_version": 3,
-  "name": "Relay Tab Audio Probe",
-  "version": "0.1.0",
-  "description": "One-click proof that Chrome can capture the current tab's rendered audio as a MediaStream.",
+  "name": "Relay Tab Audio Source",
+  "version": "0.2.0",
+  "description": "Capture Relay's local desktop YouTube source tab and forward its rendered audio to the Relay mixer.",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
     "offscreen",
     "tabCapture"
   ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Start Relay tab-audio probe"
+    "default_title": "Start Relay tab audio source"
   }
 }

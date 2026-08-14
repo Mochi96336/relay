@@ -1,32 +1,17 @@
-# Chrome tab-audio probe
+# Relay Tab Audio Source
 
-This is a deliberately tiny feasibility test for one question:
+This unpacked Chrome extension is the desktop backing-source bridge for Relay.
 
-> Can desktop Chrome expose the rendered audio of the current tab as a `MediaStream`, even when that sound comes from an embedded player?
+It uses `chrome.tabCapture` only after an explicit extension-button click. Chrome gives the offscreen extension document the current tab's rendered audio as a `MediaStream`; the extension converts that stream to mono Int16 PCM and sends it to the Relay WebSocket as role `backing`.
 
-The extension **does not record, save, upload, or relay audio**. It only measures RMS level locally and shows the result in the extension badge.
+## Use
 
-## Load it
+1. Run Relay on the desktop (`npm run dev`).
+2. Open `http://localhost:3000/source.html` in desktop Chrome. If `RELAY_KEY` is set, keep the same `?key=...` query on this URL.
+3. Start YouTube on the singer phone so Relay has a live timeline.
+4. On the desktop source page, press **Enable source audio** once. The page mirrors the phone video ID / play / pause / seek state.
+5. With the source page as the active tab, click the **Relay Tab Audio Source** extension icon.
+6. The badge should show changing dBFS values while the YouTube source has audio. Relay receives the same captured PCM and automatically switches Monitor / Solo Record to the 48 kHz live mix path.
+7. Click the extension icon again to stop capture and return Relay to the normal raw-microphone path.
 
-1. Update the Relay branch locally.
-2. Open `chrome://extensions` in desktop Chrome.
-3. Enable **Developer mode**.
-4. Click **Load unpacked** and choose this `chrome-tab-audio-probe/` folder.
-5. Pin **Relay Tab Audio Probe** so its badge is visible.
-
-## Test it
-
-1. Open Relay in desktop Chrome and load/play the existing YouTube iframe.
-2. While that Relay tab is active, click the **Relay Tab Audio Probe** extension once.
-3. The extension badge should change from `…` to a number such as `-24`. That number is approximate dBFS; it should move while audio is playing.
-4. Pause the YouTube player. The badge should settle near `--`.
-5. Resume playback. The level should return.
-6. Click the extension again to stop capture.
-
-Chrome normally removes a captured tab's audio from direct playback. The probe reconnects the captured `MediaStream` to an `AudioContext` output so the tab should remain audible while testing.
-
-## What success means
-
-If the badge follows YouTube audio, the browser-security limitation is narrower than the page-level IFrame limitation: page JavaScript still cannot access YouTube PCM, but a user-authorized Chrome tab capture can access the tab's rendered audio stream.
-
-That does **not** yet prove a fully unattended server is possible. Chrome requires a user invocation before `tabCapture` can start. The next feasibility question would be how much of that browser session can be made persistent/operational on the machine running Relay.
+The extension intentionally accepts only a local Relay source page (`localhost` or `127.0.0.1`). It does not capture arbitrary tabs or send audio anywhere except that local Relay WebSocket.

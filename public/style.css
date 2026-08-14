@@ -20,6 +20,8 @@ button:hover:not(:disabled) { background: #27292d; }
 button.primary { background: #f4f4f5; color: #111214; border-color: #f4f4f5; }
 button.primary:hover:not(:disabled) { background: #dedee1; }
 button:disabled { opacity: .35; cursor: default; }
+input[type="text"] { width: 100%; min-width: 0; border: 1px solid #34363a; border-radius: 12px; padding: 13px 14px; font: inherit; color: inherit; background: #111214; outline: none; }
+input[type="text"]:focus { border-color: #6f7278; }
 .test-panel { margin-top: 14px; padding: 16px; border: 1px solid #34363a; border-radius: 16px; background: #15171a; }
 .test-heading { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
 .test-heading > div:first-child { display: grid; gap: 5px; }
@@ -29,13 +31,23 @@ button:disabled { opacity: .35; cursor: default; }
 .gain-control { margin-top: 12px; padding: 12px 14px; border: 1px solid #34363a; border-radius: 12px; display: grid; grid-template-columns: 92px 1fr 70px; align-items: center; gap: 12px; font-size: 14px; }
 .gain-control input { width: 100%; }
 .gain-control output { text-align: right; font-variant-numeric: tabular-nums; opacity: .72; }
+.youtube-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 14px; }
+.youtube-form button { padding: 12px 16px; }
+.youtube-player-shell { margin-top: 12px; overflow: hidden; border: 1px solid #34363a; border-radius: 12px; background: #0b0c0e; min-height: 200px; }
+.youtube-player-shell > div,
+.youtube-player-shell iframe { display: block; width: 100%; min-height: 200px; aspect-ratio: 16 / 9; border: 0; }
+.youtube-readout { margin-top: 10px; display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.youtube-readout span { opacity: .65; text-align: right; }
 .hint { margin: 11px 3px 0; font-size: 12px; line-height: 1.55; opacity: .52; }
 .note { margin: 16px 2px 0; font-size: 13px; line-height: 1.55; opacity: .5; }
 @media (max-width: 600px) {
+  body { padding: 16px; }
   .actions { grid-template-columns: 1fr 1fr; }
   #stop { grid-column: 1 / -1; }
   .test-heading { display: grid; }
   .test-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .gain-control { grid-template-columns: 1fr auto; }
   .gain-control input { grid-column: 1 / -1; grid-row: 2; }
+  .youtube-readout { display: grid; }
+  .youtube-readout span { text-align: left; }
 }

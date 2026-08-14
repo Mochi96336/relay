@@ -11,7 +11,7 @@
     <main class="shell">
       <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
       <h1>Phone mic → mixer</h1>
-      <p class="intro">第二階段加入 Server 端測試伴奏、人聲 offset 與單人錄音。仍然沒有 Discord，也還沒有 YouTube。</p>
+      <p class="intro">現在開始驗證手機端 YouTube monitor。YouTube 只在手機可見播放；Relay 讀播放器時間軸，Mic 仍走自己的低延遲音訊路徑。</p>
 
       <section class="panel" aria-live="polite">
         <strong id="status">Idle</strong>
@@ -24,11 +24,35 @@
         <button id="stop" disabled>Stop</button>
       </div>
 
+      <section class="test-panel youtube-panel">
+        <div class="test-heading">
+          <div>
+            <strong>YouTube monitor</strong>
+            <span>播放器完整保留在手機頁面。Relay 只讀播放狀態與媒體時間，不擷取 YouTube 音訊。</span>
+          </div>
+        </div>
+
+        <div class="youtube-form">
+          <input id="youtube-url" type="text" inputmode="url" autocomplete="off" placeholder="YouTube URL or video ID" aria-label="YouTube URL or video ID" />
+          <button id="load-youtube">Load</button>
+        </div>
+
+        <div class="youtube-player-shell">
+          <div id="youtube-player"></div>
+        </div>
+
+        <div class="youtube-readout" aria-live="polite">
+          <strong id="youtube-state">not loaded</strong>
+          <span id="youtube-timeline">--:-- / --:--</span>
+        </div>
+        <p id="youtube-note" class="hint">Load a video, tap Play in the YouTube player, then start Microphone.</p>
+      </section>
+
       <section class="test-panel">
         <div class="test-heading">
           <div>
             <strong>Solo recording</strong>
-            <span>電腦端直接錄下 Server 輸出，不包含本機 Monitor gain；唱完可以立刻回放。</span>
+            <span>電腦端直接錄下 Server 輸出，不包含本機 Monitor gain；講完可以立刻回放。</span>
           </div>
           <div class="test-actions">
             <button id="start-recording">● Record</button>
@@ -43,8 +67,8 @@
       <section class="test-panel">
         <div class="test-heading">
           <div>
-            <strong>Sync test</strong>
-            <span>手機與 Server 各自播放 120 BPM click；對著手機 click 拍手或說「搭」。</span>
+            <strong>Legacy click sync test</strong>
+            <span>保留原本的 120 BPM 工程測試；現在不用優先碰它。</span>
           </div>
           <div class="test-actions">
             <button id="start-sync-test" disabled>Start test</button>
@@ -63,7 +87,7 @@
           <input id="voice-offset" type="range" min="-500" max="500" step="10" value="0" disabled />
           <output id="voice-offset-value" for="voice-offset">0 ms</output>
         </label>
-        <p class="hint">人聲聽起來比 click 晚，就往負值調；比 click 早，就往正值調。Server 保留 800 ms safety buffer，所以可即時前後移動。</p>
+        <p class="hint">這組 offset 仍只作用於舊 click mixer；YouTube timeline 還沒接進 Server mixer。</p>
       </section>
 
       <label class="gain-control" for="monitor-gain">
@@ -72,9 +96,10 @@
         <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
       </label>
 
-      <p class="note">手機麥克風需要 HTTPS。單人測試可以不開 Monitor，直接錄完再聽；Sync test 時手機請戴耳機，避免 click 被麥克風直接收到。</p>
+      <p class="note">手機麥克風需要 HTTPS。YouTube 測試時先讓影片在可見播放器中正常播放，再按 Microphone；也可以反過來測一次，看 iPhone 是否會讓其中一路中斷。</p>
     </main>
     <script type="module" src="/app.js"></script>
     <script type="module" src="/recorder.js"></script>
+    <script type="module" src="/youtube.js"></script>
   </body>
 </html>

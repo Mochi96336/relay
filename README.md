@@ -33,6 +33,7 @@ Requires Node.js 20.19 or newer.
 ```bash
 npm install
 npm run check
+npm test
 npm run dev
 ```
 
@@ -47,6 +48,22 @@ RELAY_KEY=some-random-string npm run dev
 ```
 
 Use the same `?key=some-random-string` query on the phone and on `source.html`.
+
+## Tests
+
+`npm test` runs the suite on Node's built-in runner; it takes about ten seconds and needs no network.
+
+- `test/timing-calibration.test.ts` feeds the analyser synthetic percussive audio with a known lag baked in and asserts the lag comes back.
+- `test/youtube-timeline.test.ts` drives `YouTubeTimelineTracker` with an injected clock and pins the anchor / re-anchor / seek classification.
+- `test/server.test.ts` starts the real server as a child process on an OS-assigned port and exercises it over WebSockets: raw microphone passthrough, the live mix, publisher takeover, mix-health starvation reporting, shared-key auth, and the full calibration lifecycle.
+
+`src/server.ts` reads `RELAY_LIVE_PREBUFFER_MS`, `RELAY_CALIBRATION_TIMEOUT_MS` and `RELAY_HEARTBEAT_MS` so tests do not have to spend the production timings on every run. They default to the production values.
+
+### Known gap: calibration accepts unrelated audio
+
+The analyser's guards (`MIN_GLOBAL_CORRELATION` 0.12, and the 140 ms window-spread limit) are permissive. Given two unrelated recordings it usually still returns a result, reporting confidence around 0.4-0.6 against 1.0 for a true match. A bogus multi-second lag is not harmless: it puts the mixer's read head past the end of the microphone history immediately, which sounds exactly like the vocal dropping out.
+
+Tightening the thresholds needs real device captures to calibrate against, so for now `test/timing-calibration.test.ts` pins the discrimination margin that any change has to preserve rather than asserting a rejection that does not happen.
 
 ## Desktop YouTube source
 

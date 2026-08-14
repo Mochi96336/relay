@@ -14,6 +14,13 @@ const publicDir = path.resolve(__dirname, '../public');
 const port = Number(process.env.PORT ?? 3000);
 const relayKey = process.env.RELAY_KEY ?? null;
 
+// Real-time timings, overridable so the test suite does not have to spend the
+// full production prebuffer and calibration timeout on every run.
+function envMs(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
 const MIX_FRAME_SAMPLES = Math.round((MIX_SAMPLE_RATE * MIX_FRAME_MS) / 1000);
@@ -23,14 +30,14 @@ const TEST_PREBUFFER_MS = 800;
 // usable margin is `prebuffer - 2 * micTransportDelay + backingTransportDelay`.
 // The microphone delay counts twice, which is why 2.5 s left almost no room once
 // the phone link got slow and the calibrated lag was allowed to reach 2 s.
-const LIVE_MIX_PREBUFFER_MS = 4_000;
+const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 4_000);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
 const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_SAMPLES = Math.round((MIX_SAMPLE_RATE * TIMING_CALIBRATION_MS) / 1000);
-const TIMING_CALIBRATION_TIMEOUT_MS = 20_000;
+const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_000);
 const MAX_VOCAL_FINE_TUNE_MS = 100;
-const HEARTBEAT_MS = 8_000;
+const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
 
 const app = express();
@@ -957,6 +964,10 @@ server.on('error', (error: NodeJS.ErrnoException) => {
 });
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`Relay listening on http://localhost:${port}`);
+  // PORT=0 asks the OS for a free port; report the real one so callers (and the
+  // test harness) can find it.
+  const address = server.address();
+  const actualPort = typeof address === 'object' && address ? address.port : port;
+  console.log(`Relay listening on http://localhost:${actualPort}`);
   console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');
 });

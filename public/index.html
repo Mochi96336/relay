@@ -11,7 +11,7 @@
     <main class="shell">
       <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
       <h1>Phone mic → mixer</h1>
-      <p class="intro">第二階段加入 Server 端測試伴奏與人聲 offset。仍然沒有 Discord，也還沒有 YouTube。</p>
+      <p class="intro">第二階段加入 Server 端測試伴奏、人聲 offset 與單人錄音。仍然沒有 Discord，也還沒有 YouTube。</p>
 
       <section class="panel" aria-live="polite">
         <strong id="status">Idle</strong>
@@ -23,6 +23,22 @@
         <button id="start-monitor">🎧 Monitor</button>
         <button id="stop" disabled>Stop</button>
       </div>
+
+      <section class="test-panel">
+        <div class="test-heading">
+          <div>
+            <strong>Solo recording</strong>
+            <span>電腦端直接錄下 Server 輸出，不包含本機 Monitor gain；唱完可以立刻回放。</span>
+          </div>
+          <div class="test-actions">
+            <button id="start-recording">● Record</button>
+            <button id="stop-recording" disabled>■ Stop</button>
+          </div>
+        </div>
+        <p id="recording-status" class="hint">手機開 Microphone 後，電腦直接按 Record 就能單人測試。</p>
+        <audio id="recording-player" controls hidden style="width: 100%; margin-top: 12px"></audio>
+        <a id="download-recording" class="note" hidden>Download recording</a>
+      </section>
 
       <section class="test-panel">
         <div class="test-heading">
@@ -56,8 +72,9 @@
         <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
       </label>
 
-      <p class="note">手機麥克風需要 HTTPS。測 Sync test 時請戴耳機，避免手機播放的 click 又被手機麥克風直接收到。</p>
+      <p class="note">手機麥克風需要 HTTPS。單人測試可以不開 Monitor，直接錄完再聽；Sync test 時手機請戴耳機，避免 click 被麥克風直接收到。</p>
     </main>
     <script type="module" src="/app.js"></script>
+    <script type="module" src="/recorder.js"></script>
   </body>
 </html>

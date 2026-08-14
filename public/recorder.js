@@ -15,6 +15,11 @@ let recordingUrl = null;
 let sourceSampleRate = null;
 let publisherSampleRate = null;
 let testActive = false;
+let sourceConnected = false;
+let receivedPcmFrames = 0;
+let receivedPcmSamples = 0;
+let maxPcmAbs = 0;
+let lastPcmStatusAt = 0;
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -69,6 +74,32 @@ function chooseMimeType() {
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
 }
 
+function peakDbfs() {
+  if (maxPcmAbs <= 0) return -100;
+  return 20 * Math.log10(maxPcmAbs / 32768);
+}
+
+function updateRecordingTransportStatus() {
+  if (mediaRecorder?.state !== 'recording') return;
+
+  if (receivedPcmFrames > 0) {
+    recordingStatus.textContent = `● 錄音中 · Server PCM ${receivedPcmFrames} frames · peak ${peakDbfs().toFixed(1)} dBFS`;
+    return;
+  }
+
+  if (sourceConnected) {
+    recordingStatus.textContent = '● 錄音中 · Source 已連線 · 等待第一個 Server PCM frame…';
+    return;
+  }
+
+  if (publisherSampleRate) {
+    recordingStatus.textContent = `● 錄音中 · Mic ${publisherSampleRate} Hz 已連線 · 尚未收到 Server PCM`;
+    return;
+  }
+
+  recordingStatus.textContent = '● 錄音中 · 尚未看到 Mic / Source 連線';
+}
+
 function cleanupTransport() {
   if (socket) {
     socket.close();
@@ -87,11 +118,15 @@ function cleanupTransport() {
   sourceSampleRate = null;
   publisherSampleRate = null;
   testActive = false;
+  sourceConnected = false;
 }
 
 function finishRecording(mimeType) {
   const type = mediaRecorder?.mimeType || mimeType || 'audio/webm';
   const blob = new Blob(recordingChunks, { type });
+  const frames = receivedPcmFrames;
+  const samples = receivedPcmSamples;
+  const peak = peakDbfs();
 
   if (recordingUrl) URL.revokeObjectURL(recordingUrl);
   recordingUrl = URL.createObjectURL(blob);
@@ -104,7 +139,14 @@ function finishRecording(mimeType) {
   recordingDownload.download = `relay-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`;
   recordingDownload.hidden = false;
 
-  recordingStatus.textContent = `錄音完成 · ${(blob.size / 1024).toFixed(0)} KB · 可直接回放`;
+  if (frames === 0) {
+    recordingStatus.textContent = `錄音完成 · ⚠ 沒收到任何 Server PCM · ${(blob.size / 1024).toFixed(0)} KB`;
+  } else if (maxPcmAbs < 8) {
+    recordingStatus.textContent = `錄音完成 · ⚠ 收到 ${frames} PCM frames，但幾乎全是靜音 · ${(blob.size / 1024).toFixed(0)} KB`;
+  } else {
+    recordingStatus.textContent = `錄音完成 · ${frames} PCM frames / ${samples} samples · peak ${peak.toFixed(1)} dBFS · ${(blob.size / 1024).toFixed(0)} KB`;
+  }
+
   recordingChunks = [];
   mediaRecorder = null;
   cleanupTransport();
@@ -124,6 +166,11 @@ async function startRecording() {
   recordingPlayer.hidden = true;
   recordingDownload.hidden = true;
   recordingChunks = [];
+  sourceConnected = false;
+  receivedPcmFrames = 0;
+  receivedPcmSamples = 0;
+  maxPcmAbs = 0;
+  lastPcmStatusAt = 0;
 
   audioContext = new AudioContext({ latencyHint: 'interactive' });
   await audioContext.audioWorklet.addModule('/playback-worklet.js');
@@ -148,9 +195,16 @@ async function startRecording() {
       if (message.type === 'publisher-status') {
         publisherSampleRate = message.sampleRate ?? null;
         if (!testActive) sourceSampleRate = publisherSampleRate;
-        if (!message.connected) {
-          recordingStatus.textContent = '● 錄音中 · 等待手機 Microphone';
+        updateRecordingTransportStatus();
+        return;
+      }
+
+      if (message.type === 'source-status') {
+        sourceConnected = Boolean(message.connected);
+        if (sourceConnected && message.sampleRate) {
+          sourceSampleRate = MIX_SAMPLE_RATE;
         }
+        updateRecordingTransportStatus();
         return;
       }
 
@@ -159,11 +213,16 @@ async function startRecording() {
         if (testActive) {
           sourceSampleRate = Number(message.sampleRate) || MIX_SAMPLE_RATE;
           playback?.port.postMessage({ type: 'reset' });
-          recordingStatus.textContent = `● 錄音中 · Server mix · ${message.bpm} BPM`;
+          const label = message.mode === 'tab-source'
+            ? 'YouTube tab + Mic mix'
+            : message.mode === 'youtube-backing'
+              ? 'timecode follower'
+              : `${message.bpm} BPM test`;
+          recordingStatus.textContent = `● 錄音中 · Server mix · ${label}`;
         } else {
           sourceSampleRate = publisherSampleRate;
           playback?.port.postMessage({ type: 'reset' });
-          recordingStatus.textContent = '● 錄音中 · Server microphone';
+          updateRecordingTransportStatus();
         }
         return;
       }
@@ -171,7 +230,25 @@ async function startRecording() {
       return;
     }
 
-    if (!(event.data instanceof ArrayBuffer) || !sourceSampleRate || !audioContext || !playback) return;
+    if (!(event.data instanceof ArrayBuffer)) return;
+
+    const pcm16 = new Int16Array(event.data);
+    receivedPcmFrames += 1;
+    receivedPcmSamples += pcm16.length;
+    for (let i = 0; i < pcm16.length; i += 1) {
+      maxPcmAbs = Math.max(maxPcmAbs, Math.abs(pcm16[i]));
+    }
+
+    const now = performance.now();
+    if (now - lastPcmStatusAt >= 500) {
+      lastPcmStatusAt = now;
+      updateRecordingTransportStatus();
+    }
+
+    if (!sourceSampleRate || !audioContext || !playback) {
+      recordingStatus.textContent = `● 錄音中 · 收到 PCM ${receivedPcmFrames} frames，但 sample rate 尚未建立`;
+      return;
+    }
 
     const pcm = int16ToFloat32(event.data);
     const samples = linearResample(pcm, sourceSampleRate, audioContext.sampleRate);
@@ -198,7 +275,7 @@ async function startRecording() {
   mediaRecorder.addEventListener('stop', () => finishRecording(mimeType), { once: true });
   mediaRecorder.start(1000);
 
-  recordingStatus.textContent = '● 錄音中 · 正在錄 Server 輸出';
+  updateRecordingTransportStatus();
   stopButton.disabled = false;
 }
 

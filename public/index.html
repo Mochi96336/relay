@@ -55,10 +55,10 @@
             <span>電腦另外開一個 Source 分頁，它會自動跟手機的 video / play / pause / seek。Chrome 擴充功能只擷取這個分頁。</span>
           </div>
           <div class="test-actions">
-            <button type="button" onclick="window.open('/source.html' + location.search, '_blank')">Open source</button>
+            <button type="button" onclick="window.open('http://localhost:3000/source.html' + location.search, '_blank')">Open source</button>
           </div>
         </div>
-        <p class="hint">手機開始播放後：Open source → Enable source audio → 在 Source 分頁點 Relay Tab Audio Source 擴充功能。</p>
+        <p class="hint">這顆按鈕固定開本機 <code>localhost:3000</code>，不會再跟著 Cloudflare 網址走。手機開始播放後：Open source → Enable source audio → 在 Source 分頁點 Relay Tab Audio Source 擴充功能。</p>
       </section>
 
       <section class="test-panel">

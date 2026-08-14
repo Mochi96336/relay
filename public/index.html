@@ -11,7 +11,7 @@
     <main class="shell">
       <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
       <h1>Phone mic → mixer</h1>
-      <p class="intro">現在開始驗證手機端 YouTube monitor。YouTube 只在手機可見播放；Relay 讀播放器時間軸，Mic 仍走自己的低延遲音訊路徑。</p>
+      <p class="intro">手機 YouTube 留在本機播放；Relay 讀它的媒體時間，Server 可以用同一條 timeline 驅動自己的測試 backing。YouTube 音訊本身不會被擷取或送到 Server。</p>
 
       <section class="panel" aria-live="polite">
         <strong id="status">Idle</strong>
@@ -46,6 +46,21 @@
           <span id="youtube-timeline">--:-- / --:--</span>
         </div>
         <p id="youtube-note" class="hint">Load a video, tap Play in the YouTube player, then start Microphone.</p>
+      </section>
+
+      <section class="test-panel">
+        <div class="test-heading">
+          <div>
+            <strong>Server backing follower</strong>
+            <span>Server 依照 YouTube timeline 產生一條可聽的 timecode 測試音。它不是 YouTube 音訊，也不需要先開 Microphone。</span>
+          </div>
+          <div class="test-actions">
+            <button id="start-youtube-backing" disabled>Start follower</button>
+            <button id="stop-youtube-backing" disabled>Stop follower</button>
+          </div>
+        </div>
+        <p id="youtube-backing-status" class="hint">先在手機 Load 並播放 YouTube。</p>
+        <p class="hint">最簡單測法：電腦先按 Monitor；手機播放 YouTube 後按 Start follower。Pause / buffering 時 Server 測試音會停，Resume 會繼續，Seek 會跳到新的 timecode 位置。</p>
       </section>
 
       <section class="test-panel">
@@ -87,7 +102,7 @@
           <input id="voice-offset" type="range" min="-500" max="500" step="10" value="0" disabled />
           <output id="voice-offset-value" for="voice-offset">0 ms</output>
         </label>
-        <p class="hint">這組 offset 仍只作用於舊 click mixer；YouTube timeline 還沒接進 Server mixer。</p>
+        <p class="hint">這組 gain / offset 目前仍只作用於舊 click mixer；Server backing follower 先單獨驗證 backing 跟 timeline 的行為。</p>
       </section>
 
       <label class="gain-control" for="monitor-gain">
@@ -96,11 +111,12 @@
         <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
       </label>
 
-      <p class="note">手機麥克風需要 HTTPS。YouTube 測試時先讓影片在可見播放器中正常播放，再按 Microphone；也可以反過來測一次，看 iPhone 是否會讓其中一路中斷。</p>
+      <p class="note">手機麥克風需要 HTTPS。YouTube monitor 與 Server backing follower 是兩條不同音源：YouTube 只在手機本機播放，Server 只接收 timeline telemetry。</p>
     </main>
     <script type="module" src="/app.js"></script>
     <script type="module" src="/recorder.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>
+    <script type="module" src="/youtube-backing.js"></script>
   </body>
 </html>

@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 import express from 'express';
@@ -18,6 +19,7 @@ const MIX_FRAME_SAMPLES = Math.round((MIX_SAMPLE_RATE * MIX_FRAME_MS) / 1000);
 const TEST_BPM = 120;
 const TEST_PREBUFFER_MS = 800;
 const MAX_OFFSET_MS = 500;
+const YOUTUBE_BACKING_LOOKAHEAD_MS = 40;
 
 const app = express();
 app.disable('x-powered-by');
@@ -60,6 +62,14 @@ type MicChunk = {
   samples: Int16Array;
 };
 
+type TimelineStatus = {
+  connected?: boolean;
+  videoId?: string;
+  state?: number;
+  serverTime?: number;
+  playbackRate?: number;
+};
+
 let publisher: RelaySocket | null = null;
 let publisherSampleRate: number | null = null;
 let micGainDb = 30;
@@ -67,6 +77,9 @@ let voiceOffsetMs = 0;
 let testActive = false;
 let testStartedAt = 0;
 let testFrameIndex = 0;
+let youtubeBackingActive = false;
+let youtubeBackingStartedAt = 0;
+let youtubeBackingFrameIndex = 0;
 let micHistory: MicChunk[] = [];
 let micTotalSamples = 0;
 
@@ -102,12 +115,14 @@ function publisherStatusPayload() {
 }
 
 function testStatusPayload() {
+  const mode = testActive ? 'click' : youtubeBackingActive ? 'youtube-backing' : 'off';
   return {
     type: 'test-status',
-    active: testActive,
-    bpm: TEST_BPM,
+    active: mode !== 'off',
+    mode,
+    bpm: testActive ? TEST_BPM : 0,
     sampleRate: MIX_SAMPLE_RATE,
-    prebufferMs: TEST_PREBUFFER_MS,
+    prebufferMs: testActive ? TEST_PREBUFFER_MS : 0,
   };
 }
 
@@ -116,6 +131,24 @@ function mixSettingsPayload() {
     type: 'mix-settings',
     micGainDb,
     voiceOffsetMs,
+  };
+}
+
+function currentTimelineStatus(nowMs = performance.now()) {
+  return youtubeTimeline.statusPayload(nowMs) as TimelineStatus & Record<string, unknown>;
+}
+
+function youtubeBackingStatusPayload(nowMs = performance.now()) {
+  const timeline = currentTimelineStatus(nowMs);
+  return {
+    type: 'youtube-backing-status',
+    active: youtubeBackingActive,
+    available: Boolean(timeline.connected && timeline.videoId),
+    sampleRate: MIX_SAMPLE_RATE,
+    state: Number.isFinite(Number(timeline.state)) ? Number(timeline.state) : -1,
+    positionSeconds: Number.isFinite(Number(timeline.serverTime)) ? Number(timeline.serverTime) : null,
+    videoId: typeof timeline.videoId === 'string' ? timeline.videoId : null,
+    pattern: 'timecode-tone',
   };
 }
 
@@ -247,6 +280,24 @@ function clickSample(sampleIndex: number) {
   return Math.sin(2 * Math.PI * frequency * seconds) * amplitude * envelope;
 }
 
+function youtubeTimecodeSample(mediaSeconds: number) {
+  if (!Number.isFinite(mediaSeconds) || mediaSeconds < 0) return 0;
+
+  const wholeSecond = Math.floor(mediaSeconds);
+  const secondPhase = mediaSeconds - wholeSecond;
+  const halfBeat = secondPhase < 0.5 ? 0 : 1;
+  const pulsePhase = secondPhase - halfBeat * 0.5;
+  if (pulsePhase >= 0.085) return 0;
+
+  const notes = [440, 494, 523, 587, 659, 698, 784, 880];
+  const noteIndex = ((wholeSecond % notes.length) + notes.length) % notes.length;
+  const frequency = notes[noteIndex] * (halfBeat === 0 ? 1 : 1.5);
+  const accent = wholeSecond % 4 === 0 && halfBeat === 0;
+  const amplitude = accent ? 0.18 : 0.11;
+  const envelope = Math.exp(-pulsePhase * 48);
+  return Math.sin(2 * Math.PI * frequency * pulsePhase) * amplitude * envelope;
+}
+
 function mixedFrame(frameIndex: number) {
   const startSample = frameIndex * MIX_FRAME_SAMPLES;
   const offsetSamples = Math.round((voiceOffsetMs * MIX_SAMPLE_RATE) / 1000);
@@ -267,7 +318,25 @@ function mixedFrame(frameIndex: number) {
   return output;
 }
 
+function youtubeBackingFrame(frameAtMs: number) {
+  const timeline = currentTimelineStatus(frameAtMs);
+  const playing = Boolean(timeline.connected) && Number(timeline.state) === 1;
+  const mediaStart = Number(timeline.serverTime);
+  const playbackRate = Number(timeline.playbackRate) || 1;
+  const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
+
+  for (let i = 0; i < MIX_FRAME_SAMPLES; i += 1) {
+    const mediaSeconds = mediaStart + (i / MIX_SAMPLE_RATE) * playbackRate;
+    const value = playing ? youtubeTimecodeSample(mediaSeconds) : 0;
+    const intSample = value < 0 ? Math.round(value * 32768) : Math.round(value * 32767);
+    output.writeInt16LE(intSample, i * 2);
+  }
+
+  return output;
+}
+
 function startSyncTest() {
+  if (youtubeBackingActive) stopYoutubeBacking();
   testActive = true;
   testStartedAt = Date.now();
   testFrameIndex = 0;
@@ -284,17 +353,56 @@ function stopSyncTest() {
   broadcastStatus();
 }
 
+function startYoutubeBacking() {
+  const timeline = currentTimelineStatus();
+  if (!timeline.connected || !timeline.videoId) return false;
+
+  if (testActive) stopSyncTest();
+  youtubeBackingActive = true;
+  youtubeBackingStartedAt = performance.now();
+  youtubeBackingFrameIndex = 0;
+  clearMicHistory();
+  broadcastJson(youtubeBackingStatusPayload());
+  broadcastJson(testStatusPayload());
+  return true;
+}
+
+function stopYoutubeBacking() {
+  if (!youtubeBackingActive) return;
+  youtubeBackingActive = false;
+  clearMicHistory();
+  broadcastJson(youtubeBackingStatusPayload());
+  broadcastJson(testStatusPayload());
+  broadcastStatus();
+}
+
 const mixerTimer = setInterval(() => {
-  if (!testActive) return;
+  if (testActive) {
+    const elapsed = Date.now() - testStartedAt - TEST_PREBUFFER_MS;
+    if (elapsed < 0) return;
 
-  const elapsed = Date.now() - testStartedAt - TEST_PREBUFFER_MS;
-  if (elapsed < 0) return;
+    const expectedFrames = Math.floor(elapsed / MIX_FRAME_MS) + 1;
+    let framesToSend = Math.min(5, expectedFrames - testFrameIndex);
+    while (framesToSend > 0) {
+      broadcastToMonitors(mixedFrame(testFrameIndex), true);
+      testFrameIndex += 1;
+      framesToSend -= 1;
+    }
+    return;
+  }
 
-  const expectedFrames = Math.floor(elapsed / MIX_FRAME_MS) + 1;
-  let framesToSend = Math.min(5, expectedFrames - testFrameIndex);
+  if (!youtubeBackingActive) return;
+
+  const nowMs = performance.now();
+  const expectedFrames = Math.floor(
+    (nowMs - youtubeBackingStartedAt + YOUTUBE_BACKING_LOOKAHEAD_MS) / MIX_FRAME_MS,
+  ) + 1;
+  let framesToSend = Math.min(5, expectedFrames - youtubeBackingFrameIndex);
+
   while (framesToSend > 0) {
-    broadcastToMonitors(mixedFrame(testFrameIndex), true);
-    testFrameIndex += 1;
+    const frameAtMs = youtubeBackingStartedAt + youtubeBackingFrameIndex * MIX_FRAME_MS;
+    broadcastToMonitors(youtubeBackingFrame(frameAtMs), true);
+    youtubeBackingFrameIndex += 1;
     framesToSend -= 1;
   }
 }, 5);
@@ -302,6 +410,7 @@ const mixerTimer = setInterval(() => {
 const youtubeTimelineTimer = setInterval(() => {
   if (youtubeTimeline.hasTelemetry) {
     broadcastJson(youtubeTimeline.statusPayload());
+    broadcastJson(youtubeBackingStatusPayload());
   }
 }, 250);
 
@@ -320,7 +429,7 @@ wss.on('connection', (rawSocket) => {
       const buffer = data as Buffer;
       if (testActive) {
         appendMic(buffer);
-      } else {
+      } else if (!youtubeBackingActive) {
         broadcastToMonitors(buffer, true);
       }
       return;
@@ -352,12 +461,33 @@ wss.on('connection', (rawSocket) => {
     if (payload.type === 'youtube-telemetry') {
       if (youtubeTimeline.update(payload)) {
         broadcastJson(youtubeTimeline.statusPayload());
+        broadcastJson(youtubeBackingStatusPayload());
       }
       return;
     }
 
     if (payload.type === 'youtube-timeline-request') {
       sendJson(socket, youtubeTimeline.statusPayload());
+      return;
+    }
+
+    if (payload.type === 'youtube-backing-status-request') {
+      sendJson(socket, youtubeBackingStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'start-youtube-backing') {
+      if (!startYoutubeBacking()) {
+        sendJson(socket, {
+          type: 'error',
+          message: 'YouTube timeline is not live yet. Load and play a video first.',
+        });
+      }
+      return;
+    }
+
+    if (payload.type === 'stop-youtube-backing') {
+      stopYoutubeBacking();
       return;
     }
 
@@ -381,6 +511,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      sendJson(socket, youtubeBackingStatusPayload());
       broadcastStatus();
       return;
     }
@@ -392,6 +523,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      sendJson(socket, youtubeBackingStatusPayload());
       return;
     }
 
@@ -405,7 +537,8 @@ wss.on('connection', (rawSocket) => {
     }
 
     if (payload.type === 'stop-sync-test') {
-      stopSyncTest();
+      if (youtubeBackingActive) stopYoutubeBacking();
+      else stopSyncTest();
       return;
     }
 

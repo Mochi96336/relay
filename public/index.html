@@ -77,19 +77,6 @@
         <a id="download-recording" class="note" hidden>Download recording</a>
       </section>
 
-      <section class="test-panel">
-        <div class="test-heading">
-          <div>
-            <strong>Legacy timecode follower</strong>
-            <span>先前驗證 timeline → Server audio 的嗶聲測試，現在不用再碰。</span>
-          </div>
-          <div class="test-actions">
-            <button id="start-youtube-backing" disabled>Start follower</button>
-            <button id="stop-youtube-backing" disabled>Stop follower</button>
-          </div>
-        </div>
-        <p id="youtube-backing-status" class="hint">保留作工程診斷。</p>
-      </section>
 
       <section class="test-panel">
         <div class="test-heading">
@@ -102,26 +89,20 @@
             <button id="stop-sync-test" disabled>Stop test</button>
           </div>
         </div>
-
-        <label class="gain-control" for="mic-gain">
-          <span>Mic gain</span>
-          <input id="mic-gain" type="range" min="0" max="36" step="1" value="30" disabled />
-          <output id="mic-gain-value" for="mic-gain">+30 dB</output>
-        </label>
-
-        <label class="gain-control" for="voice-offset">
-          <span>Voice offset</span>
-          <input id="voice-offset" type="range" min="-500" max="500" step="10" value="0" disabled />
-          <output id="voice-offset-value" for="voice-offset">0 ms</output>
-        </label>
-        <p class="hint">Live source 會先用手機 RTT/2 補掉第一階網路延遲；Voice offset 是之後做固定聲學校正時的微調。</p>
       </section>
+
+      <label class="gain-control" for="mic-gain">
+        <span>Mic gain</span>
+        <input id="mic-gain" type="range" min="0" max="36" step="1" value="30" disabled />
+        <output id="mic-gain-value" for="mic-gain">+30 dB</output>
+      </label>
 
       <label class="gain-control" for="monitor-gain">
         <span>Monitor gain</span>
         <input id="monitor-gain" type="range" min="0" max="30" step="1" value="30" />
         <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
       </label>
+      <p class="hint">人聲對齊在 Source 分頁用 Calibrate timing 量測，再用該頁的 fine tune 微調。</p>
 
       <p class="note">手機 Mic 仍需要 HTTPS；Desktop source 則固定用本機 Relay (`localhost`) 讓 Chrome 擴充功能只把聲音送回本機 Server。</p>
     </main>
@@ -129,6 +110,5 @@
     <script type="module" src="/recorder.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>
-    <script type="module" src="/youtube-backing.js"></script>
   </body>
 </html>

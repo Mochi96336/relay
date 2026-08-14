@@ -125,7 +125,10 @@ function renderCalibration() {
     const windows = Array.isArray(latestCalibration.segmentLagsMs)
       ? latestCalibration.segmentLagsMs.map((value) => `${signed(value)} ms`).join(' / ')
       : '';
-    timingStatus.textContent = `✓ Mic path ${signed(latestCalibration.micLagMs, ' ms')} · confidence ${Number.isFinite(confidence) ? confidence.toFixed(2) : '--'}${windows ? ` · windows ${windows}` : ''}`;
+    const stale = latestCalibration.calibrationStale
+      ? ' · ⚠ 已過期，建議重跑'
+      : '';
+    timingStatus.textContent = `✓ Mic path ${signed(latestCalibration.micLagMs, ' ms')} · confidence ${Number.isFinite(confidence) ? confidence.toFixed(2) : '--'}${windows ? ` · windows ${windows}` : ''}${stale}`;
     return;
   }
 
@@ -135,7 +138,10 @@ function renderCalibration() {
   }
 
   if (latestSourceStatus?.timingMode === 'acoustic-calibration') {
-    timingStatus.textContent = `Applied acoustic calibration · Mic path ${signed(latestSourceStatus.calibratedMicLagMs, ' ms')} · fine tune ${signed(latestSourceStatus.vocalFineTuneMs, ' ms')}`;
+    const stale = latestSourceStatus.calibrationStale
+      ? ' · ⚠ 麥克風重新連線過，這個校準值已過期，建議重跑'
+      : '';
+    timingStatus.textContent = `Applied acoustic calibration · Mic path ${signed(latestSourceStatus.calibratedMicLagMs, ' ms')} · fine tune ${signed(latestSourceStatus.vocalFineTuneMs, ' ms')}${stale}`;
     return;
   }
 

@@ -9,8 +9,6 @@ const monitorGain = document.querySelector('#monitor-gain');
 const monitorGainValue = document.querySelector('#monitor-gain-value');
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
-const voiceOffset = document.querySelector('#voice-offset');
-const voiceOffsetValue = document.querySelector('#voice-offset-value');
 
 const TEST_BPM = 120;
 const MIX_SAMPLE_RATE = 48000;
@@ -85,7 +83,6 @@ function updateMonitorGain() {
 
 function updateMixLabels() {
   micGainValue.value = signed(micGain.value, ' dB');
-  voiceOffsetValue.value = signed(voiceOffset.value, ' ms');
 }
 
 function sendMixSettings() {
@@ -94,7 +91,6 @@ function sendMixSettings() {
   socket.send(JSON.stringify({
     type: 'set-mix',
     micGainDb: Number(micGain.value),
-    voiceOffsetMs: Number(voiceOffset.value),
   }));
 }
 
@@ -102,7 +98,6 @@ function updateTestButtons() {
   testStartButton.disabled = activeRole !== 'publisher' || testActive;
   testStopButton.disabled = !activeRole || !testActive;
   micGain.disabled = !activeRole;
-  voiceOffset.disabled = !activeRole;
 }
 
 function wsUrl() {
@@ -234,7 +229,6 @@ function handleServerMessage(message) {
 
   if (message.type === 'mix-settings') {
     if (!sliderIsBusy(micGain)) micGain.value = String(message.micGainDb ?? 30);
-    if (!sliderIsBusy(voiceOffset)) voiceOffset.value = String(message.voiceOffsetMs ?? 0);
     updateMixLabels();
     return;
   }
@@ -610,7 +604,7 @@ testStopButton.addEventListener('click', () => {
 
 monitorGain.addEventListener('input', updateMonitorGain);
 
-for (const slider of [micGain, voiceOffset]) {
+for (const slider of [micGain]) {
   slider.addEventListener('input', () => {
     markSliderTouched(slider);
     sendMixSettings();

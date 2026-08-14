@@ -11,6 +11,8 @@ let activeTabId = null;
 let meterSumSquares = 0;
 let meterSamples = 0;
 let lastMeterAt = 0;
+let droppedChunks = 0;
+let lastDropWarningAt = 0;
 
 function relayWsUrl(pageUrl) {
   const url = new URL(pageUrl);
@@ -97,7 +99,12 @@ function connectRelay() {
 }
 
 function handlePcm(buffer) {
-  if (!(buffer instanceof ArrayBuffer)) return;
+  if (!(buffer instanceof ArrayBuffer)) {
+    if (buffer?.type === 'input-gap') {
+      console.warn('Relay tab capture gap:', buffer.quanta, 'quanta padded with silence');
+    }
+    return;
+  }
 
   const samples = new Int16Array(buffer);
   for (let i = 0; i < samples.length; i += 1) {
@@ -122,13 +129,29 @@ function handlePcm(buffer) {
     lastMeterAt = now;
   }
 
-  if (
-    relayReady &&
-    relaySocket?.readyState === WebSocket.OPEN &&
-    relaySocket.bufferedAmount < 512 * 1024
-  ) {
-    relaySocket.send(buffer);
+  if (!relayReady || relaySocket?.readyState !== WebSocket.OPEN) return;
+
+  // Dropping a chunk shifts every later sample earlier with nothing recording
+  // the fact, which silently invalidates the timing calibration. Say so.
+  if (relaySocket.bufferedAmount >= 512 * 1024) {
+    droppedChunks += 1;
+    const now = performance.now();
+    if (now - lastDropWarningAt > 2_000) {
+      lastDropWarningAt = now;
+      console.warn(`Relay uplink congested: dropped ${droppedChunks} chunks (~${droppedChunks * 20} ms).`);
+      if (Number.isInteger(activeTabId)) {
+        chrome.runtime.sendMessage({
+          target: 'service-worker',
+          type: 'uplink-congested',
+          tabId: activeTabId,
+          droppedChunks,
+        }).catch(() => {});
+      }
+    }
+    return;
   }
+
+  relaySocket.send(buffer);
 }
 
 async function stopCapture(notify = false) {
@@ -168,6 +191,8 @@ async function stopCapture(notify = false) {
   relayPageUrl = null;
   meterSumSquares = 0;
   meterSamples = 0;
+  droppedChunks = 0;
+  lastDropWarningAt = 0;
   activeTabId = null;
 }
 

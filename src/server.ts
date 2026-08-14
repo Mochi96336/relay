@@ -30,7 +30,6 @@ const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_SAMPLES = Math.round((MIX_SAMPLE_RATE * TIMING_CALIBRATION_MS) / 1000);
 const TIMING_CALIBRATION_TIMEOUT_MS = 20_000;
 const MAX_VOCAL_FINE_TUNE_MS = 100;
-const YOUTUBE_BACKING_LOOKAHEAD_MS = 40;
 const HEARTBEAT_MS = 8_000;
 const MIX_HEALTH_INTERVAL_MS = 1_000;
 
@@ -97,18 +96,19 @@ let publisherSampleRate: number | null = null;
 let backing: RelaySocket | null = null;
 let backingSampleRate: number | null = null;
 let micGainDb = 30;
-let voiceOffsetMs = 0;
 let testActive = false;
 let testStartedAt = 0;
 let testFrameIndex = 0;
-let youtubeBackingActive = false;
-let youtubeBackingStartedAt = 0;
-let youtubeBackingFrameIndex = 0;
 let liveSourceActive = false;
 let liveSourceStartedAt = 0;
 let liveSourceFrameIndex = 0;
 let liveMicNetworkCompMs = 0;
 let calibratedMicLagMs: number | null = null;
+// A calibration measures one particular pair of transports. It must not outlive
+// the session it was measured in, and a microphone reconnect can change the
+// transport delay it folded in, so it is marked stale rather than silently kept.
+let liveSessionGeneration = 0;
+let calibrationGeneration = -1;
 let vocalFineTuneMs = 0;
 let timingCalibrationPhase: TimingCalibrationPhase = 'idle';
 let timingCalibrationError: string | null = null;
@@ -182,6 +182,10 @@ function publisherStatusPayload() {
   };
 }
 
+function calibrationIsStale() {
+  return calibratedMicLagMs !== null && calibrationGeneration !== liveSessionGeneration;
+}
+
 function sourceStatusPayload() {
   const timingBaseMs = calibratedMicLagMs ?? liveMicNetworkCompMs;
   return {
@@ -194,6 +198,7 @@ function sourceStatusPayload() {
     micNetworkCompensationMs: liveMicNetworkCompMs,
     calibratedMicLagMs,
     timingMode: calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+    calibrationStale: calibrationIsStale(),
     vocalFineTuneMs,
     appliedMicAdvanceMs: timingBaseMs - vocalFineTuneMs,
   };
@@ -239,6 +244,7 @@ function timingCalibrationStatusPayload() {
     segmentLagsMs: timingCalibrationSegmentLagsMs,
     error: timingCalibrationError,
     timingMode: calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+    calibrationStale: calibrationIsStale(),
     fallbackNetworkMs: liveMicNetworkCompMs,
     vocalFineTuneMs,
     appliedMicAdvanceMs: timingBaseMs - vocalFineTuneMs,
@@ -248,11 +254,9 @@ function timingCalibrationStatusPayload() {
 function testStatusPayload() {
   const mode = testActive
     ? 'click'
-    : youtubeBackingActive
-      ? 'youtube-backing'
-      : liveSourceActive
-        ? 'tab-source'
-        : 'off';
+    : liveSourceActive
+      ? 'tab-source'
+      : 'off';
 
   return {
     type: 'test-status',
@@ -272,26 +276,11 @@ function mixSettingsPayload() {
   return {
     type: 'mix-settings',
     micGainDb,
-    voiceOffsetMs,
   };
 }
 
 function currentTimelineStatus(nowMs = performance.now()) {
   return youtubeTimeline.statusPayload(nowMs) as TimelineStatus & Record<string, unknown>;
-}
-
-function youtubeBackingStatusPayload(nowMs = performance.now()) {
-  const timeline = currentTimelineStatus(nowMs);
-  return {
-    type: 'youtube-backing-status',
-    active: youtubeBackingActive,
-    available: Boolean(timeline.connected && timeline.videoId),
-    sampleRate: MIX_SAMPLE_RATE,
-    state: Number.isFinite(Number(timeline.state)) ? Number(timeline.state) : -1,
-    positionSeconds: Number.isFinite(Number(timeline.serverTime)) ? Number(timeline.serverTime) : null,
-    videoId: typeof timeline.videoId === 'string' ? timeline.videoId : null,
-    pattern: 'timecode-tone',
-  };
 }
 
 function broadcastStatus() {
@@ -341,6 +330,7 @@ function finishTimingCalibration() {
     const backingCapture = flattenChunks(timingCalibrationBackingChunks, TIMING_CALIBRATION_SAMPLES);
     const result = analyzeTimingCalibration(mic, backingCapture, MIX_SAMPLE_RATE);
     calibratedMicLagMs = result.micLagMs;
+    calibrationGeneration = liveSessionGeneration;
     timingCalibrationConfidence = result.confidence;
     timingCalibrationSegmentLagsMs = result.segmentLagsMs;
     timingCalibrationError = null;
@@ -513,24 +503,6 @@ function clickSample(sampleIndex: number) {
   return Math.sin(2 * Math.PI * frequency * seconds) * amplitude * envelope;
 }
 
-function youtubeTimecodeSample(mediaSeconds: number) {
-  if (!Number.isFinite(mediaSeconds) || mediaSeconds < 0) return 0;
-
-  const wholeSecond = Math.floor(mediaSeconds);
-  const secondPhase = mediaSeconds - wholeSecond;
-  const halfBeat = secondPhase < 0.5 ? 0 : 1;
-  const pulsePhase = secondPhase - halfBeat * 0.5;
-  if (pulsePhase >= 0.085) return 0;
-
-  const notes = [440, 494, 523, 587, 659, 698, 784, 880];
-  const noteIndex = ((wholeSecond % notes.length) + notes.length) % notes.length;
-  const frequency = notes[noteIndex] * (halfBeat === 0 ? 1 : 1.5);
-  const accent = wholeSecond % 4 === 0 && halfBeat === 0;
-  const amplitude = accent ? 0.18 : 0.11;
-  const envelope = Math.exp(-pulsePhase * 48);
-  return Math.sin(2 * Math.PI * frequency * pulsePhase) * amplitude * envelope;
-}
-
 function writeMixedSample(output: Buffer, index: number, value: number) {
   const mixed = Math.max(-1, Math.min(1, value));
   const intSample = mixed < 0 ? Math.round(mixed * 32768) : Math.round(mixed * 32767);
@@ -539,8 +511,7 @@ function writeMixedSample(output: Buffer, index: number, value: number) {
 
 function clickMixedFrame(frameIndex: number) {
   const startSample = frameIndex * MIX_FRAME_SAMPLES;
-  const offsetSamples = Math.round((voiceOffsetMs * MIX_SAMPLE_RATE) / 1000);
-  const mic = readHistoryRange(micHistory, startSample - offsetSamples, MIX_FRAME_SAMPLES);
+  const mic = readHistoryRange(micHistory, startSample, MIX_FRAME_SAMPLES);
   const gain = 10 ** (micGainDb / 20);
   const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
 
@@ -589,25 +560,8 @@ function liveMixedFrame(frameIndex: number) {
   return output;
 }
 
-function youtubeBackingFrame(frameAtMs: number) {
-  const timeline = currentTimelineStatus(frameAtMs);
-  const playing = Boolean(timeline.connected) && Number(timeline.state) === 1;
-  const mediaStart = Number(timeline.serverTime);
-  const playbackRate = Number(timeline.playbackRate) || 1;
-  const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
-
-  for (let i = 0; i < MIX_FRAME_SAMPLES; i += 1) {
-    const mediaSeconds = mediaStart + (i / MIX_SAMPLE_RATE) * playbackRate;
-    const value = playing ? youtubeTimecodeSample(mediaSeconds) : 0;
-    writeMixedSample(output, i, value);
-  }
-
-  return output;
-}
-
 function startSyncTest() {
   if (liveSourceActive) return false;
-  if (youtubeBackingActive) stopYoutubeBacking();
   testActive = true;
   testStartedAt = performance.now();
   testFrameIndex = 0;
@@ -621,29 +575,6 @@ function stopSyncTest() {
   if (!testActive) return;
   testActive = false;
   clearHistory(micHistory);
-  broadcastJson(testStatusPayload());
-  broadcastStatus();
-}
-
-function startYoutubeBacking() {
-  const timeline = currentTimelineStatus();
-  if (!timeline.connected || !timeline.videoId || liveSourceActive) return false;
-
-  if (testActive) stopSyncTest();
-  youtubeBackingActive = true;
-  youtubeBackingStartedAt = performance.now();
-  youtubeBackingFrameIndex = 0;
-  clearHistory(micHistory);
-  broadcastJson(youtubeBackingStatusPayload());
-  broadcastJson(testStatusPayload());
-  return true;
-}
-
-function stopYoutubeBacking() {
-  if (!youtubeBackingActive) return;
-  youtubeBackingActive = false;
-  clearHistory(micHistory);
-  broadcastJson(youtubeBackingStatusPayload());
   broadcastJson(testStatusPayload());
   broadcastStatus();
 }
@@ -663,13 +594,13 @@ function resetLiveMixEpoch() {
   // monotonic clock here and in the mixer.
   liveSourceStartedAt = performance.now();
   liveSourceFrameIndex = 0;
+  liveSessionGeneration += 1;
   clearMixHistories();
   resetMixHealth();
 }
 
 function startLiveSource() {
   if (testActive) stopSyncTest();
-  if (youtubeBackingActive) stopYoutubeBacking();
   refreshLiveMicNetworkCompensation();
   liveSourceActive = true;
   resetLiveMixEpoch();
@@ -694,7 +625,17 @@ function stopLiveSource() {
   if (!liveSourceActive) return;
   liveSourceActive = false;
   liveMicNetworkCompMs = 0;
+  // The next capture can be a different tab, device or output path, so the old
+  // measurement must not survive. It used to be process-global and quietly
+  // carried over into the next session.
+  calibratedMicLagMs = null;
+  calibrationGeneration = -1;
+  timingCalibrationPhase = 'idle';
+  timingCalibrationConfidence = null;
+  timingCalibrationSegmentLagsMs = [];
+  timingCalibrationError = null;
   clearMixHistories();
+  broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
   broadcastJson(testStatusPayload());
   broadcastStatus();
@@ -731,22 +672,6 @@ const mixerTimer = setInterval(() => {
       liveSourceFrameIndex += 1;
       framesToSend -= 1;
     }
-    return;
-  }
-
-  if (!youtubeBackingActive) return;
-
-  const nowMs = performance.now();
-  const expectedFrames = Math.floor(
-    (nowMs - youtubeBackingStartedAt + YOUTUBE_BACKING_LOOKAHEAD_MS) / MIX_FRAME_MS,
-  ) + 1;
-  let framesToSend = Math.min(5, expectedFrames - youtubeBackingFrameIndex);
-
-  while (framesToSend > 0) {
-    const frameAtMs = youtubeBackingStartedAt + youtubeBackingFrameIndex * MIX_FRAME_MS;
-    broadcastToMonitors(youtubeBackingFrame(frameAtMs), true);
-    youtubeBackingFrameIndex += 1;
-    framesToSend -= 1;
   }
 }, 5);
 
@@ -755,7 +680,6 @@ const youtubeTimelineTimer = setInterval(() => {
 
   if (youtubeTimeline.hasTelemetry) {
     broadcastJson(youtubeTimeline.statusPayload(nowMs));
-    broadcastJson(youtubeBackingStatusPayload(nowMs));
   }
 
   if (timingCalibrationPhase === 'collecting') {
@@ -807,7 +731,7 @@ wss.on('connection', (rawSocket) => {
         if (testActive || liveSourceActive) {
           const samples = appendHistory(micHistory, buffer, publisherSampleRate);
           if (liveSourceActive) appendTimingCalibrationSamples('mic', samples);
-        } else if (!youtubeBackingActive) {
+        } else {
           broadcastToMonitors(buffer, true);
         }
         return;
@@ -848,7 +772,6 @@ wss.on('connection', (rawSocket) => {
     if (payload.type === 'youtube-telemetry') {
       if (youtubeTimeline.update(payload)) {
         broadcastJson(youtubeTimeline.statusPayload());
-        broadcastJson(youtubeBackingStatusPayload());
       }
       return;
     }
@@ -899,28 +822,6 @@ wss.on('connection', (rawSocket) => {
       return;
     }
 
-    if (payload.type === 'youtube-backing-status-request') {
-      sendJson(socket, youtubeBackingStatusPayload());
-      return;
-    }
-
-    if (payload.type === 'start-youtube-backing') {
-      if (!startYoutubeBacking()) {
-        sendJson(socket, {
-          type: 'error',
-          message: liveSourceActive
-            ? 'Captured tab source is active. Stop it before using the old timecode follower.'
-            : 'YouTube timeline is not live yet. Load and play a video first.',
-        });
-      }
-      return;
-    }
-
-    if (payload.type === 'stop-youtube-backing') {
-      stopYoutubeBacking();
-      return;
-    }
-
     if (payload.type === 'register' && payload.role === 'publisher') {
       const sampleRate = validSampleRate(payload.sampleRate);
       if (!sampleRate) {
@@ -943,7 +844,6 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
-      sendJson(socket, youtubeBackingStatusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
@@ -977,7 +877,6 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
-      sendJson(socket, youtubeBackingStatusPayload());
       return;
     }
 
@@ -993,19 +892,13 @@ wss.on('connection', (rawSocket) => {
     }
 
     if (payload.type === 'stop-sync-test') {
-      if (youtubeBackingActive) stopYoutubeBacking();
-      else stopSyncTest();
+      stopSyncTest();
       return;
     }
 
     if (payload.type === 'set-mix') {
       const nextGain = Number(payload.micGainDb);
-      const nextOffset = Number(payload.voiceOffsetMs);
-
       if (Number.isFinite(nextGain)) micGainDb = Math.max(0, Math.min(36, nextGain));
-      if (Number.isFinite(nextOffset)) {
-        voiceOffsetMs = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, nextOffset));
-      }
       broadcastJson(mixSettingsPayload());
     }
   });

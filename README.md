@@ -79,7 +79,9 @@ The microphone delay counts twice, so a 500 ms phone link leaves ~3 s of margin 
 
 Recording must be done on the computer. Solo recording downloads the full 48 kHz mix and encodes it live, which a phone cannot do while also capturing and uploading the microphone; the page warns if you start it on the publishing device.
 
-Relay uses the phone timeline RTT/2 as a first-order microphone network compensation when the captured tab source connects. The existing `Voice offset` remains the manual fine adjustment on top of that estimate.
+Relay uses the phone timeline RTT/2 as a first-order microphone network compensation when the captured tab source connects. `Vocal fine tune` on `source.html` is the manual adjustment on top of the calibrated value; the old `Voice offset` slider is gone, because the live mixer never read it.
+
+A calibration is bound to the live session it was measured in. Disconnecting the capture clears it, and a microphone reconnect marks it stale on `source.html`, because the transport delay it folded in may have changed.
 
 This does **not** yet prove final acoustic alignment. `getCurrentTime()` is a media timeline value, not the exact moment a sample becomes audible from the phone output, so a later fixed device/output calibration is still needed.
 
@@ -97,7 +99,7 @@ The recorder reconnects on its own if the Relay connection drops mid-take, so a 
 
 ## Legacy diagnostics
 
-The older 120 BPM click mixer and synthetic YouTube timecode follower remain in the prototype as engineering diagnostics. They are no longer the primary product path.
+The 120 BPM click mixer remains as an engineering diagnostic for the microphone uplink and the monitor output path. The synthetic YouTube timecode follower has been removed: the desktop tab capture proves the same timeline end to end with real audio, and the follower's mode flag still altered production microphone routing while it was active.
 
 ## What has been proved so far
 

@@ -2,6 +2,7 @@ const OFFSCREEN_URL = 'offscreen.html';
 
 let activeTabId = null;
 let creatingOffscreen = null;
+let droppedChunks = 0;
 
 async function ensureOffscreenDocument() {
   const documentUrl = chrome.runtime.getURL(OFFSCREEN_URL);
@@ -49,6 +50,7 @@ async function clearBadge(tabId) {
 async function stopCapture() {
   const tabId = activeTabId;
   activeTabId = null;
+  droppedChunks = 0;
   chrome.runtime.sendMessage({ target: 'offscreen', type: 'stop-capture' }).catch(() => {});
   await clearBadge(tabId);
 }
@@ -110,15 +112,23 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
 
+  if (message.type === 'uplink-congested' && message.tabId === activeTabId) {
+    droppedChunks = Number(message.droppedChunks) || 0;
+    return;
+  }
+
   if (message.type === 'audio-level' && message.tabId === activeTabId) {
     const db = Number(message.dbfs);
     const text = Number.isFinite(db) && db > -80 ? String(Math.round(db)) : '--';
+    const congestion = droppedChunks > 0
+      ? ` · ⚠ dropped ${droppedChunks} chunks (~${droppedChunks * 20} ms)`
+      : '';
     chrome.action.setBadgeText({ tabId: activeTabId, text }).catch(() => {});
     chrome.action.setTitle({
       tabId: activeTabId,
       title: Number.isFinite(db)
-        ? `Relay tab source · ${message.sending ? 'sending' : 'not connected'} · ${db.toFixed(1)} dBFS`
-        : 'Relay tab source · silence',
+        ? `Relay tab source · ${message.sending ? 'sending' : 'not connected'} · ${db.toFixed(1)} dBFS${congestion}`
+        : `Relay tab source · silence${congestion}`,
     }).catch(() => {});
     return;
   }
@@ -126,6 +136,7 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'capture-ended' && message.tabId === activeTabId) {
     const tabId = activeTabId;
     activeTabId = null;
+    droppedChunks = 0;
     clearBadge(tabId).catch(() => {});
   }
 });

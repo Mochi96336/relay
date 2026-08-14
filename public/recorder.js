@@ -236,9 +236,7 @@ function handleJsonMessage(message) {
       playback?.port.postMessage({ type: 'reset' });
       const label = message.mode === 'tab-source'
         ? 'YouTube tab + Mic mix'
-        : message.mode === 'youtube-backing'
-          ? 'timecode follower'
-          : `${message.bpm} BPM test`;
+        : `${message.bpm} BPM test`;
       recordingStatus.textContent = `● 錄音中 · Server mix · ${label}`;
     } else {
       // Never leave this null: a null rate used to make every arriving frame be

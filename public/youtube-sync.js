@@ -9,10 +9,9 @@ const STATE_NAMES = new Map([
 
 let socket = null;
 let reconnectTimer = null;
-let clockTimer = null;
-let clockOffsetMs = null;
-let bestClockRttMs = Number.POSITIVE_INFINITY;
-let clockSequence = 0;
+let rttTimer = null;
+let bestNetworkRttMs = Number.POSITIVE_INFINITY;
+let pingSequence = 0;
 const pendingPings = new Map();
 
 const panel = document.querySelector('.youtube-panel');
@@ -25,7 +24,7 @@ serverReadout.innerHTML = '<strong id="server-timeline-state">Server timeline ·
 const serverNote = document.createElement('p');
 serverNote.id = 'server-timeline-note';
 serverNote.className = 'hint';
-serverNote.textContent = 'Clock sync and Server timeline are starting.';
+serverNote.textContent = 'Server media-clock tracking is starting.';
 
 if (localReadout) {
   localReadout.insertAdjacentElement('afterend', serverReadout);
@@ -61,11 +60,11 @@ function send(payload) {
   return false;
 }
 
-function sendClockPing() {
-  const id = ++clockSequence;
-  const clientSentAtMs = Date.now();
-  pendingPings.set(id, clientSentAtMs);
-  send({ type: 'clock-ping', id, clientSentAtMs });
+function sendRttPing() {
+  const id = ++pingSequence;
+  const sentAt = performance.now();
+  pendingPings.set(id, sentAt);
+  send({ type: 'clock-ping', id });
 
   if (pendingPings.size > 12) {
     const oldest = pendingPings.keys().next().value;
@@ -73,24 +72,25 @@ function sendClockPing() {
   }
 }
 
-function handleClockPong(message) {
+function handleRttPong(message) {
   const id = Number(message.id);
-  const clientSentAtMs = pendingPings.get(id);
-  if (!Number.isFinite(clientSentAtMs)) return;
+  const sentAt = pendingPings.get(id);
+  if (!Number.isFinite(sentAt)) return;
   pendingPings.delete(id);
 
-  const clientReceivedAtMs = Date.now();
-  const serverReceivedAtMs = Number(message.serverReceivedAtMs);
-  const serverSentAtMs = Number(message.serverSentAtMs);
-  if (!Number.isFinite(serverReceivedAtMs) || !Number.isFinite(serverSentAtMs)) return;
+  const receivedAt = performance.now();
+  const explicitProcessing = optionalNumber(message.serverProcessingMs);
+  const serverReceivedAt = optionalNumber(message.serverReceivedAtMs);
+  const serverSentAt = optionalNumber(message.serverSentAtMs);
+  const serverProcessingMs = explicitProcessing ?? (
+    serverReceivedAt !== null && serverSentAt !== null
+      ? Math.max(0, serverSentAt - serverReceivedAt)
+      : 0
+  );
+  const rttMs = Math.max(0, receivedAt - sentAt - serverProcessingMs);
 
-  const serverProcessingMs = Math.max(0, serverSentAtMs - serverReceivedAtMs);
-  const rttMs = Math.max(0, clientReceivedAtMs - clientSentAtMs - serverProcessingMs);
-  const offsetMs = ((serverReceivedAtMs - clientSentAtMs) + (serverSentAtMs - clientReceivedAtMs)) / 2;
-
-  if (rttMs <= bestClockRttMs + 2) {
-    bestClockRttMs = Math.min(bestClockRttMs, rttMs);
-    clockOffsetMs = clockOffsetMs === null ? offsetMs : clockOffsetMs * 0.7 + offsetMs * 0.3;
+  if (rttMs <= bestNetworkRttMs + 2) {
+    bestNetworkRttMs = Math.min(bestNetworkRttMs, rttMs);
   }
 }
 
@@ -100,7 +100,7 @@ function renderTimeline(message) {
   if (!message.videoId) {
     serverState.textContent = 'Server timeline · waiting for YouTube';
     serverValues.textContent = 'YT -- · Server --';
-    serverNote.textContent = 'Load and play YouTube on the phone to establish the Server timeline.';
+    serverNote.textContent = 'Load and play YouTube on the phone to establish the Server media timeline.';
     return;
   }
 
@@ -108,7 +108,9 @@ function renderTimeline(message) {
   const connected = Boolean(message.connected);
   const differenceMs = optionalNumber(message.differenceMs);
   const drift = optionalNumber(message.driftMsPerMinute);
-  const rtt = optionalNumber(message.clockRttMs);
+  const jitter = optionalNumber(message.measurementJitterMs);
+  const rtt = optionalNumber(message.networkRttMs ?? message.clockRttMs);
+  const transport = optionalNumber(message.transportEstimateMs);
   const age = optionalNumber(message.ageMs);
   const youtubeTime = optionalNumber(message.youtubeTime);
   const serverTime = optionalNumber(message.serverTime);
@@ -117,13 +119,15 @@ function renderTimeline(message) {
 
   serverState.textContent = `Server timeline · ${connected ? state : 'stale'} · ${message.lastReason ?? 'tracking'}`;
   serverValues.textContent = youtubeTime !== null && serverTime !== null
-    ? `YT ${youtubeTime.toFixed(3)} s · Server ${serverTime.toFixed(3)} s · Δ ${signed(differenceMs)} ms`
+    ? `YT ${youtubeTime.toFixed(3)} s · Server ${serverTime.toFixed(3)} s · phase Δ ${signed(differenceMs)} ms`
     : 'YT -- · Server --';
 
   const driftText = drift !== null ? `${signed(drift, 1)} ms/min` : 'collecting';
-  const rttText = rtt !== null ? `${rtt.toFixed(0)} ms RTT` : 'clock sync…';
+  const jitterText = jitter !== null ? `${jitter.toFixed(0)} ms jitter` : 'jitter --';
+  const rttText = rtt !== null ? `${rtt.toFixed(0)} ms RTT` : 'RTT…';
+  const transportText = transport !== null ? `one-way≈${transport.toFixed(0)} ms` : 'one-way --';
   const ageText = age !== null ? `${age.toFixed(0)} ms old` : 'age --';
-  serverNote.textContent = `Drift ${driftText} · ${rttText} · ${ageText} · reanchors ${reanchors} · corrections ${corrections}`;
+  serverNote.textContent = `Drift ${driftText} · ${jitterText} · ${rttText} · ${transportText} · ${ageText} · reanchors ${reanchors} · corrections ${corrections}`;
 }
 
 function handleMessage(event) {
@@ -137,7 +141,7 @@ function handleMessage(event) {
   }
 
   if (message.type === 'clock-pong') {
-    handleClockPong(message);
+    handleRttPong(message);
     return;
   }
 
@@ -153,22 +157,21 @@ function connect() {
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
-    clockOffsetMs = null;
-    bestClockRttMs = Number.POSITIVE_INFINITY;
+    bestNetworkRttMs = Number.POSITIVE_INFINITY;
     pendingPings.clear();
     send({ type: 'youtube-timeline-request' });
-    sendClockPing();
-    setTimeout(sendClockPing, 180);
-    setTimeout(sendClockPing, 450);
-    clearInterval(clockTimer);
-    clockTimer = setInterval(sendClockPing, 5_000);
+    sendRttPing();
+    setTimeout(sendRttPing, 180);
+    setTimeout(sendRttPing, 450);
+    clearInterval(rttTimer);
+    rttTimer = setInterval(sendRttPing, 5_000);
   });
 
   next.addEventListener('message', handleMessage);
   next.addEventListener('close', () => {
     if (socket !== next) return;
     socket = null;
-    clearInterval(clockTimer);
+    clearInterval(rttTimer);
     if (serverState) serverState.textContent = 'Server timeline · disconnected';
     reconnectTimer = setTimeout(connect, 1_000);
   });
@@ -185,10 +188,7 @@ window.addEventListener('relay:youtube-telemetry', (event) => {
   send({
     type: 'youtube-telemetry',
     ...detail,
-    sampledAtServerMs: Number.isFinite(clockOffsetMs)
-      ? Number(detail.sampledAtMs) + clockOffsetMs
-      : undefined,
-    clockRttMs: Number.isFinite(bestClockRttMs) ? bestClockRttMs : undefined,
+    networkRttMs: Number.isFinite(bestNetworkRttMs) ? bestNetworkRttMs : undefined,
   });
 });
 

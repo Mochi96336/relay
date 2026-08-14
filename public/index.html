@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Relay</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
+      <h1>Phone mic → computer</h1>
+      <p class="intro">第一階段只驗證即時收音與播放。沒有 Discord、沒有 YouTube、沒有混音。</p>
+
+      <section class="panel" aria-live="polite">
+        <strong id="status">Idle</strong>
+        <span id="details"></span>
+      </section>
+
+      <div class="actions">
+        <button id="start-publisher" class="primary">🎤 Microphone</button>
+        <button id="start-monitor">🎧 Monitor</button>
+        <button id="stop" disabled>Stop</button>
+      </div>
+
+      <p class="note">手機麥克風需要 HTTPS；開發時可把本機 HTTP 服務透過 HTTPS tunnel 暴露出去。</p>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

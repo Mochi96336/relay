@@ -16,6 +16,8 @@ let sourceSampleRate = null;
 let publisherSampleRate = null;
 let testActive = false;
 let sourceConnected = false;
+let sourceMicConnected = false;
+let sourcePrebufferMs = 0;
 let receivedPcmFrames = 0;
 let receivedPcmSamples = 0;
 let maxPcmAbs = 0;
@@ -87,8 +89,14 @@ function updateRecordingTransportStatus() {
     return;
   }
 
+  if (sourceConnected && !sourceMicConnected) {
+    recordingStatus.textContent = '● 錄音中 · Source 已連線 · Mic 未連線 / 正在重連 · Server 暫不輸出 PCM';
+    return;
+  }
+
   if (sourceConnected) {
-    recordingStatus.textContent = '● 錄音中 · Source 已連線 · 等待第一個 Server PCM frame…';
+    const prebuffer = sourcePrebufferMs > 0 ? ` · prebuffer ${sourcePrebufferMs} ms` : '';
+    recordingStatus.textContent = `● 錄音中 · Source + Mic 已連線${prebuffer} · 等待第一個 Server PCM frame…`;
     return;
   }
 
@@ -119,6 +127,8 @@ function cleanupTransport() {
   publisherSampleRate = null;
   testActive = false;
   sourceConnected = false;
+  sourceMicConnected = false;
+  sourcePrebufferMs = 0;
 }
 
 function finishRecording(mimeType) {
@@ -167,6 +177,8 @@ async function startRecording() {
   recordingDownload.hidden = true;
   recordingChunks = [];
   sourceConnected = false;
+  sourceMicConnected = false;
+  sourcePrebufferMs = 0;
   receivedPcmFrames = 0;
   receivedPcmSamples = 0;
   maxPcmAbs = 0;
@@ -201,6 +213,8 @@ async function startRecording() {
 
       if (message.type === 'source-status') {
         sourceConnected = Boolean(message.connected);
+        sourceMicConnected = Boolean(message.micConnected);
+        sourcePrebufferMs = Number(message.prebufferMs) || 0;
         if (sourceConnected && message.sampleRate) {
           sourceSampleRate = MIX_SAMPLE_RATE;
         }

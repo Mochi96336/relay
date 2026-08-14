@@ -7,11 +7,21 @@ export type TimingCalibrationAnalysis = {
   backingLevelDbfs: number;
 };
 
+type LagSearchResult = {
+  lag: number;
+  correlation: number;
+};
+
 const ENVELOPE_FRAME_MS = 5;
-const MAX_LAG_MS = 650;
-const SEGMENT_LENGTH_MS = 1_400;
-const SEGMENT_STARTS_MS = [700, 2_300, 3_900];
+const MAX_LAG_MS = 2_000;
+const LOCAL_SEARCH_RADIUS_MS = 150;
+const LOCAL_SUPPORT_RADIUS_MS = 100;
 const LOCAL_MEAN_RADIUS_MS = 125;
+const SEGMENT_LENGTH_MS = 650;
+const SEGMENT_COUNT = 5;
+const SEGMENT_EDGE_MARGIN_MS = 120;
+const MIN_GLOBAL_CORRELATION = 0.12;
+const MIN_LOCAL_CORRELATION = 0.06;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -44,19 +54,26 @@ function featureEnvelope(samples: Int16Array, sampleRate: number) {
     energy[frame] = Math.log1p(rms * 80);
   }
 
-  // Remove slow loudness changes. What remains is the short-term musical
-  // envelope, which survives phone speaker / microphone coloration much better
-  // than raw waveform correlation.
+  const smoothed = new Float64Array(frameCount);
+  for (let i = 0; i < frameCount; i += 1) {
+    const before = energy[Math.max(0, i - 1)];
+    const current = energy[i];
+    const after = energy[Math.min(frameCount - 1, i + 1)];
+    smoothed[i] = (before + current * 2 + after) / 4;
+  }
+
+  // Remove slow loudness changes. The remaining short-term envelope survives
+  // speaker / room / microphone coloration much better than raw PCM matching.
   const radius = Math.max(1, Math.round(LOCAL_MEAN_RADIUS_MS / ENVELOPE_FRAME_MS));
   const prefix = new Float64Array(frameCount + 1);
-  for (let i = 0; i < frameCount; i += 1) prefix[i + 1] = prefix[i] + energy[i];
+  for (let i = 0; i < frameCount; i += 1) prefix[i + 1] = prefix[i] + smoothed[i];
 
   const feature = new Float64Array(frameCount);
   for (let i = 0; i < frameCount; i += 1) {
     const from = Math.max(0, i - radius);
     const to = Math.min(frameCount, i + radius + 1);
     const mean = (prefix[to] - prefix[from]) / Math.max(1, to - from);
-    feature[i] = energy[i] - mean;
+    feature[i] = smoothed[i] - mean;
   }
 
   return feature;
@@ -99,12 +116,13 @@ function bestLagForSegment(
   mic: Float64Array,
   start: number,
   length: number,
+  minLagFrames: number,
   maxLagFrames: number,
-) {
+): LagSearchResult {
   let bestLag = 0;
   let bestCorrelation = -1;
 
-  for (let lag = -maxLagFrames; lag <= maxLagFrames; lag += 1) {
+  for (let lag = minLagFrames; lag <= maxLagFrames; lag += 1) {
     const micStart = start + lag;
     if (micStart < 0 || micStart + length > mic.length) continue;
     const correlation = normalizedCorrelation(backing, mic, start, length, lag);
@@ -117,12 +135,67 @@ function bestLagForSegment(
   return { lag: bestLag, correlation: bestCorrelation };
 }
 
+function bestLagAcrossOverlap(
+  backing: Float64Array,
+  mic: Float64Array,
+  maxLagFrames: number,
+): LagSearchResult {
+  let bestLag = 0;
+  let bestCorrelation = -1;
+  const minimumOverlapFrames = Math.round(3_000 / ENVELOPE_FRAME_MS);
+
+  for (let lag = -maxLagFrames; lag <= maxLagFrames; lag += 1) {
+    const start = Math.max(0, -lag);
+    const length = Math.min(backing.length - start, mic.length - (start + lag));
+    if (length < minimumOverlapFrames) continue;
+
+    const correlation = normalizedCorrelation(backing, mic, start, length, lag);
+    if (correlation > bestCorrelation) {
+      bestCorrelation = correlation;
+      bestLag = lag;
+    }
+  }
+
+  return { lag: bestLag, correlation: bestCorrelation };
+}
+
+function validationStarts(
+  frameCount: number,
+  segmentLength: number,
+  minLagFrames: number,
+  maxLagFrames: number,
+) {
+  let first = Math.max(0, -minLagFrames);
+  let last = Math.min(
+    frameCount - segmentLength,
+    frameCount - segmentLength - maxLagFrames,
+  );
+
+  const margin = Math.round(SEGMENT_EDGE_MARGIN_MS / ENVELOPE_FRAME_MS);
+  if (last - first > margin * 2) {
+    first += margin;
+    last -= margin;
+  }
+
+  if (last < first) return [];
+  if (SEGMENT_COUNT === 1) return [Math.round((first + last) / 2)];
+
+  return Array.from({ length: SEGMENT_COUNT }, (_, index) => (
+    Math.round(first + ((last - first) * index) / (SEGMENT_COUNT - 1))
+  ));
+}
+
 function median(values: number[]) {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1
     ? sorted[middle]
     : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function signedMs(value: number) {
+  const rounded = Math.round(value);
+  return `${rounded > 0 ? '+' : ''}${rounded} ms`;
 }
 
 export function analyzeTimingCalibration(
@@ -152,33 +225,91 @@ export function analyzeTimingCalibration(
   const micFeature = featureEnvelope(mic, sampleRate);
   const backingFeature = featureEnvelope(backing, sampleRate);
   const maxLagFrames = Math.round(MAX_LAG_MS / ENVELOPE_FRAME_MS);
-  const segmentLength = Math.round(SEGMENT_LENGTH_MS / ENVELOPE_FRAME_MS);
-  const segmentStarts = SEGMENT_STARTS_MS.map((ms) => Math.round(ms / ENVELOPE_FRAME_MS));
 
-  const results = segmentStarts.map((start) => bestLagForSegment(
+  // First search the full usable overlap. At ±2 s there are still four seconds
+  // of common material in a six-second capture, which is much harder for a
+  // repeated beat to fool than several independent short windows.
+  const global = bestLagAcrossOverlap(backingFeature, micFeature, maxLagFrames);
+  const globalLagMs = global.lag * ENVELOPE_FRAME_MS;
+
+  if (global.correlation < MIN_GLOBAL_CORRELATION) {
+    throw new Error(
+      `Calibration signal is weak (corr ${global.correlation.toFixed(2)}). ` +
+      'Use a louder section with clear drums or attacks and stay quiet for six seconds.',
+    );
+  }
+
+  // Then validate only near that coarse answer. Segment locations are chosen
+  // inside the actual overlap, so large lags near ±2 s still get five windows.
+  const localRadiusFrames = Math.round(LOCAL_SEARCH_RADIUS_MS / ENVELOPE_FRAME_MS);
+  const supportRadiusFrames = Math.round(LOCAL_SUPPORT_RADIUS_MS / ENVELOPE_FRAME_MS);
+  const minLocalLag = Math.max(-maxLagFrames, global.lag - localRadiusFrames);
+  const maxLocalLag = Math.min(maxLagFrames, global.lag + localRadiusFrames);
+  const segmentLength = Math.round(SEGMENT_LENGTH_MS / ENVELOPE_FRAME_MS);
+  const starts = validationStarts(
+    backingFeature.length,
+    segmentLength,
+    minLocalLag,
+    maxLocalLag,
+  );
+
+  if (starts.length < 3) {
+    throw new Error('Not enough overlapping audio to validate this timing result.');
+  }
+
+  const results = starts.map((start) => bestLagForSegment(
     backingFeature,
     micFeature,
     start,
     segmentLength,
-    maxLagFrames,
+    minLocalLag,
+    maxLocalLag,
   ));
 
   const segmentLagsMs = results.map((result) => result.lag * ENVELOPE_FRAME_MS);
   const segmentCorrelations = results.map((result) => result.correlation);
-  const micLagMs = Math.round(median(segmentLagsMs));
-  const medianCorrelation = median(segmentCorrelations);
-  const spreadMs = Math.max(...segmentLagsMs) - Math.min(...segmentLagsMs);
+  const support = results.filter((result) => (
+    result.correlation >= MIN_LOCAL_CORRELATION &&
+    Math.abs(result.lag - global.lag) <= supportRadiusFrames
+  ));
 
-  if (medianCorrelation < 0.22) {
-    throw new Error('Calibration signal is ambiguous. Keep the room quiet and try a louder music section.');
-  }
-  if (spreadMs > 120) {
-    throw new Error('Calibration windows disagree. Keep the phone still and try another six-second section.');
+  if (support.length < 3) {
+    const windows = segmentLagsMs.map(signedMs).join(' / ');
+    throw new Error(
+      `Could not confirm the coarse timing peak (global ${signedMs(globalLagMs)}; windows ${windows}). ` +
+      'Try another six-second section with clear attacks.',
+    );
   }
 
-  const correlationScore = clamp((medianCorrelation - 0.18) / 0.62, 0, 1);
-  const consistencyScore = clamp(1 - spreadMs / 120, 0, 1);
-  const confidence = clamp(correlationScore * 0.7 + consistencyScore * 0.3, 0, 1);
+  const supportLagsMs = support.map((result) => result.lag * ENVELOPE_FRAME_MS);
+  const spreadMs = Math.max(...supportLagsMs) - Math.min(...supportLagsMs);
+  if (spreadMs > 140) {
+    const windows = segmentLagsMs.map(signedMs).join(' / ');
+    throw new Error(
+      `Timing moved during calibration (global ${signedMs(globalLagMs)}; windows ${windows}). ` +
+      'Keep playback continuous and try again.',
+    );
+  }
+
+  const micLagMs = Math.round(median([
+    globalLagMs,
+    globalLagMs,
+    ...supportLagsMs,
+  ]));
+
+  const medianLocalCorrelation = median(support.map((result) => result.correlation));
+  const correlationScore = clamp((global.correlation - 0.10) / 0.55, 0, 1);
+  const localScore = clamp((medianLocalCorrelation - 0.04) / 0.50, 0, 1);
+  const supportScore = support.length / results.length;
+  const consistencyScore = clamp(1 - spreadMs / 140, 0, 1);
+  const confidence = clamp(
+    correlationScore * 0.4 +
+    localScore * 0.25 +
+    supportScore * 0.2 +
+    consistencyScore * 0.15,
+    0,
+    1,
+  );
 
   return {
     micLagMs,

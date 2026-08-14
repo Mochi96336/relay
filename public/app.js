@@ -14,8 +14,10 @@ const voiceOffsetValue = document.querySelector('#voice-offset-value');
 
 const TEST_BPM = 120;
 const MIX_SAMPLE_RATE = 48000;
+const SOCKET_RECONNECT_MS = 1000;
 
 let socket = null;
+let socketReconnectTimer = null;
 let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
@@ -87,6 +89,12 @@ function connectSocket() {
     ws.addEventListener('open', () => resolve(ws), { once: true });
     ws.addEventListener('error', () => reject(new Error('WebSocket connection failed.')), { once: true });
   });
+}
+
+function clearSocketReconnect() {
+  if (!socketReconnectTimer) return;
+  clearTimeout(socketReconnectTimer);
+  socketReconnectTimer = null;
 }
 
 function linearResample(input, sourceRate, targetRate) {
@@ -164,6 +172,12 @@ function handleServerMessage(message, playback = null) {
     return;
   }
 
+  if (message.type === 'registered' && message.role === 'publisher' && activeRole === 'publisher') {
+    setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM → relay`);
+    sendMixSettings();
+    return;
+  }
+
   if (message.type === 'publisher-status') {
     if (!testActive) sourceSampleRate = message.sampleRate ?? null;
     if (activeRole === 'monitor') {
@@ -209,8 +223,68 @@ function handleServerMessage(message, playback = null) {
   }
 }
 
+function schedulePublisherReconnect() {
+  if (activeRole !== 'publisher' || !mediaStream || !audioContext) return;
+  clearSocketReconnect();
+  socketReconnectTimer = setTimeout(() => {
+    socketReconnectTimer = null;
+    connectPublisherSocket().catch(() => {
+      if (activeRole !== 'publisher' || !mediaStream || !audioContext) return;
+      setStatus('Reconnecting microphone…', 'Relay is still unavailable; retrying automatically.');
+      schedulePublisherReconnect();
+    });
+  }, SOCKET_RECONNECT_MS);
+}
+
+async function connectPublisherSocket() {
+  if (activeRole !== 'publisher' || !mediaStream || !audioContext) return;
+  clearSocketReconnect();
+
+  const ws = await connectSocket();
+  if (activeRole !== 'publisher' || !mediaStream || !audioContext) {
+    ws.close();
+    return;
+  }
+
+  const previous = socket;
+  socket = ws;
+  if (previous && previous !== ws) {
+    try {
+      previous.close();
+    } catch {}
+  }
+
+  ws.send(JSON.stringify({
+    type: 'register',
+    role: 'publisher',
+    sampleRate: audioContext.sampleRate,
+  }));
+
+  ws.addEventListener('message', (event) => {
+    if (socket !== ws || typeof event.data !== 'string') return;
+    handleServerMessage(JSON.parse(event.data));
+  });
+
+  ws.addEventListener('close', () => {
+    if (socket !== ws) return;
+    socket = null;
+    if (activeRole !== 'publisher' || !mediaStream || !audioContext) return;
+    setStatus('Reconnecting microphone…', 'Relay connection closed; microphone capture stays active.');
+    schedulePublisherReconnect();
+  });
+
+  ws.addEventListener('error', () => {
+    try {
+      ws.close();
+    } catch {}
+  });
+}
+
 async function stop(setIdle = true) {
   stopLocalClickTrack();
+  clearSocketReconnect();
+  const previousRole = activeRole;
+  activeRole = null;
   if (socket) {
     socket.close();
     socket = null;
@@ -231,13 +305,12 @@ async function stop(setIdle = true) {
     audioContext = null;
   }
   sourceSampleRate = null;
-  activeRole = null;
   testActive = false;
   publisherButton.disabled = false;
   monitorButton.disabled = false;
   stopButton.disabled = true;
   updateTestButtons();
-  if (setIdle) setStatus('Idle', 'Choose one role on each device.');
+  if (setIdle) setStatus('Idle', previousRole ? 'Choose one role on each device.' : 'Choose one role on each device.');
 }
 
 async function startPublisher() {
@@ -261,13 +334,7 @@ async function startPublisher() {
   await audioContext.audioWorklet.addModule('/capture-worklet.js');
   await audioContext.resume();
 
-  socket = await connectSocket();
   activeRole = 'publisher';
-  socket.send(JSON.stringify({
-    type: 'register',
-    role: 'publisher',
-    sampleRate: audioContext.sampleRate,
-  }));
 
   const source = audioContext.createMediaStreamSource(mediaStream);
   const capture = new AudioWorkletNode(audioContext, 'capture-processor', {
@@ -291,18 +358,18 @@ async function startPublisher() {
   source.connect(capture).connect(silent).connect(audioContext.destination);
   activeNode = capture;
 
-  socket.addEventListener('message', (event) => {
-    if (typeof event.data !== 'string') return;
-    handleServerMessage(JSON.parse(event.data));
-  });
-
-  socket.addEventListener('close', () => setStatus('Disconnected', 'The relay connection closed.'));
-
   publisherButton.disabled = true;
   monitorButton.disabled = true;
   stopButton.disabled = false;
   updateTestButtons();
-  setStatus('Microphone is live', `${audioContext.sampleRate} Hz mono PCM → relay`);
+  setStatus('Connecting microphone…', `${audioContext.sampleRate} Hz capture is active; connecting to Relay.`);
+
+  try {
+    await connectPublisherSocket();
+  } catch (error) {
+    setStatus('Reconnecting microphone…', 'Initial Relay connection failed; retrying automatically.');
+    schedulePublisherReconnect();
+  }
 }
 
 async function startMonitor() {

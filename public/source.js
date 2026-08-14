@@ -22,6 +22,8 @@ const STATE_NAMES = new Map([
   [5, 'cued'],
 ]);
 
+const SLIDER_HOLD_MS = 2000;
+
 let socket = null;
 let reconnectTimer = null;
 let player = null;
@@ -30,9 +32,18 @@ let armed = false;
 let latestTimeline = null;
 let latestSourceStatus = null;
 let latestCalibration = null;
+let latestMixHealth = null;
 let loadedVideoId = null;
 let lastSeekAt = 0;
 let applyTimer = null;
+let vocalFineTuneTouchedAt = 0;
+
+// The server echoes every source-status back to every client, which used to
+// snap this slider back to a stale value while the user was still dragging it.
+function fineTuneIsBusy() {
+  return document.activeElement === vocalFineTune
+    || performance.now() - vocalFineTuneTouchedAt < SLIDER_HOLD_MS;
+}
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -222,12 +233,27 @@ function renderSourceStatus(message) {
   captureState.textContent = message.connected
     ? `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`
     : 'Capture not connected · click the Relay extension icon on this tab.';
+  renderMixHealth();
 
-  if (Number.isFinite(Number(message.vocalFineTuneMs))) {
+  if (Number.isFinite(Number(message.vocalFineTuneMs)) && !fineTuneIsBusy()) {
     vocalFineTune.value = String(Number(message.vocalFineTuneMs));
     applyFineTune(false);
   }
   renderCalibration();
+}
+
+function renderMixHealth() {
+  if (!latestMixHealth?.active || !captureState.textContent.startsWith('●')) return;
+
+  const notes = [];
+  if (latestMixHealth.micStarvedFrames > 0) {
+    notes.push(`⚠ 人聲緩衝不足 ${latestMixHealth.micStarvedFrames} frames`);
+  }
+  if (latestMixHealth.monitorDroppedFrames > 0) {
+    notes.push(`⚠ 丟棄 ${latestMixHealth.monitorDroppedFrames} frames`);
+  }
+  notes.push(`headroom mic ${latestMixHealth.micHeadroomMs} ms / song ${latestMixHealth.backingHeadroomMs} ms`);
+  captureState.textContent += ` · ${notes.join(' · ')}`;
 }
 
 function connect() {
@@ -270,6 +296,12 @@ function connect() {
       return;
     }
 
+    if (message.type === 'mix-health') {
+      latestMixHealth = message;
+      if (latestSourceStatus) renderSourceStatus(latestSourceStatus);
+      return;
+    }
+
     if (message.type === 'error') {
       timingStatus.textContent = message.message ?? 'Relay error.';
     }
@@ -299,7 +331,13 @@ armButton.addEventListener('click', () => {
 
 sourceVolume.addEventListener('input', applyBalance);
 sourceMicGain.addEventListener('input', applyBalance);
-vocalFineTune.addEventListener('input', () => applyFineTune(true));
+vocalFineTune.addEventListener('input', () => {
+  vocalFineTuneTouchedAt = performance.now();
+  applyFineTune(true);
+});
+vocalFineTune.addEventListener('change', () => {
+  vocalFineTuneTouchedAt = performance.now();
+});
 timingButton.addEventListener('click', () => {
   if (!send({ type: 'start-timing-calibration' })) {
     timingStatus.textContent = 'Server 尚未連線。';

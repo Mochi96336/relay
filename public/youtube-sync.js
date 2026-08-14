@@ -10,9 +10,17 @@ const STATE_NAMES = new Map([
 let socket = null;
 let reconnectTimer = null;
 let rttTimer = null;
-let bestNetworkRttMs = Number.POSITIVE_INFINITY;
 let pingSequence = 0;
 const pendingPings = new Map();
+// A plain running minimum never rose again, so one lucky early sample pinned the
+// estimate low for the rest of the session even after the link degraded. Keep a
+// window of recent samples and take the minimum of those instead.
+const RTT_WINDOW = 8;
+const recentRttMs = [];
+
+function networkRttMs() {
+  return recentRttMs.length > 0 ? Math.min(...recentRttMs) : Number.POSITIVE_INFINITY;
+}
 
 const panel = document.querySelector('.youtube-panel');
 const localReadout = panel?.querySelector('.youtube-readout');
@@ -89,9 +97,8 @@ function handleRttPong(message) {
   );
   const rttMs = Math.max(0, receivedAt - sentAt - serverProcessingMs);
 
-  if (rttMs <= bestNetworkRttMs + 2) {
-    bestNetworkRttMs = Math.min(bestNetworkRttMs, rttMs);
-  }
+  recentRttMs.push(rttMs);
+  while (recentRttMs.length > RTT_WINDOW) recentRttMs.shift();
 }
 
 function renderTimeline(message) {
@@ -157,7 +164,7 @@ function connect() {
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
-    bestNetworkRttMs = Number.POSITIVE_INFINITY;
+    recentRttMs.length = 0;
     pendingPings.clear();
     send({ type: 'youtube-timeline-request' });
     sendRttPing();
@@ -188,7 +195,7 @@ window.addEventListener('relay:youtube-telemetry', (event) => {
   send({
     type: 'youtube-telemetry',
     ...detail,
-    networkRttMs: Number.isFinite(bestNetworkRttMs) ? bestNetworkRttMs : undefined,
+    networkRttMs: Number.isFinite(networkRttMs()) ? networkRttMs() : undefined,
   });
 });
 

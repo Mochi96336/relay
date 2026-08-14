@@ -67,7 +67,17 @@ The source follower uses the existing server media clock. Large source/phone dif
 
 ## Live mix timing
 
-The live mix keeps an 800 ms server buffer. This is intentional: the singer does not monitor the returned vocal, so end-to-end output latency can be traded for enough room to align the remote microphone with the local captured song.
+The live mix keeps a 4 s server buffer. This is intentional: the singer does not monitor the returned vocal, so end-to-end output latency can be traded for enough room to align the remote microphone with the local captured song.
+
+The buffer has to be this large because the mixer reads the microphone history *ahead* by the calibrated lag. The usable margin is:
+
+```text
+margin = prebuffer - 2 * micTransportDelay + backingTransportDelay
+```
+
+The microphone delay counts twice, so a 500 ms phone link leaves ~3 s of margin while a 1.5 s link leaves ~1 s. When the margin runs out the mixer reads past the end of the microphone history and the vocal drops out in chunks. The server now counts those frames and reports them as `mix-health`, which `source.html` and Solo recording both display, instead of failing silently.
+
+Recording must be done on the computer. Solo recording downloads the full 48 kHz mix and encodes it live, which a phone cannot do while also capturing and uploading the microphone; the page warns if you start it on the publishing device.
 
 Relay uses the phone timeline RTT/2 as a first-order microphone network compensation when the captured tab source connects. The existing `Voice offset` remains the manual fine adjustment on top of that estimate.
 
@@ -82,6 +92,8 @@ Normal video/state/rate transitions are counted as re-anchors. Seek/discontinuit
 ## Solo recording
 
 Solo recording opens an independent monitor connection and records the Server output before local Monitor gain. With the captured tab source connected, that output is the live song + microphone mix. Without it, recording falls back to the normal microphone relay.
+
+The recorder reconnects on its own if the Relay connection drops mid-take, so a `tsx watch` restart or a tunnel hiccup no longer ends the recording. The dropout becomes silence in the file and is reported in the completion summary along with any buffer underruns and any frames the server had to drop.
 
 ## Legacy diagnostics
 

@@ -1,15 +1,53 @@
+const RENDER_QUANTUM = 128;
+
 class CaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.chunkSize = Math.max(128, Math.round(sampleRate * 0.02));
     this.chunk = new Int16Array(this.chunkSize);
     this.offset = 0;
+    this.started = false;
+    this.silenceQuanta = 0;
+  }
+
+  writeSilence(count) {
+    let remaining = count;
+    while (remaining > 0) {
+      const room = this.chunkSize - this.offset;
+      const step = Math.min(room, remaining);
+      this.chunk.fill(0, this.offset, this.offset + step);
+      this.offset += step;
+      remaining -= step;
+      this.flushIfFull();
+    }
+  }
+
+  flushIfFull() {
+    if (this.offset !== this.chunkSize) return;
+    const buffer = this.chunk.buffer;
+    this.port.postMessage(buffer, [buffer]);
+    this.chunk = new Int16Array(this.chunkSize);
+    this.offset = 0;
   }
 
   process(inputs) {
     const input = inputs[0]?.[0];
-    if (!input) return true;
 
+    // Everything downstream aligns purely by sample count, so a gap here shifts
+    // the whole microphone timeline forward for good. Emit silence for the
+    // missing render quantum instead of skipping it.
+    if (!input) {
+      if (this.started) {
+        this.silenceQuanta += 1;
+        this.writeSilence(RENDER_QUANTUM);
+        if (this.silenceQuanta % 400 === 0) {
+          this.port.postMessage({ type: 'input-gap', quanta: this.silenceQuanta });
+        }
+      }
+      return true;
+    }
+
+    this.started = true;
     let sourceOffset = 0;
     while (sourceOffset < input.length) {
       const remaining = this.chunkSize - this.offset;
@@ -22,13 +60,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
       this.offset += count;
       sourceOffset += count;
-
-      if (this.offset === this.chunkSize) {
-        const buffer = this.chunk.buffer;
-        this.port.postMessage(buffer, [buffer]);
-        this.chunk = new Int16Array(this.chunkSize);
-        this.offset = 0;
-      }
+      this.flushIfFull();
     }
 
     return true;

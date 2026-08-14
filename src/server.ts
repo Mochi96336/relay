@@ -19,13 +19,20 @@ const MIX_FRAME_MS = 20;
 const MIX_FRAME_SAMPLES = Math.round((MIX_SAMPLE_RATE * MIX_FRAME_MS) / 1000);
 const TEST_BPM = 120;
 const TEST_PREBUFFER_MS = 800;
-const LIVE_MIX_PREBUFFER_MS = 2_500;
+// The live mix reads the microphone buffer *ahead* by the calibrated lag, so the
+// usable margin is `prebuffer - 2 * micTransportDelay + backingTransportDelay`.
+// The microphone delay counts twice, which is why 2.5 s left almost no room once
+// the phone link got slow and the calibrated lag was allowed to reach 2 s.
+const LIVE_MIX_PREBUFFER_MS = 4_000;
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
 const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_SAMPLES = Math.round((MIX_SAMPLE_RATE * TIMING_CALIBRATION_MS) / 1000);
+const TIMING_CALIBRATION_TIMEOUT_MS = 20_000;
 const MAX_VOCAL_FINE_TUNE_MS = 100;
 const YOUTUBE_BACKING_LOOKAHEAD_MS = 40;
+const HEARTBEAT_MS = 8_000;
+const MIX_HEALTH_INTERVAL_MS = 1_000;
 
 const app = express();
 app.disable('x-powered-by');
@@ -61,6 +68,7 @@ type RelaySocket = WebSocket & {
   role: ClientRole;
   sampleRate?: number;
   isAlive: boolean;
+  replaced?: boolean;
 };
 
 type PcmChunk = {
@@ -110,6 +118,13 @@ let timingCalibrationMicChunks: Int16Array[] = [];
 let timingCalibrationBackingChunks: Int16Array[] = [];
 let timingCalibrationMicSamples = 0;
 let timingCalibrationBackingSamples = 0;
+let timingCalibrationStartedAt = 0;
+let micStarvedFrames = 0;
+let backingStarvedFrames = 0;
+let monitorDroppedFrames = 0;
+let micHeadroomMs = 0;
+let backingHeadroomMs = 0;
+let lastMixHealthAt = 0;
 const micHistory: PcmHistory = { chunks: [], totalSamples: 0 };
 const backingHistory: PcmHistory = { chunks: [], totalSamples: 0 };
 
@@ -131,9 +146,32 @@ function broadcastToMonitors(payload: string | Buffer, binary = false) {
   for (const client of wss.clients) {
     const socket = client as RelaySocket;
     if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
-    if (binary && socket.bufferedAmount > 512 * 1024) continue;
+    // A dropped frame is not just a glitch: everything after it moves earlier by
+    // 20 ms with nothing recording the fact. Count it so the UI can say so.
+    if (binary && socket.bufferedAmount > 512 * 1024) {
+      monitorDroppedFrames += 1;
+      continue;
+    }
     socket.send(payload, { binary });
   }
+}
+
+function replacePrevious(previous: RelaySocket | null, next: RelaySocket, message: string) {
+  if (!previous || previous === next) return;
+
+  // Detach it from every role check before closing so its own close handler,
+  // which fires later, cannot tear down the state the new socket just claimed.
+  previous.replaced = true;
+  previous.role = 'unknown';
+  sendJson(previous, { type: 'error', message });
+
+  try {
+    previous.close();
+  } catch {}
+
+  setTimeout(() => {
+    if (previous.readyState !== WebSocket.CLOSED) previous.terminate();
+  }, 1_000).unref();
 }
 
 function publisherStatusPayload() {
@@ -159,6 +197,27 @@ function sourceStatusPayload() {
     vocalFineTuneMs,
     appliedMicAdvanceMs: timingBaseMs - vocalFineTuneMs,
   };
+}
+
+function mixHealthPayload() {
+  return {
+    type: 'mix-health',
+    active: liveSourceActive,
+    micStarvedFrames,
+    backingStarvedFrames,
+    monitorDroppedFrames,
+    micHeadroomMs: Math.round(micHeadroomMs),
+    backingHeadroomMs: Math.round(backingHeadroomMs),
+    prebufferMs: LIVE_MIX_PREBUFFER_MS,
+  };
+}
+
+function resetMixHealth() {
+  micStarvedFrames = 0;
+  backingStarvedFrames = 0;
+  monitorDroppedFrames = 0;
+  micHeadroomMs = 0;
+  backingHeadroomMs = 0;
 }
 
 function timingCalibrationStatusPayload() {
@@ -277,7 +336,6 @@ function failTimingCalibration(message: string) {
 }
 
 function finishTimingCalibration() {
-  timingCalibrationPhase = 'idle';
   try {
     const mic = flattenChunks(timingCalibrationMicChunks, TIMING_CALIBRATION_SAMPLES);
     const backingCapture = flattenChunks(timingCalibrationBackingChunks, TIMING_CALIBRATION_SAMPLES);
@@ -327,6 +385,7 @@ function appendTimingCalibrationSamples(kind: 'mic' | 'backing', samples: Int16A
 
 function startTimingCalibration() {
   timingCalibrationPhase = 'collecting';
+  timingCalibrationStartedAt = performance.now();
   timingCalibrationError = null;
   timingCalibrationConfidence = null;
   timingCalibrationSegmentLagsMs = [];
@@ -503,7 +562,17 @@ function liveMixedFrame(frameIndex: number) {
   const timingBaseMs = calibratedMicLagMs ?? liveMicNetworkCompMs;
   const micAdvanceMs = timingBaseMs - vocalFineTuneMs;
   const advanceSamples = Math.round((micAdvanceMs * MIX_SAMPLE_RATE) / 1000);
-  const mic = readHistoryRange(micHistory, startSample + advanceSamples, MIX_FRAME_SAMPLES);
+  const micReadStart = startSample + advanceSamples;
+
+  // Reading ahead can outrun what has actually arrived. readHistoryRange pads
+  // with zeros when that happens, so without this the vocal simply disappears
+  // in chunks and nothing anywhere says why.
+  micHeadroomMs = ((micHistory.totalSamples - (micReadStart + MIX_FRAME_SAMPLES)) / MIX_SAMPLE_RATE) * 1000;
+  backingHeadroomMs = ((backingHistory.totalSamples - (startSample + MIX_FRAME_SAMPLES)) / MIX_SAMPLE_RATE) * 1000;
+  if (micHeadroomMs < 0) micStarvedFrames += 1;
+  if (backingHeadroomMs < 0) backingStarvedFrames += 1;
+
+  const mic = readHistoryRange(micHistory, micReadStart, MIX_FRAME_SAMPLES);
   const song = readHistoryRange(backingHistory, startSample, MIX_FRAME_SAMPLES);
   const micGain = 10 ** (micGainDb / 20);
   const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
@@ -540,7 +609,7 @@ function startSyncTest() {
   if (liveSourceActive) return false;
   if (youtubeBackingActive) stopYoutubeBacking();
   testActive = true;
-  testStartedAt = Date.now();
+  testStartedAt = performance.now();
   testFrameIndex = 0;
   clearHistory(micHistory);
   broadcastJson(testStatusPayload());
@@ -588,9 +657,14 @@ function refreshLiveMicNetworkCompensation() {
 }
 
 function resetLiveMixEpoch() {
-  liveSourceStartedAt = Date.now();
+  // Both histories are indexed from this epoch, so they must be cleared
+  // together or the microphone and song timelines stop describing the same
+  // moment. A wall clock would let an NTP step corrupt a take, so use the
+  // monotonic clock here and in the mixer.
+  liveSourceStartedAt = performance.now();
   liveSourceFrameIndex = 0;
   clearMixHistories();
+  resetMixHealth();
 }
 
 function startLiveSource() {
@@ -628,7 +702,7 @@ function stopLiveSource() {
 
 const mixerTimer = setInterval(() => {
   if (testActive) {
-    const elapsed = Date.now() - testStartedAt - TEST_PREBUFFER_MS;
+    const elapsed = performance.now() - testStartedAt - TEST_PREBUFFER_MS;
     if (elapsed < 0) return;
 
     const expectedFrames = Math.floor(elapsed / MIX_FRAME_MS) + 1;
@@ -647,7 +721,7 @@ const mixerTimer = setInterval(() => {
     // both histories to a fresh epoch, so reopening Source is unnecessary.
     if (publisher?.readyState !== WebSocket.OPEN) return;
 
-    const elapsed = Date.now() - liveSourceStartedAt - LIVE_MIX_PREBUFFER_MS;
+    const elapsed = performance.now() - liveSourceStartedAt - LIVE_MIX_PREBUFFER_MS;
     if (elapsed < 0) return;
 
     const expectedFrames = Math.floor(elapsed / MIX_FRAME_MS) + 1;
@@ -677,12 +751,31 @@ const mixerTimer = setInterval(() => {
 }, 5);
 
 const youtubeTimelineTimer = setInterval(() => {
+  const nowMs = performance.now();
+
   if (youtubeTimeline.hasTelemetry) {
-    broadcastJson(youtubeTimeline.statusPayload());
-    broadcastJson(youtubeBackingStatusPayload());
+    broadcastJson(youtubeTimeline.statusPayload(nowMs));
+    broadcastJson(youtubeBackingStatusPayload(nowMs));
   }
+
   if (timingCalibrationPhase === 'collecting') {
-    broadcastJson(timingCalibrationStatusPayload());
+    // Without this the phase never leaves 'collecting' when one side stops
+    // sending, and the Calibrate button stays disabled with no way back.
+    if (nowMs - timingCalibrationStartedAt > TIMING_CALIBRATION_TIMEOUT_MS) {
+      const micMs = Math.round((timingCalibrationMicSamples / MIX_SAMPLE_RATE) * 1000);
+      const backingMs = Math.round((timingCalibrationBackingSamples / MIX_SAMPLE_RATE) * 1000);
+      failTimingCalibration(
+        `Calibration timed out (mic ${micMs} ms, source ${backingMs} ms of ${TIMING_CALIBRATION_MS} ms). ` +
+        'Check that both the phone microphone and the desktop capture are still streaming.',
+      );
+    } else {
+      broadcastJson(timingCalibrationStatusPayload());
+    }
+  }
+
+  if (liveSourceActive && nowMs - lastMixHealthAt >= MIX_HEALTH_INTERVAL_MS) {
+    lastMixHealthAt = nowMs;
+    broadcastJson(mixHealthPayload());
   }
 }, 250);
 
@@ -703,6 +796,10 @@ wss.on('connection', (rawSocket) => {
   });
 
   socket.on('message', (data, isBinary) => {
+    // Any traffic proves the peer is alive. Relying on pong alone let a
+    // throttled background tab get terminated mid-recording.
+    socket.isAlive = true;
+
     if (isBinary) {
       const buffer = data as Buffer;
 
@@ -825,16 +922,17 @@ wss.on('connection', (rawSocket) => {
     }
 
     if (payload.type === 'register' && payload.role === 'publisher') {
-      if (publisher && publisher !== socket && publisher.readyState === WebSocket.OPEN) {
-        sendJson(socket, { type: 'error', message: 'A publisher is already connected.' });
-        return;
-      }
-
       const sampleRate = validSampleRate(payload.sampleRate);
       if (!sampleRate) {
         sendJson(socket, { type: 'error', message: 'Invalid sample rate.' });
         return;
       }
+
+      // Last connection wins. When the phone loses its network the old socket
+      // stays OPEN here until the heartbeat notices, and rejecting the retry
+      // left the microphone dead for up to a full heartbeat cycle with no
+      // further retry, because the client's new socket never closed.
+      replacePrevious(publisher, socket, 'Replaced by a newer microphone connection.');
 
       socket.role = 'publisher';
       socket.sampleRate = sampleRate;
@@ -853,16 +951,13 @@ wss.on('connection', (rawSocket) => {
     }
 
     if (payload.type === 'register' && payload.role === 'backing') {
-      if (backing && backing !== socket && backing.readyState === WebSocket.OPEN) {
-        sendJson(socket, { type: 'error', message: 'A captured backing source is already connected.' });
-        return;
-      }
-
       const sampleRate = validSampleRate(payload.sampleRate);
       if (!sampleRate) {
         sendJson(socket, { type: 'error', message: 'Invalid backing sample rate.' });
         return;
       }
+
+      replacePrevious(backing, socket, 'Replaced by a newer tab capture.');
 
       socket.role = 'backing';
       socket.sampleRate = sampleRate;
@@ -916,6 +1011,8 @@ wss.on('connection', (rawSocket) => {
   });
 
   socket.on('close', () => {
+    if (socket.replaced) return;
+
     if (socket === publisher) {
       publisher = null;
       publisherSampleRate = null;
@@ -938,6 +1035,7 @@ wss.on('connection', (rawSocket) => {
   });
 });
 
+// 30 s meant a dropped phone kept its publisher slot for up to a minute.
 const heartbeat = setInterval(() => {
   for (const client of wss.clients) {
     const socket = client as RelaySocket;
@@ -948,12 +1046,21 @@ const heartbeat = setInterval(() => {
     socket.isAlive = false;
     socket.ping();
   }
-}, 30_000);
+}, HEARTBEAT_MS);
 
 wss.on('close', () => {
   clearInterval(heartbeat);
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
+});
+
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${port} is already in use. Stop the other Relay instance or set PORT.`);
+    process.exit(1);
+  }
+  console.error('Relay server error', error);
+  process.exit(1);
 });
 
 server.listen(port, '0.0.0.0', () => {

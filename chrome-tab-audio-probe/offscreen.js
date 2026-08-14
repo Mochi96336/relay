@@ -13,6 +13,27 @@ let meterSamples = 0;
 let lastMeterAt = 0;
 let droppedChunks = 0;
 let lastDropWarningAt = 0;
+let captureGeneration = 0;
+let captureSampleCursor = 0;
+
+// Byte layout is pinned by src/pcm-frame.ts and test/pcm-frame.test.ts. Each
+// frame states where it belongs, so a chunk dropped here leaves a hole of the
+// right length on the server instead of pulling all later audio earlier.
+const FRAME_MAGIC = 0x4c52;
+const FRAME_VERSION = 1;
+const FRAME_HEADER_BYTES = 16;
+
+function framePcm(pcm, generation, firstSampleIndex) {
+  const frame = new ArrayBuffer(FRAME_HEADER_BYTES + pcm.byteLength);
+  const view = new DataView(frame);
+  view.setUint16(0, FRAME_MAGIC, true);
+  view.setUint8(2, FRAME_VERSION);
+  view.setUint8(3, 0);
+  view.setUint32(4, generation >>> 0, true);
+  view.setFloat64(8, firstSampleIndex, true);
+  new Uint8Array(frame, FRAME_HEADER_BYTES).set(new Uint8Array(pcm));
+  return frame;
+}
 
 function relayWsUrl(pageUrl) {
   const url = new URL(pageUrl);
@@ -129,10 +150,13 @@ function handlePcm(buffer) {
     lastMeterAt = now;
   }
 
+  // Advance for every captured chunk, sent or not, and keep counting across a
+  // relay reconnect so the stream rejoins the timeline it already had.
+  const firstSampleIndex = captureSampleCursor;
+  captureSampleCursor += samples.length;
+
   if (!relayReady || relaySocket?.readyState !== WebSocket.OPEN) return;
 
-  // Dropping a chunk shifts every later sample earlier with nothing recording
-  // the fact, which silently invalidates the timing calibration. Say so.
   if (relaySocket.bufferedAmount >= 512 * 1024) {
     droppedChunks += 1;
     const now = performance.now();
@@ -151,7 +175,7 @@ function handlePcm(buffer) {
     return;
   }
 
-  relaySocket.send(buffer);
+  relaySocket.send(framePcm(buffer, captureGeneration, firstSampleIndex));
 }
 
 async function stopCapture(notify = false) {
@@ -218,6 +242,9 @@ async function startCapture(streamId, tabId, pageUrl) {
   audioContext = new AudioContext({ latencyHint: 'interactive' });
   await audioContext.audioWorklet.addModule(chrome.runtime.getURL('capture-worklet.js'));
   await audioContext.resume();
+
+  captureGeneration += 1;
+  captureSampleCursor = 0;
 
   source = audioContext.createMediaStreamSource(stream);
   captureNode = new AudioWorkletNode(audioContext, 'relay-tab-capture', {

@@ -33,6 +33,9 @@ let playbackHealth = null;
 let transportDropouts = 0;
 let serverMicStarvedFrames = 0;
 let serverDroppedFrames = 0;
+let serverMicGapMs = 0;
+let serverBackingGapMs = 0;
+let serverUnheadered = false;
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -112,7 +115,7 @@ function updateRecordingTransportStatus() {
   }
 
   if (sourceConnected && !sourceMicConnected) {
-    recordingStatus.textContent = '● 錄音中 · Source 已連線 · Mic 未連線 / 正在重連 · Server 暫不輸出 PCM';
+    recordingStatus.textContent = '● 錄音中 · Source 已連線 · Mic 未連線 / 正在重連 · 歌曲照錄，這段沒有人聲';
     return;
   }
 
@@ -168,6 +171,9 @@ function describeQuality() {
   if (playbackHealth?.starvedMs > 30) notes.push(`約 ${Math.round(playbackHealth.starvedMs)} ms 靜音`);
   if (playbackHealth?.droppedMs > 30) notes.push(`裁掉 ${Math.round(playbackHealth.droppedMs)} ms`);
   if (serverMicStarvedFrames > 0) notes.push(`Server 人聲不足 ${serverMicStarvedFrames} frames`);
+  if (serverMicGapMs > 0) notes.push(`人聲缺口 ${serverMicGapMs} ms`);
+  if (serverBackingGapMs > 0) notes.push(`歌曲缺口 ${serverBackingGapMs} ms`);
+  if (serverUnheadered) notes.push('有 client 送出未加 header 的 PCM');
   if (serverDroppedFrames > 0) notes.push(`Server 丟棄 ${serverDroppedFrames} frames`);
   return notes.length > 0 ? ` · ⚠ ${notes.join(' / ')}` : '';
 }
@@ -226,6 +232,9 @@ function handleJsonMessage(message) {
   if (message.type === 'mix-health') {
     serverMicStarvedFrames = Number(message.micStarvedFrames) || 0;
     serverDroppedFrames = Number(message.monitorDroppedFrames) || 0;
+    serverMicGapMs = Number(message.micGapMs) || 0;
+    serverBackingGapMs = Number(message.backingGapMs) || 0;
+    serverUnheadered = Boolean(message.unheadered);
     return;
   }
 
@@ -354,6 +363,9 @@ async function startRecording() {
   transportDropouts = 0;
   serverMicStarvedFrames = 0;
   serverDroppedFrames = 0;
+  serverMicGapMs = 0;
+  serverBackingGapMs = 0;
+  serverUnheadered = false;
 
   audioContext = new AudioContext({ latencyHint: 'interactive' });
   await audioContext.audioWorklet.addModule('/playback-worklet.js');

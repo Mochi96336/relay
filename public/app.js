@@ -34,6 +34,27 @@ let rawMonitorGainDb = 30;
 let uplinkDroppedChunks = 0;
 let lastUplinkWarningAt = 0;
 let monitorHealth = null;
+let captureGeneration = 0;
+let captureSampleCursor = 0;
+
+// Byte layout is pinned by src/pcm-frame.ts and test/pcm-frame.test.ts. Each
+// frame states where it belongs, so a chunk dropped here leaves a hole of the
+// right length on the server instead of pulling all later audio earlier.
+const FRAME_MAGIC = 0x4c52;
+const FRAME_VERSION = 1;
+const FRAME_HEADER_BYTES = 16;
+
+function framePcm(pcm, generation, firstSampleIndex) {
+  const frame = new ArrayBuffer(FRAME_HEADER_BYTES + pcm.byteLength);
+  const view = new DataView(frame);
+  view.setUint16(0, FRAME_MAGIC, true);
+  view.setUint8(2, FRAME_VERSION);
+  view.setUint8(3, 0);
+  view.setUint32(4, generation >>> 0, true);
+  view.setFloat64(8, firstSampleIndex, true);
+  new Uint8Array(frame, FRAME_HEADER_BYTES).set(new Uint8Array(pcm));
+  return frame;
+}
 
 // recorder.js reads this so it can warn when Solo recording is started on the
 // same device that is publishing the microphone.
@@ -458,6 +479,12 @@ async function startPublisher() {
 
   setActiveRole('publisher');
 
+  // A new capture session. Reconnecting the websocket does not bump this: the
+  // capture keeps running and its sample cursor stays continuous, so the server
+  // can place the reconnected frames on the timeline they already belonged to.
+  captureGeneration += 1;
+  captureSampleCursor = 0;
+
   const [track] = mediaStream.getAudioTracks();
   track?.addEventListener('ended', () => {
     setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.');
@@ -480,11 +507,15 @@ async function startPublisher() {
       return;
     }
 
+    // The cursor advances for every captured chunk, including ones that are
+    // never sent, so the server can see exactly what is missing. It also keeps
+    // counting through a websocket outage, which is what lets the stream rejoin
+    // the same timeline without the mix restarting.
+    const firstSampleIndex = captureSampleCursor;
+    captureSampleCursor += event.data.byteLength / 2;
+
     if (socket?.readyState !== WebSocket.OPEN) return;
 
-    // Dropping uplink PCM shifts every later sample earlier and invalidates the
-    // timing calibration, so at least say it happened instead of doing it
-    // silently the way the old code did.
     if (socket.bufferedAmount >= 256 * 1024) {
       uplinkDroppedChunks += 1;
       const now = performance.now();
@@ -493,13 +524,13 @@ async function startPublisher() {
         setStatus(
           'Microphone uplink congested',
           `Dropped ${uplinkDroppedChunks} chunks (~${uplinkDroppedChunks * 20} ms). ` +
-          'Timing will drift — re-run Calibrate timing once the link recovers.',
+          'The gap is reported to the server, but the vocal is missing for that stretch.',
         );
       }
       return;
     }
 
-    socket.send(event.data);
+    socket.send(framePcm(event.data, captureGeneration, firstSampleIndex));
   };
 
   source.connect(capture).connect(silent).connect(audioContext.destination);

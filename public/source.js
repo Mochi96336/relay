@@ -252,8 +252,17 @@ function renderMixHealth() {
   if (!latestMixHealth?.active || !captureState.textContent.startsWith('●')) return;
 
   const notes = [];
+  if (latestMixHealth.unheadered) {
+    notes.push('⚠ 有 client 還在送沒有 header 的 PCM，請重新載入該頁 / 擴充功能');
+  }
   if (latestMixHealth.micStarvedFrames > 0) {
     notes.push(`⚠ 人聲緩衝不足 ${latestMixHealth.micStarvedFrames} frames`);
+  }
+  if (latestMixHealth.micGapMs > 0) {
+    notes.push(`⚠ 人聲缺口 ${latestMixHealth.micGapMs} ms`);
+  }
+  if (latestMixHealth.backingGapMs > 0) {
+    notes.push(`⚠ 歌曲缺口 ${latestMixHealth.backingGapMs} ms`);
   }
   if (latestMixHealth.monitorDroppedFrames > 0) {
     notes.push(`⚠ 丟棄 ${latestMixHealth.monitorDroppedFrames} frames`);

@@ -55,7 +55,8 @@ Use the same `?key=some-random-string` query on the phone and on `source.html`.
 
 - `test/timing-calibration.test.ts` feeds the analyser synthetic percussive audio with a known lag baked in and asserts the lag comes back.
 - `test/youtube-timeline.test.ts` drives `YouTubeTimelineTracker` with an injected clock and pins the anchor / re-anchor / seek classification.
-- `test/server.test.ts` starts the real server as a child process on an OS-assigned port and exercises it over WebSockets: raw microphone passthrough, the live mix, publisher takeover, mix-health starvation reporting, shared-key auth, and the full calibration lifecycle.
+- `test/pcm-frame.test.ts` pins the wire format, including the byte offsets the two browser encoders duplicate by hand.
+- `test/server.test.ts` starts the real server as a child process on an OS-assigned port and exercises it over WebSockets: raw microphone passthrough, the live mix, publisher takeover, mix-health starvation and gap reporting, reconnecting onto an existing timeline, shared-key auth, and the full calibration lifecycle.
 
 `src/server.ts` reads `RELAY_LIVE_PREBUFFER_MS`, `RELAY_CALIBRATION_TIMEOUT_MS` and `RELAY_HEARTBEAT_MS` so tests do not have to spend the production timings on every run. They default to the production values.
 
@@ -94,11 +95,23 @@ margin = prebuffer - 2 * micTransportDelay + backingTransportDelay
 
 The microphone delay counts twice, so a 500 ms phone link leaves ~3 s of margin while a 1.5 s link leaves ~1 s. When the margin runs out the mixer reads past the end of the microphone history and the vocal drops out in chunks. The server now counts those frames and reports them as `mix-health`, which `source.html` and Solo recording both display, instead of failing silently.
 
+### Framed PCM
+
+Microphone and captured-source frames carry a 16-byte header stating the capture session and the index of their first sample; `src/pcm-frame.ts` documents the layout and `test/pcm-frame.test.ts` pins it, because the browser encoders write it by hand.
+
+This is what lets the two streams be placed on the session timeline instead of appended in arrival order, and it removes three long-standing problems:
+
+- A dropped uplink chunk used to pull every later sample earlier with nothing recording the fact. The gap is now exactly as long as the audio that went missing, and is reported as `micGapMs` / `backingGapMs`.
+- A microphone reconnect used to reset the mix epoch, costing every listener another full prebuffer of silence. The capture keeps counting samples through a transport outage, so the reconnected stream rejoins the timeline it already had and only the outage itself is silent.
+- The captured song used to be buffered only while a phone was connected, and the mixer stopped entirely without one. Both streams are now independent: an absent phone costs the mix its vocal, not the whole take.
+
+A timing calibration therefore survives a websocket reconnect. It is marked stale only when the microphone starts a *new* capture session, which the server learns from the generation on the first frame that arrives.
+
 Recording must be done on the computer. Solo recording downloads the full 48 kHz mix and encodes it live, which a phone cannot do while also capturing and uploading the microphone; the page warns if you start it on the publishing device.
 
 Relay uses the phone timeline RTT/2 as a first-order microphone network compensation when the captured tab source connects. `Vocal fine tune` on `source.html` is the manual adjustment on top of the calibrated value; the old `Voice offset` slider is gone, because the live mixer never read it.
 
-A calibration is bound to the live session it was measured in. Disconnecting the capture clears it, and a microphone reconnect marks it stale on `source.html`, because the transport delay it folded in may have changed.
+A calibration is bound to the live session it was measured in. Disconnecting the capture clears it outright.
 
 This does **not** yet prove final acoustic alignment. `getCurrentTime()` is a media timeline value, not the exact moment a sample becomes audible from the phone output, so a later fixed device/output calibration is still needed.
 

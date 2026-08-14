@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
+import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import { analyzeTimingCalibration } from './timing-calibration.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
@@ -84,7 +85,15 @@ type PcmChunk = {
 
 type PcmHistory = {
   chunks: PcmChunk[];
+  /** Write frontier on the session timeline, not a count of samples received. */
   totalSamples: number;
+  /** Capture session the current mapping was anchored to. */
+  generation: number | null;
+  /** sessionSample = streamSample + originOffset. */
+  originOffset: number;
+  /** Samples the timeline is missing: drops, congestion, transport outages. */
+  gapSamples: number;
+  unheadered: boolean;
 };
 
 type TimelineStatus = {
@@ -116,6 +125,7 @@ let calibratedMicLagMs: number | null = null;
 // transport delay it folded in, so it is marked stale rather than silently kept.
 let liveSessionGeneration = 0;
 let calibrationGeneration = -1;
+let calibrationMicGeneration: number | null = null;
 let vocalFineTuneMs = 0;
 let timingCalibrationPhase: TimingCalibrationPhase = 'idle';
 let timingCalibrationError: string | null = null;
@@ -132,8 +142,12 @@ let monitorDroppedFrames = 0;
 let micHeadroomMs = 0;
 let backingHeadroomMs = 0;
 let lastMixHealthAt = 0;
-const micHistory: PcmHistory = { chunks: [], totalSamples: 0 };
-const backingHistory: PcmHistory = { chunks: [], totalSamples: 0 };
+function emptyHistory(): PcmHistory {
+  return { chunks: [], totalSamples: 0, generation: null, originOffset: 0, gapSamples: 0, unheadered: false };
+}
+
+const micHistory: PcmHistory = emptyHistory();
+const backingHistory: PcmHistory = emptyHistory();
 
 function sendJson(socket: WebSocket, payload: unknown) {
   if (socket.readyState === WebSocket.OPEN) {
@@ -190,7 +204,13 @@ function publisherStatusPayload() {
 }
 
 function calibrationIsStale() {
-  return calibratedMicLagMs !== null && calibrationGeneration !== liveSessionGeneration;
+  if (calibratedMicLagMs === null) return false;
+  // A websocket reconnect no longer invalidates anything: the capture keeps
+  // counting samples through the outage, so the measurement still holds. Only a
+  // new capture session, or a new live session, can change the transport the
+  // measurement folded in.
+  return calibrationGeneration !== liveSessionGeneration
+    || calibrationMicGeneration !== micHistory.generation;
 }
 
 function sourceStatusPayload() {
@@ -220,11 +240,18 @@ function mixHealthPayload() {
     monitorDroppedFrames,
     micHeadroomMs: Math.round(micHeadroomMs),
     backingHeadroomMs: Math.round(backingHeadroomMs),
+    // Gaps the framing made visible: dropped uplink chunks, congestion, or a
+    // transport outage the capture kept running through.
+    micGapMs: Math.round((micHistory.gapSamples / MIX_SAMPLE_RATE) * 1000),
+    backingGapMs: Math.round((backingHistory.gapSamples / MIX_SAMPLE_RATE) * 1000),
+    unheadered: micHistory.unheadered || backingHistory.unheadered,
     prebufferMs: LIVE_MIX_PREBUFFER_MS,
   };
 }
 
 function resetMixHealth() {
+  micHistory.gapSamples = 0;
+  backingHistory.gapSamples = 0;
   micStarvedFrames = 0;
   backingStarvedFrames = 0;
   monitorDroppedFrames = 0;
@@ -298,6 +325,14 @@ function broadcastStatus() {
 function clearHistory(history: PcmHistory) {
   history.chunks = [];
   history.totalSamples = 0;
+  history.generation = null;
+  history.originOffset = 0;
+  history.gapSamples = 0;
+}
+
+/** Where the session clock is right now, in 48 kHz samples since the epoch. */
+function currentSessionSample() {
+  return Math.round(((performance.now() - liveSourceStartedAt) * MIX_SAMPLE_RATE) / 1000);
 }
 
 function clearMixHistories() {
@@ -338,6 +373,7 @@ function finishTimingCalibration() {
     const result = analyzeTimingCalibration(mic, backingCapture, MIX_SAMPLE_RATE);
     calibratedMicLagMs = result.micLagMs;
     calibrationGeneration = liveSessionGeneration;
+    calibrationMicGeneration = micHistory.generation;
     timingCalibrationConfidence = result.confidence;
     timingCalibrationSegmentLagsMs = result.segmentLagsMs;
     timingCalibrationError = null;
@@ -415,12 +451,44 @@ function resampleToMixRate(buffer: Buffer, sourceRate: number) {
   return output;
 }
 
-function appendHistory(history: PcmHistory, buffer: Buffer, sourceRate: number | null) {
+function appendHistory(history: PcmHistory, frame: PcmFrame, sourceRate: number | null) {
   if (!sourceRate) return new Int16Array(0);
-  const samples = resampleToMixRate(buffer, sourceRate);
+  const samples = resampleToMixRate(frame.pcm, sourceRate);
   if (samples.length === 0) return samples;
-  history.chunks.push({ start: history.totalSamples, samples });
-  history.totalSamples += samples.length;
+
+  let start: number;
+
+  if (frame.firstSampleIndex === null) {
+    // No header: the only thing left to do is append at the frontier, which is
+    // the old lossy behaviour. Flag it so the UI can say the client is stale.
+    history.unheadered = true;
+    start = history.totalSamples;
+  } else {
+    // Each frame states its own position, so rounding never accumulates and a
+    // missing frame leaves a hole of exactly the right length instead of
+    // pulling everything after it earlier.
+    const streamStart = Math.round((frame.firstSampleIndex * MIX_SAMPLE_RATE) / sourceRate);
+
+    if (history.generation !== frame.generation) {
+      // A fresh capture session. Anchor it to the session clock; the previous
+      // session's samples keep their own place and simply age out.
+      history.generation = frame.generation;
+      history.originOffset = Math.max(0, currentSessionSample() - samples.length) - streamStart;
+    }
+
+    start = streamStart + history.originOffset;
+  }
+
+  if (start < history.totalSamples) {
+    // Out of order or overlapping. Ordered transport makes this a rounding
+    // artefact at worst, so keep the frontier rather than corrupting the sort.
+    start = history.totalSamples;
+  } else if (start > history.totalSamples && history.chunks.length > 0) {
+    history.gapSamples += start - history.totalSamples;
+  }
+
+  history.chunks.push({ start, samples });
+  history.totalSamples = start + samples.length;
   return samples;
 }
 
@@ -547,8 +615,10 @@ function liveMixedFrame(frameIndex: number) {
   // in chunks and nothing anywhere says why.
   micHeadroomMs = ((micHistory.totalSamples - (micReadStart + MIX_FRAME_SAMPLES)) / MIX_SAMPLE_RATE) * 1000;
   backingHeadroomMs = ((backingHistory.totalSamples - (startSample + MIX_FRAME_SAMPLES)) / MIX_SAMPLE_RATE) * 1000;
-  if (micHeadroomMs < 0) micStarvedFrames += 1;
-  if (backingHeadroomMs < 0) backingStarvedFrames += 1;
+  // With no phone attached the read head is always past the end; that is an
+  // absent source, not starvation, and reporting it as such would be noise.
+  if (micHeadroomMs < 0 && publisher?.readyState === WebSocket.OPEN) micStarvedFrames += 1;
+  if (backingHeadroomMs < 0 && backing?.readyState === WebSocket.OPEN) backingStarvedFrames += 1;
 
   const mic = readHistoryRange(micHistory, micReadStart, MIX_FRAME_SAMPLES);
   const song = readHistoryRange(backingHistory, startSample, MIX_FRAME_SAMPLES);
@@ -619,8 +689,10 @@ function startLiveSource() {
 
 function restartLiveSourceAfterMicReconnect() {
   if (!liveSourceActive || backing?.readyState !== WebSocket.OPEN) return;
+  // No epoch reset. Framed PCM states its own position, so the reconnected
+  // stream lands back on the existing timeline with a hole exactly as long as
+  // the outage, instead of costing every listener another full prebuffer.
   refreshLiveMicNetworkCompensation();
-  resetLiveMixEpoch();
   if (timingCalibrationPhase === 'collecting') {
     failTimingCalibration('Microphone reconnected during calibration. Start calibration again.');
   }
@@ -637,6 +709,7 @@ function stopLiveSource() {
   // carried over into the next session.
   calibratedMicLagMs = null;
   calibrationGeneration = -1;
+  calibrationMicGeneration = null;
   timingCalibrationPhase = 'idle';
   timingCalibrationConfidence = null;
   timingCalibrationSegmentLagsMs = [];
@@ -664,11 +737,9 @@ const mixerTimer = setInterval(() => {
   }
 
   if (liveSourceActive) {
-    // Keep the captured Source alive while the phone reconnects, but do not
-    // advance the shared mix clock without a publisher. Registration resets
-    // both histories to a fresh epoch, so reopening Source is unnecessary.
-    if (publisher?.readyState !== WebSocket.OPEN) return;
-
+    // The mix clock is free-running now. Without a phone the vocal is simply
+    // silent for that stretch; stopping output altogether used to cost the
+    // whole take, including the song that was arriving perfectly well.
     const elapsed = performance.now() - liveSourceStartedAt - LIVE_MIX_PREBUFFER_MS;
     if (elapsed < 0) return;
 
@@ -732,23 +803,36 @@ wss.on('connection', (rawSocket) => {
     socket.isAlive = true;
 
     if (isBinary) {
-      const buffer = data as Buffer;
+      const frame = decodePcmFrame(data as Buffer);
 
       if (socket === publisher && socket.role === 'publisher') {
         if (testActive || liveSourceActive) {
-          const samples = appendHistory(micHistory, buffer, publisherSampleRate);
-          if (liveSourceActive) appendTimingCalibrationSamples('mic', samples);
+          const previousGeneration = micHistory.generation;
+          const samples = appendHistory(micHistory, frame, publisherSampleRate);
+
+          if (liveSourceActive) {
+            // A new capture session can mean a different transport delay, which
+            // is only knowable once a frame arrives - registration alone does
+            // not say whether the phone restarted its microphone or merely
+            // reopened the socket.
+            if (micHistory.generation !== previousGeneration && calibratedMicLagMs !== null) {
+              broadcastJson(sourceStatusPayload());
+              broadcastJson(timingCalibrationStatusPayload());
+            }
+            appendTimingCalibrationSamples('mic', samples);
+          }
         } else {
-          broadcastToMonitors(buffer, true);
+          broadcastToMonitors(frame.pcm, true);
         }
         return;
       }
 
+      // The captured song no longer waits on the microphone. Both streams carry
+      // their own position, so they stay aligned independently and an absent
+      // phone costs the mix its vocal, not the whole take.
       if (socket === backing && socket.role === 'backing' && liveSourceActive) {
-        if (publisher?.readyState === WebSocket.OPEN) {
-          const samples = appendHistory(backingHistory, buffer, backingSampleRate);
-          appendTimingCalibrationSamples('backing', samples);
-        }
+        const samples = appendHistory(backingHistory, frame, backingSampleRate);
+        appendTimingCalibrationSamples('backing', samples);
       }
       return;
     }
@@ -916,7 +1000,8 @@ wss.on('connection', (rawSocket) => {
     if (socket === publisher) {
       publisher = null;
       publisherSampleRate = null;
-      clearHistory(micHistory);
+      // Deliberately not cleared: the capture may still be running on the phone
+      // and about to reconnect onto the same timeline.
       if (timingCalibrationPhase === 'collecting') {
         failTimingCalibration('Microphone disconnected during calibration.');
       }

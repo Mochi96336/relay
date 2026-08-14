@@ -182,6 +182,123 @@ describe('live mix', () => {
   });
 });
 
+describe('framed pcm', () => {
+  test('reports a hole when the uplink drops chunks, instead of pulling audio earlier', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+
+      await sendPcmInChunks(backing, tone(3, 0.8));
+
+      // One second of microphone, then 400 ms captured but never sent, then
+      // more. The cursor keeps advancing across the drop.
+      await sendPcmInChunks(publisher, tone(1, 0.4));
+      publisher.skipPcm(Buffer.alloc(Math.round(RATE * 0.4) * 2));
+      await sendPcmInChunks(publisher, tone(1, 0.4));
+
+      const health = await monitor.waitFor(
+        (m) => m.type === 'mix-health' && m.micGapMs > 0,
+        6_000,
+      );
+      assert.ok(
+        Math.abs(health.micGapMs - 400) <= 25,
+        `expected a ~400 ms hole, got ${health.micGapMs} ms`,
+      );
+      assert.equal(health.backingGapMs, 0, 'the song stream was continuous');
+      assert.equal(health.unheadered, false);
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('keeps mixing the song while the microphone is away', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      await sendPcmInChunks(backing, tone(3, 0.8));
+      await sendPcmInChunks(publisher, tone(0.5, 0.4));
+      await sleep(400);
+
+      // Before the fix the mixer stopped dead without a publisher, so the take
+      // lost the song too, even though it was arriving perfectly well.
+      const before = monitor.binaryFrames;
+      publisher.close();
+      await sleep(800);
+
+      assert.ok(
+        monitor.binaryFrames > before + 20,
+        `mix stalled without the phone: ${monitor.binaryFrames - before} frames`,
+      );
+
+      backing.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('rejoins the existing timeline after a transport outage', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      await sendPcmInChunks(backing, tone(4, 0.8));
+      await sendPcmInChunks(publisher, tone(1, 0.4));
+      await sleep(300);
+
+      const cursor = publisher.cursor;
+      const framesBefore = monitor.binaryFrames;
+      publisher.close();
+      await sleep(400);
+
+      // Same capture session: the phone kept recording through the outage, so
+      // the cursor carries on and the server places the frames where they
+      // belong rather than restarting the mix epoch.
+      const rejoined = await RelayClient.connect(server);
+      rejoined.resumeCaptureSession(publisher.generationId, cursor + Math.round(RATE * 0.4));
+      rejoined.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+      await rejoined.waitForType('registered');
+      await sendPcmInChunks(rejoined, tone(1, 0.4));
+
+      await sleep(600);
+      assert.ok(
+        monitor.binaryFrames > framesBefore + 30,
+        'output paused for a fresh prebuffer instead of continuing',
+      );
+
+      const health = await monitor.waitFor((m) => m.type === 'mix-health' && m.micGapMs > 0, 4_000);
+      assert.ok(health.micGapMs > 200, `outage should show as a hole, got ${health.micGapMs} ms`);
+
+      backing.close();
+      rejoined.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('still accepts a client that predates the framing', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      await sendPcmInChunks(backing, tone(2, 0.8));
+      publisher.sendUnheaderedPcm(tone(0.5, 0.4));
+
+      const health = await monitor.waitFor((m) => m.type === 'mix-health' && m.unheadered === true, 4_000);
+      assert.equal(health.unheadered, true, 'a stale client must be visible, not silently degraded');
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe('publisher takeover', () => {
   let server: RelayServer;
   before(async () => { server = await startRelay(FAST); });
@@ -267,7 +384,7 @@ describe('timing calibration', () => {
     }
   });
 
-  test('measures an injected lag, then marks it stale after a microphone reconnect', async () => {
+  test('measures an injected lag and survives a socket-only reconnect', async () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
@@ -292,28 +409,72 @@ describe('timing calibration', () => {
       );
       assert.equal(complete.calibrationStale, false);
 
-      // finishTimingCalibration broadcasts the calibration status before the
-      // source status, so wait for the one that carries the applied mode.
       const applied = await monitor.waitFor(
         (m) => m.type === 'source-status' && m.timingMode === 'acoustic-calibration',
         3_000,
       );
       assert.equal(applied.calibratedMicLagMs, complete.micLagMs);
 
-      // A reconnect can change the transport delay the measurement folded in.
-      const replacement = await RelayClient.connect(server);
-      replacement.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-      await replacement.waitForType('registered');
+      // Only the socket died. The capture kept counting samples, so the
+      // measurement still describes the same transport and must stay valid.
+      const cursor = publisher.cursor;
+      publisher.close();
+      await sleep(300);
+
+      const rejoined = await RelayClient.connect(server);
+      rejoined.resumeCaptureSession(publisher.generationId, cursor + Math.round(RATE * 0.3));
+      rejoined.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+      await rejoined.waitForType('registered');
+      await sendPcmInChunks(rejoined, tone(0.5, 0.4));
+      await sleep(400);
+
+      const afterRejoin = monitor.latest('source-status');
+      assert.equal(afterRejoin?.calibrationStale, false, 'a socket reconnect must not invalidate the measurement');
+      assert.equal(afterRejoin?.calibratedMicLagMs, complete.micLagMs);
+
+      backing.close();
+      rejoined.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('marks the measurement stale when the microphone capture restarts', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+      await sleep(100);
+
+      monitor.send({ type: 'start-timing-calibration' });
+      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+
+      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      await sendPcmInChunks(backing, song);
+      await sendPcmInChunks(publisher, mic);
+      const complete = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
+        10_000,
+      );
+
+      // The user pressed Microphone again: a different capture, so the delay
+      // the measurement folded in may no longer hold.
+      const restarted = await RelayClient.connect(server);
+      restarted.newCaptureSession();
+      restarted.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+      await restarted.waitForType('registered');
+      await sendPcmInChunks(restarted, tone(0.5, 0.4));
 
       const stale = await monitor.waitFor(
         (m) => m.type === 'source-status' && m.calibrationStale === true,
-        3_000,
+        4_000,
       );
       assert.equal(stale.calibratedMicLagMs, complete.micLagMs, 'the value is kept, only flagged');
 
       backing.close();
       publisher.close();
-      replacement.close();
+      restarted.close();
       monitor.close();
     } finally {
       await server.stop();

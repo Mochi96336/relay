@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 import WebSocket from 'ws';
 
+import { encodePcmFrame } from '../../src/pcm-frame.js';
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const STARTUP_TIMEOUT_MS = 20_000;
 
@@ -80,6 +82,8 @@ export class RelayClient {
   readonly errors: string[] = [];
   binaryFrames = 0;
   binarySamples = 0;
+  private generation = 1;
+  private sampleCursor = 0;
   private readonly waiters: { predicate: (m: JsonMessage) => boolean; resolve: (m: JsonMessage) => void }[] = [];
 
   private constructor(private readonly socket: WebSocket) {
@@ -121,8 +125,41 @@ export class RelayClient {
     this.socket.send(JSON.stringify(payload));
   }
 
+  /** Frames PCM the way a real capture does, advancing the sample cursor. */
   sendPcm(buffer: Buffer) {
+    const index = this.sampleCursor;
+    this.sampleCursor += buffer.byteLength / 2;
+    this.socket.send(encodePcmFrame(this.generation, index, buffer), { binary: true });
+  }
+
+  /** Captured but never sent: what a congested uplink does. */
+  skipPcm(buffer: Buffer) {
+    this.sampleCursor += buffer.byteLength / 2;
+  }
+
+  /** A pre-framing client, to check the server still copes with one. */
+  sendUnheaderedPcm(buffer: Buffer) {
     this.socket.send(buffer, { binary: true });
+  }
+
+  /** A new capture session, as if the user restarted the microphone. */
+  newCaptureSession() {
+    this.generation += 1;
+    this.sampleCursor = 0;
+  }
+
+  get cursor() {
+    return this.sampleCursor;
+  }
+
+  get generationId() {
+    return this.generation;
+  }
+
+  /** Same capture, new socket: what app.js does when only the websocket died. */
+  resumeCaptureSession(generation: number, sampleCursor: number) {
+    this.generation = generation;
+    this.sampleCursor = sampleCursor;
   }
 
   /** Resolves on the first matching message, including ones already received. */

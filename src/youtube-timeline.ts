@@ -100,16 +100,18 @@ export class YouTubeTimelineTracker {
     const videoChanged = !this.anchor || this.anchor.videoId !== videoId;
     const explicitJump = Math.abs(timelineDeltaSeconds) > 0.4;
 
+    // A seek commonly passes through buffering, so continuity must be checked
+    // across state changes rather than only between two playing samples.
     let continuityErrorMs: number | null = null;
     if (
       previous &&
       previous.videoId === videoId &&
-      previous.state === PLAYING &&
-      state === PLAYING &&
       Math.abs(previous.playbackRate - playbackRate) < 0.0001
     ) {
       const serverDeltaSeconds = Math.max(0, nowMs - previous.receivedAtServerMs) / 1000;
-      const expectedMediaDelta = serverDeltaSeconds * playbackRate;
+      const expectedMediaDelta = previous.state === PLAYING
+        ? serverDeltaSeconds * previous.playbackRate
+        : 0;
       const actualMediaDelta = currentTime - previous.currentTime;
       continuityErrorMs = (actualMediaDelta - expectedMediaDelta) * 1000;
     }

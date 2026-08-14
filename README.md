@@ -59,7 +59,11 @@ The YouTube integration deliberately uses the official visible IFrame Player API
 5. Watch the local readout for player state, `getCurrentTime()`, duration, playback rate, buffering, and obvious timeline jumps.
 6. On the computer, use **Record** if you want to confirm microphone transport stayed alive while YouTube was playing on the phone.
 
-The YouTube module emits a local `relay:youtube-telemetry` browser event every 250 ms. That is the seam intended for the next step, where the server will follow YouTube play / pause / seek state.
+The YouTube module emits local telemetry every 250 ms. A separate WebSocket client forwards that telemetry to Relay without sharing the microphone PCM path.
+
+Relay maintains a free-running server media timeline. Play, pause, buffering, rate, and video changes create normal re-anchors. Seek/discontinuity jumps are counted separately as corrections. Seek detection checks media continuity across YouTube state changes because scrubbing commonly passes through `buffering` before returning to `playing`.
+
+Drift measurement does not align browser and server wall clocks. It compares YouTube media-time progression against server monotonic receive-time progression over a rolling window. RTT is used only as an approximate transport estimate for the displayed phase and is not part of drift measurement. The UI also reports measurement jitter.
 
 Important boundary: YouTube audio is not extracted, downloaded, separated, or sent to the Relay server. The IFrame stays visible and YouTube remains the singer-side monitor only.
 
@@ -89,8 +93,12 @@ The 120 BPM click test is still available as a lower-level engineering diagnosti
 - server-side microphone gain and click mixing
 - independent solo recording
 - visible YouTube IFrame loading on the same page as microphone capture
-- direct access to YouTube media time and playback-state telemetry without touching the YouTube audio stream
+- YouTube playback and browser microphone capture coexist on the tested iPhone
+- direct access to YouTube media time and playback-state telemetry without touching YouTube audio
+- server-side free-running media timeline with state re-anchors
+- media-clock drift measurement against server monotonic time with jitter reporting
+- seek/discontinuity classification across YouTube state transitions
 
 ## Next milestone
 
-If YouTube playback and microphone capture coexist reliably on the phone, send the existing YouTube timeline telemetry to the server and make a controlled server-side backing timeline follow YouTube play, pause, seek, buffering, and playback-rate changes. Only after that timing model is stable should Discord output be added.
+If the media clock remains stable over real-device testing, add a controlled server-side backing source that follows the YouTube timeline for play, pause, seek, buffering, and playback-rate changes. After that, calibrate the fixed device/output phase offset before introducing Discord output.

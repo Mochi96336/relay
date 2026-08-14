@@ -4,6 +4,10 @@ const detailNode = document.querySelector('#source-detail');
 const mirrorState = document.querySelector('#mirror-state');
 const mirrorTimeline = document.querySelector('#mirror-timeline');
 const captureState = document.querySelector('#capture-state');
+const sourceVolume = document.querySelector('#source-volume');
+const sourceVolumeValue = document.querySelector('#source-volume-value');
+const sourceMicGain = document.querySelector('#source-mic-gain');
+const sourceMicGainValue = document.querySelector('#source-mic-gain-value');
 
 const STATE_NAMES = new Map([
   [-1, 'waiting'],
@@ -40,8 +44,9 @@ function formatTime(seconds) {
 }
 
 function send(payload) {
-  if (socket?.readyState !== WebSocket.OPEN) return;
+  if (socket?.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(payload));
+  return true;
 }
 
 function safePlayerTime() {
@@ -50,6 +55,24 @@ function safePlayerTime() {
     return Number(player.getCurrentTime());
   } catch {
     return Number.NaN;
+  }
+}
+
+function applyBalance() {
+  const songLevel = Math.max(0, Math.min(100, Number(sourceVolume.value) || 0));
+  const micGainDb = Math.max(0, Math.min(36, Number(sourceMicGain.value) || 0));
+
+  sourceVolumeValue.value = `${Math.round(songLevel)}%`;
+  sourceMicGainValue.value = `${micGainDb > 0 ? '+' : ''}${Math.round(micGainDb)} dB`;
+
+  if (playerReady && player && armed) {
+    try {
+      player.setVolume(songLevel);
+    } catch {}
+  }
+
+  if (armed) {
+    send({ type: 'set-mix', micGainDb });
   }
 }
 
@@ -135,6 +158,7 @@ function connect() {
     if (socket !== next) return;
     send({ type: 'youtube-timeline-request' });
     send({ type: 'source-status-request' });
+    if (armed) applyBalance();
   });
 
   next.addEventListener('message', (event) => {
@@ -176,10 +200,13 @@ armButton.addEventListener('click', () => {
   armButton.disabled = true;
   try {
     player?.unMute();
-    player?.setVolume(100);
   } catch {}
+  applyBalance();
   applyTimeline();
 });
+
+sourceVolume.addEventListener('input', applyBalance);
+sourceMicGain.addEventListener('input', applyBalance);
 
 window.onYouTubeIframeAPIReady = () => {
   player = new window.YT.Player('source-player', {
@@ -194,6 +221,7 @@ window.onYouTubeIframeAPIReady = () => {
       onReady: () => {
         playerReady = true;
         renderTimeline();
+        applyBalance();
         applyTimeline();
       },
       onStateChange: renderTimeline,
@@ -210,5 +238,6 @@ document.head.append(apiScript);
 
 applyTimer = setInterval(applyTimeline, 250);
 window.addEventListener('beforeunload', () => clearInterval(applyTimer), { once: true });
+applyBalance();
 renderTimeline();
 connect();

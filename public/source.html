@@ -41,6 +41,29 @@
       <section class="test-panel">
         <div class="test-heading">
           <div>
+            <strong>Live mix balance</strong>
+            <span>只改送進 Relay 的歌曲 / 人聲比例，不影響手機端歌手聽到的 YouTube 音量。</span>
+          </div>
+        </div>
+
+        <label class="gain-control" for="source-volume">
+          <span>Song level</span>
+          <input id="source-volume" type="range" min="0" max="100" step="1" value="40" />
+          <output id="source-volume-value" for="source-volume">40%</output>
+        </label>
+
+        <label class="gain-control" for="source-mic-gain">
+          <span>Mic gain</span>
+          <input id="source-mic-gain" type="range" min="0" max="36" step="1" value="36" />
+          <output id="source-mic-gain-value" for="source-mic-gain">+36 dB</output>
+        </label>
+
+        <p class="hint">預設先把桌面歌曲壓到 40%、Mic 拉到 +36 dB。錄音時如果人聲還小，先繼續降 Song level；如果人聲開始破，再把 Mic gain 往下收。</p>
+      </section>
+
+      <section class="test-panel">
+        <div class="test-heading">
+          <div>
             <strong>Chrome capture</strong>
             <span>在這個分頁按 Relay 擴充功能圖示。連上後，它會把 tab audio 轉成 PCM 丟回本機 Relay。</span>
           </div>

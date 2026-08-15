@@ -71,6 +71,19 @@ function send(payload) {
   return true;
 }
 
+/**
+ * The mixer clamps the read-ahead to what the prebuffer affords. When it has
+ * to, the vocal sits late by the difference, and nothing else would say so.
+ */
+function clampNote() {
+  const requested = Number(latestSourceStatus?.requestedMicAdvanceMs);
+  const applied = Number(latestSourceStatus?.appliedMicAdvanceMs);
+  if (!Number.isFinite(requested) || !Number.isFinite(applied)) return '';
+  const shortfall = Math.round(requested - applied);
+  if (Math.abs(shortfall) < 5) return '';
+  return ` · ⚠ 緩衝不足 ${Math.abs(shortfall)} ms，人聲會偏掉；調高 RELAY_LIVE_PREBUFFER_MS`;
+}
+
 function safePlayerTime() {
   if (!playerReady || !player) return Number.NaN;
   try {
@@ -138,10 +151,12 @@ function renderCalibration() {
   }
 
   if (latestSourceStatus?.timingMode === 'acoustic-calibration') {
+    // Staleness now has three causes - a new microphone capture, a new live
+    // session, or the player being seeked - so the reason cannot be named here.
     const stale = latestSourceStatus.calibrationStale
-      ? ' · ⚠ 麥克風重新連線過，這個校準值已過期，建議重跑'
+      ? ' · ⚠ 設定已改變（麥克風重連 / 播放器 seek），校準值過期，建議重跑'
       : '';
-    timingStatus.textContent = `Applied acoustic calibration · Mic path ${signed(latestSourceStatus.calibratedMicLagMs, ' ms')} · fine tune ${signed(latestSourceStatus.vocalFineTuneMs, ' ms')}${stale}`;
+    timingStatus.textContent = `Applied acoustic calibration · Mic path ${signed(latestSourceStatus.calibratedMicLagMs, ' ms')} · fine tune ${signed(latestSourceStatus.vocalFineTuneMs, ' ms')}${stale}${clampNote()}`;
     return;
   }
 
@@ -199,6 +214,7 @@ function applyTimeline() {
       player.cueVideoById({ videoId: timeline.videoId, startSeconds: Math.max(0, target) });
       loadedVideoId = timeline.videoId;
       lastSeekAt = performance.now();
+      send({ type: 'source-seeked' });
       renderTimeline();
       return;
     }
@@ -209,6 +225,10 @@ function applyTimeline() {
     if (Number.isFinite(errorSeconds) && Math.abs(errorSeconds) > 0.45 && now - lastSeekAt > 700) {
       player.seekTo(Math.max(0, target), true);
       lastSeekAt = now;
+      // Where this lands inside the dead band is arbitrary, and that offset is
+      // precisely what a timing calibration measures. Any existing answer is
+      // now describing a position the song no longer holds.
+      send({ type: 'source-seeked' });
     }
 
     if (!armed) {

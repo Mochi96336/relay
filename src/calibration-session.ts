@@ -27,10 +27,20 @@ export type CalibrationStatus = {
   error: string | null;
 };
 
-/** Identifies the setup a measurement describes. */
+/**
+ * Identifies the setup a measurement describes. A measurement is only valid
+ * for the arrangement it was taken against, and every field here is something
+ * that moves one stream relative to the other.
+ */
 export type CalibrationContext = {
   sessionGeneration: number;
   micGeneration: number | null;
+  /**
+   * Bumped whenever the desktop player is seeked. The follower leaves it alone
+   * inside a 450 ms dead band, so where it lands after a seek is arbitrary
+   * within that band - which is exactly the offset a calibration measures.
+   */
+  sourceGeneration: number;
 };
 
 export type CalibrationSessionOptions = {
@@ -118,8 +128,7 @@ export class CalibrationSession {
   // The measurement describes one pairing of transports. Remembering which lets
   // the server say the answer is stale instead of applying it to a setup it was
   // never measured against.
-  private measuredSessionGeneration: number | null = null;
-  private measuredMicGeneration: number | null = null;
+  private measuredContext: CalibrationContext | null = null;
 
   constructor(options: CalibrationSessionOptions) {
     this.sampleRate = options.sampleRate;
@@ -166,8 +175,7 @@ export class CalibrationSession {
     this.micLagMs = null;
     this.confidence = null;
     this.segmentLagsMs = [];
-    this.measuredSessionGeneration = null;
-    this.measuredMicGeneration = null;
+    this.measuredContext = null;
     this.clearCapture();
   }
 
@@ -193,14 +201,12 @@ export class CalibrationSession {
     return true;
   }
 
-  /**
-   * True when the answer was measured against a different live session or a
-   * different microphone capture than the one running now.
-   */
-  isStaleFor(sessionGeneration: number, micGeneration: number | null) {
-    if (this.micLagMs === null) return false;
-    return this.measuredSessionGeneration !== sessionGeneration
-      || this.measuredMicGeneration !== micGeneration;
+  /** True when the setup has moved on from the one the answer describes. */
+  isStaleFor(context: CalibrationContext) {
+    if (this.micLagMs === null || this.measuredContext === null) return false;
+    return this.measuredContext.sessionGeneration !== context.sessionGeneration
+      || this.measuredContext.micGeneration !== context.micGeneration
+      || this.measuredContext.sourceGeneration !== context.sourceGeneration;
   }
 
   status(): CalibrationStatus {
@@ -284,10 +290,8 @@ export class CalibrationSession {
       }
 
       const result = this.analyze(mic.samples, backing.samples, this.sampleRate);
-      const context = this.context();
       this.micLagMs = result.micLagMs;
-      this.measuredSessionGeneration = context.sessionGeneration;
-      this.measuredMicGeneration = context.micGeneration;
+      this.measuredContext = this.context();
       this.confidence = result.confidence;
       this.segmentLagsMs = result.segmentLagsMs;
       this.error = null;

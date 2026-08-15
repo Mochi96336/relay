@@ -486,6 +486,46 @@ describe('timing calibration', () => {
     }
   });
 
+  test('marks the measurement stale when the desktop player is seeked', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+      await sleep(100);
+
+      monitor.send({ type: 'start-timing-calibration' });
+      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+
+      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      await Promise.all([
+        sendPcmInChunks(backing, song),
+        sendPcmInChunks(publisher, mic),
+      ]);
+      const complete = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
+        10_000,
+      );
+      assert.equal(complete.calibrationStale, false);
+
+      // The follower corrected its mirrored player. It only does so past 450 ms
+      // of error, so the song has moved somewhere arbitrary inside that band and
+      // the measured offset no longer describes where it sits.
+      backing.send({ type: 'source-seeked' });
+
+      const stale = await monitor.waitFor(
+        (m) => m.type === 'source-status' && m.calibrationStale === true,
+        4_000,
+      );
+      assert.equal(stale.calibratedMicLagMs, complete.micLagMs, 'the value is kept, only flagged');
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('clears the calibration when the captured source disconnects', async () => {
     const server = await startRelay(FAST);
     try {

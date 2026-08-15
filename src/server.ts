@@ -7,7 +7,7 @@ import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import { AudioSession } from './audio-session.js';
-import { CalibrationSession } from './calibration-session.js';
+import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { decodePcmFrame } from './pcm-frame.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
@@ -113,11 +113,24 @@ const session = new AudioSession({
 });
 session.setMicGainDb(micGainDb);
 
+// Bumped by the desktop follower whenever it seeks its mirrored player. The
+// follower tolerates 450 ms of error before correcting, so a seek lands the
+// song anywhere in that band - and that offset is what a calibration measures.
+let sourceGeneration = 0;
+
+function calibrationContext(): CalibrationContext {
+  return {
+    sessionGeneration: session.generation,
+    micGeneration: session.micGeneration,
+    sourceGeneration,
+  };
+}
+
 const calibration = new CalibrationSession({
   sampleRate: MIX_SAMPLE_RATE,
   durationMs: TIMING_CALIBRATION_MS,
   timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
-  context: () => ({ sessionGeneration: session.generation, micGeneration: session.micGeneration }),
+  context: calibrationContext,
   onSettled: () => {
     const result = calibration.result;
     if (result) session.setAlignment({ calibratedMicLagMs: result.micLagMs });
@@ -184,7 +197,7 @@ function publisherStatusPayload() {
 // samples through the outage, so the measurement still holds. Only a new capture
 // session, or a new live session, changes the transport it folded in.
 function calibrationIsStale() {
-  return calibration.isStaleFor(session.generation, session.micGeneration);
+  return calibration.isStaleFor(calibrationContext());
 }
 
 function sourceStatusPayload() {
@@ -550,6 +563,20 @@ wss.on('connection', (rawSocket) => {
       }
       calibration.start();
       broadcastJson(timingCalibrationStatusPayload());
+      return;
+    }
+
+    // The desktop follower moved its player, so whatever offset a measurement
+    // found no longer describes where the song sits. Saying so beats letting a
+    // confident-looking number be wrong by up to the follower's dead band.
+    if (payload.type === 'source-seeked') {
+      sourceGeneration += 1;
+      if (calibration.collecting) {
+        calibration.fail('The desktop player seeked during calibration. Start calibration again.');
+      } else {
+        broadcastJson(sourceStatusPayload());
+        broadcastJson(timingCalibrationStatusPayload());
+      }
       return;
     }
 

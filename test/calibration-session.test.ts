@@ -32,7 +32,7 @@ function makeSession(options: {
 } = {}) {
   const harness: Harness = {
     settled: 0,
-    context: { sessionGeneration: 1, micGeneration: 10 },
+    context: { sessionGeneration: 1, micGeneration: 10, sourceGeneration: 0 },
     calibration: undefined as unknown as CalibrationSession,
   };
 
@@ -274,28 +274,37 @@ describe('CalibrationSession timeout', () => {
 });
 
 describe('CalibrationSession staleness', () => {
-  test('holds for the setup it was measured against', () => {
+  const setup = (patch: Partial<CalibrationContext> = {}): CalibrationContext => ({
+    sessionGeneration: 1,
+    micGeneration: 10,
+    sourceGeneration: 0,
+    ...patch,
+  });
+
+  /** A completed measurement taken against the default setup. */
+  function measured() {
     const harness = makeSession();
     harness.calibration.start(0);
     fill(harness.calibration, REQUIRED, REQUIRED);
+    return harness;
+  }
 
-    assert.equal(harness.calibration.isStaleFor(1, 10), false);
+  test('holds for the setup it was measured against', () => {
+    assert.equal(measured().calibration.isStaleFor(setup()), false);
   });
 
   test('is stale once the microphone starts a new capture', () => {
-    const harness = makeSession();
-    harness.calibration.start(0);
-    fill(harness.calibration, REQUIRED, REQUIRED);
-
-    assert.equal(harness.calibration.isStaleFor(1, 11), true);
+    assert.equal(measured().calibration.isStaleFor(setup({ micGeneration: 11 })), true);
   });
 
   test('is stale in a different live session', () => {
-    const harness = makeSession();
-    harness.calibration.start(0);
-    fill(harness.calibration, REQUIRED, REQUIRED);
+    assert.equal(measured().calibration.isStaleFor(setup({ sessionGeneration: 2 })), true);
+  });
 
-    assert.equal(harness.calibration.isStaleFor(2, 10), true);
+  test('is stale once the desktop player has been seeked', () => {
+    // The follower only corrects past 450 ms of error, so a seek can leave the
+    // song anywhere in that band. The measured offset no longer describes it.
+    assert.equal(measured().calibration.isStaleFor(setup({ sourceGeneration: 1 })), true);
   });
 
   test('records the capture that produced the samples, not the one at start', () => {
@@ -303,16 +312,16 @@ describe('CalibrationSession staleness', () => {
     harness.calibration.start(0);
 
     // The phone restarts its capture midway; the answer describes what finished.
-    harness.context = { sessionGeneration: 1, micGeneration: 12 };
+    harness.context = setup({ micGeneration: 12 });
     fill(harness.calibration, REQUIRED, REQUIRED);
 
-    assert.equal(harness.calibration.isStaleFor(1, 12), false);
-    assert.equal(harness.calibration.isStaleFor(1, 10), true);
+    assert.equal(harness.calibration.isStaleFor(setup({ micGeneration: 12 })), false);
+    assert.equal(harness.calibration.isStaleFor(setup()), true);
   });
 
   test('nothing measured is never stale', () => {
     const { calibration } = makeSession();
-    assert.equal(calibration.isStaleFor(99, 99), false);
+    assert.equal(calibration.isStaleFor(setup({ sessionGeneration: 99 })), false);
   });
 });
 
@@ -322,7 +331,7 @@ describe('CalibrationSession with the real analyser', () => {
       sampleRate: RATE,
       durationMs: DURATION_MS,
       timeoutMs: 20_000,
-      context: () => ({ sessionGeneration: 1, micGeneration: 1 }),
+      context: () => ({ sessionGeneration: 1, micGeneration: 1, sourceGeneration: 0 }),
     });
     const { mic, backing } = laggedPair(6, RATE, 320);
 

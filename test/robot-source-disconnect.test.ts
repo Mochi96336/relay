@@ -152,8 +152,34 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     assert.equal(restored.calibrationStale, false);
     assert.equal(restored.calibrationKind, 'boot-probe');
 
-    // Player/socket churn changes only delta. The two measured path legs must
-    // be reused rather than making the phone beep again.
+    // A page can freeze without its WebSocket closing. Once the last offset is
+    // older than the freshness budget, it is no longer timing evidence and the
+    // mixer must withdraw the boot alignment on its own.
+    await sleep(2_300);
+    const beforeExpiryStatus = monitor.messages.length;
+    monitor.send({ type: 'source-status-request' });
+    const expired = await waitForNewMessage(
+      monitor,
+      beforeExpiryStatus,
+      (m) => m.type === 'source-status' && m.robotDeltaFresh === false,
+      3_000,
+    );
+    assert.equal(expired.robotSourceConnected, true, 'the source socket itself is still alive');
+    assert.equal(expired.timingMode, 'network-estimate');
+    assert.equal(expired.activeCalibratedMicLagMs, null);
+    assert.equal(expired.calibrationStale, false, 'the measured path is still valid; only delta expired');
+
+    replacement.send({ type: 'robot-player-offset', offsetMs: 25 });
+    await monitor.waitFor(
+      (m) => m.type === 'timing-calibration-status'
+        && m.timingMode === 'acoustic-calibration'
+        && m.robotDeltaFresh === true
+        && Math.round(m.robotPlayerOffsetMs) === 25,
+      4_000,
+    );
+
+    // Player/socket churn and delta expiry change only delta. The two measured
+    // path legs must be reused rather than making the phone beep again.
     await sleep(300);
     const probeRequestsAfterReconnect = publisher.messages.filter(
       (m) => m.type === 'play-calibration-probe',

@@ -1151,6 +1151,11 @@ wss.on('connection', (rawSocket) => {
       socket.isRobotSource = false;
       robotPlayerOffsetMs = null;
       robotPlayerOffsetAt = -Infinity;
+      // A disconnected player cannot keep its old delta authoritative. The two
+      // measured path legs remain reusable, but the applied sum waits for a
+      // fresh source identity/offset before becoming valid again.
+      sourceGeneration += 1;
+      syncAppliedCalibration();
       broadcastJson(sourceStatusPayload());
       broadcastJson(timingCalibrationStatusPayload());
     }

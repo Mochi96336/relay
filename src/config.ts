@@ -88,8 +88,15 @@ export function loadRelayConfig(env: Env = process.env) {
 }
 
 export function loadBackingConfig(env: Env = process.env) {
-  const port = envNumber(env, 'PORT', 3000, { min: 0, max: 65_535, integer: true });
-  const rawUrl = rawValue(env, 'RELAY_URL') ?? `ws://127.0.0.1:${port}/ws`;
+  const configuredUrl = rawValue(env, 'RELAY_URL');
+  const rawUrl = configuredUrl ?? (() => {
+    // Port zero is useful to the Relay server test harness because the OS picks
+    // an ephemeral listener. It is never a usable destination for a separate
+    // backing process, so reject it here instead of retrying localhost:0 forever.
+    const port = envNumber(env, 'PORT', 3000, { min: 1, max: 65_535, integer: true });
+    return `ws://127.0.0.1:${port}/ws`;
+  })();
+
   let relayUrl: URL;
   try {
     relayUrl = new URL(rawUrl);
@@ -98,6 +105,9 @@ export function loadBackingConfig(env: Env = process.env) {
   }
   if (relayUrl.protocol !== 'ws:' && relayUrl.protocol !== 'wss:') {
     throw new Error('RELAY_URL must use ws:// or wss://.');
+  }
+  if (relayUrl.port === '0') {
+    throw new Error('RELAY_URL port must be from 1 to 65535.');
   }
 
   const relayKey = rawValue(env, 'RELAY_KEY');

@@ -25,6 +25,11 @@ const STATE_NAMES = new Map([
 
 const SLIDER_HOLD_MS = 2000;
 
+// The robot has no Chrome extension: `scripts/robot-source.sh` routes Chromium
+// through a PipeWire sink into backing:stdin. Advice that names the extension
+// is wrong there, and this page is the same page in both deployments.
+const ROBOT_MODE = new URLSearchParams(location.search).get('robot') === '1';
+
 let socket = null;
 let reconnectTimer = null;
 let player = null;
@@ -334,7 +339,7 @@ function renderSourceStatus(message) {
   captureState.textContent = !message.connected
     ? 'Capture not connected · click the Relay extension icon on this tab.'
     : message.backingStreaming === false
-      ? '⚠ 擴充功能已連線，但沒有音訊送進來 · 這個分頁重整過的話，請再點一次 Relay 擴充功能圖示。'
+      ? `⚠ 擷取來源已連線，但沒有音訊送進來${ROBOT_MODE ? ' · 檢查 backing bridge 與 PipeWire 路由。' : ' · 這個分頁重整過的話，請再點一次 Relay 擴充功能圖示。'}`
       : `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`;
   renderMixHealth();
 

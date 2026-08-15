@@ -588,7 +588,7 @@ const youtubeTimelineTimer = setInterval(() => {
       // simply stops moving. Say which side went quiet, and say it now.
       calibration.fail(
         `Calibration stopped: no audio from the ${silent.join(' or ')}. `
-        + 'If the desktop source page was reloaded, click the Relay extension icon on it again.',
+        + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
       );
     } else if (!calibration.tick(nowMs)) {
       broadcastJson(timingCalibrationStatusPayload());
@@ -727,7 +727,7 @@ wss.on('connection', (rawSocket) => {
       if (silent.length > 0) {
         calibration.fail(
           `No audio arriving from the ${silent.join(' or ')}. `
-          + 'If the desktop source page was reloaded, click the Relay extension icon on it again.',
+          + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
         );
         return;
       }

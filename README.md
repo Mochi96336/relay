@@ -72,11 +72,11 @@ Use the same `?key=some-random-string` query on the phone and on `source.html`.
 
 `src/server.ts` reads `RELAY_LIVE_PREBUFFER_MS`, `RELAY_CALIBRATION_TIMEOUT_MS` and `RELAY_HEARTBEAT_MS` so tests do not have to spend the production timings on every run. They default to the production values.
 
-### Known gap: calibration accepts unrelated audio
+### Known gap: the analyser still accepts unrelated audio
 
-The analyser's guards (`MIN_GLOBAL_CORRELATION` 0.12, and the 140 ms window-spread limit) are permissive. Given two unrelated recordings it usually still returns a result, reporting confidence around 0.4-0.6 against 1.0 for a true match. A bogus multi-second lag is not harmless: it puts the mixer's read head past the end of the microphone history immediately, which sounds exactly like the vocal dropping out.
+The analyser's guards (`MIN_GLOBAL_CORRELATION` 0.12, and the 140 ms window-spread limit) are permissive. Given two unrelated recordings it usually still returns a result, reporting confidence around 0.4-0.6 against 1.0 for a true match. Tightening the thresholds needs real device captures to calibrate against, so `test/timing-calibration.test.ts` pins the discrimination margin that any change has to preserve rather than asserting a rejection that does not happen.
 
-Tightening the thresholds needs real device captures to calibrate against, so for now `test/timing-calibration.test.ts` pins the discrimination margin that any change has to preserve rather than asserting a rejection that does not happen.
+This is a property of the analyser, and it is unchanged. What changed is that a single result no longer reaches the mix — see [Why a measurement has to repeat itself](#why-a-measurement-has-to-repeat-itself). Anything relying on `analyzeTimingCalibration` directly still has to deal with this.
 
 ## Desktop YouTube source
 

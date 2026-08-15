@@ -443,7 +443,7 @@ describe('timing calibration', () => {
         3_000,
       );
       assert.match(failed.error, /no audio arriving from the desktop capture/i);
-      assert.match(failed.error, /extension icon/i, 'and says what to do about it');
+      assert.match(failed.error, /restart the backing source/i, 'and says what to do about it');
 
       backing.close();
       publisher.close();

@@ -35,6 +35,7 @@ let testActive = false;
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestCalibration = null;
+let pendingPublisherTakeoverOwnerId = null;
 
 /**
  * Whether what arrives on this socket is a server mix rather than raw
@@ -236,9 +237,24 @@ function updateCalibrateButton() {
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const key = new URLSearchParams(location.search).get('key');
-  const query = key ? `?key=${encodeURIComponent(key)}` : '';
-  return `${protocol}//${location.host}/ws${query}`;
+  const source = new URLSearchParams(location.search);
+  const params = new URLSearchParams();
+  const key = source.get('key');
+  if (key) params.set('key', key);
+
+  const participantId = typeof window.relayParticipantId === 'string'
+    ? window.relayParticipantId.trim()
+    : '';
+  const nickname = typeof window.relayNickname === 'string'
+    ? window.relayNickname.trim()
+    : '';
+  if (participantId && nickname) {
+    params.set('participant', participantId);
+    params.set('name', nickname);
+  }
+
+  const query = params.toString();
+  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
 
 function connectSocket() {
@@ -382,18 +398,53 @@ function describeMonitorHealth() {
   return ` · ${parts.join(' · ')}`;
 }
 
+function dispatchRelayEvent(type, detail = {}) {
+  window.dispatchEvent(new CustomEvent(type, { detail }));
+}
+
 function handleServerMessage(message) {
   if (message.type === 'error') {
     setStatus('Error', message.message);
-    // The server now hands the publisher slot to the newest connection, so this
-    // should not happen; if it ever does, keep trying rather than going silent.
-    if (activeRole === 'publisher' && mediaStream && audioContext) schedulePublisherReconnect();
+    // Protocol errors are not transport failures. Retrying the publisher after
+    // a semantic rejection used to make superseded tabs fight forever.
+    return;
+  }
+
+  if (message.type === 'mic-busy') {
+    const owner = message.owner ?? null;
+    setStatus('Microphone is in use', owner ? `${owner.nickname} has the mic.` : 'Another participant has the mic.');
+    dispatchRelayEvent('relay-mic-busy', { owner });
+    stop(false, { releaseMic: false }).catch(console.error);
+    return;
+  }
+
+  if (message.type === 'mic-takeover-rejected') {
+    const owner = message.owner ?? null;
+    setStatus('Takeover changed', owner ? `${owner.nickname} has the mic now.` : 'The mic state changed.');
+    dispatchRelayEvent('relay-mic-takeover-rejected', { owner, reason: message.reason });
+    stop(false, { releaseMic: false }).catch(console.error);
+    return;
+  }
+
+  if (message.type === 'mic-revoked') {
+    setStatus('Microphone handed off', message.message ?? 'Another participant now has the mic.');
+    dispatchRelayEvent('relay-microphone-ended', { reason: 'revoked' });
+    stop(false, { releaseMic: false }).catch(console.error);
+    return;
+  }
+
+  if (message.type === 'publisher-superseded') {
+    setStatus('Microphone moved to another tab', message.message ?? 'A newer microphone capture is active.');
+    dispatchRelayEvent('relay-microphone-ended', { reason: 'superseded' });
+    stop(false, { releaseMic: false }).catch(console.error);
     return;
   }
 
   if (message.type === 'registered' && message.role === 'publisher' && activeRole === 'publisher') {
+    pendingPublisherTakeoverOwnerId = null;
     setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM → relay`);
     updateMixLabels();
+    dispatchRelayEvent('relay-microphone-started');
     return;
   }
 
@@ -551,11 +602,16 @@ async function connectPublisherSocket() {
 
   adoptSocket(ws);
 
-  ws.send(JSON.stringify({
+  const registration = {
     type: 'register',
     role: 'publisher',
     sampleRate: audioContext.sampleRate,
-  }));
+    captureGeneration: captureGeneration >>> 0,
+  };
+  if (pendingPublisherTakeoverOwnerId) {
+    registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
+  }
+  ws.send(JSON.stringify(registration));
 
   ws.addEventListener('message', (event) => {
     if (socket !== ws || typeof event.data !== 'string') return;
@@ -626,13 +682,25 @@ async function connectMonitorSocket() {
   });
 }
 
-async function stop(setIdle = true) {
+async function stop(setIdle = true, { releaseMic = true } = {}) {
   stopLocalClickTrack();
   clearSocketReconnect();
+
+  const closingSocket = socket;
+  const shouldReleaseMic = releaseMic && activeRole === 'publisher';
+  if (shouldReleaseMic && closingSocket?.readyState === WebSocket.OPEN) {
+    try {
+      closingSocket.send(JSON.stringify({ type: 'release-mic' }));
+    } catch {}
+  }
+
   setActiveRole(null);
-  if (socket) {
-    socket.close();
-    socket = null;
+  pendingPublisherTakeoverOwnerId = null;
+  if (closingSocket) {
+    try {
+      closingSocket.close();
+    } catch {}
+    if (socket === closingSocket) socket = null;
   }
   if (mediaStream) {
     mediaStream.getTracks().forEach((track) => track.stop());
@@ -662,13 +730,17 @@ async function stop(setIdle = true) {
   if (setIdle) setStatus('Idle', 'Choose one role on each device.');
 }
 
-async function startPublisher() {
+async function startPublisher(takeoverExpectedOwnerId = null) {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error('Microphone capture is unavailable. On a phone, open Relay through HTTPS.');
   }
   await stop();
+  pendingPublisherTakeoverOwnerId = takeoverExpectedOwnerId;
   setStatus('Starting microphone…');
 
+  // Capture is prepared before the server is allowed to change ownership. A
+  // denied permission or failed AudioWorklet therefore leaves the current
+  // singer untouched.
   mediaStream = await navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
@@ -693,7 +765,10 @@ async function startPublisher() {
 
   const [track] = mediaStream.getAudioTracks();
   track?.addEventListener('ended', () => {
-    setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.');
+    if (activeRole !== 'publisher') return;
+    stop(false, { releaseMic: true })
+      .then(() => setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.'))
+      .catch(console.error);
   });
 
   const source = audioContext.createMediaStreamSource(mediaStream);
@@ -807,19 +882,37 @@ async function startMonitor() {
   }
 }
 
-publisherButton.addEventListener('click', () => {
-  startPublisher().catch(async (error) => {
+async function requestPublisherStart(takeoverExpectedOwnerId = null) {
+  try {
+    await startPublisher(takeoverExpectedOwnerId);
+  } catch (error) {
     console.error(error);
-    setStatus('Could not start microphone', error instanceof Error ? error.message : String(error));
-    await stop(false);
-  });
+    const message = error instanceof Error ? error.message : String(error);
+    setStatus('Could not start microphone', message);
+    dispatchRelayEvent('relay-microphone-start-failed', {
+      message,
+      takeoverExpectedOwnerId,
+    });
+    await stop(false, { releaseMic: false });
+  }
+}
+
+publisherButton.addEventListener('click', () => {
+  requestPublisherStart().catch(console.error);
+});
+
+window.addEventListener('relay-request-microphone', (event) => {
+  const expectedOwnerId = typeof event.detail?.takeoverExpectedOwnerId === 'string'
+    ? event.detail.takeoverExpectedOwnerId
+    : null;
+  requestPublisherStart(expectedOwnerId).catch(console.error);
 });
 
 monitorButton.addEventListener('click', () => {
   startMonitor().catch(async (error) => {
     console.error(error);
     setStatus('Could not start monitor', error instanceof Error ? error.message : String(error));
-    await stop(false);
+    await stop(false, { releaseMic: false });
   });
 });
 

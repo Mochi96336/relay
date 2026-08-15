@@ -97,11 +97,11 @@ export class ParticipantSession {
       this.participants.set(participantId, record);
       visibleChanged = true;
     } else {
+      // A connection handshake proves liveness, not an intent to mutate the
+      // display name. Stale tabs can reconnect with an older local nickname;
+      // only the explicit participant-rename message is allowed to rename an
+      // existing participant.
       if (record.connections.size === 0) visibleChanged = true;
-      if (record.nickname !== nickname) {
-        record.nickname = nickname;
-        visibleChanged = true;
-      }
       record.lastSeenAt = input.nowMs;
       record.reconnectingUntil = null;
     }

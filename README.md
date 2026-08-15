@@ -126,7 +126,9 @@ A voice peaks some 16 dB above its own average, so one static gain cannot serve 
 Two things close that gap:
 
 - **A peak limiter on the microphone**, between its gain and the sum (`src/audio-session.ts`). Textbook feed-forward design — peak-hold detector, gain smoothed on a one-pole, threshold at −1 dBFS. Its look-ahead is free here: the microphone is read out of a buffer by index, so the detector can run 3 ms in front of the output without delaying anything, and therefore without moving the alignment. Above the threshold more gain now buys more limiting rather than more distortion; 24 dB and 36 dB produce the same output level, which is what stops the knob from being critical. The clamp stays as a backstop, because the limiter only holds down the voice and the voice plus the song can still overflow.
-- **A measured recommendation.** The calibration already computes the raw microphone RMS to reject a dead input; `source.html` now also reports it and derives the gain that puts singing peaks just under full scale (`-1 - 16 - micLevelDbfs`). Setting this by ear meant hunting a band you cannot see.
+- **A measured recommendation.** `AudioSession` meters the raw microphone continuously — peak and RMS over a couple of seconds — and `source.html` reports it live next to the gain slider along with the gain that would land peaks on the limiter threshold (`-1 - micPeakDbfs`). Setting this by ear meant hunting a band you cannot see.
+
+  The meter deliberately watches the live stream rather than the calibration, even though the calibration also measures the microphone. Calibration asks the singer to stay quiet for its six seconds, so what it measures is the room and the phone's own speaker — not the voice the gain has to carry. Measuring the peak directly also avoids having to assume a crest factor to get there from RMS.
 
 `limitedSamples` reports how much the limiter worked. It is not a fault — but a take limited almost end to end has had its dynamics flattened, and that is worth knowing.
 

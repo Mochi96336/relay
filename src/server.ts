@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { AudioSession } from './audio-session.js';
+import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { decodePcmFrame } from './pcm-frame.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
@@ -222,12 +222,18 @@ function sourceStatusPayload() {
 }
 
 function mixHealthPayload() {
+  const health = session.health();
+
   return {
     type: 'mix-health',
     active: session.active,
     // Gaps the framing made visible: dropped uplink chunks, congestion, or a
     // transport outage the capture kept running through.
-    ...session.health(),
+    ...health,
+    // Carried here rather than with the calibration so the advice tracks the
+    // voice as it is now, and keeps working without a calibration at all.
+    recommendedMicGainDb: recommendedMicGainDb(health.micPeakDbfs),
+    micGainDb,
     monitorDroppedFrames,
     prebufferMs: session.prebufferMs,
   };
@@ -235,21 +241,17 @@ function mixHealthPayload() {
 
 
 /**
- * The mic gain that puts singing peaks just under full scale.
+ * The mic gain that lands singing peaks on the limiter threshold.
  *
- * The calibration measures the raw microphone as RMS. Singing runs roughly
- * 16 dB above its own RMS at the peaks, so that much plus a decibel of headroom
- * is what the gain must leave free. Guessing at this by ear means hunting the
- * narrow band between clipping and inaudible; the measurement makes it
- * arithmetic.
+ * Derived from the live microphone meter, not from the calibration: the
+ * calibration asks the singer to stay quiet for its six seconds, so the level
+ * it measures is the room and the phone's own speaker, not the voice the gain
+ * has to carry. Measuring the peak directly also removes the guess - an assumed
+ * crest factor - that estimating it from RMS would need.
  */
-const SINGING_CREST_DB = 16;
-const PEAK_HEADROOM_DB = 1;
-
-function recommendedMicGainDb(micLevelDbfs: number | null) {
-  if (micLevelDbfs === null || !Number.isFinite(micLevelDbfs)) return null;
-  const room = -PEAK_HEADROOM_DB - SINGING_CREST_DB - micLevelDbfs;
-  return Math.max(0, Math.min(36, Math.round(room)));
+function recommendedMicGainDb(micPeakDbfs: number | null) {
+  if (micPeakDbfs === null || !Number.isFinite(micPeakDbfs)) return null;
+  return Math.max(0, Math.min(36, Math.round(LIMITER_THRESHOLD_DBFS - micPeakDbfs)));
 }
 
 function timingCalibrationStatusPayload() {
@@ -259,8 +261,6 @@ function timingCalibrationStatusPayload() {
   return {
     type: 'timing-calibration-status',
     ...status,
-    recommendedMicGainDb: recommendedMicGainDb(status.micLevelDbfs),
-    micGainDb,
     micLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),

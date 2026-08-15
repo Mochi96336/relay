@@ -48,6 +48,13 @@ export type MixHealth = {
   clippedSamples: number;
   /** Samples the microphone limiter held down. Working, not failing. */
   limitedSamples: number;
+  /**
+   * The raw microphone over the last few seconds, before any mix gain. Peak is
+   * what decides the gain - it is what runs into the limiter - and RMS says
+   * whether there is any signal at all. Null until the phone sends something.
+   */
+  micPeakDbfs: number | null;
+  micRmsDbfs: number | null;
   unheadered: boolean;
 };
 
@@ -79,10 +86,18 @@ const ADVANCE_SAFETY_MS = 200;
  * The clamp further down stays as a backstop regardless: the limiter only holds
  * down the voice, and the voice plus the song can still overflow.
  */
-const LIMITER_THRESHOLD = 0.891; // -1 dBFS
+export const LIMITER_THRESHOLD_DBFS = -1;
+const LIMITER_THRESHOLD = 10 ** (LIMITER_THRESHOLD_DBFS / 20);
 const LIMITER_ATTACK_MS = 1.5;
 const LIMITER_RELEASE_MS = 150;
 const LIMITER_LOOKAHEAD_MS = 3;
+
+/**
+ * How fast the raw microphone meter forgets. Long enough that a breath between
+ * phrases does not read as a quiet microphone, short enough to follow a singer
+ * moving nearer or further from the phone.
+ */
+const MIC_METER_HALF_LIFE_MS = 2_000;
 
 /** Per-sample coefficient of a one-pole smoother with the given time constant. */
 function onePoleCoefficient(timeConstantMs: number, sampleRate: number) {
@@ -153,6 +168,10 @@ export class AudioSession {
   // would put a 20 ms sawtooth on the vocal.
   private limiterEnvelope = 0;
   private limiterGain = 1;
+
+  private micMeterPeak = 0;
+  private micMeterPower = 0;
+  private micMeterWeight = 0;
   private readonly limiterAttack: number;
   private readonly limiterRelease: number;
   private readonly limiterLookaheadSamples: number;
@@ -260,7 +279,9 @@ export class AudioSession {
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
-    return this.ingest(this.mic, frame, sourceRate, nowMs);
+    const result = this.ingest(this.mic, frame, sourceRate, nowMs);
+    this.meterMic(result.samples);
+    return result;
   }
 
   ingestBacking(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
@@ -311,6 +332,10 @@ export class AudioSession {
       backingGapMs: Math.round((this.backing.gapSamples / this.sampleRate) * 1000),
       clippedSamples: this.clippedSamples,
       limitedSamples: this.limitedSamples,
+      micPeakDbfs: this.micMeterPeak > 0 ? 20 * Math.log10(this.micMeterPeak) : null,
+      micRmsDbfs: this.micMeterWeight > 0 && this.micMeterPower > 0
+        ? 20 * Math.log10(Math.sqrt(this.micMeterPower / this.micMeterWeight))
+        : null,
       unheadered: this.mic.unheadered || this.backing.unheadered,
     };
   }
@@ -320,6 +345,9 @@ export class AudioSession {
     this.backingStarvedFrames = 0;
     this.clippedSamples = 0;
     this.limitedSamples = 0;
+    this.micMeterPeak = 0;
+    this.micMeterPower = 0;
+    this.micMeterWeight = 0;
     this.micHeadroomMs = 0;
     this.backingHeadroomMs = 0;
     this.mic.gapSamples = 0;
@@ -482,6 +510,33 @@ export class AudioSession {
       if (chunk.start + chunk.samples.length >= beforeSample) break;
       timeline.chunks.shift();
     }
+  }
+
+  /**
+   * Tracks the raw microphone so the gain can be set from what the phone is
+   * actually sending. This has to watch the live stream: the only other
+   * measurement of the microphone happens during calibration, where the singer
+   * is asked to stay quiet, so it describes the room rather than the voice.
+   */
+  private meterMic(samples: Int16Array) {
+    if (samples.length === 0) return;
+
+    let sumSquares = 0;
+    let peak = 0;
+    for (let i = 0; i < samples.length; i += 1) {
+      const value = samples[i] / 32768;
+      sumSquares += value * value;
+      const magnitude = Math.abs(value);
+      if (magnitude > peak) peak = magnitude;
+    }
+
+    // One decay step per batch, sized by the time the batch covers, so the
+    // meter reads the same however the frames happen to be chunked.
+    const keep = 2 ** (-((samples.length / this.sampleRate) * 1000) / MIC_METER_HALF_LIFE_MS);
+
+    this.micMeterPeak = Math.max(peak, this.micMeterPeak * keep);
+    this.micMeterPower = sumSquares / samples.length + this.micMeterPower * keep;
+    this.micMeterWeight = 1 + this.micMeterWeight * keep;
   }
 
   /**

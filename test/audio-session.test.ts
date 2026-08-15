@@ -299,6 +299,29 @@ describe('AudioSession microphone limiter', () => {
     );
   });
 
+  test('meters the raw microphone, not what the gain made of it', () => {
+    const session = makeSession();
+    session.setMicGainDb(36);
+    session.start(0);
+    // Peaks at 3200/32768, i.e. -20.2 dBFS, before any gain is applied.
+    session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
+
+    const health = session.health();
+    assert.ok(
+      Math.abs((health.micPeakDbfs ?? 0) + 20.2) < 0.5,
+      `expected the raw -20.2 dBFS peak, got ${health.micPeakDbfs}`,
+    );
+    assert.ok((health.micRmsDbfs ?? 0) < (health.micPeakDbfs ?? 0), 'RMS sits below peak');
+  });
+
+  test('has nothing to report before the phone sends anything', () => {
+    const session = makeSession();
+    session.start(0);
+
+    assert.equal(session.health().micPeakDbfs, null);
+    assert.equal(session.health().micRmsDbfs, null);
+  });
+
   test('leaves a signal that already fits alone', () => {
     const session = makeSession();
     session.setMicGainDb(0);

@@ -73,28 +73,31 @@ function send(payload) {
 }
 
 /**
- * Turns the microphone level the calibration measured into the gain to set.
- * Without this the only feedback is whether the last take sounded bad.
+ * Turns the live microphone meter into the gain to set.
+ *
+ * Reads the running mix health rather than the calibration: calibration asks
+ * the singer to stay quiet, so the level it measures is the room, not the
+ * voice. Peak is what matters here because peak is what hits the limiter.
  */
 function renderGainAdvice() {
   if (!gainAdvice) return;
-  const level = Number(latestCalibration?.micLevelDbfs);
-  const recommended = Number(latestCalibration?.recommendedMicGainDb);
+  const peak = Number(latestMixHealth?.micPeakDbfs);
+  const recommended = Number(latestMixHealth?.recommendedMicGainDb);
 
-  if (!Number.isFinite(level) || !Number.isFinite(recommended)) {
-    gainAdvice.textContent = '';
+  if (!Number.isFinite(peak) || !Number.isFinite(recommended)) {
+    gainAdvice.textContent = '連上手機麥克風後，這裡會即時顯示實際電平與建議的 Mic gain。';
     return;
   }
 
   const current = Math.round(Number(sourceMicGain.value) || 0);
   const off = recommended - current;
-  const verdict = Math.abs(off) <= 2
+  const verdict = Math.abs(off) <= 3
     ? '目前設定合適'
     : off < 0
-      ? `目前 +${current} dB 偏高 ${-off} dB，會削波`
+      ? `目前 +${current} dB 偏高 ${-off} dB，動態會被壓平`
       : `目前 +${current} dB 偏低 ${off} dB，人聲會太小`;
 
-  gainAdvice.textContent = `麥克風電平 ${level.toFixed(1)} dBFS（RMS）· 建議 Mic gain +${recommended} dB · ${verdict}`;
+  gainAdvice.textContent = `麥克風峰值 ${peak.toFixed(1)} dBFS · 建議 Mic gain +${recommended} dB · ${verdict}`;
 }
 
 /**
@@ -172,7 +175,6 @@ function renderCalibration() {
       ? ' · ⚠ 已過期，建議重跑'
       : '';
     timingStatus.textContent = `✓ Mic path ${signed(latestCalibration.micLagMs, ' ms')} · confidence ${Number.isFinite(confidence) ? confidence.toFixed(2) : '--'}${windows ? ` · windows ${windows}` : ''}${stale}`;
-    renderGainAdvice();
     return;
   }
 
@@ -364,6 +366,7 @@ function connect() {
 
     if (message.type === 'mix-health') {
       latestMixHealth = message;
+      renderGainAdvice();
       if (latestSourceStatus) renderSourceStatus(latestSourceStatus);
       return;
     }

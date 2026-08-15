@@ -46,6 +46,8 @@ export type MixHealth = {
   backingGapMs: number;
   /** Samples the summing stage had to clamp, i.e. audible distortion. */
   clippedSamples: number;
+  /** Samples the microphone limiter held down. Working, not failing. */
+  limitedSamples: number;
   unheadered: boolean;
 };
 
@@ -55,6 +57,37 @@ export type MixHealth = {
  * fit between them however large a lag the calibration reports.
  */
 const ADVANCE_SAFETY_MS = 200;
+
+/**
+ * Peak limiter on the microphone, between its gain and the sum.
+ *
+ * One static gain cannot serve both ends of a voice: peaks run some 16 dB above
+ * the average, so a gain set loud enough to hear clips on transients and a gain
+ * set safe enough to never clip is inaudible. Every decibel between those is
+ * the whole tuning range, and it moves whenever the singer does.
+ *
+ * A textbook feed-forward design: track the peak envelope, pull the gain down
+ * quickly when it exceeds the threshold, let it back up slowly.
+ *
+ * The detector runs `LIMITER_LOOKAHEAD_MS` in front of the output, which is
+ * normally bought by delaying the signal. Here it is free: the microphone is
+ * read out of a buffer by index, so the limiter can simply look at samples the
+ * mixer has not emitted yet. Nothing is delayed, so none of this moves the
+ * alignment. Without it the first few milliseconds of every transient reach
+ * the sum at full height before the envelope catches up.
+ *
+ * The clamp further down stays as a backstop regardless: the limiter only holds
+ * down the voice, and the voice plus the song can still overflow.
+ */
+const LIMITER_THRESHOLD = 0.891; // -1 dBFS
+const LIMITER_ATTACK_MS = 1.5;
+const LIMITER_RELEASE_MS = 150;
+const LIMITER_LOOKAHEAD_MS = 3;
+
+/** Per-sample coefficient of a one-pole smoother with the given time constant. */
+function onePoleCoefficient(timeConstantMs: number, sampleRate: number) {
+  return 1 - Math.exp(-1 / ((timeConstantMs / 1000) * sampleRate));
+}
 
 /** Where a batch of ingested samples landed on the shared session timeline. */
 export type IngestResult = {
@@ -114,6 +147,15 @@ export class AudioSession {
   private micStarvedFrames = 0;
   private backingStarvedFrames = 0;
   private clippedSamples = 0;
+  private limitedSamples = 0;
+
+  // Envelope and gain reduction carry across frames; resetting them per frame
+  // would put a 20 ms sawtooth on the vocal.
+  private limiterEnvelope = 0;
+  private limiterGain = 1;
+  private readonly limiterAttack: number;
+  private readonly limiterRelease: number;
+  private readonly limiterLookaheadSamples: number;
   private micHeadroomMs = 0;
   private backingHeadroomMs = 0;
 
@@ -125,6 +167,9 @@ export class AudioSession {
     this.backingGain = options.backingGain;
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
+    this.limiterAttack = onePoleCoefficient(LIMITER_ATTACK_MS, options.sampleRate);
+    this.limiterRelease = onePoleCoefficient(LIMITER_RELEASE_MS, options.sampleRate);
+    this.limiterLookaheadSamples = Math.round((LIMITER_LOOKAHEAD_MS * options.sampleRate) / 1000);
   }
 
   get active() {
@@ -265,6 +310,7 @@ export class AudioSession {
       micGapMs: Math.round((this.mic.gapSamples / this.sampleRate) * 1000),
       backingGapMs: Math.round((this.backing.gapSamples / this.sampleRate) * 1000),
       clippedSamples: this.clippedSamples,
+      limitedSamples: this.limitedSamples,
       unheadered: this.mic.unheadered || this.backing.unheadered,
     };
   }
@@ -273,6 +319,7 @@ export class AudioSession {
     this.micStarvedFrames = 0;
     this.backingStarvedFrames = 0;
     this.clippedSamples = 0;
+    this.limitedSamples = 0;
     this.micHeadroomMs = 0;
     this.backingHeadroomMs = 0;
     this.mic.gapSamples = 0;
@@ -437,6 +484,33 @@ export class AudioSession {
     }
   }
 
+  /**
+   * One sample through the peak limiter. `detect` is the sample the detector
+   * should react to - a few milliseconds ahead of `value` - so the reduction is
+   * already in place when the peak arrives.
+   */
+  private limit(value: number, detect: number) {
+    const magnitude = Math.abs(detect);
+    // Peak-hold: the envelope takes a new peak immediately and only decays
+    // slowly. Smoothing the rise here as well would put two lags in series and
+    // the gain would still be falling when the peak arrived, which is what the
+    // look-ahead exists to prevent. The single lag left is the gain itself.
+    this.limiterEnvelope = magnitude > this.limiterEnvelope
+      ? magnitude
+      : this.limiterEnvelope + (magnitude - this.limiterEnvelope) * this.limiterRelease;
+
+    const target = this.limiterEnvelope > LIMITER_THRESHOLD
+      ? LIMITER_THRESHOLD / this.limiterEnvelope
+      : 1;
+    // Gain reduction engages at the attack rate and recovers at the release
+    // rate; smoothing it is what keeps the reduction from sounding like a click.
+    this.limiterGain += (target - this.limiterGain)
+      * (target < this.limiterGain ? this.limiterAttack : this.limiterRelease);
+
+    if (this.limiterGain < 0.99) this.limitedSamples += 1;
+    return value * this.limiterGain;
+  }
+
   private mixFrame(frameIndex: number) {
     const startSample = frameIndex * this.frameSamples;
     const advanceSamples = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
@@ -445,22 +519,27 @@ export class AudioSession {
     // Reading ahead can outrun what has actually arrived. readRange pads with
     // zeros when that happens, so without this the vocal simply disappears in
     // chunks and nothing anywhere says why.
-    this.micHeadroomMs = ((this.mic.totalSamples - (micReadStart + this.frameSamples)) / this.sampleRate) * 1000;
+    // The limiter's look-ahead reads past the frame, so it is part of what has
+    // to have arrived for this frame to be complete.
+    const micReadEnd = micReadStart + this.frameSamples + this.limiterLookaheadSamples;
+    this.micHeadroomMs = ((this.mic.totalSamples - micReadEnd) / this.sampleRate) * 1000;
     this.backingHeadroomMs = ((this.backing.totalSamples - (startSample + this.frameSamples)) / this.sampleRate) * 1000;
     if (this.micHeadroomMs < 0 && this.micExpected) this.micStarvedFrames += 1;
     if (this.backingHeadroomMs < 0 && this.backingExpected) this.backingStarvedFrames += 1;
 
-    const mic = this.readRange(this.mic, micReadStart, this.frameSamples);
+    // The extra tail is the limiter's look-ahead, not audio to be emitted.
+    const lookahead = this.limiterLookaheadSamples;
+    const mic = this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     const micGain = 10 ** (this.micGainDb / 20);
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
 
     for (let i = 0; i < this.frameSamples; i += 1) {
-      const value = (mic[i] / 32768) * micGain + (song[i] / 32768) * this.backingGain;
-      // Clamping keeps the wraparound crack out of the mix, but it is still
-      // distortion, and at the default 30 dB of microphone gain it is easy to
-      // reach. Count it so a take can say it was too hot instead of just
-      // sounding bad.
+      const voice = this.limit((mic[i] / 32768) * micGain, (mic[i + lookahead] / 32768) * micGain);
+      const value = voice + (song[i] / 32768) * this.backingGain;
+      // The limiter holds the voice under the threshold, so anything reaching
+      // here is the sum overflowing. Clamping keeps the wraparound crack out of
+      // the mix but is still distortion, so count it rather than hide it.
       if (value > 1 || value < -1) this.clippedSamples += 1;
       const clamped = Math.max(-1, Math.min(1, value));
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);

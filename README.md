@@ -117,7 +117,18 @@ When the margin does run out the mixer reads past the end of the microphone hist
 
 `mix-health` counters run for the whole live session. Solo recording baselines them when a take starts and quotes the difference, because a phone that was away *before* you pressed record is not damage to the recording — a 49 s take once reported a 48.7 s vocal gap alongside a single starved frame, which is what that bug looks like from the outside.
 
-`clippedSamples` counts what the summing stage had to clamp. At the default 30 dB of microphone gain the mix reaches full scale easily, and hard clipping sounds like a bad connection rather than like a level problem, so it is worth naming explicitly.
+`clippedSamples` counts what the summing stage had to clamp. Hard clipping sounds like a bad connection rather than like a level problem, so it is worth naming explicitly.
+
+### Microphone gain
+
+A voice peaks some 16 dB above its own average, so one static gain cannot serve both ends of it: loud enough to hear clips on transients, safe enough never to clip is inaudible. The window between them is narrow and it moves every time the singer does — which is what made this unturnable by ear.
+
+Two things close that gap:
+
+- **A peak limiter on the microphone**, between its gain and the sum (`src/audio-session.ts`). Textbook feed-forward design — peak-hold detector, gain smoothed on a one-pole, threshold at −1 dBFS. Its look-ahead is free here: the microphone is read out of a buffer by index, so the detector can run 3 ms in front of the output without delaying anything, and therefore without moving the alignment. Above the threshold more gain now buys more limiting rather than more distortion; 24 dB and 36 dB produce the same output level, which is what stops the knob from being critical. The clamp stays as a backstop, because the limiter only holds down the voice and the voice plus the song can still overflow.
+- **A measured recommendation.** The calibration already computes the raw microphone RMS to reject a dead input; `source.html` now also reports it and derives the gain that puts singing peaks just under full scale (`-1 - 16 - micLevelDbfs`). Setting this by ear meant hunting a band you cannot see.
+
+`limitedSamples` reports how much the limiter worked. It is not a fault — but a take limited almost end to end has had its dynamics flattened, and that is worth knowing.
 
 ### Framed PCM
 

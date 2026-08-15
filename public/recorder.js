@@ -36,6 +36,7 @@ let serverDroppedFrames = 0;
 let serverMicGapMs = 0;
 let serverBackingGapMs = 0;
 let serverClippedSamples = 0;
+let serverLimitedSamples = 0;
 /** The server's cumulative counters as of this take's first report. */
 let serverHealthBaseline = null;
 let serverUnheadered = false;
@@ -176,9 +177,17 @@ function describeQuality() {
   if (serverMicStarvedFrames > 0) notes.push(`Server 人聲不足 ${serverMicStarvedFrames} frames`);
   if (serverMicGapMs > 0) notes.push(`人聲缺口 ${serverMicGapMs} ms`);
   if (serverBackingGapMs > 0) notes.push(`歌曲缺口 ${serverBackingGapMs} ms`);
+  // The limiter holds the voice below the threshold, so a clamp here means the
+  // voice plus the song overflowed - the song side is the one to pull down.
   if (serverClippedSamples > 0) {
     const ms = Math.round(serverClippedSamples / (MIX_SAMPLE_RATE / 1000));
-    notes.push(`削波 ${ms} ms — 調低麥克風增益`);
+    notes.push(`削波 ${ms} ms — 調低 Song level`);
+  }
+  // Not a fault: this is the limiter doing its job. It is worth saying only
+  // when it never lets go, which means the gain is high enough to be flattening
+  // the dynamics rather than just catching peaks.
+  if (receivedPcmSamples > 0 && serverLimitedSamples / receivedPcmSamples > 0.6) {
+    notes.push('限幅器幾乎全程作用 — Mic gain 偏高，動態被壓平');
   }
   if (serverUnheadered) notes.push('有 client 送出未加 header 的 PCM');
   if (serverDroppedFrames > 0) notes.push(`Server 丟棄 ${serverDroppedFrames} frames`);
@@ -246,6 +255,7 @@ function handleJsonMessage(message) {
       micGapMs: Number(message.micGapMs) || 0,
       backingGapMs: Number(message.backingGapMs) || 0,
       clippedSamples: Number(message.clippedSamples) || 0,
+      limitedSamples: Number(message.limitedSamples) || 0,
     };
 
     // A counter going backwards means the server reset its own session, so the
@@ -259,6 +269,7 @@ function handleJsonMessage(message) {
     serverMicGapMs = totals.micGapMs - serverHealthBaseline.micGapMs;
     serverBackingGapMs = totals.backingGapMs - serverHealthBaseline.backingGapMs;
     serverClippedSamples = totals.clippedSamples - serverHealthBaseline.clippedSamples;
+    serverLimitedSamples = totals.limitedSamples - serverHealthBaseline.limitedSamples;
     // Not take-scoped on purpose: this says a connected client is running stale
     // code, which stays true regardless of when the take began.
     serverUnheadered = Boolean(message.unheadered);
@@ -393,6 +404,7 @@ async function startRecording() {
   serverMicGapMs = 0;
   serverBackingGapMs = 0;
   serverClippedSamples = 0;
+  serverLimitedSamples = 0;
   serverHealthBaseline = null;
   serverUnheadered = false;
 

@@ -24,6 +24,14 @@ export type CalibrationStatus = {
   micLagMs: number | null;
   confidence: number | null;
   segmentLagsMs: number[];
+  /**
+   * RMS of the raw microphone over the measured window, before any mix gain.
+   * The analyser computes this to reject a dead microphone; it is also the only
+   * measurement of what the phone actually sends, which is what a sensible mic
+   * gain has to be derived from.
+   */
+  micLevelDbfs: number | null;
+  backingLevelDbfs: number | null;
   error: string | null;
 };
 
@@ -120,6 +128,8 @@ export class CalibrationSession {
   private micLagMs: number | null = null;
   private confidence: number | null = null;
   private segmentLagsMs: number[] = [];
+  private micLevelDbfs: number | null = null;
+  private backingLevelDbfs: number | null = null;
 
   private mic = emptyCapture();
   private backing = emptyCapture();
@@ -156,6 +166,8 @@ export class CalibrationSession {
     this.error = null;
     this.confidence = null;
     this.segmentLagsMs = [];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
     this.clearCapture();
   }
 
@@ -164,6 +176,8 @@ export class CalibrationSession {
     this.error = message;
     this.confidence = null;
     this.segmentLagsMs = [];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
     this.clearCapture();
     this.onSettled();
   }
@@ -223,6 +237,8 @@ export class CalibrationSession {
       micLagMs: this.micLagMs,
       confidence: this.confidence,
       segmentLagsMs: this.segmentLagsMs,
+      micLevelDbfs: this.micLevelDbfs,
+      backingLevelDbfs: this.backingLevelDbfs,
       error: this.error,
     };
   }
@@ -294,6 +310,8 @@ export class CalibrationSession {
       this.measuredContext = this.context();
       this.confidence = result.confidence;
       this.segmentLagsMs = result.segmentLagsMs;
+      this.micLevelDbfs = result.micLevelDbfs;
+      this.backingLevelDbfs = result.backingLevelDbfs;
       this.error = null;
       this.phase = 'complete';
     } catch (error) {

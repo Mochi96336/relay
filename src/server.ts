@@ -234,12 +234,33 @@ function mixHealthPayload() {
 }
 
 
+/**
+ * The mic gain that puts singing peaks just under full scale.
+ *
+ * The calibration measures the raw microphone as RMS. Singing runs roughly
+ * 16 dB above its own RMS at the peaks, so that much plus a decibel of headroom
+ * is what the gain must leave free. Guessing at this by ear means hunting the
+ * narrow band between clipping and inaudible; the measurement makes it
+ * arithmetic.
+ */
+const SINGING_CREST_DB = 16;
+const PEAK_HEADROOM_DB = 1;
+
+function recommendedMicGainDb(micLevelDbfs: number | null) {
+  if (micLevelDbfs === null || !Number.isFinite(micLevelDbfs)) return null;
+  const room = -PEAK_HEADROOM_DB - SINGING_CREST_DB - micLevelDbfs;
+  return Math.max(0, Math.min(36, Math.round(room)));
+}
+
 function timingCalibrationStatusPayload() {
   const alignment = session.alignment;
+  const status = calibration.status();
 
   return {
     type: 'timing-calibration-status',
-    ...calibration.status(),
+    ...status,
+    recommendedMicGainDb: recommendedMicGainDb(status.micLevelDbfs),
+    micGainDb,
     micLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),

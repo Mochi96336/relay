@@ -247,26 +247,79 @@ describe('AudioSession health', () => {
   });
 });
 
-describe('AudioSession clipping', () => {
-  test('counts the samples the summing stage had to clamp', () => {
+describe('AudioSession microphone limiter', () => {
+  /** A 220 Hz tone with a 20 ms onset, which is how a voice actually starts. */
+  function sung(seconds: number, amplitude: number) {
+    const total = Math.round(RATE * seconds);
+    const onset = Math.round(RATE * 0.02);
+    const samples = new Array(total);
+    for (let i = 0; i < total; i += 1) {
+      const envelope = Math.min(1, i / onset);
+      samples[i] = Math.round(amplitude * envelope * Math.sin((2 * Math.PI * 220 * i) / RATE));
+    }
+    return pcmOf(samples);
+  }
+
+  function mixHot(micGainDb: number) {
     const session = makeSession();
-    session.setMicGainDb(30);
+    session.setMicGainDb(micGainDb);
     session.start(0);
+    session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
+    return { session, mixed: drainAll(session, 500) };
+  }
 
-    // 20 dB below full scale, lifted 30 dB, is 10 dB past the rail.
-    session.ingestMic(frame(0, pcmOf(new Array(RATE).fill(3_200))), RATE, 0);
+  function rmsDbfs(mixed: Buffer) {
+    const total = mixed.byteLength / 2;
+    let sum = 0;
+    for (let i = 0; i < total; i += 1) {
+      const value = mixed.readInt16LE(i * 2) / 32768;
+      sum += value * value;
+    }
+    return 20 * Math.log10(Math.sqrt(sum / total));
+  }
 
-    drainAll(session, 200);
-    assert.ok(session.health().clippedSamples > 0, 'a hot microphone must be reported, not just clamped');
+  test('a microphone driven well past full scale never reaches the clamp', () => {
+    // +36 dB on a -20 dBFS voice asks for 10 dB more than there is room for.
+    const { session, mixed } = mixHot(36);
+
+    assert.equal(session.health().clippedSamples, 0, 'the limiter, not the clamp, must be what holds it');
+    assert.ok(session.health().limitedSamples > 0, 'and it must say it was working');
+    assert.ok(peakSampleIndex(mixed).value < 32_767, 'nothing is left sitting on the rail');
   });
 
-  test('reports nothing when the mix fits', () => {
-    const session = makeSession();
-    session.start(0);
-    session.ingestMic(frame(0, pcmOf(new Array(RATE).fill(3_200))), RATE, 0);
+  test('the output level stops depending on where the gain knob is', () => {
+    // The point of the limiter: above the threshold, more gain buys more
+    // limiting rather than more distortion, so the knob stops being critical.
+    const quiet = rmsDbfs(mixHot(24).mixed);
+    const loud = rmsDbfs(mixHot(36).mixed);
 
-    drainAll(session, 200);
+    assert.ok(
+      Math.abs(loud - quiet) < 1,
+      `12 dB of gain should not move the output: ${quiet.toFixed(2)} vs ${loud.toFixed(2)} dBFS`,
+    );
+  });
+
+  test('leaves a signal that already fits alone', () => {
+    const session = makeSession();
+    session.setMicGainDb(0);
+    session.start(0);
+    session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
+
+    drainAll(session, 500);
+    assert.equal(session.health().limitedSamples, 0, 'a quiet take must pass through untouched');
     assert.equal(session.health().clippedSamples, 0);
+  });
+
+  test('still reports a clamp when the sum overflows despite the limiter', () => {
+    // The limiter only holds the voice down; the song is added after it.
+    const session = makeSession({ backingGain: 1 });
+    session.setMicGainDb(36);
+    session.start(0);
+    session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
+    session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(30_000))), RATE, 0);
+
+    drainAll(session, 500);
+    assert.ok(session.health().clippedSamples > 0, 'the backstop still has to report itself');
   });
 });
 

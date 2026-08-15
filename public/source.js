@@ -10,6 +10,7 @@ const sourceMicGain = document.querySelector('#source-mic-gain');
 const sourceMicGainValue = document.querySelector('#source-mic-gain-value');
 const timingButton = document.querySelector('#start-timing-calibration');
 const timingStatus = document.querySelector('#timing-calibration-status');
+const gainAdvice = document.querySelector('#gain-advice');
 const vocalFineTune = document.querySelector('#vocal-fine-tune');
 const vocalFineTuneValue = document.querySelector('#vocal-fine-tune-value');
 
@@ -72,6 +73,31 @@ function send(payload) {
 }
 
 /**
+ * Turns the microphone level the calibration measured into the gain to set.
+ * Without this the only feedback is whether the last take sounded bad.
+ */
+function renderGainAdvice() {
+  if (!gainAdvice) return;
+  const level = Number(latestCalibration?.micLevelDbfs);
+  const recommended = Number(latestCalibration?.recommendedMicGainDb);
+
+  if (!Number.isFinite(level) || !Number.isFinite(recommended)) {
+    gainAdvice.textContent = '';
+    return;
+  }
+
+  const current = Math.round(Number(sourceMicGain.value) || 0);
+  const off = recommended - current;
+  const verdict = Math.abs(off) <= 2
+    ? '目前設定合適'
+    : off < 0
+      ? `目前 +${current} dB 偏高 ${-off} dB，會削波`
+      : `目前 +${current} dB 偏低 ${off} dB，人聲會太小`;
+
+  gainAdvice.textContent = `麥克風電平 ${level.toFixed(1)} dBFS（RMS）· 建議 Mic gain +${recommended} dB · ${verdict}`;
+}
+
+/**
  * The mixer clamps the read-ahead to what the prebuffer affords. When it has
  * to, the vocal sits late by the difference, and nothing else would say so.
  */
@@ -109,6 +135,10 @@ function applyBalance() {
   if (armed) {
     send({ type: 'set-mix', micGainDb });
   }
+
+  // The verdict compares the slider against the measurement, so it has to move
+  // with the slider and not just with a fresh calibration.
+  renderGainAdvice();
 }
 
 function applyFineTune(sendToServer = true) {
@@ -142,6 +172,7 @@ function renderCalibration() {
       ? ' · ⚠ 已過期，建議重跑'
       : '';
     timingStatus.textContent = `✓ Mic path ${signed(latestCalibration.micLagMs, ' ms')} · confidence ${Number.isFinite(confidence) ? confidence.toFixed(2) : '--'}${windows ? ` · windows ${windows}` : ''}${stale}`;
+    renderGainAdvice();
     return;
   }
 

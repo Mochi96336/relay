@@ -54,11 +54,11 @@
 
         <label class="gain-control" for="source-mic-gain">
           <span>Mic gain</span>
-          <input id="source-mic-gain" type="range" min="0" max="36" step="1" value="36" />
-          <output id="source-mic-gain-value" for="source-mic-gain">+36 dB</output>
+          <input id="source-mic-gain" type="range" min="0" max="36" step="1" value="24" />
+          <output id="source-mic-gain-value" for="source-mic-gain">+24 dB</output>
         </label>
 
-        <p class="hint">預設先把桌面歌曲壓到 40%、Mic 拉到 +36 dB。錄音時如果人聲還小，先繼續降 Song level；如果人聲開始破，再把 Mic gain 往下收。</p>
+        <p class="hint">不要靠耳朵猜 Mic gain：跑一次下面的 timing calibration，它會量出麥克風實際電平並直接給你建議值。人聲整體太小就用手機端的 Monitor gain 補，那條在混音之後，不會削波。</p>
       </section>
 
       <section class="test-panel">
@@ -73,6 +73,7 @@
         </div>
 
         <p id="timing-calibration-status" class="hint">先連上手機 Microphone 與 Chrome Source，手機播放中即可校準。</p>
+        <p id="gain-advice" class="hint"></p>
         <p class="hint">校準時：手機關耳機、開喇叭約 50–70%，6 秒內不要說話。完成後可以戴回耳機正常唱。</p>
 
         <label class="gain-control" for="vocal-fine-tune">

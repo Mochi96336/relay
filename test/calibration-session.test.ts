@@ -250,6 +250,93 @@ describe('CalibrationSession placement', () => {
   });
 });
 
+describe('CalibrationSession agreement', () => {
+  /** Feeds windows whose analyser results are scripted in order. */
+  function makeAgreeing(lags: number[], windows = 3) {
+    let index = 0;
+    const calibration = new CalibrationSession({
+      sampleRate: RATE,
+      durationMs: DURATION_MS,
+      timeoutMs: 20_000,
+      context: () => ({
+        sessionGeneration: 1, micGeneration: 10, backingGeneration: 20, sourceGeneration: 0,
+      }),
+      analyze: () => analysis(lags[Math.min(index++, lags.length - 1)]),
+      agreementWindows: windows,
+      agreementToleranceMs: 25,
+      now: () => 0,
+    });
+    return calibration;
+  }
+
+  /** One full window on both sides, starting where the last one ended. */
+  function window(calibration: CalibrationSession, index: number) {
+    const at = index * REQUIRED;
+    calibration.observeBacking(chunk(REQUIRED), at);
+    calibration.observeMic(chunk(REQUIRED), at);
+  }
+
+  test('one window is not enough to apply an answer', () => {
+    const calibration = makeAgreeing([240, 240, 240]);
+    calibration.start(0);
+
+    window(calibration, 0);
+    assert.equal(calibration.result, null, 'a single window has nothing to be checked against');
+    assert.equal(calibration.status().state, 'collecting', 'and it keeps measuring');
+    assert.equal(calibration.status().windowsAgreed, 1);
+  });
+
+  test('applies once enough windows land on the same answer', () => {
+    const calibration = makeAgreeing([240, 235, 244]);
+    calibration.start(0);
+
+    for (let i = 0; i < 3; i += 1) window(calibration, i);
+
+    assert.equal(calibration.status().state, 'complete');
+    assert.equal(calibration.result?.micLagMs, 244);
+  });
+
+  test('rejects the random answers a false positive produces', () => {
+    // What unrelated audio actually did: a confident-looking lag, somewhere
+    // different every time. No human is watching, so repeatability is the only
+    // thing left that can tell these from a real match.
+    const calibration = makeAgreeing([-870, 2_000, -1_380, 640]);
+    calibration.start(0);
+
+    for (let i = 0; i < 4; i += 1) window(calibration, i);
+
+    assert.equal(calibration.result, null, 'nothing may be applied on disagreement');
+    assert.equal(calibration.status().state, 'collecting');
+  });
+
+  test('a disagreeing window costs the progress it invalidates', () => {
+    const calibration = makeAgreeing([240, 242, -900, -898]);
+    calibration.start(0);
+
+    window(calibration, 0);
+    window(calibration, 1);
+    assert.equal(calibration.status().windowsAgreed, 2, 'two in a row');
+
+    window(calibration, 2);
+    assert.equal(calibration.status().windowsAgreed, 1, 'the outlier resets the run');
+
+    window(calibration, 3);
+    assert.equal(calibration.status().windowsAgreed, 2, 'and the count rebuilds from it');
+    assert.equal(calibration.result, null);
+  });
+
+  test('a settled run reports itself as fully agreed', () => {
+    const calibration = makeAgreeing([100, 100, 100]);
+    calibration.start(0);
+
+    for (let i = 0; i < 3; i += 1) window(calibration, i);
+
+    const status = calibration.status();
+    assert.equal(status.windowsAgreed, 3);
+    assert.equal(status.windowsNeeded, 3);
+  });
+});
+
 describe('CalibrationSession timeout', () => {
   test('gives up when a side stops streaming', () => {
     const harness = makeSession({ timeoutMs: 1_000 });

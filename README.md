@@ -157,7 +157,13 @@ The desktop is meant to run unattended, so the measurement does not wait for any
 
 It only fires when there is nothing usable to fall back on — no measurement, or one that no longer describes this setup. That keeps it away from a take in progress: applying a fresh alignment mid-song shifts the vocal audibly, and every event that invalidates a measurement has already disturbed the take anyway.
 
-One analysis costs about 4 ms, so this is not where the CPU goes. What stops it from simply running continuously is trust, not cost: the analyser accepts unrelated audio at a confidence of 0.4–0.6 (`test/timing-calibration.test.ts` pins the margin), which a human re-running the measurement catches and an unattended server would not. Accepting a value only once several independent windows agree on it would fix that — a false positive returns a random lag, so agreement is a far stronger filter than any confidence threshold, and it would also drop the "do not sing" instruction. That is not built yet.
+### Why a measurement has to repeat itself
+
+The analyser accepts unrelated audio at a confidence of 0.4–0.6 against 1.0 for a true match, reporting plausible-looking lags that are simply wrong (`test/timing-calibration.test.ts` pins the margin). While a person pressed the button that was survivable: an implausible number got re-run. Automating the trigger removed the reviewer and the flaw started reaching the mix, heard as the song arriving twice, badly offset, intermittently.
+
+Confidence cannot separate the two cases — that is what the pinned margin says. Repeatability can: a false positive lands on a different lag every window, a real match does not move. So a measurement is applied only once `RELAY_CALIBRATION_AGREEMENT` (3) separately collected windows land within `RELAY_CALIBRATION_TOLERANCE_MS` (25 ms) of each other, and a window that disagrees costs the run the progress it invalidates rather than being averaged in.
+
+The cost is time, not CPU — one analysis is about 4 ms against a 20 ms frame budget, so the limit is the 6 s each window takes to collect. Set `RELAY_CALIBRATION_AGREEMENT=1` for the old single-shot behaviour.
 
 ### Test mode is only the test
 

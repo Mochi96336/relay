@@ -165,6 +165,11 @@ const calibration = new CalibrationSession({
   durationMs: TIMING_CALIBRATION_MS,
   timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
   context: calibrationContext,
+  // Nobody reviews an unattended measurement, so repeatability has to do the
+  // reviewing. A false positive lands somewhere different every window; a real
+  // one does not move.
+  agreementWindows: Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3),
+  agreementToleranceMs: envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25),
   onSettled: () => {
     const result = calibration.result;
     if (result) session.setAlignment({ calibratedMicLagMs: result.micLagMs });

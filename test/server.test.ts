@@ -20,6 +20,9 @@ const FAST = {
   // Off by default here so tests that drive calibration by hand are not racing
   // the unattended trigger. The auto path has its own test.
   RELAY_AUTO_CALIBRATE: '0',
+  // One window unless a test is specifically about agreement, so the rest do
+  // not have to synthesise three windows of audio to say anything.
+  RELAY_CALIBRATION_AGREEMENT: '1',
 };
 
 const playingTelemetry = {
@@ -578,6 +581,39 @@ describe('timing calibration', () => {
         3_000,
       );
       assert.equal(applied.calibratedMicLagMs, complete.micLagMs);
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('holds the answer back until independent windows agree', async () => {
+    const server = await startRelay({ ...FAST, RELAY_CALIBRATION_AGREEMENT: '2' });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+      await sleep(100);
+
+      monitor.send({ type: 'start-timing-calibration' });
+      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+
+      // Enough for two windows. The first one finishing must not be enough on
+      // its own - that is the whole point.
+      const { mic, backing: song } = laggedPair(16, RATE, 260);
+      await Promise.all([
+        sendPcmInChunks(backing, song),
+        sendPcmInChunks(publisher, mic),
+      ]);
+
+      const complete = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
+        15_000,
+      );
+      assert.ok(Math.abs(complete.micLagMs - 260) <= 15, `got ${complete.micLagMs} ms`);
+      assert.equal(complete.windowsNeeded, 2);
 
       backing.close();
       publisher.close();

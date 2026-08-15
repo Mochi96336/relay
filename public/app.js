@@ -192,7 +192,13 @@ function updateCalibrateButton() {
 
   if (collecting) {
     const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
-    calibrateStatus.textContent = `校正中 ${progress}% · 這幾秒先不要唱，讓麥克風收到伴奏。`;
+    const need = Number(latestCalibration.windowsNeeded) || 1;
+    // A single window is never trusted on its own, so say how far the run has
+    // got - otherwise repeated windows look like it is stuck.
+    const rounds = need > 1
+      ? ` · 已一致 ${Number(latestCalibration.windowsAgreed) || 0}/${need} 次`
+      : '';
+    calibrateStatus.textContent = `校正中 ${progress}%${rounds} · 這幾秒先不要唱，讓麥克風收到伴奏。`;
     return;
   }
 

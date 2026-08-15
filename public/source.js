@@ -168,9 +168,15 @@ function renderCalibration() {
   if (collecting) {
     const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
     timingButton.textContent = `Calibrating… ${progress}%`;
+    const need = Number(latestCalibration.windowsNeeded) || 1;
+    // One window is never applied on its own: a false positive lands somewhere
+    // different each time, so agreement is what separates it from a real match.
+    const rounds = need > 1
+      ? ` · 已一致 ${Number(latestCalibration.windowsAgreed) || 0}/${need} 次`
+      : '';
     timingStatus.textContent = latestCalibration.automatic
-      ? `自動校正中 ${progress}% · 手機保持喇叭播放，這段先不要唱。`
-      : `Collecting ${progress}% · 手機保持喇叭播放，先不要說話。`;
+      ? `自動校正中 ${progress}%${rounds} · 手機保持喇叭播放，這段先不要唱。`
+      : `Collecting ${progress}%${rounds} · 手機保持喇叭播放，先不要說話。`;
     return;
   }
 

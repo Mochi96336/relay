@@ -32,6 +32,9 @@ export type CalibrationStatus = {
    */
   micLevelDbfs: number | null;
   backingLevelDbfs: number | null;
+  /** Windows that have agreed so far, and how many are needed to apply. */
+  windowsAgreed: number;
+  windowsNeeded: number;
   error: string | null;
 };
 
@@ -69,6 +72,22 @@ export type CalibrationSessionOptions = {
   analyze?: (mic: Int16Array, backing: Int16Array, sampleRate: number) => TimingCalibrationAnalysis;
   /** Fired when the phase settles on complete or failed. */
   onSettled?: () => void;
+  /**
+   * How many separately collected windows must agree before an answer is
+   * applied. One keeps the old single-shot behaviour.
+   *
+   * The analyser accepts unrelated audio at around half the confidence of a
+   * true match, which a person re-running the measurement catches and an
+   * unattended server does not. What separates the two is not confidence but
+   * repeatability: a false positive lands on a different lag every time, so
+   * requiring independent windows to agree rejects it on the second try,
+   * whatever it scored on the first.
+   */
+  agreementWindows?: number;
+  /** How close windows must land to count as agreeing. */
+  agreementToleranceMs?: number;
+  /** Read when a window ends, so the next one gets its own timeout budget. */
+  now?: () => number;
 };
 
 /**
@@ -127,6 +146,12 @@ export class CalibrationSession {
   private readonly analyze: NonNullable<CalibrationSessionOptions['analyze']>;
   private readonly context: () => CalibrationContext;
   private readonly onSettled: () => void;
+  private readonly agreementWindows: number;
+  private readonly agreementToleranceMs: number;
+  private readonly now: () => number;
+
+  /** Lags from recent windows, kept only as far back as agreement needs. */
+  private candidates: number[] = [];
 
   private phase: CalibrationPhase = 'idle';
   private error: string | null = null;
@@ -153,6 +178,9 @@ export class CalibrationSession {
     this.analyze = options.analyze ?? analyzeTimingCalibration;
     this.context = options.context;
     this.onSettled = options.onSettled ?? (() => {});
+    this.agreementWindows = Math.max(1, options.agreementWindows ?? 1);
+    this.agreementToleranceMs = options.agreementToleranceMs ?? 25;
+    this.now = options.now ?? (() => performance.now());
   }
 
   get collecting() {
@@ -168,6 +196,8 @@ export class CalibrationSession {
   start(nowMs = performance.now()) {
     this.phase = 'collecting';
     this.startedAt = nowMs;
+    // A fresh run, so nothing an earlier one measured counts towards agreement.
+    this.candidates = [];
     this.error = null;
     this.confidence = null;
     this.segmentLagsMs = [];
@@ -191,6 +221,7 @@ export class CalibrationSession {
   reset() {
     this.phase = 'idle';
     this.error = null;
+    this.candidates = [];
     this.micLagMs = null;
     this.confidence = null;
     this.segmentLagsMs = [];
@@ -245,6 +276,10 @@ export class CalibrationSession {
       segmentLagsMs: this.segmentLagsMs,
       micLevelDbfs: this.micLevelDbfs,
       backingLevelDbfs: this.backingLevelDbfs,
+      // Counts only the run of windows that still agree with the newest one,
+      // so a disagreeing window visibly costs the progress it invalidates.
+      windowsAgreed: this.phase === 'complete' ? this.agreementWindows : this.agreeingRun(),
+      windowsNeeded: this.agreementWindows,
       error: this.error,
     };
   }
@@ -276,6 +311,23 @@ export class CalibrationSession {
     const origin = this.origin;
     if (origin === null) return 0;
     return Math.max(0, Math.min(this.mic.lastEnd, this.backing.lastEnd) - origin);
+  }
+
+  private candidatesAgree() {
+    if (this.candidates.length < this.agreementWindows) return false;
+    return Math.max(...this.candidates) - Math.min(...this.candidates) <= this.agreementToleranceMs;
+  }
+
+  /** How many of the most recent windows still agree with the newest one. */
+  private agreeingRun() {
+    const newest = this.candidates.at(-1);
+    if (newest === undefined) return 0;
+    let run = 0;
+    for (let i = this.candidates.length - 1; i >= 0; i -= 1) {
+      if (Math.abs(this.candidates[i] - newest) > this.agreementToleranceMs) break;
+      run += 1;
+    }
+    return run;
   }
 
   private spanMs(capture: Capture) {
@@ -317,6 +369,24 @@ export class CalibrationSession {
       }
 
       const result = this.analyze(mic.samples, backing.samples, this.sampleRate);
+
+      this.candidates.push(result.micLagMs);
+      if (this.candidates.length > this.agreementWindows) this.candidates.shift();
+
+      if (!this.candidatesAgree()) {
+        // Not an error: one window measured something, and the next has to say
+        // the same thing before it is worth believing. Collect another.
+        this.confidence = result.confidence;
+        this.segmentLagsMs = result.segmentLagsMs;
+        this.micLevelDbfs = result.micLevelDbfs;
+        this.backingLevelDbfs = result.backingLevelDbfs;
+        this.error = null;
+        this.clearCapture();
+        this.startedAt = this.now();
+        this.onSettled();
+        return;
+      }
+
       this.micLagMs = result.micLagMs;
       this.measuredContext = this.context();
       this.confidence = result.confidence;

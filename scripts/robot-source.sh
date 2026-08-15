@@ -110,7 +110,11 @@ parec --device="${SINK_NAME}.monitor" \
   --latency-msec="$CAPTURE_LATENCY_MS" >"$pcm_fifo" &
 parec_pid=$!
 
-RELAY_BACKING_SAMPLE_RATE="$CAPTURE_RATE" npm run backing:stdin <"$pcm_fifo" &
+# Declare robot ownership before Chromium has even loaded. The server uses this
+# registration bit to suppress the legacy song-content calibrator during the
+# launch gap between backing capture coming online and source.html announcing
+# the active robot player.
+RELAY_BACKING_ROBOT=1 RELAY_BACKING_SAMPLE_RATE="$CAPTURE_RATE" npm run backing:stdin <"$pcm_fifo" &
 backing_pid=$!
 
 source_url="http://localhost:${PORT}/source.html?robot=1"

@@ -248,6 +248,9 @@ describe('boot probe lifecycle', () => {
         3_000,
       );
 
+      // Snapshot the publisher's message queue before the new session exists,
+      // so a fast probe request during priming cannot slip past the assertion.
+      const from = publisher.messages.length;
       const newBacking = await RelayClient.connect(server);
       newBacking.newCaptureSession();
       newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE });
@@ -257,7 +260,6 @@ describe('boot probe lifecycle', () => {
         sendPcmInChunks(publisher, tone(1, 0.4)),
       ]);
 
-      const from = publisher.messages.length;
       const nextProbe = await waitForNewMessage(
         publisher,
         from,

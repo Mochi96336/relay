@@ -94,6 +94,16 @@ let lastDropLogAt = 0;
 let flushUntil: number | null = null;
 let flushing = STARTUP_FLUSH_MS > 0;
 let flushedBytes = 0;
+/**
+ * Periodic peak of what is actually forwarded, off by default.
+ *
+ * Splits "the capture is silent" from "the timeline is looking in the wrong
+ * place", which from the server alone are the same symptom: a probe window
+ * full of zeros.
+ */
+const LEVEL_LOG_MS = envNumber('RELAY_BACKING_LEVEL_LOG_MS', 0, 0);
+let levelPeak = 0;
+let lastLevelLogAt = 0;
 
 function log(message: string) {
   process.stderr.write(`[backing] ${message}\n`);
@@ -190,6 +200,19 @@ function sendPcm(pcm: Buffer) {
       log(`uplink congested; dropped ${droppedFrames} frames (~${Math.round(droppedFrames * FRAME_MS)} ms)`);
     }
     return;
+  }
+
+  if (LEVEL_LOG_MS > 0) {
+    for (let i = 0; i + 1 < pcm.byteLength; i += 2) {
+      const magnitude = Math.abs(pcm.readInt16LE(i));
+      if (magnitude > levelPeak) levelPeak = magnitude;
+    }
+    const now = Date.now();
+    if (now - lastLevelLogAt >= LEVEL_LOG_MS) {
+      lastLevelLogAt = now;
+      log(`sent peak ${levelPeak} over the last ${Math.round(LEVEL_LOG_MS / 1000)} s`);
+      levelPeak = 0;
+    }
   }
 
   socket.send(encodePcmFrame(generation, firstSampleIndex, pcm));

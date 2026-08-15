@@ -841,7 +841,31 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
 
   if (PROBE_DEBUG) {
-    console.log(`[probe] ${waiting.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`);
+    // The window's own peak separates "the probe was not heard" from "the
+    // probe was never looked at": a correlation of -1 is what an all-zero
+    // window scores, and a range the timeline does not cover reads as zeros.
+    let peak = 0;
+    for (let i = 0; i < window.length; i += 1) {
+      const magnitude = Math.abs(window[i]);
+      if (magnitude > peak) peak = magnitude;
+    }
+    // And the most recent audio on the same timeline, as a control: if that is
+    // silent too the stream is not carrying anything, and if it is not the
+    // window is simply looking in the wrong place.
+    const controlSeconds = 20;
+    const recent = waiting.target === 'mic'
+      ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
+      : session.readBacking(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds);
+    let recentPeak = 0;
+    for (let i = 0; i < recent.length; i += 1) {
+      const magnitude = Math.abs(recent[i]);
+      if (magnitude > recentPeak) recentPeak = magnitude;
+    }
+    console.log(
+      `[probe] ${waiting.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
+      + ` windowPeak=${peak} recent${controlSeconds}sPeak=${recentPeak}`
+      + ` windowStart=${waiting.windowStart} needed=${needed} reached=${reached}`,
+    );
   }
 
   if (correlation < PROBE_MIN_CORRELATION) {

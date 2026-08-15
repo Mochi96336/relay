@@ -20,8 +20,6 @@ const FAST = {
   RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
-  // These tests exercise the content path unless they explicitly opt into the
-  // boot probe. Keeping the two mechanisms separate makes failures attributable.
   RELAY_CALIBRATION_PROBE: '0',
 };
 
@@ -39,9 +37,9 @@ function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
 }
 
-async function liveSession(server: RelayServer) {
+async function liveSession(server: RelayServer, robotBacking = false) {
   const backing = await RelayClient.connect(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: robotBacking });
   await backing.waitForType('registered');
 
   const publisher = await RelayClient.connect(server);
@@ -203,6 +201,123 @@ describe('timing validity boundary', () => {
   });
 });
 
+describe('robot calibration ownership', () => {
+  const ROBOT_FAST = {
+    ...FAST,
+    RELAY_CALIBRATION_PROBE: '1',
+    RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
+    RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
+    RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
+    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-2',
+    RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
+  };
+
+  test('robot backing suppresses legacy auto-calibration before Chromium says hello', async () => {
+    const server = await startRelay({ ...ROBOT_FAST, RELAY_AUTO_CALIBRATE: '1' });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server, true);
+      publisher.send(playingTelemetry);
+      await primeStreams(backing, publisher);
+
+      const probe = await publisher.waitFor(
+        (m) => m.type === 'play-calibration-probe' && m.target === 'mic',
+        3_000,
+      );
+      assert.equal(probe.target, 'mic');
+
+      monitor.send({ type: 'timing-calibration-status-request' });
+      const status = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status'
+          && m.robotRoute === true
+          && m.calibrationKind === 'boot-probe',
+        3_000,
+      );
+      assert.notEqual(status.state, 'collecting', 'the legacy content collector must not win the launch race');
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('manual timing calibration on the robot restarts the boot probe, not song correlation', async () => {
+    const server = await startRelay(ROBOT_FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server, true);
+      const robot = await RelayClient.connect(server);
+      robot.send({ type: 'robot-source-hello' });
+      publisher.send(playingTelemetry);
+      await primeStreams(backing, publisher);
+
+      // Ignore any unattended boot request that may have been emitted while the
+      // streams were primed; the manual click must start a fresh run of its own.
+      const from = publisher.messages.length;
+      monitor.send({ type: 'start-timing-calibration' });
+      const probe = await waitForNewMessage(
+        publisher,
+        from,
+        (m) => m.type === 'play-calibration-probe' && m.target === 'mic',
+        3_000,
+      );
+      assert.equal(probe.target, 'mic');
+
+      monitor.send({ type: 'timing-calibration-status-request' });
+      const status = await waitForNewMessage(
+        monitor,
+        monitor.messages.length - 1,
+        (m) => m.type === 'timing-calibration-status' && m.calibrationKind === 'boot-probe',
+        3_000,
+      );
+      assert.notEqual(status.state, 'collecting', 'manual robot calibration must never enter content collection');
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+      robot.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('only the newest robot source can publish delta', async () => {
+    const server = await startRelay(ROBOT_FAST);
+    try {
+      const monitor = await RelayClient.connect(server);
+      monitor.send({ type: 'register', role: 'monitor' });
+      await monitor.waitForType('registered');
+
+      const first = await RelayClient.connect(server);
+      first.send({ type: 'robot-source-hello' });
+      const second = await RelayClient.connect(server);
+      second.send({ type: 'robot-source-hello' });
+
+      await first.waitForType('robot-source-replaced', 3_000);
+      second.send({ type: 'robot-player-offset', offsetMs: 35 });
+      first.send({ type: 'robot-player-offset', offsetMs: 900 });
+      await sleep(50);
+
+      const from = monitor.messages.length;
+      monitor.send({ type: 'timing-calibration-status-request' });
+      const status = await waitForNewMessage(
+        monitor,
+        from,
+        (m) => m.type === 'timing-calibration-status',
+        3_000,
+      );
+      assert.equal(Math.round(status.robotPlayerOffsetMs), 35, 'superseded robot delta must be ignored');
+      assert.equal(status.robotSourceConnected, true);
+
+      first.close();
+      second.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe('boot probe lifecycle', () => {
   test('does not carry a completed mic leg into a new live session', async () => {
     const server = await startRelay({
@@ -211,8 +326,6 @@ describe('boot probe lifecycle', () => {
       RELAY_CALIBRATION_PROBE_RETRY_MS: '1000',
       RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
       RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-      // This test is about lifecycle, not detector quality. Let silence/noise
-      // count as a found leg so the state machine can be driven deterministically.
       RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-2',
       RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
       RELAY_BACKING_GRACE_MS: '100',
@@ -241,15 +354,12 @@ describe('boot probe lifecycle', () => {
         4_000,
       );
 
-      // End the take after the first leg but before the backing leg can start.
       backing.close();
       await monitor.waitFor(
         (m) => m.type === 'source-status' && m.active === false,
         3_000,
       );
 
-      // Snapshot the publisher's message queue before the new session exists,
-      // so a fast probe request during priming cannot slip past the assertion.
       const from = publisher.messages.length;
       const newBacking = await RelayClient.connect(server);
       newBacking.newCaptureSession();
@@ -282,7 +392,7 @@ describe('boot probe lifecycle', () => {
   });
 });
 
-test('robot follower applies only fresh server timeline snapshots', async () => {
+test('robot follower applies only fresh server timeline snapshots and settled seek state', async () => {
   const source = await readFile(new URL('../public/source.js', import.meta.url), 'utf8');
   assert.doesNotMatch(
     source,
@@ -290,4 +400,11 @@ test('robot follower applies only fresh server timeline snapshots', async () => 
     'replaying a serverTime snapshot on a local timer turns snapshot age into a false robot delta',
   );
   assert.match(source, /server already emits them every 250 ms/);
+  assert.match(source, /ROBOT_DELTA_SETTLE_MS/);
+  assert.ok(
+    source.indexOf('if (shouldSeek)') < source.indexOf("send({ type: 'robot-player-offset'"),
+    'seek detection must happen before a robot delta is published',
+  );
+  assert.match(source, /message\.type === 'robot-source-replaced'/);
+  assert.match(source, /robotSuperseded/);
 });

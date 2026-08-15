@@ -35,14 +35,13 @@ test('server keeps one authoritative participant playback transport', async () =
     b.send(telemetry(90, 'playback-transport-b'));
     await sleep(100);
     b.send({ type: 'youtube-timeline-request' });
-    const status = await b.waitFor((message) => (
-      message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === 'participant-a'
-      && Number(message.serverTime) < 20
-    ));
+    await sleep(50);
+    const status = b.latest('youtube-timeline-status');
 
+    assert.ok(status);
     assert.equal(status.playbackLeaderParticipantId, 'participant-a');
     assert.equal(status.playbackTransportId, 'playback-transport-a');
+    assert.ok(Number(status.serverTime) < 20, `competing telemetry overwrote timeline: ${status.serverTime}`);
   } finally {
     await server.stop();
   }
@@ -55,9 +54,11 @@ test('anonymous non-publisher sockets cannot claim the room timeline', async () 
     anonymous.send(telemetry(90, 'anonymous-playback'));
     await sleep(100);
     anonymous.send({ type: 'youtube-timeline-request' });
+    await sleep(50);
 
-    const status = await anonymous.waitFor((message) => message.type === 'youtube-timeline-status');
-    assert.equal(status.videoId, null);
+    const status = anonymous.latest('youtube-timeline-status');
+    assert.ok(status);
+    assert.equal(status.videoId, undefined);
     assert.equal(status.playbackLeaderParticipantId, null);
   } finally {
     await server.stop();
@@ -93,12 +94,12 @@ test('only the selected anonymous publisher keeps the narrow legacy telemetry pa
     observer.send(telemetry(90, 'anonymous-observer'));
     await sleep(100);
     observer.send({ type: 'youtube-timeline-request' });
-    const after = await observer.waitFor((message) => (
-      message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === '__relay_legacy_publisher__'
-      && Number(message.serverTime) < 20
-    ));
+    await sleep(50);
+    const after = observer.latest('youtube-timeline-status');
+
+    assert.ok(after);
     assert.equal(after.playbackLeaderParticipantId, '__relay_legacy_publisher__');
+    assert.ok(Number(after.serverTime) < 20, `anonymous observer overwrote timeline: ${after.serverTime}`);
   } finally {
     await server.stop();
   }

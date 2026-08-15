@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,11 @@ import { combineBootCalibration, type BootCalibrationResult } from './boot-calib
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { decodePcmFrame } from './pcm-frame.js';
+import {
+  ParticipantSession,
+  normalizeNickname,
+  normalizeParticipantId,
+} from './participant-session.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +42,7 @@ const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_0
 const MAX_VOCAL_FINE_TUNE_MS = 100;
 const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
+const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
 
 const app = express();
 app.disable('x-powered-by');
@@ -48,6 +54,7 @@ app.get('/healthz', (_req, res) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
 const youtubeTimeline = new YouTubeTimelineTracker();
+const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -75,6 +82,8 @@ type RelaySocket = WebSocket & {
   isAlive: boolean;
   replaced?: boolean;
   isRobotSource?: boolean;
+  participantId?: string;
+  participantConnectionId?: string;
 };
 
 type TimelineStatus = {
@@ -99,6 +108,7 @@ let testStartedAt = 0;
 let testFrameIndex = 0;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
+let participantConnectionSequence = 0;
 
 const session = new AudioSession({
   sampleRate: MIX_SAMPLE_RATE,
@@ -240,6 +250,51 @@ function broadcastJson(payload: unknown) {
     const socket = client as RelaySocket;
     if (socket.readyState === WebSocket.OPEN) socket.send(message);
   }
+}
+
+function cookieValue(header: string | undefined, name: string) {
+  if (!header) return null;
+  for (const pair of header.split(';')) {
+    const separator = pair.indexOf('=');
+    if (separator < 0 || pair.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(pair.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function participantIdentity(request: IncomingMessage) {
+  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+  const participantId = normalizeParticipantId(url.searchParams.get('participant'))
+    ?? normalizeParticipantId(cookieValue(request.headers.cookie, 'relayParticipantId'));
+  if (!participantId) return null;
+
+  const nickname = normalizeNickname(url.searchParams.get('name'))
+    ?? normalizeNickname(cookieValue(request.headers.cookie, 'relayNickname'))
+    ?? 'Guest';
+  return { participantId, nickname };
+}
+
+function sessionStatusPayload() {
+  const snapshot = participants.snapshot();
+  return {
+    type: 'session-status',
+    ...snapshot,
+    micConnected: snapshot.micOwnerId !== null
+      && publisher?.readyState === WebSocket.OPEN
+      && publisher.participantId === snapshot.micOwnerId,
+  };
+}
+
+function broadcastSessionStatus() {
+  broadcastJson(sessionStatusPayload());
+}
+
+function participantPayload(participantId: string | null) {
+  return participantId ? participants.participant(participantId) : null;
 }
 
 function broadcastToMonitors(payload: string | Buffer, binary = false) {
@@ -435,6 +490,30 @@ function currentTimelineStatus(nowMs = performance.now()) {
 
 function broadcastStatus() {
   broadcastToMonitors(JSON.stringify(publisherStatusPayload()));
+  broadcastJson(sourceStatusPayload());
+}
+
+function revokePublisherTransport(message: string) {
+  const previous = publisher;
+  if (!previous) return false;
+  publisher = null;
+  publisherSampleRate = null;
+  previous.role = 'unknown';
+  session.setMicExpected(false);
+  sendJson(previous, { type: 'mic-revoked', message });
+  if (testActive) stopSyncTest();
+  broadcastStatus();
+  return true;
+}
+
+function invalidateMicTiming(message: string) {
+  clearBootCalibrationState();
+  if (calibration.collecting) calibration.fail(message);
+  else calibration.reset();
+  calibrationKind = 'none';
+  lastAutoCalibrationAt = -Infinity;
+  syncAppliedCalibration();
+  broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
 }
 
@@ -883,6 +962,12 @@ const youtubeTimelineTimer = setInterval(() => {
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
   maybeAutoCalibrate(nowMs);
+
+  const presenceSweep = participants.sweep(Date.now());
+  if (presenceSweep.releasedMicOwnerId) {
+    invalidateMicTiming('Microphone owner left the Relay session.');
+  }
+  if (presenceSweep.changed) broadcastSessionStatus();
 }, 250);
 
 function validSampleRate(value: unknown) {
@@ -892,10 +977,25 @@ function validSampleRate(value: unknown) {
     : null;
 }
 
-wss.on('connection', (rawSocket) => {
+wss.on('connection', (rawSocket, request) => {
   const socket = rawSocket as RelaySocket;
   socket.role = 'unknown';
   socket.isAlive = true;
+
+  const identity = participantIdentity(request);
+  if (identity) {
+    participantConnectionSequence += 1;
+    socket.participantId = identity.participantId;
+    socket.participantConnectionId = `connection-${participantConnectionSequence}`;
+    const changed = participants.attach({
+      connectionId: socket.participantConnectionId,
+      participantId: identity.participantId,
+      nickname: identity.nickname,
+      nowMs: Date.now(),
+    });
+    if (changed) broadcastSessionStatus();
+    else sendJson(socket, sessionStatusPayload());
+  }
 
   socket.on('pong', () => {
     socket.isAlive = true;
@@ -975,6 +1075,90 @@ wss.on('connection', (rawSocket) => {
         serverReceivedAtMs,
         serverSentAtMs: Date.now(),
       });
+      return;
+    }
+
+    if (payload.type === 'session-status-request') {
+      sendJson(socket, sessionStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'participant-rename') {
+      if (!socket.participantId) return;
+      if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
+        broadcastSessionStatus();
+      } else {
+        sendJson(socket, sessionStatusPayload());
+      }
+      return;
+    }
+
+    if (payload.type === 'acquire-mic') {
+      if (!socket.participantId) return;
+      const result = participants.acquireMic(socket.participantId);
+      if (!result.ok) {
+        sendJson(socket, {
+          type: 'mic-busy',
+          owner: participantPayload(result.ownerId),
+          revision: participants.revision,
+        });
+        return;
+      }
+      if (result.changed) {
+        if (publisher && !publisher.participantId) {
+          revokePublisherTransport(`${participantPayload(socket.participantId)?.nickname ?? 'Another participant'} took the microphone.`);
+          invalidateMicTiming('Microphone ownership changed.');
+        }
+        broadcastSessionStatus();
+      }
+      sendJson(socket, { type: 'mic-acquired', ownerId: socket.participantId });
+      return;
+    }
+
+    if (payload.type === 'force-acquire-mic') {
+      if (!socket.participantId) return;
+      const expectedOwnerId = normalizeParticipantId(payload.expectedOwnerId) ?? null;
+      const result = participants.takeoverMic(socket.participantId, expectedOwnerId);
+      if (!result.ok) {
+        sendJson(socket, {
+          type: 'mic-takeover-rejected',
+          reason: result.reason,
+          owner: participantPayload(result.ownerId),
+          revision: participants.revision,
+        });
+        sendJson(socket, sessionStatusPayload());
+        return;
+      }
+
+      if (result.changed) {
+        const newOwnerName = participantPayload(socket.participantId)?.nickname ?? 'Another participant';
+        if (
+          publisher
+          && (
+            !publisher.participantId
+            || publisher.participantId === result.previousOwnerId
+          )
+        ) {
+          revokePublisherTransport(`${newOwnerName} took over the microphone.`);
+        }
+        invalidateMicTiming('Microphone ownership changed.');
+        broadcastSessionStatus();
+      }
+      sendJson(socket, { type: 'mic-acquired', ownerId: socket.participantId, takeover: true });
+      return;
+    }
+
+    if (payload.type === 'release-mic') {
+      if (!socket.participantId) return;
+      const result = participants.releaseMic(socket.participantId);
+      if (!result.ok) return;
+
+      if (publisher?.participantId === socket.participantId) {
+        revokePublisherTransport('You released the microphone.');
+      }
+      invalidateMicTiming('Microphone was released.');
+      broadcastSessionStatus();
+      sendJson(socket, { type: 'mic-released' });
       return;
     }
 
@@ -1070,6 +1254,23 @@ wss.on('connection', (rawSocket) => {
         return;
       }
 
+      if (socket.participantId) {
+        const ownership = participants.acquireMic(socket.participantId);
+        if (!ownership.ok) {
+          sendJson(socket, {
+            type: 'mic-busy',
+            owner: participantPayload(ownership.ownerId),
+            revision: participants.revision,
+          });
+          sendJson(socket, sessionStatusPayload());
+          return;
+        }
+        if (ownership.changed) broadcastSessionStatus();
+      } else if (participants.micOwnerId !== null) {
+        sendJson(socket, { type: 'error', message: 'Microphone is owned by an active Relay participant.' });
+        return;
+      }
+
       replacePrevious(publisher, socket, 'Replaced by a newer microphone connection.');
       socket.role = 'publisher';
       socket.sampleRate = sampleRate;
@@ -1084,6 +1285,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
+      if (socket.participantId) broadcastSessionStatus();
       return;
     }
 
@@ -1117,6 +1319,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      if (socket.participantId) sendJson(socket, sessionStatusPayload());
       return;
     }
 
@@ -1191,43 +1394,51 @@ wss.on('connection', (rawSocket) => {
   });
 
   socket.on('close', () => {
-    if (socket.replaced) return;
+    let micTransportChanged = false;
 
-    if (socket === activeRobotSource) {
-      activeRobotSource = null;
-      socket.isRobotSource = false;
-      robotPlayerOffsetMs = null;
-      robotPlayerOffsetAt = -Infinity;
-      sourceGeneration += 1;
-      syncAppliedCalibration();
-      broadcastJson(sourceStatusPayload());
-      broadcastJson(timingCalibrationStatusPayload());
-    }
-
-    if (socket === publisher) {
-      publisher = null;
-      publisherSampleRate = null;
-      session.setMicExpected(false);
-      if (calibration.collecting) {
-        calibration.fail('Microphone disconnected during calibration.');
+    if (!socket.replaced) {
+      if (socket === activeRobotSource) {
+        activeRobotSource = null;
+        socket.isRobotSource = false;
+        robotPlayerOffsetMs = null;
+        robotPlayerOffsetAt = -Infinity;
+        sourceGeneration += 1;
+        syncAppliedCalibration();
+        broadcastJson(sourceStatusPayload());
+        broadcastJson(timingCalibrationStatusPayload());
       }
-      if (testActive) stopSyncTest();
-      broadcastStatus();
+
+      if (socket === publisher) {
+        publisher = null;
+        publisherSampleRate = null;
+        session.setMicExpected(false);
+        micTransportChanged = true;
+        if (calibration.collecting) {
+          calibration.fail('Microphone disconnected during calibration.');
+        }
+        if (testActive) stopSyncTest();
+        broadcastStatus();
+      }
+
+      if (socket === backing) {
+        backing = null;
+        backingSampleRate = null;
+        backingIsRobot = false;
+        session.setBackingExpected(false);
+        if (calibration.collecting) {
+          calibration.fail('Desktop Source disconnected during calibration.');
+        }
+        cancelBackingGrace();
+        backingAbsenceTimer = setTimeout(stopLiveSource, BACKING_GRACE_MS);
+        broadcastJson(sourceStatusPayload());
+        broadcastStatus();
+      }
     }
 
-    if (socket === backing) {
-      backing = null;
-      backingSampleRate = null;
-      backingIsRobot = false;
-      session.setBackingExpected(false);
-      if (calibration.collecting) {
-        calibration.fail('Desktop Source disconnected during calibration.');
-      }
-      cancelBackingGrace();
-      backingAbsenceTimer = setTimeout(stopLiveSource, BACKING_GRACE_MS);
-      broadcastJson(sourceStatusPayload());
-      broadcastStatus();
-    }
+    const presenceChanged = socket.participantConnectionId
+      ? participants.detach(socket.participantConnectionId, Date.now())
+      : false;
+    if (presenceChanged || micTransportChanged) broadcastSessionStatus();
   });
 });
 

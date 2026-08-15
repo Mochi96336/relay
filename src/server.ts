@@ -289,10 +289,35 @@ function calibrationCanApply() {
 }
 
 function syncAppliedCalibration() {
-  const nextMicLagMs = calibrationCanApply() ? calibration.result!.micLagMs : null;
-  if (session.alignment.calibratedMicLagMs !== nextMicLagMs) {
-    session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
+  const active = session.alignment.calibratedMicLagMs;
+
+  if (robotRouteActive() && calibrationKind === 'boot-probe') {
+    if (!calibrationCanApply()) {
+      if (active === null) return false;
+      session.setAlignment({ calibratedMicLagMs: null });
+      return true;
+    }
+
+    if (active !== null) return false;
+
+    const result = calibration.result;
+    const storedDeltaMs = lastBootCalibration?.deltaMs;
+    const currentDelta = currentDeltaMs(performance.now());
+    if (
+      result !== null
+      && storedDeltaMs !== undefined
+      && Math.abs(storedDeltaMs - currentDelta) < 0.001
+    ) {
+      session.setAlignment({ calibratedMicLagMs: result.micLagMs });
+      return true;
+    }
+    return false;
   }
+
+  const nextMicLagMs = calibrationCanApply() ? calibration.result!.micLagMs : null;
+  if (active === nextMicLagMs) return false;
+  session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
+  return true;
 }
 
 function sourceStatusPayload() {
@@ -830,7 +855,10 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
-  syncAppliedCalibration();
+  if (syncAppliedCalibration()) {
+    broadcastJson(sourceStatusPayload());
+    broadcastJson(timingCalibrationStatusPayload());
+  }
   maybeFinishProbeAnalysis(nowMs);
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);

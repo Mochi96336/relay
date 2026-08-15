@@ -50,7 +50,6 @@ let latestCalibration = null;
 let latestMixHealth = null;
 let loadedVideoId = null;
 let lastSeekAt = 0;
-let applyTimer = null;
 let playerError = null;
 let vocalFineTuneTouchedAt = 0;
 const sliderTouchedAt = new Map();
@@ -487,6 +486,11 @@ function connect() {
 
     if (message.type === 'youtube-timeline-status') {
       latestTimeline = message;
+      // `serverTime` is already projected to the instant the server emitted
+      // this snapshot. Re-applying the same snapshot on a local timer used to
+      // make its age look like player drift, feeding a false +0..250 ms sawtooth
+      // into boot calibration's delta. Apply only on fresh snapshots instead;
+      // the server already emits them every 250 ms while telemetry is live.
       applyTimeline();
       return;
     }
@@ -611,8 +615,6 @@ const apiScript = document.createElement('script');
 apiScript.src = 'https://www.youtube.com/iframe_api';
 document.head.append(apiScript);
 
-applyTimer = setInterval(applyTimeline, 250);
-window.addEventListener('beforeunload', () => clearInterval(applyTimer), { once: true });
 applyBalance();
 applyFineTune(false);
 renderTimeline();

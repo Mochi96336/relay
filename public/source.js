@@ -33,6 +33,7 @@ const ERROR_NAMES = new Map([
 ]);
 
 const SLIDER_HOLD_MS = 2000;
+const ROBOT_DELTA_SETTLE_MS = 1000;
 
 // The robot has no Chrome extension: `scripts/robot-source.sh` routes Chromium
 // through a PipeWire sink into backing:stdin. Advice that names the extension
@@ -52,6 +53,8 @@ let loadedVideoId = null;
 let lastSeekAt = 0;
 let playerError = null;
 let vocalFineTuneTouchedAt = 0;
+let robotSuperseded = false;
+let robotDeltaSuppressedUntil = 0;
 const sliderTouchedAt = new Map();
 
 // The server echoes every source-status back to every client, which used to
@@ -155,6 +158,22 @@ function safePlayerState() {
   }
 }
 
+function parkSupersededRobot() {
+  if (!ROBOT_MODE || robotSuperseded) return;
+  robotSuperseded = true;
+  armed = false;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  try {
+    player?.pauseVideo();
+    player?.mute();
+  } catch {}
+  stateNode.textContent = 'Robot source superseded';
+  detailNode.textContent = 'A newer robot source owns playback. This page is parked and will not reconnect.';
+  mirrorState.textContent = 'superseded · muted';
+  timingButton.disabled = true;
+}
+
 function applyBalance(sendToServer = true) {
   const songLevel = Math.max(0, Math.min(100, Number(sourceVolume.value) || 0));
   const micGainDb = Math.max(0, Math.min(36, Number(sourceMicGain.value) || 0));
@@ -170,7 +189,7 @@ function applyBalance(sendToServer = true) {
     } catch {}
   }
 
-  if (sendToServer && armed) {
+  if (sendToServer && armed && !robotSuperseded) {
     send({ type: 'set-mix', micGainDb, songLevel });
   }
 
@@ -207,6 +226,7 @@ let probeAudioContext = null;
  * Nothing here is audible to anyone. The sink has no speaker behind it.
  */
 async function playBackingProbe(requestId, leadMs) {
+  if (robotSuperseded) return;
   try {
     if (!probeAudioContext) probeAudioContext = new AudioContext({ latencyHint: 'interactive' });
     if (probeAudioContext.state === 'suspended') await probeAudioContext.resume();
@@ -239,18 +259,17 @@ function renderCalibration() {
   const micConnected = Boolean(latestSourceStatus?.micConnected);
   const phonePlaying = Boolean(latestTimeline?.connected) && Number(latestTimeline?.state) === 1;
   const collecting = latestCalibration?.state === 'collecting';
-  timingButton.disabled = collecting || !sourceConnected || !micConnected || !phonePlaying;
+  timingButton.disabled = robotSuperseded || collecting || !sourceConnected || !micConnected || !phonePlaying;
+
+  if (robotSuperseded) {
+    timingStatus.textContent = '這個 Robot Source 已被較新的頁面取代；不再參與播放或校正。';
+    return;
+  }
 
   if (collecting) {
     const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
     timingButton.textContent = `Calibrating… ${progress}%`;
     const need = Number(latestCalibration.windowsNeeded) || 1;
-    // Full agreement is still what a value needs to stop being provisional -
-    // a false positive lands somewhere different each window, so repeatability
-    // is what separates it from a real match. A confident single window may
-    // already be applied underneath this (see the provisional note below);
-    // that does not end collection, it just means the singer is not waiting
-    // on the network estimate while agreement keeps confirming it.
     const rounds = need > 1
       ? ` · 已一致 ${Number(latestCalibration.windowsAgreed) || 0}/${need} 次`
       : '';
@@ -278,8 +297,6 @@ function renderCalibration() {
   }
 
   if (latestCalibration?.state === 'failed') {
-    // An unattended attempt retries by itself, so it is a wait rather than a
-    // fault. Saying "failed" would send the operator looking for a problem.
     timingStatus.textContent = latestCalibration.automatic
       ? `自動校正等待可用音訊中 · 上次未成功：${latestCalibration.error ?? '訊號不足'}`
       : `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
@@ -287,8 +304,6 @@ function renderCalibration() {
   }
 
   if (latestSourceStatus?.timingMode === 'acoustic-calibration') {
-    // Staleness now has three causes - a new microphone capture, a new live
-    // session, or the player being seeked - so the reason cannot be named here.
     const stale = latestSourceStatus.calibrationStale
       ? ' · ⚠ 設定已改變（麥克風重連 / 播放器 seek），校準值過期，建議重跑'
       : '';
@@ -322,7 +337,16 @@ function renderTimeline() {
     ? (current - target) * 1000
     : Number.NaN;
 
-  armButton.disabled = armed || !playerReady || !connected || !videoId;
+  armButton.disabled = robotSuperseded || armed || !playerReady || !connected || !videoId;
+
+  if (robotSuperseded) {
+    stateNode.textContent = 'Robot source superseded';
+    detailNode.textContent = 'A newer robot source owns playback.';
+    mirrorState.textContent = 'superseded · muted';
+    mirrorTimeline.textContent = '--:-- · Δ ignored';
+    renderCalibration();
+    return;
+  }
 
   if (!connected || !videoId) {
     stateNode.textContent = 'Waiting for phone timeline';
@@ -349,6 +373,14 @@ function renderTimeline() {
 
 function applyTimeline() {
   const timeline = latestTimeline;
+  if (robotSuperseded) {
+    try {
+      if (player?.getPlayerState() === 1) player.pauseVideo();
+      player?.mute();
+    } catch {}
+    renderTimeline();
+    return;
+  }
   if (!playerReady || !player || !timeline?.connected || !timeline.videoId) {
     renderTimeline();
     return;
@@ -364,6 +396,7 @@ function applyTimeline() {
       player.cueVideoById({ videoId: timeline.videoId, startSeconds: Math.max(0, target) });
       loadedVideoId = timeline.videoId;
       lastSeekAt = performance.now();
+      robotDeltaSuppressedUntil = lastSeekAt + ROBOT_DELTA_SETTLE_MS;
       send({ type: 'source-seeked' });
       renderTimeline();
       return;
@@ -372,23 +405,28 @@ function applyTimeline() {
     const current = safePlayerTime();
     const errorSeconds = Number.isFinite(current) ? current - target : Number.NaN;
     const now = performance.now();
+    const playerState = safePlayerState();
+    const shouldSeek = Number.isFinite(errorSeconds)
+      && Math.abs(errorSeconds) > 0.45
+      && now - lastSeekAt > 700;
 
-    // `delta` in the server's boot calibration: this player's position minus
-    // the timeline the phone drives. The singer sings against the phone, so
-    // wherever this player sits inside the dead band below is a real part of
-    // the offset the mixer has to correct. It was already being computed to
-    // decide whether to seek and then thrown away.
-    if (ROBOT_MODE && Number.isFinite(errorSeconds)) {
-      send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000 });
-    }
-
-    if (Number.isFinite(errorSeconds) && Math.abs(errorSeconds) > 0.45 && now - lastSeekAt > 700) {
+    // A seek is a discontinuity, not a measurement. Do not publish the offset
+    // from the same snapshot that triggers seekTo(), and do not publish the
+    // IFrame's transient currentTime while it is buffering/settling afterwards.
+    if (shouldSeek) {
       player.seekTo(Math.max(0, target), true);
       lastSeekAt = now;
-      // Where this lands inside the dead band is arbitrary, and that offset is
-      // precisely what a timing calibration measures. Any existing answer is
-      // now describing a position the song no longer holds.
+      robotDeltaSuppressedUntil = now + ROBOT_DELTA_SETTLE_MS;
       send({ type: 'source-seeked' });
+    } else if (
+      ROBOT_MODE
+      && armed
+      && desiredState === 1
+      && playerState === 1
+      && now >= robotDeltaSuppressedUntil
+      && Number.isFinite(errorSeconds)
+    ) {
+      send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000 });
     }
 
     if (!armed) {
@@ -416,10 +454,6 @@ function renderSourceStatus(message) {
     ? `calibrated ${signed(message.calibratedMicLagMs, ' ms')}`
     : `network ${signed(message.micNetworkCompensationMs, ' ms')}`;
 
-  // Reloading this tab destroys the tab capture while the extension's socket,
-  // which lives in an offscreen document, stays open. Connected with no audio
-  // behind it is therefore a normal state to end up in, and used to look
-  // healthy right up until a calibration sat at 0 %.
   captureState.textContent = !message.connected
     ? 'Capture not connected · click the Relay extension icon on this tab.'
     : message.backingStreaming === false
@@ -458,15 +492,16 @@ function renderMixHealth() {
 }
 
 function connect() {
+  if (robotSuperseded) return;
   clearTimeout(reconnectTimer);
   const next = new WebSocket(wsUrl());
   socket = next;
 
   next.addEventListener('open', () => {
-    if (socket !== next) return;
-    // This page holds no role, but on the robot it owns the mirrored player,
-    // which makes it the only client that can play the backing probe or say
-    // where that player actually sits.
+    if (socket !== next || robotSuperseded) {
+      next.close();
+      return;
+    }
     if (ROBOT_MODE) send({ type: 'robot-source-hello' });
     send({ type: 'youtube-timeline-request' });
     send({ type: 'source-status-request' });
@@ -484,6 +519,16 @@ function connect() {
       return;
     }
 
+    if (message.type === 'robot-source-replaced') {
+      if (ROBOT_MODE) {
+        parkSupersededRobot();
+        if (socket === next) socket = null;
+        next.close();
+        renderTimeline();
+      }
+      return;
+    }
+
     if (message.type === 'youtube-timeline-status') {
       latestTimeline = message;
       // `serverTime` is already projected to the instant the server emitted
@@ -495,8 +540,6 @@ function connect() {
       return;
     }
 
-    // Both values live on the server so the phone can drive them. Song level
-    // can only be acted on here, because this page owns the player.
     if (message.type === 'mix-settings') {
       if (!sliderIsBusy(sourceMicGain) && Number.isFinite(Number(message.micGainDb))) {
         sourceMicGain.value = String(message.micGainDb);
@@ -520,9 +563,7 @@ function connect() {
     }
 
     if (message.type === 'play-calibration-probe') {
-      // Only the robot's page answers the backing leg, and only that leg: the
-      // mic leg belongs to the phone, and this page is broadcast to.
-      if (ROBOT_MODE && message.target === 'backing') {
+      if (ROBOT_MODE && !robotSuperseded && message.target === 'backing') {
         playBackingProbe(message.requestId, Number(message.leadMs) || 200);
       }
       return;
@@ -546,13 +587,14 @@ function connect() {
     latestTimeline = null;
     latestSourceStatus = null;
     renderTimeline();
-    reconnectTimer = setTimeout(connect, 1_000);
+    if (!robotSuperseded) reconnectTimer = setTimeout(connect, 1_000);
   });
 
   next.addEventListener('error', () => next.close());
 }
 
 armButton.addEventListener('click', () => {
+  if (robotSuperseded) return;
   armed = true;
   armButton.disabled = true;
   try {
@@ -564,8 +606,6 @@ armButton.addEventListener('click', () => {
 
 for (const slider of [sourceVolume, sourceMicGain]) {
   slider.addEventListener('input', () => {
-    // Remembered so the server's echo does not snap the slider back out from
-    // under a drag that is still in progress.
     sliderTouchedAt.set(slider, performance.now());
     applyBalance();
   });
@@ -595,6 +635,12 @@ window.onYouTubeIframeAPIReady = () => {
     events: {
       onReady: () => {
         playerReady = true;
+        if (robotSuperseded) {
+          try {
+            player.mute();
+            player.pauseVideo();
+          } catch {}
+        }
         renderTimeline();
         applyBalance();
         applyTimeline();

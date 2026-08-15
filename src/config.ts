@@ -120,5 +120,6 @@ export function loadBackingConfig(env: Env = process.env) {
     reconnectMs: envNumber(env, 'RELAY_BACKING_RECONNECT_MS', 1_000, { min: 50 }),
     maxBufferedBytes: envNumber(env, 'RELAY_BACKING_MAX_BUFFERED_BYTES', 512 * 1024, { min: 1_024 }),
     startupFlushMs: envNumber(env, 'RELAY_BACKING_STARTUP_FLUSH_MS', 250, { min: 0 }),
+    robot: envBoolean(env, 'RELAY_BACKING_ROBOT', false),
   } as const;
 }

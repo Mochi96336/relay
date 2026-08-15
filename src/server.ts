@@ -206,6 +206,12 @@ function robotRouteActive() {
   );
 }
 
+function robotDeltaIsFresh(nowMs = performance.now()) {
+  return activeRobotSource?.readyState === WebSocket.OPEN
+    && robotPlayerOffsetMs !== null
+    && nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS;
+}
+
 const calibration = new CalibrationSession({
   sampleRate: MIX_SAMPLE_RATE,
   durationMs: TIMING_CALIBRATION_MS,
@@ -277,6 +283,11 @@ function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
   if (robotRouteActive() && calibrationKind !== 'boot-probe') return false;
+  // Boot calibration is a three-term equation. The two probe legs may be
+  // measured ahead of playback, but an unknown player delta is not zero. Keep
+  // the path result as evidence and stay on the network fallback until the
+  // active robot has published a fresh, settled delta.
+  if (robotRouteActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   return true;
 }
 
@@ -309,6 +320,7 @@ function sourceStatusPayload() {
     calibrationKind,
     robotRoute: robotRouteActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
@@ -336,6 +348,7 @@ function recommendedMicGainDb(micPeakDbfs: number | null) {
 function timingCalibrationStatusPayload() {
   const alignment = session.alignment;
   const status = calibration.status();
+  const nowMs = performance.now();
   return {
     type: 'timing-calibration-status',
     ...status,
@@ -345,15 +358,14 @@ function timingCalibrationStatusPayload() {
     calibrationKind,
     robotRoute: robotRouteActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
     probeCorrelation: lastProbeCorrelation,
     bootCalibration: lastBootCalibration,
-    robotPlayerOffsetMs: performance.now() - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS
-      ? robotPlayerOffsetMs
-      : null,
+    robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs : null,
     automatic: calibrationWasAutomatic,
     autoCalibrate: AUTO_CALIBRATE,
   };
@@ -740,14 +752,13 @@ function maybeFinishProbeAnalysis(nowMs: number) {
 }
 
 function currentDeltaMs(nowMs: number) {
-  if (robotPlayerOffsetMs === null) return 0;
-  return nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS ? robotPlayerOffsetMs : 0;
+  return robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs! : 0;
 }
 
 function maybeReapplyBootCalibration(nowMs: number) {
   if (!robotRouteActive() || calibrationKind !== 'boot-probe') return;
   if (bootPathDifferenceMs === null || calibration.collecting) return;
-  if (nowMs - robotPlayerOffsetAt > ROBOT_OFFSET_FRESH_MS) return;
+  if (!robotDeltaIsFresh(nowMs)) return;
   if (lastProbeContext === null) return;
   if (
     lastProbeContext.sessionGeneration !== session.generation
@@ -822,6 +833,10 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
+  // Freshness is a live validity condition, not just something checked when a
+  // socket closes. If a robot page freezes while its WebSocket remains open,
+  // the last delta loses authority after ROBOT_OFFSET_FRESH_MS as well.
+  syncAppliedCalibration();
   maybeFinishProbeAnalysis(nowMs);
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
@@ -1141,11 +1156,6 @@ wss.on('connection', (rawSocket) => {
       socket.isRobotSource = false;
       robotPlayerOffsetMs = null;
       robotPlayerOffsetAt = -Infinity;
-      // A websocket outage may leave the browser/player itself alive, but until
-      // that same page reconnects and publishes a fresh delta the old total is
-      // not valid timing evidence. Invalidate only the source term: the measured
-      // mic/backing path legs remain reusable and are folded back in on the next
-      // fresh robot-player-offset.
       sourceGeneration += 1;
       syncAppliedCalibration();
       broadcastJson(sourceStatusPayload());

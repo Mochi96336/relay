@@ -79,7 +79,13 @@ let rawMonitorGainDb = 30;
 let uplinkDroppedChunks = 0;
 let lastUplinkWarningAt = 0;
 let monitorHealth = null;
-let captureGeneration = 0;
+// Seeded from the clock, not 0: a page reload starts a new module scope and
+// would otherwise reuse the same first-ever generation number, which the
+// server take as "nothing changed" and skip re-anchoring the mic timeline to
+// the new capture. Wire format is a Uint32 (see framePcm below); the seconds
+// component keeps this unique across any reload that is not the same
+// millisecond as a previous one, which a real reload never is.
+let captureGeneration = Date.now();
 let captureSampleCursor = 0;
 
 // Byte layout is pinned by src/pcm-frame.ts and test/pcm-frame.test.ts. Each

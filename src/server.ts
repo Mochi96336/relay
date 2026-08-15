@@ -207,6 +207,12 @@ function robotRouteActive() {
   );
 }
 
+function robotDeltaIsFresh(nowMs = performance.now()) {
+  return activeRobotSource?.readyState === WebSocket.OPEN
+    && robotPlayerOffsetMs !== null
+    && nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS;
+}
+
 const calibration = new CalibrationSession({
   sampleRate: MIX_SAMPLE_RATE,
   durationMs: TIMING_CALIBRATION_MS,
@@ -278,6 +284,7 @@ function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
   if (robotRouteActive() && calibrationKind !== 'boot-probe') return false;
+  if (robotRouteActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   return true;
 }
 
@@ -310,6 +317,7 @@ function sourceStatusPayload() {
     calibrationKind,
     robotRoute: robotRouteActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
@@ -337,6 +345,7 @@ function recommendedMicGainDb(micPeakDbfs: number | null) {
 function timingCalibrationStatusPayload() {
   const alignment = session.alignment;
   const status = calibration.status();
+  const nowMs = performance.now();
   return {
     type: 'timing-calibration-status',
     ...status,
@@ -346,15 +355,14 @@ function timingCalibrationStatusPayload() {
     calibrationKind,
     robotRoute: robotRouteActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
     probeCorrelation: lastProbeCorrelation,
     bootCalibration: lastBootCalibration,
-    robotPlayerOffsetMs: performance.now() - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS
-      ? robotPlayerOffsetMs
-      : null,
+    robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs : null,
     automatic: calibrationWasAutomatic,
     autoCalibrate: AUTO_CALIBRATE,
   };
@@ -741,14 +749,13 @@ function maybeFinishProbeAnalysis(nowMs: number) {
 }
 
 function currentDeltaMs(nowMs: number) {
-  if (robotPlayerOffsetMs === null) return 0;
-  return nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS ? robotPlayerOffsetMs : 0;
+  return robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs! : 0;
 }
 
 function maybeReapplyBootCalibration(nowMs: number) {
   if (!robotRouteActive() || calibrationKind !== 'boot-probe') return;
   if (bootPathDifferenceMs === null || calibration.collecting) return;
-  if (nowMs - robotPlayerOffsetAt > ROBOT_OFFSET_FRESH_MS) return;
+  if (!robotDeltaIsFresh(nowMs)) return;
   if (lastProbeContext === null) return;
   if (
     lastProbeContext.sessionGeneration !== session.generation
@@ -823,6 +830,7 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
+  syncAppliedCalibration();
   maybeFinishProbeAnalysis(nowMs);
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
@@ -1151,9 +1159,6 @@ wss.on('connection', (rawSocket) => {
       socket.isRobotSource = false;
       robotPlayerOffsetMs = null;
       robotPlayerOffsetAt = -Infinity;
-      // A disconnected player cannot keep its old delta authoritative. The two
-      // measured path legs remain reusable, but the applied sum waits for a
-      // fresh source identity/offset before becoming valid again.
       sourceGeneration += 1;
       syncAppliedCalibration();
       broadcastJson(sourceStatusPayload());
@@ -1209,8 +1214,7 @@ function readinessPayload(nowMs = performance.now()) {
   const timeline = currentTimelineStatus(nowMs);
   const calibrationStatus = calibration.status();
   const calibrationStale = calibrationIsStale();
-  const playerOffsetFresh = robotPlayerOffsetMs !== null
-    && nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS;
+  const playerOffsetFresh = robotDeltaIsFresh(nowMs);
   const timelineState = Number(timeline.state);
 
   return buildReadiness({

@@ -200,6 +200,14 @@ const PROBE_REPLY_TIMEOUT_MS = 3_000;
 const PROBE_ANALYSIS_TIMEOUT_MS = envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000);
 
 type ProbeTarget = 'mic' | 'backing';
+type MeasuredMicLeg = {
+  targetSample: number;
+  actualSample: number;
+  correlation: number;
+  /** The mix epoch and capture this leg belongs to; both must still match. */
+  sessionGeneration: number;
+  micGeneration: number | null;
+};
 
 let lastProbeAttemptAt = -Infinity;
 let probeRequestId = 0;
@@ -218,7 +226,7 @@ let pendingProbeAnalysis: {
   deadlineMs: number;
 } | null = null;
 /** The mic leg, held while the backing leg is measured. Both describe one run. */
-let measuredMicLeg: { targetSample: number; actualSample: number; correlation: number } | null = null;
+let measuredMicLeg: MeasuredMicLeg | null = null;
 /** Diagnostic only: what the last probe of each leg scored. */
 let lastProbeCorrelation: { mic: number | null; backing: number | null } = { mic: null, backing: null };
 /** What the last completed boot calibration described, so it is not re-run for nothing. */
@@ -329,8 +337,7 @@ const calibration = new CalibrationSession({
   // it made it unmeasurable.
   maxLagMs: envMs('RELAY_CALIBRATION_MAX_LAG_MS', 2_500),
   onSettled: () => {
-    const result = calibration.result;
-    if (result) session.setAlignment({ calibratedMicLagMs: result.micLagMs });
+    syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());
     broadcastJson(sourceStatusPayload());
   },
@@ -397,8 +404,22 @@ function calibrationIsStale() {
   return calibration.isStaleFor(calibrationContext());
 }
 
+/**
+ * Keeps the historical measurement in CalibrationSession, but only lets the
+ * mixer use it while it still describes the current session/captures/player.
+ * This is the missing validity boundary: "stale" is not merely a UI warning.
+ */
+function syncAppliedCalibration() {
+  const result = calibration.result;
+  const nextMicLagMs = result !== null && !calibrationIsStale() ? result.micLagMs : null;
+  if (session.alignment.calibratedMicLagMs !== nextMicLagMs) {
+    session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
+  }
+}
+
 function sourceStatusPayload() {
   const alignment = session.alignment;
+  const calibrationStatus = calibration.status();
   const nowMs = performance.now();
   return {
     type: 'source-status',
@@ -415,7 +436,10 @@ function sourceStatusPayload() {
     // rate the phone happens to be capturing at.
     mixSampleRate: MIX_SAMPLE_RATE,
     micNetworkCompensationMs: alignment.networkCompensationMs,
-    calibratedMicLagMs: alignment.calibratedMicLagMs,
+    // Historical measurement for diagnostics. `timingMode` says whether it is
+    // currently valid and applied; stale measurements deliberately remain here.
+    calibratedMicLagMs: calibrationStatus.micLagMs,
+    activeCalibratedMicLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     vocalFineTuneMs: alignment.fineTuneMs,
@@ -466,7 +490,7 @@ function timingCalibrationStatusPayload() {
   return {
     type: 'timing-calibration-status',
     ...status,
-    micLagMs: alignment.calibratedMicLagMs,
+    activeMicLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     fallbackNetworkMs: alignment.networkCompensationMs,
@@ -654,6 +678,11 @@ function restartLiveSourceAfterMicReconnect() {
 function stopLiveSource() {
   cancelBackingGrace();
   if (!session.active) return;
+  // A half-finished two-leg probe belongs to this epoch. Never carry the mic
+  // leg into the next live session and pair it with a different backing leg.
+  abandonProbeRun();
+  robotPlayerOffsetMs = null;
+  robotPlayerOffsetAt = -Infinity;
   // The next capture can be a different tab, device or output path, so the old
   // measurement must not survive. It used to be process-global and quietly
   // carried over into the next session.
@@ -771,6 +800,20 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
 function maybeStartProbeCalibration(nowMs: number) {
   if (!PROBE_CALIBRATE) return;
   if (!session.active || calibration.collecting) return;
+
+  // A mic leg is only reusable while both the mix epoch and that capture still
+  // match. Without this, a stopped/restarted session could pair Mic(A) with
+  // Backing(B) and then bless the result with B's current context.
+  if (
+    measuredMicLeg !== null
+    && (
+      measuredMicLeg.sessionGeneration !== session.generation
+      || measuredMicLeg.micGeneration !== session.micGeneration
+    )
+  ) {
+    abandonProbeRun();
+  }
+
   if (calibration.result !== null && !calibrationIsStale()) return;
   if (pendingProbe !== null || pendingProbeAnalysis !== null) return;
   if (nowMs - lastProbeAttemptAt < PROBE_RETRY_MS) return;
@@ -904,15 +947,24 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   const leg = { targetSample: waiting.targetSample, actualSample, correlation };
 
   if (waiting.target === 'mic') {
-    // Held while the backing leg runs. Neither leg means anything alone.
-    measuredMicLeg = leg;
+    // Held while the backing leg runs. Neither leg means anything alone, and
+    // the context is part of the leg so a later session cannot reuse it.
+    measuredMicLeg = {
+      ...leg,
+      sessionGeneration: session.generation,
+      micGeneration: waiting.generation,
+    };
     broadcastJson(timingCalibrationStatusPayload());
     return;
   }
 
   const micLeg = measuredMicLeg;
   measuredMicLeg = null;
-  if (micLeg === null) return;
+  if (
+    micLeg === null
+    || micLeg.sessionGeneration !== session.generation
+    || micLeg.micGeneration !== session.micGeneration
+  ) return;
 
   const result = combineBootCalibration({
     mic: micLeg,
@@ -1061,13 +1113,18 @@ wss.on('connection', (rawSocket) => {
           const { samples, start } = session.ingestMic(frame, publisherSampleRate);
 
           if (session.active) {
-            // A new capture session can mean a different transport delay, which
-            // is only knowable once a frame arrives - registration alone does
-            // not say whether the phone restarted its microphone or merely
-            // reopened the socket.
-            if (session.micGeneration !== previousGeneration && session.alignment.calibratedMicLagMs !== null) {
-              broadcastJson(sourceStatusPayload());
-              broadcastJson(timingCalibrationStatusPayload());
+            const micRestarted = previousGeneration !== null && session.micGeneration !== previousGeneration;
+            if (micRestarted) {
+              // A fresh capture can have a different uplink/audio-device delay.
+              // It also invalidates any saved first leg of the boot probe.
+              abandonProbeRun();
+              if (calibration.collecting) {
+                calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
+              } else {
+                syncAppliedCalibration();
+                broadcastJson(sourceStatusPayload());
+                broadcastJson(timingCalibrationStatusPayload());
+              }
             }
             calibration.observeMic(samples, start);
           }
@@ -1092,9 +1149,11 @@ wss.on('connection', (rawSocket) => {
           // Registration happens before its first framed sample, so generation
           // is the first point where a socket reconnect can be distinguished
           // from an entirely new capture.
+          abandonProbeRun();
           if (calibration.collecting) {
             calibration.fail('Backing capture restarted during calibration. Start calibration again.');
           } else {
+            syncAppliedCalibration();
             broadcastJson(sourceStatusPayload());
             broadcastJson(timingCalibrationStatusPayload());
           }
@@ -1180,14 +1239,17 @@ wss.on('connection', (rawSocket) => {
       return;
     }
 
-    // The desktop follower moved its player, so whatever offset a measurement
-    // found no longer describes where the song sits. Saying so beats letting a
-    // confident-looking number be wrong by up to the follower's dead band.
+    // The desktop follower moved its player, so whatever offset a content-based
+    // measurement found no longer describes where the song sits. A boot probe's
+    // path terms survive, but its active sum must wait for a fresh delta report.
     if (payload.type === 'source-seeked') {
       sourceGeneration += 1;
+      robotPlayerOffsetMs = null;
+      robotPlayerOffsetAt = -Infinity;
       if (calibration.collecting) {
         calibration.fail('The desktop player seeked during calibration. Start calibration again.');
       } else {
+        syncAppliedCalibration();
         broadcastJson(sourceStatusPayload());
         broadcastJson(timingCalibrationStatusPayload());
       }

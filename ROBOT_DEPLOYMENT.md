@@ -57,6 +57,17 @@ The port is not part of that contract. Relay defaults to `3000`; use another por
 
 ## Launcher
 
+Before launching, the read-only doctor checks dependencies, the PipeWire
+server and sink monitor, and the required `localhost` Relay endpoints:
+
+```bash
+PORT=3100 npm run robot:doctor
+```
+
+It reports a missing sink as a warning because the launcher can create it;
+missing commands, an unreachable Relay server, or a sink without its monitor
+source are failures.
+
 The checked-in launcher owns the complete browser backing route:
 
 ```bash
@@ -67,13 +78,13 @@ It:
 
 - verifies `pactl`, `parec`, `xvfb-run`, `npm`, Node.js, and Chromium are available;
 - creates the `relay_browser` null sink only when it does not already exist;
-- captures `relay_browser.monitor` as mono 16-bit little-endian PCM at 48 kHz;
+- captures `relay_browser.monitor` as mono 16-bit little-endian PCM at 48 kHz by default;
 - pipes the capture into `backing:stdin`;
 - launches an isolated Chromium profile under Xvfb, routed with `PULSE_SINK=relay_browser`;
 - always opens `http://localhost:$PORT/source.html?robot=1`; and
 - stops its child processes and unloads only a sink module it created itself.
 
-`PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate.
+`PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. The launcher applies `RELAY_BACKING_SAMPLE_RATE` to both `parec` and the bridge so the declared rate always matches the PCM; the validated default remains 48 kHz. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate, without writing the key into its log line.
 
 Run the Relay server separately before starting the launcher. Robot mode automatically arms source audio, and Chromium is launched with the autoplay policy needed for that unattended local page; no source-page gesture or extension invocation is required.
 

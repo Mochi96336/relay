@@ -8,6 +8,7 @@ set -m
 PORT="${PORT:-3000}"
 SINK_NAME="${RELAY_BROWSER_SINK:-relay_browser}"
 CHROMIUM_BIN="${CHROMIUM_BIN:-}"
+CAPTURE_RATE="${RELAY_BACKING_SAMPLE_RATE:-48000}"
 created_module=""
 parec_pid=""
 backing_pid=""
@@ -74,10 +75,12 @@ elif ! command -v "$CHROMIUM_BIN" >/dev/null 2>&1; then
   die "CHROMIUM_BIN is not executable: $CHROMIUM_BIN"
 fi
 
-[[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) \
+[[ "$PORT" =~ ^[0-9]+$ ]] && ((10#$PORT >= 1 && 10#$PORT <= 65535)) \
   || die "PORT must be an integer from 1 to 65535"
 [[ "$SINK_NAME" =~ ^[A-Za-z0-9_.-]+$ ]] \
   || die "RELAY_BROWSER_SINK may contain only letters, numbers, dot, underscore, and hyphen"
+[[ "$CAPTURE_RATE" =~ ^[0-9]+$ ]] && ((10#$CAPTURE_RATE >= 8000 && 10#$CAPTURE_RATE <= 192000)) \
+  || die "RELAY_BACKING_SAMPLE_RATE must be an integer from 8000 to 192000"
 
 if ! pactl list short sinks | awk -v sink="$SINK_NAME" '$2 == sink { found = 1 } END { exit !found }'; then
   created_module="$(pactl load-module module-null-sink \
@@ -96,10 +99,10 @@ mkfifo "$pcm_fifo"
 mkdir "$profile_dir"
 
 parec --device="${SINK_NAME}.monitor" \
-  --raw --format=s16le --rate=48000 --channels=1 >"$pcm_fifo" &
+  --raw --format=s16le --rate="$CAPTURE_RATE" --channels=1 >"$pcm_fifo" &
 parec_pid=$!
 
-npm run backing:stdin <"$pcm_fifo" &
+RELAY_BACKING_SAMPLE_RATE="$CAPTURE_RATE" npm run backing:stdin <"$pcm_fifo" &
 backing_pid=$!
 
 source_url="http://localhost:${PORT}/source.html?robot=1"
@@ -107,7 +110,7 @@ if [[ -n "${RELAY_KEY:-}" ]]; then
   encoded_key="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$RELAY_KEY")"
   source_url+="&key=$encoded_key"
 fi
-log "opening $source_url with audio routed to $SINK_NAME"
+log "opening http://localhost:${PORT}/source.html?robot=1 with audio routed to $SINK_NAME at $CAPTURE_RATE Hz${RELAY_KEY:+ (authenticated)}"
 PULSE_SINK="$SINK_NAME" xvfb-run -a "$CHROMIUM_BIN" \
   --user-data-dir="$profile_dir" \
   --autoplay-policy=no-user-gesture-required \
@@ -120,4 +123,11 @@ set +e
 wait -n "$parec_pid" "$backing_pid" "$browser_pid"
 route_status=$?
 set -e
+# This route is expected to run until the launcher receives a signal. A child
+# exiting cleanly is still a broken route and must look like a failure to a
+# service supervisor using Restart=on-failure.
+if ((route_status == 0)); then
+  log "a route component exited unexpectedly"
+  route_status=1
+fi
 exit "$route_status"

@@ -276,9 +276,6 @@ function calibrationIsStale() {
 function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
-  // A song-content result is never authoritative once the robot route exists.
-  // This hard gate protects the mixer even if a startup or manual-control race
-  // somehow leaves such a result in CalibrationSession.
   if (robotRouteActive() && calibrationKind !== 'boot-probe') return false;
   return true;
 }
@@ -536,8 +533,6 @@ const mixerTimer = setInterval(() => {
 
 function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE) return;
-  // Robot backing declares itself before Chromium loads, so this check closes
-  // the launch race where legacy content calibration used to start first.
   if (robotRouteActive()) return;
   if (!session.active || calibration.collecting) return;
   if (calibration.result !== null && !calibrationIsStale()) return;
@@ -584,8 +579,6 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
   if (target === 'mic') {
     sendJson(publisher!, payload);
   } else if (activeRobotSource) {
-    // Exactly one player is authoritative. Broadcasting this used to make every
-    // orphan Chromium page emit the same probe into the same PipeWire sink.
     sendJson(activeRobotSource, payload);
   }
 }
@@ -604,8 +597,6 @@ function maybeStartProbeCalibration(nowMs: number) {
     abandonProbeRun();
   }
 
-  // Only an already-valid boot result can suppress another boot run. A content
-  // result left over from a pre-robot race is diagnostics, never authority.
   if (
     calibrationKind === 'boot-probe'
     && calibration.result !== null
@@ -973,9 +964,6 @@ wss.on('connection', (rawSocket) => {
       }
 
       if (robotRouteActive()) {
-        // Manual calibration on a robot means "re-run the boot probe", never
-        // "fall back to song correlation". Playback itself is not required for
-        // the two path legs; delta will join when the active player is stable.
         restartBootCalibration(nowMs, false);
         return;
       }
@@ -1057,9 +1045,6 @@ wss.on('connection', (rawSocket) => {
       backingIsRobot = payload.robot === true;
       session.setBackingExpected(true);
 
-      // The robot bridge knows its identity before Chromium exists. If a legacy
-      // collection somehow started before this registration, remove its
-      // authority immediately rather than waiting for the source page hello.
       dropLegacyCalibrationForRobot();
       sendJson(socket, { type: 'registered', role: 'backing', robot: backingIsRobot });
       startLiveSource();
@@ -1095,9 +1080,6 @@ wss.on('connection', (rawSocket) => {
       if (previous && previous !== socket) {
         previous.isRobotSource = false;
         sendJson(previous, { type: 'robot-source-replaced' });
-        // A different player identity means the old delta sum is invalid, but
-        // the measured mic/backing path terms can survive and be re-applied once
-        // the new active player reports a stable delta.
         sourceGeneration += 1;
       }
 
@@ -1159,6 +1141,13 @@ wss.on('connection', (rawSocket) => {
       socket.isRobotSource = false;
       robotPlayerOffsetMs = null;
       robotPlayerOffsetAt = -Infinity;
+      // A websocket outage may leave the browser/player itself alive, but until
+      // that same page reconnects and publishes a fresh delta the old total is
+      // not valid timing evidence. Invalidate only the source term: the measured
+      // mic/backing path legs remain reusable and are folded back in on the next
+      // fresh robot-player-offset.
+      sourceGeneration += 1;
+      syncAppliedCalibration();
       broadcastJson(sourceStatusPayload());
       broadcastJson(timingCalibrationStatusPayload());
     }

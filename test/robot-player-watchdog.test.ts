@@ -3,7 +3,6 @@ import test from 'node:test';
 
 // Browser-only runtime module; the exported policy functions are intentionally
 // exercised in Node without installing its DOM watcher.
-// @ts-ignore public browser module has no TypeScript declaration file
 import {
   decideRobotPlayerRecovery,
   playerLoadedFromMirrorState,

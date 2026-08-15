@@ -69,7 +69,12 @@ export type CalibrationSessionOptions = {
    */
   context: () => CalibrationContext;
   /** Injectable so lifecycle tests do not have to synthesise six real seconds. */
-  analyze?: (mic: Int16Array, backing: Int16Array, sampleRate: number) => TimingCalibrationAnalysis;
+  analyze?: (
+    mic: Int16Array,
+    backing: Int16Array,
+    sampleRate: number,
+    maxLagMs?: number,
+  ) => TimingCalibrationAnalysis;
   /** Fired when the phase settles on complete or failed. */
   onSettled?: () => void;
   /**
@@ -88,6 +93,8 @@ export type CalibrationSessionOptions = {
   agreementToleranceMs?: number;
   /** Read when a window ends, so the next one gets its own timeout budget. */
   now?: () => number;
+  /** How far the analyser may look for a match. */
+  maxLagMs?: number;
 };
 
 /**
@@ -149,6 +156,7 @@ export class CalibrationSession {
   private readonly agreementWindows: number;
   private readonly agreementToleranceMs: number;
   private readonly now: () => number;
+  private readonly maxLagMs: number | undefined;
 
   /** Lags from recent windows, kept only as far back as agreement needs. */
   private candidates: number[] = [];
@@ -181,6 +189,7 @@ export class CalibrationSession {
     this.agreementWindows = Math.max(1, options.agreementWindows ?? 1);
     this.agreementToleranceMs = options.agreementToleranceMs ?? 25;
     this.now = options.now ?? (() => performance.now());
+    this.maxLagMs = options.maxLagMs;
   }
 
   get collecting() {
@@ -368,7 +377,9 @@ export class CalibrationSession {
         );
       }
 
-      const result = this.analyze(mic.samples, backing.samples, this.sampleRate);
+      const result = this.maxLagMs === undefined
+        ? this.analyze(mic.samples, backing.samples, this.sampleRate)
+        : this.analyze(mic.samples, backing.samples, this.sampleRate, this.maxLagMs);
 
       this.candidates.push(result.micLagMs);
       if (this.candidates.length > this.agreementWindows) this.candidates.shift();

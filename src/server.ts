@@ -170,6 +170,11 @@ const calibration = new CalibrationSession({
   // one does not move.
   agreementWindows: Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3),
   agreementToleranceMs: envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25),
+  // Agreement rejects a false positive that lands somewhere different each
+  // window. It cannot reject one that lands in the same wrong place every time,
+  // which is what a beat-period match does - the tempo does not change between
+  // windows. Not looking that far out is what rules those out.
+  maxLagMs: envMs('RELAY_CALIBRATION_MAX_LAG_MS', 700),
   onSettled: () => {
     const result = calibration.result;
     if (result) session.setAlignment({ calibratedMicLagMs: result.micLagMs });

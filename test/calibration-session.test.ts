@@ -3,7 +3,7 @@ import test, { describe } from 'node:test';
 
 import { CalibrationSession, type CalibrationContext } from '../src/calibration-session.js';
 import type { TimingCalibrationAnalysis } from '../src/timing-calibration.js';
-import { laggedPair } from './helpers/harness.js';
+import { laggedPair, pulseTrain, toInt16 } from './helpers/harness.js';
 
 const RATE = 48_000;
 const DURATION_MS = 6_000;
@@ -334,6 +334,67 @@ describe('CalibrationSession agreement', () => {
     const status = calibration.status();
     assert.equal(status.windowsAgreed, 3);
     assert.equal(status.windowsNeeded, 3);
+  });
+});
+
+describe('CalibrationSession agreement against the real analyser', () => {
+  const REQUIRED_BYTES = REQUIRED * 2;
+
+  function build(windows: number, seed: number, gain: number) {
+    return toInt16(pulseTrain(REQUIRED * windows, RATE, seed), gain);
+  }
+
+  function windowOf(buffer: Buffer, index: number) {
+    return new Int16Array(buffer.buffer, buffer.byteOffset + index * REQUIRED_BYTES, REQUIRED);
+  }
+
+  function run(mic: Buffer, backing: Buffer, windows: number) {
+    const calibration = new CalibrationSession({
+      sampleRate: RATE,
+      durationMs: DURATION_MS,
+      timeoutMs: 600_000,
+      context: () => ({
+        sessionGeneration: 1, micGeneration: 10, backingGeneration: 20, sourceGeneration: 0,
+      }),
+      agreementWindows: 3,
+      agreementToleranceMs: 25,
+      maxLagMs: 700,
+      now: () => 0,
+    });
+
+    calibration.start(0);
+    for (let i = 0; i < windows; i += 1) {
+      const at = i * REQUIRED;
+      calibration.observeBacking(windowOf(backing, i), at);
+      calibration.observeMic(windowOf(mic, i), at);
+    }
+    return calibration;
+  }
+
+  test('never applies an answer for two unrelated streams', () => {
+    // The analyser accepts most unrelated pairs with a plausible confidence and
+    // a lag it invents afresh each window. Measured over consecutive windows,
+    // three in a row never land within 25 ms of each other - which is the whole
+    // reason agreement is the filter rather than confidence.
+    for (let seed = 1; seed <= 6; seed += 1) {
+      const calibration = run(build(4, seed, 0.5), build(4, seed + 100, 0.8), 4);
+      assert.equal(
+        calibration.result,
+        null,
+        `unrelated audio (seed ${seed}) produced an applied answer: ${calibration.status().micLagMs} ms`,
+      );
+    }
+  });
+
+  test('still applies a real match, which does not move between windows', () => {
+    const { mic, backing } = laggedPair(24, RATE, 260);
+    const calibration = run(mic, backing, 4);
+
+    assert.equal(calibration.status().state, 'complete', calibration.status().error ?? '');
+    assert.ok(
+      Math.abs((calibration.result?.micLagMs ?? 0) - 260) <= 15,
+      `got ${calibration.result?.micLagMs} ms`,
+    );
   });
 });
 

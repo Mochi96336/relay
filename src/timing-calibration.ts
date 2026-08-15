@@ -202,6 +202,7 @@ export function analyzeTimingCalibration(
   micSamples: Int16Array,
   backingSamples: Int16Array,
   sampleRate: number,
+  maxLagMs: number = MAX_LAG_MS,
 ): TimingCalibrationAnalysis {
   if (sampleRate <= 0) throw new Error('Invalid calibration sample rate.');
 
@@ -224,11 +225,17 @@ export function analyzeTimingCalibration(
 
   const micFeature = featureEnvelope(mic, sampleRate);
   const backingFeature = featureEnvelope(backing, sampleRate);
-  const maxLagFrames = Math.round(MAX_LAG_MS / ENVELOPE_FRAME_MS);
+  const maxLagFrames = Math.max(1, Math.round(maxLagMs / ENVELOPE_FRAME_MS));
 
-  // First search the full usable overlap. At ±2 s there are still four seconds
-  // of common material in a six-second capture, which is much harder for a
-  // repeated beat to fool than several independent short windows.
+  // Search the full usable overlap rather than several short windows: a wide
+  // overlap is much harder for a repeated beat to fool.
+  //
+  // How wide to look is a physical question, not a free parameter. The desktop
+  // player is only corrected past 450 ms of error, transport adds a fraction of
+  // that on a local link, and the acoustic path is a few milliseconds. Looking
+  // far beyond that does not find better answers, it finds beat multiples -
+  // and the mixer cannot apply them anyway, so a wrong answer from out there
+  // gets clamped and still looks like a successful calibration.
   const global = bestLagAcrossOverlap(backingFeature, micFeature, maxLagFrames);
   const globalLagMs = global.lag * ENVELOPE_FRAME_MS;
 

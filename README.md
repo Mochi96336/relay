@@ -161,9 +161,13 @@ It only fires when there is nothing usable to fall back on — no measurement, o
 
 The analyser accepts unrelated audio at a confidence of 0.4–0.6 against 1.0 for a true match, reporting plausible-looking lags that are simply wrong (`test/timing-calibration.test.ts` pins the margin). While a person pressed the button that was survivable: an implausible number got re-run. Automating the trigger removed the reviewer and the flaw started reaching the mix, heard as the song arriving twice, badly offset, intermittently.
 
-Confidence cannot separate the two cases — that is what the pinned margin says. Repeatability can: a false positive lands on a different lag every window, a real match does not move. So a measurement is applied only once `RELAY_CALIBRATION_AGREEMENT` (3) separately collected windows land within `RELAY_CALIBRATION_TOLERANCE_MS` (25 ms) of each other, and a window that disagrees costs the run the progress it invalidates rather than being averaged in.
+Confidence cannot separate the two cases — that is what the pinned margin says. Repeatability can: a false positive lands on a different lag every window, a real match does not move. So a measurement is applied only once `RELAY_CALIBRATION_AGREEMENT` (3) separately collected windows land within `RELAY_CALIBRATION_TOLERANCE_MS` (25 ms) of each other, and a window that disagrees costs the run the progress it invalidates rather than being averaged in. The first window is never applied on its own.
+
+Measured over consecutive windows of unrelated audio, the analyser accepts most of them and invents a lag that jumps hundreds of milliseconds each time; three in a row never landed within tolerance across the seeds tested. `test/calibration-session.test.ts` pins both halves of that — unrelated streams producing nothing, a real match still landing.
 
 The cost is time, not CPU — one analysis is about 4 ms against a 20 ms frame budget, so the limit is the 6 s each window takes to collect. Set `RELAY_CALIBRATION_AGREEMENT=1` for the old single-shot behaviour.
+
+`RELAY_CALIBRATION_MAX_LAG_MS` (700) bounds how far the analyser looks. This is **not** what rejects false positives — narrowing the search from ±2 s changed where they land but not how often they are accepted. It is about applicability: the mixer clamps the advance to what its buffers afford, so a measurement of −1975 ms would be applied as −1300 ms and still report success. The bound is physical — the desktop player is only corrected past 450 ms of error, transport adds a fraction of that locally, and the acoustic path is a few milliseconds — so nothing real lives outside it, while beat multiples do.
 
 ### Test mode is only the test
 

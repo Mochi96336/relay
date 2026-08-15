@@ -16,7 +16,11 @@ import {
   normalizeNickname,
   normalizeParticipantId,
 } from './participant-session.js';
-import { YouTubeTimelineTracker } from './youtube-timeline.js';
+import {
+  SongSession,
+  normalizePlaybackGeneration,
+  normalizePlaybackTransportId,
+} from './song-session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
@@ -75,8 +79,8 @@ app.get('/healthz', (_req, res) => {
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
-const youtubeTimeline = new YouTubeTimelineTracker();
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
+const youtubeTimeline = new SongSession();
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -107,6 +111,8 @@ type RelaySocket = WebSocket & {
   isRobotSource?: boolean;
   participantId?: string;
   participantConnectionId?: string;
+  playbackTransportId?: string;
+  playbackGeneration?: number;
 };
 
 type TimelineStatus = {
@@ -165,7 +171,7 @@ const PROBE_REPLY_TIMEOUT_MS = 3_000;
  * Long enough for the probe to play, be captured and reach the server.
  *
  * Derived from the search window rather than set independently: the analysis
- * cannot run until the timeline has covered the whole window, so a timeout
+ * cannot run until the timeline has covered its whole window, so a timeout
  * shorter than that rejects every probe before it is even looked at. Raising
  * `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` to 10 s did exactly that, and the
  * only symptom was every leg reporting `analysis dropped ... timedOut=true`.
@@ -1216,7 +1222,22 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'youtube-telemetry') {
-      if (youtubeTimeline.update(payload)) {
+      const playbackTransportId = normalizePlaybackTransportId(payload.playbackTransportId);
+      const playbackGeneration = normalizePlaybackGeneration(payload.playbackGeneration);
+      if (!socket.participantId || !playbackTransportId || playbackGeneration === null) return;
+
+      const result = youtubeTimeline.update(
+        payload,
+        {
+          participantId: socket.participantId,
+          transportId: playbackTransportId,
+          generation: playbackGeneration,
+        },
+        participants.micOwnerId,
+      );
+      if (result.accepted) {
+        socket.playbackTransportId = playbackTransportId;
+        socket.playbackGeneration = playbackGeneration;
         broadcastJson(youtubeTimeline.statusPayload());
       }
       return;
@@ -1524,6 +1545,19 @@ wss.on('connection', (rawSocket, request) => {
 
   socket.on('close', () => {
     let micTransportChanged = false;
+
+    if (
+      socket.participantId
+      && socket.playbackTransportId
+      && socket.playbackGeneration !== undefined
+    ) {
+      const playbackChanged = youtubeTimeline.detach({
+        participantId: socket.participantId,
+        transportId: socket.playbackTransportId,
+        generation: socket.playbackGeneration,
+      });
+      if (playbackChanged) broadcastJson(youtubeTimeline.statusPayload());
+    }
 
     if (!socket.replaced) {
       if (socket === activeRobotSource) {

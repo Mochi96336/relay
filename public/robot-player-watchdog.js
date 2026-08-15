@@ -30,6 +30,11 @@ export function reloadBudgetAvailable(history, nowMs) {
   return trimReloadHistory(history, nowMs).length < MAX_RELOADS_PER_WINDOW;
 }
 
+export function playerLoadedFromMirrorState(text) {
+  const state = String(text).trim().toLowerCase();
+  return !/^(?:not loaded|waiting)(?:\s*·|$)/.test(state);
+}
+
 function parseClock(text) {
   const match = String(text).match(/^(\d+):(\d{2})\s*\/\s*target/);
   if (!match) return Number.NaN;
@@ -71,7 +76,7 @@ function installRobotPlayerWatchdog() {
     const hasTimeline = /^[\w-]{6,}\s+·\s+phone\s+/i.test(detailText);
     const phonePlaying = /·\s*phone\s+playing\s*·/i.test(`· ${detailText} ·`);
     const playerError = stateText.startsWith('YouTube source error');
-    const playerLoaded = mirrorText !== 'not loaded' && mirrorText !== 'waiting';
+    const playerLoaded = playerLoadedFromMirrorState(mirrorText);
     const playerTime = parseClock(timelineText);
 
     if (playerError) errorSince ??= now;

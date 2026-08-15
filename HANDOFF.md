@@ -1,27 +1,35 @@
 # Handoff
 
-State of the work as of `1cb8e91`, written for picking this up on another machine. `README.md` describes how the system works; this file is what a fresh session would otherwise have to rediscover.
+State of the work as of `1cb8e91`, written for picking this up on another machine. `README.md` describes how the system works; this file is what a fresh session would otherwise have to rediscover. Updated after a real integrated session on the robot itself (2026-08-15 evening) — see "What tonight's robot session found" below for what that changed.
 
 ## What is verified and what is not
 
-The audio core is covered by 117 tests (`npm test`, ~15 s, no network) and `npm run check` is clean. That is not the same as working.
+The audio core is covered by 120 tests (`npm test`, ~15 s, no network) and `npm run check` is clean. That is not the same as working.
 
 Confirmed on real hardware:
 
 - Monitor level is correct again after the test-mode fix.
 - A 400 ms prebuffer holds: a 70 s take reported one starved frame.
 - Take-scoped health counters report the take rather than the session.
+- **The full robot route runs end to end on real hardware** (phone mic over a Cloudflare tunnel, robot Chromium mirroring YouTube through PipeWire, `backing:stdin`, `RELAY_CALIBRATION_AGREEMENT=3`): mic and backing both stream, calibration collects, and — after the fix below — converges on a plausible small lag rather than a beat-period alias.
 
 **Never validated on real hardware, individually or together:**
 
 - the microphone limiter,
-- three-window calibration agreement,
 - a desktop capture blip not ending the take,
 - the phone-side controls and song-level routing,
 - clipping detection (never observed firing),
-- the whole robot route in `scripts/robot-source.sh` — no PipeWire or Debian here, so its test coverage is zero and it rests entirely on the other agent's device validation.
+- an actual sung take with the mix confirmed audibly in sync (tonight got calibration converging; nobody sang into it).
 
-An integrated take on a development desktop was the intended next step, specifically so that a failure on the robot can be attributed to the deployment rather than to the audio core. It has not happened.
+An integrated take with someone actually singing is still the next step, specifically so that a failure on the robot can be attributed to the deployment rather than to the audio core.
+
+## What tonight's robot session found
+
+Three real problems, in the order they were found and fixed or ruled out. All three produce the same symptom from a phone speaker distance — audio that sounds obviously wrong to a person, unattended calibration that produces a suspiciously large lag — so do not assume one explains the other without checking `timing-calibration-status` directly.
+
+1. **A page reload does not re-anchor the microphone. It should have and did not.** `captureGeneration` in `public/app.js` is a plain `let` starting at 0, bumped once per capture start. Reloading the phone page resets it to the same value the *first ever* connection used, so `timeline.generation !== frame.generation` in `audio-session.ts` sees no change and skips re-anchoring. The mic timeline then keeps extending from whatever `originOffset` the very first connection computed, drifting further from correct the longer the server process has been running — we watched it go from a wrong -7195 ms to a worse -18595 ms across one reload. **The fix is restarting the Relay server process, not reloading the phone page.** A real fix would make `captureGeneration` globally unique (e.g. seed it from `Date.now()` or a random value instead of 0), which nobody has done yet.
+2. **The analyser locks onto beat-period aliases, live, not just in theory.** Thread 2 below documented this as a known gap; tonight it was watched happening in real time against a real recorded chorus — repeated automatic attempts landing on ±550-700 ms with confidence 0.4-0.6, while the true answer (confirmed once by a high-confidence 0.797 read) was ~150-250 ms. `RELAY_CALIBRATION_AGREEMENT=3` correctly rejected every one of those, exactly as designed, but never got three that agreed either, because a repeated beat produces a *different* alias each attempt while the true small lag is comparatively rare against it — a real, not just theoretical, availability problem for a live take. **Fixed**: `bestLagAcrossOverlap` in `src/timing-calibration.ts` now also searches within `PREFERRED_LAG_MS` (300 ms) and prefers that candidate whenever it scores within `PREFERRED_LAG_CORRELATION_MARGIN` (0.08) of the global best, on the same physical-plausibility reasoning `RELAY_CALIBRATION_MAX_LAG_MS` already used (nothing real lives far from zero; a comparably-strong distant candidate is that same beat, aliased). Regression tests in `test/timing-calibration.test.ts` (`prefers a ... lag over its ... ms beat-period alias`) use a new `beatTrain`/`laggedBeatPair` harness with a *regular* beat, which `pulseTrain`'s irregular spacing had never exercised — that gap in the test data is why this shipped undetected. This plausibly explains open thread 1 below (the song heard twice, unattended) better than the false-positive theory that motivated agreement in the first place: a beat-alias lag large enough to read past the end of mic history would produce exactly that symptom.
+3. **Cloudflare tunnel checked and ruled out.** The phone connects through `cloudflared tunnel --url http://localhost:$PORT`. Its `clock-ping`/`youtube-telemetry` RTT (`networkRttMs`, `transportEstimateMs`) stayed at 20-30 ms throughout, so the tunnel is not adding meaningful or variable latency. Do not re-investigate this without new evidence.
 
 ## Things that cost time to rediscover
 
@@ -30,6 +38,8 @@ An integrated take on a development desktop was the intended next step, specific
 - **Reloading `source.html` destroys the tab capture** while the extension's WebSocket, which lives in an offscreen document, stays open and registered. The server sees a healthy `backing` client with no audio behind it. It now says so; before, a calibration would sit at 0 % for the whole timeout. On the robot there is no extension, and the equivalent failure is the PipeWire route or `backing:stdin`.
 - **`tabCapture` needs a user gesture on every Chromium start.** That is a browser security boundary, not a bug to route around, which is why the robot path replaces the extension rather than automating it.
 - **Both singer-facing controls exist on two pages.** Mic gain and song level are server state; either page can move them and the server echoes to the other. Song level can only be *acted* on by the page owning the mirrored player.
+- **Reloading the phone page does not fix a wedged microphone timeline; restarting the server does.** See "What tonight's robot session found" above. Register as a `monitor` role over a plain WebSocket (`{type:'register', role:'monitor'}`) to watch `mix-health.micHeadroomMs` — frozen at a large negative number while `micStreaming` stays true is this bug, not a network problem.
+- **`npm run robot:source` already owns the whole browser-audio pipeline.** Running `parec`, `backing:stdin`, and `xvfb-run chromium` by hand in separate terminals works but leaves orphaned `Xvfb` displays and a second, conflicting `backing:stdin` behind on every restart. Use the one launcher command; it cleans up its own children on `SIGTERM`.
 
 ## Where the tuning lives
 
@@ -60,12 +70,14 @@ Both were taken on a development desktop; scale them for the target.
 
 ## Open threads
 
-1. **The last symptom is unconfirmed.** The song was heard twice, far apart, intermittently. The diagnosis was a false positive being applied unattended, and agreement was built to stop it — but that was never re-tested. This is the first thing to check.
-2. **The analyser itself still accepts unrelated audio** at 0.4–0.6 confidence. Agreement keeps it out of the mix; nothing fixed the analyser. Tightening its thresholds needs real device captures, which have never been collected. Anything calling `analyzeTimingCalibration` directly inherits the flaw.
-3. **The desktop player's ±450 ms dead band** ([`public/source.js`](public/source.js), the `seekTo` guard) is deliberate — correcting more often would mean more audible re-buffers, each also invalidating the calibration. A seek now marks the measurement stale instead. Measured lags have landed at −60, −205 and −225 ms across runs, all inside that band, which is why they differ.
-4. **The click sync test still shares plumbing with the production path.** It is the reason `test-status` and the production session were once conflated. It causes no live fault now; removing it is cleanup, not a fix.
-5. **Discord output has not been started.** It is the original goal in `README.md`.
+1. **The last symptom is now plausibly explained, not confirmed.** The song was heard twice, far apart, intermittently. The diagnosis was a false positive being applied unattended, and agreement was built to stop it — but a beat-period alias landing outside the mixer's usable buffer range would produce exactly this symptom (the mixer's read head lands past the end of mic history), and tonight's session watched that failure mode happen live. Worth a real take to close out, but no longer the top-priority unknown.
+2. **The analyser accepted unrelated audio at 0.4–0.6 confidence; this is meaningfully better, not solved.** `bestLagAcrossOverlap` now prefers a nearby (`PREFERRED_LAG_MS`, 300 ms) candidate over a distant one unless the distant one clearly wins — see "What tonight's robot session found" above. This closes the specific failure that blocked a real take tonight (repeated beat-multiple lock-on), verified against a regression test built from a genuinely periodic signal. It does **not** fix the analyser's fundamental permissiveness: two unrelated recordings can still score 0.4–0.6, and agreement is still what keeps a single bad read out of the mix. Anything calling `analyzeTimingCalibration` directly still inherits that.
+3. **A better fix than tuning thresholds: a known probe signal instead of song content.** Cross-correlating against the song is inherently ambiguous for anything with a beat, no matter how the thresholds are tuned — a true match and a one-period-away alias can both be genuinely strong correlations, not noise. The mature fix is a distinctive, non-repeating probe (a short chirp or an irregularly-spaced click burst) played through the phone speaker on cue, matched against a *known* reference instead of the song. Design sketched but **not implemented** — the one subtlety worth recording so it does not have to be re-derived: naively comparing "where the mic's own reconnect anchor (`originOffset` in `audio-session.ts`) places the probe" against "where correlation finds it in the already-anchored mic timeline" measures nothing, because both numbers come from the exact same deterministic formula applied to the same `firstSampleIndex` — there is no independent signal in that comparison. The anchor's bias (the actual quantity `calibratedMicLagMs` needs to correct) can only be measured against a clock reference that does *not* go through the mic's own anchor — i.e. reuse the existing `clock-ping`/`transportEstimateMs` RTT machinery (already computed for the phone's connection in `youtube-sync.js` and `src/server.ts`) to map "when the client scheduled the probe" onto the server's session clock directly, then compare *that* against where the probe is found in the mic timeline. `public/app.js`'s existing `scheduleClick`/`startLocalClickTrack` (an audible metronome, currently only for a human to judge by ear) is the right template for playback scheduling but is not itself a measurement — nothing analyses it today.
+4. **The desktop player's ±450 ms dead band** ([`public/source.js`](public/source.js), the `seekTo` guard) is deliberate — correcting more often would mean more audible re-buffers, each also invalidating the calibration. A seek now marks the measurement stale instead. Measured lags have landed at −60, −205 and −225 ms across runs, all inside that band, which is why they differ.
+5. **The click sync test still shares plumbing with the production path.** It is the reason `test-status` and the production session were once conflated. It causes no live fault now; removing it is cleanup, not a fix. (It is also the closest existing thing to thread 3's probe playback — see there before removing it.)
+6. **Discord output has not been started.** It is the original goal in `README.md`.
+7. **`test/server.test.ts`'s "holds the answer back until independent windows agree" is flaky under load**, unrelated to anything above (reproduces identically without tonight's fix). It spawns a real server subprocess and waits up to 15 s; on a Pi running the live robot route alongside the test suite, that budget is marginal. Not worth chasing unless it starts failing on a quiet machine too.
 
 ## Suggested order
 
-Do the integrated take before anything else, on whichever machine is quickest to get a singer in front of. It validates six changes at once and answers thread 1. Then move deployment, so that any new failure is attributable.
+Get someone singing into a real take next — calibration now converges in the section of the song that was tested tonight (mid-song, clear vocal and rhythm), so a real take is finally likely to produce a usable answer instead of stalling. That validates thread 1 and the robot route together. Thread 3 (the probe signal) is the next real quality improvement after that, not before it.

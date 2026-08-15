@@ -21,6 +21,8 @@ import {
   SongSession,
   normalizePlaybackGeneration,
   normalizePlaybackTransportId,
+  type PlaybackIdentity,
+  type SongHandoffPlan,
 } from './song-session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +72,7 @@ const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
 const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
 const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
+const PLAYBACK_MIC_INTENT_MS = 10_000;
 
 const app = express();
 app.disable('x-powered-by');
@@ -115,6 +118,7 @@ type RelaySocket = WebSocket & {
   playbackParticipantId?: string;
   playbackTransportId?: string;
   playbackGeneration?: number;
+  playbackMicIntentAtMs?: number;
   legacyPlaybackTransportId?: string;
 };
 
@@ -375,6 +379,93 @@ function requireMicOwnerCommand(socket: RelaySocket, command: MicOwnerCommand) {
     revision: participants.revision,
   });
   return false;
+}
+
+function playbackIdentityForSocket(socket: RelaySocket): PlaybackIdentity | null {
+  if (
+    !socket.playbackParticipantId
+    || !socket.playbackTransportId
+    || socket.playbackGeneration === undefined
+  ) return null;
+  return {
+    participantId: socket.playbackParticipantId,
+    transportId: socket.playbackTransportId,
+    generation: socket.playbackGeneration,
+  };
+}
+
+function samePlaybackIdentity(a: PlaybackIdentity, b: PlaybackIdentity) {
+  return a.participantId === b.participantId
+    && a.transportId === b.transportId
+    && a.generation === b.generation;
+}
+
+function sendToPlayback(identity: PlaybackIdentity, payload: unknown) {
+  let sent = 0;
+  for (const client of wss.clients) {
+    const candidate = client as RelaySocket;
+    const candidateIdentity = playbackIdentityForSocket(candidate);
+    if (
+      candidate.readyState === WebSocket.OPEN
+      && candidateIdentity
+      && samePlaybackIdentity(candidateIdentity, identity)
+    ) {
+      sendJson(candidate, payload);
+      sent += 1;
+    }
+  }
+  return sent;
+}
+
+function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
+  return {
+    type,
+    handoffId: plan.handoffId,
+    revision: plan.revision,
+    videoId: plan.videoId,
+    state: plan.state,
+    serverTime: plan.serverTime,
+    playbackRate: plan.playbackRate,
+  };
+}
+
+function sendHandoffPlan(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
+  return sendToPlayback(plan.target, handoffPayload(type, plan));
+}
+
+function selectPlaybackHandoffTarget(participantId: string, nowMs: number) {
+  const candidates: Array<{ identity: PlaybackIdentity; intentAtMs: number }> = [];
+  for (const client of wss.clients) {
+    const candidate = client as RelaySocket;
+    const identity = playbackIdentityForSocket(candidate);
+    if (
+      candidate.readyState !== WebSocket.OPEN
+      || !identity
+      || identity.participantId !== participantId
+    ) continue;
+    candidates.push({ identity, intentAtMs: candidate.playbackMicIntentAtMs ?? -Infinity });
+  }
+
+  const intended = candidates
+    .filter((candidate) => nowMs - candidate.intentAtMs <= PLAYBACK_MIC_INTENT_MS)
+    .sort((a, b) => b.intentAtMs - a.intentAtMs);
+  if (intended.length > 0) return intended[0].identity;
+
+  // Presence alone must never move the song. This fallback is used only after
+  // a microphone ownership action, and only when one playback transport exists
+  // so there is no multi-tab choice to guess.
+  return candidates.length === 1 ? candidates[0].identity : null;
+}
+
+function beginPreparedSongHandoff(participantId: string, nowMs = performance.now()) {
+  const target = selectPlaybackHandoffTarget(participantId, nowMs);
+  if (!target) return false;
+  const plan = youtubeTimeline.beginHandoff(target, participants.micOwnerId, nowMs);
+  if (!plan) return false;
+  sendHandoffPlan('song-handoff-prepare', plan);
+  broadcastJson(youtubeTimeline.statusPayload(nowMs));
+  broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+  return true;
 }
 
 function broadcastToMonitors(payload: string | Buffer, binary = false) {
@@ -1024,6 +1115,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
   if (youtubeTimeline.hasTelemetry) {
     broadcastJson(youtubeTimeline.statusPayload(nowMs));
+    broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
   }
 
   if (calibration.collecting) {
@@ -1060,6 +1152,7 @@ const youtubeTimelineTimer = setInterval(() => {
   const presenceSweep = participants.sweep(Date.now());
   if (presenceSweep.releasedMicOwnerId) {
     cancelMicTransportGrace();
+    if (youtubeTimeline.cancelHandoff()) broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
     invalidateMicTiming('Microphone owner left the Relay session.');
   }
   if (presenceSweep.changed) broadcastSessionStatus();
@@ -1211,6 +1304,10 @@ wss.on('connection', (rawSocket, request) => {
       if (!result.ok) return;
 
       cancelMicTransportGrace();
+      if (youtubeTimeline.cancelHandoff()) {
+        broadcastJson(youtubeTimeline.statusPayload());
+        broadcastJson(youtubeTimeline.roomStatusPayload());
+      }
       if (publisher?.participantId === socket.participantId) {
         revokePublisherTransport('You released the microphone.');
       }
@@ -1220,10 +1317,73 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
+    if (payload.type === 'playback-hello') {
+      if (!socket.participantId) return;
+      const transportId = normalizePlaybackTransportId(payload.playbackTransportId);
+      const generation = normalizePlaybackGeneration(payload.playbackGeneration);
+      if (!transportId || generation === null) {
+        sendJson(socket, { type: 'error', message: 'Invalid playback transport identity.' });
+        return;
+      }
+
+      socket.playbackParticipantId = socket.participantId;
+      socket.playbackTransportId = transportId;
+      socket.playbackGeneration = generation;
+      sendJson(socket, { type: 'playback-registered', playbackTransportId: transportId, playbackGeneration: generation });
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
+
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      const pendingPlan = playbackIdentity
+        ? youtubeTimeline.handoffPlanForTarget(playbackIdentity)
+        : null;
+      if (pendingPlan) sendHandoffPlan('song-handoff-prepare', pendingPlan);
+      return;
+    }
+
+    if (payload.type === 'playback-mic-intent') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) return;
+      socket.playbackMicIntentAtMs = performance.now();
+      sendJson(socket, { type: 'playback-mic-intent-registered' });
+      return;
+    }
+
+    if (payload.type === 'room-song-status-request') {
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'song-handoff-ready') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity) return;
+      const plan = youtubeTimeline.markHandoffReady(
+        playbackIdentity,
+        payload.handoffId,
+        participants.micOwnerId,
+      );
+      if (!plan) return;
+      sendHandoffPlan('song-handoff-commit', plan);
+      broadcastJson(youtubeTimeline.statusPayload());
+      broadcastJson(youtubeTimeline.roomStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'song-handoff-failed') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity) return;
+      if (youtubeTimeline.deferHandoff(playbackIdentity, payload.handoffId)) {
+        broadcastJson(youtubeTimeline.statusPayload());
+        broadcastJson(youtubeTimeline.roomStatusPayload());
+      }
+      return;
+    }
+
     if (payload.type === 'youtube-telemetry') {
       let playbackParticipantId = socket.participantId;
-      let playbackTransportId = normalizePlaybackTransportId(payload.playbackTransportId);
-      let playbackGeneration = normalizePlaybackGeneration(payload.playbackGeneration);
+      let playbackTransportId = socket.playbackTransportId
+        ?? normalizePlaybackTransportId(payload.playbackTransportId);
+      let playbackGeneration = socket.playbackGeneration
+        ?? normalizePlaybackGeneration(payload.playbackGeneration);
 
       if (!playbackParticipantId) {
         // Compatibility for pre-participant publisher clients. The authority is
@@ -1238,20 +1398,37 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
+      const acceptedIdentity = {
+        participantId: playbackParticipantId,
+        transportId: playbackTransportId,
+        generation: playbackGeneration,
+      };
       const result = youtubeTimeline.update(
         payload,
-        {
-          participantId: playbackParticipantId,
-          transportId: playbackTransportId,
-          generation: playbackGeneration,
-        },
+        acceptedIdentity,
         participants.micOwnerId,
       );
       if (result.accepted) {
         socket.playbackParticipantId = playbackParticipantId;
         socket.playbackTransportId = playbackTransportId;
         socket.playbackGeneration = playbackGeneration;
-        broadcastJson(youtubeTimeline.statusPayload());
+        const timelineStatus = youtubeTimeline.statusPayload();
+        broadcastJson(timelineStatus);
+        broadcastJson(youtubeTimeline.roomStatusPayload());
+
+        if (result.handoffCompleted && result.handoffId) {
+          if (result.previousLeader) {
+            sendToPlayback(result.previousLeader, {
+              type: 'song-handoff-release',
+              handoffId: result.handoffId,
+              videoId: timelineStatus.videoId ?? null,
+            });
+          }
+          sendToPlayback(acceptedIdentity, {
+            type: 'song-handoff-complete',
+            handoffId: result.handoffId,
+          });
+        }
       }
       return;
     }
@@ -1447,10 +1624,14 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
-      if (socket.participantId) broadcastSessionStatus();
+      if (socket.participantId) {
+        broadcastSessionStatus();
+        if (ownershipChanged) beginPreparedSongHandoff(socket.participantId);
+      }
       return;
     }
 
@@ -1484,6 +1665,7 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
       if (socket.participantId) sendJson(socket, sessionStatusPayload());
       return;
     }
@@ -1574,7 +1756,10 @@ wss.on('connection', (rawSocket, request) => {
         transportId: socket.playbackTransportId,
         generation: socket.playbackGeneration,
       });
-      if (playbackChanged) broadcastJson(youtubeTimeline.statusPayload());
+      if (playbackChanged) {
+        broadcastJson(youtubeTimeline.statusPayload());
+        broadcastJson(youtubeTimeline.roomStatusPayload());
+      }
     }
 
     if (!socket.replaced) {

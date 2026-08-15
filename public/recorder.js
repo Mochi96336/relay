@@ -25,6 +25,15 @@ let testActive = false;
 let sourceConnected = false;
 let sourceMicConnected = false;
 let sourcePrebufferMs = 0;
+let sourceTimingMode = 'network-estimate';
+let sourceCalibrationStale = false;
+let sourceNetworkCompensationMs = 0;
+let sourceCalibratedMicLagMs = null;
+let sourceRequestedMicAdvanceMs = 0;
+let sourceAppliedMicAdvanceMs = 0;
+let calibrationState = 'idle';
+let calibrationProvisional = false;
+let calibrationError = null;
 let receivedPcmFrames = 0;
 let receivedPcmSamples = 0;
 let maxPcmAbs = 0;
@@ -103,6 +112,38 @@ function isRecording() {
   return mediaRecorder?.state === 'recording';
 }
 
+function timingProblem() {
+  if (!sourceConnected) return null;
+  if (sourceTimingMode !== 'acoustic-calibration') {
+    return `未套用聲學校正（只有 network ${Math.round(sourceNetworkCompensationMs)} ms）`;
+  }
+  if (sourceCalibrationStale) return '聲學校正已過期';
+  if (calibrationState === 'failed') {
+    const provisional = calibrationProvisional
+      ? `，目前仍暫用 ${Math.round(sourceAppliedMicAdvanceMs)} ms`
+      : '';
+    return `聲學校正未完成${provisional}${calibrationError ? `：${calibrationError}` : ''}`;
+  }
+  if (calibrationProvisional || calibrationState === 'collecting') {
+    return `聲學校正仍在確認（目前暫用 ${Math.round(sourceAppliedMicAdvanceMs)} ms）`;
+  }
+
+  const shortfall = sourceRequestedMicAdvanceMs - sourceAppliedMicAdvanceMs;
+  if (Math.abs(shortfall) >= 5) {
+    return `校正要求 ${Math.round(sourceRequestedMicAdvanceMs)} ms，但 buffer 只能套 ${Math.round(sourceAppliedMicAdvanceMs)} ms`;
+  }
+  return null;
+}
+
+function describeTiming() {
+  const problem = timingProblem();
+  if (problem) return `⚠ ${problem}`;
+  if (sourceTimingMode === 'acoustic-calibration' && Number.isFinite(sourceCalibratedMicLagMs)) {
+    return `timing ${Math.round(sourceAppliedMicAdvanceMs)} ms`;
+  }
+  return '';
+}
+
 function updateRecordingTransportStatus() {
   if (!isRecording()) return;
 
@@ -114,7 +155,8 @@ function updateRecordingTransportStatus() {
   if (receivedPcmFrames > 0) {
     const glitches = playbackHealth?.underruns > 0 ? ` · ${playbackHealth.underruns} 次緩衝不足` : '';
     const buffer = playbackHealth ? ` · buffer ${Math.round(playbackHealth.queuedMs)} ms` : '';
-    recordingStatus.textContent = `● 錄音中 · Server PCM ${receivedPcmFrames} frames · peak ${peakDbfs().toFixed(1)} dBFS${buffer}${glitches}`;
+    const timing = describeTiming();
+    recordingStatus.textContent = `● 錄音中 · Server PCM ${receivedPcmFrames} frames · peak ${peakDbfs().toFixed(1)} dBFS${buffer}${glitches}${timing ? ` · ${timing}` : ''}`;
     return;
   }
 
@@ -125,7 +167,8 @@ function updateRecordingTransportStatus() {
 
   if (sourceConnected) {
     const prebuffer = sourcePrebufferMs > 0 ? ` · prebuffer ${sourcePrebufferMs} ms` : '';
-    recordingStatus.textContent = `● 錄音中 · Source + Mic 已連線${prebuffer} · 等待第一個 Server PCM frame…`;
+    const timing = describeTiming();
+    recordingStatus.textContent = `● 錄音中 · Source + Mic 已連線${prebuffer}${timing ? ` · ${timing}` : ''} · 等待第一個 Server PCM frame…`;
     return;
   }
 
@@ -166,10 +209,21 @@ function cleanupTransport() {
   sourceConnected = false;
   sourceMicConnected = false;
   sourcePrebufferMs = 0;
+  sourceTimingMode = 'network-estimate';
+  sourceCalibrationStale = false;
+  sourceNetworkCompensationMs = 0;
+  sourceCalibratedMicLagMs = null;
+  sourceRequestedMicAdvanceMs = 0;
+  sourceAppliedMicAdvanceMs = 0;
+  calibrationState = 'idle';
+  calibrationProvisional = false;
+  calibrationError = null;
 }
 
 function describeQuality() {
   const notes = [];
+  const timing = timingProblem();
+  if (timing) notes.push(timing);
   if (transportDropouts > 0) notes.push(`${transportDropouts} 次連線中斷`);
   if (playbackHealth?.underruns > 0) notes.push(`${playbackHealth.underruns} 次緩衝不足`);
   if (playbackHealth?.starvedMs > 30) notes.push(`約 ${Math.round(playbackHealth.starvedMs)} ms 靜音`);
@@ -240,9 +294,25 @@ function handleJsonMessage(message) {
     sourceConnected = Boolean(message.connected);
     sourceMicConnected = Boolean(message.micConnected);
     sourcePrebufferMs = Number(message.prebufferMs) || 0;
+    sourceTimingMode = String(message.timingMode ?? 'network-estimate');
+    sourceCalibrationStale = Boolean(message.calibrationStale);
+    sourceNetworkCompensationMs = Number(message.micNetworkCompensationMs) || 0;
+    sourceCalibratedMicLagMs = message.calibratedMicLagMs === null
+      ? null
+      : Number(message.calibratedMicLagMs);
+    sourceRequestedMicAdvanceMs = Number(message.requestedMicAdvanceMs) || 0;
+    sourceAppliedMicAdvanceMs = Number(message.appliedMicAdvanceMs) || 0;
     // Keyed on the session, not the socket: the source may be reconnecting
     // while the mix keeps running, and what arrives here is still the mix.
     if (message.active) sourceSampleRate = Number(message.mixSampleRate) || MIX_SAMPLE_RATE;
+    updateRecordingTransportStatus();
+    return;
+  }
+
+  if (message.type === 'timing-calibration-status') {
+    calibrationState = String(message.state ?? 'idle');
+    calibrationProvisional = Boolean(message.provisional);
+    calibrationError = message.error ? String(message.error) : null;
     updateRecordingTransportStatus();
     return;
   }
@@ -394,6 +464,15 @@ async function startRecording() {
   sourceConnected = false;
   sourceMicConnected = false;
   sourcePrebufferMs = 0;
+  sourceTimingMode = 'network-estimate';
+  sourceCalibrationStale = false;
+  sourceNetworkCompensationMs = 0;
+  sourceCalibratedMicLagMs = null;
+  sourceRequestedMicAdvanceMs = 0;
+  sourceAppliedMicAdvanceMs = 0;
+  calibrationState = 'idle';
+  calibrationProvisional = false;
+  calibrationError = null;
   receivedPcmFrames = 0;
   receivedPcmSamples = 0;
   maxPcmAbs = 0;

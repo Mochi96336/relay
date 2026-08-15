@@ -23,6 +23,15 @@ const STATE_NAMES = new Map([
   [5, 'cued'],
 ]);
 
+const ERROR_NAMES = new Map([
+  [2, 'invalid video ID'],
+  [5, 'HTML5 playback error'],
+  [100, 'video unavailable'],
+  [101, 'embedding disabled by owner'],
+  [150, 'embedding disabled by owner'],
+  [153, 'missing Referer / client identity'],
+]);
+
 const SLIDER_HOLD_MS = 2000;
 
 // The robot has no Chrome extension: `scripts/robot-source.sh` routes Chromium
@@ -42,6 +51,7 @@ let latestMixHealth = null;
 let loadedVideoId = null;
 let lastSeekAt = 0;
 let applyTimer = null;
+let playerError = null;
 let vocalFineTuneTouchedAt = 0;
 const sliderTouchedAt = new Map();
 
@@ -92,8 +102,12 @@ function send(payload) {
  */
 function renderGainAdvice() {
   if (!gainAdvice) return;
-  const peak = Number(latestMixHealth?.micPeakDbfs);
-  const recommended = Number(latestMixHealth?.recommendedMicGainDb);
+  const rawPeak = latestMixHealth?.micPeakDbfs;
+  const rawRecommended = latestMixHealth?.recommendedMicGainDb;
+  const peak = rawPeak === null || rawPeak === undefined ? Number.NaN : Number(rawPeak);
+  const recommended = rawRecommended === null || rawRecommended === undefined
+    ? Number.NaN
+    : Number(rawRecommended);
 
   if (!Number.isFinite(peak) || !Number.isFinite(recommended)) {
     gainAdvice.textContent = '連上手機麥克風後，這裡會即時顯示實際電平與建議的 Mic gain。';
@@ -320,11 +334,15 @@ function renderTimeline() {
     return;
   }
 
-  stateNode.textContent = armed ? 'Source armed' : 'Timeline ready';
+  stateNode.textContent = playerError === null
+    ? (armed ? 'Source armed' : 'Timeline ready')
+    : `YouTube source error ${playerError}`;
   detailNode.textContent = `${videoId} · phone ${STATE_NAMES.get(state) ?? state} · target ${formatTime(target)}`;
-  const actualState = Number.isFinite(playerState)
-    ? (STATE_NAMES.get(playerState) ?? playerState)
-    : 'waiting';
+  const actualState = playerError === null
+    ? Number.isFinite(playerState)
+      ? (STATE_NAMES.get(playerState) ?? playerState)
+      : 'waiting'
+    : `error ${playerError} · ${ERROR_NAMES.get(playerError) ?? 'player failure'}`;
   mirrorState.textContent = `${actualState}${armed ? ' · following' : ' · muted until enabled'}`;
   mirrorTimeline.textContent = `${formatTime(current)} / target ${formatTime(target)} · Δ ${Number.isFinite(deltaMs) ? `${Math.round(deltaMs)} ms` : '-- ms'}`;
   renderCalibration();
@@ -343,6 +361,7 @@ function applyTimeline() {
 
   try {
     if (loadedVideoId !== timeline.videoId) {
+      playerError = null;
       player.cueVideoById({ videoId: timeline.videoId, startSeconds: Math.max(0, target) });
       loadedVideoId = timeline.videoId;
       lastSeekAt = performance.now();
@@ -576,9 +595,13 @@ window.onYouTubeIframeAPIReady = () => {
         applyBalance();
         applyTimeline();
       },
-      onStateChange: renderTimeline,
+      onStateChange: (event) => {
+        if (Number(event.data) !== -1) playerError = null;
+        renderTimeline();
+      },
       onError: (event) => {
-        stateNode.textContent = `YouTube source error ${event.data}`;
+        playerError = Number(event.data);
+        renderTimeline();
       },
     },
   });

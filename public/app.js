@@ -54,8 +54,12 @@ function serverMixActive() {
  */
 function renderGainAdvice() {
   if (!micGainAdvice) return;
-  const peak = Number(latestMixHealth?.micPeakDbfs);
-  const recommended = Number(latestMixHealth?.recommendedMicGainDb);
+  const rawPeak = latestMixHealth?.micPeakDbfs;
+  const rawRecommended = latestMixHealth?.recommendedMicGainDb;
+  const peak = rawPeak === null || rawPeak === undefined ? Number.NaN : Number(rawPeak);
+  const recommended = rawRecommended === null || rawRecommended === undefined
+    ? Number.NaN
+    : Number(rawRecommended);
 
   if (!Number.isFinite(peak) || !Number.isFinite(recommended)) {
     micGainAdvice.textContent = '開始唱之後，這裡會顯示實際電平與建議的 Mic gain。';

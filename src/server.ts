@@ -111,8 +111,10 @@ type RelaySocket = WebSocket & {
   isRobotSource?: boolean;
   participantId?: string;
   participantConnectionId?: string;
+  playbackParticipantId?: string;
   playbackTransportId?: string;
   playbackGeneration?: number;
+  legacyPlaybackTransportId?: string;
 };
 
 type TimelineStatus = {
@@ -138,6 +140,7 @@ let testFrameIndex = 0;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
+let legacyPlaybackConnectionSequence = 0;
 let micTransportGraceTimer: NodeJS.Timeout | null = null;
 let micTransportGraceOwnerId: string | null = null;
 
@@ -412,28 +415,10 @@ function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
   if (robotRouteActive() && calibrationKind !== 'boot-probe') return false;
-  // Boot calibration is a three-term equation. The two probe legs may be
-  // measured ahead of playback, but an unknown player delta is not zero. Keep
-  // the path result as evidence and stay on the network fallback until the
-  // active robot has published a fresh, settled delta.
   if (robotRouteActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   return true;
 }
 
-/**
- * Synchronizes measurement validity into the mixer's active alignment.
- *
- * A boot result needs special treatment: once freshness/connection withdraws
- * its authority, a later delta must not resurrect the historical total before
- * `maybeReapplyBootCalibration()` has folded in the *current* delta. While a
- * boot alignment is already active, small (< threshold) delta movements are
- * intentionally left alone. While it is inactive, it may only be restored
- * directly when the stored boot result already describes exactly the current
- * reported delta; otherwise reapply owns the reactivation.
- *
- * Returns whether the mixer alignment changed so the periodic freshness check
- * can publish the transition immediately.
- */
 function syncAppliedCalibration() {
   const active = session.alignment.calibratedMicLagMs;
 
@@ -883,17 +868,11 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
 
   if (PROBE_DEBUG) {
-    // The window's own peak separates "the probe was not heard" from "the
-    // probe was never looked at": a correlation of -1 is what an all-zero
-    // window scores, and a range the timeline does not cover reads as zeros.
     let peak = 0;
     for (let i = 0; i < window.length; i += 1) {
       const magnitude = Math.abs(window[i]);
       if (magnitude > peak) peak = magnitude;
     }
-    // And the most recent audio on the same timeline, as a control: if that is
-    // silent too the stream is not carrying anything, and if it is not the
-    // window is simply looking in the wrong place.
     const controlSeconds = 20;
     const recent = waiting.target === 'mic'
       ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
@@ -1048,9 +1027,6 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
-  // Freshness is a live validity condition, not just something checked when a
-  // socket closes. If a robot page freezes while its WebSocket remains open,
-  // the last delta loses authority after ROBOT_OFFSET_FRESH_MS as well.
   if (syncAppliedCalibration()) {
     broadcastJson(sourceStatusPayload());
     broadcastJson(timingCalibrationStatusPayload());
@@ -1086,6 +1062,8 @@ wss.on('connection', (rawSocket, request) => {
   const socket = rawSocket as RelaySocket;
   socket.role = 'unknown';
   socket.isAlive = true;
+  legacyPlaybackConnectionSequence += 1;
+  socket.legacyPlaybackTransportId = `legacy-publisher-${legacyPlaybackConnectionSequence}`;
 
   const identity = participantIdentity(request);
   if (identity) {
@@ -1222,20 +1200,34 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'youtube-telemetry') {
-      const playbackTransportId = normalizePlaybackTransportId(payload.playbackTransportId);
-      const playbackGeneration = normalizePlaybackGeneration(payload.playbackGeneration);
-      if (!socket.participantId || !playbackTransportId || playbackGeneration === null) return;
+      let playbackParticipantId = socket.participantId;
+      let playbackTransportId = normalizePlaybackTransportId(payload.playbackTransportId);
+      let playbackGeneration = normalizePlaybackGeneration(payload.playbackGeneration);
+
+      if (!playbackParticipantId) {
+        // Compatibility for pre-participant publisher clients. The authority is
+        // the current server-selected publisher transport, never an identity
+        // claimed by the telemetry payload. Anonymous monitor/backing/unknown
+        // sockets therefore remain unable to mutate the room clock.
+        if (socket !== publisher || socket.role !== 'publisher') return;
+        playbackParticipantId = '__relay_legacy_publisher__';
+        playbackTransportId = socket.legacyPlaybackTransportId ?? 'legacy-publisher-fallback';
+        playbackGeneration = socket.captureGeneration ?? 0;
+      } else if (!playbackTransportId || playbackGeneration === null) {
+        return;
+      }
 
       const result = youtubeTimeline.update(
         payload,
         {
-          participantId: socket.participantId,
+          participantId: playbackParticipantId,
           transportId: playbackTransportId,
           generation: playbackGeneration,
         },
         participants.micOwnerId,
       );
       if (result.accepted) {
+        socket.playbackParticipantId = playbackParticipantId;
         socket.playbackTransportId = playbackTransportId;
         socket.playbackGeneration = playbackGeneration;
         broadcastJson(youtubeTimeline.statusPayload());
@@ -1547,12 +1539,12 @@ wss.on('connection', (rawSocket, request) => {
     let micTransportChanged = false;
 
     if (
-      socket.participantId
+      socket.playbackParticipantId
       && socket.playbackTransportId
       && socket.playbackGeneration !== undefined
     ) {
       const playbackChanged = youtubeTimeline.detach({
-        participantId: socket.participantId,
+        participantId: socket.playbackParticipantId,
         transportId: socket.playbackTransportId,
         generation: socket.playbackGeneration,
       });

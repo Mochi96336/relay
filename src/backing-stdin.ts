@@ -41,6 +41,17 @@ const FRAME_BYTES = FRAME_SAMPLES * 2;
 const RECONNECT_MS = envNumber('RELAY_BACKING_RECONNECT_MS', 1_000, 50);
 const MAX_BUFFERED_BYTES = envNumber('RELAY_BACKING_MAX_BUFFERED_BYTES', 512 * 1024, 1_024);
 /**
+ * Explicit deployment identity for the stdin bridge.
+ *
+ * The robot launcher starts the backing bridge before Chromium has loaded
+ * `source.html?robot=1`. Without this bit, the server has a short startup window
+ * where both audio streams are live but no robot page has announced itself yet,
+ * so the legacy song-content calibrator can win the race. The bridge is the
+ * first component that knows which deployment owns this backing stream, so it
+ * declares that fact at registration time instead of making the server infer it.
+ */
+const ROBOT_BACKING = process.env.RELAY_BACKING_ROBOT === '1';
+/**
  * How long to throw away audio after the first byte arrives.
  *
  * The capture starts as soon as the shell opens the FIFO, which is before this
@@ -59,7 +70,7 @@ const MAX_BUFFERED_BYTES = envNumber('RELAY_BACKING_MAX_BUFFERED_BYTES', 512 * 1
 const STARTUP_FLUSH_MS = envNumber('RELAY_BACKING_STARTUP_FLUSH_MS', 250, 0);
 
 if (process.argv.includes('--help')) {
-  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  drop threshold (default 524288)\n  RELAY_BACKING_STARTUP_FLUSH_MS    discard startup backlog (default 250)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
+  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  drop threshold (default 524288)\n  RELAY_BACKING_STARTUP_FLUSH_MS    discard startup backlog (default 250)\n  RELAY_BACKING_ROBOT               declare this backing stream as the robot route (1 enables)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
   process.exit(0);
 }
 
@@ -116,6 +127,7 @@ function connect() {
       type: 'register',
       role: 'backing',
       sampleRate: SAMPLE_RATE,
+      robot: ROBOT_BACKING,
     }));
   });
 
@@ -139,7 +151,7 @@ function connect() {
         // matching the browser extension's reconnect semantics.
         process.stdin.resume();
       }
-      log(`connected to ${relayLabel()} · ${SAMPLE_RATE} Hz · generation ${generation}`);
+      log(`connected to ${relayLabel()} · ${SAMPLE_RATE} Hz · generation ${generation}${ROBOT_BACKING ? ' · robot route' : ''}`);
       return;
     }
 

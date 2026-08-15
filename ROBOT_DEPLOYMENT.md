@@ -33,7 +33,7 @@ PipeWire/PulseAudio null sink
         ↓
 relay_browser.monitor
         ↓
-parec --raw --format=s16le --rate=48000 --channels=1
+parec --raw --format=s16le --rate=48000 --channels=1 --latency-msec=40
         ↓
 npm run backing:stdin
         ↓
@@ -84,7 +84,7 @@ It:
 - always opens `http://localhost:$PORT/source.html?robot=1`; and
 - stops its child processes and unloads only a sink module it created itself.
 
-`PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. The launcher applies `RELAY_BACKING_SAMPLE_RATE` to both `parec` and the bridge so the declared rate always matches the PCM; the validated default remains 48 kHz. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate, without writing the key into its log line.
+`PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. The launcher applies `RELAY_BACKING_SAMPLE_RATE` to both `parec` and the bridge so the declared rate always matches the PCM; the validated default remains 48 kHz. `RELAY_BACKING_CAPTURE_LATENCY_MS` controls `parec --latency-msec` and defaults to 40 ms; setting it explicitly avoids the roughly two-second default capture buffer observed on the robot. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate, without writing the key into its log line.
 
 Run the Relay server separately before starting the launcher. Robot mode automatically arms source audio, and Chromium is launched with the autoplay policy needed for that unattended local page; no source-page gesture or extension invocation is required.
 

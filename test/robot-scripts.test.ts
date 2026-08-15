@@ -51,6 +51,9 @@ for argument in "$@"; do
   if [[ "$argument" == --rate=* ]]; then
     printf '%s' "\${argument#--rate=}" >"$TEST_STATE/parec-rate"
   fi
+  if [[ "$argument" == --latency-msec=* ]]; then
+    printf '%s' "\${argument#--latency-msec=}" >"$TEST_STATE/parec-latency"
+  fi
 done
 for _attempt in {1..100}; do
   [[ -f "$TEST_STATE/npm-ready" ]] && break
@@ -111,12 +114,14 @@ describe('robot-source launcher', () => {
       ...env,
       PORT: '3100',
       RELAY_BACKING_SAMPLE_RATE: '44100',
+      RELAY_BACKING_CAPTURE_LATENCY_MS: '60',
       RELAY_KEY: 'do-not-print-this-key',
     });
 
     assert.ifError(result.error);
     assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     assert.equal(readFileSync(path.join(state, 'parec-rate'), 'utf8'), '44100');
+    assert.equal(readFileSync(path.join(state, 'parec-latency'), 'utf8'), '60');
     assert.equal(readFileSync(path.join(state, 'npm-rate'), 'utf8'), '44100');
     assert.doesNotMatch(result.stderr, /do-not-print-this-key/);
     assert.match(result.stderr, /localhost:3100\/source\.html\?robot=1/);
@@ -133,6 +138,17 @@ describe('robot-source launcher', () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /RELAY_BACKING_SAMPLE_RATE must be an integer/);
+  });
+
+  test('rejects an invalid capture latency before starting the route', () => {
+    const { env } = mockedEnvironment();
+    const result = run('robot-source.sh', {
+      ...env,
+      RELAY_BACKING_CAPTURE_LATENCY_MS: '2 seconds',
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /RELAY_BACKING_CAPTURE_LATENCY_MS must be an integer/);
   });
 });
 

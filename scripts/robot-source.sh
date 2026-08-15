@@ -9,6 +9,11 @@ PORT="${PORT:-3000}"
 SINK_NAME="${RELAY_BROWSER_SINK:-relay_browser}"
 CHROMIUM_BIN="${CHROMIUM_BIN:-}"
 CAPTURE_RATE="${RELAY_BACKING_SAMPLE_RATE:-48000}"
+# Asked for explicitly because the default is enormous. Left alone, PipeWire
+# gave this capture a 96000-sample buffer at 48 kHz - a full two seconds - which
+# boot calibration measured as 2110 ms of backing latency and the mixer then
+# had to correct for. It is buffering, not load: the Pi sat at 0.9 with four cores.
+CAPTURE_LATENCY_MS="${RELAY_BACKING_CAPTURE_LATENCY_MS:-40}"
 created_module=""
 parec_pid=""
 backing_pid=""
@@ -81,6 +86,8 @@ fi
   || die "RELAY_BROWSER_SINK may contain only letters, numbers, dot, underscore, and hyphen"
 [[ "$CAPTURE_RATE" =~ ^[0-9]+$ ]] && ((10#$CAPTURE_RATE >= 8000 && 10#$CAPTURE_RATE <= 192000)) \
   || die "RELAY_BACKING_SAMPLE_RATE must be an integer from 8000 to 192000"
+[[ "$CAPTURE_LATENCY_MS" =~ ^[0-9]+$ ]] && ((10#$CAPTURE_LATENCY_MS >= 5 && 10#$CAPTURE_LATENCY_MS <= 2000)) \
+  || die "RELAY_BACKING_CAPTURE_LATENCY_MS must be an integer from 5 to 2000"
 
 if ! pactl list short sinks | awk -v sink="$SINK_NAME" '$2 == sink { found = 1 } END { exit !found }'; then
   created_module="$(pactl load-module module-null-sink \
@@ -99,7 +106,8 @@ mkfifo "$pcm_fifo"
 mkdir "$profile_dir"
 
 parec --device="${SINK_NAME}.monitor" \
-  --raw --format=s16le --rate="$CAPTURE_RATE" --channels=1 >"$pcm_fifo" &
+  --raw --format=s16le --rate="$CAPTURE_RATE" --channels=1 \
+  --latency-msec="$CAPTURE_LATENCY_MS" >"$pcm_fifo" &
 parec_pid=$!
 
 RELAY_BACKING_SAMPLE_RATE="$CAPTURE_RATE" npm run backing:stdin <"$pcm_fifo" &
@@ -110,7 +118,7 @@ if [[ -n "${RELAY_KEY:-}" ]]; then
   encoded_key="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$RELAY_KEY")"
   source_url+="&key=$encoded_key"
 fi
-log "opening http://localhost:${PORT}/source.html?robot=1 with audio routed to $SINK_NAME at $CAPTURE_RATE Hz${RELAY_KEY:+ (authenticated)}"
+log "opening http://localhost:${PORT}/source.html?robot=1 with audio routed to $SINK_NAME at $CAPTURE_RATE Hz / ${CAPTURE_LATENCY_MS} ms${RELAY_KEY:+ (authenticated)}"
 PULSE_SINK="$SINK_NAME" xvfb-run -a "$CHROMIUM_BIN" \
   --user-data-dir="$profile_dir" \
   --autoplay-policy=no-user-gesture-required \

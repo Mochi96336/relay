@@ -33,6 +33,15 @@ async function waitForNewMessage(
   );
 }
 
+function assertBootUsesDelta(status: Record<string, any>, expectedDeltaMs: number) {
+  assert.equal(Math.round(status.robotPlayerOffsetMs), expectedDeltaMs);
+  assert.equal(Math.round(status.bootCalibration?.deltaMs), expectedDeltaMs);
+  assert.ok(
+    Math.abs(Number(status.activeMicLagMs) - Number(status.bootCalibration?.advanceMs)) < 0.001,
+    `active lag ${status.activeMicLagMs} must equal boot advance ${status.bootCalibration?.advanceMs}`,
+  );
+}
+
 test('robot source disconnect suspends the applied delta until a fresh source offset arrives', async () => {
   const server = await startRelay({
     RELAY_LIVE_PREBUFFER_MS: '200',
@@ -112,13 +121,14 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     // Only a fresh active-player delta completes the equation and grants the
     // boot measurement authority over the mixer.
     robot.send({ type: 'robot-player-offset', offsetMs: 80 });
-    await monitor.waitFor(
+    const firstApplied = await monitor.waitFor(
       (m) => m.type === 'timing-calibration-status'
         && m.timingMode === 'acoustic-calibration'
         && m.robotDeltaFresh === true
         && Math.round(m.robotPlayerOffsetMs) === 80,
       3_000,
     );
+    assertBootUsesDelta(firstApplied, 80);
 
     const probeRequestsBeforeDisconnect = publisher.messages.filter(
       (m) => m.type === 'play-calibration-probe',
@@ -151,6 +161,7 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     );
     assert.equal(restored.calibrationStale, false);
     assert.equal(restored.calibrationKind, 'boot-probe');
+    assertBootUsesDelta(restored, 35);
 
     // A page can freeze without its WebSocket closing. Once the last offset is
     // older than the freshness budget, it is no longer timing evidence and the
@@ -170,13 +181,14 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     assert.equal(expired.calibrationStale, false, 'the measured path is still valid; only delta expired');
 
     replacement.send({ type: 'robot-player-offset', offsetMs: 25 });
-    await monitor.waitFor(
+    const resumed = await monitor.waitFor(
       (m) => m.type === 'timing-calibration-status'
         && m.timingMode === 'acoustic-calibration'
         && m.robotDeltaFresh === true
         && Math.round(m.robotPlayerOffsetMs) === 25,
       4_000,
     );
+    assertBootUsesDelta(resumed, 25);
 
     // Player/socket churn and delta expiry change only delta. The two measured
     // path legs must be reused rather than making the phone beep again.

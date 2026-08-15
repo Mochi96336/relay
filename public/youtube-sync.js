@@ -11,6 +11,7 @@ let socket = null;
 let reconnectTimer = null;
 let rttTimer = null;
 let pingSequence = 0;
+let pendingMicIntentAt = -Infinity;
 const pendingPings = new Map();
 // A plain running minimum never rose again, so one lucky early sample pinned the
 // estimate low for the rest of the session even after the link degraded. Keep a
@@ -20,6 +21,7 @@ const recentRttMs = [];
 
 const PLAYBACK_TRANSPORT_KEY = 'relay.playbackTransportId.v1';
 const playbackGeneration = Date.now() >>> 0;
+const MIC_INTENT_REPLAY_MS = 8_000;
 
 function randomPlaybackTransportId() {
   const random = new Uint32Array(4);
@@ -37,6 +39,11 @@ function playbackTransportId() {
 }
 
 const transportId = playbackTransportId();
+// Expose the page transport as a debugging/introspection aid. Product authority
+// still comes from the server-attached participant identity, never from a
+// participant ID claimed inside a telemetry payload.
+window.relayPlaybackTransportId = transportId;
+window.relayPlaybackGeneration = playbackGeneration;
 
 function networkRttMs() {
   return recentRttMs.length > 0 ? Math.min(...recentRttMs) : Number.POSITIVE_INFINITY;
@@ -105,6 +112,25 @@ function send(payload) {
     return true;
   }
   return false;
+}
+
+function sendPlaybackHello() {
+  send({
+    type: 'playback-hello',
+    playbackTransportId: transportId,
+    playbackGeneration,
+  });
+}
+
+function noteMicIntent() {
+  pendingMicIntentAt = performance.now();
+  send({ type: 'playback-mic-intent' });
+}
+
+function replayRecentMicIntent() {
+  if (performance.now() - pendingMicIntentAt <= MIC_INTENT_REPLAY_MS) {
+    send({ type: 'playback-mic-intent' });
+  }
 }
 
 function sendRttPing() {
@@ -176,6 +202,10 @@ function renderTimeline(message) {
   serverNote.textContent = `Drift ${driftText} · ${jitterText} · ${rttText} · ${transportText} · ${ageText} · reanchors ${reanchors} · corrections ${corrections}`;
 }
 
+function dispatchHandoff(type, message) {
+  window.dispatchEvent(new CustomEvent(type, { detail: message }));
+}
+
 function handleMessage(event) {
   if (typeof event.data !== 'string') return;
 
@@ -193,6 +223,26 @@ function handleMessage(event) {
 
   if (message.type === 'youtube-timeline-status') {
     renderTimeline(message);
+    return;
+  }
+
+  if (message.type === 'song-handoff-prepare') {
+    dispatchHandoff('relay:song-handoff-prepare', message);
+    return;
+  }
+
+  if (message.type === 'song-handoff-commit') {
+    dispatchHandoff('relay:song-handoff-commit', message);
+    return;
+  }
+
+  if (message.type === 'song-handoff-release') {
+    dispatchHandoff('relay:song-handoff-release', message);
+    return;
+  }
+
+  if (message.type === 'song-handoff-complete') {
+    dispatchHandoff('relay:song-handoff-complete', message);
   }
 }
 
@@ -205,7 +255,10 @@ function connect() {
     if (socket !== next) return;
     recentRttMs.length = 0;
     pendingPings.clear();
+    sendPlaybackHello();
+    replayRecentMicIntent();
     send({ type: 'youtube-timeline-request' });
+    send({ type: 'room-song-status-request' });
     sendRttPing();
     setTimeout(sendRttPing, 180);
     setTimeout(sendRttPing, 450);
@@ -239,5 +292,24 @@ window.addEventListener('relay:youtube-telemetry', (event) => {
     networkRttMs: Number.isFinite(networkRttMs()) ? networkRttMs() : undefined,
   });
 });
+
+window.addEventListener('relay:song-handoff-ready', (event) => {
+  const handoffId = event.detail?.handoffId;
+  if (typeof handoffId === 'string') send({ type: 'song-handoff-ready', handoffId });
+});
+
+window.addEventListener('relay:song-handoff-failed', (event) => {
+  const handoffId = event.detail?.handoffId;
+  if (typeof handoffId === 'string') {
+    send({ type: 'song-handoff-failed', handoffId, reason: event.detail?.reason ?? 'playback-failed' });
+  }
+});
+
+// Bind the Mic action to this exact visible playback tab without changing the
+// publisher protocol. Presence-driven takeover emits the custom event; the
+// ordinary Microphone button is captured directly. Reconnects do not create a
+// new intent, so they cannot accidentally move playback between tabs.
+document.querySelector('#start-publisher')?.addEventListener('click', noteMicIntent);
+window.addEventListener('relay-request-microphone', noteMicIntent);
 
 connect();

@@ -23,7 +23,7 @@ export type RelayServer = {
 export function startRelay(env: Record<string, string> = {}): Promise<RelayServer> {
   const child = spawn(
     process.execPath,
-    ['--import', 'tsx', path.join(root, 'src', 'server.ts')],
+    ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
     {
       cwd: root,
       env: { ...process.env, PORT: '0', ...env },

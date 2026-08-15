@@ -160,7 +160,9 @@ function renderCalibration() {
   if (collecting) {
     const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
     timingButton.textContent = `Calibrating… ${progress}%`;
-    timingStatus.textContent = `Collecting ${progress}% · 手機保持喇叭播放，先不要說話。`;
+    timingStatus.textContent = latestCalibration.automatic
+      ? `自動校正中 ${progress}% · 手機保持喇叭播放，這段先不要唱。`
+      : `Collecting ${progress}% · 手機保持喇叭播放，先不要說話。`;
     return;
   }
 
@@ -179,7 +181,11 @@ function renderCalibration() {
   }
 
   if (latestCalibration?.state === 'failed') {
-    timingStatus.textContent = `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
+    // An unattended attempt retries by itself, so it is a wait rather than a
+    // fault. Saying "failed" would send the operator looking for a problem.
+    timingStatus.textContent = latestCalibration.automatic
+      ? `自動校正等待可用音訊中 · 上次未成功：${latestCalibration.error ?? '訊號不足'}`
+      : `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
     return;
   }
 
@@ -196,9 +202,14 @@ function renderCalibration() {
   if (!sourceConnected || !micConnected) {
     timingStatus.textContent = '先連上手機 Microphone 與 Chrome Source。';
   } else if (!phonePlaying) {
-    timingStatus.textContent = '手機播放 YouTube 後即可按 Calibrate timing。';
+    timingStatus.textContent = latestCalibration?.autoCalibrate
+      ? '手機開始播放後會自動校正，不需要有人在這台電腦前面。'
+      : '手機播放 YouTube 後即可按 Calibrate timing。';
   } else {
-    timingStatus.textContent = `Ready · 目前先用 network estimate ${signed(latestSourceStatus?.micNetworkCompensationMs, ' ms')}。`;
+    const estimate = signed(latestSourceStatus?.micNetworkCompensationMs, ' ms');
+    timingStatus.textContent = latestCalibration?.autoCalibrate
+      ? `即將自動校正 · 目前先用 network estimate ${estimate}。`
+      : `Ready · 目前先用 network estimate ${estimate}。`;
   }
 }
 

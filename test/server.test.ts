@@ -17,6 +17,9 @@ const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '1500',
   RELAY_HEARTBEAT_MS: '60000',
+  // Off by default here so tests that drive calibration by hand are not racing
+  // the unattended trigger. The auto path has its own test.
+  RELAY_AUTO_CALIBRATE: '0',
 };
 
 const playingTelemetry = {
@@ -485,6 +488,81 @@ describe('timing calibration', () => {
       backing.close();
       publisher.close();
       restarted.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('measures on its own when nobody is at the desktop', async () => {
+    const server = await startRelay({ ...FAST, RELAY_AUTO_CALIBRATE: '1' });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+
+      // Nobody sends start-timing-calibration. The server should notice it has
+      // no usable measurement and take one.
+      await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'collecting',
+        3_000,
+      );
+
+      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      await Promise.all([
+        sendPcmInChunks(backing, song),
+        sendPcmInChunks(publisher, mic),
+      ]);
+
+      const complete = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
+        10_000,
+      );
+      assert.ok(Math.abs(complete.micLagMs - 260) <= 15, `got ${complete.micLagMs} ms`);
+      assert.equal(complete.automatic, true, 'and says it was unattended');
+
+      const applied = await monitor.waitFor(
+        (m) => m.type === 'source-status' && m.timingMode === 'acoustic-calibration',
+        3_000,
+      );
+      assert.equal(applied.calibratedMicLagMs, complete.micLagMs);
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('does not keep re-measuring once it has a usable answer', async () => {
+    const server = await startRelay({
+      ...FAST,
+      RELAY_AUTO_CALIBRATE: '1',
+      RELAY_AUTO_CALIBRATION_RETRY_MS: '300',
+    });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+
+      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting', 3_000);
+      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      await Promise.all([
+        sendPcmInChunks(backing, song),
+        sendPcmInChunks(publisher, mic),
+      ]);
+      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'complete', 10_000);
+
+      // Well past the retry interval. A measurement that still describes this
+      // setup must be left alone - re-applying one mid-take moves the vocal.
+      await sleep(1_200);
+      assert.equal(
+        monitor.latest('timing-calibration-status')?.state,
+        'complete',
+        'a valid measurement must not be replaced on a timer',
+      );
+
+      backing.close();
+      publisher.close();
       monitor.close();
     } finally {
       await server.stop();

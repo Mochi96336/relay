@@ -119,6 +119,14 @@ session.setMicGainDb(micGainDb);
 // song anywhere in that band - and that offset is what a calibration measures.
 let sourceGeneration = 0;
 
+// The desktop is meant to run unattended, so the measurement cannot wait for
+// someone to press a button. Long enough between attempts that a singer who is
+// mid-phrase gets a genuinely different six seconds on the next try.
+const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
+const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATION_RETRY_MS', 15_000);
+let lastAutoCalibrationAt = -Infinity;
+let calibrationWasAutomatic = false;
+
 // How long the captured song may be missing before the live session is
 // declared over. The extension retries after a second, so anything shorter
 // turns an ordinary blip into a lost take.
@@ -285,6 +293,10 @@ function timingCalibrationStatusPayload() {
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
+    // An unattended attempt that fails is a retry, not an error the operator
+    // has to act on, and the UI says so differently.
+    automatic: calibrationWasAutomatic,
+    autoCalibrate: AUTO_CALIBRATE,
   };
 }
 
@@ -455,6 +467,9 @@ function stopLiveSource() {
   // carried over into the next session.
   session.stop();
   calibration.reset();
+  // The next session should measure straight away rather than serving out this
+  // one's retry interval.
+  lastAutoCalibrationAt = -Infinity;
   broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
   broadcastJson(testStatusPayload());
@@ -482,6 +497,34 @@ const mixerTimer = setInterval(() => {
   session.drain((frame) => broadcastToMonitors(frame, true));
 }, 5);
 
+/**
+ * Runs the measurement without anyone being at the desktop to press the button.
+ *
+ * Only fires when there is nothing usable to fall back on - no measurement yet,
+ * or one that no longer describes this setup. That deliberately keeps it away
+ * from a take in progress: applying a fresh alignment mid-song would shift the
+ * vocal audibly, and everything that invalidates a measurement (a reconnect, a
+ * new capture, a seek) has already disturbed the take anyway.
+ *
+ * Failures retry rather than latch. The usual reason to fail is the singer
+ * being mid-phrase, which stops being true a few seconds later.
+ */
+function maybeAutoCalibrate(nowMs: number) {
+  if (!AUTO_CALIBRATE) return;
+  if (!session.active || calibration.collecting) return;
+  if (calibration.result !== null && !calibrationIsStale()) return;
+  if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
+
+  if (backing?.readyState !== WebSocket.OPEN || publisher?.readyState !== WebSocket.OPEN) return;
+  const timeline = currentTimelineStatus();
+  if (!timeline.connected || Number(timeline.state) !== 1) return;
+
+  lastAutoCalibrationAt = nowMs;
+  calibrationWasAutomatic = true;
+  calibration.start(nowMs);
+  broadcastJson(timingCalibrationStatusPayload());
+}
+
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
 
@@ -499,6 +542,8 @@ const youtubeTimelineTimer = setInterval(() => {
     lastMixHealthAt = nowMs;
     broadcastJson(mixHealthPayload());
   }
+
+  maybeAutoCalibrate(nowMs);
 }, 250);
 
 function validSampleRate(value: unknown) {
@@ -616,6 +661,7 @@ wss.on('connection', (rawSocket) => {
         calibration.fail('Play YouTube on the phone before calibration.');
         return;
       }
+      calibrationWasAutomatic = false;
       calibration.start();
       broadcastJson(timingCalibrationStatusPayload());
       return;

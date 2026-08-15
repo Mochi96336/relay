@@ -143,6 +143,14 @@ This is what lets the two streams be placed on the session timeline instead of a
 
 The captured song now works the same way. Its socket closing used to end the whole live session — clearing both timelines, the alignment and the calibration — even though the extension reconnects after a second and its own code says it expects to rejoin the timeline it left. A desktop blip therefore threw away the phone's audio too. A source that goes missing starts a grace period (`RELAY_BACKING_GRACE_MS`, 10 s) instead; only when it expires is the session really over. A genuinely new capture is a different matter, and is caught by its generation the same way the microphone's is.
 
+### Calibration runs itself
+
+The desktop is meant to run unattended, so the measurement does not wait for anyone to press the button. Once a session is live with both sides connected and the phone playing, the server takes one on its own, and retries every `RELAY_AUTO_CALIBRATION_RETRY_MS` (15 s) until one lands. Failing is usually the singer being mid-phrase, which stops being true a few seconds later, so `source.html` shows an unattended failure as a wait rather than an error. Set `RELAY_AUTO_CALIBRATE=0` to go back to pressing the button.
+
+It only fires when there is nothing usable to fall back on — no measurement, or one that no longer describes this setup. That keeps it away from a take in progress: applying a fresh alignment mid-song shifts the vocal audibly, and every event that invalidates a measurement has already disturbed the take anyway.
+
+One analysis costs about 4 ms, so this is not where the CPU goes. What stops it from simply running continuously is trust, not cost: the analyser accepts unrelated audio at a confidence of 0.4–0.6 (`test/timing-calibration.test.ts` pins the margin), which a human re-running the measurement catches and an unattended server would not. Accepting a value only once several independent windows agree on it would fix that — a false positive returns a random lag, so agreement is a far stronger filter than any confidence threshold, and it would also drop the "do not sing" instruction. That is not built yet.
+
 ### Test mode is only the test
 
 `test-status` describes the click sync test and nothing else. It used to report a running live session as `mode: 'tab-source'`, because the browser clients had no other way to learn that the server had started mixing — so every live take ran them in test mode. That dropped the monitor slider to 0 dB at the start of each take and stopped remembering what the singer set during it. A live session is described by `source-status`; the clients listen to that, and derive "the server is mixing" from either source.

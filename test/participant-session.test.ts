@@ -30,6 +30,25 @@ describe('participant session', () => {
     assert.equal(session.snapshot().participants[0].connected, true);
   });
 
+  test('does not let a stale reconnect overwrite an explicit rename', () => {
+    const session = new ParticipantSession(5_000);
+    session.attach({
+      connectionId: 'tab-a',
+      participantId: 'participant-alice',
+      nickname: 'Alice',
+      nowMs: 100,
+    });
+    assert.equal(session.rename('participant-alice', 'Alicia', 110), true);
+
+    assert.equal(session.attach({
+      connectionId: 'stale-tab',
+      participantId: 'participant-alice',
+      nickname: 'Alice',
+      nowMs: 120,
+    }), false);
+    assert.equal(session.snapshot().participants[0].nickname, 'Alicia');
+  });
+
   test('keeps mic ownership through a short reconnect and releases it after grace expires', () => {
     const session = new ParticipantSession(500);
     session.attach({

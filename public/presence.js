@@ -58,17 +58,12 @@
   let takeoverOwnerId = null;
   let startAfterTakeover = false;
 
+  // app.js reads these when it opens publisher / monitor transports. Identity
+  // is explicit per socket; Relay deliberately does not use an origin-wide
+  // cookie that could accidentally turn source.html or robot sockets into a
+  // human participant.
   window.relayParticipantId = participantId;
   window.relayNickname = nickname;
-
-  function setIdentityCookies() {
-    const secure = location.protocol === 'https:' ? '; Secure' : '';
-    const maxAge = 60 * 60 * 24 * 365;
-    document.cookie = `relayParticipantId=${encodeURIComponent(participantId)}; Path=/; SameSite=Lax; Max-Age=${maxAge}${secure}`;
-    document.cookie = `relayNickname=${encodeURIComponent(nickname)}; Path=/; SameSite=Lax; Max-Age=${maxAge}${secure}`;
-  }
-
-  setIdentityCookies();
   identityButton.textContent = nickname;
 
   function wsUrl() {
@@ -101,14 +96,8 @@
     takeoverOwnerId = currentOwner.id;
     startAfterTakeover = false;
     confirmTakeoverButton.disabled = false;
-    takeoverCopy.textContent = `${currentOwner.nickname} 正在使用麥克風。確認後會立即把 Mic 切到你這裡。`;
+    takeoverCopy.textContent = `${currentOwner.nickname} 正在使用麥克風。確認後會先準備你的 Mic，再切換。`;
     takeoverPanel.hidden = false;
-  }
-
-  function stopLocalPublisherIfOwnershipMoved() {
-    if (window.relayActiveRole !== 'publisher') return;
-    if (latestSession?.micOwnerId === participantId) return;
-    if (!stopButton.disabled) stopButton.click();
   }
 
   function renderParticipants() {
@@ -141,7 +130,6 @@
       nickname = self.nickname;
       localStorage.setItem(NICKNAME_KEY, nickname);
       window.relayNickname = nickname;
-      setIdentityCookies();
     }
     if (document.activeElement !== identityInput) identityButton.textContent = self?.nickname ?? nickname;
 
@@ -157,38 +145,18 @@
       if (!publisherButton.disabled) publisherButton.textContent = '🎤 Microphone';
     }
 
-    if (takeoverOwnerId && latestSession.micOwnerId !== takeoverOwnerId) {
-      if (startAfterTakeover && mine) {
-        hideTakeover();
-        queueMicrotask(() => {
-          if (!publisherButton.disabled && window.relayActiveRole !== 'publisher') publisherButton.click();
-        });
-      } else {
-        hideTakeover();
-      }
+    if (startAfterTakeover && mine && latestSession.micConnected === true) {
+      hideTakeover();
+    } else if (!startAfterTakeover && takeoverOwnerId && latestSession.micOwnerId !== takeoverOwnerId) {
+      hideTakeover();
     }
-
-    stopLocalPublisherIfOwnershipMoved();
   }
 
   function handleMessage(message) {
-    if (message.type === 'session-status') {
-      if (latestSession && Number(message.revision) < Number(latestSession.revision)) return;
-      latestSession = message;
-      renderParticipants();
-      return;
-    }
-
-    if (message.type === 'mic-takeover-rejected') {
-      startAfterTakeover = false;
-      takeoverOwnerId = null;
-      confirmTakeoverButton.disabled = false;
-      const currentOwner = message.owner;
-      takeoverCopy.textContent = currentOwner
-        ? `Mic 已經換成 ${currentOwner.nickname}。如果仍要接手，再按一次 Take over。`
-        : 'Mic 狀態已改變；可以直接重新按 Microphone。';
-      takeoverPanel.hidden = false;
-    }
+    if (message.type !== 'session-status') return;
+    if (latestSession && Number(message.revision) < Number(latestSession.revision)) return;
+    latestSession = message;
+    renderParticipants();
   }
 
   function scheduleReconnect() {
@@ -257,20 +225,15 @@
 
     takeoverOwnerId = currentOwner.id;
     startAfterTakeover = true;
-    takeoverCopy.textContent = `正在從 ${currentOwner.nickname} 接手 Mic…`;
+    takeoverCopy.textContent = `正在準備你的 Mic；準備完成才會從 ${currentOwner.nickname} 接手…`;
     confirmTakeoverButton.disabled = true;
-    const sent = send({
-      type: 'force-acquire-mic',
-      expectedOwnerId: currentOwner.id,
-    });
-    if (!sent) {
-      confirmTakeoverButton.disabled = false;
-      startAfterTakeover = false;
-      takeoverCopy.textContent = 'Relay 正在重新連線；連上後再確認一次。';
-    }
+    window.dispatchEvent(new CustomEvent('relay-request-microphone', {
+      detail: { takeoverExpectedOwnerId: currentOwner.id },
+    }));
   });
 
   cancelTakeoverButton.addEventListener('click', () => {
+    if (startAfterTakeover) return;
     hideTakeover();
   });
 
@@ -301,11 +264,40 @@
     nickname = next;
     localStorage.setItem(NICKNAME_KEY, nickname);
     window.relayNickname = nickname;
-    setIdentityCookies();
     identityButton.textContent = nickname;
     cancelRename();
     send({ type: 'participant-rename', nickname });
   }
+
+  function takeoverFailed(copy) {
+    startAfterTakeover = false;
+    confirmTakeoverButton.disabled = false;
+    takeoverCopy.textContent = copy;
+    takeoverPanel.hidden = false;
+  }
+
+  window.addEventListener('relay-microphone-start-failed', (event) => {
+    if (!startAfterTakeover) return;
+    const message = event.detail?.message ?? '無法啟動麥克風。';
+    takeoverFailed(`沒有切走目前的 Mic：${message}`);
+  });
+
+  window.addEventListener('relay-mic-takeover-rejected', (event) => {
+    const currentOwner = event.detail?.owner ?? owner();
+    takeoverOwnerId = currentOwner?.id ?? null;
+    takeoverFailed(currentOwner
+      ? `Mic 已經換成 ${currentOwner.nickname}。如果仍要接手，再確認一次。`
+      : 'Mic 狀態已改變；可以直接重新按 Microphone。');
+  });
+
+  window.addEventListener('relay-mic-busy', (event) => {
+    const currentOwner = event.detail?.owner ?? owner();
+    if (currentOwner && currentOwner.id !== participantId) showTakeover(currentOwner);
+  });
+
+  window.addEventListener('relay-microphone-started', () => {
+    if (startAfterTakeover) hideTakeover();
+  });
 
   identityButton.addEventListener('click', beginRename);
   identityInput.addEventListener('keydown', (event) => {

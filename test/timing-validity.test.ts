@@ -208,7 +208,7 @@ describe('robot calibration ownership', () => {
     RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
     RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
     RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-2',
+    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
     RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
   };
 
@@ -251,8 +251,6 @@ describe('robot calibration ownership', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      // Ignore any unattended boot request that may have been emitted while the
-      // streams were primed; the manual click must start a fresh run of its own.
       const from = publisher.messages.length;
       monitor.send({ type: 'start-timing-calibration' });
       const probe = await waitForNewMessage(
@@ -326,7 +324,7 @@ describe('boot probe lifecycle', () => {
       RELAY_CALIBRATION_PROBE_RETRY_MS: '1000',
       RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
       RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-      RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-2',
+      RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
       RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
       RELAY_BACKING_GRACE_MS: '100',
     });

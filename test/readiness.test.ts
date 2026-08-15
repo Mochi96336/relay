@@ -46,6 +46,7 @@ test('readyz distinguishes robot-host readiness from full live-session readiness
     assert.equal(readiness.components.backing.streaming, true);
     assert.equal(readiness.components.backing.robot, true);
     assert.equal(readiness.components.robotSource.connected, true);
+    assert.equal(readiness.components.calibration.kind, 'none');
     assert.equal(readiness.sessionReady, false);
     assert.ok(readiness.sessionReasons.includes('mic-not-connected'));
     assert.ok(readiness.sessionReasons.includes('phone-timeline-not-connected'));

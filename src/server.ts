@@ -10,6 +10,7 @@ import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
+import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame } from './pcm-frame.js';
 import {
   ParticipantSession,
@@ -354,6 +355,26 @@ function broadcastSessionStatus() {
 
 function participantPayload(participantId: string | null) {
   return participantId ? participants.participant(participantId) : null;
+}
+
+function requireMicOwnerCommand(socket: RelaySocket, command: MicOwnerCommand) {
+  const decision = authorizeMicOwnerCommand(
+    {
+      participantId: socket.participantId ?? null,
+      isCurrentPublisher: socket === publisher && socket.role === 'publisher',
+    },
+    participants.micOwnerId,
+  );
+  if (decision.ok) return true;
+
+  sendJson(socket, {
+    type: 'command-rejected',
+    command,
+    reason: decision.reason,
+    owner: participantPayload(participants.micOwnerId),
+    revision: participants.revision,
+  });
+  return false;
 }
 
 function broadcastToMonitors(payload: string | Buffer, binary = false) {
@@ -1251,6 +1272,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'start-timing-calibration') {
+      if (!requireMicOwnerCommand(socket, 'start-timing-calibration')) return;
       const nowMs = performance.now();
       if (
         !session.active
@@ -1302,6 +1324,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'set-vocal-fine-tune') {
+      if (!requireMicOwnerCommand(socket, 'set-vocal-fine-tune')) return;
       const nextFineTune = Number(payload.valueMs);
       if (Number.isFinite(nextFineTune)) {
         session.setAlignment({
@@ -1517,11 +1540,13 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'stop-sync-test') {
+      if (!requireMicOwnerCommand(socket, 'stop-sync-test')) return;
       stopSyncTest();
       return;
     }
 
     if (payload.type === 'set-mix') {
+      if (!requireMicOwnerCommand(socket, 'set-mix')) return;
       const nextGain = Number(payload.micGainDb);
       if (Number.isFinite(nextGain)) {
         micGainDb = Math.max(0, Math.min(36, nextGain));
@@ -1532,6 +1557,7 @@ wss.on('connection', (rawSocket, request) => {
         songLevel = Math.max(0, Math.min(100, Math.round(nextSongLevel)));
       }
       broadcastJson(mixSettingsPayload());
+      return;
     }
   });
 

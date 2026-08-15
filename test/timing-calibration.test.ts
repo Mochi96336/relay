@@ -112,6 +112,24 @@ describe('analyzeTimingCalibration', () => {
     });
   }
 
+  // The other half of the tension the beat-alias preference creates: a real
+  // deployment measured -1790 ms (confidence 0.98, five windows inside 15 ms)
+  // and the recording confirmed the vocal really was that far out. Preferring
+  // a candidate near zero must break genuine ties caused by periodicity
+  // without overruling a large lag that is simply the true answer.
+  for (const lagMs of [-1790, 1600]) {
+    test(`still recovers a genuine ${lagMs} ms lag, well outside the preferred range`, () => {
+      const { mic, backing } = laggedPair(6, RATE, lagMs);
+      const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
+
+      assert.ok(
+        Math.abs(result.micLagMs - lagMs) <= 25,
+        `expected ~${lagMs} ms, got ${result.micLagMs} ms `
+        + `(confidence ${result.confidence.toFixed(2)}) - the near-zero preference overruled a true match`,
+      );
+    });
+  }
+
   test('rejects an invalid sample rate', () => {
     const { mic, backing } = laggedPair(6, RATE, 0);
     assert.throws(() => analyzeTimingCalibration(int16View(mic), int16View(backing), 0), /sample rate/);

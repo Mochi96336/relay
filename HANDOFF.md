@@ -53,13 +53,55 @@ Everything below is read once at startup.
 | `RELAY_BACKING_GRACE_MS` | `10000` | How long a missing song source may be away before the session ends |
 | `RELAY_AUTO_CALIBRATE` | on (`0` disables) | Whether calibration triggers itself |
 | `RELAY_AUTO_CALIBRATION_RETRY_MS` | `15000` | Gap between unattended attempts |
-| `RELAY_CALIBRATION_AGREEMENT` | `3` | Windows that must agree before a measurement is applied |
+| `RELAY_CALIBRATION_AGREEMENT` | `3` | Windows that must agree before a measurement is *confirmed* |
+| `RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE` | `0.55` | Confidence a single window applies at immediately, ahead of agreement (see below) |
 | `RELAY_CALIBRATION_TOLERANCE_MS` | `25` | How close those windows must land |
-| `RELAY_CALIBRATION_MAX_LAG_MS` | `700` | How far the analyser may look |
+| `RELAY_CALIBRATION_MAX_LAG_MS` | `2500` | How far the analyser may look |
 | `RELAY_CALIBRATION_TIMEOUT_MS` | `20000` | Backstop when a side stops streaming |
+| `RELAY_MIC_RETENTION_MS` | `3000` | Microphone history kept, so the ceiling on reading *behind* |
+| `RELAY_CALIBRATION_PROBE` | on (`0` disables) | Boot calibration by probe instead of song content |
+| `RELAY_CALIBRATION_PROBE_RETRY_MS` | `6000` | Gap between probe attempts |
+| `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` | `3000` | Largest path delay a probe can find |
+| `RELAY_CALIBRATION_PROBE_MIN_CORRELATION` | `0.5` | Below this a probe is treated as not heard |
+| `RELAY_CALIBRATION_DELTA_REAPPLY_MS` | `40` | How far `delta` must move before the vocal follows it |
+| `RELAY_CALIBRATION_PROBE_DEBUG` | off (`1` enables) | Logs each leg's correlation and latency |
 | `RELAY_HEARTBEAT_MS` | `8000` | Dead-socket detection |
 
 Robot route (`scripts/robot-source.sh` and `src/backing-stdin.ts`): `RELAY_BROWSER_SINK` (`relay_browser`), `CHROMIUM_BIN` (autodetected), `RELAY_URL` (`ws://127.0.0.1:$PORT/ws`), `RELAY_BACKING_SAMPLE_RATE` (`48000`), `RELAY_BACKING_FRAME_MS` (`20`).
+
+**`RELAY_CALIBRATION_AGREEMENT * durationMs` (6 s/window) is a hard floor on how long calibration takes, even in the best case** - 18 s at the default of 3. A singer hearing nothing corrected for that whole stretch has its own cost, raised live tonight. `RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE` applies the *first* window that clears it immediately - agreement keeps running in the background regardless and still replaces it the moment it lands, same mechanism `CalibrationSession` already used to protect a confirmed answer from a later disagreeing window. Real confidence tonight: ~0.6-0.8+ for a match, ~0.45-0.6 for a rejected, not-yet-agreeing window - 0.55 is a working line between them, not a validated one. Set it above 1 to disable and restore the old silent-until-confirmed behaviour. `timing-calibration-status.provisional` (and the `· 已套用暫定值 ... ms` text on both pages) says which kind of answer is currently applied.
+
+## Boot calibration, and the two-second offset it explained
+
+A recording came back with the vocal a whole two seconds off the backing, over the entire take. That is far outside anything the old setup could even measure, let alone apply, and chasing it turned up three separate things.
+
+**The measurement was right and was being thrown away.** An earlier run had reported -1790 ms at confidence 0.98 with five windows inside 15 ms - the signature of a true match, not the 0.4-0.6 an alias scores. It was dismissed as a beat alias on the reasoning recorded in `e5e38f0`: the follower corrects past 450 ms, so nothing real lives past 700 ms. That reasoning only accounted for the *players*. It missed that the phone's uplink and the robot's browser-to-PipeWire capture each add their own delay, neither of which the follower's dead band bounds. Searching only to 700 ms did not rule the real answer out as implausible, it made it unmeasurable.
+
+**And it was silently truncated even when measured.** `retentionMs` was `MAX_OFFSET_MS + 1000`, so `appliedMicAdvanceMs` clamped at 1300 ms after the safety margin while `requestedMicAdvanceMs` said -1790: a ~500 ms error, reported as a successful calibration. Reading *behind* spends retained history, not prebuffer, so `RELAY_MIC_RETENTION_MS` buys correction range for memory alone (~96 KB/s) and costs no output latency. Any gap between those two numbers means this is happening again.
+
+**Boot calibration measures the whole thing as three terms instead of one.** See `src/boot-calibration.ts` for the derivation of
+
+    advance = micLatency - backingLatency + delta
+
+Two probes - three clicks at irregular offsets, so no shift but the true one lines all three up - are played once down each path: the phone plays one its own microphone hears, and the robot's page plays one into the same null sink the song goes to, so it arrives through PipeWire exactly as the song does. `delta`, the robot player's position minus the phone's, needs no probe: the follower already computed it to decide whether to seek and used to discard it.
+
+Measured on the robot, and this is the answer to the two seconds:
+
+| Leg | Measured | Correlation |
+| --- | --- | --- |
+| `micLatency` | 50 ms | 0.73 |
+| `backingLatency` | **2110 ms** | 0.84 |
+| `delta` | +250 ms | reported |
+| applied advance | -1810 ms | requested == applied |
+
+Content correlation had independently measured -1790 ms when `delta` was near zero, which is the same answer by a completely different method.
+
+Two consequences worth keeping:
+
+- **The probes run once; `delta` tracks live.** The two path delays are properties of the capture pipeline and only a restarted capture invalidates them. `delta` is the only term a seek moves, and it is read continuously, so a seek no longer costs a re-measurement - which is also why the probe clicks stopped firing repeatedly during playback.
+- **`backingLatency` of 2110 ms is itself the thing to attack next.** That is `parec`/PipeWire buffering, not something inherent. Cutting it shrinks the correction, the retention it needs, and the room for any of this to go wrong. The system now compensates for it correctly, which is not the same as it being reasonable.
+
+`timing-calibration-status.bootCalibration` reports all three terms, so a wrong total can be attributed to the path that produced it instead of re-measured blind. A single probe cannot replace this: the phone's speaker and the robot's audio never meet in the air, so no one probe crosses both paths - which is exactly what the first attempt at this got wrong, measuring `micLatency` alone and applying it as the total.
 
 ## Two measurements worth not repeating
 
@@ -72,7 +114,7 @@ Both were taken on a development desktop; scale them for the target.
 
 1. **The last symptom is now plausibly explained, not confirmed.** The song was heard twice, far apart, intermittently. The diagnosis was a false positive being applied unattended, and agreement was built to stop it — but a beat-period alias landing outside the mixer's usable buffer range would produce exactly this symptom (the mixer's read head lands past the end of mic history), and tonight's session watched that failure mode happen live. Worth a real take to close out, but no longer the top-priority unknown.
 2. **The analyser accepted unrelated audio at 0.4–0.6 confidence; this is meaningfully better, not solved.** `bestLagAcrossOverlap` now prefers a nearby (`PREFERRED_LAG_MS`, 300 ms) candidate over a distant one unless the distant one clearly wins — see "What tonight's robot session found" above. This closes the specific failure that blocked a real take tonight (repeated beat-multiple lock-on), verified against a regression test built from a genuinely periodic signal. It does **not** fix the analyser's fundamental permissiveness: two unrelated recordings can still score 0.4–0.6, and agreement is still what keeps a single bad read out of the mix. Anything calling `analyzeTimingCalibration` directly still inherits that.
-3. **A better fix than tuning thresholds: a known probe signal instead of song content.** Cross-correlating against the song is inherently ambiguous for anything with a beat, no matter how the thresholds are tuned — a true match and a one-period-away alias can both be genuinely strong correlations, not noise. The mature fix is a distinctive, non-repeating probe (a short chirp or an irregularly-spaced click burst) played through the phone speaker on cue, matched against a *known* reference instead of the song. Design sketched but **not implemented** — the one subtlety worth recording so it does not have to be re-derived: naively comparing "where the mic's own reconnect anchor (`originOffset` in `audio-session.ts`) places the probe" against "where correlation finds it in the already-anchored mic timeline" measures nothing, because both numbers come from the exact same deterministic formula applied to the same `firstSampleIndex` — there is no independent signal in that comparison. The anchor's bias (the actual quantity `calibratedMicLagMs` needs to correct) can only be measured against a clock reference that does *not* go through the mic's own anchor — i.e. reuse the existing `clock-ping`/`transportEstimateMs` RTT machinery (already computed for the phone's connection in `youtube-sync.js` and `src/server.ts`) to map "when the client scheduled the probe" onto the server's session clock directly, then compare *that* against where the probe is found in the mic timeline. `public/app.js`'s existing `scheduleClick`/`startLocalClickTrack` (an audible metronome, currently only for a human to judge by ear) is the right template for playback scheduling but is not itself a measurement — nothing analyses it today.
+3. **Built: a known probe signal instead of song content.** See "Boot calibration" above. Cross-correlating against the song is inherently ambiguous for anything with a beat, no matter how the thresholds are tuned — a true match and a one-period-away alias can both be genuinely strong correlations, not noise. Two subtleties are worth keeping so they do not have to be re-derived. First, the timing reference: comparing "where the mic's own anchor (`originOffset`) places the probe" against "where correlation finds it in that same anchored timeline" measures nothing, because both come from one deterministic formula applied to one `firstSampleIndex`. The anchor's bias can only be measured against a clock that does *not* pass through it, which is why the probe's expected position comes from the server's own send/receive round trip mapped onto `sessionSampleAt`. Second, and the thing the first attempt got wrong: one probe is not enough. The phone's speaker and the robot's audio never meet in the air, so a phone-speaker-to-phone-mic probe measures `micLatency` alone; applying that as the whole answer is confidently wrong. It needs a leg down each path plus the robot's own player offset.
 4. **The desktop player's ±450 ms dead band** ([`public/source.js`](public/source.js), the `seekTo` guard) is deliberate — correcting more often would mean more audible re-buffers, each also invalidating the calibration. A seek now marks the measurement stale instead. Measured lags have landed at −60, −205 and −225 ms across runs, all inside that band, which is why they differ.
 5. **The click sync test still shares plumbing with the production path.** It is the reason `test-status` and the production session were once conflated. It causes no live fault now; removing it is cleanup, not a fix. (It is also the closest existing thing to thread 3's probe playback — see there before removing it.)
 6. **Discord output has not been started.** It is the original goal in `README.md`.

@@ -210,6 +210,20 @@ export class AudioSession {
     return this.backing.generation;
   }
 
+  /**
+   * How far the microphone timeline actually reaches. `readMic` pads anything
+   * past this with zeros, so a reader that needs real audio - rather than a
+   * best effort - has to wait for this to pass the end of its range.
+   */
+  get micTotalSamples() {
+    return this.mic.totalSamples;
+  }
+
+  /** The same frontier for the captured song. See `micTotalSamples`. */
+  get backingTotalSamples() {
+    return this.backing.totalSamples;
+  }
+
   start(nowMs = performance.now()) {
     this.running = true;
     this.resetEpoch(nowMs);
@@ -296,6 +310,23 @@ export class AudioSession {
   /** Exposed for the click diagnostic, which mixes against the microphone. */
   readMic(startSample: number, count: number) {
     return this.readRange(this.mic, startSample, count);
+  }
+
+  /** The same window into the captured song, for locating a probe in it. */
+  readBacking(startSample: number, count: number) {
+    return this.readRange(this.backing, startSample, count);
+  }
+
+  /**
+   * Session-sample coordinate for a real-world instant, independent of
+   * either timeline's own anchor. A probe calibration schedules playback
+   * against a client clock mapped onto this, then finds where it actually
+   * landed in the (possibly mis-anchored) mic timeline via correlation - the
+   * discrepancy between the two is exactly the anchor bias `calibratedMicLagMs`
+   * exists to correct.
+   */
+  sessionSampleAt(nowMs: number) {
+    return this.currentSessionSample(nowMs);
   }
 
   trimMic(beforeSample: number) {

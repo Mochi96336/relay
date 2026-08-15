@@ -35,6 +35,8 @@ export type CalibrationStatus = {
   /** Windows that have agreed so far, and how many are needed to apply. */
   windowsAgreed: number;
   windowsNeeded: number;
+  /** True while `micLagMs` is a first-window guess agreement has not confirmed yet. */
+  provisional: boolean;
   error: string | null;
 };
 
@@ -91,6 +93,20 @@ export type CalibrationSessionOptions = {
   agreementWindows?: number;
   /** How close windows must land to count as agreeing. */
   agreementToleranceMs?: number;
+  /**
+   * Confidence a single window must clear to be applied immediately, before
+   * agreement confirms it - undefined disables this and restores the old
+   * silent-until-confirmed behaviour.
+   *
+   * The wait for full agreement is a floor of `agreementWindows *
+   * durationMs` even in the best case, and a singer hearing nothing corrected
+   * for that whole stretch is its own cost. A confident-enough single window
+   * is a better bet than the network-estimate fallback it would otherwise
+   * apply meanwhile, and applying it does not end collection - agreement
+   * still runs in the background and can replace it with a better answer, or
+   * (via the normal disagreement path) leave it as the best guess so far.
+   */
+  provisionalConfidence?: number;
   /** Read when a window ends, so the next one gets its own timeout budget. */
   now?: () => number;
   /** How far the analyser may look for a match. */
@@ -155,6 +171,7 @@ export class CalibrationSession {
   private readonly onSettled: () => void;
   private readonly agreementWindows: number;
   private readonly agreementToleranceMs: number;
+  private readonly provisionalConfidence: number | undefined;
   private readonly now: () => number;
   private readonly maxLagMs: number | undefined;
 
@@ -168,6 +185,8 @@ export class CalibrationSession {
   private segmentLagsMs: number[] = [];
   private micLevelDbfs: number | null = null;
   private backingLevelDbfs: number | null = null;
+  /** True while `micLagMs` is a first-window guess agreement has not confirmed yet. */
+  private provisional = false;
 
   private mic = emptyCapture();
   private backing = emptyCapture();
@@ -186,8 +205,13 @@ export class CalibrationSession {
     this.analyze = options.analyze ?? analyzeTimingCalibration;
     this.context = options.context;
     this.onSettled = options.onSettled ?? (() => {});
-    this.agreementWindows = Math.max(1, options.agreementWindows ?? 1);
+    const agreementWindows = options.agreementWindows ?? 1;
+    if (!Number.isSafeInteger(agreementWindows) || agreementWindows < 1) {
+      throw new Error('agreementWindows must be a positive integer.');
+    }
+    this.agreementWindows = agreementWindows;
     this.agreementToleranceMs = options.agreementToleranceMs ?? 25;
+    this.provisionalConfidence = options.provisionalConfidence;
     this.now = options.now ?? (() => performance.now());
     this.maxLagMs = options.maxLagMs;
   }
@@ -226,6 +250,29 @@ export class CalibrationSession {
     this.onSettled();
   }
 
+  /**
+   * Applies a result measured outside the normal collect/analyze flow - a
+   * probe played on cue and matched against a known reference, rather than
+   * correlated against the song. Settles straight to 'complete': agreement
+   * across windows exists to catch a false positive that lands somewhere
+   * different each time, which a probe measurement, being unambiguous by
+   * construction, does not produce.
+   */
+  applyExternalResult(result: { micLagMs: number; confidence: number }) {
+    this.phase = 'complete';
+    this.micLagMs = result.micLagMs;
+    this.measuredContext = this.context();
+    this.confidence = result.confidence;
+    this.segmentLagsMs = [];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
+    this.error = null;
+    this.provisional = false;
+    this.candidates = [result.micLagMs];
+    this.clearCapture();
+    this.onSettled();
+  }
+
   /** Drops any measurement, for when the thing it described is gone. */
   reset() {
     this.phase = 'idle';
@@ -235,6 +282,7 @@ export class CalibrationSession {
     this.confidence = null;
     this.segmentLagsMs = [];
     this.measuredContext = null;
+    this.provisional = false;
     this.clearCapture();
   }
 
@@ -289,6 +337,7 @@ export class CalibrationSession {
       // so a disagreeing window visibly costs the progress it invalidates.
       windowsAgreed: this.phase === 'complete' ? this.agreementWindows : this.agreeingRun(),
       windowsNeeded: this.agreementWindows,
+      provisional: this.provisional,
       error: this.error,
     };
   }
@@ -298,6 +347,37 @@ export class CalibrationSession {
   private clearCapture() {
     this.mic = emptyCapture();
     this.backing = emptyCapture();
+  }
+
+  /**
+   * Consumes one completed window without throwing away audio that already
+   * arrived after it. One websocket can run ahead of the other by seconds
+   * during a transport burst; clearing both captures here made the faster
+   * side's next agreement window disappear before the slower side caught up.
+   */
+  private retainCaptureAfter(capture: Capture, beforeSample: number) {
+    const retained = emptyCapture();
+
+    for (const chunk of capture.chunks) {
+      const chunkEnd = chunk.start + chunk.samples.length;
+      if (chunkEnd <= beforeSample) continue;
+
+      const offset = Math.max(0, beforeSample - chunk.start);
+      const start = chunk.start + offset;
+      const samples = chunk.samples.subarray(offset);
+      if (samples.length === 0) continue;
+
+      if (retained.firstStart === null) retained.firstStart = start;
+      retained.chunks.push({ start, samples });
+      retained.lastEnd = Math.max(retained.lastEnd, start + samples.length);
+    }
+
+    return retained;
+  }
+
+  private advancePast(windowEnd: number) {
+    this.mic = this.retainCaptureAfter(this.mic, windowEnd);
+    this.backing = this.retainCaptureAfter(this.backing, windowEnd);
   }
 
   /**
@@ -329,11 +409,14 @@ export class CalibrationSession {
 
   /** How many of the most recent windows still agree with the newest one. */
   private agreeingRun() {
-    const newest = this.candidates.at(-1);
-    if (newest === undefined) return 0;
+    if (this.candidates.length === 0) return 0;
     let run = 0;
+    let minimum = Number.POSITIVE_INFINITY;
+    let maximum = Number.NEGATIVE_INFINITY;
     for (let i = this.candidates.length - 1; i >= 0; i -= 1) {
-      if (Math.abs(this.candidates[i] - newest) > this.agreementToleranceMs) break;
+      minimum = Math.min(minimum, this.candidates[i]);
+      maximum = Math.max(maximum, this.candidates[i]);
+      if (maximum - minimum > this.agreementToleranceMs) break;
       run += 1;
     }
     return run;
@@ -347,20 +430,26 @@ export class CalibrationSession {
   private observe(capture: Capture, samples: Int16Array, startSample: number) {
     if (this.phase !== 'collecting' || samples.length === 0) return;
 
-    // Enough slack that the shared window is still coverable once the other
-    // side turns up, without letting one live stream grow without bound while
-    // the other is stalled.
-    if (capture.firstStart !== null && startSample - capture.firstStart >= this.requiredSamples * 2) return;
+    // Enough slack for every agreement window plus one window of start skew,
+    // without letting one live stream grow without bound while the other is
+    // stalled. The old fixed 2x ceiling could not even hold production's three
+    // agreement windows, and rejected the fast websocket's tail before the
+    // slower side reached it.
+    const captureLimit = this.requiredSamples * (this.agreementWindows + 1);
+    if (capture.firstStart !== null && startSample - capture.firstStart >= captureLimit) return;
 
     if (capture.firstStart === null) capture.firstStart = startSample;
     capture.chunks.push({ start: startSample, samples });
     capture.lastEnd = Math.max(capture.lastEnd, startSample + samples.length);
 
-    if (this.captured >= this.requiredSamples) this.finish();
+    // A burst may already contain several complete windows. Drain each one in
+    // turn while `finish` keeps the suffix for the next agreement round.
+    while (this.phase === 'collecting' && this.captured >= this.requiredSamples) this.finish();
   }
 
   private finish() {
     const origin = this.origin ?? 0;
+    const windowEnd = origin + this.requiredSamples;
     const mic = render(this.mic, origin, this.requiredSamples);
     const backing = render(this.backing, origin, this.requiredSamples);
 
@@ -392,7 +481,24 @@ export class CalibrationSession {
         this.micLevelDbfs = result.micLevelDbfs;
         this.backingLevelDbfs = result.backingLevelDbfs;
         this.error = null;
-        this.clearCapture();
+
+        // Full agreement is a floor of agreementWindows * durationMs even in
+        // the best case, and nothing corrected at all for that whole stretch
+        // has its own cost. A confident single window beats the fallback
+        // network estimate it would otherwise run on meanwhile - collection
+        // keeps going regardless, and a confirmed answer still replaces this
+        // one the moment agreement lands, same as if it had never applied.
+        if (
+          this.provisionalConfidence !== undefined
+          && result.confidence >= this.provisionalConfidence
+          && (this.micLagMs === null || this.provisional)
+        ) {
+          this.micLagMs = result.micLagMs;
+          this.measuredContext = this.context();
+          this.provisional = true;
+        }
+
+        this.advancePast(windowEnd);
         this.startedAt = this.now();
         this.onSettled();
         return;
@@ -405,6 +511,7 @@ export class CalibrationSession {
       this.micLevelDbfs = result.micLevelDbfs;
       this.backingLevelDbfs = result.backingLevelDbfs;
       this.error = null;
+      this.provisional = false;
       this.phase = 'complete';
     } catch (error) {
       this.phase = 'failed';
@@ -412,7 +519,11 @@ export class CalibrationSession {
       this.confidence = null;
       this.segmentLagsMs = [];
     } finally {
-      this.clearCapture();
+      // A non-agreeing but valid window deliberately stays collecting and has
+      // already retained its overrun for the next round. `finally` also runs
+      // before that branch's `return`, so clearing unconditionally here erased
+      // the suffix we had just preserved.
+      if (this.phase !== 'collecting') this.clearCapture();
     }
 
     this.onSettled();

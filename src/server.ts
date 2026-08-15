@@ -7,6 +7,8 @@ import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
+import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
+import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { decodePcmFrame } from './pcm-frame.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
@@ -41,6 +43,24 @@ const TEST_PREBUFFER_MS = 800;
 const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 400);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
+/**
+ * How much microphone history stays readable, and so how far behind the mixer
+ * can read.
+ *
+ * This is the ceiling on a *negative* advance, which is the direction a real
+ * deployment actually needs: the vocal arrives later than the song it was sung
+ * against, so the mixer reads the microphone in the past. Reading behind costs
+ * only the memory to keep the history (~96 KB per second at 48 kHz mono), not
+ * output latency - that is `RELAY_LIVE_PREBUFFER_MS`, and it is untouched by
+ * this.
+ *
+ * It was `MAX_OFFSET_MS + 1000`, which capped the applicable correction at
+ * 1300 ms after the safety margin. A robot take measured a genuine -1790 ms
+ * (confidence 0.98, five windows inside 15 ms) and the recording confirmed the
+ * vocal sitting that far out, so the old ceiling silently truncated a real
+ * measurement by ~500 ms and reported success.
+ */
+const MIC_RETENTION_MS = envMs('RELAY_MIC_RETENTION_MS', 3_000);
 const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_000);
 const MAX_VOCAL_FINE_TUNE_MS = 100;
@@ -82,6 +102,12 @@ type RelaySocket = WebSocket & {
   sampleRate?: number;
   isAlive: boolean;
   replaced?: boolean;
+  /**
+   * A `source.html?robot=1` page. It holds no role - it neither publishes nor
+   * captures - but it owns the mirrored player, so it is the only client that
+   * can play the backing probe or report the robot's own player offset.
+   */
+  isRobotSource?: boolean;
 };
 
 type TimelineStatus = {
@@ -111,7 +137,7 @@ const session = new AudioSession({
   frameMs: MIX_FRAME_MS,
   prebufferMs: LIVE_MIX_PREBUFFER_MS,
   backingGain: LIVE_BACKING_GAIN,
-  retentionMs: MAX_OFFSET_MS + 1_000,
+  retentionMs: MIC_RETENTION_MS,
 });
 session.setMicGainDb(micGainDb);
 
@@ -127,6 +153,102 @@ const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
 const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATION_RETRY_MS', 15_000);
 let lastAutoCalibrationAt = -Infinity;
 let calibrationWasAutomatic = false;
+
+/**
+ * Boot calibration: the alignment measured as three separate, individually
+ * unambiguous quantities rather than one ambiguous correlation against the
+ * song. See `src/boot-calibration.ts` for the derivation of
+ *
+ *     advance = micLatency - backingLatency + delta
+ *
+ * Two of those come from a probe - three clicks at irregular offsets, so no
+ * shift but the true one lines them all up - played once down each path:
+ *
+ *   mic      the phone plays it, its own microphone hears it
+ *   backing  the robot's browser plays it into the same null sink the song
+ *            goes to, so it arrives through PipeWire exactly as the song does
+ *
+ * The two paths never meet in the air (the robot renders into a null sink, so
+ * nothing it plays is audible), which is why no single probe can measure the
+ * whole sum, and why the first attempt at this - one probe, phone speaker to
+ * phone mic - was measuring `micLatency` alone and applying it as if it were
+ * the total.
+ *
+ * `delta` needs no probe: the robot's follower already computes its own player
+ * error against the server timeline to decide whether to seek, and now reports
+ * it.
+ */
+const PROBE_CALIBRATE = process.env.RELAY_CALIBRATION_PROBE !== '0';
+const PROBE_RETRY_MS = envMs('RELAY_CALIBRATION_PROBE_RETRY_MS', 6_000);
+// How long the client is told to wait after receiving the request before it
+// actually plays: swallows dispatch jitter so "play now" does not mean
+// "whenever this message happens to be processed."
+const PROBE_LEAD_MS = envMs('RELAY_CALIBRATION_PROBE_LEAD_MS', 200);
+/**
+ * How far either side of the estimated position to search.
+ *
+ * This bounds the latency the probe can find at all, so it has to cover the
+ * whole plausible range of a path rather than just the round-trip estimate's
+ * error. The robot's browser-to-PipeWire path measured close to two seconds,
+ * which a 400 ms window would have silently missed.
+ */
+const PROBE_SEARCH_MARGIN_MS = envMs('RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000);
+const PROBE_MIN_CORRELATION = Number(process.env.RELAY_CALIBRATION_PROBE_MIN_CORRELATION ?? 0.5);
+const PROBE_DEBUG = process.env.RELAY_CALIBRATION_PROBE_DEBUG === '1';
+const PROBE_REPLY_TIMEOUT_MS = 3_000;
+/** Long enough for the probe to play, be captured and reach the server. */
+const PROBE_ANALYSIS_TIMEOUT_MS = envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000);
+
+type ProbeTarget = 'mic' | 'backing';
+
+let lastProbeAttemptAt = -Infinity;
+let probeRequestId = 0;
+let pendingProbe: {
+  target: ProbeTarget;
+  requestId: number;
+  serverSentAtMs: number;
+  generation: number | null;
+} | null = null;
+let pendingProbeAnalysis: {
+  target: ProbeTarget;
+  targetSample: number;
+  windowStart: number;
+  windowSamples: number;
+  generation: number | null;
+  deadlineMs: number;
+} | null = null;
+/** The mic leg, held while the backing leg is measured. Both describe one run. */
+let measuredMicLeg: { targetSample: number; actualSample: number; correlation: number } | null = null;
+/** Diagnostic only: what the last probe of each leg scored. */
+let lastProbeCorrelation: { mic: number | null; backing: number | null } = { mic: null, backing: null };
+/** What the last completed boot calibration described, so it is not re-run for nothing. */
+let lastProbeContext: {
+  sessionGeneration: number;
+  micGeneration: number | null;
+  backingGeneration: number | null;
+} | null = null;
+/**
+ * Robot player position minus the server timeline, in ms, as the robot's own
+ * follower measures it. Null until a robot source page reports one; without it
+ * there is no `delta` term and boot calibration cannot complete.
+ */
+let robotPlayerOffsetMs: number | null = null;
+let robotPlayerOffsetAt = -Infinity;
+/** How many robot source pages are connected, so the backing leg has a player. */
+let robotSourceCount = 0;
+/** The last completed boot calibration, kept for the status payload. */
+let lastBootCalibration: BootCalibrationResult | null = null;
+/**
+ * `micLatency - backingLatency` from the last completed run: the part of the
+ * alignment that is a property of the capture pipeline rather than of what is
+ * playing, so it survives every seek and only a restarted capture invalidates it.
+ */
+let bootPathDifferenceMs: number | null = null;
+let bootConfidence: number | null = null;
+/** How far `delta` must move before the vocal is shifted to follow it. */
+const BOOT_DELTA_REAPPLY_MS = envMs('RELAY_CALIBRATION_DELTA_REAPPLY_MS', 40);
+/** Past this the reported offset describes a playback position long gone. */
+const ROBOT_OFFSET_FRESH_MS = 2_000;
 
 // An open socket is not a running stream. Starting a measurement against a
 // phone that has registered but is not sending yet spends the whole window
@@ -188,11 +310,24 @@ const calibration = new CalibrationSession({
   // one does not move.
   agreementWindows: Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3),
   agreementToleranceMs: envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25),
-  // Agreement rejects a false positive that lands somewhere different each
-  // window. It cannot reject one that lands in the same wrong place every time,
-  // which is what a beat-period match does - the tempo does not change between
-  // windows. Not looking that far out is what rules those out.
-  maxLagMs: envMs('RELAY_CALIBRATION_MAX_LAG_MS', 700),
+  // Full agreement is a floor of agreementWindows * durationMs even in the
+  // best case. A single window this confident is worth applying while the
+  // rest keep collecting in the background, rather than leaving the mix on
+  // the network estimate for that whole stretch. 0.55 sits between the
+  // confidence a real match scores in practice (0.6-0.8+) and what a rejected,
+  // not-yet-agreeing window scores (0.45-0.6) - it is a working guess, not a
+  // substitute for agreement, which still runs and can replace it.
+  provisionalConfidence: Number(process.env.RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE ?? 0.55),
+  // Was 700 ms, on the reasoning that the desktop follower corrects past
+  // 450 ms and nothing physical lives beyond that, so anything further out had
+  // to be a beat multiple. A robot take then measured -1790 ms with confidence
+  // 0.98 and five windows inside 15 ms - the signature of a true match, not an
+  // alias - and the recording confirmed the vocal really was that far out. The
+  // reasoning missed that the phone's uplink and the robot's browser playback
+  // each add their own delay, neither bounded by the follower's dead band.
+  // Searching only to 700 ms did not rule the real answer out as implausible,
+  // it made it unmeasurable.
+  maxLagMs: envMs('RELAY_CALIBRATION_MAX_LAG_MS', 2_500),
   onSettled: () => {
     const result = calibration.result;
     if (result) session.setAlignment({ calibratedMicLagMs: result.micLagMs });
@@ -338,6 +473,17 @@ function timingCalibrationStatusPayload() {
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
+    // A probe heard too faintly to trust is not an error - the next one is a
+    // few seconds away - but it is invisible without this, and "phone speaker
+    // too quiet" is exactly the kind of fault it reports. Per leg, because
+    // only one of the two paths is usually the broken one.
+    probeCorrelation: lastProbeCorrelation,
+    // The three terms behind the applied advance, so a wrong total can be
+    // attributed to the path that produced it instead of re-measured blind.
+    bootCalibration: lastBootCalibration,
+    robotPlayerOffsetMs: performance.now() - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS
+      ? robotPlayerOffsetMs
+      : null,
     // An unattended attempt that fails is a retry, not an error the operator
     // has to act on, and the UI says so differently.
     automatic: calibrationWasAutomatic,
@@ -430,7 +576,7 @@ function clickMixedFrame(frameIndex: number) {
     writeMixedSample(output, i, micValue + clickSample(startSample + i));
   }
 
-  const retentionSamples = Math.round(((MAX_OFFSET_MS + 1000) * MIX_SAMPLE_RATE) / 1000);
+  const retentionSamples = Math.round((MIC_RETENTION_MS * MIX_SAMPLE_RATE) / 1000);
   session.trimMic(startSample - retentionSamples);
   return output;
 }
@@ -557,6 +703,11 @@ const mixerTimer = setInterval(() => {
  */
 function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE) return;
+  // A robot source has the two-leg boot probe, which measures both capture
+  // paths without the song's beat aliases and does not need 3/3 content
+  // agreement. Starting the legacy collector in the same timer tick races the
+  // pending probe for one CalibrationSession and can overwrite either result.
+  if (PROBE_CALIBRATE && robotSourceCount > 0) return;
   if (!session.active || calibration.collecting) return;
   if (calibration.result !== null && !calibrationIsStale()) return;
   if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
@@ -570,6 +721,273 @@ function maybeAutoCalibrate(nowMs: number) {
   calibrationWasAutomatic = true;
   calibration.start(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
+}
+
+/** The generation whose timeline a probe down this path will land on. */
+function probeGeneration(target: ProbeTarget) {
+  return target === 'mic' ? session.micGeneration : session.backingGeneration;
+}
+
+/** Whether everything a probe down this path needs is present and streaming. */
+function probePathReady(target: ProbeTarget, nowMs: number) {
+  if (target === 'mic') {
+    return publisher?.readyState === WebSocket.OPEN && nowMs - lastMicFrameAt < STREAM_LIVE_MS;
+  }
+  // The robot's browser plays the backing probe, but it arrives through the
+  // same PipeWire capture the song does, so both have to be live.
+  return backing?.readyState === WebSocket.OPEN
+    && nowMs - lastBackingFrameAt < STREAM_LIVE_MS
+    && robotSourceCount > 0;
+}
+
+function sendProbeRequest(target: ProbeTarget, nowMs: number) {
+  lastProbeAttemptAt = nowMs;
+  probeRequestId += 1;
+  pendingProbe = {
+    target,
+    requestId: probeRequestId,
+    serverSentAtMs: nowMs,
+    generation: probeGeneration(target),
+  };
+  if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${probeRequestId} generation=${probeGeneration(target)}`);
+
+  const payload = { type: 'play-calibration-probe', target, requestId: probeRequestId, leadMs: PROBE_LEAD_MS };
+  // The phone is addressed directly; the robot's source page is an
+  // unregistered client, so it is broadcast and each page decides from
+  // `?robot=1` whether the backing probe is its job.
+  if (target === 'mic') sendJson(publisher!, payload);
+  else broadcastJson(payload);
+}
+
+/**
+ * Runs the two probe legs in sequence, then combines them with the robot's
+ * reported player offset.
+ *
+ * Sequential rather than together so that each leg's search window contains
+ * exactly one probe: the same reference is used for both, and two of them
+ * overlapping in time would give the correlation two peaks to choose between,
+ * which is the ambiguity this whole approach exists to avoid.
+ */
+function maybeStartProbeCalibration(nowMs: number) {
+  if (!PROBE_CALIBRATE) return;
+  if (!session.active || calibration.collecting) return;
+  if (calibration.result !== null && !calibrationIsStale()) return;
+  if (pendingProbe !== null || pendingProbeAnalysis !== null) return;
+  if (nowMs - lastProbeAttemptAt < PROBE_RETRY_MS) return;
+
+  // Deliberately not waiting for a `delta` to exist. The probes measure the
+  // two path delays, which are properties of the hardware and the capture
+  // pipeline and do not depend on anything being played; `delta` is read
+  // continuously and folded in afterwards. Requiring playback here would mean
+  // no calibration at boot, which is exactly when it should be measured.
+
+  // A completed run stands until the thing it measured changes. Each leg is
+  // tied to its own capture, and a seek changes only `delta`, which is read
+  // continuously and needs no probe at all.
+  if (
+    measuredMicLeg === null
+    && lastProbeContext !== null
+    && lastProbeContext.sessionGeneration === session.generation
+    && lastProbeContext.micGeneration === session.micGeneration
+    && lastProbeContext.backingGeneration === session.backingGeneration
+  ) return;
+
+  const target: ProbeTarget = measuredMicLeg === null ? 'mic' : 'backing';
+  if (!probePathReady(target, nowMs)) return;
+  sendProbeRequest(target, nowMs);
+}
+
+/**
+ * The client reports only that it played the probe and for which request -
+ * not its own clock. The round trip (this server's own send and receive
+ * timestamps) is what maps "when the client scheduled it" onto the session
+ * clock, assuming symmetric latency - the same assumption the existing
+ * clock-ping RTT estimate already makes.
+ *
+ * The reply arrives when the client *scheduled* the probe, not when the audio
+ * came back: it still has to be played, captured and sent. So this only works
+ * out where to look, and the analysis waits for that stretch of timeline to
+ * actually arrive.
+ */
+function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
+  const pending = pendingProbe;
+  pendingProbe = null;
+  if (!pending || Number(reply.requestId) !== pending.requestId) return;
+  if (!session.active) return;
+
+  // A capture that restarted mid-flight makes the reply describe a timeline
+  // the audio will not land on. The server's own view is what decides that;
+  // the phone additionally confirms its capture generation, which it knows
+  // first-hand, truncated to the uint32 the PCM frame header carries. The
+  // robot's page cannot corroborate the backing leg - `backing:stdin` owns
+  // that stream, the page only makes the sound - so it is not asked to.
+  const generationHeld = probeGeneration(pending.target) === pending.generation;
+  const clientAgrees = pending.target === 'mic'
+    ? (Number(reply.generation) >>> 0) === pending.generation
+    : true;
+  if (!generationHeld || !clientAgrees) {
+    if (PROBE_DEBUG) console.log(`[probe] ${pending.target} dropped: generation mismatch`);
+    abandonProbeRun();
+    return;
+  }
+
+  const oneWayMs = (nowMs - pending.serverSentAtMs) / 2;
+  const targetSample = Math.round(session.sessionSampleAt(pending.serverSentAtMs + oneWayMs + PROBE_LEAD_MS));
+  const marginSamples = Math.round((MIX_SAMPLE_RATE * PROBE_SEARCH_MARGIN_MS) / 1000);
+  const referenceSamples = Math.round((MIX_SAMPLE_RATE * PROBE_REFERENCE_MS) / 1000);
+
+  pendingProbeAnalysis = {
+    target: pending.target,
+    targetSample,
+    // Only ever later than the estimate: a path stores audio late, never
+    // early. Searching earlier would spend the window on positions no real
+    // latency can occupy, and give a false peak somewhere to hide.
+    windowStart: targetSample - Math.round(marginSamples / 8),
+    windowSamples: referenceSamples + marginSamples,
+    generation: pending.generation,
+    deadlineMs: nowMs + PROBE_ANALYSIS_TIMEOUT_MS,
+  };
+}
+
+/** Drops a part-finished run so the next attempt starts from the mic leg. */
+function abandonProbeRun() {
+  pendingProbe = null;
+  pendingProbeAnalysis = null;
+  measuredMicLeg = null;
+}
+
+/** Runs the waiting probe analysis once the audio carrying it has landed. */
+function maybeFinishProbeAnalysis(nowMs: number) {
+  const waiting = pendingProbeAnalysis;
+  if (!waiting) return;
+
+  const reached = waiting.target === 'mic' ? session.micTotalSamples : session.backingTotalSamples;
+  const needed = waiting.windowStart + waiting.windowSamples;
+
+  if (!session.active || probeGeneration(waiting.target) !== waiting.generation || nowMs > waiting.deadlineMs) {
+    if (PROBE_DEBUG) {
+      console.log(
+        `[probe] ${waiting.target} analysis dropped: active=${session.active}`
+        + ` generation=${probeGeneration(waiting.target)}/${waiting.generation}`
+        + ` timedOut=${nowMs > waiting.deadlineMs} reached=${reached} needed=${needed}`,
+      );
+    }
+    abandonProbeRun();
+    return;
+  }
+
+  // readRange pads a range the timeline has not got to yet with zeros, which
+  // would silently correlate against silence instead of the probe.
+  if (reached < needed) return;
+  pendingProbeAnalysis = null;
+
+  const window = waiting.target === 'mic'
+    ? session.readMic(waiting.windowStart, waiting.windowSamples)
+    : session.readBacking(waiting.windowStart, waiting.windowSamples);
+  const { offsetSamples, correlation } = locateProbe(window, MIX_SAMPLE_RATE);
+  const actualSample = waiting.windowStart + offsetSamples;
+  const latencyMs = ((actualSample - waiting.targetSample) / MIX_SAMPLE_RATE) * 1000;
+  lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
+
+  if (PROBE_DEBUG) {
+    console.log(
+      `[probe] ${waiting.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`,
+    );
+  }
+
+  if (correlation < PROBE_MIN_CORRELATION) {
+    abandonProbeRun();
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
+  const leg = { targetSample: waiting.targetSample, actualSample, correlation };
+
+  if (waiting.target === 'mic') {
+    // Held while the backing leg runs. Neither leg means anything alone.
+    measuredMicLeg = leg;
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
+  const micLeg = measuredMicLeg;
+  measuredMicLeg = null;
+  if (micLeg === null) return;
+
+  const result = combineBootCalibration({
+    mic: micLeg,
+    backing: leg,
+    deltaMs: currentDeltaMs(nowMs),
+    sampleRate: MIX_SAMPLE_RATE,
+  });
+
+  if (PROBE_DEBUG) {
+    console.log(
+      `[probe] combined advanceMs=${result.advanceMs.toFixed(0)}`
+      + ` (mic ${result.micLatencyMs.toFixed(0)} - backing ${result.backingLatencyMs.toFixed(0)}`
+      + ` + delta ${result.deltaMs.toFixed(0)}) confidence=${result.confidence.toFixed(3)}`,
+    );
+  }
+
+  lastProbeContext = {
+    sessionGeneration: session.generation,
+    micGeneration: session.micGeneration,
+    backingGeneration: session.backingGeneration,
+  };
+  lastBootCalibration = result;
+  bootPathDifferenceMs = result.micLatencyMs - result.backingLatencyMs;
+  bootConfidence = result.confidence;
+  calibration.applyExternalResult({
+    micLagMs: result.advanceMs,
+    confidence: Math.max(0, Math.min(1, result.confidence)),
+  });
+}
+
+/** The robot's player offset, or 0 when nothing is playing to have one. */
+function currentDeltaMs(nowMs: number) {
+  if (robotPlayerOffsetMs === null) return 0;
+  return nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS ? robotPlayerOffsetMs : 0;
+}
+
+/**
+ * Folds a moved `delta` into the boot measurement without re-probing.
+ *
+ * The two probe legs measure path delays - properties of the capture
+ * pipeline, fixed until something in it restarts. Only `delta` moves during a
+ * session, and it moves for one reason: the robot's player drifting against
+ * the phone's and being seeked back. Re-running the probes for that would be
+ * measuring two constants again to learn a third term that is already known
+ * continuously, and on the phone it would be audible.
+ *
+ * Applied only past a threshold, because the correction shifts the vocal
+ * where it can be heard, and the follower's own dead band means small
+ * movements are constant.
+ */
+function maybeReapplyBootCalibration(nowMs: number) {
+  if (bootPathDifferenceMs === null || calibration.collecting) return;
+  if (nowMs - robotPlayerOffsetAt > ROBOT_OFFSET_FRESH_MS) return;
+  if (lastProbeContext === null) return;
+  // The paths themselves changed; the boot numbers no longer describe them and
+  // a fresh run is what is needed, not an updated delta.
+  if (
+    lastProbeContext.sessionGeneration !== session.generation
+    || lastProbeContext.micGeneration !== session.micGeneration
+    || lastProbeContext.backingGeneration !== session.backingGeneration
+  ) return;
+
+  const advanceMs = bootPathDifferenceMs + currentDeltaMs(nowMs);
+  const applied = session.alignment.calibratedMicLagMs;
+  if (applied !== null && Math.abs(advanceMs - applied) < BOOT_DELTA_REAPPLY_MS) return;
+
+  if (PROBE_DEBUG) {
+    console.log(`[probe] delta moved; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
+  }
+  lastBootCalibration = lastBootCalibration === null ? null : {
+    ...lastBootCalibration,
+    advanceMs,
+    deltaMs: currentDeltaMs(nowMs),
+  };
+  calibration.applyExternalResult({ micLagMs: advanceMs, confidence: bootConfidence ?? 0 });
 }
 
 const youtubeTimelineTimer = setInterval(() => {
@@ -600,6 +1018,15 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(mixHealthPayload());
   }
 
+  // A reply that never arrives (socket dropped between the request and the
+  // click) would otherwise wedge every future attempt behind pendingProbe.
+  if (pendingProbe !== null && nowMs - pendingProbe.serverSentAtMs > PROBE_REPLY_TIMEOUT_MS) {
+    pendingProbe = null;
+  }
+
+  maybeFinishProbeAnalysis(nowMs);
+  maybeStartProbeCalibration(nowMs);
+  maybeReapplyBootCalibration(nowMs);
   maybeAutoCalibrate(nowMs);
 }, 250);
 
@@ -825,6 +1252,40 @@ wss.on('connection', (rawSocket) => {
       return;
     }
 
+    if (payload.type === 'calibration-probe-played') {
+      // The mic leg may only be answered by the phone holding the publisher
+      // slot; the backing leg by the robot's source page, which is an
+      // unregistered client and identifies itself by the target it answers.
+      const fromPublisher = socket === publisher && socket.role === 'publisher';
+      const target = payload.target === 'backing' ? 'backing' : 'mic';
+      if (target === 'mic' ? fromPublisher : socket.isRobotSource === true) {
+        handleProbeReply({ requestId: payload.requestId, generation: payload.generation }, performance.now());
+      }
+      return;
+    }
+
+    if (payload.type === 'robot-source-hello') {
+      // Says which pages can play the backing probe. Counted rather than
+      // flagged so a reconnecting page does not leave the count stuck on.
+      if (!socket.isRobotSource) {
+        socket.isRobotSource = true;
+        robotSourceCount += 1;
+      }
+      return;
+    }
+
+    if (payload.type === 'robot-player-offset') {
+      // The robot's follower already computes this to decide whether to seek.
+      // It is `delta` in the boot calibration: the robot's player position
+      // minus the server timeline the phone drives.
+      const offsetMs = Number(payload.offsetMs);
+      if (socket.isRobotSource === true && Number.isFinite(offsetMs)) {
+        robotPlayerOffsetMs = offsetMs;
+        robotPlayerOffsetAt = performance.now();
+      }
+      return;
+    }
+
     if (payload.type === 'start-sync-test') {
       if (socket !== publisher || socket.role !== 'publisher') {
         sendJson(socket, { type: 'error', message: 'Only the microphone device can start the sync test.' });
@@ -861,6 +1322,11 @@ wss.on('connection', (rawSocket) => {
 
   socket.on('close', () => {
     if (socket.replaced) return;
+
+    if (socket.isRobotSource) {
+      socket.isRobotSource = false;
+      robotSourceCount = Math.max(0, robotSourceCount - 1);
+    }
 
     if (socket === publisher) {
       publisher = null;

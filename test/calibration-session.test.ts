@@ -276,6 +276,13 @@ describe('CalibrationSession agreement', () => {
     calibration.observeMic(chunk(REQUIRED), at);
   }
 
+  test('rejects a non-integer agreement window count', () => {
+    assert.throws(
+      () => makeAgreeing([100], 2.5),
+      /agreementWindows must be a positive integer/,
+    );
+  });
+
   test('one window is not enough to apply an answer', () => {
     const calibration = makeAgreeing([240, 240, 240]);
     calibration.start(0);
@@ -294,6 +301,36 @@ describe('CalibrationSession agreement', () => {
 
     assert.equal(calibration.status().state, 'complete');
     assert.equal(calibration.result?.micLagMs, 244);
+  });
+
+  test('keeps a fast side\'s buffered next window while the slow side catches up', () => {
+    const calibration = makeAgreeing([240, 240], 2);
+    calibration.start(0);
+
+    // Backing arrives as one large burst. Completing the first window must
+    // consume only that window, not discard the second six seconds before the
+    // microphone websocket delivers its matching range.
+    calibration.observeBacking(chunk(REQUIRED * 2), 0);
+    calibration.observeMic(chunk(REQUIRED * 2), 0);
+
+    assert.equal(calibration.status().state, 'complete');
+    assert.equal(calibration.result?.micLagMs, 240);
+    assert.equal(calibration.status().windowsAgreed, 2);
+  });
+
+  test('keeps enough fast-side audio when the two captures start at different positions', () => {
+    const calibration = makeAgreeing([240, 240], 2);
+    calibration.start(0);
+
+    // The shared origin is half a window into backing. Two full overlapping
+    // windows therefore need backing to retain past its old fixed 2x cap.
+    calibration.observeBacking(chunk(REQUIRED), 0);
+    calibration.observeBacking(chunk(REQUIRED), REQUIRED);
+    calibration.observeBacking(chunk(REQUIRED), REQUIRED * 2);
+    calibration.observeMic(chunk(REQUIRED * 2), REQUIRED / 2);
+
+    assert.equal(calibration.status().state, 'complete');
+    assert.equal(calibration.result?.micLagMs, 240);
   });
 
   test('rejects the random answers a false positive produces', () => {
@@ -325,6 +362,16 @@ describe('CalibrationSession agreement', () => {
     assert.equal(calibration.result, null);
   });
 
+  test('does not report a full run when only each edge agrees with the newest value', () => {
+    const calibration = makeAgreeing([-20, 20, 0]);
+    calibration.start(0);
+
+    for (let i = 0; i < 3; i += 1) window(calibration, i);
+
+    assert.equal(calibration.status().state, 'collecting');
+    assert.equal(calibration.status().windowsAgreed, 2, 'the full range exceeds tolerance');
+  });
+
   test('a settled run reports itself as fully agreed', () => {
     const calibration = makeAgreeing([100, 100, 100]);
     calibration.start(0);
@@ -335,6 +382,141 @@ describe('CalibrationSession agreement', () => {
     assert.equal(status.windowsAgreed, 3);
     assert.equal(status.windowsNeeded, 3);
   });
+});
+
+describe('CalibrationSession provisional application', () => {
+  function analysisWithConfidence(micLagMs: number, confidence: number): TimingCalibrationAnalysis {
+    return { ...analysis(micLagMs), confidence };
+  }
+
+  /** Feeds windows whose analyser results (lag, confidence) are scripted in order. */
+  function makeProvisional(
+    results: [lag: number, confidence: number][],
+    provisionalConfidence: number,
+    windows = 3,
+  ) {
+    let index = 0;
+    return new CalibrationSession({
+      sampleRate: RATE,
+      durationMs: DURATION_MS,
+      timeoutMs: 20_000,
+      context: () => ({
+        sessionGeneration: 1, micGeneration: 10, backingGeneration: 20, sourceGeneration: 0,
+      }),
+      analyze: () => {
+        const [lag, confidence] = results[Math.min(index++, results.length - 1)];
+        return analysisWithConfidence(lag, confidence);
+      },
+      agreementWindows: windows,
+      agreementToleranceMs: 25,
+      provisionalConfidence,
+      now: () => 0,
+    });
+  }
+
+  function window(calibration: CalibrationSession, index: number) {
+    const at = index * REQUIRED;
+    calibration.observeBacking(chunk(REQUIRED), at);
+    calibration.observeMic(chunk(REQUIRED), at);
+  }
+
+  test('a confident single window applies immediately, without waiting for agreement', () => {
+    const calibration = makeProvisional([[175, 0.7], [-600, 0.5], [-320, 0.5]], 0.55);
+    calibration.start(0);
+
+    window(calibration, 0);
+    assert.equal(calibration.result?.micLagMs, 175, 'applied on the first window');
+    assert.equal(calibration.status().state, 'collecting', 'agreement is still running');
+    assert.equal(calibration.status().provisional, true);
+  });
+
+  test('a window below the provisional threshold is not applied', () => {
+    const calibration = makeProvisional([[175, 0.5], [175, 0.5], [175, 0.5]], 0.55);
+    calibration.start(0);
+
+    window(calibration, 0);
+    assert.equal(calibration.result, null, 'not confident enough to trust alone');
+    assert.equal(calibration.status().provisional, false);
+  });
+
+  test('agreement landing replaces the provisional value and clears the flag', () => {
+    const calibration = makeProvisional(
+      [[175, 0.7], [-600, 0.5], [244, 0.8], [235, 0.8], [250, 0.8]],
+      0.55,
+    );
+    calibration.start(0);
+
+    window(calibration, 0);
+    assert.equal(calibration.result?.micLagMs, 175, 'the provisional guess');
+    assert.equal(calibration.status().provisional, true);
+
+    window(calibration, 1); // disagrees, discarded, provisional guess stands
+    assert.equal(calibration.result?.micLagMs, 175);
+
+    window(calibration, 2);
+    window(calibration, 3);
+    window(calibration, 4);
+
+    assert.equal(calibration.status().state, 'complete');
+    assert.equal(calibration.status().provisional, false, 'a confirmed answer is not provisional');
+    // The applied value is the newest agreeing window's own reading (250), not
+    // the discarded provisional guess (175) or an earlier agreeing one (244).
+    assert.equal(calibration.result?.micLagMs, 250);
+  });
+
+  test('a later provisional window can replace an earlier one', () => {
+    const calibration = makeProvisional([[175, 0.6], [-600, 0.65]], 0.55);
+    calibration.start(0);
+
+    window(calibration, 0);
+    assert.equal(calibration.result?.micLagMs, 175);
+
+    window(calibration, 1); // still disagrees with the first, but is itself confident
+    assert.equal(calibration.result?.micLagMs, -600, 'the newer guess, not stuck on the first');
+    assert.equal(calibration.status().provisional, true);
+  });
+
+  test('a confirmed answer is not overwritten by a later disagreeing window, provisional or not', () => {
+    const calibration = makeProvisional(
+      [[244, 0.8], [235, 0.8], [250, 0.8], [-600, 0.9]],
+      0.55,
+    );
+    calibration.start(0);
+    for (let i = 0; i < 3; i += 1) window(calibration, i);
+    assert.equal(calibration.result?.micLagMs, 250, 'confirmed, on the newest agreeing window');
+
+    // A fresh run (a reconnect, a re-triggered auto-calibration) starts collecting
+    // again without discarding the confirmed answer - same invariant a plain
+    // disagreeing window already had, now checked with provisional application on.
+    calibration.start(1);
+    window(calibration, 3);
+    assert.equal(calibration.result?.micLagMs, 250, 'the confirmed answer, untouched');
+    assert.equal(calibration.status().provisional, false);
+  });
+
+  test('provisional application is off unless explicitly enabled', () => {
+    const calibration = makeAgreeingWithoutProvisional([175, -600, -320]);
+    calibration.start(0);
+
+    window(calibration, 0);
+    assert.equal(calibration.result, null, 'the old silent-until-agreed behaviour by default');
+  });
+
+  function makeAgreeingWithoutProvisional(lags: number[]) {
+    let index = 0;
+    return new CalibrationSession({
+      sampleRate: RATE,
+      durationMs: DURATION_MS,
+      timeoutMs: 20_000,
+      context: () => ({
+        sessionGeneration: 1, micGeneration: 10, backingGeneration: 20, sourceGeneration: 0,
+      }),
+      analyze: () => analysisWithConfidence(lags[Math.min(index++, lags.length - 1)], 0.8),
+      agreementWindows: 3,
+      agreementToleranceMs: 25,
+      now: () => 0,
+    });
+  }
 });
 
 describe('CalibrationSession agreement against the real analyser', () => {

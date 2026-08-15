@@ -172,6 +172,53 @@ function applyFineTune(sendToServer = true) {
   if (sendToServer) send({ type: 'set-vocal-fine-tune', valueMs });
 }
 
+// Must match src/calibration-probe.ts, which builds the reference the server
+// correlates against, and public/app.js, which plays the microphone leg.
+const PROBE_CLICK_OFFSETS_MS = [0, 165, 420];
+const PROBE_FREQUENCY_HZ = 1800;
+const PROBE_CLICK_DECAY_PER_SECOND = 55;
+const PROBE_CLICK_SECONDS = 0.12;
+
+let probeAudioContext = null;
+
+/**
+ * Plays the probe into this page's normal audio output.
+ *
+ * On the robot that output is `PULSE_SINK=relay_browser`, the same null sink
+ * the mirrored YouTube plays into, so the probe reaches the server through
+ * PipeWire and `backing:stdin` by exactly the route the song does - which is
+ * the whole point: what it measures is that route's delay.
+ *
+ * Nothing here is audible to anyone. The sink has no speaker behind it.
+ */
+async function playBackingProbe(requestId, leadMs) {
+  try {
+    if (!probeAudioContext) probeAudioContext = new AudioContext({ latencyHint: 'interactive' });
+    if (probeAudioContext.state === 'suspended') await probeAudioContext.resume();
+
+    const startTime = probeAudioContext.currentTime + leadMs / 1000;
+    for (const offsetMs of PROBE_CLICK_OFFSETS_MS) {
+      const at = startTime + offsetMs / 1000;
+      const oscillator = probeAudioContext.createOscillator();
+      const gain = probeAudioContext.createGain();
+      oscillator.frequency.value = PROBE_FREQUENCY_HZ;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.35, at + 0.002);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 1 / PROBE_CLICK_DECAY_PER_SECOND);
+      oscillator.connect(gain).connect(probeAudioContext.destination);
+      oscillator.start(at);
+      oscillator.stop(at + PROBE_CLICK_SECONDS);
+    }
+
+    // No generation: the capture this lands in belongs to `backing:stdin`,
+    // not to this page, so the server checks its own view rather than taking
+    // a number this page would only be guessing at.
+    send({ type: 'calibration-probe-played', target: 'backing', requestId });
+  } catch (error) {
+    console.warn('backing probe failed', error);
+  }
+}
+
 function renderCalibration() {
   const sourceConnected = Boolean(latestSourceStatus?.connected);
   const micConnected = Boolean(latestSourceStatus?.micConnected);
@@ -183,14 +230,21 @@ function renderCalibration() {
     const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
     timingButton.textContent = `Calibrating… ${progress}%`;
     const need = Number(latestCalibration.windowsNeeded) || 1;
-    // One window is never applied on its own: a false positive lands somewhere
-    // different each time, so agreement is what separates it from a real match.
+    // Full agreement is still what a value needs to stop being provisional -
+    // a false positive lands somewhere different each window, so repeatability
+    // is what separates it from a real match. A confident single window may
+    // already be applied underneath this (see the provisional note below);
+    // that does not end collection, it just means the singer is not waiting
+    // on the network estimate while agreement keeps confirming it.
     const rounds = need > 1
       ? ` · 已一致 ${Number(latestCalibration.windowsAgreed) || 0}/${need} 次`
       : '';
+    const provisionalNote = latestCalibration.provisional
+      ? ` · 已套用暫定值 ${signed(latestCalibration.micLagMs, ' ms')}，持續確認中`
+      : '';
     timingStatus.textContent = latestCalibration.automatic
-      ? `自動校正中 ${progress}%${rounds} · 手機保持喇叭播放，這段先不要唱。`
-      : `Collecting ${progress}%${rounds} · 手機保持喇叭播放，先不要說話。`;
+      ? `自動校正中 ${progress}%${rounds}${provisionalNote} · 手機保持喇叭播放，這段先不要唱。`
+      : `Collecting ${progress}%${rounds}${provisionalNote} · 手機保持喇叭播放，先不要說話。`;
     return;
   }
 
@@ -298,6 +352,16 @@ function applyTimeline() {
     const current = safePlayerTime();
     const errorSeconds = Number.isFinite(current) ? current - target : Number.NaN;
     const now = performance.now();
+
+    // `delta` in the server's boot calibration: this player's position minus
+    // the timeline the phone drives. The singer sings against the phone, so
+    // wherever this player sits inside the dead band below is a real part of
+    // the offset the mixer has to correct. It was already being computed to
+    // decide whether to seek and then thrown away.
+    if (ROBOT_MODE && Number.isFinite(errorSeconds)) {
+      send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000 });
+    }
+
     if (Number.isFinite(errorSeconds) && Math.abs(errorSeconds) > 0.45 && now - lastSeekAt > 700) {
       player.seekTo(Math.max(0, target), true);
       lastSeekAt = now;
@@ -380,6 +444,10 @@ function connect() {
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
+    // This page holds no role, but on the robot it owns the mirrored player,
+    // which makes it the only client that can play the backing probe or say
+    // where that player actually sits.
+    if (ROBOT_MODE) send({ type: 'robot-source-hello' });
     send({ type: 'youtube-timeline-request' });
     send({ type: 'source-status-request' });
     send({ type: 'timing-calibration-status-request' });
@@ -423,6 +491,15 @@ function connect() {
     if (message.type === 'timing-calibration-status') {
       latestCalibration = message;
       renderCalibration();
+      return;
+    }
+
+    if (message.type === 'play-calibration-probe') {
+      // Only the robot's page answers the backing leg, and only that leg: the
+      // mic leg belongs to the phone, and this page is broadcast to.
+      if (ROBOT_MODE && message.target === 'backing') {
+        playBackingProbe(message.requestId, Number(message.leadMs) || 200);
+      }
       return;
     }
 

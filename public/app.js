@@ -199,12 +199,18 @@ function updateCalibrateButton() {
   if (collecting) {
     const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
     const need = Number(latestCalibration.windowsNeeded) || 1;
-    // A single window is never trusted on its own, so say how far the run has
-    // got - otherwise repeated windows look like it is stuck.
+    // A window is not fully trusted until agreement confirms it, so say how
+    // far the run has got - otherwise repeated windows look like it is stuck.
+    // A confident single window may already be applied underneath this (see
+    // provisionalNote); that does not end the run, it just means singing does
+    // not have to wait on it.
     const rounds = need > 1
       ? ` · 已一致 ${Number(latestCalibration.windowsAgreed) || 0}/${need} 次`
       : '';
-    calibrateStatus.textContent = `校正中 ${progress}%${rounds} · 這幾秒先不要唱，讓麥克風收到伴奏。`;
+    const provisionalNote = latestCalibration.provisional
+      ? ` · 已套用暫定值 ${signed(latestCalibration.micLagMs, ' ms')}`
+      : '';
+    calibrateStatus.textContent = `校正中 ${progress}%${rounds}${provisionalNote} · 這幾秒先不要唱，讓麥克風收到伴奏。`;
     return;
   }
 
@@ -272,6 +278,53 @@ function int16ToFloat32(buffer) {
     output[i] = input[i] / (input[i] < 0 ? 0x8000 : 0x7fff);
   }
   return output;
+}
+
+// Must match src/calibration-probe.ts, which builds the reference the server
+// correlates against. Irregular offsets are the point: no shift other than the
+// true one lines all three clicks up at once, which is exactly the ambiguity
+// correlating against a song's own beat cannot escape.
+const PROBE_CLICK_OFFSETS_MS = [0, 165, 420];
+const PROBE_FREQUENCY_HZ = 1800;
+const PROBE_CLICK_DECAY_PER_SECOND = 55;
+const PROBE_CLICK_SECONDS = 0.12;
+
+/**
+ * Plays the probe out of the phone speaker so the phone's own microphone hears
+ * it. The reply says only that it played and for which request - the server
+ * derives the timing from its own round trip, because the client's clock is
+ * not on the session's timeline and mapping it would be the very thing being
+ * measured.
+ */
+function playCalibrationProbe(requestId, leadMs) {
+  if (!audioContext || activeRole !== 'publisher') return;
+
+  const startTime = audioContext.currentTime + leadMs / 1000;
+  for (const offsetMs of PROBE_CLICK_OFFSETS_MS) {
+    const at = startTime + offsetMs / 1000;
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.frequency.value = PROBE_FREQUENCY_HZ;
+    // Matches the reference's exp(-t * 55) envelope closely enough for the
+    // envelope correlation the server runs; the shapes only have to agree.
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(0.35, at + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 1 / PROBE_CLICK_DECAY_PER_SECOND);
+    oscillator.connect(gain).connect(audioContext.destination);
+    oscillator.start(at);
+    oscillator.stop(at + PROBE_CLICK_SECONDS);
+  }
+
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({
+    type: 'calibration-probe-played',
+    target: 'mic',
+    requestId,
+    // The same truncation framePcm applies. The server compares this against
+    // the generation it read off a PCM frame header, which is a uint32, so
+    // sending the untruncated clock seed here never matches.
+    generation: captureGeneration >>> 0,
+  }));
 }
 
 function scheduleClick(time, accent) {
@@ -381,6 +434,16 @@ function handleServerMessage(message) {
   if (message.type === 'timing-calibration-status') {
     latestCalibration = message;
     updateCalibrateButton();
+    return;
+  }
+
+  if (message.type === 'play-calibration-probe') {
+    // Backing requests are broadcast because the robot source page has no PCM
+    // publisher role. The phone must ignore that leg or its faster reply can
+    // be mistaken for the robot probe that is still waiting to play.
+    if (message.target === undefined || message.target === 'mic') {
+      playCalibrationProbe(message.requestId, Number(message.leadMs) || 200);
+    }
     return;
   }
 

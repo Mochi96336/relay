@@ -585,6 +585,47 @@ describe('timing calibration', () => {
     }
   });
 
+  test('marks the measurement stale when the backing capture restarts', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+      await primeStreams(backing, publisher);
+
+      monitor.send({ type: 'start-timing-calibration' });
+      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+
+      const { mic, backing: song } = laggedPair(8, RATE, 260);
+      await sendPcmInChunks(backing, song);
+      await sendPcmInChunks(publisher, mic);
+      const complete = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
+        10_000,
+      );
+
+      // A new bridge/browser process starts a new capture generation even when
+      // it replaces the old socket before that socket's close event arrives.
+      const restarted = await RelayClient.connect(server);
+      restarted.newCaptureSession();
+      restarted.send({ type: 'register', role: 'backing', sampleRate: RATE });
+      await restarted.waitForType('registered');
+      await sendPcmInChunks(restarted, tone(0.5, 0.8));
+
+      const stale = await monitor.waitFor(
+        (m) => m.type === 'source-status' && m.calibrationStale === true,
+        4_000,
+      );
+      assert.equal(stale.calibratedMicLagMs, complete.micLagMs, 'the old value is retained but flagged');
+
+      backing.close();
+      restarted.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('measures on its own when nobody is at the desktop', async () => {
     const server = await startRelay({ ...FAST, RELAY_AUTO_CALIBRATE: '1' });
     try {

@@ -1081,8 +1081,24 @@ wss.on('connection', (rawSocket) => {
       // their own position, so they stay aligned independently and an absent
       // phone costs the mix its vocal, not the whole take.
       if (socket === backing && socket.role === 'backing' && session.active) {
+        const previousGeneration = session.backingGeneration;
         lastBackingFrameAt = performance.now();
         const { samples, start } = session.ingestBacking(frame, backingSampleRate);
+        if (
+          previousGeneration !== null &&
+          session.backingGeneration !== previousGeneration
+        ) {
+          // A new backing process can have a different browser/output delay.
+          // Registration happens before its first framed sample, so generation
+          // is the first point where a socket reconnect can be distinguished
+          // from an entirely new capture.
+          if (calibration.collecting) {
+            calibration.fail('Backing capture restarted during calibration. Start calibration again.');
+          } else {
+            broadcastJson(sourceStatusPayload());
+            broadcastJson(timingCalibrationStatusPayload());
+          }
+        }
         calibration.observeBacking(samples, start);
       }
       return;

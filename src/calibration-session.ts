@@ -257,13 +257,18 @@ export class CalibrationSession {
   }
 
   /**
-   * The session index both sides are rendered from. Null until each side has
-   * landed something: taking the earliest of the two is what keeps the skew
-   * between them in the measurement instead of quietly zeroing it out.
+   * The session index both sides are rendered from: the later of the two
+   * starts, because that is where both actually have audio.
+   *
+   * Taking the earlier one instead gives the late side a run of silence it was
+   * simply not observed for, which reads as an outage and biases the
+   * correlation with content that never existed. It does not buy anything
+   * either - the offset between the two streams is carried by their session
+   * indices, so any shared origin measures the same lag.
    */
   private get origin() {
     if (this.mic.firstStart === null || this.backing.firstStart === null) return null;
-    return Math.min(this.mic.firstStart, this.backing.firstStart);
+    return Math.max(this.mic.firstStart, this.backing.firstStart);
   }
 
   /** How much of the window both sides now reach. */

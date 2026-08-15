@@ -128,6 +128,17 @@ const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATION_RETRY_MS', 15_00
 let lastAutoCalibrationAt = -Infinity;
 let calibrationWasAutomatic = false;
 
+// An open socket is not a running stream. Starting a measurement against a
+// phone that has registered but is not sending yet spends the whole window
+// waiting for it, and the far side of that wait is not audio anyone lost.
+const STREAM_LIVE_MS = 1_000;
+let lastMicFrameAt = -Infinity;
+let lastBackingFrameAt = -Infinity;
+
+function bothStreamsFlowing(nowMs: number) {
+  return nowMs - lastMicFrameAt < STREAM_LIVE_MS && nowMs - lastBackingFrameAt < STREAM_LIVE_MS;
+}
+
 // How long the captured song may be missing before the live session is
 // declared over. The extension retries after a second, so anything shorter
 // turns an ordinary blip into a lost take.
@@ -518,6 +529,7 @@ function maybeAutoCalibrate(nowMs: number) {
   if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
 
   if (backing?.readyState !== WebSocket.OPEN || publisher?.readyState !== WebSocket.OPEN) return;
+  if (!bothStreamsFlowing(nowMs)) return;
   const timeline = currentTimelineStatus();
   if (!timeline.connected || Number(timeline.state) !== 1) return;
 
@@ -575,6 +587,7 @@ wss.on('connection', (rawSocket) => {
       if (socket === publisher && socket.role === 'publisher') {
         if (testActive || session.active) {
           const previousGeneration = session.micGeneration;
+          lastMicFrameAt = performance.now();
           const { samples, start } = session.ingestMic(frame, publisherSampleRate);
 
           if (session.active) {
@@ -598,6 +611,7 @@ wss.on('connection', (rawSocket) => {
       // their own position, so they stay aligned independently and an absent
       // phone costs the mix its vocal, not the whole take.
       if (socket === backing && socket.role === 'backing' && session.active) {
+        lastBackingFrameAt = performance.now();
         const { samples, start } = session.ingestBacking(frame, backingSampleRate);
         calibration.observeBacking(samples, start);
       }

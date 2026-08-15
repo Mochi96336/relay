@@ -206,21 +206,20 @@ describe('CalibrationSession placement', () => {
     assert.equal(seen!.mic[half + gap], 2_000, 'audio after the hole keeps its own position');
   });
 
-  test('keeps the skew between where the two timelines were anchored', () => {
-    const skew = 20 * MS;
+  test('starts the window where both sides have audio', () => {
+    const late = 3_000 * MS;
 
     const { seen, status } = collect((calibration) => {
-      calibration.observeBacking(filled(REQUIRED, 500), 0);
-      // The phone's stream was anchored 20 ms later than the source's. That
-      // offset is part of what the mixer has to correct, so it belongs in the
-      // measurement rather than being normalised away.
-      calibration.observeMic(filled(REQUIRED, 1_000), skew);
+      calibration.observeBacking(filled(REQUIRED * 2, 500), 0);
+      // The phone only started streaming three seconds in. Those three seconds
+      // are not an outage - nothing was captured to lose - so they must not be
+      // rendered as silence, and must not read as lost audio.
+      calibration.observeMic(filled(REQUIRED, 1_000), late);
     });
 
     assert.equal(status.state, 'complete', status.error ?? '');
-    assert.equal(seen!.mic[0], 0);
-    assert.equal(seen!.mic[skew], 1_000);
-    assert.equal(seen!.backing[0], 500);
+    assert.equal(seen!.mic[0], 1_000, 'the window opens where the microphone does');
+    assert.equal(seen!.backing[0], 500, 'and reads the song from the same moment');
   });
 
   test('refuses to measure across a large dropout', () => {

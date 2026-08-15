@@ -449,7 +449,7 @@ describe('timing calibration', () => {
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const lagMs = 260;
-      const { mic, backing: song } = laggedPair(6, RATE, lagMs);
+      const { mic, backing: song } = laggedPair(8, RATE, lagMs);
       // Concurrently, the way a real take streams. Sending one side to
       // completion first anchors its timeline that much earlier, and the
       // measurement now reports that skew instead of discarding it.
@@ -509,7 +509,7 @@ describe('timing calibration', () => {
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
-      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      const { mic, backing: song } = laggedPair(8, RATE, 260);
       await sendPcmInChunks(backing, song);
       await sendPcmInChunks(publisher, mic);
       const complete = await monitor.waitFor(
@@ -546,6 +546,13 @@ describe('timing calibration', () => {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
 
+      // Both sides have to be streaming, not merely connected: an open socket
+      // says nothing about whether the phone has started its capture.
+      await Promise.all([
+        sendPcmInChunks(backing, tone(1, 0.8)),
+        sendPcmInChunks(publisher, tone(1, 0.4)),
+      ]);
+
       // Nobody sends start-timing-calibration. The server should notice it has
       // no usable measurement and take one.
       await monitor.waitFor(
@@ -553,7 +560,7 @@ describe('timing calibration', () => {
         3_000,
       );
 
-      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      const { mic, backing: song } = laggedPair(8, RATE, 260);
       await Promise.all([
         sendPcmInChunks(backing, song),
         sendPcmInChunks(publisher, mic),
@@ -580,6 +587,32 @@ describe('timing calibration', () => {
     }
   });
 
+  test('waits for the phone to actually stream, not just to connect', async () => {
+    const server = await startRelay({ ...FAST, RELAY_AUTO_CALIBRATE: '1' });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+
+      // Registered and playing, but the phone's capture has not started. Half
+      // the window would be spent waiting for it, and the wait would then be
+      // reported as lost audio.
+      await sendPcmInChunks(backing, tone(2, 0.8));
+      await sleep(800);
+
+      assert.notEqual(
+        monitor.latest('timing-calibration-status')?.state,
+        'collecting',
+        'a measurement against a silent microphone is worse than none',
+      );
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('does not keep re-measuring once it has a usable answer', async () => {
     const server = await startRelay({
       ...FAST,
@@ -590,8 +623,12 @@ describe('timing calibration', () => {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
 
+      await Promise.all([
+        sendPcmInChunks(backing, tone(1, 0.8)),
+        sendPcmInChunks(publisher, tone(1, 0.4)),
+      ]);
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting', 3_000);
-      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      const { mic, backing: song } = laggedPair(8, RATE, 260);
       await Promise.all([
         sendPcmInChunks(backing, song),
         sendPcmInChunks(publisher, mic),
@@ -625,7 +662,7 @@ describe('timing calibration', () => {
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
-      const { mic, backing: song } = laggedPair(6, RATE, 260);
+      const { mic, backing: song } = laggedPair(8, RATE, 260);
       await Promise.all([
         sendPcmInChunks(backing, song),
         sendPcmInChunks(publisher, mic),
@@ -667,7 +704,7 @@ describe('timing calibration', () => {
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
-      const { mic, backing: song } = laggedPair(6, RATE, 200);
+      const { mic, backing: song } = laggedPair(8, RATE, 200);
       await Promise.all([
         sendPcmInChunks(backing, song),
         sendPcmInChunks(publisher, mic),
@@ -736,7 +773,7 @@ describe('timing calibration', () => {
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
-      const { mic, backing: song } = laggedPair(6, RATE, 200);
+      const { mic, backing: song } = laggedPair(8, RATE, 200);
       await Promise.all([
         sendPcmInChunks(backing, song),
         sendPcmInChunks(publisher, mic),

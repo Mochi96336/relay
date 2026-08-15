@@ -6,6 +6,7 @@ import test from 'node:test';
 // @ts-ignore public browser module has no TypeScript declaration file
 import {
   decideRobotPlayerRecovery,
+  playerLoadedFromMirrorState,
   reloadBudgetAvailable,
   trimReloadHistory,
 } from '../public/robot-player-watchdog.js';
@@ -34,6 +35,14 @@ test('robot player recovery waits through transient failures and reloads persist
     decideRobotPlayerRecovery({ ...healthy, stalledForMs: 12_000 }),
     'youtube-player-stalled',
   );
+});
+
+test('robot player loading state is not confused by UI suffixes', () => {
+  assert.equal(playerLoadedFromMirrorState('not loaded'), false);
+  assert.equal(playerLoadedFromMirrorState('waiting'), false);
+  assert.equal(playerLoadedFromMirrorState('waiting · muted until enabled'), false);
+  assert.equal(playerLoadedFromMirrorState('cued · muted until enabled'), true);
+  assert.equal(playerLoadedFromMirrorState('playing · following'), true);
 });
 
 test('robot player watchdog caps reload loops', () => {

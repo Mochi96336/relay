@@ -3,6 +3,8 @@ import { performance } from 'node:perf_hooks';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
 const LEADER_STALE_AFTER_MS = 1_500;
+const HANDOFF_TIME_TOLERANCE_SECONDS = 1.5;
+const HOLDOVER_TIME_TOLERANCE_SECONDS = 0.9;
 
 export type PlaybackIdentity = {
   participantId: string;
@@ -12,13 +14,40 @@ export type PlaybackIdentity = {
 
 export type SongTelemetryResult = {
   accepted: boolean;
-  reason?: 'invalid-identity' | 'invalid-telemetry' | 'mic-owner-required' | 'leader-busy';
+  reason?:
+    | 'invalid-identity'
+    | 'invalid-telemetry'
+    | 'mic-owner-required'
+    | 'leader-busy'
+    | 'handoff-not-ready'
+    | 'handoff-song-mismatch'
+    | 'handoff-holdover-semantic-change';
   leaderChanged: boolean;
+  handoffCompleted?: boolean;
+  handoffId?: string;
+  previousLeader?: PlaybackIdentity | null;
+};
+
+export type SongHandoffPlan = {
+  handoffId: string;
+  revision: number;
+  target: PlaybackIdentity;
+  videoId: string;
+  state: number;
+  serverTime: number;
+  playbackRate: number;
 };
 
 type Leader = PlaybackIdentity & {
   connected: boolean;
   lastTelemetryAtMs: number;
+};
+
+type Handoff = {
+  id: string;
+  target: PlaybackIdentity;
+  state: 'preparing' | 'committing';
+  startedAtMs: number;
 };
 
 export function normalizePlaybackTransportId(value: unknown) {
@@ -40,22 +69,21 @@ export function normalizePlaybackGeneration(value: unknown) {
  *
  * YouTubeTimelineTracker deliberately remains ignorant of people and sockets:
  * it measures one accepted media clock. SongSession decides which playback
- * transport is allowed to feed that clock.
+ * transport is allowed to feed that clock and, when microphone ownership moves,
+ * keeps the old clock alive until the new owner's exact playback transport is
+ * prepared and actually producing the same song.
  *
- * This is intentionally not a visible DJ role. With no microphone owner, the
- * first healthy playback transport keeps the room clock until it disconnects
- * or goes stale. Once a microphone owner exists, telemetry from other
- * participants is rejected and the owner may replace the previous leader.
- *
- * Multiple tabs belonging to one participant do not last-writer-win against
- * each other. A healthy leader remains authoritative; only a newer generation
- * of the same transport, or an unavailable leader, may replace it. The later
- * song-handoff layer can explicitly coordinate which tab should become leader
- * when microphone ownership moves.
+ * The playback leader remains an implementation detail, not a visible DJ role.
+ * A prepared handoff is also intentionally not triggered by presence alone:
+ * callers must begin it from an explicit product action such as microphone
+ * acquisition. The target is cued first, then committed, and only valid target
+ * telemetry completes the handoff.
  */
 export class SongSession {
   private readonly timeline = new YouTubeTimelineTracker();
   private leader: Leader | null = null;
+  private handoff: Handoff | null = null;
+  private handoffSequence = 0;
   private revisionValue = 0;
 
   get revision() {
@@ -64,6 +92,80 @@ export class SongSession {
 
   get hasTelemetry() {
     return this.timeline.hasTelemetry;
+  }
+
+  beginHandoff(
+    targetInput: PlaybackIdentity,
+    micOwnerId: string | null,
+    nowMs = performance.now(),
+  ): SongHandoffPlan | null {
+    const target = this.normalizeIdentity(targetInput);
+    if (!target || micOwnerId === null || target.participantId !== micOwnerId) return null;
+    if (!this.leader || !this.hasTelemetry || this.sameIdentity(this.leader, target)) return null;
+
+    if (this.handoff && this.sameIdentity(this.handoff.target, target)) {
+      return this.handoffPlan(nowMs);
+    }
+
+    this.handoffSequence += 1;
+    this.handoff = {
+      id: `song-handoff-${this.handoffSequence}`,
+      target,
+      state: 'preparing',
+      startedAtMs: nowMs,
+    };
+    this.bump();
+    return this.handoffPlan(nowMs);
+  }
+
+  handoffPlanForTarget(identityInput: PlaybackIdentity, nowMs = performance.now()) {
+    const identity = this.normalizeIdentity(identityInput);
+    if (!identity || !this.handoff || !this.sameIdentity(this.handoff.target, identity)) return null;
+    return this.handoffPlan(nowMs);
+  }
+
+  markHandoffReady(
+    identityInput: PlaybackIdentity,
+    handoffId: unknown,
+    micOwnerId: string | null,
+    nowMs = performance.now(),
+  ): SongHandoffPlan | null {
+    const identity = this.normalizeIdentity(identityInput);
+    if (
+      !identity
+      || !this.handoff
+      || handoffId !== this.handoff.id
+      || !this.sameIdentity(this.handoff.target, identity)
+      || micOwnerId !== identity.participantId
+    ) return null;
+
+    if (this.handoff.state !== 'committing') {
+      this.handoff.state = 'committing';
+      this.bump();
+    }
+    return this.handoffPlan(nowMs);
+  }
+
+  deferHandoff(identityInput: PlaybackIdentity, handoffId: unknown) {
+    const identity = this.normalizeIdentity(identityInput);
+    if (
+      !identity
+      || !this.handoff
+      || handoffId !== this.handoff.id
+      || !this.sameIdentity(this.handoff.target, identity)
+    ) return false;
+
+    if (this.handoff.state === 'preparing') return false;
+    this.handoff.state = 'preparing';
+    this.bump();
+    return true;
+  }
+
+  cancelHandoff() {
+    if (!this.handoff) return false;
+    this.handoff = null;
+    this.bump();
+    return true;
   }
 
   update(
@@ -77,7 +179,7 @@ export class SongSession {
       return { accepted: false, reason: 'invalid-identity', leaderChanged: false };
     }
 
-    const authority = this.canWrite(identity, micOwnerId, nowMs);
+    const authority = this.canWrite(payload, identity, micOwnerId, nowMs);
     if (!authority.ok) {
       return { accepted: false, reason: authority.reason, leaderChanged: false };
     }
@@ -89,6 +191,14 @@ export class SongSession {
       return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
     }
 
+    const completingHandoff = Boolean(
+      this.handoff
+      && this.handoff.state === 'committing'
+      && this.sameIdentity(this.handoff.target, identity),
+    );
+    const completedHandoffId = completingHandoff ? this.handoff!.id : undefined;
+    const previousLeader = completingHandoff ? this.leaderIdentity() : undefined;
+
     const leaderChanged = !this.sameIdentity(this.leader, identity);
     if (leaderChanged) {
       this.leader = {
@@ -96,16 +206,29 @@ export class SongSession {
         connected: true,
         lastTelemetryAtMs: nowMs,
       };
+      if (completingHandoff) this.handoff = null;
       this.bump();
     } else if (this.leader) {
       this.leader.connected = true;
       this.leader.lastTelemetryAtMs = nowMs;
+      if (completingHandoff) {
+        this.handoff = null;
+        this.bump();
+      }
     }
 
     const after = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
-    if (!leaderChanged && this.semanticTimelineChanged(before, after)) this.bump();
+    if (!leaderChanged && !completingHandoff && this.semanticTimelineChanged(before, after)) this.bump();
 
-    return { accepted: true, leaderChanged };
+    return {
+      accepted: true,
+      leaderChanged,
+      ...(completingHandoff ? {
+        handoffCompleted: true,
+        handoffId: completedHandoffId,
+        previousLeader: previousLeader ?? null,
+      } : {}),
+    };
   }
 
   detach(identityInput: PlaybackIdentity) {
@@ -130,15 +253,66 @@ export class SongSession {
       playbackGeneration: this.leader?.generation ?? null,
       leaderConnected: this.leader?.connected ?? false,
       leaderFresh,
+      handoffState: this.handoff?.state ?? 'idle',
+      handoffId: this.handoff?.id ?? null,
+      handoffTargetParticipantId: this.handoff?.target.participantId ?? null,
+      handoffTargetPlaybackTransportId: this.handoff?.target.transportId ?? null,
+      handoffTargetPlaybackGeneration: this.handoff?.target.generation ?? null,
     };
   }
 
-  private canWrite(identity: PlaybackIdentity, micOwnerId: string | null, nowMs: number): {
+  roomStatusPayload(nowMs = performance.now()) {
+    const timeline = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
+    const hasSong = typeof timeline.videoId === 'string';
+
+    return {
+      type: 'room-song-status',
+      revision: this.revisionValue,
+      connected: Boolean(timeline.connected),
+      videoId: hasSong ? timeline.videoId : null,
+      state: hasSong ? timeline.state ?? null : null,
+      serverTime: hasSong ? timeline.serverTime ?? null : null,
+      duration: hasSong ? timeline.duration ?? null : null,
+      playbackRate: hasSong ? timeline.playbackRate ?? null : null,
+      handoffState: this.handoff?.state ?? 'idle',
+      handoffTargetParticipantId: this.handoff?.target.participantId ?? null,
+    };
+  }
+
+  private canWrite(
+    payload: Record<string, unknown>,
+    identity: PlaybackIdentity,
+    micOwnerId: string | null,
+    nowMs: number,
+  ): {
     ok: true;
   } | {
     ok: false;
-    reason: 'mic-owner-required' | 'leader-busy';
+    reason:
+      | 'mic-owner-required'
+      | 'leader-busy'
+      | 'handoff-not-ready'
+      | 'handoff-song-mismatch'
+      | 'handoff-holdover-semantic-change';
   } {
+    if (this.handoff && this.leader && this.sameIdentity(this.leader, identity)) {
+      return this.safeHoldoverTelemetry(payload, nowMs)
+        ? { ok: true }
+        : { ok: false, reason: 'handoff-holdover-semantic-change' };
+    }
+
+    if (this.handoff && this.sameIdentity(this.handoff.target, identity)) {
+      if (micOwnerId !== identity.participantId) {
+        return { ok: false, reason: 'mic-owner-required' };
+      }
+      if (this.handoff.state !== 'committing') {
+        return { ok: false, reason: 'handoff-not-ready' };
+      }
+      return this.safeTargetTelemetry(payload, nowMs)
+        ? { ok: true }
+        : { ok: false, reason: 'handoff-song-mismatch' };
+    }
+
     if (micOwnerId !== null && identity.participantId !== micOwnerId) {
       return { ok: false, reason: 'mic-owner-required' };
     }
@@ -146,9 +320,6 @@ export class SongSession {
     if (!this.leader) return { ok: true };
     if (this.sameIdentity(this.leader, identity)) return { ok: true };
 
-    // A new microphone owner supersedes the previous participant's playback
-    // authority. 0C will later make this a prepared song handoff; for 0A the
-    // important property is that the old phone can no longer mutate the clock.
     if (micOwnerId !== null && this.leader.participantId !== micOwnerId) {
       return { ok: true };
     }
@@ -171,6 +342,63 @@ export class SongSession {
     return { ok: false, reason: 'leader-busy' };
   }
 
+  private safeHoldoverTelemetry(payload: Record<string, unknown>, nowMs: number) {
+    const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
+    const roomTime = Number(room.serverTime);
+    const incomingTime = Number(payload.currentTime);
+    const roomRate = Number(room.playbackRate);
+    const incomingRate = Number(payload.playbackRate ?? 1);
+
+    return typeof room.videoId === 'string'
+      && payload.videoId === room.videoId
+      && Number(payload.state) === Number(room.state)
+      && Number.isFinite(roomRate)
+      && Number.isFinite(incomingRate)
+      && Math.abs(roomRate - incomingRate) < 0.0001
+      && Number.isFinite(roomTime)
+      && Number.isFinite(incomingTime)
+      && Math.abs(incomingTime - roomTime) <= HOLDOVER_TIME_TOLERANCE_SECONDS;
+  }
+
+  private safeTargetTelemetry(payload: Record<string, unknown>, nowMs: number) {
+    const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
+    const roomTime = Number(room.serverTime);
+    const incomingTime = Number(payload.currentTime);
+    const desiredState = Number(room.state);
+    const incomingState = Number(payload.state);
+    const stateReady = desiredState === 1
+      ? incomingState === 1
+      : [0, 2, 5].includes(incomingState);
+
+    return typeof room.videoId === 'string'
+      && payload.videoId === room.videoId
+      && stateReady
+      && Number.isFinite(roomTime)
+      && Number.isFinite(incomingTime)
+      && Math.abs(incomingTime - roomTime) <= HANDOFF_TIME_TOLERANCE_SECONDS;
+  }
+
+  private handoffPlan(nowMs: number): SongHandoffPlan | null {
+    if (!this.handoff) return null;
+    const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
+    if (
+      typeof room.videoId !== 'string'
+      || !Number.isFinite(Number(room.serverTime))
+      || !Number.isFinite(Number(room.state))
+      || !Number.isFinite(Number(room.playbackRate))
+    ) return null;
+
+    return {
+      handoffId: this.handoff.id,
+      revision: this.revisionValue,
+      target: { ...this.handoff.target },
+      videoId: room.videoId,
+      state: Number(room.state),
+      serverTime: Number(room.serverTime),
+      playbackRate: Number(room.playbackRate),
+    };
+  }
+
   private normalizeIdentity(identity: PlaybackIdentity): PlaybackIdentity | null {
     const participantId = typeof identity?.participantId === 'string'
       ? identity.participantId.trim()
@@ -188,6 +416,14 @@ export class SongSession {
       && a.transportId === b.transportId
       && a.generation === b.generation,
     );
+  }
+
+  private leaderIdentity(): PlaybackIdentity | null {
+    return this.leader ? {
+      participantId: this.leader.participantId,
+      transportId: this.leader.transportId,
+      generation: this.leader.generation,
+    } : null;
   }
 
   private semanticTimelineChanged(before: Record<string, unknown>, after: Record<string, unknown>) {

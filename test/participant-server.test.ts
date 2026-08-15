@@ -45,7 +45,9 @@ describe('participant presence and microphone ownership', () => {
       alice.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await alice.waitForType('registered');
       const ownedByAlice = await bob.waitFor((message) => (
-        message.type === 'session-status' && message.micOwnerId === 'participant-alice'
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === true
       ));
       assert.equal(ownedByAlice.micConnected, true);
 

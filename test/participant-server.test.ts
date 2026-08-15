@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
+import WebSocket from 'ws';
+
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
@@ -11,6 +13,7 @@ const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_PARTICIPANT_GRACE_MS: '250',
+  RELAY_MIC_TRANSPORT_GRACE_MS: '250',
 };
 
 function participantQuery(id: string, nickname: string) {
@@ -22,141 +25,283 @@ async function connectParticipant(server: Awaited<ReturnType<typeof startRelay>>
   return RelayClient.connect(server, participantQuery(id, nickname));
 }
 
+function registerPublisher(
+  client: RelayClient,
+  captureGeneration: number,
+  takeoverExpectedOwnerId?: string,
+) {
+  client.send({
+    type: 'register',
+    role: 'publisher',
+    sampleRate: RATE,
+    captureGeneration,
+    ...(takeoverExpectedOwnerId ? { takeoverExpectedOwnerId } : {}),
+  });
+}
+
 describe('participant presence and microphone ownership', () => {
-  test('publishes presence and requires confirmation before another participant takes the mic', async () => {
+  test('commits a confirmed takeover together with a ready publisher transport', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
+      const bobPresence = await connectParticipant(server, 'participant-bobby', 'Bob');
+      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+
+      registerPublisher(alicePublisher, 1);
+      await alicePublisher.waitForType('registered');
+      await bobPresence.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === true
+      ));
+
+      const bobPublisher = await connectParticipant(server, 'participant-bobby', 'Bob');
+      registerPublisher(bobPublisher, 2);
+      const busy = await bobPublisher.waitForType('mic-busy');
+      assert.equal(busy.owner.id, 'participant-alice');
+      assert.equal(busy.owner.nickname, 'Alice');
+      assert.equal(alicePublisher.messages.some((message) => message.type === 'mic-revoked'), false);
+
+      registerPublisher(bobPublisher, 2, 'participant-alice');
+      const registered = await bobPublisher.waitFor((message) => (
+        message.type === 'registered' && message.role === 'publisher' && message.takeover === true
+      ));
+      assert.equal(registered.takeover, true);
+
+      const revoked = await alicePublisher.waitForType('mic-revoked');
+      assert.match(revoked.message, /Bob/);
+
+      const ownedByBob = await bobPresence.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-bobby'
+        && message.micConnected === true
+      ));
+      assert.equal(ownedByBob.micConnected, true);
+      assert.equal(
+        bobPresence.messages.some((message) => (
+          message.type === 'session-status'
+          && message.micOwnerId === 'participant-bobby'
+          && message.micConnected === false
+        )),
+        false,
+        'ownership must not be broadcast before the winning publisher is bound',
+      );
+
+      alicePresence.close();
+      bobPresence.close();
+      bobPublisher.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('rejects a stale takeover registration after a third participant changes ownership', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
+      const bobPresence = await connectParticipant(server, 'participant-bobby', 'Bob');
+      const carolPresence = await connectParticipant(server, 'participant-carol', 'Carol');
+      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+
+      registerPublisher(alicePublisher, 1);
+      await alicePublisher.waitForType('registered');
+
+      const carolPublisher = await connectParticipant(server, 'participant-carol', 'Carol');
+      registerPublisher(carolPublisher, 3, 'participant-alice');
+      await carolPublisher.waitForType('registered');
+      await carolPresence.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-carol'
+        && message.micConnected === true
+      ));
+
+      const bobPublisher = await connectParticipant(server, 'participant-bobby', 'Bob');
+      registerPublisher(bobPublisher, 2, 'participant-alice');
+      const rejected = await bobPublisher.waitForType('mic-takeover-rejected');
+      assert.equal(rejected.reason, 'owner-changed');
+      assert.equal(rejected.owner.id, 'participant-carol');
+      assert.equal(carolPublisher.messages.some((message) => message.type === 'mic-revoked'), false);
+
+      bobPublisher.send({ type: 'session-status-request' });
+      const status = await bobPublisher.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-carol'
+        && message.micConnected === true
+        && message.revision >= rejected.revision
+      ));
+      assert.equal(status.micOwnerId, 'participant-carol');
+
+      alicePresence.close();
+      bobPresence.close();
+      carolPresence.close();
+      bobPublisher.close();
+      carolPublisher.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('expires a missing publisher independently while the participant presence stays online', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const observer = await connectParticipant(server, 'participant-watch', 'Watcher');
+      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
+      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      registerPublisher(alicePublisher, 7);
+      await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === true
+      ));
+
+      alicePublisher.close();
+      const transportMissing = await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === false
+        && message.participants.some((participant: any) => (
+          participant.id === 'participant-alice' && participant.connected === true
+        ))
+      ));
+      assert.equal(transportMissing.micOwnerId, 'participant-alice');
+
+      await sleep(100);
+      const reconnectedPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      registerPublisher(reconnectedPublisher, 7);
+      await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === true
+      ));
+
+      reconnectedPublisher.close();
+      const released = await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === null
+        && message.participants.some((participant: any) => (
+          participant.id === 'participant-alice' && participant.connected === true
+        ))
+      ), 3_000);
+      assert.equal(released.micOwnerId, null);
+
+      alicePresence.close();
+      observer.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('release-mic frees the lease even when the participant presence remains connected', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const observer = await connectParticipant(server, 'participant-watch', 'Watcher');
+      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
+      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      registerPublisher(alicePublisher, 11);
+      await alicePublisher.waitForType('registered');
+
+      alicePresence.send({ type: 'release-mic' });
+      await alicePublisher.waitForType('mic-revoked');
+      const released = await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === null
+        && message.participants.some((participant: any) => (
+          participant.id === 'participant-alice' && participant.connected === true
+        ))
+      ));
+      assert.equal(released.micOwnerId, null);
+
+      alicePresence.close();
+      observer.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('supersedes a second tab semantically without a generic reconnecting error', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const observer = await connectParticipant(server, 'participant-watch', 'Watcher');
+      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
+      const firstPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      registerPublisher(firstPublisher, 21);
+      await firstPublisher.waitForType('registered');
+
+      const secondPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      registerPublisher(secondPublisher, 22);
+      await secondPublisher.waitForType('registered');
+      const superseded = await firstPublisher.waitForType('publisher-superseded');
+      assert.match(superseded.message, /newer microphone capture/i);
+      assert.deepEqual(firstPublisher.errors, []);
+
+      const stillOwned = await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === true
+      ));
+      assert.equal(stillOwned.micOwnerId, 'participant-alice');
+
+      alicePresence.close();
+      secondPublisher.close();
+      observer.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('does not turn ambient cookies or anonymous infrastructure sockets into participants', async () => {
     const server = await startRelay(FAST);
     try {
       const alice = await connectParticipant(server, 'participant-alice', 'Alice');
       await alice.waitFor((message) => (
         message.type === 'session-status'
-        && message.participants.some((participant: any) => participant.nickname === 'Alice')
+        && message.participants.some((participant: any) => participant.id === 'participant-alice')
       ));
 
-      const bob = await connectParticipant(server, 'participant-bobby', 'Bob');
-      const both = await alice.waitFor((message) => (
-        message.type === 'session-status'
-        && message.participants.filter((participant: any) => participant.connected).length === 2
-      ));
-      assert.deepEqual(
-        both.participants.map((participant: any) => participant.nickname).sort(),
-        ['Alice', 'Bob'],
-      );
-
-      alice.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-      await alice.waitForType('registered');
-      const ownedByAlice = await bob.waitFor((message) => (
-        message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
-        && message.micConnected === true
-      ));
-      assert.equal(ownedByAlice.micConnected, true);
-
-      bob.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-      const busy = await bob.waitForType('mic-busy');
-      assert.equal(busy.owner.id, 'participant-alice');
-      assert.equal(busy.owner.nickname, 'Alice');
-      assert.deepEqual(alice.errors, [], 'a normal busy attempt must not evict the current singer');
-
-      bob.send({
-        type: 'force-acquire-mic',
-        expectedOwnerId: 'participant-alice',
+      const anonymousStatus = await new Promise<Record<string, any>>((resolve, reject) => {
+        const ws = new WebSocket(server.wsUrl(), {
+          headers: {
+            cookie: 'relayParticipantId=participant-cookie; relayNickname=Cookie%20Ghost',
+          },
+        });
+        const timer = setTimeout(() => reject(new Error('anonymous status timeout')), 3_000);
+        ws.once('open', () => ws.send(JSON.stringify({ type: 'session-status-request' })));
+        ws.on('message', (data, isBinary) => {
+          if (isBinary) return;
+          const message = JSON.parse(data.toString());
+          if (message.type !== 'session-status') return;
+          clearTimeout(timer);
+          ws.close();
+          resolve(message);
+        });
+        ws.once('error', reject);
       });
-      const revoked = await alice.waitForType('mic-revoked');
-      assert.match(revoked.message, /Bob/);
 
-      const ownedByBob = await bob.waitFor((message) => (
-        message.type === 'session-status' && message.micOwnerId === 'participant-bobby'
-      ));
-      assert.equal(ownedByBob.micConnected, false, 'ownership changes before the new capture starts');
-
-      bob.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-      assert.equal((await bob.waitForType('registered')).role, 'publisher');
-      const bobLive = await bob.waitFor((message) => (
-        message.type === 'session-status'
-        && message.micOwnerId === 'participant-bobby'
-        && message.micConnected === true
-      ));
-      assert.equal(bobLive.micConnected, true);
-
+      assert.equal(
+        anonymousStatus.participants.some((participant: any) => participant.id === 'participant-cookie'),
+        false,
+      );
+      assert.equal(anonymousStatus.participants.length, 1);
       alice.close();
-      bob.close();
     } finally {
       await server.stop();
     }
   });
 
-  test('rejects a stale takeover confirmation after a third participant changes ownership', async () => {
+  test('does not allow a presence socket to reserve mic ownership before publisher registration', async () => {
     const server = await startRelay(FAST);
     try {
       const alice = await connectParticipant(server, 'participant-alice', 'Alice');
-      const bob = await connectParticipant(server, 'participant-bobby', 'Bob');
-      const carol = await connectParticipant(server, 'participant-carol', 'Carol');
-
       alice.send({ type: 'acquire-mic' });
-      await alice.waitFor((message) => message.type === 'session-status' && message.micOwnerId === 'participant-alice');
+      const error = await alice.waitForType('error');
+      assert.match(error.message, /publisher registration/);
 
-      carol.send({ type: 'force-acquire-mic', expectedOwnerId: 'participant-alice' });
-      await carol.waitFor((message) => message.type === 'session-status' && message.micOwnerId === 'participant-carol');
-
-      bob.send({ type: 'force-acquire-mic', expectedOwnerId: 'participant-alice' });
-      const rejected = await bob.waitForType('mic-takeover-rejected');
-      assert.equal(rejected.reason, 'owner-changed');
-      assert.equal(rejected.owner.id, 'participant-carol');
-
-      bob.send({ type: 'session-status-request' });
-      const status = await bob.waitFor((message) => (
-        message.type === 'session-status'
-        && message.micOwnerId === 'participant-carol'
-        && message.revision >= rejected.revision
+      alice.send({ type: 'session-status-request' });
+      const status = await alice.waitFor((message) => (
+        message.type === 'session-status' && message.micOwnerId === null
       ));
-      assert.equal(status.micOwnerId, 'participant-carol');
-
+      assert.equal(status.micOwnerId, null);
       alice.close();
-      bob.close();
-      carol.close();
-    } finally {
-      await server.stop();
-    }
-  });
-
-  test('keeps an offline owner during reconnect grace, then releases an abandoned mic', async () => {
-    const server = await startRelay(FAST);
-    try {
-      const observer = await connectParticipant(server, 'participant-watch', 'Watcher');
-      const alice = await connectParticipant(server, 'participant-alice', 'Alice');
-      alice.send({ type: 'acquire-mic' });
-      await observer.waitFor((message) => message.type === 'session-status' && message.micOwnerId === 'participant-alice');
-
-      alice.close();
-      const reconnecting = await observer.waitFor((message) => (
-        message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
-        && message.participants.some((participant: any) => (
-          participant.id === 'participant-alice' && participant.connected === false
-        ))
-      ));
-      assert.equal(reconnecting.micOwnerId, 'participant-alice');
-
-      await sleep(100);
-      const rejoined = await connectParticipant(server, 'participant-alice', 'Alice');
-      const backOnline = await observer.waitFor((message) => (
-        message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
-        && message.participants.some((participant: any) => (
-          participant.id === 'participant-alice' && participant.connected === true
-        ))
-      ));
-      assert.equal(backOnline.micOwnerId, 'participant-alice');
-
-      rejoined.close();
-      const released = await observer.waitFor((message) => (
-        message.type === 'session-status'
-        && message.micOwnerId === null
-        && !message.participants.some((participant: any) => participant.id === 'participant-alice')
-      ), 3_000);
-      assert.equal(released.micOwnerId, null);
-
-      observer.close();
     } finally {
       await server.stop();
     }

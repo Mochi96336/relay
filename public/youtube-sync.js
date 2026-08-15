@@ -18,6 +18,26 @@ const pendingPings = new Map();
 const RTT_WINDOW = 8;
 const recentRttMs = [];
 
+const PLAYBACK_TRANSPORT_KEY = 'relay.playbackTransportId.v1';
+const playbackGeneration = Date.now() >>> 0;
+
+function randomPlaybackTransportId() {
+  const random = new Uint32Array(4);
+  crypto.getRandomValues(random);
+  return `playback-${Array.from(random, (value) => value.toString(16).padStart(8, '0')).join('')}`;
+}
+
+function playbackTransportId() {
+  let id = sessionStorage.getItem(PLAYBACK_TRANSPORT_KEY);
+  if (!id || !/^[A-Za-z0-9_.:-]{8,128}$/.test(id)) {
+    id = randomPlaybackTransportId();
+    sessionStorage.setItem(PLAYBACK_TRANSPORT_KEY, id);
+  }
+  return id;
+}
+
+const transportId = playbackTransportId();
+
 function networkRttMs() {
   return recentRttMs.length > 0 ? Math.min(...recentRttMs) : Number.POSITIVE_INFINITY;
 }
@@ -44,9 +64,28 @@ const serverValues = document.querySelector('#server-timeline-values');
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const key = new URLSearchParams(location.search).get('key');
-  const query = key ? `?key=${encodeURIComponent(key)}` : '';
-  return `${protocol}//${location.host}/ws${query}`;
+  const source = new URLSearchParams(location.search);
+  const params = new URLSearchParams();
+  const key = source.get('key');
+  if (key) params.set('key', key);
+
+  // Playback is a human page transport, not robot infrastructure. Carry the
+  // same explicit participant identity as the presence/publisher sockets so
+  // the server can authorize telemetry without trusting a participant ID in
+  // the telemetry payload itself.
+  const participantId = typeof window.relayParticipantId === 'string'
+    ? window.relayParticipantId.trim()
+    : '';
+  const nickname = typeof window.relayNickname === 'string'
+    ? window.relayNickname.trim()
+    : '';
+  if (participantId && nickname) {
+    params.set('participant', participantId);
+    params.set('name', nickname);
+  }
+
+  const query = params.toString();
+  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
 
 function optionalNumber(value) {
@@ -195,6 +234,8 @@ window.addEventListener('relay:youtube-telemetry', (event) => {
   send({
     type: 'youtube-telemetry',
     ...detail,
+    playbackTransportId: transportId,
+    playbackGeneration,
     networkRttMs: Number.isFinite(networkRttMs()) ? networkRttMs() : undefined,
   });
 });

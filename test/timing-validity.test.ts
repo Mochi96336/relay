@@ -69,7 +69,7 @@ async function calibrate(
 ) {
   publisher.send(playingTelemetry);
   await primeStreams(backing, publisher);
-  monitor.send({ type: 'start-timing-calibration' });
+  publisher.send({ type: 'start-timing-calibration' });
   await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
   const { mic, backing: song } = laggedPair(8, RATE, lagMs);
@@ -254,7 +254,7 @@ describe('robot calibration ownership', () => {
       // Ignore any unattended boot request that may have been emitted while the
       // streams were primed; the manual click must start a fresh run of its own.
       const from = publisher.messages.length;
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       const probe = await waitForNewMessage(
         publisher,
         from,

@@ -13,6 +13,7 @@ Object.assign(process.env, {
   RELAY_BACKING_RECONNECT_MS: String(config.reconnectMs),
   RELAY_BACKING_MAX_BUFFERED_BYTES: String(config.maxBufferedBytes),
   RELAY_BACKING_STARTUP_FLUSH_MS: String(config.startupFlushMs),
+  RELAY_BACKING_ROBOT: config.robot ? '1' : '0',
 });
 
 await import('./backing-stdin.js');

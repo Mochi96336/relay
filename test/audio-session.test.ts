@@ -115,6 +115,18 @@ describe('AudioSession timelines', () => {
     assert.deepEqual([...session.readMic(0, 2)], [1, 2], 'the audio is still used');
   });
 
+  test('does not carry an unheadered warning into a new session', () => {
+    const session = makeSession();
+    session.start(0);
+    session.ingestMic(unheaderedFrame(pcmOf([1, 2])), RATE, 0);
+    assert.equal(session.health().unheadered, true);
+
+    session.stop();
+    session.start(1_000);
+
+    assert.equal(session.health().unheadered, false);
+  });
+
   test('resamples a source running at a different rate', () => {
     const session = makeSession();
     session.start(0);
@@ -343,6 +355,24 @@ describe('AudioSession microphone limiter', () => {
 
     drainAll(session, 500);
     assert.ok(session.health().clippedSamples > 0, 'the backstop still has to report itself');
+  });
+
+  test('does not carry limiter gain reduction into the next session', () => {
+    const session = makeSession();
+    session.setMicGainDb(36);
+    session.start(0);
+    session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
+    drainAll(session, 500);
+    assert.ok(session.health().limitedSamples > 0, 'the first take must leave the limiter active');
+
+    session.stop();
+    session.setMicGainDb(0);
+    session.start(1_000);
+    session.ingestMic(frame(0, pcmOf(new Array(RATE).fill(1_000)), 2), RATE, 1_000);
+    const next = drainAll(session, 1_020);
+
+    assert.equal(next.readInt16LE(0), 1_000, 'the next take starts at unity gain');
+    assert.equal(session.health().limitedSamples, 0);
   });
 });
 

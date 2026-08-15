@@ -386,6 +386,11 @@ export class AudioSession {
     this.micMeterWeight = 0;
     this.micHeadroomMs = 0;
     this.backingHeadroomMs = 0;
+    // These are audio state, not just diagnostics. Carrying gain reduction into
+    // a new epoch makes the beginning of the next take inherit the previous
+    // singer's last transient and can attenuate it for hundreds of milliseconds.
+    this.limiterEnvelope = 0;
+    this.limiterGain = 1;
     this.mic.gapSamples = 0;
     this.backing.gapSamples = 0;
   }
@@ -398,6 +403,7 @@ export class AudioSession {
     timeline.generation = null;
     timeline.originOffset = 0;
     timeline.gapSamples = 0;
+    timeline.unheadered = false;
   }
 
   /** Where the session clock is now, in session samples since the epoch. */

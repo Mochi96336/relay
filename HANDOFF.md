@@ -99,9 +99,35 @@ Content correlation had independently measured -1790 ms when `delta` was near ze
 Two consequences worth keeping:
 
 - **The probes run once; `delta` tracks live.** The two path delays are properties of the capture pipeline and only a restarted capture invalidates them. `delta` is the only term a seek moves, and it is read continuously, so a seek no longer costs a re-measurement - which is also why the probe clicks stopped firing repeatedly during playback.
-- **`backingLatency` of 2110 ms is itself the thing to attack next.** That is `parec`/PipeWire buffering, not something inherent. Cutting it shrinks the correction, the retention it needs, and the room for any of this to go wrong. The system now compensates for it correctly, which is not the same as it being reasonable.
+- **`backingLatency` of 2110 ms was buffering, and it is now fixed rather than compensated.** See "Where the two seconds actually came from" below. Compensating for it correctly was never the same as it being reasonable.
 
 `timing-calibration-status.bootCalibration` reports all three terms, so a wrong total can be attributed to the path that produced it instead of re-measured blind. A single probe cannot replace this: the phone's speaker and the robot's audio never meet in the air, so no one probe crosses both paths - which is exactly what the first attempt at this got wrong, measuring `micLatency` alone and applying it as the total.
+
+## Where the two seconds actually came from
+
+It was never load. The Pi sat at 0.9 across four cores and `backingStarvedFrames` stayed at 0 throughout - CPU pressure shows up as xruns and dropouts, not as a latency that is the same every time. The audio path itself measures **51 ms** end to end:
+
+| Stage | Latency |
+| --- | --- |
+| Chromium into the null sink | 10.7 ms (`512/48000`) |
+| the null sink | 0 |
+| `parec` capture | 40 ms (`1920/48000`, after the fix) |
+
+The 2110 ms was two unrelated buffers, and both are now fixed rather than corrected for:
+
+1. **`parec` defaulted to a two-second quantum.** `node.latency` read `96000/48000` because nothing asked for anything smaller - a sane default for recording to a file, and exactly wrong here. `scripts/robot-source.sh` now passes `--latency-msec` (`RELAY_BACKING_CAPTURE_LATENCY_MS`, default 40), which took it to `1920/48000`.
+2. **`npm run backing:stdin` takes ~1.9 s to start, and the capture does not wait for it.** The launcher opens the FIFO for reading immediately, so `parec` unblocks and captures through the whole of npm's and tsx's startup. `backing-stdin` then began its `sampleCursor` on that backlog, so the first frame it sent carried ~2 s old audio - and the server anchors the timeline to where a frame *arrives*, which pinned the whole backing timeline that far into the past. `src/backing-stdin.ts` now discards audio for `RELAY_BACKING_STARTUP_FLUSH_MS` (default 250 ms) after the first byte: a backlog drains at memory speed, so whatever is still arriving after that window is live.
+
+The second one is the one worth remembering, because it is invisible in every per-stage latency figure - every buffer reported 0, and the delay was in *when counting started*. The signature is `mix-health.backingHeadroomMs` sitting far above the prebuffer. Measured before and after, with `RELAY_LIVE_PREBUFFER_MS` at 400:
+
+| | before | after |
+| --- | --- | --- |
+| `backingHeadroomMs` | 1940 ms | 360-400 ms |
+| `micHeadroomMs` | 1929 ms | 377 ms |
+
+and the bridge now logs `discarded 2080 ms of startup backlog` at boot, which is the same number from the other side.
+
+Boot calibration keeps earning its place regardless - the phone's uplink delay and the robot player's `delta` are real and cannot be removed - but the correction it has to apply should now be a couple of hundred milliseconds rather than -1810 ms. `RELAY_MIC_RETENTION_MS` at 3000 and `RELAY_CALIBRATION_MAX_LAG_MS` at 2500 were both raised to cope with the old figure and are now far larger than needed; they cost only memory and search time, so they are left alone until a real take says what the range actually is.
 
 ## Two measurements worth not repeating
 

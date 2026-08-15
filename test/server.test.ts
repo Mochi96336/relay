@@ -332,6 +332,52 @@ describe('publisher takeover', () => {
   });
 });
 
+describe('mix settings', () => {
+  let server: RelayServer;
+  before(async () => { server = await startRelay(FAST); });
+  after(async () => { await server.stop(); });
+
+  test('carries song level so the phone can drive the machine playing the song', async () => {
+    const phone = await RelayClient.connect(server);
+    phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    await phone.waitForType('registered');
+
+    // source.html registers no role; it listens like any other client.
+    const desktop = await RelayClient.connect(server);
+    desktop.send({ type: 'register', role: 'monitor' });
+    await desktop.waitForType('registered');
+
+    phone.send({ type: 'set-mix', micGainDb: 18, songLevel: 25 });
+
+    const settings = await desktop.waitFor(
+      (m) => m.type === 'mix-settings' && m.songLevel === 25,
+      3_000,
+    );
+    assert.equal(settings.micGainDb, 18);
+
+    phone.close();
+    desktop.close();
+    await sleep(100);
+  });
+
+  test('clamps a song level outside the slider range', async () => {
+    const phone = await RelayClient.connect(server);
+    phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    await phone.waitForType('registered');
+
+    // Registration already delivered a mix-settings, so match on the value
+    // rather than on the next message of that type.
+    phone.send({ type: 'set-mix', songLevel: 900 });
+    await phone.waitFor((m) => m.type === 'mix-settings' && m.songLevel === 100, 3_000);
+
+    phone.send({ type: 'set-mix', songLevel: -40 });
+    await phone.waitFor((m) => m.type === 'mix-settings' && m.songLevel === 0, 3_000);
+
+    phone.close();
+    await sleep(100);
+  });
+});
+
 describe('timing calibration', () => {
   test('refuses to start without both sources', async () => {
     const server = await startRelay(FAST);

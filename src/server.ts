@@ -99,6 +99,7 @@ let backing: RelaySocket | null = null;
 let backingSampleRate: number | null = null;
 // Aligned with both sliders: the server is the authority they sync to.
 let micGainDb = 24;
+let songLevel = 40;
 let testActive = false;
 let testStartedAt = 0;
 let testFrameIndex = 0;
@@ -325,6 +326,7 @@ function mixSettingsPayload() {
   return {
     type: 'mix-settings',
     micGainDb,
+    songLevel,
   };
 }
 
@@ -776,6 +778,14 @@ wss.on('connection', (rawSocket) => {
       if (Number.isFinite(nextGain)) {
         micGainDb = Math.max(0, Math.min(36, nextGain));
         session.setMicGainDb(micGainDb);
+      }
+      // The song is played by the browser hosting the mirrored player, so this
+      // is the server's copy of a setting only that host can apply. Keeping it
+      // here is what lets the phone drive it - and the robot has no one at its
+      // screen to drive it locally.
+      const nextSongLevel = Number(payload.songLevel);
+      if (Number.isFinite(nextSongLevel)) {
+        songLevel = Math.max(0, Math.min(100, Math.round(nextSongLevel)));
       }
       broadcastJson(mixSettingsPayload());
     }

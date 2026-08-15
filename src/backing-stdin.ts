@@ -53,7 +53,9 @@ let registered = false;
 let everRegistered = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let stopped = false;
-let pending = Buffer.alloc(0);
+// Annotated, not inferred: `Buffer.alloc` narrows to `Buffer<ArrayBuffer>`,
+// while stdin hands out the wider `Buffer<ArrayBufferLike>`.
+let pending: Buffer = Buffer.alloc(0);
 let droppedFrames = 0;
 let lastDropLogAt = 0;
 

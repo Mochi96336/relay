@@ -38,12 +38,18 @@ let loadedVideoId = null;
 let lastSeekAt = 0;
 let applyTimer = null;
 let vocalFineTuneTouchedAt = 0;
+const sliderTouchedAt = new Map();
 
 // The server echoes every source-status back to every client, which used to
 // snap this slider back to a stale value while the user was still dragging it.
 function fineTuneIsBusy() {
   return document.activeElement === vocalFineTune
     || performance.now() - vocalFineTuneTouchedAt < SLIDER_HOLD_MS;
+}
+
+function sliderIsBusy(slider) {
+  return document.activeElement === slider
+    || performance.now() - (sliderTouchedAt.get(slider) ?? -Infinity) < SLIDER_HOLD_MS;
 }
 
 function wsUrl() {
@@ -122,21 +128,23 @@ function safePlayerTime() {
   }
 }
 
-function applyBalance() {
+function applyBalance(sendToServer = true) {
   const songLevel = Math.max(0, Math.min(100, Number(sourceVolume.value) || 0));
   const micGainDb = Math.max(0, Math.min(36, Number(sourceMicGain.value) || 0));
 
   sourceVolumeValue.value = `${Math.round(songLevel)}%`;
   sourceMicGainValue.value = `${micGainDb > 0 ? '+' : ''}${Math.round(micGainDb)} dB`;
 
-  if (playerReady && player && armed) {
+  // Only this page can act on song level - it owns the player - which is why
+  // the value lives on the server and arrives here as a message.
+  if (playerReady && player) {
     try {
       player.setVolume(songLevel);
     } catch {}
   }
 
-  if (armed) {
-    send({ type: 'set-mix', micGainDb });
+  if (sendToServer && armed) {
+    send({ type: 'set-mix', micGainDb, songLevel });
   }
 
   // The verdict compares the slider against the measurement, so it has to move
@@ -364,6 +372,19 @@ function connect() {
       return;
     }
 
+    // Both values live on the server so the phone can drive them. Song level
+    // can only be acted on here, because this page owns the player.
+    if (message.type === 'mix-settings') {
+      if (!sliderIsBusy(sourceMicGain) && Number.isFinite(Number(message.micGainDb))) {
+        sourceMicGain.value = String(message.micGainDb);
+      }
+      if (!sliderIsBusy(sourceVolume) && Number.isFinite(Number(message.songLevel))) {
+        sourceVolume.value = String(message.songLevel);
+      }
+      applyBalance(false);
+      return;
+    }
+
     if (message.type === 'source-status') {
       renderSourceStatus(message);
       return;
@@ -409,8 +430,14 @@ armButton.addEventListener('click', () => {
   applyTimeline();
 });
 
-sourceVolume.addEventListener('input', applyBalance);
-sourceMicGain.addEventListener('input', applyBalance);
+for (const slider of [sourceVolume, sourceMicGain]) {
+  slider.addEventListener('input', () => {
+    // Remembered so the server's echo does not snap the slider back out from
+    // under a drag that is still in progress.
+    sliderTouchedAt.set(slider, performance.now());
+    applyBalance();
+  });
+}
 vocalFineTune.addEventListener('input', () => {
   vocalFineTuneTouchedAt = performance.now();
   applyFineTune(true);

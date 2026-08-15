@@ -10,6 +10,10 @@ const monitorGainValue = document.querySelector('#monitor-gain-value');
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
 const micGainAdvice = document.querySelector('#mic-gain-advice');
+const songLevel = document.querySelector('#song-level');
+const songLevelValue = document.querySelector('#song-level-value');
+const calibrateButton = document.querySelector('#calibrate-timing');
+const calibrateStatus = document.querySelector('#calibrate-status');
 
 const TEST_BPM = 120;
 const MIX_SAMPLE_RATE = 48000;
@@ -30,6 +34,7 @@ let activeRole = null;
 let testActive = false;
 let liveMixActive = false;
 let latestMixHealth = null;
+let latestCalibration = null;
 
 /**
  * Whether what arrives on this socket is a server mix rather than raw
@@ -144,6 +149,7 @@ function updateMonitorGain() {
 
 function updateMixLabels() {
   micGainValue.value = signed(micGain.value, ' dB');
+  songLevelValue.value = `${Math.round(Number(songLevel.value) || 0)}%`;
   // The verdict compares the slider against the meter, so it moves with both.
   renderGainAdvice();
 }
@@ -154,6 +160,10 @@ function sendMixSettings() {
   socket.send(JSON.stringify({
     type: 'set-mix',
     micGainDb: Number(micGain.value),
+    // The song is played by the machine hosting the mirrored player, which in
+    // the finished topology is the robot - nobody is at its screen, so the
+    // value belongs to the server and the phone drives it from here.
+    songLevel: Number(songLevel.value),
   }));
 }
 
@@ -161,6 +171,45 @@ function updateTestButtons() {
   testStartButton.disabled = activeRole !== 'publisher' || testActive;
   testStopButton.disabled = !activeRole || !testActive;
   micGain.disabled = !activeRole;
+  songLevel.disabled = !activeRole;
+  // Same dependency on activeRole, so it rides along rather than needing a
+  // call at every site that changes roles.
+  updateCalibrateButton();
+}
+
+/**
+ * Calibration runs itself, but the singer is the one who can hear that it got
+ * it wrong, and they are not at the machine the other button is on.
+ */
+function updateCalibrateButton() {
+  const collecting = latestCalibration?.state === 'collecting';
+  calibrateButton.disabled = !activeRole || !liveMixActive || collecting;
+
+  if (!liveMixActive) {
+    calibrateStatus.textContent = '播放開始後會自動校正；覺得對不上可以在這裡手動重跑。';
+    return;
+  }
+
+  if (collecting) {
+    const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
+    calibrateStatus.textContent = `校正中 ${progress}% · 這幾秒先不要唱，讓麥克風收到伴奏。`;
+    return;
+  }
+
+  if (latestCalibration?.state === 'complete') {
+    const stale = latestCalibration.calibrationStale ? ' · 設定已改變，建議重跑' : '';
+    calibrateStatus.textContent = `已校正 ${signed(latestCalibration.micLagMs, ' ms')}${stale}`;
+    return;
+  }
+
+  if (latestCalibration?.state === 'failed') {
+    calibrateStatus.textContent = latestCalibration.automatic
+      ? '等待可用的音訊中，會自動重試。'
+      : `校正未成功：${latestCalibration.error ?? '訊號不足'}`;
+    return;
+  }
+
+  calibrateStatus.textContent = '尚未校正 · 目前用網路估計值。';
 }
 
 function wsUrl() {
@@ -295,6 +344,7 @@ function handleServerMessage(message) {
   if (message.type === 'source-status') {
     const wasLive = liveMixActive;
     liveMixActive = Boolean(message.active);
+    updateCalibrateButton();
 
     if (liveMixActive) {
       sourceSampleRate = Number(message.mixSampleRate) || MIX_SAMPLE_RATE;
@@ -311,7 +361,14 @@ function handleServerMessage(message) {
 
   if (message.type === 'mix-settings') {
     if (!sliderIsBusy(micGain)) micGain.value = String(message.micGainDb ?? 24);
+    if (!sliderIsBusy(songLevel)) songLevel.value = String(message.songLevel ?? 40);
     updateMixLabels();
+    return;
+  }
+
+  if (message.type === 'timing-calibration-status') {
+    latestCalibration = message;
+    updateCalibrateButton();
     return;
   }
 
@@ -703,7 +760,7 @@ testStopButton.addEventListener('click', () => {
 
 monitorGain.addEventListener('input', updateMonitorGain);
 
-for (const slider of [micGain]) {
+for (const slider of [micGain, songLevel]) {
   slider.addEventListener('input', () => {
     markSliderTouched(slider);
     sendMixSettings();
@@ -711,7 +768,13 @@ for (const slider of [micGain]) {
   slider.addEventListener('change', () => markSliderTouched(slider));
 }
 
+calibrateButton.addEventListener('click', () => {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
+});
+
 updateMonitorGain();
 updateMixLabels();
+updateCalibrateButton();
 updateTestButtons();
 setStatus('Idle', 'On the phone choose Microphone; on the computer choose Monitor.');

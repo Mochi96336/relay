@@ -91,12 +91,23 @@
         </div>
       </section>
 
+      <label class="gain-control" for="song-level">
+        <span>Song level</span>
+        <input id="song-level" type="range" min="0" max="100" step="1" value="40" disabled />
+        <output id="song-level-value" for="song-level">40%</output>
+      </label>
+
       <label class="gain-control" for="mic-gain">
         <span>Mic gain</span>
         <input id="mic-gain" type="range" min="0" max="36" step="1" value="24" disabled />
         <output id="mic-gain-value" for="mic-gain">+24 dB</output>
       </label>
       <p id="mic-gain-advice" class="hint">開始唱之後，這裡會顯示實際電平與建議的 Mic gain。</p>
+
+      <div class="actions">
+        <button id="calibrate-timing">校正人聲時間</button>
+      </div>
+      <p id="calibrate-status" class="hint">播放開始後會自動校正；覺得對不上可以在這裡手動重跑。</p>
 
       <label class="gain-control" for="monitor-gain">
         <span>Monitor gain</span>

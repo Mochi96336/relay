@@ -143,6 +143,14 @@ This is what lets the two streams be placed on the session timeline instead of a
 
 The captured song now works the same way. Its socket closing used to end the whole live session — clearing both timelines, the alignment and the calibration — even though the extension reconnects after a second and its own code says it expects to rejoin the timeline it left. A desktop blip therefore threw away the phone's audio too. A source that goes missing starts a grace period (`RELAY_BACKING_GRACE_MS`, 10 s) instead; only when it expires is the session really over. A genuinely new capture is a different matter, and is caught by its generation the same way the microphone's is.
 
+### The phone holds the controls
+
+`ROBOT_DEPLOYMENT.md` puts the finished topology at phone + robot, with the desktop standing in for the robot's browser host during development. Nobody is at that screen, so nothing the singer needs may live only on it.
+
+Song level and mic gain are therefore server state, not page state. Both pages carry a slider, either can move it, and the server echoes the change to the other. Song level can still only be *acted* on by the page that owns the mirrored player — it ends up as `player.setVolume` — which is exactly why the value has to travel rather than being read off a local slider.
+
+Calibration runs unattended, but the singer is the one who can hear that it landed wrong, so the phone has its own button for it.
+
 ### Calibration runs itself
 
 The desktop is meant to run unattended, so the measurement does not wait for anyone to press the button. Once a session is live with both sides connected and the phone playing, the server takes one on its own, and retries every `RELAY_AUTO_CALIBRATION_RETRY_MS` (15 s) until one lands. Failing is usually the singer being mid-phrase, which stops being true a few seconds later, so `source.html` shows an unattended failure as a wait rather than an error. Set `RELAY_AUTO_CALIBRATE=0` to go back to pressing the button.

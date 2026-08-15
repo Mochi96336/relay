@@ -40,9 +40,26 @@ const FRAME_SAMPLES = Math.max(1, Math.round((SAMPLE_RATE * FRAME_MS) / 1000));
 const FRAME_BYTES = FRAME_SAMPLES * 2;
 const RECONNECT_MS = envNumber('RELAY_BACKING_RECONNECT_MS', 1_000, 50);
 const MAX_BUFFERED_BYTES = envNumber('RELAY_BACKING_MAX_BUFFERED_BYTES', 512 * 1024, 1_024);
+/**
+ * How long to throw away audio after the first byte arrives.
+ *
+ * The capture starts as soon as the shell opens the FIFO, which is before this
+ * process exists: `npm run backing:stdin` spends ~1.9 s on npm and tsx startup
+ * on a Pi, and every millisecond of that is captured and waiting in the pipe.
+ * Consuming it normally makes the first frame sent carry audio that old, and
+ * the server anchors the backing timeline to the frame's *arrival*, so the
+ * whole timeline ends up stuck that far in the past. Boot calibration measured
+ * exactly that: 1675 ms of backing latency against 51 ms of actual audio
+ * pipeline (Chromium 11 ms, null sink 0, parec 40 ms).
+ *
+ * A backlog drains at memory speed, so anything still arriving after a short
+ * wall-clock window is live. The cost is this much audio at startup, before
+ * anyone is singing.
+ */
+const STARTUP_FLUSH_MS = envNumber('RELAY_BACKING_STARTUP_FLUSH_MS', 250, 0);
 
 if (process.argv.includes('--help')) {
-  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  drop threshold (default 524288)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
+  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  drop threshold (default 524288)\n  RELAY_BACKING_STARTUP_FLUSH_MS    discard startup backlog (default 250)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
   process.exit(0);
 }
 
@@ -58,6 +75,14 @@ let stopped = false;
 let pending: Buffer = Buffer.alloc(0);
 let droppedFrames = 0;
 let lastDropLogAt = 0;
+/**
+ * Wall-clock instant the startup flush ends, set when the first byte arrives
+ * rather than at process start: the window has to cover the backlog draining,
+ * and the process may be up well before the capture writes anything.
+ */
+let flushUntil: number | null = null;
+let flushing = STARTUP_FLUSH_MS > 0;
+let flushedBytes = 0;
 
 function log(message: string) {
   process.stderr.write(`[backing] ${message}\n`);
@@ -159,6 +184,19 @@ function sendPcm(pcm: Buffer) {
 }
 
 function consume(chunk: Buffer) {
+  // Discarded rather than counted: `sampleCursor` has to start at live audio,
+  // because the server anchors the timeline to where the first frame arrives.
+  if (flushing) {
+    const now = Date.now();
+    if (flushUntil === null) flushUntil = now + STARTUP_FLUSH_MS;
+    if (now < flushUntil) {
+      flushedBytes += chunk.byteLength;
+      return;
+    }
+    flushing = false;
+    log(`discarded ${Math.round((flushedBytes / 2 / SAMPLE_RATE) * 1000)} ms of startup backlog`);
+  }
+
   pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
 
   while (pending.length >= FRAME_BYTES) {

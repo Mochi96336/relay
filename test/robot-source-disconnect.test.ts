@@ -92,18 +92,30 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     });
     await sendPcmInChunks(backing, tone(1.5, 0.8));
 
-    await monitor.waitFor(
-      (m) => m.type === 'source-status'
+    // The two path legs may finish before playback has a stable player offset.
+    // Their result is evidence, not a complete three-term alignment: unknown
+    // delta must never be silently treated as zero.
+    const beforeFirstDelta = monitor.messages.length;
+    monitor.send({ type: 'timing-calibration-status-request' });
+    const measured = await waitForNewMessage(
+      monitor,
+      beforeFirstDelta,
+      (m) => m.type === 'timing-calibration-status'
         && m.calibrationKind === 'boot-probe'
-        && m.timingMode === 'acoustic-calibration',
+        && m.state === 'complete',
       5_000,
     );
+    assert.equal(measured.timingMode, 'network-estimate');
+    assert.equal(measured.activeMicLagMs, null);
+    assert.equal(measured.robotDeltaFresh, false);
 
-    // Put a real source term into the applied total before dropping the source.
+    // Only a fresh active-player delta completes the equation and grants the
+    // boot measurement authority over the mixer.
     robot.send({ type: 'robot-player-offset', offsetMs: 80 });
     await monitor.waitFor(
       (m) => m.type === 'timing-calibration-status'
         && m.timingMode === 'acoustic-calibration'
+        && m.robotDeltaFresh === true
         && Math.round(m.robotPlayerOffsetMs) === 80,
       3_000,
     );
@@ -124,6 +136,7 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     );
     assert.equal(suspended.activeCalibratedMicLagMs, null);
     assert.equal(suspended.calibrationStale, true);
+    assert.equal(suspended.robotDeltaFresh, false);
 
     const replacement = await RelayClient.connect(server);
     replacement.send({ type: 'robot-source-hello' });
@@ -132,6 +145,7 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     const restored = await monitor.waitFor(
       (m) => m.type === 'timing-calibration-status'
         && m.timingMode === 'acoustic-calibration'
+        && m.robotDeltaFresh === true
         && Math.round(m.robotPlayerOffsetMs) === 35,
       4_000,
     );

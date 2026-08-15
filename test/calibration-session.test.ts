@@ -50,9 +50,13 @@ function makeSession(options: {
 
 const chunk = (samples: number) => new Int16Array(samples);
 
+/**
+ * Streams both sides from session sample 0, contiguously. Tests that care about
+ * placement state their own indices instead.
+ */
 function fill(calibration: CalibrationSession, micSamples: number, backingSamples: number) {
-  if (micSamples > 0) calibration.observeMic(chunk(micSamples));
-  if (backingSamples > 0) calibration.observeBacking(chunk(backingSamples));
+  if (micSamples > 0) calibration.observeMic(chunk(micSamples), 0);
+  if (backingSamples > 0) calibration.observeBacking(chunk(backingSamples), 0);
 }
 
 describe('CalibrationSession lifecycle', () => {
@@ -165,6 +169,88 @@ describe('CalibrationSession lifecycle', () => {
   });
 });
 
+describe('CalibrationSession placement', () => {
+  const filled = (samples: number, value: number) => new Int16Array(samples).fill(value);
+  const MS = RATE / 1000;
+
+  /** Runs a collection and hands back what the analyser actually received. */
+  function collect(stream: (calibration: CalibrationSession) => void) {
+    type Seen = { mic: Int16Array; backing: Int16Array };
+    let seen: Seen | null = null;
+    const harness = makeSession({
+      analyze: (mic, backing) => {
+        seen = { mic, backing };
+        return analysis(0);
+      },
+    });
+
+    harness.calibration.start(0);
+    stream(harness.calibration);
+    return { seen: seen as Seen | null, status: harness.calibration.status() };
+  }
+
+  test('a dropped frame leaves silence instead of pulling later audio earlier', () => {
+    const half = REQUIRED / 2;
+    const gap = 100 * MS;
+
+    const { seen, status } = collect((calibration) => {
+      calibration.observeBacking(filled(REQUIRED, 500), 0);
+      calibration.observeMic(filled(half, 1_000), 0);
+      // The frames covering the next 100 ms never arrived.
+      calibration.observeMic(filled(half, 2_000), half + gap);
+    });
+
+    assert.equal(status.state, 'complete', status.error ?? '');
+    assert.equal(seen!.mic[half - 1], 1_000);
+    assert.equal(seen!.mic[half], 0, 'the outage reads as the silence it was');
+    assert.equal(seen!.mic[half + gap], 2_000, 'audio after the hole keeps its own position');
+  });
+
+  test('keeps the skew between where the two timelines were anchored', () => {
+    const skew = 20 * MS;
+
+    const { seen, status } = collect((calibration) => {
+      calibration.observeBacking(filled(REQUIRED, 500), 0);
+      // The phone's stream was anchored 20 ms later than the source's. That
+      // offset is part of what the mixer has to correct, so it belongs in the
+      // measurement rather than being normalised away.
+      calibration.observeMic(filled(REQUIRED, 1_000), skew);
+    });
+
+    assert.equal(status.state, 'complete', status.error ?? '');
+    assert.equal(seen!.mic[0], 0);
+    assert.equal(seen!.mic[skew], 1_000);
+    assert.equal(seen!.backing[0], 500);
+  });
+
+  test('refuses to measure across a large dropout', () => {
+    const half = REQUIRED / 2;
+
+    const { status } = collect((calibration) => {
+      calibration.observeBacking(filled(REQUIRED, 500), 0);
+      calibration.observeMic(filled(half, 1_000), 0);
+      calibration.observeMic(filled(half, 2_000), half + 500 * MS);
+    });
+
+    assert.equal(status.state, 'failed');
+    assert.match(status.error ?? '', /lost 500 ms of audio/);
+  });
+
+  test('a burst delivered at once still spans the time it covers', () => {
+    const { seen, status } = collect((calibration) => {
+      calibration.observeBacking(filled(REQUIRED, 500), 0);
+      // Three frames released together by a congested link, each stating its
+      // own position. Concatenating them would compress 60 ms into 20 ms.
+      for (let i = 0; i < 3; i += 1) calibration.observeMic(filled(20 * MS, 1_000), i * 20 * MS);
+      calibration.observeMic(filled(REQUIRED - 60 * MS, 2_000), 60 * MS);
+    });
+
+    assert.equal(status.state, 'complete', status.error ?? '');
+    assert.equal(seen!.mic[60 * MS - 1], 1_000, 'the burst still occupies its full 60 ms');
+    assert.equal(seen!.mic[60 * MS], 2_000);
+  });
+});
+
 describe('CalibrationSession timeout', () => {
   test('gives up when a side stops streaming', () => {
     const harness = makeSession({ timeoutMs: 1_000 });
@@ -241,8 +327,8 @@ describe('CalibrationSession with the real analyser', () => {
     const { mic, backing } = laggedPair(6, RATE, 320);
 
     calibration.start(0);
-    calibration.observeBacking(new Int16Array(backing.buffer, backing.byteOffset, REQUIRED));
-    calibration.observeMic(new Int16Array(mic.buffer, mic.byteOffset, REQUIRED));
+    calibration.observeBacking(new Int16Array(backing.buffer, backing.byteOffset, REQUIRED), 0);
+    calibration.observeMic(new Int16Array(mic.buffer, mic.byteOffset, REQUIRED), 0);
 
     const status = calibration.status();
     assert.equal(status.state, 'complete', status.error ?? '');

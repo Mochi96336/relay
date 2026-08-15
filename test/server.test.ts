@@ -396,8 +396,13 @@ describe('timing calibration', () => {
 
       const lagMs = 260;
       const { mic, backing: song } = laggedPair(6, RATE, lagMs);
-      await sendPcmInChunks(backing, song);
-      await sendPcmInChunks(publisher, mic);
+      // Concurrently, the way a real take streams. Sending one side to
+      // completion first anchors its timeline that much earlier, and the
+      // measurement now reports that skew instead of discarding it.
+      await Promise.all([
+        sendPcmInChunks(backing, song),
+        sendPcmInChunks(publisher, mic),
+      ]);
 
       const complete = await monitor.waitFor(
         (m) => m.type === 'timing-calibration-status' && m.state === 'complete',

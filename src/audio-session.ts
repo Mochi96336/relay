@@ -47,6 +47,13 @@ export type MixHealth = {
   unheadered: boolean;
 };
 
+/** Where a batch of ingested samples landed on the shared session timeline. */
+export type IngestResult = {
+  samples: Int16Array;
+  /** Session sample index of the first sample, in mix-rate samples. */
+  start: number;
+};
+
 export type AudioSessionOptions = {
   sampleRate: number;
   frameMs: number;
@@ -256,10 +263,10 @@ export class AudioSession {
     return Math.round(((nowMs - this.startedAt) * this.sampleRate) / 1000);
   }
 
-  private ingest(timeline: PcmTimeline, frame: PcmFrame, sourceRate: number | null, nowMs: number) {
-    if (!sourceRate) return new Int16Array(0);
+  private ingest(timeline: PcmTimeline, frame: PcmFrame, sourceRate: number | null, nowMs: number): IngestResult {
+    if (!sourceRate) return { samples: new Int16Array(0), start: timeline.totalSamples };
     const samples = this.resample(frame.pcm, sourceRate);
-    if (samples.length === 0) return samples;
+    if (samples.length === 0) return { samples, start: timeline.totalSamples };
 
     let start: number;
 
@@ -295,7 +302,7 @@ export class AudioSession {
 
     timeline.chunks.push({ start, samples });
     timeline.totalSamples = start + samples.length;
-    return samples;
+    return { samples, start };
   }
 
   private resample(buffer: Buffer, sourceRate: number) {

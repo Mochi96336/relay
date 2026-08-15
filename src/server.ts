@@ -28,10 +28,13 @@ const MIX_FRAME_MS = 20;
 const MIX_FRAME_SAMPLES = Math.round((MIX_SAMPLE_RATE * MIX_FRAME_MS) / 1000);
 const TEST_BPM = 120;
 const TEST_PREBUFFER_MS = 800;
-// The live mix reads the microphone buffer *ahead* by the calibrated lag, so the
-// usable margin is `prebuffer - 2 * micTransportDelay + backingTransportDelay`.
-// The microphone delay counts twice, which is why 2.5 s left almost no room once
-// the phone link got slow and the calibrated lag was allowed to reach 2 s.
+// Both timelines are placed by absolute sample index, so transport delay decides
+// when audio lands, not where. What the prebuffer has to cover is the read-ahead
+// alone: `margin = prebuffer - appliedMicAdvanceMs`. With the advance capped at
+// 2 s, 2.5 s of prebuffer left only 500 ms for jitter.
+//
+// This is a pure output delay: the monitor hears everything this many
+// milliseconds late. Lower it for singing along, raise it for a flaky link.
 const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 4_000);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
@@ -450,7 +453,7 @@ wss.on('connection', (rawSocket) => {
       if (socket === publisher && socket.role === 'publisher') {
         if (testActive || session.active) {
           const previousGeneration = session.micGeneration;
-          const samples = session.ingestMic(frame, publisherSampleRate);
+          const { samples, start } = session.ingestMic(frame, publisherSampleRate);
 
           if (session.active) {
             // A new capture session can mean a different transport delay, which
@@ -461,7 +464,7 @@ wss.on('connection', (rawSocket) => {
               broadcastJson(sourceStatusPayload());
               broadcastJson(timingCalibrationStatusPayload());
             }
-            calibration.observeMic(samples);
+            calibration.observeMic(samples, start);
           }
         } else {
           broadcastToMonitors(frame.pcm, true);
@@ -473,8 +476,8 @@ wss.on('connection', (rawSocket) => {
       // their own position, so they stay aligned independently and an absent
       // phone costs the mix its vocal, not the whole take.
       if (socket === backing && socket.role === 'backing' && session.active) {
-        const samples = session.ingestBacking(frame, backingSampleRate);
-        calibration.observeBacking(samples);
+        const { samples, start } = session.ingestBacking(frame, backingSampleRate);
+        calibration.observeBacking(samples, start);
       }
       return;
     }

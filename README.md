@@ -97,15 +97,17 @@ The source follower uses the existing server media clock. Large source/phone dif
 
 ## Live mix timing
 
-The live mix keeps a 4 s server buffer. This is intentional: the singer does not monitor the returned vocal, so end-to-end output latency can be traded for enough room to align the remote microphone with the local captured song.
+The live mix keeps a 4 s server buffer (`RELAY_LIVE_PREBUFFER_MS`). It buys room to align the remote microphone against the locally captured song, and it is paid for in output latency.
 
-The buffer has to be this large because the mixer reads the microphone history *ahead* by the calibrated lag. The usable margin is:
+The mixer reads the microphone history *ahead* by `appliedMicAdvanceMs`, so what the buffer has to cover is that read-ahead:
 
 ```text
-margin = prebuffer - 2 * micTransportDelay + backingTransportDelay
+margin = prebuffer - appliedMicAdvanceMs
 ```
 
-The microphone delay counts twice, so a 500 ms phone link leaves ~3 s of margin while a 1.5 s link leaves ~1 s. When the margin runs out the mixer reads past the end of the microphone history and the vocal drops out in chunks. The server now counts those frames and reports them as `mix-health`, which `source.html` and Solo recording both display, instead of failing silently.
+Transport delay does not appear. Since both sides carry absolute sample indices, a slow link changes *when* audio lands, not *where* it is placed — the frames it holds up still land at the index they were captured at. With the advance capped at 2 s, 4 s of prebuffer leaves at least 2 s of margin. When the margin does run out the mixer reads past the end of the microphone history and the vocal drops out in chunks; the server counts those frames and reports them as `mix-health`, which `source.html` and Solo recording both display, instead of failing silently.
+
+**The prebuffer is a pure output delay.** Monitor playback adds its own 250 ms, so at the default the monitor hears the mix ~4.25 s after it happened. That is fine for checking a take and unusable for singing along — set `RELAY_LIVE_PREBUFFER_MS=400` for the latter. It does not affect *alignment* either way, because it delays both streams equally.
 
 ### Framed PCM
 

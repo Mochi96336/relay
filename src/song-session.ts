@@ -19,6 +19,7 @@ export type SongTelemetryResult = {
     | 'invalid-telemetry'
     | 'mic-owner-required'
     | 'leader-busy'
+    | 'handoff-not-target'
     | 'handoff-not-ready'
     | 'handoff-song-mismatch'
     | 'handoff-holdover-semantic-change';
@@ -291,6 +292,7 @@ export class SongSession {
     reason:
       | 'mic-owner-required'
       | 'leader-busy'
+      | 'handoff-not-target'
       | 'handoff-not-ready'
       | 'handoff-song-mismatch'
       | 'handoff-holdover-semantic-change';
@@ -311,6 +313,14 @@ export class SongSession {
       return this.safeTargetTelemetry(payload, nowMs)
         ? { ok: true }
         : { ok: false, reason: 'handoff-song-mismatch' };
+    }
+
+    // Once a handoff exists, the old leader and the exact prepared target are
+    // the only transports allowed to touch the room clock. In particular, a
+    // second tab owned by the new Mic holder must not fall through to the 0A
+    // rule that otherwise lets a Mic owner supersede a previous participant.
+    if (this.handoff) {
+      return { ok: false, reason: 'handoff-not-target' };
     }
 
     if (micOwnerId !== null && identity.participantId !== micOwnerId) {

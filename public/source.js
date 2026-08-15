@@ -174,10 +174,12 @@ function applyFineTune(sendToServer = true) {
 
 // Must match src/calibration-probe.ts, which builds the reference the server
 // correlates against, and public/app.js, which plays the microphone leg.
-const PROBE_CLICK_OFFSETS_MS = [0, 165, 420];
-const PROBE_FREQUENCY_HZ = 1800;
-const PROBE_CLICK_DECAY_PER_SECOND = 55;
-const PROBE_CLICK_SECONDS = 0.12;
+const PROBE_NOTES = [
+  { offsetMs: 0, frequencyHz: 1046.5, gain: 0.24 },
+  { offsetMs: 125, frequencyHz: 1318.5, gain: 0.27 },
+  { offsetMs: 330, frequencyHz: 1568, gain: 0.32 },
+];
+const PROBE_NOTE_SECONDS = 0.105;
 
 let probeAudioContext = null;
 
@@ -197,17 +199,17 @@ async function playBackingProbe(requestId, leadMs) {
     if (probeAudioContext.state === 'suspended') await probeAudioContext.resume();
 
     const startTime = probeAudioContext.currentTime + leadMs / 1000;
-    for (const offsetMs of PROBE_CLICK_OFFSETS_MS) {
-      const at = startTime + offsetMs / 1000;
+    for (const note of PROBE_NOTES) {
+      const at = startTime + note.offsetMs / 1000;
       const oscillator = probeAudioContext.createOscillator();
       const gain = probeAudioContext.createGain();
-      oscillator.frequency.value = PROBE_FREQUENCY_HZ;
+      oscillator.frequency.value = note.frequencyHz;
       gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(0.35, at + 0.002);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + 1 / PROBE_CLICK_DECAY_PER_SECOND);
+      gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
       oscillator.connect(gain).connect(probeAudioContext.destination);
       oscillator.start(at);
-      oscillator.stop(at + PROBE_CLICK_SECONDS);
+      oscillator.stop(at + PROBE_NOTE_SECONDS);
     }
 
     // No generation: the capture this lands in belongs to `backing:stdin`,

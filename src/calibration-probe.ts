@@ -5,12 +5,12 @@
  * beat: a true match and a copy shifted by the beat's own period can both be
  * genuinely strong correlations, not noise, and tightening thresholds cannot
  * fix an ambiguity that is a property of the signal being correlated, not of
- * the threshold. Three clicks at irregular offsets have no self-similar
+ * the threshold. Three short notes at irregular offsets have no self-similar
  * repeat to alias onto, so the same envelope-correlation technique that
  * struggles against a beat is unambiguous against this.
  *
  * The client (public/app.js, playCalibrationProbe) plays the audible version
- * of the same three clicks - same offsets, frequency and decay - through the
+ * of the same three notes - same offsets, frequencies and decay - through the
  * phone speaker on the same clock domain its own mic capture uses. It does
  * not need to match this module's PCM byte for byte, only its shape closely
  * enough for correlation to lock onto it; keep the two in sync by hand.
@@ -18,25 +18,33 @@
 
 const ENVELOPE_FRAME_MS = 5;
 
-/** Irregular so no lag other than the true one lines all three up at once. */
-export const PROBE_CLICK_OFFSETS_MS = [0, 165, 420];
-export const PROBE_FREQUENCY_HZ = 1800;
-/** How fast each click's tone decays; matches the metronome click's shape. */
-const CLICK_DECAY_PER_SECOND = 55;
-/** Long enough after the last click's onset for it to have decayed away. */
-export const PROBE_REFERENCE_MS = 550;
+/**
+ * A restrained C6-E6-G6 success chime. The unequal 125/205 ms gaps are
+ * intentional: no lag other than the true one lines all three notes up.
+ * Keep this list in sync with public/app.js and public/source.js.
+ */
+export const PROBE_NOTES = [
+  { offsetMs: 0, frequencyHz: 1046.5, gain: 0.24 },
+  { offsetMs: 125, frequencyHz: 1318.5, gain: 0.27 },
+  { offsetMs: 330, frequencyHz: 1568, gain: 0.32 },
+] as const;
+
+/** A quick decay keeps the chime light while leaving enough energy to detect. */
+const NOTE_DECAY_PER_SECOND = 70;
+/** Long enough after the last note's onset for it to have decayed away. */
+export const PROBE_REFERENCE_MS = 470;
 
 export type ProbeLocation = {
-  /** Where the reference's first sample (offset 0 click) was found, in samples from the window's own start. */
+  /** Where the reference's first note was found, in samples from the window's own start. */
   offsetSamples: number;
   correlation: number;
 };
 
-function clickSample(secondsIntoClick: number): number {
-  if (secondsIntoClick < 0) return 0;
-  const envelope = Math.exp(-secondsIntoClick * CLICK_DECAY_PER_SECOND);
+function noteSample(secondsIntoNote: number, frequencyHz: number): number {
+  if (secondsIntoNote < 0) return 0;
+  const envelope = Math.exp(-secondsIntoNote * NOTE_DECAY_PER_SECOND);
   if (envelope < 0.001) return 0;
-  return Math.sin(2 * Math.PI * PROBE_FREQUENCY_HZ * secondsIntoClick) * envelope;
+  return Math.sin(2 * Math.PI * frequencyHz * secondsIntoNote) * envelope;
 }
 
 /** The known reference waveform, at whatever rate the mixer is running. */
@@ -44,11 +52,11 @@ export function generateProbeReference(sampleRate: number): Int16Array {
   const totalSamples = Math.max(1, Math.round((sampleRate * PROBE_REFERENCE_MS) / 1000));
   const accumulator = new Float64Array(totalSamples);
 
-  for (const offsetMs of PROBE_CLICK_OFFSETS_MS) {
-    const startSample = Math.round((sampleRate * offsetMs) / 1000);
+  for (const note of PROBE_NOTES) {
+    const startSample = Math.round((sampleRate * note.offsetMs) / 1000);
     for (let i = startSample; i < totalSamples; i += 1) {
       const seconds = (i - startSample) / sampleRate;
-      const value = clickSample(seconds);
+      const value = noteSample(seconds, note.frequencyHz) * note.gain;
       if (value === 0 && seconds > 0) break;
       accumulator[i] += value;
     }
@@ -56,7 +64,7 @@ export function generateProbeReference(sampleRate: number): Int16Array {
 
   const output = new Int16Array(totalSamples);
   for (let i = 0; i < totalSamples; i += 1) {
-    const clamped = Math.max(-1, Math.min(1, accumulator[i] * 0.8));
+    const clamped = Math.max(-1, Math.min(1, accumulator[i]));
     output[i] = Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767);
   }
   return output;

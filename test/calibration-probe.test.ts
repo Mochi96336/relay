@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
-import { generateProbeReference, locateProbe, PROBE_REFERENCE_MS } from '../src/calibration-probe.js';
+import {
+  generateProbeReference,
+  locateProbe,
+  PROBE_NOTES,
+  PROBE_REFERENCE_MS,
+} from '../src/calibration-probe.js';
 
 const RATE = 48_000;
 
@@ -32,6 +37,16 @@ function noise(samples: number, amplitude: number, seed: number) {
 }
 
 describe('calibration-probe', () => {
+  test('uses a restrained ascending success chime with irregular timing', () => {
+    assert.ok(PROBE_NOTES.every((note) => note.gain <= 0.32), 'does not become a loud notification');
+    assert.ok(
+      PROBE_NOTES.every((note, index) => index === 0 || note.frequencyHz > PROBE_NOTES[index - 1].frequencyHz),
+      'notes ascend',
+    );
+    const gaps = PROBE_NOTES.slice(1).map((note, index) => note.offsetMs - PROBE_NOTES[index].offsetMs);
+    assert.notEqual(gaps[0], gaps[1], 'timing remains irregular for unambiguous correlation');
+  });
+
   test('locates the reference at a known offset inside a noisy window', () => {
     const reference = generateProbeReference(RATE);
     const windowSamples = Math.round(RATE * 1.5);

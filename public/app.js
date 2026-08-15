@@ -282,12 +282,14 @@ function int16ToFloat32(buffer) {
 
 // Must match src/calibration-probe.ts, which builds the reference the server
 // correlates against. Irregular offsets are the point: no shift other than the
-// true one lines all three clicks up at once, which is exactly the ambiguity
+// true one lines all three notes up at once, which is exactly the ambiguity
 // correlating against a song's own beat cannot escape.
-const PROBE_CLICK_OFFSETS_MS = [0, 165, 420];
-const PROBE_FREQUENCY_HZ = 1800;
-const PROBE_CLICK_DECAY_PER_SECOND = 55;
-const PROBE_CLICK_SECONDS = 0.12;
+const PROBE_NOTES = [
+  { offsetMs: 0, frequencyHz: 1046.5, gain: 0.24 },
+  { offsetMs: 125, frequencyHz: 1318.5, gain: 0.27 },
+  { offsetMs: 330, frequencyHz: 1568, gain: 0.32 },
+];
+const PROBE_NOTE_SECONDS = 0.105;
 
 /**
  * Plays the probe out of the phone speaker so the phone's own microphone hears
@@ -300,19 +302,19 @@ function playCalibrationProbe(requestId, leadMs) {
   if (!audioContext || activeRole !== 'publisher') return;
 
   const startTime = audioContext.currentTime + leadMs / 1000;
-  for (const offsetMs of PROBE_CLICK_OFFSETS_MS) {
-    const at = startTime + offsetMs / 1000;
+  for (const note of PROBE_NOTES) {
+    const at = startTime + note.offsetMs / 1000;
     const oscillator = audioContext.createOscillator();
     const gain = audioContext.createGain();
-    oscillator.frequency.value = PROBE_FREQUENCY_HZ;
-    // Matches the reference's exp(-t * 55) envelope closely enough for the
-    // envelope correlation the server runs; the shapes only have to agree.
+    oscillator.frequency.value = note.frequencyHz;
+    // A slightly softened attack avoids a sharp test-beep edge. The decay is
+    // close to the reference envelope used by the server's correlation.
     gain.gain.setValueAtTime(0.0001, at);
-    gain.gain.exponentialRampToValueAtTime(0.35, at + 0.002);
-    gain.gain.exponentialRampToValueAtTime(0.0001, at + 1 / PROBE_CLICK_DECAY_PER_SECOND);
+    gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
     oscillator.connect(gain).connect(audioContext.destination);
     oscillator.start(at);
-    oscillator.stop(at + PROBE_CLICK_SECONDS);
+    oscillator.stop(at + PROBE_NOTE_SECONDS);
   }
 
   if (socket?.readyState !== WebSocket.OPEN) return;

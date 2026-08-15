@@ -19,6 +19,7 @@
 
   const PARTICIPANT_ID_KEY = 'relay.participantId.v1';
   const NICKNAME_KEY = 'relay.nickname.v1';
+  const PENDING_NICKNAME_KEY = 'relay.pendingNickname.v1';
   const RECONNECT_MS = 1_000;
   const adjectives = [
     'Blue', 'Quiet', 'Tiny', 'Silver', 'Mint', 'Soft', 'Bright', 'Lazy',
@@ -29,29 +30,46 @@
     'Whale', 'Finch', 'Koala', 'Lynx', 'Sparrow', 'Rabbit', 'Dolphin', 'Bear',
   ];
 
+  function normalizeNickname(value) {
+    if (typeof value !== 'string') return null;
+    const normalized = Array.from(value.replace(/\s+/g, ' ').trim()).slice(0, 32).join('');
+    return normalized || null;
+  }
+
   function randomNickname() {
     const random = new Uint32Array(3);
     crypto.getRandomValues(random);
     return `${adjectives[random[0] % adjectives.length]} ${nouns[random[1] % nouns.length]} ${10 + (random[2] % 90)}`;
   }
 
+  function randomParticipantId() {
+    const random = new Uint32Array(4);
+    crypto.getRandomValues(random);
+    return `participant-${Array.from(random, (value) => value.toString(16).padStart(8, '0')).join('')}`;
+  }
+
   function storedIdentity() {
     let participantId = localStorage.getItem(PARTICIPANT_ID_KEY);
     if (!participantId || !/^[A-Za-z0-9_-]{8,128}$/.test(participantId)) {
-      participantId = crypto.randomUUID();
+      participantId = randomParticipantId();
       localStorage.setItem(PARTICIPANT_ID_KEY, participantId);
     }
 
-    let nickname = localStorage.getItem(NICKNAME_KEY)?.replace(/\s+/g, ' ').trim();
+    let nickname = normalizeNickname(localStorage.getItem(NICKNAME_KEY));
     if (!nickname) {
       nickname = randomNickname();
       localStorage.setItem(NICKNAME_KEY, nickname);
     }
-    nickname = Array.from(nickname).slice(0, 32).join('');
     return { participantId, nickname };
   }
 
   let { participantId, nickname } = storedIdentity();
+  let pendingNickname = normalizeNickname(localStorage.getItem(PENDING_NICKNAME_KEY));
+  if (pendingNickname) {
+    nickname = pendingNickname;
+    localStorage.setItem(NICKNAME_KEY, nickname);
+  }
+
   let socket = null;
   let reconnectTimer = null;
   let latestSession = null;
@@ -100,6 +118,17 @@
     takeoverPanel.hidden = false;
   }
 
+  function send(payload) {
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify(payload));
+    return true;
+  }
+
+  function sendPendingRename() {
+    if (!pendingNickname) return false;
+    return send({ type: 'participant-rename', nickname: pendingNickname });
+  }
+
   function renderParticipants() {
     if (!latestSession) return;
 
@@ -126,12 +155,25 @@
     }
 
     const self = participantById(participantId);
-    if (self && self.nickname !== nickname) {
+    if (self && pendingNickname) {
+      if (self.nickname === pendingNickname) {
+        nickname = self.nickname;
+        pendingNickname = null;
+        localStorage.setItem(NICKNAME_KEY, nickname);
+        localStorage.removeItem(PENDING_NICKNAME_KEY);
+        window.relayNickname = nickname;
+      } else {
+        // The server has not acknowledged the explicit rename yet. Do not let
+        // an older session snapshot overwrite the user's pending intent.
+        nickname = pendingNickname;
+        window.relayNickname = nickname;
+      }
+    } else if (self && self.nickname !== nickname) {
       nickname = self.nickname;
       localStorage.setItem(NICKNAME_KEY, nickname);
       window.relayNickname = nickname;
     }
-    if (document.activeElement !== identityInput) identityButton.textContent = self?.nickname ?? nickname;
+    if (document.activeElement !== identityInput) identityButton.textContent = nickname;
 
     const currentOwner = owner();
     const mine = latestSession.micOwnerId === participantId;
@@ -183,7 +225,6 @@
       return;
     }
 
-    next.send(JSON.stringify({ type: 'session-status-request' }));
     next.addEventListener('message', (event) => {
       if (socket !== next || typeof event.data !== 'string') return;
       try {
@@ -199,12 +240,9 @@
     next.addEventListener('error', () => {
       try { next.close(); } catch {}
     });
-  }
 
-  function send(payload) {
-    if (socket?.readyState !== WebSocket.OPEN) return false;
-    socket.send(JSON.stringify(payload));
-    return true;
+    next.send(JSON.stringify({ type: 'session-status-request' }));
+    sendPendingRename();
   }
 
   publisherButton.addEventListener('click', (event) => {
@@ -256,17 +294,19 @@
   }
 
   function commitRename() {
-    const next = Array.from(identityInput.value.replace(/\s+/g, ' ').trim()).slice(0, 32).join('');
+    const next = normalizeNickname(identityInput.value);
     if (!next) {
       cancelRename();
       return;
     }
     nickname = next;
+    pendingNickname = next;
     localStorage.setItem(NICKNAME_KEY, nickname);
+    localStorage.setItem(PENDING_NICKNAME_KEY, pendingNickname);
     window.relayNickname = nickname;
     identityButton.textContent = nickname;
     cancelRename();
-    send({ type: 'participant-rename', nickname });
+    sendPendingRename();
   }
 
   function takeoverFailed(copy) {

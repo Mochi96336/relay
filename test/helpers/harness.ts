@@ -238,6 +238,33 @@ export function pulseTrain(samples: number, sampleRate: number, seed = 7) {
   return output;
 }
 
+/**
+ * Percussive pulses at a *regular* interval, standing in for a musical beat.
+ * Unlike `pulseTrain`, shifting this by the period leaves it looking almost
+ * identical to itself - which is exactly the ambiguity a real song's beat
+ * grid creates for the analyser.
+ */
+export function beatTrain(samples: number, sampleRate: number, periodMs: number, seed = 7) {
+  const random = lcg(seed);
+  const output = new Float64Array(samples);
+  const periodSamples = Math.round((sampleRate * periodMs) / 1000);
+  let cursor = Math.round(sampleRate * 0.05);
+
+  while (cursor < samples) {
+    const amplitude = 0.7 + random() * 0.2;
+    const length = Math.min(samples - cursor, Math.round(sampleRate * 0.12));
+
+    for (let i = 0; i < length; i += 1) {
+      const seconds = i / sampleRate;
+      output[cursor + i] += Math.sin(2 * Math.PI * 90 * seconds) * amplitude * Math.exp(-seconds * 40);
+    }
+
+    cursor += periodSamples;
+  }
+
+  return output;
+}
+
 export function toInt16(values: Float64Array, gain = 1, noise = 0, seed = 11) {
   const random = lcg(seed);
   const output = Buffer.alloc(values.length * 2);
@@ -263,6 +290,39 @@ export function laggedPair(seconds: number, sampleRate: number, lagMs: number, s
 
   return {
     mic: toInt16(master.subarray(micStart, micStart + samples), 0.45, 0.004),
+    backing: toInt16(master.subarray(backingStart, backingStart + samples), 0.9),
+  };
+}
+
+/**
+ * Same shape as `laggedPair`, but built from a regular beat instead of
+ * irregular pulses, with vocal-like broadband noise riding on top of the mic
+ * side. A song is never *just* its beat grid; the noise is what a real match
+ * has to key on that a beat-multiple alias does not share.
+ */
+export function laggedBeatPair(
+  seconds: number,
+  sampleRate: number,
+  lagMs: number,
+  periodMs: number,
+  seed = 7,
+) {
+  const samples = Math.round(sampleRate * seconds);
+  const lagSamples = Math.round((Math.abs(lagMs) * sampleRate) / 1000);
+  const master = beatTrain(samples + lagSamples, sampleRate, periodMs, seed);
+
+  const micStart = lagMs >= 0 ? 0 : lagSamples;
+  const backingStart = lagMs >= 0 ? lagSamples : 0;
+
+  const micBeat = master.subarray(micStart, micStart + samples);
+  const random = lcg(seed + 1);
+  const micWithVoice = new Float64Array(samples);
+  for (let i = 0; i < samples; i += 1) {
+    micWithVoice[i] = micBeat[i] + (random() - 0.5) * 0.15;
+  }
+
+  return {
+    mic: toInt16(micWithVoice, 0.45, 0.004),
     backing: toInt16(master.subarray(backingStart, backingStart + samples), 0.9),
   };
 }

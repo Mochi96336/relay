@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { analyzeTimingCalibration } from '../src/timing-calibration.js';
-import { laggedPair, pulseTrain, toInt16 } from './helpers/harness.js';
+import { laggedBeatPair, laggedPair, pulseTrain, toInt16 } from './helpers/harness.js';
 
 const RATE = 48_000;
 
@@ -93,6 +93,24 @@ describe('analyzeTimingCalibration', () => {
       );
     }
   });
+
+  // Regression for a real robot take: a repeated beat lets a lag one period
+  // away from the truth score almost as well as the truth itself, because
+  // shifting a periodic signal by its own period leaves it looking nearly
+  // identical. `laggedPair`'s irregular pulses never exercise this - only a
+  // *regular* beat does, which is what a real song's rhythm is.
+  for (const [lagMs, periodMs] of [[180, 500], [-220, 480], [150, 650]] as const) {
+    test(`prefers a ${lagMs} ms lag over its ${periodMs} ms beat-period alias`, () => {
+      const { mic, backing } = laggedBeatPair(6, RATE, lagMs, periodMs);
+      const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE);
+
+      assert.ok(
+        Math.abs(result.micLagMs - lagMs) <= 25,
+        `expected ~${lagMs} ms, got ${result.micLagMs} ms (a beat-period alias) `
+        + `(confidence ${result.confidence.toFixed(2)})`,
+      );
+    });
+  }
 
   test('rejects an invalid sample rate', () => {
     const { mic, backing } = laggedPair(6, RATE, 0);

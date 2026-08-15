@@ -23,6 +23,21 @@ const SEGMENT_EDGE_MARGIN_MS = 120;
 const MIN_GLOBAL_CORRELATION = 0.12;
 const MIN_LOCAL_CORRELATION = 0.06;
 
+/**
+ * How far a candidate is trusted as a plausible *physical* delay rather than
+ * a beat-period alias of one. See the physical reasoning in `analyzeTimingCalibration`:
+ * nothing real lives much past this.
+ */
+const PREFERRED_LAG_MS = 300;
+/**
+ * How much worse a nearby candidate's correlation may be than the global
+ * best and still be preferred over it. A repeated beat produces near-equal
+ * correlation at every multiple of its period, so when something inside the
+ * physically plausible range scores almost as well as the global winner, the
+ * global winner is the alias, not the other way around.
+ */
+const PREFERRED_LAG_CORRELATION_MARGIN = 0.08;
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -139,9 +154,12 @@ function bestLagAcrossOverlap(
   backing: Float64Array,
   mic: Float64Array,
   maxLagFrames: number,
+  preferredMaxLagFrames: number,
 ): LagSearchResult {
   let bestLag = 0;
   let bestCorrelation = -1;
+  let preferredLag = 0;
+  let preferredCorrelation = -1;
   const minimumOverlapFrames = Math.round(3_000 / ENVELOPE_FRAME_MS);
 
   for (let lag = -maxLagFrames; lag <= maxLagFrames; lag += 1) {
@@ -154,6 +172,22 @@ function bestLagAcrossOverlap(
       bestCorrelation = correlation;
       bestLag = lag;
     }
+    if (Math.abs(lag) <= preferredMaxLagFrames && correlation > preferredCorrelation) {
+      preferredCorrelation = correlation;
+      preferredLag = lag;
+    }
+  }
+
+  // A repeated beat scores its true offset and every multiple of its period
+  // almost equally, and the multiple often wins outright by chance. Nothing
+  // physical lives past PREFERRED_LAG_MS (see the reasoning below), so a
+  // nearby candidate within a small margin of the global best is the real
+  // answer and the wider one is that same beat, aliased.
+  if (
+    preferredCorrelation >= 0
+    && preferredCorrelation >= bestCorrelation - PREFERRED_LAG_CORRELATION_MARGIN
+  ) {
+    return { lag: preferredLag, correlation: preferredCorrelation };
   }
 
   return { lag: bestLag, correlation: bestCorrelation };
@@ -236,7 +270,11 @@ export function analyzeTimingCalibration(
   // far beyond that does not find better answers, it finds beat multiples -
   // and the mixer cannot apply them anyway, so a wrong answer from out there
   // gets clamped and still looks like a successful calibration.
-  const global = bestLagAcrossOverlap(backingFeature, micFeature, maxLagFrames);
+  const preferredMaxLagFrames = Math.min(
+    maxLagFrames,
+    Math.round(PREFERRED_LAG_MS / ENVELOPE_FRAME_MS),
+  );
+  const global = bestLagAcrossOverlap(backingFeature, micFeature, maxLagFrames, preferredMaxLagFrames);
   const globalLagMs = global.lag * ENVELOPE_FRAME_MS;
 
   if (global.correlation < MIN_GLOBAL_CORRELATION) {

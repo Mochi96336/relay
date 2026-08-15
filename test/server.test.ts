@@ -130,9 +130,14 @@ describe('live mix', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
 
-      const status = monitor.latest('test-status');
-      assert.equal(status?.mode, 'tab-source', 'the live path must not masquerade as another mode');
-      assert.equal(status?.sampleRate, RATE);
+      // A live take is not a test run. Clients that could not tell the two
+      // apart ran every take in test mode, which cost the monitor 30 dB.
+      assert.equal(monitor.latest('test-status')?.active, false, 'no test is running');
+      assert.equal(monitor.latest('test-status')?.mode, 'off');
+
+      const live = monitor.latest('source-status');
+      assert.equal(live?.active, true, 'the live session describes itself');
+      assert.equal(live?.mixSampleRate, RATE);
 
       // Prime both buffers well past the observation window. Feeding on a JS
       // timer would only measure the test's own timer accuracy.
@@ -526,8 +531,10 @@ describe('timing calibration', () => {
     }
   });
 
-  test('clears the calibration when the captured source disconnects', async () => {
-    const server = await startRelay(FAST);
+  test('clears the calibration once the captured source is really gone', async () => {
+    // A short grace period, so the take survives a blip but a closed tab still
+    // ends the session rather than leaving a dead one running.
+    const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '300' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
@@ -537,18 +544,105 @@ describe('timing calibration', () => {
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(6, RATE, 200);
-      await sendPcmInChunks(backing, song);
-      await sendPcmInChunks(publisher, mic);
+      await Promise.all([
+        sendPcmInChunks(backing, song),
+        sendPcmInChunks(publisher, mic),
+      ]);
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'complete', 10_000);
 
       backing.close();
       const cleared = await monitor.waitFor(
-        (m) => m.type === 'source-status' && m.connected === false,
+        (m) => m.type === 'source-status' && m.active === false,
         3_000,
       );
       assert.equal(cleared.calibratedMicLagMs, null, 'a stale measurement must not survive the source');
       assert.equal(cleared.timingMode, 'network-estimate');
 
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('the microphone timeline survives a source socket reconnect', async () => {
+    const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '5000' });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+
+      await Promise.all([
+        sendPcmInChunks(backing, tone(2, 0.8)),
+        sendPcmInChunks(publisher, tone(2, 0.4)),
+      ]);
+      await monitor.waitForType('mix-health', 3_000);
+
+      // The desktop link blips. The phone did nothing wrong, and its audio must
+      // not be thrown away for it - which is what restarting the session did.
+      backing.close();
+      await sleep(200);
+
+      const rejoined = await RelayClient.connect(server);
+      rejoined.newCaptureSession();
+      rejoined.send({ type: 'register', role: 'backing', sampleRate: RATE });
+      await rejoined.waitForType('registered');
+      await sendPcmInChunks(rejoined, tone(1, 0.8));
+
+      const health = await monitor.waitFor(
+        (m) => m.type === 'mix-health' && m.active === true,
+        3_000,
+      );
+      assert.equal(health.micGapMs, 0, 'the microphone timeline was never cleared');
+      assert.equal(monitor.latest('source-status')?.active, true);
+
+      rejoined.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a source socket reconnect does not end the take', async () => {
+    const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '5000' });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+      await sleep(100);
+
+      monitor.send({ type: 'start-timing-calibration' });
+      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+
+      const { mic, backing: song } = laggedPair(6, RATE, 200);
+      await Promise.all([
+        sendPcmInChunks(backing, song),
+        sendPcmInChunks(publisher, mic),
+      ]);
+      const complete = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
+        10_000,
+      );
+
+      // Only the socket died. The extension keeps capturing and reconnects on
+      // its own, so its frames land back on the timeline they left - the same
+      // contract the microphone already had.
+      const cursor = backing.cursor;
+      const generation = backing.generationId;
+      backing.close();
+      await sleep(300);
+
+      const rejoined = await RelayClient.connect(server);
+      rejoined.resumeCaptureSession(generation, cursor + Math.round(RATE * 0.3));
+      rejoined.send({ type: 'register', role: 'backing', sampleRate: RATE });
+      await rejoined.waitForType('registered');
+      await sendPcmInChunks(rejoined, tone(0.5, 0.8));
+      await sleep(400);
+
+      const after = monitor.latest('source-status');
+      assert.equal(after?.active, true, 'the session must still be running');
+      assert.equal(after?.calibratedMicLagMs, complete.micLagMs, 'the measurement still describes this setup');
+      assert.equal(after?.calibrationStale, false);
+
+      rejoined.close();
       publisher.close();
       monitor.close();
     } finally {

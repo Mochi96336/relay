@@ -27,6 +27,17 @@ let monitorGainNode = null;
 let sourceSampleRate = null;
 let activeRole = null;
 let testActive = false;
+let liveMixActive = false;
+
+/**
+ * Whether what arrives on this socket is a server mix rather than raw
+ * microphone PCM. Two different things put the server into that state - the
+ * click test and a live session - and only the first of them is a test. Reading
+ * one from the other is what made every live take behave like a test run.
+ */
+function serverMixActive() {
+  return testActive || liveMixActive;
+}
 let clickScheduler = null;
 let nextClickTime = 0;
 let clickBeat = 0;
@@ -236,14 +247,33 @@ function handleServerMessage(message) {
   }
 
   if (message.type === 'publisher-status') {
-    if (!testActive) sourceSampleRate = message.sampleRate ?? null;
+    // Only meaningful while the raw microphone is being forwarded; a server mix
+    // arrives at the mix rate no matter what the phone captures at.
+    if (!serverMixActive()) sourceSampleRate = message.sampleRate ?? null;
     if (activeRole === 'monitor') {
       if (!message.connected) {
         playbackNode?.port.postMessage({ type: 'reset' });
         setStatus('Waiting for singer', 'Open this page on the phone and start the microphone.');
-      } else if (!testActive) {
+      } else if (!serverMixActive()) {
         setStatus('Singer connected', `Raw input: ${message.sampleRate} Hz · buffering audio…`);
       }
+    }
+    return;
+  }
+
+  if (message.type === 'source-status') {
+    const wasLive = liveMixActive;
+    liveMixActive = Boolean(message.active);
+
+    if (liveMixActive) {
+      sourceSampleRate = Number(message.mixSampleRate) || MIX_SAMPLE_RATE;
+      if (!wasLive && activeRole === 'monitor') {
+        playbackNode?.port.postMessage({ type: 'reset' });
+        setStatus('Live mix', `Server mix · ${message.prebufferMs} ms buffer`);
+      }
+    } else if (wasLive) {
+      sourceSampleRate = null;
+      if (activeRole === 'monitor') playbackNode?.port.postMessage({ type: 'reset' });
     }
     return;
   }
@@ -273,6 +303,10 @@ function handleServerMessage(message) {
       sourceSampleRate = Number(message.sampleRate) || MIX_SAMPLE_RATE;
       if (activeRole === 'monitor') {
         playbackNode?.port.postMessage({ type: 'reset' });
+        // The click track is deliberately harsh, so the test drops the monitor
+        // to unity and restores the setting afterwards. This only ever made
+        // sense for the test - it used to fire on live takes too, costing the
+        // singer 30 dB and forgetting whatever they set during the take.
         monitorGain.value = '0';
         updateMonitorGain();
         setStatus('Sync test running', `${message.bpm} BPM · server mix · ${message.prebufferMs} ms safety buffer`);
@@ -447,6 +481,7 @@ async function stop(setIdle = true) {
   }
   sourceSampleRate = null;
   testActive = false;
+  liveMixActive = false;
   uplinkDroppedChunks = 0;
   monitorHealth = null;
   publisherButton.disabled = false;

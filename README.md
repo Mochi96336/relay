@@ -140,6 +140,12 @@ This is what lets the two streams be placed on the session timeline instead of a
 
 - A dropped uplink chunk used to pull every later sample earlier with nothing recording the fact. The gap is now exactly as long as the audio that went missing, and is reported as `micGapMs` / `backingGapMs`.
 - A microphone reconnect used to reset the mix epoch, costing every listener another full prebuffer of silence. The capture keeps counting samples through a transport outage, so the reconnected stream rejoins the timeline it already had and only the outage itself is silent.
+
+The captured song now works the same way. Its socket closing used to end the whole live session — clearing both timelines, the alignment and the calibration — even though the extension reconnects after a second and its own code says it expects to rejoin the timeline it left. A desktop blip therefore threw away the phone's audio too. A source that goes missing starts a grace period (`RELAY_BACKING_GRACE_MS`, 10 s) instead; only when it expires is the session really over. A genuinely new capture is a different matter, and is caught by its generation the same way the microphone's is.
+
+### Test mode is only the test
+
+`test-status` describes the click sync test and nothing else. It used to report a running live session as `mode: 'tab-source'`, because the browser clients had no other way to learn that the server had started mixing — so every live take ran them in test mode. That dropped the monitor slider to 0 dB at the start of each take and stopped remembering what the singer set during it. A live session is described by `source-status`; the clients listen to that, and derive "the server is mixing" from either source.
 - The captured song used to be buffered only while a phone was connected, and the mixer stopped entirely without one. Both streams are now independent: an absent phone costs the mix its vocal, not the whole take.
 
 A timing calibration therefore survives a websocket reconnect. It is marked stale only when the microphone starts a *new* capture session, which the server learns from the generation on the first frame that arrives.

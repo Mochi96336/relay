@@ -32,7 +32,7 @@ function makeSession(options: {
 } = {}) {
   const harness: Harness = {
     settled: 0,
-    context: { sessionGeneration: 1, micGeneration: 10, sourceGeneration: 0 },
+    context: { sessionGeneration: 1, micGeneration: 10, backingGeneration: 20, sourceGeneration: 0 },
     calibration: undefined as unknown as CalibrationSession,
   };
 
@@ -277,6 +277,7 @@ describe('CalibrationSession staleness', () => {
   const setup = (patch: Partial<CalibrationContext> = {}): CalibrationContext => ({
     sessionGeneration: 1,
     micGeneration: 10,
+    backingGeneration: 20,
     sourceGeneration: 0,
     ...patch,
   });
@@ -299,6 +300,12 @@ describe('CalibrationSession staleness', () => {
 
   test('is stale in a different live session', () => {
     assert.equal(measured().calibration.isStaleFor(setup({ sessionGeneration: 2 })), true);
+  });
+
+  test('is stale once the song comes from a different capture', () => {
+    // A new tab capture can be a different device or output path, so it carries
+    // its own delay. A socket reconnect keeps the generation and stays valid.
+    assert.equal(measured().calibration.isStaleFor(setup({ backingGeneration: 21 })), true);
   });
 
   test('is stale once the desktop player has been seeked', () => {
@@ -331,7 +338,7 @@ describe('CalibrationSession with the real analyser', () => {
       sampleRate: RATE,
       durationMs: DURATION_MS,
       timeoutMs: 20_000,
-      context: () => ({ sessionGeneration: 1, micGeneration: 1, sourceGeneration: 0 }),
+      context: () => ({ sessionGeneration: 1, micGeneration: 1, backingGeneration: 1, sourceGeneration: 0 }),
     });
     const { mic, backing } = laggedPair(6, RATE, 320);
 

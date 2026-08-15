@@ -118,10 +118,23 @@ session.setMicGainDb(micGainDb);
 // song anywhere in that band - and that offset is what a calibration measures.
 let sourceGeneration = 0;
 
+// How long the captured song may be missing before the live session is
+// declared over. The extension retries after a second, so anything shorter
+// turns an ordinary blip into a lost take.
+const BACKING_GRACE_MS = envMs('RELAY_BACKING_GRACE_MS', 10_000);
+let backingAbsenceTimer: NodeJS.Timeout | null = null;
+
+function cancelBackingGrace() {
+  if (backingAbsenceTimer === null) return;
+  clearTimeout(backingAbsenceTimer);
+  backingAbsenceTimer = null;
+}
+
 function calibrationContext(): CalibrationContext {
   return {
     sessionGeneration: session.generation,
     micGeneration: session.micGeneration,
+    backingGeneration: session.backingGeneration,
     sourceGeneration,
   };
 }
@@ -209,6 +222,9 @@ function sourceStatusPayload() {
     sampleRate: backingSampleRate,
     active: session.active,
     prebufferMs: session.prebufferMs,
+    // Monitors receive the mix at this rate while a session is live, whatever
+    // rate the phone happens to be capturing at.
+    mixSampleRate: MIX_SAMPLE_RATE,
     micNetworkCompensationMs: alignment.networkCompensationMs,
     calibratedMicLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
@@ -271,24 +287,24 @@ function timingCalibrationStatusPayload() {
   };
 }
 
+/**
+ * The click sync test, and nothing else.
+ *
+ * This used to report a running live session as `mode: 'tab-source'` with
+ * `active: true`, because the clients had no other way to hear that the server
+ * was mixing. They therefore ran every live take in test mode - which, among
+ * other things, forced the monitor slider to 0 dB and stopped remembering what
+ * the user had set. A live session is described by `source-status`; the clients
+ * read that now.
+ */
 function testStatusPayload() {
-  const mode = testActive
-    ? 'click'
-    : session.active
-      ? 'tab-source'
-      : 'off';
-
   return {
     type: 'test-status',
-    active: mode !== 'off',
-    mode,
+    active: testActive,
+    mode: testActive ? 'click' : 'off',
     bpm: testActive ? TEST_BPM : 0,
     sampleRate: MIX_SAMPLE_RATE,
-    prebufferMs: testActive
-      ? TEST_PREBUFFER_MS
-      : session.active
-        ? session.prebufferMs
-        : 0,
+    prebufferMs: testActive ? TEST_PREBUFFER_MS : 0,
   };
 }
 
@@ -391,7 +407,23 @@ function refreshLiveMicNetworkCompensation() {
 }
 
 
+/**
+ * Brings the captured song online. A session already running is rejoined, not
+ * restarted: the extension keeps capturing and counting samples through a
+ * socket outage, so its frames land back on the timeline they left. Restarting
+ * here used to throw away that timeline - and the microphone's with it - for a
+ * reconnect the capture had already survived.
+ */
 function startLiveSource() {
+  cancelBackingGrace();
+
+  if (session.active) {
+    refreshLiveMicNetworkCompensation();
+    broadcastJson(sourceStatusPayload());
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
   if (testActive) stopSyncTest();
   session.start();
   refreshLiveMicNetworkCompensation();
@@ -415,6 +447,7 @@ function restartLiveSourceAfterMicReconnect() {
 }
 
 function stopLiveSource() {
+  cancelBackingGrace();
   if (!session.active) return;
   // The next capture can be a different tab, device or output path, so the old
   // measurement must not survive. It used to be process-global and quietly
@@ -724,7 +757,13 @@ wss.on('connection', (rawSocket) => {
       if (calibration.collecting) {
         calibration.fail('Desktop Source disconnected during calibration.');
       }
-      stopLiveSource();
+      // Symmetrical with the microphone: the socket dying is not the capture
+      // dying. The extension reconnects on its own, so hold the timeline open
+      // and only end the session once the source really has gone away.
+      cancelBackingGrace();
+      backingAbsenceTimer = setTimeout(stopLiveSource, BACKING_GRACE_MS);
+      broadcastJson(sourceStatusPayload());
+      broadcastStatus();
     }
   });
 });

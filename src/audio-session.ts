@@ -205,6 +205,11 @@ export class AudioSession {
     return this.mic.generation;
   }
 
+  /** Capture session of the captured-song stream currently on the timeline. */
+  get backingGeneration() {
+    return this.backing.generation;
+  }
+
   start(nowMs = performance.now()) {
     this.running = true;
     this.resetEpoch(nowMs);

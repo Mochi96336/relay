@@ -240,7 +240,9 @@ function handleJsonMessage(message) {
     sourceConnected = Boolean(message.connected);
     sourceMicConnected = Boolean(message.micConnected);
     sourcePrebufferMs = Number(message.prebufferMs) || 0;
-    if (sourceConnected) sourceSampleRate = MIX_SAMPLE_RATE;
+    // Keyed on the session, not the socket: the source may be reconnecting
+    // while the mix keeps running, and what arrives here is still the mix.
+    if (message.active) sourceSampleRate = Number(message.mixSampleRate) || MIX_SAMPLE_RATE;
     updateRecordingTransportStatus();
     return;
   }
@@ -281,10 +283,9 @@ function handleJsonMessage(message) {
     if (testActive) {
       sourceSampleRate = Number(message.sampleRate) || MIX_SAMPLE_RATE;
       playback?.port.postMessage({ type: 'reset' });
-      const label = message.mode === 'tab-source'
-        ? 'YouTube tab + Mic mix'
-        : `${message.bpm} BPM test`;
-      recordingStatus.textContent = `● 錄音中 · Server mix · ${label}`;
+      // test-status is the click test only now; a live take is described by
+      // source-status and reported through updateRecordingTransportStatus.
+      recordingStatus.textContent = `● 錄音中 · Server mix · ${message.bpm} BPM test`;
     } else {
       // Never leave this null: a null rate used to make every arriving frame be
       // counted and then discarded, which looks identical to "no audio".

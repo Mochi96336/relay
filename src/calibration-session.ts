@@ -44,6 +44,11 @@ export type CalibrationContext = {
   sessionGeneration: number;
   micGeneration: number | null;
   /**
+   * The capture behind the song. A new one can be a different tab, device or
+   * output path, so it carries its own delay - a socket reconnect does not.
+   */
+  backingGeneration: number | null;
+  /**
    * Bumped whenever the desktop player is seeked. The follower leaves it alone
    * inside a 450 ms dead band, so where it lands after a seek is arbitrary
    * within that band - which is exactly the offset a calibration measures.
@@ -220,6 +225,7 @@ export class CalibrationSession {
     if (this.micLagMs === null || this.measuredContext === null) return false;
     return this.measuredContext.sessionGeneration !== context.sessionGeneration
       || this.measuredContext.micGeneration !== context.micGeneration
+      || this.measuredContext.backingGeneration !== context.backingGeneration
       || this.measuredContext.sourceGeneration !== context.sourceGeneration;
   }
 

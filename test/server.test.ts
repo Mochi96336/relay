@@ -148,8 +148,6 @@ describe('live mix', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
 
-      // A live take is not a test run. Clients that could not tell the two
-      // apart ran every take in test mode, which cost the monitor 30 dB.
       assert.equal(monitor.latest('test-status')?.active, false, 'no test is running');
       assert.equal(monitor.latest('test-status')?.mode, 'off');
 
@@ -157,8 +155,6 @@ describe('live mix', () => {
       assert.equal(live?.active, true, 'the live session describes itself');
       assert.equal(live?.mixSampleRate, RATE);
 
-      // Prime both buffers well past the observation window. Feeding on a JS
-      // timer would only measure the test's own timer accuracy.
       await sendPcmInChunks(backing, tone(3, 0.8));
       await sendPcmInChunks(publisher, tone(3, 0.4));
       await sleep(1_200);
@@ -184,8 +180,6 @@ describe('live mix', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
 
-      // The song keeps arriving but the phone stops after a fraction of a
-      // second, so the mixer's read head runs past the microphone history.
       await sendPcmInChunks(backing, tone(3, 0.8));
       await sendPcmInChunks(publisher, tone(0.2, 0.4));
 
@@ -212,9 +206,6 @@ describe('framed pcm', () => {
       const { backing, publisher, monitor } = await liveSession(server);
 
       await sendPcmInChunks(backing, tone(3, 0.8));
-
-      // One second of microphone, then 400 ms captured but never sent, then
-      // more. The cursor keeps advancing across the drop.
       await sendPcmInChunks(publisher, tone(1, 0.4));
       publisher.skipPcm(Buffer.alloc(Math.round(RATE * 0.4) * 2));
       await sendPcmInChunks(publisher, tone(1, 0.4));
@@ -246,8 +237,6 @@ describe('framed pcm', () => {
       await sendPcmInChunks(publisher, tone(0.5, 0.4));
       await sleep(400);
 
-      // Before the fix the mixer stopped dead without a publisher, so the take
-      // lost the song too, even though it was arriving perfectly well.
       const before = monitor.binaryFrames;
       publisher.close();
       await sleep(800);
@@ -277,9 +266,6 @@ describe('framed pcm', () => {
       publisher.close();
       await sleep(400);
 
-      // Same capture session: the phone kept recording through the outage, so
-      // the cursor carries on and the server places the frames where they
-      // belong rather than restarting the mix epoch.
       const rejoined = await RelayClient.connect(server);
       rejoined.resumeCaptureSession(publisher.generationId, cursor + Math.round(RATE * 0.4));
       rejoined.send({ type: 'register', role: 'publisher', sampleRate: RATE });
@@ -332,8 +318,6 @@ describe('publisher takeover', () => {
     first.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await first.waitForType('registered');
 
-    // The old socket is still OPEN here, exactly like a phone that lost its
-    // network before the heartbeat noticed.
     const second = await RelayClient.connect(server);
     second.send({ type: 'register', role: 'publisher', sampleRate: RATE });
 
@@ -357,7 +341,6 @@ describe('mix settings', () => {
     phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await phone.waitForType('registered');
 
-    // source.html registers no role; it listens like any other client.
     const desktop = await RelayClient.connect(server);
     desktop.send({ type: 'register', role: 'monitor' });
     await desktop.waitForType('registered');
@@ -380,8 +363,6 @@ describe('mix settings', () => {
     phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await phone.waitForType('registered');
 
-    // Registration already delivered a mix-settings, so match on the value
-    // rather than on the next message of that type.
     phone.send({ type: 'set-mix', songLevel: 900 });
     await phone.waitFor((m) => m.type === 'mix-settings' && m.songLevel === 100, 3_000);
 
@@ -413,6 +394,9 @@ describe('timing calibration', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
+      // Make playback the only missing prerequisite. A registered-but-silent
+      // source is a different contract and has its own regression below.
+      await primeStreams(backing, publisher);
       monitor.send({ type: 'start-timing-calibration' });
 
       const status = await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'failed');
@@ -431,10 +415,6 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-
-      // Reloading source.html destroys the tab capture while the extension's
-      // socket, which lives in an offscreen document, stays open and
-      // registered. Only the phone is actually sending.
       await sendPcmInChunks(publisher, tone(0.5, 0.4));
 
       monitor.send({ type: 'start-timing-calibration' });
@@ -454,8 +434,6 @@ describe('timing calibration', () => {
   });
 
   test('names the side that went quiet instead of stalling at 0 %', async () => {
-    // Production ordering: the timeout is the backstop, and noticing a silent
-    // side gets there first. The suite's fast timeout would mask that.
     const server = await startRelay({ ...FAST, RELAY_CALIBRATION_TIMEOUT_MS: '20000' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
@@ -465,8 +443,6 @@ describe('timing calibration', () => {
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
-      // Only the source keeps streaming; the phone goes quiet. Waiting out the
-      // full timeout would report nothing but stalled progress.
       await sendPcmInChunks(backing, silence(2));
 
       const failed = await monitor.waitFor(
@@ -495,9 +471,6 @@ describe('timing calibration', () => {
 
       const lagMs = 260;
       const { mic, backing: song } = laggedPair(8, RATE, lagMs);
-      // Concurrently, the way a real take streams. Sending one side to
-      // completion first anchors its timeline that much earlier, and the
-      // measurement now reports that skew instead of discarding it.
       await Promise.all([
         sendPcmInChunks(backing, song),
         sendPcmInChunks(publisher, mic),
@@ -519,8 +492,6 @@ describe('timing calibration', () => {
       );
       assert.equal(applied.calibratedMicLagMs, complete.micLagMs);
 
-      // Only the socket died. The capture kept counting samples, so the
-      // measurement still describes the same transport and must stay valid.
       const cursor = publisher.cursor;
       publisher.close();
       await sleep(300);
@@ -562,8 +533,6 @@ describe('timing calibration', () => {
         10_000,
       );
 
-      // The user pressed Microphone again: a different capture, so the delay
-      // the measurement folded in may no longer hold.
       const restarted = await RelayClient.connect(server);
       restarted.newCaptureSession();
       restarted.send({ type: 'register', role: 'publisher', sampleRate: RATE });
@@ -603,8 +572,6 @@ describe('timing calibration', () => {
         10_000,
       );
 
-      // A new bridge/browser process starts a new capture generation even when
-      // it replaces the old socket before that socket's close event arrives.
       const restarted = await RelayClient.connect(server);
       restarted.newCaptureSession();
       restarted.send({ type: 'register', role: 'backing', sampleRate: RATE });
@@ -632,15 +599,11 @@ describe('timing calibration', () => {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
 
-      // Both sides have to be streaming, not merely connected: an open socket
-      // says nothing about whether the phone has started its capture.
       await Promise.all([
         sendPcmInChunks(backing, tone(1, 0.8)),
         sendPcmInChunks(publisher, tone(1, 0.4)),
       ]);
 
-      // Nobody sends start-timing-calibration. The server should notice it has
-      // no usable measurement and take one.
       await monitor.waitFor(
         (m) => m.type === 'timing-calibration-status' && m.state === 'collecting',
         3_000,
@@ -656,10 +619,6 @@ describe('timing calibration', () => {
         (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
         10_000,
       );
-      // The two websocket streams anchor independently on their first frame,
-      // so a loaded test runner can add one 20 ms frame of real timeline skew.
-      // Calibration is meant to include that anchor bias; keep this at the
-      // same tolerance production uses to decide that windows agree.
       assert.ok(Math.abs(complete.micLagMs - 260) <= 25, `got ${complete.micLagMs} ms`);
       assert.equal(complete.automatic, true, 'and says it was unattended');
 
@@ -687,8 +646,6 @@ describe('timing calibration', () => {
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
-      // Enough for two windows. The first one finishing must not be enough on
-      // its own - that is the whole point.
       const { mic, backing: song } = laggedPair(16, RATE, 260);
       await Promise.all([
         sendPcmInChunks(backing, song),
@@ -716,9 +673,6 @@ describe('timing calibration', () => {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
 
-      // Registered and playing, but the phone's capture has not started. Half
-      // the window would be spent waiting for it, and the wait would then be
-      // reported as lost audio.
       await sendPcmInChunks(backing, tone(2, 0.8));
       await sleep(800);
 
@@ -758,8 +712,6 @@ describe('timing calibration', () => {
       ]);
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'complete', 10_000);
 
-      // Well past the retry interval. A measurement that still describes this
-      // setup must be left alone - re-applying one mid-take moves the vocal.
       await sleep(1_200);
       assert.equal(
         monitor.latest('timing-calibration-status')?.state,
@@ -796,9 +748,6 @@ describe('timing calibration', () => {
       );
       assert.equal(complete.calibrationStale, false);
 
-      // The follower corrected its mirrored player. It only does so past 450 ms
-      // of error, so the song has moved somewhere arbitrary inside that band and
-      // the measured offset no longer describes where it sits.
       backing.send({ type: 'source-seeked' });
 
       const stale = await monitor.waitFor(
@@ -816,8 +765,6 @@ describe('timing calibration', () => {
   });
 
   test('clears the calibration once the captured source is really gone', async () => {
-    // A short grace period, so the take survives a blip but a closed tab still
-    // ends the session rather than leaving a dead one running.
     const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '300' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
@@ -860,8 +807,6 @@ describe('timing calibration', () => {
       ]);
       await monitor.waitForType('mix-health', 3_000);
 
-      // The desktop link blips. The phone did nothing wrong, and its audio must
-      // not be thrown away for it - which is what restarting the session did.
       backing.close();
       await sleep(200);
 
@@ -906,9 +851,6 @@ describe('timing calibration', () => {
         10_000,
       );
 
-      // Only the socket died. The extension keeps capturing and reconnects on
-      // its own, so its frames land back on the timeline they left - the same
-      // contract the microphone already had.
       const cursor = backing.cursor;
       const generation = backing.generationId;
       backing.close();

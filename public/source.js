@@ -314,9 +314,15 @@ function renderSourceStatus(message) {
     ? `calibrated ${signed(message.calibratedMicLagMs, ' ms')}`
     : `network ${signed(message.micNetworkCompensationMs, ' ms')}`;
 
-  captureState.textContent = message.connected
-    ? `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`
-    : 'Capture not connected · click the Relay extension icon on this tab.';
+  // Reloading this tab destroys the tab capture while the extension's socket,
+  // which lives in an offscreen document, stays open. Connected with no audio
+  // behind it is therefore a normal state to end up in, and used to look
+  // healthy right up until a calibration sat at 0 %.
+  captureState.textContent = !message.connected
+    ? 'Capture not connected · click the Relay extension icon on this tab.'
+    : message.backingStreaming === false
+      ? '⚠ 擴充功能已連線，但沒有音訊送進來 · 這個分頁重整過的話，請再點一次 Relay 擴充功能圖示。'
+      : `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`;
   renderMixHealth();
 
   if (Number.isFinite(Number(message.vocalFineTuneMs)) && !fineTuneIsBusy()) {

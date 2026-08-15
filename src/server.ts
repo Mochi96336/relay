@@ -132,11 +132,29 @@ let calibrationWasAutomatic = false;
 // phone that has registered but is not sending yet spends the whole window
 // waiting for it, and the far side of that wait is not audio anyone lost.
 const STREAM_LIVE_MS = 1_000;
+// Extra tolerance once a collection is under way, so an ordinary jitter spike
+// does not abandon a measurement that would have completed.
+const COLLECTION_SILENCE_GRACE_MS = 1_500;
 let lastMicFrameAt = -Infinity;
 let lastBackingFrameAt = -Infinity;
 
 function bothStreamsFlowing(nowMs: number) {
-  return nowMs - lastMicFrameAt < STREAM_LIVE_MS && nowMs - lastBackingFrameAt < STREAM_LIVE_MS;
+  return silentSides(nowMs).length === 0;
+}
+
+/**
+ * Which registered sides are not actually delivering audio.
+ *
+ * A socket says nothing about this, and the two come apart in a way that is
+ * easy to hit: reloading source.html destroys the tab capture, while the
+ * extension's own socket lives in an offscreen document and stays open. The
+ * server then sees a healthy backing client with no audio behind it.
+ */
+function silentSides(nowMs: number) {
+  const silent: string[] = [];
+  if (nowMs - lastMicFrameAt >= STREAM_LIVE_MS) silent.push('phone microphone');
+  if (nowMs - lastBackingFrameAt >= STREAM_LIVE_MS) silent.push('desktop capture');
+  return silent;
 }
 
 // How long the captured song may be missing before the live session is
@@ -246,10 +264,15 @@ function calibrationIsStale() {
 
 function sourceStatusPayload() {
   const alignment = session.alignment;
+  const nowMs = performance.now();
   return {
     type: 'source-status',
     connected: backing?.readyState === WebSocket.OPEN,
     micConnected: publisher?.readyState === WebSocket.OPEN,
+    // Connected and streaming are different states, and the gap between them is
+    // reachable by simply reloading the source page.
+    backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
+    micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
     sampleRate: backingSampleRate,
     active: session.active,
     prebufferMs: session.prebufferMs,
@@ -558,8 +581,18 @@ const youtubeTimelineTimer = setInterval(() => {
 
   // Without the timeout the phase never leaves 'collecting' when one side stops
   // sending, and the Calibrate button stays disabled with no way back.
-  if (calibration.collecting && !calibration.tick(nowMs)) {
-    broadcastJson(timingCalibrationStatusPayload());
+  if (calibration.collecting) {
+    const silent = silentSides(nowMs - COLLECTION_SILENCE_GRACE_MS);
+    if (silent.length > 0) {
+      // Waiting out the full timeout here tells the user nothing; the progress
+      // simply stops moving. Say which side went quiet, and say it now.
+      calibration.fail(
+        `Calibration stopped: no audio from the ${silent.join(' or ')}. `
+        + 'If the desktop source page was reloaded, click the Relay extension icon on it again.',
+      );
+    } else if (!calibration.tick(nowMs)) {
+      broadcastJson(timingCalibrationStatusPayload());
+    }
   }
 
   if (session.active && nowMs - lastMixHealthAt >= MIX_HEALTH_INTERVAL_MS) {
@@ -685,6 +718,17 @@ wss.on('connection', (rawSocket) => {
       }
       if (!timeline.connected || Number(timeline.state) !== 1) {
         calibration.fail('Play YouTube on the phone before calibration.');
+        return;
+      }
+      // Registered is not the same as streaming. Without this the collection
+      // starts, receives nothing from the silent side, and sits at 0 % for the
+      // whole timeout with nothing saying which side is missing.
+      const silent = silentSides(performance.now());
+      if (silent.length > 0) {
+        calibration.fail(
+          `No audio arriving from the ${silent.join(' or ')}. `
+          + 'If the desktop source page was reloaded, click the Relay extension icon on it again.',
+        );
         return;
       }
       calibrationWasAutomatic = false;

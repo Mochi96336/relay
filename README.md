@@ -157,6 +157,12 @@ The desktop is meant to run unattended, so the measurement does not wait for any
 
 It only fires when there is nothing usable to fall back on — no measurement, or one that no longer describes this setup. That keeps it away from a take in progress: applying a fresh alignment mid-song shifts the vocal audibly, and every event that invalidates a measurement has already disturbed the take anyway.
 
+### Connected is not streaming
+
+Reloading `source.html` destroys the tab capture, but the extension's WebSocket lives in an offscreen document and survives it. The server is then holding a registered, open `backing` client with no audio behind it — and every check written against socket state says everything is fine.
+
+That state used to be invisible until a calibration started against it and sat at 0 % for the full timeout, reporting only that progress had stopped. Calibration now refuses to start unless frames have actually arrived from both sides recently, gives up quickly if one goes quiet mid-collection, and names the side in both cases. `source-status` carries `micStreaming` / `backingStreaming` so `source.html` can say it without anyone pressing anything.
+
 ### Why a measurement has to repeat itself
 
 The analyser accepts unrelated audio at a confidence of 0.4–0.6 against 1.0 for a true match, reporting plausible-looking lags that are simply wrong (`test/timing-calibration.test.ts` pins the margin). While a person pressed the button that was survivable: an implausible number got re-run. Automating the trigger removed the reviewer and the flaw started reaching the mix, heard as the song arriving twice, badly offset, intermittently.

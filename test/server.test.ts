@@ -43,6 +43,18 @@ function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
 }
 
+/**
+ * Gets audio genuinely moving on both sides. Calibration refuses to start
+ * against a registered-but-silent client, because that spends the whole window
+ * receiving nothing and says only that progress stopped.
+ */
+async function primeStreams(backing: RelayClient, publisher: RelayClient) {
+  await Promise.all([
+    sendPcmInChunks(backing, tone(0.5, 0.8)),
+    sendPcmInChunks(publisher, tone(0.5, 0.4)),
+  ]);
+}
+
 async function liveSession(server: RelayServer) {
   const backing = await RelayClient.connect(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
@@ -414,24 +426,54 @@ describe('timing calibration', () => {
     }
   });
 
-  test('times out instead of hanging when a stream stalls', async () => {
+  test('refuses to start against a connected source that is not streaming', async () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-      await sleep(100);
+
+      // Reloading source.html destroys the tab capture while the extension's
+      // socket, which lives in an offscreen document, stays open and
+      // registered. Only the phone is actually sending.
+      await sendPcmInChunks(publisher, tone(0.5, 0.4));
+
+      monitor.send({ type: 'start-timing-calibration' });
+      const failed = await monitor.waitFor(
+        (m) => m.type === 'timing-calibration-status' && m.state === 'failed',
+        3_000,
+      );
+      assert.match(failed.error, /no audio arriving from the desktop capture/i);
+      assert.match(failed.error, /extension icon/i, 'and says what to do about it');
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('names the side that went quiet instead of stalling at 0 %', async () => {
+    // Production ordering: the timeout is the backstop, and noticing a silent
+    // side gets there first. The suite's fast timeout would mask that.
+    const server = await startRelay({ ...FAST, RELAY_CALIBRATION_TIMEOUT_MS: '20000' });
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      publisher.send(playingTelemetry);
+      await primeStreams(backing, publisher);
 
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
-      // Only the source keeps streaming; the microphone side never fills.
-      await sendPcmInChunks(backing, silence(1));
+      // Only the source keeps streaming; the phone goes quiet. Waiting out the
+      // full timeout would report nothing but stalled progress.
+      await sendPcmInChunks(backing, silence(2));
 
       const failed = await monitor.waitFor(
         (m) => m.type === 'timing-calibration-status' && m.state === 'failed',
         6_000,
       );
-      assert.match(failed.error, /timed out/i);
+      assert.match(failed.error, /no audio from the phone microphone/i);
 
       backing.close();
       publisher.close();
@@ -446,7 +488,7 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-      await sleep(100);
+      await primeStreams(backing, publisher);
 
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
@@ -507,7 +549,7 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-      await sleep(100);
+      await primeStreams(backing, publisher);
 
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
@@ -595,7 +637,7 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-      await sleep(100);
+      await primeStreams(backing, publisher);
 
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
@@ -693,7 +735,7 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-      await sleep(100);
+      await primeStreams(backing, publisher);
 
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
@@ -735,7 +777,7 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-      await sleep(100);
+      await primeStreams(backing, publisher);
 
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
@@ -804,7 +846,7 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
-      await sleep(100);
+      await primeStreams(backing, publisher);
 
       monitor.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');

@@ -73,6 +73,29 @@ describe('AudioSession timelines', () => {
     assert.equal(session.health().micGapMs, 0);
   });
 
+  // The mixer reads the song at the read head, so a second of history is all
+  // it ever wanted - but a probe calibration reads back across its whole
+  // search window, and cannot do so until enough audio has arrived to cover
+  // it. Trimming to the mixer's need alone silently handed that reader zeros.
+  test('keeps captured song history for readers further back than the mixer', () => {
+    const session = makeSession({ backingRetentionMs: 4_000, prebufferMs: 0 });
+    session.start(0);
+
+    // A marker three seconds back, then enough audio to carry the read head
+    // well past it and trigger the trim.
+    const marker = pcmOf(new Array(RATE).fill(9_000));
+    session.ingestBacking(frame(0, marker), RATE, 0);
+    session.ingestBacking(frame(RATE, pcmOf(new Array(RATE * 4).fill(0))), RATE, 0);
+    session.ingestMic(frame(0, pcmOf(new Array(RATE * 5).fill(0))), RATE, 0);
+    drainAll(session, 4_000);
+
+    const recovered = session.readBacking(0, RATE);
+    assert.ok(
+      recovered.some((sample) => sample !== 0),
+      'the song under the read head was discarded before a later reader could look at it',
+    );
+  });
+
   test('a skipped frame leaves a hole of exactly the right length', () => {
     const session = makeSession();
     session.start(0);

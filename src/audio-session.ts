@@ -116,8 +116,22 @@ export type AudioSessionOptions = {
   frameMs: number;
   prebufferMs: number;
   backingGain: number;
-  /** How far behind the read head to keep audio before discarding it. */
+  /** How far behind the read head to keep microphone audio before discarding it. */
   retentionMs: number;
+  /**
+   * The same for the captured song, which the mixer reads at the read head
+   * rather than behind it and so needs far less of - but it is not the only
+   * reader. A probe calibration looks back over its whole search window, and
+   * that window is minutes-old by timeline standards: it cannot be analysed
+   * until enough audio has arrived to cover it.
+   *
+   * This was a hardcoded one second, which was enough only while the backing
+   * path was two seconds slow and the probe therefore landed close to the
+   * frontier. Bounding the capture latency moved the probe nearly two seconds
+   * further back, straight into the discarded region, and the probe leg began
+   * correlating at exactly -1 against a window of zeros.
+   */
+  backingRetentionMs?: number;
 };
 
 function emptyTimeline(): PcmTimeline {
@@ -137,9 +151,11 @@ export class AudioSession {
   readonly frameSamples: number;
   readonly prebufferMs: number;
   readonly retentionMs: number;
+  readonly backingRetentionMs: number;
 
   private readonly backingGain: number;
   private readonly retentionSamples: number;
+  private readonly backingRetentionSamples: number;
 
   private readonly mic = emptyTimeline();
   private readonly backing = emptyTimeline();
@@ -186,6 +202,8 @@ export class AudioSession {
     this.backingGain = options.backingGain;
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
+    this.backingRetentionMs = options.backingRetentionMs ?? 1_000;
+    this.backingRetentionSamples = Math.round((this.backingRetentionMs * options.sampleRate) / 1000);
     this.limiterAttack = onePoleCoefficient(LIMITER_ATTACK_MS, options.sampleRate);
     this.limiterRelease = onePoleCoefficient(LIMITER_RELEASE_MS, options.sampleRate);
     this.limiterLookaheadSamples = Math.round((LIMITER_LOOKAHEAD_MS * options.sampleRate) / 1000);
@@ -643,7 +661,7 @@ export class AudioSession {
     }
 
     this.trim(this.mic, startSample - this.retentionSamples);
-    this.trim(this.backing, startSample - this.sampleRate);
+    this.trim(this.backing, startSample - this.backingRetentionSamples);
     return output;
   }
 }

@@ -37,6 +37,27 @@ const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 400);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
 const MIC_RETENTION_MS = envMs('RELAY_MIC_RETENTION_MS', 3_000);
+/**
+ * How far either side of the estimated position a probe is searched for.
+ *
+ * This bounds the latency a probe can find at all, so it has to cover the
+ * whole plausible range of a path rather than just the round-trip estimate's
+ * error. The robot's browser-to-PipeWire path measured close to two seconds,
+ * which a 400 ms window would have silently missed.
+ */
+const PROBE_SEARCH_MARGIN_MS = envMs('RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000);
+/**
+ * Captured-song history kept, sized by the probe rather than by the mixer.
+ *
+ * The mixer reads the song at the read head and would be happy with a second.
+ * The probe analysis is the demanding reader: it waits for the timeline to
+ * cover its whole search window and only then looks back across it, so every
+ * sample it will examine has to still be there. A hardcoded second was enough
+ * only while the backing path was two seconds slow and the probe landed near
+ * the frontier; bounding the capture latency moved it back into the discarded
+ * region, and the leg started correlating at -1 against a window of zeros.
+ */
+const BACKING_RETENTION_MS = PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 2_000;
 const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_000);
 const MAX_VOCAL_FINE_TUNE_MS = 100;
@@ -120,6 +141,10 @@ const session = new AudioSession({
   prebufferMs: LIVE_MIX_PREBUFFER_MS,
   backingGain: LIVE_BACKING_GAIN,
   retentionMs: MIC_RETENTION_MS,
+  // Sized by its hungriest reader rather than by the mixer, which needs almost
+  // none of it. The probe analysis cannot run until the timeline covers its
+  // whole search window, so anything it will look at has to survive that wait.
+  backingRetentionMs: BACKING_RETENTION_MS,
 });
 session.setMicGainDb(micGainDb);
 
@@ -133,11 +158,22 @@ let calibrationKind: CalibrationKind = 'none';
 const PROBE_CALIBRATE = process.env.RELAY_CALIBRATION_PROBE !== '0';
 const PROBE_RETRY_MS = envMs('RELAY_CALIBRATION_PROBE_RETRY_MS', 6_000);
 const PROBE_LEAD_MS = envMs('RELAY_CALIBRATION_PROBE_LEAD_MS', 200);
-const PROBE_SEARCH_MARGIN_MS = envMs('RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000);
 const PROBE_MIN_CORRELATION = Number(process.env.RELAY_CALIBRATION_PROBE_MIN_CORRELATION ?? 0.5);
 const PROBE_DEBUG = process.env.RELAY_CALIBRATION_PROBE_DEBUG === '1';
 const PROBE_REPLY_TIMEOUT_MS = 3_000;
-const PROBE_ANALYSIS_TIMEOUT_MS = envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000);
+/**
+ * Long enough for the probe to play, be captured and reach the server.
+ *
+ * Derived from the search window rather than set independently: the analysis
+ * cannot run until the timeline has covered the whole window, so a timeout
+ * shorter than that rejects every probe before it is even looked at. Raising
+ * `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` to 10 s did exactly that, and the
+ * only symptom was every leg reporting `analysis dropped ... timedOut=true`.
+ */
+const PROBE_ANALYSIS_TIMEOUT_MS = Math.max(
+  envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000),
+  PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 5_000,
+);
 
 type ProbeTarget = 'mic' | 'backing';
 type MeasuredMicLeg = {

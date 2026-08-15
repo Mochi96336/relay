@@ -39,6 +39,24 @@ function registerPublisher(
   });
 }
 
+async function waitForNewMessage(
+  client: RelayClient,
+  startIndex: number,
+  predicate: (message: Record<string, any>) => boolean,
+  timeoutMs = 3_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = client.messages.slice(startIndex).find(predicate);
+    if (found) return found;
+    await sleep(10);
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs} ms waiting for a new message. `
+    + `Saw after index ${startIndex}: ${client.messages.slice(startIndex).map((message) => message.type).join(', ')}`,
+  );
+}
+
 describe('participant presence and microphone ownership', () => {
   test('commits a confirmed takeover together with a ready publisher transport', async () => {
     const server = await startRelay(FAST);
@@ -122,12 +140,12 @@ describe('participant presence and microphone ownership', () => {
       assert.equal(rejected.owner.id, 'participant-carol');
       assert.equal(carolPublisher.messages.some((message) => message.type === 'mic-revoked'), false);
 
+      const statusStart = bobPublisher.messages.length;
       bobPublisher.send({ type: 'session-status-request' });
-      const status = await bobPublisher.waitFor((message) => (
+      const status = await waitForNewMessage(bobPublisher, statusStart, (message) => (
         message.type === 'session-status'
         && message.micOwnerId === 'participant-carol'
         && message.micConnected === true
-        && message.revision >= rejected.revision
       ));
       assert.equal(status.micOwnerId, 'participant-carol');
 
@@ -148,14 +166,16 @@ describe('participant presence and microphone ownership', () => {
       const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
       const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
       registerPublisher(alicePublisher, 7);
+      await alicePublisher.waitForType('registered');
       await observer.waitFor((message) => (
         message.type === 'session-status'
         && message.micOwnerId === 'participant-alice'
         && message.micConnected === true
       ));
 
+      const missingStart = observer.messages.length;
       alicePublisher.close();
-      const transportMissing = await observer.waitFor((message) => (
+      const transportMissing = await waitForNewMessage(observer, missingStart, (message) => (
         message.type === 'session-status'
         && message.micOwnerId === 'participant-alice'
         && message.micConnected === false
@@ -167,15 +187,18 @@ describe('participant presence and microphone ownership', () => {
 
       await sleep(100);
       const reconnectedPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const reconnectedStart = observer.messages.length;
       registerPublisher(reconnectedPublisher, 7);
-      await observer.waitFor((message) => (
+      await reconnectedPublisher.waitForType('registered');
+      await waitForNewMessage(observer, reconnectedStart, (message) => (
         message.type === 'session-status'
         && message.micOwnerId === 'participant-alice'
         && message.micConnected === true
       ));
 
+      const releaseStart = observer.messages.length;
       reconnectedPublisher.close();
-      const released = await observer.waitFor((message) => (
+      const released = await waitForNewMessage(observer, releaseStart, (message) => (
         message.type === 'session-status'
         && message.micOwnerId === null
         && message.participants.some((participant: any) => (
@@ -199,10 +222,16 @@ describe('participant presence and microphone ownership', () => {
       const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
       registerPublisher(alicePublisher, 11);
       await alicePublisher.waitForType('registered');
+      await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === true
+      ));
 
+      const releaseStart = observer.messages.length;
       alicePresence.send({ type: 'release-mic' });
       await alicePublisher.waitForType('mic-revoked');
-      const released = await observer.waitFor((message) => (
+      const released = await waitForNewMessage(observer, releaseStart, (message) => (
         message.type === 'session-status'
         && message.micOwnerId === null
         && message.participants.some((participant: any) => (
@@ -226,7 +255,13 @@ describe('participant presence and microphone ownership', () => {
       const firstPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
       registerPublisher(firstPublisher, 21);
       await firstPublisher.waitForType('registered');
+      await observer.waitFor((message) => (
+        message.type === 'session-status'
+        && message.micOwnerId === 'participant-alice'
+        && message.micConnected === true
+      ));
 
+      const replacementStart = observer.messages.length;
       const secondPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
       registerPublisher(secondPublisher, 22);
       await secondPublisher.waitForType('registered');
@@ -234,7 +269,7 @@ describe('participant presence and microphone ownership', () => {
       assert.match(superseded.message, /newer microphone capture/i);
       assert.deepEqual(firstPublisher.errors, []);
 
-      const stillOwned = await observer.waitFor((message) => (
+      const stillOwned = await waitForNewMessage(observer, replacementStart, (message) => (
         message.type === 'session-status'
         && message.micOwnerId === 'participant-alice'
         && message.micConnected === true
@@ -292,12 +327,13 @@ describe('participant presence and microphone ownership', () => {
     const server = await startRelay(FAST);
     try {
       const alice = await connectParticipant(server, 'participant-alice', 'Alice');
+      const statusStart = alice.messages.length;
       alice.send({ type: 'acquire-mic' });
       const error = await alice.waitForType('error');
       assert.match(error.message, /publisher registration/);
 
       alice.send({ type: 'session-status-request' });
-      const status = await alice.waitFor((message) => (
+      const status = await waitForNewMessage(alice, statusStart, (message) => (
         message.type === 'session-status' && message.micOwnerId === null
       ));
       assert.equal(status.micOwnerId, null);

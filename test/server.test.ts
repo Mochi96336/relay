@@ -313,7 +313,7 @@ describe('publisher takeover', () => {
   before(async () => { server = await startRelay(FAST); });
   after(async () => { await server.stop(); });
 
-  test('hands the slot to the newest connection instead of rejecting it', async () => {
+  test('retires the old anonymous publisher with a terminal semantic message', async () => {
     const first = await RelayClient.connect(server);
     first.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await first.waitForType('registered');
@@ -323,7 +323,8 @@ describe('publisher takeover', () => {
 
     assert.equal((await second.waitForType('registered')).role, 'publisher');
     assert.deepEqual(second.errors, []);
-    assert.match((await first.waitForType('error')).message, /Replaced/);
+    assert.match((await first.waitForType('mic-revoked')).message, /took over the microphone/i);
+    assert.deepEqual(first.errors, [], 'publisher replacement is protocol state, not a transport error');
 
     first.close();
     second.close();

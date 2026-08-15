@@ -88,6 +88,12 @@ exit 0
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       TEST_STATE: state,
+      // The launcher takes a per-sink `flock` in `XDG_RUNTIME_DIR`. Pointed at
+      // the real one, this test cannot run on a host where the robot route is
+      // actually live: the launcher would exit on the lock instead of starting
+      // the mocked route, and its failure exit status is the same 1 the test
+      // expects from a child exiting. Give each run its own lock directory.
+      XDG_RUNTIME_DIR: directory,
     },
   };
 }

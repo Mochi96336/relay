@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,11 @@ import { combineBootCalibration, type BootCalibrationResult } from './boot-calib
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { decodePcmFrame } from './pcm-frame.js';
+import {
+  ParticipantSession,
+  normalizeNickname,
+  normalizeParticipantId,
+} from './participant-session.js';
 import { buildReadiness } from './readiness.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
@@ -33,11 +38,34 @@ const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 400);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
 const MIC_RETENTION_MS = envMs('RELAY_MIC_RETENTION_MS', 3_000);
+/**
+ * How far either side of the estimated position a probe is searched for.
+ *
+ * This bounds the latency a probe can find at all, so it has to cover the
+ * whole plausible range of a path rather than just the round-trip estimate's
+ * error. The robot's browser-to-PipeWire path measured close to two seconds,
+ * which a 400 ms window would have silently missed.
+ */
+const PROBE_SEARCH_MARGIN_MS = envMs('RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000);
+/**
+ * Captured-song history kept, sized by the probe rather than by the mixer.
+ *
+ * The mixer reads the song at the read head and would be happy with a second.
+ * The probe analysis is the demanding reader: it waits for the timeline to
+ * cover its whole search window and only then looks back across it, so every
+ * sample it will examine has to still be there. A hardcoded second was enough
+ * only while the backing path was two seconds slow and the probe landed near
+ * the frontier; bounding the capture latency moved it back into the discarded
+ * region, and the leg started correlating at -1 against a window of zeros.
+ */
+const BACKING_RETENTION_MS = PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 2_000;
 const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_000);
 const MAX_VOCAL_FINE_TUNE_MS = 100;
 const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
+const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
+const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
 
 const app = express();
 app.disable('x-powered-by');
@@ -49,6 +77,7 @@ app.get('/healthz', (_req, res) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
 const youtubeTimeline = new YouTubeTimelineTracker();
+const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -73,9 +102,12 @@ type CalibrationKind = 'none' | 'content' | 'boot-probe';
 type RelaySocket = WebSocket & {
   role: ClientRole;
   sampleRate?: number;
+  captureGeneration?: number;
   isAlive: boolean;
   replaced?: boolean;
   isRobotSource?: boolean;
+  participantId?: string;
+  participantConnectionId?: string;
 };
 
 type TimelineStatus = {
@@ -100,6 +132,9 @@ let testStartedAt = 0;
 let testFrameIndex = 0;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
+let participantConnectionSequence = 0;
+let micTransportGraceTimer: NodeJS.Timeout | null = null;
+let micTransportGraceOwnerId: string | null = null;
 
 const session = new AudioSession({
   sampleRate: MIX_SAMPLE_RATE,
@@ -107,6 +142,10 @@ const session = new AudioSession({
   prebufferMs: LIVE_MIX_PREBUFFER_MS,
   backingGain: LIVE_BACKING_GAIN,
   retentionMs: MIC_RETENTION_MS,
+  // Sized by its hungriest reader rather than by the mixer, which needs almost
+  // none of it. The probe analysis cannot run until the timeline covers its
+  // whole search window, so anything it will look at has to survive that wait.
+  backingRetentionMs: BACKING_RETENTION_MS,
 });
 session.setMicGainDb(micGainDb);
 
@@ -120,11 +159,22 @@ let calibrationKind: CalibrationKind = 'none';
 const PROBE_CALIBRATE = process.env.RELAY_CALIBRATION_PROBE !== '0';
 const PROBE_RETRY_MS = envMs('RELAY_CALIBRATION_PROBE_RETRY_MS', 6_000);
 const PROBE_LEAD_MS = envMs('RELAY_CALIBRATION_PROBE_LEAD_MS', 200);
-const PROBE_SEARCH_MARGIN_MS = envMs('RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000);
 const PROBE_MIN_CORRELATION = Number(process.env.RELAY_CALIBRATION_PROBE_MIN_CORRELATION ?? 0.5);
 const PROBE_DEBUG = process.env.RELAY_CALIBRATION_PROBE_DEBUG === '1';
 const PROBE_REPLY_TIMEOUT_MS = 3_000;
-const PROBE_ANALYSIS_TIMEOUT_MS = envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000);
+/**
+ * Long enough for the probe to play, be captured and reach the server.
+ *
+ * Derived from the search window rather than set independently: the analysis
+ * cannot run until the timeline has covered the whole window, so a timeout
+ * shorter than that rejects every probe before it is even looked at. Raising
+ * `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` to 10 s did exactly that, and the
+ * only symptom was every leg reporting `analysis dropped ... timedOut=true`.
+ */
+const PROBE_ANALYSIS_TIMEOUT_MS = Math.max(
+  envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000),
+  PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 5_000,
+);
 
 type ProbeTarget = 'mic' | 'backing';
 type MeasuredMicLeg = {
@@ -191,6 +241,33 @@ function cancelBackingGrace() {
   backingAbsenceTimer = null;
 }
 
+function cancelMicTransportGrace() {
+  if (micTransportGraceTimer !== null) clearTimeout(micTransportGraceTimer);
+  micTransportGraceTimer = null;
+  micTransportGraceOwnerId = null;
+}
+
+function scheduleMicTransportGrace(ownerId: string) {
+  cancelMicTransportGrace();
+  micTransportGraceOwnerId = ownerId;
+  micTransportGraceTimer = setTimeout(() => {
+    micTransportGraceTimer = null;
+    const expectedOwnerId = micTransportGraceOwnerId;
+    micTransportGraceOwnerId = null;
+    if (!expectedOwnerId || participants.micOwnerId !== expectedOwnerId) return;
+    if (
+      publisher?.readyState === WebSocket.OPEN
+      && publisher.participantId === expectedOwnerId
+    ) return;
+
+    const released = participants.releaseMic(expectedOwnerId);
+    if (!released.ok) return;
+    invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
+    broadcastSessionStatus();
+  }, MIC_TRANSPORT_GRACE_MS);
+  micTransportGraceTimer.unref();
+}
+
 function calibrationContext(): CalibrationContext {
   return {
     sessionGeneration: session.generation,
@@ -243,6 +320,34 @@ function broadcastJson(payload: unknown) {
   }
 }
 
+function participantIdentity(request: IncomingMessage) {
+  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+  const participantId = normalizeParticipantId(url.searchParams.get('participant'));
+  if (!participantId) return null;
+
+  const nickname = normalizeNickname(url.searchParams.get('name')) ?? 'Guest';
+  return { participantId, nickname };
+}
+
+function sessionStatusPayload() {
+  const snapshot = participants.snapshot();
+  return {
+    type: 'session-status',
+    ...snapshot,
+    micConnected: snapshot.micOwnerId !== null
+      && publisher?.readyState === WebSocket.OPEN
+      && publisher.participantId === snapshot.micOwnerId,
+  };
+}
+
+function broadcastSessionStatus() {
+  broadcastJson(sessionStatusPayload());
+}
+
+function participantPayload(participantId: string | null) {
+  return participantId ? participants.participant(participantId) : null;
+}
+
 function broadcastToMonitors(payload: string | Buffer, binary = false) {
   for (const client of wss.clients) {
     const socket = client as RelaySocket;
@@ -266,6 +371,24 @@ function replacePrevious(previous: RelaySocket | null, next: RelaySocket, messag
   setTimeout(() => {
     if (previous.readyState !== WebSocket.CLOSED) previous.terminate();
   }, 1_000).unref();
+}
+
+function retirePublisherTransport(
+  previous: RelaySocket | null,
+  type: 'mic-revoked' | 'publisher-superseded',
+  message: string,
+) {
+  if (!previous) return false;
+  previous.replaced = true;
+  previous.role = 'unknown';
+  sendJson(previous, { type, message });
+  try {
+    previous.close();
+  } catch {}
+  setTimeout(() => {
+    if (previous.readyState !== WebSocket.CLOSED) previous.terminate();
+  }, 1_000).unref();
+  return true;
 }
 
 function publisherStatusPayload() {
@@ -418,6 +541,29 @@ function currentTimelineStatus(nowMs = performance.now()) {
 
 function broadcastStatus() {
   broadcastToMonitors(JSON.stringify(publisherStatusPayload()));
+  broadcastJson(sourceStatusPayload());
+}
+
+function revokePublisherTransport(message: string) {
+  const previous = publisher;
+  if (!previous) return false;
+  publisher = null;
+  publisherSampleRate = null;
+  session.setMicExpected(false);
+  retirePublisherTransport(previous, 'mic-revoked', message);
+  if (testActive) stopSyncTest();
+  broadcastStatus();
+  return true;
+}
+
+function invalidateMicTiming(message: string) {
+  clearBootCalibrationState();
+  if (calibration.collecting) calibration.fail(message);
+  else calibration.reset();
+  calibrationKind = 'none';
+  lastAutoCalibrationAt = -Infinity;
+  syncAppliedCalibration();
+  broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
 }
 
@@ -607,7 +753,7 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
     generation: probeGeneration(target),
   };
   calibrationKind = 'boot-probe';
-  if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${probeRequestId} generation=${probeGeneration(target)}`);
+  if (PROBE_DEBUG) console.log(`[probe] ${pendingProbe.target} sent #${probeRequestId} generation=${probeGeneration(target)}`);
 
   const payload = { type: 'play-calibration-probe', target, requestId: probeRequestId, leadMs: PROBE_LEAD_MS };
   if (target === 'mic') {
@@ -714,7 +860,31 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
 
   if (PROBE_DEBUG) {
-    console.log(`[probe] ${waiting.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`);
+    // The window's own peak separates "the probe was not heard" from "the
+    // probe was never looked at": a correlation of -1 is what an all-zero
+    // window scores, and a range the timeline does not cover reads as zeros.
+    let peak = 0;
+    for (let i = 0; i < window.length; i += 1) {
+      const magnitude = Math.abs(window[i]);
+      if (magnitude > peak) peak = magnitude;
+    }
+    // And the most recent audio on the same timeline, as a control: if that is
+    // silent too the stream is not carrying anything, and if it is not the
+    // window is simply looking in the wrong place.
+    const controlSeconds = 20;
+    const recent = waiting.target === 'mic'
+      ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
+      : session.readBacking(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds);
+    let recentPeak = 0;
+    for (let i = 0; i < recent.length; i += 1) {
+      const magnitude = Math.abs(recent[i]);
+      if (magnitude > recentPeak) recentPeak = magnitude;
+    }
+    console.log(
+      `[probe] ${waiting.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
+      + ` windowPeak=${peak} recent${controlSeconds}sPeak=${recentPeak}`
+      + ` windowStart=${waiting.windowStart} needed=${needed} reached=${reached}`,
+    );
   }
 
   if (correlation < PROBE_MIN_CORRELATION) {
@@ -863,6 +1033,13 @@ const youtubeTimelineTimer = setInterval(() => {
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
   maybeAutoCalibrate(nowMs);
+
+  const presenceSweep = participants.sweep(Date.now());
+  if (presenceSweep.releasedMicOwnerId) {
+    cancelMicTransportGrace();
+    invalidateMicTiming('Microphone owner left the Relay session.');
+  }
+  if (presenceSweep.changed) broadcastSessionStatus();
 }, 250);
 
 function validSampleRate(value: unknown) {
@@ -872,10 +1049,32 @@ function validSampleRate(value: unknown) {
     : null;
 }
 
-wss.on('connection', (rawSocket) => {
+function validCaptureGeneration(value: unknown) {
+  const generation = Number(value);
+  return Number.isInteger(generation) && generation >= 0 && generation <= 0xffff_ffff
+    ? generation >>> 0
+    : null;
+}
+
+wss.on('connection', (rawSocket, request) => {
   const socket = rawSocket as RelaySocket;
   socket.role = 'unknown';
   socket.isAlive = true;
+
+  const identity = participantIdentity(request);
+  if (identity) {
+    participantConnectionSequence += 1;
+    socket.participantId = identity.participantId;
+    socket.participantConnectionId = `connection-${participantConnectionSequence}`;
+    const changed = participants.attach({
+      connectionId: socket.participantConnectionId,
+      participantId: identity.participantId,
+      nickname: identity.nickname,
+      nowMs: Date.now(),
+    });
+    if (changed) broadcastSessionStatus();
+    else sendJson(socket, sessionStatusPayload());
+  }
 
   socket.on('pong', () => {
     socket.isAlive = true;
@@ -955,6 +1154,44 @@ wss.on('connection', (rawSocket) => {
         serverReceivedAtMs,
         serverSentAtMs: Date.now(),
       });
+      return;
+    }
+
+    if (payload.type === 'session-status-request') {
+      sendJson(socket, sessionStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'participant-rename') {
+      if (!socket.participantId) return;
+      if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
+        broadcastSessionStatus();
+      } else {
+        sendJson(socket, sessionStatusPayload());
+      }
+      return;
+    }
+
+    if (payload.type === 'acquire-mic' || payload.type === 'force-acquire-mic') {
+      sendJson(socket, {
+        type: 'error',
+        message: 'Microphone ownership is committed by publisher registration, not reserved separately.',
+      });
+      return;
+    }
+
+    if (payload.type === 'release-mic') {
+      if (!socket.participantId) return;
+      const result = participants.releaseMic(socket.participantId);
+      if (!result.ok) return;
+
+      cancelMicTransportGrace();
+      if (publisher?.participantId === socket.participantId) {
+        revokePublisherTransport('You released the microphone.');
+      }
+      invalidateMicTiming('Microphone was released.');
+      broadcastSessionStatus();
+      sendJson(socket, { type: 'mic-released' });
       return;
     }
 
@@ -1059,20 +1296,114 @@ wss.on('connection', (rawSocket) => {
         return;
       }
 
-      replacePrevious(publisher, socket, 'Replaced by a newer microphone connection.');
+      const captureGeneration = validCaptureGeneration(payload.captureGeneration);
+      const hasTakeoverExpectation = Object.prototype.hasOwnProperty.call(payload, 'takeoverExpectedOwnerId');
+      const expectedOwnerId = hasTakeoverExpectation
+        ? normalizeParticipantId(payload.takeoverExpectedOwnerId)
+        : null;
+
+      if (
+        hasTakeoverExpectation
+        && payload.takeoverExpectedOwnerId !== null
+        && !expectedOwnerId
+      ) {
+        sendJson(socket, {
+          type: 'mic-takeover-rejected',
+          reason: 'owner-changed',
+          owner: participantPayload(participants.micOwnerId),
+          revision: participants.revision,
+        });
+        sendJson(socket, sessionStatusPayload());
+        return;
+      }
+
+      let ownershipChanged = false;
+      let previousOwnerId: string | null = participants.micOwnerId;
+      if (socket.participantId) {
+        const ownership = hasTakeoverExpectation
+          ? participants.takeoverMic(socket.participantId, expectedOwnerId)
+          : participants.acquireMic(socket.participantId);
+        if (!ownership.ok) {
+          if (ownership.reason === 'busy') {
+            sendJson(socket, {
+              type: 'mic-busy',
+              owner: participantPayload(ownership.ownerId),
+              revision: participants.revision,
+            });
+          } else {
+            sendJson(socket, {
+              type: 'mic-takeover-rejected',
+              reason: ownership.reason,
+              owner: participantPayload(ownership.ownerId),
+              revision: participants.revision,
+            });
+          }
+          sendJson(socket, sessionStatusPayload());
+          return;
+        }
+        ownershipChanged = ownership.changed;
+        previousOwnerId = ownership.previousOwnerId;
+      } else if (participants.micOwnerId !== null) {
+        sendJson(socket, { type: 'error', message: 'Microphone is owned by an active Relay participant.' });
+        return;
+      }
+
+      const previousPublisher = publisher;
+      const sameParticipantReplacement = Boolean(
+        previousPublisher
+        && previousPublisher !== socket
+        && previousPublisher.participantId
+        && previousPublisher.participantId === socket.participantId,
+      );
+      const sameCapture = Boolean(
+        sameParticipantReplacement
+        && previousPublisher?.captureGeneration !== undefined
+        && captureGeneration !== null
+        && previousPublisher.captureGeneration === captureGeneration,
+      );
+
+      if (previousPublisher && previousPublisher !== socket) {
+        const newOwnerName = socket.participantId
+          ? participantPayload(socket.participantId)?.nickname ?? 'Another participant'
+          : 'Another microphone';
+        retirePublisherTransport(
+          previousPublisher,
+          sameParticipantReplacement ? 'publisher-superseded' : 'mic-revoked',
+          sameParticipantReplacement
+            ? 'A newer microphone capture from this participant became active.'
+            : `${newOwnerName} took over the microphone.`,
+        );
+      }
+
       socket.role = 'publisher';
       socket.sampleRate = sampleRate;
+      socket.captureGeneration = captureGeneration ?? undefined;
       publisher = socket;
       publisherSampleRate = sampleRate;
+      cancelMicTransportGrace();
       session.setMicExpected(true);
+
+      if (ownershipChanged || (sameParticipantReplacement && !sameCapture)) {
+        invalidateMicTiming(
+          ownershipChanged
+            ? 'Microphone ownership changed.'
+            : 'Microphone capture changed.',
+        );
+      }
+
       restartLiveSourceAfterMicReconnect();
-      sendJson(socket, { type: 'registered', role: 'publisher' });
+      sendJson(socket, {
+        type: 'registered',
+        role: 'publisher',
+        takeover: hasTakeoverExpectation && previousOwnerId !== socket.participantId,
+      });
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
+      if (socket.participantId) broadcastSessionStatus();
       return;
     }
 
@@ -1106,6 +1437,7 @@ wss.on('connection', (rawSocket) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      if (socket.participantId) sendJson(socket, sessionStatusPayload());
       return;
     }
 
@@ -1180,43 +1512,56 @@ wss.on('connection', (rawSocket) => {
   });
 
   socket.on('close', () => {
-    if (socket.replaced) return;
+    let micTransportChanged = false;
 
-    if (socket === activeRobotSource) {
-      activeRobotSource = null;
-      socket.isRobotSource = false;
-      robotPlayerOffsetMs = null;
-      robotPlayerOffsetAt = -Infinity;
-      sourceGeneration += 1;
-      syncAppliedCalibration();
-      broadcastJson(sourceStatusPayload());
-      broadcastJson(timingCalibrationStatusPayload());
-    }
-
-    if (socket === publisher) {
-      publisher = null;
-      publisherSampleRate = null;
-      session.setMicExpected(false);
-      if (calibration.collecting) {
-        calibration.fail('Microphone disconnected during calibration.');
+    if (!socket.replaced) {
+      if (socket === activeRobotSource) {
+        activeRobotSource = null;
+        socket.isRobotSource = false;
+        robotPlayerOffsetMs = null;
+        robotPlayerOffsetAt = -Infinity;
+        sourceGeneration += 1;
+        syncAppliedCalibration();
+        broadcastJson(sourceStatusPayload());
+        broadcastJson(timingCalibrationStatusPayload());
       }
-      if (testActive) stopSyncTest();
-      broadcastStatus();
+
+      if (socket === publisher) {
+        const reconnectingOwnerId = socket.participantId
+          && participants.micOwnerId === socket.participantId
+          ? socket.participantId
+          : null;
+        publisher = null;
+        publisherSampleRate = null;
+        session.setMicExpected(false);
+        micTransportChanged = true;
+        if (reconnectingOwnerId) scheduleMicTransportGrace(reconnectingOwnerId);
+        if (calibration.collecting) {
+          calibration.fail('Microphone disconnected during calibration.');
+        }
+        if (testActive) stopSyncTest();
+        broadcastStatus();
+      }
+
+      if (socket === backing) {
+        backing = null;
+        backingSampleRate = null;
+        backingIsRobot = false;
+        session.setBackingExpected(false);
+        if (calibration.collecting) {
+          calibration.fail('Desktop Source disconnected during calibration.');
+        }
+        cancelBackingGrace();
+        backingAbsenceTimer = setTimeout(stopLiveSource, BACKING_GRACE_MS);
+        broadcastJson(sourceStatusPayload());
+        broadcastStatus();
+      }
     }
 
-    if (socket === backing) {
-      backing = null;
-      backingSampleRate = null;
-      backingIsRobot = false;
-      session.setBackingExpected(false);
-      if (calibration.collecting) {
-        calibration.fail('Desktop Source disconnected during calibration.');
-      }
-      cancelBackingGrace();
-      backingAbsenceTimer = setTimeout(stopLiveSource, BACKING_GRACE_MS);
-      broadcastJson(sourceStatusPayload());
-      broadcastStatus();
-    }
+    const presenceChanged = socket.participantConnectionId
+      ? participants.detach(socket.participantConnectionId, Date.now())
+      : false;
+    if (presenceChanged || micTransportChanged) broadcastSessionStatus();
   });
 });
 
@@ -1233,6 +1578,7 @@ const heartbeat = setInterval(() => {
 }, HEARTBEAT_MS);
 
 wss.on('close', () => {
+  cancelMicTransportGrace();
   clearInterval(heartbeat);
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);

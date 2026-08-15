@@ -13,6 +13,29 @@
       <h1>Phone mic → mixer</h1>
       <p class="intro">手機 YouTube 給歌手自己聽；Relay 把它的 timeline 交給電腦上的 Source 分頁。Source 播同一支 YouTube，Chrome 再把那個分頁的實際聲音送回 Server，和手機 Mic 混在一起。</p>
 
+      <section class="presence-panel" aria-label="Relay session">
+        <div class="presence-heading">
+          <div class="presence-state">
+            <span class="presence-dot" aria-hidden="true"></span>
+            <strong id="participant-count">Connecting…</strong>
+          </div>
+          <div class="identity-editor">
+            <span class="identity-label">You</span>
+            <button id="identity-name" class="identity-name" type="button" title="Rename yourself"></button>
+            <input id="identity-input" class="identity-input" type="text" maxlength="32" autocomplete="off" aria-label="Your Relay nickname" hidden />
+            <button id="release-mic" class="quiet-button" type="button" hidden>Release mic</button>
+          </div>
+        </div>
+        <div id="participant-list" class="participant-list" aria-live="polite"></div>
+        <div id="mic-takeover" class="takeover-row" aria-live="polite" hidden>
+          <span id="mic-takeover-copy"></span>
+          <div class="inline-actions">
+            <button id="confirm-takeover" type="button">Confirm takeover</button>
+            <button id="cancel-takeover" class="quiet-button" type="button">Cancel</button>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" aria-live="polite">
         <strong id="status">Idle</strong>
         <span id="details"></span>
@@ -77,7 +100,6 @@
         <a id="download-recording" class="note" hidden>Download recording</a>
       </section>
 
-
       <section class="test-panel">
         <div class="test-heading">
           <div>
@@ -118,6 +140,7 @@
 
       <p class="note">手機 Mic 仍需要 HTTPS；Desktop source 則固定用本機 Relay (`localhost`) 讓 Chrome 擴充功能只把聲音送回本機 Server。</p>
     </main>
+    <script src="/presence.js"></script>
     <script type="module" src="/app.js"></script>
     <script type="module" src="/recorder.js"></script>
     <script type="module" src="/youtube.js"></script>

@@ -216,6 +216,33 @@ const PROBE_NOTE_SECONDS = 0.105;
 let probeAudioContext = null;
 
 /**
+ * Opens the probe's audio context and keeps its output stream from being
+ * reclaimed.
+ *
+ * An idle WebAudio graph gets its underlying output stream torn down, and the
+ * context goes on reporting `running` while it happens - so the first probe
+ * after page load worked and every later one played into nothing, with
+ * `state === 'suspended'` never true to catch it. What that looks like from
+ * the server is a backing leg correlating at exactly -1 against an all-zero
+ * window while the sink's monitor demonstrably still carries the chime.
+ *
+ * A `ConstantSourceNode` at offset 0 keeps a source node running for the life
+ * of the page, which keeps the stream open. It has to be exactly zero: this
+ * output is the song's own path into the mix, so anything audible here ends up
+ * in the take.
+ */
+function probeContext() {
+  if (probeAudioContext) return probeAudioContext;
+
+  probeAudioContext = new AudioContext({ latencyHint: 'interactive' });
+  const keepAlive = probeAudioContext.createConstantSource();
+  keepAlive.offset.value = 0;
+  keepAlive.connect(probeAudioContext.destination);
+  keepAlive.start();
+  return probeAudioContext;
+}
+
+/**
  * Plays the probe into this page's normal audio output.
  *
  * On the robot that output is `PULSE_SINK=relay_browser`, the same null sink
@@ -228,19 +255,22 @@ let probeAudioContext = null;
 async function playBackingProbe(requestId, leadMs) {
   if (robotSuperseded) return;
   try {
-    if (!probeAudioContext) probeAudioContext = new AudioContext({ latencyHint: 'interactive' });
-    if (probeAudioContext.state === 'suspended') await probeAudioContext.resume();
+    const context = probeContext();
+    // Unconditionally, not only when it reports 'suspended': the state a stale
+    // stream leaves behind is 'running', so trusting the state is what let this
+    // fail silently.
+    await context.resume();
 
-    const startTime = probeAudioContext.currentTime + leadMs / 1000;
+    const startTime = context.currentTime + leadMs / 1000;
     for (const note of PROBE_NOTES) {
       const at = startTime + note.offsetMs / 1000;
-      const oscillator = probeAudioContext.createOscillator();
-      const gain = probeAudioContext.createGain();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
       oscillator.frequency.value = note.frequencyHz;
       gain.gain.setValueAtTime(0.0001, at);
       gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
       gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
-      oscillator.connect(gain).connect(probeAudioContext.destination);
+      oscillator.connect(gain).connect(context.destination);
       oscillator.start(at);
       oscillator.stop(at + PROBE_NOTE_SECONDS);
     }

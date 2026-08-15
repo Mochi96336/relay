@@ -19,6 +19,7 @@ parec_pid=""
 backing_pid=""
 browser_pid=""
 runtime_dir=""
+lock_fd=""
 
 log() {
   printf '[robot-source] %s\n' "$*" >&2
@@ -65,6 +66,7 @@ require_command parec
 require_command xvfb-run
 require_command npm
 require_command node
+require_command flock
 
 pactl info >/dev/null 2>&1 || die "could not connect to the PipeWire/PulseAudio server"
 
@@ -88,6 +90,14 @@ fi
   || die "RELAY_BACKING_SAMPLE_RATE must be an integer from 8000 to 192000"
 [[ "$CAPTURE_LATENCY_MS" =~ ^[0-9]+$ ]] && ((10#$CAPTURE_LATENCY_MS >= 5 && 10#$CAPTURE_LATENCY_MS <= 2000)) \
   || die "RELAY_BACKING_CAPTURE_LATENCY_MS must be an integer from 5 to 2000"
+
+# Two launchers mean two Chromium players and two probes feeding the same sink.
+# Protocol-level source ownership can ignore duplicate telemetry, but it cannot
+# un-play audio that a second local browser has already written to PipeWire.
+# Keep the whole browser/capture/bridge route single-instance per sink.
+lock_file="${XDG_RUNTIME_DIR:-/tmp}/relay-robot-source-${SINK_NAME}.lock"
+exec {lock_fd}>"$lock_file"
+flock -n "$lock_fd" || die "another robot-source launcher already owns sink $SINK_NAME"
 
 if ! pactl list short sinks | awk -v sink="$SINK_NAME" '$2 == sink { found = 1 } END { exit !found }'; then
   created_module="$(pactl load-module module-null-sink \

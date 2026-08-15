@@ -97,7 +97,8 @@ let publisher: RelaySocket | null = null;
 let publisherSampleRate: number | null = null;
 let backing: RelaySocket | null = null;
 let backingSampleRate: number | null = null;
-let micGainDb = 30;
+// Aligned with both sliders: the server is the authority they sync to.
+let micGainDb = 24;
 let testActive = false;
 let testStartedAt = 0;
 let testFrameIndex = 0;

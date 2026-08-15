@@ -9,6 +9,7 @@ const monitorGain = document.querySelector('#monitor-gain');
 const monitorGainValue = document.querySelector('#monitor-gain-value');
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
+const micGainAdvice = document.querySelector('#mic-gain-advice');
 
 const TEST_BPM = 120;
 const MIX_SAMPLE_RATE = 48000;
@@ -28,6 +29,7 @@ let sourceSampleRate = null;
 let activeRole = null;
 let testActive = false;
 let liveMixActive = false;
+let latestMixHealth = null;
 
 /**
  * Whether what arrives on this socket is a server mix rather than raw
@@ -37,6 +39,33 @@ let liveMixActive = false;
  */
 function serverMixActive() {
   return testActive || liveMixActive;
+}
+
+/**
+ * The same measured advice source.html shows, put where the singer can act on
+ * it. Mic gain is one server value with a slider on each page, and the person
+ * whose voice decides the right setting is holding the phone - they cannot see
+ * the desktop screen while singing.
+ */
+function renderGainAdvice() {
+  if (!micGainAdvice) return;
+  const peak = Number(latestMixHealth?.micPeakDbfs);
+  const recommended = Number(latestMixHealth?.recommendedMicGainDb);
+
+  if (!Number.isFinite(peak) || !Number.isFinite(recommended)) {
+    micGainAdvice.textContent = '開始唱之後，這裡會顯示實際電平與建議的 Mic gain。';
+    return;
+  }
+
+  const current = Math.round(Number(micGain.value) || 0);
+  const off = recommended - current;
+  const verdict = Math.abs(off) <= 3
+    ? '目前設定合適'
+    : off < 0
+      ? `偏高 ${-off} dB，動態會被壓平`
+      : `偏低 ${off} dB，人聲會太小`;
+
+  micGainAdvice.textContent = `峰值 ${peak.toFixed(1)} dBFS · 建議 +${recommended} dB · ${verdict}`;
 }
 let clickScheduler = null;
 let nextClickTime = 0;
@@ -115,6 +144,8 @@ function updateMonitorGain() {
 
 function updateMixLabels() {
   micGainValue.value = signed(micGain.value, ' dB');
+  // The verdict compares the slider against the meter, so it moves with both.
+  renderGainAdvice();
 }
 
 function sendMixSettings() {
@@ -279,12 +310,14 @@ function handleServerMessage(message) {
   }
 
   if (message.type === 'mix-settings') {
-    if (!sliderIsBusy(micGain)) micGain.value = String(message.micGainDb ?? 30);
+    if (!sliderIsBusy(micGain)) micGain.value = String(message.micGainDb ?? 24);
     updateMixLabels();
     return;
   }
 
   if (message.type === 'mix-health') {
+    latestMixHealth = message;
+    renderGainAdvice();
     if (activeRole === 'monitor' && message.active && message.micStarvedFrames > 0) {
       setStatus(
         'Monitor playing · vocal starved',

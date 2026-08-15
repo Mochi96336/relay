@@ -152,7 +152,7 @@ export class AudioSession {
   private micExpected = false;
   private backingExpected = false;
 
-  private micGainDb = 30;
+  private micGainDb = 24;
   private alignmentState: AlignmentState = {
     networkCompensationMs: 0,
     calibratedMicLagMs: null,

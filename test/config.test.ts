@@ -30,7 +30,16 @@ test('relay config accepts explicit boolean spellings and rejects guesses', () =
 
 test('backing config validates its URL and transport ranges before capture starts', () => {
   assert.throws(() => loadBackingConfig({ RELAY_URL: 'https://example.test/ws' }), /must use ws:\/\/ or wss:\/\//);
+  assert.throws(() => loadBackingConfig({ RELAY_URL: 'ws://127.0.0.1:0/ws' }), /port must be from 1 to 65535/);
+  assert.throws(() => loadBackingConfig({ PORT: '0' }), /PORT must be from 1 to 65535/);
   assert.throws(() => loadBackingConfig({ RELAY_BACKING_RECONNECT_MS: '10' }), />= 50/);
+
+  // An explicit endpoint owns the destination completely. A stale PORT value
+  // must not make the backing process fail when it is not used to build the URL.
+  assert.equal(
+    loadBackingConfig({ RELAY_URL: 'ws://relay.test:3100/ws', PORT: 'not-used' }).relayUrl,
+    'ws://relay.test:3100/ws',
+  );
 
   const config = loadBackingConfig({
     PORT: '3100',

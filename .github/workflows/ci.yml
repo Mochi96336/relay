@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - agent/web-mic-relay
   pull_request:
 
 permissions:
@@ -21,4 +18,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Check browser JavaScript syntax
+        run: find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Check launcher shell syntax
+        run: bash -n scripts/*.sh
       - run: npm test

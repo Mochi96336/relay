@@ -2,9 +2,10 @@ export type ReadinessInput = {
   backingConnected: boolean;
   backingStreaming: boolean;
   backingSampleRate: number | null;
+  backingIsRobot: boolean;
   micConnected: boolean;
   micStreaming: boolean;
-  robotSourceCount: number;
+  robotSourceConnected: boolean;
   sessionActive: boolean;
   timelineConnected: boolean;
   timelineState: number | null;
@@ -13,6 +14,7 @@ export type ReadinessInput = {
   calibrationState: string;
   calibrationValid: boolean;
   calibrationStale: boolean;
+  calibrationKind?: string;
   probeCorrelation: { mic: number | null; backing: number | null };
   bootCalibration: unknown;
 };
@@ -20,8 +22,11 @@ export type ReadinessInput = {
 export function buildReadiness(input: ReadinessInput) {
   const reasons: string[] = [];
   if (!input.backingConnected) reasons.push('backing-not-connected');
-  else if (!input.backingStreaming) reasons.push('backing-not-streaming');
-  if (input.robotSourceCount < 1) reasons.push('robot-source-not-connected');
+  else {
+    if (!input.backingStreaming) reasons.push('backing-not-streaming');
+    if (!input.backingIsRobot) reasons.push('backing-not-robot');
+  }
+  if (!input.robotSourceConnected) reasons.push('robot-source-not-connected');
 
   const sessionReasons = [...reasons];
   if (!input.micConnected) sessionReasons.push('mic-not-connected');
@@ -49,14 +54,14 @@ export function buildReadiness(input: ReadinessInput) {
         connected: input.backingConnected,
         streaming: input.backingStreaming,
         sampleRate: input.backingSampleRate,
+        robot: input.backingIsRobot,
       },
       mic: {
         connected: input.micConnected,
         streaming: input.micStreaming,
       },
       robotSource: {
-        connected: input.robotSourceCount > 0,
-        count: input.robotSourceCount,
+        connected: input.robotSourceConnected,
       },
       player: {
         timelineConnected: input.timelineConnected,
@@ -68,6 +73,7 @@ export function buildReadiness(input: ReadinessInput) {
         state: input.calibrationState,
         valid: input.calibrationValid,
         stale: input.calibrationStale,
+        kind: input.calibrationKind ?? null,
         probeCorrelation: input.probeCorrelation,
         bootCalibration: input.bootCalibration,
       },

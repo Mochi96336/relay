@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { loadBackingConfig, loadRelayConfig } from '../src/config.js';
+import { startRelay } from './helpers/harness.js';
 
 test('relay config rejects malformed numeric deployment settings', () => {
   assert.throws(
@@ -15,6 +16,13 @@ test('relay config rejects malformed numeric deployment settings', () => {
   assert.throws(
     () => loadRelayConfig({ RELAY_CALIBRATION_AGREEMENT: '2.5' }),
     /must be an integer/,
+  );
+});
+
+test('real server entry fails closed on malformed deployment config', async () => {
+  await assert.rejects(
+    startRelay({ RELAY_CALIBRATION_PROBE_MIN_CORRELATION: 'oops' }),
+    /RELAY_CALIBRATION_PROBE_MIN_CORRELATION must be a finite number/,
   );
 });
 

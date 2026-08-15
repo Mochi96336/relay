@@ -32,7 +32,7 @@ test('readyz distinguishes robot-host readiness from full live-session readiness
 
     const backing = await RelayClient.connect(server);
     clients.push(backing);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     await backing.waitForType('registered');
     backing.sendPcm(pcm(40));
     await sleep(30);
@@ -44,6 +44,7 @@ test('readyz distinguishes robot-host readiness from full live-session readiness
     assert.deepEqual(readiness.reasons, []);
     assert.equal(readiness.components.backing.connected, true);
     assert.equal(readiness.components.backing.streaming, true);
+    assert.equal(readiness.components.backing.robot, true);
     assert.equal(readiness.components.robotSource.connected, true);
     assert.equal(readiness.sessionReady, false);
     assert.ok(readiness.sessionReasons.includes('mic-not-connected'));
@@ -76,6 +77,32 @@ test('readyz distinguishes robot-host readiness from full live-session readiness
     assert.equal(readiness.components.player.offsetMs, 12);
     assert.equal(readiness.sessionReady, false, 'calibration is still deliberately absent');
     assert.deepEqual(readiness.sessionReasons, ['calibration-missing']);
+  } finally {
+    for (const client of clients) client.close();
+    await server.stop();
+  }
+});
+
+test('readyz does not mistake a development backing client for the robot route', async () => {
+  const server = await startRelay(FAST);
+  const clients: RelayClient[] = [];
+  try {
+    const robot = await RelayClient.connect(server);
+    clients.push(robot);
+    robot.send({ type: 'robot-source-hello' });
+
+    const backing = await RelayClient.connect(server);
+    clients.push(backing);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+    await backing.waitForType('registered');
+    backing.sendPcm(pcm(40));
+    await sleep(30);
+
+    const response = await fetch(server.httpUrl('/readyz'));
+    assert.equal(response.status, 503);
+    const readiness = await response.json() as any;
+    assert.equal(readiness.ready, false);
+    assert.ok(readiness.reasons.includes('backing-not-robot'));
   } finally {
     for (const client of clients) client.close();
     await server.stop();

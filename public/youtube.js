@@ -28,6 +28,9 @@ let loadedVideoId = null;
 let telemetryTimer = null;
 let previousSnapshot = null;
 let apiPromise = null;
+let pendingHandoff = null;
+let handoffReadySent = false;
+let handoffReadyTimers = [];
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
@@ -152,7 +155,7 @@ function renderSnapshot(snapshot) {
     noteNode.textContent = `Timeline jump detected: ${sign}${snapshot.timelineDeltaSeconds.toFixed(2)} s. This is expected after seeks or some playback interruptions.`;
   } else if (snapshot.state === 3) {
     noteNode.textContent = 'YouTube is buffering. Mic transport can keep running independently.';
-  } else {
+  } else if (!pendingHandoff) {
     noteNode.textContent = 'Timeline is media time from the YouTube player; it does not include the phone speaker/headphone output latency.';
   }
 
@@ -183,17 +186,77 @@ function startTelemetry() {
   telemetryTimer = setInterval(sampleNow, 250);
 }
 
+function clearHandoffReadyTimers() {
+  for (const timer of handoffReadyTimers) clearTimeout(timer);
+  handoffReadyTimers = [];
+}
+
+function actualVideoId() {
+  try {
+    const value = player?.getVideoData?.()?.video_id;
+    return typeof value === 'string' && value ? value : loadedVideoId;
+  } catch {
+    return loadedVideoId;
+  }
+}
+
+function announceHandoffReady() {
+  if (!pendingHandoff || pendingHandoff.phase !== 'preparing' || handoffReadySent) return false;
+  if (!playerReady || !player || actualVideoId() !== pendingHandoff.videoId) return false;
+
+  const state = Number(player.getPlayerState());
+  if (![1, 2, 5].includes(state)) return false;
+
+  handoffReadySent = true;
+  clearHandoffReadyTimers();
+  noteNode.textContent = 'Room song is prepared on this device. Relay is waiting to switch playback safely.';
+  window.dispatchEvent(new CustomEvent('relay:song-handoff-ready', {
+    detail: { handoffId: pendingHandoff.handoffId },
+  }));
+  return true;
+}
+
+function scheduleHandoffReadyChecks() {
+  clearHandoffReadyTimers();
+  for (const delayMs of [80, 220, 500, 900, 1_500, 2_400]) {
+    handoffReadyTimers.push(setTimeout(announceHandoffReady, delayMs));
+  }
+}
+
+function cuePendingHandoff() {
+  if (!pendingHandoff || !playerReady || !player) return;
+  try {
+    loadedVideoId = pendingHandoff.videoId;
+    previousSnapshot = null;
+    player.cueVideoById({
+      videoId: pendingHandoff.videoId,
+      startSeconds: Math.max(0, pendingHandoff.targetTime),
+    });
+    scheduleHandoffReadyChecks();
+  } catch (error) {
+    console.warn('Could not prepare room song handoff', error);
+    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+      detail: {
+        handoffId: pendingHandoff.handoffId,
+        reason: 'prepare-failed',
+      },
+    }));
+  }
+}
+
 function handleReady(event) {
   playerReady = true;
   const iframe = event.target.getIframe();
   iframe.referrerPolicy = 'strict-origin-when-cross-origin';
   setPlayerState(event.target.getPlayerState(), 'ready');
   startTelemetry();
+  if (pendingHandoff?.phase === 'preparing') cuePendingHandoff();
 }
 
 function handleStateChange(event) {
   setPlayerState(event.data);
   sampleNow();
+  if (pendingHandoff?.phase === 'preparing') announceHandoffReady();
 }
 
 function handlePlaybackRateChange(event) {
@@ -205,10 +268,144 @@ function handleError(event) {
   const label = ERROR_NAMES.get(event.data) ?? `YouTube error ${event.data}`;
   setPlayerState(-1, label);
   noteNode.textContent = `Player error ${event.data}: ${label}.`;
+  if (pendingHandoff) {
+    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+      detail: {
+        handoffId: pendingHandoff.handoffId,
+        reason: `youtube-error-${event.data}`,
+      },
+    }));
+  }
 }
 
 function handleAutoplayBlocked() {
-  noteNode.textContent = 'Browser blocked scripted playback. Tap Play directly inside the visible YouTube player.';
+  noteNode.textContent = pendingHandoff?.phase === 'committing'
+    ? 'Browser blocked the playback handoff. Tap Play once in the visible YouTube player; Relay will retry without dropping the old playback first.'
+    : 'Browser blocked scripted playback. Tap Play directly inside the visible YouTube player.';
+
+  if (pendingHandoff?.phase === 'committing') {
+    const handoffId = pendingHandoff.handoffId;
+    pendingHandoff.phase = 'preparing';
+    handoffReadySent = false;
+    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+      detail: { handoffId, reason: 'autoplay-blocked' },
+    }));
+  }
+}
+
+async function ensurePlayer(videoId) {
+  const YT = await loadYouTubeApi();
+  loadedVideoId = videoId;
+
+  if (player) return player;
+
+  player = new YT.Player('youtube-player', {
+    width: 640,
+    height: 360,
+    videoId,
+    playerVars: {
+      playsinline: 1,
+      origin: location.origin,
+    },
+    events: {
+      onReady: handleReady,
+      onStateChange: handleStateChange,
+      onPlaybackRateChange: handlePlaybackRateChange,
+      onError: handleError,
+      onAutoplayBlocked: handleAutoplayBlocked,
+    },
+  });
+  return player;
+}
+
+async function prepareRoomSong(message) {
+  const handoffId = typeof message.handoffId === 'string' ? message.handoffId : null;
+  const videoId = typeof message.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(message.videoId)
+    ? message.videoId
+    : null;
+  const targetTime = Number(message.serverTime);
+  if (!handoffId || !videoId || !Number.isFinite(targetTime)) return;
+
+  pendingHandoff = {
+    handoffId,
+    videoId,
+    targetTime: Math.max(0, targetTime),
+    desiredState: Number(message.state),
+    phase: 'preparing',
+  };
+  handoffReadySent = false;
+  previousSnapshot = null;
+  noteNode.textContent = 'Preparing the room song for microphone handoff. Playback will not start until the server commits the switch.';
+
+  try {
+    await ensurePlayer(videoId);
+    if (playerReady) cuePendingHandoff();
+  } catch (error) {
+    console.error(error);
+    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+      detail: { handoffId, reason: 'player-unavailable' },
+    }));
+  }
+}
+
+function commitRoomSong(message) {
+  if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
+  if (!playerReady || !player) {
+    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+      detail: { handoffId: pendingHandoff.handoffId, reason: 'player-not-ready' },
+    }));
+    return;
+  }
+
+  const targetTime = Number(message.serverTime);
+  const desiredState = Number(message.state);
+  if (!Number.isFinite(targetTime)) return;
+
+  pendingHandoff.phase = 'committing';
+  pendingHandoff.targetTime = Math.max(0, targetTime);
+  pendingHandoff.desiredState = desiredState;
+  previousSnapshot = null;
+
+  try {
+    if (actualVideoId() !== pendingHandoff.videoId) {
+      player.cueVideoById({
+        videoId: pendingHandoff.videoId,
+        startSeconds: pendingHandoff.targetTime,
+      });
+    }
+    player.seekTo(pendingHandoff.targetTime, true);
+    if (desiredState === 1) player.playVideo();
+    else player.pauseVideo();
+    setTimeout(sampleNow, 80);
+    setTimeout(sampleNow, 220);
+    noteNode.textContent = 'Switching room playback to this device…';
+  } catch (error) {
+    console.warn('Could not commit room song handoff', error);
+    const handoffId = pendingHandoff.handoffId;
+    pendingHandoff.phase = 'preparing';
+    handoffReadySent = false;
+    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+      detail: { handoffId, reason: 'commit-failed' },
+    }));
+  }
+}
+
+function releaseRoomSong(message) {
+  if (!playerReady || !player) return;
+  if (typeof message.videoId === 'string' && loadedVideoId !== message.videoId) return;
+
+  try {
+    player.pauseVideo();
+  } catch {}
+  noteNode.textContent = 'Room playback moved with the microphone. This player is no longer driving the shared song.';
+}
+
+function completeRoomSong(message) {
+  if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
+  clearHandoffReadyTimers();
+  pendingHandoff = null;
+  handoffReadySent = false;
+  noteNode.textContent = 'Room playback handoff complete. This device now follows the shared song.';
 }
 
 async function loadVideo() {
@@ -224,31 +421,11 @@ async function loadVideo() {
   noteNode.textContent = 'The video will be cued only. Start playback from the normal YouTube controls.';
 
   try {
-    const YT = await loadYouTubeApi();
+    await ensurePlayer(videoId);
     loadedVideoId = videoId;
     previousSnapshot = null;
 
-    if (player) {
-      player.cueVideoById(videoId);
-      return;
-    }
-
-    player = new YT.Player('youtube-player', {
-      width: 640,
-      height: 360,
-      videoId,
-      playerVars: {
-        playsinline: 1,
-        origin: location.origin,
-      },
-      events: {
-        onReady: handleReady,
-        onStateChange: handleStateChange,
-        onPlaybackRateChange: handlePlaybackRateChange,
-        onError: handleError,
-        onAutoplayBlocked: handleAutoplayBlocked,
-      },
-    });
+    if (playerReady) player.cueVideoById(videoId);
   } catch (error) {
     console.error(error);
     stateNode.textContent = 'could not load YouTube';
@@ -257,6 +434,19 @@ async function loadVideo() {
     loadButton.disabled = false;
   }
 }
+
+window.addEventListener('relay:song-handoff-prepare', (event) => {
+  prepareRoomSong(event.detail ?? {}).catch(console.error);
+});
+window.addEventListener('relay:song-handoff-commit', (event) => {
+  commitRoomSong(event.detail ?? {});
+});
+window.addEventListener('relay:song-handoff-release', (event) => {
+  releaseRoomSong(event.detail ?? {});
+});
+window.addEventListener('relay:song-handoff-complete', (event) => {
+  completeRoomSong(event.detail ?? {});
+});
 
 loadButton.addEventListener('click', () => {
   loadVideo().catch(console.error);

@@ -6,6 +6,7 @@ import { SongSession } from '../src/song-session.js';
 const VIDEO = 'dQw4w9WgXcQ';
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const B = { participantId: 'participant-b', transportId: 'playback-tab-b', generation: 1 };
+const B_OTHER = { participantId: 'participant-b', transportId: 'playback-tab-b-other', generation: 1 };
 const C = { participantId: 'participant-c', transportId: 'playback-tab-c', generation: 1 };
 
 function telemetry(currentTime: number, overrides: Record<string, unknown> = {}) {
@@ -86,6 +87,18 @@ describe('prepared song handoff', () => {
     const status = songs.statusPayload(300) as Record<string, any>;
     assert.equal(status.state, 1);
     assert.ok(status.serverTime < 11, `old singer overwrote room time: ${status.serverTime}`);
+  });
+
+  test('locks a pending handoff to the exact target transport, not merely the Mic owner', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10), A, A.participantId, 0);
+    const plan = songs.beginHandoff(B, B.participantId, 250);
+    assert.ok(plan);
+
+    const siblingTab = songs.update(telemetry(10.3), B_OTHER, B.participantId, 300);
+    assert.equal(siblingTab.accepted, false);
+    assert.equal(siblingTab.reason, 'handoff-not-target');
+    assert.equal((songs.statusPayload(300) as Record<string, any>).playbackLeaderParticipantId, A.participantId);
   });
 
   test('target cannot take the clock before the server receives a ready acknowledgement', () => {

@@ -291,11 +291,50 @@ function calibrationCanApply() {
   return true;
 }
 
+/**
+ * Synchronizes measurement validity into the mixer's active alignment.
+ *
+ * A boot result needs special treatment: once freshness/connection withdraws
+ * its authority, a later delta must not resurrect the historical total before
+ * `maybeReapplyBootCalibration()` has folded in the *current* delta. While a
+ * boot alignment is already active, small (< threshold) delta movements are
+ * intentionally left alone. While it is inactive, it may only be restored
+ * directly when the stored boot result already describes exactly the current
+ * reported delta; otherwise reapply owns the reactivation.
+ *
+ * Returns whether the mixer alignment changed so the periodic freshness check
+ * can publish the transition immediately.
+ */
 function syncAppliedCalibration() {
-  const nextMicLagMs = calibrationCanApply() ? calibration.result!.micLagMs : null;
-  if (session.alignment.calibratedMicLagMs !== nextMicLagMs) {
-    session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
+  const active = session.alignment.calibratedMicLagMs;
+
+  if (robotRouteActive() && calibrationKind === 'boot-probe') {
+    if (!calibrationCanApply()) {
+      if (active === null) return false;
+      session.setAlignment({ calibratedMicLagMs: null });
+      return true;
+    }
+
+    if (active !== null) return false;
+
+    const result = calibration.result;
+    const storedDeltaMs = lastBootCalibration?.deltaMs;
+    const currentDelta = currentDeltaMs(performance.now());
+    if (
+      result !== null
+      && storedDeltaMs !== undefined
+      && Math.abs(storedDeltaMs - currentDelta) < 0.001
+    ) {
+      session.setAlignment({ calibratedMicLagMs: result.micLagMs });
+      return true;
+    }
+    return false;
   }
+
+  const nextMicLagMs = calibrationCanApply() ? calibration.result!.micLagMs : null;
+  if (active === nextMicLagMs) return false;
+  session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
+  return true;
 }
 
 function sourceStatusPayload() {
@@ -836,7 +875,10 @@ const youtubeTimelineTimer = setInterval(() => {
   // Freshness is a live validity condition, not just something checked when a
   // socket closes. If a robot page freezes while its WebSocket remains open,
   // the last delta loses authority after ROBOT_OFFSET_FRESH_MS as well.
-  syncAppliedCalibration();
+  if (syncAppliedCalibration()) {
+    broadcastJson(sourceStatusPayload());
+    broadcastJson(timingCalibrationStatusPayload());
+  }
   maybeFinishProbeAnalysis(nowMs);
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);

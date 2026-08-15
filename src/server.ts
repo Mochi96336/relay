@@ -11,6 +11,7 @@ import { combineBootCalibration, type BootCalibrationResult } from './boot-calib
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { decodePcmFrame } from './pcm-frame.js';
+import { buildReadiness } from './readiness.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1454,6 +1455,41 @@ wss.on('close', () => {
   clearInterval(heartbeat);
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
+});
+
+function readinessPayload(nowMs = performance.now()) {
+  const timeline = currentTimelineStatus(nowMs);
+  const calibrationStatus = calibration.status();
+  const calibrationStale = calibrationIsStale();
+  const playerOffsetFresh = robotPlayerOffsetMs !== null
+    && nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS;
+  const timelineState = Number(timeline.state);
+
+  return buildReadiness({
+    backingConnected: backing?.readyState === WebSocket.OPEN,
+    backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
+    backingSampleRate,
+    micConnected: publisher?.readyState === WebSocket.OPEN,
+    micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
+    robotSourceCount,
+    sessionActive: session.active,
+    timelineConnected: Boolean(timeline.connected && timeline.videoId),
+    timelineState: Number.isFinite(timelineState) ? timelineState : null,
+    playerOffsetMs: robotPlayerOffsetMs,
+    playerOffsetFresh,
+    calibrationState: String(calibrationStatus.state ?? 'idle'),
+    calibrationValid: calibration.result !== null
+      && !calibrationStale
+      && session.alignment.calibratedMicLagMs !== null,
+    calibrationStale,
+    probeCorrelation: lastProbeCorrelation,
+    bootCalibration: lastBootCalibration,
+  });
+}
+
+app.get('/readyz', (_req, res) => {
+  const readiness = readinessPayload();
+  res.status(readiness.ready ? 200 : 503).json(readiness);
 });
 
 server.on('error', (error: NodeJS.ErrnoException) => {

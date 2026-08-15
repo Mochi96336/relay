@@ -111,9 +111,12 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     const probeRequestsBeforeDisconnect = publisher.messages.filter(
       (m) => m.type === 'play-calibration-probe',
     ).length;
+    const beforeDisconnect = monitor.messages.length;
 
     robot.close();
-    const suspended = await monitor.waitFor(
+    const suspended = await waitForNewMessage(
+      monitor,
+      beforeDisconnect,
       (m) => m.type === 'source-status'
         && m.robotSourceConnected === false
         && m.timingMode === 'network-estimate',

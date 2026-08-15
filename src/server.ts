@@ -7,8 +7,8 @@ import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import { AudioSession } from './audio-session.js';
+import { CalibrationSession } from './calibration-session.js';
 import { decodePcmFrame } from './pcm-frame.js';
-import { analyzeTimingCalibration } from './timing-calibration.js';
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,7 +36,6 @@ const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 4_000);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
 const TIMING_CALIBRATION_MS = 6_000;
-const TIMING_CALIBRATION_SAMPLES = Math.round((MIX_SAMPLE_RATE * TIMING_CALIBRATION_MS) / 1000);
 const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_000);
 const MAX_VOCAL_FINE_TUNE_MS = 100;
 const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
@@ -88,8 +87,6 @@ type TimelineStatus = {
   transportEstimateMs?: number;
 };
 
-type TimingCalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
-
 let publisher: RelaySocket | null = null;
 let publisherSampleRate: number | null = null;
 let backing: RelaySocket | null = null;
@@ -98,20 +95,6 @@ let micGainDb = 30;
 let testActive = false;
 let testStartedAt = 0;
 let testFrameIndex = 0;
-// A calibration measures one particular pair of transports. It must not outlive
-// the session it was measured in, and a new microphone capture can change the
-// transport delay it folded in, so it is marked stale rather than silently kept.
-let calibrationGeneration = -1;
-let calibrationMicGeneration: number | null = null;
-let timingCalibrationPhase: TimingCalibrationPhase = 'idle';
-let timingCalibrationError: string | null = null;
-let timingCalibrationConfidence: number | null = null;
-let timingCalibrationSegmentLagsMs: number[] = [];
-let timingCalibrationMicChunks: Int16Array[] = [];
-let timingCalibrationBackingChunks: Int16Array[] = [];
-let timingCalibrationMicSamples = 0;
-let timingCalibrationBackingSamples = 0;
-let timingCalibrationStartedAt = 0;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 
@@ -123,6 +106,19 @@ const session = new AudioSession({
   retentionMs: MAX_OFFSET_MS + 1_000,
 });
 session.setMicGainDb(micGainDb);
+
+const calibration = new CalibrationSession({
+  sampleRate: MIX_SAMPLE_RATE,
+  durationMs: TIMING_CALIBRATION_MS,
+  timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
+  context: () => ({ sessionGeneration: session.generation, micGeneration: session.micGeneration }),
+  onSettled: () => {
+    const result = calibration.result;
+    if (result) session.setAlignment({ calibratedMicLagMs: result.micLagMs });
+    broadcastJson(timingCalibrationStatusPayload());
+    broadcastJson(sourceStatusPayload());
+  },
+});
 
 function sendJson(socket: WebSocket, payload: unknown) {
   if (socket.readyState === WebSocket.OPEN) {
@@ -178,14 +174,11 @@ function publisherStatusPayload() {
   };
 }
 
+// A websocket reconnect does not invalidate anything: the capture keeps counting
+// samples through the outage, so the measurement still holds. Only a new capture
+// session, or a new live session, changes the transport it folded in.
 function calibrationIsStale() {
-  if (session.alignment.calibratedMicLagMs === null) return false;
-  // A websocket reconnect no longer invalidates anything: the capture keeps
-  // counting samples through the outage, so the measurement still holds. Only a
-  // new capture session, or a new live session, can change the transport the
-  // measurement folded in.
-  return calibrationGeneration !== session.generation
-    || calibrationMicGeneration !== session.micGeneration;
+  return calibration.isStaleFor(session.generation, session.micGeneration);
 }
 
 function sourceStatusPayload() {
@@ -220,23 +213,12 @@ function mixHealthPayload() {
 
 
 function timingCalibrationStatusPayload() {
-  const capturedSamples = Math.min(timingCalibrationMicSamples, timingCalibrationBackingSamples);
-  const progress = timingCalibrationPhase === 'collecting'
-    ? Math.max(0, Math.min(1, capturedSamples / TIMING_CALIBRATION_SAMPLES))
-    : timingCalibrationPhase === 'complete'
-      ? 1
-      : 0;
   const alignment = session.alignment;
 
   return {
     type: 'timing-calibration-status',
-    state: timingCalibrationPhase,
-    progress,
-    durationMs: TIMING_CALIBRATION_MS,
+    ...calibration.status(),
     micLagMs: alignment.calibratedMicLagMs,
-    confidence: timingCalibrationConfidence,
-    segmentLagsMs: timingCalibrationSegmentLagsMs,
-    error: timingCalibrationError,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     fallbackNetworkMs: alignment.networkCompensationMs,
@@ -286,91 +268,11 @@ function broadcastStatus() {
 /** Where the session clock is right now, in 48 kHz samples since the epoch. */
 
 
-function clearTimingCalibrationCapture() {
-  timingCalibrationMicChunks = [];
-  timingCalibrationBackingChunks = [];
-  timingCalibrationMicSamples = 0;
-  timingCalibrationBackingSamples = 0;
-}
 
-function flattenChunks(chunks: Int16Array[], totalSamples: number) {
-  const output = new Int16Array(totalSamples);
-  let offset = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return output;
-}
 
-function failTimingCalibration(message: string) {
-  timingCalibrationPhase = 'failed';
-  timingCalibrationError = message;
-  timingCalibrationConfidence = null;
-  timingCalibrationSegmentLagsMs = [];
-  clearTimingCalibrationCapture();
-  broadcastJson(timingCalibrationStatusPayload());
-}
 
-function finishTimingCalibration() {
-  try {
-    const mic = flattenChunks(timingCalibrationMicChunks, TIMING_CALIBRATION_SAMPLES);
-    const backingCapture = flattenChunks(timingCalibrationBackingChunks, TIMING_CALIBRATION_SAMPLES);
-    const result = analyzeTimingCalibration(mic, backingCapture, MIX_SAMPLE_RATE);
-    session.setAlignment({ calibratedMicLagMs: result.micLagMs });
-    calibrationGeneration = session.generation;
-    calibrationMicGeneration = session.micGeneration;
-    timingCalibrationConfidence = result.confidence;
-    timingCalibrationSegmentLagsMs = result.segmentLagsMs;
-    timingCalibrationError = null;
-    timingCalibrationPhase = 'complete';
-  } catch (error) {
-    timingCalibrationPhase = 'failed';
-    timingCalibrationError = error instanceof Error ? error.message : String(error);
-    timingCalibrationConfidence = null;
-    timingCalibrationSegmentLagsMs = [];
-  } finally {
-    clearTimingCalibrationCapture();
-  }
 
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
-}
 
-function appendTimingCalibrationSamples(kind: 'mic' | 'backing', samples: Int16Array) {
-  if (timingCalibrationPhase !== 'collecting' || samples.length === 0) return;
-
-  const isMic = kind === 'mic';
-  const current = isMic ? timingCalibrationMicSamples : timingCalibrationBackingSamples;
-  const remaining = Math.max(0, TIMING_CALIBRATION_SAMPLES - current);
-  if (remaining === 0) return;
-
-  const kept = samples.length <= remaining ? samples : samples.slice(0, remaining);
-  if (isMic) {
-    timingCalibrationMicChunks.push(kept);
-    timingCalibrationMicSamples += kept.length;
-  } else {
-    timingCalibrationBackingChunks.push(kept);
-    timingCalibrationBackingSamples += kept.length;
-  }
-
-  if (
-    timingCalibrationMicSamples >= TIMING_CALIBRATION_SAMPLES &&
-    timingCalibrationBackingSamples >= TIMING_CALIBRATION_SAMPLES
-  ) {
-    finishTimingCalibration();
-  }
-}
-
-function startTimingCalibration() {
-  timingCalibrationPhase = 'collecting';
-  timingCalibrationStartedAt = performance.now();
-  timingCalibrationError = null;
-  timingCalibrationConfidence = null;
-  timingCalibrationSegmentLagsMs = [];
-  clearTimingCalibrationCapture();
-  broadcastJson(timingCalibrationStatusPayload());
-}
 
 
 
@@ -461,8 +363,8 @@ function restartLiveSourceAfterMicReconnect() {
   // stream lands back on the existing timeline with a hole exactly as long as
   // the outage, instead of costing every listener another full prebuffer.
   refreshLiveMicNetworkCompensation();
-  if (timingCalibrationPhase === 'collecting') {
-    failTimingCalibration('Microphone reconnected during calibration. Start calibration again.');
+  if (calibration.collecting) {
+    calibration.fail('Microphone reconnected during calibration. Start calibration again.');
   }
   broadcastJson(sourceStatusPayload());
   broadcastJson(testStatusPayload());
@@ -474,12 +376,7 @@ function stopLiveSource() {
   // measurement must not survive. It used to be process-global and quietly
   // carried over into the next session.
   session.stop();
-  calibrationGeneration = -1;
-  calibrationMicGeneration = null;
-  timingCalibrationPhase = 'idle';
-  timingCalibrationConfidence = null;
-  timingCalibrationSegmentLagsMs = [];
-  timingCalibrationError = null;
+  calibration.reset();
   broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
   broadcastJson(testStatusPayload());
@@ -514,19 +411,10 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(youtubeTimeline.statusPayload(nowMs));
   }
 
-  if (timingCalibrationPhase === 'collecting') {
-    // Without this the phase never leaves 'collecting' when one side stops
-    // sending, and the Calibrate button stays disabled with no way back.
-    if (nowMs - timingCalibrationStartedAt > TIMING_CALIBRATION_TIMEOUT_MS) {
-      const micMs = Math.round((timingCalibrationMicSamples / MIX_SAMPLE_RATE) * 1000);
-      const backingMs = Math.round((timingCalibrationBackingSamples / MIX_SAMPLE_RATE) * 1000);
-      failTimingCalibration(
-        `Calibration timed out (mic ${micMs} ms, source ${backingMs} ms of ${TIMING_CALIBRATION_MS} ms). ` +
-        'Check that both the phone microphone and the desktop capture are still streaming.',
-      );
-    } else {
-      broadcastJson(timingCalibrationStatusPayload());
-    }
+  // Without the timeout the phase never leaves 'collecting' when one side stops
+  // sending, and the Calibrate button stays disabled with no way back.
+  if (calibration.collecting && !calibration.tick(nowMs)) {
+    broadcastJson(timingCalibrationStatusPayload());
   }
 
   if (session.active && nowMs - lastMixHealthAt >= MIX_HEALTH_INTERVAL_MS) {
@@ -573,7 +461,7 @@ wss.on('connection', (rawSocket) => {
               broadcastJson(sourceStatusPayload());
               broadcastJson(timingCalibrationStatusPayload());
             }
-            appendTimingCalibrationSamples('mic', samples);
+            calibration.observeMic(samples);
           }
         } else {
           broadcastToMonitors(frame.pcm, true);
@@ -586,7 +474,7 @@ wss.on('connection', (rawSocket) => {
       // phone costs the mix its vocal, not the whole take.
       if (socket === backing && socket.role === 'backing' && session.active) {
         const samples = session.ingestBacking(frame, backingSampleRate);
-        appendTimingCalibrationSamples('backing', samples);
+        calibration.observeBacking(samples);
       }
       return;
     }
@@ -643,14 +531,15 @@ wss.on('connection', (rawSocket) => {
         backing?.readyState !== WebSocket.OPEN ||
         publisher?.readyState !== WebSocket.OPEN
       ) {
-        failTimingCalibration('Connect both phone Microphone and Desktop Source before calibration.');
+        calibration.fail('Connect both phone Microphone and Desktop Source before calibration.');
         return;
       }
       if (!timeline.connected || Number(timeline.state) !== 1) {
-        failTimingCalibration('Play YouTube on the phone before calibration.');
+        calibration.fail('Play YouTube on the phone before calibration.');
         return;
       }
-      startTimingCalibration();
+      calibration.start();
+      broadcastJson(timingCalibrationStatusPayload());
       return;
     }
 
@@ -763,8 +652,8 @@ wss.on('connection', (rawSocket) => {
       session.setMicExpected(false);
       // Deliberately not cleared: the capture may still be running on the phone
       // and about to reconnect onto the same timeline.
-      if (timingCalibrationPhase === 'collecting') {
-        failTimingCalibration('Microphone disconnected during calibration.');
+      if (calibration.collecting) {
+        calibration.fail('Microphone disconnected during calibration.');
       }
       if (testActive) stopSyncTest();
       broadcastStatus();
@@ -774,8 +663,8 @@ wss.on('connection', (rawSocket) => {
       backing = null;
       backingSampleRate = null;
       session.setBackingExpected(false);
-      if (timingCalibrationPhase === 'collecting') {
-        failTimingCalibration('Desktop Source disconnected during calibration.');
+      if (calibration.collecting) {
+        calibration.fail('Desktop Source disconnected during calibration.');
       }
       stopLiveSource();
     }

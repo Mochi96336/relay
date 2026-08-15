@@ -53,7 +53,11 @@ Use the same `?key=some-random-string` query on the phone and on `source.html`.
 
 `src/server.ts` is the transport layer: websocket routing, roles, status broadcasts and the diagnostics. It no longer owns the audio.
 
-`src/audio-session.ts` owns the live mix - both PCM timelines, the session clock, the alignment the mixer applies and the health counters. It is told what happened (a source appeared, a frame arrived, a calibration succeeded) and decides for itself what that does to the audio, rather than having transport events reach in and reset the mix clock directly. `src/pcm-frame.ts` and `src/timing-calibration.ts` are pure; `src/youtube-timeline.ts` owns the media clock that keeps the desktop player following the phone, which is a control plane and deliberately separate from the audio clock.
+`src/audio-session.ts` owns the live mix - both PCM timelines, the session clock, the alignment the mixer applies and the health counters. It is told what happened (a source appeared, a frame arrived, a calibration succeeded) and decides for itself what that does to the audio, rather than having transport events reach in and reset the mix clock directly.
+
+`src/calibration-session.ts` owns one acoustic measurement: collecting, timing out, holding the answer, and knowing which setup that answer describes. Calibration is a tap on the live audio, not a stage in it - `AudioSession` never asks whether a measurement is running, and a normal take never passes through any of it. The server feeds it the same samples it feeds the mix and applies a result to the session's alignment when one lands.
+
+`src/pcm-frame.ts` and `src/timing-calibration.ts` are pure. `src/youtube-timeline.ts` owns the media clock that keeps the desktop player following the phone, which is a control plane and deliberately separate from the audio clock.
 
 ## Tests
 
@@ -61,6 +65,7 @@ Use the same `?key=some-random-string` query on the phone and on `source.html`.
 
 - `test/timing-calibration.test.ts` feeds the analyser synthetic percussive audio with a known lag baked in and asserts the lag comes back.
 - `test/youtube-timeline.test.ts` drives `YouTubeTimelineTracker` with an injected clock and pins the anchor / re-anchor / seek classification.
+- `test/calibration-session.test.ts` drives the measurement lifecycle with an injected clock and a stubbed analyser: progress, completion, timeout, retry after failure, and which setup an answer is bound to.
 - `test/audio-session.test.ts` drives `AudioSession` with an injected clock: timeline placement, holes, re-anchoring, the read-ahead alignment, starvation and the prebuffer.
 - `test/pcm-frame.test.ts` pins the wire format, including the byte offsets the two browser encoders duplicate by hand.
 - `test/server.test.ts` starts the real server as a child process on an OS-assigned port and exercises it over WebSockets: raw microphone passthrough, the live mix, publisher takeover, mix-health starvation and gap reporting, reconnecting onto an existing timeline, shared-key auth, and the full calibration lifecycle.

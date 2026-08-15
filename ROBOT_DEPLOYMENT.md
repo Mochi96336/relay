@@ -1,6 +1,6 @@
 # Robot deployment contract
 
-Relay's final product topology is **phone + robot**. The desktop used during development is only a stand-in for the robot-side browser host; it is not a permanent runtime component.
+Relay's product topology is **phone + robot**. The desktop used during development is only a stand-in for the robot-side browser host.
 
 ```text
 Singer phone
@@ -10,10 +10,10 @@ Singer phone
                                          │
 Robot                                    │
 ├─ Relay server <────────────────────────┘
-├─ Chromium
-│  └─ source.html
+├─ Xvfb + Chromium
+│  └─ http://localhost:$PORT/source.html?robot=1
 │     └─ mirrored YouTube
-└─ backing-source adapter
+└─ PipeWire backing route
    └─ rendered song PCM ────────────────> Relay server
 
 Relay server
@@ -21,73 +21,75 @@ Relay server
    └─ Monitor / Record / later Discord
 ```
 
-## Current prototype boundary
+## Validated browser audio route
 
-`chrome-tab-audio-probe/` is the current browser backing-source adapter. It proves that rendered YouTube audio can be turned into framed PCM and fed into Relay, but it is **not a fully unattended headless robot capture path**.
-
-Chrome's `tabCapture` API can only start after the user invokes the extension. The current implementation makes that explicit by calling `chrome.tabCapture.getMediaStreamId()` from `chrome.action.onClicked`. This is a browser security boundary, not a reconnect bug that the Relay server can work around.
-
-`source.html` also currently waits for the **Enable source audio** gesture before the mirrored YouTube player is allowed to emit sound. Therefore a fresh Chromium session still needs local interaction before backing audio exists, even though Relay reconnect, mixing and timing calibration can run unattended after that point.
-
-Do not build a system service that claims to auto-start this extension capture at boot. It would encode a deployment promise Chrome does not provide.
-
-## Backing protocol bridge
-
-`npm run backing:stdin` is the robot-side protocol seam for replacing the extension.
-
-It reads **raw mono signed 16-bit little-endian PCM** from stdin and sends it to Relay as the existing `backing` role. It uses the same framed PCM contract as the phone and extension (`generation` + `firstSampleIndex`), keeps the capture clock running across a WebSocket outage, and lets a dropped transport interval remain an explicit hole on the Relay timeline.
+The robot route has been validated on Debian 13 arm64:
 
 ```text
-robot audio capture
-      │ raw s16le mono PCM
-      ▼
+Chromium
+  PULSE_SINK=relay_browser
+        ↓
+PipeWire/PulseAudio null sink
+        ↓
+relay_browser.monitor
+        ↓
+parec --raw --format=s16le --rate=48000 --channels=1
+        ↓
 npm run backing:stdin
-      │ framed backing PCM
-      ▼
-Relay server
+        ↓
+Relay
 ```
 
-Defaults are 48 kHz and 20 ms frames. Relevant environment variables:
+This proves both halves of the deployment seam: Chromium's rendered audio reaches raw PCM through PipeWire, and `backing:stdin` frames that PCM and publishes it as Relay's normal `backing` role. The Chrome extension remains useful for desktop development, but it is not part of the robot runtime.
 
-- `RELAY_URL` — backing WebSocket URL, default `ws://127.0.0.1:3000/ws`
-- `RELAY_KEY` — optional shared Relay key
-- `RELAY_BACKING_SAMPLE_RATE` — input rate, default `48000`
-- `RELAY_BACKING_FRAME_MS` — frame duration, default `20`
+## Localhost is a deployment requirement
 
-The bridge deliberately does **not** decide how the robot captures Chromium audio. That is deployment policy, not mixer ownership. Any robot-local audio route that can produce the documented PCM stream can feed this client without teaching `AudioSession` about Chromium, PipeWire, a browser extension or a specific operating system.
+The robot source URL **must use `localhost`**:
 
-## Deployment stages
+```text
+✓ http://localhost:$PORT/source.html?robot=1
+✗ http://127.0.0.1:$PORT/source.html?robot=1
+```
 
-### Development
+On the validated installation, the same YouTube video played through the `localhost` origin and created the expected PipeWire sink input, while the `127.0.0.1` origin showed `Video unavailable`. Treat the hostname as part of the deployment contract, not as an interchangeable loopback spelling.
 
-A normal computer runs Chromium, `source.html` and the unpacked extension. This is only the development substitute for the robot-side browser host.
+The port is not part of that contract. Relay defaults to `3000`; use another port when the host already reserves it.
 
-### Robot browser session
+## Launcher
 
-Relay server and Chromium run on the robot. `source.html` is opened locally and the extension is loaded there. With the current prototype, a Chromium restart still requires the source-audio gesture and one extension invocation before capture begins.
+The checked-in launcher owns the complete browser backing route:
 
-This mode is useful for integrated robot testing, but it is not the final unattended target.
+```bash
+PORT=3100 npm run robot:source
+```
 
-### Final unattended robot
+It:
 
-Keep the existing Relay `backing` protocol and replace only the **backing-source adapter** with a robot-local capture path that can be started and supervised as a service. Feed that PCM into `npm run backing:stdin`.
+- verifies `pactl`, `parec`, `xvfb-run`, `npm`, Node.js, and Chromium are available;
+- creates the `relay_browser` null sink only when it does not already exist;
+- captures `relay_browser.monitor` as mono 16-bit little-endian PCM at 48 kHz;
+- pipes the capture into `backing:stdin`;
+- launches an isolated Chromium profile under Xvfb, routed with `PULSE_SINK=relay_browser`;
+- always opens `http://localhost:$PORT/source.html?robot=1`; and
+- stops its child processes and unloads only a sink module it created itself.
 
-That change must stay outside the audio core:
+`PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate.
 
-- `source.html` owns mirroring the phone's YouTube media timeline.
-- the backing-source adapter owns extracting rendered song audio, framing it and reconnecting its transport.
+Run the Relay server separately before starting the launcher. Robot mode automatically arms source audio, and Chromium is launched with the autoplay policy needed for that unattended local page; no source-page gesture or extension invocation is required.
+
+## Ownership boundaries
+
+- `source.html` mirrors the phone's YouTube media timeline.
+- `scripts/robot-source.sh` owns robot-local browser audio capture and process cleanup.
+- `src/backing-stdin.ts` owns PCM framing, its capture clock, and backing transport reconnection.
 - `src/server.ts` owns WebSocket routing and source lifecycle orchestration.
-- `AudioSession` owns the shared PCM timelines, alignment, mixer and signal processing.
+- `AudioSession` owns the shared PCM timelines, alignment, mixer, and signal processing.
 - `CalibrationSession` observes those timelines and owns measurement validity.
 
-A new robot capture adapter should continue sending the same framed PCM as the extension does today. It should not create a second mixer clock or a second alignment model.
+The launcher does not create a second mixer clock or alignment model. Observed follower deltas are diagnostics, not configuration: final audio alignment remains the calibration system's job.
 
-## Next implementation seam
+## Current checkpoint and next stage
 
-The remaining deployment-specific work is to wire the robot browser's rendered audio into the stdin backing bridge without depending on a `tabCapture` user invocation.
+The manually launched robot backing route is reproducible and validated. Full phone microphone + robot backing + automatic calibration still needs an integrated real-device monitor/recording test.
 
-On Raspberry Pi OS, modern releases use PipeWire for desktop audio, and PipeWire provides service-friendly capture/routing primitives. The exact robot audio route should be validated on the target installation before it is checked in as a boot service; it does not belong in the Relay mixer itself.
-
-Until that route is installed, the accurate statement is:
-
-> Relay is unattended after backing capture has been activated; the Chrome-extension prototype still needs manual activation, while `backing:stdin` is the protocol path for the final unattended robot capture.
+Do not install or commit boot services yet. After that integrated path is validated, the next deployment checkpoint can supervise the Relay server, backing bridge, and browser at boot. That is the point where the deployment can accurately promise unattended startup.

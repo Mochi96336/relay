@@ -128,6 +128,15 @@ function safePlayerTime() {
   }
 }
 
+function safePlayerState() {
+  if (!playerReady || !player) return Number.NaN;
+  try {
+    return Number(player.getPlayerState());
+  } catch {
+    return Number.NaN;
+  }
+}
+
 function applyBalance(sendToServer = true) {
   const songLevel = Math.max(0, Math.min(100, Number(sourceVolume.value) || 0));
   const micGainDb = Math.max(0, Math.min(36, Number(sourceMicGain.value) || 0));
@@ -233,6 +242,7 @@ function renderTimeline() {
   const videoId = typeof timeline?.videoId === 'string' ? timeline.videoId : null;
   const target = Number(timeline?.serverTime);
   const state = Number(timeline?.state);
+  const playerState = safePlayerState();
   const current = safePlayerTime();
   const deltaMs = Number.isFinite(current) && Number.isFinite(target)
     ? (current - target) * 1000
@@ -251,7 +261,10 @@ function renderTimeline() {
 
   stateNode.textContent = armed ? 'Source armed' : 'Timeline ready';
   detailNode.textContent = `${videoId} · phone ${STATE_NAMES.get(state) ?? state} · target ${formatTime(target)}`;
-  mirrorState.textContent = `${STATE_NAMES.get(state) ?? state}${armed ? ' · following' : ' · muted until enabled'}`;
+  const actualState = Number.isFinite(playerState)
+    ? (STATE_NAMES.get(playerState) ?? playerState)
+    : 'waiting';
+  mirrorState.textContent = `${actualState}${armed ? ' · following' : ' · muted until enabled'}`;
   mirrorTimeline.textContent = `${formatTime(current)} / target ${formatTime(target)} · Δ ${Number.isFinite(deltaMs) ? `${Math.round(deltaMs)} ms` : '-- ms'}`;
   renderCalibration();
 }

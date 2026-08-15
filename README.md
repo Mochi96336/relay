@@ -12,17 +12,17 @@ Singer phone
 ├─ YouTube media timeline -> Relay server
 └─ microphone PCM ---------> Relay server
 
-Desktop Relay source tab
+Robot Relay source browser
 └─ visible YouTube IFrame
    └─ follows the phone's video / play / pause / seek timeline
-      └─ Chrome tabCapture extension -> rendered tab audio PCM -> Relay server
+      └─ PipeWire monitor -> backing:stdin -> rendered audio PCM -> Relay server
 
 Relay server
 └─ captured YouTube tab audio + phone microphone
    └─ 48 kHz buffered mix -> Monitor / Solo Record
 ```
 
-The desktop source uses the same visible YouTube player surface; Relay does not download a media file or use a YouTube audio-download endpoint. The Chrome extension captures the final rendered audio of the local `source.html` tab after an explicit extension-button click.
+The robot source uses the same visible YouTube player surface; Relay does not download a media file or use a YouTube audio-download endpoint. On the validated Debian robot, Chromium is routed to a PipeWire null sink and its monitor feeds the stdin backing bridge. The Chrome extension remains a desktop development adapter, not a robot runtime dependency.
 
 Discord output is not connected yet.
 
@@ -94,6 +94,18 @@ For an integrated run:
 8. Relay automatically switches Monitor / Solo Record to the 48 kHz live mix path. Stop the extension capture to return to the normal raw microphone path.
 
 The source follower uses the existing server media clock. Large source/phone differences are corrected with `seekTo`; play, pause, buffering and deliberate seeks follow the phone timeline.
+
+## Robot YouTube source
+
+On the Debian robot, start Relay and then launch the validated browser audio route:
+
+```bash
+PORT=3100 npm run robot:source
+```
+
+`PORT` defaults to `3000`. The launcher creates or reuses the `relay_browser` PipeWire/PulseAudio sink, captures its monitor as mono 48 kHz PCM, feeds `backing:stdin`, and starts an isolated Chromium under Xvfb in unattended robot mode.
+
+The source URL must use `localhost`, not `127.0.0.1`; the latter produced `Video unavailable` in the real-device comparison. See `ROBOT_DEPLOYMENT.md` for the deployment contract, prerequisites, cleanup behavior, and the boundary before adding boot services.
 
 ## Live mix timing
 

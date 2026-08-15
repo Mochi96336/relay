@@ -1,151 +1,227 @@
 # Handoff
 
-State of the work as of `1cb8e91`, written for picking this up on another machine. `README.md` describes how the system works; this file is what a fresh session would otherwise have to rediscover. Updated after a real integrated session on the robot itself (2026-08-15 evening) — see "What tonight's robot session found" below for what that changed.
+Current state of draft PR #1 (`agent/web-mic-relay`). `README.md` describes the product surface; this file records the current engineering truth needed to continue work without rediscovering the timing failures already fixed.
 
-## What is verified and what is not
+## Validation state
 
-The audio core is covered by 120 tests (`npm test`, ~15 s, no network) and `npm run check` is clean. That is not the same as working.
+GitHub Actions now validates every PR update with:
 
-Confirmed on real hardware:
+```bash
+npm ci
+npm run check
+npm test
+```
 
-- Monitor level is correct again after the test-mode fix.
-- A 400 ms prebuffer holds: a 70 s take reported one starved frame.
-- Take-scoped health counters report the take rather than the session.
-- **The full robot route runs end to end on real hardware** (phone mic over a Cloudflare tunnel, robot Chromium mirroring YouTube through PipeWire, `backing:stdin`, `RELAY_CALIBRATION_AGREEMENT=3`): mic and backing both stream, calibration collects, and — after the fix below — converges on a plausible small lag rather than a beat-period alias.
+Do not treat CI as a substitute for the next real-hardware test. The audio core and lifecycle contracts are automated; audible sync through the complete phone -> Relay -> robot -> recorder path still needs a fresh sung take after the latest timing-state changes.
 
-**Never validated on real hardware, individually or together:**
+Previously confirmed on the Raspberry Pi / robot route:
 
-- the microphone limiter,
-- a desktop capture blip not ending the take,
-- the phone-side controls and song-level routing,
-- clipping detection (never observed firing),
-- an actual sung take with the mix confirmed audibly in sync (tonight got calibration converging; nobody sang into it).
+- phone microphone and robot backing both reach Relay end to end;
+- the 400 ms live prebuffer is viable;
+- the old ~2 second backing delay was real startup/capture buffering, not CPU load;
+- after the buffering fixes, backing/mic headroom returned to roughly the expected 400 ms region;
+- Cloudflare RTT was only about 20-30 ms during the observed session and was not the multi-second latency source.
 
-An integrated take with someone actually singing is still the next step, specifically so that a failure on the robot can be attributed to the deployment rather than to the audio core.
+Still worth validating on current head as one integrated take:
 
-## What tonight's robot session found
+- actual sung vocal is audibly aligned for the whole recording;
+- mic limiter / clipping diagnostics behave as intended;
+- source/player reconnects recover without audible alignment jumps;
+- `requestedMicAdvanceMs` and `appliedMicAdvanceMs` remain equal unless a real buffer limit is reached.
 
-Three real problems, in the order they were found and fixed or ruled out. All three produce the same symptom from a phone speaker distance — audio that sounds obviously wrong to a person, unattended calibration that produces a suspiciously large lag — so do not assume one explains the other without checking `timing-calibration-status` directly.
+## Current robot audio route
 
-1. **A page reload does not re-anchor the microphone. It should have and did not.** `captureGeneration` in `public/app.js` is a plain `let` starting at 0, bumped once per capture start. Reloading the phone page resets it to the same value the *first ever* connection used, so `timeline.generation !== frame.generation` in `audio-session.ts` sees no change and skips re-anchoring. The mic timeline then keeps extending from whatever `originOffset` the very first connection computed, drifting further from correct the longer the server process has been running — we watched it go from a wrong -7195 ms to a worse -18595 ms across one reload. **The fix is restarting the Relay server process, not reloading the phone page.** A real fix would make `captureGeneration` globally unique (e.g. seed it from `Date.now()` or a random value instead of 0), which nobody has done yet.
-2. **The analyser locks onto beat-period aliases, live, not just in theory.** Thread 2 below documented this as a known gap; tonight it was watched happening in real time against a real recorded chorus — repeated automatic attempts landing on ±550-700 ms with confidence 0.4-0.6, while the true answer (confirmed once by a high-confidence 0.797 read) was ~150-250 ms. `RELAY_CALIBRATION_AGREEMENT=3` correctly rejected every one of those, exactly as designed, but never got three that agreed either, because a repeated beat produces a *different* alias each attempt while the true small lag is comparatively rare against it — a real, not just theoretical, availability problem for a live take. **Fixed**: `bestLagAcrossOverlap` in `src/timing-calibration.ts` now also searches within `PREFERRED_LAG_MS` (300 ms) and prefers that candidate whenever it scores within `PREFERRED_LAG_CORRELATION_MARGIN` (0.08) of the global best, on the same physical-plausibility reasoning `RELAY_CALIBRATION_MAX_LAG_MS` already used (nothing real lives far from zero; a comparably-strong distant candidate is that same beat, aliased). Regression tests in `test/timing-calibration.test.ts` (`prefers a ... lag over its ... ms beat-period alias`) use a new `beatTrain`/`laggedBeatPair` harness with a *regular* beat, which `pulseTrain`'s irregular spacing had never exercised — that gap in the test data is why this shipped undetected. This plausibly explains open thread 1 below (the song heard twice, unattended) better than the false-positive theory that motivated agreement in the first place: a beat-alias lag large enough to read past the end of mic history would produce exactly that symptom.
-3. **Cloudflare tunnel checked and ruled out.** The phone connects through `cloudflared tunnel --url http://localhost:$PORT`. Its `clock-ping`/`youtube-telemetry` RTT (`networkRttMs`, `transportEstimateMs`) stayed at 20-30 ms throughout, so the tunnel is not adding meaningful or variable latency. Do not re-investigate this without new evidence.
+Run the route through the launcher, not as three unrelated manual processes:
 
-## Things that cost time to rediscover
+```text
+npm run robot:source
+  |
+  +-- Chromium source.html?robot=1
+  |     -> relay_browser PipeWire/Pulse sink
+  |
+  +-- parec relay_browser.monitor
+  |     -> 40 ms capture quantum by default
+  |
+  +-- backing:stdin
+        -> framed backing PCM
+        -> Relay
+```
 
-- **Source changes need the server restarted.** `npm start` does not watch. Several confusing sessions came from reading new UI against an old server — including one where a calibration reported a lag the current search range cannot produce.
-- **The source URL must use `localhost`, not `127.0.0.1`.** The latter gives `Video unavailable`. Found on the real device.
-- **Reloading `source.html` destroys the tab capture** while the extension's WebSocket, which lives in an offscreen document, stays open and registered. The server sees a healthy `backing` client with no audio behind it. It now says so; before, a calibration would sit at 0 % for the whole timeout. On the robot there is no extension, and the equivalent failure is the PipeWire route or `backing:stdin`.
-- **`tabCapture` needs a user gesture on every Chromium start.** That is a browser security boundary, not a bug to route around, which is why the robot path replaces the extension rather than automating it.
-- **Both singer-facing controls exist on two pages.** Mic gain and song level are server state; either page can move them and the server echoes to the other. Song level can only be *acted* on by the page owning the mirrored player.
-- **Reloading the phone page does not fix a wedged microphone timeline; restarting the server does.** See "What tonight's robot session found" above. Register as a `monitor` role over a plain WebSocket (`{type:'register', role:'monitor'}`) to watch `mix-health.micHeadroomMs` — frozen at a large negative number while `micStreaming` stays true is this bug, not a network problem.
-- **`npm run robot:source` already owns the whole browser-audio pipeline.** Running `parec`, `backing:stdin`, and `xvfb-run chromium` by hand in separate terminals works but leaves orphaned `Xvfb` displays and a second, conflicting `backing:stdin` behind on every restart. Use the one launcher command; it cleans up its own children on `SIGTERM`.
+`scripts/robot-source.sh` now holds a `flock` lock per sink. A second launcher for the same sink exits instead of creating a second Chromium/player/capture route.
 
-## Where the tuning lives
+The launcher also sets `RELAY_BACKING_ROBOT=1` for `backing:stdin`. The backing WebSocket therefore declares `robot: true` at registration time, before Chromium has finished loading. This is important: the server knows the route is a robot deployment early enough that the legacy song-content auto-calibrator cannot win a startup race.
 
-Everything below is read once at startup.
+An old Chromium process created before the single-instance/ownership changes cannot be remotely prevented from writing audio to PipeWire merely by ignoring its WebSocket telemetry. After deploying this head, use a clean launcher restart (or a clean host reboot) before the first hardware validation so no pre-update orphan browser is still feeding the sink.
 
-| Variable | Default | What it decides |
-| --- | --- | --- |
-| `PORT` | `3000` | HTTP + WebSocket port |
-| `RELAY_KEY` | unset | Shared key; must match the `?key=` on every page |
-| `RELAY_LIVE_PREBUFFER_MS` | `400` | Pure output delay, and the read-ahead the mixer can afford |
-| `RELAY_BACKING_GRACE_MS` | `10000` | How long a missing song source may be away before the session ends |
-| `RELAY_AUTO_CALIBRATE` | on (`0` disables) | Whether calibration triggers itself |
-| `RELAY_AUTO_CALIBRATION_RETRY_MS` | `15000` | Gap between unattended attempts |
-| `RELAY_CALIBRATION_AGREEMENT` | `3` | Windows that must agree before a measurement is *confirmed* |
-| `RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE` | `0.55` | Confidence a single window applies at immediately, ahead of agreement (see below) |
-| `RELAY_CALIBRATION_TOLERANCE_MS` | `25` | How close those windows must land |
-| `RELAY_CALIBRATION_MAX_LAG_MS` | `2500` | How far the analyser may look |
-| `RELAY_CALIBRATION_TIMEOUT_MS` | `20000` | Backstop when a side stops streaming |
-| `RELAY_MIC_RETENTION_MS` | `3000` | Microphone history kept, so the ceiling on reading *behind* |
-| `RELAY_CALIBRATION_PROBE` | on (`0` disables) | Boot calibration by probe instead of song content |
-| `RELAY_CALIBRATION_PROBE_RETRY_MS` | `6000` | Gap between probe attempts |
-| `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` | `3000` | Largest path delay a probe can find |
-| `RELAY_CALIBRATION_PROBE_MIN_CORRELATION` | `0.5` | Below this a probe is treated as not heard |
-| `RELAY_CALIBRATION_DELTA_REAPPLY_MS` | `40` | How far `delta` must move before the vocal follows it |
-| `RELAY_CALIBRATION_PROBE_DEBUG` | off (`1` enables) | Logs each leg's correlation and latency |
-| `RELAY_HEARTBEAT_MS` | `8000` | Dead-socket detection |
+## Calibration architecture
 
-Robot route (`scripts/robot-source.sh` and `src/backing-stdin.ts`): `RELAY_BROWSER_SINK` (`relay_browser`), `CHROMIUM_BIN` (autodetected), `RELAY_URL` (`ws://127.0.0.1:$PORT/ws`), `RELAY_BACKING_SAMPLE_RATE` (`48000`), `RELAY_BACKING_FRAME_MS` (`20`).
+Robot timing is a three-term boot calibration:
 
-**`RELAY_CALIBRATION_AGREEMENT * durationMs` (6 s/window) is a hard floor on how long calibration takes, even in the best case** - 18 s at the default of 3. A singer hearing nothing corrected for that whole stretch has its own cost, raised live tonight. `RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE` applies the *first* window that clears it immediately - agreement keeps running in the background regardless and still replaces it the moment it lands, same mechanism `CalibrationSession` already used to protect a confirmed answer from a later disagreeing window. Real confidence tonight: ~0.6-0.8+ for a match, ~0.45-0.6 for a rejected, not-yet-agreeing window - 0.55 is a working line between them, not a validated one. Set it above 1 to disable and restore the old silent-until-confirmed behaviour. `timing-calibration-status.provisional` (and the `· 已套用暫定值 ... ms` text on both pages) says which kind of answer is currently applied.
+```text
+advance = micLatency - backingLatency + delta
+```
 
-## Boot calibration, and the two-second offset it explained
+- `micLatency`: known irregular three-note probe played by the phone and captured by its microphone.
+- `backingLatency`: the same known probe played by the active robot browser and captured through the real Chromium -> PipeWire -> `parec` -> `backing:stdin` path.
+- `delta`: active robot YouTube player position minus the phone-driven server timeline.
 
-A recording came back with the vocal a whole two seconds off the backing, over the entire take. That is far outside anything the old setup could even measure, let alone apply, and chasing it turned up three separate things.
+The probe reference is intentionally non-periodic so it does not have the beat-period ambiguity of correlating arbitrary songs.
 
-**The measurement was right and was being thrown away.** An earlier run had reported -1790 ms at confidence 0.98 with five windows inside 15 ms - the signature of a true match, not the 0.4-0.6 an alias scores. It was dismissed as a beat alias on the reasoning recorded in `e5e38f0`: the follower corrects past 450 ms, so nothing real lives past 700 ms. That reasoning only accounted for the *players*. It missed that the phone's uplink and the robot's browser-to-PipeWire capture each add their own delay, neither of which the follower's dead band bounds. Searching only to 700 ms did not rule the real answer out as implausible, it made it unmeasurable.
+### Calibration ownership
 
-**And it was silently truncated even when measured.** `retentionMs` was `MAX_OFFSET_MS + 1000`, so `appliedMicAdvanceMs` clamped at 1300 ms after the safety margin while `requestedMicAdvanceMs` said -1790: a ~500 ms error, reported as a successful calibration. Reading *behind* spends retained history, not prebuffer, so `RELAY_MIC_RETENTION_MS` buys correction range for memory alone (~96 KB/s) and costs no output latency. Any gap between those two numbers means this is happening again.
+Robot and non-robot routes now have explicit ownership rather than sharing one ambiguous `CalibrationSession` policy:
 
-**Boot calibration measures the whole thing as three terms instead of one.** See `src/boot-calibration.ts` for the derivation of
+- `calibrationKind = content` is the legacy song-content path for non-robot deployments.
+- `calibrationKind = boot-probe` is authoritative on a robot route.
+- robot backing registration suppresses legacy auto-calibration before the robot page says hello;
+- pressing **Calibrate timing** on a robot restarts the two-leg boot probe; it never falls back to song correlation;
+- a leftover content result is historical data only once the robot route exists and cannot become the mixer's active alignment.
 
-    advance = micLatency - backingLatency + delta
+### A boot result is not applied until all three terms exist
 
-Two probes - three clicks at irregular offsets, so no shift but the true one lines all three up - are played once down each path: the phone plays one its own microphone hears, and the robot's page plays one into the same null sink the song goes to, so it arrives through PipeWire exactly as the song does. `delta`, the robot player's position minus the phone's, needs no probe: the follower already computed it to decide whether to seek and used to discard it.
+The two probe legs may complete before the robot player has a stable position. That is allowed, but an unknown `delta` is **not** treated as zero.
 
-Measured on the robot, and this is the answer to the two seconds:
+The mixer only applies a robot boot calibration when:
 
-| Leg | Measured | Correlation |
-| --- | --- | --- |
-| `micLatency` | 50 ms | 0.73 |
-| `backingLatency` | **2110 ms** | 0.84 |
-| `delta` | +250 ms | reported |
-| applied advance | -1810 ms | requested == applied |
+1. the measurement still matches the current session/mic/backing generations;
+2. the result came from `boot-probe`;
+3. there is one active robot source;
+4. that source has published a fresh `robot-player-offset` within the freshness window.
 
-Content correlation had independently measured -1790 ms when `delta` was near zero, which is the same answer by a completely different method.
+Until then, the probe result remains inspectable evidence while the mixer uses the network fallback.
 
-Two consequences worth keeping:
+`source-status` / `timing-calibration-status` expose the distinction:
 
-- **The probes run once; `delta` tracks live.** The two path delays are properties of the capture pipeline and only a restarted capture invalidates them. `delta` is the only term a seek moves, and it is read continuously, so a seek no longer costs a re-measurement - which is also why the probe clicks stopped firing repeatedly during playback.
-- **`backingLatency` of 2110 ms was buffering, and it is now fixed rather than compensated.** See "Where the two seconds actually came from" below. Compensating for it correctly was never the same as it being reasonable.
+- `calibratedMicLagMs`: historical measured value;
+- `activeCalibratedMicLagMs` / `activeMicLagMs`: value actually allowed to affect the mixer;
+- `calibrationKind`: `none`, `content`, or `boot-probe`;
+- `robotRoute`;
+- `robotSourceConnected`;
+- `robotDeltaFresh`;
+- `timingMode`: `network-estimate` or `acoustic-calibration`.
 
-`timing-calibration-status.bootCalibration` reports all three terms, so a wrong total can be attributed to the path that produced it instead of re-measured blind. A single probe cannot replace this: the phone's speaker and the robot's audio never meet in the air, so no one probe crosses both paths - which is exactly what the first attempt at this got wrong, measuring `micLatency` alone and applying it as the total.
+A stale or incomplete result must never be inferred as active merely because a historical number is present.
 
-## Where the two seconds actually came from
+## Robot source ownership
 
-It was never load. The Pi sat at 0.9 across four cores and `backingStarvedFrames` stayed at 0 throughout - CPU pressure shows up as xruns and dropouts, not as a latency that is the same every time. The audio path itself measures **51 ms** end to end:
+The server keeps one `activeRobotSource`, not a count of interchangeable pages.
 
-| Stage | Latency |
-| --- | --- |
-| Chromium into the null sink | 10.7 ms (`512/48000`) |
-| the null sink | 0 |
-| `parec` capture | 40 ms (`1920/48000`, after the fix) |
+When a newer `source.html?robot=1` connects:
 
-The 2110 ms was two unrelated buffers, and both are now fixed rather than corrected for:
+- last connection wins;
+- the previous page receives `robot-source-replaced`;
+- the previous page parks itself: pause, mute, stop answering probes, stop sending delta, and stop reconnecting;
+- backing probes are sent only to the active robot source;
+- probe replies and `robot-player-offset` from any superseded socket are ignored.
 
-1. **`parec` defaulted to a two-second quantum.** `node.latency` read `96000/48000` because nothing asked for anything smaller - a sane default for recording to a file, and exactly wrong here. `scripts/robot-source.sh` now passes `--latency-msec` (`RELAY_BACKING_CAPTURE_LATENCY_MS`, default 40), which took it to `1920/48000`.
-2. **`npm run backing:stdin` takes ~1.9 s to start, and the capture does not wait for it.** The launcher opens the FIFO for reading immediately, so `parec` unblocks and captures through the whole of npm's and tsx's startup. `backing-stdin` then began its `sampleCursor` on that backlog, so the first frame it sent carried ~2 s old audio - and the server anchors the timeline to where a frame *arrives*, which pinned the whole backing timeline that far into the past. `src/backing-stdin.ts` now discards audio for `RELAY_BACKING_STARTUP_FLUSH_MS` (default 250 ms) after the first byte: a backlog drains at memory speed, so whatever is still arriving after that window is live.
+The launcher-level `flock` is a second boundary. Protocol ownership prevents duplicate control/telemetry; the launcher lock prevents a second local browser from injecting duplicate audio into the same PipeWire sink in the first place.
 
-The second one is the one worth remembering, because it is invisible in every per-stage latency figure - every buffer reported 0, and the delay was in *when counting started*. The signature is `mix-health.backingHeadroomMs` sitting far above the prebuffer. Measured before and after, with `RELAY_LIVE_PREBUFFER_MS` at 400:
+## Delta lifecycle
 
-| | before | after |
-| --- | --- | --- |
-| `backingHeadroomMs` | 1940 ms | 360-400 ms |
-| `micHeadroomMs` | 1929 ms | 377 ms |
+`delta` is live timing evidence, not permanent calibration state.
 
-and the bridge now logs `discarded 2080 ms of startup backlog` at boot, which is the same number from the other side.
+`public/source.js` follows these rules:
 
-Boot calibration keeps earning its place regardless - the phone's uplink delay and the robot player's `delta` are real and cannot be removed - but the correction it has to apply should now be a couple of hundred milliseconds rather than -1810 ms. `RELAY_MIC_RETENTION_MS` at 3000 and `RELAY_CALIBRATION_MAX_LAG_MS` at 2500 were both raised to cope with the old figure and are now far larger than needed; they cost only memory and search time, so they are left alone until a real take says what the range actually is.
+- it only computes delta from fresh server timeline-status messages; there is no independent `setInterval(applyTimeline, ...)` replay of an aging `serverTime` snapshot;
+- if a snapshot requires `seekTo()`, that same snapshot is not reported as a delta;
+- after a seek, delta is suppressed for `ROBOT_DELTA_SETTLE_MS` (currently 1000 ms);
+- delta is reported only while both desired and actual player state are playing and the source is armed.
 
-## Two measurements worth not repeating
+The server treats a robot offset as fresh for 2000 ms. If it expires, or the active robot socket disconnects, the mixer withdraws the boot alignment and falls back to the network estimate. The measured mic/backing path terms are retained. Once a fresh delta returns, Relay recomputes the total from the existing path terms without replaying the audible phone probe.
 
-Both were taken on a development desktop; scale them for the target.
+A source seek or active-player replacement increments `sourceGeneration`; this prevents an old total from being presented as valid for the new player position.
 
-- **The mixer is free.** 0.034 ms per 20 ms frame — 0.17 % of one core, roughly 580× headroom. A slower machine is not a problem for the mix path.
-- **One calibration analysis is about 4 ms.** On a much slower machine this can exceed a frame budget, but `drain` catches up at five frames per 5 ms tick and the monitor's 250 ms jitter buffer absorbs it. It is not a reason to move the analysis off-thread.
+## Probe lifecycle
 
-## Open threads
+A completed mic probe leg carries:
 
-1. **The last symptom is now plausibly explained, not confirmed.** The song was heard twice, far apart, intermittently. The diagnosis was a false positive being applied unattended, and agreement was built to stop it — but a beat-period alias landing outside the mixer's usable buffer range would produce exactly this symptom (the mixer's read head lands past the end of mic history), and tonight's session watched that failure mode happen live. Worth a real take to close out, but no longer the top-priority unknown.
-2. **The analyser accepted unrelated audio at 0.4–0.6 confidence; this is meaningfully better, not solved.** `bestLagAcrossOverlap` now prefers a nearby (`PREFERRED_LAG_MS`, 300 ms) candidate over a distant one unless the distant one clearly wins — see "What tonight's robot session found" above. This closes the specific failure that blocked a real take tonight (repeated beat-multiple lock-on), verified against a regression test built from a genuinely periodic signal. It does **not** fix the analyser's fundamental permissiveness: two unrelated recordings can still score 0.4–0.6, and agreement is still what keeps a single bad read out of the mix. Anything calling `analyzeTimingCalibration` directly still inherits that.
-3. **Built: a known probe signal instead of song content.** See "Boot calibration" above. Cross-correlating against the song is inherently ambiguous for anything with a beat, no matter how the thresholds are tuned — a true match and a one-period-away alias can both be genuinely strong correlations, not noise. Two subtleties are worth keeping so they do not have to be re-derived. First, the timing reference: comparing "where the mic's own anchor (`originOffset`) places the probe" against "where correlation finds it in that same anchored timeline" measures nothing, because both come from one deterministic formula applied to one `firstSampleIndex`. The anchor's bias can only be measured against a clock that does *not* pass through it, which is why the probe's expected position comes from the server's own send/receive round trip mapped onto `sessionSampleAt`. Second, and the thing the first attempt got wrong: one probe is not enough. The phone's speaker and the robot's audio never meet in the air, so a phone-speaker-to-phone-mic probe measures `micLatency` alone; applying that as the whole answer is confidently wrong. It needs a leg down each path plus the robot's own player offset.
-4. **The desktop player's ±450 ms dead band** ([`public/source.js`](public/source.js), the `seekTo` guard) is deliberate — correcting more often would mean more audible re-buffers, each also invalidating the calibration. A seek now marks the measurement stale instead. Measured lags have landed at −60, −205 and −225 ms across runs, all inside that band, which is why they differ.
-5. **The click sync test still shares plumbing with the production path.** It is the reason `test-status` and the production session were once conflated. It causes no live fault now; removing it is cleanup, not a fix. (It is also the closest existing thing to thread 3's probe playback — see there before removing it.)
-6. **Discord output has not been started.** It is the original goal in `README.md`.
-7. **`test/server.test.ts`'s "holds the answer back until independent windows agree" is flaky under load**, unrelated to anything above (reproduces identically without tonight's fix). It spawns a real server subprocess and waits up to 15 s; on a Pi running the live robot route alongside the test suite, that budget is marginal. Not worth chasing unless it starts failing on a quiet machine too.
+```text
+sessionGeneration
+micGeneration
+targetSample
+actualSample
+correlation
+```
 
-## Suggested order
+Before the backing leg starts, and again before the two legs are combined, the session/mic generation must still match.
 
-Get someone singing into a real take next — calibration now converges in the section of the song that was tested tonight (mid-song, clear vocal and rhythm), so a real take is finally likely to produce a usable answer instead of stalling. That validates thread 1 and the robot route together. Thread 3 (the probe signal) is the next real quality improvement after that, not before it.
+A stopped live session, changed capture generation, or incompatible probe state abandons the partial run. This prevents `Mic(A) + Backing(B)` from being stamped as a valid result for session B.
+
+Mic/backing path measurements intentionally survive **player-only** churn once both legs have completed. A player reconnect/seek changes `delta`, not those two capture-path latencies.
+
+## Where the old ~2 seconds came from
+
+The large backing delay was two buffering/startup effects, both fixed rather than merely compensated:
+
+1. `parec` was allowed to choose a ~2 second capture quantum. The launcher now requests `RELAY_BACKING_CAPTURE_LATENCY_MS`, default 40 ms.
+2. `parec` began filling the FIFO while `npm`/`tsx` were still starting `backing:stdin`. The first transmitted frames therefore contained old startup audio but were anchored at their much later arrival time. `backing:stdin` now discards startup backlog for `RELAY_BACKING_STARTUP_FLUSH_MS` (default 250 ms) after the first byte arrives, then starts its sample cursor on live audio.
+
+Observed before/after with a 400 ms live prebuffer was approximately:
+
+```text
+backing headroom: 1940 ms -> 360-400 ms
+mic headroom:     1929 ms -> ~377 ms
+```
+
+The underlying browser/sink/capture audio path was about 51 ms after the capture-quantum fix (roughly 11 ms Chromium + 0 ms null sink + 40 ms `parec`).
+
+The oversized `RELAY_MIC_RETENTION_MS=3000` and legacy `RELAY_CALIBRATION_MAX_LAG_MS=2500` remain conservative from the earlier multi-second-delay investigation. They are not the source of live output latency; retention primarily costs memory/search range.
+
+## Capture generations
+
+Phone capture generations are no longer a module-local counter that restarts from the same value after every page reload. `public/app.js` seeds the generation from the current clock and increments it for a new capture session before truncating to the uint32 wire value.
+
+A WebSocket-only reconnect keeps the same generation and sample cursor, because the microphone capture itself continued. A true capture restart gets a new generation and invalidates timing evidence that depended on the previous microphone path.
+
+The same framed-PCM rule applies to backing: sample indices continue through transport loss so missing network data appears as a hole rather than compressing the timeline.
+
+## Legacy content calibration
+
+Song-content correlation remains for non-robot deployments. It is no longer the primary robot timing mechanism.
+
+The legacy path still has a provisional-confidence policy and a wide search range inherited from earlier development. Do not tune those values to fix robot calibration problems: if `robotRoute` is true, a content result should not own the mixer at all.
+
+If legacy/non-robot calibration is revisited, the main remaining product question is whether a single-window provisional result should be allowed to apply before multi-window agreement when repeated musical beats can produce plausible aliases.
+
+## Useful runtime values
+
+Defaults currently worth remembering:
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `RELAY_LIVE_PREBUFFER_MS` | 400 | output delay / positive read-ahead budget |
+| `RELAY_MIC_RETENTION_MS` | 3000 | retained mic history / negative read range |
+| `RELAY_BACKING_CAPTURE_LATENCY_MS` | 40 | `parec` capture quantum on robot |
+| `RELAY_BACKING_STARTUP_FLUSH_MS` | 250 | startup FIFO-backlog discard window |
+| `RELAY_CALIBRATION_PROBE` | on | robot known-probe calibration |
+| `RELAY_CALIBRATION_PROBE_RETRY_MS` | 6000 | retry spacing |
+| `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` | 3000 | probe path search range |
+| `RELAY_CALIBRATION_PROBE_MIN_CORRELATION` | 0.5 | minimum accepted probe match |
+| `RELAY_CALIBRATION_DELTA_REAPPLY_MS` | 40 | delta movement before changing applied total |
+| robot delta freshness | 2000 ms | age after which the last player offset loses authority |
+| robot seek settle | 1000 ms | client-side interval before delta resumes after a seek |
+
+## Next real-hardware validation
+
+After pulling this PR head on the Pi:
+
+```bash
+npm ci
+npm run check
+npm test
+```
+
+Then restart Relay and `npm run robot:source` from a clean process state. During the next sung recording, watch these fields together rather than judging from one calibration number:
+
+```text
+calibrationKind       expected boot-probe
+robotRoute            expected true
+robotSourceConnected  expected true
+robotDeltaFresh       expected true while playing stably
+timingMode            expected acoustic-calibration once delta is fresh
+requestedMicAdvanceMs
+appliedMicAdvanceMs   should equal requested unless a real buffer limit is hit
+bootCalibration       inspect micLatency / backingLatency / delta separately
+```
+
+If audible sync is still wrong while those contracts remain healthy, the next investigation should compare the known-probe browser path with actual YouTube media presentation latency on the Pi. Do not return first to the already-fixed two-second FIFO/`parec` delay or to Cloudflare without new evidence.

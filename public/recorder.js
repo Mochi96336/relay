@@ -35,6 +35,9 @@ let serverMicStarvedFrames = 0;
 let serverDroppedFrames = 0;
 let serverMicGapMs = 0;
 let serverBackingGapMs = 0;
+let serverClippedSamples = 0;
+/** The server's cumulative counters as of this take's first report. */
+let serverHealthBaseline = null;
 let serverUnheadered = false;
 
 function wsUrl() {
@@ -173,6 +176,10 @@ function describeQuality() {
   if (serverMicStarvedFrames > 0) notes.push(`Server 人聲不足 ${serverMicStarvedFrames} frames`);
   if (serverMicGapMs > 0) notes.push(`人聲缺口 ${serverMicGapMs} ms`);
   if (serverBackingGapMs > 0) notes.push(`歌曲缺口 ${serverBackingGapMs} ms`);
+  if (serverClippedSamples > 0) {
+    const ms = Math.round(serverClippedSamples / (MIX_SAMPLE_RATE / 1000));
+    notes.push(`削波 ${ms} ms — 調低麥克風增益`);
+  }
   if (serverUnheadered) notes.push('有 client 送出未加 header 的 PCM');
   if (serverDroppedFrames > 0) notes.push(`Server 丟棄 ${serverDroppedFrames} frames`);
   return notes.length > 0 ? ` · ⚠ ${notes.join(' / ')}` : '';
@@ -230,10 +237,30 @@ function handleJsonMessage(message) {
   }
 
   if (message.type === 'mix-health') {
-    serverMicStarvedFrames = Number(message.micStarvedFrames) || 0;
-    serverDroppedFrames = Number(message.monitorDroppedFrames) || 0;
-    serverMicGapMs = Number(message.micGapMs) || 0;
-    serverBackingGapMs = Number(message.backingGapMs) || 0;
+    // The server's counters run for the whole live session, so a phone that was
+    // away before this take started would otherwise be reported as damage to
+    // it. Baseline on the first report and quote the difference.
+    const totals = {
+      micStarvedFrames: Number(message.micStarvedFrames) || 0,
+      monitorDroppedFrames: Number(message.monitorDroppedFrames) || 0,
+      micGapMs: Number(message.micGapMs) || 0,
+      backingGapMs: Number(message.backingGapMs) || 0,
+      clippedSamples: Number(message.clippedSamples) || 0,
+    };
+
+    // A counter going backwards means the server reset its own session, so the
+    // old baseline describes audio that is no longer on the timeline.
+    const rewound = serverHealthBaseline !== null
+      && Object.keys(totals).some((key) => totals[key] < serverHealthBaseline[key]);
+    if (serverHealthBaseline === null || rewound) serverHealthBaseline = totals;
+
+    serverMicStarvedFrames = totals.micStarvedFrames - serverHealthBaseline.micStarvedFrames;
+    serverDroppedFrames = totals.monitorDroppedFrames - serverHealthBaseline.monitorDroppedFrames;
+    serverMicGapMs = totals.micGapMs - serverHealthBaseline.micGapMs;
+    serverBackingGapMs = totals.backingGapMs - serverHealthBaseline.backingGapMs;
+    serverClippedSamples = totals.clippedSamples - serverHealthBaseline.clippedSamples;
+    // Not take-scoped on purpose: this says a connected client is running stale
+    // code, which stays true regardless of when the take began.
     serverUnheadered = Boolean(message.unheadered);
     return;
   }
@@ -365,6 +392,8 @@ async function startRecording() {
   serverDroppedFrames = 0;
   serverMicGapMs = 0;
   serverBackingGapMs = 0;
+  serverClippedSamples = 0;
+  serverHealthBaseline = null;
   serverUnheadered = false;
 
   audioContext = new AudioContext({ latencyHint: 'interactive' });

@@ -44,8 +44,17 @@ export type MixHealth = {
   backingHeadroomMs: number;
   micGapMs: number;
   backingGapMs: number;
+  /** Samples the summing stage had to clamp, i.e. audible distortion. */
+  clippedSamples: number;
   unheadered: boolean;
 };
+
+/**
+ * Jitter headroom the read-ahead is never allowed to eat. Reading ahead spends
+ * prebuffer and reading behind spends retained history, so the advance has to
+ * fit between them however large a lag the calibration reports.
+ */
+const ADVANCE_SAFETY_MS = 200;
 
 /** Where a batch of ingested samples landed on the shared session timeline. */
 export type IngestResult = {
@@ -79,6 +88,7 @@ export class AudioSession {
   readonly frameMs: number;
   readonly frameSamples: number;
   readonly prebufferMs: number;
+  readonly retentionMs: number;
 
   private readonly backingGain: number;
   private readonly retentionSamples: number;
@@ -103,6 +113,7 @@ export class AudioSession {
 
   private micStarvedFrames = 0;
   private backingStarvedFrames = 0;
+  private clippedSamples = 0;
   private micHeadroomMs = 0;
   private backingHeadroomMs = 0;
 
@@ -112,6 +123,7 @@ export class AudioSession {
     this.frameSamples = Math.round((options.sampleRate * options.frameMs) / 1000);
     this.prebufferMs = options.prebufferMs;
     this.backingGain = options.backingGain;
+    this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
   }
 
@@ -179,10 +191,27 @@ export class AudioSession {
     this.alignmentState = { ...this.alignmentState, ...patch };
   }
 
-  /** Milliseconds the mixer reads ahead in the microphone timeline. */
-  get appliedMicAdvanceMs() {
+  /** What the alignment asks for, before the buffer's limits are applied. */
+  get requestedMicAdvanceMs() {
     const base = this.alignmentState.calibratedMicLagMs ?? this.alignmentState.networkCompensationMs;
     return base - this.alignmentState.fineTuneMs;
+  }
+
+  /**
+   * Milliseconds the mixer actually reads ahead in the microphone timeline.
+   *
+   * A measurement larger than the buffers can absorb is clamped rather than
+   * obeyed: obeying it reads past the end of the microphone history and the
+   * vocal disappears entirely, where clamping leaves it audible but late. Both
+   * are wrong, and only one of them can be heard and diagnosed. The difference
+   * from `requestedMicAdvanceMs` is what says the buffer is too small.
+   */
+  get appliedMicAdvanceMs() {
+    // Never past zero in either direction: a buffer too small to afford any
+    // read-ahead means no read-ahead, not a shove the other way.
+    const ahead = Math.max(0, this.prebufferMs - ADVANCE_SAFETY_MS);
+    const behind = Math.max(0, this.retentionMs - ADVANCE_SAFETY_MS);
+    return Math.max(-behind, Math.min(ahead, this.requestedMicAdvanceMs));
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
@@ -235,6 +264,7 @@ export class AudioSession {
       backingHeadroomMs: Math.round(this.backingHeadroomMs),
       micGapMs: Math.round((this.mic.gapSamples / this.sampleRate) * 1000),
       backingGapMs: Math.round((this.backing.gapSamples / this.sampleRate) * 1000),
+      clippedSamples: this.clippedSamples,
       unheadered: this.mic.unheadered || this.backing.unheadered,
     };
   }
@@ -242,6 +272,7 @@ export class AudioSession {
   resetHealth() {
     this.micStarvedFrames = 0;
     this.backingStarvedFrames = 0;
+    this.clippedSamples = 0;
     this.micHeadroomMs = 0;
     this.backingHeadroomMs = 0;
     this.mic.gapSamples = 0;
@@ -426,6 +457,11 @@ export class AudioSession {
 
     for (let i = 0; i < this.frameSamples; i += 1) {
       const value = (mic[i] / 32768) * micGain + (song[i] / 32768) * this.backingGain;
+      // Clamping keeps the wraparound crack out of the mix, but it is still
+      // distortion, and at the default 30 dB of microphone gain it is easy to
+      // reach. Count it so a take can say it was too hot instead of just
+      // sounding bad.
+      if (value > 1 || value < -1) this.clippedSamples += 1;
       const clamped = Math.max(-1, Math.min(1, value));
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
     }

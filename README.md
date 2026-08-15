@@ -97,7 +97,7 @@ The source follower uses the existing server media clock. Large source/phone dif
 
 ## Live mix timing
 
-The live mix keeps a 4 s server buffer (`RELAY_LIVE_PREBUFFER_MS`). It buys room to align the remote microphone against the locally captured song, and it is paid for in output latency.
+The live mix keeps a 400 ms server buffer (`RELAY_LIVE_PREBUFFER_MS`). It buys room to align the remote microphone against the locally captured song, and it is paid for in output latency.
 
 The mixer reads the microphone history *ahead* by `appliedMicAdvanceMs`, so what the buffer has to cover is that read-ahead:
 
@@ -105,9 +105,19 @@ The mixer reads the microphone history *ahead* by `appliedMicAdvanceMs`, so what
 margin = prebuffer - appliedMicAdvanceMs
 ```
 
-Transport delay does not appear. Since both sides carry absolute sample indices, a slow link changes *when* audio lands, not *where* it is placed — the frames it holds up still land at the index they were captured at. With the advance capped at 2 s, 4 s of prebuffer leaves at least 2 s of margin. When the margin does run out the mixer reads past the end of the microphone history and the vocal drops out in chunks; the server counts those frames and reports them as `mix-health`, which `source.html` and Solo recording both display, instead of failing silently.
+Transport delay does not appear. Since both sides carry absolute sample indices, a slow link changes *when* audio lands, not *where* it is placed — the frames it holds up still land at the index they were captured at.
 
-**The prebuffer is a pure output delay.** Monitor playback adds its own 250 ms, so at the default the monitor hears the mix ~4.25 s after it happened. That is fine for checking a take and unusable for singing along — set `RELAY_LIVE_PREBUFFER_MS=400` for the latter. It does not affect *alignment* either way, because it delays both streams equally.
+**The prebuffer is a pure output delay**, and it was 4 s until measurements showed what that cost. Monitor playback adds its own 250 ms on top, so the singer heard themselves ~4.25 s late, which no one can sing against. It never affected *alignment* — it delays both streams equally — so the recordings were fine while the monitor was unusable, which is why it took a while to find.
+
+The advance is clamped to what the buffers actually afford (`prebuffer - 200 ms` ahead, retained history behind) rather than obeyed on faith. Obeying an oversized measurement reads past the end of the microphone history and the vocal disappears; clamping leaves it late but audible, and `requestedMicAdvanceMs` diverging from `appliedMicAdvanceMs` in `source-status` is the signal to raise the prebuffer. Measured lags have so far run *negative* — the desktop player sits behind the phone — and those are paid for out of retained history, costing no prebuffer at all.
+
+When the margin does run out the mixer reads past the end of the microphone history and the vocal drops out in chunks; the server counts those frames and reports them as `mix-health`, which `source.html` and Solo recording both display, instead of failing silently.
+
+### Take quality is measured over the take
+
+`mix-health` counters run for the whole live session. Solo recording baselines them when a take starts and quotes the difference, because a phone that was away *before* you pressed record is not damage to the recording — a 49 s take once reported a 48.7 s vocal gap alongside a single starved frame, which is what that bug looks like from the outside.
+
+`clippedSamples` counts what the summing stage had to clamp. At the default 30 dB of microphone gain the mix reaches full scale easily, and hard clipping sounds like a bad connection rather than like a level problem, so it is worth naming explicitly.
 
 ### Framed PCM
 

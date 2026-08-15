@@ -129,7 +129,8 @@ describe('AudioSession timelines', () => {
 
 describe('AudioSession alignment', () => {
   test('falls back to the network estimate until a calibration lands', () => {
-    const session = makeSession();
+    // Roomy enough that nothing here is clamped; affordability is its own test.
+    const session = makeSession({ prebufferMs: 2_000 });
     session.setAlignment({ networkCompensationMs: 80 });
     assert.equal(session.appliedMicAdvanceMs, 80);
 
@@ -140,8 +141,48 @@ describe('AudioSession alignment', () => {
     assert.equal(session.appliedMicAdvanceMs, 275);
   });
 
+  test('will not read further ahead than the prebuffer can pay for', () => {
+    const session = makeSession({ prebufferMs: 800, retentionMs: 5_000 });
+
+    session.setAlignment({ calibratedMicLagMs: 1_800 });
+    assert.equal(session.requestedMicAdvanceMs, 1_800, 'the measurement is reported as measured');
+    assert.equal(session.appliedMicAdvanceMs, 600, 'but only 800 - 200 ms of it is affordable');
+  });
+
+  test('will not read further behind than the retained history holds', () => {
+    const session = makeSession({ prebufferMs: 800, retentionMs: 1_500 });
+
+    session.setAlignment({ calibratedMicLagMs: -4_000 });
+    assert.equal(session.appliedMicAdvanceMs, -1_300);
+  });
+
+  test('leaves an affordable advance alone', () => {
+    const session = makeSession({ prebufferMs: 800, retentionMs: 1_500 });
+
+    session.setAlignment({ calibratedMicLagMs: -60 });
+    assert.equal(session.appliedMicAdvanceMs, -60, 'a negative lag is paid out of history, not prebuffer');
+  });
+
+  test('a clamped advance keeps the vocal audible rather than starving it', () => {
+    const session = makeSession({ prebufferMs: 800, retentionMs: 5_000 });
+    session.setMicExpected(true);
+    session.start(0);
+
+    session.ingestBacking(frame(0, markedAt(2_000, 100, 5_000)), RATE, 0);
+    session.ingestMic(frame(0, markedAt(2_000, 100, 5_000)), RATE, 0);
+    // Far more than the buffer affords. Obeying it would read past the end of
+    // the microphone history for every frame.
+    session.setAlignment({ calibratedMicLagMs: 10_000 });
+
+    drainAll(session, 1_000);
+    assert.equal(session.health().micStarvedFrames, 0, 'clamping is what stops the starvation');
+  });
+
   test('reads the microphone ahead so a delayed vocal lands on the beat', () => {
-    const session = makeSession();
+    // 300 ms of read-ahead has to be affordable, so the prebuffer has to cover
+    // it with the safety margin on top.
+    const prebufferMs = 600;
+    const session = makeSession({ prebufferMs });
     session.setMicExpected(true);
     session.setBackingExpected(true);
     session.start(0);
@@ -151,7 +192,7 @@ describe('AudioSession alignment', () => {
     session.ingestMic(frame(0, markedAt(1_000, 700, 12_000)), RATE, 0);
     session.setAlignment({ calibratedMicLagMs: 300 });
 
-    const mixed = drainAll(session, 700);
+    const mixed = drainAll(session, 700 + prebufferMs);
     const peak = peakSampleIndex(mixed);
     const peakMs = (peak.index / RATE) * 1000;
 
@@ -203,6 +244,29 @@ describe('AudioSession health', () => {
     assert.equal(health.micStarvedFrames, 0);
     assert.ok(health.micHeadroomMs > 1_000, `headroom ${health.micHeadroomMs} ms`);
     assert.ok(health.backingHeadroomMs > 1_000);
+  });
+});
+
+describe('AudioSession clipping', () => {
+  test('counts the samples the summing stage had to clamp', () => {
+    const session = makeSession();
+    session.setMicGainDb(30);
+    session.start(0);
+
+    // 20 dB below full scale, lifted 30 dB, is 10 dB past the rail.
+    session.ingestMic(frame(0, pcmOf(new Array(RATE).fill(3_200))), RATE, 0);
+
+    drainAll(session, 200);
+    assert.ok(session.health().clippedSamples > 0, 'a hot microphone must be reported, not just clamped');
+  });
+
+  test('reports nothing when the mix fits', () => {
+    const session = makeSession();
+    session.start(0);
+    session.ingestMic(frame(0, pcmOf(new Array(RATE).fill(3_200))), RATE, 0);
+
+    drainAll(session, 200);
+    assert.equal(session.health().clippedSamples, 0);
   });
 });
 

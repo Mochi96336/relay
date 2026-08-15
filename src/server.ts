@@ -30,12 +30,15 @@ const TEST_BPM = 120;
 const TEST_PREBUFFER_MS = 800;
 // Both timelines are placed by absolute sample index, so transport delay decides
 // when audio lands, not where. What the prebuffer has to cover is the read-ahead
-// alone: `margin = prebuffer - appliedMicAdvanceMs`. With the advance capped at
-// 2 s, 2.5 s of prebuffer left only 500 ms for jitter.
+// alone: `margin = prebuffer - appliedMicAdvanceMs`.
 //
-// This is a pure output delay: the monitor hears everything this many
-// milliseconds late. Lower it for singing along, raise it for a flaky link.
-const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 4_000);
+// It is also a pure output delay - the monitor hears everything this many
+// milliseconds late - which at the old 4 s made singing along impossible. The
+// session clamps the advance to what this affords rather than starving, so
+// lowering it costs correction range, not reliability. Measured lags have run
+// negative (the desktop player sits behind the phone), and those are paid for
+// out of retained history instead.
+const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 400);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
 const TIMING_CALIBRATION_MS = 6_000;
@@ -199,6 +202,9 @@ function sourceStatusPayload() {
     calibrationStale: calibrationIsStale(),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
+    // Differs from the applied value only when the measurement asked for more
+    // than the buffers can absorb, which is the signal to raise the prebuffer.
+    requestedMicAdvanceMs: session.requestedMicAdvanceMs,
   };
 }
 
@@ -227,6 +233,7 @@ function timingCalibrationStatusPayload() {
     fallbackNetworkMs: alignment.networkCompensationMs,
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
+    requestedMicAdvanceMs: session.requestedMicAdvanceMs,
   };
 }
 

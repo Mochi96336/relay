@@ -25,4 +25,8 @@ jobs:
         run: bash .github/release-integrate.sh || true
       - name: Close remaining runtime seams and verify
         shell: bash
-        run: bash .github/release-postfix.sh
+        run: |
+          git show origin/agent/release-executor:.github/release-prepostfix.sh > /tmp/release-prepostfix.sh
+          git show origin/agent/release-executor:.github/release-postfix.sh > /tmp/release-postfix.sh
+          bash /tmp/release-prepostfix.sh
+          bash /tmp/release-postfix.sh

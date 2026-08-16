@@ -27,6 +27,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name 'relay-runtime-integration[bot]'
+          git config user.email 'relay-runtime-integration[bot]@users.noreply.github.com'
           git fetch origin agent/robot-runtime-hardening agent/live-ui-shell
 
           # Record the Robot-hardening line as an explicit parent, while keeping
@@ -118,7 +120,5 @@ jobs:
           bash -n scripts/*.sh
           npm test
 
-          git config user.name 'relay-runtime-integration[bot]'
-          git config user.email 'relay-runtime-integration[bot]@users.noreply.github.com'
           git commit -m 'feat: unify Robot readiness with product status'
           git push origin HEAD:agent/runtime-product-status

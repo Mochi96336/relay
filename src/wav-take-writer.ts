@@ -67,6 +67,7 @@ export class WavTakeWriter {
   private readonly partPath: string;
   private readonly stream: WriteStream;
   private readonly maxPendingBytes: number;
+  private readonly maxDataBytes: number;
   private dataBytes = 0;
   private closed = false;
   private failure: Error | null = null;
@@ -76,6 +77,7 @@ export class WavTakeWriter {
     takeId: string;
     sampleRate: number;
     maxPendingBytes?: number;
+    maxDataBytes?: number;
     onError?: (error: Error) => void;
   }) {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(options.takeId)) throw new Error('Invalid Take ID.');
@@ -86,10 +88,18 @@ export class WavTakeWriter {
       throw new Error('Invalid Take WAV pending-byte limit.');
     }
 
+    const requestedMaxDataBytes = options.maxDataBytes ?? MAX_WAV_DATA_BYTES;
+    if (!Number.isFinite(requestedMaxDataBytes) || requestedMaxDataBytes <= 0) {
+      throw new Error('Invalid Take WAV data-byte limit.');
+    }
+    const maxDataBytes = Math.floor(Math.min(requestedMaxDataBytes, MAX_WAV_DATA_BYTES) / 2) * 2;
+    if (maxDataBytes <= 0) throw new Error('Invalid Take WAV data-byte limit.');
+
     mkdirSync(options.directory, { recursive: true });
     this.takeId = options.takeId;
     this.sampleRate = options.sampleRate;
     this.maxPendingBytes = maxPendingBytes;
+    this.maxDataBytes = maxDataBytes;
     this.fileName = `${options.takeId}.wav`;
     this.filePath = path.join(options.directory, this.fileName);
     this.partPath = `${this.filePath}.part`;
@@ -110,8 +120,8 @@ export class WavTakeWriter {
     if (this.closed) throw new Error('Take WAV writer is closed.');
     if (this.failure) throw this.failure;
     if (frame.byteLength % 2 !== 0) throw new Error('Take PCM frame is not 16-bit aligned.');
-    if (this.dataBytes + frame.byteLength > MAX_WAV_DATA_BYTES) {
-      throw new Error('Take exceeded the WAV RIFF size limit.');
+    if (this.dataBytes + frame.byteLength > this.maxDataBytes) {
+      throw new Error('Take exceeded the available WAV storage budget.');
     }
     if (this.stream.writableLength + frame.byteLength > this.maxPendingBytes) {
       throw new Error('Take WAV writer could not keep up with the authoritative mix.');
@@ -150,17 +160,22 @@ export class WavTakeWriter {
     }
 
     await rename(this.partPath, this.filePath);
-    const info = await stat(this.filePath);
-    return {
-      fileName: this.fileName,
-      filePath: this.filePath,
-      sizeBytes: info.size,
-      sampleRate: this.sampleRate,
-      channels: 1,
-      bitsPerSample: 16,
-      sampleCount: this.sampleCount,
-      durationMs: (this.sampleCount / this.sampleRate) * 1000,
-    };
+    try {
+      const info = await stat(this.filePath);
+      return {
+        fileName: this.fileName,
+        filePath: this.filePath,
+        sizeBytes: info.size,
+        sampleRate: this.sampleRate,
+        channels: 1,
+        bitsPerSample: 16,
+        sampleCount: this.sampleCount,
+        durationMs: (this.sampleCount / this.sampleRate) * 1000,
+      };
+    } catch (error) {
+      await rm(this.filePath, { force: true }).catch(() => {});
+      throw error;
+    }
   }
 
   async abort() {
@@ -168,6 +183,11 @@ export class WavTakeWriter {
       this.closed = true;
       this.stream.destroy();
     }
+    await rm(this.partPath, { force: true }).catch(() => {});
+  }
+
+  async discardFinalized() {
+    await rm(this.filePath, { force: true }).catch(() => {});
     await rm(this.partPath, { force: true }).catch(() => {});
   }
 }

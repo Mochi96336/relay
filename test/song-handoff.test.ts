@@ -22,6 +22,52 @@ function telemetry(currentTime: number, overrides: Record<string, unknown> = {})
 }
 
 describe('prepared song handoff', () => {
+  test('a handoff whose target vanishes does not hold the room song for ever', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10), A, null, 0);
+    assert.ok(songs.beginHandoff(B, B.participantId, 100));
+
+    // While the handoff stands, the old leader may only repeat itself and
+    // nobody else may touch the clock at all. That is the whole reason a
+    // handoff must not be able to outlive the tab it is waiting for.
+    assert.equal(songs.update(telemetry(60), A, B.participantId, 200).accepted, false);
+    assert.equal(songs.update(telemetry(60), B_OTHER, B.participantId, 200).reason, 'handoff-not-target');
+
+    assert.equal(songs.sweepHandoff(true, 200), false, 'a present target is still waited for');
+    assert.equal(songs.sweepHandoff(false, 200), true, 'a departed target ends the handoff');
+    assert.equal(songs.statusPayload(200).handoffState, 'idle');
+
+    // And the room is usable again.
+    assert.equal(songs.update(telemetry(60), A, null, 300).accepted, true);
+  });
+
+  test('a target that never answers the plan cannot hold the room past the deadline', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10), A, null, 0);
+    assert.ok(songs.beginHandoff(B, B.participantId, 100));
+
+    assert.equal(songs.sweepHandoff(true, 100 + 19_000), false, 'still inside the preparation deadline');
+    assert.equal(songs.sweepHandoff(true, 100 + 21_000), true, 'an unanswered plan expires');
+    assert.equal(songs.statusPayload(0).handoffState, 'idle');
+  });
+
+  test('a target that answered may take as long as a blocked autoplay needs', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10), A, null, 0);
+    const plan = songs.beginHandoff(B, B.participantId, 100);
+    assert.ok(plan);
+    assert.ok(songs.markHandoffReady(B, plan.handoffId, B.participantId, 150));
+    // The commit failed; the page is waiting for a real user gesture.
+    assert.equal(songs.deferHandoff(B, plan.handoffId), true);
+
+    assert.equal(
+      songs.sweepHandoff(true, 100 + 600_000),
+      false,
+      'a target that has acknowledged the plan is trusted to wait for its gesture',
+    );
+    assert.equal(songs.sweepHandoff(false, 100 + 600_000), true, 'but not once it is gone');
+  });
+
   test('does not create a handoff merely because another playback transport exists', () => {
     const songs = new SongSession();
 

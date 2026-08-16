@@ -126,7 +126,7 @@ test('only the server-selected anonymous publisher keeps legacy command authorit
       from,
       (message) => message.type === 'command-rejected' && message.command === 'set-mix',
     );
-    assert.equal(rejected.reason, 'mic-free');
+    assert.equal(rejected.reason, 'no-identity');
 
     from = observer.messages.length;
     publisher.send({ type: 'set-mix', micGainDb: 12, songLevel: 33 });
@@ -146,7 +146,7 @@ test('only the server-selected anonymous publisher keeps legacy command authorit
       from,
       (message) => message.type === 'command-rejected' && message.command === 'set-mix',
     );
-    assert.equal(robotRejected.reason, 'mic-free');
+    assert.equal(robotRejected.reason, 'no-identity');
 
     publisher.close();
     observer.close();
@@ -180,9 +180,11 @@ test('another participant cannot stop the Mic owner sync test', async () => {
     );
     assert.equal(rejected.reason, 'not-mic-owner');
 
+    // The status burst that follows registration arrives after `registered`,
+    // so this has to wait for it rather than read whatever has landed so far.
     const lateObserver = await participant(server, 'participant-third', 'Third', 'monitor');
-    const current = lateObserver.latest('test-status');
-    assert.equal(current?.active, true, 'rejected stop must leave the sync test running');
+    const current = await lateObserver.waitForType('test-status');
+    assert.equal(current.active, true, 'rejected stop must leave the sync test running');
 
     from = other.messages.length;
     ownerControl.send({ type: 'stop-sync-test' });
@@ -197,6 +199,56 @@ test('another participant cannot stop the Mic owner sync test', async () => {
     ownerControl.close();
     other.close();
     lateObserver.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('the Mic owner may start the sync test from a transport that is not the publisher', async () => {
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  try {
+    const ownerPublisher = await participant(server, 'participant-owner', 'Owner', 'publisher');
+    const ownerControl = await participant(server, 'participant-owner', 'Owner', 'monitor');
+
+    // Starting and stopping answer to one boundary now. Requiring the physical
+    // publisher socket to start, while any owner transport could stop, let the
+    // owner's second tab stop a test it was not allowed to start.
+    let from = ownerControl.messages.length;
+    ownerControl.send({ type: 'start-sync-test' });
+    await waitForNewMessage(
+      ownerControl,
+      from,
+      (message) => message.type === 'test-status' && message.active === true,
+    );
+
+    from = ownerControl.messages.length;
+    ownerControl.send({ type: 'stop-sync-test' });
+    await waitForNewMessage(
+      ownerControl,
+      from,
+      (message) => message.type === 'test-status' && message.active === false,
+    );
+
+    ownerPublisher.close();
+    ownerControl.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('an identified participant may adjust the mix while nobody holds the mic', async () => {
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  try {
+    const listener = await participant(server, 'participant-listener', 'Listener', 'monitor');
+
+    const from = listener.messages.length;
+    listener.send({ type: 'set-mix', micGainDb: 9, songLevel: 41 });
+    const settings = await waitForNewMessage(
+      listener,
+      from,
+      (message) => message.type === 'mix-settings' && message.songLevel === 41,
+    );
+    assert.equal(settings.micGainDb, 9);
   } finally {
     await server.stop();
   }

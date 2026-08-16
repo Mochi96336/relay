@@ -33,12 +33,14 @@ function unheaderedFrame(value = 1_000): PcmFrame {
   return { generation: null, firstSampleIndex: null, pcm: pcm(value) };
 }
 
-function drainOne(session: AudioSession, nowMs: number) {
-  let evidence: MixFrameEvidence | null = null;
+function drainOne(session: AudioSession, nowMs: number): MixFrameEvidence {
+  const captured: MixFrameEvidence[] = [];
   const emitted = session.drain(() => {
-    evidence = session.health().lastMixedFrame;
+    const evidence = session.health().lastMixedFrame;
+    if (evidence) captured.push(evidence);
   }, nowMs, 1);
   assert.equal(emitted, 1);
+  const evidence = captured[0];
   assert.ok(evidence, 'mixed output must expose exact frame evidence before its callback returns');
   return evidence;
 }

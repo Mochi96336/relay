@@ -49,6 +49,15 @@ export class TakeController {
     onStorageError?: (error: unknown) => void;
   }) {
     this.storagePolicy = options.storagePolicy ?? takeStoragePolicyFromEnv();
+    try {
+      prepareTakeStorage(this.options.directory, this.storagePolicy);
+      this.storagePrepared = true;
+    } catch (error) {
+      // Keep the server alive so diagnostics and existing non-Take features
+      // still work; Start will retry the storage preparation and reject clearly
+      // if the directory or free-space reserve is still unavailable.
+      this.reportStorageError(error);
+    }
   }
 
   get lifecycle() {
@@ -64,6 +73,10 @@ export class TakeController {
   }
 
   start(actorParticipantId: string, song: TakeSongSnapshot, nowMs = Date.now()): StartTakeResult {
+    if (this.session.lifecycle === 'recording' || this.session.lifecycle === 'finalizing') {
+      return { ok: false, reason: 'take-active' };
+    }
+
     let maxTakeDataBytes: number;
     try {
       if (!this.storagePrepared) {

@@ -91,6 +91,11 @@ function feedBacking(backing: RelayClient, frames = 30, value = 10_000) {
   for (let i = 0; i < frames; i += 1) backing.sendPcm(frame);
 }
 
+function feedMic(mic: RelayClient, frames = 30, value = 4_000) {
+  const frame = pcmFrame(value);
+  for (let i = 0; i < frames; i += 1) mic.sendPcm(frame);
+}
+
 async function waitReady(client: RelayClient, takeId: string) {
   return client.waitFor((message) => (
     message.type === 'take-status'
@@ -138,6 +143,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     ));
     assert.equal(recording.take.startedByParticipantId, 'participant-a');
     assert.equal(recording.take.song.videoId, VIDEO);
+    assert.equal(recording.take.quality, null, 'quality is sealed when the recording stops');
 
     feedBacking(backing, 40);
     await sleep(260);
@@ -157,6 +163,20 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     assert.equal(ready.take.artifact.channels, 1);
     assert.equal(ready.take.artifact.bitsPerSample, 16);
     assert.ok(ready.take.artifact.durationMs > 0);
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v1');
+    assert.equal(
+      ready.take.quality.evidence.recordedSamples,
+      ready.take.artifact.sampleCount,
+      'quality must describe exactly the samples published in this WAV',
+    );
+    assert.equal(
+      ready.take.quality.evidence.recordedDurationMs,
+      ready.take.artifact.durationMs,
+    );
+    assert.ok(
+      ['review', 'degraded'].includes(ready.take.quality.verdict),
+      'this synthetic backing-only Take should expose missing-mic/timing evidence',
+    );
 
     const unauthorized = await fetch(server.httpUrl(ready.take.artifact.url));
     assert.equal(unauthorized.status, 401, 'RELAY_KEY must also protect Take artifacts');
@@ -230,6 +250,7 @@ test('a Take survives Mic takeover and can be stopped by the new participant wit
     assert.equal(ready.take.startedByParticipantId, 'participant-a');
     assert.equal(ready.take.stoppedByParticipantId, 'participant-b');
     assert.equal(ready.take.takeId, takeId);
+    assert.equal(ready.take.quality.evidence.events['mic-owner-changed'], 1);
 
     b.close();
     backing.close();
@@ -271,6 +292,74 @@ test('Take keeps recording after the controller socket disconnects and another p
   }
 });
 
+test('a sustained backing outage is attached to the Take and degrades the final quality verdict', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-quality-outage-'));
+  const server = await startRelay({
+    ...FAST,
+    RELAY_TAKE_DIR: directory,
+    RELAY_BACKING_GRACE_MS: '1200',
+  });
+  try {
+    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    await playback(control, 'quality-playback-a');
+    control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+
+    control.send({
+      type: 'room-song-command',
+      commandId: 'quality-load',
+      expectedRevision: 0,
+      action: 'load',
+      videoId: VIDEO,
+      positionSeconds: 0,
+    });
+    await control.waitFor((message) => message.type === 'room-song-command-accepted' && message.commandId === 'quality-load');
+    await control.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === 'quality-load');
+    control.send(telemetry(0));
+    await control.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === 'quality-load');
+
+    let backing = await startBacking(server);
+    feedMic(control, 60);
+    feedBacking(backing, 60);
+    await sleep(80);
+
+    control.send({ type: 'start-take' });
+    const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
+    const takeId = String(start.takeId);
+    await control.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
+
+    feedMic(control, 80);
+    feedBacking(backing, 40);
+    await sleep(100);
+    backing.close();
+    await sleep(340);
+
+    backing = await startBacking(server);
+    feedBacking(backing, 40, 12_000);
+    feedMic(control, 40, 5_000);
+    await sleep(100);
+
+    control.send({ type: 'stop-take', takeId });
+    const ready = await waitReady(control, takeId);
+    assert.equal(ready.take.quality.verdict, 'degraded');
+    assert.ok(ready.take.quality.evidence.backingUnavailableMs >= 250);
+    assert.equal(ready.take.quality.evidence.events['backing-transport-disconnected'], 1);
+    assert.equal(ready.take.quality.evidence.events['backing-transport-connected'], 1);
+    assert.equal(
+      ready.take.quality.issues.some((issue: { code: string; severity: string }) => (
+        issue.code === 'backing-unavailable' && issue.severity === 'critical'
+      )),
+      true,
+    );
+
+    backing.close();
+    control.close();
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('ending the authoritative live mix auto-finalizes the active Take instead of leaving fake recording state', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-mix-end-'));
   const server = await startRelay({
@@ -294,6 +383,7 @@ test('ending the authoritative live mix auto-finalizes the active Take instead o
     assert.equal(ready.take.stopReason, 'mix-ended');
     assert.equal(ready.take.stoppedByParticipantId, null);
     assert.ok(ready.take.artifact.durationMs > 0);
+    assert.ok(ready.take.quality, 'auto-finalized Takes keep their quality evidence');
 
     control.close();
   } finally {

@@ -7,7 +7,7 @@
     <title>Relay</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
-  <body>
+  <body data-lifecycle="idle" data-health="healthy" data-timing="idle" data-self-mic="off">
     <main class="live-shell">
       <header class="room-header">
         <div class="room-mark" aria-label="Relay">Relay</div>
@@ -48,8 +48,8 @@
           <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
         </div>
         <div class="voice-copy">
-          <strong id="status">Idle</strong>
-          <span id="details"></span>
+          <strong id="live-state-title">Connecting…</strong>
+          <span id="live-state-detail"></span>
         </div>
 
         <div class="mic-actions">
@@ -71,9 +71,9 @@
           <button id="start-recording" class="record-action" type="button">Record take</button>
           <button id="stop-recording" class="record-action recording" type="button" disabled>Stop</button>
         </div>
-        <p id="recording-status" class="microcopy">Relay TakeSession connecting…</p>
+        <p id="recording-status" class="microcopy"></p>
         <audio id="recording-player" controls hidden></audio>
-        <a id="download-recording" class="take-link" hidden>Open last take</a>
+        <a id="download-recording" class="take-link" hidden>Last take</a>
       </section>
 
       <footer class="live-actions">
@@ -120,19 +120,21 @@
         </details>
       </footer>
 
-      <section class="attention-region" aria-live="polite" hidden>
-        <button type="button" class="attention-link">System needs attention <span>›</span></button>
+      <section id="system-attention" class="attention-region" aria-live="polite" hidden>
+        <button id="attention-link" type="button" class="attention-link">
+          <span id="attention-copy">System needs attention</span><span>›</span>
+        </button>
       </section>
 
-      <details class="system-panel">
+      <details id="system-panel" class="system-panel">
         <summary>System</summary>
         <div class="system-sheet">
-          <div class="system-line"><span>Relay</span><strong>Connected</strong></div>
-          <div class="system-line"><span>Phones</span><strong>Session</strong></div>
-          <div class="system-line"><span>Robot</span><strong>See diagnostics</strong></div>
-          <div class="system-line"><span>Audio</span><strong>Live route</strong></div>
-          <div class="system-line"><span>Timing</span><strong>Automatic</strong></div>
-          <div class="system-line"><span>Recording</span><strong>Relay Take</strong></div>
+          <div class="system-line"><span>Relay</span><strong id="system-relay">Connecting</strong></div>
+          <div class="system-line"><span>Phones</span><strong id="system-phones">—</strong></div>
+          <div class="system-line"><span>Robot</span><strong id="system-robot">—</strong></div>
+          <div class="system-line"><span>Audio</span><strong id="system-audio">—</strong></div>
+          <div class="system-line"><span>Timing</span><strong id="system-timing">—</strong></div>
+          <div class="system-line"><span>Recording</span><strong id="system-recording">—</strong></div>
 
           <details class="diagnostics-panel">
             <summary>Technical details</summary>
@@ -159,6 +161,11 @@
                 <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
               </label>
 
+              <div class="legacy-status-readout" hidden aria-hidden="true">
+                <strong id="status">Idle</strong>
+                <span id="details"></span>
+              </div>
+
               <div class="legacy-transport-controls" aria-hidden="true">
                 <button id="start-monitor" type="button" tabindex="-1">Legacy monitor</button>
                 <button id="stop" type="button" tabindex="-1" disabled>Stop legacy transport</button>
@@ -170,6 +177,7 @@
     </main>
 
     <script src="/presence.js"></script>
+    <script type="module" src="/live-status.js"></script>
     <script type="module" src="/app.js"></script>
     <script type="module" src="/listen.js"></script>
     <script type="module" src="/recorder.js"></script>

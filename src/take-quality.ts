@@ -28,25 +28,42 @@ export type TakeQualityFrameState = {
   robotDeltaFresh: boolean;
 };
 
+/**
+ * Take-level evidence keeps exact sample counts as the source of truth and ms
+ * values as a derived convenience for diagnostics/UI. Nothing sub-millisecond
+ * is rounded away before the versioned policy sees it.
+ */
 export type TakeQualityEvidence = {
+  sampleRate: number;
   recordedSamples: number;
   recordedDurationMs: number;
+  micGapSamples: number;
   micGapMs: number;
+  backingGapSamples: number;
   backingGapMs: number;
   micStarvedFrames: number;
   backingStarvedFrames: number;
+  micStarvedSamples: number;
+  backingStarvedSamples: number;
   micStarvedMs: number;
   backingStarvedMs: number;
   clippedSamples: number;
   clippedMs: number;
   limitedSamples: number;
   limitedMs: number;
+  unheaderedSamples: number;
   unheadered: boolean;
+  micUnavailableSamples: number;
   micUnavailableMs: number;
+  backingUnavailableSamples: number;
   backingUnavailableMs: number;
+  networkEstimateSamples: number;
   networkEstimateMs: number;
+  calibrationStaleSamples: number;
   calibrationStaleMs: number;
+  alignmentClampedSamples: number;
   alignmentClampedMs: number;
+  robotDeltaMissingSamples: number;
   robotDeltaMissingMs: number;
   events: TakeQualityEventCounts;
 };
@@ -171,12 +188,12 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     });
   }
 
-  if (evidence.unheadered) {
+  if (evidence.unheaderedSamples > 0) {
     issues.push({
       code: 'unheadered-pcm',
       severity: 'warning',
-      value: true,
-      unit: 'boolean',
+      value: evidence.unheaderedSamples,
+      unit: 'samples',
       message: 'Recorded source samples came from legacy PCM without timeline positioning metadata.',
     });
   }
@@ -304,27 +321,40 @@ export class TakeQualityTracker {
   }
 
   assessment() {
-    const toMs = (samples: number) => Math.round((samples / this.options.sampleRate) * 1000);
+    const sampleRate = this.options.sampleRate;
+    const toMs = (samples: number) => (samples / sampleRate) * 1000;
 
     return assessTakeQuality({
+      sampleRate,
       recordedSamples: this.recordedSamples,
       recordedDurationMs: toMs(this.recordedSamples),
+      micGapSamples: this.micGapSamples,
       micGapMs: toMs(this.micGapSamples),
+      backingGapSamples: this.backingGapSamples,
       backingGapMs: toMs(this.backingGapSamples),
       micStarvedFrames: this.micStarvedFrames,
       backingStarvedFrames: this.backingStarvedFrames,
+      micStarvedSamples: this.micStarvedSamples,
+      backingStarvedSamples: this.backingStarvedSamples,
       micStarvedMs: toMs(this.micStarvedSamples),
       backingStarvedMs: toMs(this.backingStarvedSamples),
       clippedSamples: this.clippedSamples,
       clippedMs: toMs(this.clippedSamples),
       limitedSamples: this.limitedSamples,
       limitedMs: toMs(this.limitedSamples),
+      unheaderedSamples: this.unheaderedSamples,
       unheadered: this.unheaderedSamples > 0,
+      micUnavailableSamples: this.micUnavailableSamples,
       micUnavailableMs: toMs(this.micUnavailableSamples),
+      backingUnavailableSamples: this.backingUnavailableSamples,
       backingUnavailableMs: toMs(this.backingUnavailableSamples),
+      networkEstimateSamples: this.networkEstimateSamples,
       networkEstimateMs: toMs(this.networkEstimateSamples),
+      calibrationStaleSamples: this.calibrationStaleSamples,
       calibrationStaleMs: toMs(this.calibrationStaleSamples),
+      alignmentClampedSamples: this.alignmentClampedSamples,
       alignmentClampedMs: toMs(this.alignmentClampedSamples),
+      robotDeltaMissingSamples: this.robotDeltaMissingSamples,
       robotDeltaMissingMs: toMs(this.robotDeltaMissingSamples),
       events: { ...this.events },
     });

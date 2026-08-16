@@ -8,11 +8,12 @@ MAIN_SHA="$(git rev-parse origin/main)"
 echo '=== merge current main into verified integration tree ==='
 if ! git merge --no-ff --no-commit origin/main; then
   conflicts="$(git diff --name-only --diff-filter=U)"
-  expected=$'deploy/relay-server.service\nsrc/server.ts\ntest/robot-scripts.test.ts'
   printf 'final main conflicts:\n%s\n' "$conflicts"
-  test "$conflicts" = "$expected"
+  test "$conflicts" = 'src/server.ts'
 
   # #25/current main owns the deployment executable and host-aware verifier.
+  # These already merge cleanly, but restore them explicitly so the flattened
+  # release tree cannot accidentally regress the current-main deployment decision.
   git checkout origin/main -- deploy/relay-server.service test/robot-scripts.test.ts
 
   # Keep the fully integrated runtime and port only #23's stable observation API.

@@ -40,14 +40,50 @@ test('context and mode actions stay typographic instead of gaining hover capsule
   assert.equal(textRules.includes('background: rgba('), false);
 });
 
+test('typographic actions enlarge touch affordance without enlarging their visible shape', () => {
+  const haloStart = actionCss.indexOf('#change-youtube::before,');
+  const horizonStart = actionCss.indexOf('/* Listen and Adjust are the persistent thumb horizon');
+  assert.ok(haloStart >= 0 && horizonStart > haloStart);
+  const haloRules = actionCss.slice(haloStart, horizonStart);
+  assert.equal(haloRules.includes('position: absolute;'), true);
+  assert.equal(haloRules.includes('inset: -10px -4px;'), true);
+  assert.equal(haloRules.includes('background:'), false,
+    'transparent hit halos must never become visible button surfaces');
+});
+
+test('persistent thumb-horizon and primary commit actions carry real 44px touch rows', () => {
+  assert.equal(actionCss.includes('#listen-toggle,\n.adjust-panel > summary {\n  min-height: 44px;'), true);
+  assert.equal(actionCss.includes('#start-publisher,\n#confirm-takeover {\n  min-height: 44px;'), true);
+  assert.equal(actionCss.includes('#load-youtube {\n  min-height: 44px;'), true);
+});
+
+test('Record stays visually quieter while its transparent halo reaches the touch target', () => {
+  const recordStart = actionCss.indexOf('#start-recording {');
+  const stopComment = actionCss.indexOf('/* Once recording is underway');
+  assert.ok(recordStart >= 0 && stopComment > recordStart);
+  const recordRules = actionCss.slice(recordStart, stopComment);
+  assert.equal(recordRules.includes('min-height: 38px;'), true);
+  assert.equal(recordRules.includes('#start-recording::after'), true);
+  assert.equal(recordRules.includes('inset: -3px -6px;'), true);
+});
+
 test('recording Stop becomes a text action once elapsed-time state exists', () => {
   const stopStart = actionCss.indexOf('#stop-recording:not(:disabled) {');
   const loadStart = actionCss.indexOf('#load-youtube {');
   assert.ok(stopStart >= 0 && loadStart > stopStart);
   const stopRules = actionCss.slice(stopStart, loadStart);
+  assert.equal(stopRules.includes('min-height: 44px;'), true);
   assert.equal(stopRules.includes('border-radius: 0;'), true);
   assert.equal(stopRules.includes('background: transparent;'), true);
   assert.equal(html.includes('id="stop-recording"'), true);
+});
+
+test('narrow phones compress width, not action semantics', () => {
+  const narrowStart = actionCss.indexOf('@media (max-width: 360px)');
+  assert.ok(narrowStart >= 0);
+  const narrowRules = actionCss.slice(narrowStart);
+  assert.equal(narrowRules.includes('#start-publisher { min-width: 116px; }'), true);
+  assert.equal(narrowRules.includes('border-radius: 999px'), false);
 });
 
 test('participant presence chips are not reclassified as actions', () => {

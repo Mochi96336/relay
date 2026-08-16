@@ -180,7 +180,7 @@ Calibration runs unattended, but the singer is the one who can hear that it land
 
 ### Calibration runs itself
 
-The desktop is meant to run unattended, so the measurement does not wait for anyone to press the button. Once a session is live with both sides connected and the phone playing, the server takes one on its own, and retries every `RELAY_AUTO_CALIBRATE_MS` (15 s) until one lands. Failing is usually the singer being mid-phrase, which stops being true a few seconds later, so `source.html` shows an unattended failure as a wait rather than an error. Set `RELAY_AUTO_CALIBRATE=0` to go back to pressing the button.
+The desktop is meant to run unattended, so the measurement does not wait for anyone to press the button. Once a session is live with both sides connected and the phone playing, the server takes one on its own, and retries every `RELAY_AUTO_CALIBRATION_RETRY_MS` (15 s) until one lands. Failing is usually the singer being mid-phrase, which stops being true a few seconds later, so `source.html` shows an unattended failure as a wait rather than an error. Set `RELAY_AUTO_CALIBRATE=0` to go back to pressing the button.
 
 It only fires when there is nothing usable to fall back on — no measurement, or one that no longer describes this setup. That keeps it away from unnecessary recalibration; applying a fresh alignment mid-song shifts the vocal audibly, and every event that invalidates a measurement has already disturbed the take anyway.
 
@@ -200,7 +200,7 @@ Measured over consecutive windows of unrelated audio, the analyser accepts most 
 
 The cost is time, not CPU — one analysis is about 4 ms against a 20 ms frame budget, so the limit is the 6 s each window takes to collect. Set `RELAY_CALIBRATION_AGREEMENT=1` for the old single-shot behaviour.
 
-`RELAY_CALIBRATION_MAX_LAG_MS` (700) bounds how far the analyser looks. This is **not** what rejects false positives — narrowing the search from ±2 s changed where they land but not how often they are accepted. It is about applicability: the mixer clamps the advance to what its buffers afford, so a measurement of −1975 ms would be applied as −1300 ms and still report success. The bound is physical — the desktop player is only corrected past 450 ms of error, transport adds a fraction of that locally, and the acoustic path is a few milliseconds — so nothing real lives outside it, while beat multiples do.
+`RELAY_CALIBRATION_MAX_LAG_MS` defaults to 2500 ms and bounds how far the analyser looks. This is **not** what rejects false positives; it limits the search domain, while repeatability across independent windows is what keeps unstable false matches from reaching the live alignment.
 
 ### Test mode is only the test
 

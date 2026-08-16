@@ -313,6 +313,13 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     reconcile(copy);
   }
 
+  function restoreAfterMicBoundary(copy = t('listen.resumed')) {
+    // Legacy terminal notifications can be dispatched immediately before
+    // app.js enters stop(). Defer one task so stop() has synchronously stopped
+    // MediaStream tracks before room audio can become audible again.
+    setTimeout(() => restoreAfterMic(copy), 0);
+  }
+
   function setPlaybackForcedMute(forced) {
     if (playbackForcedMuted === forced) return;
     playbackForcedMuted = forced;
@@ -374,10 +381,8 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   takeoverButton.addEventListener('click', () => forceMicMute(t('listen.handoffStarting')), { capture: true });
   window.addEventListener('relay-request-microphone', () => forceMicMute(t('listen.handoffStarting')));
   window.addEventListener('relay-microphone-started', () => forceMicMute(t('listen.micOwned')));
-  // This terminal event is emitted by app.js only after the local Mic capture
-  // has been torn down. Listen must not reopen while raw capture is still live.
-  window.addEventListener('relay-microphone-ended', () => restoreAfterMic());
-  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic(t('listen.micFailedResume')));
+  window.addEventListener('relay-microphone-ended', () => restoreAfterMicBoundary());
+  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMicBoundary(t('listen.micFailedResume')));
   window.addEventListener('relay:playback-view', (event) => {
     setPlaybackForcedMute(shouldForceMuteListen({
       role: event.detail?.role,

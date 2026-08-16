@@ -38,7 +38,9 @@ test('Release tears down local capture even if the Presence websocket cannot sen
 });
 
 test('failed Mic ownership attempts clean up before Listen is allowed to recover', () => {
-  assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMic/);
+  assert.match(listen, /function restoreAfterMicBoundary\(copy[\s\S]*setTimeout\(\(\) => restoreAfterMic\(copy\), 0\)/);
+  assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMicBoundary/);
+  assert.match(listen, /window\.addEventListener\('relay-microphone-start-failed',[\s\S]*restoreAfterMicBoundary/);
   assert.doesNotMatch(listen, /window\.addEventListener\('relay-mic-busy'/);
   assert.doesNotMatch(listen, /window\.addEventListener\('relay-mic-takeover-rejected'/);
 

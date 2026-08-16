@@ -335,6 +335,13 @@ export class RoomSongCommandSession {
     return true;
   }
 
+  cancelPending() {
+    if (!this.pending) return null;
+    const cancelled = this.publicCommand(this.pending);
+    this.pending = null;
+    return cancelled;
+  }
+
   pendingForTarget(identity: PlaybackIdentity, nowMs: number) {
     this.expire(nowMs);
     if (!this.pending || !sameIdentity(this.pending.target, identity)) return null;

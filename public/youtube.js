@@ -172,7 +172,10 @@ function activeServerMutation() {
 }
 
 function requestRoomSongCommand(detail) {
-  if (localCommandPending) return false;
+  // Phase 1B deliberately replaces the page's previous local intent. The sync
+  // transport attaches the predecessor command id synchronously, so another
+  // gesture can causally supersede this one before either server round trip
+  // finishes.
   localCommandPending = {
     action: detail.action,
     commandId: null,
@@ -183,9 +186,62 @@ function requestRoomSongCommand(detail) {
   return true;
 }
 
+function normalizedDesiredState(value) {
+  const desired = value && typeof value === 'object' ? value : null;
+  if (!desired) return null;
+  const videoId = typeof desired.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(desired.videoId)
+    ? desired.videoId
+    : null;
+  const positionSeconds = Number(desired.positionSeconds);
+  const state = Number(desired.state);
+  const playbackRate = Number(desired.playbackRate);
+  if (
+    !videoId
+    || !Number.isFinite(positionSeconds)
+    || positionSeconds < 0
+    || ![1, 2, 5].includes(state)
+    || !Number.isFinite(playbackRate)
+    || playbackRate <= 0
+  ) return null;
+  return { videoId, positionSeconds, state, playbackRate };
+}
+
+function projectedDesiredPosition(mutation, now = performance.now()) {
+  if (!mutation?.desired) return null;
+  const elapsedSeconds = mutation.desired.state === 1
+    ? Math.max(0, now - mutation.appliedAtPerformanceMs) / 1000
+    : 0;
+  return mutation.desired.positionSeconds + elapsedSeconds * mutation.desired.playbackRate;
+}
+
+function snapshotMatchesDesired(snapshot, mutation) {
+  if (!snapshot || !mutation?.desired) return false;
+  const desired = mutation.desired;
+  if (snapshot.videoId !== desired.videoId) return false;
+  if (Math.abs(snapshot.playbackRate - desired.playbackRate) > 0.0001) return false;
+
+  const desiredPosition = projectedDesiredPosition(mutation, snapshot.sampledAtPerformanceMs);
+  if (!Number.isFinite(desiredPosition) || Math.abs(snapshot.currentTime - desiredPosition) > 1.5) return false;
+
+  if (desired.state === 1) return snapshot.state === 1 || snapshot.state === 3;
+  if (desired.state === 2) return snapshot.state === 2;
+  return snapshot.state === 5 || snapshot.state === 2 || snapshot.state === -1;
+}
+
 function localMutationForSnapshot(snapshot) {
   if (!snapshot || !snapshot.previousVideoId) return null;
-  if (activeServerMutation() || pendingHandoff) return null;
+  if (pendingHandoff) return null;
+
+  const mutationContext = activeServerMutation();
+  if (mutationContext && mutationContext.source !== 'room-command') return null;
+
+  // Server apply itself is not a new product intent. If the player has reached
+  // the latest complete desired state, report proof instead of recursively
+  // turning that state transition into another command. A later deviation from
+  // that desired state is a genuine user gesture and may supersede it.
+  if (mutationContext?.source === 'room-command' && snapshotMatchesDesired(snapshot, mutationContext)) {
+    return null;
+  }
 
   if (snapshot.videoId !== snapshot.previousVideoId) {
     return { action: 'load', videoId: snapshot.videoId, positionSeconds: Math.max(0, snapshot.currentTime) };
@@ -237,13 +293,15 @@ function renderSnapshot(snapshot) {
   // owns the room clock. Do not turn that local preparation into product input.
   if (pendingHandoff?.phase === 'preparing') return;
 
-  if (localCommandPending) return;
-
+  // Detect a newer native control gesture even while an earlier command is
+  // awaiting acceptance/proof. Stable intermediate telemetry stays suppressed
+  // until the latest local intent has a server apply.
   const mutation = localMutationForSnapshot(snapshot);
   if (mutation) {
     requestRoomSongCommand(mutation);
     return;
   }
+  if (localCommandPending) return;
 
   const mutationContext = activeServerMutation();
   if (mutationContext?.suppressTelemetry) return;
@@ -362,7 +420,7 @@ function handleError(event) {
       },
     }));
   }
-  if (serverMutation?.commandId) {
+  if (serverMutation?.source === 'room-command' && serverMutation.commandId) {
     window.dispatchEvent(new CustomEvent('relay:room-song-command-failed', {
       detail: {
         commandId: serverMutation.commandId,
@@ -387,7 +445,7 @@ function handleAutoplayBlocked() {
     return;
   }
 
-  if (serverMutation?.commandId && serverMutation.action === 'play') {
+  if (serverMutation?.source === 'room-command' && serverMutation.desired?.state === 1) {
     const commandId = serverMutation.commandId;
     serverMutation = null;
     window.dispatchEvent(new CustomEvent('relay:room-song-command-failed', {
@@ -424,52 +482,73 @@ async function ensurePlayer(videoId) {
 async function applyRoomSongCommand(message) {
   const commandId = typeof message.commandId === 'string' ? message.commandId : null;
   const action = typeof message.action === 'string' ? message.action : null;
-  if (!commandId || !action) return;
+  const revision = Number(message.revision);
+  const desired = normalizedDesiredState(message.desired);
+  if (!commandId || !action || !Number.isSafeInteger(revision) || !desired) return;
 
-  localCommandPending = null;
+  if (
+    serverMutation?.source === 'room-command'
+    && Number.isSafeInteger(serverMutation.revision)
+    && serverMutation.revision > revision
+  ) return;
+
   serverMutation = {
     source: 'room-command',
     commandId,
+    revision,
     action,
+    desired,
+    appliedAtPerformanceMs: performance.now(),
     suppressTelemetry: false,
-    expiresAt: performance.now() + 2_500,
+    expiresAt: Number.POSITIVE_INFINITY,
   };
 
   try {
-    if (action === 'load') {
-      const videoId = typeof message.videoId === 'string' ? message.videoId : null;
-      const positionSeconds = Number(message.positionSeconds ?? 0);
-      if (!videoId || !Number.isFinite(positionSeconds)) throw new Error('invalid load command');
-      await ensurePlayer(videoId);
-      loadedVideoId = videoId;
-      previousSnapshot = null;
-      if (playerReady) {
-        player.cueVideoById({ videoId, startSeconds: Math.max(0, positionSeconds) });
+    await ensurePlayer(desired.videoId);
+    // A newer apply may have arrived while the YouTube API/player was loading.
+    // Never let the older async continuation mutate playback afterward.
+    if (serverMutation?.source !== 'room-command' || serverMutation.commandId !== commandId) return;
+    if (!playerReady || !player) {
+      if (desired.state === 5) {
+        noteNode.textContent = `Preparing room ${action}…`;
+        return;
       }
-    } else {
-      if (!playerReady || !player) throw new Error('player not ready');
-      if (action === 'play') {
-        player.playVideo();
-      } else if (action === 'pause') {
-        player.pauseVideo();
-      } else if (action === 'seek') {
-        const positionSeconds = Number(message.positionSeconds);
-        if (!Number.isFinite(positionSeconds)) throw new Error('invalid seek command');
-        player.seekTo(Math.max(0, positionSeconds), true);
-      } else if (action === 'rate') {
-        const playbackRate = Number(message.playbackRate);
-        if (!Number.isFinite(playbackRate)) throw new Error('invalid rate command');
-        player.setPlaybackRate(playbackRate);
-      } else {
-        throw new Error(`unknown room command ${action}`);
-      }
+      throw new Error('player not ready');
     }
 
-    noteNode.textContent = `Applying room ${action}…`;
-    setTimeout(sampleNow, 80);
-    setTimeout(sampleNow, 220);
+    previousSnapshot = null;
+    loadedVideoId = desired.videoId;
+    serverMutation.appliedAtPerformanceMs = performance.now();
+
+    if (desired.state === 5) {
+      player.cueVideoById({
+        videoId: desired.videoId,
+        startSeconds: Math.max(0, desired.positionSeconds),
+      });
+    } else {
+      if (actualVideoId() !== desired.videoId) {
+        player.cueVideoById({
+          videoId: desired.videoId,
+          startSeconds: Math.max(0, desired.positionSeconds),
+        });
+      }
+      player.seekTo(Math.max(0, desired.positionSeconds), true);
+      player.setPlaybackRate(desired.playbackRate);
+      if (desired.state === 1) player.playVideo();
+      else player.pauseVideo();
+    }
+
+    if (desired.state === 5) player.setPlaybackRate(desired.playbackRate);
+    noteNode.textContent = `Applying latest room ${action}…`;
+    setTimeout(() => {
+      if (serverMutation?.commandId === commandId) sampleNow();
+    }, 80);
+    setTimeout(() => {
+      if (serverMutation?.commandId === commandId) sampleNow();
+    }, 220);
   } catch (error) {
     console.warn('Could not apply room song command', error);
+    if (serverMutation?.commandId !== commandId) return;
     serverMutation = null;
     window.dispatchEvent(new CustomEvent('relay:room-song-command-failed', {
       detail: {
@@ -639,9 +718,12 @@ function loadVideo() {
     return;
   }
 
-  if (!requestRoomSongCommand({ action: 'load', videoId, positionSeconds: 0 })) {
-    noteNode.textContent = 'A room song command is already pending.';
-  }
+  requestRoomSongCommand({ action: 'load', videoId, positionSeconds: 0 });
+}
+
+function trackedRoomCommandId() {
+  return localCommandPending?.commandId
+    ?? (serverMutation?.source === 'room-command' ? serverMutation.commandId : null);
 }
 
 window.addEventListener('relay:room-song-command-sent', (event) => {
@@ -650,20 +732,18 @@ window.addEventListener('relay:room-song-command-sent', (event) => {
 });
 window.addEventListener('relay:room-song-command-accepted', (event) => {
   if (localCommandPending?.commandId === event.detail?.commandId) {
-    noteNode.textContent = `Room ${localCommandPending.action} accepted. Applying on this playback device…`;
+    noteNode.textContent = `Latest room ${localCommandPending.action} accepted. Applying on this playback device…`;
   }
 });
 window.addEventListener('relay:room-song-command-apply', (event) => {
-  applyRoomSongCommand(event.detail ?? {}).catch(console.error);
+  const detail = event.detail ?? {};
+  if (localCommandPending?.commandId === detail.commandId) localCommandPending = null;
+  applyRoomSongCommand(detail).catch(console.error);
 });
 window.addEventListener('relay:room-song-command-rejected', (event) => {
   const detail = event.detail ?? {};
-  if (
-    localCommandPending
-    && localCommandPending.commandId
-    && detail.commandId
-    && localCommandPending.commandId !== detail.commandId
-  ) return;
+  const trackedCommandId = trackedRoomCommandId();
+  if (trackedCommandId && detail.commandId && trackedCommandId !== detail.commandId) return;
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
   noteNode.textContent = `Room song command rejected: ${detail.reason ?? 'not allowed'}.`;
@@ -671,33 +751,34 @@ window.addEventListener('relay:room-song-command-rejected', (event) => {
 });
 window.addEventListener('relay:room-song-command-complete', (event) => {
   const commandId = event.detail?.commandId;
+  const trackedCommandId = trackedRoomCommandId();
+  if (trackedCommandId && commandId && trackedCommandId !== commandId) return;
   if (serverMutation?.commandId === commandId) serverMutation = null;
   if (localCommandPending?.commandId === commandId) localCommandPending = null;
-  noteNode.textContent = 'Room song command applied.';
+  noteNode.textContent = 'Latest room song intent applied.';
 });
 window.addEventListener('relay:room-song-command-failed-ack', (event) => {
   const detail = event.detail ?? {};
   const commandId = detail.commandId;
-  if (serverMutation?.commandId && commandId && serverMutation.commandId !== commandId) return;
-  if (localCommandPending?.commandId && commandId && localCommandPending.commandId !== commandId) return;
+  const trackedCommandId = trackedRoomCommandId();
+  if (trackedCommandId && commandId && trackedCommandId !== commandId) return;
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
-  noteNode.textContent = 'Playback could not apply the room command. Restoring the authoritative room song.';
+  noteNode.textContent = 'Playback could not apply the latest room intent. Restoring the authoritative room song.';
   restoreAuthoritativeRoom(detail.room).catch(console.error);
 });
 window.addEventListener('relay:room-song-command-status', (event) => {
   const detail = event.detail ?? {};
   const pendingCommandId = detail.pendingCommandId;
-  const trackedCommandId = localCommandPending?.commandId
-    ?? (serverMutation?.source === 'room-command' ? serverMutation.commandId : null);
+  const trackedCommandId = trackedRoomCommandId();
   if (!trackedCommandId || pendingCommandId !== null) return;
 
   // Completion is delivered before the terminal pending=null status on the
   // same WebSocket. Reaching this branch therefore means timeout, disconnect,
-  // or another terminal cleanup for a command this page still believes active.
+  // or another terminal cleanup for the latest command this page still tracks.
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
-  noteNode.textContent = 'Room song command ended without playback confirmation. Restoring the authoritative room song.';
+  noteNode.textContent = 'Latest room song intent ended without playback confirmation. Restoring the authoritative room song.';
   restoreAuthoritativeRoom(detail.room).catch(console.error);
 });
 

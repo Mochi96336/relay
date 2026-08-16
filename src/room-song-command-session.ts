@@ -1,5 +1,5 @@
 import type { RoomSongCommandBody, RoomSongCommandRequest } from './room-song-command.js';
-import type { PlaybackIdentity } from './song-session.js';
+import { LEGACY_PLAYBACK_PARTICIPANT_ID, type PlaybackIdentity } from './song-session.js';
 
 const COMMAND_TIMEOUT_MS = 4_000;
 const SEEK_MUTATION_THRESHOLD_SECONDS = 0.75;
@@ -198,7 +198,7 @@ export class RoomSongCommandSession {
     // The narrow pre-participant compatibility publisher predates room song
     // commands. It remains a compatibility boundary, not a production bypass
     // for identified participants.
-    if (identity.participantId === '__relay_legacy_publisher__') return { ok: true };
+    if (identity.participantId === LEGACY_PLAYBACK_PARTICIPANT_ID) return { ok: true };
 
     const mutation = this.detectMutation(payload, roomStatus);
     if (this.pending) {
@@ -294,13 +294,28 @@ export class RoomSongCommandSession {
     if (incomingState === 2 && roomState !== 2) return 'pause';
     if (incomingState === 5 && roomState !== 5) return 'load';
 
-    const roomTime = Number(roomStatus.serverTime);
+    // Compared against where the player's *own last accepted report* would be
+    // by now, not against `serverTime`.
+    //
+    // `serverTime` is where the room clock predicts the player should be, and
+    // a player that rebuffers falls behind that prediction without anybody
+    // seeking. Judging against it made every packet after a stall longer than
+    // the threshold look like an unrequested seek, so all of them were refused
+    // — and because a refused packet never reaches the timeline, it could never
+    // re-anchor. A two second stall left the room clock permanently two
+    // seconds ahead of the audio, silently, and growing.
+    //
+    // The honest bound is that a player can only fall behind its own last
+    // report by the time that has actually passed. Anything beyond that in
+    // either direction is a real jump.
+    const reportedTime = Number(roomStatus.youtubeTime);
     const incomingTime = Number(payload.currentTime);
-    if (
-      Number.isFinite(roomTime)
-      && Number.isFinite(incomingTime)
-      && Math.abs(roomTime - incomingTime) > SEEK_MUTATION_THRESHOLD_SECONDS
-    ) return 'seek';
+    const elapsedSeconds = Math.max(0, Number(roomStatus.ageMs) || 0) / 1000;
+    if (Number.isFinite(reportedTime) && Number.isFinite(incomingTime)) {
+      const delta = incomingTime - reportedTime;
+      if (delta > SEEK_MUTATION_THRESHOLD_SECONDS) return 'seek';
+      if (delta < -(elapsedSeconds + SEEK_MUTATION_THRESHOLD_SECONDS)) return 'seek';
+    }
 
     return null;
   }

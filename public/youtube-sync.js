@@ -200,6 +200,10 @@ const REJECTION_NOTES = {
   'not-publisher': 'This page is not the room’s microphone device, so its player does not drive the song.',
   'invalid-identity': 'This page could not identify its player to Relay. Reload it.',
   'invalid-telemetry': 'Relay could not read this player’s position.',
+  // Room-command gate refusals.
+  'command-required': 'This player moved the song without a room command, so Relay is ignoring it. Use the room controls.',
+  'command-target-mismatch': 'A room command is being applied by another player. This one is not driving the song right now.',
+  'command-mismatch': 'This player did not end up where the room command asked it to go.',
 };
 
 /**
@@ -271,7 +275,7 @@ function handleMessage(event) {
     return;
   }
 
-  if (message.type === 'youtube-telemetry-rejected') {
+  if (message.type === 'youtube-telemetry-rejected' || message.type === 'room-song-telemetry-rejected') {
     renderRejection(message);
     return;
   }

@@ -157,13 +157,30 @@ test('a rejected playback page is told why, once per reason', async () => {
     const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
     const b = await RelayClient.connect(server, '?participant=participant-b&name=B');
 
-    a.send(telemetry(10));
+    // Room song changes go through the command path now, so establish one that
+    // way before testing what a competing player is told.
+    a.send({ type: 'playback-hello', playbackTransportId: 'playback-transport-a', playbackGeneration: 1 });
+    await a.waitForType('playback-registered');
+    a.send({
+      type: 'room-song-command',
+      commandId: 'command-load-authority',
+      expectedRevision: 0,
+      action: 'load',
+      videoId: VIDEO,
+      positionSeconds: 10,
+    });
+    await a.waitFor((message) => (
+      message.type === 'room-song-command-apply' && message.commandId === 'command-load-authority'
+    ));
+    a.send({ ...telemetry(10), state: 5 });
     await a.waitFor((message) => (
       message.type === 'youtube-timeline-status'
       && message.playbackLeaderParticipantId === 'participant-a'
     ));
 
-    b.send(telemetry(90, 'playback-transport-b'));
+    // B reports the room's own position, so this is not an attempted mutation:
+    // the command gate lets it through and playback authority is what refuses.
+    b.send({ ...telemetry(10, 'playback-transport-b'), state: 5 });
     const rejected = await b.waitFor((message) => message.type === 'youtube-telemetry-rejected');
     assert.equal(rejected.reason, 'leader-busy');
     assert.equal(rejected.playbackLeaderParticipantId, 'participant-a');
@@ -171,8 +188,8 @@ test('a rejected playback page is told why, once per reason', async () => {
     // Telemetry repeats several times a second; repeating the same rejection
     // would drown the socket in messages nobody can act on.
     const seen = b.messages.filter((message) => message.type === 'youtube-telemetry-rejected').length;
-    b.send(telemetry(91, 'playback-transport-b'));
-    b.send(telemetry(92, 'playback-transport-b'));
+    b.send({ ...telemetry(10, 'playback-transport-b'), state: 5 });
+    b.send({ ...telemetry(10, 'playback-transport-b'), state: 5 });
     await sleep(150);
     assert.equal(
       b.messages.filter((message) => message.type === 'youtube-telemetry-rejected').length,

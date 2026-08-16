@@ -23,6 +23,8 @@ import {
   type AcceptedRoomSongCommand,
 } from './room-song-command-session.js';
 import {
+  LEGACY_PLAYBACK_PARTICIPANT_ID,
+  LEGACY_PLAYBACK_TRANSPORT_ID,
   SongSession,
   normalizePlaybackGeneration,
   normalizePlaybackTransportId,
@@ -154,15 +156,6 @@ let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
 let legacyPlaybackConnectionSequence = 0;
-/**
- * The single synthetic playback identity shared by pre-participant clients.
- *
- * There is only ever one anonymous publisher transport at a time, so this is
- * one logical device rather than a population; each connection is a newer
- * incarnation of it, distinguished by `legacyPlaybackGeneration`.
- */
-const LEGACY_PLAYBACK_PARTICIPANT_ID = '__relay_legacy_publisher__';
-const LEGACY_PLAYBACK_TRANSPORT_ID = 'legacy-publisher';
 let micTransportGraceTimer: NodeJS.Timeout | null = null;
 let micTransportGraceOwnerId: string | null = null;
 
@@ -550,6 +543,24 @@ function beginPreparedSongHandoff(participantId: string, nowMs = performance.now
  * answer every time, so only a *change* of reason is reported, and an accepted
  * packet clears the memory so the next problem is reported again.
  */
+/**
+ * The same discipline for the room-command gate's refusals.
+ *
+ * Shares `telemetryRejectedReason` with the authority refusals above so that
+ * switching between the two kinds still notifies, and one accepted packet
+ * clears both.
+ */
+function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
+  const key = `room-song:${reason}`;
+  if (socket.telemetryRejectedReason === key) return;
+  socket.telemetryRejectedReason = key;
+  sendJson(socket, {
+    type: 'room-song-telemetry-rejected',
+    reason,
+    revision: roomSongCommandRevision,
+  });
+}
+
 function reportTelemetryRejected(socket: RelaySocket, reason: string) {
   if (socket.telemetryRejectedReason === reason) return;
   socket.telemetryRejectedReason = reason;
@@ -1621,11 +1632,7 @@ wss.on('connection', (rawSocket, request) => {
         nowMs,
       );
       if (!commandGate.ok) {
-        sendJson(socket, {
-          type: 'room-song-telemetry-rejected',
-          reason: commandGate.reason,
-          revision: roomSongCommandRevision,
-        });
+        reportRoomSongTelemetryRejected(socket, commandGate.reason);
         return;
       }
 

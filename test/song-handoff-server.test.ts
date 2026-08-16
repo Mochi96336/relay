@@ -233,10 +233,7 @@ test('closing the tab a handoff is waiting for gives the room song back', async 
     const aPlayback = await playback(server, 'participant-a', 'A', 'playback-tab-a');
     const aPublisher = await publisher(server, 'participant-a', 'A');
 
-    aPlayback.send(telemetry(10));
-    await aPlayback.waitFor((message) => (
-      message.type === 'youtube-timeline-status' && message.videoId === VIDEO
-    ));
+    await establishPlayingRoom(aPlayback, 'playback-tab-a', 10, 'handoff-frozen');
 
     const bPlayback = await playback(server, 'participant-b', 'B', 'playback-tab-b');
     const bPublisher = await publisher(server, 'participant-b', 'B', 'participant-a');
@@ -252,11 +249,19 @@ test('closing the tab a handoff is waiting for gives the room song back', async 
     // stuck handoff this transport was refused for ever as `handoff-not-target`.
     // A real page sends continuously, so this does too rather than depending on
     // one packet landing after the sweep.
+    // It reports the room's own position rather than a jump, because moving the
+    // song is the room command path's job; what is under test here is only
+    // whether this transport is allowed to drive the clock at all.
     const bReopened = await playback(server, 'participant-b', 'B', 'playback-tab-b-reopened');
     const deadline = Date.now() + 5_000;
     let moved: Record<string, any> | undefined;
     while (Date.now() < deadline && !moved) {
-      bReopened.send(telemetry(90));
+      const roomTime = Number(
+        bReopened.latest('youtube-timeline-status')?.serverTime
+        ?? aPlayback.latest('youtube-timeline-status')?.serverTime
+        ?? 10,
+      );
+      bReopened.send(telemetry(roomTime));
       await sleep(100);
       moved = bReopened.messages.find((message) => (
         message.type === 'youtube-timeline-status'
@@ -265,7 +270,6 @@ test('closing the tab a handoff is waiting for gives the room song back', async 
     }
 
     assert.ok(moved, 'the room song stayed frozen behind a handoff whose target had gone');
-    assert.ok(Number(moved.serverTime) > 80, `room song stayed frozen at ${moved.serverTime}`);
     assert.equal(aPlayback.latest('room-song-status')?.handoffState, 'idle');
 
     aPlayback.close();

@@ -23,6 +23,11 @@ function room(overrides: Record<string, unknown> = {}) {
     videoId: VIDEO,
     state: 2,
     serverTime: 10,
+    // What the player itself last reported, projected to now, and how long ago
+    // that was. The real status payload always carries both; a seek is judged
+    // against them rather than against the room's prediction.
+    youtubeTime: 10,
+    ageMs: 0,
     playbackRate: 1,
     playbackLeaderParticipantId: A.participantId,
     playbackTransportId: A.transportId,
@@ -228,6 +233,31 @@ describe('room song telemetry command gate', () => {
       ok: false,
       reason: 'command-required',
     });
+  });
+
+  test('does not read a stalled player as an unrequested seek', () => {
+    const session = new RoomSongCommandSession();
+
+    // Two seconds of rebuffering: the room predicts 12, the player is honestly
+    // still at 10. It can only fall behind its own last report by the time that
+    // actually passed, so this is a stall, not a jump.
+    const stalled = room({ state: 1, serverTime: 12, youtubeTime: 12, ageMs: 2_000 });
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ state: 1, currentTime: 10 }), A, stalled, 0),
+      { ok: true },
+    );
+
+    // Falling further behind than the elapsed time is a real backward seek.
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ state: 1, currentTime: 5 }), A, stalled, 0),
+      { ok: false, reason: 'command-required' },
+    );
+
+    // And jumping ahead of its own last report is a real forward seek.
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ state: 1, currentTime: 20 }), A, stalled, 0),
+      { ok: false, reason: 'command-required' },
+    );
   });
 
   test('allows steady telemetry and buffering recovery without inventing commands', () => {

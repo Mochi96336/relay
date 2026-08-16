@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 
 import {
   createWebTransportMediaTicket,
+  startWebTransportMediaServer,
   webTransportMediaConfig,
 } from '../src/webtransport-media-server.js';
 
@@ -12,19 +13,28 @@ describe('WebTransport media configuration', () => {
     assert.equal(webTransportMediaConfig({}), null);
   });
 
-  it('requires a direct HTTPS URL with an explicit HTTP/3 UDP port and keypair', () => {
-    assert.throws(
-      () => webTransportMediaConfig({ RELAY_WEBTRANSPORT_PUBLIC_URL: 'https://media.example.test/media' }),
-      /port explicitly/,
-    );
-    assert.throws(
-      () => webTransportMediaConfig({ RELAY_WEBTRANSPORT_PUBLIC_URL: 'http://media.example.test:4433/media' }),
-      /must use https/,
-    );
-    assert.throws(
-      () => webTransportMediaConfig({ RELAY_WEBTRANSPORT_PUBLIC_URL: 'https://media.example.test:4433/media' }),
-      /RELAY_WEBTRANSPORT_CERT/,
-    );
+  it('fails open when the optional direct-media configuration is invalid', () => {
+    const originalWarn = console.warn;
+    const warnings: unknown[][] = [];
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    try {
+      assert.equal(
+        webTransportMediaConfig({ RELAY_WEBTRANSPORT_PUBLIC_URL: 'https://media.example.test/media' }),
+        null,
+      );
+      assert.equal(
+        webTransportMediaConfig({ RELAY_WEBTRANSPORT_PUBLIC_URL: 'http://media.example.test:4433/media' }),
+        null,
+      );
+      assert.equal(
+        webTransportMediaConfig({ RELAY_WEBTRANSPORT_PUBLIC_URL: 'https://media.example.test:4433/media' }),
+        null,
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(warnings.length, 3);
+    assert.ok(warnings.every((warning) => String(warning[0]).includes('WebSocket microphone fallback')));
   });
 
   it('derives the bind port from the public URL without confusing it with the HTTP control port', () => {
@@ -64,6 +74,33 @@ describe('WebTransport media configuration', () => {
     assert.notEqual(first, second);
     assert.match(first, /^[A-Za-z0-9_-]{32}$/);
   });
+});
+
+it('falls back to a no-op direct-media adapter when HTTP/3 startup fails', async () => {
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    const media = await startWebTransportMediaServer({
+      publicUrl: new URL('https://media.example.test:4433/media'),
+      bindHost: '127.0.0.1',
+      bindPort: 4433,
+      certPath: '/definitely/missing/relay-media.crt',
+      keyPath: '/definitely/missing/relay-media.key',
+      pinCertificate: false,
+    }, {
+      authorize: () => false,
+      onDatagram: () => {},
+    });
+
+    assert.equal(media.offer('ticket'), undefined);
+    assert.equal(media.hasSession('ticket'), false);
+    await media.stop();
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(String(warnings[0]?.[0]), /WebSocket microphone fallback/);
 });
 
 it('retires direct-media authority at every Mic ownership terminal boundary', () => {

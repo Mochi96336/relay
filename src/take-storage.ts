@@ -90,9 +90,17 @@ function artifactNamesToRemove(
 function currentTakeBudget(directory: string, policy: TakeStoragePolicy) {
   const filesystem = statfsSync(directory);
   const freeBytes = filesystem.bavail * filesystem.bsize;
-  const writableBytes = Math.floor((freeBytes - policy.minFreeBytes - WAV_HEADER_BYTES) / 2) * 2;
-  if (!Number.isFinite(writableBytes) || writableBytes <= 0) {
+  const freeDataBytes = freeBytes - policy.minFreeBytes - WAV_HEADER_BYTES;
+  if (!Number.isFinite(freeDataBytes) || freeDataBytes <= 0) {
     throw new Error('Take storage does not have the configured free-space reserve.');
+  }
+
+  const policyDataBytes = policy.maxBytes > 0
+    ? policy.maxBytes - WAV_HEADER_BYTES
+    : freeDataBytes;
+  const writableBytes = Math.floor(Math.min(freeDataBytes, policyDataBytes) / 2) * 2;
+  if (writableBytes <= 0) {
+    throw new Error('Take storage retention budget is too small for a PCM WAV artifact.');
   }
   return writableBytes;
 }

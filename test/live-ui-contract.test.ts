@@ -117,12 +117,15 @@ test('Voice motion follows product self-Mic state rather than legacy button disa
   assert.match(liveStateCss, /body\[data-self-mic="off"\] \.voice-ribbon span/);
 });
 
-test('formal Listen has its own transport and only pauses timing setup on the singer phone', () => {
+test('formal Listen owns local mute state while Mic ownership supplies only a temporary override', () => {
   assert.match(html, /src="\/listen\.js"/);
   assert.match(listen, /role:\s*'monitor'/);
-  assert.match(listen, /window\.relayActiveRole === 'publisher'/);
-  assert.match(listen, /message\.state === 'collecting'/);
-  assert.match(listen, /Listen paused for timing setup\./);
+  assert.match(listen, /let userMuted = false/);
+  assert.match(listen, /let micForcedMuted = false/);
+  assert.match(listen, /relay-microphone-started/);
+  assert.match(listen, /relay-microphone-ended/);
+  assert.doesNotMatch(listen, /window\.relayActiveRole === 'publisher'/);
+  assert.doesNotMatch(listen, /timing-calibration-status/);
   assert.doesNotMatch(listen, /startPublisher\(/);
 });
 

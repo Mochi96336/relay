@@ -97,7 +97,7 @@
 
       <footer class="live-actions">
         <div class="listen-action">
-          <button id="listen-toggle" class="text-action" type="button" aria-pressed="false">Listen</button>
+          <button id="listen-toggle" class="text-action" type="button" aria-pressed="false">Mute</button>
           <span id="listen-note" class="action-note" aria-live="polite"></span>
         </div>
 
@@ -159,11 +159,11 @@
               <label class="adjust-control" for="listen-gain">
                 <div class="adjust-row-heading">
                   <strong>Listen volume</strong>
-                  <output id="listen-gain-value" for="listen-gain">70%</output>
+                  <output id="listen-gain-value" for="listen-gain">30%</output>
                 </div>
-                <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="70" />
+                <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="30" />
               </label>
-              <p id="listen-adjust-state" class="adjust-helper">Listen is off. Volume is kept for next time.</p>
+              <p id="listen-adjust-state" class="adjust-helper">Sound is on by default after your first interaction.</p>
             </section>
 
             <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">

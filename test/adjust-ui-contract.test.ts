@@ -48,10 +48,39 @@ test('Voice Adjust distinguishes live input evidence from the gain setting and s
     'incoming recommendation evidence must not move Voice gain before the user chooses Use');
 });
 
-test('Listen owns only local playback state and preserves volume while off', () => {
-  assert.equal(listen.includes('document.body.dataset.listen = state'), true);
+test('Listen defaults audible at 30% and exposes mute rather than an enable action', () => {
+  assert.match(html, /id="listen-toggle"[^>]*>Mute<\/button>/);
+  assert.match(html, /id="listen-gain-value"[^>]*>30%<\/output>/);
+  assert.match(html, /id="listen-gain"[^>]*value="30"/);
+  assert.equal(listen.includes('let userMuted = false;'), true);
+  assert.equal(listen.includes("toggle.textContent = micForcedMuted ? 'Muted for Mic' : userMuted ? 'Unmute' : 'Mute';"), true);
+  assert.equal(listen.includes('Sound starts after your first interaction.'), true,
+    'default-unmuted intent must acknowledge the mobile autoplay boundary');
+});
+
+test('Mic ownership overlays a temporary local mute and restores the prior Listen preference', () => {
+  assert.equal(listen.includes('let micForcedMuted = false;'), true);
+  assert.equal(listen.includes('return userMuted || micForcedMuted;'), true);
+  assert.equal(listen.includes("window.addEventListener('relay-microphone-started'"), true);
+  assert.equal(listen.includes("window.addEventListener('relay-microphone-ended'"), true);
+  assert.equal(listen.includes("window.addEventListener('relay-microphone-start-failed'"), true);
+  assert.equal(listen.includes("window.addEventListener('relay-request-microphone'"), true);
+  assert.equal(listen.includes("publisherButton.addEventListener('click'"), true,
+    'local Mic intent mutes before publisher registration finishes');
+  assert.equal(listen.includes("publisherButton.dataset.presenceLabel !== 'takeover'"), true,
+    'opening takeover confirmation must not mute Listen before the handoff is confirmed');
+  assert.equal(listen.includes('Do not auto-resume afterward'), false);
+  assert.equal(listen.includes("message.type === 'timing-calibration-status'"), false,
+    'timing setup no longer owns the product-level Listen preference');
+});
+
+test('Listen keeps browser audio permission separate from the muted transport state', () => {
+  assert.equal(listen.includes('async function ensureAudioGraph()'), true);
+  assert.equal(listen.includes('function closeTransport()'), true);
+  assert.equal(listen.includes('await context.resume();'), true);
+  assert.equal(listen.includes("window.addEventListener('pointerdown', activateFromGesture"), true);
+  assert.equal(listen.includes("window.addEventListener('keydown', activateFromGesture"), true);
   assert.equal(listen.includes('Playing Relay mix on this phone.'), true);
-  assert.equal(listen.includes('Volume is kept for next time.'), true);
 });
 
 test('Adjust uses one flat layer and thin rails instead of a card wall', () => {

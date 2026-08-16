@@ -3,8 +3,10 @@ const gainControl = document.querySelector('#listen-gain');
 const gainValue = document.querySelector('#listen-gain-value');
 const note = document.querySelector('#listen-note');
 const adjustState = document.querySelector('#listen-adjust-state');
+const publisherButton = document.querySelector('#start-publisher');
+const takeoverButton = document.querySelector('#confirm-takeover');
 
-if (toggle && gainControl && gainValue && note && adjustState) {
+if (toggle && gainControl && gainValue && note && adjustState && publisherButton && takeoverButton) {
   const MIX_SAMPLE_RATE = 48_000;
   const RECONNECT_MS = 1_000;
   const PREBUFFER_MS = 250;
@@ -15,7 +17,10 @@ if (toggle && gainControl && gainValue && note && adjustState) {
   let audioContext = null;
   let playbackNode = null;
   let gainNode = null;
-  let enabled = false;
+  let audioSetupPromise = null;
+  let transportEnabled = false;
+  let userMuted = false;
+  let micForcedMuted = false;
   let sourceSampleRate = MIX_SAMPLE_RATE;
 
   function wsUrl() {
@@ -73,25 +78,40 @@ if (toggle && gainControl && gainValue && note && adjustState) {
     return ((percent / 100) ** 1.5) * 8;
   }
 
+  function effectiveMuted() {
+    return userMuted || micForcedMuted;
+  }
+
   function updateGain() {
     const percent = Math.round(Number(gainControl.value) || 0);
     gainValue.value = `${percent}%`;
     if (gainNode && audioContext) {
-      gainNode.gain.setTargetAtTime(listenGain(), audioContext.currentTime, 0.01);
+      const target = effectiveMuted() ? 0 : listenGain();
+      gainNode.gain.setTargetAtTime(target, audioContext.currentTime, 0.01);
     }
   }
 
-  function render(state, copy = '') {
+  function render(copy = '') {
+    const muted = effectiveMuted();
+    const state = micForcedMuted ? 'mic-muted' : userMuted ? 'muted' : audioContext ? 'audible' : 'ready';
     toggle.dataset.state = state;
-    toggle.setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
-    toggle.textContent = state === 'on' ? '● Listen' : 'Listen';
+    toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
+    toggle.disabled = micForcedMuted;
+    toggle.textContent = micForcedMuted ? 'Muted for Mic' : userMuted ? 'Unmute' : 'Mute';
     note.textContent = copy;
     document.body.dataset.listen = state;
-    adjustState.textContent = state === 'on'
-      ? 'Playing Relay mix on this phone.'
-      : copy.includes('timing setup')
-        ? 'Listen is off for timing setup. Volume is kept for next time.'
-        : 'Listen is off. Volume is kept for next time.';
+
+    if (micForcedMuted) {
+      adjustState.textContent = 'Muted while this phone has the mic. Sound restores automatically afterward.';
+    } else if (userMuted) {
+      adjustState.textContent = 'Muted on this phone.';
+    } else if (!audioContext) {
+      adjustState.textContent = 'Sound is on by default after your first interaction.';
+    } else if (transportEnabled) {
+      adjustState.textContent = 'Playing Relay mix on this phone.';
+    } else {
+      adjustState.textContent = copy || 'Connecting Relay audio…';
+    }
   }
 
   function clearReconnect() {
@@ -100,13 +120,24 @@ if (toggle && gainControl && gainValue && note && adjustState) {
     reconnectTimer = null;
   }
 
+  function closeTransport() {
+    transportEnabled = false;
+    clearReconnect();
+    const closing = socket;
+    socket = null;
+    if (closing) {
+      try { closing.close(); } catch {}
+    }
+    playbackNode?.port.postMessage({ type: 'reset' });
+  }
+
   function scheduleReconnect() {
-    if (!enabled || reconnectTimer) return;
+    if (!transportEnabled || effectiveMuted() || reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect().catch(() => {
-        if (!enabled) return;
-        render('on', 'Reconnecting…');
+        if (!transportEnabled || effectiveMuted()) return;
+        render('Reconnecting…');
         scheduleReconnect();
       });
     }, RECONNECT_MS);
@@ -115,24 +146,11 @@ if (toggle && gainControl && gainValue && note && adjustState) {
   function handleMessage(message) {
     if (message.type === 'source-status') {
       sourceSampleRate = Number(message.sampleRate ?? message.mixSampleRate) || MIX_SAMPLE_RATE;
-      return;
-    }
-
-    // Timing setup only needs to silence the returned mix on the phone whose
-    // microphone is being measured. Other participants may keep listening.
-    // Do not auto-resume afterward; the singer explicitly turns Listen back on,
-    // ideally after moving the output to headphones.
-    if (
-      message.type === 'timing-calibration-status'
-      && message.state === 'collecting'
-      && window.relayActiveRole === 'publisher'
-    ) {
-      void stop('Listen paused for timing setup.');
     }
   }
 
   async function connect() {
-    if (!enabled || !audioContext || !playbackNode) return;
+    if (!transportEnabled || effectiveMuted() || !audioContext || !playbackNode) return;
     const next = new WebSocket(wsUrl());
     next.binaryType = 'arraybuffer';
     await new Promise((resolve, reject) => {
@@ -140,7 +158,7 @@ if (toggle && gainControl && gainValue && note && adjustState) {
       next.addEventListener('error', reject, { once: true });
     });
 
-    if (!enabled) {
+    if (!transportEnabled || effectiveMuted()) {
       next.close();
       return;
     }
@@ -164,8 +182,8 @@ if (toggle && gainControl && gainValue && note && adjustState) {
     next.addEventListener('close', () => {
       if (socket !== next) return;
       socket = null;
-      if (!enabled) return;
-      render('on', 'Reconnecting…');
+      if (!transportEnabled || effectiveMuted()) return;
+      render('Reconnecting…');
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -173,92 +191,152 @@ if (toggle && gainControl && gainValue && note && adjustState) {
     });
   }
 
-  async function start() {
-    if (enabled) return;
-    enabled = true;
-    clearReconnect();
-    render('on', window.relayActiveRole === 'publisher'
-      ? 'Use headphones while your mic is on.'
-      : 'Listening on this phone.');
+  async function ensureAudioGraph() {
+    if (audioContext && playbackNode && gainNode) {
+      if (audioContext.state === 'suspended') await audioContext.resume();
+      return;
+    }
+    if (audioSetupPromise) return audioSetupPromise;
 
-    audioContext = new AudioContext({ latencyHint: 'interactive' });
-    await audioContext.audioWorklet.addModule('/playback-worklet.js');
-    await audioContext.resume();
+    audioSetupPromise = (async () => {
+      const context = new AudioContext({ latencyHint: 'interactive' });
+      audioContext = context;
+      // Consume the user's first interaction immediately. Fetching the worklet
+      // before resume can lose transient autoplay permission on mobile.
+      await context.resume();
+      await context.audioWorklet.addModule('/playback-worklet.js');
 
-    playbackNode = new AudioWorkletNode(audioContext, 'playback-processor', {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
-    });
-    playbackNode.port.postMessage({
-      type: 'configure',
-      prebufferMs: PREBUFFER_MS,
-      maxQueueMs: MAX_QUEUE_MS,
-    });
-    playbackNode.port.onmessage = (event) => {
-      if (!enabled) return;
-      if (event.data?.type === 'buffering') render('on', 'Buffering…');
-      if (event.data?.type === 'playing') {
-        render('on', window.relayActiveRole === 'publisher'
-          ? 'Use headphones while your mic is on.'
-          : 'Listening on this phone.');
-      }
-    };
+      const node = new AudioWorkletNode(context, 'playback-processor', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+      node.port.postMessage({
+        type: 'configure',
+        prebufferMs: PREBUFFER_MS,
+        maxQueueMs: MAX_QUEUE_MS,
+      });
+      node.port.onmessage = (event) => {
+        if (!transportEnabled || effectiveMuted()) return;
+        if (event.data?.type === 'buffering') render('Buffering…');
+        if (event.data?.type === 'playing') render('');
+      };
 
-    gainNode = audioContext.createGain();
-    gainNode.gain.value = listenGain();
-    playbackNode.connect(gainNode).connect(audioContext.destination);
+      const localGain = context.createGain();
+      gainNode = localGain;
+      playbackNode = node;
+      node.connect(localGain).connect(context.destination);
+      updateGain();
+    })();
 
     try {
-      await connect();
-    } catch {
-      render('on', 'Reconnecting…');
-      scheduleReconnect();
-    }
-  }
-
-  async function stop(copy = '') {
-    enabled = false;
-    clearReconnect();
-    const closing = socket;
-    socket = null;
-    if (closing) {
-      try { closing.close(); } catch {}
-    }
-    if (playbackNode) {
-      try { playbackNode.disconnect(); } catch {}
-      playbackNode = null;
-    }
-    if (gainNode) {
-      try { gainNode.disconnect(); } catch {}
-      gainNode = null;
-    }
-    if (audioContext) {
-      const closingContext = audioContext;
+      await audioSetupPromise;
+    } catch (error) {
+      const failed = audioContext;
       audioContext = null;
-      try { await closingContext.close(); } catch {}
+      playbackNode = null;
+      gainNode = null;
+      try { await failed?.close(); } catch {}
+      throw error;
+    } finally {
+      audioSetupPromise = null;
     }
-    render('off', copy);
   }
 
-  toggle.addEventListener('click', () => {
-    if (enabled) stop().catch(console.error);
-    else start().catch((error) => {
-      console.error(error);
-      stop('Could not start Listen.').catch(console.error);
+  function reconcile(copy = '') {
+    updateGain();
+    if (effectiveMuted()) {
+      closeTransport();
+      render(copy);
+      return;
+    }
+    if (!audioContext || !playbackNode || !gainNode) {
+      render(copy || 'Sound starts after your first interaction.');
+      return;
+    }
+    if (transportEnabled) {
+      render(copy);
+      return;
+    }
+
+    transportEnabled = true;
+    render(copy || 'Connecting…');
+    connect().catch(() => {
+      if (!transportEnabled || effectiveMuted()) return;
+      render('Reconnecting…');
+      scheduleReconnect();
     });
+  }
+
+  function forceMicMute(copy = 'Muted while the microphone is active.') {
+    micForcedMuted = true;
+    reconcile(copy);
+  }
+
+  function restoreAfterMic(copy = 'Listening resumed.') {
+    micForcedMuted = false;
+    reconcile(copy);
+  }
+
+  async function activateFromGesture(event) {
+    const target = event.target instanceof Element ? event.target : null;
+    const startsMic = target?.closest('#confirm-takeover')
+      || (target?.closest('#start-publisher') && publisherButton.dataset.presenceLabel !== 'takeover');
+    if (startsMic) micForcedMuted = true;
+    try {
+      await ensureAudioGraph();
+      reconcile();
+    } catch (error) {
+      console.error(error);
+      render('Tap Mute, then Unmute to retry audio.');
+    }
+  }
+
+  toggle.addEventListener('click', async () => {
+    if (micForcedMuted) return;
+    userMuted = !userMuted;
+    if (!userMuted) {
+      try {
+        await ensureAudioGraph();
+      } catch (error) {
+        console.error(error);
+        userMuted = true;
+        render('Could not start audio on this phone.');
+        return;
+      }
+    }
+    reconcile();
   });
 
   gainControl.addEventListener('input', updateGain);
-  window.addEventListener('relay-microphone-started', () => {
-    if (enabled) render('on', 'Use headphones while your mic is on.');
-  });
+
+  // Product semantics are negative: room audio is wanted by default, and Mic
+  // ownership temporarily overlays a forced local mute. Do not rewrite the
+  // user's own mute preference when the Mic comes and goes.
+  publisherButton.addEventListener('click', () => {
+    if (publisherButton.dataset.presenceLabel !== 'takeover') {
+      forceMicMute('Muted while the microphone starts.');
+    }
+  }, { capture: true });
+  takeoverButton.addEventListener('click', () => forceMicMute('Muted while the microphone handoff starts.'), { capture: true });
+  window.addEventListener('relay-request-microphone', () => forceMicMute('Muted while the microphone handoff starts.'));
+  window.addEventListener('relay-microphone-started', () => forceMicMute('Muted while this phone has the mic.'));
+  window.addEventListener('relay-microphone-ended', () => restoreAfterMic());
+  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic('Microphone did not start. Listening resumed.'));
+
+  // Browsers do not generally allow a newly navigated page to speak before a
+  // user gesture. Prime the local graph on the first interaction, then the
+  // default-unmuted state and later Mic restore can run without another tap.
+  window.addEventListener('pointerdown', activateFromGesture, { capture: true, once: true });
+  window.addEventListener('keydown', activateFromGesture, { capture: true, once: true });
+
   window.addEventListener('beforeunload', () => {
-    if (socket) {
-      try { socket.close(); } catch {}
+    closeTransport();
+    if (audioContext) {
+      try { audioContext.close(); } catch {}
     }
   }, { once: true });
 
   updateGain();
-  render('off');
+  render('Sound starts after your first interaction.');
 }

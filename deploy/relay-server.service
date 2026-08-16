@@ -1,0 +1,33 @@
+# Relay server as a systemd *user* unit.
+#
+# User rather than system: the robot's audio route reaches PipeWire through the
+# per-user socket in /run/user/$UID, and only the user manager is in a position
+# to see it. That manager does not exist at boot unless lingering is enabled -
+# see ROBOT_DEPLOYMENT.md, which is where the install procedure lives.
+#
+# Not enabled by being committed here. Installing it is a deliberate step.
+
+[Unit]
+Description=Relay server
+Documentation=https://github.com/Mochi96336/relay/blob/main/ROBOT_DEPLOYMENT.md
+After=network.target
+# A server that cannot start will not be fixed by starting it every five
+# seconds. Stop, and leave a failed unit behind to be read.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/relay
+# Defaults first so the optional file can override them. The key belongs in
+# that file, not here: units under ~/.config are readable, and this one is
+# checked into the repository.
+Environment=PORT=3100
+EnvironmentFile=-%h/.config/relay/robot.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=relay-server
+
+[Install]
+WantedBy=default.target

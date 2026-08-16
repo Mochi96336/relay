@@ -21,6 +21,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Configure merge identity
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
       - name: Merge verified runtime base
         run: |
           git fetch origin agent/runtime-product-status
@@ -43,8 +47,6 @@ jobs:
         run: |
           rm scripts/tmp-sync-voice-only-ui.mjs
           rm .github/workflows/tmp-sync-voice-only-ui.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "fix(ui): support voice-only Live sessions"
           git push origin HEAD:agent/live-ui-shell

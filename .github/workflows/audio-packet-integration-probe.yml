@@ -101,8 +101,13 @@ jobs:
                 return `${ours}${theirs}`;
               }
 
-              if (ours.includes('micPacketReceiver = null;')
-                  && theirs.includes("takeController.noteQualityEvent('mic-owner-changed')")) {
+              if (
+                ours.includes('micPacketReceiver = null;')
+                && (
+                  theirs.includes("takeController.noteQualityEvent('mic-owner-changed')")
+                  || theirs.includes("cancelPendingRoomSongCommand('mic-owner-released', nowMs)")
+                )
+              ) {
                 return `${ours}${theirs}`;
               }
 

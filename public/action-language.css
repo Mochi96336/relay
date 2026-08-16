@@ -76,6 +76,13 @@
 #start-publisher {
   min-width: 124px;
   padding: 10px 16px;
+  font-size: 13px;
+}
+/* style.css still contains the retired English pseudo-label. The formal action
+   layer is later in the cascade, so explicitly retire it here and let the real
+   localized button text remain the only visible label. */
+#start-publisher::after {
+  content: none;
 }
 #confirm-takeover {
   padding: 10px 13px;

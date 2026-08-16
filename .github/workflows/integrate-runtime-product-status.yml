@@ -1,0 +1,124 @@
+name: Integrate runtime product status
+
+on:
+  push:
+    branches:
+      - agent/runtime-product-status
+    paths:
+      - .github/workflows/integrate-runtime-product-status.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.ref == 'refs/heads/agent/runtime-product-status'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/runtime-product-status
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+      - name: Integrate Robot hardening and product publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/robot-runtime-hardening agent/live-ui-shell
+
+          # Record the Robot-hardening line as an explicit parent, while keeping
+          # the current product stack as the tree we are integrating into.
+          git merge --no-commit -s ours origin/agent/robot-runtime-hardening
+
+          # Product-status publication was prototyped and tested on the Live UI
+          # branch. Pull only that server seam and its integration contract here.
+          git checkout origin/agent/live-ui-shell -- src/server.ts test/product-status-server.test.ts
+
+          # Port every Robot-hardening change except the two deliberately unified
+          # files: product readiness.ts is the typed semantic superset, and
+          # server.ts is reconciled below against the product-status publisher.
+          git diff --binary 90bc23fef546fd0ecfd7037959a0bfbe0c9fcc0e 546c425230bbc740138b8998d472ba94c4d030be \
+            -- . ':(exclude)src/readiness.ts' ':(exclude)src/server.ts' > /tmp/robot-hardening.patch
+          git apply --3way --index /tmp/robot-hardening.patch
+
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+          const path = 'src/server.ts';
+          let source = readFileSync(path, 'utf8');
+
+          const oldBlock = `      const silent = silentSides(nowMs);
+          if (silent.length > 0) {
+            calibration.fail(
+              \`No audio arriving from the \${silent.join(' or ')}. \`
+              + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
+            );
+            return;
+          }
+
+          if (robotRouteActive()) {
+            restartBootCalibration(nowMs, false);
+            return;
+          }
+
+          const timeline = currentTimelineStatus(nowMs);
+          if (Number(timeline.state) !== 1) {
+            calibration.fail('Play YouTube on the phone before calibration.');
+            return;
+          }
+          calibrationWasAutomatic = false;`;
+
+          const newBlock = `      if (robotRouteActive()) {
+            const silent = silentSides(nowMs);
+            if (silent.length > 0) {
+              calibration.fail(
+                \`No audio arriving from the \${silent.join(' or ')}. \`
+                + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
+              );
+              return;
+            }
+            restartBootCalibration(nowMs, false);
+            return;
+          }
+
+          const timeline = currentTimelineStatus(nowMs);
+          if (Number(timeline.state) !== 1) {
+            calibration.fail('Play YouTube on the phone before calibration.');
+            return;
+          }
+
+          const silent = silentSides(nowMs);
+          if (silent.length > 0) {
+            calibration.fail(
+              \`No audio arriving from the \${silent.join(' or ')}. \`
+              + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
+            );
+            return;
+          }
+
+          calibrationWasAutomatic = false;`;
+
+          const count = source.split(oldBlock).length - 1;
+          if (count !== 1) throw new Error(`expected one manual-calibration boundary, found ${count}`);
+          source = source.replace(oldBlock, newBlock);
+          writeFileSync(path, source);
+          NODE
+
+          git add src/server.ts test/product-status-server.test.ts
+
+          # The temporary workflow must not survive into the integration diff.
+          rm .github/workflows/integrate-runtime-product-status.yml
+          git add -A
+
+          npm ci
+          npm run check
+          for f in public/*.js; do node --check "$f"; done
+          bash -n scripts/*.sh
+          npm test
+
+          git config user.name 'relay-runtime-integration[bot]'
+          git config user.email 'relay-runtime-integration[bot]@users.noreply.github.com'
+          git commit -m 'feat: unify Robot readiness with product status'
+          git push origin HEAD:agent/runtime-product-status

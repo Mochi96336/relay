@@ -3,61 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="dark" />
     <title>Relay</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main class="shell">
-      <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
-      <h1>Phone mic → mixer</h1>
-      <p class="intro">手機 YouTube 給歌手自己聽；Relay 把它的 timeline 交給電腦上的 Source 分頁。Source 播同一支 YouTube，Chrome 再把那個分頁的實際聲音送回 Server，和手機 Mic 混在一起。</p>
-
-      <section class="presence-panel" aria-label="Relay session">
-        <div class="presence-heading">
-          <div class="presence-state">
-            <span class="presence-dot" aria-hidden="true"></span>
-            <strong id="participant-count">Connecting…</strong>
+    <main class="live-shell">
+      <header class="room-header">
+        <div class="room-mark" aria-label="Relay">Relay</div>
+        <details class="people-menu">
+          <summary><strong id="participant-count">Connecting…</strong></summary>
+          <div class="people-popover">
+            <div class="identity-editor">
+              <span class="identity-label">You</span>
+              <button id="identity-name" class="identity-name" type="button" title="Rename yourself"></button>
+              <input id="identity-input" class="identity-input" type="text" maxlength="32" autocomplete="off" aria-label="Your Relay nickname" hidden />
+            </div>
+            <div id="participant-list" class="participant-list" aria-live="polite"></div>
           </div>
-          <div class="identity-editor">
-            <span class="identity-label">You</span>
-            <button id="identity-name" class="identity-name" type="button" title="Rename yourself"></button>
-            <input id="identity-input" class="identity-input" type="text" maxlength="32" autocomplete="off" aria-label="Your Relay nickname" hidden />
-            <button id="release-mic" class="quiet-button" type="button" hidden>Release mic</button>
-          </div>
-        </div>
-        <div id="participant-list" class="participant-list" aria-live="polite"></div>
-        <div id="mic-takeover" class="takeover-row" aria-live="polite" hidden>
-          <span id="mic-takeover-copy"></span>
-          <div class="inline-actions">
-            <button id="confirm-takeover" type="button">Confirm takeover</button>
-            <button id="cancel-takeover" class="quiet-button" type="button">Cancel</button>
-          </div>
-        </div>
-      </section>
+        </details>
+      </header>
 
-      <section class="panel" aria-live="polite">
-        <strong id="status">Idle</strong>
-        <span id="details"></span>
-      </section>
-
-      <div class="actions">
-        <button id="start-publisher" class="primary">🎤 Microphone</button>
-        <button id="start-monitor">🎧 Monitor</button>
-        <button id="stop" disabled>Stop</button>
-      </div>
-
-      <section class="test-panel youtube-panel">
-        <div class="test-heading">
-          <div>
-            <strong>YouTube monitor</strong>
-            <span>歌手手機用這個可見播放器正常聽歌；Relay 讀播放狀態與媒體時間。</span>
-          </div>
-        </div>
-
+      <section class="song-stage" aria-label="Room song">
+        <div class="section-label">Song</div>
         <div class="youtube-form">
-          <input id="youtube-url" type="text" inputmode="url" autocomplete="off" placeholder="YouTube URL or video ID" aria-label="YouTube URL or video ID" />
-          <button id="load-youtube">Load</button>
+          <input id="youtube-url" type="text" inputmode="url" autocomplete="off" placeholder="Paste a YouTube link" aria-label="YouTube URL or video ID" />
+          <button id="load-youtube" type="button">Load</button>
         </div>
 
         <div class="youtube-player-shell">
@@ -68,80 +39,139 @@
           <strong id="youtube-state">not loaded</strong>
           <span id="youtube-timeline">--:-- / --:--</span>
         </div>
-        <p id="youtube-note" class="hint">Load a video, tap Play in the YouTube player, then start Microphone.</p>
+        <p id="youtube-note" class="microcopy">Paste a song, then use the YouTube player normally.</p>
       </section>
 
-      <section class="test-panel">
-        <div class="test-heading">
-          <div>
-            <strong>Desktop YouTube source</strong>
-            <span>電腦另外開一個 Source 分頁，它會自動跟手機的 video / play / pause / seek。Chrome 擴充功能只擷取這個分頁。</span>
-          </div>
-          <div class="test-actions">
-            <button type="button" onclick="window.open('http://localhost:3000/source.html' + location.search, '_blank')">Open source</button>
-          </div>
+      <section class="performance-stage" aria-live="polite">
+        <div class="section-label">Voice</div>
+        <div class="voice-ribbon" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
         </div>
-        <p class="hint">這顆按鈕固定開本機 <code>localhost:3000</code>，不會再跟著 Cloudflare 網址走。手機開始播放後：Open source → Enable source audio → 在 Source 分頁點 Relay Tab Audio Source 擴充功能。</p>
-      </section>
-
-      <section class="test-panel">
-        <div class="test-heading">
-          <div>
-            <strong>Take recording</strong>
-            <span>Relay 直接把 authoritative 48 kHz mono mix 寫成 WAV；手機只送 Start / Stop，不再下載整份 PCM 或即時編碼錄音。</span>
-          </div>
-          <div class="test-actions">
-            <button id="start-recording">● Record</button>
-            <button id="stop-recording" disabled>■ Stop</button>
-          </div>
+        <div class="voice-copy">
+          <strong id="status">Idle</strong>
+          <span id="details"></span>
         </div>
-        <p id="recording-status" class="hint">Relay TakeSession 連線中…</p>
-        <audio id="recording-player" controls hidden style="width: 100%; margin-top: 12px"></audio>
-        <a id="download-recording" class="note" hidden>Download recording</a>
-      </section>
 
-      <section class="test-panel">
-        <div class="test-heading">
-          <div>
-            <strong>Legacy click sync test</strong>
-            <span>保留原本的 120 BPM 工程測試；現在不用優先碰它。</span>
-          </div>
-          <div class="test-actions">
-            <button id="start-sync-test" disabled>Start test</button>
-            <button id="stop-sync-test" disabled>Stop test</button>
+        <div class="mic-actions">
+          <button id="start-publisher" class="mic-primary" type="button">Take mic</button>
+          <button id="release-mic" class="text-action" type="button" hidden>Release mic</button>
+        </div>
+
+        <div id="mic-takeover" class="takeover-row" aria-live="polite" hidden>
+          <span id="mic-takeover-copy"></span>
+          <div class="inline-actions">
+            <button id="confirm-takeover" type="button">Take mic</button>
+            <button id="cancel-takeover" class="text-action" type="button">Cancel</button>
           </div>
         </div>
       </section>
 
-      <label class="gain-control" for="song-level">
-        <span>Song level</span>
-        <input id="song-level" type="range" min="0" max="100" step="1" value="40" disabled />
-        <output id="song-level-value" for="song-level">40%</output>
-      </label>
+      <section class="take-strip" aria-label="Take recording">
+        <div class="take-actions">
+          <button id="start-recording" class="record-action" type="button">Record take</button>
+          <button id="stop-recording" class="record-action recording" type="button" disabled>Stop</button>
+        </div>
+        <p id="recording-status" class="microcopy">Relay TakeSession connecting…</p>
+        <audio id="recording-player" controls hidden></audio>
+        <a id="download-recording" class="take-link" hidden>Open last take</a>
+      </section>
 
-      <label class="gain-control" for="mic-gain">
-        <span>Mic gain</span>
-        <input id="mic-gain" type="range" min="0" max="36" step="1" value="24" disabled />
-        <output id="mic-gain-value" for="mic-gain">+24 dB</output>
-      </label>
-      <p id="mic-gain-advice" class="hint">開始唱之後，這裡會顯示實際電平與建議的 Mic gain。</p>
+      <footer class="live-actions">
+        <div class="listen-action">
+          <button id="listen-toggle" class="text-action" type="button" aria-pressed="false">Listen</button>
+          <span id="listen-note" class="action-note" aria-live="polite"></span>
+        </div>
 
-      <div class="actions">
-        <button id="calibrate-timing">校正人聲時間</button>
-      </div>
-      <p id="calibrate-status" class="hint">播放開始後會自動校正；覺得對不上可以在這裡手動重跑。</p>
+        <details class="adjust-panel">
+          <summary>Adjust</summary>
+          <div class="adjust-sheet">
+            <div class="adjust-heading">
+              <strong>Adjust</strong>
+              <span>Room mix + this phone</span>
+            </div>
 
-      <label class="gain-control" for="monitor-gain">
-        <span>Monitor gain</span>
-        <input id="monitor-gain" type="range" min="0" max="30" step="1" value="30" />
-        <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
-      </label>
-      <p class="hint">人聲對齊在 Source 分頁用 Calibrate timing 量測，再用該頁的 fine tune 微調。</p>
+            <label class="mix-row" for="mic-gain">
+              <span>Voice</span>
+              <input id="mic-gain" type="range" min="0" max="36" step="1" value="24" disabled />
+              <output id="mic-gain-value" for="mic-gain">+24 dB</output>
+            </label>
+            <p id="mic-gain-advice" class="microcopy">Voice guidance appears while singing.</p>
 
-      <p class="note">手機 Mic 仍需要 HTTPS；Desktop source 則固定用本機 Relay (`localhost`) 讓 Chrome 擴充功能只把聲音送回本機 Server。</p>
+            <label class="mix-row" for="song-level">
+              <span>Song</span>
+              <input id="song-level" type="range" min="0" max="100" step="1" value="40" disabled />
+              <output id="song-level-value" for="song-level">40%</output>
+            </label>
+
+            <label class="mix-row" for="listen-gain">
+              <span>Monitor</span>
+              <input id="listen-gain" type="range" min="0" max="100" step="1" value="70" />
+              <output id="listen-gain-value" for="listen-gain">70%</output>
+            </label>
+
+            <div class="timing-row">
+              <div>
+                <span class="section-label">Timing</span>
+                <strong id="calibrate-status">Waiting for playback</strong>
+              </div>
+              <button id="calibrate-timing" class="text-action" type="button">Recalibrate</button>
+            </div>
+          </div>
+        </details>
+      </footer>
+
+      <section class="attention-region" aria-live="polite" hidden>
+        <button type="button" class="attention-link">System needs attention <span>›</span></button>
+      </section>
+
+      <details class="system-panel">
+        <summary>System</summary>
+        <div class="system-sheet">
+          <div class="system-line"><span>Relay</span><strong>Connected</strong></div>
+          <div class="system-line"><span>Phones</span><strong>Session</strong></div>
+          <div class="system-line"><span>Robot</span><strong>See diagnostics</strong></div>
+          <div class="system-line"><span>Audio</span><strong>Live route</strong></div>
+          <div class="system-line"><span>Timing</span><strong>Automatic</strong></div>
+          <div class="system-line"><span>Recording</span><strong>Relay Take</strong></div>
+
+          <details class="diagnostics-panel">
+            <summary>Technical details</summary>
+            <div class="diagnostics-body">
+              <section class="diagnostic-block">
+                <div>
+                  <strong>Robot / development source</strong>
+                  <p>Prototype source controls stay here, outside the Live surface.</p>
+                </div>
+                <button type="button" onclick="window.open('http://localhost:3000/source.html' + location.search, '_blank')">Open source</button>
+              </section>
+
+              <section class="diagnostic-block">
+                <strong>Legacy click sync test</strong>
+                <div class="inline-actions">
+                  <button id="start-sync-test" type="button" disabled>Start test</button>
+                  <button id="stop-sync-test" type="button" disabled>Stop test</button>
+                </div>
+              </section>
+
+              <label class="mix-row legacy-monitor" for="monitor-gain">
+                <span>Legacy monitor gain</span>
+                <input id="monitor-gain" type="range" min="0" max="30" step="1" value="30" />
+                <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
+              </label>
+
+              <div class="legacy-transport-controls" aria-hidden="true">
+                <button id="start-monitor" type="button" tabindex="-1">Legacy monitor</button>
+                <button id="stop" type="button" tabindex="-1" disabled>Stop legacy transport</button>
+              </div>
+            </div>
+          </details>
+        </div>
+      </details>
     </main>
+
     <script src="/presence.js"></script>
     <script type="module" src="/app.js"></script>
+    <script type="module" src="/listen.js"></script>
     <script type="module" src="/recorder.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>

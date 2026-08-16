@@ -35,6 +35,30 @@ test('youtube sync owns command ids and expected revision instead of trusting pa
   assert.match(sync, /relay:room-song-command-rejected/);
 });
 
+test('terminal command status carries the latest room snapshot for local recovery', async () => {
+  const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+
+  assert.match(sync, /function withLatestRoom/);
+  assert.match(sync, /relay:room-song-command-status', withLatestRoom\(message\)/);
+  assert.match(sync, /relay:room-song-command-failed-ack', withLatestRoom\(message\)/);
+
+  const activeStart = source.indexOf('function activeServerMutation()');
+  const activeEnd = source.indexOf('function requestRoomSongCommand', activeStart);
+  assert.ok(activeStart >= 0 && activeEnd > activeStart);
+  const activeSection = source.slice(activeStart, activeEnd);
+  assert.match(activeSection, /serverMutation\.source === 'room-command'/);
+
+  const failedStart = source.indexOf("window.addEventListener('relay:room-song-command-failed-ack'");
+  const statusStart = source.indexOf("window.addEventListener('relay:room-song-command-status'", failedStart);
+  const handoffStart = source.indexOf("window.addEventListener('relay:song-handoff-prepare'", statusStart);
+  assert.ok(failedStart >= 0 && statusStart > failedStart && handoffStart > statusStart);
+  const terminalSection = source.slice(failedStart, handoffStart);
+  assert.match(terminalSection, /restoreAuthoritativeRoom\(detail\.room\)/);
+  assert.match(terminalSection, /pendingCommandId !== null/);
+  assert.match(terminalSection, /trackedCommandId/);
+});
+
 test('room status observation alone never starts playback', async () => {
   const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
   const branchStart = sync.indexOf("if (message.type === 'room-song-status')");

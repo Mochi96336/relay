@@ -5,7 +5,7 @@ on:
     branches:
       - agent/runtime-product-status
     paths:
-      - scripts/tmp-voice-only-runtime.mjs
+      - scripts/tmp-voice-only-runtime-v2.mjs
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ jobs:
           node-version: 20
           cache: npm
       - name: Apply exact voice-only runtime refactor
-        run: node scripts/tmp-voice-only-runtime.mjs
+        run: node scripts/tmp-voice-only-runtime-v2.mjs
       - name: Install dependencies
         run: npm ci
       - name: TypeScript check
@@ -35,6 +35,7 @@ jobs:
       - name: Commit verified runtime change
         run: |
           rm scripts/tmp-voice-only-runtime.mjs
+          rm scripts/tmp-voice-only-runtime-v2.mjs
           rm .github/workflows/tmp-voice-only-runtime.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com

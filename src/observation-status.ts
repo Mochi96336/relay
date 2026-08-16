@@ -1,4 +1,5 @@
 export type RelayObservationState = 'idle' | 'live' | 'degraded' | 'fault';
+export type RelayTimingMode = 'network-estimate' | 'acoustic-calibration';
 
 export type RelayObservationStatusV1 = {
   schema: 'relay.observation.v1';
@@ -43,7 +44,7 @@ export type RelayObservationStatusV1 = {
   calibration: {
     kind: 'none' | 'content' | 'boot-probe';
     stale: boolean;
-    timingMode: 'network-estimate' | 'acoustic-calibration';
+    timingMode: RelayTimingMode;
     activeCalibratedMicLagMs: number | null;
   };
   mix: {
@@ -68,14 +69,39 @@ export type RelayObservationStatusV1 = {
 };
 
 type RelayObservationStatusV1Body = Omit<RelayObservationStatusV1, 'schema' | 'generatedAt'>;
+type RelayObservationStatusV1Input = Omit<RelayObservationStatusV1Body, 'workload' | 'calibration'> & {
+  workload: Omit<RelayObservationStatusV1Body['workload'], 'state'> & { state: string };
+  calibration: Omit<RelayObservationStatusV1Body['calibration'], 'timingMode'> & { timingMode: string };
+};
+
+const OBSERVATION_STATES = new Set<RelayObservationState>(['idle', 'live', 'degraded', 'fault']);
+const TIMING_MODES = new Set<RelayTimingMode>(['network-estimate', 'acoustic-calibration']);
+
+function observationState(value: string): RelayObservationState {
+  if (OBSERVATION_STATES.has(value as RelayObservationState)) return value as RelayObservationState;
+  throw new Error(`Unsupported Relay observation state: ${value}`);
+}
+
+function timingMode(value: string): RelayTimingMode {
+  if (TIMING_MODES.has(value as RelayTimingMode)) return value as RelayTimingMode;
+  throw new Error(`Unsupported Relay timing mode: ${value}`);
+}
 
 export function buildRelayObservationStatusV1(
-  body: RelayObservationStatusV1Body,
+  body: RelayObservationStatusV1Input,
   generatedAt = new Date().toISOString(),
 ): RelayObservationStatusV1 {
   return {
     schema: 'relay.observation.v1',
     generatedAt,
     ...body,
+    workload: {
+      ...body.workload,
+      state: observationState(body.workload.state),
+    },
+    calibration: {
+      ...body.calibration,
+      timingMode: timingMode(body.calibration.timingMode),
+    },
   };
 }

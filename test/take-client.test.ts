@@ -32,13 +32,21 @@ test('browser reconnects to TakeSession state instead of coupling recording life
   assert.doesNotMatch(closeSection, /stop-take|mediaRecorder|stopRecording/);
 });
 
-test('ready Take artifacts stay server-owned behind one lightweight keyed Live entry', async () => {
+test('ready Take artifacts review inline instead of navigating away from Live', async () => {
   const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+
   assert.match(source, /function artifactUrl/);
   assert.match(source, /url\.searchParams\.set\('key', key\)/);
+  assert.match(source, /recordingPlayer\.src = href/);
+  assert.match(source, /lastTakeToggle\.addEventListener\('click'/);
+  assert.match(source, /lastTakeReview\.hidden = !reviewOpen/);
   assert.match(source, /recordingDownload\.href = href/);
-  assert.match(source, /recordingDownload\.textContent = `Last take ·/);
-  assert.match(source, /recordingPlayer\.hidden = true/);
-  assert.doesNotMatch(source, /recordingDownload\.download =/);
-  assert.doesNotMatch(source, /recordingPlayer\.src = href/);
+  assert.match(source, /recordingDownload\.download = `relay-take-/);
+  assert.doesNotMatch(source, /window\.open|location\.href\s*=|lastTakeToggle\.href/);
+
+  assert.match(html, /id="last-take-toggle"[^>]*type="button"/);
+  assert.match(html, /id="last-take-review"/);
+  assert.match(html, /id="recording-player" controls preload="metadata"/);
+  assert.match(html, /id="download-recording"[^>]*download>Download WAV<\/a>/);
 });

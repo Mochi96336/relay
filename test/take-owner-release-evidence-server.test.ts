@@ -94,6 +94,24 @@ async function stopAndRead(control: RelayClient, takeId: string) {
   ));
 }
 
+async function waitForNewMessage(
+  client: RelayClient,
+  startIndex: number,
+  predicate: (message: Record<string, any>) => boolean,
+  timeoutMs = 5_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = client.messages.slice(startIndex).find(predicate);
+    if (found) return found;
+    await sleep(10);
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs} ms waiting for a new message. `
+    + `Saw after index ${startIndex}: ${client.messages.slice(startIndex).map((message) => message.type).join(', ')}`,
+  );
+}
+
 async function room(server: RelayServer, controllerId = 'participant-a') {
   const control = await RelayClient.connect(server, participantQuery(controllerId, 'Controller'));
   await establishRoomSong(control, `owner-release-${controllerId}`);
@@ -146,8 +164,9 @@ test('Mic transport grace release records ownership change while participant pre
     const mic = await registerMic(server, 'participant-a', 'Mic A');
     const takeId = await startTake(control);
 
+    const releaseStart = control.messages.length;
     mic.close();
-    const released = await control.waitFor((message) => (
+    const released = await waitForNewMessage(control, releaseStart, (message) => (
       message.type === 'session-status'
       && message.micOwnerId === null
     ), 2_000);
@@ -178,8 +197,9 @@ test('participant presence expiry records ownership change before the longer Mic
     const mic = await registerMic(server, 'participant-a', 'Mic A');
     const takeId = await startTake(observer);
 
+    const releaseStart = observer.messages.length;
     mic.close();
-    const released = await observer.waitFor((message) => (
+    const released = await waitForNewMessage(observer, releaseStart, (message) => (
       message.type === 'session-status'
       && message.micOwnerId === null
     ), 2_000);

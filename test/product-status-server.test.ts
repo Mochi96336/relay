@@ -13,9 +13,13 @@ function pcm(ms: number) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
 
-test('/readyz and product-status treat a completely unarmed room as healthy idle', async () => {
+test('/statusz, /readyz and product-status agree that a completely unarmed room is healthy idle', async () => {
   const server = await startRelay(FAST);
   try {
+    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    assert.equal(remote.ok, true);
+    assert.equal(remote.state, 'idle');
+
     const readyResponse = await fetch(server.httpUrl('/readyz'));
     assert.equal(readyResponse.status, 200);
     const readiness = await readyResponse.json() as any;
@@ -46,12 +50,18 @@ test('/readyz and product-status treat a completely unarmed room as healthy idle
   }
 });
 
-test('arming the Robot source makes missing Robot audio a real blocker', async () => {
+test('arming the Robot source makes missing Robot audio a blocker everywhere', async () => {
   const server = await startRelay(FAST);
   try {
     const robot = await RelayClient.connect(server);
     robot.send({ type: 'robot-source-hello' });
     await sleep(30);
+
+    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    assert.equal(remote.ok, false);
+    assert.equal(remote.state, 'fault');
+    assert.equal(remote.robot.route, true);
+    assert.ok(remote.faults.includes('robot route has no backing source'));
 
     const readyResponse = await fetch(server.httpUrl('/readyz'));
     assert.equal(readyResponse.status, 503);
@@ -80,7 +90,7 @@ test('arming the Robot source makes missing Robot audio a real blocker', async (
   }
 });
 
-test('a legacy backing route does not require Robot identity or player delta', async () => {
+test('a legacy backing route stays healthy without Robot identity or player delta', async () => {
   const server = await startRelay(FAST);
   try {
     const backing = await RelayClient.connect(server);
@@ -88,6 +98,11 @@ test('a legacy backing route does not require Robot identity or player delta', a
     await backing.waitForType('registered');
     backing.sendPcm(pcm(40));
     await sleep(30);
+
+    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    assert.equal(remote.ok, true);
+    assert.equal(remote.state, 'live');
+    assert.equal(remote.robot.route, false);
 
     const readyResponse = await fetch(server.httpUrl('/readyz'));
     assert.equal(readyResponse.status, 200);
@@ -98,6 +113,42 @@ test('a legacy backing route does not require Robot identity or player delta', a
     assert.equal(readiness.reasons.includes('robot-source-not-connected'), false);
 
     backing.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('Robot route expectation survives simultaneous source loss during backing grace', async () => {
+  const server = await startRelay({
+    ...FAST,
+    RELAY_CALIBRATION_PROBE: '0',
+    RELAY_BACKING_GRACE_MS: '250',
+  });
+  try {
+    const robot = await RelayClient.connect(server);
+    robot.send({ type: 'robot-source-hello' });
+
+    const backing = await RelayClient.connect(server);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
+    await backing.waitForType('registered');
+    backing.sendPcm(pcm(40));
+    await sleep(30);
+
+    backing.close();
+    robot.close();
+    await sleep(60);
+
+    const readyResponse = await fetch(server.httpUrl('/readyz'));
+    assert.equal(readyResponse.status, 503);
+    const readiness = await readyResponse.json() as any;
+    assert.equal(readiness.components.route.mode, 'robot');
+    assert.ok(readiness.reasons.includes('backing-not-connected'));
+    assert.ok(readiness.reasons.includes('robot-source-not-connected'));
+
+    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    assert.equal(remote.ok, false);
+    assert.equal(remote.state, 'fault');
+    assert.equal(remote.robot.route, true);
   } finally {
     await server.stop();
   }

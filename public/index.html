@@ -87,15 +87,15 @@
       <section class="test-panel">
         <div class="test-heading">
           <div>
-            <strong>Solo recording</strong>
-            <span>直接錄 Server 輸出。Source capture 連著時，這裡錄到的是 YouTube tab audio + 手機 Mic。</span>
+            <strong>Take recording</strong>
+            <span>Relay 直接把 authoritative 48 kHz mono mix 寫成 WAV；手機只送 Start / Stop，不再下載整份 PCM 或即時編碼錄音。</span>
           </div>
           <div class="test-actions">
             <button id="start-recording">● Record</button>
             <button id="stop-recording" disabled>■ Stop</button>
           </div>
         </div>
-        <p id="recording-status" class="hint">先把手機 Mic 與 Desktop source 接好，再按 Record 做一次完整 take。</p>
+        <p id="recording-status" class="hint">Relay TakeSession 連線中…</p>
         <audio id="recording-player" controls hidden style="width: 100%; margin-top: 12px"></audio>
         <a id="download-recording" class="note" hidden>Download recording</a>
       </section>

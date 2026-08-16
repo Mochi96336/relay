@@ -4,560 +4,210 @@ const recordingStatus = document.querySelector('#recording-status');
 const recordingPlayer = document.querySelector('#recording-player');
 const recordingDownload = document.querySelector('#download-recording');
 
-const MIX_SAMPLE_RATE = 48000;
-const SOCKET_RECONNECT_MS = 1000;
-// Recording wants completeness, not low latency: hold a deep queue so a stall
-// followed by the server's catch-up burst is written out rather than trimmed.
-const RECORDER_PREBUFFER_MS = 350;
-const RECORDER_MAX_QUEUE_MS = 8000;
+const RECONNECT_MS = 1_000;
 
 let socket = null;
-let socketReconnectTimer = null;
-let transportActive = false;
-let audioContext = null;
-let playback = null;
-let mediaRecorder = null;
-let recordingChunks = [];
-let recordingUrl = null;
-let sourceSampleRate = null;
-let publisherSampleRate = null;
-let testActive = false;
-let sourceConnected = false;
-let sourceMicConnected = false;
-let sourcePrebufferMs = 0;
-let sourceTimingMode = 'network-estimate';
-let sourceCalibrationStale = false;
-let sourceNetworkCompensationMs = 0;
-let sourceCalibratedMicLagMs = null;
-let sourceRequestedMicAdvanceMs = 0;
-let sourceAppliedMicAdvanceMs = 0;
-let calibrationState = 'idle';
-let calibrationProvisional = false;
-let calibrationError = null;
-let receivedPcmFrames = 0;
-let receivedPcmSamples = 0;
-let maxPcmAbs = 0;
-let lastPcmStatusAt = 0;
-let playbackHealth = null;
-let transportDropouts = 0;
-let serverMicStarvedFrames = 0;
-let serverDroppedFrames = 0;
-let serverMicGapMs = 0;
-let serverBackingGapMs = 0;
-let serverClippedSamples = 0;
-let serverLimitedSamples = 0;
-/** The server's cumulative counters as of this take's first report. */
-let serverHealthBaseline = null;
-let serverUnheadered = false;
+let reconnectTimer = null;
+let latestStatus = { lifecycle: 'idle', take: null };
+let commandError = null;
 
 function wsUrl() {
+  const participantId = typeof window.relayParticipantId === 'string'
+    ? window.relayParticipantId
+    : '';
+  if (!participantId) return null;
+
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const source = new URLSearchParams(location.search);
+  const params = new URLSearchParams();
+  const key = source.get('key');
+  if (key) params.set('key', key);
+  params.set('participant', participantId);
+  params.set('name', typeof window.relayNickname === 'string' ? window.relayNickname : 'Guest');
+  return `${protocol}//${location.host}/ws?${params.toString()}`;
+}
+
+function artifactUrl(relativeUrl) {
+  const url = new URL(relativeUrl, location.origin);
   const key = new URLSearchParams(location.search).get('key');
-  const query = key ? `?key=${encodeURIComponent(key)}` : '';
-  return `${protocol}//${location.host}/ws${query}`;
+  if (key) url.searchParams.set('key', key);
+  return url.toString();
 }
 
-function connectSocket() {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl());
-    ws.binaryType = 'arraybuffer';
-    ws.addEventListener('open', () => resolve(ws), { once: true });
-    ws.addEventListener('error', () => reject(new Error('WebSocket connection failed.')), { once: true });
-  });
+function formatDuration(durationMs) {
+  const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-function int16ToFloat32(buffer) {
-  const input = new Int16Array(buffer);
-  const output = new Float32Array(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    output[i] = input[i] / (input[i] < 0 ? 0x8000 : 0x7fff);
-  }
-  return output;
+function shortTakeId(takeId) {
+  return typeof takeId === 'string' ? takeId.slice(0, 8) : '—';
 }
 
-function linearResample(input, sourceRate, targetRate) {
-  if (sourceRate === targetRate) return input;
+function render() {
+  const lifecycle = String(latestStatus?.lifecycle ?? 'idle');
+  const take = latestStatus?.take ?? null;
+  const connected = socket?.readyState === WebSocket.OPEN;
 
-  const ratio = targetRate / sourceRate;
-  const outputLength = Math.max(1, Math.round(input.length * ratio));
-  const output = new Float32Array(outputLength);
+  recordButton.disabled = !connected || lifecycle === 'recording' || lifecycle === 'finalizing';
+  stopButton.disabled = !connected || lifecycle !== 'recording' || !take?.takeId;
 
-  for (let i = 0; i < outputLength; i += 1) {
-    const sourcePosition = i / ratio;
-    const index = Math.floor(sourcePosition);
-    const fraction = sourcePosition - index;
-    const a = input[Math.min(index, input.length - 1)];
-    const b = input[Math.min(index + 1, input.length - 1)];
-    output[i] = a + (b - a) * fraction;
+  if (lifecycle !== 'ready') {
+    recordingPlayer.hidden = true;
+    recordingPlayer.removeAttribute('src');
+    recordingDownload.hidden = true;
+    recordingDownload.removeAttribute('href');
   }
 
-  return output;
-}
-
-function chooseMimeType() {
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/mp4',
-  ];
-  return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
-}
-
-function peakDbfs() {
-  if (maxPcmAbs <= 0) return -100;
-  return 20 * Math.log10(maxPcmAbs / 32768);
-}
-
-function isRecording() {
-  return mediaRecorder?.state === 'recording';
-}
-
-function timingProblem() {
-  if (!sourceConnected) return null;
-  if (sourceTimingMode !== 'acoustic-calibration') {
-    return `未套用聲學校正（只有 network ${Math.round(sourceNetworkCompensationMs)} ms）`;
-  }
-  if (sourceCalibrationStale) return '聲學校正已過期';
-  if (calibrationState === 'failed') {
-    const provisional = calibrationProvisional
-      ? `，目前仍暫用 ${Math.round(sourceAppliedMicAdvanceMs)} ms`
-      : '';
-    return `聲學校正未完成${provisional}${calibrationError ? `：${calibrationError}` : ''}`;
-  }
-  if (calibrationProvisional || calibrationState === 'collecting') {
-    return `聲學校正仍在確認（目前暫用 ${Math.round(sourceAppliedMicAdvanceMs)} ms）`;
-  }
-
-  const shortfall = sourceRequestedMicAdvanceMs - sourceAppliedMicAdvanceMs;
-  if (Math.abs(shortfall) >= 5) {
-    return `校正要求 ${Math.round(sourceRequestedMicAdvanceMs)} ms，但 buffer 只能套 ${Math.round(sourceAppliedMicAdvanceMs)} ms`;
-  }
-  return null;
-}
-
-function describeTiming() {
-  const problem = timingProblem();
-  if (problem) return `⚠ ${problem}`;
-  if (sourceTimingMode === 'acoustic-calibration' && Number.isFinite(sourceCalibratedMicLagMs)) {
-    return `timing ${Math.round(sourceAppliedMicAdvanceMs)} ms`;
-  }
-  return '';
-}
-
-function updateRecordingTransportStatus() {
-  if (!isRecording()) return;
-
-  if (!socket) {
-    recordingStatus.textContent = '● 錄音中 · ⚠ Relay 連線中斷，正在重連 · 這段期間會錄到靜音';
+  if (!connected && lifecycle === 'idle') {
+    recordingStatus.textContent = '正在連線到 Relay TakeSession…';
     return;
   }
 
-  if (receivedPcmFrames > 0) {
-    const glitches = playbackHealth?.underruns > 0 ? ` · ${playbackHealth.underruns} 次緩衝不足` : '';
-    const buffer = playbackHealth ? ` · buffer ${Math.round(playbackHealth.queuedMs)} ms` : '';
-    const timing = describeTiming();
-    recordingStatus.textContent = `● 錄音中 · Server PCM ${receivedPcmFrames} frames · peak ${peakDbfs().toFixed(1)} dBFS${buffer}${glitches}${timing ? ` · ${timing}` : ''}`;
+  if (commandError) {
+    recordingStatus.textContent = `⚠ ${commandError}`;
     return;
   }
 
-  if (sourceConnected && !sourceMicConnected) {
-    recordingStatus.textContent = '● 錄音中 · Source 已連線 · Mic 未連線 / 正在重連 · 歌曲照錄，這段沒有人聲';
+  if (lifecycle === 'recording' && take) {
+    recordingStatus.textContent = `● Relay 正在錄 Take ${shortTakeId(take.takeId)} · WAV 直接寫在 Server；這支手機只負責 Start / Stop。`;
     return;
   }
 
-  if (sourceConnected) {
-    const prebuffer = sourcePrebufferMs > 0 ? ` · prebuffer ${sourcePrebufferMs} ms` : '';
-    const timing = describeTiming();
-    recordingStatus.textContent = `● 錄音中 · Source + Mic 已連線${prebuffer}${timing ? ` · ${timing}` : ''} · 等待第一個 Server PCM frame…`;
+  if (lifecycle === 'finalizing' && take) {
+    recordingStatus.textContent = `正在完成 Take ${shortTakeId(take.takeId)} 的 WAV…`;
     return;
   }
 
-  if (publisherSampleRate) {
-    recordingStatus.textContent = `● 錄音中 · Mic ${publisherSampleRate} Hz 已連線 · 尚未收到 Server PCM`;
+  if (lifecycle === 'ready' && take?.artifact) {
+    const href = artifactUrl(take.artifact.url);
+    recordingPlayer.src = href;
+    recordingPlayer.hidden = false;
+    recordingDownload.href = href;
+    recordingDownload.download = take.artifact.fileName;
+    recordingDownload.textContent = `Download ${take.artifact.fileName}`;
+    recordingDownload.hidden = false;
+    recordingStatus.textContent = `Take ${shortTakeId(take.takeId)} 完成 · ${formatDuration(take.artifact.durationMs)} · 48 kHz mono WAV · ${(Number(take.artifact.sizeBytes) / 1024).toFixed(0)} KB`;
     return;
   }
 
-  recordingStatus.textContent = '● 錄音中 · 尚未看到 Mic / Source 連線';
+  if (lifecycle === 'failed' && take) {
+    recordingStatus.textContent = `Take ${shortTakeId(take.takeId)} 失敗 · ${take.error || 'WAV writer failed'}`;
+    return;
+  }
+
+  recordingStatus.textContent = connected
+    ? 'Relay TakeSession 待命；先載入歌曲並讓 Source mix 啟動，再按 Record。'
+    : 'Relay TakeSession 重新連線中…';
 }
 
-function clearSocketReconnect() {
-  if (!socketReconnectTimer) return;
-  clearTimeout(socketReconnectTimer);
-  socketReconnectTimer = null;
+function send(payload) {
+  if (socket?.readyState !== WebSocket.OPEN) {
+    commandError = 'Relay 連線中斷，尚未送出 Take 指令。';
+    render();
+    return false;
+  }
+  commandError = null;
+  socket.send(JSON.stringify(payload));
+  return true;
 }
 
-function cleanupTransport() {
-  transportActive = false;
-  clearSocketReconnect();
-  if (socket) {
-    socket.close();
-    socket = null;
-  }
-  if (playback) {
-    try {
-      playback.disconnect();
-    } catch {}
-    playback = null;
-  }
-  if (audioContext) {
-    audioContext.close().catch(() => {});
-    audioContext = null;
-  }
-  sourceSampleRate = null;
-  publisherSampleRate = null;
-  testActive = false;
-  sourceConnected = false;
-  sourceMicConnected = false;
-  sourcePrebufferMs = 0;
-  sourceTimingMode = 'network-estimate';
-  sourceCalibrationStale = false;
-  sourceNetworkCompensationMs = 0;
-  sourceCalibratedMicLagMs = null;
-  sourceRequestedMicAdvanceMs = 0;
-  sourceAppliedMicAdvanceMs = 0;
-  calibrationState = 'idle';
-  calibrationProvisional = false;
-  calibrationError = null;
-}
-
-function describeQuality() {
-  const notes = [];
-  const timing = timingProblem();
-  if (timing) notes.push(timing);
-  if (transportDropouts > 0) notes.push(`${transportDropouts} 次連線中斷`);
-  if (playbackHealth?.underruns > 0) notes.push(`${playbackHealth.underruns} 次緩衝不足`);
-  if (playbackHealth?.starvedMs > 30) notes.push(`約 ${Math.round(playbackHealth.starvedMs)} ms 靜音`);
-  if (playbackHealth?.droppedMs > 30) notes.push(`裁掉 ${Math.round(playbackHealth.droppedMs)} ms`);
-  if (serverMicStarvedFrames > 0) notes.push(`Server 人聲不足 ${serverMicStarvedFrames} frames`);
-  if (serverMicGapMs > 0) notes.push(`人聲缺口 ${serverMicGapMs} ms`);
-  if (serverBackingGapMs > 0) notes.push(`歌曲缺口 ${serverBackingGapMs} ms`);
-  // The limiter holds the voice below the threshold, so a clamp here means the
-  // voice plus the song overflowed - the song side is the one to pull down.
-  if (serverClippedSamples > 0) {
-    const ms = Math.round(serverClippedSamples / (MIX_SAMPLE_RATE / 1000));
-    notes.push(`削波 ${ms} ms — 調低 Song level`);
-  }
-  // Not a fault: this is the limiter doing its job. It is worth saying only
-  // when it never lets go, which means the gain is high enough to be flattening
-  // the dynamics rather than just catching peaks.
-  if (receivedPcmSamples > 0 && serverLimitedSamples / receivedPcmSamples > 0.6) {
-    notes.push('限幅器幾乎全程作用 — Mic gain 偏高，動態被壓平');
-  }
-  if (serverUnheadered) notes.push('有 client 送出未加 header 的 PCM');
-  if (serverDroppedFrames > 0) notes.push(`Server 丟棄 ${serverDroppedFrames} frames`);
-  return notes.length > 0 ? ` · ⚠ ${notes.join(' / ')}` : '';
-}
-
-function finishRecording(mimeType) {
-  const type = mediaRecorder?.mimeType || mimeType || 'audio/webm';
-  const blob = new Blob(recordingChunks, { type });
-  const frames = receivedPcmFrames;
-  const samples = receivedPcmSamples;
-  const peak = peakDbfs();
-  const quality = describeQuality();
-
-  if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-  recordingUrl = URL.createObjectURL(blob);
-
-  recordingPlayer.src = recordingUrl;
-  recordingPlayer.hidden = false;
-
-  const extension = type.includes('mp4') ? 'm4a' : 'webm';
-  recordingDownload.href = recordingUrl;
-  recordingDownload.download = `relay-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`;
-  recordingDownload.hidden = false;
-
-  if (frames === 0) {
-    recordingStatus.textContent = `錄音完成 · ⚠ 沒收到任何 Server PCM · ${(blob.size / 1024).toFixed(0)} KB${quality}`;
-  } else if (maxPcmAbs < 8) {
-    recordingStatus.textContent = `錄音完成 · ⚠ 收到 ${frames} PCM frames，但幾乎全是靜音 · ${(blob.size / 1024).toFixed(0)} KB${quality}`;
-  } else {
-    recordingStatus.textContent = `錄音完成 · ${frames} PCM frames / ${samples} samples · peak ${peak.toFixed(1)} dBFS · ${(blob.size / 1024).toFixed(0)} KB${quality}`;
-  }
-
-  recordingChunks = [];
-  mediaRecorder = null;
-  cleanupTransport();
-  recordButton.disabled = false;
-  stopButton.disabled = true;
-}
-
-function handleJsonMessage(message) {
-  if (message.type === 'publisher-status') {
-    publisherSampleRate = message.sampleRate ?? null;
-    if (!testActive) sourceSampleRate = publisherSampleRate;
-    updateRecordingTransportStatus();
-    return;
-  }
-
-  if (message.type === 'source-status') {
-    sourceConnected = Boolean(message.connected);
-    sourceMicConnected = Boolean(message.micConnected);
-    sourcePrebufferMs = Number(message.prebufferMs) || 0;
-    sourceTimingMode = String(message.timingMode ?? 'network-estimate');
-    sourceCalibrationStale = Boolean(message.calibrationStale);
-    sourceNetworkCompensationMs = Number(message.micNetworkCompensationMs) || 0;
-    sourceCalibratedMicLagMs = message.calibratedMicLagMs === null
-      ? null
-      : Number(message.calibratedMicLagMs);
-    sourceRequestedMicAdvanceMs = Number(message.requestedMicAdvanceMs) || 0;
-    sourceAppliedMicAdvanceMs = Number(message.appliedMicAdvanceMs) || 0;
-    // Keyed on the session, not the socket: the source may be reconnecting
-    // while the mix keeps running, and what arrives here is still the mix.
-    if (message.active) sourceSampleRate = Number(message.mixSampleRate) || MIX_SAMPLE_RATE;
-    updateRecordingTransportStatus();
-    return;
-  }
-
-  if (message.type === 'timing-calibration-status') {
-    calibrationState = String(message.state ?? 'idle');
-    calibrationProvisional = Boolean(message.provisional);
-    calibrationError = message.error ? String(message.error) : null;
-    updateRecordingTransportStatus();
-    return;
-  }
-
-  if (message.type === 'mix-health') {
-    // The server's counters run for the whole live session, so a phone that was
-    // away before this take started would otherwise be reported as damage to
-    // it. Baseline on the first report and quote the difference.
-    const totals = {
-      micStarvedFrames: Number(message.micStarvedFrames) || 0,
-      monitorDroppedFrames: Number(message.monitorDroppedFrames) || 0,
-      micGapMs: Number(message.micGapMs) || 0,
-      backingGapMs: Number(message.backingGapMs) || 0,
-      clippedSamples: Number(message.clippedSamples) || 0,
-      limitedSamples: Number(message.limitedSamples) || 0,
-    };
-
-    // A counter going backwards means the server reset its own session, so the
-    // old baseline describes audio that is no longer on the timeline.
-    const rewound = serverHealthBaseline !== null
-      && Object.keys(totals).some((key) => totals[key] < serverHealthBaseline[key]);
-    if (serverHealthBaseline === null || rewound) serverHealthBaseline = totals;
-
-    serverMicStarvedFrames = totals.micStarvedFrames - serverHealthBaseline.micStarvedFrames;
-    serverDroppedFrames = totals.monitorDroppedFrames - serverHealthBaseline.monitorDroppedFrames;
-    serverMicGapMs = totals.micGapMs - serverHealthBaseline.micGapMs;
-    serverBackingGapMs = totals.backingGapMs - serverHealthBaseline.backingGapMs;
-    serverClippedSamples = totals.clippedSamples - serverHealthBaseline.clippedSamples;
-    serverLimitedSamples = totals.limitedSamples - serverHealthBaseline.limitedSamples;
-    // Not take-scoped on purpose: this says a connected client is running stale
-    // code, which stays true regardless of when the take began.
-    serverUnheadered = Boolean(message.unheadered);
-    return;
-  }
-
-  if (message.type === 'test-status') {
-    testActive = Boolean(message.active);
-    if (testActive) {
-      sourceSampleRate = Number(message.sampleRate) || MIX_SAMPLE_RATE;
-      playback?.port.postMessage({ type: 'reset' });
-      // test-status is the click test only now; a live take is described by
-      // source-status and reported through updateRecordingTransportStatus.
-      recordingStatus.textContent = `● 錄音中 · Server mix · ${message.bpm} BPM test`;
-    } else {
-      // Never leave this null: a null rate used to make every arriving frame be
-      // counted and then discarded, which looks identical to "no audio".
-      sourceSampleRate = publisherSampleRate || MIX_SAMPLE_RATE;
-      playback?.port.postMessage({ type: 'reset' });
-      updateRecordingTransportStatus();
-    }
-  }
-}
-
-function handleBinaryMessage(data) {
-  const pcm16 = new Int16Array(data);
-  receivedPcmFrames += 1;
-  receivedPcmSamples += pcm16.length;
-  for (let i = 0; i < pcm16.length; i += 1) {
-    maxPcmAbs = Math.max(maxPcmAbs, Math.abs(pcm16[i]));
-  }
-
-  const now = performance.now();
-  if (now - lastPcmStatusAt >= 500) {
-    lastPcmStatusAt = now;
-    updateRecordingTransportStatus();
-  }
-
-  if (!audioContext || !playback) return;
-
-  const rate = sourceSampleRate || MIX_SAMPLE_RATE;
-  const pcm = int16ToFloat32(data);
-  const samples = linearResample(pcm, rate, audioContext.sampleRate);
-  playback.port.postMessage(samples.buffer, [samples.buffer]);
+function clearReconnect() {
+  if (!reconnectTimer) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
 }
 
 function scheduleReconnect() {
-  if (!transportActive) return;
-  clearSocketReconnect();
-  socketReconnectTimer = setTimeout(() => {
-    socketReconnectTimer = null;
-    connectTransport().catch(() => scheduleReconnect());
-  }, SOCKET_RECONNECT_MS);
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect().catch(scheduleReconnect);
+  }, RECONNECT_MS);
 }
 
-async function connectTransport() {
-  if (!transportActive) return;
-  clearSocketReconnect();
-
-  const ws = await connectSocket();
-  if (!transportActive) {
-    ws.close();
+async function connect() {
+  if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
+  const url = wsUrl();
+  if (!url) {
+    scheduleReconnect();
     return;
   }
 
-  socket = ws;
-  playback?.port.postMessage({ type: 'reset' });
-  ws.send(JSON.stringify({ type: 'register', role: 'monitor' }));
+  clearReconnect();
+  const next = new WebSocket(url);
+  socket = next;
+  render();
 
-  ws.addEventListener('message', (event) => {
-    if (socket !== ws) return;
+  await new Promise((resolve, reject) => {
+    next.addEventListener('open', resolve, { once: true });
+    next.addEventListener('error', reject, { once: true });
+  });
 
-    if (typeof event.data === 'string') {
-      let message;
-      try {
-        message = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      handleJsonMessage(message);
+  if (socket !== next) {
+    next.close();
+    return;
+  }
+
+  next.addEventListener('message', (event) => {
+    if (socket !== next || typeof event.data !== 'string') return;
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
       return;
     }
 
-    if (event.data instanceof ArrayBuffer) handleBinaryMessage(event.data);
+    if (message.type === 'take-status') {
+      latestStatus = message;
+      commandError = null;
+      render();
+      return;
+    }
+
+    if (message.type === 'take-command-rejected') {
+      const reasons = {
+        'participant-required': 'Take 指令需要 Relay participant identity。',
+        'mix-not-active': 'Source mix 還沒啟動，現在沒有 authoritative mix 可以錄。',
+        'song-required': '先載入一首歌，再開始 Take。',
+        'take-active': '已經有一個 Take 正在錄音或收尾。',
+        'take-not-recording': '目前沒有正在錄的 Take。',
+        'stale-take': '這個 Stop 屬於較舊的 Take，已忽略。',
+        'invalid-take-id': 'Stop Take 缺少有效的 Take ID。',
+        'writer-failed': 'Relay 無法建立 WAV writer。',
+        'storage-unavailable': 'Relay 錄音磁碟空間不足，或 Take 儲存目錄目前不可用。',
+      };
+      commandError = reasons[message.reason] ?? `Take 指令被拒絕：${message.reason ?? 'unknown'}`;
+      render();
+    }
   });
 
-  ws.addEventListener('close', () => {
-    if (socket !== ws) return;
+  next.addEventListener('close', () => {
+    if (socket !== next) return;
     socket = null;
-    if (!transportActive) return;
-    // A dev-server restart, a tunnel hiccup or a heartbeat miss used to end the
-    // take outright. Keep recording and reconnect; the gap is audible silence
-    // and is reported in the summary.
-    transportDropouts += 1;
-    updateRecordingTransportStatus();
+    render();
     scheduleReconnect();
   });
-
-  ws.addEventListener('error', () => {
-    try {
-      ws.close();
-    } catch {}
+  next.addEventListener('error', () => {
+    try { next.close(); } catch {}
   });
 
-  updateRecordingTransportStatus();
-}
-
-async function startRecording() {
-  if (typeof MediaRecorder === 'undefined') {
-    recordingStatus.textContent = '這個瀏覽器不支援 MediaRecorder。';
-    return;
-  }
-
-  recordButton.disabled = true;
-  stopButton.disabled = true;
-  recordingStatus.textContent = '正在連線到 Server…';
-  recordingPlayer.hidden = true;
-  recordingDownload.hidden = true;
-  recordingChunks = [];
-  sourceConnected = false;
-  sourceMicConnected = false;
-  sourcePrebufferMs = 0;
-  sourceTimingMode = 'network-estimate';
-  sourceCalibrationStale = false;
-  sourceNetworkCompensationMs = 0;
-  sourceCalibratedMicLagMs = null;
-  sourceRequestedMicAdvanceMs = 0;
-  sourceAppliedMicAdvanceMs = 0;
-  calibrationState = 'idle';
-  calibrationProvisional = false;
-  calibrationError = null;
-  receivedPcmFrames = 0;
-  receivedPcmSamples = 0;
-  maxPcmAbs = 0;
-  lastPcmStatusAt = 0;
-  playbackHealth = null;
-  transportDropouts = 0;
-  serverMicStarvedFrames = 0;
-  serverDroppedFrames = 0;
-  serverMicGapMs = 0;
-  serverBackingGapMs = 0;
-  serverClippedSamples = 0;
-  serverLimitedSamples = 0;
-  serverHealthBaseline = null;
-  serverUnheadered = false;
-
-  audioContext = new AudioContext({ latencyHint: 'interactive' });
-  await audioContext.audioWorklet.addModule('/playback-worklet.js');
-  await audioContext.resume();
-
-  playback = new AudioWorkletNode(audioContext, 'playback-processor', {
-    numberOfInputs: 0,
-    numberOfOutputs: 1,
-    outputChannelCount: [1],
-  });
-  playback.port.postMessage({
-    type: 'configure',
-    prebufferMs: RECORDER_PREBUFFER_MS,
-    maxQueueMs: RECORDER_MAX_QUEUE_MS,
-  });
-  playback.port.onmessage = (event) => {
-    if (event.data?.type === 'health') playbackHealth = event.data;
-  };
-
-  const recordingDestination = audioContext.createMediaStreamDestination();
-  playback.connect(recordingDestination);
-
-  transportActive = true;
-  await connectTransport();
-
-  const mimeType = chooseMimeType();
-  mediaRecorder = new MediaRecorder(
-    recordingDestination.stream,
-    mimeType ? { mimeType } : undefined,
-  );
-
-  mediaRecorder.addEventListener('dataavailable', (event) => {
-    if (event.data.size > 0) recordingChunks.push(event.data);
-  });
-
-  mediaRecorder.addEventListener('stop', () => finishRecording(mimeType), { once: true });
-  mediaRecorder.start(1000);
-
-  if (window.relayActiveRole === 'publisher') {
-    recordingStatus.textContent =
-      '● 錄音中 · ⚠ 這台裝置同時在當 Microphone。錄音要再下載整份 48 kHz 混音並即時編碼，'
-      + '手機通常撐不住，聲音會斷斷續續。請改在電腦上錄。';
-  } else {
-    updateRecordingTransportStatus();
-  }
-
-  stopButton.disabled = false;
-}
-
-function stopRecording() {
-  if (isRecording()) {
-    stopButton.disabled = true;
-    recordingStatus.textContent = '正在完成錄音…';
-    transportActive = false;
-    clearSocketReconnect();
-    mediaRecorder.stop();
-  }
+  next.send(JSON.stringify({ type: 'take-status-request' }));
+  render();
 }
 
 recordButton.addEventListener('click', () => {
-  startRecording().catch((error) => {
-    console.error(error);
-    cleanupTransport();
-    mediaRecorder = null;
-    recordingStatus.textContent = error instanceof Error ? error.message : String(error);
-    recordButton.disabled = false;
-    stopButton.disabled = true;
-  });
+  send({ type: 'start-take' });
 });
 
-stopButton.addEventListener('click', stopRecording);
+stopButton.addEventListener('click', () => {
+  const takeId = latestStatus?.take?.takeId;
+  if (!takeId) return;
+  send({ type: 'stop-take', takeId });
+});
 
-recordButton.disabled = false;
+recordButton.disabled = true;
 stopButton.disabled = true;
+render();
+connect().catch(scheduleReconnect);

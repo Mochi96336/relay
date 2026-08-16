@@ -12,16 +12,34 @@ import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
+import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
+import { buildProductViewModel } from './product-view-model.js';
+import { buildReadiness } from './readiness.js';
 import {
   ParticipantSession,
   normalizeNickname,
   normalizeParticipantId,
 } from './participant-session.js';
-import { YouTubeTimelineTracker } from './youtube-timeline.js';
+import { parseRoomSongCommand } from './room-song-command.js';
+import {
+  RoomSongCommandSession,
+  type AcceptedRoomSongCommand,
+} from './room-song-command-session.js';
+import {
+  LEGACY_PLAYBACK_PARTICIPANT_ID,
+  LEGACY_PLAYBACK_TRANSPORT_ID,
+  SongSession,
+  normalizePlaybackGeneration,
+  normalizePlaybackTransportId,
+  type PlaybackIdentity,
+  type SongHandoffPlan,
+} from './song-session.js';
+import { TakeController, type TakeSongSnapshot } from './take-controller.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
+const takeDir = path.resolve(process.env.RELAY_TAKE_DIR ?? path.join(process.cwd(), 'takes'));
 const port = Number(process.env.PORT ?? 3000);
 const relayKey = process.env.RELAY_KEY ?? null;
 
@@ -77,9 +95,26 @@ const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
 const MIC_REORDER_WINDOW_PACKETS = envNonNegativeInt('RELAY_AUDIO_REORDER_WINDOW_PACKETS', 8);
 const MIC_REORDER_DEADLINE_MS = envNonNegativeInt('RELAY_AUDIO_REORDER_DEADLINE_MS', 40);
 const MIC_MAX_FORWARD_JUMP_PACKETS = envNonNegativeInt('RELAY_AUDIO_MAX_FORWARD_JUMP_PACKETS', 256);
+const PLAYBACK_MIC_INTENT_MS = 10_000;
+const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const TAKE_ARTIFACT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const app = express();
 app.disable('x-powered-by');
+app.get('/takes/:takeId.wav', (req, res) => {
+  if (relayKey && req.query.key !== relayKey) {
+    res.sendStatus(401);
+    return;
+  }
+  const takeId = String(req.params.takeId ?? '');
+  if (!TAKE_ARTIFACT_ID_PATTERN.test(takeId)) {
+    res.sendStatus(404);
+    return;
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.type('audio/wav');
+  res.sendFile(path.join(takeDir, `${takeId}.wav`));
+});
 app.use(express.static(publicDir));
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true });
@@ -87,11 +122,17 @@ app.get('/healthz', (_req, res) => {
 app.get('/statusz', (_req, res) => {
   res.json(remoteStatusPayload());
 });
+app.get('/readyz', (_req, res) => {
+  const readiness = readinessPayload();
+  res.status(readiness.ready ? 200 : 503).json(readiness);
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
-const youtubeTimeline = new YouTubeTimelineTracker();
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
+const youtubeTimeline = new SongSession();
+const roomSongCommands = new RoomSongCommandSession();
+let roomSongCommandRevision = 0;
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -123,6 +164,12 @@ type RelaySocket = WebSocket & {
   isRobotSource?: boolean;
   participantId?: string;
   participantConnectionId?: string;
+  playbackParticipantId?: string;
+  playbackTransportId?: string;
+  playbackGeneration?: number;
+  playbackMicIntentAtMs?: number;
+  legacyPlaybackGeneration?: number;
+  telemetryRejectedReason?: string;
 };
 
 type TimelineStatus = {
@@ -149,6 +196,7 @@ let testFrameIndex = 0;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
+let legacyPlaybackConnectionSequence = 0;
 let micTransportGraceTimer: NodeJS.Timeout | null = null;
 let micTransportGraceOwnerId: string | null = null;
 
@@ -164,6 +212,12 @@ const session = new AudioSession({
   backingRetentionMs: BACKING_RETENTION_MS,
 });
 session.setMicGainDb(micGainDb);
+
+const takeController = new TakeController({
+  directory: takeDir,
+  sampleRate: MIX_SAMPLE_RATE,
+  onChange: (status) => broadcastJson(status),
+});
 
 let sourceGeneration = 0;
 const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
@@ -279,6 +333,8 @@ function scheduleMicTransportGrace(ownerId: string) {
     const released = participants.releaseMic(expectedOwnerId);
     if (!released.ok) return;
     micPacketReceiver = null;
+    takeController.noteQualityEvent('mic-owner-changed');
+    cancelPendingRoomSongCommand('mic-owner-released');
     invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
     broadcastSessionStatus();
   }, MIC_TRANSPORT_GRACE_MS);
@@ -363,6 +419,246 @@ function broadcastSessionStatus() {
 
 function participantPayload(participantId: string | null) {
   return participantId ? participants.participant(participantId) : null;
+}
+
+function requireMicOwnerCommand(socket: RelaySocket, command: MicOwnerCommand) {
+  const decision = authorizeMicOwnerCommand(
+    {
+      participantId: socket.participantId ?? null,
+      isCurrentPublisher: socket === publisher && socket.role === 'publisher',
+    },
+    participants.micOwnerId,
+  );
+  if (decision.ok) return true;
+
+  sendJson(socket, {
+    type: 'command-rejected',
+    command,
+    reason: decision.reason,
+    owner: participantPayload(participants.micOwnerId),
+    revision: participants.revision,
+  });
+  return false;
+}
+
+function playbackIdentityForSocket(socket: RelaySocket): PlaybackIdentity | null {
+  if (
+    !socket.playbackParticipantId
+    || !socket.playbackTransportId
+    || socket.playbackGeneration === undefined
+  ) return null;
+  return {
+    participantId: socket.playbackParticipantId,
+    transportId: socket.playbackTransportId,
+    generation: socket.playbackGeneration,
+  };
+}
+
+function samePlaybackIdentity(a: PlaybackIdentity, b: PlaybackIdentity) {
+  return a.participantId === b.participantId
+    && a.transportId === b.transportId
+    && a.generation === b.generation;
+}
+
+function sendToPlayback(identity: PlaybackIdentity, payload: unknown) {
+  let sent = 0;
+  for (const client of wss.clients) {
+    const candidate = client as RelaySocket;
+    const candidateIdentity = playbackIdentityForSocket(candidate);
+    if (
+      candidate.readyState === WebSocket.OPEN
+      && candidateIdentity
+      && samePlaybackIdentity(candidateIdentity, identity)
+    ) {
+      sendJson(candidate, payload);
+      sent += 1;
+    }
+  }
+  return sent;
+}
+
+function roomSongCommandStatusPayload(nowMs = performance.now()) {
+  return roomSongCommands.statusPayload(roomSongCommandRevision, nowMs);
+}
+
+function roomSongCommandApplyPayload(command: AcceptedRoomSongCommand) {
+  return {
+    type: 'room-song-command-apply',
+    commandId: command.commandId,
+    revision: command.revision,
+    issuedByParticipantId: command.issuedByParticipantId,
+    targetPlaybackTransportId: command.target.transportId,
+    targetPlaybackGeneration: command.target.generation,
+    ...command.body,
+  };
+}
+
+function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: string) {
+  sendJson(socket, {
+    type: 'room-song-command-rejected',
+    commandId: typeof commandId === 'string' ? commandId : null,
+    reason,
+    revision: roomSongCommandRevision,
+    room: youtubeTimeline.roomStatusPayload(),
+  });
+}
+
+function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now()) {
+  const cancelled = roomSongCommands.cancelPending();
+  if (!cancelled) return false;
+  sendToPlayback(cancelled.target, {
+    type: 'room-song-command-failed-ack',
+    commandId: cancelled.commandId,
+    revision: roomSongCommandRevision,
+    reason,
+    room: youtubeTimeline.roomStatusPayload(nowMs),
+  });
+  broadcastJson(roomSongCommandStatusPayload(nowMs));
+  return true;
+}
+
+function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot | null {
+  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
+  if (typeof room.videoId !== 'string' || !room.videoId) return null;
+
+  const revision = Number(room.revision);
+  const state = Number(room.state);
+  const serverTime = Number(room.serverTime);
+  const playbackRate = Number(room.playbackRate);
+  return {
+    videoId: room.videoId,
+    revision: Number.isInteger(revision) ? revision : null,
+    state: Number.isFinite(state) ? state : null,
+    serverTime: Number.isFinite(serverTime) ? serverTime : null,
+    playbackRate: Number.isFinite(playbackRate) ? playbackRate : null,
+  };
+}
+
+function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
+  sendJson(socket, {
+    type: 'take-command-rejected',
+    command,
+    reason,
+  });
+}
+
+function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
+  return {
+    type,
+    handoffId: plan.handoffId,
+    revision: plan.revision,
+    videoId: plan.videoId,
+    state: plan.state,
+    serverTime: plan.serverTime,
+    playbackRate: plan.playbackRate,
+  };
+}
+
+function sendHandoffPlan(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
+  return sendToPlayback(plan.target, handoffPayload(type, plan));
+}
+
+function selectPlaybackHandoffTarget(participantId: string, nowMs: number) {
+  const candidates: Array<{ identity: PlaybackIdentity; intentAtMs: number }> = [];
+  for (const client of wss.clients) {
+    const candidate = client as RelaySocket;
+    const identity = playbackIdentityForSocket(candidate);
+    if (
+      candidate.readyState !== WebSocket.OPEN
+      || !identity
+      || identity.participantId !== participantId
+    ) continue;
+    candidates.push({ identity, intentAtMs: candidate.playbackMicIntentAtMs ?? -Infinity });
+  }
+
+  const intended = candidates
+    .filter((candidate) => nowMs - candidate.intentAtMs <= PLAYBACK_MIC_INTENT_MS)
+    .sort((a, b) => b.intentAtMs - a.intentAtMs);
+  if (intended.length > 0) return intended[0].identity;
+
+  // Presence alone must never move the song. This fallback is used only after
+  // a microphone ownership action, and only when one playback transport exists
+  // so there is no multi-tab choice to guess.
+  return candidates.length === 1 ? candidates[0].identity : null;
+}
+
+function playbackTransportIsConnected(identity: PlaybackIdentity) {
+  for (const client of wss.clients) {
+    const candidate = client as RelaySocket;
+    if (candidate.readyState !== WebSocket.OPEN) continue;
+    const candidateIdentity = playbackIdentityForSocket(candidate);
+    if (candidateIdentity && samePlaybackIdentity(candidateIdentity, identity)) return true;
+  }
+  return false;
+}
+
+/**
+ * Ends a handoff that has stopped being able to complete.
+ *
+ * A live handoff intentionally holds the room song still, so it must not be
+ * able to outlive the transport it is waiting for. A page reload also lands
+ * here rather than resuming: the playback generation changes on load, so the
+ * reloaded tab is a different transport and the prepared target is genuinely
+ * gone.
+ */
+function sweepPreparedSongHandoff(nowMs: number) {
+  const target = youtubeTimeline.handoffTarget();
+  if (!target) return false;
+  if (!youtubeTimeline.sweepHandoff(playbackTransportIsConnected(target), nowMs)) return false;
+
+  sendToPlayback(target, { type: 'song-handoff-cancelled' });
+  broadcastJson(youtubeTimeline.statusPayload(nowMs));
+  broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+  return true;
+}
+
+function beginPreparedSongHandoff(participantId: string, nowMs = performance.now()) {
+  const target = selectPlaybackHandoffTarget(participantId, nowMs);
+  if (!target) return false;
+  const plan = youtubeTimeline.beginHandoff(target, participants.micOwnerId, nowMs);
+  if (!plan) return false;
+  sendHandoffPlan('song-handoff-prepare', plan);
+  broadcastJson(youtubeTimeline.statusPayload(nowMs));
+  broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+  return true;
+}
+
+/**
+ * Tells a playback page why its telemetry is being ignored.
+ *
+ * Rejection used to be a bare `return`, which is indistinguishable from a lost
+ * connection: the page keeps sending several times a second and its server
+ * timeline readout simply never advances. Telemetry is far too frequent to
+ * answer every time, so only a *change* of reason is reported, and an accepted
+ * packet clears the memory so the next problem is reported again.
+ */
+/**
+ * The same discipline for the room-command gate's refusals.
+ *
+ * Shares `telemetryRejectedReason` with the authority refusals above so that
+ * switching between the two kinds still notifies, and one accepted packet
+ * clears both.
+ */
+function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
+  const key = `room-song:${reason}`;
+  if (socket.telemetryRejectedReason === key) return;
+  socket.telemetryRejectedReason = key;
+  sendJson(socket, {
+    type: 'room-song-telemetry-rejected',
+    reason,
+    revision: roomSongCommandRevision,
+  });
+}
+
+function reportTelemetryRejected(socket: RelaySocket, reason: string) {
+  if (socket.telemetryRejectedReason === reason) return;
+  socket.telemetryRejectedReason = reason;
+  sendJson(socket, {
+    type: 'youtube-telemetry-rejected',
+    reason,
+    playbackLeaderParticipantId: youtubeTimeline.statusPayload().playbackLeaderParticipantId,
+    micOwner: participantPayload(participants.micOwnerId),
+  });
 }
 
 function broadcastToMonitors(payload: string | Buffer, binary = false) {
@@ -507,6 +803,19 @@ function sourceStatusPayload() {
   };
 }
 
+function takeQualityFrameState(nowMs = performance.now()) {
+  const alignment = session.alignment;
+  return {
+    timingMode: alignment.calibratedMicLagMs === null
+      ? 'network-estimate' as const
+      : 'acoustic-calibration' as const,
+    calibrationStale: calibrationIsStale(),
+    alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
+    robotRoute: robotRouteActive(),
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
+  };
+}
+
 function mixHealthPayload() {
   const health = session.health();
   return {
@@ -550,14 +859,20 @@ function remoteStatusPayload() {
   const micConnected = publisher?.readyState === WebSocket.OPEN;
   const backingStreaming = nowMs - lastBackingFrameAt < STREAM_LIVE_MS;
   const micStreaming = nowMs - lastMicFrameAt < STREAM_LIVE_MS;
-  const robotRoute = robotRouteActive();
+  // Route identity is readiness evidence, not a calibration feature flag.
+  // A deployment may deliberately disable boot probing while still running
+  // the formal Robot route. Keep /statusz aligned with /readyz.
+  const routeMode = readinessPayload(nowMs).components.route.mode;
+  const robotRoute = routeMode === 'robot';
   const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;
   const deltaFresh = robotDeltaIsFresh(nowMs);
 
   const faults: string[] = [];
   if (backingConnected && !backingStreaming) faults.push('backing source is connected but no longer sending audio');
   if (micConnected && !micStreaming) faults.push('microphone is connected but no longer sending audio');
-  if (robotRoute && !backingConnected) faults.push('robot route has no backing source');
+  if (routeMode !== 'idle' && !backingConnected) {
+    faults.push(`${routeMode} route has no backing source`);
+  }
   if (robotRoute && !robotSourceConnected) faults.push('robot route has no source page');
 
   const warnings: string[] = [];
@@ -659,6 +974,90 @@ function mixSettingsPayload() {
 
 function currentTimelineStatus(nowMs = performance.now()) {
   return youtubeTimeline.statusPayload(nowMs) as TimelineStatus & Record<string, unknown>;
+}
+
+/**
+ * One runtime readiness collector shared by diagnostics and product UI.
+ *
+ * Keep transport facts here rather than reconstructing them in /readyz, the
+ * browser, or ProductViewModel independently. The pure readiness model decides
+ * what those facts mean; this function only samples the live server once.
+ */
+function readinessPayload(nowMs = performance.now()) {
+  const timeline = currentTimelineStatus(nowMs);
+  const calibrationStatus = calibration.status();
+  const timelineState = Number(timeline.state);
+
+  return buildReadiness({
+    backingConnected: backing?.readyState === WebSocket.OPEN,
+    backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
+    backingSampleRate,
+    backingIsRobot,
+    micConnected: publisher?.readyState === WebSocket.OPEN,
+    micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
+    robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    sessionActive: session.active,
+    timelineConnected: Boolean(timeline.connected && timeline.videoId),
+    timelineState: Number.isFinite(timelineState) ? timelineState : null,
+    playerOffsetMs: robotPlayerOffsetMs,
+    playerOffsetFresh: robotDeltaIsFresh(nowMs),
+    calibrationState: String(calibrationStatus.state ?? 'idle'),
+    calibrationValid: calibrationCanApply() && session.alignment.calibratedMicLagMs !== null,
+    calibrationStale: calibrationIsStale(),
+    calibrationKind,
+    probeCorrelation: lastProbeCorrelation,
+    bootCalibration: lastBootCalibration,
+  });
+}
+
+function productStatusPayload(nowMs = performance.now()) {
+  const readiness = readinessPayload(nowMs);
+  const participantSnapshot = participants.snapshot();
+  const micOwner = participantSnapshot.micOwnerId
+    ? participantSnapshot.participants.find((participant) => participant.id === participantSnapshot.micOwnerId) ?? null
+    : null;
+  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
+  const roomState = Number(room.state);
+  const takeStatus = takeController.statusPayload();
+  const take = takeStatus.take;
+  const alignment = session.alignment;
+  const calibrationStatus = calibration.status();
+
+  return buildProductViewModel({
+    readiness,
+    participantCount: participantSnapshot.participants.length,
+    micOwnerId: participantSnapshot.micOwnerId,
+    micOwnerNickname: micOwner?.nickname ?? null,
+    roomSong: {
+      videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
+      connected: Boolean(room.connected),
+      state: Number.isFinite(roomState) ? roomState : null,
+      handoffState: typeof room.handoffState === 'string' ? room.handoffState : 'idle',
+    },
+    take: {
+      lifecycle: takeStatus.lifecycle,
+      takeId: take?.takeId ?? null,
+      qualityVerdict: take?.quality?.verdict ?? null,
+    },
+    timing: {
+      timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+      calibrationState: String(calibrationStatus.state ?? 'idle'),
+      calibrationStale: calibrationIsStale(),
+      alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
+      robotRoute: robotRouteActive(),
+      robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    },
+  });
+}
+
+let lastProductStatusJson = '';
+function broadcastProductStatus(nowMs = performance.now()) {
+  const status = productStatusPayload(nowMs);
+  const serialized = JSON.stringify(status);
+  if (serialized === lastProductStatusJson) return false;
+  lastProductStatusJson = serialized;
+  broadcastJson(status);
+  return true;
 }
 
 function broadcastStatus() {
@@ -802,7 +1201,9 @@ function clearBootCalibrationState() {
 
 function stopLiveSource() {
   cancelBackingGrace();
+  backingIsRobot = false;
   if (!session.active) return;
+  takeController.endMix();
   clearBootCalibrationState();
   robotPlayerOffsetMs = null;
   robotPlayerOffsetAt = -Infinity;
@@ -827,13 +1228,16 @@ function processPublisherFrame(frame: PcmFrame) {
     if (session.active) {
       const micRestarted = previousGeneration !== null && session.micGeneration !== previousGeneration;
       if (micRestarted) {
+        takeController.noteQualityEvent('mic-capture-restarted');
         abandonProbeRun();
         if (calibration.collecting) {
           calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
         } else {
           syncAppliedCalibration();
-          broadcastJson(sourceStatusPayload());
+          // Publish invalidated timing before the source summary
+          // so consumers never observe stale timing for a new capture.
           broadcastJson(timingCalibrationStatusPayload());
+          broadcastJson(sourceStatusPayload());
         }
       }
       calibration.observeMic(samples, start);
@@ -866,7 +1270,11 @@ const mixerTimer = setInterval(() => {
     return;
   }
 
-  session.drain((frame) => broadcastToMonitors(frame, true));
+  session.drain((frame, evidence) => {
+    const nowMs = performance.now();
+    takeController.append(frame, takeQualityFrameState(nowMs), evidence);
+    broadcastToMonitors(frame, true);
+  });
 }, 5);
 
 function maybeAutoCalibrate(nowMs: number) {
@@ -1018,17 +1426,11 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
 
   if (PROBE_DEBUG) {
-    // The window's own peak separates "the probe was not heard" from "the
-    // probe was never looked at": a correlation of -1 is what an all-zero
-    // window scores, and a range the timeline does not cover reads as zeros.
     let peak = 0;
     for (let i = 0; i < window.length; i += 1) {
       const magnitude = Math.abs(window[i]);
       if (magnitude > peak) peak = magnitude;
     }
-    // And the most recent audio on the same timeline, as a control: if that is
-    // silent too the stream is not carrying anything, and if it is not the
-    // window is simply looking in the wrong place.
     const controlSeconds = 20;
     const recent = waiting.target === 'mic'
       ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
@@ -1159,6 +1561,11 @@ const youtubeTimelineTimer = setInterval(() => {
 
   if (youtubeTimeline.hasTelemetry) {
     broadcastJson(youtubeTimeline.statusPayload(nowMs));
+    broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+  }
+
+  if (roomSongCommands.sweep(nowMs)) {
+    broadcastJson(roomSongCommandStatusPayload(nowMs));
   }
 
   if (calibration.collecting) {
@@ -1183,9 +1590,6 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
-  // Freshness is a live validity condition, not just something checked when a
-  // socket closes. If a robot page freezes while its WebSocket remains open,
-  // the last delta loses authority after ROBOT_OFFSET_FRESH_MS as well.
   if (syncAppliedCalibration()) {
     broadcastJson(sourceStatusPayload());
     broadcastJson(timingCalibrationStatusPayload());
@@ -1195,13 +1599,20 @@ const youtubeTimelineTimer = setInterval(() => {
   maybeReapplyBootCalibration(nowMs);
   maybeAutoCalibrate(nowMs);
 
+  sweepPreparedSongHandoff(nowMs);
+
   const presenceSweep = participants.sweep(Date.now());
   if (presenceSweep.releasedMicOwnerId) {
+    takeController.noteQualityEvent('mic-owner-changed');
     cancelMicTransportGrace();
     micPacketReceiver = null;
+    cancelPendingRoomSongCommand('mic-owner-released', nowMs);
+    if (youtubeTimeline.cancelHandoff()) broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
     invalidateMicTiming('Microphone owner left the Relay session.');
   }
   if (presenceSweep.changed) broadcastSessionStatus();
+
+  broadcastProductStatus(nowMs);
 }, 250);
 
 function validSampleRate(value: unknown) {
@@ -1228,6 +1639,8 @@ wss.on('connection', (rawSocket, request) => {
   const socket = rawSocket as RelaySocket;
   socket.role = 'unknown';
   socket.isAlive = true;
+  legacyPlaybackConnectionSequence += 1;
+  socket.legacyPlaybackGeneration = legacyPlaybackConnectionSequence;
 
   const identity = participantIdentity(request);
   if (identity) {
@@ -1272,13 +1685,14 @@ wss.on('connection', (rawSocket, request) => {
           previousGeneration !== null
           && session.backingGeneration !== previousGeneration
         ) {
+          takeController.noteQualityEvent('backing-capture-restarted');
           abandonProbeRun();
           if (calibration.collecting) {
             calibration.fail('Backing capture restarted during calibration. Start calibration again.');
           } else {
             syncAppliedCalibration();
-            broadcastJson(sourceStatusPayload());
             broadcastJson(timingCalibrationStatusPayload());
+            broadcastJson(sourceStatusPayload());
           }
         }
         calibration.observeBacking(samples, start);
@@ -1314,6 +1728,69 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
+    if (payload.type === 'product-status-request') {
+      sendJson(socket, productStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'take-status-request') {
+      sendJson(socket, takeController.statusPayload());
+      return;
+    }
+
+    if (payload.type === 'start-take') {
+      if (!socket.participantId) {
+        rejectTakeCommand(socket, 'start', 'participant-required');
+        return;
+      }
+      if (!session.active) {
+        rejectTakeCommand(socket, 'start', 'mix-not-active');
+        return;
+      }
+      const song = takeSongSnapshot();
+      if (!song) {
+        rejectTakeCommand(socket, 'start', 'song-required');
+        return;
+      }
+
+      const result = takeController.start(socket.participantId, song);
+      if (!result.ok) {
+        rejectTakeCommand(socket, 'start', result.reason);
+        return;
+      }
+      sendJson(socket, {
+        type: 'take-command-accepted',
+        command: 'start',
+        takeId: result.takeId,
+      });
+      return;
+    }
+
+    if (payload.type === 'stop-take') {
+      if (!socket.participantId) {
+        rejectTakeCommand(socket, 'stop', 'participant-required');
+        return;
+      }
+      const takeId = typeof payload.takeId === 'string' ? payload.takeId.trim() : '';
+      if (!TAKE_ID_PATTERN.test(takeId)) {
+        rejectTakeCommand(socket, 'stop', 'invalid-take-id');
+        return;
+      }
+
+      const result = takeController.stop(takeId, socket.participantId);
+      if (!result.ok) {
+        rejectTakeCommand(socket, 'stop', result.reason);
+        return;
+      }
+      sendJson(socket, {
+        type: 'take-command-accepted',
+        command: 'stop',
+        takeId,
+        duplicate: result.duplicate,
+      });
+      return;
+    }
+
     if (payload.type === 'participant-rename') {
       if (!socket.participantId) return;
       if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
@@ -1337,7 +1814,13 @@ wss.on('connection', (rawSocket, request) => {
       const result = participants.releaseMic(socket.participantId);
       if (!result.ok) return;
 
+      takeController.noteQualityEvent('mic-owner-changed');
       cancelMicTransportGrace();
+      cancelPendingRoomSongCommand('mic-owner-released');
+      if (youtubeTimeline.cancelHandoff()) {
+        broadcastJson(youtubeTimeline.statusPayload());
+        broadcastJson(youtubeTimeline.roomStatusPayload());
+      }
       if (publisher?.participantId === socket.participantId) {
         revokePublisherTransport('You released the microphone.');
       }
@@ -1347,9 +1830,221 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'youtube-telemetry') {
-      if (youtubeTimeline.update(payload)) {
+    if (payload.type === 'playback-hello') {
+      if (!socket.participantId) return;
+      const transportId = normalizePlaybackTransportId(payload.playbackTransportId);
+      const generation = normalizePlaybackGeneration(payload.playbackGeneration);
+      if (!transportId || generation === null) {
+        sendJson(socket, { type: 'error', message: 'Invalid playback transport identity.' });
+        return;
+      }
+
+      socket.playbackParticipantId = socket.participantId;
+      socket.playbackTransportId = transportId;
+      socket.playbackGeneration = generation;
+      sendJson(socket, { type: 'playback-registered', playbackTransportId: transportId, playbackGeneration: generation });
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
+      sendJson(socket, roomSongCommandStatusPayload());
+
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      const pendingPlan = playbackIdentity
+        ? youtubeTimeline.handoffPlanForTarget(playbackIdentity)
+        : null;
+      if (pendingPlan) sendHandoffPlan('song-handoff-prepare', pendingPlan);
+
+      const pendingCommand = playbackIdentity
+        ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
+        : null;
+      if (pendingCommand) sendToPlayback(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
+      return;
+    }
+
+    if (payload.type === 'playback-mic-intent') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) return;
+      socket.playbackMicIntentAtMs = performance.now();
+      sendJson(socket, { type: 'playback-mic-intent-registered' });
+      return;
+    }
+
+    if (payload.type === 'room-song-status-request') {
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'room-song-command-status-request') {
+      sendJson(socket, roomSongCommandStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'room-song-command') {
+      if (!socket.participantId) {
+        rejectRoomSongCommand(socket, payload.commandId, 'participant-required');
+        return;
+      }
+
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) {
+        rejectRoomSongCommand(socket, payload.commandId, 'playback-transport-required');
+        return;
+      }
+
+      const parsed = parseRoomSongCommand(payload);
+      if (!parsed.ok) {
+        rejectRoomSongCommand(socket, payload.commandId, parsed.reason);
+        return;
+      }
+
+      const nowMs = performance.now();
+      const decision = roomSongCommands.begin(
+        parsed.request,
+        socket.participantId,
+        playbackIdentity,
+        participants.micOwnerId,
+        youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
+        roomSongCommandRevision,
+        roomSongCommandRevision + 1,
+        nowMs,
+      );
+      if (!decision.ok) {
+        rejectRoomSongCommand(socket, parsed.request.commandId, decision.reason);
+        return;
+      }
+
+      if (!decision.duplicate) roomSongCommandRevision = decision.command.revision;
+      sendJson(socket, {
+        type: 'room-song-command-accepted',
+        commandId: decision.command.commandId,
+        revision: decision.command.revision,
+        duplicate: decision.duplicate,
+      });
+
+      const stillPending = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
+      if (stillPending?.commandId === decision.command.commandId) {
+        sendToPlayback(playbackIdentity, roomSongCommandApplyPayload(decision.command));
+      }
+      broadcastJson(roomSongCommandStatusPayload(nowMs));
+      return;
+    }
+
+    if (payload.type === 'room-song-command-failed') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity) return;
+      if (roomSongCommands.fail(playbackIdentity, payload.commandId)) {
+        sendJson(socket, {
+          type: 'room-song-command-failed-ack',
+          commandId: payload.commandId,
+          revision: roomSongCommandRevision,
+        });
+        broadcastJson(roomSongCommandStatusPayload());
+      }
+      return;
+    }
+
+    if (payload.type === 'song-handoff-ready') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity) return;
+      const plan = youtubeTimeline.markHandoffReady(
+        playbackIdentity,
+        payload.handoffId,
+        participants.micOwnerId,
+      );
+      if (!plan) return;
+      sendHandoffPlan('song-handoff-commit', plan);
+      broadcastJson(youtubeTimeline.statusPayload());
+      broadcastJson(youtubeTimeline.roomStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'song-handoff-failed') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity) return;
+      if (youtubeTimeline.deferHandoff(playbackIdentity, payload.handoffId)) {
         broadcastJson(youtubeTimeline.statusPayload());
+        broadcastJson(youtubeTimeline.roomStatusPayload());
+      }
+      return;
+    }
+
+    if (payload.type === 'youtube-telemetry') {
+      let playbackParticipantId = socket.participantId;
+      let playbackTransportId = socket.playbackTransportId
+        ?? normalizePlaybackTransportId(payload.playbackTransportId);
+      let playbackGeneration = socket.playbackGeneration
+        ?? normalizePlaybackGeneration(payload.playbackGeneration);
+
+      if (!playbackParticipantId) {
+        if (socket !== publisher || socket.role !== 'publisher') {
+          reportTelemetryRejected(socket, 'not-publisher');
+          return;
+        }
+        playbackParticipantId = LEGACY_PLAYBACK_PARTICIPANT_ID;
+        playbackTransportId = LEGACY_PLAYBACK_TRANSPORT_ID;
+        playbackGeneration = socket.legacyPlaybackGeneration ?? 0;
+      } else if (!playbackTransportId || playbackGeneration === null) {
+        reportTelemetryRejected(socket, 'invalid-identity');
+        return;
+      }
+
+      const acceptedIdentity = {
+        participantId: playbackParticipantId,
+        transportId: playbackTransportId,
+        generation: playbackGeneration,
+      };
+      const nowMs = performance.now();
+      const commandGate = roomSongCommands.gateTelemetry(
+        payload,
+        acceptedIdentity,
+        youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
+        nowMs,
+      );
+      if (!commandGate.ok) {
+        reportRoomSongTelemetryRejected(socket, commandGate.reason);
+        return;
+      }
+
+      const result = youtubeTimeline.update(
+        payload,
+        acceptedIdentity,
+        participants.micOwnerId,
+        nowMs,
+      );
+      if (result.accepted) {
+        socket.playbackParticipantId = playbackParticipantId;
+        socket.playbackTransportId = playbackTransportId;
+        socket.playbackGeneration = playbackGeneration;
+        socket.telemetryRejectedReason = undefined;
+        const timelineStatus = youtubeTimeline.statusPayload(nowMs);
+        broadcastJson(timelineStatus);
+        broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+
+        if (
+          commandGate.completesCommandId
+          && roomSongCommands.complete(commandGate.completesCommandId)
+        ) {
+          sendToPlayback(acceptedIdentity, {
+            type: 'room-song-command-complete',
+            commandId: commandGate.completesCommandId,
+            revision: roomSongCommandRevision,
+          });
+          broadcastJson(roomSongCommandStatusPayload(nowMs));
+        }
+
+        if (result.handoffCompleted && result.handoffId) {
+          if (result.previousLeader) {
+            sendToPlayback(result.previousLeader, {
+              type: 'song-handoff-release',
+              handoffId: result.handoffId,
+              videoId: timelineStatus.videoId ?? null,
+            });
+          }
+          sendToPlayback(acceptedIdentity, {
+            type: 'song-handoff-complete',
+            handoffId: result.handoffId,
+          });
+        }
+      } else {
+        reportTelemetryRejected(socket, result.reason ?? 'invalid-telemetry');
       }
       return;
     }
@@ -1370,6 +2065,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'start-timing-calibration') {
+      if (!requireMicOwnerCommand(socket, 'start-timing-calibration')) return;
       const nowMs = performance.now();
       if (
         !session.active
@@ -1421,6 +2117,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'set-vocal-fine-tune') {
+      if (!requireMicOwnerCommand(socket, 'set-vocal-fine-tune')) return;
       const nextFineTune = Number(payload.valueMs);
       if (Number.isFinite(nextFineTune)) {
         session.setAlignment({
@@ -1503,6 +2200,11 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
+      if (ownershipChanged) {
+        cancelPendingRoomSongCommand('mic-owner-changed');
+        takeController.noteQualityEvent('mic-owner-changed');
+      }
+
       const previousPublisher = publisher;
       const sameParticipantReplacement = Boolean(
         previousPublisher
@@ -1544,6 +2246,7 @@ wss.on('connection', (rawSocket, request) => {
       publisherSampleRate = sampleRate;
       cancelMicTransportGrace();
       session.setMicExpected(true);
+      if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
 
       if (audioPacketVersion === 2) {
         if (!preservePacketReceiver) {
@@ -1576,10 +2279,16 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
+      sendJson(socket, roomSongCommandStatusPayload());
+      sendJson(socket, takeController.statusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
-      if (socket.participantId) broadcastSessionStatus();
+      if (socket.participantId) {
+        broadcastSessionStatus();
+        if (ownershipChanged) beginPreparedSongHandoff(socket.participantId);
+      }
       return;
     }
 
@@ -1590,13 +2299,18 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      replacePrevious(backing, socket, 'Replaced by a newer tab capture.');
+      const previousBacking = backing;
+      if (previousBacking && previousBacking !== socket) {
+        takeController.noteQualityEvent('backing-transport-replaced');
+      }
+      replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
       socket.role = 'backing';
       socket.sampleRate = sampleRate;
       backing = socket;
       backingSampleRate = sampleRate;
       backingIsRobot = payload.robot === true;
       session.setBackingExpected(true);
+      if (!previousBacking && session.active) takeController.noteQualityEvent('backing-transport-connected');
 
       dropLegacyCalibrationForRobot();
       sendJson(socket, { type: 'registered', role: 'backing', robot: backingIsRobot });
@@ -1613,6 +2327,9 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
+      sendJson(socket, roomSongCommandStatusPayload());
+      sendJson(socket, takeController.statusPayload());
       if (socket.participantId) sendJson(socket, sessionStatusPayload());
       return;
     }
@@ -1635,6 +2352,9 @@ wss.on('connection', (rawSocket, request) => {
         previous.isRobotSource = false;
         sendJson(previous, { type: 'robot-source-replaced' });
         sourceGeneration += 1;
+        takeController.noteQualityEvent('robot-source-replaced');
+      } else if (!previous && session.active) {
+        takeController.noteQualityEvent('robot-source-connected');
       }
 
       activeRobotSource = socket;
@@ -1658,10 +2378,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'start-sync-test') {
-      if (socket !== publisher || socket.role !== 'publisher') {
-        sendJson(socket, { type: 'error', message: 'Only the microphone device can start the sync test.' });
-        return;
-      }
+      if (!requireMicOwnerCommand(socket, 'start-sync-test')) return;
       if (!startSyncTest()) {
         sendJson(socket, { type: 'error', message: 'Captured tab source is active.' });
       }
@@ -1669,11 +2386,13 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'stop-sync-test') {
+      if (!requireMicOwnerCommand(socket, 'stop-sync-test')) return;
       stopSyncTest();
       return;
     }
 
     if (payload.type === 'set-mix') {
+      if (!requireMicOwnerCommand(socket, 'set-mix')) return;
       const nextGain = Number(payload.micGainDb);
       if (Number.isFinite(nextGain)) {
         micGainDb = Math.max(0, Math.min(36, nextGain));
@@ -1684,14 +2403,43 @@ wss.on('connection', (rawSocket, request) => {
         songLevel = Math.max(0, Math.min(100, Math.round(nextSongLevel)));
       }
       broadcastJson(mixSettingsPayload());
+      return;
     }
   });
 
   socket.on('close', () => {
     let micTransportChanged = false;
 
+    const closingPlaybackIdentity = playbackIdentityForSocket(socket);
+    if (closingPlaybackIdentity) {
+      const pendingCommand = roomSongCommands.pendingForTarget(closingPlaybackIdentity, performance.now());
+      if (
+        pendingCommand
+        && roomSongCommands.fail(closingPlaybackIdentity, pendingCommand.commandId)
+      ) {
+        broadcastJson(roomSongCommandStatusPayload());
+      }
+    }
+
+    if (
+      socket.playbackParticipantId
+      && socket.playbackTransportId
+      && socket.playbackGeneration !== undefined
+    ) {
+      const playbackChanged = youtubeTimeline.detach({
+        participantId: socket.playbackParticipantId,
+        transportId: socket.playbackTransportId,
+        generation: socket.playbackGeneration,
+      });
+      if (playbackChanged) {
+        broadcastJson(youtubeTimeline.statusPayload());
+        broadcastJson(youtubeTimeline.roomStatusPayload());
+      }
+    }
+
     if (!socket.replaced) {
       if (socket === activeRobotSource) {
+        takeController.noteQualityEvent('robot-source-disconnected');
         activeRobotSource = null;
         socket.isRobotSource = false;
         robotPlayerOffsetMs = null;
@@ -1703,6 +2451,7 @@ wss.on('connection', (rawSocket, request) => {
       }
 
       if (socket === publisher) {
+        takeController.noteQualityEvent('mic-transport-disconnected');
         const reconnectingOwnerId = socket.participantId
           && participants.micOwnerId === socket.participantId
           ? socket.participantId
@@ -1721,9 +2470,9 @@ wss.on('connection', (rawSocket, request) => {
       }
 
       if (socket === backing) {
+        takeController.noteQualityEvent('backing-transport-disconnected');
         backing = null;
         backingSampleRate = null;
-        backingIsRobot = false;
         session.setBackingExpected(false);
         if (calibration.collecting) {
           calibration.fail('Desktop Source disconnected during calibration.');
@@ -1756,6 +2505,7 @@ const heartbeat = setInterval(() => {
 
 wss.on('close', () => {
   cancelMicTransportGrace();
+  takeController.shutdown();
   clearInterval(heartbeat);
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);

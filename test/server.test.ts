@@ -422,13 +422,20 @@ describe('timing calibration', () => {
   test('refuses to start without both sources', async () => {
     const server = await startRelay(FAST);
     try {
+      const publisher = await RelayClient.connect(server);
+      publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+      await publisher.waitForType('registered');
+
       const monitor = await RelayClient.connect(server);
       monitor.send({ type: 'register', role: 'monitor' });
       await monitor.waitForType('registered');
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       const status = await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'failed');
       assert.match(status.error, /Connect both/);
+
+      publisher.close();
+      monitor.close();
     } finally {
       await server.stop();
     }
@@ -441,7 +448,7 @@ describe('timing calibration', () => {
       // Make playback the only missing prerequisite. A registered-but-silent
       // source is a different contract and has its own regression below.
       await primeStreams(backing, publisher);
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
 
       const status = await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'failed');
       assert.match(status.error, /Play YouTube/);
@@ -461,7 +468,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await sendPcmInChunks(publisher, tone(0.5, 0.4));
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       const failed = await monitor.waitFor(
         (m) => m.type === 'timing-calibration-status' && m.state === 'failed',
         3_000,
@@ -484,7 +491,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       await sendPcmInChunks(backing, silence(2));
@@ -510,7 +517,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const lagMs = 260;
@@ -566,7 +573,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
@@ -605,7 +612,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
@@ -687,7 +694,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(16, RATE, 260);
@@ -778,7 +785,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
@@ -815,7 +822,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 200);
@@ -882,7 +889,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 200);

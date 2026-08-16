@@ -125,6 +125,14 @@ function setStatus(title, body = '') {
   details.textContent = body;
 }
 
+const COMMAND_LABELS = {
+  'set-mix': 'Mix is controlled by the singer',
+  'set-vocal-fine-tune': 'Vocal timing is controlled by the singer',
+  'start-timing-calibration': 'Calibration is controlled by the singer',
+  'start-sync-test': 'The sync test is controlled by the singer',
+  'stop-sync-test': 'The sync test is controlled by the singer',
+};
+
 function setActiveRole(role) {
   activeRole = role;
   window.relayActiveRole = role;
@@ -411,6 +419,19 @@ function handleServerMessage(message) {
     setStatus('Error', message.message);
     // Protocol errors are not transport failures. Retrying the publisher after
     // a semantic rejection used to make superseded tabs fight forever.
+    return;
+  }
+
+  if (message.type === 'command-rejected') {
+    // Without this the control simply stops working: the slider moves, the
+    // server drops the command, and nothing on the page says why.
+    const owner = message.owner ?? null;
+    setStatus(
+      COMMAND_LABELS[message.command] ?? 'Command refused',
+      message.reason === 'not-mic-owner'
+        ? `${owner ? owner.nickname : 'Another participant'} has the mic and controls this.`
+        : 'Join the room with a name before changing this.',
+    );
     return;
   }
 

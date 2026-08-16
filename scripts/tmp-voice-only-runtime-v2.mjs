@@ -87,6 +87,15 @@ replaceRepo(
   'expected generated symmetric source gate',
 );
 
+// Robot boot-probe measures the deployment path itself and is valid before a
+// room Song exists. Only content calibration is Song-dependent.
+replaceRepo(
+  'src/server.ts',
+  `  if (!PROBE_CALIBRATE || !robotRouteActive()) return;\n  if (!roomHasSong()) return;\n  if (!session.active || calibration.collecting) return;\n`,
+  `  if (!PROBE_CALIBRATE || !robotRouteActive()) return;\n  if (!session.active || calibration.collecting) return;\n`,
+  'expected generated Song gate on boot probe',
+);
+
 // Restore the parent PR's health regression: an explicitly armed broken Robot
 // remains blocked even when the room has not loaded a Song yet.
 replaceRepo(
@@ -115,6 +124,22 @@ replaceRepo(
   `      && message.reason === 'song-required'\n    ));\n    assert.equal(noSong.reason, 'song-required');\n`,
   `      && message.reason === 'take-not-ready'\n    ));\n    assert.equal(noSong.reason, 'take-not-ready');\n`,
   'expected old no-Song rejection contract',
+);
+
+// The old no-source Monitor path was a raw-Mic compatibility bypass. A formal
+// voice-only room now goes through the authoritative mixer, so Listen receives
+// the same buffered room output that a Take records.
+replaceRepo(
+  'test/server.test.ts',
+  `  test('forwards raw microphone PCM to monitors when no source is connected', async () => {\n`,
+  `  test('forwards the authoritative voice-only mix to monitors when no source is connected', async () => {\n`,
+  'expected legacy raw-Mic monitor test name',
+);
+replaceRepo(
+  'test/server.test.ts',
+  `    publisher.sendPcm(tone(0.1));\n    await sleep(200);\n\n    assert.ok(monitor.binaryFrames > 0, 'monitor received no raw PCM');\n`,
+  `    publisher.sendPcm(tone(0.1));\n    await sleep(450);\n\n    assert.equal(monitor.latest('source-status')?.active, true);\n    assert.ok(monitor.binaryFrames > 0, 'monitor received no voice-only mixed PCM');\n`,
+  'expected legacy raw-Mic monitor assertion',
 );
 
 console.log('voice-only compatibility corrections applied');

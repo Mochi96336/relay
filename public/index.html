@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/live-state.css" />
     <link rel="stylesheet" href="/song-surface.css" />
+    <link rel="stylesheet" href="/system-details.css" />
   </head>
   <body data-lifecycle="idle" data-health="healthy" data-timing="idle" data-self-mic="off" data-playback-role="connecting">
     <main class="live-shell">
@@ -146,37 +147,123 @@
       <details id="system-panel" class="system-panel">
         <summary>System</summary>
         <div class="system-sheet">
-          <div class="system-line"><span>Relay</span><strong id="system-relay">Connecting</strong></div>
-          <div class="system-line"><span>Phones</span><strong id="system-phones">—</strong></div>
-          <div class="system-line"><span>Robot</span><strong id="system-robot">—</strong></div>
-          <div class="system-line"><span>Audio</span><strong id="system-audio">—</strong></div>
-          <div class="system-line"><span>Timing</span><strong id="system-timing">—</strong></div>
-          <div class="system-line"><span>Recording</span><strong id="system-recording">—</strong></div>
+          <details class="system-item" data-system-scope="relay">
+            <summary><span class="system-item-name">Relay</span><strong id="system-relay">Connecting</strong><span class="system-chevron">›</span></summary>
+            <p id="system-relay-detail" class="system-item-detail">Room connection and lifecycle.</p>
+          </details>
+          <details class="system-item" data-system-scope="phones">
+            <summary><span class="system-item-name">Phones</span><strong id="system-phones">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-phones-detail" class="system-item-detail">People and microphone state.</p>
+          </details>
+          <details class="system-item" data-system-scope="robot">
+            <summary><span class="system-item-name">Robot</span><strong id="system-robot">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-robot-detail" class="system-item-detail">Robot route state appears when System is opened.</p>
+          </details>
+          <details class="system-item" data-system-scope="audio">
+            <summary><span class="system-item-name">Audio</span><strong id="system-audio">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-audio-detail" class="system-item-detail">Room song and voice path.</p>
+          </details>
+          <details class="system-item" data-system-scope="timing">
+            <summary><span class="system-item-name">Timing</span><strong id="system-timing">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-timing-detail" class="system-item-detail">Performance alignment state.</p>
+          </details>
+          <details class="system-item" data-system-scope="recording">
+            <summary><span class="system-item-name">Recording</span><strong id="system-recording">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-recording-detail" class="system-item-detail">Current and most recent Take state.</p>
+          </details>
 
-          <details class="diagnostics-panel">
+          <details id="diagnostics-panel" class="diagnostics-panel">
             <summary>Technical details</summary>
             <div class="diagnostics-body">
-              <section class="diagnostic-block">
-                <div>
-                  <strong>Robot / development source</strong>
-                  <p>Prototype source controls stay here, outside the Live surface.</p>
-                </div>
-                <button type="button" onclick="window.open('http://localhost:3000/source.html' + location.search, '_blank')">Open source</button>
+              <div class="diagnostics-toolbar">
+                <span id="diagnostics-state">Open to refresh</span>
+                <button id="copy-diagnostics" class="text-action" type="button">Copy diagnostics</button>
+              </div>
+
+              <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics">
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true">Overview</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="session" aria-selected="false">Session</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false">Audio</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false">Timing</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="robot" aria-selected="false">Robot</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="raw" aria-selected="false">Raw</button>
+              </div>
+
+              <section class="diagnostics-view" data-diagnostics-panel="overview">
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Product health</dt><dd id="diag-overview-health">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Lifecycle</dt><dd id="diag-overview-lifecycle">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Host ready</dt><dd id="diag-overview-ready">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Session ready</dt><dd id="diag-overview-session-ready">—</dd></div>
+                </dl>
               </section>
 
-              <section class="diagnostic-block">
-                <strong>Legacy click sync test</strong>
-                <div class="inline-actions">
-                  <button id="start-sync-test" type="button" disabled>Start test</button>
-                  <button id="stop-sync-test" type="button" disabled>Stop test</button>
-                </div>
+              <section class="diagnostics-view" data-diagnostics-panel="session" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>People</dt><dd id="diag-session-people">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Microphone</dt><dd id="diag-session-mic">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Song</dt><dd id="diag-session-song">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Take</dt><dd id="diag-session-take">—</dd></div>
+                </dl>
               </section>
 
-              <label class="mix-row legacy-monitor" for="monitor-gain">
-                <span>Legacy monitor gain</span>
-                <input id="monitor-gain" type="range" min="0" max="30" step="1" value="30" />
-                <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
-              </label>
+              <section class="diagnostics-view" data-diagnostics-panel="audio" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Route</dt><dd id="diag-audio-route">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Backing</dt><dd id="diag-audio-backing">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Mic stream</dt><dd id="diag-audio-mic">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Mixer</dt><dd id="diag-audio-mix">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="timing" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Product timing</dt><dd id="diag-timing-product">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Timeline</dt><dd id="diag-timing-player">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Calibration</dt><dd id="diag-timing-calibration">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Player offset</dt><dd id="diag-timing-offset">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="robot" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Route mode</dt><dd id="diag-robot-mode">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Source page</dt><dd id="diag-robot-source">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Backing</dt><dd id="diag-robot-backing">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Player</dt><dd id="diag-robot-player">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="raw" hidden>
+                <pre id="diagnostics-raw" class="diagnostics-raw">{}</pre>
+              </section>
+
+              <details class="legacy-tools">
+                <summary>Development tools</summary>
+                <div class="legacy-tools-body">
+                  <section class="diagnostic-block">
+                    <div>
+                      <strong>Robot / development source</strong>
+                      <p>Prototype source controls stay here, outside the Live surface.</p>
+                    </div>
+                    <button type="button" onclick="window.open('http://localhost:3000/source.html' + location.search, '_blank')">Open source</button>
+                  </section>
+
+                  <section class="diagnostic-block">
+                    <strong>Legacy click sync test</strong>
+                    <div class="inline-actions">
+                      <button id="start-sync-test" type="button" disabled>Start test</button>
+                      <button id="stop-sync-test" type="button" disabled>Stop test</button>
+                    </div>
+                  </section>
+
+                  <label class="mix-row legacy-monitor" for="monitor-gain">
+                    <span>Legacy monitor gain</span>
+                    <input id="monitor-gain" type="range" min="0" max="30" step="1" value="30" />
+                    <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
+                  </label>
+                </div>
+              </details>
 
               <div class="legacy-status-readout" hidden aria-hidden="true">
                 <strong id="status">Idle</strong>
@@ -195,6 +282,7 @@
 
     <script src="/presence.js"></script>
     <script type="module" src="/live-status.js"></script>
+    <script type="module" src="/system-details.js"></script>
     <script type="module" src="/app.js"></script>
     <script type="module" src="/listen.js"></script>
     <script type="module" src="/recorder.js"></script>

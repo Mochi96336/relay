@@ -106,8 +106,14 @@ test('opening Adjust extends the page without hiding performance or overlaying Y
   assert.equal(css.includes('body:has(.adjust-panel[open]) .take-strip'), false);
   assert.equal(css.includes('.adjust-panel[open]'), true);
   assert.equal(css.includes('position: static;'), true);
-  assert.equal(css.includes('max-height:'), false,
+
+  const sheetBlock = css.match(/\.adjust-sheet\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
+  assert.notEqual(sheetBlock, '', 'Adjust sheet styling must remain explicit');
+  assert.equal(sheetBlock.includes('max-height:'), false,
     'normal page scroll owns Adjust instead of a nested viewport');
+  assert.equal(sheetBlock.includes('overflow: auto'), false,
+    'Adjust must not introduce a nested scrolling viewport');
+
   assert.equal(css.includes('content: "Done";'), false,
     'open/closed labels must come from the locale runtime rather than CSS-generated English');
   assert.equal(i18n.includes('function applyAdjustSummary()'), true);

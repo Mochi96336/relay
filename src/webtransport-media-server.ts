@@ -28,7 +28,7 @@ export type WebTransportMediaHooks = {
 };
 
 export type WebTransportMediaServer = {
-  offer(ticket: string): WebTransportMediaOffer;
+  offer(ticket: string): WebTransportMediaOffer | undefined;
   hasSession(ticket: string | null): boolean;
   stop(): Promise<void>;
 };
@@ -50,11 +50,9 @@ function validPort(value: string | undefined, fallback: number) {
   return port;
 }
 
-export function webTransportMediaConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): WebTransportMediaConfig | null {
+function parseWebTransportMediaConfig(env: NodeJS.ProcessEnv): WebTransportMediaConfig {
   const rawPublicUrl = env.RELAY_WEBTRANSPORT_PUBLIC_URL?.trim();
-  if (!rawPublicUrl) return null;
+  if (!rawPublicUrl) throw new Error('RELAY_WEBTRANSPORT_PUBLIC_URL is required.');
 
   const publicUrl = new URL(rawPublicUrl);
   if (publicUrl.protocol !== 'https:') {
@@ -81,6 +79,23 @@ export function webTransportMediaConfig(
     keyPath: requiredPath(env, 'RELAY_WEBTRANSPORT_KEY'),
     pinCertificate: env.RELAY_WEBTRANSPORT_PIN_CERT === '1',
   };
+}
+
+export function webTransportMediaConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): WebTransportMediaConfig | null {
+  const rawPublicUrl = env.RELAY_WEBTRANSPORT_PUBLIC_URL?.trim();
+  if (!rawPublicUrl) return null;
+
+  try {
+    return parseWebTransportMediaConfig(env);
+  } catch (error) {
+    console.warn(
+      'Relay WebTransport media configuration is invalid; continuing with the WebSocket microphone fallback.',
+      error,
+    );
+    return null;
+  }
 }
 
 export function createWebTransportMediaTicket() {
@@ -130,7 +145,23 @@ function offerFor(
   };
 }
 
-export async function startWebTransportMediaServer(
+function unavailableWebTransportMediaServer(error: unknown): WebTransportMediaServer {
+  console.warn(
+    'Relay WebTransport media is unavailable; continuing with the WebSocket microphone fallback.',
+    error,
+  );
+  return {
+    offer() {
+      return undefined;
+    },
+    hasSession() {
+      return false;
+    },
+    async stop() {},
+  };
+}
+
+async function startConfiguredWebTransportMediaServer(
   config: WebTransportMediaConfig,
   hooks: WebTransportMediaHooks,
 ): Promise<WebTransportMediaServer> {
@@ -245,4 +276,15 @@ export async function startWebTransportMediaServer(
       } catch {}
     },
   };
+}
+
+export async function startWebTransportMediaServer(
+  config: WebTransportMediaConfig,
+  hooks: WebTransportMediaHooks,
+): Promise<WebTransportMediaServer> {
+  try {
+    return await startConfiguredWebTransportMediaServer(config, hooks);
+  } catch (error) {
+    return unavailableWebTransportMediaServer(error);
+  }
 }

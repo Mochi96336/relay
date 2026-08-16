@@ -40,6 +40,8 @@ jobs:
           ]
           path.write_text('\n'.join(lines) + '\n')
           PY
+      - name: Show generated contract around parser failure
+        run: nl -ba test/adjust-ui-contract.test.ts | sed -n '30,44p'
       - run: npm run check
       - name: Check browser JavaScript syntax
         run: |

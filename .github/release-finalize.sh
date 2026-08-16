@@ -89,7 +89,7 @@ function observationStatusV1Payload() {
       },
     },
     calibration: {
-      kind: remote.robot.calibrationKind,
+      kind: remote.robot.calibrationKind ?? 'none',
       stale: remote.robot.calibrationStale,
       timingMode: remote.robot.timingMode,
       activeCalibratedMicLagMs: remote.robot.activeCalibratedMicLagMs,

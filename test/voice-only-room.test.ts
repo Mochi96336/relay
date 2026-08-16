@@ -62,6 +62,34 @@ test('product lifecycle and Take availability treat live Mic as a complete voice
   assert.equal(status.actions.canStartTake, true);
 });
 
+test('unused Robot failure does not take away a recordable live Mic when there is no Song', () => {
+  const status = buildProductViewModel({
+    readiness: buildReadiness({
+      ...VOICE_ONLY,
+      routeMode: 'robot',
+      robotSourceConnected: true,
+    }),
+    participantCount: 1,
+    micOwnerId: 'participant-a',
+    micOwnerNickname: 'A',
+    roomSong: { videoId: null, connected: false, state: null, handoffState: 'idle' },
+    take: { lifecycle: 'idle', takeId: null, qualityVerdict: null },
+    timing: {
+      timingMode: 'network-estimate',
+      calibrationState: 'idle',
+      calibrationStale: false,
+      alignmentClamped: false,
+      robotRoute: true,
+      robotDeltaFresh: false,
+    },
+  });
+
+  assert.equal(status.lifecycle, 'live');
+  assert.equal(status.health, 'blocked', 'Robot route failure remains visible as system health');
+  assert.equal(status.attention?.scope, 'robot');
+  assert.equal(status.actions.canStartTake, true, 'no-Song Take depends on the live Mic, not unused backing');
+});
+
 test('voice-only Take snapshot explicitly records that there was no Song', () => {
   const takes = new TakeSession();
   const started = takes.start({

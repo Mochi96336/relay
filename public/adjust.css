@@ -1,17 +1,52 @@
 /* Adjust is a performance-tuning layer, not a second mixer dashboard. */
-.adjust-sheet {
+
+/* L1 morphs the performance area instead of floating over the media field.
+   The YouTube player remains in normal document flow and unobscured. */
+body:has(.adjust-panel[open]) .performance-stage,
+body:has(.adjust-panel[open]) .take-strip {
+  display: none;
+}
+
+body:has(.adjust-panel[open]) .live-actions {
+  margin-top: 26px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 10px;
+}
+
+.adjust-panel > summary {
+  font-size: 0;
+}
+.adjust-panel > summary::after {
+  content: "Adjust";
+  font-size: 13px;
+}
+.adjust-panel[open] {
+  flex: 0 0 100%;
+  width: 100%;
+  order: 3;
+}
+.adjust-panel[open] > summary {
   position: absolute;
-  left: -22px;
-  right: -22px;
-  bottom: calc(100% + 1px);
-  max-height: min(72svh, 660px);
+  top: 18px;
+  right: 0;
+}
+.adjust-panel[open] > summary::after {
+  content: "Done";
+}
+
+.adjust-sheet {
+  position: static;
+  width: calc(100% + 44px);
+  max-height: min(50svh, 520px);
   overflow: auto;
+  margin: 10px -22px 0;
   padding: 22px 22px 26px;
   border: 0;
   border-top: 1px solid #2a2c31;
   border-radius: 0;
-  background: rgba(13, 14, 16, .985);
-  box-shadow: 0 -24px 64px rgba(0, 0, 0, .34);
+  background: #0d0e10;
+  box-shadow: none;
   display: grid;
   gap: 26px;
 }
@@ -173,8 +208,11 @@ body[data-listen="off"] .local-listen .adjust-range { opacity: .6; }
 }
 
 @media (max-height: 760px) {
+  body:has(.adjust-panel[open]) .live-actions {
+    margin-top: 20px;
+  }
   .adjust-sheet {
-    max-height: min(78svh, 610px);
+    max-height: min(50svh, 380px);
     gap: 20px;
     padding-top: 18px;
   }

@@ -26,14 +26,14 @@ jobs:
       - name: Narrow legacy CSS guard to the anchored base block
         run: sed -i "/multiple legacy Adjust CSS blocks found/d" scripts/rework-adjust.mjs
       - run: node scripts/rework-adjust.mjs
-      - name: Fix generated Monitor retirement contract literal
+      - name: Simplify generated Monitor retirement contract
         run: |
           python3 - <<'PY'
           from pathlib import Path
           path = Path('test/adjust-ui-contract.test.ts')
           lines = path.read_text().splitlines()
           lines = [
-              "  assert.doesNotMatch(html, />Monitor</);"
+              "  assert.equal(html.includes('>Monitor<'), false);"
               if 'assert.doesNotMatch(html' in line and 'Monitor' in line
               else line
               for line in lines

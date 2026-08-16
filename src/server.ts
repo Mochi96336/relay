@@ -193,6 +193,7 @@ session.setMicGainDb(micGainDb);
 const takeController = new TakeController({
   directory: takeDir,
   sampleRate: MIX_SAMPLE_RATE,
+  frameMs: MIX_FRAME_MS,
   onChange: (status) => broadcastJson(status),
 });
 
@@ -778,6 +779,21 @@ function sourceStatusPayload() {
   };
 }
 
+function takeQualityFrameState(nowMs = performance.now()) {
+  const alignment = session.alignment;
+  return {
+    micAvailable: publisher?.readyState === WebSocket.OPEN && nowMs - lastMicFrameAt < STREAM_LIVE_MS,
+    backingAvailable: backing?.readyState === WebSocket.OPEN && nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
+    timingMode: alignment.calibratedMicLagMs === null
+      ? 'network-estimate' as const
+      : 'acoustic-calibration' as const,
+    calibrationStale: calibrationIsStale(),
+    alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
+    robotRoute: robotRouteActive(),
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
+  };
+}
+
 function mixHealthPayload() {
   const health = session.health();
   return {
@@ -1016,7 +1032,8 @@ const mixerTimer = setInterval(() => {
   }
 
   session.drain((frame) => {
-    takeController.append(frame);
+    const nowMs = performance.now();
+    takeController.append(frame, takeQualityFrameState(nowMs), session.health());
     broadcastToMonitors(frame, true);
   });
 }, 5);
@@ -1170,17 +1187,11 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
 
   if (PROBE_DEBUG) {
-    // The window's own peak separates "the probe was not heard" from "the
-    // probe was never looked at": a correlation of -1 is what an all-zero
-    // window scores, and a range the timeline does not cover reads as zeros.
     let peak = 0;
     for (let i = 0; i < window.length; i += 1) {
       const magnitude = Math.abs(window[i]);
       if (magnitude > peak) peak = magnitude;
     }
-    // And the most recent audio on the same timeline, as a control: if that is
-    // silent too the stream is not carrying anything, and if it is not the
-    // window is simply looking in the wrong place.
     const controlSeconds = 20;
     const recent = waiting.target === 'mic'
       ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
@@ -1340,9 +1351,6 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
-  // Freshness is a live validity condition, not just something checked when a
-  // socket closes. If a robot page freezes while its WebSocket remains open,
-  // the last delta loses authority after ROBOT_OFFSET_FRESH_MS as well.
   if (syncAppliedCalibration()) {
     broadcastJson(sourceStatusPayload());
     broadcastJson(timingCalibrationStatusPayload());
@@ -1419,6 +1427,7 @@ wss.on('connection', (rawSocket, request) => {
           if (session.active) {
             const micRestarted = previousGeneration !== null && session.micGeneration !== previousGeneration;
             if (micRestarted) {
+              takeController.noteQualityEvent('mic-capture-restarted');
               abandonProbeRun();
               if (calibration.collecting) {
                 calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
@@ -1444,6 +1453,7 @@ wss.on('connection', (rawSocket, request) => {
           previousGeneration !== null
           && session.backingGeneration !== previousGeneration
         ) {
+          takeController.noteQualityEvent('backing-capture-restarted');
           abandonProbeRun();
           if (calibration.collecting) {
             calibration.fail('Backing capture restarted during calibration. Start calibration again.');
@@ -1506,7 +1516,7 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      const result = takeController.start(socket.participantId, song);
+      const result = takeController.start(socket.participantId, song, session.health());
       if (!result.ok) {
         rejectTakeCommand(socket, 'start', result.reason);
         return;
@@ -1726,20 +1736,11 @@ wss.on('connection', (rawSocket, request) => {
         ?? normalizePlaybackGeneration(payload.playbackGeneration);
 
       if (!playbackParticipantId) {
-        // Compatibility for pre-participant publisher clients. The authority is
-        // the current server-selected publisher transport, never an identity
-        // claimed by the telemetry payload. Anonymous monitor/backing/unknown
-        // sockets therefore remain unable to mutate the room clock.
         if (socket !== publisher || socket.role !== 'publisher') {
           reportTelemetryRejected(socket, 'not-publisher');
           return;
         }
         playbackParticipantId = LEGACY_PLAYBACK_PARTICIPANT_ID;
-        // One logical legacy transport whose incarnation counts up, not a new
-        // transport per socket. A replacement publisher is the same anonymous
-        // playback device reconnecting, so it must be able to take the room
-        // clock through the normal newer-generation rule instead of waiting out
-        // the previous socket's staleness window.
         playbackTransportId = LEGACY_PLAYBACK_TRANSPORT_ID;
         playbackGeneration = socket.legacyPlaybackGeneration ?? 0;
       } else if (!playbackTransportId || playbackGeneration === null) {
@@ -1949,7 +1950,10 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      if (ownershipChanged) cancelPendingRoomSongCommand('mic-owner-changed');
+      if (ownershipChanged) {
+        cancelPendingRoomSongCommand('mic-owner-changed');
+        takeController.noteQualityEvent('mic-owner-changed');
+      }
 
       const previousPublisher = publisher;
       const sameParticipantReplacement = Boolean(
@@ -1985,6 +1989,7 @@ wss.on('connection', (rawSocket, request) => {
       publisherSampleRate = sampleRate;
       cancelMicTransportGrace();
       session.setMicExpected(true);
+      if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
 
       if (ownershipChanged || (sameParticipantReplacement && !sameCapture)) {
         invalidateMicTiming(
@@ -2023,13 +2028,18 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      replacePrevious(backing, socket, 'Replaced by a newer tab capture.');
+      const previousBacking = backing;
+      if (previousBacking && previousBacking !== socket) {
+        takeController.noteQualityEvent('backing-transport-replaced');
+      }
+      replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
       socket.role = 'backing';
       socket.sampleRate = sampleRate;
       backing = socket;
       backingSampleRate = sampleRate;
       backingIsRobot = payload.robot === true;
       session.setBackingExpected(true);
+      if (!previousBacking && session.active) takeController.noteQualityEvent('backing-transport-connected');
 
       dropLegacyCalibrationForRobot();
       sendJson(socket, { type: 'registered', role: 'backing', robot: backingIsRobot });
@@ -2071,6 +2081,9 @@ wss.on('connection', (rawSocket, request) => {
         previous.isRobotSource = false;
         sendJson(previous, { type: 'robot-source-replaced' });
         sourceGeneration += 1;
+        takeController.noteQualityEvent('robot-source-replaced');
+      } else if (!previous && session.active) {
+        takeController.noteQualityEvent('robot-source-connected');
       }
 
       activeRobotSource = socket;
@@ -2094,10 +2107,6 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'start-sync-test') {
-      // Same authority as stopping it. Requiring the physical publisher socket
-      // here while `stop-sync-test` accepts any transport of the Mic owner made
-      // one feature answer to two different boundaries, so the owner's second
-      // tab could stop a test it was not allowed to start.
       if (!requireMicOwnerCommand(socket, 'start-sync-test')) return;
       if (!startSyncTest()) {
         sendJson(socket, { type: 'error', message: 'Captured tab source is active.' });
@@ -2159,6 +2168,7 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!socket.replaced) {
       if (socket === activeRobotSource) {
+        takeController.noteQualityEvent('robot-source-disconnected');
         activeRobotSource = null;
         socket.isRobotSource = false;
         robotPlayerOffsetMs = null;
@@ -2170,6 +2180,7 @@ wss.on('connection', (rawSocket, request) => {
       }
 
       if (socket === publisher) {
+        takeController.noteQualityEvent('mic-transport-disconnected');
         const reconnectingOwnerId = socket.participantId
           && participants.micOwnerId === socket.participantId
           ? socket.participantId
@@ -2187,6 +2198,7 @@ wss.on('connection', (rawSocket, request) => {
       }
 
       if (socket === backing) {
+        takeController.noteQualityEvent('backing-transport-disconnected');
         backing = null;
         backingSampleRate = null;
         backingIsRobot = false;

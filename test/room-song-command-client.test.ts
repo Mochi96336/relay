@@ -65,6 +65,23 @@ test('native controls can supersede a pending room intent but stable intermediat
   assert.doesNotMatch(mutationSection, /if \(activeServerMutation\(\) \|\| pendingHandoff\) return null/);
 });
 
+test('latest apply survives player creation without erasing the first post-apply gesture history', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+
+  const readyStart = source.indexOf('function handleReady');
+  const readyEnd = source.indexOf('function handleStateChange', readyStart);
+  assert.ok(readyStart >= 0 && readyEnd > readyStart);
+  const readySection = source.slice(readyStart, readyEnd);
+  assert.match(readySection, /pendingRoomApply/);
+  assert.match(readySection, /applyRoomSongCommand\(pendingRoomApply\)/);
+  assert.match(readySection, /finally\(startTelemetry\)/);
+
+  const applyStart = source.indexOf('async function applyRoomSongCommand');
+  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
+  const applySection = source.slice(applyStart, applyEnd);
+  assert.doesNotMatch(applySection, /previousSnapshot = null/);
+});
+
 test('terminal command status carries the latest room snapshot for local recovery', async () => {
   const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');

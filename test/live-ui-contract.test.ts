@@ -148,3 +148,12 @@ test('an empty Song surface does not gate the formal Mic or imply that singing r
   assert.match(recorder, /Start the mic before recording a voice-only Take\./);
   assert.doesNotMatch(recorder, /song-required/);
 });
+
+test('Live tells the active singer to use headphones only when the room Song is actually playing', () => {
+  assert.match(liveStatus, /if \(song\.state === 'playing'\) \{[\s\S]*Use headphones so the song stays out of your mic\./,
+    'normal Song + self-Mic playback should surface the acoustic isolation requirement');
+  const calibrationCopy = liveStatus.indexOf('Keep this phone speaker audible for a moment.');
+  const headphoneCopy = liveStatus.indexOf('Use headphones so the song stays out of your mic.');
+  assert.ok(calibrationCopy >= 0 && headphoneCopy > calibrationCopy,
+    'calibration must keep its intentional speaker-to-mic path ahead of normal singing guidance');
+});

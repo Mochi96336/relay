@@ -12,6 +12,12 @@ test('product UI keeps Mic startup, PCM stall and transport reconnect distinct',
   assert.match(liveStatus, /mic-audio-stalled/);
 });
 
+test('Mic flow freshness belongs to the current owner and capture generation', () => {
+  assert.match(server, /lastMicFrameOwnerId === micMediaOwnerId/);
+  assert.match(server, /lastMicFrameGeneration === micMediaGeneration/);
+  assert.match(server, /resetMicFlowEvidence\(\);/);
+});
+
 test('Mic presence follows media availability and direct WebTransport can retain the lease', () => {
   assert.match(server, /micMediaOwnerId === ownerId[\s\S]*micMediaConnected\(\)/);
   assert.match(

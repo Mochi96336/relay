@@ -256,7 +256,8 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       verdict: input.take.qualityVerdict,
     },
     actions: {
-      canStartTake: input.readiness.components.session.active
+      canStartTake: health !== 'blocked'
+        && input.readiness.components.session.active
         && input.roomSong.videoId !== null
         && input.take.lifecycle !== 'recording'
         && input.take.lifecycle !== 'finalizing',

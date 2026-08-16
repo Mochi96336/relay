@@ -57,9 +57,6 @@ function envMs(name: string, fallback: number) {
 
 const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
-const MIX_FRAME_SAMPLES = Math.round((MIX_SAMPLE_RATE * MIX_FRAME_MS) / 1000);
-const TEST_BPM = 120;
-const TEST_PREBUFFER_MS = 800;
 const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 400);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
@@ -194,9 +191,6 @@ let backingIsRobot = false;
 let activeRobotSource: RelaySocket | null = null;
 let micGainDb = 24;
 let songLevel = 40;
-let testActive = false;
-let testStartedAt = 0;
-let testFrameIndex = 0;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
@@ -1007,17 +1001,6 @@ function timingCalibrationStatusPayload() {
   };
 }
 
-function testStatusPayload() {
-  return {
-    type: 'test-status',
-    active: testActive,
-    mode: testActive ? 'click' : 'off',
-    bpm: testActive ? TEST_BPM : 0,
-    sampleRate: MIX_SAMPLE_RATE,
-    prebufferMs: testActive ? TEST_PREBUFFER_MS : 0,
-  };
-}
-
 function mixSettingsPayload() {
   return {
     type: 'mix-settings',
@@ -1125,7 +1108,6 @@ function revokePublisherTransport(message: string) {
   publisher = null;
   clearMicMediaAuthority();
   if (previous) retirePublisherTransport(previous, 'mic-revoked', message);
-  if (testActive) stopSyncTest();
   broadcastStatus();
   return hadMedia;
 }
@@ -1139,62 +1121,6 @@ function invalidateMicTiming(message: string) {
   syncAppliedCalibration();
   broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
-}
-
-function clickSample(sampleIndex: number) {
-  const beatSamples = Math.round((MIX_SAMPLE_RATE * 60) / TEST_BPM);
-  const clickSamples = Math.round(MIX_SAMPLE_RATE * 0.055);
-  const phase = sampleIndex % beatSamples;
-  if (phase >= clickSamples) return 0;
-
-  const beat = Math.floor(sampleIndex / beatSamples);
-  const accent = beat % 4 === 0;
-  const frequency = accent ? 1500 : 1000;
-  const amplitude = accent ? 0.18 : 0.12;
-  const seconds = phase / MIX_SAMPLE_RATE;
-  const envelope = Math.exp(-seconds * 55);
-  return Math.sin(2 * Math.PI * frequency * seconds) * amplitude * envelope;
-}
-
-function writeMixedSample(output: Buffer, index: number, value: number) {
-  const mixed = Math.max(-1, Math.min(1, value));
-  const intSample = mixed < 0 ? Math.round(mixed * 32768) : Math.round(mixed * 32767);
-  output.writeInt16LE(intSample, index * 2);
-}
-
-function clickMixedFrame(frameIndex: number) {
-  const startSample = frameIndex * MIX_FRAME_SAMPLES;
-  const mic = session.readMic(startSample, MIX_FRAME_SAMPLES);
-  const gain = 10 ** (micGainDb / 20);
-  const output = Buffer.allocUnsafe(MIX_FRAME_SAMPLES * 2);
-
-  for (let i = 0; i < MIX_FRAME_SAMPLES; i += 1) {
-    const micValue = (mic[i] / 32768) * gain;
-    writeMixedSample(output, i, micValue + clickSample(startSample + i));
-  }
-
-  const retentionSamples = Math.round((MIC_RETENTION_MS * MIX_SAMPLE_RATE) / 1000);
-  session.trimMic(startSample - retentionSamples);
-  return output;
-}
-
-function startSyncTest() {
-  if (session.active) return false;
-  testActive = true;
-  testStartedAt = performance.now();
-  testFrameIndex = 0;
-  session.clearMic();
-  broadcastJson(testStatusPayload());
-  broadcastJson(mixSettingsPayload());
-  return true;
-}
-
-function stopSyncTest() {
-  if (!testActive) return;
-  testActive = false;
-  session.clearMic();
-  broadcastJson(testStatusPayload());
-  broadcastStatus();
 }
 
 function refreshLiveMicNetworkCompensation() {
@@ -1217,11 +1143,9 @@ function startLiveSource() {
     return;
   }
 
-  if (testActive) stopSyncTest();
   session.start();
   refreshLiveMicNetworkCompensation();
   broadcastJson(sourceStatusPayload());
-  broadcastJson(testStatusPayload());
   broadcastJson(mixSettingsPayload());
   broadcastJson(timingCalibrationStatusPayload());
 }
@@ -1233,7 +1157,6 @@ function restartLiveSourceAfterMicReconnect() {
     calibration.fail('Microphone reconnected during calibration. Start calibration again.');
   }
   broadcastJson(sourceStatusPayload());
-  broadcastJson(testStatusPayload());
 }
 
 function abandonProbeRun() {
@@ -1265,7 +1188,6 @@ function stopLiveSource() {
   lastAutoCalibrationAt = -Infinity;
   broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
-  broadcastJson(testStatusPayload());
   broadcastStatus();
 }
 
@@ -1276,7 +1198,7 @@ function processPublisherFrame(frame: PcmFrame) {
   // a control socket pointer into a second source of truth.
   if (!micAudioTransport || publisherSampleRate === null) return;
 
-  if (testActive || session.active) {
+  if (session.active) {
     const previousGeneration = session.micGeneration;
     lastMicFrameAt = performance.now();
     const { samples, start } = session.ingestMic(frame, publisherSampleRate);
@@ -1310,20 +1232,6 @@ function deliverMicPackets(packets: PcmFrame[]) {
 const mixerTimer = setInterval(() => {
   if (micAudioTransport) {
     deliverMicPackets(micAudioTransport.flush(performance.now()));
-  }
-
-  if (testActive) {
-    const elapsed = performance.now() - testStartedAt - TEST_PREBUFFER_MS;
-    if (elapsed < 0) return;
-
-    const expectedFrames = Math.floor(elapsed / MIX_FRAME_MS) + 1;
-    let framesToSend = Math.min(5, expectedFrames - testFrameIndex);
-    while (framesToSend > 0) {
-      broadcastToMonitors(clickMixedFrame(testFrameIndex), true);
-      testFrameIndex += 1;
-      framesToSend -= 1;
-    }
-    return;
   }
 
   session.drain((frame, evidence) => {
@@ -2363,7 +2271,6 @@ wss.on('connection', (rawSocket, request) => {
         takeover: hasTakeoverExpectation && previousOwnerId !== socket.participantId,
         ...(mediaTransport ? { mediaTransport } : {}),
       });
-      sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeTimeline.roomStatusPayload());
@@ -2411,7 +2318,6 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, publisherStatusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
-      sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeTimeline.roomStatusPayload());
@@ -2461,20 +2367,6 @@ wss.on('connection', (rawSocket, request) => {
         robotPlayerOffsetMs = offsetMs;
         robotPlayerOffsetAt = performance.now();
       }
-      return;
-    }
-
-    if (payload.type === 'start-sync-test') {
-      if (!requireMicOwnerCommand(socket, 'start-sync-test')) return;
-      if (!startSyncTest()) {
-        sendJson(socket, { type: 'error', message: 'Captured tab source is active.' });
-      }
-      return;
-    }
-
-    if (payload.type === 'stop-sync-test') {
-      if (!requireMicOwnerCommand(socket, 'stop-sync-test')) return;
-      stopSyncTest();
       return;
     }
 
@@ -2558,8 +2450,7 @@ wss.on('connection', (rawSocket, request) => {
         if (calibration.collecting) {
           calibration.fail('Microphone disconnected during calibration.');
         }
-        if (testActive) stopSyncTest();
-        broadcastStatus();
+              broadcastStatus();
       }
 
       if (socket === backing) {

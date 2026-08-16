@@ -77,16 +77,18 @@ test('observer Song surface is transport-read-only until this page becomes holde
   assert.match(songSurface, /observer\.hidden = !observerMode/);
 });
 
-test('engineering source and click-sync controls live below System technical details', () => {
-  const system = position('class="system-panel"');
-  const diagnostics = position('class="diagnostics-panel"');
-  const source = position('Open source');
-  const clickTest = position('id="start-sync-test"');
-  const legacyStatus = position('class="legacy-status-readout"');
-  assert.ok(system < diagnostics);
-  assert.ok(diagnostics < source);
-  assert.ok(diagnostics < clickTest);
-  assert.ok(diagnostics < legacyStatus);
+test('retired development source and click-sync controls are absent from Live', () => {
+  for (const retired of [
+    'Robot / development source',
+    'Open source',
+    'start-sync-test',
+    'stop-sync-test',
+    'Legacy click sync test',
+    'class="legacy-tools"',
+    'source.html',
+  ]) {
+    assert.equal(html.includes(retired), false);
+  }
 });
 
 test('formal Live copy consumes server product-status instead of rebuilding lifecycle in the browser', () => {

@@ -227,9 +227,7 @@ The cost is time, not CPU — one analysis is about 4 ms against a 20 ms frame b
 
 `RELAY_CALIBRATION_MAX_LAG_MS` defaults to 2500 ms and bounds how far the analyser looks. This is **not** what rejects false positives; it limits the search domain, while repeatability across independent windows is what keeps unstable false matches from reaching the live alignment.
 
-### Test mode is only the test
-
-`test-status` describes the click sync test and nothing else. It used to report a running live session as `mode: 'tab-source'`, because the browser clients had no other way to learn that the server had started mixing — so every live take ran them in test mode. That dropped the monitor slider to 0 dB at the start of each take and stopped remembering what the singer set during it. A live session is described by `source-status`; the clients listen to that, and derive "the server is mixing" from either source.
+### Live-session continuity
 
 The captured song used to be buffered only while a phone was connected, and the mixer stopped entirely without one. Both streams are now independent: an absent phone costs the mix its vocal, not the whole take.
 

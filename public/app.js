@@ -2,8 +2,6 @@ import { PreferredAudioTransport } from './audio-transport.js';
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
 const publisherButton = document.querySelector('#start-publisher');
-const testStartButton = document.querySelector('#start-sync-test');
-const testStopButton = document.querySelector('#stop-sync-test');
 const status = document.querySelector('#status');
 const details = document.querySelector('#details');
 const micGain = document.querySelector('#mic-gain');
@@ -19,7 +17,6 @@ const songLevelValue = document.querySelector('#song-level-value');
 const calibrateButton = document.querySelector('#calibrate-timing');
 const calibrateStatus = document.querySelector('#calibrate-status');
 
-const TEST_BPM = 120;
 const SOCKET_RECONNECT_MS = 1000;
 const SLIDER_HOLD_MS = 2000;
 const AUDIO_UPLINK_HEALTH_INTERVAL_MS = 1000;
@@ -30,7 +27,6 @@ let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
 let publisherActive = false;
-let testActive = false;
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestCalibration = null;
@@ -93,9 +89,6 @@ function renderGainAdvice() {
   useMicGainSuggestion.disabled = !publisherActive;
   useMicGainSuggestion.textContent = `Use +${suggested} dB`;
 }
-let clickScheduler = null;
-let nextClickTime = 0;
-let clickBeat = 0;
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
 let captureInputGapSamples = 0;
@@ -203,8 +196,6 @@ const COMMAND_LABELS = {
   'set-mix': 'Mix is controlled by the singer',
   'set-vocal-fine-tune': 'Vocal timing is controlled by the singer',
   'start-timing-calibration': 'Calibration is controlled by the singer',
-  'start-sync-test': 'The sync test is controlled by the singer',
-  'stop-sync-test': 'The sync test is controlled by the singer',
 };
 
 function setPublisherActive(active) {
@@ -253,14 +244,10 @@ function sendMixSettings() {
   }));
 }
 
-function updateTestButtons() {
-  testStartButton.disabled = !publisherActive || testActive;
-  testStopButton.disabled = !publisherActive || !testActive;
+function updateSingerControls() {
   micGain.disabled = !publisherActive;
   songLevel.disabled = !publisherActive;
   renderGainAdvice();
-  // Same dependency on publisher state, so it rides along rather than needing a
-  // call at every site that changes roles.
   updateCalibrateButton();
 }
 
@@ -397,47 +384,6 @@ function playCalibrationProbe(requestId, leadMs) {
   }));
 }
 
-function scheduleClick(time, accent) {
-  if (!audioContext) return;
-  const oscillator = audioContext.createOscillator();
-  const gain = audioContext.createGain();
-  oscillator.frequency.value = accent ? 1500 : 1000;
-  gain.gain.setValueAtTime(0.0001, time);
-  gain.gain.exponentialRampToValueAtTime(accent ? 0.22 : 0.15, time + 0.002);
-  gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.055);
-  oscillator.connect(gain).connect(audioContext.destination);
-  oscillator.start(time);
-  oscillator.stop(time + 0.06);
-}
-
-function startLocalClickTrack() {
-  stopLocalClickTrack();
-  if (!audioContext || !publisherActive) return;
-
-  const beatSeconds = 60 / TEST_BPM;
-  nextClickTime = audioContext.currentTime + 0.12;
-  clickBeat = 0;
-
-  const scheduleAhead = () => {
-    if (!audioContext) return;
-    while (nextClickTime < audioContext.currentTime + 0.15) {
-      scheduleClick(nextClickTime, clickBeat % 4 === 0);
-      nextClickTime += beatSeconds;
-      clickBeat += 1;
-    }
-  };
-
-  scheduleAhead();
-  clickScheduler = setInterval(scheduleAhead, 25);
-}
-
-function stopLocalClickTrack() {
-  if (clickScheduler) {
-    clearInterval(clickScheduler);
-    clickScheduler = null;
-  }
-}
-
 function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
@@ -540,12 +486,6 @@ function handleServerMessage(message) {
     renderGainAdvice();
     return;
   }
-
-  if (message.type === 'test-status') {
-    testActive = Boolean(message.active);
-    if (!testActive && publisherActive) stopLocalClickTrack();
-    updateTestButtons();
-  }
 }
 
 function canKeepPublishing() {
@@ -623,7 +563,6 @@ async function connectPublisherSocket() {
 }
 
 async function stop(setIdle = true, { releaseMic = true } = {}) {
-  stopLocalClickTrack();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
 
@@ -658,14 +597,13 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
     await audioContext.close();
     audioContext = null;
   }
-  testActive = false;
   liveMixActive = false;
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
   captureInputGapSamples = 0;
   publisherControlConnections = 0;
   publisherButton.disabled = false;
-  updateTestButtons();
+  updateSingerControls();
   if (setIdle) setStatus('Idle', 'Take the mic when you are ready.');
 }
 
@@ -806,7 +744,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   activeNode = capture;
 
   publisherButton.disabled = true;
-  updateTestButtons();
+  updateSingerControls();
   setStatus('Connecting microphone…', `${audioContext.sampleRate} Hz capture is active; connecting to Relay.`);
 
   try {
@@ -843,18 +781,6 @@ window.addEventListener('relay-request-microphone', (event) => {
   requestPublisherStart(expectedOwnerId).catch(console.error);
 });
 
-testStartButton.addEventListener('click', () => {
-  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: 'start-sync-test' }));
-  startLocalClickTrack();
-});
-
-testStopButton.addEventListener('click', () => {
-  if (socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: 'stop-sync-test' }));
-  stopLocalClickTrack();
-});
-
 for (const slider of [micGain, songLevel]) {
   slider.addEventListener('input', () => {
     markSliderTouched(slider);
@@ -878,5 +804,5 @@ calibrateButton.addEventListener('click', () => {
 
 updateMixLabels();
 updateCalibrateButton();
-updateTestButtons();
+updateSingerControls();
 setStatus('Idle', 'Take the mic when you are ready.');

@@ -33,7 +33,6 @@ test('Technical details exposes Overview, Session, Audio, Timing, Robot, and Raw
   }
   assert.match(html, /id="copy-diagnostics"/);
   assert.match(html, /id="diagnostics-raw"/);
-  assert.match(html, />Development tools</);
 });
 
 test('L2 consumes ProductStatus and keeps readiness fresh only while System is open', () => {
@@ -85,14 +84,19 @@ test('product attention opens the matching L2 evidence line instead of jumping s
   assert.match(system, /item\.open = true/);
 });
 
-test('remaining engineering controls stay below Technical details and Development tools', () => {
-  const technical = position('id="diagnostics-panel"');
-  const development = position('class="legacy-tools"');
-  const source = position('Open source');
-  const clickTest = position('id="start-sync-test"');
-
-  assert.ok(technical < development);
-  assert.ok(development < source);
-  assert.ok(development < clickTest);
+test('Technical details ships diagnostics without retired development controls', () => {
+  assert.match(html, />Technical details</);
+  for (const retired of [
+    'Development tools',
+    'legacy-tools',
+    'Robot / development source',
+    'Open source',
+    'start-sync-test',
+    'stop-sync-test',
+    'Legacy click sync test',
+    'source.html',
+  ]) {
+    assert.equal(html.includes(retired), false);
+  }
   assert.doesNotMatch(html, /id="monitor-gain"|id="start-monitor"|legacy-transport-controls/);
 });

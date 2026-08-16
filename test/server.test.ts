@@ -67,7 +67,7 @@ async function liveSession(server: RelayServer) {
   const monitor = await RelayClient.connect(server);
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
-  await monitor.waitForType('test-status');
+  await monitor.waitForType('source-status');
 
   return { backing, publisher, monitor };
 }
@@ -194,9 +194,6 @@ describe('live mix', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-
-      assert.equal(monitor.latest('test-status')?.active, false, 'no test is running');
-      assert.equal(monitor.latest('test-status')?.mode, 'off');
 
       const live = monitor.latest('source-status');
       assert.equal(live?.active, true, 'the live session describes itself');

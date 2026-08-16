@@ -1,9 +1,7 @@
 export type MicOwnerCommand =
   | 'set-mix'
   | 'set-vocal-fine-tune'
-  | 'start-timing-calibration'
-  | 'start-sync-test'
-  | 'stop-sync-test';
+  | 'start-timing-calibration';
 
 export type CommandActor = {
   participantId: string | null;

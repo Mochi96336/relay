@@ -49,7 +49,6 @@ async function liveSession(server: RelayServer, robotBacking = false) {
   const monitor = await RelayClient.connect(server);
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
-  await monitor.waitForType('test-status');
 
   return { backing, publisher, monitor };
 }

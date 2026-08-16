@@ -113,7 +113,7 @@ if (toggle && gainControl && gainValue && note && adjustState) {
   }
 
   function handleMessage(message) {
-    if (message.type === 'test-status' || message.type === 'source-status') {
+    if (message.type === 'source-status') {
       sourceSampleRate = Number(message.sampleRate ?? message.mixSampleRate) || MIX_SAMPLE_RATE;
       return;
     }

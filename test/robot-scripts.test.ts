@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { afterEach, describe } from 'node:test';
@@ -105,6 +105,16 @@ function run(script: string, env: NodeJS.ProcessEnv) {
     encoding: 'utf8',
     timeout: 5_000,
   });
+}
+
+function systemdVerifySkip() {
+  if (spawnSync('systemd-analyze', ['--version']).error) return 'systemd-analyze unavailable';
+  try {
+    accessSync('/usr/bin/npm', constants.X_OK);
+  } catch {
+    return '/usr/bin/npm unavailable on verifier host';
+  }
+  return false;
 }
 
 afterEach(() => {
@@ -220,9 +230,10 @@ describe('unattended boot', () => {
       assert.match(text, /WantedBy=default\.target/, `${name} must install into the user manager`);
       assert.doesNotMatch(text, /RELAY_KEY=/, `${name} is in the repository and must not carry the key`);
     }
+    assert.match(unit('relay-server.service'), /ExecStart=\/usr\/bin\/npm start/);
   });
 
-  test('systemd accepts the unit files', { skip: spawnSync('systemd-analyze', ['--version']).error ? 'systemd-analyze unavailable' : false }, () => {
+  test('systemd accepts the unit files', { skip: systemdVerifySkip() }, () => {
     const result = spawnSync('systemd-analyze', [
       '--user',
       'verify',

@@ -34,13 +34,23 @@ describe('mic owner command authority', () => {
     );
   });
 
+  test('lets any identified participant adjust a room nobody is singing in', () => {
+    assert.deepEqual(
+      authorizeMicOwnerCommand(
+        { participantId: 'participant-listener', isCurrentPublisher: false },
+        null,
+      ),
+      { ok: true, authority: 'room-open' },
+    );
+  });
+
   test('does not let an arbitrary anonymous socket control a legacy session', () => {
     assert.deepEqual(
       authorizeMicOwnerCommand(
         { participantId: null, isCurrentPublisher: false },
         null,
       ),
-      { ok: false, reason: 'mic-free' },
+      { ok: false, reason: 'no-identity' },
     );
   });
 

@@ -1598,10 +1598,11 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'start-sync-test') {
-      if (socket !== publisher || socket.role !== 'publisher') {
-        sendJson(socket, { type: 'error', message: 'Only the microphone device can start the sync test.' });
-        return;
-      }
+      // Same authority as stopping it. Requiring the physical publisher socket
+      // here while `stop-sync-test` accepts any transport of the Mic owner made
+      // one feature answer to two different boundaries, so the owner's second
+      // tab could stop a test it was not allowed to start.
+      if (!requireMicOwnerCommand(socket, 'start-sync-test')) return;
       if (!startSyncTest()) {
         sendJson(socket, { type: 'error', message: 'Captured tab source is active.' });
       }

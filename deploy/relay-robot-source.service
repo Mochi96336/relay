@@ -1,0 +1,42 @@
+# The robot's browser audio route: PipeWire sink, parec capture, backing
+# bridge, and Chromium under Xvfb. See deploy/relay-server.service for why
+# these are user units, and ROBOT_DEPLOYMENT.md for the install procedure.
+#
+# Separate from the server on purpose. The phone talks to the server, so
+# collapsing both into one unit would make a Chromium crash end the singer's
+# session as well as the backing route.
+#
+# Not enabled by being committed here. Installing it is a deliberate step.
+
+[Unit]
+Description=Relay robot browser audio route
+Documentation=https://github.com/Mochi96336/relay/blob/main/ROBOT_DEPLOYMENT.md
+Requires=relay-server.service
+After=relay-server.service pipewire-pulse.service wireplumber.service
+# Give up rather than thrash. Each attempt creates a Chromium profile and
+# touches the sink, so a route that cannot work would keep the failure moving;
+# a unit that has stopped is a still one, and /statusz reports it the same way
+# on every poll.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/relay
+Environment=PORT=3100
+EnvironmentFile=-%h/.config/relay/robot.env
+# After= only orders the start; it does not wait for the port to accept
+# connections. Chromium does not retry a refused load, so without this gate a
+# boot race leaves the source page on an error screen with every process in
+# the unit healthy - the launcher included.
+ExecStartPre=/usr/bin/curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-all-errors http://localhost:${PORT}/healthz
+ExecStart=/bin/bash scripts/robot-source.sh
+Restart=on-failure
+RestartSec=5
+# The launcher cleans up its own children and its own sink module on a signal,
+# but a SIGKILL never runs that trap. Leave KillMode at the default so the
+# cgroup sweep catches Chromium either way.
+SyslogIdentifier=relay-robot-source
+
+[Install]
+WantedBy=default.target

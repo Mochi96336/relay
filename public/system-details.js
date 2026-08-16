@@ -30,8 +30,11 @@ if (
   && Object.values(systemValues).every(Boolean)
   && Object.values(systemDetails).every(Boolean)
 ) {
+  const READINESS_REFRESH_MS = 1_000;
   let latestProduct = null;
   let latestReadiness = null;
+  let readinessRefreshTimer = null;
+  let readinessRefreshInFlight = false;
   let diagnosticsSocket = null;
   let diagnosticsReconnect = null;
   const snapshots = new Map();
@@ -153,6 +156,8 @@ if (
   }
 
   async function refreshReadiness() {
+    if (readinessRefreshInFlight) return latestReadiness;
+    readinessRefreshInFlight = true;
     try {
       const response = await fetch(readyzUrl(), { cache: 'no-store' });
       const payload = await response.json();
@@ -166,7 +171,27 @@ if (
       renderL2();
       renderDiagnostics();
       return null;
+    } finally {
+      readinessRefreshInFlight = false;
     }
+  }
+
+  function stopReadinessRefresh() {
+    if (readinessRefreshTimer) clearInterval(readinessRefreshTimer);
+    readinessRefreshTimer = null;
+  }
+
+  function startReadinessRefresh() {
+    if (!systemPanel.open) return;
+    void refreshReadiness();
+    if (readinessRefreshTimer) return;
+    readinessRefreshTimer = setInterval(() => {
+      if (!systemPanel.open) {
+        stopReadinessRefresh();
+        return;
+      }
+      void refreshReadiness();
+    }, READINESS_REFRESH_MS);
   }
 
   function wsUrl() {
@@ -335,12 +360,13 @@ if (
   });
 
   systemPanel.addEventListener('toggle', () => {
-    if (systemPanel.open) refreshReadiness();
+    if (systemPanel.open) startReadinessRefresh();
+    else stopReadinessRefresh();
   });
 
   diagnosticsPanel.addEventListener('toggle', () => {
     if (diagnosticsPanel.open) {
-      refreshReadiness();
+      void refreshReadiness();
       connectDiagnostics();
     } else {
       closeDiagnosticsSocket();
@@ -375,6 +401,11 @@ if (
     renderL2();
     renderDiagnostics();
   });
+
+  window.addEventListener('beforeunload', () => {
+    stopReadinessRefresh();
+    closeDiagnosticsSocket();
+  }, { once: true });
 
   renderDiagnostics();
 }

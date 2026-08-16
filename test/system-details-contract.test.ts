@@ -36,9 +36,14 @@ test('Technical details exposes Overview, Session, Audio, Timing, Robot, and Raw
   assert.match(html, />Development tools</);
 });
 
-test('L2 consumes ProductStatus and only refreshes readiness when System is opened', () => {
+test('L2 consumes ProductStatus and keeps readiness fresh only while System is open', () => {
   assert.match(system, /relay-product-status/);
-  assert.match(system, /if \(systemPanel\.open\) refreshReadiness\(\)/);
+  assert.match(system, /const READINESS_REFRESH_MS = 1_000/);
+  assert.match(system, /function startReadinessRefresh\(\)/);
+  assert.match(system, /if \(systemPanel\.open\) startReadinessRefresh\(\)/);
+  assert.match(system, /else stopReadinessRefresh\(\)/);
+  assert.match(system, /setInterval\([\s\S]*?refreshReadiness\(\)[\s\S]*?READINESS_REFRESH_MS/);
+  assert.match(system, /if \(readinessRefreshInFlight\) return latestReadiness/);
   assert.match(system, /fetch\(readyzUrl\(\), \{ cache: 'no-store' \}\)/);
   assert.match(system, /components\?\.route\?\.mode|components\.route\?\.mode/);
   assert.match(system, /The Robot route is not armed\. Missing Robot audio is expected in this state\./);

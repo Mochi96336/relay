@@ -75,8 +75,29 @@ function loadYouTubeApi() {
   if (apiPromise) return apiPromise;
 
   apiPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('YouTube IFrame API timed out.')), 15_000);
     const previousReady = window.onYouTubeIframeAPIReady;
+    let script = null;
+
+    /**
+     * A failed attempt has to leave nothing behind.
+     *
+     * The memoized promise and the injected <script> are both guards against
+     * loading the API twice, so either one surviving a failure makes the
+     * failure permanent: the promise is handed to every later caller already
+     * rejected, and the tag makes a retry wait on a callback that has no
+     * script left to fire it. On the robot that turns a temporary outage -
+     * booting before the network is up - into a page that cannot load a song
+     * again until someone reloads it, which nobody is there to do.
+     */
+    const fail = (error) => {
+      clearTimeout(timeout);
+      window.onYouTubeIframeAPIReady = previousReady;
+      apiPromise = null;
+      script?.remove();
+      reject(error);
+    };
+
+    const timeout = setTimeout(() => fail(new Error('YouTube IFrame API timed out.')), 15_000);
 
     window.onYouTubeIframeAPIReady = () => {
       clearTimeout(timeout);
@@ -84,14 +105,14 @@ function loadYouTubeApi() {
       resolve(window.YT);
     };
 
-    if (!document.querySelector('script[data-relay-youtube-api]')) {
-      const script = document.createElement('script');
+    script = document.querySelector('script[data-relay-youtube-api]');
+    if (!script) {
+      script = document.createElement('script');
       script.src = 'https://www.youtube.com/iframe_api';
       script.async = true;
       script.dataset.relayYoutubeApi = 'true';
       script.addEventListener('error', () => {
-        clearTimeout(timeout);
-        reject(new Error('Could not load YouTube IFrame API.'));
+        fail(new Error('Could not load YouTube IFrame API.'));
       }, { once: true });
       document.head.append(script);
     }

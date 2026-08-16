@@ -76,6 +76,9 @@ app.use(express.static(publicDir));
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true });
 });
+app.get('/statusz', (_req, res) => {
+  res.json(remoteStatusPayload());
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
@@ -538,6 +541,92 @@ function mixHealthPayload() {
     micGainDb,
     monitorDroppedFrames,
     prebufferMs: session.prebufferMs,
+  };
+}
+
+function frameAgeMs(atMs: number, nowMs: number) {
+  return Number.isFinite(atMs) ? Math.round(nowMs - atMs) : null;
+}
+
+/**
+ * The status another machine can poll.
+ *
+ * `/healthz` answers "is the Relay process up", which stays `true` through
+ * every failure an unattended robot actually has: the browser died, the sink
+ * vanished, the backing bridge stopped. This reports on the *route* instead.
+ *
+ * It reduces that to `ok` plus named faults so the poller does not have to
+ * model Relay's internals. A fault is something that is definitely broken - a
+ * connected client that stopped sending audio, or a robot route missing a
+ * component - never merely "nobody is singing", which is what `idle` is for.
+ * Warnings degrade quality without stopping audio, so they do not clear `ok`.
+ *
+ * Deliberately carries no nicknames or keys: it is unauthenticated on the LAN
+ * like `/healthz`, so it reports counts and states only.
+ */
+function remoteStatusPayload() {
+  const nowMs = performance.now();
+  const alignment = session.alignment;
+  const snapshot = participants.snapshot();
+
+  const backingConnected = backing?.readyState === WebSocket.OPEN;
+  const micConnected = publisher?.readyState === WebSocket.OPEN;
+  const backingStreaming = nowMs - lastBackingFrameAt < STREAM_LIVE_MS;
+  const micStreaming = nowMs - lastMicFrameAt < STREAM_LIVE_MS;
+  const robotRoute = robotRouteActive();
+  const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;
+  const deltaFresh = robotDeltaIsFresh(nowMs);
+
+  const faults: string[] = [];
+  if (backingConnected && !backingStreaming) faults.push('backing source is connected but no longer sending audio');
+  if (micConnected && !micStreaming) faults.push('microphone is connected but no longer sending audio');
+  if (robotRoute && !backingConnected) faults.push('robot route has no backing source');
+  if (robotRoute && !robotSourceConnected) faults.push('robot route has no source page');
+
+  const warnings: string[] = [];
+  if (robotRoute && robotSourceConnected && !deltaFresh) {
+    warnings.push('robot player delta is stale; alignment fell back to the network estimate');
+  }
+  if (calibrationIsStale()) warnings.push('timing calibration no longer matches the current capture');
+
+  const idle = !backingConnected && !micConnected && !robotSourceConnected;
+  const state = faults.length > 0 ? 'fault'
+    : idle ? 'idle'
+      : warnings.length > 0 ? 'degraded'
+        : 'live';
+
+  return {
+    ok: faults.length === 0,
+    state,
+    faults,
+    warnings,
+    uptimeMs: Math.round(nowMs),
+    source: {
+      backingConnected,
+      backingStreaming,
+      backingSampleRate,
+      backingIsRobot,
+      backingFrameAgeMs: frameAgeMs(lastBackingFrameAt, nowMs),
+      micConnected,
+      micStreaming,
+      micFrameAgeMs: frameAgeMs(lastMicFrameAt, nowMs),
+      participants: snapshot.participants.length,
+      participantsConnected: snapshot.participants.filter((participant) => participant.connected).length,
+    },
+    robot: {
+      route: robotRoute,
+      sourceConnected: robotSourceConnected,
+      deltaFresh,
+      calibrationKind,
+      calibrationStale: calibrationIsStale(),
+      timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+      activeCalibratedMicLagMs: alignment.calibratedMicLagMs,
+    },
+    mix: {
+      active: session.active,
+      ...session.health(),
+      monitorDroppedFrames,
+    },
   };
 }
 

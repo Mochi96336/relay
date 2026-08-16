@@ -177,12 +177,6 @@ export class TakeController {
     }
   }
 
-  noteUnheaderedPcm() {
-    if (!this.session.recordingTakeId) return false;
-    this.quality?.noteUnheaderedPcm();
-    return true;
-  }
-
   noteQualityEvent(kind: TakeQualityEventKind) {
     if (!this.session.recordingTakeId) return false;
     this.quality?.noteEvent(kind);

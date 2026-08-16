@@ -240,6 +240,47 @@ describe('room song telemetry command gate', () => {
     });
   });
 
+  test('lets a committing handoff target report after its command expired', () => {
+    const session = new RoomSongCommandSession();
+
+    // The server named B as the target while applying a command, told it to
+    // commit, and is waiting for the report that says where it landed. On a
+    // phone that means cueing a video and buffering it, which routinely takes
+    // longer than COMMAND_TIMEOUT_MS - so by the time the report arrives the
+    // command is gone and only the handoff state remains.
+    const committing = room({
+      handoffState: 'committing',
+      handoffTargetParticipantId: B.participantId,
+      handoffTargetPlaybackTransportId: B.transportId,
+      handoffTargetPlaybackGeneration: B.generation,
+    });
+
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ videoId: OTHER_VIDEO, state: 2 }), B, committing, 0),
+      { ok: true },
+    );
+
+    // Only the named target. A commit does not open the room to everyone
+    // watching it happen.
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ videoId: OTHER_VIDEO, state: 2 }), A, committing, 0),
+      { ok: false, reason: 'command-required' },
+    );
+
+    // And it is the commit that authorizes, not the mere existence of a
+    // handoff: while one is still preparing, the target has nothing to report.
+    const preparing = room({
+      handoffState: 'preparing',
+      handoffTargetParticipantId: B.participantId,
+      handoffTargetPlaybackTransportId: B.transportId,
+      handoffTargetPlaybackGeneration: B.generation,
+    });
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ videoId: OTHER_VIDEO, state: 2 }), B, preparing, 0),
+      { ok: false, reason: 'command-required' },
+    );
+  });
+
   test('lets the leader re-anchor its own clock once its reports have gone stale', () => {
     const session = new RoomSongCommandSession();
 

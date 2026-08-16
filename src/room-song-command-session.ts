@@ -84,6 +84,16 @@ function statusLeader(status: RoomSongStatus): PlaybackIdentity | null {
   return { participantId, transportId, generation };
 }
 
+function statusHandoffTarget(status: RoomSongStatus): PlaybackIdentity | null {
+  const participantId = normalizeParticipantId(status.handoffTargetParticipantId);
+  const transportId = typeof status.handoffTargetPlaybackTransportId === 'string'
+    ? status.handoffTargetPlaybackTransportId
+    : '';
+  const generation = Number(status.handoffTargetPlaybackGeneration);
+  if (!participantId || !transportId || !Number.isInteger(generation) || generation < 0) return null;
+  return { participantId, transportId, generation };
+}
+
 function sameCommandBody(a: RoomSongCommandBody, b: RoomSongCommandBody) {
   if (a.action !== b.action) return false;
   if (a.action === 'load' && b.action === 'load') {
@@ -311,6 +321,28 @@ export class RoomSongCommandSession {
       }
 
       if (mutation !== null) return { ok: false, reason: 'command-mismatch' };
+      return { ok: true };
+    }
+
+    // A commit is its own authorization, and it outlives the command that
+    // started it.
+    //
+    // Commands expire after COMMAND_TIMEOUT_MS; a handoff has no such bound.
+    // The report that completes a commit is the target loading the song and
+    // saying where it landed, which on a phone means cueing a video and
+    // buffering it - routinely longer than the command lives. Once the command
+    // expired, this gate could no longer see that a handoff was in flight, so
+    // it read the report it had been waiting for as an unauthorized mutation
+    // and refused it. Nothing then completed the handoff, the room stayed in
+    // `committing` forever, and every later song load was refused behind it.
+    //
+    // The target is not a stranger here: the server named it while applying a
+    // command that already passed the mic-owner and leader checks, and it is
+    // the only identity this state will accept.
+    if (
+      roomStatus.handoffState === 'committing'
+      && sameIdentity(statusHandoffTarget(roomStatus), identity)
+    ) {
       return { ok: true };
     }
 

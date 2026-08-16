@@ -29,9 +29,11 @@ import {
   type PlaybackIdentity,
   type SongHandoffPlan,
 } from './song-session.js';
+import { TakeController, type TakeSongSnapshot } from './take-controller.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
+const takeDir = path.resolve(process.env.RELAY_TAKE_DIR ?? path.join(process.cwd(), 'takes'));
 const port = Number(process.env.PORT ?? 3000);
 const relayKey = process.env.RELAY_KEY ?? null;
 
@@ -78,9 +80,25 @@ const MIX_HEALTH_INTERVAL_MS = 1_000;
 const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
 const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
 const PLAYBACK_MIC_INTENT_MS = 10_000;
+const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const TAKE_ARTIFACT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const app = express();
 app.disable('x-powered-by');
+app.get('/takes/:takeId.wav', (req, res) => {
+  if (relayKey && req.query.key !== relayKey) {
+    res.sendStatus(401);
+    return;
+  }
+  const takeId = String(req.params.takeId ?? '');
+  if (!TAKE_ARTIFACT_ID_PATTERN.test(takeId)) {
+    res.sendStatus(404);
+    return;
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.type('audio/wav');
+  res.sendFile(path.join(takeDir, `${takeId}.wav`));
+});
 app.use(express.static(publicDir));
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true });
@@ -168,6 +186,12 @@ const session = new AudioSession({
   backingRetentionMs: BACKING_RETENTION_MS,
 });
 session.setMicGainDb(micGainDb);
+
+const takeController = new TakeController({
+  directory: takeDir,
+  sampleRate: MIX_SAMPLE_RATE,
+  onChange: (status) => broadcastJson(status),
+});
 
 let sourceGeneration = 0;
 const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
@@ -463,6 +487,31 @@ function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now())
   });
   broadcastJson(roomSongCommandStatusPayload(nowMs));
   return true;
+}
+
+function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot | null {
+  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
+  if (typeof room.videoId !== 'string' || !room.videoId) return null;
+
+  const revision = Number(room.revision);
+  const state = Number(room.state);
+  const serverTime = Number(room.serverTime);
+  const playbackRate = Number(room.playbackRate);
+  return {
+    videoId: room.videoId,
+    revision: Number.isInteger(revision) ? revision : null,
+    state: Number.isFinite(state) ? state : null,
+    serverTime: Number.isFinite(serverTime) ? serverTime : null,
+    playbackRate: Number.isFinite(playbackRate) ? playbackRate : null,
+  };
+}
+
+function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
+  sendJson(socket, {
+    type: 'take-command-rejected',
+    command,
+    reason,
+  });
 }
 
 function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
@@ -848,6 +897,7 @@ function clearBootCalibrationState() {
 function stopLiveSource() {
   cancelBackingGrace();
   if (!session.active) return;
+  takeController.endMix();
   clearBootCalibrationState();
   robotPlayerOffsetMs = null;
   robotPlayerOffsetAt = -Infinity;
@@ -876,7 +926,10 @@ const mixerTimer = setInterval(() => {
     return;
   }
 
-  session.drain((frame) => broadcastToMonitors(frame, true));
+  session.drain((frame) => {
+    takeController.append(frame);
+    broadcastToMonitors(frame, true);
+  });
 }, 5);
 
 function maybeAutoCalibrate(nowMs: number) {
@@ -1333,6 +1386,64 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
+    if (payload.type === 'take-status-request') {
+      sendJson(socket, takeController.statusPayload());
+      return;
+    }
+
+    if (payload.type === 'start-take') {
+      if (!socket.participantId) {
+        rejectTakeCommand(socket, 'start', 'participant-required');
+        return;
+      }
+      if (!session.active) {
+        rejectTakeCommand(socket, 'start', 'mix-not-active');
+        return;
+      }
+      const song = takeSongSnapshot();
+      if (!song) {
+        rejectTakeCommand(socket, 'start', 'song-required');
+        return;
+      }
+
+      const result = takeController.start(socket.participantId, song);
+      if (!result.ok) {
+        rejectTakeCommand(socket, 'start', result.reason);
+        return;
+      }
+      sendJson(socket, {
+        type: 'take-command-accepted',
+        command: 'start',
+        takeId: result.takeId,
+      });
+      return;
+    }
+
+    if (payload.type === 'stop-take') {
+      if (!socket.participantId) {
+        rejectTakeCommand(socket, 'stop', 'participant-required');
+        return;
+      }
+      const takeId = typeof payload.takeId === 'string' ? payload.takeId.trim() : '';
+      if (!TAKE_ID_PATTERN.test(takeId)) {
+        rejectTakeCommand(socket, 'stop', 'invalid-take-id');
+        return;
+      }
+
+      const result = takeController.stop(takeId, socket.participantId);
+      if (!result.ok) {
+        rejectTakeCommand(socket, 'stop', result.reason);
+        return;
+      }
+      sendJson(socket, {
+        type: 'take-command-accepted',
+        command: 'stop',
+        takeId,
+        duplicate: result.duplicate,
+      });
+      return;
+    }
+
     if (payload.type === 'participant-rename') {
       if (!socket.participantId) return;
       if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
@@ -1786,6 +1897,7 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeTimeline.roomStatusPayload());
       sendJson(socket, roomSongCommandStatusPayload());
+      sendJson(socket, takeController.statusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
@@ -1828,6 +1940,7 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeTimeline.roomStatusPayload());
       sendJson(socket, roomSongCommandStatusPayload());
+      sendJson(socket, takeController.statusPayload());
       if (socket.participantId) sendJson(socket, sessionStatusPayload());
       return;
     }
@@ -2000,6 +2113,7 @@ const heartbeat = setInterval(() => {
 
 wss.on('close', () => {
   cancelMicTransportGrace();
+  takeController.shutdown();
   clearInterval(heartbeat);
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);

@@ -31,6 +31,8 @@ let apiPromise = null;
 let pendingHandoff = null;
 let handoffReadySent = false;
 let handoffReadyTimers = [];
+let localCommandPending = null;
+let serverMutation = null;
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
@@ -108,25 +110,39 @@ function setPlayerState(state, detail = '') {
   stateNode.textContent = detail ? `${label} · ${detail}` : label;
 }
 
+function actualVideoId() {
+  try {
+    const value = player?.getVideoData?.()?.video_id;
+    return typeof value === 'string' && value ? value : loadedVideoId;
+  } catch {
+    return loadedVideoId;
+  }
+}
+
 function readSnapshot() {
   if (!playerReady || !player || !loadedVideoId) return null;
 
   const now = performance.now();
+  const previous = previousSnapshot;
   const state = Number(player.getPlayerState());
   const currentTime = Number(player.getCurrentTime());
   const duration = Number(player.getDuration());
   const playbackRate = Number(player.getPlaybackRate());
   const bufferedFraction = Number(player.getVideoLoadedFraction());
+  const currentVideoId = actualVideoId() ?? loadedVideoId;
+  if (currentVideoId) loadedVideoId = currentVideoId;
 
   let timelineDeltaSeconds = 0;
-  if (previousSnapshot && previousSnapshot.state === 1 && state === 1) {
-    const elapsedSeconds = (now - previousSnapshot.sampledAtPerformanceMs) / 1000;
-    const expected = previousSnapshot.currentTime + elapsedSeconds * previousSnapshot.playbackRate;
+  if (previous && previous.videoId === currentVideoId) {
+    const elapsedSeconds = (now - previous.sampledAtPerformanceMs) / 1000;
+    const expected = previous.state === 1 && state === 1
+      ? previous.currentTime + elapsedSeconds * previous.playbackRate
+      : previous.currentTime;
     timelineDeltaSeconds = currentTime - expected;
   }
 
   const snapshot = {
-    videoId: loadedVideoId,
+    videoId: currentVideoId,
     state,
     currentTime,
     duration,
@@ -135,10 +151,64 @@ function readSnapshot() {
     sampledAtMs: performance.timeOrigin + now,
     sampledAtPerformanceMs: now,
     timelineDeltaSeconds,
+    previousVideoId: previous?.videoId ?? null,
+    previousState: previous?.state ?? null,
+    previousPlaybackRate: previous?.playbackRate ?? null,
   };
 
   previousSnapshot = snapshot;
   return snapshot;
+}
+
+function activeServerMutation() {
+  if (!serverMutation) return null;
+  if (performance.now() <= serverMutation.expiresAt) return serverMutation;
+  serverMutation = null;
+  return null;
+}
+
+function requestRoomSongCommand(detail) {
+  if (localCommandPending) return false;
+  localCommandPending = {
+    action: detail.action,
+    commandId: null,
+    requestedAt: performance.now(),
+  };
+  noteNode.textContent = `Requesting room ${detail.action}…`;
+  window.dispatchEvent(new CustomEvent('relay:room-song-command-intent', { detail }));
+  return true;
+}
+
+function localMutationForSnapshot(snapshot) {
+  if (!snapshot || !snapshot.previousVideoId) return null;
+  if (activeServerMutation() || pendingHandoff) return null;
+
+  if (snapshot.videoId !== snapshot.previousVideoId) {
+    return { action: 'load', videoId: snapshot.videoId, positionSeconds: Math.max(0, snapshot.currentTime) };
+  }
+
+  if (
+    Number.isFinite(snapshot.previousPlaybackRate)
+    && Number.isFinite(snapshot.playbackRate)
+    && Math.abs(snapshot.playbackRate - snapshot.previousPlaybackRate) > 0.0001
+  ) {
+    return { action: 'rate', playbackRate: snapshot.playbackRate };
+  }
+
+  if (snapshot.state !== snapshot.previousState) {
+    if (snapshot.state === 1 && ![1, 3].includes(snapshot.previousState)) {
+      return { action: 'play' };
+    }
+    if (snapshot.state === 2 && snapshot.previousState !== 2) {
+      return { action: 'pause' };
+    }
+  }
+
+  if (Math.abs(snapshot.timelineDeltaSeconds) > 0.75) {
+    return { action: 'seek', positionSeconds: Math.max(0, snapshot.currentTime) };
+  }
+
+  return null;
 }
 
 function renderSnapshot(snapshot) {
@@ -152,12 +222,27 @@ function renderSnapshot(snapshot) {
 
   if (Math.abs(snapshot.timelineDeltaSeconds) > 0.4) {
     const sign = snapshot.timelineDeltaSeconds > 0 ? '+' : '';
-    noteNode.textContent = `Timeline jump detected: ${sign}${snapshot.timelineDeltaSeconds.toFixed(2)} s. This is expected after seeks or some playback interruptions.`;
+    noteNode.textContent = `Timeline jump detected: ${sign}${snapshot.timelineDeltaSeconds.toFixed(2)} s.`;
   } else if (snapshot.state === 3) {
     noteNode.textContent = 'YouTube is buffering. Mic transport can keep running independently.';
-  } else if (!pendingHandoff) {
-    noteNode.textContent = 'Timeline is media time from the YouTube player; it does not include the phone speaker/headphone output latency.';
+  } else if (!pendingHandoff && !localCommandPending && !activeServerMutation()) {
+    noteNode.textContent = 'Timeline is media time from the YouTube player; shared controls are authorized by Relay.';
   }
+
+  // During preparation the target player is deliberately being cued before it
+  // owns the room clock. Do not turn that local preparation into product input.
+  if (pendingHandoff?.phase === 'preparing') return;
+
+  if (localCommandPending) return;
+
+  const mutation = localMutationForSnapshot(snapshot);
+  if (mutation) {
+    requestRoomSongCommand(mutation);
+    return;
+  }
+
+  const mutationContext = activeServerMutation();
+  if (mutationContext?.suppressTelemetry) return;
 
   window.dispatchEvent(new CustomEvent('relay:youtube-telemetry', {
     detail: {
@@ -191,15 +276,6 @@ function clearHandoffReadyTimers() {
   handoffReadyTimers = [];
 }
 
-function actualVideoId() {
-  try {
-    const value = player?.getVideoData?.()?.video_id;
-    return typeof value === 'string' && value ? value : loadedVideoId;
-  } catch {
-    return loadedVideoId;
-  }
-}
-
 function announceHandoffReady() {
   if (!pendingHandoff || pendingHandoff.phase !== 'preparing' || handoffReadySent) return false;
   if (!playerReady || !player || actualVideoId() !== pendingHandoff.videoId) return false;
@@ -226,6 +302,12 @@ function scheduleHandoffReadyChecks() {
 function cuePendingHandoff() {
   if (!pendingHandoff || !playerReady || !player) return;
   try {
+    serverMutation = {
+      source: 'handoff-prepare',
+      action: 'load',
+      suppressTelemetry: true,
+      expiresAt: performance.now() + 3_000,
+    };
     loadedVideoId = pendingHandoff.videoId;
     previousSnapshot = null;
     player.cueVideoById({
@@ -276,6 +358,14 @@ function handleError(event) {
       },
     }));
   }
+  if (serverMutation?.commandId) {
+    window.dispatchEvent(new CustomEvent('relay:room-song-command-failed', {
+      detail: {
+        commandId: serverMutation.commandId,
+        reason: `youtube-error-${event.data}`,
+      },
+    }));
+  }
 }
 
 function handleAutoplayBlocked() {
@@ -289,6 +379,15 @@ function handleAutoplayBlocked() {
     handoffReadySent = false;
     window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
       detail: { handoffId, reason: 'autoplay-blocked' },
+    }));
+    return;
+  }
+
+  if (serverMutation?.commandId && serverMutation.action === 'play') {
+    const commandId = serverMutation.commandId;
+    serverMutation = null;
+    window.dispatchEvent(new CustomEvent('relay:room-song-command-failed', {
+      detail: { commandId, reason: 'autoplay-blocked' },
     }));
   }
 }
@@ -318,6 +417,113 @@ async function ensurePlayer(videoId) {
   return player;
 }
 
+async function applyRoomSongCommand(message) {
+  const commandId = typeof message.commandId === 'string' ? message.commandId : null;
+  const action = typeof message.action === 'string' ? message.action : null;
+  if (!commandId || !action) return;
+
+  localCommandPending = null;
+  serverMutation = {
+    source: 'room-command',
+    commandId,
+    action,
+    suppressTelemetry: false,
+    expiresAt: performance.now() + 2_500,
+  };
+
+  try {
+    if (action === 'load') {
+      const videoId = typeof message.videoId === 'string' ? message.videoId : null;
+      const positionSeconds = Number(message.positionSeconds ?? 0);
+      if (!videoId || !Number.isFinite(positionSeconds)) throw new Error('invalid load command');
+      await ensurePlayer(videoId);
+      loadedVideoId = videoId;
+      previousSnapshot = null;
+      if (playerReady) {
+        player.cueVideoById({ videoId, startSeconds: Math.max(0, positionSeconds) });
+      }
+    } else {
+      if (!playerReady || !player) throw new Error('player not ready');
+      if (action === 'play') {
+        player.playVideo();
+      } else if (action === 'pause') {
+        player.pauseVideo();
+      } else if (action === 'seek') {
+        const positionSeconds = Number(message.positionSeconds);
+        if (!Number.isFinite(positionSeconds)) throw new Error('invalid seek command');
+        player.seekTo(Math.max(0, positionSeconds), true);
+      } else if (action === 'rate') {
+        const playbackRate = Number(message.playbackRate);
+        if (!Number.isFinite(playbackRate)) throw new Error('invalid rate command');
+        player.setPlaybackRate(playbackRate);
+      } else {
+        throw new Error(`unknown room command ${action}`);
+      }
+    }
+
+    noteNode.textContent = `Applying room ${action}…`;
+    setTimeout(sampleNow, 80);
+    setTimeout(sampleNow, 220);
+  } catch (error) {
+    console.warn('Could not apply room song command', error);
+    serverMutation = null;
+    window.dispatchEvent(new CustomEvent('relay:room-song-command-failed', {
+      detail: {
+        commandId,
+        reason: error instanceof Error ? error.message : 'apply-failed',
+      },
+    }));
+  }
+}
+
+async function restoreAuthoritativeRoom(room) {
+  if (!room || typeof room !== 'object') return;
+  localCommandPending = null;
+
+  const videoId = typeof room.videoId === 'string' ? room.videoId : null;
+  if (!videoId) {
+    if (playerReady && player) {
+      serverMutation = {
+        source: 'restore',
+        action: 'pause',
+        suppressTelemetry: true,
+        expiresAt: performance.now() + 1_500,
+      };
+      try { player.pauseVideo(); } catch {}
+    }
+    return;
+  }
+
+  const targetTime = Number(room.serverTime);
+  const desiredState = Number(room.state);
+  const playbackRate = Number(room.playbackRate);
+
+  try {
+    serverMutation = {
+      source: 'restore',
+      action: 'restore',
+      suppressTelemetry: false,
+      expiresAt: performance.now() + 2_000,
+    };
+    await ensurePlayer(videoId);
+    if (!playerReady || !player) return;
+
+    if (actualVideoId() !== videoId) {
+      loadedVideoId = videoId;
+      previousSnapshot = null;
+      player.cueVideoById({ videoId, startSeconds: Number.isFinite(targetTime) ? Math.max(0, targetTime) : 0 });
+    }
+    if (Number.isFinite(targetTime)) player.seekTo(Math.max(0, targetTime), true);
+    if (Number.isFinite(playbackRate)) player.setPlaybackRate(playbackRate);
+    if (desiredState === 1) player.playVideo();
+    else if ([0, 2, 5].includes(desiredState)) player.pauseVideo();
+    setTimeout(sampleNow, 100);
+    setTimeout(sampleNow, 260);
+  } catch (error) {
+    console.warn('Could not restore authoritative room song', error);
+  }
+}
+
 async function prepareRoomSong(message) {
   const handoffId = typeof message.handoffId === 'string' ? message.handoffId : null;
   const videoId = typeof message.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(message.videoId)
@@ -326,6 +532,7 @@ async function prepareRoomSong(message) {
   const targetTime = Number(message.serverTime);
   if (!handoffId || !videoId || !Number.isFinite(targetTime)) return;
 
+  localCommandPending = null;
   pendingHandoff = {
     handoffId,
     videoId,
@@ -365,6 +572,12 @@ function commitRoomSong(message) {
   pendingHandoff.targetTime = Math.max(0, targetTime);
   pendingHandoff.desiredState = desiredState;
   previousSnapshot = null;
+  serverMutation = {
+    source: 'handoff-commit',
+    action: desiredState === 1 ? 'play' : 'pause',
+    suppressTelemetry: false,
+    expiresAt: performance.now() + 2_500,
+  };
 
   try {
     if (actualVideoId() !== pendingHandoff.videoId) {
@@ -394,6 +607,12 @@ function releaseRoomSong(message) {
   if (!playerReady || !player) return;
   if (typeof message.videoId === 'string' && loadedVideoId !== message.videoId) return;
 
+  serverMutation = {
+    source: 'handoff-release',
+    action: 'pause',
+    suppressTelemetry: true,
+    expiresAt: performance.now() + 2_000,
+  };
   try {
     player.pauseVideo();
   } catch {}
@@ -408,7 +627,7 @@ function completeRoomSong(message) {
   noteNode.textContent = 'Room playback handoff complete. This device now follows the shared song.';
 }
 
-async function loadVideo() {
+function loadVideo() {
   const videoId = parseVideoId(input.value);
   if (!videoId) {
     stateNode.textContent = 'invalid URL / video ID';
@@ -416,24 +635,50 @@ async function loadVideo() {
     return;
   }
 
-  loadButton.disabled = true;
-  stateNode.textContent = 'loading YouTube API…';
-  noteNode.textContent = 'The video will be cued only. Start playback from the normal YouTube controls.';
-
-  try {
-    await ensurePlayer(videoId);
-    loadedVideoId = videoId;
-    previousSnapshot = null;
-
-    if (playerReady) player.cueVideoById(videoId);
-  } catch (error) {
-    console.error(error);
-    stateNode.textContent = 'could not load YouTube';
-    noteNode.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    loadButton.disabled = false;
+  if (!requestRoomSongCommand({ action: 'load', videoId, positionSeconds: 0 })) {
+    noteNode.textContent = 'A room song command is already pending.';
   }
 }
+
+window.addEventListener('relay:room-song-command-sent', (event) => {
+  if (!localCommandPending) return;
+  localCommandPending.commandId = event.detail?.commandId ?? null;
+});
+window.addEventListener('relay:room-song-command-accepted', (event) => {
+  if (localCommandPending?.commandId === event.detail?.commandId) {
+    noteNode.textContent = `Room ${localCommandPending.action} accepted. Applying on this playback device…`;
+  }
+});
+window.addEventListener('relay:room-song-command-apply', (event) => {
+  applyRoomSongCommand(event.detail ?? {}).catch(console.error);
+});
+window.addEventListener('relay:room-song-command-rejected', (event) => {
+  const detail = event.detail ?? {};
+  if (
+    localCommandPending
+    && localCommandPending.commandId
+    && detail.commandId
+    && localCommandPending.commandId !== detail.commandId
+  ) return;
+  localCommandPending = null;
+  serverMutation = null;
+  noteNode.textContent = `Room song command rejected: ${detail.reason ?? 'not allowed'}.`;
+  restoreAuthoritativeRoom(detail.room).catch(console.error);
+});
+window.addEventListener('relay:room-song-command-complete', (event) => {
+  const commandId = event.detail?.commandId;
+  if (serverMutation?.commandId === commandId) serverMutation = null;
+  if (localCommandPending?.commandId === commandId) localCommandPending = null;
+  noteNode.textContent = 'Room song command applied.';
+});
+window.addEventListener('relay:room-song-command-status', (event) => {
+  if (!localCommandPending?.commandId) return;
+  const pendingCommandId = event.detail?.pendingCommandId;
+  if (pendingCommandId === null && performance.now() - localCommandPending.requestedAt > 1_000) {
+    localCommandPending = null;
+    noteNode.textContent = 'Room song command expired before the playback device confirmed it.';
+  }
+});
 
 window.addEventListener('relay:song-handoff-prepare', (event) => {
   prepareRoomSong(event.detail ?? {}).catch(console.error);
@@ -448,16 +693,14 @@ window.addEventListener('relay:song-handoff-complete', (event) => {
   completeRoomSong(event.detail ?? {});
 });
 
-loadButton.addEventListener('click', () => {
-  loadVideo().catch(console.error);
-});
+loadButton.addEventListener('click', loadVideo);
 
 input.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
   event.preventDefault();
-  loadVideo().catch(console.error);
+  loadVideo();
 });
 
 stateNode.textContent = 'not loaded';
 timelineNode.textContent = '--:-- / --:--';
-noteNode.textContent = 'Load a video, tap Play in the YouTube player, then start Microphone. The player stays visible and YouTube audio remains local to this device.';
+noteNode.textContent = 'Load a video, then use the visible YouTube controls. Shared song changes are authorized by Relay; joining the room never starts playback by itself.';

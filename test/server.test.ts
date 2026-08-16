@@ -83,10 +83,14 @@ describe('http surface', () => {
     assert.deepEqual(await response.json(), { ok: true });
   });
 
-  test('serves the client page', async () => {
+  test('serves the formal Live client page', async () => {
     const response = await fetch(server.httpUrl('/'));
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /RELAY \/ AUDIO PROTOTYPE/);
+    const body = await response.text();
+    assert.match(body, /class="live-shell"/);
+    assert.match(body, /id="youtube-player"/);
+    assert.match(body, /id="listen-toggle"/);
+    assert.doesNotMatch(body, /RELAY \/ AUDIO PROTOTYPE/);
   });
 });
 

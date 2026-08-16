@@ -1,0 +1,104 @@
+.song-heading-row {
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.song-heading-row .section-label { margin: 0; }
+.song-heading-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.song-device-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.3;
+}
+#change-youtube {
+  padding: 4px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.song-observer {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 18px;
+  background: #07080a;
+}
+.song-observer[hidden] { display: none; }
+.song-observer img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .7;
+  filter: saturate(.76) contrast(.94);
+}
+.song-observer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(5, 6, 8, .9), rgba(5, 6, 8, .06) 62%);
+  pointer-events: none;
+}
+.song-observer-meta {
+  position: absolute;
+  z-index: 1;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.song-observer-meta strong {
+  max-width: 16ch;
+  font-size: 20px;
+  line-height: 1.02;
+  font-weight: 620;
+  letter-spacing: -.035em;
+}
+.song-observer-meta span {
+  color: #c5c6ca;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.song-stage[data-playback-role="preparing"] .youtube-player-shell {
+  border-color: #3d4047;
+}
+.song-stage[data-playback-role="preparing"] #youtube-note {
+  color: #b6b8bd;
+}
+.song-stage[data-playback-role="observer"] .youtube-form,
+.song-stage[data-playback-role="observer"] .youtube-player-shell,
+.song-stage[data-playback-role="observer"] .youtube-readout,
+.song-stage[data-playback-role="observer"] #youtube-note {
+  display: none;
+}
+
+/* Empty and connecting rooms stay spatially quiet; media appears only when it exists. */
+.song-stage[data-playback-role="empty"] .youtube-player-shell,
+.song-stage[data-playback-role="empty"] .youtube-readout,
+.song-stage[data-playback-role="empty"] #youtube-note,
+.song-stage[data-playback-role="connecting"] .youtube-form,
+.song-stage[data-playback-role="connecting"] .youtube-player-shell,
+.song-stage[data-playback-role="connecting"] .youtube-readout,
+.song-stage[data-playback-role="connecting"] #youtube-note {
+  display: none;
+}

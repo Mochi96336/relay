@@ -1,3 +1,5 @@
+import { resolvePlaybackRole } from './song-role.js';
+
 const STATE_NAMES = new Map([
   [-1, 'unstarted'],
   [0, 'ended'],
@@ -15,6 +17,7 @@ let pendingMicIntentAt = -Infinity;
 let roomCommandRevision = 0;
 let latestRoomCommandId = null;
 let latestRoomSongStatus = null;
+let latestTimelineStatus = null;
 const pendingPings = new Map();
 // A plain running minimum never rose again, so one lucky early sample pinned the
 // estimate low for the rest of the session even after the link degraded. Keep a
@@ -267,6 +270,29 @@ function dispatchHandoff(type, message) {
   window.dispatchEvent(new CustomEvent(type, { detail: message }));
 }
 
+function dispatchPlaybackView() {
+  const participantId = typeof window.relayParticipantId === 'string'
+    ? window.relayParticipantId.trim()
+    : '';
+  const role = resolvePlaybackRole({
+    timeline: latestTimelineStatus,
+    room: latestRoomSongStatus,
+    participantId,
+    transportId,
+    playbackGeneration,
+  });
+  if (!role) return;
+  window.dispatchEvent(new CustomEvent('relay:playback-view', {
+    detail: {
+      role,
+      room: latestRoomSongStatus,
+      timeline: latestTimelineStatus,
+      transportId,
+      playbackGeneration,
+    },
+  }));
+}
+
 function handleMessage(event) {
   if (typeof event.data !== 'string') return;
 
@@ -288,12 +314,15 @@ function handleMessage(event) {
   }
 
   if (message.type === 'youtube-timeline-status') {
+    latestTimelineStatus = message;
     renderTimeline(message);
+    dispatchPlaybackView();
     return;
   }
 
   if (message.type === 'room-song-status') {
     latestRoomSongStatus = message;
+    dispatchPlaybackView();
     return;
   }
 
@@ -313,7 +342,10 @@ function handleMessage(event) {
   if (message.type === 'room-song-command-rejected') {
     updateRoomCommandRevision(message.revision);
     clearLatestRoomCommand(message.commandId);
-    if (message.room && typeof message.room === 'object') latestRoomSongStatus = message.room;
+    if (message.room && typeof message.room === 'object') {
+      latestRoomSongStatus = message.room;
+      dispatchPlaybackView();
+    }
     dispatchRoomCommand('relay:room-song-command-rejected', withLatestRoom(message));
     return;
   }

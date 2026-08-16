@@ -10,6 +10,7 @@ let socket = null;
 let reconnectTimer = null;
 let latestStatus = { lifecycle: 'idle', take: null };
 let commandError = null;
+let productCanStartTake = false;
 
 function wsUrl() {
   const participantId = typeof window.relayParticipantId === 'string'
@@ -41,8 +42,20 @@ function formatDuration(durationMs) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+function elapsedDuration(startedAtMs) {
+  if (!Number.isFinite(Number(startedAtMs))) return '0:00';
+  return formatDuration(Date.now() - Number(startedAtMs));
+}
+
 function shortTakeId(takeId) {
   return typeof takeId === 'string' ? takeId.slice(0, 8) : '—';
+}
+
+function verdictLabel(verdict) {
+  if (verdict === 'clean') return 'Clean';
+  if (verdict === 'review') return 'Review';
+  if (verdict === 'degraded') return 'Degraded';
+  return 'Ready';
 }
 
 function render() {
@@ -50,61 +63,57 @@ function render() {
   const take = latestStatus?.take ?? null;
   const connected = socket?.readyState === WebSocket.OPEN;
 
-  recordButton.disabled = !connected || lifecycle === 'recording' || lifecycle === 'finalizing';
+  recordButton.disabled = !connected
+    || !productCanStartTake
+    || lifecycle === 'recording'
+    || lifecycle === 'finalizing';
   stopButton.disabled = !connected || lifecycle !== 'recording' || !take?.takeId;
 
+  // The formal Live surface keeps the completed Take as one lightweight entry.
+  // Technical WAV details belong below Diagnostics, not in the singing view.
+  recordingPlayer.hidden = true;
+  recordingPlayer.removeAttribute('src');
   if (lifecycle !== 'ready') {
-    recordingPlayer.hidden = true;
-    recordingPlayer.removeAttribute('src');
     recordingDownload.hidden = true;
     recordingDownload.removeAttribute('href');
   }
 
-  if (!connected && lifecycle === 'idle') {
-    recordingStatus.textContent = '正在連線到 Relay TakeSession…';
-    return;
-  }
-
   if (commandError) {
-    recordingStatus.textContent = `⚠ ${commandError}`;
+    recordingStatus.textContent = commandError;
     return;
   }
 
   if (lifecycle === 'recording' && take) {
-    recordingStatus.textContent = `● Relay 正在錄 Take ${shortTakeId(take.takeId)} · WAV 直接寫在 Server；這支手機只負責 Start / Stop。`;
+    recordingStatus.textContent = `● ${elapsedDuration(take.startedAtMs)}`;
     return;
   }
 
   if (lifecycle === 'finalizing' && take) {
-    recordingStatus.textContent = `正在完成 Take ${shortTakeId(take.takeId)} 的 WAV…`;
+    recordingStatus.textContent = 'Finishing take…';
     return;
   }
 
   if (lifecycle === 'ready' && take?.artifact) {
     const href = artifactUrl(take.artifact.url);
-    recordingPlayer.src = href;
-    recordingPlayer.hidden = false;
     recordingDownload.href = href;
-    recordingDownload.download = take.artifact.fileName;
-    recordingDownload.textContent = `Download ${take.artifact.fileName}`;
+    recordingDownload.removeAttribute('download');
+    recordingDownload.textContent = `Last take · ${formatDuration(take.artifact.durationMs)} · ${verdictLabel(take.quality?.verdict)}`;
     recordingDownload.hidden = false;
-    recordingStatus.textContent = `Take ${shortTakeId(take.takeId)} 完成 · ${formatDuration(take.artifact.durationMs)} · 48 kHz mono WAV · ${(Number(take.artifact.sizeBytes) / 1024).toFixed(0)} KB`;
+    recordingStatus.textContent = '';
     return;
   }
 
   if (lifecycle === 'failed' && take) {
-    recordingStatus.textContent = `Take ${shortTakeId(take.takeId)} 失敗 · ${take.error || 'WAV writer failed'}`;
+    recordingStatus.textContent = `Take ${shortTakeId(take.takeId)} failed`;
     return;
   }
 
-  recordingStatus.textContent = connected
-    ? 'Relay TakeSession 待命；先載入歌曲並讓 Source mix 啟動，再按 Record。'
-    : 'Relay TakeSession 重新連線中…';
+  recordingStatus.textContent = '';
 }
 
 function send(payload) {
   if (socket?.readyState !== WebSocket.OPEN) {
-    commandError = 'Relay 連線中斷，尚未送出 Take 指令。';
+    commandError = 'Relay is reconnecting. Take was not changed.';
     render();
     return false;
   }
@@ -168,17 +177,19 @@ async function connect() {
 
     if (message.type === 'take-command-rejected') {
       const reasons = {
-        'participant-required': 'Take 指令需要 Relay participant identity。',
-        'mix-not-active': 'Source mix 還沒啟動，現在沒有 authoritative mix 可以錄。',
-        'song-required': '先載入一首歌，再開始 Take。',
-        'take-active': '已經有一個 Take 正在錄音或收尾。',
-        'take-not-recording': '目前沒有正在錄的 Take。',
-        'stale-take': '這個 Stop 屬於較舊的 Take，已忽略。',
-        'invalid-take-id': 'Stop Take 缺少有效的 Take ID。',
-        'writer-failed': 'Relay 無法建立 WAV writer。',
-        'storage-unavailable': 'Relay 錄音磁碟空間不足，或 Take 儲存目錄目前不可用。',
+        'participant-required': 'Take needs a Relay participant identity.',
+        'mix-not-active': 'There is no room mix to record yet.',
+        'song-required': 'Add a song before recording a Take.',
+        'product-blocked': 'Fix the room audio before recording a Take.',
+        'take-not-ready': 'The room is not ready to record yet.',
+        'take-active': 'A Take is already recording or finishing.',
+        'take-not-recording': 'There is no Take recording right now.',
+        'stale-take': 'That Stop belonged to an older Take.',
+        'invalid-take-id': 'Relay could not identify the Take to stop.',
+        'writer-failed': 'Relay could not start the Take recorder.',
+        'storage-unavailable': 'Recording storage is not available right now.',
       };
-      commandError = reasons[message.reason] ?? `Take 指令被拒絕：${message.reason ?? 'unknown'}`;
+      commandError = reasons[message.reason] ?? `Take was rejected: ${message.reason ?? 'unknown'}`;
       render();
     }
   });
@@ -197,6 +208,11 @@ async function connect() {
   render();
 }
 
+window.addEventListener('relay-product-status', (event) => {
+  productCanStartTake = event.detail?.actions?.canStartTake === true;
+  render();
+});
+
 recordButton.addEventListener('click', () => {
   send({ type: 'start-take' });
 });
@@ -206,6 +222,10 @@ stopButton.addEventListener('click', () => {
   if (!takeId) return;
   send({ type: 'stop-take', takeId });
 });
+
+setInterval(() => {
+  if (latestStatus?.lifecycle === 'recording') render();
+}, 1_000);
 
 recordButton.disabled = true;
 stopButton.disabled = true;

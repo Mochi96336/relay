@@ -2,28 +2,26 @@ import { PreferredAudioTransport } from './audio-transport.js';
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
 const publisherButton = document.querySelector('#start-publisher');
-const monitorButton = document.querySelector('#start-monitor');
-const stopButton = document.querySelector('#stop');
 const testStartButton = document.querySelector('#start-sync-test');
 const testStopButton = document.querySelector('#stop-sync-test');
 const status = document.querySelector('#status');
 const details = document.querySelector('#details');
-const monitorGain = document.querySelector('#monitor-gain');
-const monitorGainValue = document.querySelector('#monitor-gain-value');
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
 const micGainAdvice = document.querySelector('#mic-gain-advice');
+const micInputMeter = document.querySelector('#mic-input-meter');
+const micInputValue = document.querySelector('#mic-input-value');
+const micGainRecommendation = document.querySelector('#mic-gain-recommendation');
+const micGainRecommendationMarker = document.querySelector('#mic-gain-recommendation-marker');
+const useMicGainSuggestion = document.querySelector('#use-mic-gain-suggestion');
 const songLevel = document.querySelector('#song-level');
 const songLevelValue = document.querySelector('#song-level-value');
 const calibrateButton = document.querySelector('#calibrate-timing');
 const calibrateStatus = document.querySelector('#calibrate-status');
 
 const TEST_BPM = 120;
-const MIX_SAMPLE_RATE = 48000;
 const SOCKET_RECONNECT_MS = 1000;
 const SLIDER_HOLD_MS = 2000;
-const MONITOR_PREBUFFER_MS = 250;
-const MONITOR_MAX_QUEUE_MS = 800;
 const AUDIO_UPLINK_HEALTH_INTERVAL_MS = 1000;
 
 let socket = null;
@@ -31,25 +29,12 @@ let socketReconnectTimer = null;
 let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
-let playbackNode = null;
-let monitorGainNode = null;
-let sourceSampleRate = null;
-let activeRole = null;
+let publisherActive = false;
 let testActive = false;
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
-
-/**
- * Whether what arrives on this socket is a server mix rather than raw
- * microphone PCM. Two different things put the server into that state - the
- * click test and a live session - and only the first of them is a test. Reading
- * one from the other is what made every live take behave like a test run.
- */
-function serverMixActive() {
-  return testActive || liveMixActive;
-}
 
 /**
  * The same measured advice source.html shows, put where the singer can act on
@@ -58,7 +43,11 @@ function serverMixActive() {
  * the desktop screen while singing.
  */
 function renderGainAdvice() {
-  if (!micGainAdvice) return;
+  if (
+    !micGainAdvice || !micInputMeter || !micInputValue
+    || !micGainRecommendation || !micGainRecommendationMarker || !useMicGainSuggestion
+  ) return;
+
   const rawPeak = latestMixHealth?.micPeakDbfs;
   const rawRecommended = latestMixHealth?.recommendedMicGainDb;
   const peak = rawPeak === null || rawPeak === undefined ? Number.NaN : Number(rawPeak);
@@ -66,32 +55,53 @@ function renderGainAdvice() {
     ? Number.NaN
     : Number(rawRecommended);
 
-  if (!Number.isFinite(peak) || !Number.isFinite(recommended)) {
-    micGainAdvice.textContent = '開始唱之後，這裡會顯示實際電平與建議的 Mic gain。';
-    return;
+  if (Number.isFinite(peak)) {
+    // Evidence only: the rail shows the measured input, not another setting.
+    // -60 dBFS maps to the quiet edge and 0 dBFS to full scale.
+    const inputPercent = Math.max(0, Math.min(100, ((peak + 60) / 60) * 100));
+    micInputMeter.style.setProperty('--input-level', `${inputPercent}%`);
+    micInputValue.value = `${peak.toFixed(1)} dBFS`;
+  } else {
+    micInputMeter.style.setProperty('--input-level', '0%');
+    micInputValue.value = 'Listening…';
   }
 
   const current = Math.round(Number(micGain.value) || 0);
-  const off = recommended - current;
-  const verdict = Math.abs(off) <= 3
-    ? '目前設定合適'
-    : off < 0
-      ? `偏高 ${-off} dB，動態會被壓平`
-      : `偏低 ${off} dB，人聲會太小`;
+  if (!Number.isFinite(recommended)) {
+    micGainRecommendationMarker.hidden = true;
+    micGainRecommendation.textContent = 'Sing normally for a moment.';
+    micGainAdvice.textContent = 'Relay will suggest a stable gain after it has enough voice.';
+    useMicGainSuggestion.hidden = true;
+    return;
+  }
 
-  micGainAdvice.textContent = `峰值 ${peak.toFixed(1)} dBFS · 建議 +${recommended} dB · ${verdict}`;
+  const suggested = Math.max(0, Math.min(36, Math.round(recommended)));
+  const markerPercent = (suggested / 36) * 100;
+  micGainRecommendationMarker.hidden = false;
+  micGainRecommendationMarker.style.left = `${markerPercent}%`;
+  micGainRecommendation.textContent = `Recommended +${suggested} dB`;
+
+  const off = suggested - current;
+  micGainAdvice.textContent = Math.abs(off) <= 3
+    ? 'Sounds good'
+    : off < 0
+      ? `${-off} dB above suggestion`
+      : `${off} dB below suggestion`;
+
+  const canApply = publisherActive && Math.abs(off) > 3;
+  useMicGainSuggestion.hidden = !canApply;
+  useMicGainSuggestion.disabled = !publisherActive;
+  useMicGainSuggestion.textContent = `Use +${suggested} dB`;
 }
 let clickScheduler = null;
 let nextClickTime = 0;
 let clickBeat = 0;
-let rawMonitorGainDb = 30;
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
 let captureInputGapSamples = 0;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
 let lastUplinkWarningAt = 0;
-let monitorHealth = null;
 // Seeded from the clock, not 0: a page reload starts a new module scope and
 // would otherwise reuse the same first-ever generation number, which the
 // server take as "nothing changed" and skip re-anchoring the mic timeline to
@@ -112,7 +122,6 @@ const AUDIO_PACKET_SOURCE_MIC = 1;
 
 const audioTransport = new PreferredAudioTransport({
   maxBufferedBytes: 256 * 1024,
-  // A usable datagram must carry the v2 header plus at least one Int16 sample.
   minimumPacketBytes: AUDIO_PACKET_HEADER_BYTES + 2,
 });
 
@@ -141,7 +150,7 @@ function recordUplinkDrop(sampleCount, reason) {
   const now = performance.now();
   if (now - lastUplinkWarningAt <= 2000) return;
   lastUplinkWarningAt = now;
-  const sampleRate = audioContext?.sampleRate ?? MIX_SAMPLE_RATE;
+  const sampleRate = audioContext?.sampleRate ?? 48000;
   const droppedMs = Math.round((uplinkDroppedSamples * 1000) / sampleRate);
   const title = reason === 'packet-too-large'
     ? 'Microphone datagram budget changed'
@@ -167,7 +176,7 @@ function audioUplinkHealthPayload() {
 }
 
 function sendAudioUplinkHealth() {
-  if (activeRole !== 'publisher' || socket?.readyState !== WebSocket.OPEN) return;
+  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(audioUplinkHealthPayload()));
 }
 
@@ -198,13 +207,11 @@ const COMMAND_LABELS = {
   'stop-sync-test': 'The sync test is controlled by the singer',
 };
 
-function setActiveRole(role) {
-  activeRole = role;
-  window.relayActiveRole = role;
-}
-
-function dbToGain(db) {
-  return 10 ** (db / 20);
+function setPublisherActive(active) {
+  publisherActive = Boolean(active);
+  // listen.js only needs to know whether this phone is the singer phone.
+  // Keep the old global shape temporarily while the Mic controller remains in app.js.
+  window.relayActiveRole = publisherActive ? 'publisher' : null;
 }
 
 function signed(value, suffix) {
@@ -226,15 +233,6 @@ function sliderIsBusy(element) {
   return touchedAt !== undefined && performance.now() - touchedAt < SLIDER_HOLD_MS;
 }
 
-function updateMonitorGain() {
-  const db = Number(monitorGain.value);
-  monitorGainValue.value = signed(db, ' dB');
-  if (!testActive) rawMonitorGainDb = db;
-  if (monitorGainNode && audioContext) {
-    monitorGainNode.gain.setTargetAtTime(dbToGain(db), audioContext.currentTime, 0.01);
-  }
-}
-
 function updateMixLabels() {
   micGainValue.value = signed(micGain.value, ' dB');
   songLevelValue.value = `${Math.round(Number(songLevel.value) || 0)}%`;
@@ -244,7 +242,7 @@ function updateMixLabels() {
 
 function sendMixSettings() {
   updateMixLabels();
-  if (socket?.readyState !== WebSocket.OPEN || !activeRole) return;
+  if (socket?.readyState !== WebSocket.OPEN || !publisherActive) return;
   socket.send(JSON.stringify({
     type: 'set-mix',
     micGainDb: Number(micGain.value),
@@ -256,11 +254,12 @@ function sendMixSettings() {
 }
 
 function updateTestButtons() {
-  testStartButton.disabled = activeRole !== 'publisher' || testActive;
-  testStopButton.disabled = !activeRole || !testActive;
-  micGain.disabled = !activeRole;
-  songLevel.disabled = !activeRole;
-  // Same dependency on activeRole, so it rides along rather than needing a
+  testStartButton.disabled = !publisherActive || testActive;
+  testStopButton.disabled = !publisherActive || !testActive;
+  micGain.disabled = !publisherActive;
+  songLevel.disabled = !publisherActive;
+  renderGainAdvice();
+  // Same dependency on publisher state, so it rides along rather than needing a
   // call at every site that changes roles.
   updateCalibrateButton();
 }
@@ -271,7 +270,7 @@ function updateTestButtons() {
  */
 function updateCalibrateButton() {
   const collecting = latestCalibration?.state === 'collecting';
-  calibrateButton.disabled = !activeRole || !liveMixActive || collecting;
+  calibrateButton.disabled = !publisherActive || !liveMixActive || collecting;
 
   if (!liveMixActive) {
     calibrateStatus.textContent = '播放開始後會自動校正；覺得對不上可以在這裡手動重跑。';
@@ -349,34 +348,6 @@ function clearSocketReconnect() {
   socketReconnectTimer = null;
 }
 
-function linearResample(input, sourceRate, targetRate) {
-  if (sourceRate === targetRate) return input;
-
-  const ratio = targetRate / sourceRate;
-  const outputLength = Math.max(1, Math.round(input.length * ratio));
-  const output = new Float32Array(outputLength);
-
-  for (let i = 0; i < outputLength; i += 1) {
-    const sourcePosition = i / ratio;
-    const index = Math.floor(sourcePosition);
-    const fraction = sourcePosition - index;
-    const a = input[Math.min(index, input.length - 1)];
-    const b = input[Math.min(index + 1, input.length - 1)];
-    output[i] = a + (b - a) * fraction;
-  }
-
-  return output;
-}
-
-function int16ToFloat32(buffer) {
-  const input = new Int16Array(buffer);
-  const output = new Float32Array(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    output[i] = input[i] / (input[i] < 0 ? 0x8000 : 0x7fff);
-  }
-  return output;
-}
-
 // Must match src/calibration-probe.ts, which builds the reference the server
 // correlates against. Irregular offsets are the point: no shift other than the
 // true one lines all three notes up at once, which is exactly the ambiguity
@@ -396,7 +367,7 @@ const PROBE_NOTE_SECONDS = 0.105;
  * measured.
  */
 function playCalibrationProbe(requestId, leadMs) {
-  if (!audioContext || activeRole !== 'publisher') return;
+  if (!audioContext || !publisherActive) return;
 
   const startTime = audioContext.currentTime + leadMs / 1000;
   for (const note of PROBE_NOTES) {
@@ -441,7 +412,7 @@ function scheduleClick(time, accent) {
 
 function startLocalClickTrack() {
   stopLocalClickTrack();
-  if (!audioContext || activeRole !== 'publisher') return;
+  if (!audioContext || !publisherActive) return;
 
   const beatSeconds = 60 / TEST_BPM;
   nextClickTime = audioContext.currentTime + 0.12;
@@ -465,14 +436,6 @@ function stopLocalClickTrack() {
     clearInterval(clickScheduler);
     clickScheduler = null;
   }
-}
-
-function describeMonitorHealth() {
-  if (!monitorHealth) return '';
-  const parts = [`buffer ${Math.round(monitorHealth.queuedMs)} ms`];
-  if (monitorHealth.underruns > 0) parts.push(`${monitorHealth.underruns} underruns`);
-  if (monitorHealth.droppedMs > 20) parts.push(`trimmed ${Math.round(monitorHealth.droppedMs)} ms`);
-  return ` · ${parts.join(' · ')}`;
 }
 
 function dispatchRelayEvent(type, detail = {}) {
@@ -530,10 +493,10 @@ function handleServerMessage(message) {
     return;
   }
 
-  if (message.type === 'registered' && message.role === 'publisher' && activeRole === 'publisher') {
+  if (message.type === 'registered' && message.role === 'publisher' && publisherActive) {
     pendingPublisherTakeoverOwnerId = null;
     void audioTransport.prefer(message.mediaTransport ?? null).then((preferred) => {
-      if (activeRole !== 'publisher') return;
+      if (!publisherActive) return;
       const path = preferred ? 'WebTransport datagrams' : 'WebSocket fallback';
       setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM · ${path}`);
       sendAudioUplinkHealth();
@@ -543,36 +506,9 @@ function handleServerMessage(message) {
     return;
   }
 
-  if (message.type === 'publisher-status') {
-    // Only meaningful while the raw microphone is being forwarded; a server mix
-    // arrives at the mix rate no matter what the phone captures at.
-    if (!serverMixActive()) sourceSampleRate = message.sampleRate ?? null;
-    if (activeRole === 'monitor') {
-      if (!message.connected) {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        setStatus('Waiting for singer', 'Open this page on the phone and start the microphone.');
-      } else if (!serverMixActive()) {
-        setStatus('Singer connected', `Raw input: ${message.sampleRate} Hz · buffering audio…`);
-      }
-    }
-    return;
-  }
-
   if (message.type === 'source-status') {
-    const wasLive = liveMixActive;
     liveMixActive = Boolean(message.active);
     updateCalibrateButton();
-
-    if (liveMixActive) {
-      sourceSampleRate = Number(message.mixSampleRate) || MIX_SAMPLE_RATE;
-      if (!wasLive && activeRole === 'monitor') {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        setStatus('Live mix', `Server mix · ${message.prebufferMs} ms buffer`);
-      }
-    } else if (wasLive) {
-      sourceSampleRate = null;
-      if (activeRole === 'monitor') playbackNode?.port.postMessage({ type: 'reset' });
-    }
     return;
   }
 
@@ -602,51 +538,18 @@ function handleServerMessage(message) {
   if (message.type === 'mix-health') {
     latestMixHealth = message;
     renderGainAdvice();
-    if (activeRole === 'monitor' && message.active && message.micStarvedFrames > 0) {
-      setStatus(
-        'Monitor playing · vocal starved',
-        `Server ran out of buffered microphone on ${message.micStarvedFrames} frames ` +
-        `(headroom ${message.micHeadroomMs} ms). Re-run Calibrate timing or check the phone link.`,
-      );
-    }
     return;
   }
 
   if (message.type === 'test-status') {
-    const wasActive = testActive;
     testActive = Boolean(message.active);
-
-    if (testActive) {
-      sourceSampleRate = Number(message.sampleRate) || MIX_SAMPLE_RATE;
-      if (activeRole === 'monitor') {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        // The click track is deliberately harsh, so the test drops the monitor
-        // to unity and restores the setting afterwards. This only ever made
-        // sense for the test - it used to fire on live takes too, costing the
-        // singer 30 dB and forgetting whatever they set during the take.
-        monitorGain.value = '0';
-        updateMonitorGain();
-        setStatus('Sync test running', `${message.bpm} BPM · server mix · ${message.prebufferMs} ms safety buffer`);
-      }
-    } else {
-      if (wasActive && activeRole === 'monitor') {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        monitorGain.value = String(rawMonitorGainDb);
-        updateMonitorGain();
-      }
-      if (activeRole === 'publisher') stopLocalClickTrack();
-    }
-
+    if (!testActive && publisherActive) stopLocalClickTrack();
     updateTestButtons();
   }
 }
 
 function canKeepPublishing() {
-  return activeRole === 'publisher' && Boolean(mediaStream) && Boolean(audioContext);
-}
-
-function canKeepMonitoring() {
-  return activeRole === 'monitor' && Boolean(audioContext) && Boolean(playbackNode);
+  return publisherActive && Boolean(mediaStream) && Boolean(audioContext);
 }
 
 function schedulePublisherReconnect() {
@@ -658,19 +561,6 @@ function schedulePublisherReconnect() {
       if (!canKeepPublishing()) return;
       setStatus('Reconnecting microphone…', 'Relay is still unavailable; retrying automatically.');
       schedulePublisherReconnect();
-    });
-  }, SOCKET_RECONNECT_MS);
-}
-
-function scheduleMonitorReconnect() {
-  if (!canKeepMonitoring()) return;
-  clearSocketReconnect();
-  socketReconnectTimer = setTimeout(() => {
-    socketReconnectTimer = null;
-    connectMonitorSocket().catch(() => {
-      if (!canKeepMonitoring()) return;
-      setStatus('Reconnecting monitor…', 'Relay is still unavailable; retrying automatically.');
-      scheduleMonitorReconnect();
     });
   }, SOCKET_RECONNECT_MS);
 }
@@ -732,70 +622,21 @@ async function connectPublisherSocket() {
   });
 }
 
-async function connectMonitorSocket() {
-  if (!canKeepMonitoring()) return;
-  clearSocketReconnect();
-
-  const ws = await connectSocket();
-  if (!canKeepMonitoring()) {
-    ws.close();
-    return;
-  }
-
-  adoptSocket(ws);
-  playbackNode.port.postMessage({ type: 'reset' });
-  ws.send(JSON.stringify({ type: 'register', role: 'monitor' }));
-
-  ws.addEventListener('message', (event) => {
-    if (socket !== ws) return;
-
-    if (typeof event.data === 'string') {
-      handleServerMessage(JSON.parse(event.data));
-      return;
-    }
-
-    if (!(event.data instanceof ArrayBuffer) || !audioContext || !playbackNode) return;
-    // Falling back beats discarding audio: every server-mixed frame is 48 kHz,
-    // and dropping frames here used to look exactly like "no audio at all".
-    const rate = sourceSampleRate || MIX_SAMPLE_RATE;
-    const pcm = int16ToFloat32(event.data);
-    const samples = linearResample(pcm, rate, audioContext.sampleRate);
-    playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
-  });
-
-  ws.addEventListener('close', () => {
-    if (socket !== ws) return;
-    socket = null;
-    if (!canKeepMonitoring()) {
-      setStatus('Disconnected', 'The relay connection closed.');
-      return;
-    }
-    setStatus('Reconnecting monitor…', 'Relay connection closed; retrying automatically.');
-    scheduleMonitorReconnect();
-  });
-
-  ws.addEventListener('error', () => {
-    try {
-      ws.close();
-    } catch {}
-  });
-}
-
 async function stop(setIdle = true, { releaseMic = true } = {}) {
   stopLocalClickTrack();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
 
   const closingSocket = socket;
-  const shouldReleaseMic = releaseMic && activeRole === 'publisher';
+  const shouldReleaseMic = releaseMic && publisherActive;
   if (shouldReleaseMic && closingSocket?.readyState === WebSocket.OPEN) {
     try {
       closingSocket.send(JSON.stringify({ type: 'release-mic' }));
     } catch {}
   }
 
-  if (activeRole === 'publisher') audioTransport.close();
-  setActiveRole(null);
+  if (publisherActive) audioTransport.close();
+  setPublisherActive(false);
   pendingPublisherTakeoverOwnerId = null;
   if (closingSocket) {
     try {
@@ -813,25 +654,19 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
     } catch {}
     activeNode = null;
   }
-  playbackNode = null;
-  monitorGainNode = null;
   if (audioContext) {
     await audioContext.close();
     audioContext = null;
   }
-  sourceSampleRate = null;
   testActive = false;
   liveMixActive = false;
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
   captureInputGapSamples = 0;
   publisherControlConnections = 0;
-  monitorHealth = null;
   publisherButton.disabled = false;
-  monitorButton.disabled = false;
-  stopButton.disabled = true;
   updateTestButtons();
-  if (setIdle) setStatus('Idle', 'Choose one role on each device.');
+  if (setIdle) setStatus('Idle', 'Take the mic when you are ready.');
 }
 
 async function startPublisher(takeoverExpectedOwnerId = null) {
@@ -859,7 +694,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   await audioContext.audioWorklet.addModule('/capture-worklet.js');
   await audioContext.resume();
 
-  setActiveRole('publisher');
+  setPublisherActive(true);
 
   // A new capture session. Reconnecting the websocket does not bump this: the
   // capture keeps running and its sample cursor stays continuous, so the server
@@ -876,7 +711,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
 
   const [track] = mediaStream.getAudioTracks();
   track?.addEventListener('ended', () => {
-    if (activeRole !== 'publisher') return;
+    if (!publisherActive) return;
     stop(false, { releaseMic: true })
       .then(() => setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.'))
       .catch(console.error);
@@ -896,15 +731,19 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       if (event.data?.type === 'input-gap') {
         const samples = Number(event.data.samples);
         if (Number.isSafeInteger(samples) && samples > 0) captureInputGapSamples += samples;
-        console.warn('Microphone input gap', event.data.quanta, 'quanta padded with silence', event.data.recovered ? '(recovered)' : '(continuing)');
+        console.warn(
+          'Microphone input gap',
+          event.data.quanta,
+          'quanta padded with silence',
+          event.data.recovered ? '(recovered)' : '(continuing)',
+        );
       }
       return;
     }
 
-    // The capture clock advances once for the whole 20 ms worklet chunk. The
-    // media packetizer may divide that PCM into smaller complete AudioPacket v2
-    // units to fit the live WebTransport datagram budget, but every segment
-    // keeps its exact sample position on this same capture timeline.
+    // Capture time advances once for the complete worklet chunk. Packetization
+    // may split the PCM to the live datagram budget, but each segment keeps its
+    // exact firstSampleIndex on the same capture timeline.
     const chunkFirstSampleIndex = captureSampleCursor;
     captureSampleCursor += event.data.byteLength / 2;
 
@@ -925,11 +764,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       let sendResult = audioTransport.send(packet);
 
       if (!sendResult.sent && sendResult.reason === 'packet-too-large') {
-        // The spec allows maxDatagramSize to change while connected. If the
-        // path became completely unusable, maxPacketBytes() demotes it and the
-        // exact same not-yet-sent packet can safely use the WS fallback. If it
-        // merely shrank, split this segment again without changing sequence or
-        // sample time.
         const retryLimit = audioTransport.maxPacketBytes();
         if (!Number.isFinite(retryLimit)) {
           sendResult = audioTransport.send(packet);
@@ -958,7 +792,11 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         continue;
       }
 
-      if (sendResult.reason === 'disconnected' || sendResult.reason === 'congested' || sendResult.reason === 'packet-too-large') {
+      if (
+        sendResult.reason === 'disconnected'
+        || sendResult.reason === 'congested'
+        || sendResult.reason === 'packet-too-large'
+      ) {
         recordUplinkDrop(segment.pcm.byteLength / 2, sendResult.reason);
       }
     }
@@ -968,8 +806,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   activeNode = capture;
 
   publisherButton.disabled = true;
-  monitorButton.disabled = true;
-  stopButton.disabled = false;
   updateTestButtons();
   setStatus('Connecting microphone…', `${audioContext.sampleRate} Hz capture is active; connecting to Relay.`);
 
@@ -978,57 +814,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   } catch {
     setStatus('Reconnecting microphone…', 'Initial Relay connection failed; retrying automatically.');
     schedulePublisherReconnect();
-  }
-}
-
-async function startMonitor() {
-  await stop();
-  setStatus('Starting monitor…');
-
-  audioContext = new AudioContext({ latencyHint: 'interactive' });
-  await audioContext.audioWorklet.addModule('/playback-worklet.js');
-  await audioContext.resume();
-
-  const playback = new AudioWorkletNode(audioContext, 'playback-processor', {
-    numberOfInputs: 0,
-    numberOfOutputs: 1,
-    outputChannelCount: [1],
-  });
-  playback.port.postMessage({
-    type: 'configure',
-    prebufferMs: MONITOR_PREBUFFER_MS,
-    maxQueueMs: MONITOR_MAX_QUEUE_MS,
-  });
-
-  monitorGainNode = audioContext.createGain();
-  monitorGainNode.gain.value = dbToGain(Number(monitorGain.value));
-  playback.connect(monitorGainNode).connect(audioContext.destination);
-  activeNode = playback;
-  playbackNode = playback;
-
-  playback.port.onmessage = (event) => {
-    if (event.data?.type === 'health') {
-      monitorHealth = event.data;
-      return;
-    }
-    if (event.data?.type === 'buffering') setStatus('Monitor buffering…', 'Waiting for enough audio.');
-    if (event.data?.type === 'playing' && !testActive) {
-      setStatus('Monitor playing', `Output: ${audioContext.sampleRate} Hz · gain ${monitorGainValue.value}${describeMonitorHealth()}`);
-    }
-  };
-
-  setActiveRole('monitor');
-
-  publisherButton.disabled = true;
-  monitorButton.disabled = true;
-  stopButton.disabled = false;
-  updateTestButtons();
-
-  try {
-    await connectMonitorSocket();
-  } catch {
-    setStatus('Reconnecting monitor…', 'Initial Relay connection failed; retrying automatically.');
-    scheduleMonitorReconnect();
   }
 }
 
@@ -1058,20 +843,8 @@ window.addEventListener('relay-request-microphone', (event) => {
   requestPublisherStart(expectedOwnerId).catch(console.error);
 });
 
-monitorButton.addEventListener('click', () => {
-  startMonitor().catch(async (error) => {
-    console.error(error);
-    setStatus('Could not start monitor', error instanceof Error ? error.message : String(error));
-    await stop(false, { releaseMic: false });
-  });
-});
-
-stopButton.addEventListener('click', () => {
-  stop().catch(console.error);
-});
-
 testStartButton.addEventListener('click', () => {
-  if (activeRole !== 'publisher' || socket?.readyState !== WebSocket.OPEN) return;
+  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'start-sync-test' }));
   startLocalClickTrack();
 });
@@ -1082,8 +855,6 @@ testStopButton.addEventListener('click', () => {
   stopLocalClickTrack();
 });
 
-monitorGain.addEventListener('input', updateMonitorGain);
-
 for (const slider of [micGain, songLevel]) {
   slider.addEventListener('input', () => {
     markSliderTouched(slider);
@@ -1092,13 +863,20 @@ for (const slider of [micGain, songLevel]) {
   slider.addEventListener('change', () => markSliderTouched(slider));
 }
 
+useMicGainSuggestion.addEventListener('click', () => {
+  const recommended = Number(latestMixHealth?.recommendedMicGainDb);
+  if (!publisherActive || !Number.isFinite(recommended)) return;
+  micGain.value = String(Math.max(0, Math.min(36, Math.round(recommended))));
+  markSliderTouched(micGain);
+  sendMixSettings();
+});
+
 calibrateButton.addEventListener('click', () => {
   if (socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
 });
 
-updateMonitorGain();
 updateMixLabels();
 updateCalibrateButton();
 updateTestButtons();
-setStatus('Idle', 'On the phone choose Microphone; on the computer choose Monitor.');
+setStatus('Idle', 'Take the mic when you are ready.');

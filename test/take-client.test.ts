@@ -32,11 +32,13 @@ test('browser reconnects to TakeSession state instead of coupling recording life
   assert.doesNotMatch(closeSection, /stop-take|mediaRecorder|stopRecording/);
 });
 
-test('ready Take artifacts are played and downloaded from the server with the shared key preserved', async () => {
+test('ready Take artifacts stay server-owned behind one lightweight keyed Live entry', async () => {
   const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
   assert.match(source, /function artifactUrl/);
   assert.match(source, /url\.searchParams\.set\('key', key\)/);
-  assert.match(source, /recordingPlayer\.src = href/);
   assert.match(source, /recordingDownload\.href = href/);
-  assert.match(source, /recordingDownload\.download = take\.artifact\.fileName/);
+  assert.match(source, /recordingDownload\.textContent = `Last take ·/);
+  assert.match(source, /recordingPlayer\.hidden = true/);
+  assert.doesNotMatch(source, /recordingDownload\.download =/);
+  assert.doesNotMatch(source, /recordingPlayer\.src = href/);
 });

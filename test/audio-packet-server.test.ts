@@ -79,7 +79,12 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
     RELAY_PARTICIPANT_GRACE_MS: '500',
     RELAY_MIC_TRANSPORT_GRACE_MS: '500',
     RELAY_AUDIO_REORDER_WINDOW_PACKETS: '4',
-    RELAY_AUDIO_REORDER_DEADLINE_MS: '100',
+    // This integration case proves reorder + reconnect semantics, not deadline
+    // expiry. Keep the deadline well outside normal CI scheduling stalls so a
+    // buffered packet cannot be declared lost between the status assertion and
+    // the deliberately late predecessor sent a few lines below. Deadline
+    // behavior is covered deterministically in audio-packet-receiver.test.ts.
+    RELAY_AUDIO_REORDER_DEADLINE_MS: '5000',
     RELAY_AUDIO_MAX_FORWARD_JUMP_PACKETS: '32',
   });
 

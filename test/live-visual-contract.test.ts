@@ -33,6 +33,12 @@ test('the performance field gains visual weight only for the local live Mic owne
   assert.match(state, /body\[data-self-mic="off"\] \.voice-ribbon span[\s\S]*?opacity: \.24 !important/);
 });
 
+test('live singer hands space from media guidance to the Voice field', () => {
+  assert.match(state, /body\[data-self-mic="live"\] \.performance-stage \{[\s\S]*?padding-top: 30px;/);
+  assert.match(state, /body\[data-self-mic="live"\] #youtube-note \{[\s\S]*?display: none;/);
+  assert.match(state, /@media \(max-height: 760px\)[\s\S]*?body\[data-self-mic="live"\] \.performance-stage \{[\s\S]*?padding-top: 24px;/);
+});
+
 test('short phone viewports compress rhythm instead of dropping primary controls below arbitrary whitespace', () => {
   assert.match(composition, /@media \(max-height: 760px\)/);
   assert.match(composition, /\.performance-stage \{ padding-top: 26px; \}/);

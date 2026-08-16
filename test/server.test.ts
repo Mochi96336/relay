@@ -135,6 +135,34 @@ describe('remote status', () => {
     assert.ok(stalled.source.backingFrameAgeMs >= 1_000);
     backing.close();
   });
+
+  /**
+   * "No longer" is a claim about a stream that once existed. A microphone that
+   * has been taken but has not produced a first frame yet is starting, and that
+   * is the ordinary state of every take for its first moments - the phone is
+   * still resolving permission and filling its first buffers.
+   */
+  test('calls a microphone that has not sent its first frame starting, not broken', async () => {
+    const publisher = await RelayClient.connect(server);
+    publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    await publisher.waitForType('registered');
+
+    const starting = await status();
+    assert.equal(starting.source.micConnected, true);
+    assert.equal(starting.source.micStreaming, false);
+    assert.doesNotMatch(starting.faults.join(' '), /microphone is connected but no longer/);
+
+    // Once frames have actually flowed, silence is the real failure and must
+    // still be reported.
+    await sendPcmInChunks(publisher, tone(0.3));
+    assert.equal((await status()).source.micStreaming, true);
+
+    await sleep(1_200);
+    const stalled = await status();
+    assert.equal(stalled.state, 'fault');
+    assert.match(stalled.faults.join(' '), /microphone is connected but no longer sending audio/);
+    publisher.close();
+  });
 });
 
 describe('shared-key auth', () => {

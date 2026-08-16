@@ -15,6 +15,8 @@ const HANDOFF_TIME_TOLERANCE_SECONDS = 1.5;
  */
 const HANDOFF_PREPARE_TIMEOUT_MS = 20_000;
 const HOLDOVER_TIME_TOLERANCE_SECONDS = 0.9;
+/** YT.PlayerState.BUFFERING: on its way to a state, not refusing one. */
+const BUFFERING_STATE = 3;
 
 /**
  * The single synthetic playback identity shared by pre-participant clients.
@@ -409,40 +411,68 @@ export class SongSession {
     return { ok: false, reason: 'leader-busy' };
   }
 
+  /**
+   * How far a report may sit from where this player's own last accepted report
+   * would be by now.
+   *
+   * Not from `serverTime`. That is where the room clock predicts a player
+   * should be, and a player that rebuffers falls behind the prediction without
+   * anybody seeking - so judging against it made every packet after a stall
+   * look like a jump. A refused packet never reaches the timeline, so it could
+   * not correct the drift it was refused for, and the refusals repeated at the
+   * telemetry rate. The honest bound is that a player can only fall behind its
+   * own last report by the time that has actually passed; anything further, in
+   * either direction, is a real jump. The room-song command gate draws exactly
+   * this line, and a handoff must not draw a different one.
+   */
+  private withinOwnReport(
+    room: Record<string, unknown>,
+    payload: Record<string, unknown>,
+    toleranceSeconds: number,
+  ) {
+    const reportedTime = Number(room.youtubeTime);
+    const incomingTime = Number(payload.currentTime);
+    if (!Number.isFinite(reportedTime) || !Number.isFinite(incomingTime)) return false;
+
+    const elapsedSeconds = Math.max(0, Number(room.ageMs) || 0) / 1000;
+    const delta = incomingTime - reportedTime;
+    return delta <= toleranceSeconds && delta >= -(elapsedSeconds + toleranceSeconds);
+  }
+
   private safeHoldoverTelemetry(payload: Record<string, unknown>, nowMs: number) {
     const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
-    const roomTime = Number(room.serverTime);
-    const incomingTime = Number(payload.currentTime);
     const roomRate = Number(room.playbackRate);
     const incomingRate = Number(payload.playbackRate ?? 1);
+    // Buffering is not a decision the singer made, so it is not a semantic
+    // change. Demanding the exact room state meant the outgoing leader lost
+    // its own holdover the moment its network hiccuped.
+    const stateHeld = Number(payload.state) === Number(room.state)
+      || Number(payload.state) === BUFFERING_STATE;
 
     return typeof room.videoId === 'string'
       && payload.videoId === room.videoId
-      && Number(payload.state) === Number(room.state)
+      && stateHeld
       && Number.isFinite(roomRate)
       && Number.isFinite(incomingRate)
       && Math.abs(roomRate - incomingRate) < 0.0001
-      && Number.isFinite(roomTime)
-      && Number.isFinite(incomingTime)
-      && Math.abs(incomingTime - roomTime) <= HOLDOVER_TIME_TOLERANCE_SECONDS;
+      && this.withinOwnReport(room, payload, HOLDOVER_TIME_TOLERANCE_SECONDS);
   }
 
   private safeTargetTelemetry(payload: Record<string, unknown>, nowMs: number) {
     const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
-    const roomTime = Number(room.serverTime);
-    const incomingTime = Number(payload.currentTime);
     const desiredState = Number(room.state);
     const incomingState = Number(payload.state);
-    const stateReady = desiredState === 1
-      ? incomingState === 1
-      : [0, 2, 5].includes(incomingState);
+    // A target that has just been told to take a song is loading it, and a
+    // phone loading a video reports BUFFERING before it reports playing.
+    // Requiring the finished state here meant a handoff could only complete on
+    // a device that never had to buffer, which is not a phone.
+    const stateReady = incomingState === BUFFERING_STATE
+      || (desiredState === 1 ? incomingState === 1 : [0, 2, 5].includes(incomingState));
 
     return typeof room.videoId === 'string'
       && payload.videoId === room.videoId
       && stateReady
-      && Number.isFinite(roomTime)
-      && Number.isFinite(incomingTime)
-      && Math.abs(incomingTime - roomTime) <= HANDOFF_TIME_TOLERANCE_SECONDS;
+      && this.withinOwnReport(room, payload, HANDOFF_TIME_TOLERANCE_SECONDS);
   }
 
   private handoffPlan(nowMs: number): SongHandoffPlan | null {

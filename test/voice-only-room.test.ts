@@ -43,7 +43,7 @@ test('product lifecycle and Take availability treat live Mic as a complete voice
     participantCount: 1,
     micOwnerId: 'participant-a',
     micOwnerNickname: 'A',
-    roomSong: { videoId: null, connected: false, state: null, handoffState: 'idle' },
+    roomSong: { videoId: null, connected: false, clockAgeMs: 0, state: null, handoffState: 'idle' },
     take: { lifecycle: 'idle', takeId: null, qualityVerdict: null },
     timing: {
       timingMode: 'network-estimate',
@@ -72,7 +72,7 @@ test('unused Robot failure does not take away a recordable live Mic when there i
     participantCount: 1,
     micOwnerId: 'participant-a',
     micOwnerNickname: 'A',
-    roomSong: { videoId: null, connected: false, state: null, handoffState: 'idle' },
+    roomSong: { videoId: null, connected: false, clockAgeMs: 0, state: null, handoffState: 'idle' },
     take: { lifecycle: 'idle', takeId: null, qualityVerdict: null },
     timing: {
       timingMode: 'network-estimate',

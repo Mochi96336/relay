@@ -953,6 +953,7 @@ function remoteStatusPayload() {
   const micConnected = components.mic.connected;
   const backingStreaming = components.backing.streaming;
   const micStreaming = components.mic.streaming;
+  const micFlowSeen = components.mic.flowObserved;
   const routeMode = components.route.mode;
   const robotRoute = routeMode === 'robot';
   const robotSourceConnected = components.robotSource.connected;
@@ -960,7 +961,17 @@ function remoteStatusPayload() {
 
   const faults: string[] = [];
   if (backingConnected && !backingStreaming) faults.push('backing source is connected but no longer sending audio');
-  if (micConnected && !micStreaming) faults.push('microphone is connected but no longer sending audio');
+  // "No longer" is a claim about a stream that once existed. A microphone that
+  // has been taken but has not produced its first frame yet is starting, not
+  // failing - the phone is still resolving permission, opening the capture and
+  // filling its first buffers. Reporting that as a fault told an operator the
+  // opposite of what was happening, and it is the ordinary state of every take
+  // for its first moments. `flowObserved` is what separates the two, and the
+  // product view already draws that line: `starting` before the first frame,
+  // `interrupted` after one stops arriving.
+  if (micConnected && micFlowSeen && !micStreaming) {
+    faults.push('microphone is connected but no longer sending audio');
+  }
   if (routeMode !== 'idle' && !backingConnected) {
     faults.push(`${routeMode} route has no backing source`);
   }
@@ -1181,6 +1192,13 @@ function productStatusPayload(nowMs = performance.now()) {
     : null;
   const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
   const roomState = Number(room.state);
+  // `connected` answers "is the clock authoritative right now", on a window
+  // tight enough for alignment. Telling a singer their playback is unavailable
+  // is a different question with a different answer, so the product view gets
+  // the raw age and draws its own, slower line.
+  const timelineAgeMs = Number(
+    (youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>).ageMs,
+  );
   const takeStatus = takeController.statusPayload();
   const take = takeStatus.take;
   const alignment = session.alignment;
@@ -1194,6 +1212,7 @@ function productStatusPayload(nowMs = performance.now()) {
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),
+      clockAgeMs: Number.isFinite(timelineAgeMs) ? timelineAgeMs : Number.POSITIVE_INFINITY,
       state: Number.isFinite(roomState) ? roomState : null,
       handoffState: typeof room.handoffState === 'string' ? room.handoffState : 'idle',
     },

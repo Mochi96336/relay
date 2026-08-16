@@ -34,6 +34,7 @@ function model(readinessInput: ReadinessInput, takeLifecycle: 'idle' | 'recordin
     roomSong: {
       videoId: 'abcdefghijk',
       connected: true,
+      clockAgeMs: 0,
       state: 1,
       handoffState: 'idle',
     },

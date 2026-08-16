@@ -159,6 +159,53 @@ describe('prepared song handoff', () => {
     assert.equal((songs.statusPayload(300) as Record<string, any>).playbackLeaderParticipantId, A.participantId);
   });
 
+  /**
+   * The deadlock this replaced was observed against a phone: 1858 refusals of
+   * the target's own commit report, and 822 of the outgoing leader's holdover,
+   * neither able to converge. Both rules judged a player against `serverTime` -
+   * where the room predicts it should be - so a player that had to buffer could
+   * never satisfy them, and a refused report never reaches the timeline to
+   * correct the gap it was refused for.
+   */
+  test('a target that is still buffering can complete its commit', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10), A, A.participantId, 0);
+    const prepared = songs.beginHandoff(B, B.participantId, 250);
+    assert.ok(prepared);
+    assert.ok(songs.markHandoffReady(B, prepared.handoffId, B.participantId, 300));
+
+    // A phone loading a video reports BUFFERING before it reports playing, and
+    // it lands a little behind the room clock that kept running without it.
+    // Demanding the finished state and the predicted position meant a handoff
+    // could only complete on a device that never had to buffer.
+    const completed = songs.update(
+      telemetry(9.6, { state: 3 }), B, B.participantId, 1_600,
+    );
+    assert.equal(completed.accepted, true);
+    assert.equal(completed.handoffCompleted, true);
+    assert.equal((songs.statusPayload(1_600) as Record<string, any>).handoffState, 'idle');
+  });
+
+  test('a real jump by the target is still refused', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10), A, A.participantId, 0);
+    const prepared = songs.beginHandoff(B, B.participantId, 250);
+    assert.ok(prepared);
+    assert.ok(songs.markHandoffReady(B, prepared.handoffId, B.participantId, 300));
+
+    // Further ahead than its own last report allows is a seek, not a stall,
+    // and buffering does not excuse it.
+    const jumped = songs.update(telemetry(90, { state: 3 }), B, B.participantId, 350);
+    assert.equal(jumped.accepted, false);
+    assert.equal(jumped.reason, 'handoff-song-mismatch');
+
+    // And a different song is still a different song.
+    const other = songs.update(
+      telemetry(10.2, { videoId: 'kJQP7kiw5Fk' }), B, B.participantId, 350,
+    );
+    assert.equal(other.accepted, false);
+  });
+
   test('ready plus matching target telemetry commits atomically and releases the handoff', () => {
     const songs = new SongSession();
     songs.update(telemetry(10), A, A.participantId, 0);

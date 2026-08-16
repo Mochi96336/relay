@@ -121,3 +121,52 @@ test('old leader remains holder while a different exact target prepares', () => 
     room: { videoId: 'abcdefghijk' },
   }), 'holder');
 });
+
+/**
+ * Observer is a surface with no controls at all: no song form, no player, and
+ * every command refused before it is sent. That is right while somebody is
+ * driving the room and a trap once they stop. The server already accepts a
+ * command against a disconnected or stale leader; this side used to compare
+ * identities only, so a tab left open kept the room to itself for as long as it
+ * existed.
+ */
+test('hands the room back when its leader stops holding it', () => {
+  const foreignLeader = {
+    playbackLeaderParticipantId: 'participant-other',
+    playbackTransportId: 'playback-other-tab',
+    playbackGeneration: 2,
+  };
+
+  // Still driving: nobody else may take the room from under them.
+  assert.equal(resolvePlaybackRole({
+    ...self,
+    timeline: timeline({ ...foreignLeader, leaderConnected: true, leaderFresh: true }),
+    room: { videoId: 'abcdefghijk' },
+  }), 'observer');
+
+  // Gone.
+  assert.equal(resolvePlaybackRole({
+    ...self,
+    timeline: timeline({ ...foreignLeader, leaderConnected: false, leaderFresh: false }),
+    room: { videoId: 'abcdefghijk' },
+  }), 'empty');
+
+  // Still connected but long past reporting, which is what a tab left open on
+  // a locked phone looks like.
+  assert.equal(resolvePlaybackRole({
+    ...self,
+    timeline: timeline({
+      ...foreignLeader, leaderConnected: true, leaderFresh: false, ageMs: 30_000,
+    }),
+    room: { videoId: 'abcdefghijk' },
+  }), 'empty');
+
+  // A rebuffer is not an abdication: the controls must not flicker.
+  assert.equal(resolvePlaybackRole({
+    ...self,
+    timeline: timeline({
+      ...foreignLeader, leaderConnected: true, leaderFresh: false, ageMs: 2_000,
+    }),
+    room: { videoId: 'abcdefghijk' },
+  }), 'observer');
+});

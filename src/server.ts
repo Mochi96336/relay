@@ -1178,6 +1178,7 @@ function clearBootCalibrationState() {
 
 function stopLiveSource() {
   cancelBackingGrace();
+  backingIsRobot = false;
   if (!session.active) return;
   takeController.endMix();
   clearBootCalibrationState();
@@ -2387,7 +2388,6 @@ wss.on('connection', (rawSocket, request) => {
         takeController.noteQualityEvent('backing-transport-disconnected');
         backing = null;
         backingSampleRate = null;
-        backingIsRobot = false;
         session.setBackingExpected(false);
         if (calibration.collecting) {
           calibration.fail('Desktop Source disconnected during calibration.');

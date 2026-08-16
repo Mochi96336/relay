@@ -1,4 +1,12 @@
 import type { ReadinessSnapshot } from './readiness.js';
+import {
+  deriveRoomMicState,
+  deriveRoomSongState,
+  roomSongClockSeverity,
+  type RoomMicState,
+  type RoomSongFacts,
+  type RoomSongState,
+} from './room-domain.js';
 import type { TakeQualityVerdict } from './take-quality.js';
 import type { TakeLifecycle } from './take-session.js';
 
@@ -23,14 +31,7 @@ export type ProductAttention = {
   severity: 'warning' | 'critical';
 };
 
-export type ProductRoomSongInput = {
-  videoId: string | null;
-  connected: boolean;
-  /** How long since the room clock last accepted a report. */
-  clockAgeMs: number;
-  state: number | null;
-  handoffState: string;
-};
+export type ProductRoomSongInput = RoomSongFacts;
 
 export type ProductTakeInput = {
   lifecycle: TakeLifecycle;
@@ -68,12 +69,12 @@ export type ProductStatus = {
   room: {
     participantCount: number;
     mic: {
-      state: 'free' | 'starting' | 'live' | 'interrupted' | 'reconnecting';
+      state: RoomMicState;
       ownerId: string | null;
       ownerNickname: string | null;
     };
     song: {
-      state: 'empty' | 'ready' | 'playing' | 'handoff' | 'unavailable';
+      state: RoomSongState;
       videoId: string | null;
       handoffState: string;
     };
@@ -91,6 +92,16 @@ export type ProductStatus = {
     canStopTake: boolean;
   };
 };
+
+function micState(input: ProductViewModelInput): RoomMicState {
+  const mic = input.readiness.components.mic;
+  return deriveRoomMicState({
+    ownerId: input.micOwnerId,
+    connected: mic.connected,
+    flowObserved: mic.flowObserved,
+    streaming: mic.streaming,
+  });
+}
 
 function productLifecycle(input: ProductViewModelInput): ProductLifecycle {
   if (input.take.lifecycle === 'recording' || input.take.lifecycle === 'finalizing') {
@@ -117,40 +128,8 @@ function productLifecycle(input: ProductViewModelInput): ProductLifecycle {
   return 'idle';
 }
 
-function micState(input: ProductViewModelInput): ProductStatus['room']['mic']['state'] {
-  if (input.micOwnerId === null) return 'free';
-  const mic = input.readiness.components.mic;
-  if (!mic.connected) return 'reconnecting';
-  if (!mic.flowObserved) return 'starting';
-  if (mic.streaming) return 'live';
-  return 'interrupted';
-}
-
-/**
- * How long the room clock may go unreported before the singer is told about it.
- *
- * The clock itself stops being authoritative after 1.5 s, which is right for
- * alignment and wrong as a thing to say out loud. A phone reports every 250 ms,
- * so that window tolerates five missed samples - and a phone misses five the
- * moment the screen dims, the tab goes to the background, or the player
- * rebuffers, because browsers throttle timers in exactly those situations.
- * Reported at 1.5 s, "playback unavailable" fires during ordinary use, every
- * time the singer glances away.
- */
-const SONG_CLOCK_LOST_MS = 6_000;
-/** And only a gap this long is worth interrupting a performance for. */
-const SONG_CLOCK_BLOCKING_MS = 15_000;
-
-function songClockLost(input: ProductViewModelInput) {
-  return !input.roomSong.connected && input.roomSong.clockAgeMs > SONG_CLOCK_LOST_MS;
-}
-
-function songState(input: ProductViewModelInput): ProductStatus['room']['song']['state'] {
-  if (input.roomSong.videoId === null) return 'empty';
-  if (input.roomSong.handoffState !== 'idle') return 'handoff';
-  if (songClockLost(input)) return 'unavailable';
-  if (input.roomSong.state === 1) return 'playing';
-  return 'ready';
+function songState(input: ProductViewModelInput): RoomSongState {
+  return deriveRoomSongState(input.roomSong);
 }
 
 function timingState(
@@ -214,22 +193,18 @@ function productAttention(
   const host = hostAttention(input);
   if (host) return host;
 
-  const songLoaded = input.roomSong.videoId !== null;
   const performanceActive = lifecycle === 'live' || lifecycle === 'recording';
-  if (songLoaded && songClockLost(input)) {
-    // Blocking a performance is a strong claim. A gap the singer could have
-    // caused by looking away is worth mentioning; only one long enough that the
-    // room genuinely has no clock is worth stopping for.
-    const blocking = performanceActive
-      && input.roomSong.clockAgeMs > SONG_CLOCK_BLOCKING_MS;
+  const songClockSeverity = roomSongClockSeverity(input.roomSong, performanceActive);
+  if (songClockSeverity) {
     return {
       code: 'song-clock-unavailable',
       scope: 'song',
-      severity: blocking ? 'critical' : 'warning',
+      severity: songClockSeverity,
     };
   }
 
-  if (input.micOwnerId !== null && micState(input) === 'interrupted') {
+  const mic = micState(input);
+  if (input.micOwnerId !== null && mic === 'interrupted') {
     return {
       code: 'mic-audio-stalled',
       scope: 'mic',
@@ -237,7 +212,7 @@ function productAttention(
     };
   }
 
-  if (input.micOwnerId !== null && micState(input) === 'reconnecting') {
+  if (input.micOwnerId !== null && mic === 'reconnecting') {
     return {
       code: 'mic-reconnecting',
       scope: 'mic',
@@ -291,6 +266,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     : attention
       ? 'degraded'
       : 'healthy';
+  const mic = micState(input);
 
   return {
     type: 'product-status',
@@ -300,7 +276,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     room: {
       participantCount: input.participantCount,
       mic: {
-        state: micState(input),
+        state: mic,
         ownerId: input.micOwnerId,
         ownerNickname: input.micOwnerNickname,
       },
@@ -320,7 +296,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       canStartTake: input.readiness.components.session.active
         && (
           input.roomSong.videoId === null
-            ? micState(input) === 'live'
+            ? mic === 'live'
             : health !== 'blocked'
         )
         && input.take.lifecycle !== 'recording'

@@ -1,3 +1,5 @@
+import { resolvePlaybackRole } from './song-role.js';
+
 const STATE_NAMES = new Map([
   [-1, 'unstarted'],
   [0, 'ended'],
@@ -268,46 +270,17 @@ function dispatchHandoff(type, message) {
   window.dispatchEvent(new CustomEvent(type, { detail: message }));
 }
 
-function exactSelfPlayback(status, participantKey, transportKey, generationKey) {
+function dispatchPlaybackView() {
   const participantId = typeof window.relayParticipantId === 'string'
     ? window.relayParticipantId.trim()
     : '';
-  if (!participantId || !status || typeof status !== 'object') return false;
-  return status[participantKey] === participantId
-    && status[transportKey] === transportId
-    && Number(status[generationKey]) === playbackGeneration;
-}
-
-function currentPlaybackRole() {
-  const timeline = latestTimelineStatus;
-  if (!timeline) return null;
-
-  const hasSong = typeof latestRoomSongStatus?.videoId === 'string'
-    || typeof timeline.videoId === 'string';
-  if (!hasSong) return 'empty';
-
-  if (
-    timeline.handoffState !== 'idle'
-    && exactSelfPlayback(
-      timeline,
-      'handoffTargetParticipantId',
-      'handoffTargetPlaybackTransportId',
-      'handoffTargetPlaybackGeneration',
-    )
-  ) return 'preparing';
-
-  if (exactSelfPlayback(
-    timeline,
-    'playbackLeaderParticipantId',
-    'playbackTransportId',
-    'playbackGeneration',
-  )) return 'holder';
-
-  return 'observer';
-}
-
-function dispatchPlaybackView() {
-  const role = currentPlaybackRole();
+  const role = resolvePlaybackRole({
+    timeline: latestTimelineStatus,
+    room: latestRoomSongStatus,
+    participantId,
+    transportId,
+    playbackGeneration,
+  });
   if (!role) return;
   window.dispatchEvent(new CustomEvent('relay:playback-view', {
     detail: {

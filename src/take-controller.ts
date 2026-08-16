@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
+import type { MixHealth } from './audio-session.js';
+import {
+  TakeQualityTracker,
+  type TakeQualityEventKind,
+  type TakeQualityFrameState,
+} from './take-quality.js';
 import {
   TakeSession,
   type StopTakeDecision,
@@ -19,20 +25,23 @@ function errorMessage(error: unknown) {
 }
 
 /**
- * Binds the pure Take lifecycle to the server-side WAV artifact writer.
+ * Binds the pure Take lifecycle to the server-side WAV artifact writer and one
+ * Take-scoped quality tracker.
  *
  * It deliberately knows nothing about Mic ownership, WebSockets, SongSession
- * authority or product UI. The transport layer decides whether a Start/Stop
- * request is allowed, while this controller guarantees one room recording and
- * one writer/finalization path at a time.
+ * authority or product UI. The transport layer supplies authoritative evidence
+ * alongside each exact mixed frame; this controller guarantees that only the
+ * evidence belonging to frames accepted by the WAV writer reaches the Take.
  */
 export class TakeController {
   private readonly session = new TakeSession();
   private writer: WavTakeWriter | null = null;
+  private quality: TakeQualityTracker | null = null;
 
   constructor(private readonly options: {
     directory: string;
     sampleRate: number;
+    frameMs: number;
     artifactBaseUrl?: string;
     onChange?: (status: ReturnType<TakeSession['statusPayload']>) => void;
   }) {}
@@ -49,7 +58,12 @@ export class TakeController {
     return this.session.statusPayload();
   }
 
-  start(actorParticipantId: string, song: TakeSongSnapshot, nowMs = Date.now()): StartTakeResult {
+  start(
+    actorParticipantId: string,
+    song: TakeSongSnapshot,
+    baselineHealth: MixHealth,
+    nowMs = Date.now(),
+  ): StartTakeResult {
     const takeId = randomUUID();
     const started = this.session.start({
       takeId,
@@ -58,6 +72,12 @@ export class TakeController {
       startedAtMs: nowMs,
     });
     if (!started.ok) return started;
+
+    this.quality = new TakeQualityTracker({
+      sampleRate: this.options.sampleRate,
+      frameMs: this.options.frameMs,
+      baselineHealth,
+    });
 
     let writer: WavTakeWriter;
     try {
@@ -68,7 +88,9 @@ export class TakeController {
         onError: (error) => this.failWriter(writer, error),
       });
     } catch (error) {
-      this.session.fail(takeId, errorMessage(error), Date.now());
+      const quality = this.quality.assessment();
+      this.quality = null;
+      this.session.fail(takeId, errorMessage(error), Date.now(), quality);
       this.emitChange();
       return { ok: false, reason: 'writer-failed' };
     }
@@ -84,16 +106,26 @@ export class TakeController {
     stopReason: TakeStopReason = 'user',
     nowMs = Date.now(),
   ): StopTakeResult {
+    const current = this.session.currentTake();
+    const quality = this.quality?.assessment() ?? current?.quality;
+    if (!quality) {
+      return current?.takeId === takeId
+        ? { ok: false, reason: 'take-not-recording' }
+        : { ok: false, reason: current ? 'stale-take' : 'take-not-recording' };
+    }
+
     const decision = this.session.beginFinalizing({
       takeId,
       stoppedByParticipantId: actorParticipantId,
       stopReason,
       endedAtMs: nowMs,
+      quality,
     });
     if (!decision.ok || decision.duplicate) return decision;
 
     const writer = this.writer;
     this.writer = null;
+    this.quality = null;
     this.emitChange();
 
     if (!writer || writer.takeId !== takeId) {
@@ -132,11 +164,12 @@ export class TakeController {
     return result.ok;
   }
 
-  append(frame: Buffer) {
+  append(frame: Buffer, state: TakeQualityFrameState, health: MixHealth) {
     const writer = this.writer;
     if (!writer || this.session.recordingTakeId !== writer.takeId) return false;
     try {
       writer.append(frame);
+      this.quality?.observeFrame(Math.floor(frame.byteLength / 2), state, health);
       return true;
     } catch (error) {
       this.failWriter(writer, error);
@@ -144,16 +177,25 @@ export class TakeController {
     }
   }
 
+  noteQualityEvent(kind: TakeQualityEventKind) {
+    if (!this.session.recordingTakeId) return false;
+    this.quality?.noteEvent(kind);
+    return true;
+  }
+
   shutdown() {
     const writer = this.writer;
     this.writer = null;
+    this.quality = null;
     if (writer) void writer.abort();
   }
 
   private failWriter(writer: WavTakeWriter, error: unknown) {
     if (this.writer !== writer) return;
     this.writer = null;
-    if (this.session.fail(writer.takeId, errorMessage(error), Date.now())) this.emitChange();
+    const quality = this.quality?.assessment();
+    this.quality = null;
+    if (this.session.fail(writer.takeId, errorMessage(error), Date.now(), quality)) this.emitChange();
     void writer.abort();
   }
 

@@ -142,4 +142,20 @@ replaceRepo(
   'expected legacy raw-Mic monitor assertion',
 );
 
+// Backing loss is no longer a session boundary while a Mic can carry a
+// voice-only room. The boot-probe lifecycle regression must therefore cross a
+// *real* room-session boundary: retire both audio sources, then reconnect both.
+replaceRepo(
+  'test/timing-validity.test.ts',
+  `      backing.close();\n      await monitor.waitFor(\n        (m) => m.type === 'source-status' && m.active === false,\n        3_000,\n      );\n\n      const from = publisher.messages.length;\n      const newBacking = await RelayClient.connect(server);\n      newBacking.newCaptureSession();\n      newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE });\n      await newBacking.waitForType('registered');\n      await Promise.all([\n        sendPcmInChunks(newBacking, tone(1, 0.8)),\n        sendPcmInChunks(publisher, tone(1, 0.4)),\n      ]);\n\n      const nextProbe = await waitForNewMessage(\n        publisher,\n        from,\n        (m) => m.type === 'play-calibration-probe',\n        4_000,\n      );\n`,
+  `      const sessionEndFrom = monitor.messages.length;\n      backing.close();\n      publisher.close();\n      await waitForNewMessage(\n        monitor,\n        sessionEndFrom,\n        (m) => m.type === 'source-status' && m.active === false,\n        3_000,\n      );\n\n      const newBacking = await RelayClient.connect(server);\n      newBacking.newCaptureSession();\n      newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE });\n      await newBacking.waitForType('registered');\n\n      const newPublisher = await RelayClient.connect(server);\n      newPublisher.newCaptureSession();\n      newPublisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });\n      await newPublisher.waitForType('registered');\n      const from = newPublisher.messages.length;\n      await Promise.all([\n        sendPcmInChunks(newBacking, tone(1, 0.8)),\n        sendPcmInChunks(newPublisher, tone(1, 0.4)),\n      ]);\n\n      const nextProbe = await waitForNewMessage(\n        newPublisher,\n        from,\n        (m) => m.type === 'play-calibration-probe',\n        4_000,\n      );\n`,
+  'expected old backing-only session boundary in boot-probe lifecycle test',
+);
+replaceRepo(
+  'test/timing-validity.test.ts',
+  `      newBacking.close();\n      publisher.close();\n      monitor.close();\n      robot.close();\n`,
+  `      newBacking.close();\n      newPublisher.close();\n      monitor.close();\n      robot.close();\n`,
+  'expected old publisher cleanup in boot-probe lifecycle test',
+);
+
 console.log('voice-only compatibility corrections applied');

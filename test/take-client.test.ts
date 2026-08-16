@@ -45,6 +45,7 @@ test('ready Take artifacts review inline instead of navigating away from Live', 
   assert.match(source, /recordingDownload\.download = `relay-take-/);
   assert.doesNotMatch(source, /window\.open|location\.href\s*=|lastTakeToggle\.href/);
 
+  // Review is progressive disclosure inside Live; the artifact link is download-only.
   assert.match(html, /id="last-take" class="last-take" hidden/);
   assert.match(html, /id="last-take-toggle"[^>]*type="button"[^>]*aria-expanded="false"/);
   assert.match(html, /id="last-take-review"[^>]*hidden/);

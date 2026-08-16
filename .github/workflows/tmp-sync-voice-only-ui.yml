@@ -6,6 +6,7 @@ on:
       - agent/live-ui-shell
     paths:
       - scripts/tmp-sync-voice-only-ui.mjs
+      - .github/workflows/tmp-sync-voice-only-ui.yml
 
 permissions:
   contents: write

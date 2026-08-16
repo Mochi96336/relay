@@ -12,6 +12,8 @@ import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame } from './pcm-frame.js';
+import { buildProductViewModel } from './product-view-model.js';
+import { buildReadiness } from './readiness.js';
 import {
   ParticipantSession,
   normalizeNickname,
@@ -107,6 +109,10 @@ app.get('/healthz', (_req, res) => {
 });
 app.get('/statusz', (_req, res) => {
   res.json(remoteStatusPayload());
+});
+app.get('/readyz', (_req, res) => {
+  const readiness = readinessPayload();
+  res.status(readiness.ready ? 200 : 503).json(readiness);
 });
 
 const server = createServer(app);
@@ -948,6 +954,90 @@ function currentTimelineStatus(nowMs = performance.now()) {
   return youtubeTimeline.statusPayload(nowMs) as TimelineStatus & Record<string, unknown>;
 }
 
+/**
+ * One runtime readiness collector shared by diagnostics and product UI.
+ *
+ * Keep transport facts here rather than reconstructing them in /readyz, the
+ * browser, or ProductViewModel independently. The pure readiness model decides
+ * what those facts mean; this function only samples the live server once.
+ */
+function readinessPayload(nowMs = performance.now()) {
+  const timeline = currentTimelineStatus(nowMs);
+  const calibrationStatus = calibration.status();
+  const timelineState = Number(timeline.state);
+
+  return buildReadiness({
+    backingConnected: backing?.readyState === WebSocket.OPEN,
+    backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
+    backingSampleRate,
+    backingIsRobot,
+    micConnected: publisher?.readyState === WebSocket.OPEN,
+    micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
+    robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    sessionActive: session.active,
+    timelineConnected: Boolean(timeline.connected && timeline.videoId),
+    timelineState: Number.isFinite(timelineState) ? timelineState : null,
+    playerOffsetMs: robotPlayerOffsetMs,
+    playerOffsetFresh: robotDeltaIsFresh(nowMs),
+    calibrationState: String(calibrationStatus.state ?? 'idle'),
+    calibrationValid: calibrationCanApply() && session.alignment.calibratedMicLagMs !== null,
+    calibrationStale: calibrationIsStale(),
+    calibrationKind,
+    probeCorrelation: lastProbeCorrelation,
+    bootCalibration: lastBootCalibration,
+  });
+}
+
+function productStatusPayload(nowMs = performance.now()) {
+  const readiness = readinessPayload(nowMs);
+  const participantSnapshot = participants.snapshot();
+  const micOwner = participantSnapshot.micOwnerId
+    ? participantSnapshot.participants.find((participant) => participant.id === participantSnapshot.micOwnerId) ?? null
+    : null;
+  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
+  const roomState = Number(room.state);
+  const takeStatus = takeController.statusPayload();
+  const take = takeStatus.take;
+  const alignment = session.alignment;
+  const calibrationStatus = calibration.status();
+
+  return buildProductViewModel({
+    readiness,
+    participantCount: participantSnapshot.participants.length,
+    micOwnerId: participantSnapshot.micOwnerId,
+    micOwnerNickname: micOwner?.nickname ?? null,
+    roomSong: {
+      videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
+      connected: Boolean(room.connected),
+      state: Number.isFinite(roomState) ? roomState : null,
+      handoffState: typeof room.handoffState === 'string' ? room.handoffState : 'idle',
+    },
+    take: {
+      lifecycle: takeStatus.lifecycle,
+      takeId: take?.takeId ?? null,
+      qualityVerdict: take?.quality?.verdict ?? null,
+    },
+    timing: {
+      timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+      calibrationState: String(calibrationStatus.state ?? 'idle'),
+      calibrationStale: calibrationIsStale(),
+      alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
+      robotRoute: robotRouteActive(),
+      robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    },
+  });
+}
+
+let lastProductStatusJson = '';
+function broadcastProductStatus(nowMs = performance.now()) {
+  const status = productStatusPayload(nowMs);
+  const serialized = JSON.stringify(status);
+  if (serialized === lastProductStatusJson) return false;
+  lastProductStatusJson = serialized;
+  broadcastJson(status);
+  return true;
+}
+
 function broadcastStatus() {
   broadcastToMonitors(JSON.stringify(publisherStatusPayload()));
   broadcastJson(sourceStatusPayload());
@@ -1458,6 +1548,8 @@ const youtubeTimelineTimer = setInterval(() => {
     invalidateMicTiming('Microphone owner left the Relay session.');
   }
   if (presenceSweep.changed) broadcastSessionStatus();
+
+  broadcastProductStatus(nowMs);
 }, 250);
 
 function validSampleRate(value: unknown) {
@@ -1581,6 +1673,11 @@ wss.on('connection', (rawSocket, request) => {
 
     if (payload.type === 'session-status-request') {
       sendJson(socket, sessionStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'product-status-request') {
+      sendJson(socket, productStatusPayload());
       return;
     }
 

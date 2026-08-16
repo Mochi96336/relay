@@ -62,17 +62,54 @@ function telemetry(currentTime: number, overrides: Record<string, unknown> = {})
   };
 }
 
+async function establishPlayingRoom(
+  client: RelayClient,
+  transportId: string,
+  currentTime: number,
+  commandPrefix: string,
+) {
+  const loadId = `${commandPrefix}-load`;
+  client.send({
+    type: 'room-song-command',
+    commandId: loadId,
+    expectedRevision: 0,
+    action: 'load',
+    videoId: VIDEO,
+    positionSeconds: currentTime,
+  });
+  await client.waitFor((message) => message.type === 'room-song-command-accepted' && message.commandId === loadId);
+  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === loadId);
+  client.send(telemetry(currentTime, { state: 5 }));
+  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === loadId);
+
+  const playId = `${commandPrefix}-play`;
+  client.send({
+    type: 'room-song-command',
+    commandId: playId,
+    expectedRevision: 1,
+    action: 'play',
+  });
+  await client.waitFor((message) => message.type === 'room-song-command-accepted' && message.commandId === playId);
+  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === playId);
+  client.send(telemetry(currentTime + 0.05, { state: 1 }));
+  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === playId);
+
+  client.send({ type: 'youtube-timeline-request' });
+  const leader = await client.waitFor((message) => (
+    message.type === 'youtube-timeline-status'
+    && message.playbackLeaderParticipantId === 'participant-a'
+    && message.state === 1
+  ));
+  assert.equal(leader.playbackTransportId, transportId);
+}
+
 test('mic takeover prepares the room song before switching playback leader', async () => {
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'participant-a', 'A', 'playback-tab-a');
     const aPublisher = await publisher(server, 'participant-a', 'A');
 
-    aPlayback.send(telemetry(10));
-    await aPlayback.waitFor((message) => (
-      message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === 'participant-a'
-    ));
+    await establishPlayingRoom(aPlayback, 'playback-tab-a', 10, 'handoff-one');
 
     const bPlayback = await playback(server, 'participant-b', 'B', 'playback-tab-b');
     await sleep(120);
@@ -149,11 +186,7 @@ test('multi-tab Mic takeover targets only the playback transport that expressed 
   try {
     const aPlayback = await playback(server, 'participant-a', 'A', 'playback-tab-a');
     const aPublisher = await publisher(server, 'participant-a', 'A');
-    aPlayback.send(telemetry(20));
-    await aPlayback.waitFor((message) => (
-      message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === 'participant-a'
-    ));
+    await establishPlayingRoom(aPlayback, 'playback-tab-a', 20, 'handoff-two');
 
     const bOtherTab = await playback(server, 'participant-b', 'B', 'playback-tab-b-other');
     const bMicTab = await playback(server, 'participant-b', 'B', 'playback-tab-b-mic');
@@ -172,7 +205,8 @@ test('multi-tab Mic takeover targets only the playback transport that expressed 
     );
 
     bOtherTab.send(telemetry(Number(prepare.serverTime) + 0.05));
-    await sleep(80);
+    const rejected = await bOtherTab.waitFor((message) => message.type === 'room-song-telemetry-rejected');
+    assert.equal(rejected.reason, 'command-target-mismatch');
     bOtherTab.send({ type: 'youtube-timeline-request' });
     await sleep(40);
     assert.equal(

@@ -1,0 +1,74 @@
+name: Fix runtime status publication
+
+on:
+  push:
+    branches:
+      - agent/runtime-status-publication-fix
+    paths:
+      - .github/workflows/fix-runtime-status-publication.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/runtime-status-publication-fix
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+      - name: Separate route identity from probe feature state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'relay-runtime-fix[bot]'
+          git config user.email 'relay-runtime-fix[bot]@users.noreply.github.com'
+
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+          const path = 'src/server.ts';
+          let source = readFileSync(path, 'utf8');
+
+          function replaceOnce(label, before, after) {
+            const count = source.split(before).length - 1;
+            if (count !== 1) throw new Error(`${label}: expected one patch target, found ${count}`);
+            source = source.replace(before, after);
+          }
+
+          replaceOnce(
+            'remote route identity',
+            `  const backingStreaming = nowMs - lastBackingFrameAt < STREAM_LIVE_MS;\n  const micStreaming = nowMs - lastMicFrameAt < STREAM_LIVE_MS;\n  const robotRoute = robotRouteActive();\n  const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;`,
+            `  const backingStreaming = nowMs - lastBackingFrameAt < STREAM_LIVE_MS;\n  const micStreaming = nowMs - lastMicFrameAt < STREAM_LIVE_MS;\n  // Route identity is readiness evidence, not a calibration feature flag.\n  // A deployment may deliberately disable boot probing while still running\n  // the formal Robot route. Keep /statusz aligned with /readyz.\n  const robotRoute = readinessPayload(nowMs).components.route.mode === 'robot';\n  const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;`,
+          );
+
+          replaceOnce(
+            'mic restart publication order',
+            `                syncAppliedCalibration();\n                broadcastJson(sourceStatusPayload());\n                broadcastJson(timingCalibrationStatusPayload());`,
+            `                syncAppliedCalibration();\n                // Publish invalidated timing evidence before the source summary\n                // that reports the same capture transition. WebSocket ordering\n                // then prevents consumers from observing a stale timing snapshot.\n                broadcastJson(timingCalibrationStatusPayload());\n                broadcastJson(sourceStatusPayload());`,
+          );
+
+          replaceOnce(
+            'backing restart publication order',
+            `            syncAppliedCalibration();\n            broadcastJson(sourceStatusPayload());\n            broadcastJson(timingCalibrationStatusPayload());`,
+            `            syncAppliedCalibration();\n            broadcastJson(timingCalibrationStatusPayload());\n            broadcastJson(sourceStatusPayload());`,
+          );
+
+          writeFileSync(path, source);
+          NODE
+
+          rm .github/workflows/fix-runtime-status-publication.yml
+          git add -A
+
+          npm ci
+          npm run check
+          find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check
+          bash -n scripts/*.sh
+          npm test
+
+          git commit -m 'fix: align runtime route and timing status publication'
+          git push origin HEAD:agent/runtime-status-publication-fix

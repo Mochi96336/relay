@@ -56,8 +56,14 @@ test('playback forced mute composes with Mic mute and preserves the user prefere
 });
 
 test('Last Take speaker playback cannot be fed back through the same phone Mic', () => {
-  assert.match(recorder, /function phoneOwnsMic\(\)[\s\S]*window\.relayActiveRole === 'publisher'/,
-    'Take review must use the same local Mic ownership fact as the capture controller');
+  assert.match(recorder, /let localMicActive = false/,
+    'Take review must own an explicit local Mic lifecycle fact');
+  assert.match(recorder, /window\.addEventListener\('relay-microphone-local-state'[\s\S]*localMicActive = event\.detail\?\.active === true/,
+    'Take review must receive local Mic lifecycle through an explicit module boundary');
+  assert.match(recorder, /function phoneOwnsMic\(\)[\s\S]*return localMicActive/,
+    'Take review must use the explicit local Mic lifecycle fact');
+  assert.doesNotMatch(recorder, /relayActiveRole/,
+    'Take review must not recover the retired shared role global');
   assert.match(recorder, /function stopReviewForMic\(copy\)[\s\S]*recordingPlayer\.pause\(\)[\s\S]*reviewNotice = copy/,
     'the shared feedback guard must actually stop local speaker playback');
   assert.match(recorder, /recordingPlayer\.addEventListener\('play'[\s\S]*phoneOwnsMic\(\)[\s\S]*stopReviewForMic\(t\('take\.reviewReleaseMic'\)\)/,

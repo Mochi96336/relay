@@ -6,6 +6,7 @@ import {
   statfsSync,
 } from 'node:fs';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import path from 'node:path';
 
 const GIB = 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -110,19 +111,19 @@ export function prepareTakeStorage(
   let removedPartialFiles = 0;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !TAKE_PART_PATTERN.test(entry.name)) continue;
-    rmSync(`${directory}/${entry.name}`, { force: true });
+    rmSync(path.join(directory, entry.name), { force: true });
     removedPartialFiles += 1;
   }
 
   const artifacts: ArtifactRecord[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !TAKE_WAV_PATTERN.test(entry.name)) continue;
-    const info = statSync(`${directory}/${entry.name}`);
+    const info = statSync(path.join(directory, entry.name));
     artifacts.push({ fileName: entry.name, sizeBytes: info.size, mtimeMs: info.mtimeMs });
   }
 
   const removals = artifactNamesToRemove(artifacts, policy, null, nowMs);
-  for (const fileName of removals) rmSync(`${directory}/${fileName}`, { force: true });
+  for (const fileName of removals) rmSync(path.join(directory, fileName), { force: true });
 
   return {
     removedPartialFiles,
@@ -152,7 +153,7 @@ export async function pruneTakeArtifacts(
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !TAKE_WAV_PATTERN.test(entry.name)) continue;
     try {
-      const info = await stat(`${directory}/${entry.name}`);
+      const info = await stat(path.join(directory, entry.name));
       artifacts.push({ fileName: entry.name, sizeBytes: info.size, mtimeMs: info.mtimeMs });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -163,7 +164,7 @@ export async function pruneTakeArtifacts(
   let removedBytes = 0;
   for (const record of artifacts) {
     if (!removals.has(record.fileName)) continue;
-    await rm(`${directory}/${record.fileName}`, { force: true });
+    await rm(path.join(directory, record.fileName), { force: true });
     removedBytes += record.sizeBytes;
   }
 

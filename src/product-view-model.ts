@@ -88,17 +88,23 @@ function productLifecycle(input: ProductViewModelInput): ProductLifecycle {
   if (input.take.lifecycle === 'recording' || input.take.lifecycle === 'finalizing') {
     return 'recording';
   }
-  if (input.roomSong.handoffState !== 'idle' || input.timing.calibrationState === 'collecting') {
+  const songLoaded = input.roomSong.videoId !== null;
+  if (
+    input.roomSong.handoffState !== 'idle'
+    || (songLoaded && input.timing.calibrationState === 'collecting')
+  ) {
     return 'preparing';
   }
-  if (
-    input.roomSong.videoId !== null
-    && input.roomSong.state === 1
-    && input.readiness.components.session.active
-  ) {
-    return 'live';
+
+  const mic = micState(input);
+  if (songLoaded) {
+    if (input.roomSong.state === 1 && input.readiness.components.session.active) return 'live';
+    return 'ready';
   }
-  if (input.roomSong.videoId !== null) return 'ready';
+  if (
+    input.readiness.components.session.active
+    && (mic === 'live' || mic === 'reconnecting')
+  ) return 'live';
   return 'idle';
 }
 
@@ -120,8 +126,11 @@ function timingState(
   input: ProductViewModelInput,
   lifecycle: ProductLifecycle,
 ): ProductStatus['timing']['state'] {
-  const performanceActive = lifecycle === 'live' || lifecycle === 'recording';
+  const songLoaded = input.roomSong.videoId !== null;
+  if (!songLoaded) return 'idle';
   if (input.timing.calibrationState === 'collecting') return 'calibrating';
+  const performanceActive = input.roomSong.state === 1
+    && (lifecycle === 'live' || lifecycle === 'recording');
   if (!performanceActive) return 'idle';
   if (input.timing.alignmentClamped) return 'clamped';
   if (input.timing.calibrationStale) return 'stale';
@@ -264,9 +273,12 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       verdict: input.take.qualityVerdict,
     },
     actions: {
-      canStartTake: health !== 'blocked'
-        && input.readiness.components.session.active
-        && input.roomSong.videoId !== null
+      canStartTake: input.readiness.components.session.active
+        && (
+          input.roomSong.videoId === null
+            ? micState(input) === 'live'
+            : health !== 'blocked'
+        )
         && input.take.lifecycle !== 'recording'
         && input.take.lifecycle !== 'finalizing',
       canStopTake: input.take.lifecycle === 'recording',

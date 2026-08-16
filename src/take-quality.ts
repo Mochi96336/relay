@@ -292,31 +292,47 @@ export class TakeQualityTracker {
   private robotDeltaMissingSamples = 0;
   private readonly events = emptyEvents();
 
-  constructor(private readonly options: { sampleRate: number }) {}
+  constructor(private readonly options: {
+    sampleRate: number;
+    /** False for an intentional voice-only Take. */
+    backingExpected?: boolean;
+    /** False when there is no Song for Voice to align against. */
+    timingExpected?: boolean;
+  }) {}
 
   observeFrame(sampleCount: number, state: TakeQualityFrameState, audio: MixFrameEvidence) {
     if (!Number.isSafeInteger(sampleCount) || sampleCount <= 0) return;
 
     this.recordedSamples += sampleCount;
     this.micGapSamples += audio.micGapSamples;
-    this.backingGapSamples += audio.backingGapSamples;
     this.micStarvedSamples += audio.micStarvedSamples;
-    this.backingStarvedSamples += audio.backingStarvedSamples;
     if (audio.micStarvedSamples > 0) this.micStarvedFrames += 1;
-    if (audio.backingStarvedSamples > 0) this.backingStarvedFrames += 1;
+    this.micUnavailableSamples += audio.micUnavailableSamples;
+
+    if (this.options.backingExpected !== false) {
+      this.backingGapSamples += audio.backingGapSamples;
+      this.backingStarvedSamples += audio.backingStarvedSamples;
+      if (audio.backingStarvedSamples > 0) this.backingStarvedFrames += 1;
+      this.backingUnavailableSamples += audio.backingUnavailableSamples;
+    }
+
     this.clippedSamples += audio.clippedSamples;
     this.limitedSamples += audio.limitedSamples;
     this.unheaderedSamples += audio.unheaderedSamples;
-    this.micUnavailableSamples += audio.micUnavailableSamples;
-    this.backingUnavailableSamples += audio.backingUnavailableSamples;
 
-    if (state.timingMode === 'network-estimate') this.networkEstimateSamples += sampleCount;
-    if (state.calibrationStale) this.calibrationStaleSamples += sampleCount;
-    if (state.alignmentClamped) this.alignmentClampedSamples += sampleCount;
-    if (state.robotRoute && !state.robotDeltaFresh) this.robotDeltaMissingSamples += sampleCount;
+    if (this.options.timingExpected !== false) {
+      if (state.timingMode === 'network-estimate') this.networkEstimateSamples += sampleCount;
+      if (state.calibrationStale) this.calibrationStaleSamples += sampleCount;
+      if (state.alignmentClamped) this.alignmentClampedSamples += sampleCount;
+      if (state.robotRoute && !state.robotDeltaFresh) this.robotDeltaMissingSamples += sampleCount;
+    }
   }
 
   noteEvent(kind: TakeQualityEventKind) {
+    if (
+      this.options.backingExpected === false
+      && (kind.startsWith('backing-') || kind.startsWith('robot-'))
+    ) return;
     this.events[kind] += 1;
   }
 

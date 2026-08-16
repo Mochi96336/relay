@@ -166,7 +166,7 @@ describe('microphone transport', () => {
     client.close();
   });
 
-  test('forwards raw microphone PCM to monitors when no source is connected', async () => {
+  test('forwards the authoritative voice-only mix to monitors when no source is connected', async () => {
     const monitor = await RelayClient.connect(server);
     monitor.send({ type: 'register', role: 'monitor' });
     await monitor.waitForType('registered');
@@ -176,9 +176,10 @@ describe('microphone transport', () => {
     await publisher.waitForType('registered');
 
     publisher.sendPcm(tone(0.1));
-    await sleep(200);
+    await sleep(450);
 
-    assert.ok(monitor.binaryFrames > 0, 'monitor received no raw PCM');
+    assert.equal(monitor.latest('source-status')?.active, true);
+    assert.ok(monitor.binaryFrames > 0, 'monitor received no voice-only mixed PCM');
     publisher.close();
     monitor.close();
     await sleep(100);

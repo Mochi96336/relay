@@ -108,7 +108,12 @@ export class TakeController {
     });
     if (!started.ok) return started;
 
-    this.quality = new TakeQualityTracker({ sampleRate: this.options.sampleRate });
+    const backingExpected = song.videoId !== null;
+    this.quality = new TakeQualityTracker({
+      sampleRate: this.options.sampleRate,
+      backingExpected,
+      timingExpected: backingExpected,
+    });
 
     let writer: WavTakeWriter | null = null;
     try {

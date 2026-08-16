@@ -13,7 +13,7 @@ import { CalibrationSession, type CalibrationContext } from './calibration-sessi
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame } from './pcm-frame.js';
 import { buildProductViewModel } from './product-view-model.js';
-import { buildReadiness } from './readiness.js';
+import { buildReadiness, type RouteMode } from './readiness.js';
 import {
   ParticipantSession,
   normalizeNickname,
@@ -322,6 +322,7 @@ function scheduleMicTransportGrace(ownerId: string) {
     cancelPendingRoomSongCommand('mic-owner-released');
     invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
     broadcastSessionStatus();
+    maybeStopLiveSourceWhenUnarmed();
   }, MIC_TRANSPORT_GRACE_MS);
   micTransportGraceTimer.unref();
 }
@@ -502,21 +503,34 @@ function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now())
   return true;
 }
 
-function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot | null {
+function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
   const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
-  if (typeof room.videoId !== 'string' || !room.videoId) return null;
+  const videoId = typeof room.videoId === 'string' && room.videoId ? room.videoId : null;
+  if (videoId === null) {
+    return {
+      videoId: null,
+      revision: null,
+      state: null,
+      serverTime: null,
+      playbackRate: null,
+    };
+  }
 
   const revision = Number(room.revision);
   const state = Number(room.state);
   const serverTime = Number(room.serverTime);
   const playbackRate = Number(room.playbackRate);
   return {
-    videoId: room.videoId,
+    videoId,
     revision: Number.isInteger(revision) ? revision : null,
     state: Number.isFinite(state) ? state : null,
     serverTime: Number.isFinite(serverTime) ? serverTime : null,
     playbackRate: Number.isFinite(playbackRate) ? playbackRate : null,
   };
+}
+
+function roomHasSong(nowMs = performance.now()) {
+  return takeSongSnapshot(nowMs).videoId !== null;
 }
 
 function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
@@ -967,12 +981,19 @@ function currentTimelineStatus(nowMs = performance.now()) {
  * browser, or ProductViewModel independently. The pure readiness model decides
  * what those facts mean; this function only samples the live server once.
  */
+function readinessRouteMode(): RouteMode {
+  if (backingIsRobot || activeRobotSource?.readyState === WebSocket.OPEN) return 'robot';
+  if (backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null) return 'legacy';
+  return 'idle';
+}
+
 function readinessPayload(nowMs = performance.now()) {
   const timeline = currentTimelineStatus(nowMs);
   const calibrationStatus = calibration.status();
   const timelineState = Number(timeline.state);
 
   return buildReadiness({
+    routeMode: readinessRouteMode(),
     backingConnected: backing?.readyState === WebSocket.OPEN,
     backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
     backingSampleRate,
@@ -1197,6 +1218,27 @@ function stopLiveSource() {
   broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
   broadcastJson(testStatusPayload());
+  broadcastStatus();
+}
+
+function maybeStopLiveSourceWhenUnarmed() {
+  if (!session.active) return;
+  const micArmed = publisher?.readyState === WebSocket.OPEN || micTransportGraceTimer !== null;
+  const backingArmed = backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null;
+  if (!micArmed && !backingArmed) stopLiveSource();
+}
+
+function expireBackingGrace() {
+  backingAbsenceTimer = null;
+  if (roomHasSong() || publisher?.readyState !== WebSocket.OPEN) {
+    stopLiveSource();
+    return;
+  }
+
+  // The backing route disappeared, but a voice-only room still has a valid
+  // authoritative mix. Retire backing timing state without killing the Mic.
+  backingIsRobot = false;
+  invalidateMicTiming('Backing route ended while the room continued voice-only.');
   broadcastStatus();
 }
 
@@ -1606,6 +1648,7 @@ wss.on('connection', (rawSocket, request) => {
       const frame = decodePcmFrame(data as Buffer);
 
       if (socket === publisher && socket.role === 'publisher') {
+        if (!testActive && !session.active) startLiveSource();
         if (testActive || session.active) {
           const previousGeneration = session.micGeneration;
           lastMicFrameAt = performance.now();
@@ -1705,9 +1748,12 @@ wss.on('connection', (rawSocket, request) => {
         rejectTakeCommand(socket, 'start', 'mix-not-active');
         return;
       }
-      const song = takeSongSnapshot();
-      if (!song) {
-        rejectTakeCommand(socket, 'start', 'song-required');
+      const nowMs = performance.now();
+      const song = takeSongSnapshot(nowMs);
+      const micStreaming = publisher?.readyState === WebSocket.OPEN
+        && nowMs - lastMicFrameAt < STREAM_LIVE_MS;
+      if (song.videoId === null && !micStreaming) {
+        rejectTakeCommand(socket, 'start', 'take-not-ready');
         return;
       }
 
@@ -1784,6 +1830,7 @@ wss.on('connection', (rawSocket, request) => {
       }
       invalidateMicTiming('Microphone was released.');
       broadcastSessionStatus();
+      maybeStopLiveSourceWhenUnarmed();
       sendJson(socket, { type: 'mic-released' });
       return;
     }
@@ -2386,6 +2433,7 @@ wss.on('connection', (rawSocket, request) => {
         session.setMicExpected(false);
         micTransportChanged = true;
         if (reconnectingOwnerId) scheduleMicTransportGrace(reconnectingOwnerId);
+        else maybeStopLiveSourceWhenUnarmed();
         if (calibration.collecting) {
           calibration.fail('Microphone disconnected during calibration.');
         }
@@ -2402,7 +2450,7 @@ wss.on('connection', (rawSocket, request) => {
           calibration.fail('Desktop Source disconnected during calibration.');
         }
         cancelBackingGrace();
-        backingAbsenceTimer = setTimeout(stopLiveSource, BACKING_GRACE_MS);
+        backingAbsenceTimer = setTimeout(expireBackingGrace, BACKING_GRACE_MS);
         broadcastJson(sourceStatusPayload());
         broadcastStatus();
       }

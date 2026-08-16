@@ -12,6 +12,8 @@ Object.assign(process.env, {
   RELAY_MIC_RETENTION_MS: String(config.micRetentionMs),
   RELAY_CALIBRATION_TIMEOUT_MS: String(config.calibrationTimeoutMs),
   RELAY_HEARTBEAT_MS: String(config.heartbeatMs),
+  RELAY_PARTICIPANT_GRACE_MS: String(config.participantGraceMs),
+  RELAY_MIC_TRANSPORT_GRACE_MS: String(config.micTransportGraceMs),
   RELAY_AUTO_CALIBRATE: config.autoCalibrate ? '1' : '0',
   RELAY_AUTO_CALIBRATION_RETRY_MS: String(config.autoCalibrationRetryMs),
   RELAY_CALIBRATION_PROBE: config.probeCalibrate ? '1' : '0',

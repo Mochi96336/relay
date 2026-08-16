@@ -64,6 +64,8 @@ export function loadRelayConfig(env: Env = process.env) {
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),
     heartbeatMs: envNumber(env, 'RELAY_HEARTBEAT_MS', 8_000, { min: 100 }),
+    participantGraceMs: envNumber(env, 'RELAY_PARTICIPANT_GRACE_MS', 5_000, { min: 1 }),
+    micTransportGraceMs: envNumber(env, 'RELAY_MIC_TRANSPORT_GRACE_MS', 5_000, { min: 1 }),
     autoCalibrate: envBoolean(env, 'RELAY_AUTO_CALIBRATE', true),
     autoCalibrationRetryMs: envNumber(env, 'RELAY_AUTO_CALIBRATION_RETRY_MS', 15_000, { min: 1 }),
     probeCalibrate: envBoolean(env, 'RELAY_CALIBRATION_PROBE', true),

@@ -19,6 +19,21 @@ test('relay config rejects malformed numeric deployment settings', () => {
   );
 });
 
+test('relay config owns the participant and mic transport grace windows', () => {
+  assert.throws(() => loadRelayConfig({ RELAY_PARTICIPANT_GRACE_MS: '0' }), />= 1/);
+  assert.throws(
+    () => loadRelayConfig({ RELAY_MIC_TRANSPORT_GRACE_MS: 'soon' }),
+    /RELAY_MIC_TRANSPORT_GRACE_MS must be a finite number/,
+  );
+
+  const config = loadRelayConfig({
+    RELAY_PARTICIPANT_GRACE_MS: '7500',
+    RELAY_MIC_TRANSPORT_GRACE_MS: '2500',
+  });
+  assert.equal(config.participantGraceMs, 7_500);
+  assert.equal(config.micTransportGraceMs, 2_500);
+});
+
 test('real server entry fails closed on malformed deployment config', async () => {
   await assert.rejects(
     startRelay({ RELAY_CALIBRATION_PROBE_MIN_CORRELATION: 'oops' }),

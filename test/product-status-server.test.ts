@@ -1,23 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, startRelay } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
+const RATE = 48_000;
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_HEARTBEAT_MS: '60000',
 };
 
-test('/readyz and product-status share the formal Robot readiness boundary', async () => {
+function pcm(ms: number) {
+  return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
+}
+
+test('/readyz and product-status treat a completely unarmed room as healthy idle', async () => {
   const server = await startRelay(FAST);
   try {
     const readyResponse = await fetch(server.httpUrl('/readyz'));
-    assert.equal(readyResponse.status, 503);
+    assert.equal(readyResponse.status, 200);
     const readiness = await readyResponse.json() as any;
-    assert.equal(readiness.ready, false);
+    assert.equal(readiness.ready, true);
     assert.equal(readiness.sessionReady, false);
-    assert.ok(readiness.reasons.includes('backing-not-connected'));
-    assert.ok(readiness.reasons.includes('robot-source-not-connected'));
+    assert.deepEqual(readiness.reasons, []);
+    assert.equal(readiness.components.route.mode, 'idle');
     assert.ok(readiness.sessionReasons.includes('mic-not-connected'));
 
     const client = await RelayClient.connect(
@@ -28,18 +33,71 @@ test('/readyz and product-status share the formal Robot readiness boundary', asy
     const product = await client.waitForType('product-status');
 
     assert.equal(product.lifecycle, 'idle');
-    assert.equal(product.health, 'blocked');
-    assert.deepEqual(product.attention, {
-      code: 'robot-audio-unavailable',
-      scope: 'robot',
-      severity: 'critical',
-    });
+    assert.equal(product.health, 'healthy');
+    assert.equal(product.attention, null);
     assert.equal(product.room.participantCount, 1);
     assert.equal(product.room.mic.state, 'free');
     assert.equal(product.room.song.state, 'empty');
     assert.equal(product.actions.canStartTake, false);
     assert.equal(product.actions.canStopTake, false);
     client.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('arming the Robot source makes missing Robot audio a real blocker', async () => {
+  const server = await startRelay(FAST);
+  try {
+    const robot = await RelayClient.connect(server);
+    robot.send({ type: 'robot-source-hello' });
+    await sleep(30);
+
+    const readyResponse = await fetch(server.httpUrl('/readyz'));
+    assert.equal(readyResponse.status, 503);
+    const readiness = await readyResponse.json() as any;
+    assert.equal(readiness.components.route.mode, 'robot');
+    assert.ok(readiness.reasons.includes('backing-not-connected'));
+
+    const observer = await RelayClient.connect(
+      server,
+      '?participant=observer-user-123&name=Quiet%20Cat',
+    );
+    observer.send({ type: 'product-status-request' });
+    const product = await observer.waitForType('product-status');
+    assert.equal(product.lifecycle, 'idle');
+    assert.equal(product.health, 'blocked');
+    assert.deepEqual(product.attention, {
+      code: 'robot-audio-unavailable',
+      scope: 'robot',
+      severity: 'critical',
+    });
+
+    observer.close();
+    robot.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a legacy backing route does not require Robot identity or player delta', async () => {
+  const server = await startRelay(FAST);
+  try {
+    const backing = await RelayClient.connect(server);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+    await backing.waitForType('registered');
+    backing.sendPcm(pcm(40));
+    await sleep(30);
+
+    const readyResponse = await fetch(server.httpUrl('/readyz'));
+    assert.equal(readyResponse.status, 200);
+    const readiness = await readyResponse.json() as any;
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.components.route.mode, 'legacy');
+    assert.equal(readiness.reasons.includes('backing-not-robot'), false);
+    assert.equal(readiness.reasons.includes('robot-source-not-connected'), false);
+
+    backing.close();
   } finally {
     await server.stop();
   }
@@ -52,7 +110,7 @@ test('product-status carries person-facing Mic ownership instead of exposing tra
       server,
       '?participant=singer-user-123&name=Blue%20Fox',
     );
-    singer.send({ type: 'register', role: 'publisher', sampleRate: 48_000 });
+    singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
     const observer = await RelayClient.connect(

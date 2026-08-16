@@ -147,4 +147,32 @@ describe('AudioPacketReceiver', () => {
     assert.deepEqual(output.map((p) => [p.sequence, p.firstSampleIndex]), [[2, 10], [3, 20]]);
     assert.equal(r.stats().lostPackets, 0, 'capture gaps are not transport packet loss');
   });
+
+  test('same capture receiver replacement resumes the sequence and timeline frontier', () => {
+    const generation = 113;
+    const first = receiver({ generation });
+    assert.deepEqual(first.receive(packet(0, 0, { generation }), 1_000).map((p) => p.sequence), [0]);
+    assert.deepEqual(first.receive(packet(1, 2, { generation }), 1_001).map((p) => p.sequence), [1]);
+
+    const replacement = receiver({ generation });
+    assert.deepEqual(
+      replacement.receive(packet(2, 4, { generation }), 1_010).map((p) => p.sequence),
+      [2],
+      'transport replacement must not restart the receiver at sequence zero',
+    );
+    assert.equal(replacement.stats().lostPackets, 0);
+    assert.equal(replacement.stats().replayPackets, 0);
+  });
+
+  test('fresh sequence zero resets a coincidentally reused generation instead of inheriting history', () => {
+    const generation = 114;
+    const first = receiver({ generation });
+    first.receive(packet(0, 0, { generation }), 2_000);
+    first.receive(packet(1, 2, { generation }), 2_001);
+
+    const fresh = receiver({ generation });
+    assert.deepEqual(fresh.receive(packet(0, 0, { generation }), 2_010).map((p) => p.sequence), [0]);
+    assert.equal(fresh.stats().lostPackets, 0);
+    assert.equal(fresh.stats().duplicatePackets, 0);
+  });
 });

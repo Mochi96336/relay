@@ -1,3 +1,4 @@
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const recordButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 const recordingStatus = document.querySelector('#recording-status');
@@ -58,10 +59,10 @@ function shortTakeId(takeId) {
 }
 
 function verdictLabel(verdict) {
-  if (verdict === 'clean') return 'Clean';
-  if (verdict === 'review') return 'Review';
-  if (verdict === 'degraded') return 'Degraded';
-  return 'Ready';
+  if (verdict === 'clean') return t('take.verdict.clean');
+  if (verdict === 'review') return t('take.verdict.review');
+  if (verdict === 'degraded') return t('take.verdict.degraded');
+  return t('take.verdict.ready');
 }
 
 function setReviewOpen(open) {
@@ -117,7 +118,7 @@ function render() {
   }
 
   if (lifecycle === 'finalizing' && take) {
-    recordingStatus.textContent = 'Finishing take…';
+    recordingStatus.textContent = t('take.finishing');
     return;
   }
 
@@ -138,7 +139,7 @@ function render() {
   }
 
   if (lifecycle === 'failed' && take) {
-    recordingStatus.textContent = `Take ${shortTakeId(take.takeId)} failed`;
+    recordingStatus.textContent = t('take.failed', { id: shortTakeId(take.takeId) });
     return;
   }
 
@@ -147,7 +148,7 @@ function render() {
 
 function send(payload) {
   if (socket?.readyState !== WebSocket.OPEN) {
-    commandError = 'Relay is reconnecting. Take was not changed.';
+    commandError = t('take.reconnectingError');
     render();
     return false;
   }
@@ -240,6 +241,8 @@ async function connect() {
   next.send(JSON.stringify({ type: 'take-status-request' }));
   render();
 }
+
+window.addEventListener('relay-locale-changed', render);
 
 window.addEventListener('relay-product-status', (event) => {
   productCanStartTake = event.detail?.actions?.canStartTake === true;

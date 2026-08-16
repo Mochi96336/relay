@@ -5,6 +5,7 @@ import test from 'node:test';
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
+const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/adjust.css', import.meta.url), 'utf8');
 
 test('Adjust separates shared room mix from this-phone Listen and Timing', () => {
@@ -32,7 +33,7 @@ test('Voice Adjust distinguishes live input evidence from the gain setting and s
   assert.equal(app.includes('micPeakDbfs'), true);
   assert.equal(app.includes('recommendedMicGainDb'), true);
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
-  assert.equal(app.includes('Use +${suggested} dB'), true);
+  assert.equal(app.includes("t('adjust.useGain'"), true);
 
   const useSuggestion = app.indexOf("useMicGainSuggestion.addEventListener('click'");
   const calibrate = app.indexOf("calibrateButton.addEventListener('click'");
@@ -49,7 +50,7 @@ test('Voice Adjust distinguishes live input evidence from the gain setting and s
 });
 
 test('Listen defaults audible at 30% and exposes mute rather than an enable action', () => {
-  assert.match(html, /id="listen-toggle"[^>]*>Mute<\/button>/);
+  assert.match(html, /id="listen-toggle"[^>]*data-i18n="listen\.mute"[^>]*>Mute<\/button>/);
   assert.match(html, /id="listen-gain-value"[^>]*>30%<\/output>/);
   assert.match(html, /id="listen-gain"[^>]*value="30"/);
   assert.equal(listen.includes('let userMuted = false;'), true);
@@ -83,7 +84,7 @@ test('Listen keeps browser audio permission separate from the muted transport st
   assert.equal(listen.includes('await context.resume();'), true);
   assert.equal(listen.includes("window.addEventListener('pointerdown', activateFromGesture"), true);
   assert.equal(listen.includes("window.addEventListener('keydown', activateFromGesture"), true);
-  assert.equal(listen.includes('Playing Relay mix on this phone.'), true);
+  assert.equal(listen.includes("t('listen.adjust.playing')"), true);
 });
 
 test('Adjust uses one flat layer and thin rails instead of a card wall', () => {
@@ -99,7 +100,10 @@ test('opening Adjust morphs the performance area instead of overlaying the YouTu
   assert.equal(css.includes('body:has(.adjust-panel[open]) .take-strip'), true);
   assert.equal(css.includes('.adjust-panel[open]'), true);
   assert.equal(css.includes('position: static;'), true);
-  assert.equal(css.includes('content: "Done";'), true);
+  assert.equal(css.includes('content: "Done";'), false,
+    'open/closed labels must come from the locale runtime rather than CSS-generated English');
+  assert.equal(i18n.includes('function applyAdjustSummary()'), true);
+  assert.equal(i18n.includes("t(panel.open ? 'adjust.done' : 'adjust.summary')"), true);
   assert.equal(css.includes('body:has(.adjust-panel[open]) .song-stage'), false,
     'the media field must remain in normal flow and unobscured while Adjust is open');
 });

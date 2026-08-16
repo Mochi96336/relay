@@ -1,3 +1,4 @@
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const title = document.querySelector('#live-state-title');
 const detail = document.querySelector('#live-state-detail');
 const attentionRegion = document.querySelector('#system-attention');
@@ -19,6 +20,7 @@ if (
   const RECONNECT_MS = 1_000;
   let socket = null;
   let reconnectTimer = null;
+  let latestProductStatus = null;
 
   const attentionLabels = {
     'audio-unavailable': 'Room audio unavailable',
@@ -34,31 +36,31 @@ if (
   };
 
   const timingLabels = {
-    idle: 'Idle',
-    calibrating: 'Getting ready',
-    aligned: 'Aligned',
-    fallback: 'Recovering',
-    stale: 'Recovering',
-    clamped: 'Needs attention',
+    idle: () => t('system.idle'),
+    calibrating: () => t('system.timing.gettingReady'),
+    aligned: () => t('system.timing.aligned'),
+    fallback: () => t('system.timing.recovering'),
+    stale: () => t('system.timing.recovering'),
+    clamped: () => t('system.needsAttention'),
   };
 
   const takeLabels = {
-    idle: 'Available',
-    recording: 'Recording',
-    finalizing: 'Finishing',
-    ready: 'Last take ready',
-    failed: 'Needs attention',
+    idle: () => t('system.take.available'),
+    recording: () => t('system.take.recording'),
+    finalizing: () => t('system.take.finishing'),
+    ready: () => t('system.take.lastReady'),
+    failed: () => t('system.needsAttention'),
   };
 
   function microphoneFailureCopy(rawMessage) {
     const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
     if (/https/i.test(message)) {
-      return 'Open Relay over HTTPS so this phone can use its microphone.';
+      return t('voice.httpsRequired');
     }
     if (/permission|notallowed|denied/i.test(message)) {
-      return 'Allow microphone access in your browser, then try again.';
+      return t('voice.permissionRequired');
     }
-    return message || 'Check microphone access on this phone, then try again.';
+    return message || t('voice.checkAccess');
   }
 
   function wsUrl() {
@@ -99,17 +101,17 @@ if (
     if (status.lifecycle === 'preparing') {
       if (selfOwner && status.timing?.state === 'calibrating') {
         return {
-          title: 'Getting ready…',
-          detail: 'Keep this phone speaker audible for a moment.',
+          title: t('voice.gettingReady'),
+          detail: t('voice.keepSpeakerAudible'),
         };
       }
       if (song.state === 'handoff') {
         return {
-          title: 'Getting the song ready…',
-          detail: selfOwner ? 'Playback is moving to this phone.' : 'Playback is changing phones.',
+          title: t('voice.songPreparing'),
+          detail: selfOwner ? t('voice.playbackMovingHere') : t('voice.playbackChangingPhones'),
         };
       }
-      return { title: 'Getting ready…', detail: '' };
+      return { title: t('voice.gettingReady'), detail: '' };
     }
 
     if (mic.state === 'free') {
@@ -117,9 +119,9 @@ if (
         return { title: 'Mic is free', detail: 'Take the mic, or add a song for backing.' };
       }
       if (status.lifecycle === 'ready') {
-        return { title: 'Ready when you are', detail: 'Take the mic when you want to sing.' };
+        return { title: t('voice.ready'), detail: t('voice.takeMicWhenReady') };
       }
-      return { title: 'Mic is free', detail: '' };
+      return { title: t('voice.micFree'), detail: '' };
     }
 
     if (selfOwner) {
@@ -130,10 +132,10 @@ if (
         return { title: 'Mic audio interrupted', detail: 'The media path is connected, but audio stopped arriving.' };
       }
       if (mic.state === 'reconnecting') {
-        return { title: 'Reconnecting your mic…', detail: 'Relay is holding your place for a moment.' };
+        return { title: t('voice.reconnectingYours'), detail: t('voice.holdingPlace') };
       }
       if (status.timing?.state === 'fallback' || status.timing?.state === 'stale') {
-        return { title: 'You’re live', detail: 'Timing is recovering while you keep singing.' };
+        return { title: t('voice.live'), detail: t('voice.timingRecovering') };
       }
       if (song.state === 'playing') {
         return { title: 'You’re live', detail: 'Use headphones so the song stays out of your mic.' };
@@ -149,9 +151,9 @@ if (
       return { title: owner, detail: 'microphone audio interrupted' };
     }
     if (mic.state === 'reconnecting') {
-      return { title: owner, detail: 'microphone reconnecting…' };
+      return { title: owner, detail: t('voice.reconnecting') };
     }
-    return { title: owner, detail: 'is singing' };
+    return { title: owner, detail: t('voice.singing') };
   }
 
   function renderSystem(status) {
@@ -161,14 +163,14 @@ if (
     const songState = status.room?.song?.state;
     const micState = status.room?.mic?.state;
 
-    systemRelay.textContent = socket?.readyState === WebSocket.OPEN ? 'Connected' : 'Reconnecting';
+    systemRelay.textContent = socket?.readyState === WebSocket.OPEN ? t('system.connected') : t('system.reconnecting');
     const people = Number(status.room?.participantCount) || 0;
-    systemPhones.textContent = `${people} ${people === 1 ? 'person' : 'people'}`;
+    systemPhones.textContent = t('system.people', { count: people, label: t(people === 1 ? 'system.person' : 'system.peoplePlural') });
     systemRobot.textContent = robotProblem
-      ? 'Needs attention'
+      ? t('system.needsAttention')
       : status.lifecycle === 'idle' && songState === 'empty'
-        ? 'Idle'
-        : 'OK';
+        ? t('system.idle')
+        : t('system.ok');
     systemAudio.textContent = audioProblem
       ? 'Needs attention'
       : songState === 'playing' || micState === 'live'
@@ -193,7 +195,7 @@ if (
       attentionCopy.textContent = '';
       return;
     }
-    attentionCopy.textContent = attentionLabels[attention.code] ?? 'System needs attention';
+    attentionCopy.textContent = attentionLabels[attention.code]?.() ?? t('system.attention');
     attentionRegion.hidden = false;
     attentionRegion.dataset.scope = attention.scope || '';
     attentionRegion.dataset.severity = attention.severity || 'warning';
@@ -201,6 +203,7 @@ if (
 
   function render(status) {
     if (!status || status.type !== 'product-status') return;
+    latestProductStatus = status;
     const copy = liveCopy(status);
     title.textContent = copy.title;
     detail.textContent = copy.detail;
@@ -256,7 +259,7 @@ if (
     next.addEventListener('close', () => {
       if (socket !== next) return;
       socket = null;
-      systemRelay.textContent = 'Reconnecting';
+      systemRelay.textContent = t('system.reconnecting');
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -267,7 +270,7 @@ if (
   }
 
   window.addEventListener('relay-microphone-start-failed', (event) => {
-    title.textContent = 'Microphone unavailable';
+    title.textContent = t('voice.micUnavailable');
     detail.textContent = microphoneFailureCopy(event.detail?.message);
     document.body.dataset.selfMic = 'off';
   });
@@ -275,6 +278,10 @@ if (
   attentionButton.addEventListener('click', () => {
     systemPanel.open = true;
     systemPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+
+  window.addEventListener('relay-locale-changed', () => {
+    if (latestProductStatus) render(latestProductStatus);
   });
 
   connect().catch(scheduleReconnect);

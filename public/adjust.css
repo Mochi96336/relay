@@ -15,10 +15,6 @@ body:has(.adjust-panel[open]) .live-actions {
 }
 
 .adjust-panel > summary {
-  font-size: 0;
-}
-.adjust-panel > summary::after {
-  content: "Adjust";
   font-size: 13px;
 }
 .adjust-panel[open] {
@@ -30,9 +26,6 @@ body:has(.adjust-panel[open]) .live-actions {
   position: absolute;
   top: 18px;
   right: 0;
-}
-.adjust-panel[open] > summary::after {
-  content: "Done";
 }
 
 .adjust-sheet {

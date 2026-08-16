@@ -1,3 +1,4 @@
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const systemPanel = document.querySelector('#system-panel');
 const diagnosticsPanel = document.querySelector('#diagnostics-panel');
 const attentionButton = document.querySelector('#attention-link');
@@ -72,18 +73,18 @@ if (
   function micSummary(product) {
     const mic = product?.room?.mic;
     if (!mic) return '—';
-    if (mic.state === 'free') return 'Mic free';
-    const owner = mic.ownerNickname || 'Someone';
-    if (mic.state === 'reconnecting') return `${owner} · reconnecting`;
-    return `${owner} · live`;
+    if (mic.state === 'free') return t('system.micFree');
+    const owner = mic.ownerNickname || t('voice.someone');
+    if (mic.state === 'reconnecting') return t('system.micOwnerReconnecting', { name: owner });
+    return t('system.micOwner', { name: owner });
   }
 
   function songSummary(product) {
     const song = product?.room?.song;
     if (!song) return '—';
-    if (song.state === 'empty') return 'No song';
-    if (song.state === 'handoff') return 'Changing phones';
-    if (song.state === 'unavailable') return 'Unavailable';
+    if (song.state === 'empty') return t('system.noSong');
+    if (song.state === 'handoff') return t('system.songChangingPhones');
+    if (song.state === 'unavailable') return t('system.unavailable');
     return titleCase(song.state);
   }
 
@@ -91,48 +92,48 @@ if (
     const product = latestProduct;
     if (!product) return;
 
-    systemDetails.relay.textContent = `${titleCase(product.health)} · ${titleCase(product.lifecycle)} room state.`;
+    systemDetails.relay.textContent = t('system.relayState', { health: titleCase(product.health), lifecycle: titleCase(product.lifecycle) });
     const people = Number(product.room?.participantCount) || 0;
-    systemDetails.phones.textContent = `${people} ${people === 1 ? 'person' : 'people'} online · ${micSummary(product)}.`;
+    systemDetails.phones.textContent = t('system.phonesState', { count: people, label: t(people === 1 ? 'system.person' : 'system.peoplePlural'), mic: micSummary(product) });
 
     const audioAttention = product.attention?.scope === 'audio';
     const songAttention = product.attention?.scope === 'song';
     if (audioAttention) {
-      systemValues.audio.textContent = 'Needs attention';
-      systemDetails.audio.textContent = 'The room audio path is unavailable. Open Technical details for backing evidence.';
+      systemValues.audio.textContent = t('system.needsAttention');
+      systemDetails.audio.textContent = t('system.audioUnavailableDetail');
     } else if (songAttention) {
-      systemValues.audio.textContent = 'Needs attention';
-      systemDetails.audio.textContent = 'Song playback needs attention. Open Technical details for playback evidence.';
+      systemValues.audio.textContent = t('system.needsAttention');
+      systemDetails.audio.textContent = t('system.songUnavailableDetail');
     } else {
-      systemDetails.audio.textContent = `${songSummary(product)} · ${micSummary(product)}.`;
+      systemDetails.audio.textContent = t('system.audioState', { song: songSummary(product), mic: micSummary(product) });
     }
 
     systemDetails.timing.textContent = product.timing?.state === 'idle'
-      ? 'Timing stays out of the way until a performance needs it.'
-      : `${titleCase(product.timing?.state)} timing state for the active performance.`;
+      ? t('system.timingIdleDetail')
+      : t('system.timingState', { state: titleCase(product.timing?.state) });
 
     const take = product.take ?? {};
     systemDetails.recording.textContent = take.lifecycle === 'ready'
-      ? `Last take ${take.verdict ? `· ${titleCase(take.verdict)}` : 'is ready'}.`
-      : `${titleCase(take.lifecycle)} recording state.`;
+      ? t('system.lastTakeState', { verdict: take.verdict ? `· ${titleCase(take.verdict)}` : t('system.ready') })
+      : t('system.recordingState', { state: titleCase(take.lifecycle) });
 
     const route = latestReadiness?.components?.route?.mode;
     const robotAttention = product.attention?.scope === 'robot';
     if (robotAttention) {
-      systemValues.robot.textContent = 'Needs attention';
-      systemDetails.robot.textContent = 'The active Robot audio path has a problem. Open Technical details for evidence.';
+      systemValues.robot.textContent = t('system.needsAttention');
+      systemDetails.robot.textContent = t('system.robotProblemDetail');
     } else if (route === 'idle') {
-      systemValues.robot.textContent = 'Idle';
-      systemDetails.robot.textContent = 'The Robot route is not armed. Missing Robot audio is expected in this state.';
+      systemValues.robot.textContent = t('system.idle');
+      systemDetails.robot.textContent = t('system.robotIdleDetail');
     } else if (route === 'legacy') {
-      systemValues.robot.textContent = 'Legacy route';
-      systemDetails.robot.textContent = 'This session is using the compatibility backing route rather than the formal Robot route.';
+      systemValues.robot.textContent = t('system.robotLegacy');
+      systemDetails.robot.textContent = t('system.robotLegacyDetail');
     } else if (route === 'robot') {
-      systemValues.robot.textContent = 'Ready';
-      systemDetails.robot.textContent = 'The formal Robot source and backing route are armed.';
+      systemValues.robot.textContent = t('system.ready');
+      systemDetails.robot.textContent = t('system.robotReadyDetail');
     } else {
-      systemValues.robot.textContent = product.lifecycle === 'idle' ? 'Idle' : 'OK';
-      systemDetails.robot.textContent = 'No current Robot issue is surfaced by the product state.';
+      systemValues.robot.textContent = product.lifecycle === 'idle' ? t('system.idle') : t('system.ok');
+      systemDetails.robot.textContent = t('system.robotNoIssue');
     }
 
     document.querySelectorAll('.system-item').forEach((item) => {
@@ -394,6 +395,8 @@ if (
     }
     setTimeout(() => { copyButton.textContent = 'Copy diagnostics'; }, 1_400);
   });
+
+  window.addEventListener('relay-locale-changed', renderL2);
 
   window.addEventListener('relay-product-status', (event) => {
     latestProduct = event.detail;

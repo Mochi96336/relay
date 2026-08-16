@@ -1,3 +1,4 @@
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
 const gainValue = document.querySelector('#listen-gain-value');
@@ -128,13 +129,13 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     } else if (forcedReason === 'playback') {
       adjustState.textContent = 'Muted while this phone plays the room song. Sound restores automatically afterward.';
     } else if (userMuted) {
-      adjustState.textContent = 'Muted on this phone.';
+      adjustState.textContent = t('listen.adjust.userMuted');
     } else if (!audioContext) {
-      adjustState.textContent = 'Sound is on by default after your first interaction.';
+      adjustState.textContent = t('listen.adjust.ready');
     } else if (transportEnabled) {
-      adjustState.textContent = 'Playing Relay mix on this phone.';
+      adjustState.textContent = t('listen.adjust.playing');
     } else {
-      adjustState.textContent = copy || 'Connecting Relay audio…';
+      adjustState.textContent = copy || t('listen.connectingAudio');
     }
   }
 
@@ -161,7 +162,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       reconnectTimer = null;
       connect().catch(() => {
         if (!transportEnabled || effectiveMuted()) return;
-        render('Reconnecting…');
+        render(t('listen.reconnecting'));
         scheduleReconnect();
       });
     }, RECONNECT_MS);
@@ -207,7 +208,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       if (socket !== next) return;
       socket = null;
       if (!transportEnabled || effectiveMuted()) return;
-      render('Reconnecting…');
+      render(t('listen.reconnecting'));
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -242,7 +243,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       });
       node.port.onmessage = (event) => {
         if (!transportEnabled || effectiveMuted()) return;
-        if (event.data?.type === 'buffering') render('Buffering…');
+        if (event.data?.type === 'buffering') render(t('listen.buffering'));
         if (event.data?.type === 'playing') render('');
       };
 
@@ -275,7 +276,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       return;
     }
     if (!audioContext || !playbackNode || !gainNode) {
-      render(copy || 'Sound starts after your first interaction.');
+      render(copy || t('listen.firstInteraction'));
       return;
     }
     if (transportEnabled) {
@@ -284,20 +285,20 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     }
 
     transportEnabled = true;
-    render(copy || 'Connecting…');
+    render(copy || t('people.connecting'));
     connect().catch(() => {
       if (!transportEnabled || effectiveMuted()) return;
-      render('Reconnecting…');
+      render(t('listen.reconnecting'));
       scheduleReconnect();
     });
   }
 
-  function forceMicMute(copy = 'Muted while the microphone is active.') {
+  function forceMicMute(copy = t('listen.micActive')) {
     micForcedMuted = true;
     reconcile(copy);
   }
 
-  function restoreAfterMic(copy = 'Listening resumed.') {
+  function restoreAfterMic(copy = t('listen.resumed')) {
     micForcedMuted = false;
     if (playbackForcedMuted) {
       reconcile('Muted while this phone plays the room song.');
@@ -338,7 +339,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       reconcile();
     } catch (error) {
       console.error(error);
-      render('Tap Mute, then Unmute to retry audio.');
+      render(t('listen.retry'));
     }
   }
 
@@ -351,7 +352,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       } catch (error) {
         console.error(error);
         userMuted = true;
-        render('Could not start audio on this phone.');
+        render(t('listen.startFailed'));
         return;
       }
     }
@@ -365,12 +366,12 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   // the user's own mute preference when Mic or Song ownership comes and goes.
   publisherButton.addEventListener('click', () => {
     if (publisherButton.dataset.presenceLabel !== 'takeover') {
-      forceMicMute('Muted while the microphone starts.');
+      forceMicMute(t('listen.micStarting'));
     }
   }, { capture: true });
-  takeoverButton.addEventListener('click', () => forceMicMute('Muted while the microphone handoff starts.'), { capture: true });
-  window.addEventListener('relay-request-microphone', () => forceMicMute('Muted while the microphone handoff starts.'));
-  window.addEventListener('relay-microphone-started', () => forceMicMute('Muted while this phone has the mic.'));
+  takeoverButton.addEventListener('click', () => forceMicMute(t('listen.handoffStarting')), { capture: true });
+  window.addEventListener('relay-request-microphone', () => forceMicMute(t('listen.handoffStarting')));
+  window.addEventListener('relay-microphone-started', () => forceMicMute(t('listen.micOwned')));
   window.addEventListener('relay-microphone-ended', () => restoreAfterMic());
   window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic('Microphone did not start. Listening resumed.'));
   window.addEventListener('relay:playback-view', (event) => {
@@ -395,6 +396,8 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     }
   }, { once: true });
 
+  window.addEventListener('relay-locale-changed', () => render());
+
   updateGain();
-  render('Sound starts after your first interaction.');
+  render(t('listen.firstInteraction'));
 }

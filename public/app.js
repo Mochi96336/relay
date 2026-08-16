@@ -1,4 +1,5 @@
 import { PreferredAudioTransport } from './audio-transport.js';
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
 const publisherButton = document.querySelector('#start-publisher');
@@ -60,14 +61,14 @@ function renderGainAdvice() {
     micInputValue.value = `${peak.toFixed(1)} dBFS`;
   } else {
     micInputMeter.style.setProperty('--input-level', '0%');
-    micInputValue.value = 'Listening…';
+    micInputValue.value = t('adjust.listening');
   }
 
   const current = Math.round(Number(micGain.value) || 0);
   if (!Number.isFinite(recommended)) {
     micGainRecommendationMarker.hidden = true;
-    micGainRecommendation.textContent = 'Sing normally for a moment.';
-    micGainAdvice.textContent = 'Relay will suggest a stable gain after it has enough voice.';
+    micGainRecommendation.textContent = t('adjust.singNormally');
+    micGainAdvice.textContent = t('adjust.suggestionHelp');
     useMicGainSuggestion.hidden = true;
     return;
   }
@@ -76,19 +77,19 @@ function renderGainAdvice() {
   const markerPercent = (suggested / 36) * 100;
   micGainRecommendationMarker.hidden = false;
   micGainRecommendationMarker.style.left = `${markerPercent}%`;
-  micGainRecommendation.textContent = `Recommended +${suggested} dB`;
+  micGainRecommendation.textContent = t('adjust.recommendedGain', { gain: suggested });
 
   const off = suggested - current;
   micGainAdvice.textContent = Math.abs(off) <= 3
-    ? 'Sounds good'
+    ? t('adjust.soundsGood')
     : off < 0
-      ? `${-off} dB above suggestion`
-      : `${off} dB below suggestion`;
+      ? t('adjust.aboveSuggestion', { amount: -off })
+      : t('adjust.belowSuggestion', { amount: off });
 
   const canApply = publisherActive && Math.abs(off) > 3;
   useMicGainSuggestion.hidden = !canApply;
   useMicGainSuggestion.disabled = !publisherActive;
-  useMicGainSuggestion.textContent = `Use +${suggested} dB`;
+  useMicGainSuggestion.textContent = t('adjust.useGain', { gain: suggested });
 }
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
@@ -274,7 +275,7 @@ function updateCalibrateButton() {
   }
 
   if (!liveMixActive) {
-    calibrateStatus.textContent = '播放開始後會自動校正；覺得對不上可以在這裡手動重跑。';
+    calibrateStatus.textContent = t('adjust.calibration.auto');
     return;
   }
 
@@ -287,29 +288,29 @@ function updateCalibrateButton() {
     // provisionalNote); that does not end the run, it just means singing does
     // not have to wait on it.
     const rounds = need > 1
-      ? ` · 已一致 ${Number(latestCalibration.windowsAgreed) || 0}/${need} 次`
+      ? t('adjust.calibration.rounds', { agreed: Number(latestCalibration.windowsAgreed) || 0, need })
       : '';
     const provisionalNote = latestCalibration.provisional
-      ? ` · 已套用暫定值 ${signed(latestCalibration.micLagMs, ' ms')}`
+      ? t('adjust.calibration.provisional', { lag: signed(latestCalibration.micLagMs, ' ms') })
       : '';
-    calibrateStatus.textContent = `校正中 ${progress}%${rounds}${provisionalNote} · 這幾秒先不要唱，讓麥克風收到伴奏。`;
+    calibrateStatus.textContent = t('adjust.calibration.collecting', { progress, rounds, provisional: provisionalNote });
     return;
   }
 
   if (latestCalibration?.state === 'complete') {
-    const stale = latestCalibration.calibrationStale ? ' · 設定已改變，建議重跑' : '';
-    calibrateStatus.textContent = `已校正 ${signed(latestCalibration.micLagMs, ' ms')}${stale}`;
+    const stale = latestCalibration.calibrationStale ? t('adjust.calibration.stale') : '';
+    calibrateStatus.textContent = t('adjust.calibration.complete', { lag: signed(latestCalibration.micLagMs, ' ms'), stale });
     return;
   }
 
   if (latestCalibration?.state === 'failed') {
     calibrateStatus.textContent = latestCalibration.automatic
-      ? '等待可用的音訊中，會自動重試。'
-      : `校正未成功：${latestCalibration.error ?? '訊號不足'}`;
+      ? t('adjust.calibration.autoRetry')
+      : t('adjust.calibration.failed', { error: latestCalibration.error ?? t('adjust.calibration.noSignal') });
     return;
   }
 
-  calibrateStatus.textContent = '尚未校正 · 目前用網路估計值。';
+  calibrateStatus.textContent = t('adjust.calibration.fallback');
 }
 
 function wsUrl() {
@@ -815,6 +816,11 @@ useMicGainSuggestion.addEventListener('click', () => {
   micGain.value = String(Math.max(0, Math.min(36, Math.round(recommended))));
   markSliderTouched(micGain);
   sendMixSettings();
+});
+
+window.addEventListener('relay-locale-changed', () => {
+  renderGainAdvice();
+  updateCalibrateButton();
 });
 
 calibrateButton.addEventListener('click', () => {

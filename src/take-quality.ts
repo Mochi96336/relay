@@ -1,4 +1,4 @@
-import type { MixHealth } from './audio-session.js';
+import type { MixFrameEvidence } from './audio-session.js';
 
 export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v1' as const;
 
@@ -21,8 +21,6 @@ export type TakeQualityEventKind =
 export type TakeQualityEventCounts = Record<TakeQualityEventKind, number>;
 
 export type TakeQualityFrameState = {
-  micAvailable: boolean;
-  backingAvailable: boolean;
   timingMode: 'network-estimate' | 'acoustic-calibration';
   calibrationStale: boolean;
   alignmentClamped: boolean;
@@ -253,16 +251,10 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
 }
 
 /**
- * Binds frame-level mixer evidence and higher-layer timing/transport state to
- * exactly one Take.
- *
- * AudioSession's epoch counters remain diagnostics. Take quality instead uses
- * `MixHealth.lastMixedFrame`, which describes exactly the source ranges and
- * processing applied to the PCM frame the WAV writer just accepted. This keeps
- * holes detected before Start, future holes detected before Stop, partial
- * starvation and buffered reconnects attributed to the WAV that actually
- * contains them rather than to the wall-clock moment an engineering counter
- * happened to change.
+ * Binds exact mixer-frame facts and higher-layer timing/transport context to one
+ * Take. AudioSession emits the evidence beside the PCM frame it describes, so
+ * the tracker never has to infer WAV damage from epoch counters or transport
+ * liveness.
  */
 export class TakeQualityTracker {
   private recordedSamples = 0;
@@ -283,16 +275,10 @@ export class TakeQualityTracker {
   private robotDeltaMissingSamples = 0;
   private readonly events = emptyEvents();
 
-  constructor(private readonly options: {
-    sampleRate: number;
-    frameMs: number;
-    baselineHealth: MixHealth;
-  }) {}
+  constructor(private readonly options: { sampleRate: number }) {}
 
-  observeFrame(sampleCount: number, state: TakeQualityFrameState, health: MixHealth) {
+  observeFrame(sampleCount: number, state: TakeQualityFrameState, audio: MixFrameEvidence) {
     if (!Number.isSafeInteger(sampleCount) || sampleCount <= 0) return;
-    const audio = health.lastMixedFrame;
-    if (!audio) throw new Error('Take frame is missing exact AudioSession evidence.');
 
     this.recordedSamples += sampleCount;
     this.micGapSamples += audio.micGapSamples;

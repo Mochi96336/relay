@@ -3,6 +3,7 @@ const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
 const publisherButton = document.querySelector('#start-publisher');
+const releaseButton = document.querySelector('#release-mic');
 const status = document.querySelector('#status');
 const details = document.querySelector('#details');
 const micGain = document.querySelector('#mic-gain');
@@ -202,9 +203,12 @@ const COMMAND_LABELS = {
 
 function setPublisherActive(active) {
   publisherActive = Boolean(active);
-  // listen.js only needs to know whether this phone is the singer phone.
-  // Keep the old global shape temporarily while the Mic controller remains in app.js.
+  // listen.js / recorder.js consume the legacy role, while Presence consumes
+  // the explicit local lifecycle event so Release never depends on a server
+  // ownership snapshot arriving first.
   window.relayActiveRole = publisherActive ? 'publisher' : null;
+  releaseButton.hidden = !publisherActive;
+  dispatchRelayEvent('relay-microphone-local-state', { active: publisherActive });
 }
 
 function signed(value, suffix) {
@@ -428,7 +432,9 @@ function handleServerMessage(message) {
     const owner = message.owner ?? null;
     setStatus('Microphone is in use', owner ? `${owner.nickname} has the mic.` : 'Another participant has the mic.');
     dispatchRelayEvent('relay-mic-busy', { owner });
-    stop(false, { releaseMic: false }).catch(console.error);
+    stop(false, { releaseMic: false })
+      .then(() => dispatchRelayEvent('relay-microphone-ended', { reason: 'busy' }))
+      .catch(console.error);
     return;
   }
 
@@ -436,7 +442,9 @@ function handleServerMessage(message) {
     const owner = message.owner ?? null;
     setStatus('Takeover changed', owner ? `${owner.nickname} has the mic now.` : 'The mic state changed.');
     dispatchRelayEvent('relay-mic-takeover-rejected', { owner, reason: message.reason });
-    stop(false, { releaseMic: false }).catch(console.error);
+    stop(false, { releaseMic: false })
+      .then(() => dispatchRelayEvent('relay-microphone-ended', { reason: 'takeover-rejected' }))
+      .catch(console.error);
     return;
   }
 
@@ -666,7 +674,10 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   track?.addEventListener('ended', () => {
     if (!publisherActive) return;
     stop(false, { releaseMic: true })
-      .then(() => setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.'))
+      .then(() => {
+        dispatchRelayEvent('relay-microphone-ended', { reason: 'input-ended' });
+        setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.');
+      })
       .catch(console.error);
   });
 
@@ -800,6 +811,16 @@ window.addEventListener('relay-request-microphone', (event) => {
     ? event.detail.takeoverExpectedOwnerId
     : null;
   requestPublisherStart(expectedOwnerId).catch(console.error);
+});
+
+window.addEventListener('relay-release-microphone', () => {
+  if (!publisherActive) return;
+  stop(false, { releaseMic: true })
+    .then(() => {
+      dispatchRelayEvent('relay-microphone-ended', { reason: 'released' });
+      setStatus('Microphone released', 'This phone is no longer using the microphone.');
+    })
+    .catch(console.error);
 });
 
 for (const slider of [micGain, songLevel]) {

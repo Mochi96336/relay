@@ -7,6 +7,10 @@ const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'ut
 const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
 const liveStateCss = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url), 'utf8');
+const songSurface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
+const songSurfaceCss = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
+const youtube = readFileSync(new URL('../public/youtube.js', import.meta.url), 'utf8');
+const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 
 function position(fragment: string) {
   const index = html.indexOf(fragment);
@@ -18,6 +22,7 @@ test('phone home is the Live surface, not the old prototype dashboard', () => {
   assert.match(html, /class="live-shell"/);
   assert.doesNotMatch(html, /RELAY \/ AUDIO PROTOTYPE/);
   assert.doesNotMatch(html, /Phone mic → mixer/);
+  assert.doesNotMatch(html, />DJ<|>Host</);
 
   for (const id of [
     'participant-count',
@@ -39,6 +44,37 @@ test('YouTube remains a real unobscured player surface ahead of Relay performanc
   const take = position('class="take-strip"');
   assert.ok(player < voice);
   assert.ok(voice < take);
+});
+
+test('Song surface separates the playback holder from room observers without inventing a social role', () => {
+  assert.match(html, /href="\/song-surface\.css"/);
+  assert.match(html, /src="\/song-surface\.js"/);
+  assert.match(html, /id="song-observer"/);
+  assert.match(html, /id="song-device-note"/);
+  assert.match(html, /id="change-youtube"/);
+
+  assert.match(songSurface, /Playing from this phone/);
+  assert.match(songSurface, /Preparing on this phone/);
+  assert.match(songSurface, /Playing from another phone/);
+  assert.match(songSurface, /relay:playback-view/);
+  assert.match(songSurfaceCss, /data-playback-role="observer"/);
+});
+
+test('Song authority role comes from exact playback transport state, not participant presence', () => {
+  assert.match(youtubeSync, /import \{ resolvePlaybackRole \} from '\.\/song-role\.js'/);
+  assert.match(youtubeSync, /transportId/);
+  assert.match(youtubeSync, /playbackGeneration/);
+  assert.match(youtubeSync, /relay:playback-view/);
+  assert.doesNotMatch(songSurface, /micOwnerId|participantCount/);
+});
+
+test('observer Song surface is transport-read-only until this page becomes holder or exact handoff target', () => {
+  assert.match(youtube, /playbackRole === 'observer'/);
+  assert.match(youtube, /source: 'observer-quiet'/);
+  assert.match(youtube, /player\.pauseVideo\(\)/);
+  assert.match(youtube, /Take the mic on this phone before changing the song\./);
+  assert.match(songSurface, /playerShell\.hidden = observerMode/);
+  assert.match(songSurface, /observer\.hidden = !observerMode/);
 });
 
 test('engineering source and click-sync controls live below System technical details', () => {

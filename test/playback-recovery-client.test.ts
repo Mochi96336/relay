@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const youtube = readFileSync(new URL('../public/youtube.js', import.meta.url), 'utf8');
 const surface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
+const surfaceCss = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
 
 test('observer no longer vetoes a room-song recovery command on the client', () => {
   const requestStart = youtube.indexOf('function requestRoomSongCommand');
@@ -30,9 +31,14 @@ test('stale observer gets both resume and replace-song recovery affordances', ()
   assert.match(surface, /id = 'recover-youtube'/);
   assert.match(surface, /relay:recover-room-song/);
   assert.match(surface, /role === 'observer' && !recoverable/,
-    'only a healthy observer should have the song form hidden');
+    'only a healthy observer should have the song form hidden by DOM state');
   assert.match(surface, /在這支手機繼續播放/);
   assert.match(surface, /播放主控已失聯/);
+
+  assert.match(surfaceCss, /data-playback-health="disconnected"[^\n]*\.youtube-form/);
+  assert.match(surfaceCss, /data-playback-health="stale"[^\n]*\.youtube-form/);
+  assert.match(surfaceCss, /display: grid;/,
+    'CSS must not keep the recovery form hidden after JS makes it available');
 });
 
 test('recovery button uses the same server-authorized room command path as normal playback actions', () => {

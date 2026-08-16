@@ -17,20 +17,22 @@
 }
 
 .song-stage {
-  padding-top: clamp(22px, 4vh, 38px);
+  padding-top: clamp(20px, 3.5vh, 32px);
 }
 
+/* The playback holder keeps a real YouTube surface. Never collapse the iframe
+   into a fake mini-player: the embedded player remains visible and usable. */
 .youtube-player-shell {
   width: calc(100% + 12px);
   margin-left: -6px;
-  min-height: 0;
+  min-height: 200px;
   border-color: rgba(255, 255, 255, .07);
   border-radius: 18px;
 }
 
 .youtube-player-shell > div,
 .youtube-player-shell iframe {
-  min-height: 0;
+  min-height: 200px;
 }
 
 .youtube-readout {
@@ -47,14 +49,64 @@
   color: #7f8289;
 }
 
+/* Performance is one stage: room Mic evidence, ownership, and Take all belong
+   to the same task instead of reading as separate product sections. */
 .performance-stage {
-  padding-top: clamp(32px, 5.5vh, 54px);
+  padding-top: clamp(28px, 4.5vh, 44px);
 }
 
-.voice-ribbon {
-  height: 52px;
-  margin: 7px 0 14px;
-  gap: 6px;
+.performance-stage > .section-label {
+  margin-bottom: 10px;
+}
+
+.voice-input-evidence {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 18px;
+}
+
+.evidence-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  color: #767981;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.evidence-heading output {
+  color: #a6a8ae;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* app.js drives --input-level from the server's measured micPeakDbfs. This is
+   evidence, not decorative state animation. */
+.voice-input-meter {
+  --input-level: 0%;
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #27292e;
+}
+
+.voice-input-meter::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--input-level);
+  border-radius: inherit;
+  background: #d8d6d1;
+  transition: width 90ms linear;
+}
+
+.voice-copy {
+  min-height: 0;
 }
 
 .voice-copy strong {
@@ -67,12 +119,13 @@
 
 .mic-actions {
   min-height: 38px;
-  margin-top: 20px;
+  margin-top: 18px;
 }
 
 .take-strip {
-  margin-top: 16px;
-  padding-top: 0;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #202227;
   text-align: left;
 }
 
@@ -99,11 +152,11 @@
   text-align: left;
 }
 
-/* Keep the controls low in the composition, but do not let flex auto-margin
-   turn the space after Take into an accidental empty panel on tall phones. */
+/* Listen and Adjust are the persistent local-control horizon. They follow the
+   performance task closely instead of floating at the bottom of a long page. */
 .live-actions {
-  margin-top: clamp(48px, 6vh, 64px);
-  padding-top: 18px;
+  margin-top: 28px;
+  padding-top: 14px;
 }
 
 .system-panel {
@@ -120,16 +173,16 @@
 }
 
 @media (max-width: 420px) {
-  .song-stage { padding-top: 20px; }
-  .performance-stage { padding-top: 30px; }
+  .song-stage { padding-top: 18px; }
+  .performance-stage { padding-top: 26px; }
 }
 
 @media (max-height: 760px) {
   .live-shell { padding-top: 14px; }
-  .song-stage { padding-top: 16px; }
-  .performance-stage { padding-top: 26px; }
-  .voice-ribbon { height: 42px; margin-bottom: 10px; }
-  .mic-actions { margin-top: 15px; }
-  .take-strip { margin-top: 10px; }
-  .live-actions { margin-top: 36px; padding-top: 13px; }
+  .song-stage { padding-top: 14px; }
+  .performance-stage { padding-top: 22px; }
+  .voice-input-evidence { margin-bottom: 14px; }
+  .mic-actions { margin-top: 14px; }
+  .take-strip { margin-top: 14px; padding-top: 13px; }
+  .live-actions { margin-top: 24px; padding-top: 12px; }
 }

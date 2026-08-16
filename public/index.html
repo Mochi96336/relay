@@ -69,12 +69,18 @@
         <p id="youtube-note" class="microcopy" data-i18n="song.noteInitial">Paste a song, then use the YouTube player normally.</p>
       </section>
 
-      <section class="performance-stage" aria-live="polite">
+      <section class="performance-stage">
         <div class="section-label" data-i18n="voice.label">Voice</div>
-        <div class="voice-ribbon" aria-hidden="true">
-          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+
+        <div class="voice-input-evidence" aria-live="off">
+          <div class="evidence-heading">
+            <span data-i18n="adjust.input">Input</span>
+            <output id="mic-input-value" data-i18n="adjust.listening">Listening…</output>
+          </div>
+          <div id="mic-input-meter" class="voice-input-meter" aria-hidden="true"></div>
         </div>
-        <div class="voice-copy">
+
+        <div class="voice-copy" aria-live="polite">
           <strong id="live-state-title" data-i18n="voice.connecting">Connecting…</strong>
           <span id="live-state-detail"></span>
         </div>
@@ -91,16 +97,16 @@
             <button id="cancel-takeover" class="text-action" type="button" data-i18n="mic.cancel">Cancel</button>
           </div>
         </div>
-      </section>
 
-      <section class="take-strip" aria-label="Take recording" data-i18n-aria-label="take.aria">
-        <div class="take-actions">
-          <button id="start-recording" class="record-action" type="button" data-i18n="take.record">Record take</button>
-          <button id="stop-recording" class="record-action recording" type="button" disabled data-i18n="take.stop">Stop</button>
-        </div>
-        <p id="recording-status" class="microcopy"></p>
-        <audio id="recording-player" controls hidden></audio>
-        <a id="download-recording" class="take-link" hidden>Last take</a>
+        <section class="take-strip" aria-label="Take recording" data-i18n-aria-label="take.aria">
+          <div class="take-actions">
+            <button id="start-recording" class="record-action" type="button" data-i18n="take.record">Record take</button>
+            <button id="stop-recording" class="record-action recording" type="button" disabled data-i18n="take.stop">Stop</button>
+          </div>
+          <p id="recording-status" class="microcopy"></p>
+          <audio id="recording-player" controls hidden></audio>
+          <a id="download-recording" class="take-link" hidden>Last take</a>
+        </section>
       </section>
 
       <footer class="live-actions">
@@ -127,14 +133,6 @@
                 <div class="adjust-row-heading">
                   <strong data-i18n="adjust.voice">Voice</strong>
                   <output id="mic-gain-value" for="mic-gain">+24 dB</output>
-                </div>
-
-                <div class="voice-input-evidence">
-                  <div class="evidence-heading">
-                    <span data-i18n="adjust.input">Input</span>
-                    <output id="mic-input-value" data-i18n="adjust.listening">Listening…</output>
-                  </div>
-                  <div id="mic-input-meter" class="voice-input-meter" aria-hidden="true"></div>
                 </div>
 
                 <div class="gain-control">

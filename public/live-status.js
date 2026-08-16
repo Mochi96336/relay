@@ -134,7 +134,11 @@ if (
     systemRelay.textContent = socket?.readyState === WebSocket.OPEN ? 'Connected' : 'Reconnecting';
     const people = Number(status.room?.participantCount) || 0;
     systemPhones.textContent = `${people} ${people === 1 ? 'person' : 'people'}`;
-    systemRobot.textContent = robotProblem ? 'Needs attention' : 'Ready';
+    systemRobot.textContent = robotProblem
+      ? 'Needs attention'
+      : status.lifecycle === 'idle' && songState === 'empty'
+        ? 'Idle'
+        : 'OK';
     systemAudio.textContent = songState === 'playing'
       ? 'Live'
       : songState === 'ready' || songState === 'handoff'

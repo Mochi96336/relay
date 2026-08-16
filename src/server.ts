@@ -193,7 +193,6 @@ session.setMicGainDb(micGainDb);
 const takeController = new TakeController({
   directory: takeDir,
   sampleRate: MIX_SAMPLE_RATE,
-  frameMs: MIX_FRAME_MS,
   onChange: (status) => broadcastJson(status),
 });
 
@@ -310,6 +309,7 @@ function scheduleMicTransportGrace(ownerId: string) {
 
     const released = participants.releaseMic(expectedOwnerId);
     if (!released.ok) return;
+    takeController.noteQualityEvent('mic-owner-changed');
     cancelPendingRoomSongCommand('mic-owner-released');
     invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
     broadcastSessionStatus();
@@ -600,15 +600,6 @@ function beginPreparedSongHandoff(participantId: string, nowMs = performance.now
 }
 
 /**
- * Tells a playback page why its telemetry is being ignored.
- *
- * Rejection used to be a bare `return`, which is indistinguishable from a lost
- * connection: the page keeps sending several times a second and its server
- * timeline readout simply never advances. Telemetry is far too frequent to
- * answer every time, so only a *change* of reason is reported, and an accepted
- * packet clears the memory so the next problem is reported again.
- */
-/**
  * The same discipline for the room-command gate's refusals.
  *
  * Shares `telemetryRejectedReason` with the authority refusals above so that
@@ -626,6 +617,15 @@ function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
   });
 }
 
+/**
+ * Tells a playback page why its telemetry is being ignored.
+ *
+ * Rejection used to be a bare `return`, which is indistinguishable from a lost
+ * connection: the page keeps sending several times a second and its server
+ * timeline readout simply never advances. Telemetry is far too frequent to
+ * answer every time, so only a *change* of reason is reported, and an accepted
+ * packet clears the memory so the next problem is reported again.
+ */
 function reportTelemetryRejected(socket: RelaySocket, reason: string) {
   if (socket.telemetryRejectedReason === reason) return;
   socket.telemetryRejectedReason = reason;
@@ -782,8 +782,6 @@ function sourceStatusPayload() {
 function takeQualityFrameState(nowMs = performance.now()) {
   const alignment = session.alignment;
   return {
-    micAvailable: publisher?.readyState === WebSocket.OPEN && nowMs - lastMicFrameAt < STREAM_LIVE_MS,
-    backingAvailable: backing?.readyState === WebSocket.OPEN && nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
     timingMode: alignment.calibratedMicLagMs === null
       ? 'network-estimate' as const
       : 'acoustic-calibration' as const,
@@ -1031,9 +1029,9 @@ const mixerTimer = setInterval(() => {
     return;
   }
 
-  session.drain((frame) => {
+  session.drain((frame, evidence) => {
     const nowMs = performance.now();
-    takeController.append(frame, takeQualityFrameState(nowMs), session.health());
+    takeController.append(frame, takeQualityFrameState(nowMs), evidence);
     broadcastToMonitors(frame, true);
   });
 }, 5);
@@ -1364,6 +1362,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
   const presenceSweep = participants.sweep(Date.now());
   if (presenceSweep.releasedMicOwnerId) {
+    takeController.noteQualityEvent('mic-owner-changed');
     cancelMicTransportGrace();
     cancelPendingRoomSongCommand('mic-owner-released', nowMs);
     if (youtubeTimeline.cancelHandoff()) broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
@@ -1374,7 +1373,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
 function validSampleRate(value: unknown) {
   const sampleRate = Number(value);
-  return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000
+  return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000
     ? sampleRate
     : null;
 }
@@ -1516,7 +1515,7 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      const result = takeController.start(socket.participantId, song, session.health());
+      const result = takeController.start(socket.participantId, song);
       if (!result.ok) {
         rejectTakeCommand(socket, 'start', result.reason);
         return;
@@ -1577,6 +1576,7 @@ wss.on('connection', (rawSocket, request) => {
       const result = participants.releaseMic(socket.participantId);
       if (!result.ok) return;
 
+      takeController.noteQualityEvent('mic-owner-changed');
       cancelMicTransportGrace();
       cancelPendingRoomSongCommand('mic-owner-released');
       if (youtubeTimeline.cancelHandoff()) {

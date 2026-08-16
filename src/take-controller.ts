@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { MixHealth } from './audio-session.js';
+import type { MixFrameEvidence } from './audio-session.js';
 import {
   TakeQualityTracker,
   type TakeQualityEventKind,
@@ -29,9 +29,9 @@ function errorMessage(error: unknown) {
  * Take-scoped quality tracker.
  *
  * It deliberately knows nothing about Mic ownership, WebSockets, SongSession
- * authority or product UI. The transport layer supplies authoritative evidence
- * alongside each exact mixed frame; this controller guarantees that only the
- * evidence belonging to frames accepted by the WAV writer reaches the Take.
+ * authority or product UI. AudioSession supplies exact evidence beside each
+ * mixed PCM frame; this controller guarantees that evidence reaches the Take
+ * only after the same frame is accepted by the WAV writer.
  */
 export class TakeController {
   private readonly session = new TakeSession();
@@ -41,7 +41,6 @@ export class TakeController {
   constructor(private readonly options: {
     directory: string;
     sampleRate: number;
-    frameMs: number;
     artifactBaseUrl?: string;
     onChange?: (status: ReturnType<TakeSession['statusPayload']>) => void;
   }) {}
@@ -61,7 +60,6 @@ export class TakeController {
   start(
     actorParticipantId: string,
     song: TakeSongSnapshot,
-    baselineHealth: MixHealth,
     nowMs = Date.now(),
   ): StartTakeResult {
     const takeId = randomUUID();
@@ -73,11 +71,7 @@ export class TakeController {
     });
     if (!started.ok) return started;
 
-    this.quality = new TakeQualityTracker({
-      sampleRate: this.options.sampleRate,
-      frameMs: this.options.frameMs,
-      baselineHealth,
-    });
+    this.quality = new TakeQualityTracker({ sampleRate: this.options.sampleRate });
 
     let writer: WavTakeWriter;
     try {
@@ -164,12 +158,12 @@ export class TakeController {
     return result.ok;
   }
 
-  append(frame: Buffer, state: TakeQualityFrameState, health: MixHealth) {
+  append(frame: Buffer, state: TakeQualityFrameState, evidence: MixFrameEvidence) {
     const writer = this.writer;
     if (!writer || this.session.recordingTakeId !== writer.takeId) return false;
     try {
       writer.append(frame);
-      this.quality?.observeFrame(Math.floor(frame.byteLength / 2), state, health);
+      this.quality?.observeFrame(Math.floor(frame.byteLength / 2), state, evidence);
       return true;
     } catch (error) {
       this.failWriter(writer, error);

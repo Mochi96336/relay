@@ -35,13 +35,10 @@ function unheaderedFrame(value = 1_000): PcmFrame {
 
 function drainOne(session: AudioSession, nowMs: number): MixFrameEvidence {
   const captured: MixFrameEvidence[] = [];
-  const emitted = session.drain(() => {
-    const evidence = session.health().lastMixedFrame;
-    if (evidence) captured.push(evidence);
-  }, nowMs, 1);
+  const emitted = session.drain((_frame, evidence) => captured.push(evidence), nowMs, 1);
   assert.equal(emitted, 1);
   const evidence = captured[0];
-  assert.ok(evidence, 'mixed output must expose exact frame evidence before its callback returns');
+  assert.ok(evidence, 'mixed output must emit exact evidence beside its PCM frame');
   return evidence;
 }
 

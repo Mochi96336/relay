@@ -10,6 +10,7 @@ import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
+import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { decodePcmFrame } from './pcm-frame.js';
 import {
   ParticipantSession,
@@ -74,6 +75,9 @@ app.get('/healthz', (_req, res) => {
 });
 app.get('/statusz', (_req, res) => {
   res.json(remoteStatusPayload());
+});
+app.get('/api/status/v1', (_req, res) => {
+  res.json(observationStatusV1Payload());
 });
 
 const server = createServer(app);
@@ -144,9 +148,6 @@ const session = new AudioSession({
   prebufferMs: LIVE_MIX_PREBUFFER_MS,
   backingGain: LIVE_BACKING_GAIN,
   retentionMs: MIC_RETENTION_MS,
-  // Sized by its hungriest reader rather than by the mixer, which needs almost
-  // none of it. The probe analysis cannot run until the timeline covers its
-  // whole search window, so anything it will look at has to survive that wait.
   backingRetentionMs: BACKING_RETENTION_MS,
 });
 session.setMicGainDb(micGainDb);
@@ -164,15 +165,6 @@ const PROBE_LEAD_MS = envMs('RELAY_CALIBRATION_PROBE_LEAD_MS', 200);
 const PROBE_MIN_CORRELATION = Number(process.env.RELAY_CALIBRATION_PROBE_MIN_CORRELATION ?? 0.5);
 const PROBE_DEBUG = process.env.RELAY_CALIBRATION_PROBE_DEBUG === '1';
 const PROBE_REPLY_TIMEOUT_MS = 3_000;
-/**
- * Long enough for the probe to play, be captured and reach the server.
- *
- * Derived from the search window rather than set independently: the analysis
- * cannot run until the timeline has covered the whole window, so a timeout
- * shorter than that rejects every probe before it is even looked at. Raising
- * `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` to 10 s did exactly that, and the
- * only symptom was every leg reporting `analysis dropped ... timedOut=true`.
- */
 const PROBE_ANALYSIS_TIMEOUT_MS = Math.max(
   envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000),
   PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 5_000,
@@ -409,28 +401,10 @@ function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
   if (robotRouteActive() && calibrationKind !== 'boot-probe') return false;
-  // Boot calibration is a three-term equation. The two probe legs may be
-  // measured ahead of playback, but an unknown player delta is not zero. Keep
-  // the path result as evidence and stay on the network fallback until the
-  // active robot has published a fresh, settled delta.
   if (robotRouteActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   return true;
 }
 
-/**
- * Synchronizes measurement validity into the mixer's active alignment.
- *
- * A boot result needs special treatment: once freshness/connection withdraws
- * its authority, a later delta must not resurrect the historical total before
- * `maybeReapplyBootCalibration()` has folded in the *current* delta. While a
- * boot alignment is already active, small (< threshold) delta movements are
- * intentionally left alone. While it is inactive, it may only be restored
- * directly when the stored boot result already describes exactly the current
- * reported delta; otherwise reapply owns the reactivation.
- *
- * Returns whether the mixer alignment changed so the periodic freshness check
- * can publish the transition immediately.
- */
 function syncAppliedCalibration() {
   const active = session.alignment.calibratedMicLagMs;
 
@@ -509,22 +483,6 @@ function frameAgeMs(atMs: number, nowMs: number) {
   return Number.isFinite(atMs) ? Math.round(nowMs - atMs) : null;
 }
 
-/**
- * The status another machine can poll.
- *
- * `/healthz` answers "is the Relay process up", which stays `true` through
- * every failure an unattended robot actually has: the browser died, the sink
- * vanished, the backing bridge stopped. This reports on the *route* instead.
- *
- * It reduces that to `ok` plus named faults so the poller does not have to
- * model Relay's internals. A fault is something that is definitely broken - a
- * connected client that stopped sending audio, or a robot route missing a
- * component - never merely "nobody is singing", which is what `idle` is for.
- * Warnings degrade quality without stopping audio, so they do not clear `ok`.
- *
- * Deliberately carries no nicknames or keys: it is unauthenticated on the LAN
- * like `/healthz`, so it reports counts and states only.
- */
 function remoteStatusPayload() {
   const nowMs = performance.now();
   const alignment = session.alignment;
@@ -589,6 +547,62 @@ function remoteStatusPayload() {
       monitorDroppedFrames,
     },
   };
+}
+
+function observationStatusV1Payload() {
+  const remote = remoteStatusPayload();
+  const snapshot = participants.snapshot();
+
+  return buildRelayObservationStatusV1({
+    workload: {
+      id: 'relay',
+      state: remote.state,
+      ok: remote.ok,
+      uptimeMs: remote.uptimeMs,
+    },
+    activity: {
+      sessionActive: remote.mix.active,
+      participants: {
+        total: remote.source.participants,
+        connected: remote.source.participantsConnected,
+      },
+      microphoneLease: {
+        held: snapshot.micOwnerId !== null,
+        transportConnected: remote.source.micConnected,
+      },
+    },
+    sources: {
+      backing: {
+        connected: remote.source.backingConnected,
+        streaming: remote.source.backingStreaming,
+        sampleRate: remote.source.backingSampleRate,
+        robot: remote.source.backingIsRobot,
+        frameAgeMs: remote.source.backingFrameAgeMs,
+      },
+      microphone: {
+        connected: remote.source.micConnected,
+        streaming: remote.source.micStreaming,
+        sampleRate: publisherSampleRate,
+        frameAgeMs: remote.source.micFrameAgeMs,
+      },
+      robot: {
+        routeActive: remote.robot.route,
+        sourceConnected: remote.robot.sourceConnected,
+        playerDeltaFresh: remote.robot.deltaFresh,
+      },
+    },
+    calibration: {
+      kind: remote.robot.calibrationKind,
+      stale: remote.robot.calibrationStale,
+      timingMode: remote.robot.timingMode,
+      activeCalibratedMicLagMs: remote.robot.activeCalibratedMicLagMs,
+    },
+    mix: remote.mix,
+    issues: {
+      faults: remote.faults,
+      warnings: remote.warnings,
+    },
+  });
 }
 
 function recommendedMicGainDb(micPeakDbfs: number | null) {
@@ -966,17 +980,11 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
 
   if (PROBE_DEBUG) {
-    // The window's own peak separates "the probe was not heard" from "the
-    // probe was never looked at": a correlation of -1 is what an all-zero
-    // window scores, and a range the timeline does not cover reads as zeros.
     let peak = 0;
     for (let i = 0; i < window.length; i += 1) {
       const magnitude = Math.abs(window[i]);
       if (magnitude > peak) peak = magnitude;
     }
-    // And the most recent audio on the same timeline, as a control: if that is
-    // silent too the stream is not carrying anything, and if it is not the
-    // window is simply looking in the wrong place.
     const controlSeconds = 20;
     const recent = waiting.target === 'mic'
       ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
@@ -1131,9 +1139,6 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
-  // Freshness is a live validity condition, not just something checked when a
-  // socket closes. If a robot page freezes while its WebSocket remains open,
-  // the last delta loses authority after ROBOT_OFFSET_FRESH_MS as well.
   if (syncAppliedCalibration()) {
     broadcastJson(sourceStatusPayload());
     broadcastJson(timingCalibrationStatusPayload());

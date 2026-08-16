@@ -21,6 +21,7 @@ if (
   let reconnectTimer = null;
 
   const attentionLabels = {
+    'audio-unavailable': 'Room audio unavailable',
     'robot-audio-unavailable': 'Robot audio unavailable',
     'robot-route-invalid': 'Robot audio route needs attention',
     'robot-player-unavailable': 'Robot player unavailable',
@@ -129,6 +130,7 @@ if (
   function renderSystem(status) {
     const attention = status.attention;
     const robotProblem = attention?.scope === 'robot';
+    const audioProblem = attention?.scope === 'audio' || attention?.scope === 'song';
     const songState = status.room?.song?.state;
 
     systemRelay.textContent = socket?.readyState === WebSocket.OPEN ? 'Connected' : 'Reconnecting';
@@ -139,13 +141,15 @@ if (
       : status.lifecycle === 'idle' && songState === 'empty'
         ? 'Idle'
         : 'OK';
-    systemAudio.textContent = songState === 'playing'
-      ? 'Live'
-      : songState === 'ready' || songState === 'handoff'
-        ? 'Ready'
-        : songState === 'unavailable'
-          ? 'Needs attention'
-          : 'Idle';
+    systemAudio.textContent = audioProblem
+      ? 'Needs attention'
+      : songState === 'playing'
+        ? 'Live'
+        : songState === 'ready' || songState === 'handoff'
+          ? 'Ready'
+          : songState === 'unavailable'
+            ? 'Needs attention'
+            : 'Idle';
     systemTiming.textContent = timingLabels[status.timing?.state] ?? 'Unknown';
     systemRecording.textContent = takeLabels[status.take?.lifecycle] ?? 'Unknown';
   }

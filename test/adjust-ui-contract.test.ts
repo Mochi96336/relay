@@ -13,6 +13,13 @@ test('Adjust separates shared room mix from this-phone Listen and Timing', () =>
   assert.equal(html.includes('>Listen volume<'), true);
   assert.equal(html.includes('>Timing<'), true);
   assert.equal(html.includes('>Monitor<'), false);
+
+  const localStart = html.indexOf('class="adjust-group local-listen"');
+  const timingStart = html.indexOf('class="adjust-group timing-adjust"');
+  const listenGain = html.indexOf('id="listen-gain"');
+  assert.ok(localStart >= 0 && localStart < listenGain && listenGain < timingStart);
+  assert.equal(html.slice(localStart, timingStart).includes('disabled'), false,
+    'Listen volume stays locally adjustable even while Listen is off');
 });
 
 test('Voice Adjust distinguishes live input evidence from the gain setting and suggestion', () => {
@@ -26,6 +33,15 @@ test('Voice Adjust distinguishes live input evidence from the gain setting and s
   assert.equal(app.includes('recommendedMicGainDb'), true);
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
   assert.equal(app.includes('Use +${suggested} dB'), true);
+
+  const useSuggestion = app.indexOf("useMicGainSuggestion.addEventListener('click'");
+  const calibrate = app.indexOf("calibrateButton.addEventListener('click'");
+  assert.ok(useSuggestion >= 0 && calibrate > useSuggestion);
+  const suggestionHandler = app.slice(useSuggestion, calibrate);
+  assert.equal(suggestionHandler.includes('sendMixSettings();'), true,
+    'applying the recommendation reuses the existing room mix command path');
+  assert.equal(suggestionHandler.includes("type: '"), false,
+    'recommendation UI must not invent a second gain command protocol');
 });
 
 test('Listen owns only local playback state and preserves volume while off', () => {

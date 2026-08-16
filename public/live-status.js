@@ -135,6 +135,9 @@ if (
       if (status.timing?.state === 'fallback' || status.timing?.state === 'stale') {
         return { title: 'You’re live', detail: 'Timing is recovering while you keep singing.' };
       }
+      if (song.state === 'playing') {
+        return { title: 'You’re live', detail: 'Use headphones so the song stays out of your mic.' };
+      }
       return { title: 'You’re live', detail: 'Your voice is going to the room.' };
     }
 

@@ -25,6 +25,11 @@ function room(overrides: Record<string, unknown> = {}) {
     videoId: VIDEO,
     state: 2,
     serverTime: 10,
+    // What the player itself last reported, projected to now, and how long ago
+    // that was. The real status payload always carries both; a seek is judged
+    // against them rather than against the room's prediction.
+    youtubeTime: 10,
+    ageMs: 0,
     playbackRate: 1,
     playbackLeaderParticipantId: A.participantId,
     playbackTransportId: A.transportId,

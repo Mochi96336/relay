@@ -376,6 +376,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   window.addEventListener('relay-microphone-started', () => forceMicMute(t('listen.micOwned')));
   window.addEventListener('relay-microphone-ended', () => restoreAfterMic());
   window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic(t('listen.micFailedResume')));
+  // Acquisition refusals are terminal for the local capture attempt too. They
+  // used to clean up app.js while leaving this independent Listen state stuck
+  // in micForcedMuted forever.
+  window.addEventListener('relay-mic-busy', () => restoreAfterMic(t('listen.micFailedResume')));
+  window.addEventListener('relay-mic-takeover-rejected', () => restoreAfterMic(t('listen.micFailedResume')));
   window.addEventListener('relay:playback-view', (event) => {
     setPlaybackForcedMute(shouldForceMuteListen({
       role: event.detail?.role,

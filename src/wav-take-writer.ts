@@ -4,6 +4,7 @@ import path from 'node:path';
 
 const WAV_HEADER_BYTES = 44;
 const MAX_WAV_DATA_BYTES = 0xffff_ffff - 36;
+const DEFAULT_MAX_PENDING_BYTES = 8 * 1024 * 1024;
 
 export type WavFileArtifact = {
   fileName: string;
@@ -51,6 +52,11 @@ export function encodePcm16WavHeader(sampleRate: number, dataBytes: number) {
  * The file stays as `.wav.part` while recording. Only finalization patches the
  * RIFF sizes and renames it to `.wav`, so an interrupted writer can never be
  * mistaken for a ready Take artifact.
+ *
+ * Disk I/O is never allowed to stall the mixer. Node may buffer a short burst
+ * internally, but an unhealthy filesystem is bounded: if the pending write
+ * queue grows beyond the configured ceiling the Take fails explicitly instead
+ * of turning recording backpressure into unbounded process memory.
  */
 export class WavTakeWriter {
   readonly takeId: string;
@@ -60,6 +66,7 @@ export class WavTakeWriter {
 
   private readonly partPath: string;
   private readonly stream: WriteStream;
+  private readonly maxPendingBytes: number;
   private dataBytes = 0;
   private closed = false;
   private failure: Error | null = null;
@@ -68,14 +75,21 @@ export class WavTakeWriter {
     directory: string;
     takeId: string;
     sampleRate: number;
+    maxPendingBytes?: number;
     onError?: (error: Error) => void;
   }) {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(options.takeId)) throw new Error('Invalid Take ID.');
     if (!Number.isInteger(options.sampleRate) || options.sampleRate <= 0) throw new Error('Invalid Take sample rate.');
 
+    const maxPendingBytes = options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES;
+    if (!Number.isInteger(maxPendingBytes) || maxPendingBytes <= 0) {
+      throw new Error('Invalid Take WAV pending-byte limit.');
+    }
+
     mkdirSync(options.directory, { recursive: true });
     this.takeId = options.takeId;
     this.sampleRate = options.sampleRate;
+    this.maxPendingBytes = maxPendingBytes;
     this.fileName = `${options.takeId}.wav`;
     this.filePath = path.join(options.directory, this.fileName);
     this.partPath = `${this.filePath}.part`;
@@ -98,6 +112,9 @@ export class WavTakeWriter {
     if (frame.byteLength % 2 !== 0) throw new Error('Take PCM frame is not 16-bit aligned.');
     if (this.dataBytes + frame.byteLength > MAX_WAV_DATA_BYTES) {
       throw new Error('Take exceeded the WAV RIFF size limit.');
+    }
+    if (this.stream.writableLength + frame.byteLength > this.maxPendingBytes) {
+      throw new Error('Take WAV writer could not keep up with the authoritative mix.');
     }
 
     this.dataBytes += frame.byteLength;

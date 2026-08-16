@@ -12,6 +12,8 @@ let reconnectTimer = null;
 let rttTimer = null;
 let pingSequence = 0;
 let pendingMicIntentAt = -Infinity;
+let roomCommandRevision = 0;
+let latestRoomSongStatus = null;
 const pendingPings = new Map();
 // A plain running minimum never rose again, so one lucky early sample pinned the
 // estimate low for the rest of the session even after the link degraded. Keep a
@@ -27,6 +29,12 @@ function randomPlaybackTransportId() {
   const random = new Uint32Array(4);
   crypto.getRandomValues(random);
   return `playback-${Array.from(random, (value) => value.toString(16).padStart(8, '0')).join('')}`;
+}
+
+function randomRoomCommandId() {
+  const random = new Uint32Array(2);
+  crypto.getRandomValues(random);
+  return `song-${Date.now().toString(36)}-${Array.from(random, (value) => value.toString(16).padStart(8, '0')).join('')}`;
 }
 
 function playbackTransportId() {
@@ -112,6 +120,17 @@ function send(payload) {
     return true;
   }
   return false;
+}
+
+function dispatchRoomCommand(type, detail) {
+  window.dispatchEvent(new CustomEvent(type, { detail }));
+}
+
+function updateRoomCommandRevision(value) {
+  const revision = Number(value);
+  if (Number.isSafeInteger(revision) && revision >= 0) {
+    roomCommandRevision = Math.max(roomCommandRevision, revision);
+  }
 }
 
 function sendPlaybackHello() {
@@ -226,6 +245,48 @@ function handleMessage(event) {
     return;
   }
 
+  if (message.type === 'room-song-status') {
+    latestRoomSongStatus = message;
+    return;
+  }
+
+  if (message.type === 'room-song-command-status') {
+    updateRoomCommandRevision(message.revision);
+    dispatchRoomCommand('relay:room-song-command-status', message);
+    return;
+  }
+
+  if (message.type === 'room-song-command-accepted') {
+    updateRoomCommandRevision(message.revision);
+    dispatchRoomCommand('relay:room-song-command-accepted', message);
+    return;
+  }
+
+  if (message.type === 'room-song-command-rejected') {
+    updateRoomCommandRevision(message.revision);
+    if (message.room && typeof message.room === 'object') latestRoomSongStatus = message.room;
+    dispatchRoomCommand('relay:room-song-command-rejected', message);
+    return;
+  }
+
+  if (message.type === 'room-song-command-apply') {
+    updateRoomCommandRevision(message.revision);
+    dispatchRoomCommand('relay:room-song-command-apply', message);
+    return;
+  }
+
+  if (message.type === 'room-song-command-complete') {
+    updateRoomCommandRevision(message.revision);
+    dispatchRoomCommand('relay:room-song-command-complete', message);
+    return;
+  }
+
+  if (message.type === 'room-song-command-failed-ack') {
+    updateRoomCommandRevision(message.revision);
+    dispatchRoomCommand('relay:room-song-command-failed-ack', message);
+    return;
+  }
+
   if (message.type === 'song-handoff-prepare') {
     dispatchHandoff('relay:song-handoff-prepare', message);
     return;
@@ -259,6 +320,7 @@ function connect() {
     replayRecentMicIntent();
     send({ type: 'youtube-timeline-request' });
     send({ type: 'room-song-status-request' });
+    send({ type: 'room-song-command-status-request' });
     sendRttPing();
     setTimeout(sendRttPing, 180);
     setTimeout(sendRttPing, 450);
@@ -291,6 +353,46 @@ window.addEventListener('relay:youtube-telemetry', (event) => {
     playbackGeneration,
     networkRttMs: Number.isFinite(networkRttMs()) ? networkRttMs() : undefined,
   });
+});
+
+window.addEventListener('relay:room-song-command-intent', (event) => {
+  const detail = event.detail;
+  if (!detail || typeof detail !== 'object' || typeof detail.action !== 'string') return;
+
+  const commandId = randomRoomCommandId();
+  const sent = send({
+    type: 'room-song-command',
+    commandId,
+    expectedRevision: roomCommandRevision,
+    ...detail,
+  });
+
+  if (sent) {
+    dispatchRoomCommand('relay:room-song-command-sent', {
+      commandId,
+      expectedRevision: roomCommandRevision,
+      ...detail,
+    });
+  } else {
+    dispatchRoomCommand('relay:room-song-command-rejected', {
+      type: 'room-song-command-rejected',
+      commandId,
+      reason: 'disconnected',
+      revision: roomCommandRevision,
+      room: latestRoomSongStatus,
+    });
+  }
+});
+
+window.addEventListener('relay:room-song-command-failed', (event) => {
+  const commandId = event.detail?.commandId;
+  if (typeof commandId === 'string') {
+    send({
+      type: 'room-song-command-failed',
+      commandId,
+      reason: event.detail?.reason ?? 'playback-failed',
+    });
+  }
 });
 
 window.addEventListener('relay:song-handoff-ready', (event) => {

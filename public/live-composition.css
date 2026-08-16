@@ -37,6 +37,16 @@
   margin: 8px 2px 0;
 }
 
+/* Secondary song context must survive normal phone brightness without
+   competing with the media field itself. */
+.song-device-note {
+  color: #85888f;
+}
+
+#youtube-note {
+  color: #7f8289;
+}
+
 .performance-stage {
   padding-top: clamp(32px, 5.5vh, 54px);
 }
@@ -48,7 +58,7 @@
 }
 
 .voice-copy strong {
-  max-width: 12ch;
+  max-width: 18ch;
   font-size: clamp(30px, 8vw, 42px);
   line-height: .98;
   letter-spacing: -.045em;
@@ -89,8 +99,10 @@
   text-align: left;
 }
 
+/* Keep the controls low in the composition, but do not let flex auto-margin
+   turn the space after Take into an accidental empty panel on tall phones. */
 .live-actions {
-  margin-top: auto;
+  margin-top: clamp(48px, 6vh, 64px);
   padding-top: 18px;
 }
 
@@ -100,7 +112,7 @@
 
 .system-panel > summary {
   padding: 12px 0 2px;
-  color: #50535a;
+  color: #60636a;
   font-size: 10px;
   font-weight: 650;
   letter-spacing: .08em;
@@ -119,5 +131,5 @@
   .voice-ribbon { height: 42px; margin-bottom: 10px; }
   .mic-actions { margin-top: 15px; }
   .take-strip { margin-top: 10px; }
-  .live-actions { padding-top: 13px; }
+  .live-actions { margin-top: 36px; padding-top: 13px; }
 }

@@ -21,6 +21,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   let transportEnabled = false;
   let userMuted = false;
   let micForcedMuted = false;
+  let playbackForcedMuted = false;
   let sourceSampleRate = MIX_SAMPLE_RATE;
 
   function wsUrl() {
@@ -79,7 +80,13 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   function effectiveMuted() {
-    return userMuted || micForcedMuted;
+    return userMuted || micForcedMuted || playbackForcedMuted;
+  }
+
+  function forcedMuteReason() {
+    if (micForcedMuted) return 'mic';
+    if (playbackForcedMuted) return 'playback';
+    return null;
   }
 
   function updateGain() {
@@ -93,16 +100,33 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
 
   function render(copy = '') {
     const muted = effectiveMuted();
-    const state = micForcedMuted ? 'mic-muted' : userMuted ? 'muted' : audioContext ? 'audible' : 'ready';
+    const forcedReason = forcedMuteReason();
+    const state = forcedReason === 'mic'
+      ? 'mic-muted'
+      : forcedReason === 'playback'
+        ? 'playback-muted'
+        : userMuted
+          ? 'muted'
+          : audioContext
+            ? 'audible'
+            : 'ready';
     toggle.dataset.state = state;
     toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
-    toggle.disabled = micForcedMuted;
-    toggle.textContent = micForcedMuted ? 'Muted for Mic' : userMuted ? 'Unmute' : 'Mute';
+    toggle.disabled = Boolean(forcedReason);
+    toggle.textContent = forcedReason === 'mic'
+      ? 'Muted for Mic'
+      : forcedReason === 'playback'
+        ? 'Muted for Song'
+        : userMuted
+          ? 'Unmute'
+          : 'Mute';
     note.textContent = copy;
     document.body.dataset.listen = state;
 
-    if (micForcedMuted) {
+    if (forcedReason === 'mic') {
       adjustState.textContent = 'Muted while this phone has the mic. Sound restores automatically afterward.';
+    } else if (forcedReason === 'playback') {
+      adjustState.textContent = 'Muted while this phone plays the room song. Sound restores automatically afterward.';
     } else if (userMuted) {
       adjustState.textContent = 'Muted on this phone.';
     } else if (!audioContext) {
@@ -275,7 +299,33 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
 
   function restoreAfterMic(copy = 'Listening resumed.') {
     micForcedMuted = false;
+    if (playbackForcedMuted) {
+      reconcile('Muted while this phone plays the room song.');
+      return;
+    }
+    if (userMuted) {
+      reconcile('Muted on this phone.');
+      return;
+    }
     reconcile(copy);
+  }
+
+  function setPlaybackForcedMute(forced) {
+    if (playbackForcedMuted === forced) return;
+    playbackForcedMuted = forced;
+    if (forced) {
+      reconcile('Muted while this phone plays the room song.');
+      return;
+    }
+    if (micForcedMuted) {
+      reconcile('Muted while this phone has the mic.');
+      return;
+    }
+    if (userMuted) {
+      reconcile('Muted on this phone.');
+      return;
+    }
+    reconcile('Listening resumed.');
   }
 
   async function activateFromGesture(event) {
@@ -293,7 +343,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   toggle.addEventListener('click', async () => {
-    if (micForcedMuted) return;
+    if (micForcedMuted || playbackForcedMuted) return;
     userMuted = !userMuted;
     if (!userMuted) {
       try {
@@ -310,9 +360,9 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
 
   gainControl.addEventListener('input', updateGain);
 
-  // Product semantics are negative: room audio is wanted by default, and Mic
-  // ownership temporarily overlays a forced local mute. Do not rewrite the
-  // user's own mute preference when the Mic comes and goes.
+  // Product semantics are negative: room audio is wanted by default, while
+  // local source roles temporarily overlay forced mute reasons. Do not rewrite
+  // the user's own mute preference when Mic or Song ownership comes and goes.
   publisherButton.addEventListener('click', () => {
     if (publisherButton.dataset.presenceLabel !== 'takeover') {
       forceMicMute('Muted while the microphone starts.');
@@ -323,10 +373,18 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   window.addEventListener('relay-microphone-started', () => forceMicMute('Muted while this phone has the mic.'));
   window.addEventListener('relay-microphone-ended', () => restoreAfterMic());
   window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic('Microphone did not start. Listening resumed.'));
+  window.addEventListener('relay:playback-view', (event) => {
+    const role = event.detail?.role;
+    if (role === 'holder' || role === 'preparing') {
+      setPlaybackForcedMute(true);
+    } else if (role === 'observer' || role === 'empty') {
+      setPlaybackForcedMute(false);
+    }
+  });
 
   // Browsers do not generally allow a newly navigated page to speak before a
   // user gesture. Prime the local graph on the first interaction, then the
-  // default-unmuted state and later Mic restore can run without another tap.
+  // default-unmuted state and later forced-mute restore can run without another tap.
   window.addEventListener('pointerdown', activateFromGesture, { capture: true, once: true });
   window.addEventListener('keydown', activateFromGesture, { capture: true, once: true });
 

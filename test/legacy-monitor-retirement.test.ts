@@ -8,10 +8,11 @@ const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf
 
 test('app.js owns Mic capture but no longer contains a second monitor runtime', () => {
   assert.match(app, /role:\s*'publisher'/);
-  assert.match(app, /setActiveRole\('publisher'\)/);
+  assert.match(app, /let publisherActive = false/);
+  assert.match(app, /setPublisherActive\(true\)/);
   assert.match(app, /framePcm\(event\.data, captureGeneration, firstSampleIndex\)/);
   assert.doesNotMatch(app, /role:\s*'monitor'/);
-  assert.doesNotMatch(app, /setActiveRole\('monitor'\)/);
+  assert.doesNotMatch(app, /\bactiveRole\b|setActiveRole|setPublisherActive\('monitor'\)/);
   assert.doesNotMatch(app, /startMonitor|connectMonitorSocket|monitorGainNode|playbackNode|linearResample|int16ToFloat32/);
 });
 

@@ -20,7 +20,7 @@ let socketReconnectTimer = null;
 let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
-let activeRole = null;
+let publisherActive = false;
 let testActive = false;
 let liveMixActive = false;
 let latestMixHealth = null;
@@ -107,9 +107,11 @@ const COMMAND_LABELS = {
   'stop-sync-test': 'The sync test is controlled by the singer',
 };
 
-function setActiveRole(role) {
-  activeRole = role;
-  window.relayActiveRole = role;
+function setPublisherActive(active) {
+  publisherActive = Boolean(active);
+  // listen.js only needs to know whether this phone is the singer phone.
+  // Keep the old global shape temporarily while the Mic controller remains in app.js.
+  window.relayActiveRole = publisherActive ? 'publisher' : null;
 }
 
 function signed(value, suffix) {
@@ -140,7 +142,7 @@ function updateMixLabels() {
 
 function sendMixSettings() {
   updateMixLabels();
-  if (socket?.readyState !== WebSocket.OPEN || !activeRole) return;
+  if (socket?.readyState !== WebSocket.OPEN || !publisherActive) return;
   socket.send(JSON.stringify({
     type: 'set-mix',
     micGainDb: Number(micGain.value),
@@ -152,11 +154,11 @@ function sendMixSettings() {
 }
 
 function updateTestButtons() {
-  testStartButton.disabled = activeRole !== 'publisher' || testActive;
-  testStopButton.disabled = !activeRole || !testActive;
-  micGain.disabled = !activeRole;
-  songLevel.disabled = !activeRole;
-  // Same dependency on activeRole, so it rides along rather than needing a
+  testStartButton.disabled = !publisherActive || testActive;
+  testStopButton.disabled = !publisherActive || !testActive;
+  micGain.disabled = !publisherActive;
+  songLevel.disabled = !publisherActive;
+  // Same dependency on publisher state, so it rides along rather than needing a
   // call at every site that changes roles.
   updateCalibrateButton();
 }
@@ -167,7 +169,7 @@ function updateTestButtons() {
  */
 function updateCalibrateButton() {
   const collecting = latestCalibration?.state === 'collecting';
-  calibrateButton.disabled = !activeRole || !liveMixActive || collecting;
+  calibrateButton.disabled = !publisherActive || !liveMixActive || collecting;
 
   if (!liveMixActive) {
     calibrateStatus.textContent = '播放開始後會自動校正；覺得對不上可以在這裡手動重跑。';
@@ -264,7 +266,7 @@ const PROBE_NOTE_SECONDS = 0.105;
  * measured.
  */
 function playCalibrationProbe(requestId, leadMs) {
-  if (!audioContext || activeRole !== 'publisher') return;
+  if (!audioContext || !publisherActive) return;
 
   const startTime = audioContext.currentTime + leadMs / 1000;
   for (const note of PROBE_NOTES) {
@@ -309,7 +311,7 @@ function scheduleClick(time, accent) {
 
 function startLocalClickTrack() {
   stopLocalClickTrack();
-  if (!audioContext || activeRole !== 'publisher') return;
+  if (!audioContext || !publisherActive) return;
 
   const beatSeconds = 60 / TEST_BPM;
   nextClickTime = audioContext.currentTime + 0.12;
@@ -390,7 +392,7 @@ function handleServerMessage(message) {
     return;
   }
 
-  if (message.type === 'registered' && message.role === 'publisher' && activeRole === 'publisher') {
+  if (message.type === 'registered' && message.role === 'publisher' && publisherActive) {
     pendingPublisherTakeoverOwnerId = null;
     setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM → relay`);
     updateMixLabels();
@@ -435,13 +437,13 @@ function handleServerMessage(message) {
 
   if (message.type === 'test-status') {
     testActive = Boolean(message.active);
-    if (!testActive && activeRole === 'publisher') stopLocalClickTrack();
+    if (!testActive && publisherActive) stopLocalClickTrack();
     updateTestButtons();
   }
 }
 
 function canKeepPublishing() {
-  return activeRole === 'publisher' && Boolean(mediaStream) && Boolean(audioContext);
+  return publisherActive && Boolean(mediaStream) && Boolean(audioContext);
 }
 
 function schedulePublisherReconnect() {
@@ -515,14 +517,14 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   clearSocketReconnect();
 
   const closingSocket = socket;
-  const shouldReleaseMic = releaseMic && activeRole === 'publisher';
+  const shouldReleaseMic = releaseMic && publisherActive;
   if (shouldReleaseMic && closingSocket?.readyState === WebSocket.OPEN) {
     try {
       closingSocket.send(JSON.stringify({ type: 'release-mic' }));
     } catch {}
   }
 
-  setActiveRole(null);
+  setPublisherActive(false);
   pendingPublisherTakeoverOwnerId = null;
   if (closingSocket) {
     try {
@@ -577,7 +579,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   await audioContext.audioWorklet.addModule('/capture-worklet.js');
   await audioContext.resume();
 
-  setActiveRole('publisher');
+  setPublisherActive(true);
 
   // A new capture session. Reconnecting the websocket does not bump this: the
   // capture keeps running and its sample cursor stays continuous, so the server
@@ -587,7 +589,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
 
   const [track] = mediaStream.getAudioTracks();
   track?.addEventListener('ended', () => {
-    if (activeRole !== 'publisher') return;
+    if (!publisherActive) return;
     stop(false, { releaseMic: true })
       .then(() => setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.'))
       .catch(console.error);
@@ -678,7 +680,7 @@ window.addEventListener('relay-request-microphone', (event) => {
 });
 
 testStartButton.addEventListener('click', () => {
-  if (activeRole !== 'publisher' || socket?.readyState !== WebSocket.OPEN) return;
+  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'start-sync-test' }));
   startLocalClickTrack();
 });

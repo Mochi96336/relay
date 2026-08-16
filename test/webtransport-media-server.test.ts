@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -63,4 +64,24 @@ describe('WebTransport media configuration', () => {
     assert.notEqual(first, second);
     assert.match(first, /^[A-Za-z0-9_-]{32}$/);
   });
+});
+
+it('retires direct-media authority at every Mic ownership terminal boundary', () => {
+  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+
+  assert.match(
+    server,
+    /participants\.releaseMic\(expectedOwnerId\)[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}takeController\.noteQualityEvent\('mic-owner-changed'\)[\s\S]{0,500}cancelPendingRoomSongCommand\('mic-owner-released'\)/,
+    'Mic transport-grace expiry must retire WebTransport authority without dropping Take/command semantics',
+  );
+  assert.match(
+    server,
+    /presenceSweep\.releasedMicOwnerId[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}cancelPendingRoomSongCommand\('mic-owner-released', nowMs\)[\s\S]{0,500}youtubeTimeline\.cancelHandoff\(\)/,
+    'participant expiry must retire media authority and the old owner command/handoff epoch together',
+  );
+  assert.match(
+    server,
+    /wss\.on\('close'[\s\S]{0,500}takeController\.shutdown\(\)[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}webTransportMedia\?\.stop\(\)/,
+    'server shutdown must close Take, direct-media authority, and the HTTP\/3 server',
+  );
 });

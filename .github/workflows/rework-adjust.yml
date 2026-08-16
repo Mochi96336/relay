@@ -1,0 +1,41 @@
+name: Rework Adjust
+
+on:
+  push:
+    branches:
+      - agent/live-ui-shell
+    paths:
+      - scripts/rework-adjust.mjs
+      - .github/workflows/rework-adjust.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/live-ui-shell
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/rework-adjust.mjs
+      - run: npm run check
+      - name: Check browser JavaScript syntax
+        run: |
+          for file in public/*.js; do node --check "$file"; done
+      - name: Check launcher shell syntax
+        run: bash -n scripts/*.sh
+      - run: npm test
+      - name: Commit verified Adjust refactor
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm scripts/rework-adjust.mjs .github/workflows/rework-adjust.yml
+          git add -A
+          git commit -m "feat(ui): rework Adjust ownership and voice guidance"
+          git push origin HEAD:agent/live-ui-shell

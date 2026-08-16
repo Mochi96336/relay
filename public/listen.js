@@ -1,3 +1,5 @@
+import { shouldForceMuteListen } from './playback-recovery.js';
+
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
@@ -375,12 +377,10 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   window.addEventListener('relay-microphone-ended', () => restoreAfterMic());
   window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic(t('listen.micFailedResume')));
   window.addEventListener('relay:playback-view', (event) => {
-    const role = event.detail?.role;
-    if (role === 'holder' || role === 'preparing') {
-      setPlaybackForcedMute(true);
-    } else if (role === 'observer' || role === 'empty') {
-      setPlaybackForcedMute(false);
-    }
+    setPlaybackForcedMute(shouldForceMuteListen({
+      role: event.detail?.role,
+      timeline: event.detail?.timeline,
+    }));
   });
 
   // Browsers do not generally allow a newly navigated page to speak before a

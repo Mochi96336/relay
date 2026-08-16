@@ -53,14 +53,17 @@ test('Listen defaults audible at 30% and exposes mute rather than an enable acti
   assert.match(html, /id="listen-gain-value"[^>]*>30%<\/output>/);
   assert.match(html, /id="listen-gain"[^>]*value="30"/);
   assert.equal(listen.includes('let userMuted = false;'), true);
-  assert.equal(listen.includes("toggle.textContent = micForcedMuted ? 'Muted for Mic' : userMuted ? 'Unmute' : 'Mute';"), true);
+  assert.equal(listen.includes("'Muted for Mic'"), true);
+  assert.equal(listen.includes("'Muted for Song'"), true);
+  assert.equal(listen.includes("'Unmute'"), true);
+  assert.equal(listen.includes("'Mute'"), true);
   assert.equal(listen.includes('Sound starts after your first interaction.'), true,
     'default-unmuted intent must acknowledge the mobile autoplay boundary');
 });
 
 test('Mic ownership overlays a temporary local mute and restores the prior Listen preference', () => {
   assert.equal(listen.includes('let micForcedMuted = false;'), true);
-  assert.equal(listen.includes('return userMuted || micForcedMuted;'), true);
+  assert.equal(listen.includes('return userMuted || micForcedMuted || playbackForcedMuted;'), true);
   assert.equal(listen.includes("window.addEventListener('relay-microphone-started'"), true);
   assert.equal(listen.includes("window.addEventListener('relay-microphone-ended'"), true);
   assert.equal(listen.includes("window.addEventListener('relay-microphone-start-failed'"), true);

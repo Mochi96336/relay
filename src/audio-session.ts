@@ -42,9 +42,9 @@ export type AlignmentState = {
  * Raw evidence for exactly one mixed output frame.
  *
  * These values describe what the mixer actually read for the samples it just
- * emitted. They intentionally do not say whether a Take is good or bad; that
- * policy belongs to the Take domain. Epoch-level health counters below remain
- * useful engineering diagnostics but cannot answer which WAV a gap belonged to.
+ * emitted. They deliberately contain no Take verdict or policy: the audio
+ * domain reports facts, while the Take domain decides whether those facts mean
+ * clean, review or degraded.
  */
 export type MixFrameEvidence = {
   micGapSamples: number;
@@ -69,11 +69,6 @@ export type MixHealth = {
   clippedSamples: number;
   /** Samples the microphone limiter held down. Working, not failing. */
   limitedSamples: number;
-  /**
-   * Evidence for the exact frame most recently emitted by `drain()`.
-   * Null before the first mixed frame in an epoch.
-   */
-  lastMixedFrame: MixFrameEvidence | null;
   /**
    * The raw microphone over the last few seconds, before any mix gain. Peak is
    * what decides the gain - it is what runs into the limiter - and RMS says
@@ -171,20 +166,6 @@ function emptyTimeline(): PcmTimeline {
   };
 }
 
-function emptyMixFrameEvidence(): MixFrameEvidence {
-  return {
-    micGapSamples: 0,
-    backingGapSamples: 0,
-    micStarvedSamples: 0,
-    backingStarvedSamples: 0,
-    micUnavailableSamples: 0,
-    backingUnavailableSamples: 0,
-    clippedSamples: 0,
-    limitedSamples: 0,
-    unheaderedSamples: 0,
-  };
-}
-
 export class AudioSession {
   readonly sampleRate: number;
   readonly frameMs: number;
@@ -219,7 +200,6 @@ export class AudioSession {
   private backingStarvedFrames = 0;
   private clippedSamples = 0;
   private limitedSamples = 0;
-  private lastMixedFrame: MixFrameEvidence | null = null;
 
   // Envelope and gain reduction carry across frames; resetting them per frame
   // would put a 20 ms sawtooth on the vocal.
@@ -397,7 +377,11 @@ export class AudioSession {
   }
 
   /** Emits every frame whose time has come. Returns how many were produced. */
-  drain(emit: (frame: Buffer) => void, nowMs = performance.now(), maxFrames = 5) {
+  drain(
+    emit: (frame: Buffer, evidence: MixFrameEvidence) => void,
+    nowMs = performance.now(),
+    maxFrames = 5,
+  ) {
     if (!this.running) return 0;
 
     const elapsed = nowMs - this.startedAt - this.prebufferMs;
@@ -408,7 +392,8 @@ export class AudioSession {
     let sent = 0;
 
     while (remaining > 0) {
-      emit(this.mixFrame(this.frameIndex));
+      const mixed = this.mixFrame(this.frameIndex);
+      emit(mixed.frame, mixed.evidence);
       this.frameIndex += 1;
       remaining -= 1;
       sent += 1;
@@ -427,7 +412,6 @@ export class AudioSession {
       backingGapMs: Math.round((this.backing.gapSamples / this.sampleRate) * 1000),
       clippedSamples: this.clippedSamples,
       limitedSamples: this.limitedSamples,
-      lastMixedFrame: this.lastMixedFrame ? { ...this.lastMixedFrame } : null,
       micPeakDbfs: this.micMeterPeak > 0 ? 20 * Math.log10(this.micMeterPeak) : null,
       micRmsDbfs: this.micMeterWeight > 0 && this.micMeterPower > 0
         ? 20 * Math.log10(Math.sqrt(this.micMeterPower / this.micMeterWeight))
@@ -441,7 +425,6 @@ export class AudioSession {
     this.backingStarvedFrames = 0;
     this.clippedSamples = 0;
     this.limitedSamples = 0;
-    this.lastMixedFrame = null;
     this.micMeterPeak = 0;
     this.micMeterPower = 0;
     this.micMeterWeight = 0;
@@ -728,7 +711,7 @@ export class AudioSession {
     return value * this.limiterGain;
   }
 
-  private mixFrame(frameIndex: number) {
+  private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
     const startSample = frameIndex * this.frameSamples;
     const advanceSamples = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
     const micReadStart = startSample + advanceSamples;
@@ -770,8 +753,7 @@ export class AudioSession {
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
     }
 
-    this.lastMixedFrame = {
-      ...emptyMixFrameEvidence(),
+    const evidence: MixFrameEvidence = {
       micGapSamples: micReadEvidence.gapSamples,
       backingGapSamples: backingReadEvidence.gapSamples,
       micStarvedSamples: this.micExpected ? micReadEvidence.frontierMissingSamples : 0,
@@ -785,6 +767,6 @@ export class AudioSession {
 
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);
-    return output;
+    return { frame: output, evidence };
   }
 }

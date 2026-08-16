@@ -39,75 +39,12 @@ jobs:
           # branch. Pull only that server seam and its integration contract here.
           git checkout origin/agent/live-ui-shell -- src/server.ts test/product-status-server.test.ts
 
-          # Port every Robot-hardening change except the two deliberately unified
-          # files: product readiness.ts is the typed semantic superset, and
-          # server.ts is reconciled below against the product-status publisher.
+          # Port the Robot runtime files and contracts. Keep product readiness.ts
+          # because it is the typed semantic superset, and keep the evolved
+          # product server.ts rather than replaying an older server ordering patch.
           git diff --binary 90bc23fef546fd0ecfd7037959a0bfbe0c9fcc0e 546c425230bbc740138b8998d472ba94c4d030be \
             -- . ':(exclude)src/readiness.ts' ':(exclude)src/server.ts' > /tmp/robot-hardening.patch
           git apply --3way --index /tmp/robot-hardening.patch
-
-          node <<'NODE'
-          const { readFileSync, writeFileSync } = require('node:fs');
-          const path = 'src/server.ts';
-          let source = readFileSync(path, 'utf8');
-
-          const oldBlock = `      const silent = silentSides(nowMs);
-          if (silent.length > 0) {
-            calibration.fail(
-              \`No audio arriving from the \${silent.join(' or ')}. \`
-              + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
-            );
-            return;
-          }
-
-          if (robotRouteActive()) {
-            restartBootCalibration(nowMs, false);
-            return;
-          }
-
-          const timeline = currentTimelineStatus(nowMs);
-          if (!timeline.connected || Number(timeline.state) !== 1) {
-            calibration.fail('Play YouTube on the phone before calibration.');
-            return;
-          }
-          calibrationWasAutomatic = false;`;
-
-          const newBlock = `      if (robotRouteActive()) {
-            const silent = silentSides(nowMs);
-            if (silent.length > 0) {
-              calibration.fail(
-                \`No audio arriving from the \${silent.join(' or ')}. \`
-                + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
-              );
-              return;
-            }
-            restartBootCalibration(nowMs, false);
-            return;
-          }
-
-          const timeline = currentTimelineStatus(nowMs);
-          if (!timeline.connected || Number(timeline.state) !== 1) {
-            calibration.fail('Play YouTube on the phone before calibration.');
-            return;
-          }
-
-          const silent = silentSides(nowMs);
-          if (silent.length > 0) {
-            calibration.fail(
-              \`No audio arriving from the \${silent.join(' or ')}. \`
-              + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
-            );
-            return;
-          }
-
-          calibrationWasAutomatic = false;`;
-
-          const count = source.split(oldBlock).length - 1;
-          if (count !== 1) throw new Error(`expected one manual-calibration boundary, found ${count}`);
-          source = source.replace(oldBlock, newBlock);
-          writeFileSync(path, source);
-          NODE
-
           git add src/server.ts test/product-status-server.test.ts
 
           # The temporary workflow must not survive into the integration diff.

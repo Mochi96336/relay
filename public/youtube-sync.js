@@ -61,7 +61,7 @@ function networkRttMs() {
   return recentRttMs.length > 0 ? Math.min(...recentRttMs) : Number.POSITIVE_INFINITY;
 }
 
-const panel = document.querySelector('.youtube-panel');
+const panel = document.querySelector('.song-stage');
 const localReadout = panel?.querySelector('.youtube-readout');
 
 const serverReadout = document.createElement('div');

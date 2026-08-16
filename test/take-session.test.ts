@@ -4,6 +4,8 @@ import test from 'node:test';
 import { assessTakeQuality, type TakeQualityEvidence } from '../src/take-quality.js';
 import { TakeSession, type TakeArtifact, type TakeSongSnapshot } from '../src/take-session.js';
 
+const RATE = 48_000;
+
 const SONG: TakeSongSnapshot = {
   videoId: 'dQw4w9WgXcQ',
   revision: 12,
@@ -17,33 +19,45 @@ const ARTIFACT: TakeArtifact = {
   url: '/takes/take-1.wav',
   mimeType: 'audio/wav',
   sizeBytes: 96_044,
-  sampleRate: 48_000,
+  sampleRate: RATE,
   channels: 1,
   bitsPerSample: 16,
-  sampleCount: 48_000,
+  sampleCount: RATE,
   durationMs: 1_000,
 };
 
 function cleanQuality() {
   const evidence: TakeQualityEvidence = {
-    recordedSamples: 48_000,
+    sampleRate: RATE,
+    recordedSamples: RATE,
     recordedDurationMs: 1_000,
+    micGapSamples: 0,
     micGapMs: 0,
+    backingGapSamples: 0,
     backingGapMs: 0,
     micStarvedFrames: 0,
     backingStarvedFrames: 0,
+    micStarvedSamples: 0,
+    backingStarvedSamples: 0,
     micStarvedMs: 0,
     backingStarvedMs: 0,
     clippedSamples: 0,
     clippedMs: 0,
     limitedSamples: 0,
     limitedMs: 0,
+    unheaderedSamples: 0,
     unheadered: false,
+    micUnavailableSamples: 0,
     micUnavailableMs: 0,
+    backingUnavailableSamples: 0,
     backingUnavailableMs: 0,
+    networkEstimateSamples: 0,
     networkEstimateMs: 0,
+    calibrationStaleSamples: 0,
     calibrationStaleMs: 0,
+    alignmentClampedSamples: 0,
     alignmentClampedMs: 0,
+    robotDeltaMissingSamples: 0,
     robotDeltaMissingMs: 0,
     events: {
       'mic-transport-disconnected': 0,
@@ -153,7 +167,11 @@ test('TakeSession makes repeated Stop idempotent during and after finalization',
     stoppedByParticipantId: 'participant-b',
     stopReason: 'user',
     endedAtMs: 2_100,
-    quality: assessTakeQuality({ ...firstQuality.evidence, micUnavailableMs: 500 }),
+    quality: assessTakeQuality({
+      ...firstQuality.evidence,
+      micUnavailableSamples: 24_000,
+      micUnavailableMs: 500,
+    }),
   });
   assert.equal(second.ok && second.duplicate, true);
   assert.equal(takes.currentTake()?.stoppedByParticipantId, 'participant-a');

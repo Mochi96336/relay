@@ -67,7 +67,7 @@ async function liveSession(server: RelayServer) {
   const monitor = await RelayClient.connect(server);
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
-  await monitor.waitForType('test-status');
+  await monitor.waitForType('source-status');
 
   return { backing, publisher, monitor };
 }
@@ -83,10 +83,14 @@ describe('http surface', () => {
     assert.deepEqual(await response.json(), { ok: true });
   });
 
-  test('serves the client page', async () => {
+  test('serves the formal Live client page', async () => {
     const response = await fetch(server.httpUrl('/'));
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /RELAY \/ AUDIO PROTOTYPE/);
+    const body = await response.text();
+    assert.match(body, /class="live-shell"/);
+    assert.match(body, /id="youtube-player"/);
+    assert.match(body, /id="listen-toggle"/);
+    assert.doesNotMatch(body, /RELAY \/ AUDIO PROTOTYPE/);
   });
 });
 
@@ -166,7 +170,7 @@ describe('microphone transport', () => {
     client.close();
   });
 
-  test('forwards raw microphone PCM to monitors when no source is connected', async () => {
+  test('forwards the authoritative voice-only mix to monitors when no source is connected', async () => {
     const monitor = await RelayClient.connect(server);
     monitor.send({ type: 'register', role: 'monitor' });
     await monitor.waitForType('registered');
@@ -176,9 +180,10 @@ describe('microphone transport', () => {
     await publisher.waitForType('registered');
 
     publisher.sendPcm(tone(0.1));
-    await sleep(200);
+    await sleep(450);
 
-    assert.ok(monitor.binaryFrames > 0, 'monitor received no raw PCM');
+    assert.equal(monitor.latest('source-status')?.active, true);
+    assert.ok(monitor.binaryFrames > 0, 'monitor received no voice-only mixed PCM');
     publisher.close();
     monitor.close();
     await sleep(100);
@@ -190,9 +195,6 @@ describe('live mix', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-
-      assert.equal(monitor.latest('test-status')?.active, false, 'no test is running');
-      assert.equal(monitor.latest('test-status')?.mode, 'off');
 
       const live = monitor.latest('source-status');
       assert.equal(live?.active, true, 'the live session describes itself');
@@ -422,13 +424,20 @@ describe('timing calibration', () => {
   test('refuses to start without both sources', async () => {
     const server = await startRelay(FAST);
     try {
+      const publisher = await RelayClient.connect(server);
+      publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+      await publisher.waitForType('registered');
+
       const monitor = await RelayClient.connect(server);
       monitor.send({ type: 'register', role: 'monitor' });
       await monitor.waitForType('registered');
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       const status = await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'failed');
       assert.match(status.error, /Connect both/);
+
+      publisher.close();
+      monitor.close();
     } finally {
       await server.stop();
     }
@@ -441,7 +450,7 @@ describe('timing calibration', () => {
       // Make playback the only missing prerequisite. A registered-but-silent
       // source is a different contract and has its own regression below.
       await primeStreams(backing, publisher);
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
 
       const status = await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'failed');
       assert.match(status.error, /Play YouTube/);
@@ -461,7 +470,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await sendPcmInChunks(publisher, tone(0.5, 0.4));
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       const failed = await monitor.waitFor(
         (m) => m.type === 'timing-calibration-status' && m.state === 'failed',
         3_000,
@@ -484,7 +493,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       await sendPcmInChunks(backing, silence(2));
@@ -510,7 +519,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const lagMs = 260;
@@ -566,7 +575,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
@@ -605,7 +614,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
@@ -687,7 +696,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(16, RATE, 260);
@@ -778,7 +787,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
@@ -815,7 +824,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 200);
@@ -882,7 +891,7 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
       const { mic, backing: song } = laggedPair(8, RATE, 200);

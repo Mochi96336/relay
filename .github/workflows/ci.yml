@@ -35,3 +35,16 @@ jobs:
             echo "::error title=npm test failed::$message"
           fi
           exit "$status"
+
+  webtransport-loopback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - run: npm ci
+      - name: Real HTTP/3 + 1200-byte WebTransport datagram loopback
+        run: npm run test:webtransport-loopback

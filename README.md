@@ -19,7 +19,9 @@ Robot Relay source browser
 
 Relay server
 └─ captured YouTube tab audio + phone microphone
-   └─ 48 kHz buffered mix -> Monitor / Solo Record
+   └─ 48 kHz buffered authoritative mix
+      ├─ Monitor
+      └─ TakeSession -> streaming PCM16 WAV -> takes/<takeId>.wav
 ```
 
 The robot source uses the same visible YouTube player surface; Relay does not download a media file or use a YouTube audio-download endpoint. On the validated Debian robot, Chromium is routed to a PipeWire null sink and its monitor feeds the stdin backing bridge. The Chrome extension remains a desktop development adapter, not a robot runtime dependency.
@@ -47,13 +49,17 @@ If the tunnel is public, set a shared key:
 RELAY_KEY=some-random-string npm run dev
 ```
 
-Use the same `?key=some-random-string` query on the phone and on `source.html`.
+Use the same `?key=some-random-string` query on the phone and on `source.html`. The same key also protects completed Take WAV artifacts.
 
 ## Server structure
 
-`src/server.ts` is the transport layer: websocket routing, roles, status broadcasts and the diagnostics. It no longer owns the audio.
+`src/server.ts` is the transport layer: websocket routing, roles, status broadcasts and the diagnostics. It no longer owns the audio or the Take file lifecycle.
 
 `src/audio-session.ts` owns the live mix - both PCM timelines, the session clock, the alignment the mixer applies and the health counters. It is told what happened (a source appeared, a frame arrived, a calibration succeeded) and decides for itself what that does to the audio, rather than having transport events reach in and reset the mix clock directly.
+
+`src/take-session.ts` owns the room recording lifecycle: `idle -> recording -> finalizing -> ready`, with `failed` as a terminal failure state. A Take records who pressed Start and Stop, but it does not belong to the Mic owner; a Mic handoff does not split the recording.
+
+`src/take-controller.ts` binds that lifecycle to one server-side WAV writer. `src/wav-take-writer.ts` streams the exact authoritative mixed PCM to a hidden `.wav.part`, patches and fsyncs the RIFF header at finalization, then publishes the stable `.wav`. Disk writes never block the mixer; a bounded write queue turns a persistently unhealthy filesystem into an explicit failed Take instead of unbounded process memory.
 
 `src/calibration-session.ts` owns one acoustic measurement: collecting, timing out, holding the answer, and knowing which setup that answer describes. Calibration is a tap on the live audio, not a stage in it - `AudioSession` never asks whether a measurement is running, and a normal take never passes through any of it. The server feeds it the same samples it feeds the mix and applies a result to the session's alignment when one lands.
 
@@ -61,14 +67,17 @@ Use the same `?key=some-random-string` query on the phone and on `source.html`.
 
 ## Tests
 
-`npm test` runs the suite on Node's built-in runner; it takes about ten seconds and needs no network.
+`npm test` runs the suite on Node's built-in runner and needs no network.
 
 - `test/timing-calibration.test.ts` feeds the analyser synthetic percussive audio with a known lag baked in and asserts the lag comes back.
 - `test/youtube-timeline.test.ts` drives `YouTubeTimelineTracker` with an injected clock and pins the anchor / re-anchor / seek classification.
 - `test/calibration-session.test.ts` drives the measurement lifecycle with an injected clock and a stubbed analyser: progress, completion, timeout, retry after failure, and which setup an answer is bound to.
 - `test/audio-session.test.ts` drives `AudioSession` with an injected clock: timeline placement, holes, re-anchoring, the read-ahead alignment, starvation and the prebuffer.
 - `test/pcm-frame.test.ts` pins the wire format, including the byte offsets the two browser encoders duplicate by hand.
-- `test/server.test.ts` starts the real server as a child process on an OS-assigned port and exercises it over WebSockets: raw microphone passthrough, the live mix, publisher takeover, mix-health starvation and gap reporting, reconnecting onto an existing timeline, shared-key auth, and the full calibration lifecycle.
+- `test/take-session.test.ts` pins the room-owned Take lifecycle, stale Stop protection, cross-participant Stop and terminal failure.
+- `test/wav-take-writer.test.ts` pins PCM16 WAV layout, atomic `.part -> .wav` publication, cleanup and bounded disk backpressure.
+- `test/take-server.test.ts` starts the real server and proves authoritative mixed PCM becomes a downloadable WAV, survives controller disconnect and Mic takeover, auto-finalizes when the live mix truly ends, and keeps shared-key protection.
+- the remaining real-server suites exercise raw microphone passthrough, the live mix, publisher takeover, mix-health starvation and gap reporting, reconnecting onto existing timelines, shared-key auth, playback authority and calibration lifecycle.
 
 `src/server.ts` reads `RELAY_LIVE_PREBUFFER_MS`, `RELAY_CALIBRATION_TIMEOUT_MS` and `RELAY_HEARTBEAT_MS` so tests do not have to spend the production timings on every run. They default to the production values.
 
@@ -84,14 +93,14 @@ Load the unpacked Chrome extension from `chrome-tab-audio-probe/` once in `chrom
 
 For an integrated run:
 
-1. On the computer, open **Monitor** or start **Solo recording** on the normal Relay page.
+1. On the computer, open **Monitor** if you want to hear Relay output during development. Recording no longer requires this page or a desktop recorder.
 2. On the phone, load YouTube in Relay, start playback, and start **Microphone** if you want voice in the mix.
 3. On the computer, open `http://localhost:3000/source.html` (with the same `?key=` when used).
 4. The source page automatically mirrors the phone's YouTube video ID and media timeline.
 5. Press **Enable source audio** once on the source page. This is the browser user gesture that allows the mirrored player to make sound.
 6. While `source.html` is the active tab, click the **Relay Tab Audio Source** extension icon.
 7. The extension captures that tab's rendered audio, converts it to mono Int16 PCM, and registers it with Relay as the `backing` source.
-8. Relay automatically switches Monitor / Solo Record to the 48 kHz live mix path. Stop the extension capture to return to the normal raw microphone path.
+8. Relay starts the 48 kHz live mix. Monitor receives it if connected, while any active Take receives the same authoritative mixed PCM directly inside the server.
 
 The source follower uses the existing server media clock. Large source/phone differences are corrected with `seekTo`; play, pause, buffering and deliberate seeks follow the phone timeline.
 
@@ -121,17 +130,23 @@ margin = prebuffer - appliedMicAdvanceMs
 
 Transport delay does not appear. Since both sides carry absolute sample indices, a slow link changes *when* audio lands, not *where* it is placed — the frames it holds up still land at the index they were captured at.
 
-**The prebuffer is a pure output delay**, and it was 4 s until measurements showed what that cost. Monitor playback adds its own 250 ms on top, so the singer heard themselves ~4.25 s late, which no one can sing against. It never affected *alignment* — it delays both streams equally — so the recordings were fine while the monitor was unusable, which is why it took a while to find.
+**The prebuffer is a pure output delay**, and it was 4 s until measurements showed what that cost. Monitor playback adds its own 250 ms on top, so the singer heard themselves ~4.25 s late, which no one can sing against. It never affected *alignment* — it delays both streams equally — so recordings could still be aligned while the monitor was unusable, which is why it took a while to find.
 
 The advance is clamped to what the buffers actually afford (`prebuffer - 200 ms` ahead, retained history behind) rather than obeyed on faith. Obeying an oversized measurement reads past the end of the microphone history and the vocal disappears; clamping leaves it late but audible, and `requestedMicAdvanceMs` diverging from `appliedMicAdvanceMs` in `source-status` is the signal to raise the prebuffer. Measured lags have so far run *negative* — the desktop player sits behind the phone — and those are paid for out of retained history, costing no prebuffer at all.
 
-When the margin does run out the mixer reads past the end of the microphone history and the vocal drops out in chunks; the server counts those frames and reports them as `mix-health`, which `source.html` and Solo recording both display, instead of failing silently.
+When the margin does run out the mixer reads past the end of the microphone history and the vocal drops out in chunks. The server already counts those frames in `mix-health`; Phase 0E will bind the relevant evidence to a specific Take instead of making the recording page infer quality from session-wide counters.
 
-### Take quality is measured over the take
+### Take recording is server-owned
 
-`mix-health` counters run for the whole live session. Solo recording baselines them when a take starts and quotes the difference, because a phone that was away *before* you pressed record is not damage to the recording — a 49 s take once reported a 48.7 s vocal gap alongside a single starved frame, which is what that bug looks like from the outside.
+A Take is now a Relay domain object rather than a browser `MediaRecorder` job. The browser only sends Start / Stop and observes `take-status`; the WAV writer consumes the exact 48 kHz mono Int16 frames emitted by the authoritative live mixer.
 
-`clippedSamples` counts what the summing stage had to clamp. Hard clipping sounds like a bad connection rather than like a level problem, so it is worth naming explicitly.
+A Take is room-owned, not Mic-owned. Participant A can start it, participant B can take the Mic and later stop it, and the same `takeId` remains active throughout. Disconnecting the page that pressed Start also does not stop recording. A temporary backing disconnect inside the existing source grace period stays inside the same Take; only when the authoritative live mix truly ends does Relay auto-finalize it with `stopReason: mix-ended`.
+
+By default artifacts live under `./takes`; set `RELAY_TAKE_DIR` to choose another directory. While recording, the file is `<takeId>.wav.part`. Relay patches and fsyncs the WAV header before atomically renaming it to `<takeId>.wav`, so a partial recording is never advertised as ready. With `RELAY_KEY` configured, `/takes/:takeId.wav` requires the same key and is served with private/no-store caching.
+
+The disk path is deliberately non-blocking for the mixer. The writer allows bounded buffering for short filesystem stalls, but if the pending queue grows beyond its safety ceiling the Take fails explicitly and the partial artifact is cleaned up rather than letting disk backpressure grow process memory without bound.
+
+**Phase 0D only establishes reliable recording and artifact lifecycle. It does not yet grade the recording.** Existing `mix-health`, clipping, limiter, calibration and reconnect evidence remains engineering state; Phase 0E will attach the relevant evidence to each Take and derive Take-level quality summaries.
 
 ### Microphone gain
 
@@ -144,7 +159,7 @@ Two things close that gap:
 
   The meter deliberately watches the live stream rather than the calibration, even though the calibration also measures the microphone. Calibration asks the singer to stay quiet for its six seconds, so what it measures is the room and the phone's own speaker — not the voice the gain has to carry. Measuring the peak directly also avoids having to assume a crest factor to get there from RMS.
 
-`limitedSamples` reports how much the limiter worked. It is not a fault — but a take limited almost end to end has had its dynamics flattened, and that is worth knowing.
+`limitedSamples` reports how much the limiter worked. It is not automatically a fault, but Phase 0E can use sustained limiting as Take quality evidence rather than asking the UI to interpret the raw counter itself.
 
 ### Framed PCM
 
@@ -163,13 +178,13 @@ The captured song now works the same way. Its socket closing used to end the who
 
 Song level and mic gain are therefore server state, not page state. Both pages carry a slider, either can move it, and the server echoes the change to the other. Song level can still only be *acted* on by the page that owns the mirrored player — it ends up as `player.setVolume` — which is exactly why the value has to travel rather than being read off a local slider.
 
-Calibration runs unattended, but the singer is the one who can hear that it landed wrong, so the phone has its own button for it.
+Calibration runs unattended, but the singer is the one who can hear that it landed wrong, so the phone has its own button for it. Take Start / Stop is also room state now; the phone does not have to become an audio recorder to control it.
 
 ### Calibration runs itself
 
 The desktop is meant to run unattended, so the measurement does not wait for anyone to press the button. Once a session is live with both sides connected and the phone playing, the server takes one on its own, and retries every `RELAY_AUTO_CALIBRATION_RETRY_MS` (15 s) until one lands. Failing is usually the singer being mid-phrase, which stops being true a few seconds later, so `source.html` shows an unattended failure as a wait rather than an error. Set `RELAY_AUTO_CALIBRATE=0` to go back to pressing the button.
 
-It only fires when there is nothing usable to fall back on — no measurement, or one that no longer describes this setup. That keeps it away from a take in progress: applying a fresh alignment mid-song shifts the vocal audibly, and every event that invalidates a measurement has already disturbed the take anyway.
+It only fires when there is nothing usable to fall back on — no measurement, or one that no longer describes this setup. That keeps it away from unnecessary recalibration; applying a fresh alignment mid-song shifts the vocal audibly, and every event that invalidates a measurement has already disturbed the take anyway.
 
 ### Connected is not streaming
 
@@ -210,16 +225,13 @@ Measured over consecutive windows of unrelated audio, the analyser accepts most 
 
 The cost is time, not CPU — one analysis is about 4 ms against a 20 ms frame budget, so the limit is the 6 s each window takes to collect. Set `RELAY_CALIBRATION_AGREEMENT=1` for the old single-shot behaviour.
 
-`RELAY_CALIBRATION_MAX_LAG_MS` (700) bounds how far the analyser looks. This is **not** what rejects false positives — narrowing the search from ±2 s changed where they land but not how often they are accepted. It is about applicability: the mixer clamps the advance to what its buffers afford, so a measurement of −1975 ms would be applied as −1300 ms and still report success. The bound is physical — the desktop player is only corrected past 450 ms of error, transport adds a fraction of that locally, and the acoustic path is a few milliseconds — so nothing real lives outside it, while beat multiples do.
+`RELAY_CALIBRATION_MAX_LAG_MS` defaults to 2500 ms and bounds how far the analyser looks. This is **not** what rejects false positives; it limits the search domain, while repeatability across independent windows is what keeps unstable false matches from reaching the live alignment.
 
-### Test mode is only the test
+### Live-session continuity
 
-`test-status` describes the click sync test and nothing else. It used to report a running live session as `mode: 'tab-source'`, because the browser clients had no other way to learn that the server had started mixing — so every live take ran them in test mode. That dropped the monitor slider to 0 dB at the start of each take and stopped remembering what the singer set during it. A live session is described by `source-status`; the clients listen to that, and derive "the server is mixing" from either source.
-- The captured song used to be buffered only while a phone was connected, and the mixer stopped entirely without one. Both streams are now independent: an absent phone costs the mix its vocal, not the whole take.
+The captured song used to be buffered only while a phone was connected, and the mixer stopped entirely without one. Both streams are now independent: an absent phone costs the mix its vocal, not the whole take.
 
 A timing calibration therefore survives a websocket reconnect. It is marked stale only when the microphone starts a *new* capture session, which the server learns from the generation on the first frame that arrives.
-
-Recording must be done on the computer. Solo recording downloads the full 48 kHz mix and encodes it live, which a phone cannot do while also capturing and uploading the microphone; the page warns if you start it on the publishing device.
 
 Relay uses the phone timeline RTT/2 as a first-order microphone network compensation when the captured tab source connects. `Vocal fine tune` on `source.html` is the manual adjustment on top of the calibrated value; the old `Voice offset` slider is gone, because the live mixer never read it.
 
@@ -233,11 +245,13 @@ The phone-side visible YouTube IFrame reports video ID, player state, current me
 
 Normal video/state/rate transitions are counted as re-anchors. Seek/discontinuity jumps are counted separately as corrections. Drift is measured from YouTube media-time progression against the server monotonic receive clock; RTT is used only for approximate transport/phase information.
 
-## Solo recording
+## Take recording
 
-Solo recording opens an independent monitor connection and records the Server output before local Monitor gain. With the captured tab source connected, that output is the live song + microphone mix. Without it, recording falls back to the normal microphone relay.
+`start-take` creates one room-owned Take against the currently active authoritative mix and current room song. `stop-take` includes the current `takeId`, which prevents a delayed Stop from an old page from terminating a newer recording. Any identified room participant may control the Take; starter/stopped-by identities are retained as metadata rather than authority ownership.
 
-The recorder reconnects on its own if the Relay connection drops mid-take, so a `tsx watch` restart or a tunnel hiccup no longer ends the recording. The dropout becomes silence in the file and is reported in the completion summary along with any buffer underruns and any frames the server had to drop.
+The controller browser can disconnect and reconnect without affecting the WAV writer. On reconnect it asks for `take-status` and resumes observing the server lifecycle. Mic ownership can also change while recording without splitting the artifact.
+
+The current Phase 0D state keeps the latest Take lifecycle and its artifact metadata in memory and writes the WAV to disk. A persistent Take catalog/history across server restarts is not part of this phase.
 
 ## Legacy diagnostics
 
@@ -254,7 +268,10 @@ The 120 BPM click mixer remains as an engineering diagnostic for the microphone 
 - a desktop mirrored YouTube source can be controlled from the phone timeline
 - captured desktop tab audio can be forwarded to Relay as PCM
 - Relay has a buffered 48 kHz path for combining captured song audio with the phone microphone
+- the authoritative mixed PCM can be written directly by Relay as a finalized PCM16 WAV without a browser recorder
+- a Take survives controller disconnect and Mic handoff without splitting
+- a truly ended live mix finalizes the active Take instead of leaving fake recording state
 
 ## Next milestone
 
-Run one integrated real-device take and inspect the resulting recording. Once the full song + microphone path is stable, calibrate the remaining fixed acoustic/output offset, then add Discord as the final output transport.
+Phase 0E: bind quality evidence to each Take. Relay already knows about stream gaps, clipping/limiting, calibration validity and reconnects; the next step is to record the evidence that happened during one Take and summarize it without making the UI interpret session-wide engineering counters.

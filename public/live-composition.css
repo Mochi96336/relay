@@ -1,0 +1,173 @@
+/* Formal phone composition.
+   This layer owns spatial hierarchy only. Product-state emphasis stays in
+   live-state.css and playback-role behavior stays in song-surface.css. */
+
+.live-shell {
+  padding-top: 18px;
+  padding-bottom: max(22px, env(safe-area-inset-bottom));
+}
+
+.room-header {
+  min-height: 38px;
+}
+
+.room-mark {
+  font-size: 15px;
+  letter-spacing: -.04em;
+}
+
+.song-stage {
+  padding-top: clamp(22px, 4vh, 38px);
+}
+
+.youtube-player-shell {
+  width: calc(100% + 12px);
+  margin-left: -6px;
+  min-height: 0;
+  border-color: rgba(255, 255, 255, .07);
+  border-radius: 18px;
+}
+
+.youtube-player-shell > div,
+.youtube-player-shell iframe {
+  min-height: 0;
+}
+
+.youtube-readout {
+  margin: 8px 2px 0;
+}
+
+/* Secondary song context must survive normal phone brightness without
+   competing with the media field itself. */
+.song-device-note {
+  color: #85888f;
+}
+
+#youtube-note {
+  color: #7f8289;
+}
+
+.performance-stage {
+  padding-top: clamp(32px, 5.5vh, 54px);
+}
+
+.voice-ribbon {
+  height: 52px;
+  margin: 7px 0 14px;
+  gap: 6px;
+}
+
+.voice-copy strong {
+  max-width: 18ch;
+  font-size: clamp(30px, 8vw, 42px);
+  line-height: .98;
+  letter-spacing: -.045em;
+  font-weight: 640;
+}
+
+.mic-actions {
+  min-height: 38px;
+  margin-top: 20px;
+}
+
+.take-strip {
+  margin-top: 16px;
+  padding-top: 0;
+  text-align: left;
+}
+
+.take-actions {
+  min-height: 34px;
+  justify-content: flex-start;
+}
+
+#start-recording:not(:disabled)::before,
+#stop-recording:not(:disabled)::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  vertical-align: 1px;
+  opacity: .72;
+}
+
+.take-strip .microcopy {
+  min-height: 15px;
+  text-align: left;
+}
+
+/* Last take stays inside Live. The summary is lightweight; native playback is
+   disclosed only when the person asks to review it. */
+.last-take {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.last-take[hidden],
+.take-review[hidden] {
+  display: none;
+}
+
+#last-take-toggle {
+  margin: 0;
+  text-align: left;
+}
+
+.take-review {
+  width: min(100%, 360px);
+  display: grid;
+  justify-items: start;
+  gap: 7px;
+}
+
+#recording-player {
+  width: 100%;
+  height: 36px;
+  margin-top: 0;
+}
+
+.take-download {
+  color: #777a81;
+  font-size: 10px;
+  text-decoration: none;
+}
+
+/* Keep the controls low in the composition, but do not let flex auto-margin
+   turn the space after Take into an accidental empty panel on tall phones. */
+.live-actions {
+  margin-top: clamp(48px, 6vh, 64px);
+  padding-top: 18px;
+}
+
+.system-panel {
+  margin-top: 4px;
+}
+
+.system-panel > summary {
+  padding: 12px 0 2px;
+  color: #60636a;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 420px) {
+  .song-stage { padding-top: 20px; }
+  .performance-stage { padding-top: 30px; }
+}
+
+@media (max-height: 760px) {
+  .live-shell { padding-top: 14px; }
+  .song-stage { padding-top: 16px; }
+  .performance-stage { padding-top: 26px; }
+  .voice-ribbon { height: 42px; margin-bottom: 10px; }
+  .mic-actions { margin-top: 15px; }
+  .take-strip { margin-top: 10px; }
+  .live-actions { margin-top: 36px; padding-top: 13px; }
+}

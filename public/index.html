@@ -3,61 +3,51 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="dark" />
     <title>Relay</title>
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/live-state.css" />
+    <link rel="stylesheet" href="/adjust.css" />
+    <link rel="stylesheet" href="/song-surface.css" />
+    <link rel="stylesheet" href="/system-details.css" />
   </head>
-  <body>
-    <main class="shell">
-      <p class="eyebrow">RELAY / AUDIO PROTOTYPE</p>
-      <h1>Phone mic → mixer</h1>
-      <p class="intro">手機 YouTube 給歌手自己聽；Relay 把它的 timeline 交給電腦上的 Source 分頁。Source 播同一支 YouTube，Chrome 再把那個分頁的實際聲音送回 Server，和手機 Mic 混在一起。</p>
+  <body data-lifecycle="idle" data-health="healthy" data-timing="idle" data-self-mic="off" data-playback-role="connecting">
+    <main class="live-shell">
+      <header class="room-header">
+        <div class="room-mark" aria-label="Relay">Relay</div>
+        <details class="people-menu">
+          <summary><strong id="participant-count">Connecting…</strong></summary>
+          <div class="people-popover">
+            <div class="identity-editor">
+              <span class="identity-label">You</span>
+              <button id="identity-name" class="identity-name" type="button" title="Rename yourself"></button>
+              <input id="identity-input" class="identity-input" type="text" maxlength="32" autocomplete="off" aria-label="Your Relay nickname" hidden />
+            </div>
+            <div id="participant-list" class="participant-list" aria-live="polite"></div>
+          </div>
+        </details>
+      </header>
 
-      <section class="presence-panel" aria-label="Relay session">
-        <div class="presence-heading">
-          <div class="presence-state">
-            <span class="presence-dot" aria-hidden="true"></span>
-            <strong id="participant-count">Connecting…</strong>
-          </div>
-          <div class="identity-editor">
-            <span class="identity-label">You</span>
-            <button id="identity-name" class="identity-name" type="button" title="Rename yourself"></button>
-            <input id="identity-input" class="identity-input" type="text" maxlength="32" autocomplete="off" aria-label="Your Relay nickname" hidden />
-            <button id="release-mic" class="quiet-button" type="button" hidden>Release mic</button>
-          </div>
-        </div>
-        <div id="participant-list" class="participant-list" aria-live="polite"></div>
-        <div id="mic-takeover" class="takeover-row" aria-live="polite" hidden>
-          <span id="mic-takeover-copy"></span>
-          <div class="inline-actions">
-            <button id="confirm-takeover" type="button">Confirm takeover</button>
-            <button id="cancel-takeover" class="quiet-button" type="button">Cancel</button>
+      <section class="song-stage" data-playback-role="connecting" aria-label="Room song">
+        <div class="song-heading-row">
+          <div class="section-label">Song</div>
+          <div class="song-heading-actions">
+            <span id="song-device-note" class="song-device-note" aria-live="polite">Connecting…</span>
+            <button id="change-youtube" class="text-action" type="button" hidden>Change song</button>
           </div>
         </div>
-      </section>
 
-      <section class="panel" aria-live="polite">
-        <strong id="status">Idle</strong>
-        <span id="details"></span>
-      </section>
-
-      <div class="actions">
-        <button id="start-publisher" class="primary">🎤 Microphone</button>
-        <button id="start-monitor">🎧 Monitor</button>
-        <button id="stop" disabled>Stop</button>
-      </div>
-
-      <section class="test-panel youtube-panel">
-        <div class="test-heading">
-          <div>
-            <strong>YouTube monitor</strong>
-            <span>歌手手機用這個可見播放器正常聽歌；Relay 讀播放狀態與媒體時間。</span>
+        <div id="song-observer" class="song-observer" aria-live="polite" hidden>
+          <img id="room-song-artwork" alt="" />
+          <div class="song-observer-meta">
+            <strong id="room-song-state">Room song</strong>
+            <span id="room-song-timeline">--:-- / --:--</span>
           </div>
         </div>
 
         <div class="youtube-form">
-          <input id="youtube-url" type="text" inputmode="url" autocomplete="off" placeholder="YouTube URL or video ID" aria-label="YouTube URL or video ID" />
-          <button id="load-youtube">Load</button>
+          <input id="youtube-url" type="text" inputmode="url" autocomplete="off" placeholder="Paste a YouTube link" aria-label="YouTube URL or video ID" />
+          <button id="load-youtube" type="button">Load</button>
         </div>
 
         <div class="youtube-player-shell">
@@ -68,81 +58,250 @@
           <strong id="youtube-state">not loaded</strong>
           <span id="youtube-timeline">--:-- / --:--</span>
         </div>
-        <p id="youtube-note" class="hint">Load a video, tap Play in the YouTube player, then start Microphone.</p>
+        <p id="youtube-note" class="microcopy">Paste a song, then use the YouTube player normally.</p>
       </section>
 
-      <section class="test-panel">
-        <div class="test-heading">
-          <div>
-            <strong>Desktop YouTube source</strong>
-            <span>電腦另外開一個 Source 分頁，它會自動跟手機的 video / play / pause / seek。Chrome 擴充功能只擷取這個分頁。</span>
-          </div>
-          <div class="test-actions">
-            <button type="button" onclick="window.open('http://localhost:3000/source.html' + location.search, '_blank')">Open source</button>
-          </div>
+      <section class="performance-stage" aria-live="polite">
+        <div class="section-label">Voice</div>
+        <div class="voice-ribbon" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
         </div>
-        <p class="hint">這顆按鈕固定開本機 <code>localhost:3000</code>，不會再跟著 Cloudflare 網址走。手機開始播放後：Open source → Enable source audio → 在 Source 分頁點 Relay Tab Audio Source 擴充功能。</p>
-      </section>
-
-      <section class="test-panel">
-        <div class="test-heading">
-          <div>
-            <strong>Solo recording</strong>
-            <span>直接錄 Server 輸出。Source capture 連著時，這裡錄到的是 YouTube tab audio + 手機 Mic。</span>
-          </div>
-          <div class="test-actions">
-            <button id="start-recording">● Record</button>
-            <button id="stop-recording" disabled>■ Stop</button>
-          </div>
+        <div class="voice-copy">
+          <strong id="live-state-title">Connecting…</strong>
+          <span id="live-state-detail"></span>
         </div>
-        <p id="recording-status" class="hint">先把手機 Mic 與 Desktop source 接好，再按 Record 做一次完整 take。</p>
-        <audio id="recording-player" controls hidden style="width: 100%; margin-top: 12px"></audio>
-        <a id="download-recording" class="note" hidden>Download recording</a>
-      </section>
 
-      <section class="test-panel">
-        <div class="test-heading">
-          <div>
-            <strong>Legacy click sync test</strong>
-            <span>保留原本的 120 BPM 工程測試；現在不用優先碰它。</span>
-          </div>
-          <div class="test-actions">
-            <button id="start-sync-test" disabled>Start test</button>
-            <button id="stop-sync-test" disabled>Stop test</button>
+        <div class="mic-actions">
+          <button id="start-publisher" class="mic-primary" type="button">Take mic</button>
+          <button id="release-mic" class="text-action" type="button" hidden>Release mic</button>
+        </div>
+
+        <div id="mic-takeover" class="takeover-row" aria-live="polite" hidden>
+          <span id="mic-takeover-copy"></span>
+          <div class="inline-actions">
+            <button id="confirm-takeover" type="button">Take mic</button>
+            <button id="cancel-takeover" class="text-action" type="button">Cancel</button>
           </div>
         </div>
       </section>
 
-      <label class="gain-control" for="song-level">
-        <span>Song level</span>
-        <input id="song-level" type="range" min="0" max="100" step="1" value="40" disabled />
-        <output id="song-level-value" for="song-level">40%</output>
-      </label>
+      <section class="take-strip" aria-label="Take recording">
+        <div class="take-actions">
+          <button id="start-recording" class="record-action" type="button">Record take</button>
+          <button id="stop-recording" class="record-action recording" type="button" disabled>Stop</button>
+        </div>
+        <p id="recording-status" class="microcopy"></p>
+        <div id="last-take" class="last-take" hidden>
+          <button id="last-take-toggle" class="take-link text-action" type="button" aria-expanded="false">Last take</button>
+          <div id="last-take-review" class="take-review" hidden>
+            <audio id="recording-player" controls preload="metadata"></audio>
+            <a id="download-recording" class="take-download text-action" download>Download WAV</a>
+          </div>
+        </div>
+      </section>
 
-      <label class="gain-control" for="mic-gain">
-        <span>Mic gain</span>
-        <input id="mic-gain" type="range" min="0" max="36" step="1" value="24" disabled />
-        <output id="mic-gain-value" for="mic-gain">+24 dB</output>
-      </label>
-      <p id="mic-gain-advice" class="hint">開始唱之後，這裡會顯示實際電平與建議的 Mic gain。</p>
+      <footer class="live-actions">
+        <div class="listen-action">
+          <button id="listen-toggle" class="text-action" type="button" aria-pressed="false">Mute</button>
+          <span id="listen-note" class="action-note" aria-live="polite"></span>
+        </div>
 
-      <div class="actions">
-        <button id="calibrate-timing">校正人聲時間</button>
-      </div>
-      <p id="calibrate-status" class="hint">播放開始後會自動校正；覺得對不上可以在這裡手動重跑。</p>
+        <details class="adjust-panel">
+          <summary>Adjust</summary>
+          <div class="adjust-sheet">
+            <div class="adjust-heading">
+              <strong>Adjust</strong>
+              <span>Performance tuning</span>
+            </div>
 
-      <label class="gain-control" for="monitor-gain">
-        <span>Monitor gain</span>
-        <input id="monitor-gain" type="range" min="0" max="30" step="1" value="30" />
-        <output id="monitor-gain-value" for="monitor-gain">+30 dB</output>
-      </label>
-      <p class="hint">人聲對齊在 Source 分頁用 Calibrate timing 量測，再用該頁的 fine tune 微調。</p>
+            <section class="adjust-group room-mix" aria-labelledby="room-mix-label">
+              <div class="adjust-group-heading">
+                <span id="room-mix-label" class="section-label">Room mix</span>
+                <span>Shared</span>
+              </div>
 
-      <p class="note">手機 Mic 仍需要 HTTPS；Desktop source 則固定用本機 Relay (`localhost`) 讓 Chrome 擴充功能只把聲音送回本機 Server。</p>
+              <div class="adjust-control voice-adjust">
+                <div class="adjust-row-heading">
+                  <strong>Voice</strong>
+                  <output id="mic-gain-value" for="mic-gain">+24 dB</output>
+                </div>
+
+                <div class="voice-input-evidence">
+                  <div class="evidence-heading">
+                    <span>Input</span>
+                    <output id="mic-input-value">Listening…</output>
+                  </div>
+                  <div id="mic-input-meter" class="voice-input-meter" aria-hidden="true"></div>
+                </div>
+
+                <div class="gain-control">
+                  <div class="gain-rail">
+                    <input id="mic-gain" class="adjust-range" type="range" min="0" max="36" step="1" value="24" disabled aria-label="Voice gain" />
+                    <span id="mic-gain-recommendation-marker" class="recommendation-marker" hidden aria-hidden="true"></span>
+                  </div>
+                  <div class="recommendation-meta">
+                    <span id="mic-gain-recommendation">Sing normally for a moment.</span>
+                    <button id="use-mic-gain-suggestion" class="text-action recommendation-action" type="button" hidden>Use suggestion</button>
+                  </div>
+                  <p id="mic-gain-advice" class="adjust-helper">Relay will suggest a stable gain after it has enough voice.</p>
+                </div>
+              </div>
+
+              <label class="adjust-control" for="song-level">
+                <div class="adjust-row-heading">
+                  <strong>Song</strong>
+                  <output id="song-level-value" for="song-level">40%</output>
+                </div>
+                <input id="song-level" class="adjust-range" type="range" min="0" max="100" step="1" value="40" disabled />
+              </label>
+            </section>
+
+            <section class="adjust-group local-listen" aria-labelledby="local-listen-label">
+              <div class="adjust-group-heading">
+                <span id="local-listen-label" class="section-label">This phone</span>
+                <span>Local only</span>
+              </div>
+              <label class="adjust-control" for="listen-gain">
+                <div class="adjust-row-heading">
+                  <strong>Listen volume</strong>
+                  <output id="listen-gain-value" for="listen-gain">30%</output>
+                </div>
+                <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="30" />
+              </label>
+              <p id="listen-adjust-state" class="adjust-helper">Sound is on by default after your first interaction.</p>
+            </section>
+
+            <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">
+              <div class="adjust-group-heading">
+                <span id="timing-adjust-label" class="section-label">Timing</span>
+                <span>Room alignment</span>
+              </div>
+              <div class="timing-row">
+                <strong id="calibrate-status">Waiting for playback</strong>
+                <button id="calibrate-timing" class="text-action" type="button">Recalibrate</button>
+              </div>
+            </section>
+          </div>
+        </details>
+      </footer>
+
+      <section id="system-attention" class="attention-region" aria-live="polite" hidden>
+        <button id="attention-link" type="button" class="attention-link">
+          <span id="attention-copy">System needs attention</span><span>›</span>
+        </button>
+      </section>
+
+      <details id="system-panel" class="system-panel">
+        <summary>System</summary>
+        <div class="system-sheet">
+          <details class="system-item" data-system-scope="relay">
+            <summary><span class="system-item-name">Relay</span><strong id="system-relay">Connecting</strong><span class="system-chevron">›</span></summary>
+            <p id="system-relay-detail" class="system-item-detail">Room connection and lifecycle.</p>
+          </details>
+          <details class="system-item" data-system-scope="phones">
+            <summary><span class="system-item-name">Phones</span><strong id="system-phones">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-phones-detail" class="system-item-detail">People and microphone state.</p>
+          </details>
+          <details class="system-item" data-system-scope="robot">
+            <summary><span class="system-item-name">Robot</span><strong id="system-robot">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-robot-detail" class="system-item-detail">Robot route state appears when System is opened.</p>
+          </details>
+          <details class="system-item" data-system-scope="audio">
+            <summary><span class="system-item-name">Audio</span><strong id="system-audio">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-audio-detail" class="system-item-detail">Room song and voice path.</p>
+          </details>
+          <details class="system-item" data-system-scope="timing">
+            <summary><span class="system-item-name">Timing</span><strong id="system-timing">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-timing-detail" class="system-item-detail">Performance alignment state.</p>
+          </details>
+          <details class="system-item" data-system-scope="recording">
+            <summary><span class="system-item-name">Recording</span><strong id="system-recording">—</strong><span class="system-chevron">›</span></summary>
+            <p id="system-recording-detail" class="system-item-detail">Current and most recent Take state.</p>
+          </details>
+
+          <details id="diagnostics-panel" class="diagnostics-panel">
+            <summary>Technical details</summary>
+            <div class="diagnostics-body">
+              <div class="diagnostics-toolbar">
+                <span id="diagnostics-state">Open to refresh</span>
+                <button id="copy-diagnostics" class="text-action" type="button">Copy diagnostics</button>
+              </div>
+
+              <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics">
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true">Overview</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="session" aria-selected="false">Session</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false">Audio</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false">Timing</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="robot" aria-selected="false">Robot</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="raw" aria-selected="false">Raw</button>
+              </div>
+
+              <section class="diagnostics-view" data-diagnostics-panel="overview">
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Product health</dt><dd id="diag-overview-health">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Lifecycle</dt><dd id="diag-overview-lifecycle">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Host ready</dt><dd id="diag-overview-ready">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Session ready</dt><dd id="diag-overview-session-ready">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="session" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>People</dt><dd id="diag-session-people">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Microphone</dt><dd id="diag-session-mic">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Song</dt><dd id="diag-session-song">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Take</dt><dd id="diag-session-take">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="audio" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Route</dt><dd id="diag-audio-route">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Backing</dt><dd id="diag-audio-backing">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Mic stream</dt><dd id="diag-audio-mic">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Mixer</dt><dd id="diag-audio-mix">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="timing" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Product timing</dt><dd id="diag-timing-product">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Timeline</dt><dd id="diag-timing-player">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Calibration</dt><dd id="diag-timing-calibration">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Player offset</dt><dd id="diag-timing-offset">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="robot" hidden>
+                <dl class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Route mode</dt><dd id="diag-robot-mode">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Source page</dt><dd id="diag-robot-source">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Backing</dt><dd id="diag-robot-backing">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Player</dt><dd id="diag-robot-player">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="raw" hidden>
+                <pre id="diagnostics-raw" class="diagnostics-raw">{}</pre>
+              </section>
+
+              <div class="legacy-status-readout" hidden aria-hidden="true">
+                <strong id="status">Idle</strong>
+                <span id="details"></span>
+              </div>
+            </div>
+          </details>
+        </div>
+      </details>
     </main>
+
     <script src="/presence.js"></script>
+    <script type="module" src="/live-status.js"></script>
+    <script type="module" src="/system-details.js"></script>
     <script type="module" src="/app.js"></script>
+    <script type="module" src="/listen.js"></script>
     <script type="module" src="/recorder.js"></script>
+    <script type="module" src="/song-surface.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>
   </body>

@@ -7,15 +7,18 @@
     "node": ">=20.19"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
-    "backing:stdin": "tsx src/backing-stdin.ts",
+    "dev": "tsx watch src/server-entry.ts",
+    "start": "tsx src/server-entry.ts",
+    "backing:stdin": "tsx src/backing-entry.ts",
     "robot:doctor": "bash scripts/robot-doctor.sh",
     "robot:source": "bash scripts/robot-source.sh",
     "check": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:webtransport-loopback": "node --import tsx scripts/webtransport-loopback.mjs"
   },
   "dependencies": {
+    "@fails-components/webtransport": "1.6.7",
+    "@fails-components/webtransport-transport-http3-quiche": "1.6.7",
     "express": "^5.2.1",
     "ws": "^8.21.1"
   },

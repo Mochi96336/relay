@@ -9,12 +9,11 @@
   const confirmTakeoverButton = document.querySelector('#confirm-takeover');
   const cancelTakeoverButton = document.querySelector('#cancel-takeover');
   const publisherButton = document.querySelector('#start-publisher');
-  const stopButton = document.querySelector('#stop');
 
   if (
     !participantCount || !participantList || !identityButton || !identityInput
     || !releaseButton || !takeoverPanel || !takeoverCopy
-    || !confirmTakeoverButton || !cancelTakeoverButton || !publisherButton || !stopButton
+    || !confirmTakeoverButton || !cancelTakeoverButton || !publisherButton
   ) return;
 
   const PARTICIPANT_ID_KEY = 'relay.participantId.v1';

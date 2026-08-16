@@ -15,6 +15,7 @@ import type { PcmFrame } from './pcm-frame.js';
 type PcmChunk = {
   start: number;
   samples: Int16Array;
+  positioned: boolean;
 };
 
 type PcmTimeline = {
@@ -35,6 +36,26 @@ export type AlignmentState = {
   networkCompensationMs: number;
   calibratedMicLagMs: number | null;
   fineTuneMs: number;
+};
+
+/**
+ * Raw evidence for exactly one mixed output frame.
+ *
+ * These values describe what the mixer actually read for the samples it just
+ * emitted. They deliberately contain no Take verdict or policy: the audio
+ * domain reports facts, while the Take domain decides whether those facts mean
+ * clean, review or degraded.
+ */
+export type MixFrameEvidence = {
+  micGapSamples: number;
+  backingGapSamples: number;
+  micStarvedSamples: number;
+  backingStarvedSamples: number;
+  micUnavailableSamples: number;
+  backingUnavailableSamples: number;
+  clippedSamples: number;
+  limitedSamples: number;
+  unheaderedSamples: number;
 };
 
 export type MixHealth = {
@@ -356,7 +377,11 @@ export class AudioSession {
   }
 
   /** Emits every frame whose time has come. Returns how many were produced. */
-  drain(emit: (frame: Buffer) => void, nowMs = performance.now(), maxFrames = 5) {
+  drain(
+    emit: (frame: Buffer, evidence: MixFrameEvidence) => void,
+    nowMs = performance.now(),
+    maxFrames = 5,
+  ) {
     if (!this.running) return 0;
 
     const elapsed = nowMs - this.startedAt - this.prebufferMs;
@@ -367,7 +392,8 @@ export class AudioSession {
     let sent = 0;
 
     while (remaining > 0) {
-      emit(this.mixFrame(this.frameIndex));
+      const mixed = this.mixFrame(this.frameIndex);
+      emit(mixed.frame, mixed.evidence);
       this.frameIndex += 1;
       remaining -= 1;
       sent += 1;
@@ -431,12 +457,13 @@ export class AudioSession {
 
   private ingest(timeline: PcmTimeline, frame: PcmFrame, sourceRate: number | null, nowMs: number): IngestResult {
     if (!sourceRate) return { samples: new Int16Array(0), start: timeline.totalSamples };
-    const samples = this.resample(frame.pcm, sourceRate);
+    let samples = this.resample(frame.pcm, sourceRate);
     if (samples.length === 0) return { samples, start: timeline.totalSamples };
 
     let start: number;
+    const positioned = frame.firstSampleIndex !== null;
 
-    if (frame.firstSampleIndex === null) {
+    if (!positioned) {
       // No header: the only thing left to do is append at the frontier, which
       // is the old lossy behaviour. Flag it so the UI can say the client is
       // stale rather than letting it degrade invisibly.
@@ -446,7 +473,7 @@ export class AudioSession {
       // Each frame states its own position, so rounding never accumulates and a
       // missing frame leaves a hole of exactly the right length instead of
       // pulling everything after it earlier.
-      const streamStart = Math.round((frame.firstSampleIndex * this.sampleRate) / sourceRate);
+      const streamStart = Math.round((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
 
       if (timeline.generation !== frame.generation) {
         // A fresh capture session. Anchor it to the session clock; the previous
@@ -459,14 +486,22 @@ export class AudioSession {
     }
 
     if (start < timeline.totalSamples) {
-      // Out of order or overlapping. Ordered transport makes this a rounding
-      // artefact at worst, so keep the frontier rather than corrupting the sort.
+      // Transport ordering is no longer an AudioSession contract. The packet
+      // receiver normally prevents late overlap, but this boundary still must
+      // not relocate old audio to "now" if a caller violates it. Keep only a
+      // genuinely new tail; a fully late packet contributes nothing.
+      const overlap = timeline.totalSamples - start;
+      if (overlap >= samples.length) {
+        return { samples: new Int16Array(0), start: timeline.totalSamples };
+      }
+      samples = samples.slice(overlap);
       start = timeline.totalSamples;
     } else if (start > timeline.totalSamples && timeline.chunks.length > 0) {
       timeline.gapSamples += start - timeline.totalSamples;
     }
 
-    timeline.chunks.push({ start, samples });
+    if (samples.length === 0) return { samples, start };
+    timeline.chunks.push({ start, samples, positioned });
     timeline.totalSamples = start + samples.length;
     return { samples, start };
   }
@@ -564,6 +599,64 @@ export class AudioSession {
     return output;
   }
 
+  /**
+   * Describes missing/legacy source samples for exactly the requested output
+   * range. Silence before session sample zero is structural pre-roll and is not
+   * counted as a source failure. Missing samples inside an established frontier
+   * are gaps; samples beyond the frontier are starvation/unavailability.
+   */
+  private readEvidence(timeline: PcmTimeline, startSample: number, count: number) {
+    let cursor = startSample;
+    let remaining = count;
+    let gapSamples = 0;
+    let frontierMissingSamples = 0;
+    let unheaderedSamples = 0;
+
+    if (remaining <= 0) return { gapSamples, frontierMissingSamples, unheaderedSamples };
+    if (cursor < 0) {
+      const preRoll = Math.min(remaining, -cursor);
+      cursor += preRoll;
+      remaining -= preRoll;
+    }
+    if (remaining <= 0) return { gapSamples, frontierMissingSamples, unheaderedSamples };
+
+    if (timeline.chunks.length === 0 || cursor >= timeline.totalSamples) {
+      frontierMissingSamples += remaining;
+      return { gapSamples, frontierMissingSamples, unheaderedSamples };
+    }
+
+    let chunkIndex = this.firstChunkAtOrBefore(timeline, cursor);
+    while (remaining > 0) {
+      if (cursor >= timeline.totalSamples || chunkIndex >= timeline.chunks.length) {
+        frontierMissingSamples += remaining;
+        break;
+      }
+
+      const chunk = timeline.chunks[chunkIndex];
+      const chunkEnd = chunk.start + chunk.samples.length;
+      if (cursor >= chunkEnd) {
+        chunkIndex += 1;
+        continue;
+      }
+
+      if (cursor < chunk.start) {
+        const missing = Math.min(remaining, chunk.start - cursor);
+        gapSamples += missing;
+        cursor += missing;
+        remaining -= missing;
+        continue;
+      }
+
+      const available = Math.min(remaining, chunkEnd - cursor);
+      if (!chunk.positioned) unheaderedSamples += available;
+      cursor += available;
+      remaining -= available;
+      chunkIndex += 1;
+    }
+
+    return { gapSamples, frontierMissingSamples, unheaderedSamples };
+  }
+
   private trim(timeline: PcmTimeline, beforeSample: number) {
     while (timeline.chunks.length > 1) {
       const chunk = timeline.chunks[0];
@@ -626,7 +719,7 @@ export class AudioSession {
     return value * this.limiterGain;
   }
 
-  private mixFrame(frameIndex: number) {
+  private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
     const startSample = frameIndex * this.frameSamples;
     const advanceSamples = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
     const micReadStart = startSample + advanceSamples;
@@ -641,6 +734,14 @@ export class AudioSession {
     this.backingHeadroomMs = ((this.backing.totalSamples - (startSample + this.frameSamples)) / this.sampleRate) * 1000;
     if (this.micHeadroomMs < 0 && this.micExpected) this.micStarvedFrames += 1;
     if (this.backingHeadroomMs < 0 && this.backingExpected) this.backingStarvedFrames += 1;
+
+    // Take evidence is scoped only to source samples that feed this emitted
+    // frame. In particular, the limiter look-ahead may be short without a single
+    // emitted vocal sample being missing, so it is deliberately excluded here.
+    const micReadEvidence = this.readEvidence(this.mic, micReadStart, this.frameSamples);
+    const backingReadEvidence = this.readEvidence(this.backing, startSample, this.frameSamples);
+    const clippedBefore = this.clippedSamples;
+    const limitedBefore = this.limitedSamples;
 
     // The extra tail is the limiter's look-ahead, not audio to be emitted.
     const lookahead = this.limiterLookaheadSamples;
@@ -660,8 +761,20 @@ export class AudioSession {
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
     }
 
+    const evidence: MixFrameEvidence = {
+      micGapSamples: micReadEvidence.gapSamples,
+      backingGapSamples: backingReadEvidence.gapSamples,
+      micStarvedSamples: this.micExpected ? micReadEvidence.frontierMissingSamples : 0,
+      backingStarvedSamples: this.backingExpected ? backingReadEvidence.frontierMissingSamples : 0,
+      micUnavailableSamples: this.micExpected ? 0 : micReadEvidence.frontierMissingSamples,
+      backingUnavailableSamples: this.backingExpected ? 0 : backingReadEvidence.frontierMissingSamples,
+      clippedSamples: this.clippedSamples - clippedBefore,
+      limitedSamples: this.limitedSamples - limitedBefore,
+      unheaderedSamples: micReadEvidence.unheaderedSamples + backingReadEvidence.unheaderedSamples,
+    };
+
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);
-    return output;
+    return { frame: output, evidence };
   }
 }

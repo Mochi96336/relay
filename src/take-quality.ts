@@ -183,7 +183,7 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
       severity: 'warning',
       value: true,
       unit: 'boolean',
-      message: 'At least one source used legacy PCM without timeline positioning metadata.',
+      message: 'At least one source used legacy PCM without timeline positioning metadata during this Take.',
     });
   }
 
@@ -272,7 +272,7 @@ export class TakeQualityTracker {
   private calibrationStaleSamples = 0;
   private alignmentClampedSamples = 0;
   private robotDeltaMissingSamples = 0;
-  private unheaderedObserved: boolean;
+  private unheaderedObserved = false;
   private readonly events = emptyEvents();
 
   constructor(private readonly options: {
@@ -282,7 +282,6 @@ export class TakeQualityTracker {
   }) {
     this.baseline = { ...options.baselineHealth };
     this.lastHealth = { ...options.baselineHealth };
-    this.unheaderedObserved = options.baselineHealth.unheadered;
   }
 
   observeFrame(sampleCount: number, state: TakeQualityFrameState, health: MixHealth) {
@@ -295,7 +294,10 @@ export class TakeQualityTracker {
     if (state.alignmentClamped) this.alignmentClampedSamples += sampleCount;
     if (state.robotRoute && !state.robotDeltaFresh) this.robotDeltaMissingSamples += sampleCount;
     this.lastHealth = { ...health };
-    this.unheaderedObserved ||= health.unheadered;
+  }
+
+  noteUnheaderedPcm() {
+    this.unheaderedObserved = true;
   }
 
   noteEvent(kind: TakeQualityEventKind) {

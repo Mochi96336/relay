@@ -241,6 +241,22 @@ export class RoomSongCommandSession {
     return this.publicCommand(this.pending);
   }
 
+  sweep(nowMs: number) {
+    const hadPending = this.pending !== null;
+    this.expire(nowMs);
+    return hadPending && this.pending === null;
+  }
+
+  statusPayload(revision: number, nowMs: number) {
+    this.expire(nowMs);
+    return {
+      type: 'room-song-command-status',
+      revision,
+      pendingCommandId: this.pending?.commandId ?? null,
+      pendingAction: this.pending?.body.action ?? null,
+    };
+  }
+
   private expire(nowMs: number) {
     if (this.pending && nowMs - this.pending.issuedAtMs > COMMAND_TIMEOUT_MS) {
       this.pending = null;

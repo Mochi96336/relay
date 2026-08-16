@@ -314,6 +314,33 @@ export class RoomSongCommandSession {
       return { ok: true };
     }
 
+    // A leader whose own clock went stale re-anchors it rather than being
+    // locked out of it.
+    //
+    // The two sides judge a mutation against different baselines. The player
+    // compares a snapshot against its own previous one, so a gap it sat
+    // through - a long rebuffer, a backgrounded tab, a network hole - reads as
+    // "nothing changed" locally and never raises a command. The room compares
+    // that same snapshot against a clock that kept running without it, sees a
+    // jump, and refuses it. But a refused report never reaches the timeline,
+    // so it cannot correct the very drift it is being refused for. The
+    // refusals then repeat at the telemetry rate and this player can never
+    // drive the room again without reloading the page.
+    //
+    // Only the established leader gets this, and only once its own reports
+    // have gone stale. Its reports are what the room clock is made of, so
+    // there is nothing here to take from anyone else. A player that is not
+    // leading still needs an accepted command to put a song in the room:
+    // reporting telemetry at an idle room must never become a second,
+    // unauthorized way to set one.
+    //
+    // Tested for `false` rather than "not true": a status that never carried
+    // the field at all is not evidence of staleness, and must not open the
+    // gate by omission.
+    if (roomStatus.connected === false && sameIdentity(statusLeader(roomStatus), identity)) {
+      return { ok: true };
+    }
+
     return mutation === null
       ? { ok: true }
       : { ok: false, reason: 'command-required' };

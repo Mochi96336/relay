@@ -32,6 +32,10 @@ function room(overrides: Record<string, unknown> = {}) {
     playbackLeaderParticipantId: A.participantId,
     playbackTransportId: A.transportId,
     playbackGeneration: A.generation,
+    // The room clock has a fresh source. The real status payload always
+    // carries this, and the gate only guards a song something is still
+    // reporting on.
+    connected: true,
     leaderConnected: true,
     leaderFresh: true,
     handoffState: 'idle',
@@ -234,6 +238,37 @@ describe('room song telemetry command gate', () => {
       ok: false,
       reason: 'command-required',
     });
+  });
+
+  test('lets the leader re-anchor its own clock once its reports have gone stale', () => {
+    const session = new RoomSongCommandSession();
+
+    // A is the room's leader, but nothing has reported for long enough that
+    // the clock it feeds is stale: a long rebuffer, a backgrounded tab, a
+    // network hole. Locally A's baseline never moved, so it raises no command;
+    // judged against a room clock that kept running it looks like a jump. A
+    // refused report never reaches the timeline, so refusing it is what keeps
+    // the clock stale, and the refusal would repeat forever.
+    const stale = room({ connected: false, serverTime: 40, youtubeTime: 40, ageMs: 30_000 });
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ state: 1, currentTime: 11 }), A, stale, 0),
+      { ok: true },
+    );
+
+    // Staleness is not a general bypass. Someone who is not leading still
+    // needs an accepted command, or telemetry becomes a second way to take
+    // the room.
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ state: 1, currentTime: 11 }), B, stale, 0),
+      { ok: false, reason: 'command-required' },
+    );
+
+    // And a clock with a fresh source is still protected from its own leader:
+    // that is the seek rule, which staleness must not weaken.
+    assert.deepEqual(
+      session.gateTelemetry(telemetry({ videoId: OTHER_VIDEO }), A, room(), 0),
+      { ok: false, reason: 'command-required' },
+    );
   });
 
   test('does not read a stalled player as an unrequested seek', () => {

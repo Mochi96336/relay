@@ -158,17 +158,23 @@ test('microphone limiting is retained as evidence but is not itself a failed Tak
   assert.deepEqual(result.issues, []);
 });
 
-test('legacy unpositioned PCM is scoped to the active Take instead of inherited from the epoch', () => {
-  const tracker = new TakeQualityTracker({
+test('legacy unpositioned PCM is scoped to a new warning observed during the active Take', () => {
+  const inherited = new TakeQualityTracker({
     sampleRate: 48_000,
     frameMs: 20,
     baselineHealth: health({ unheadered: true }),
   });
-  tracker.observeFrame(960, frameState(), health({ unheadered: true }));
-  assert.equal(tracker.assessment().evidence.unheadered, false);
+  inherited.observeFrame(960, frameState(), health({ unheadered: true }));
+  assert.equal(inherited.assessment().evidence.unheadered, false);
 
-  tracker.noteUnheaderedPcm();
-  const result = tracker.assessment();
+  const appearedDuringTake = new TakeQualityTracker({
+    sampleRate: 48_000,
+    frameMs: 20,
+    baselineHealth: health({ unheadered: false }),
+  });
+  appearedDuringTake.observeFrame(960, frameState(), health({ unheadered: false }));
+  appearedDuringTake.observeFrame(960, frameState(), health({ unheadered: true }));
+  const result = appearedDuringTake.assessment();
   assert.equal(result.evidence.unheadered, true);
   assert.equal(result.verdict, 'review');
   assert.equal(result.issues.some((issue) => issue.code === 'unheadered-pcm'), true);

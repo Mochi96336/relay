@@ -104,3 +104,76 @@ test('only the selected anonymous publisher keeps the narrow legacy telemetry pa
     await server.stop();
   }
 });
+
+test('a rejected playback page is told why, once per reason', async () => {
+  const server = await startRelay();
+  try {
+    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
+    const b = await RelayClient.connect(server, '?participant=participant-b&name=B');
+
+    a.send(telemetry(10));
+    await a.waitFor((message) => (
+      message.type === 'youtube-timeline-status'
+      && message.playbackLeaderParticipantId === 'participant-a'
+    ));
+
+    b.send(telemetry(90, 'playback-transport-b'));
+    const rejected = await b.waitFor((message) => message.type === 'youtube-telemetry-rejected');
+    assert.equal(rejected.reason, 'leader-busy');
+    assert.equal(rejected.playbackLeaderParticipantId, 'participant-a');
+
+    // Telemetry repeats several times a second; repeating the same rejection
+    // would drown the socket in messages nobody can act on.
+    const seen = b.messages.filter((message) => message.type === 'youtube-telemetry-rejected').length;
+    b.send(telemetry(91, 'playback-transport-b'));
+    b.send(telemetry(92, 'playback-transport-b'));
+    await sleep(150);
+    assert.equal(
+      b.messages.filter((message) => message.type === 'youtube-telemetry-rejected').length,
+      seen,
+      'the same rejection reason was repeated',
+    );
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a replacement anonymous publisher takes the room clock without waiting out the old one', async () => {
+  const server = await startRelay();
+  try {
+    const observer = await RelayClient.connect(server);
+    const first = await RelayClient.connect(server);
+    first.send({ type: 'register', role: 'publisher', sampleRate: 48_000 });
+    await first.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+
+    const legacyTelemetry = (currentTime: number) => ({
+      type: 'youtube-telemetry',
+      videoId: VIDEO,
+      state: 1,
+      currentTime,
+      duration: 200,
+      playbackRate: 1,
+      bufferedFraction: 0.5,
+    });
+
+    first.send(legacyTelemetry(12));
+    await observer.waitFor((message) => (
+      message.type === 'youtube-timeline-status' && message.videoId === VIDEO
+    ));
+
+    // The replacement is the same anonymous playback device reconnecting, so it
+    // must not have to wait out the previous socket's staleness window.
+    const second = await RelayClient.connect(server);
+    second.send({ type: 'register', role: 'publisher', sampleRate: 48_000 });
+    await second.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+
+    second.send(legacyTelemetry(120));
+    const moved = await observer.waitFor(
+      (message) => message.type === 'youtube-timeline-status' && Number(message.serverTime) > 100,
+      1_000,
+    );
+    assert.equal(moved.playbackLeaderParticipantId, '__relay_legacy_publisher__');
+  } finally {
+    await server.stop();
+  }
+});

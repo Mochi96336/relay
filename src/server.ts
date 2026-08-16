@@ -119,7 +119,8 @@ type RelaySocket = WebSocket & {
   playbackTransportId?: string;
   playbackGeneration?: number;
   playbackMicIntentAtMs?: number;
-  legacyPlaybackTransportId?: string;
+  legacyPlaybackGeneration?: number;
+  telemetryRejectedReason?: string;
 };
 
 type TimelineStatus = {
@@ -146,6 +147,15 @@ let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
 let legacyPlaybackConnectionSequence = 0;
+/**
+ * The single synthetic playback identity shared by pre-participant clients.
+ *
+ * There is only ever one anonymous publisher transport at a time, so this is
+ * one logical device rather than a population; each connection is a newer
+ * incarnation of it, distinguished by `legacyPlaybackGeneration`.
+ */
+const LEGACY_PLAYBACK_PARTICIPANT_ID = '__relay_legacy_publisher__';
+const LEGACY_PLAYBACK_TRANSPORT_ID = 'legacy-publisher';
 let micTransportGraceTimer: NodeJS.Timeout | null = null;
 let micTransportGraceOwnerId: string | null = null;
 
@@ -179,7 +189,7 @@ const PROBE_REPLY_TIMEOUT_MS = 3_000;
  * Long enough for the probe to play, be captured and reach the server.
  *
  * Derived from the search window rather than set independently: the analysis
- * cannot run until the timeline has covered its whole window, so a timeout
+ * cannot run until the timeline has covered the whole window, so a timeout
  * shorter than that rejects every probe before it is even looked at. Raising
  * `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` to 10 s did exactly that, and the
  * only symptom was every leg reporting `analysis dropped ... timedOut=true`.
@@ -468,6 +478,26 @@ function beginPreparedSongHandoff(participantId: string, nowMs = performance.now
   return true;
 }
 
+/**
+ * Tells a playback page why its telemetry is being ignored.
+ *
+ * Rejection used to be a bare `return`, which is indistinguishable from a lost
+ * connection: the page keeps sending several times a second and its server
+ * timeline readout simply never advances. Telemetry is far too frequent to
+ * answer every time, so only a *change* of reason is reported, and an accepted
+ * packet clears the memory so the next problem is reported again.
+ */
+function reportTelemetryRejected(socket: RelaySocket, reason: string) {
+  if (socket.telemetryRejectedReason === reason) return;
+  socket.telemetryRejectedReason = reason;
+  sendJson(socket, {
+    type: 'youtube-telemetry-rejected',
+    reason,
+    playbackLeaderParticipantId: youtubeTimeline.statusPayload().playbackLeaderParticipantId,
+    micOwner: participantPayload(participants.micOwnerId),
+  });
+}
+
 function broadcastToMonitors(payload: string | Buffer, binary = false) {
   for (const client of wss.clients) {
     const socket = client as RelaySocket;
@@ -527,10 +557,28 @@ function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
   if (robotRouteActive() && calibrationKind !== 'boot-probe') return false;
+  // Boot calibration is a three-term equation. The two probe legs may be
+  // measured ahead of playback, but an unknown player delta is not zero. Keep
+  // the path result as evidence and stay on the network fallback until the
+  // active robot has published a fresh, settled delta.
   if (robotRouteActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   return true;
 }
 
+/**
+ * Synchronizes measurement validity into the mixer's active alignment.
+ *
+ * A boot result needs special treatment: once freshness/connection withdraws
+ * its authority, a later delta must not resurrect the historical total before
+ * `maybeReapplyBootCalibration()` has folded in the *current* delta. While a
+ * boot alignment is already active, small (< threshold) delta movements are
+ * intentionally left alone. While it is inactive, it may only be restored
+ * directly when the stored boot result already describes exactly the current
+ * reported delta; otherwise reapply owns the reactivation.
+ *
+ * Returns whether the mixer alignment changed so the periodic freshness check
+ * can publish the transition immediately.
+ */
 function syncAppliedCalibration() {
   const active = session.alignment.calibratedMicLagMs;
 
@@ -980,11 +1028,17 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
 
   if (PROBE_DEBUG) {
+    // The window's own peak separates "the probe was not heard" from "the
+    // probe was never looked at": a correlation of -1 is what an all-zero
+    // window scores, and a range the timeline does not cover reads as zeros.
     let peak = 0;
     for (let i = 0; i < window.length; i += 1) {
       const magnitude = Math.abs(window[i]);
       if (magnitude > peak) peak = magnitude;
     }
+    // And the most recent audio on the same timeline, as a control: if that is
+    // silent too the stream is not carrying anything, and if it is not the
+    // window is simply looking in the wrong place.
     const controlSeconds = 20;
     const recent = waiting.target === 'mic'
       ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
@@ -1140,6 +1194,9 @@ const youtubeTimelineTimer = setInterval(() => {
   }
 
   dropLegacyCalibrationForRobot();
+  // Freshness is a live validity condition, not just something checked when a
+  // socket closes. If a robot page freezes while its WebSocket remains open,
+  // the last delta loses authority after ROBOT_OFFSET_FRESH_MS as well.
   if (syncAppliedCalibration()) {
     broadcastJson(sourceStatusPayload());
     broadcastJson(timingCalibrationStatusPayload());
@@ -1177,7 +1234,7 @@ wss.on('connection', (rawSocket, request) => {
   socket.role = 'unknown';
   socket.isAlive = true;
   legacyPlaybackConnectionSequence += 1;
-  socket.legacyPlaybackTransportId = `legacy-publisher-${legacyPlaybackConnectionSequence}`;
+  socket.legacyPlaybackGeneration = legacyPlaybackConnectionSequence;
 
   const identity = participantIdentity(request);
   if (identity) {
@@ -1390,11 +1447,20 @@ wss.on('connection', (rawSocket, request) => {
         // the current server-selected publisher transport, never an identity
         // claimed by the telemetry payload. Anonymous monitor/backing/unknown
         // sockets therefore remain unable to mutate the room clock.
-        if (socket !== publisher || socket.role !== 'publisher') return;
-        playbackParticipantId = '__relay_legacy_publisher__';
-        playbackTransportId = socket.legacyPlaybackTransportId ?? 'legacy-publisher-fallback';
-        playbackGeneration = socket.captureGeneration ?? 0;
+        if (socket !== publisher || socket.role !== 'publisher') {
+          reportTelemetryRejected(socket, 'not-publisher');
+          return;
+        }
+        playbackParticipantId = LEGACY_PLAYBACK_PARTICIPANT_ID;
+        // One logical legacy transport whose incarnation counts up, not a new
+        // transport per socket. A replacement publisher is the same anonymous
+        // playback device reconnecting, so it must be able to take the room
+        // clock through the normal newer-generation rule instead of waiting out
+        // the previous socket's staleness window.
+        playbackTransportId = LEGACY_PLAYBACK_TRANSPORT_ID;
+        playbackGeneration = socket.legacyPlaybackGeneration ?? 0;
       } else if (!playbackTransportId || playbackGeneration === null) {
+        reportTelemetryRejected(socket, 'invalid-identity');
         return;
       }
 
@@ -1412,6 +1478,7 @@ wss.on('connection', (rawSocket, request) => {
         socket.playbackParticipantId = playbackParticipantId;
         socket.playbackTransportId = playbackTransportId;
         socket.playbackGeneration = playbackGeneration;
+        socket.telemetryRejectedReason = undefined;
         const timelineStatus = youtubeTimeline.statusPayload();
         broadcastJson(timelineStatus);
         broadcastJson(youtubeTimeline.roomStatusPayload());
@@ -1429,6 +1496,8 @@ wss.on('connection', (rawSocket, request) => {
             handoffId: result.handoffId,
           });
         }
+      } else {
+        reportTelemetryRejected(socket, result.reason ?? 'invalid-telemetry');
       }
       return;
     }
@@ -1711,10 +1780,11 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'start-sync-test') {
-      if (socket !== publisher || socket.role !== 'publisher') {
-        sendJson(socket, { type: 'error', message: 'Only the microphone device can start the sync test.' });
-        return;
-      }
+      // Same authority as stopping it. Requiring the physical publisher socket
+      // here while `stop-sync-test` accepts any transport of the Mic owner made
+      // one feature answer to two different boundaries, so the owner's second
+      // tab could stop a test it was not allowed to start.
+      if (!requireMicOwnerCommand(socket, 'start-sync-test')) return;
       if (!startSyncTest()) {
         sendJson(socket, { type: 'error', message: 'Captured tab source is active.' });
       }

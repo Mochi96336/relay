@@ -35,6 +35,12 @@ import {
   type SongHandoffPlan,
 } from './song-session.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
+import {
+  createWebTransportMediaTicket,
+  startWebTransportMediaServer,
+  webTransportMediaConfig,
+  type WebTransportMediaServer,
+} from './webtransport-media-server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
@@ -183,6 +189,10 @@ type TimelineStatus = {
 let publisher: RelaySocket | null = null;
 let publisherSampleRate: number | null = null;
 let micAudioTransport: AudioTransport | null = null;
+let micMediaTicket: string | null = null;
+let micMediaOwnerId: string | null = null;
+let micMediaGeneration: number | null = null;
+let webTransportMedia: WebTransportMediaServer | null = null;
 let backing: RelaySocket | null = null;
 let backingSampleRate: number | null = null;
 let backingIsRobot = false;
@@ -316,6 +326,29 @@ function cancelMicTransportGrace() {
   micTransportGraceOwnerId = null;
 }
 
+function webTransportMicConnected() {
+  return webTransportMedia?.hasSession(micMediaTicket) ?? false;
+}
+
+function micMediaConnected() {
+  return publisher?.readyState === WebSocket.OPEN || webTransportMicConnected();
+}
+
+function micMediaPath() {
+  if (webTransportMicConnected()) return 'webtransport';
+  if (publisher?.readyState === WebSocket.OPEN) return 'websocket';
+  return null;
+}
+
+function clearMicMediaAuthority() {
+  micAudioTransport = null;
+  micMediaTicket = null;
+  micMediaOwnerId = null;
+  micMediaGeneration = null;
+  publisherSampleRate = null;
+  session.setMicExpected(false);
+}
+
 function scheduleMicTransportGrace(ownerId: string) {
   cancelMicTransportGrace();
   micTransportGraceOwnerId = ownerId;
@@ -331,7 +364,7 @@ function scheduleMicTransportGrace(ownerId: string) {
 
     const released = participants.releaseMic(expectedOwnerId);
     if (!released.ok) return;
-    micAudioTransport = null;
+    clearMicMediaAuthority();
     takeController.noteQualityEvent('mic-owner-changed');
     cancelPendingRoomSongCommand('mic-owner-released');
     invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
@@ -706,8 +739,9 @@ function retirePublisherTransport(
 function publisherStatusPayload() {
   return {
     type: 'publisher-status',
-    connected: publisher?.readyState === WebSocket.OPEN,
+    connected: micMediaConnected(),
     sampleRate: publisherSampleRate,
+    mediaPath: micMediaPath(),
   };
 }
 
@@ -780,7 +814,8 @@ function sourceStatusPayload() {
   return {
     type: 'source-status',
     connected: backing?.readyState === WebSocket.OPEN,
-    micConnected: publisher?.readyState === WebSocket.OPEN,
+    micConnected: micMediaConnected(),
+    micMediaPath: micMediaPath(),
     backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
     micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
     sampleRate: backingSampleRate,
@@ -825,6 +860,7 @@ function mixHealthPayload() {
     micGainDb,
     monitorDroppedFrames,
     prebufferMs: session.prebufferMs,
+    micMediaPath: micMediaPath(),
     micTransport: micAudioTransport?.stats() ?? null,
   };
 }
@@ -855,7 +891,7 @@ function remoteStatusPayload() {
   const snapshot = participants.snapshot();
 
   const backingConnected = backing?.readyState === WebSocket.OPEN;
-  const micConnected = publisher?.readyState === WebSocket.OPEN;
+  const micConnected = micMediaConnected();
   const backingStreaming = nowMs - lastBackingFrameAt < STREAM_LIVE_MS;
   const micStreaming = nowMs - lastMicFrameAt < STREAM_LIVE_MS;
   // Route identity is readiness evidence, not a calibration feature flag.
@@ -900,6 +936,7 @@ function remoteStatusPayload() {
       backingFrameAgeMs: frameAgeMs(lastBackingFrameAt, nowMs),
       micConnected,
       micStreaming,
+      micMediaPath: micMediaPath(),
       micFrameAgeMs: frameAgeMs(lastMicFrameAt, nowMs),
       participants: snapshot.participants.length,
       participantsConnected: snapshot.participants.filter((participant) => participant.connected).length,
@@ -1066,15 +1103,13 @@ function broadcastStatus() {
 
 function revokePublisherTransport(message: string) {
   const previous = publisher;
-  if (!previous) return false;
+  const hadMedia = Boolean(previous || micAudioTransport || micMediaTicket);
   publisher = null;
-  publisherSampleRate = null;
-  micAudioTransport = null;
-  session.setMicExpected(false);
-  retirePublisherTransport(previous, 'mic-revoked', message);
+  clearMicMediaAuthority();
+  if (previous) retirePublisherTransport(previous, 'mic-revoked', message);
   if (testActive) stopSyncTest();
   broadcastStatus();
-  return true;
+  return hadMedia;
 }
 
 function invalidateMicTiming(message: string) {
@@ -1217,7 +1252,11 @@ function stopLiveSource() {
 }
 
 function processPublisherFrame(frame: PcmFrame) {
-  if (!publisher || publisher.role !== 'publisher') return;
+  // Physical media can outlive the control WebSocket during its reconnect
+  // grace. Authorization already happened at the WS publisher boundary or the
+  // short-lived WebTransport media ticket boundary, so the mixer must not make
+  // a control socket pointer into a second source of truth.
+  if (!micAudioTransport || publisherSampleRate === null) return;
 
   if (testActive || session.active) {
     const previousGeneration = session.micGeneration;
@@ -1604,7 +1643,7 @@ const youtubeTimelineTimer = setInterval(() => {
   if (presenceSweep.releasedMicOwnerId) {
     takeController.noteQualityEvent('mic-owner-changed');
     cancelMicTransportGrace();
-    micAudioTransport = null;
+    clearMicMediaAuthority();
     cancelPendingRoomSongCommand('mic-owner-released', nowMs);
     if (youtubeTimeline.cancelHandoff()) broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
     invalidateMicTiming('Microphone owner left the Relay session.');
@@ -1818,6 +1857,8 @@ wss.on('connection', (rawSocket, request) => {
       }
       if (publisher?.participantId === socket.participantId) {
         revokePublisherTransport('You released the microphone.');
+      } else if (micMediaOwnerId === socket.participantId) {
+        clearMicMediaAuthority();
       }
       invalidateMicTiming('Microphone was released.');
       broadcastSessionStatus();
@@ -2213,11 +2254,22 @@ wss.on('connection', (rawSocket, request) => {
         && captureGeneration !== null
         && previousPublisher.captureGeneration === captureGeneration,
       );
-      const preserveAudioTransport = Boolean(
-        sameCapture
-        && previousPublisher?.audioPacketVersion === 2
+      const reconnectingSameCapture = Boolean(
+        socket.participantId
+        && micMediaOwnerId === socket.participantId
+        && captureGeneration !== null
+        && micMediaGeneration === captureGeneration
         && audioPacketVersion === 2
-        && micAudioTransport,
+        && micAudioTransport?.packetVersion === 2,
+      );
+      const preserveAudioTransport = Boolean(
+        reconnectingSameCapture
+        || (
+          sameCapture
+          && previousPublisher?.audioPacketVersion === 2
+          && audioPacketVersion === 2
+          && micAudioTransport
+        ),
       );
 
       if (previousPublisher && previousPublisher !== socket) {
@@ -2255,8 +2307,14 @@ wss.on('connection', (rawSocket, request) => {
               maxForwardJumpPackets: Math.max(MIC_REORDER_WINDOW_PACKETS, MIC_MAX_FORWARD_JUMP_PACKETS),
             },
           });
+          micMediaGeneration = captureGeneration;
+          micMediaOwnerId = socket.participantId ?? null;
+          micMediaTicket = webTransportMedia ? createWebTransportMediaTicket() : null;
         } else {
           micAudioTransport = createWebSocketAudioTransport({ packetVersion: 1 });
+          micMediaGeneration = null;
+          micMediaOwnerId = socket.participantId ?? null;
+          micMediaTicket = null;
         }
       }
 
@@ -2269,10 +2327,14 @@ wss.on('connection', (rawSocket, request) => {
       }
 
       restartLiveSourceAfterMicReconnect();
+      const mediaTransport = micMediaTicket && webTransportMedia
+        ? webTransportMedia.offer(micMediaTicket)
+        : undefined;
       sendJson(socket, {
         type: 'registered',
         role: 'publisher',
         takeover: hasTakeoverExpectation && previousOwnerId !== socket.participantId,
+        ...(mediaTransport ? { mediaTransport } : {}),
       });
       sendJson(socket, testStatusPayload());
       sendJson(socket, mixSettingsPayload());
@@ -2455,11 +2517,17 @@ wss.on('connection', (rawSocket, request) => {
           ? socket.participantId
           : null;
         publisher = null;
-        publisherSampleRate = null;
-        session.setMicExpected(false);
-        if (!reconnectingOwnerId) micAudioTransport = null;
+        const directMediaStillLive = webTransportMicConnected();
+        if (!reconnectingOwnerId) {
+          clearMicMediaAuthority();
+        } else {
+          // The control plane may reconnect while an independent HTTP/3 media
+          // session is still carrying the same capture. Keep the capture and
+          // sample rate authoritative until the existing grace expires.
+          session.setMicExpected(directMediaStillLive);
+          scheduleMicTransportGrace(reconnectingOwnerId);
+        }
         micTransportChanged = true;
-        if (reconnectingOwnerId) scheduleMicTransportGrace(reconnectingOwnerId);
         if (calibration.collecting) {
           calibration.fail('Microphone disconnected during calibration.');
         }
@@ -2504,6 +2572,8 @@ const heartbeat = setInterval(() => {
 wss.on('close', () => {
   cancelMicTransportGrace();
   takeController.shutdown();
+  clearMicMediaAuthority();
+  void webTransportMedia?.stop();
   clearInterval(heartbeat);
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
@@ -2517,6 +2587,32 @@ server.on('error', (error: NodeJS.ErrnoException) => {
   console.error('Relay server error', error);
   process.exit(1);
 });
+
+const directMediaConfig = webTransportMediaConfig();
+if (directMediaConfig) {
+  try {
+    webTransportMedia = await startWebTransportMediaServer(directMediaConfig, {
+      authorize(ticket) {
+        return Boolean(
+          ticket
+          && ticket === micMediaTicket
+          && micAudioTransport?.packetVersion === 2,
+        );
+      },
+      onDatagram(ticket, packet, nowMs) {
+        if (ticket !== micMediaTicket || !micAudioTransport) return;
+        deliverMicPackets(micAudioTransport.receive(packet, nowMs));
+      },
+    });
+    console.log(
+      `Relay WebTransport media listening on udp://${directMediaConfig.bindHost}:${directMediaConfig.bindPort}`
+      + ` and advertised as ${directMediaConfig.publicUrl.toString()}`,
+    );
+  } catch (error) {
+    console.error('Failed to start Relay WebTransport media endpoint', error);
+    process.exit(1);
+  }
+}
 
 server.listen(port, '0.0.0.0', () => {
   const address = server.address();

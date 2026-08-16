@@ -88,6 +88,27 @@ It:
 
 Run the Relay server separately before starting the launcher. Robot mode automatically arms source audio, and Chromium is launched with the autoplay policy needed for that unattended local page; no source-page gesture or extension invocation is required.
 
+## Optional direct WebTransport microphone path
+
+Relay keeps the phone page and control WebSocket on the existing HTTPS origin, but microphone media can use a separate **direct HTTP/3/UDP endpoint**. This is optional: if it is not configured, or if the browser cannot establish it, AudioPacket v2 continues over the existing WebSocket binary path.
+
+A Cloudflare Tunnel URL is **not** the WebTransport media endpoint. Cloudflare can accept HTTP/3 from the browser at its edge, but Tunnel published applications currently connect from `cloudflared` to the origin with HTTP/1.1 or HTTP/2 rather than forwarding an end-to-end HTTP/3 WebTransport session. The media hostname therefore has to reach the robot's UDP port directly (or through infrastructure that explicitly supports WebTransport end to end).
+
+Configure the direct path in `~/.config/relay/robot.env` only after DNS, UDP forwarding/firewall, and a certificate are ready:
+
+```bash
+RELAY_WEBTRANSPORT_PUBLIC_URL=https://media.example.com:4433/media
+RELAY_WEBTRANSPORT_CERT=/home/mochi/.config/relay/media-cert.pem
+RELAY_WEBTRANSPORT_KEY=/home/mochi/.config/relay/media-key.pem
+# Optional when the public UDP port differs from the local bind port:
+# RELAY_WEBTRANSPORT_PORT=4433
+# RELAY_WEBTRANSPORT_HOST=0.0.0.0
+```
+
+With a normal publicly trusted certificate, leave `RELAY_WEBTRANSPORT_PIN_CERT` unset. For a short-lived local/test certificate, `RELAY_WEBTRANSPORT_PIN_CERT=1` makes Relay advertise the SHA-256 certificate hash to the browser; pinned WebTransport certificates are deliberately restricted to a validity period shorter than 14 days and an EC/P-256-compatible key.
+
+The WebTransport URL carries a random, capture-scoped media ticket issued only after publisher registration. A fresh capture or ownership change rotates it. A same-capture control reconnect preserves it until the existing microphone reconnect grace expires. This ticket is a narrow media capability, not a replacement for `RELAY_KEY` or participant ownership.
+
 ## Watching the route from another machine
 
 The robot is unattended, so the interesting question from a second host is not

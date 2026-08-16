@@ -1,4 +1,5 @@
-import { WebSocketAudioTransport } from './audio-transport.js';
+import { PreferredAudioTransport } from './audio-transport.js';
+import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
 const publisherButton = document.querySelector('#start-publisher');
 const monitorButton = document.querySelector('#start-monitor');
@@ -23,10 +24,6 @@ const SOCKET_RECONNECT_MS = 1000;
 const SLIDER_HOLD_MS = 2000;
 const MONITOR_PREBUFFER_MS = 250;
 const MONITOR_MAX_QUEUE_MS = 800;
-
-const audioTransport = new WebSocketAudioTransport({
-  maxBufferedBytes: 256 * 1024,
-});
 
 let socket = null;
 let socketReconnectTimer = null;
@@ -87,7 +84,7 @@ let clickScheduler = null;
 let nextClickTime = 0;
 let clickBeat = 0;
 let rawMonitorGainDb = 30;
-let uplinkDroppedChunks = 0;
+let uplinkDroppedSamples = 0;
 let lastUplinkWarningAt = 0;
 let monitorHealth = null;
 // Seeded from the clock, not 0: a page reload starts a new module scope and
@@ -108,6 +105,12 @@ const AUDIO_PACKET_VERSION = 2;
 const AUDIO_PACKET_HEADER_BYTES = 24;
 const AUDIO_PACKET_SOURCE_MIC = 1;
 
+const audioTransport = new PreferredAudioTransport({
+  maxBufferedBytes: 256 * 1024,
+  // A usable datagram must carry the v2 header plus at least one Int16 sample.
+  minimumPacketBytes: AUDIO_PACKET_HEADER_BYTES + 2,
+});
+
 function framePcm(pcm, generation, sequence, firstSampleIndex) {
   const packet = new ArrayBuffer(AUDIO_PACKET_HEADER_BYTES + pcm.byteLength);
   const view = new DataView(packet);
@@ -120,6 +123,25 @@ function framePcm(pcm, generation, sequence, firstSampleIndex) {
   view.setFloat64(16, firstSampleIndex, true);
   new Uint8Array(packet, AUDIO_PACKET_HEADER_BYTES).set(new Uint8Array(pcm));
   return packet;
+}
+
+function recordUplinkDrop(sampleCount, reason) {
+  if (!Number.isFinite(sampleCount) || sampleCount <= 0) return;
+  uplinkDroppedSamples += sampleCount;
+  const now = performance.now();
+  if (now - lastUplinkWarningAt <= 2000) return;
+
+  lastUplinkWarningAt = now;
+  const sampleRate = audioContext?.sampleRate ?? MIX_SAMPLE_RATE;
+  const droppedMs = Math.round((uplinkDroppedSamples * 1000) / sampleRate);
+  const title = reason === 'packet-too-large'
+    ? 'Microphone datagram budget changed'
+    : 'Microphone uplink congested';
+  setStatus(
+    title,
+    `Dropped about ${droppedMs} ms of microphone audio. ` +
+    'The sample timeline keeps the hole in the right place instead of pulling later audio earlier.',
+  );
 }
 
 // recorder.js reads this so it can warn when Solo recording is started on the
@@ -473,7 +495,11 @@ function handleServerMessage(message) {
 
   if (message.type === 'registered' && message.role === 'publisher' && activeRole === 'publisher') {
     pendingPublisherTakeoverOwnerId = null;
-    setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM → relay`);
+    void audioTransport.prefer(message.mediaTransport ?? null).then((preferred) => {
+      if (activeRole !== 'publisher') return;
+      const path = preferred ? 'WebTransport datagrams' : 'WebSocket fallback';
+      setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM · ${path}`);
+    });
     updateMixLabels();
     dispatchRelayEvent('relay-microphone-started');
     return;
@@ -728,7 +754,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
     } catch {}
   }
 
-  if (activeRole === 'publisher') audioTransport.unbind(closingSocket);
+  if (activeRole === 'publisher') audioTransport.close();
   setActiveRole(null);
   pendingPublisherTakeoverOwnerId = null;
   if (closingSocket) {
@@ -756,7 +782,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   sourceSampleRate = null;
   testActive = false;
   liveMixActive = false;
-  uplinkDroppedChunks = 0;
+  uplinkDroppedSamples = 0;
   monitorHealth = null;
   publisherButton.disabled = false;
   monitorButton.disabled = false;
@@ -824,34 +850,67 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       return;
     }
 
-    // The cursor advances for every captured chunk, including ones that are
-    // never sent, so the server can see exactly what is missing. It also keeps
-    // counting through a websocket outage, which is what lets the stream rejoin
-    // the same timeline without the mix restarting.
-    const firstSampleIndex = captureSampleCursor;
+    // The capture clock advances once for the whole 20 ms worklet chunk. The
+    // media packetizer may divide that PCM into smaller complete AudioPacket v2
+    // units to fit the live WebTransport datagram budget, but every segment
+    // keeps its exact sample position on this same capture timeline.
+    const chunkFirstSampleIndex = captureSampleCursor;
     captureSampleCursor += event.data.byteLength / 2;
 
-    const sequence = capturePacketSequence;
-    const sendResult = audioTransport.send(
-      framePcm(event.data, captureGeneration, sequence, firstSampleIndex),
-    );
-    if (!sendResult.sent) {
-      if (sendResult.reason !== 'congested') return;
+    const pending = splitPcmForPacketLimit(
+      event.data,
+      audioTransport.maxPacketBytes(),
+      AUDIO_PACKET_HEADER_BYTES,
+    ).map((segment) => ({
+      pcm: segment.pcm,
+      sampleOffset: segment.sampleOffset,
+    }));
 
-      uplinkDroppedChunks += 1;
-      const now = performance.now();
-      if (now - lastUplinkWarningAt > 2000) {
-        lastUplinkWarningAt = now;
-        setStatus(
-          'Microphone uplink congested',
-          `Dropped ${uplinkDroppedChunks} chunks (~${uplinkDroppedChunks * 20} ms). ` +
-          'The gap is reported to the server, but the vocal is missing for that stretch.',
-        );
+    while (pending.length > 0) {
+      const segment = pending.shift();
+      const firstSampleIndex = chunkFirstSampleIndex + segment.sampleOffset;
+      const sequence = capturePacketSequence;
+      const packet = framePcm(segment.pcm, captureGeneration, sequence, firstSampleIndex);
+      let sendResult = audioTransport.send(packet);
+
+      if (!sendResult.sent && sendResult.reason === 'packet-too-large') {
+        // The spec allows maxDatagramSize to change while connected. If the
+        // path became completely unusable, maxPacketBytes() demotes it and the
+        // exact same not-yet-sent packet can safely use the WS fallback. If it
+        // merely shrank, split this segment again without changing sequence or
+        // sample time.
+        const retryLimit = audioTransport.maxPacketBytes();
+        if (!Number.isFinite(retryLimit)) {
+          sendResult = audioTransport.send(packet);
+        } else {
+          try {
+            const smaller = splitPcmForPacketLimit(
+              segment.pcm,
+              retryLimit,
+              AUDIO_PACKET_HEADER_BYTES,
+            );
+            if (smaller.length > 1) {
+              for (let index = smaller.length - 1; index >= 0; index -= 1) {
+                pending.unshift({
+                  pcm: smaller[index].pcm,
+                  sampleOffset: segment.sampleOffset + smaller[index].sampleOffset,
+                });
+              }
+              continue;
+            }
+          } catch {}
+        }
       }
-      return;
-    }
 
-    capturePacketSequence = (capturePacketSequence + 1) >>> 0;
+      if (sendResult.sent) {
+        capturePacketSequence = (capturePacketSequence + 1) >>> 0;
+        continue;
+      }
+
+      if (sendResult.reason === 'congested' || sendResult.reason === 'packet-too-large') {
+        recordUplinkDrop(segment.pcm.byteLength / 2, sendResult.reason);
+      }
+    }
   };
 
   source.connect(capture).connect(silent).connect(audioContext.destination);

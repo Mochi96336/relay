@@ -1,12 +1,8 @@
 const publisherButton = document.querySelector('#start-publisher');
-const monitorButton = document.querySelector('#start-monitor');
-const stopButton = document.querySelector('#stop');
 const testStartButton = document.querySelector('#start-sync-test');
 const testStopButton = document.querySelector('#stop-sync-test');
 const status = document.querySelector('#status');
 const details = document.querySelector('#details');
-const monitorGain = document.querySelector('#monitor-gain');
-const monitorGainValue = document.querySelector('#monitor-gain-value');
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
 const micGainAdvice = document.querySelector('#mic-gain-advice');
@@ -16,36 +12,20 @@ const calibrateButton = document.querySelector('#calibrate-timing');
 const calibrateStatus = document.querySelector('#calibrate-status');
 
 const TEST_BPM = 120;
-const MIX_SAMPLE_RATE = 48000;
 const SOCKET_RECONNECT_MS = 1000;
 const SLIDER_HOLD_MS = 2000;
-const MONITOR_PREBUFFER_MS = 250;
-const MONITOR_MAX_QUEUE_MS = 800;
 
 let socket = null;
 let socketReconnectTimer = null;
 let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
-let playbackNode = null;
-let monitorGainNode = null;
-let sourceSampleRate = null;
 let activeRole = null;
 let testActive = false;
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
-
-/**
- * Whether what arrives on this socket is a server mix rather than raw
- * microphone PCM. Two different things put the server into that state - the
- * click test and a live session - and only the first of them is a test. Reading
- * one from the other is what made every live take behave like a test run.
- */
-function serverMixActive() {
-  return testActive || liveMixActive;
-}
 
 /**
  * The same measured advice source.html shows, put where the singer can act on
@@ -80,10 +60,8 @@ function renderGainAdvice() {
 let clickScheduler = null;
 let nextClickTime = 0;
 let clickBeat = 0;
-let rawMonitorGainDb = 30;
 let uplinkDroppedChunks = 0;
 let lastUplinkWarningAt = 0;
-let monitorHealth = null;
 // Seeded from the clock, not 0: a page reload starts a new module scope and
 // would otherwise reuse the same first-ever generation number, which the
 // server take as "nothing changed" and skip re-anchoring the mic timeline to
@@ -134,10 +112,6 @@ function setActiveRole(role) {
   window.relayActiveRole = role;
 }
 
-function dbToGain(db) {
-  return 10 ** (db / 20);
-}
-
 function signed(value, suffix) {
   const number = Number(value);
   return `${number > 0 ? '+' : ''}${number}${suffix}`;
@@ -155,15 +129,6 @@ function sliderIsBusy(element) {
   if (document.activeElement === element) return true;
   const touchedAt = sliderTouchedAt.get(element);
   return touchedAt !== undefined && performance.now() - touchedAt < SLIDER_HOLD_MS;
-}
-
-function updateMonitorGain() {
-  const db = Number(monitorGain.value);
-  monitorGainValue.value = signed(db, ' dB');
-  if (!testActive) rawMonitorGainDb = db;
-  if (monitorGainNode && audioContext) {
-    monitorGainNode.gain.setTargetAtTime(dbToGain(db), audioContext.currentTime, 0.01);
-  }
 }
 
 function updateMixLabels() {
@@ -280,34 +245,6 @@ function clearSocketReconnect() {
   socketReconnectTimer = null;
 }
 
-function linearResample(input, sourceRate, targetRate) {
-  if (sourceRate === targetRate) return input;
-
-  const ratio = targetRate / sourceRate;
-  const outputLength = Math.max(1, Math.round(input.length * ratio));
-  const output = new Float32Array(outputLength);
-
-  for (let i = 0; i < outputLength; i += 1) {
-    const sourcePosition = i / ratio;
-    const index = Math.floor(sourcePosition);
-    const fraction = sourcePosition - index;
-    const a = input[Math.min(index, input.length - 1)];
-    const b = input[Math.min(index + 1, input.length - 1)];
-    output[i] = a + (b - a) * fraction;
-  }
-
-  return output;
-}
-
-function int16ToFloat32(buffer) {
-  const input = new Int16Array(buffer);
-  const output = new Float32Array(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    output[i] = input[i] / (input[i] < 0 ? 0x8000 : 0x7fff);
-  }
-  return output;
-}
-
 // Must match src/calibration-probe.ts, which builds the reference the server
 // correlates against. Irregular offsets are the point: no shift other than the
 // true one lines all three notes up at once, which is exactly the ambiguity
@@ -398,14 +335,6 @@ function stopLocalClickTrack() {
   }
 }
 
-function describeMonitorHealth() {
-  if (!monitorHealth) return '';
-  const parts = [`buffer ${Math.round(monitorHealth.queuedMs)} ms`];
-  if (monitorHealth.underruns > 0) parts.push(`${monitorHealth.underruns} underruns`);
-  if (monitorHealth.droppedMs > 20) parts.push(`trimmed ${Math.round(monitorHealth.droppedMs)} ms`);
-  return ` · ${parts.join(' · ')}`;
-}
-
 function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
@@ -469,36 +398,9 @@ function handleServerMessage(message) {
     return;
   }
 
-  if (message.type === 'publisher-status') {
-    // Only meaningful while the raw microphone is being forwarded; a server mix
-    // arrives at the mix rate no matter what the phone captures at.
-    if (!serverMixActive()) sourceSampleRate = message.sampleRate ?? null;
-    if (activeRole === 'monitor') {
-      if (!message.connected) {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        setStatus('Waiting for singer', 'Open this page on the phone and start the microphone.');
-      } else if (!serverMixActive()) {
-        setStatus('Singer connected', `Raw input: ${message.sampleRate} Hz · buffering audio…`);
-      }
-    }
-    return;
-  }
-
   if (message.type === 'source-status') {
-    const wasLive = liveMixActive;
     liveMixActive = Boolean(message.active);
     updateCalibrateButton();
-
-    if (liveMixActive) {
-      sourceSampleRate = Number(message.mixSampleRate) || MIX_SAMPLE_RATE;
-      if (!wasLive && activeRole === 'monitor') {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        setStatus('Live mix', `Server mix · ${message.prebufferMs} ms buffer`);
-      }
-    } else if (wasLive) {
-      sourceSampleRate = null;
-      if (activeRole === 'monitor') playbackNode?.port.postMessage({ type: 'reset' });
-    }
     return;
   }
 
@@ -528,51 +430,18 @@ function handleServerMessage(message) {
   if (message.type === 'mix-health') {
     latestMixHealth = message;
     renderGainAdvice();
-    if (activeRole === 'monitor' && message.active && message.micStarvedFrames > 0) {
-      setStatus(
-        'Monitor playing · vocal starved',
-        `Server ran out of buffered microphone on ${message.micStarvedFrames} frames ` +
-        `(headroom ${message.micHeadroomMs} ms). Re-run Calibrate timing or check the phone link.`,
-      );
-    }
     return;
   }
 
   if (message.type === 'test-status') {
-    const wasActive = testActive;
     testActive = Boolean(message.active);
-
-    if (testActive) {
-      sourceSampleRate = Number(message.sampleRate) || MIX_SAMPLE_RATE;
-      if (activeRole === 'monitor') {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        // The click track is deliberately harsh, so the test drops the monitor
-        // to unity and restores the setting afterwards. This only ever made
-        // sense for the test - it used to fire on live takes too, costing the
-        // singer 30 dB and forgetting whatever they set during the take.
-        monitorGain.value = '0';
-        updateMonitorGain();
-        setStatus('Sync test running', `${message.bpm} BPM · server mix · ${message.prebufferMs} ms safety buffer`);
-      }
-    } else {
-      if (wasActive && activeRole === 'monitor') {
-        playbackNode?.port.postMessage({ type: 'reset' });
-        monitorGain.value = String(rawMonitorGainDb);
-        updateMonitorGain();
-      }
-      if (activeRole === 'publisher') stopLocalClickTrack();
-    }
-
+    if (!testActive && activeRole === 'publisher') stopLocalClickTrack();
     updateTestButtons();
   }
 }
 
 function canKeepPublishing() {
   return activeRole === 'publisher' && Boolean(mediaStream) && Boolean(audioContext);
-}
-
-function canKeepMonitoring() {
-  return activeRole === 'monitor' && Boolean(audioContext) && Boolean(playbackNode);
 }
 
 function schedulePublisherReconnect() {
@@ -584,19 +453,6 @@ function schedulePublisherReconnect() {
       if (!canKeepPublishing()) return;
       setStatus('Reconnecting microphone…', 'Relay is still unavailable; retrying automatically.');
       schedulePublisherReconnect();
-    });
-  }, SOCKET_RECONNECT_MS);
-}
-
-function scheduleMonitorReconnect() {
-  if (!canKeepMonitoring()) return;
-  clearSocketReconnect();
-  socketReconnectTimer = setTimeout(() => {
-    socketReconnectTimer = null;
-    connectMonitorSocket().catch(() => {
-      if (!canKeepMonitoring()) return;
-      setStatus('Reconnecting monitor…', 'Relay is still unavailable; retrying automatically.');
-      scheduleMonitorReconnect();
     });
   }, SOCKET_RECONNECT_MS);
 }
@@ -654,55 +510,6 @@ async function connectPublisherSocket() {
   });
 }
 
-async function connectMonitorSocket() {
-  if (!canKeepMonitoring()) return;
-  clearSocketReconnect();
-
-  const ws = await connectSocket();
-  if (!canKeepMonitoring()) {
-    ws.close();
-    return;
-  }
-
-  adoptSocket(ws);
-  playbackNode.port.postMessage({ type: 'reset' });
-  ws.send(JSON.stringify({ type: 'register', role: 'monitor' }));
-
-  ws.addEventListener('message', (event) => {
-    if (socket !== ws) return;
-
-    if (typeof event.data === 'string') {
-      handleServerMessage(JSON.parse(event.data));
-      return;
-    }
-
-    if (!(event.data instanceof ArrayBuffer) || !audioContext || !playbackNode) return;
-    // Falling back beats discarding audio: every server-mixed frame is 48 kHz,
-    // and dropping frames here used to look exactly like "no audio at all".
-    const rate = sourceSampleRate || MIX_SAMPLE_RATE;
-    const pcm = int16ToFloat32(event.data);
-    const samples = linearResample(pcm, rate, audioContext.sampleRate);
-    playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
-  });
-
-  ws.addEventListener('close', () => {
-    if (socket !== ws) return;
-    socket = null;
-    if (!canKeepMonitoring()) {
-      setStatus('Disconnected', 'The relay connection closed.');
-      return;
-    }
-    setStatus('Reconnecting monitor…', 'Relay connection closed; retrying automatically.');
-    scheduleMonitorReconnect();
-  });
-
-  ws.addEventListener('error', () => {
-    try {
-      ws.close();
-    } catch {}
-  });
-}
-
 async function stop(setIdle = true, { releaseMic = true } = {}) {
   stopLocalClickTrack();
   clearSocketReconnect();
@@ -733,22 +540,16 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
     } catch {}
     activeNode = null;
   }
-  playbackNode = null;
-  monitorGainNode = null;
   if (audioContext) {
     await audioContext.close();
     audioContext = null;
   }
-  sourceSampleRate = null;
   testActive = false;
   liveMixActive = false;
   uplinkDroppedChunks = 0;
-  monitorHealth = null;
   publisherButton.disabled = false;
-  monitorButton.disabled = false;
-  stopButton.disabled = true;
   updateTestButtons();
-  if (setIdle) setStatus('Idle', 'Choose one role on each device.');
+  if (setIdle) setStatus('Idle', 'Take the mic when you are ready.');
 }
 
 async function startPublisher(takeoverExpectedOwnerId = null) {
@@ -839,8 +640,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   activeNode = capture;
 
   publisherButton.disabled = true;
-  monitorButton.disabled = true;
-  stopButton.disabled = false;
   updateTestButtons();
   setStatus('Connecting microphone…', `${audioContext.sampleRate} Hz capture is active; connecting to Relay.`);
 
@@ -849,57 +648,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   } catch {
     setStatus('Reconnecting microphone…', 'Initial Relay connection failed; retrying automatically.');
     schedulePublisherReconnect();
-  }
-}
-
-async function startMonitor() {
-  await stop();
-  setStatus('Starting monitor…');
-
-  audioContext = new AudioContext({ latencyHint: 'interactive' });
-  await audioContext.audioWorklet.addModule('/playback-worklet.js');
-  await audioContext.resume();
-
-  const playback = new AudioWorkletNode(audioContext, 'playback-processor', {
-    numberOfInputs: 0,
-    numberOfOutputs: 1,
-    outputChannelCount: [1],
-  });
-  playback.port.postMessage({
-    type: 'configure',
-    prebufferMs: MONITOR_PREBUFFER_MS,
-    maxQueueMs: MONITOR_MAX_QUEUE_MS,
-  });
-
-  monitorGainNode = audioContext.createGain();
-  monitorGainNode.gain.value = dbToGain(Number(monitorGain.value));
-  playback.connect(monitorGainNode).connect(audioContext.destination);
-  activeNode = playback;
-  playbackNode = playback;
-
-  playback.port.onmessage = (event) => {
-    if (event.data?.type === 'health') {
-      monitorHealth = event.data;
-      return;
-    }
-    if (event.data?.type === 'buffering') setStatus('Monitor buffering…', 'Waiting for enough audio.');
-    if (event.data?.type === 'playing' && !testActive) {
-      setStatus('Monitor playing', `Output: ${audioContext.sampleRate} Hz · gain ${monitorGainValue.value}${describeMonitorHealth()}`);
-    }
-  };
-
-  setActiveRole('monitor');
-
-  publisherButton.disabled = true;
-  monitorButton.disabled = true;
-  stopButton.disabled = false;
-  updateTestButtons();
-
-  try {
-    await connectMonitorSocket();
-  } catch {
-    setStatus('Reconnecting monitor…', 'Initial Relay connection failed; retrying automatically.');
-    scheduleMonitorReconnect();
   }
 }
 
@@ -929,18 +677,6 @@ window.addEventListener('relay-request-microphone', (event) => {
   requestPublisherStart(expectedOwnerId).catch(console.error);
 });
 
-monitorButton.addEventListener('click', () => {
-  startMonitor().catch(async (error) => {
-    console.error(error);
-    setStatus('Could not start monitor', error instanceof Error ? error.message : String(error));
-    await stop(false, { releaseMic: false });
-  });
-});
-
-stopButton.addEventListener('click', () => {
-  stop().catch(console.error);
-});
-
 testStartButton.addEventListener('click', () => {
   if (activeRole !== 'publisher' || socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'start-sync-test' }));
@@ -952,8 +688,6 @@ testStopButton.addEventListener('click', () => {
   socket.send(JSON.stringify({ type: 'stop-sync-test' }));
   stopLocalClickTrack();
 });
-
-monitorGain.addEventListener('input', updateMonitorGain);
 
 for (const slider of [micGain, songLevel]) {
   slider.addEventListener('input', () => {
@@ -968,8 +702,7 @@ calibrateButton.addEventListener('click', () => {
   socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
 });
 
-updateMonitorGain();
 updateMixLabels();
 updateCalibrateButton();
 updateTestButtons();
-setStatus('Idle', 'On the phone choose Microphone; on the computer choose Monitor.');
+setStatus('Idle', 'Take the mic when you are ready.');

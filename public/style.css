@@ -485,8 +485,6 @@ body:has(#start-publisher:disabled) .voice-ribbon span:nth-child(6) { animation-
 .diagnostic-block > div:first-child { display: grid; gap: 4px; }
 .diagnostic-block strong { font-size: 12px; }
 .diagnostic-block p { margin: 0; color: var(--dim); font-size: 11px; line-height: 1.5; }
-.legacy-monitor { padding: 12px 0; }
-.legacy-transport-controls { display: none !important; }
 
 @media (min-width: 700px) {
   .live-shell {

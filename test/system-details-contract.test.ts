@@ -80,15 +80,14 @@ test('product attention opens the matching L2 evidence line instead of jumping s
   assert.match(system, /item\.open = true/);
 });
 
-test('legacy engineering controls remain below Technical details and Development tools', () => {
+test('remaining engineering controls stay below Technical details and Development tools', () => {
   const technical = position('id="diagnostics-panel"');
   const development = position('class="legacy-tools"');
   const source = position('Open source');
   const clickTest = position('id="start-sync-test"');
-  const legacyMonitor = position('id="monitor-gain"');
 
   assert.ok(technical < development);
   assert.ok(development < source);
   assert.ok(development < clickTest);
-  assert.ok(development < legacyMonitor);
+  assert.doesNotMatch(html, /id="monitor-gain"|id="start-monitor"|legacy-transport-controls/);
 });

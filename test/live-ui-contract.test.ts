@@ -124,8 +124,7 @@ test('Take start availability comes from product actions while Stop remains Take
   assert.match(recorder, /Last take ·/);
 });
 
-test('legacy monitor transport stays hidden during the migration', () => {
-  const legacy = position('class="legacy-transport-controls"');
-  const technical = position('class="diagnostics-body"');
-  assert.ok(technical < legacy);
+test('formal Listen is the only monitor transport shipped by the Live page', () => {
+  assert.doesNotMatch(html, /id="start-monitor"|id="monitor-gain"|legacy-transport-controls/);
+  assert.match(listen, /role:\s*'monitor'/);
 });

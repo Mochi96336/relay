@@ -88,6 +88,12 @@ exit 0
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       TEST_STATE: state,
+      // The launcher takes a per-sink `flock` in `XDG_RUNTIME_DIR`. Pointed at
+      // the real one, this test cannot run on a host where the robot route is
+      // actually live: the launcher would exit on the lock instead of starting
+      // the mocked route, and its failure exit status is the same 1 the test
+      // expects from a child exiting. Give each run its own lock directory.
+      XDG_RUNTIME_DIR: directory,
     },
   };
 }
@@ -174,5 +180,56 @@ describe('robot doctor', () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /sink exists but monitor is missing/);
+  });
+});
+
+describe('unattended boot', () => {
+  const unit = (name: string) => readFileSync(path.join(root, 'deploy', name), 'utf8');
+
+  /**
+   * The robot page is opened once, by a launcher, on a machine that may reach
+   * Chromium before it reaches the network. A script tag that failed is never
+   * retried by the browser, and nobody is there to reload the page.
+   */
+  test('the robot source page keeps asking for the YouTube API', () => {
+    const source = readFileSync(path.join(root, 'public', 'source.js'), 'utf8');
+
+    assert.match(source, /setInterval\(/, 'a one-shot script injection cannot survive a boot with no network');
+    assert.ok(
+      source.indexOf('function loadYouTubeApi') < source.indexOf('iframe_api'),
+      'the API script must be injected from a function that can be called again',
+    );
+    assert.match(source, /if \(window\.YT\?\.Player\) return;/);
+    assert.match(source, /clearInterval\(apiRetryTimer\)/, 'retrying must stop once a player exists');
+  });
+
+  test('the route unit waits for the server to answer before opening the page', () => {
+    const route = unit('relay-robot-source.service');
+
+    assert.match(route, /ExecStartPre=.*curl.*\/healthz/, 'After= orders the start but does not wait for the port');
+    assert.match(route, /--retry 30/);
+    assert.match(route, /Requires=relay-server\.service/);
+    assert.match(route, /After=relay-server\.service/);
+  });
+
+  test('both units restart on failure without thrashing', () => {
+    for (const name of ['relay-server.service', 'relay-robot-source.service']) {
+      const text = unit(name);
+      assert.match(text, /Restart=on-failure/, name);
+      assert.match(text, /StartLimitBurst=/, `${name} would otherwise respawn indefinitely`);
+      assert.match(text, /WantedBy=default\.target/, `${name} must install into the user manager`);
+      assert.doesNotMatch(text, /RELAY_KEY=/, `${name} is in the repository and must not carry the key`);
+    }
+  });
+
+  test('systemd accepts the unit files', { skip: spawnSync('systemd-analyze', ['--version']).error ? 'systemd-analyze unavailable' : false }, () => {
+    const result = spawnSync('systemd-analyze', [
+      '--user',
+      'verify',
+      './relay-server.service',
+      './relay-robot-source.service',
+    ], { cwd: path.join(root, 'deploy'), encoding: 'utf8' });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   });
 });

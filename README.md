@@ -105,7 +105,9 @@ PORT=3100 npm run robot:source
 
 `PORT` defaults to `3000`. The launcher creates or reuses the `relay_browser` PipeWire/PulseAudio sink, captures its monitor as mono 48 kHz PCM, feeds `backing:stdin`, and starts an isolated Chromium under Xvfb in unattended robot mode.
 
-The source URL must use `localhost`, not `127.0.0.1`; the latter produced `Video unavailable` in the real-device comparison. See `ROBOT_DEPLOYMENT.md` for the deployment contract, prerequisites, cleanup behavior, and the boundary before adding boot services.
+The source URL must use `localhost`, not `127.0.0.1`; the latter produced `Video unavailable` in the real-device comparison. See `ROBOT_DEPLOYMENT.md` for the deployment contract, prerequisites, and cleanup behavior.
+
+`deploy/` holds systemd **user** units for the server and the route. They are committed to be reviewed and rehearsed, not enabled: the gate on enabling them is the integrated real-device test, and they need `loginctl enable-linger` to start at boot at all, because PipeWire lives in the user session. `ROBOT_DEPLOYMENT.md` has the procedure.
 
 ## Live mix timing
 
@@ -174,6 +176,29 @@ It only fires when there is nothing usable to fall back on — no measurement, o
 Reloading `source.html` destroys the tab capture, but the extension's WebSocket lives in an offscreen document and survives it. The server is then holding a registered, open `backing` client with no audio behind it — and every check written against socket state says everything is fine.
 
 That state used to be invisible until a calibration started against it and sat at 0 % for the full timeout, reporting only that progress had stopped. Calibration now refuses to start unless frames have actually arrived from both sides recently, gives up quickly if one goes quiet mid-collection, and names the side in both cases. `source-status` carries `micStreaming` / `backingStreaming` so `source.html` can say it without anyone pressing anything.
+
+### Status another machine can poll
+
+`GET /healthz` is liveness only: it returns `{ "ok": true }` for as long as the Relay process exists, which includes every robot failure worth knowing about — the browser died, the sink vanished, the backing bridge stopped. Nothing else was readable from outside, because `mix-health` and `source-status` are pushed over WebSocket to clients that are already connected.
+
+`GET /statusz` reports the route instead, and decides rather than dumps:
+
+```json
+{
+  "ok": false,
+  "state": "fault",
+  "faults": ["backing source is connected but no longer sending audio"],
+  "warnings": [],
+  "uptimeMs": 812345,
+  "source": { "backingConnected": true, "backingStreaming": false, "backingFrameAgeMs": 9421, "micConnected": false, "...": "..." },
+  "robot": { "route": true, "sourceConnected": false, "deltaFresh": false, "...": "..." },
+  "mix": { "micStarvedFrames": 0, "backingGapMs": 0, "...": "..." }
+}
+```
+
+The split that makes it pollable is between **faults**, which clear `ok` and mean something is definitely broken, and **warnings**, which do not. "Connected but no longer streaming" is a fault; a stale calibration is a warning, because audio still flows on the network estimate. Nobody being connected is neither — that is `state: "idle"` with `ok: true`, since a robot with no singer on it is not a robot that failed.
+
+It is unauthenticated like `/healthz`, so it carries counts and states but never nicknames or keys.
 
 ### Why a measurement has to repeat itself
 

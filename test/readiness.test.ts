@@ -14,21 +14,29 @@ function pcm(ms: number) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
 
-test('readyz distinguishes robot-host readiness from full live-session readiness', async () => {
+test('readyz distinguishes unarmed, robot-host and full live-session readiness', async () => {
   const server = await startRelay(FAST);
   const clients: RelayClient[] = [];
   try {
     let response = await fetch(server.httpUrl('/readyz'));
-    assert.equal(response.status, 503);
+    assert.equal(response.status, 200);
     let readiness = await response.json() as any;
-    assert.equal(readiness.ready, false);
+    assert.equal(readiness.ready, true);
     assert.equal(readiness.sessionReady, false);
-    assert.ok(readiness.reasons.includes('backing-not-connected'));
-    assert.ok(readiness.reasons.includes('robot-source-not-connected'));
+    assert.deepEqual(readiness.reasons, []);
+    assert.equal(readiness.components.route.mode, 'idle');
 
     const robot = await RelayClient.connect(server);
     clients.push(robot);
     robot.send({ type: 'robot-source-hello' });
+    await sleep(30);
+
+    response = await fetch(server.httpUrl('/readyz'));
+    assert.equal(response.status, 503);
+    readiness = await response.json() as any;
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.components.route.mode, 'robot');
+    assert.ok(readiness.reasons.includes('backing-not-connected'));
 
     const backing = await RelayClient.connect(server);
     clients.push(backing);
@@ -42,6 +50,7 @@ test('readyz distinguishes robot-host readiness from full live-session readiness
     readiness = await response.json() as any;
     assert.equal(readiness.ready, true);
     assert.deepEqual(readiness.reasons, []);
+    assert.equal(readiness.components.route.mode, 'robot');
     assert.equal(readiness.components.backing.connected, true);
     assert.equal(readiness.components.backing.streaming, true);
     assert.equal(readiness.components.backing.robot, true);
@@ -84,7 +93,7 @@ test('readyz distinguishes robot-host readiness from full live-session readiness
   }
 });
 
-test('readyz does not mistake a development backing client for the robot route', async () => {
+test('readyz does not mistake a development backing client for an armed Robot route', async () => {
   const server = await startRelay(FAST);
   const clients: RelayClient[] = [];
   try {
@@ -103,6 +112,7 @@ test('readyz does not mistake a development backing client for the robot route',
     assert.equal(response.status, 503);
     const readiness = await response.json() as any;
     assert.equal(readiness.ready, false);
+    assert.equal(readiness.components.route.mode, 'robot');
     assert.ok(readiness.reasons.includes('backing-not-robot'));
   } finally {
     for (const client of clients) client.close();

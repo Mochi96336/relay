@@ -102,10 +102,6 @@ function emptyEvents(): TakeQualityEventCounts {
   };
 }
 
-function counterDelta(current: number, baseline: number) {
-  return Math.max(0, current - baseline);
-}
-
 function durationSeverity(durationMs: number, criticalAtMs = DEGRADED_DURATION_MS): TakeQualitySeverity {
   return durationMs >= criticalAtMs ? 'critical' : 'warning';
 }
@@ -134,37 +130,37 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     issues,
     'mic-unavailable',
     evidence.micUnavailableMs,
-    'Microphone audio was unavailable while Relay was recording mixed output.',
+    'Microphone audio was unavailable in the mixed samples recorded by this Take.',
   );
   addDurationIssue(
     issues,
     'backing-unavailable',
     evidence.backingUnavailableMs,
-    'Backing audio was unavailable while Relay was recording mixed output.',
+    'Backing audio was unavailable in the mixed samples recorded by this Take.',
   );
   addDurationIssue(
     issues,
     'mic-pcm-gap',
     evidence.micGapMs,
-    'The microphone transport left positioned PCM gaps during this Take.',
+    'The recorded microphone range contained positioned PCM gaps.',
   );
   addDurationIssue(
     issues,
     'backing-pcm-gap',
     evidence.backingGapMs,
-    'The backing transport left positioned PCM gaps during this Take.',
+    'The recorded backing range contained positioned PCM gaps.',
   );
   addDurationIssue(
     issues,
     'mic-starvation',
     evidence.micStarvedMs,
-    'The mixer reached microphone positions that had not arrived yet.',
+    'The mixer recorded microphone samples beyond the live source frontier.',
   );
   addDurationIssue(
     issues,
     'backing-starvation',
     evidence.backingStarvedMs,
-    'The mixer reached backing positions that had not arrived yet.',
+    'The mixer recorded backing samples beyond the live source frontier.',
   );
 
   if (evidence.clippedSamples > 0) {
@@ -183,7 +179,7 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
       severity: 'warning',
       value: true,
       unit: 'boolean',
-      message: 'At least one source used legacy PCM without timeline positioning metadata during this Take.',
+      message: 'Recorded source samples came from legacy PCM without timeline positioning metadata.',
     });
   }
 
@@ -257,48 +253,64 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
 }
 
 /**
- * Binds cumulative mixer counters and per-recorded-frame state to exactly one
- * Take. Mixer health is epoch-scoped, so a baseline is mandatory: without it a
- * Take started halfway through a live session would inherit earlier dropouts and
- * clipping that are not present in its WAV artifact.
+ * Binds frame-level mixer evidence and higher-layer timing/transport state to
+ * exactly one Take.
+ *
+ * AudioSession's epoch counters remain diagnostics. Take quality instead uses
+ * `MixHealth.lastMixedFrame`, which describes exactly the source ranges and
+ * processing applied to the PCM frame the WAV writer just accepted. This keeps
+ * holes detected before Start, future holes detected before Stop, partial
+ * starvation and buffered reconnects attributed to the WAV that actually
+ * contains them rather than to the wall-clock moment an engineering counter
+ * happened to change.
  */
 export class TakeQualityTracker {
-  private readonly baseline: MixHealth;
-  private lastHealth: MixHealth;
   private recordedSamples = 0;
+  private micGapSamples = 0;
+  private backingGapSamples = 0;
+  private micStarvedSamples = 0;
+  private backingStarvedSamples = 0;
+  private micStarvedFrames = 0;
+  private backingStarvedFrames = 0;
+  private clippedSamples = 0;
+  private limitedSamples = 0;
+  private unheaderedSamples = 0;
   private micUnavailableSamples = 0;
   private backingUnavailableSamples = 0;
   private networkEstimateSamples = 0;
   private calibrationStaleSamples = 0;
   private alignmentClampedSamples = 0;
   private robotDeltaMissingSamples = 0;
-  private unheaderedObserved = false;
   private readonly events = emptyEvents();
 
   constructor(private readonly options: {
     sampleRate: number;
     frameMs: number;
     baselineHealth: MixHealth;
-  }) {
-    this.baseline = { ...options.baselineHealth };
-    this.lastHealth = { ...options.baselineHealth };
-  }
+  }) {}
 
   observeFrame(sampleCount: number, state: TakeQualityFrameState, health: MixHealth) {
     if (!Number.isSafeInteger(sampleCount) || sampleCount <= 0) return;
+    const audio = health.lastMixedFrame;
+    if (!audio) throw new Error('Take frame is missing exact AudioSession evidence.');
+
     this.recordedSamples += sampleCount;
-    if (!state.micAvailable) this.micUnavailableSamples += sampleCount;
-    if (!state.backingAvailable) this.backingUnavailableSamples += sampleCount;
+    this.micGapSamples += audio.micGapSamples;
+    this.backingGapSamples += audio.backingGapSamples;
+    this.micStarvedSamples += audio.micStarvedSamples;
+    this.backingStarvedSamples += audio.backingStarvedSamples;
+    if (audio.micStarvedSamples > 0) this.micStarvedFrames += 1;
+    if (audio.backingStarvedSamples > 0) this.backingStarvedFrames += 1;
+    this.clippedSamples += audio.clippedSamples;
+    this.limitedSamples += audio.limitedSamples;
+    this.unheaderedSamples += audio.unheaderedSamples;
+    this.micUnavailableSamples += audio.micUnavailableSamples;
+    this.backingUnavailableSamples += audio.backingUnavailableSamples;
+
     if (state.timingMode === 'network-estimate') this.networkEstimateSamples += sampleCount;
     if (state.calibrationStale) this.calibrationStaleSamples += sampleCount;
     if (state.alignmentClamped) this.alignmentClampedSamples += sampleCount;
     if (state.robotRoute && !state.robotDeltaFresh) this.robotDeltaMissingSamples += sampleCount;
-    // `unheadered` is an epoch-level latch, not a counter. Attribute it only
-    // when the latch was clear at Start and becomes set while this Take is
-    // actually accepting mixed frames; a pre-existing legacy warning belongs
-    // to the earlier epoch history, not automatically to this WAV.
-    if (!this.baseline.unheadered && health.unheadered) this.unheaderedObserved = true;
-    this.lastHealth = { ...health };
   }
 
   noteEvent(kind: TakeQualityEventKind) {
@@ -307,31 +319,21 @@ export class TakeQualityTracker {
 
   assessment() {
     const toMs = (samples: number) => Math.round((samples / this.options.sampleRate) * 1000);
-    const micStarvedFrames = counterDelta(
-      this.lastHealth.micStarvedFrames,
-      this.baseline.micStarvedFrames,
-    );
-    const backingStarvedFrames = counterDelta(
-      this.lastHealth.backingStarvedFrames,
-      this.baseline.backingStarvedFrames,
-    );
-    const clippedSamples = counterDelta(this.lastHealth.clippedSamples, this.baseline.clippedSamples);
-    const limitedSamples = counterDelta(this.lastHealth.limitedSamples, this.baseline.limitedSamples);
 
     return assessTakeQuality({
       recordedSamples: this.recordedSamples,
       recordedDurationMs: toMs(this.recordedSamples),
-      micGapMs: counterDelta(this.lastHealth.micGapMs, this.baseline.micGapMs),
-      backingGapMs: counterDelta(this.lastHealth.backingGapMs, this.baseline.backingGapMs),
-      micStarvedFrames,
-      backingStarvedFrames,
-      micStarvedMs: Math.round(micStarvedFrames * this.options.frameMs),
-      backingStarvedMs: Math.round(backingStarvedFrames * this.options.frameMs),
-      clippedSamples,
-      clippedMs: toMs(clippedSamples),
-      limitedSamples,
-      limitedMs: toMs(limitedSamples),
-      unheadered: this.unheaderedObserved,
+      micGapMs: toMs(this.micGapSamples),
+      backingGapMs: toMs(this.backingGapSamples),
+      micStarvedFrames: this.micStarvedFrames,
+      backingStarvedFrames: this.backingStarvedFrames,
+      micStarvedMs: toMs(this.micStarvedSamples),
+      backingStarvedMs: toMs(this.backingStarvedSamples),
+      clippedSamples: this.clippedSamples,
+      clippedMs: toMs(this.clippedSamples),
+      limitedSamples: this.limitedSamples,
+      limitedMs: toMs(this.limitedSamples),
+      unheadered: this.unheaderedSamples > 0,
       micUnavailableMs: toMs(this.micUnavailableSamples),
       backingUnavailableMs: toMs(this.backingUnavailableSamples),
       networkEstimateMs: toMs(this.networkEstimateSamples),

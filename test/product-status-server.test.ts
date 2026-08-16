@@ -118,6 +118,42 @@ test('a legacy backing route stays healthy without Robot identity or player delt
   }
 });
 
+test('Robot route expectation survives simultaneous source loss during backing grace', async () => {
+  const server = await startRelay({
+    ...FAST,
+    RELAY_CALIBRATION_PROBE: '0',
+    RELAY_BACKING_GRACE_MS: '250',
+  });
+  try {
+    const robot = await RelayClient.connect(server);
+    robot.send({ type: 'robot-source-hello' });
+
+    const backing = await RelayClient.connect(server);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
+    await backing.waitForType('registered');
+    backing.sendPcm(pcm(40));
+    await sleep(30);
+
+    backing.close();
+    robot.close();
+    await sleep(60);
+
+    const readyResponse = await fetch(server.httpUrl('/readyz'));
+    assert.equal(readyResponse.status, 503);
+    const readiness = await readyResponse.json() as any;
+    assert.equal(readiness.components.route.mode, 'robot');
+    assert.ok(readiness.reasons.includes('backing-not-connected'));
+    assert.ok(readiness.reasons.includes('robot-source-not-connected'));
+
+    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    assert.equal(remote.ok, false);
+    assert.equal(remote.state, 'fault');
+    assert.equal(remote.robot.route, true);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('product-status carries person-facing Mic ownership instead of exposing transport identity', async () => {
   const server = await startRelay(FAST);
   try {

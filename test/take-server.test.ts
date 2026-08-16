@@ -316,7 +316,11 @@ test('Take commands require participant identity, an active mix, a song, and the
 
     const backing = await startBacking(server);
     control.send({ type: 'start-take' });
-    const noSong = await control.waitFor((message) => message.type === 'take-command-rejected' && message.command === 'start');
+    const noSong = await control.waitFor((message) => (
+      message.type === 'take-command-rejected'
+      && message.command === 'start'
+      && message.reason === 'song-required'
+    ));
     assert.equal(noSong.reason, 'song-required');
 
     await establishRoomSong(control, 'reject-playback-a');

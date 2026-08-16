@@ -37,17 +37,20 @@ test('Release tears down local capture even if the Presence websocket cannot sen
   assert.match(appRelease, /relay-microphone-ended/);
 });
 
-test('failed Mic ownership attempts end the independent Listen mute lifecycle', () => {
-  for (const event of ['relay-mic-busy', 'relay-mic-takeover-rejected']) {
-    assert.match(listen, new RegExp(`window\\.addEventListener\\('${event}'[\\s\\S]*restoreAfterMic`));
-  }
+test('failed Mic ownership attempts clean up before Listen is allowed to recover', () => {
+  assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMic/);
+  assert.doesNotMatch(listen, /window\.addEventListener\('relay-mic-busy'/);
+  assert.doesNotMatch(listen, /window\.addEventListener\('relay-mic-takeover-rejected'/);
 
   const busyStart = app.indexOf("if (message.type === 'mic-busy')");
   const takeoverStart = app.indexOf("if (message.type === 'mic-takeover-rejected')", busyStart);
   const revokedStart = app.indexOf("if (message.type === 'mic-revoked')", takeoverStart);
   assert.ok(busyStart >= 0 && takeoverStart > busyStart && revokedStart > takeoverStart);
-  assert.match(app.slice(busyStart, takeoverStart), /relay-microphone-ended'[\s\S]*reason: 'busy'/);
-  assert.match(app.slice(takeoverStart, revokedStart), /relay-microphone-ended'[\s\S]*reason: 'takeover-rejected'/);
+
+  const busy = app.slice(busyStart, takeoverStart);
+  const takeover = app.slice(takeoverStart, revokedStart);
+  assert.match(busy, /stop\(false, \{ releaseMic: false \}\)[\s\S]*relay-microphone-ended'[\s\S]*reason: 'busy'/);
+  assert.match(takeover, /stop\(false, \{ releaseMic: false \}\)[\s\S]*relay-microphone-ended'[\s\S]*reason: 'takeover-rejected'/);
 });
 
 test('hardware input ending completes the same Mic lifecycle', () => {

@@ -176,6 +176,7 @@ async function connect() {
         'stale-take': '這個 Stop 屬於較舊的 Take，已忽略。',
         'invalid-take-id': 'Stop Take 缺少有效的 Take ID。',
         'writer-failed': 'Relay 無法建立 WAV writer。',
+        'storage-unavailable': 'Relay 錄音磁碟空間不足，或 Take 儲存目錄目前不可用。',
       };
       commandError = reasons[message.reason] ?? `Take 指令被拒絕：${message.reason ?? 'unknown'}`;
       render();

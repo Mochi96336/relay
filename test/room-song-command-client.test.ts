@@ -6,7 +6,7 @@ test('visible YouTube controls emit room intent and server apply performs media 
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
   const loadStart = source.indexOf('function loadVideo()');
-  const loadEnd = source.indexOf("window.addEventListener('relay:room-song-command-sent'", loadStart);
+  const loadEnd = source.indexOf('function trackedRoomCommandId()', loadStart);
   assert.ok(loadStart >= 0 && loadEnd > loadStart, 'load command boundary is missing');
   const loadSection = source.slice(loadStart, loadEnd);
   assert.match(loadSection, /requestRoomSongCommand\(\{ action: 'load'/);
@@ -16,6 +16,9 @@ test('visible YouTube controls emit room intent and server apply performs media 
   const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
   assert.ok(applyStart >= 0 && applyEnd > applyStart, 'server apply helper is missing');
   const applySection = source.slice(applyStart, applyEnd);
+  assert.match(applySection, /normalizedDesiredState\(message\.desired\)/);
+  assert.match(applySection, /serverMutation\.revision > revision/);
+  assert.match(applySection, /serverMutation\.commandId !== commandId/);
   assert.match(applySection, /cueVideoById/);
   assert.match(applySection, /playVideo\s*\(/);
   assert.match(applySection, /pauseVideo\s*\(/);
@@ -23,16 +26,43 @@ test('visible YouTube controls emit room intent and server apply performs media 
   assert.match(applySection, /setPlaybackRate\s*\(/);
 });
 
-test('youtube sync owns command ids and expected revision instead of trusting page state', async () => {
+test('youtube sync owns command ids, revision and causal predecessor instead of trusting page state', async () => {
   const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 
   assert.match(sync, /function randomRoomCommandId/);
+  assert.match(sync, /let latestRoomCommandId = null/);
   assert.match(sync, /type:\s*'room-song-command'/);
   assert.match(sync, /commandId/);
-  assert.match(sync, /expectedRevision:\s*roomCommandRevision/);
+  assert.match(sync, /expectedRevision/);
+  assert.match(sync, /supersedesCommandId/);
+  assert.match(sync, /latestRoomCommandId = commandId/);
   assert.match(sync, /type:\s*'room-song-command-status-request'/);
   assert.match(sync, /relay:room-song-command-apply/);
   assert.match(sync, /relay:room-song-command-rejected/);
+});
+
+test('native controls can supersede a pending room intent but stable intermediate telemetry stays suppressed', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+
+  const requestStart = source.indexOf('function requestRoomSongCommand');
+  const requestEnd = source.indexOf('function normalizedDesiredState', requestStart);
+  assert.ok(requestStart >= 0 && requestEnd > requestStart);
+  const requestSection = source.slice(requestStart, requestEnd);
+  assert.doesNotMatch(requestSection, /if \(localCommandPending\) return false/);
+
+  const renderStart = source.indexOf('function renderSnapshot');
+  const renderEnd = source.indexOf('function sampleNow', renderStart);
+  assert.ok(renderStart >= 0 && renderEnd > renderStart);
+  const renderSection = source.slice(renderStart, renderEnd);
+  const mutationIndex = renderSection.indexOf('localMutationForSnapshot(snapshot)');
+  const pendingIndex = renderSection.indexOf('if (localCommandPending) return');
+  assert.ok(mutationIndex >= 0 && pendingIndex > mutationIndex, 'new native intent must be detected before stable pending telemetry is suppressed');
+
+  const mutationStart = source.indexOf('function localMutationForSnapshot');
+  const mutationEnd = source.indexOf('function renderSnapshot', mutationStart);
+  const mutationSection = source.slice(mutationStart, mutationEnd);
+  assert.match(mutationSection, /snapshotMatchesDesired/);
+  assert.doesNotMatch(mutationSection, /if \(activeServerMutation\(\) \|\| pendingHandoff\) return null/);
 });
 
 test('terminal command status carries the latest room snapshot for local recovery', async () => {

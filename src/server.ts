@@ -843,14 +843,20 @@ function remoteStatusPayload() {
   const micConnected = publisher?.readyState === WebSocket.OPEN;
   const backingStreaming = nowMs - lastBackingFrameAt < STREAM_LIVE_MS;
   const micStreaming = nowMs - lastMicFrameAt < STREAM_LIVE_MS;
-  const robotRoute = robotRouteActive();
+  // Route identity is readiness evidence, not a calibration feature flag.
+  // A deployment may deliberately disable boot probing while still running
+  // the formal Robot route. Keep /statusz aligned with /readyz.
+  const routeMode = readinessPayload(nowMs).components.route.mode;
+  const robotRoute = routeMode === 'robot';
   const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;
   const deltaFresh = robotDeltaIsFresh(nowMs);
 
   const faults: string[] = [];
   if (backingConnected && !backingStreaming) faults.push('backing source is connected but no longer sending audio');
   if (micConnected && !micStreaming) faults.push('microphone is connected but no longer sending audio');
-  if (robotRoute && !backingConnected) faults.push('robot route has no backing source');
+  if (routeMode !== 'idle' && !backingConnected) {
+    faults.push(`${routeMode} route has no backing source`);
+  }
   if (robotRoute && !robotSourceConnected) faults.push('robot route has no source page');
 
   const warnings: string[] = [];
@@ -1178,6 +1184,7 @@ function clearBootCalibrationState() {
 
 function stopLiveSource() {
   cancelBackingGrace();
+  backingIsRobot = false;
   if (!session.active) return;
   takeController.endMix();
   clearBootCalibrationState();
@@ -1613,8 +1620,11 @@ wss.on('connection', (rawSocket, request) => {
                 calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
               } else {
                 syncAppliedCalibration();
-                broadcastJson(sourceStatusPayload());
+                // Publish invalidated timing evidence before the source summary
+                // that reports the same capture transition. WebSocket ordering
+                // then prevents consumers from observing a stale timing snapshot.
                 broadcastJson(timingCalibrationStatusPayload());
+                broadcastJson(sourceStatusPayload());
               }
             }
             calibration.observeMic(samples, start);
@@ -1639,8 +1649,8 @@ wss.on('connection', (rawSocket, request) => {
             calibration.fail('Backing capture restarted during calibration. Start calibration again.');
           } else {
             syncAppliedCalibration();
-            broadcastJson(sourceStatusPayload());
             broadcastJson(timingCalibrationStatusPayload());
+            broadcastJson(sourceStatusPayload());
           }
         }
         calibration.observeBacking(samples, start);
@@ -2387,7 +2397,6 @@ wss.on('connection', (rawSocket, request) => {
         takeController.noteQualityEvent('backing-transport-disconnected');
         backing = null;
         backingSampleRate = null;
-        backingIsRobot = false;
         session.setBackingExpected(false);
         if (calibration.collecting) {
           calibration.fail('Desktop Source disconnected during calibration.');

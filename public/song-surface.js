@@ -1,3 +1,5 @@
+import { canRecoverPlayback, playbackLeaderHealth } from './playback-recovery.js';
+
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const stage = document.querySelector('.song-stage');
 const form = document.querySelector('.youtube-form');
@@ -11,6 +13,7 @@ const observer = document.querySelector('#song-observer');
 const observerArtwork = document.querySelector('#room-song-artwork');
 const observerState = document.querySelector('#room-song-state');
 const observerTimeline = document.querySelector('#room-song-timeline');
+const observerMeta = observer?.querySelector('.song-observer-meta');
 
 const ROLES = new Set(['empty', 'holder', 'preparing', 'observer']);
 const STATE_LABELS = new Map([
@@ -30,15 +33,30 @@ function formatTime(seconds) {
   return `${minutes}:${String(whole % 60).padStart(2, '0')}`;
 }
 
+function localCopy(english, traditionalChinese) {
+  return window.relayI18n?.getLocale?.() === 'zh-Hant' ? traditionalChinese : english;
+}
+
 if (
   stage && form && input && playerShell && localReadout && localNote
   && deviceNote && changeButton && observer && observerArtwork
-  && observerState && observerTimeline
+  && observerState && observerTimeline && observerMeta
 ) {
   let role = 'connecting';
   let editing = false;
   let lastVideoId = null;
   let lastRoom = {};
+  let recoveryPending = false;
+
+  const recoveryActions = document.createElement('div');
+  recoveryActions.className = 'inline-actions playback-recovery-actions';
+  recoveryActions.hidden = true;
+
+  const recoverButton = document.createElement('button');
+  recoverButton.id = 'recover-youtube';
+  recoverButton.type = 'button';
+  recoveryActions.append(recoverButton);
+  observerMeta.append(recoveryActions);
 
   function roomSnapshot(detail) {
     const timeline = detail?.timeline && typeof detail.timeline === 'object' ? detail.timeline : {};
@@ -54,13 +72,30 @@ if (
     return t('people.connecting');
   }
 
-  function renderObserver(room) {
+  function recoveryButtonCopy() {
+    return recoveryPending
+      ? localCopy('Taking over…', '正在接手…')
+      : localCopy('Continue on this phone', '在這支手機繼續播放');
+  }
+
+  function renderRecovery(recoverable) {
+    recoveryActions.hidden = !recoverable;
+    recoverButton.disabled = !recoverable || recoveryPending;
+    recoverButton.textContent = recoveryButtonCopy();
+  }
+
+  function renderObserver(room, recoverable) {
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const state = Number(room.state);
-    const stateLabel = STATE_LABELS.has(state) ? t(STATE_LABELS.get(state)) : t('song.roomSong');
+    const stateLabel = recoverable
+      ? localCopy('Playback interrupted', '播放已中斷')
+      : STATE_LABELS.has(state)
+        ? t(STATE_LABELS.get(state))
+        : t('song.roomSong');
 
     observerState.textContent = stateLabel;
     observerTimeline.textContent = `${formatTime(room.serverTime)} / ${formatTime(room.duration)}`;
+    renderRecovery(recoverable);
 
     if (videoId) {
       const nextSrc = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
@@ -78,6 +113,7 @@ if (
     const room = roomSnapshot(detail);
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const previousRole = role;
+    const recoverable = canRecoverPlayback({ role: nextRole, timeline: room });
     lastRoom = room;
 
     if (nextRole === 'empty') {
@@ -88,14 +124,22 @@ if (
       editing = false;
     }
 
+    if (!recoverable) recoveryPending = false;
+
     role = nextRole;
     lastVideoId = videoId;
     stage.dataset.playbackRole = role;
     document.body.dataset.playbackRole = role;
-    deviceNote.textContent = roleCopy(role);
+    stage.dataset.playbackHealth = playbackLeaderHealth(room);
+    document.body.dataset.playbackHealth = stage.dataset.playbackHealth;
+    deviceNote.textContent = recoverable
+      ? localCopy('Playback controller unavailable', '播放主控已失聯')
+      : roleCopy(role);
 
     const holderWithSong = role === 'holder' && Boolean(videoId);
-    form.hidden = role === 'observer' || role === 'preparing' || (holderWithSong && !editing);
+    form.hidden = role === 'preparing'
+      || (role === 'observer' && !recoverable)
+      || (holderWithSong && !editing);
     changeButton.hidden = !holderWithSong;
     changeButton.textContent = editing ? t('song.done') : t('song.change');
 
@@ -105,7 +149,8 @@ if (
     localReadout.hidden = observerMode;
     localNote.hidden = observerMode;
 
-    if (observerMode) renderObserver(room);
+    if (observerMode) renderObserver(room, recoverable);
+    else renderRecovery(false);
   }
 
   changeButton.addEventListener('click', () => {
@@ -116,11 +161,32 @@ if (
     if (editing) input.focus();
   });
 
+  recoverButton.addEventListener('click', () => {
+    if (recoveryPending || !canRecoverPlayback({ role, timeline: lastRoom })) return;
+    recoveryPending = true;
+    renderRecovery(true);
+    window.dispatchEvent(new CustomEvent('relay:recover-room-song'));
+  });
+
+  function releaseRecoveryPending() {
+    if (!recoveryPending) return;
+    recoveryPending = false;
+    renderRecovery(canRecoverPlayback({ role, timeline: lastRoom }));
+  }
+
   window.addEventListener('relay:playback-view', render);
+  window.addEventListener('relay:room-song-command-rejected', releaseRecoveryPending);
+  window.addEventListener('relay:room-song-command-failed-ack', releaseRecoveryPending);
+  window.addEventListener('relay:room-song-command-status', (event) => {
+    if (event.detail?.pendingCommandId === null) releaseRecoveryPending();
+  });
   window.addEventListener('relay-locale-changed', () => {
-    deviceNote.textContent = roleCopy(role);
+    const recoverable = canRecoverPlayback({ role, timeline: lastRoom });
+    deviceNote.textContent = recoverable
+      ? localCopy('Playback controller unavailable', '播放主控已失聯')
+      : roleCopy(role);
     changeButton.textContent = editing ? t('song.done') : t('song.change');
-    if (role === 'observer') renderObserver(lastRoom);
+    if (role === 'observer') renderObserver(lastRoom, recoverable);
   });
   stage.dataset.playbackRole = role;
   document.body.dataset.playbackRole = role;

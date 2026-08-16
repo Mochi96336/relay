@@ -1,0 +1,37 @@
+name: Apply product status wiring
+
+on:
+  push:
+    branches:
+      - agent/live-ui-shell
+    paths:
+      - scripts/apply-product-status-wiring.mjs
+      - .github/workflows/apply-product-status-wiring.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/agent/live-ui-shell'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/live-ui-shell
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+      - name: Apply exact source transform
+        run: node scripts/apply-product-status-wiring.mjs
+      - name: Commit transformed runtime and remove one-shot files
+        shell: bash
+        run: |
+          rm scripts/apply-product-status-wiring.mjs
+          rm .github/workflows/apply-product-status-wiring.yml
+          git config user.name 'relay-ui-wiring[bot]'
+          git config user.email 'relay-ui-wiring[bot]@users.noreply.github.com'
+          git add src/server.ts scripts/apply-product-status-wiring.mjs .github/workflows/apply-product-status-wiring.yml
+          git commit -m 'feat: publish product status from one readiness snapshot'
+          git push origin HEAD:agent/live-ui-shell

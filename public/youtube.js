@@ -196,15 +196,9 @@ function activeServerMutation() {
 }
 
 function requestRoomSongCommand(detail) {
-  if (playbackRole === 'observer') {
-    noteNode.textContent = t('song.observerCannotChange');
-    return false;
-  }
-
-  // Phase 1B deliberately replaces the page's previous local intent. The sync
-  // transport attaches the predecessor command id synchronously, so another
-  // gesture can causally supersede this one before either server round trip
-  // finishes.
+  // The server is the playback-authority boundary. In particular, a page that
+  // still renders as observer may legitimately recover a stale/disconnected
+  // leader. Do not veto that request from a possibly older client snapshot.
   localCommandPending = {
     action: detail.action,
     commandId: null,
@@ -318,10 +312,13 @@ function renderSnapshot(snapshot) {
     noteNode.textContent = t('song.timelineAuthorized');
   }
 
-  // Observer pages render the room-owned song but do not publish a competing
-  // local media clock. The exact handoff target becomes "preparing" before it
-  // needs to interact with the player, so this does not block takeover.
-  if (playbackRole === 'observer') return;
+  const mutationContext = activeServerMutation();
+
+  // A normal observer never publishes a competing media clock. A server-applied
+  // room command is different: the server has already authorized this exact
+  // transport as the recovery target, so it must be allowed to publish proof
+  // even before the next snapshot promotes the page from observer to holder.
+  if (playbackRole === 'observer' && mutationContext?.source !== 'room-command') return;
 
   // During preparation the target player is deliberately being cued before it
   // owns the room clock. Do not turn that local preparation into product input.
@@ -337,7 +334,6 @@ function renderSnapshot(snapshot) {
   }
   if (localCommandPending) return;
 
-  const mutationContext = activeServerMutation();
   if (mutationContext?.suppressTelemetry) return;
 
   window.dispatchEvent(new CustomEvent('relay:youtube-telemetry', {
@@ -823,6 +819,10 @@ window.addEventListener('relay:playback-view', (event) => {
   }
 
   if (serverMutation?.source === 'observer-quiet') serverMutation = null;
+});
+
+window.addEventListener('relay:recover-room-song', () => {
+  requestRoomSongCommand({ action: 'play' });
 });
 
 window.addEventListener('relay:room-song-command-sent', (event) => {

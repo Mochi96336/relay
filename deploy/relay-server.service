@@ -24,7 +24,10 @@ WorkingDirectory=%h/relay
 # checked into the repository.
 Environment=PORT=3100
 EnvironmentFile=-%h/.config/relay/robot.env
-ExecStart=/usr/bin/npm start
+# Resolve npm through the user manager's PATH instead of assuming one distro
+# location. Node installed by a package manager, setup-node, or another normal
+# user-scoped installation does not have to live at /usr/bin/npm.
+ExecStart=/usr/bin/env npm start
 Restart=on-failure
 RestartSec=5
 SyslogIdentifier=relay-server

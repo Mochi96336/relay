@@ -143,6 +143,20 @@ test('legacy route expectation survives backing grace instead of collapsing to i
     assert.equal(remote.ok, false);
     assert.equal(remote.state, 'fault');
     assert.equal(remote.robot.route, false);
+
+    const observer = await RelayClient.connect(
+      server,
+      '?participant=legacy-observer-123&name=Quiet%20Cat',
+    );
+    observer.send({ type: 'product-status-request' });
+    const product = await observer.waitForType('product-status');
+    assert.equal(product.health, 'blocked');
+    assert.deepEqual(product.attention, {
+      code: 'audio-unavailable',
+      scope: 'audio',
+      severity: 'critical',
+    });
+    observer.close();
   } finally {
     await server.stop();
   }

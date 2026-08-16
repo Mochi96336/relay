@@ -1,6 +1,9 @@
 const recordButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 const recordingStatus = document.querySelector('#recording-status');
+const lastTake = document.querySelector('#last-take');
+const lastTakeToggle = document.querySelector('#last-take-toggle');
+const lastTakeReview = document.querySelector('#last-take-review');
 const recordingPlayer = document.querySelector('#recording-player');
 const recordingDownload = document.querySelector('#download-recording');
 
@@ -11,6 +14,8 @@ let reconnectTimer = null;
 let latestStatus = { lifecycle: 'idle', take: null };
 let commandError = null;
 let productCanStartTake = false;
+let reviewOpen = false;
+let currentArtifactHref = null;
 
 function wsUrl() {
   const participantId = typeof window.relayParticipantId === 'string'
@@ -58,6 +63,25 @@ function verdictLabel(verdict) {
   return 'Ready';
 }
 
+function setReviewOpen(open) {
+  reviewOpen = Boolean(open) && !lastTake.hidden;
+  lastTakeToggle.setAttribute('aria-expanded', String(reviewOpen));
+  lastTakeReview.hidden = !reviewOpen;
+}
+
+function clearArtifact() {
+  setReviewOpen(false);
+  lastTake.hidden = true;
+  recordingDownload.removeAttribute('href');
+  recordingDownload.removeAttribute('download');
+  if (currentArtifactHref !== null) {
+    recordingPlayer.pause();
+    recordingPlayer.removeAttribute('src');
+    recordingPlayer.load();
+    currentArtifactHref = null;
+  }
+}
+
 function render() {
   const lifecycle = String(latestStatus?.lifecycle ?? 'idle');
   const take = latestStatus?.take ?? null;
@@ -69,14 +93,7 @@ function render() {
     || lifecycle === 'finalizing';
   stopButton.disabled = !connected || lifecycle !== 'recording' || !take?.takeId;
 
-  // The formal Live surface keeps the completed Take as one lightweight entry.
-  // Technical WAV details belong below Diagnostics, not in the singing view.
-  recordingPlayer.hidden = true;
-  recordingPlayer.removeAttribute('src');
-  if (lifecycle !== 'ready') {
-    recordingDownload.hidden = true;
-    recordingDownload.removeAttribute('href');
-  }
+  if (lifecycle !== 'ready' || !take?.artifact) clearArtifact();
 
   if (commandError) {
     recordingStatus.textContent = commandError;
@@ -95,11 +112,17 @@ function render() {
 
   if (lifecycle === 'ready' && take?.artifact) {
     const href = artifactUrl(take.artifact.url);
+    if (currentArtifactHref !== href) {
+      currentArtifactHref = href;
+      recordingPlayer.src = href;
+      setReviewOpen(false);
+    }
+    lastTake.hidden = false;
+    lastTakeToggle.textContent = `Last take · ${formatDuration(take.artifact.durationMs)} · ${verdictLabel(take.quality?.verdict)}`;
     recordingDownload.href = href;
-    recordingDownload.removeAttribute('download');
-    recordingDownload.textContent = `Last take · ${formatDuration(take.artifact.durationMs)} · ${verdictLabel(take.quality?.verdict)}`;
-    recordingDownload.hidden = false;
+    recordingDownload.download = `relay-take-${shortTakeId(take.takeId)}.wav`;
     recordingStatus.textContent = '';
+    setReviewOpen(reviewOpen);
     return;
   }
 
@@ -220,6 +243,10 @@ stopButton.addEventListener('click', () => {
   const takeId = latestStatus?.take?.takeId;
   if (!takeId) return;
   send({ type: 'stop-take', takeId });
+});
+
+lastTakeToggle.addEventListener('click', () => {
+  setReviewOpen(!reviewOpen);
 });
 
 setInterval(() => {

@@ -30,3 +30,8 @@ jobs:
           git show origin/agent/release-executor:.github/release-postfix.sh > /tmp/release-postfix.sh
           bash /tmp/release-prepostfix.sh
           bash /tmp/release-postfix.sh
+      - name: Probe current main merge
+        shell: bash
+        run: |
+          git show origin/agent/release-executor:.github/release-finalize.sh > /tmp/release-finalize.sh
+          bash /tmp/release-finalize.sh

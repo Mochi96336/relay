@@ -1,0 +1,46 @@
+name: Audio packet integration probe
+
+on:
+  push:
+    branches:
+      - agent/audio-packet-v2
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Probe merge against runtime product status
+        shell: bash
+        run: |
+          set -u
+          git fetch origin agent/runtime-product-status
+          set +e
+          git merge --no-commit --no-ff origin/agent/runtime-product-status
+          merge_status=$?
+          set -e
+
+          echo "MERGE_STATUS=$merge_status"
+          echo "--- STATUS ---"
+          git status --short
+
+          conflicts="$(git diff --name-only --diff-filter=U)"
+          if [[ -z "$conflicts" ]]; then
+            echo "NO_CONFLICTS"
+            exit 0
+          fi
+
+          while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
+            echo "=== CONFLICT_FILE: $file ==="
+            git diff --cc -- "$file" || true
+          done <<< "$conflicts"
+
+          # This workflow is diagnostic only. Never commit or push from here.
+          exit 0

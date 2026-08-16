@@ -61,10 +61,18 @@ test('another tab owned by the same participant remains an observer', () => {
   }), 'observer');
 });
 
-test('an older generation of the same playback transport remains an observer', () => {
+test('a newer generation of the same playback transport continues as holder after reload', () => {
   assert.equal(resolvePlaybackRole({
     ...self,
     timeline: timeline({ playbackGeneration: 6 }),
+    room: { videoId: 'abcdefghijk' },
+  }), 'holder');
+});
+
+test('an older page generation cannot claim a newer incarnation of the same transport', () => {
+  assert.equal(resolvePlaybackRole({
+    ...self,
+    timeline: timeline({ playbackGeneration: 8 }),
     room: { videoId: 'abcdefghijk' },
   }), 'observer');
 });
@@ -83,6 +91,22 @@ test('only the exact handoff target becomes preparing', () => {
     }),
     room: { videoId: 'abcdefghijk' },
   }), 'preparing');
+});
+
+test('a newer generation is not allowed to impersonate an exact handoff target', () => {
+  assert.equal(resolvePlaybackRole({
+    ...self,
+    timeline: timeline({
+      playbackLeaderParticipantId: 'participant-other',
+      playbackTransportId: 'playback-other',
+      playbackGeneration: 2,
+      handoffState: 'preparing',
+      handoffTargetParticipantId: 'participant-self',
+      handoffTargetPlaybackTransportId: 'playback-self-tab',
+      handoffTargetPlaybackGeneration: 6,
+    }),
+    room: { videoId: 'abcdefghijk' },
+  }), 'observer');
 });
 
 test('old leader remains holder while a different exact target prepares', () => {

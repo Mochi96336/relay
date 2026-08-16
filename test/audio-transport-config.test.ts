@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -60,5 +61,18 @@ describe('audio transport configuration', () => {
       () => startRelay({ RELAY_AUDIO_REORDER_WINDOW_PACKETS: 'not-a-number' }),
       /RELAY_AUDIO_REORDER_WINDOW_PACKETS must be an integer/,
     );
+  });
+
+  it('keeps the server on the validated config boundary instead of restoring raw env fallbacks', () => {
+    const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+
+    assert.match(server, /const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig\(\);/);
+    assert.match(
+      server,
+      /createWebSocketAudioTransport\(\{[\s\S]{0,500}receiver:\s*\{[\s\S]{0,300}\.\.\.AUDIO_TRANSPORT_CONFIG/,
+      'the receiver must consume the already-validated config object',
+    );
+    assert.doesNotMatch(server, /envNonNegativeInt|MIC_REORDER_WINDOW_PACKETS|MIC_REORDER_DEADLINE_MS|MIC_MAX_FORWARD_JUMP_PACKETS/);
+    assert.doesNotMatch(server, /maxForwardJumpPackets:\s*Math\.max/);
   });
 });

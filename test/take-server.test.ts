@@ -320,7 +320,10 @@ test('a sustained backing outage is attached to the Take and degrades the final 
 
     let backing = await startBacking(server);
     feedMic(control, 60);
-    feedBacking(backing, 60);
+    // Keep only a small real-audio frontier. Exact Take evidence must not count
+    // wall-clock disconnect time while already-buffered backing is still what
+    // the WAV actually receives.
+    feedBacking(backing, 10);
     await sleep(80);
 
     control.send({ type: 'start-take' });
@@ -329,8 +332,10 @@ test('a sustained backing outage is attached to the Take and degrades the final 
     await control.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
 
     feedMic(control, 80);
-    feedBacking(backing, 40);
-    await sleep(100);
+    // Let the small backing frontier drain before disconnecting so the next
+    // emitted frames genuinely contain missing backing rather than buffered
+    // pre-outage audio.
+    await sleep(160);
     backing.close();
     await sleep(340);
 

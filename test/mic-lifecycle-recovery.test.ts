@@ -5,6 +5,8 @@ import test from 'node:test';
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const presence = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
+const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+const actionCss = readFileSync(new URL('../public/action-language.css', import.meta.url), 'utf8');
 
 test('local Mic capture publishes an explicit lifecycle independent of server presence', () => {
   assert.match(app, /function setPublisherActive\(active\)[\s\S]*relayActiveRole = publisherActive \? 'publisher' : null/);
@@ -67,4 +69,19 @@ test('initial Relay connection failure remains cancellable instead of trapping a
   // setPublisherActive(true) makes Release visible before the first control
   // connection succeeds, so the retry loop can always be cancelled locally.
   assert.match(app, /releaseButton\.hidden = !publisherActive/);
+});
+
+test('timeline diagnostics attach to the current Song stage instead of retired markup', () => {
+  assert.match(youtubeSync, /document\.querySelector\('\.song-stage'\)/);
+  assert.doesNotMatch(youtubeSync, /document\.querySelector\('\.youtube-panel'\)/);
+  assert.match(youtubeSync, /panel\?\.querySelector\('\.youtube-readout'\)/);
+});
+
+test('localized Mic labels are not replaced by the retired English pseudo-label', () => {
+  const micStart = actionCss.indexOf('#start-publisher {');
+  const confirmStart = actionCss.indexOf('#confirm-takeover {', micStart);
+  assert.ok(micStart >= 0 && confirmStart > micStart);
+  const micRules = actionCss.slice(micStart, confirmStart);
+  assert.match(micRules, /font-size:\s*13px/);
+  assert.match(micRules, /#start-publisher::after\s*\{[\s\S]*content:\s*none/);
 });

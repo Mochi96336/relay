@@ -21,6 +21,13 @@ app = replaceAllExact(app, "activeRole !== 'publisher'", '!publisherActive', 5, 
 app = replaceAllExact(app, '!activeRole', '!publisherActive', 5, 'generic active checks');
 app = replaceAllExact(app, "setActiveRole('publisher')", 'setPublisherActive(true)', 1, 'publisher activation');
 app = replaceAllExact(app, 'setActiveRole(null)', 'setPublisherActive(false)', 1, 'publisher deactivation');
+app = replaceAllExact(
+  app,
+  '// Same dependency on activeRole, so it rides along rather than needing a',
+  '// Same dependency on publisher state, so it rides along rather than needing a',
+  1,
+  'publisher state comment',
+);
 
 if (/\bactiveRole\b/.test(app)) throw new Error('generic activeRole state still exists');
 if (app.includes('setActiveRole')) throw new Error('generic role setter still exists');

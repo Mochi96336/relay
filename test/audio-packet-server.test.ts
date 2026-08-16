@@ -27,11 +27,19 @@ async function waitForBinaryFrames(client: RelayClient, count: number, timeoutMs
   throw new Error(`Timed out waiting for ${count} binary frames; saw ${client.binaryFrames}`);
 }
 
-async function waitForMicDisconnected(client: RelayClient, timeoutMs = 2_000) {
-  await client.waitFor(
-    (message) => message.type === 'session-status' && message.micConnected === false,
-    timeoutMs,
-  );
+async function waitForNewMessage(
+  client: RelayClient,
+  fromIndex: number,
+  predicate: (message: any) => boolean,
+  timeoutMs = 2_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const match = client.messages.slice(fromIndex).find(predicate);
+    if (match) return match;
+    await sleep(10);
+  }
+  throw new Error(`Timed out waiting for a new matching message after index ${fromIndex}`);
 }
 
 function registerV2(client: RelayClient, generation: number) {
@@ -64,6 +72,9 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
     const publisher = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
     registerV2(publisher, 7);
     await publisher.waitForType('registered');
+    await presence.waitFor(
+      (message) => message.type === 'session-status' && message.micConnected === true,
+    );
 
     publisher.sendBinary(encodeAudioPacket({
       source: 'mic', generation: 7, sequence: 0, firstSampleIndex: 0, pcm: pcm(10),
@@ -91,8 +102,13 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
     await sleep(30);
     assert.equal(monitor.binaryFrames, 3, 'duplicates, malformed v2 and wrong generations are rejected');
 
+    const closeFrom = presence.messages.length;
     publisher.close();
-    await waitForMicDisconnected(presence);
+    await waitForNewMessage(
+      presence,
+      closeFrom,
+      (message) => message.type === 'session-status' && message.micConnected === false,
+    );
 
     const reconnected = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
     registerV2(reconnected, 7);

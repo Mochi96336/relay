@@ -20,6 +20,8 @@ jobs:
         shell: bash
         run: |
           set -u
+          git config user.name 'relay-integration-probe[bot]'
+          git config user.email 'relay-integration-probe[bot]@users.noreply.github.com'
           git fetch origin agent/runtime-product-status
           set +e
           git merge --no-commit --no-ff origin/agent/runtime-product-status

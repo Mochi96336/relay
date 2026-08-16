@@ -201,6 +201,32 @@ function handleRttPong(message) {
   while (recentRttMs.length > RTT_WINDOW) recentRttMs.shift();
 }
 
+const REJECTION_NOTES = {
+  'leader-busy': 'Another tab or device already drives this room’s song. Close it, or take the microphone here.',
+  'mic-owner-required': 'Whoever holds the microphone controls the room song.',
+  'not-publisher': 'This page is not the room’s microphone device, so its player does not drive the song.',
+  'invalid-identity': 'This page could not identify its player to Relay. Reload it.',
+  'invalid-telemetry': 'Relay could not read this player’s position.',
+  // Room-command gate refusals.
+  'command-required': 'This player moved the song without a room command, so Relay is ignoring it. Use the room controls.',
+  'command-target-mismatch': 'A room command is being applied by another player. This one is not driving the song right now.',
+  'command-mismatch': 'This player did not end up where the room command asked it to go.',
+};
+
+/**
+ * Explains why this page's player is not driving the room timeline.
+ *
+ * Otherwise the readout sits on "waiting for YouTube" forever while the page
+ * is in fact sending telemetry several times a second and having every packet
+ * refused, which is indistinguishable from a dead connection.
+ */
+function renderRejection(message) {
+  if (!serverState || !serverValues) return;
+  serverState.textContent = 'Server timeline · not driven by this page';
+  serverNote.textContent = REJECTION_NOTES[message.reason]
+    ?? `Relay refused this player's telemetry (${message.reason}).`;
+}
+
 function renderTimeline(message) {
   if (!serverState || !serverValues) return;
 
@@ -253,6 +279,11 @@ function handleMessage(event) {
 
   if (message.type === 'clock-pong') {
     handleRttPong(message);
+    return;
+  }
+
+  if (message.type === 'youtube-telemetry-rejected' || message.type === 'room-song-telemetry-rejected') {
+    renderRejection(message);
     return;
   }
 
@@ -325,6 +356,11 @@ function handleMessage(event) {
 
   if (message.type === 'song-handoff-complete') {
     dispatchHandoff('relay:song-handoff-complete', message);
+    return;
+  }
+
+  if (message.type === 'song-handoff-cancelled') {
+    dispatchHandoff('relay:song-handoff-cancelled', message);
   }
 }
 

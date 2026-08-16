@@ -13,6 +13,7 @@ let rttTimer = null;
 let pingSequence = 0;
 let pendingMicIntentAt = -Infinity;
 let roomCommandRevision = 0;
+let latestRoomCommandId = null;
 let latestRoomSongStatus = null;
 const pendingPings = new Map();
 // A plain running minimum never rose again, so one lucky early sample pinned the
@@ -142,6 +143,12 @@ function updateRoomCommandRevision(value) {
   }
 }
 
+function clearLatestRoomCommand(commandId) {
+  if (typeof commandId === 'string' && latestRoomCommandId === commandId) {
+    latestRoomCommandId = null;
+  }
+}
+
 function sendPlaybackHello() {
   send({
     type: 'playback-hello',
@@ -261,6 +268,7 @@ function handleMessage(event) {
 
   if (message.type === 'room-song-command-status') {
     updateRoomCommandRevision(message.revision);
+    if (message.pendingCommandId === null) latestRoomCommandId = null;
     dispatchRoomCommand('relay:room-song-command-status', withLatestRoom(message));
     return;
   }
@@ -273,6 +281,7 @@ function handleMessage(event) {
 
   if (message.type === 'room-song-command-rejected') {
     updateRoomCommandRevision(message.revision);
+    clearLatestRoomCommand(message.commandId);
     if (message.room && typeof message.room === 'object') latestRoomSongStatus = message.room;
     dispatchRoomCommand('relay:room-song-command-rejected', withLatestRoom(message));
     return;
@@ -280,18 +289,21 @@ function handleMessage(event) {
 
   if (message.type === 'room-song-command-apply') {
     updateRoomCommandRevision(message.revision);
+    latestRoomCommandId = message.commandId;
     dispatchRoomCommand('relay:room-song-command-apply', message);
     return;
   }
 
   if (message.type === 'room-song-command-complete') {
     updateRoomCommandRevision(message.revision);
+    clearLatestRoomCommand(message.commandId);
     dispatchRoomCommand('relay:room-song-command-complete', message);
     return;
   }
 
   if (message.type === 'room-song-command-failed-ack') {
     updateRoomCommandRevision(message.revision);
+    clearLatestRoomCommand(message.commandId);
     dispatchRoomCommand('relay:room-song-command-failed-ack', withLatestRoom(message));
     return;
   }
@@ -369,17 +381,22 @@ window.addEventListener('relay:room-song-command-intent', (event) => {
   if (!detail || typeof detail !== 'object' || typeof detail.action !== 'string') return;
 
   const commandId = randomRoomCommandId();
+  const supersedesCommandId = latestRoomCommandId;
+  const expectedRevision = roomCommandRevision;
   const sent = send({
     type: 'room-song-command',
     commandId,
-    expectedRevision: roomCommandRevision,
+    expectedRevision,
+    supersedesCommandId,
     ...detail,
   });
 
   if (sent) {
+    latestRoomCommandId = commandId;
     dispatchRoomCommand('relay:room-song-command-sent', {
       commandId,
-      expectedRevision: roomCommandRevision,
+      expectedRevision,
+      supersedesCommandId,
       ...detail,
     });
   } else {

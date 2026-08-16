@@ -1,0 +1,71 @@
+name: Refactor song role resolver wiring
+
+on:
+  push:
+    branches:
+      - agent/live-ui-shell
+    paths:
+      - .github/workflows/refactor-song-role.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/live-ui-shell
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+      - name: Use the tested playback surface role resolver
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'relay-ui-integration[bot]'
+          git config user.email 'relay-ui-integration[bot]@users.noreply.github.com'
+
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+          const path = 'public/youtube-sync.js';
+          let source = readFileSync(path, 'utf8');
+
+          function replaceOnce(before, after) {
+            const count = source.split(before).length - 1;
+            if (count !== 1) throw new Error(`expected one patch target, found ${count}`);
+            source = source.replace(before, after);
+          }
+
+          replaceOnce(
+            `const STATE_NAMES = new Map([`,
+            `import { resolvePlaybackRole } from './song-role.js';\n\nconst STATE_NAMES = new Map([`,
+          );
+
+          replaceOnce(
+            `function exactSelfPlayback(status, participantKey, transportKey, generationKey) {\n  const participantId = typeof window.relayParticipantId === 'string'\n    ? window.relayParticipantId.trim()\n    : '';\n  if (!participantId || !status || typeof status !== 'object') return false;\n  return status[participantKey] === participantId\n    && status[transportKey] === transportId\n    && Number(status[generationKey]) === playbackGeneration;\n}\n\nfunction currentPlaybackRole() {\n  const timeline = latestTimelineStatus;\n  if (!timeline) return null;\n\n  const hasSong = typeof latestRoomSongStatus?.videoId === 'string'\n    || typeof timeline.videoId === 'string';\n  if (!hasSong) return 'empty';\n\n  if (\n    timeline.handoffState !== 'idle'\n    && exactSelfPlayback(\n      timeline,\n      'handoffTargetParticipantId',\n      'handoffTargetPlaybackTransportId',\n      'handoffTargetPlaybackGeneration',\n    )\n  ) return 'preparing';\n\n  if (exactSelfPlayback(\n    timeline,\n    'playbackLeaderParticipantId',\n    'playbackTransportId',\n    'playbackGeneration',\n  )) return 'holder';\n\n  return 'observer';\n}\n\n`,
+            ``,
+          );
+
+          replaceOnce(
+            `function dispatchPlaybackView() {\n  const role = currentPlaybackRole();\n  if (!role) return;`,
+            `function dispatchPlaybackView() {\n  const participantId = typeof window.relayParticipantId === 'string'\n    ? window.relayParticipantId.trim()\n    : '';\n  const role = resolvePlaybackRole({\n    timeline: latestTimelineStatus,\n    room: latestRoomSongStatus,\n    participantId,\n    transportId,\n    playbackGeneration,\n  });\n  if (!role) return;`,
+          );
+
+          writeFileSync(path, source);
+          NODE
+
+          rm .github/workflows/refactor-song-role.yml
+          git add -A
+
+          npm ci
+          npm run check
+          for f in public/*.js; do node --check "$f"; done
+          bash -n scripts/*.sh
+          npm test
+
+          git commit -m 'refactor(ui): use tested playback surface role resolver'
+          git push origin HEAD:agent/live-ui-shell

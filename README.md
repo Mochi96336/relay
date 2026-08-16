@@ -105,7 +105,9 @@ PORT=3100 npm run robot:source
 
 `PORT` defaults to `3000`. The launcher creates or reuses the `relay_browser` PipeWire/PulseAudio sink, captures its monitor as mono 48 kHz PCM, feeds `backing:stdin`, and starts an isolated Chromium under Xvfb in unattended robot mode.
 
-The source URL must use `localhost`, not `127.0.0.1`; the latter produced `Video unavailable` in the real-device comparison. See `ROBOT_DEPLOYMENT.md` for the deployment contract, prerequisites, cleanup behavior, and the boundary before adding boot services.
+The source URL must use `localhost`, not `127.0.0.1`; the latter produced `Video unavailable` in the real-device comparison. See `ROBOT_DEPLOYMENT.md` for the deployment contract, prerequisites, and cleanup behavior.
+
+`deploy/` holds systemd **user** units for the server and the route. They are committed to be reviewed and rehearsed, not enabled: the gate on enabling them is the integrated real-device test, and they need `loginctl enable-linger` to start at boot at all, because PipeWire lives in the user session. `ROBOT_DEPLOYMENT.md` has the procedure.
 
 ## Live mix timing
 

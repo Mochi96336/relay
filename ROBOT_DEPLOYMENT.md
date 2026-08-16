@@ -122,8 +122,86 @@ still manual, and remains so until the boot-service checkpoint below.
 
 The launcher does not create a second mixer clock or alignment model. Observed follower deltas are diagnostics, not configuration: final audio alignment remains the calibration system's job.
 
+## Boot services: written, deliberately not enabled
+
+`deploy/` holds two systemd **user** units, `relay-server.service` and
+`relay-robot-source.service`. They are committed so the boot design can be
+reviewed and rehearsed by hand; nothing here enables them, and the first
+unattended boot should not also be the first time the whole route runs
+unattended.
+
+### Why user units
+
+The route reaches PipeWire through the per-user socket under
+`/run/user/$UID`, and on this installation `pipewire`, `pipewire-pulse` and
+`wireplumber` all run as user services. A system unit cannot reach that socket
+without recreating the session around it.
+
+The consequence is the step that is easy to miss: **without lingering the user
+manager does not exist at boot**, so no user unit starts and `/run/user/$UID`
+is never created. Check before anything else:
+
+```bash
+loginctl show-user "$USER" -p Linger      # Linger=no means nothing will start
+sudo loginctl enable-linger "$USER"
+```
+
+### Install
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/relay
+cp deploy/*.service ~/.config/systemd/user/
+printf 'PORT=3100\n' > ~/.config/relay/robot.env   # add RELAY_KEY= here if used
+chmod 600 ~/.config/relay/robot.env
+systemctl --user daemon-reload
+```
+
+The units read `~/.config/relay/robot.env`, which is optional and overrides
+their built-in `PORT` default. The key belongs in that file rather than in a
+unit: `~/.config/systemd/user` is readable, and the units are in the
+repository.
+
+### Rehearse before enabling
+
+```bash
+systemctl --user start relay-server.service
+systemctl --user start relay-robot-source.service
+curl -s http://localhost:3100/statusz | jq '{ok, state, faults}'
+systemctl --user stop relay-robot-source.service    # sink and Chromium go too
+```
+
+Only after the integrated phone-microphone + robot-backing + calibration test
+passes on real devices, and the units have been exercised by hand:
+
+```bash
+systemctl --user enable relay-server.service relay-robot-source.service
+```
+
+### What the units add over running the scripts
+
+- **A readiness gate, not just ordering.** `After=` sequences starts but does
+  not wait for the port to listen, and Chromium does not retry a refused load.
+  `ExecStartPre` polls `/healthz` the way `robot:doctor` does, so a boot race
+  cannot leave the source page on an error screen while every process in the
+  unit looks healthy.
+- **Failure that stays still.** `Restart=on-failure` uses the exit status the
+  launcher already reports, and `StartLimitBurst` stops the retrying after five
+  attempts in two minutes rather than respawning Chromium indefinitely. A
+  stopped unit reads the same on every `/statusz` poll; a thrashing one does
+  not.
+- **Cleanup that survives SIGKILL.** The launcher's own trap handles signals,
+  and systemd's cgroup sweep handles the case where the trap never runs.
+
+Two units rather than one because the phone talks to the server: collapsing
+them would make a Chromium crash end the singer's session along with the
+backing route.
+
+### Still manual after this
+
+Nothing acts on a `/statusz` fault. Recovery is restarting a unit by hand, and
+a watchdog would need a narrower signal than `ok: false` — several faults it
+reports are phone-side, and restarting the robot route would not touch them.
+
 ## Current checkpoint and next stage
 
-The manually launched robot backing route is reproducible and validated. Full phone microphone + robot backing + automatic calibration still needs an integrated real-device monitor/recording test.
-
-Do not install or commit boot services yet. After that integrated path is validated, the next deployment checkpoint can supervise the Relay server, backing bridge, and browser at boot. That is the point where the deployment can accurately promise unattended startup.
+The manually launched robot backing route is reproducible and validated. Full phone microphone + robot backing + automatic calibration still needs an integrated real-device monitor/recording test. That test is the gate on enabling the units above.

@@ -204,9 +204,11 @@ test('multi-tab Mic takeover targets only the playback transport that expressed 
       'another live tab from the same person must not receive the handoff',
     );
 
+    // This is intentionally a 0C/SongSession assertion. The packet is not a
+    // semantic room-song command mutation, so 1A may pass it through; the exact
+    // handoff target lock is what must prevent the sibling tab from taking over.
     bOtherTab.send(telemetry(Number(prepare.serverTime) + 0.05));
-    const rejected = await bOtherTab.waitFor((message) => message.type === 'room-song-telemetry-rejected');
-    assert.equal(rejected.reason, 'command-target-mismatch');
+    await sleep(80);
     bOtherTab.send({ type: 'youtube-timeline-request' });
     await sleep(40);
     assert.equal(

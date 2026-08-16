@@ -7,8 +7,9 @@
     <title>Relay</title>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/live-state.css" />
+    <link rel="stylesheet" href="/song-surface.css" />
   </head>
-  <body data-lifecycle="idle" data-health="healthy" data-timing="idle" data-self-mic="off">
+  <body data-lifecycle="idle" data-health="healthy" data-timing="idle" data-self-mic="off" data-playback-role="connecting">
     <main class="live-shell">
       <header class="room-header">
         <div class="room-mark" aria-label="Relay">Relay</div>
@@ -25,8 +26,23 @@
         </details>
       </header>
 
-      <section class="song-stage" aria-label="Room song">
-        <div class="section-label">Song</div>
+      <section class="song-stage" data-playback-role="connecting" aria-label="Room song">
+        <div class="song-heading-row">
+          <div class="section-label">Song</div>
+          <div class="song-heading-actions">
+            <span id="song-device-note" class="song-device-note" aria-live="polite">Connecting…</span>
+            <button id="change-youtube" class="text-action" type="button" hidden>Change song</button>
+          </div>
+        </div>
+
+        <div id="song-observer" class="song-observer" aria-live="polite" hidden>
+          <img id="room-song-artwork" alt="" />
+          <div class="song-observer-meta">
+            <strong id="room-song-state">Room song</strong>
+            <span id="room-song-timeline">--:-- / --:--</span>
+          </div>
+        </div>
+
         <div class="youtube-form">
           <input id="youtube-url" type="text" inputmode="url" autocomplete="off" placeholder="Paste a YouTube link" aria-label="YouTube URL or video ID" />
           <button id="load-youtube" type="button">Load</button>
@@ -182,6 +198,7 @@
     <script type="module" src="/app.js"></script>
     <script type="module" src="/listen.js"></script>
     <script type="module" src="/recorder.js"></script>
+    <script type="module" src="/song-surface.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>
   </body>

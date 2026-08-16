@@ -5,6 +5,8 @@ import {
 } from './audio-packet.js';
 
 const HALF_SEQUENCE_SPACE = 0x8000_0000;
+const CONTINUITY_TTL_MS = 15_000;
+const MAX_CONTINUITY_SNAPSHOTS = 8;
 
 export type AudioPacketReceiverOptions = {
   source: AudioPacketSource;
@@ -35,6 +37,20 @@ export type AudioPacketReceiverStats = {
 type FinalizedState = 'emitted' | 'lost' | 'invalid';
 type PendingPacket = { packet: AudioPacket; receivedAtMs: number };
 type Counters = Omit<AudioPacketReceiverStats, 'bufferedPackets'>;
+type ContinuitySnapshot = {
+  expectedSequence: number;
+  lastEmittedEndSampleIndex: number | null;
+  pending: [number, PendingPacket][];
+  finalized: [number, FinalizedState][];
+  counters: Counters;
+  updatedAtMs: number;
+};
+
+const continuitySnapshots = new Map<string, ContinuitySnapshot>();
+
+function continuityKey(source: AudioPacketSource, generation: number) {
+  return `${source}:${generation >>> 0}`;
+}
 
 function sequenceDistance(from: number, to: number) {
   return (to - from) >>> 0;
@@ -52,10 +68,28 @@ function uint32(value: number) {
   return Number.isInteger(value) && value >= 0 && value <= 0xffff_ffff;
 }
 
+function pruneContinuitySnapshots(nowMs: number) {
+  for (const [key, snapshot] of continuitySnapshots) {
+    if (nowMs - snapshot.updatedAtMs > CONTINUITY_TTL_MS) continuitySnapshots.delete(key);
+  }
+  while (continuitySnapshots.size > MAX_CONTINUITY_SNAPSHOTS) {
+    const oldest = continuitySnapshots.keys().next().value as string | undefined;
+    if (!oldest) break;
+    continuitySnapshots.delete(oldest);
+  }
+}
+
 /**
  * Converts unordered media packets into an ordered, bounded stream without
  * assigning them a new time. Missing sequences are transport evidence only;
  * the next packet's `firstSampleIndex` is what leaves the real timeline hole.
+ *
+ * Receiver state is snapshotted by source + capture generation for a short
+ * reconnect window. A replacement receiver adopts that state only when its
+ * first valid packet proves capture continuation (non-zero sequence/time and a
+ * forward sequence within the configured bound). A fresh capture beginning at
+ * sequence 0 / sample 0 always resets the snapshot, so a coincidental generation
+ * reuse cannot silently inherit another capture's frontier.
  */
 export class AudioPacketReceiver {
   readonly source: AudioPacketSource;
@@ -82,6 +116,8 @@ export class AudioPacketReceiver {
     futurePackets: 0,
     invalidSampleRangePackets: 0,
   };
+  private continuityCandidate: ContinuitySnapshot | null = null;
+  private continuityResolved = false;
 
   constructor(options: AudioPacketReceiverOptions) {
     if (!nonNegativeInteger(options.reorderWindowPackets)) {
@@ -106,6 +142,13 @@ export class AudioPacketReceiver {
     this.reorderWindowPackets = options.reorderWindowPackets;
     this.reorderDeadlineMs = options.reorderDeadlineMs;
     this.maxForwardJumpPackets = options.maxForwardJumpPackets;
+
+    const nowMs = Date.now();
+    pruneContinuitySnapshots(nowMs);
+    const candidate = continuitySnapshots.get(continuityKey(this.source, this.generation));
+    if (candidate && nowMs - candidate.updatedAtMs <= CONTINUITY_TTL_MS) {
+      this.continuityCandidate = candidate;
+    }
   }
 
   receive(buffer: Buffer, nowMs = Date.now()): AudioPacket[] {
@@ -113,21 +156,27 @@ export class AudioPacketReceiver {
     const decoded = decodeAudioPacket(buffer);
     if (!decoded.ok) {
       this.counters.malformedPackets += 1;
+      this.rememberContinuity(nowMs);
       return [];
     }
 
     const packet = decoded.packet;
     if (packet.source !== this.source) {
       this.counters.wrongSourcePackets += 1;
+      this.rememberContinuity(nowMs);
       return [];
     }
     if (packet.generation !== this.generation) {
       this.counters.wrongGenerationPackets += 1;
+      this.rememberContinuity(nowMs);
       return [];
     }
 
+    this.resolveContinuity(packet, nowMs);
+
     if (this.pending.has(packet.sequence)) {
       this.counters.duplicatePackets += 1;
+      this.rememberContinuity(nowMs);
       return [];
     }
 
@@ -138,6 +187,7 @@ export class AudioPacketReceiver {
       const output: AudioPacket[] = [];
       this.emitExpected(packet, output);
       this.drainPending(output);
+      this.rememberContinuity(nowMs);
       return output;
     }
 
@@ -146,11 +196,13 @@ export class AudioPacketReceiver {
       if (finalized === 'emitted') this.counters.duplicatePackets += 1;
       else if (finalized === 'lost' || finalized === 'invalid') this.counters.latePackets += 1;
       else this.counters.replayPackets += 1;
+      this.rememberContinuity(nowMs);
       return [];
     }
 
     if (distance > this.maxForwardJumpPackets) {
       this.counters.futurePackets += 1;
+      this.rememberContinuity(nowMs);
       return [];
     }
 
@@ -160,6 +212,7 @@ export class AudioPacketReceiver {
     const output: AudioPacket[] = [];
     this.enforceWindow(packet.sequence, output);
     output.push(...this.flush(nowMs));
+    this.rememberContinuity(nowMs);
     return output;
   }
 
@@ -176,11 +229,68 @@ export class AudioPacketReceiver {
       this.markExpectedLost();
       this.drainPending(output);
     }
+    this.rememberContinuity(nowMs);
     return output;
   }
 
   stats(): AudioPacketReceiverStats {
     return { ...this.counters, bufferedPackets: this.pending.size };
+  }
+
+  private resolveContinuity(packet: AudioPacket, nowMs: number) {
+    if (this.continuityResolved) return;
+    this.continuityResolved = true;
+
+    const candidate = this.continuityCandidate;
+    this.continuityCandidate = null;
+    if (!candidate) {
+      this.rememberContinuity(nowMs);
+      return;
+    }
+
+    const definitelyFresh = packet.sequence === 0 && packet.firstSampleIndex === 0;
+    const forwardDistance = sequenceDistance(candidate.expectedSequence, packet.sequence);
+    const timelineContinues = candidate.lastEmittedEndSampleIndex === null
+      ? packet.sequence !== 0 || packet.firstSampleIndex !== 0
+      : packet.firstSampleIndex >= candidate.lastEmittedEndSampleIndex;
+    const sequenceContinues = forwardDistance < HALF_SEQUENCE_SPACE
+      && forwardDistance <= this.maxForwardJumpPackets;
+
+    if (!definitelyFresh && timelineContinues && sequenceContinues) {
+      this.expectedSequence = candidate.expectedSequence;
+      this.lastEmittedEndSampleIndex = candidate.lastEmittedEndSampleIndex;
+      this.pending.clear();
+      for (const [sequence, pending] of candidate.pending) this.pending.set(sequence, pending);
+      this.finalized.clear();
+      for (const [sequence, state] of candidate.finalized) this.finalized.set(sequence, state);
+      Object.assign(this.counters, candidate.counters);
+      // This packet belongs to the replacement transport, so keep the receive
+      // count already charged by this instance rather than losing it when the
+      // prior counters are restored.
+      this.counters.receivedPackets += 1;
+    } else {
+      continuitySnapshots.delete(continuityKey(this.source, this.generation));
+    }
+
+    this.rememberContinuity(nowMs);
+  }
+
+  private rememberContinuity(nowMs: number) {
+    if (this.expectedSequence === null) return;
+    const key = continuityKey(this.source, this.generation);
+    continuitySnapshots.delete(key);
+    continuitySnapshots.set(key, {
+      expectedSequence: this.expectedSequence,
+      lastEmittedEndSampleIndex: this.lastEmittedEndSampleIndex,
+      pending: [...this.pending.entries()].map(([sequence, pending]) => [sequence, {
+        packet: pending.packet,
+        receivedAtMs: pending.receivedAtMs,
+      }]),
+      finalized: [...this.finalized.entries()],
+      counters: { ...this.counters },
+      updatedAtMs: nowMs,
+    });
+    pruneContinuitySnapshots(nowMs);
   }
 
   private enforceWindow(newestSequence: number, output: AudioPacket[]) {

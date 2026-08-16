@@ -6,6 +6,7 @@ export type ProductLifecycle = 'idle' | 'preparing' | 'ready' | 'live' | 'record
 export type ProductHealth = 'healthy' | 'degraded' | 'blocked';
 
 export type ProductAttentionCode =
+  | 'audio-unavailable'
   | 'robot-audio-unavailable'
   | 'robot-route-invalid'
   | 'robot-player-unavailable'
@@ -17,7 +18,7 @@ export type ProductAttentionCode =
 
 export type ProductAttention = {
   code: ProductAttentionCode;
-  scope: 'robot' | 'song' | 'mic' | 'timing' | 'take';
+  scope: 'audio' | 'robot' | 'song' | 'mic' | 'timing' | 'take';
   severity: 'warning' | 'critical';
 };
 
@@ -135,9 +136,16 @@ function timingState(
 function hostAttention(input: ProductViewModelInput): ProductAttention | null {
   const reasons = new Set(input.readiness.reasons);
   if (reasons.has('backing-not-connected') || reasons.has('backing-not-streaming')) {
+    if (input.readiness.components.route.mode === 'robot') {
+      return {
+        code: 'robot-audio-unavailable',
+        scope: 'robot',
+        severity: 'critical',
+      };
+    }
     return {
-      code: 'robot-audio-unavailable',
-      scope: 'robot',
+      code: 'audio-unavailable',
+      scope: 'audio',
       severity: 'critical',
     };
   }

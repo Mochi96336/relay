@@ -4,6 +4,16 @@ import { YouTubeTimelineTracker } from './youtube-timeline.js';
 
 const LEADER_STALE_AFTER_MS = 1_500;
 const HANDOFF_TIME_TOLERANCE_SECONDS = 1.5;
+/**
+ * How long a target may leave a prepared handoff unacknowledged.
+ *
+ * A live handoff deliberately freezes the room song: the old leader may only
+ * repeat what it is already playing, and no other transport may touch the
+ * clock at all. That is correct for the seconds a real handoff takes and
+ * intolerable for anything longer, so a target that never answers the plan
+ * must not be able to hold the room indefinitely.
+ */
+const HANDOFF_PREPARE_TIMEOUT_MS = 20_000;
 const HOLDOVER_TIME_TOLERANCE_SECONDS = 0.9;
 
 export type PlaybackIdentity = {
@@ -49,6 +59,15 @@ type Handoff = {
   target: PlaybackIdentity;
   state: 'preparing' | 'committing';
   startedAtMs: number;
+  /**
+   * Whether the target has ever reported itself prepared.
+   *
+   * A target that has acknowledged the plan is trusted to take as long as it
+   * needs, because a blocked autoplay legitimately waits for a user gesture.
+   * A target that has never answered at all is a different situation, and is
+   * the one the preparation deadline exists for.
+   */
+  everReady: boolean;
 };
 
 export function normalizePlaybackTransportId(value: unknown) {
@@ -114,6 +133,7 @@ export class SongSession {
       target,
       state: 'preparing',
       startedAtMs: nowMs,
+      everReady: false,
     };
     this.bump();
     return this.handoffPlan(nowMs);
@@ -140,6 +160,7 @@ export class SongSession {
       || micOwnerId !== identity.participantId
     ) return null;
 
+    this.handoff.everReady = true;
     if (this.handoff.state !== 'committing') {
       this.handoff.state = 'committing';
       this.bump();
@@ -167,6 +188,28 @@ export class SongSession {
     this.handoff = null;
     this.bump();
     return true;
+  }
+
+  /** The transport a live handoff is waiting for, so callers can check it still exists. */
+  handoffTarget(): PlaybackIdentity | null {
+    return this.handoff ? { ...this.handoff.target } : null;
+  }
+
+  /**
+   * Abandons a handoff whose target is never going to answer.
+   *
+   * `targetPresent` is supplied by the caller because SongSession does not know
+   * about sockets. Without this, closing the tab that was about to take over
+   * left the room frozen for good: the old leader restricted to repeating
+   * itself, every other transport refused as `handoff-not-target`, and the only
+   * escapes were releasing the microphone or leaving the room.
+   */
+  sweepHandoff(targetPresent: boolean, nowMs = performance.now()) {
+    if (!this.handoff) return false;
+    if (!targetPresent) return this.cancelHandoff();
+    if (this.handoff.everReady) return false;
+    if (nowMs - this.handoff.startedAtMs <= HANDOFF_PREPARE_TIMEOUT_MS) return false;
+    return this.cancelHandoff();
   }
 
   update(

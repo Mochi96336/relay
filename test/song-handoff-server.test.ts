@@ -190,3 +190,53 @@ test('multi-tab Mic takeover targets only the playback transport that expressed 
     await server.stop();
   }
 });
+
+test('closing the tab a handoff is waiting for gives the room song back', async () => {
+  const server = await startRelay(FAST);
+  try {
+    const aPlayback = await playback(server, 'participant-a', 'A', 'playback-tab-a');
+    const aPublisher = await publisher(server, 'participant-a', 'A');
+
+    aPlayback.send(telemetry(10));
+    await aPlayback.waitFor((message) => (
+      message.type === 'youtube-timeline-status' && message.videoId === VIDEO
+    ));
+
+    const bPlayback = await playback(server, 'participant-b', 'B', 'playback-tab-b');
+    const bPublisher = await publisher(server, 'participant-b', 'B', 'participant-a');
+    await bPlayback.waitForType('song-handoff-prepare');
+
+    // B's YouTube tab goes away before it ever takes over. B still holds the
+    // microphone and is still in the room, so nothing else releases the
+    // handoff; while it stands, every transport except that dead tab and the
+    // old leader is refused as `handoff-not-target`.
+    bPlayback.close();
+
+    // A reopened tab for the Mic owner can drive the room again. Under the
+    // stuck handoff this transport was refused for ever as `handoff-not-target`.
+    // A real page sends continuously, so this does too rather than depending on
+    // one packet landing after the sweep.
+    const bReopened = await playback(server, 'participant-b', 'B', 'playback-tab-b-reopened');
+    const deadline = Date.now() + 5_000;
+    let moved: Record<string, any> | undefined;
+    while (Date.now() < deadline && !moved) {
+      bReopened.send(telemetry(90));
+      await sleep(100);
+      moved = bReopened.messages.find((message) => (
+        message.type === 'youtube-timeline-status'
+        && message.playbackTransportId === 'playback-tab-b-reopened'
+      ));
+    }
+
+    assert.ok(moved, 'the room song stayed frozen behind a handoff whose target had gone');
+    assert.ok(Number(moved.serverTime) > 80, `room song stayed frozen at ${moved.serverTime}`);
+    assert.equal(aPlayback.latest('room-song-status')?.handoffState, 'idle');
+
+    aPlayback.close();
+    aPublisher.close();
+    bPublisher.close();
+    bReopened.close();
+  } finally {
+    await server.stop();
+  }
+});

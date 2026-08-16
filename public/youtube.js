@@ -400,6 +400,21 @@ function releaseRoomSong(message) {
   noteNode.textContent = 'Room playback moved with the microphone. This player is no longer driving the shared song.';
 }
 
+/**
+ * The server gave up waiting for this player to take over.
+ *
+ * Dropping the pending state matters as much as the note: a stale prepared
+ * handoff would otherwise keep answering with a `handoffId` the server has
+ * already forgotten.
+ */
+function cancelRoomSongHandoff() {
+  if (!pendingHandoff) return;
+  clearHandoffReadyTimers();
+  pendingHandoff = null;
+  handoffReadySent = false;
+  noteNode.textContent = 'Room playback handoff was cancelled. Take the microphone again to retry.';
+}
+
 function completeRoomSong(message) {
   if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
   clearHandoffReadyTimers();
@@ -446,6 +461,9 @@ window.addEventListener('relay:song-handoff-release', (event) => {
 });
 window.addEventListener('relay:song-handoff-complete', (event) => {
   completeRoomSong(event.detail ?? {});
+});
+window.addEventListener('relay:song-handoff-cancelled', () => {
+  cancelRoomSongHandoff();
 });
 
 loadButton.addEventListener('click', () => {

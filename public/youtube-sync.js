@@ -270,6 +270,11 @@ function handleMessage(event) {
 
   if (message.type === 'song-handoff-complete') {
     dispatchHandoff('relay:song-handoff-complete', message);
+    return;
+  }
+
+  if (message.type === 'song-handoff-cancelled') {
+    dispatchHandoff('relay:song-handoff-cancelled', message);
   }
 }
 

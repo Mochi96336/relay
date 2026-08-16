@@ -467,6 +467,36 @@ function selectPlaybackHandoffTarget(participantId: string, nowMs: number) {
   return candidates.length === 1 ? candidates[0].identity : null;
 }
 
+function playbackTransportIsConnected(identity: PlaybackIdentity) {
+  for (const client of wss.clients) {
+    const candidate = client as RelaySocket;
+    if (candidate.readyState !== WebSocket.OPEN) continue;
+    const candidateIdentity = playbackIdentityForSocket(candidate);
+    if (candidateIdentity && samePlaybackIdentity(candidateIdentity, identity)) return true;
+  }
+  return false;
+}
+
+/**
+ * Ends a handoff that has stopped being able to complete.
+ *
+ * A live handoff intentionally holds the room song still, so it must not be
+ * able to outlive the transport it is waiting for. A page reload also lands
+ * here rather than resuming: the playback generation changes on load, so the
+ * reloaded tab is a different transport and the prepared target is genuinely
+ * gone.
+ */
+function sweepPreparedSongHandoff(nowMs: number) {
+  const target = youtubeTimeline.handoffTarget();
+  if (!target) return false;
+  if (!youtubeTimeline.sweepHandoff(playbackTransportIsConnected(target), nowMs)) return false;
+
+  sendToPlayback(target, { type: 'song-handoff-cancelled' });
+  broadcastJson(youtubeTimeline.statusPayload(nowMs));
+  broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+  return true;
+}
+
 function beginPreparedSongHandoff(participantId: string, nowMs = performance.now()) {
   const target = selectPlaybackHandoffTarget(participantId, nowMs);
   if (!target) return false;
@@ -1205,6 +1235,8 @@ const youtubeTimelineTimer = setInterval(() => {
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
   maybeAutoCalibrate(nowMs);
+
+  sweepPreparedSongHandoff(nowMs);
 
   const presenceSweep = participants.sweep(Date.now());
   if (presenceSweep.releasedMicOwnerId) {

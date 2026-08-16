@@ -57,3 +57,13 @@ test('Adjust uses one flat layer and thin rails instead of a card wall', () => {
   assert.equal(css.includes('height: 2px;'), true);
   assert.equal(css.includes('.adjust-range::-webkit-slider-runnable-track'), true);
 });
+
+test('opening Adjust morphs the performance area instead of overlaying the YouTube player', () => {
+  assert.equal(css.includes('body:has(.adjust-panel[open]) .performance-stage'), true);
+  assert.equal(css.includes('body:has(.adjust-panel[open]) .take-strip'), true);
+  assert.equal(css.includes('.adjust-panel[open]'), true);
+  assert.equal(css.includes('position: static;'), true);
+  assert.equal(css.includes('content: "Done";'), true);
+  assert.equal(css.includes('body:has(.adjust-panel[open]) .song-stage'), false,
+    'the media field must remain in normal flow and unobscured while Adjust is open');
+});

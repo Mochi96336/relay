@@ -17,7 +17,7 @@ app = replaceAllExact(
   'role setter',
 );
 app = replaceAllExact(app, "activeRole === 'publisher'", 'publisherActive', 4, 'publisher checks');
-app = replaceAllExact(app, "activeRole !== 'publisher'", '!publisherActive', 4, 'publisher inverse checks');
+app = replaceAllExact(app, "activeRole !== 'publisher'", '!publisherActive', 5, 'publisher inverse checks');
 app = replaceAllExact(app, '!activeRole', '!publisherActive', 5, 'generic active checks');
 app = replaceAllExact(app, "setActiveRole('publisher')", 'setPublisherActive(true)', 1, 'publisher activation');
 app = replaceAllExact(app, 'setActiveRole(null)', 'setPublisherActive(false)', 1, 'publisher deactivation');

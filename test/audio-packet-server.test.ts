@@ -27,6 +27,13 @@ async function waitForBinaryFrames(client: RelayClient, count: number, timeoutMs
   throw new Error(`Timed out waiting for ${count} binary frames; saw ${client.binaryFrames}`);
 }
 
+async function waitForMicDisconnected(client: RelayClient, timeoutMs = 2_000) {
+  await client.waitFor(
+    (message) => message.type === 'session-status' && message.micConnected === false,
+    timeoutMs,
+  );
+}
+
 function registerV2(client: RelayClient, generation: number) {
   client.send({
     type: 'register',
@@ -85,6 +92,8 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
     assert.equal(monitor.binaryFrames, 3, 'duplicates, malformed v2 and wrong generations are rejected');
 
     publisher.close();
+    await waitForMicDisconnected(presence);
+
     const reconnected = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
     registerV2(reconnected, 7);
     await reconnected.waitForType('registered');

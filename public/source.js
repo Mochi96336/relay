@@ -654,6 +654,9 @@ timingButton.addEventListener('click', () => {
 });
 
 window.onYouTubeIframeAPIReady = () => {
+  // Idempotent because the retry timer may call this itself. Two players on
+  // one page would both hold the sink and both answer probes.
+  if (player) return;
   player = new window.YT.Player('source-player', {
     height: '360',
     width: '640',
@@ -687,9 +690,51 @@ window.onYouTubeIframeAPIReady = () => {
   });
 };
 
-const apiScript = document.createElement('script');
-apiScript.src = 'https://www.youtube.com/iframe_api';
-document.head.append(apiScript);
+/**
+ * The robot opens this page at boot and nobody is there to reload it.
+ *
+ * A script tag the browser could not fetch is never retried, so a Pi that
+ * reaches Chromium before it reaches the network would otherwise leave `player`
+ * null for the entire session. That failure is close to invisible from
+ * outside: the WebSocket connects, the launcher's three processes are all
+ * alive, and the robot registers as a source - there is simply never a player
+ * behind it. So keep asking until there is one.
+ */
+const API_RETRY_MS = 20_000;
+let apiScript = null;
+
+function loadYouTubeApi() {
+  // Once the API object exists the load succeeded; re-injecting would only
+  // race the ready callback that creates the player.
+  if (window.YT?.Player) return;
+  apiScript?.remove();
+  apiScript = document.createElement('script');
+  apiScript.src = 'https://www.youtube.com/iframe_api';
+  document.head.append(apiScript);
+}
+
+/**
+ * One timer rather than an error listener as well. Retrying the moment a fetch
+ * fails would hammer DNS for as long as the network is down, and the interval
+ * already covers both failure modes: a script that never arrived, and one that
+ * arrived without ever calling back.
+ */
+const apiRetryTimer = setInterval(() => {
+  if (player) {
+    clearInterval(apiRetryTimer);
+    return;
+  }
+  // The API arrived but its ready callback did not. Re-injecting cannot help -
+  // the global is already there - so build the player from here instead of
+  // going on waiting for a call that has had its chance.
+  if (window.YT?.Player) {
+    window.onYouTubeIframeAPIReady();
+    return;
+  }
+  loadYouTubeApi();
+}, API_RETRY_MS);
+
+loadYouTubeApi();
 
 applyBalance();
 applyFineTune(false);

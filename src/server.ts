@@ -1691,13 +1691,8 @@ wss.on('connection', (rawSocket, request) => {
         rejectTakeCommand(socket, 'start', 'participant-required');
         return;
       }
-      const product = productStatusPayload();
-      if (!product.actions.canStartTake) {
-        rejectTakeCommand(
-          socket,
-          'start',
-          product.health === 'blocked' ? 'product-blocked' : 'take-not-ready',
-        );
+      if (!session.active) {
+        rejectTakeCommand(socket, 'start', 'mix-not-active');
         return;
       }
       const song = takeSongSnapshot();

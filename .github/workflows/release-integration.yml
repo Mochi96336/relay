@@ -37,6 +37,7 @@ jobs:
       - name: Verify reconciled product tree
         shell: bash
         run: |
+          npm ci
           git show origin/agent/release-executor:.github/release-prepostfix.sh > /tmp/release-prepostfix.sh
           git show origin/agent/release-executor:.github/release-postfix.sh > /tmp/release-postfix.sh
           bash /tmp/release-prepostfix.sh

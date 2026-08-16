@@ -1,3 +1,5 @@
+import type { TakeQualityAssessment } from './take-quality.js';
+
 export type TakeLifecycle = 'idle' | 'recording' | 'finalizing' | 'ready' | 'failed';
 
 export type TakeStopReason = 'user' | 'mix-ended';
@@ -32,6 +34,7 @@ export type TakeRecord = {
   stopReason: TakeStopReason | null;
   song: TakeSongSnapshot;
   artifact: TakeArtifact | null;
+  quality: TakeQualityAssessment | null;
   error: string | null;
 };
 
@@ -51,11 +54,24 @@ function cloneArtifact(artifact: TakeArtifact | null): TakeArtifact | null {
   return artifact ? { ...artifact } : null;
 }
 
+function cloneQuality(quality: TakeQualityAssessment | null): TakeQualityAssessment | null {
+  if (!quality) return null;
+  return {
+    ...quality,
+    evidence: {
+      ...quality.evidence,
+      events: { ...quality.evidence.events },
+    },
+    issues: quality.issues.map((issue) => ({ ...issue })),
+  };
+}
+
 function cloneTake(take: TakeRecord): TakeRecord {
   return {
     ...take,
     song: cloneSong(take.song),
     artifact: cloneArtifact(take.artifact),
+    quality: cloneQuality(take.quality),
   };
 }
 
@@ -106,6 +122,7 @@ export class TakeSession {
       stopReason: null,
       song: cloneSong(input.song),
       artifact: null,
+      quality: null,
       error: null,
     };
     return { ok: true, take: cloneTake(this.current) };
@@ -116,6 +133,7 @@ export class TakeSession {
     stoppedByParticipantId: string | null;
     stopReason: TakeStopReason;
     endedAtMs: number;
+    quality: TakeQualityAssessment;
   }): StopTakeDecision {
     const take = this.current;
     if (!take) return { ok: false, reason: 'take-not-recording' };
@@ -130,6 +148,7 @@ export class TakeSession {
     take.endedAtMs = input.endedAtMs;
     take.stoppedByParticipantId = input.stoppedByParticipantId;
     take.stopReason = input.stopReason;
+    take.quality = cloneQuality(input.quality);
     return { ok: true, take: cloneTake(take), duplicate: false };
   }
 
@@ -143,7 +162,7 @@ export class TakeSession {
     return true;
   }
 
-  fail(takeId: string, error: string, endedAtMs: number) {
+  fail(takeId: string, error: string, endedAtMs: number, quality?: TakeQualityAssessment) {
     if (!this.current || this.current.takeId !== takeId) return false;
     if (this.current.lifecycle === 'ready' || this.current.lifecycle === 'failed') return false;
 
@@ -151,6 +170,7 @@ export class TakeSession {
     this.current.endedAtMs ??= endedAtMs;
     this.current.error = error;
     this.current.artifact = null;
+    if (quality) this.current.quality = cloneQuality(quality);
     return true;
   }
 

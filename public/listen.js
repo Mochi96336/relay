@@ -111,10 +111,15 @@ if (toggle && gainControl && gainValue && note) {
       return;
     }
 
-    // Timing setup deliberately needs the phone speaker path uncontaminated by
-    // the returned Relay mix. Stop Listen immediately and do not auto-resume;
-    // the singer explicitly turns it back on after setup, ideally on headphones.
-    if (message.type === 'timing-calibration-status' && message.state === 'collecting') {
+    // Timing setup only needs to silence the returned mix on the phone whose
+    // microphone is being measured. Other participants may keep listening.
+    // Do not auto-resume afterward; the singer explicitly turns Listen back on,
+    // ideally after moving the output to headphones.
+    if (
+      message.type === 'timing-calibration-status'
+      && message.state === 'collecting'
+      && window.relayActiveRole === 'publisher'
+    ) {
       void stop('Listen paused for timing setup.');
     }
   }

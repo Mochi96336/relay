@@ -9,6 +9,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
+import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
@@ -184,6 +185,8 @@ let micAudioTransport: AudioTransport | null = null;
 let micMediaTicket: string | null = null;
 let micMediaOwnerId: string | null = null;
 let micMediaGeneration: number | null = null;
+let micUplinkHealth: AudioUplinkHealth | null = null;
+let micUplinkHealthAt = -Infinity;
 let webTransportMedia: WebTransportMediaServer | null = null;
 let backing: RelaySocket | null = null;
 let backingSampleRate: number | null = null;
@@ -337,6 +340,8 @@ function clearMicMediaAuthority() {
   micMediaTicket = null;
   micMediaOwnerId = null;
   micMediaGeneration = null;
+  micUplinkHealth = null;
+  micUplinkHealthAt = -Infinity;
   publisherSampleRate = null;
   session.setMicExpected(false);
 }
@@ -842,6 +847,16 @@ function takeQualityFrameState(nowMs = performance.now()) {
   };
 }
 
+function micUplinkHealthPayload(nowMs = performance.now()) {
+  if (!micUplinkHealth) return null;
+  return {
+    ...micUplinkHealth,
+    reportAgeMs: Number.isFinite(micUplinkHealthAt)
+      ? Math.max(0, Math.round(nowMs - micUplinkHealthAt))
+      : null,
+  };
+}
+
 function mixHealthPayload() {
   const health = session.health();
   return {
@@ -853,6 +868,7 @@ function mixHealthPayload() {
     monitorDroppedFrames,
     prebufferMs: session.prebufferMs,
     micMediaPath: micMediaPath(),
+    micUplink: micUplinkHealthPayload(),
     micTransport: micAudioTransport?.stats() ?? null,
   };
 }
@@ -881,6 +897,7 @@ function remoteStatusPayload() {
   const nowMs = performance.now();
   const alignment = session.alignment;
   const snapshot = participants.snapshot();
+  const mixHealth = session.health();
 
   const backingConnected = backing?.readyState === WebSocket.OPEN;
   const micConnected = micMediaConnected();
@@ -944,8 +961,18 @@ function remoteStatusPayload() {
     },
     mix: {
       active: session.active,
-      ...session.health(),
+      ...mixHealth,
       monitorDroppedFrames,
+    },
+    audio: {
+      micMediaPath: micMediaPath(),
+      captureAndSender: micUplinkHealthPayload(nowMs),
+      receiverTransport: micAudioTransport?.stats() ?? null,
+      timeline: {
+        micGapMs: mixHealth.micGapMs,
+        micHeadroomMs: mixHealth.micHeadroomMs,
+        micStarvedFrames: mixHealth.micStarvedFrames,
+      },
     },
   };
 }
@@ -1021,7 +1048,7 @@ function readinessPayload(nowMs = performance.now()) {
     backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
     backingSampleRate,
     backingIsRobot,
-    micConnected: publisher?.readyState === WebSocket.OPEN,
+    micConnected: micMediaConnected(),
     micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     sessionActive: session.active,
@@ -1754,6 +1781,15 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
+    if (payload.type === 'audio-uplink-health') {
+      if (socket !== publisher || socket.role !== 'publisher' || socket.audioPacketVersion !== 2) return;
+      const health = parseAudioUplinkHealth(payload);
+      if (!health || socket.captureGeneration === undefined || health.captureGeneration !== socket.captureGeneration) return;
+      micUplinkHealth = health;
+      micUplinkHealthAt = performance.now();
+      return;
+    }
+
     if (payload.type === 'product-status-request') {
       sendJson(socket, productStatusPayload());
       return;
@@ -2288,6 +2324,8 @@ wss.on('connection', (rawSocket, request) => {
       if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
 
       if (!preserveAudioTransport) {
+        micUplinkHealth = null;
+        micUplinkHealthAt = -Infinity;
         if (audioPacketVersion === 2) {
           micAudioTransport = createWebSocketAudioTransport({
             packetVersion: 2,

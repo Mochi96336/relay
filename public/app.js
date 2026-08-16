@@ -24,6 +24,7 @@ const SOCKET_RECONNECT_MS = 1000;
 const SLIDER_HOLD_MS = 2000;
 const MONITOR_PREBUFFER_MS = 250;
 const MONITOR_MAX_QUEUE_MS = 800;
+const AUDIO_UPLINK_HEALTH_INTERVAL_MS = 1000;
 
 let socket = null;
 let socketReconnectTimer = null;
@@ -85,6 +86,10 @@ let nextClickTime = 0;
 let clickBeat = 0;
 let rawMonitorGainDb = 30;
 let uplinkDroppedSamples = 0;
+let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
+let captureInputGapSamples = 0;
+let publisherControlConnections = 0;
+let audioUplinkHealthTimer = null;
 let lastUplinkWarningAt = 0;
 let monitorHealth = null;
 // Seeded from the clock, not 0: a page reload starts a new module scope and
@@ -128,9 +133,13 @@ function framePcm(pcm, generation, sequence, firstSampleIndex) {
 function recordUplinkDrop(sampleCount, reason) {
   if (!Number.isFinite(sampleCount) || sampleCount <= 0) return;
   uplinkDroppedSamples += sampleCount;
+  if (reason === 'disconnected') uplinkDroppedSamplesByReason.disconnected += sampleCount;
+  else if (reason === 'congested') uplinkDroppedSamplesByReason.congested += sampleCount;
+  else if (reason === 'packet-too-large') uplinkDroppedSamplesByReason.packetTooLarge += sampleCount;
+  if (reason === 'disconnected') return;
+
   const now = performance.now();
   if (now - lastUplinkWarningAt <= 2000) return;
-
   lastUplinkWarningAt = now;
   const sampleRate = audioContext?.sampleRate ?? MIX_SAMPLE_RATE;
   const droppedMs = Math.round((uplinkDroppedSamples * 1000) / sampleRate);
@@ -142,6 +151,34 @@ function recordUplinkDrop(sampleCount, reason) {
     `Dropped about ${droppedMs} ms of microphone audio. ` +
     'The sample timeline keeps the hole in the right place instead of pulling later audio earlier.',
   );
+}
+
+function audioUplinkHealthPayload() {
+  return {
+    type: 'audio-uplink-health',
+    version: 1,
+    captureGeneration: captureGeneration >>> 0,
+    capturedSamples: captureSampleCursor,
+    inputGapSamples: captureInputGapSamples,
+    droppedSamples: { total: uplinkDroppedSamples, ...uplinkDroppedSamplesByReason },
+    controlReconnects: Math.max(0, publisherControlConnections - 1),
+    transport: audioTransport.stats(),
+  };
+}
+
+function sendAudioUplinkHealth() {
+  if (activeRole !== 'publisher' || socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify(audioUplinkHealthPayload()));
+}
+
+function startAudioUplinkHealthReporting() {
+  if (audioUplinkHealthTimer !== null) clearInterval(audioUplinkHealthTimer);
+  audioUplinkHealthTimer = setInterval(sendAudioUplinkHealth, AUDIO_UPLINK_HEALTH_INTERVAL_MS);
+}
+
+function stopAudioUplinkHealthReporting() {
+  if (audioUplinkHealthTimer !== null) clearInterval(audioUplinkHealthTimer);
+  audioUplinkHealthTimer = null;
 }
 
 // recorder.js reads this so it can warn when Solo recording is started on the
@@ -499,6 +536,7 @@ function handleServerMessage(message) {
       if (activeRole !== 'publisher') return;
       const path = preferred ? 'WebTransport datagrams' : 'WebSocket fallback';
       setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM · ${path}`);
+      sendAudioUplinkHealth();
     });
     updateMixLabels();
     dispatchRelayEvent('relay-microphone-started');
@@ -671,6 +709,7 @@ async function connectPublisherSocket() {
   }
   ws.send(JSON.stringify(registration));
   audioTransport.bind(ws);
+  publisherControlConnections += 1;
 
   ws.addEventListener('message', (event) => {
     if (socket !== ws || typeof event.data !== 'string') return;
@@ -745,6 +784,7 @@ async function connectMonitorSocket() {
 async function stop(setIdle = true, { releaseMic = true } = {}) {
   stopLocalClickTrack();
   clearSocketReconnect();
+  stopAudioUplinkHealthReporting();
 
   const closingSocket = socket;
   const shouldReleaseMic = releaseMic && activeRole === 'publisher';
@@ -783,6 +823,9 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   testActive = false;
   liveMixActive = false;
   uplinkDroppedSamples = 0;
+  uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
+  captureInputGapSamples = 0;
+  publisherControlConnections = 0;
   monitorHealth = null;
   publisherButton.disabled = false;
   monitorButton.disabled = false;
@@ -824,6 +867,12 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   captureGeneration += 1;
   captureSampleCursor = 0;
   capturePacketSequence = 0;
+  captureInputGapSamples = 0;
+  uplinkDroppedSamples = 0;
+  uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
+  publisherControlConnections = 0;
+  audioTransport.resetStats();
+  startAudioUplinkHealthReporting();
 
   const [track] = mediaStream.getAudioTracks();
   track?.addEventListener('ended', () => {
@@ -845,7 +894,9 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   capture.port.onmessage = (event) => {
     if (!(event.data instanceof ArrayBuffer)) {
       if (event.data?.type === 'input-gap') {
-        console.warn('Microphone input gap', event.data.quanta, 'quanta padded with silence');
+        const samples = Number(event.data.samples);
+        if (Number.isSafeInteger(samples) && samples > 0) captureInputGapSamples += samples;
+        console.warn('Microphone input gap', event.data.quanta, 'quanta padded with silence', event.data.recovered ? '(recovered)' : '(continuing)');
       }
       return;
     }
@@ -907,7 +958,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         continue;
       }
 
-      if (sendResult.reason === 'congested' || sendResult.reason === 'packet-too-large') {
+      if (sendResult.reason === 'disconnected' || sendResult.reason === 'congested' || sendResult.reason === 'packet-too-large') {
         recordUplinkDrop(segment.pcm.byteLength / 2, sendResult.reason);
       }
     }

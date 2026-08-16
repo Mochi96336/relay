@@ -25,11 +25,12 @@ jobs:
       - run: npm ci
       - name: Narrow legacy CSS guard to the anchored base block
         run: sed -i "/multiple legacy Adjust CSS blocks found/d" scripts/rework-adjust.mjs
+      - run: node scripts/rework-adjust.mjs
       - name: Fix generated Monitor retirement contract literal
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('scripts/rework-adjust.mjs')
+          path = Path('test/adjust-ui-contract.test.ts')
           lines = path.read_text().splitlines()
           lines = [
               "  assert.doesNotMatch(html, />Monitor</);"
@@ -39,7 +40,6 @@ jobs:
           ]
           path.write_text('\n'.join(lines) + '\n')
           PY
-      - run: node scripts/rework-adjust.mjs
       - run: npm run check
       - name: Check browser JavaScript syntax
         run: |

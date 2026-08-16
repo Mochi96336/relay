@@ -1,3 +1,4 @@
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const input = document.querySelector('#youtube-url');
 const loadButton = document.querySelector('#load-youtube');
 const stateNode = document.querySelector('#youtube-state');
@@ -5,12 +6,12 @@ const timelineNode = document.querySelector('#youtube-timeline');
 const noteNode = document.querySelector('#youtube-note');
 
 const STATE_NAMES = new Map([
-  [-1, 'unstarted'],
-  [0, 'ended'],
-  [1, 'playing'],
-  [2, 'paused'],
-  [3, 'buffering'],
-  [5, 'cued'],
+  [-1, 'song.state.preparing'],
+  [0, 'song.state.ended'],
+  [1, 'song.state.playing'],
+  [2, 'song.state.paused'],
+  [3, 'song.state.buffering'],
+  [5, 'song.state.ready'],
 ]);
 
 const ERROR_NAMES = new Map([
@@ -128,7 +129,8 @@ function loadYouTubeApi() {
 }
 
 function setPlayerState(state, detail = '') {
-  const label = STATE_NAMES.get(state) ?? `state ${state}`;
+  const key = STATE_NAMES.get(state);
+  const label = key ? t(key) : `state ${state}`;
   stateNode.textContent = detail ? `${label} · ${detail}` : label;
 }
 
@@ -195,7 +197,7 @@ function activeServerMutation() {
 
 function requestRoomSongCommand(detail) {
   if (playbackRole === 'observer') {
-    noteNode.textContent = 'Room playback is on another phone. Take the mic on this phone before changing the song.';
+    noteNode.textContent = t('song.observerCannotChange');
     return false;
   }
 
@@ -208,7 +210,7 @@ function requestRoomSongCommand(detail) {
     commandId: null,
     requestedAt: performance.now(),
   };
-  noteNode.textContent = `Requesting room ${detail.action}…`;
+  noteNode.textContent = t('song.requestingAction', { action: detail.action });
   window.dispatchEvent(new CustomEvent('relay:room-song-command-intent', { detail }));
   return true;
 }
@@ -302,18 +304,18 @@ function renderSnapshot(snapshot) {
   if (!snapshot) return;
 
   const buffered = Number.isFinite(snapshot.bufferedFraction)
-    ? `${Math.round(snapshot.bufferedFraction * 100)}% buffered`
-    : 'buffer --';
+    ? t('song.buffered', { percent: Math.round(snapshot.bufferedFraction * 100) })
+    : t('song.bufferUnknown');
 
   timelineNode.textContent = `${formatTime(snapshot.currentTime)} / ${formatTime(snapshot.duration)} · ${snapshot.playbackRate || 1}× · ${buffered}`;
 
   if (Math.abs(snapshot.timelineDeltaSeconds) > 0.4) {
     const sign = snapshot.timelineDeltaSeconds > 0 ? '+' : '';
-    noteNode.textContent = `Timeline jump detected: ${sign}${snapshot.timelineDeltaSeconds.toFixed(2)} s.`;
+    noteNode.textContent = t('song.timelineJump', { delta: `${sign}${snapshot.timelineDeltaSeconds.toFixed(2)}` });
   } else if (snapshot.state === 3) {
-    noteNode.textContent = 'YouTube is buffering. Mic transport can keep running independently.';
+    noteNode.textContent = t('song.bufferingIndependent');
   } else if (!pendingHandoff && !localCommandPending && !activeServerMutation()) {
-    noteNode.textContent = 'Timeline is media time from the YouTube player; shared controls are authorized by Relay.';
+    noteNode.textContent = t('song.timelineAuthorized');
   }
 
   // Observer pages render the room-owned song but do not publish a competing
@@ -379,7 +381,7 @@ function announceHandoffReady() {
 
   handoffReadySent = true;
   clearHandoffReadyTimers();
-  noteNode.textContent = 'Room song is prepared on this device. Relay is waiting to switch playback safely.';
+  noteNode.textContent = t('song.handoffPrepared');
   window.dispatchEvent(new CustomEvent('relay:song-handoff-ready', {
     detail: { handoffId: pendingHandoff.handoffId },
   }));
@@ -683,7 +685,7 @@ async function prepareRoomSong(message) {
   };
   handoffReadySent = false;
   previousSnapshot = null;
-  noteNode.textContent = 'Preparing the room song for microphone handoff. Playback will not start until the server commits the switch.';
+  noteNode.textContent = t('song.preparingHandoff');
 
   try {
     await ensurePlayer(videoId);
@@ -732,7 +734,7 @@ function commitRoomSong(message) {
     else player.pauseVideo();
     setTimeout(sampleNow, 80);
     setTimeout(sampleNow, 220);
-    noteNode.textContent = 'Switching room playback to this device…';
+    noteNode.textContent = t('song.switchingHere');
   } catch (error) {
     console.warn('Could not commit room song handoff', error);
     const handoffId = pendingHandoff.handoffId;
@@ -757,7 +759,7 @@ function releaseRoomSong(message) {
   try {
     player.pauseVideo();
   } catch {}
-  noteNode.textContent = 'Room playback moved with the microphone. This player is no longer driving the shared song.';
+  noteNode.textContent = t('song.movedWithMic');
 }
 
 /**
@@ -772,7 +774,7 @@ function cancelRoomSongHandoff() {
   clearHandoffReadyTimers();
   pendingHandoff = null;
   handoffReadySent = false;
-  noteNode.textContent = 'Room playback handoff was cancelled. Take the microphone again to retry.';
+  noteNode.textContent = t('song.handoffCancelled');
 }
 
 function completeRoomSong(message) {
@@ -780,14 +782,14 @@ function completeRoomSong(message) {
   clearHandoffReadyTimers();
   pendingHandoff = null;
   handoffReadySent = false;
-  noteNode.textContent = 'Room playback handoff complete. This device now follows the shared song.';
+  noteNode.textContent = t('song.handoffComplete');
 }
 
 function loadVideo() {
   const videoId = parseVideoId(input.value);
   if (!videoId) {
-    stateNode.textContent = 'invalid URL / video ID';
-    noteNode.textContent = 'Paste a YouTube watch, youtu.be, Shorts, Live, Embed URL, or an 11-character video ID.';
+    stateNode.textContent = t('song.invalidVideo');
+    noteNode.textContent = t('song.invalidVideoHelp');
     return;
   }
 
@@ -903,6 +905,22 @@ input.addEventListener('keydown', (event) => {
   loadVideo();
 });
 
-stateNode.textContent = 'not loaded';
-timelineNode.textContent = '--:-- / --:--';
-noteNode.textContent = 'Load a video, then use the visible YouTube controls. Shared song changes are authorized by Relay; joining the room never starts playback by itself.';
+function rerenderLocale() {
+  if (playerReady && player && loadedVideoId) setPlayerState(Number(player.getPlayerState()));
+  else stateNode.textContent = t('song.notLoaded');
+  if (previousSnapshot) {
+    const buffered = Number.isFinite(previousSnapshot.bufferedFraction)
+      ? t('song.buffered', { percent: Math.round(previousSnapshot.bufferedFraction * 100) })
+      : t('song.bufferUnknown');
+    timelineNode.textContent = `${formatTime(previousSnapshot.currentTime)} / ${formatTime(previousSnapshot.duration)} · ${previousSnapshot.playbackRate || 1}× · ${buffered}`;
+    noteNode.textContent = previousSnapshot.state === 3
+      ? t('song.bufferingIndependent')
+      : t('song.timelineAuthorized');
+  } else {
+    timelineNode.textContent = '--:-- / --:--';
+    noteNode.textContent = t('song.initialHelp');
+  }
+}
+
+window.addEventListener('relay-locale-changed', rerenderLocale);
+rerenderLocale();

@@ -37,7 +37,7 @@ test('ready Take artifacts stay server-owned behind one lightweight keyed Live e
   assert.match(source, /function artifactUrl/);
   assert.match(source, /url\.searchParams\.set\('key', key\)/);
   assert.match(source, /recordingDownload\.href = href/);
-  assert.match(source, /recordingDownload\.textContent = `Last take ·/);
+  assert.match(source, /recordingDownload\.textContent = t\('take\.last'/);
   assert.match(source, /recordingPlayer\.hidden = true/);
   assert.doesNotMatch(source, /recordingDownload\.download =/);
   assert.doesNotMatch(source, /recordingPlayer\.src = href/);

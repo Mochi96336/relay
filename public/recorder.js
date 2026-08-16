@@ -1,3 +1,4 @@
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const recordButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 const recordingStatus = document.querySelector('#recording-status');
@@ -52,10 +53,10 @@ function shortTakeId(takeId) {
 }
 
 function verdictLabel(verdict) {
-  if (verdict === 'clean') return 'Clean';
-  if (verdict === 'review') return 'Review';
-  if (verdict === 'degraded') return 'Degraded';
-  return 'Ready';
+  if (verdict === 'clean') return t('take.verdict.clean');
+  if (verdict === 'review') return t('take.verdict.review');
+  if (verdict === 'degraded') return t('take.verdict.degraded');
+  return t('take.verdict.ready');
 }
 
 function render() {
@@ -89,7 +90,7 @@ function render() {
   }
 
   if (lifecycle === 'finalizing' && take) {
-    recordingStatus.textContent = 'Finishing take…';
+    recordingStatus.textContent = t('take.finishing');
     return;
   }
 
@@ -97,14 +98,14 @@ function render() {
     const href = artifactUrl(take.artifact.url);
     recordingDownload.href = href;
     recordingDownload.removeAttribute('download');
-    recordingDownload.textContent = `Last take · ${formatDuration(take.artifact.durationMs)} · ${verdictLabel(take.quality?.verdict)}`;
+    recordingDownload.textContent = t('take.last', { duration: formatDuration(take.artifact.durationMs), verdict: verdictLabel(take.quality?.verdict) });
     recordingDownload.hidden = false;
     recordingStatus.textContent = '';
     return;
   }
 
   if (lifecycle === 'failed' && take) {
-    recordingStatus.textContent = `Take ${shortTakeId(take.takeId)} failed`;
+    recordingStatus.textContent = t('take.failed', { id: shortTakeId(take.takeId) });
     return;
   }
 
@@ -113,7 +114,7 @@ function render() {
 
 function send(payload) {
   if (socket?.readyState !== WebSocket.OPEN) {
-    commandError = 'Relay is reconnecting. Take was not changed.';
+    commandError = t('take.reconnectingError');
     render();
     return false;
   }
@@ -176,20 +177,10 @@ async function connect() {
     }
 
     if (message.type === 'take-command-rejected') {
-      const reasons = {
-        'participant-required': 'Take needs a Relay participant identity.',
-        'mix-not-active': 'There is no room mix to record yet.',
-        'song-required': 'Add a song before recording a Take.',
-        'product-blocked': 'Fix the room audio before recording a Take.',
-        'take-not-ready': 'The room is not ready to record yet.',
-        'take-active': 'A Take is already recording or finishing.',
-        'take-not-recording': 'There is no Take recording right now.',
-        'stale-take': 'That Stop belonged to an older Take.',
-        'invalid-take-id': 'Relay could not identify the Take to stop.',
-        'writer-failed': 'Relay could not start the Take recorder.',
-        'storage-unavailable': 'Recording storage is not available right now.',
-      };
-      commandError = reasons[message.reason] ?? `Take was rejected: ${message.reason ?? 'unknown'}`;
+      const key = `take.reject.${message.reason}`;
+      commandError = window.relayI18n?.has?.(key)
+        ? t(key)
+        : t('take.reject.unknown', { reason: message.reason ?? 'unknown' });
       render();
     }
   });
@@ -207,6 +198,8 @@ async function connect() {
   next.send(JSON.stringify({ type: 'take-status-request' }));
   render();
 }
+
+window.addEventListener('relay-locale-changed', render);
 
 window.addEventListener('relay-product-status', (event) => {
   productCanStartTake = event.detail?.actions?.canStartTake === true;

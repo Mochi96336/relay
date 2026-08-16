@@ -149,6 +149,28 @@ button:disabled { cursor: default; opacity: .32; }
 }
 .participant-chip.mic-owner { border-color: #666970; color: var(--text); background: #202226; }
 .participant-chip.reconnecting { opacity: .5; }
+.locale-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.locale-options {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--dim);
+  font-size: 11px;
+}
+.locale-option {
+  min-height: 36px;
+  padding: 0;
+  color: var(--dim);
+  font-size: 11px;
+}
+.locale-option[data-active="true"] { color: var(--text); }
 
 .song-stage {
   padding-top: clamp(34px, 7vh, 68px);

@@ -45,15 +45,15 @@ test('L2 consumes ProductStatus and keeps readiness fresh only while System is o
   assert.match(system, /if \(readinessRefreshInFlight\) return latestReadiness/);
   assert.match(system, /fetch\(readyzUrl\(\), \{ cache: 'no-store' \}\)/);
   assert.match(system, /components\?\.route\?\.mode|components\.route\?\.mode/);
-  assert.match(system, /The Robot route is not armed\. Missing Robot audio is expected in this state\./);
+  assert.match(system, /t\('system\.robotIdleDetail'\)/);
   assert.doesNotMatch(liveStatus, /robotProblem \? 'Needs attention' : 'Ready'/);
 });
 
 test('legacy backing failure is Audio attention rather than a false Robot failure', () => {
-  assert.match(liveStatus, /'audio-unavailable': 'Room audio unavailable'/);
+  assert.match(liveStatus, /'audio-unavailable': \(\) => t\('system\.attention\.audio-unavailable'\)/);
   assert.match(liveStatus, /const audioProblem = attention\?\.scope === 'audio' \|\| attention\?\.scope === 'song'/);
   assert.match(system, /const audioAttention = product\.attention\?\.scope === 'audio'/);
-  assert.match(system, /The room audio path is unavailable\. Open Technical details for backing evidence\./);
+  assert.match(system, /t\('system\.audioUnavailableDetail'\)/);
   assert.match(system, /audio:\s*'audio'/);
 });
 

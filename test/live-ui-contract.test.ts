@@ -53,9 +53,9 @@ test('Song surface separates the playback holder from room observers without inv
   assert.match(html, /id="song-device-note"/);
   assert.match(html, /id="change-youtube"/);
 
-  assert.match(songSurface, /Playing from this phone/);
-  assert.match(songSurface, /Preparing on this phone/);
-  assert.match(songSurface, /Playing from another phone/);
+  assert.match(songSurface, /t\('song\.role\.holder'\)/);
+  assert.match(songSurface, /t\('song\.role\.preparing'\)/);
+  assert.match(songSurface, /t\('song\.role\.observer'\)/);
   assert.match(songSurface, /relay:playback-view/);
   assert.match(songSurfaceCss, /data-playback-role="observer"/);
 });
@@ -72,7 +72,7 @@ test('observer Song surface is transport-read-only until this page becomes holde
   assert.match(youtube, /playbackRole === 'observer'/);
   assert.match(youtube, /source: 'observer-quiet'/);
   assert.match(youtube, /player\.pauseVideo\(\)/);
-  assert.match(youtube, /Take the mic on this phone before changing the song\./);
+  assert.match(youtube, /song\.observerCannotChange|Take the mic on this phone before changing the song\./);
   assert.match(songSurface, /playerShell\.hidden = observerMode/);
   assert.match(songSurface, /observer\.hidden = !observerMode/);
 });
@@ -96,16 +96,16 @@ test('formal Live copy consumes server product-status instead of rebuilding life
   assert.match(liveStatus, /product-status-request/);
   assert.match(liveStatus, /message\.type === 'product-status'/);
   assert.match(liveStatus, /relay-product-status/);
-  assert.match(liveStatus, /Keep this phone speaker audible for a moment\./);
-  assert.match(liveStatus, /Robot audio unavailable/);
+  assert.match(liveStatus, /t\('voice\.keepSpeakerAudible'\)/);
+  assert.match(liveStatus, /t\('system\.attention\.robot-audio-unavailable'\)/);
   assert.doesNotMatch(liveStatus, /buildReadiness|buildProductViewModel/);
 });
 
 test('local Mic permission/start failures surface in the formal Voice field instead of hidden legacy status', () => {
   assert.match(liveStatus, /relay-microphone-start-failed/);
-  assert.match(liveStatus, /Microphone unavailable/);
-  assert.match(liveStatus, /Allow microphone access in your browser, then try again\./);
-  assert.match(liveStatus, /Open Relay over HTTPS so this phone can use its microphone\./);
+  assert.match(liveStatus, /t\('voice\.micUnavailable'\)/);
+  assert.match(liveStatus, /t\('voice\.permissionRequired'\)/);
+  assert.match(liveStatus, /t\('voice\.httpsRequired'\)/);
 });
 
 test('Voice motion follows product self-Mic state rather than legacy button disabled state', () => {
@@ -133,7 +133,7 @@ test('Take start availability comes from product actions while Stop remains Take
   assert.match(recorder, /productCanStartTake/);
   assert.match(recorder, /event\.detail\?\.actions\?\.canStartTake === true/);
   assert.match(recorder, /lifecycle !== 'recording'/);
-  assert.match(recorder, /Last take ·/);
+  assert.match(recorder, /t\('take\.last'/);
 });
 
 test('formal Listen is the only monitor transport shipped by the Live page', () => {

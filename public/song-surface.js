@@ -1,3 +1,4 @@
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const stage = document.querySelector('.song-stage');
 const form = document.querySelector('.youtube-form');
 const input = document.querySelector('#youtube-url');
@@ -13,12 +14,12 @@ const observerTimeline = document.querySelector('#room-song-timeline');
 
 const ROLES = new Set(['empty', 'holder', 'preparing', 'observer']);
 const STATE_LABELS = new Map([
-  [-1, 'Getting ready'],
-  [0, 'Ended'],
-  [1, 'Playing'],
-  [2, 'Paused'],
-  [3, 'Buffering'],
-  [5, 'Ready'],
+  [-1, 'song.state.preparing'],
+  [0, 'song.state.ended'],
+  [1, 'song.state.playing'],
+  [2, 'song.state.paused'],
+  [3, 'song.state.buffering'],
+  [5, 'song.state.ready'],
 ]);
 
 function formatTime(seconds) {
@@ -37,6 +38,7 @@ if (
   let role = 'connecting';
   let editing = false;
   let lastVideoId = null;
+  let lastRoom = {};
 
   function roomSnapshot(detail) {
     const timeline = detail?.timeline && typeof detail.timeline === 'object' ? detail.timeline : {};
@@ -45,17 +47,17 @@ if (
   }
 
   function roleCopy(nextRole) {
-    if (nextRole === 'holder') return 'Playing from this phone';
-    if (nextRole === 'preparing') return 'Preparing on this phone';
-    if (nextRole === 'observer') return 'Playing from another phone';
-    if (nextRole === 'empty') return 'No song yet';
-    return 'Connecting…';
+    if (nextRole === 'holder') return t('song.role.holder');
+    if (nextRole === 'preparing') return t('song.role.preparing');
+    if (nextRole === 'observer') return t('song.role.observer');
+    if (nextRole === 'empty') return t('song.role.empty');
+    return t('people.connecting');
   }
 
   function renderObserver(room) {
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const state = Number(room.state);
-    const stateLabel = STATE_LABELS.get(state) ?? 'Room song';
+    const stateLabel = STATE_LABELS.has(state) ? t(STATE_LABELS.get(state)) : t('song.roomSong');
 
     observerState.textContent = stateLabel;
     observerTimeline.textContent = `${formatTime(room.serverTime)} / ${formatTime(room.duration)}`;
@@ -76,6 +78,7 @@ if (
     const room = roomSnapshot(detail);
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const previousRole = role;
+    lastRoom = room;
 
     if (nextRole === 'empty') {
       editing = true;
@@ -94,7 +97,7 @@ if (
     const holderWithSong = role === 'holder' && Boolean(videoId);
     form.hidden = role === 'observer' || role === 'preparing' || (holderWithSong && !editing);
     changeButton.hidden = !holderWithSong;
-    changeButton.textContent = editing ? 'Done' : 'Change song';
+    changeButton.textContent = editing ? t('song.done') : t('song.change');
 
     const observerMode = role === 'observer';
     observer.hidden = !observerMode;
@@ -109,11 +112,16 @@ if (
     if (role !== 'holder') return;
     editing = !editing;
     form.hidden = !editing;
-    changeButton.textContent = editing ? 'Done' : 'Change song';
+    changeButton.textContent = editing ? t('song.done') : t('song.change');
     if (editing) input.focus();
   });
 
   window.addEventListener('relay:playback-view', render);
+  window.addEventListener('relay-locale-changed', () => {
+    deviceNote.textContent = roleCopy(role);
+    changeButton.textContent = editing ? t('song.done') : t('song.change');
+    if (role === 'observer') renderObserver(lastRoom);
+  });
   stage.dataset.playbackRole = role;
   document.body.dataset.playbackRole = role;
 }

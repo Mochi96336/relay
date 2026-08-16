@@ -1,4 +1,4 @@
-export type PlaybackLeaderHealth = 'missing' | 'disconnected' | 'stale' | 'healthy';
+export type PlaybackLeaderHealth = 'unknown' | 'missing' | 'disconnected' | 'stale' | 'healthy';
 export type PlaybackRecoveryStatusLike = Record<string, unknown> | null;
 
 export function playbackLeaderHealth(

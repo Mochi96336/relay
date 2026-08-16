@@ -91,7 +91,19 @@ if (
     systemDetails.relay.textContent = `${titleCase(product.health)} · ${titleCase(product.lifecycle)} room state.`;
     const people = Number(product.room?.participantCount) || 0;
     systemDetails.phones.textContent = `${people} ${people === 1 ? 'person' : 'people'} online · ${micSummary(product)}.`;
-    systemDetails.audio.textContent = `${songSummary(product)} · ${micSummary(product)}.`;
+
+    const audioAttention = product.attention?.scope === 'audio';
+    const songAttention = product.attention?.scope === 'song';
+    if (audioAttention) {
+      systemValues.audio.textContent = 'Needs attention';
+      systemDetails.audio.textContent = 'The room audio path is unavailable. Open Technical details for backing evidence.';
+    } else if (songAttention) {
+      systemValues.audio.textContent = 'Needs attention';
+      systemDetails.audio.textContent = 'Song playback needs attention. Open Technical details for playback evidence.';
+    } else {
+      systemDetails.audio.textContent = `${songSummary(product)} · ${micSummary(product)}.`;
+    }
+
     systemDetails.timing.textContent = product.timing?.state === 'idle'
       ? 'Timing stays out of the way until a performance needs it.'
       : `${titleCase(product.timing?.state)} timing state for the active performance.`;
@@ -306,6 +318,7 @@ if (
 
   function focusSystemScope(scope) {
     const map = {
+      audio: 'audio',
       robot: 'robot',
       song: 'audio',
       mic: 'phones',

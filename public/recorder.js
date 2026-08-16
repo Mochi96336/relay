@@ -18,6 +18,7 @@ let reviewNotice = null;
 let productCanStartTake = false;
 let reviewOpen = false;
 let currentArtifactHref = null;
+let localMicActive = false;
 
 function wsUrl() {
   const participantId = typeof window.relayParticipantId === 'string'
@@ -72,7 +73,7 @@ function setReviewOpen(open) {
 }
 
 function phoneOwnsMic() {
-  return window.relayActiveRole === 'publisher';
+  return localMicActive;
 }
 
 function stopReviewForMic(copy) {
@@ -274,6 +275,10 @@ recordingPlayer.addEventListener('play', () => {
   }
   reviewNotice = null;
   render();
+});
+
+window.addEventListener('relay-microphone-local-state', (event) => {
+  localMicActive = event.detail?.active === true;
 });
 
 window.addEventListener('relay-microphone-started', () => {

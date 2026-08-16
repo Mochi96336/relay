@@ -33,6 +33,7 @@ let handoffReadySent = false;
 let handoffReadyTimers = [];
 let localCommandPending = null;
 let serverMutation = null;
+let playbackRole = 'connecting';
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
@@ -193,6 +194,11 @@ function activeServerMutation() {
 }
 
 function requestRoomSongCommand(detail) {
+  if (playbackRole === 'observer') {
+    noteNode.textContent = 'Room playback is on another phone. Take the mic on this phone before changing the song.';
+    return false;
+  }
+
   // Phase 1B deliberately replaces the page's previous local intent. The sync
   // transport attaches the predecessor command id synchronously, so another
   // gesture can causally supersede this one before either server round trip
@@ -309,6 +315,11 @@ function renderSnapshot(snapshot) {
   } else if (!pendingHandoff && !localCommandPending && !activeServerMutation()) {
     noteNode.textContent = 'Timeline is media time from the YouTube player; shared controls are authorized by Relay.';
   }
+
+  // Observer pages render the room-owned song but do not publish a competing
+  // local media clock. The exact handoff target becomes "preparing" before it
+  // needs to interact with the player, so this does not block takeover.
+  if (playbackRole === 'observer') return;
 
   // During preparation the target player is deliberately being cued before it
   // owns the room clock. Do not turn that local preparation into product input.
@@ -787,6 +798,30 @@ function trackedRoomCommandId() {
   return localCommandPending?.commandId
     ?? (serverMutation?.source === 'room-command' ? serverMutation.commandId : null);
 }
+
+window.addEventListener('relay:playback-view', (event) => {
+  const nextRole = event.detail?.role;
+  if (!['empty', 'holder', 'preparing', 'observer'].includes(nextRole)) return;
+  if (nextRole === playbackRole) return;
+
+  playbackRole = nextRole;
+  if (nextRole === 'observer') {
+    localCommandPending = null;
+    if (serverMutation?.source === 'room-command') serverMutation = null;
+    if (playerReady && player) {
+      serverMutation = {
+        source: 'observer-quiet',
+        action: 'pause',
+        suppressTelemetry: true,
+        expiresAt: performance.now() + 1_200,
+      };
+      try { player.pauseVideo(); } catch {}
+    }
+    return;
+  }
+
+  if (serverMutation?.source === 'observer-quiet') serverMutation = null;
+});
 
 window.addEventListener('relay:room-song-command-sent', (event) => {
   if (!localCommandPending) return;

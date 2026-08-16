@@ -1192,6 +1192,13 @@ function productStatusPayload(nowMs = performance.now()) {
     : null;
   const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
   const roomState = Number(room.state);
+  // `connected` answers "is the clock authoritative right now", on a window
+  // tight enough for alignment. Telling a singer their playback is unavailable
+  // is a different question with a different answer, so the product view gets
+  // the raw age and draws its own, slower line.
+  const timelineAgeMs = Number(
+    (youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>).ageMs,
+  );
   const takeStatus = takeController.statusPayload();
   const take = takeStatus.take;
   const alignment = session.alignment;
@@ -1205,6 +1212,7 @@ function productStatusPayload(nowMs = performance.now()) {
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),
+      clockAgeMs: Number.isFinite(timelineAgeMs) ? timelineAgeMs : Number.POSITIVE_INFINITY,
       state: Number.isFinite(roomState) ? roomState : null,
       handoffState: typeof room.handoffState === 'string' ? room.handoffState : 'idle',
     },

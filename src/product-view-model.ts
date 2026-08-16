@@ -26,6 +26,8 @@ export type ProductAttention = {
 export type ProductRoomSongInput = {
   videoId: string | null;
   connected: boolean;
+  /** How long since the room clock last accepted a report. */
+  clockAgeMs: number;
   state: number | null;
   handoffState: string;
 };
@@ -124,10 +126,29 @@ function micState(input: ProductViewModelInput): ProductStatus['room']['mic']['s
   return 'interrupted';
 }
 
+/**
+ * How long the room clock may go unreported before the singer is told about it.
+ *
+ * The clock itself stops being authoritative after 1.5 s, which is right for
+ * alignment and wrong as a thing to say out loud. A phone reports every 250 ms,
+ * so that window tolerates five missed samples - and a phone misses five the
+ * moment the screen dims, the tab goes to the background, or the player
+ * rebuffers, because browsers throttle timers in exactly those situations.
+ * Reported at 1.5 s, "playback unavailable" fires during ordinary use, every
+ * time the singer glances away.
+ */
+const SONG_CLOCK_LOST_MS = 6_000;
+/** And only a gap this long is worth interrupting a performance for. */
+const SONG_CLOCK_BLOCKING_MS = 15_000;
+
+function songClockLost(input: ProductViewModelInput) {
+  return !input.roomSong.connected && input.roomSong.clockAgeMs > SONG_CLOCK_LOST_MS;
+}
+
 function songState(input: ProductViewModelInput): ProductStatus['room']['song']['state'] {
   if (input.roomSong.videoId === null) return 'empty';
   if (input.roomSong.handoffState !== 'idle') return 'handoff';
-  if (!input.roomSong.connected) return 'unavailable';
+  if (songClockLost(input)) return 'unavailable';
   if (input.roomSong.state === 1) return 'playing';
   return 'ready';
 }
@@ -195,11 +216,16 @@ function productAttention(
 
   const songLoaded = input.roomSong.videoId !== null;
   const performanceActive = lifecycle === 'live' || lifecycle === 'recording';
-  if (songLoaded && !input.roomSong.connected) {
+  if (songLoaded && songClockLost(input)) {
+    // Blocking a performance is a strong claim. A gap the singer could have
+    // caused by looking away is worth mentioning; only one long enough that the
+    // room genuinely has no clock is worth stopping for.
+    const blocking = performanceActive
+      && input.roomSong.clockAgeMs > SONG_CLOCK_BLOCKING_MS;
     return {
       code: 'song-clock-unavailable',
       scope: 'song',
-      severity: performanceActive ? 'critical' : 'warning',
+      severity: blocking ? 'critical' : 'warning',
     };
   }
 

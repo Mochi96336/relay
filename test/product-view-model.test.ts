@@ -34,6 +34,7 @@ function input(overrides: Partial<ProductViewModelInput> = {}): ProductViewModel
     roomSong: {
       videoId: 'abcdefghijk',
       connected: true,
+      clockAgeMs: 0,
       state: 1,
       handoffState: 'idle',
     },
@@ -79,7 +80,7 @@ describe('product lifecycle and health', () => {
       }),
       micOwnerId: null,
       micOwnerNickname: null,
-      roomSong: { videoId: null, connected: false, state: null, handoffState: 'idle' },
+      roomSong: { videoId: null, connected: false, clockAgeMs: 0, state: null, handoffState: 'idle' },
       timing: {
         timingMode: 'network-estimate',
         calibrationState: 'idle',
@@ -111,7 +112,7 @@ describe('product lifecycle and health', () => {
       }),
       micOwnerId: null,
       micOwnerNickname: null,
-      roomSong: { videoId: null, connected: false, state: null, handoffState: 'idle' },
+      roomSong: { videoId: null, connected: false, clockAgeMs: 0, state: null, handoffState: 'idle' },
     }));
 
     assert.equal(model.lifecycle, 'idle');
@@ -122,7 +123,7 @@ describe('product lifecycle and health', () => {
   test('reports a loaded paused room as ready without treating phone-not-playing as damage', () => {
     const model = buildProductViewModel(input({
       readiness: readiness({ timelineState: 2, calibrationValid: false }),
-      roomSong: { videoId: 'abcdefghijk', connected: true, state: 2, handoffState: 'idle' },
+      roomSong: { videoId: 'abcdefghijk', connected: true, clockAgeMs: 0, state: 2, handoffState: 'idle' },
       timing: {
         timingMode: 'network-estimate',
         calibrationState: 'idle',
@@ -173,7 +174,7 @@ describe('product lifecycle and health', () => {
 
   test('turns a prepared playback handoff into preparing without calling it unhealthy', () => {
     const model = buildProductViewModel(input({
-      roomSong: { videoId: 'abcdefghijk', connected: true, state: 1, handoffState: 'preparing' },
+      roomSong: { videoId: 'abcdefghijk', connected: true, clockAgeMs: 0, state: 1, handoffState: 'preparing' },
     }));
 
     assert.equal(model.lifecycle, 'preparing');
@@ -241,7 +242,7 @@ describe('product lifecycle and health', () => {
   test('blocks an active room when its authoritative song clock disappears', () => {
     const model = buildProductViewModel(input({
       readiness: readiness({ timelineConnected: false }),
-      roomSong: { videoId: 'abcdefghijk', connected: false, state: 1, handoffState: 'idle' },
+      roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 30_000, state: 1, handoffState: 'idle' },
     }));
 
     assert.equal(model.lifecycle, 'live');
@@ -250,9 +251,38 @@ describe('product lifecycle and health', () => {
     assert.equal(model.room.song.state, 'unavailable');
   });
 
+  /**
+   * The clock stops being authoritative after 1.5 s, which is right for
+   * alignment and wrong as a thing to say to a singer. A phone reports every
+   * 250 ms and misses five samples the moment its screen dims or the player
+   * rebuffers, so at that window "playback unavailable" fires during ordinary
+   * use - every time the singer glances away.
+   */
+  test('does not call playback unavailable while the singer glances away', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ timelineConnected: false }),
+      roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 2_000, state: 1, handoffState: 'idle' },
+    }));
+
+    assert.equal(model.attention, null);
+    assert.equal(model.health, 'healthy');
+    assert.notEqual(model.room.song.state, 'unavailable');
+  });
+
+  test('mentions a longer gap without blocking the performance for it', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ timelineConnected: false }),
+      roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 8_000, state: 1, handoffState: 'idle' },
+    }));
+
+    assert.equal(model.attention?.code, 'song-clock-unavailable');
+    assert.equal(model.attention?.severity, 'warning');
+    assert.equal(model.health, 'degraded');
+  });
+
   test('keeps completed Take quality separate from current system health', () => {
     const model = buildProductViewModel(input({
-      roomSong: { videoId: 'abcdefghijk', connected: true, state: 2, handoffState: 'idle' },
+      roomSong: { videoId: 'abcdefghijk', connected: true, clockAgeMs: 0, state: 2, handoffState: 'idle' },
       readiness: readiness({ timelineState: 2 }),
       take: { lifecycle: 'ready', takeId: 'take-1', qualityVerdict: 'degraded' },
     }));
@@ -264,7 +294,7 @@ describe('product lifecycle and health', () => {
 
   test('surfaces a failed Take without pretending the whole robot is blocked', () => {
     const model = buildProductViewModel(input({
-      roomSong: { videoId: 'abcdefghijk', connected: true, state: 2, handoffState: 'idle' },
+      roomSong: { videoId: 'abcdefghijk', connected: true, clockAgeMs: 0, state: 2, handoffState: 'idle' },
       readiness: readiness({ timelineState: 2 }),
       take: { lifecycle: 'failed', takeId: 'take-1', qualityVerdict: 'review' },
     }));

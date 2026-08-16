@@ -5,6 +5,7 @@ import test from 'node:test';
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
+const liveStateCss = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url), 'utf8');
 
 function position(fragment: string) {
@@ -60,6 +61,15 @@ test('formal Live copy consumes server product-status instead of rebuilding life
   assert.match(liveStatus, /Keep this phone speaker audible for a moment\./);
   assert.match(liveStatus, /Robot audio unavailable/);
   assert.doesNotMatch(liveStatus, /buildReadiness|buildProductViewModel/);
+});
+
+test('Voice motion follows product self-Mic state rather than legacy button disabled state', () => {
+  const baseStyle = position('href="/style.css"');
+  const stateStyle = position('href="/live-state.css"');
+  assert.ok(baseStyle < stateStyle, 'product-state presentation must override the legacy base selector');
+  assert.match(liveStatus, /document\.body\.dataset\.selfMic/);
+  assert.match(liveStateCss, /body\[data-self-mic="live"\] \.voice-ribbon span/);
+  assert.match(liveStateCss, /body\[data-self-mic="off"\] \.voice-ribbon span/);
 });
 
 test('formal Listen has its own transport and only pauses timing setup on the singer phone', () => {

@@ -53,6 +53,11 @@ test('Timing is explicitly out of scope when the room has no Song', () => {
   assert.equal(app.includes("roomSongAvailable !== true"), true);
   assert.equal(app.includes("No song to align."), true);
   assert.equal(app.includes("event.detail?.room?.song?.videoId"), true);
+
+  const noSong = app.indexOf('if (roomSongAvailable === false)');
+  const noMix = app.indexOf('if (!liveMixActive)');
+  assert.ok(noSong >= 0 && noMix > noSong,
+    'voice-only Live must say there is no Song to align before generic playback/calibration guidance');
 });
 
 test('Listen owns only local playback state and preserves volume while off', () => {

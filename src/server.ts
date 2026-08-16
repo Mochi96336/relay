@@ -846,14 +846,17 @@ function remoteStatusPayload() {
   // Route identity is readiness evidence, not a calibration feature flag.
   // A deployment may deliberately disable boot probing while still running
   // the formal Robot route. Keep /statusz aligned with /readyz.
-  const robotRoute = readinessPayload(nowMs).components.route.mode === 'robot';
+  const routeMode = readinessPayload(nowMs).components.route.mode;
+  const robotRoute = routeMode === 'robot';
   const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;
   const deltaFresh = robotDeltaIsFresh(nowMs);
 
   const faults: string[] = [];
   if (backingConnected && !backingStreaming) faults.push('backing source is connected but no longer sending audio');
   if (micConnected && !micStreaming) faults.push('microphone is connected but no longer sending audio');
-  if (robotRoute && !backingConnected) faults.push('robot route has no backing source');
+  if (routeMode !== 'idle' && !backingConnected) {
+    faults.push(`${routeMode} route has no backing source`);
+  }
   if (robotRoute && !robotSourceConnected) faults.push('robot route has no source page');
 
   const warnings: string[] = [];

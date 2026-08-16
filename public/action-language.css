@@ -3,10 +3,13 @@
 
 /* Context + mode actions: no capsule silhouette, including hover feedback. */
 .text-action {
+  position: relative;
   border-radius: 0;
   padding-left: 0;
   padding-right: 0;
   background: transparent;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   transition: color 120ms ease, opacity 120ms ease;
 }
 .text-action:hover:not(:disabled) {
@@ -24,18 +27,53 @@
   background: transparent;
 }
 
+/* Inline typography keeps its visual rhythm while the transparent hit halo
+   gives a finger more room. Keep the halo narrow enough that neighboring
+   actions do not compete for the same tap. */
+#change-youtube::before,
+#release-mic::before,
+#cancel-takeover::before,
+.recommendation-action::before,
+#calibrate-timing::before {
+  content: "";
+  position: absolute;
+  inset: -10px -4px;
+}
+
+/* Listen and Adjust are the persistent thumb horizon, so their actual rows -
+   not an invisible overlay - carry a full touch target. */
+#listen-toggle,
+.adjust-panel > summary {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+#listen-toggle {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.adjust-panel > summary {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
 /* Primary commitment: taking room microphone ownership. */
 #start-publisher,
 #confirm-takeover {
+  min-height: 44px;
   border: 1px solid #dedbd3;
   border-radius: 9px;
   background: var(--accent);
   color: #111214;
   box-shadow: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 #start-publisher {
-  min-width: 132px;
-  padding: 12px 16px;
+  min-width: 124px;
+  padding: 10px 16px;
 }
 #confirm-takeover {
   padding: 10px 13px;
@@ -46,13 +84,24 @@
   background: #f5f2ea;
 }
 
-/* Recording starts a lifecycle, but is deliberately quieter than taking Mic. */
+/* Recording starts a lifecycle, but is deliberately quieter than taking Mic.
+   Its visible surface stays compact; a transparent after-layer completes the
+   touch target without making Record look like a second primary action. */
 #start-recording {
+  position: relative;
+  min-height: 38px;
   border: 1px solid #34363c;
   border-radius: 9px;
-  padding: 10px 14px;
+  padding: 8px 14px;
   background: #16171a;
   color: #d9d8d4;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+#start-recording::after {
+  content: "";
+  position: absolute;
+  inset: -3px -6px;
 }
 #start-recording:hover:not(:disabled) {
   border-color: #464950;
@@ -61,11 +110,14 @@
 
 /* Once recording is underway, elapsed time is the state surface; Stop is text. */
 #stop-recording:not(:disabled) {
+  min-height: 44px;
   border: 0;
   border-radius: 0;
-  padding: 7px 0;
+  padding: 0;
   background: transparent;
   color: #ffaaa3;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 #stop-recording:hover:not(:disabled) {
   background: transparent;
@@ -74,7 +126,15 @@
 
 /* Shared-song commit inside its input row: rectangular, never a pill. */
 #load-youtube {
+  min-height: 44px;
   border-radius: 8px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 360px) {
+  #start-publisher { min-width: 116px; }
+  #start-recording { padding-left: 12px; padding-right: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

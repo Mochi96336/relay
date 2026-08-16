@@ -63,6 +63,28 @@ test('WavTakeWriter streams PCM into a hidden partial file and publishes only af
   }
 });
 
+test('WavTakeWriter fails explicitly instead of buffering an unbounded disk queue', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-backpressure-'));
+  const writer = new WavTakeWriter({
+    directory,
+    takeId: 'take-backpressure',
+    sampleRate: 48_000,
+    maxPendingBytes: 1_000,
+  });
+  try {
+    assert.throws(
+      () => writer.append(Buffer.alloc(1_920)),
+      /could not keep up with the authoritative mix/,
+    );
+    assert.equal(writer.sampleCount, 0, 'rejected PCM must not be counted as recorded audio');
+  } finally {
+    await writer.abort();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(await readdir(directory), []);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('aborting a Take removes its partial artifact', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-abort-'));
   try {

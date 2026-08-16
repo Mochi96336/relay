@@ -47,7 +47,12 @@ export type ProductViewModelInput = {
     calibrationState: string;
     calibrationStale: boolean;
     alignmentClamped: boolean;
-    robotRoute: boolean;
+    /**
+     * Whether the active timing strategy needs a fresh Robot player delta to
+     * make an acoustic calibration applicable. Route identity remains in
+     * `readiness.components.route.mode`.
+     */
+    requiresRobotPlayerDelta: boolean;
     robotDeltaFresh: boolean;
   };
 };
@@ -128,7 +133,7 @@ function timingState(
   if (
     input.timing.timingMode === 'acoustic-calibration'
     && input.readiness.components.calibration.valid
-    && (!input.timing.robotRoute || input.timing.robotDeltaFresh)
+    && (!input.timing.requiresRobotPlayerDelta || input.timing.robotDeltaFresh)
   ) return 'aligned';
   return 'fallback';
 }

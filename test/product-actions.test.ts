@@ -47,7 +47,7 @@ function model(readinessInput: ReadinessInput, takeLifecycle: 'idle' | 'recordin
       calibrationState: 'complete',
       calibrationStale: false,
       alignmentClamped: false,
-      robotRoute: true,
+      requiresRobotPlayerDelta: true,
       robotDeltaFresh: true,
     },
   });

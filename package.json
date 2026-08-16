@@ -13,7 +13,8 @@
     "robot:doctor": "bash scripts/robot-doctor.sh",
     "robot:source": "bash scripts/robot-source.sh",
     "check": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:webtransport-loopback": "node --import tsx scripts/webtransport-loopback.mjs"
   },
   "dependencies": {
     "@fails-components/webtransport": "1.6.7",

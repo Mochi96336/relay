@@ -47,7 +47,7 @@ function input(overrides: Partial<ProductViewModelInput> = {}): ProductViewModel
       calibrationState: 'complete',
       calibrationStale: false,
       alignmentClamped: false,
-      robotRoute: true,
+      requiresRobotPlayerDelta: true,
       robotDeltaFresh: true,
     },
   };
@@ -85,7 +85,7 @@ describe('product lifecycle and health', () => {
         calibrationState: 'idle',
         calibrationStale: false,
         alignmentClamped: false,
-        robotRoute: true,
+        requiresRobotPlayerDelta: true,
         robotDeltaFresh: false,
       },
     }));
@@ -128,7 +128,7 @@ describe('product lifecycle and health', () => {
         calibrationState: 'idle',
         calibrationStale: false,
         alignmentClamped: false,
-        robotRoute: true,
+        requiresRobotPlayerDelta: true,
         robotDeltaFresh: false,
       },
     }));
@@ -189,7 +189,7 @@ describe('product lifecycle and health', () => {
         calibrationState: 'collecting',
         calibrationStale: false,
         alignmentClamped: false,
-        robotRoute: true,
+        requiresRobotPlayerDelta: true,
         robotDeltaFresh: false,
       },
     }));
@@ -208,7 +208,7 @@ describe('product lifecycle and health', () => {
         calibrationState: 'idle',
         calibrationStale: false,
         alignmentClamped: false,
-        robotRoute: true,
+        requiresRobotPlayerDelta: true,
         robotDeltaFresh: false,
       },
     }));
@@ -227,7 +227,7 @@ describe('product lifecycle and health', () => {
         calibrationState: 'complete',
         calibrationStale: false,
         alignmentClamped: true,
-        robotRoute: true,
+        requiresRobotPlayerDelta: true,
         robotDeltaFresh: true,
       },
     }));
@@ -273,4 +273,28 @@ describe('product lifecycle and health', () => {
     assert.equal(model.health, 'degraded');
     assert.equal(model.attention?.code, 'take-failed');
   });
+
+  test('Robot route identity does not require a player delta when the active timing strategy does not', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({
+        playerOffsetMs: null,
+        playerOffsetFresh: false,
+        calibrationValid: true,
+      }),
+      timing: {
+        timingMode: 'acoustic-calibration',
+        calibrationState: 'complete',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: false,
+        robotDeltaFresh: false,
+      },
+    }));
+
+    assert.equal(model.lifecycle, 'live');
+    assert.equal(model.timing.state, 'aligned');
+    assert.equal(model.health, 'healthy');
+    assert.equal(model.attention, null);
+  });
+
 });

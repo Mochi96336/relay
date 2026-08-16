@@ -379,7 +379,7 @@ function calibrationContext(): CalibrationContext {
   };
 }
 
-function robotRouteActive() {
+function robotProbeTimingActive() {
   return PROBE_CALIBRATE && (
     backingIsRobot
     || activeRobotSource?.readyState === WebSocket.OPEN
@@ -749,12 +749,12 @@ function calibrationIsStale() {
 function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
-  if (robotRouteActive() && calibrationKind !== 'boot-probe') return false;
+  if (robotProbeTimingActive() && calibrationKind !== 'boot-probe') return false;
   // Boot calibration is a three-term equation. The two probe legs may be
   // measured ahead of playback, but an unknown player delta is not zero. Keep
   // the path result as evidence and stay on the network fallback until the
   // active robot has published a fresh, settled delta.
-  if (robotRouteActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
+  if (robotProbeTimingActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   return true;
 }
 
@@ -775,7 +775,7 @@ function calibrationCanApply() {
 function syncAppliedCalibration() {
   const active = session.alignment.calibratedMicLagMs;
 
-  if (robotRouteActive() && calibrationKind === 'boot-probe') {
+  if (robotProbeTimingActive() && calibrationKind === 'boot-probe') {
     if (!calibrationCanApply()) {
       if (active === null) return false;
       session.setAlignment({ calibratedMicLagMs: null });
@@ -825,7 +825,7 @@ function sourceStatusPayload() {
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     calibrationKind,
-    robotRoute: robotRouteActive(),
+    robotRoute: robotProbeTimingActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
@@ -842,7 +842,7 @@ function takeQualityFrameState(nowMs = performance.now()) {
       : 'acoustic-calibration' as const,
     calibrationStale: calibrationIsStale(),
     alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
-    robotRoute: robotRouteActive(),
+    robotRoute: robotProbeTimingActive(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
   };
 }
@@ -899,17 +899,16 @@ function remoteStatusPayload() {
   const snapshot = participants.snapshot();
   const mixHealth = session.health();
 
-  const backingConnected = backing?.readyState === WebSocket.OPEN;
-  const micConnected = micMediaConnected();
-  const backingStreaming = nowMs - lastBackingFrameAt < STREAM_LIVE_MS;
-  const micStreaming = nowMs - lastMicFrameAt < STREAM_LIVE_MS;
-  // Route identity is readiness evidence, not a calibration feature flag.
-  // A deployment may deliberately disable boot probing while still running
-  // the formal Robot route. Keep /statusz aligned with /readyz.
-  const routeMode = readinessPayload(nowMs).components.route.mode;
+  const readiness = readinessPayload(nowMs);
+  const components = readiness.components;
+  const backingConnected = components.backing.connected;
+  const micConnected = components.mic.connected;
+  const backingStreaming = components.backing.streaming;
+  const micStreaming = components.mic.streaming;
+  const routeMode = components.route.mode;
   const robotRoute = routeMode === 'robot';
-  const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;
-  const deltaFresh = robotDeltaIsFresh(nowMs);
+  const robotSourceConnected = components.robotSource.connected;
+  const deltaFresh = components.player.offsetFresh;
 
   const faults: string[] = [];
   if (backingConnected && !backingStreaming) faults.push('backing source is connected but no longer sending audio');
@@ -923,7 +922,7 @@ function remoteStatusPayload() {
   if (robotRoute && robotSourceConnected && !deltaFresh) {
     warnings.push('robot player delta is stale; alignment fell back to the network estimate');
   }
-  if (calibrationIsStale()) warnings.push('timing calibration no longer matches the current capture');
+  if (components.calibration.stale) warnings.push('timing calibration no longer matches the current capture');
 
   const idle = !backingConnected && !micConnected && !robotSourceConnected;
   const state = faults.length > 0 ? 'fault'
@@ -940,8 +939,8 @@ function remoteStatusPayload() {
     source: {
       backingConnected,
       backingStreaming,
-      backingSampleRate,
-      backingIsRobot,
+      backingSampleRate: components.backing.sampleRate,
+      backingIsRobot: components.backing.robot,
       backingFrameAgeMs: frameAgeMs(lastBackingFrameAt, nowMs),
       micConnected,
       micStreaming,
@@ -954,8 +953,8 @@ function remoteStatusPayload() {
       route: robotRoute,
       sourceConnected: robotSourceConnected,
       deltaFresh,
-      calibrationKind,
-      calibrationStale: calibrationIsStale(),
+      calibrationKind: components.calibration.kind,
+      calibrationStale: components.calibration.stale,
       timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
       activeCalibratedMicLagMs: alignment.calibratedMicLagMs,
     },
@@ -993,7 +992,7 @@ function timingCalibrationStatusPayload() {
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     calibrationKind,
-    robotRoute: robotRouteActive(),
+    robotRoute: robotProbeTimingActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
@@ -1099,7 +1098,7 @@ function productStatusPayload(nowMs = performance.now()) {
       calibrationState: String(calibrationStatus.state ?? 'idle'),
       calibrationStale: calibrationIsStale(),
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
-      robotRoute: robotRouteActive(),
+      requiresRobotPlayerDelta: robotProbeTimingActive(),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
     },
   });
@@ -1336,7 +1335,7 @@ const mixerTimer = setInterval(() => {
 
 function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE) return;
-  if (robotRouteActive()) return;
+  if (robotProbeTimingActive()) return;
   if (!session.active || calibration.collecting) return;
   if (calibration.result !== null && !calibrationIsStale()) return;
   if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
@@ -1387,7 +1386,7 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
 }
 
 function maybeStartProbeCalibration(nowMs: number) {
-  if (!PROBE_CALIBRATE || !robotRouteActive()) return;
+  if (!PROBE_CALIBRATE || !robotProbeTimingActive()) return;
   if (!session.active || calibration.collecting) return;
 
   if (
@@ -1565,7 +1564,7 @@ function currentDeltaMs(nowMs: number) {
 }
 
 function maybeReapplyBootCalibration(nowMs: number) {
-  if (!robotRouteActive() || calibrationKind !== 'boot-probe') return;
+  if (!robotProbeTimingActive() || calibrationKind !== 'boot-probe') return;
   if (bootPathDifferenceMs === null || calibration.collecting) return;
   if (!robotDeltaIsFresh(nowMs)) return;
   if (lastProbeContext === null) return;
@@ -1592,7 +1591,7 @@ function maybeReapplyBootCalibration(nowMs: number) {
 }
 
 function dropLegacyCalibrationForRobot() {
-  if (!robotRouteActive() || calibrationKind !== 'content') return;
+  if (!robotProbeTimingActive() || calibrationKind !== 'content') return;
   calibration.reset();
   calibrationKind = 'none';
   lastAutoCalibrationAt = -Infinity;
@@ -2149,7 +2148,7 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      if (robotRouteActive()) {
+      if (robotProbeTimingActive()) {
         restartBootCalibration(nowMs, false);
         return;
       }

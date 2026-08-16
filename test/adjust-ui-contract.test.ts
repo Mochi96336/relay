@@ -42,6 +42,10 @@ test('Voice Adjust distinguishes live input evidence from the gain setting and s
     'applying the recommendation reuses the existing room mix command path');
   assert.equal(suggestionHandler.includes("type: '"), false,
     'recommendation UI must not invent a second gain command protocol');
+
+  const suggestionBeforeHandler = app.slice(0, useSuggestion);
+  assert.equal(suggestionBeforeHandler.includes('micGain.value = String(Math.max'), false,
+    'incoming recommendation evidence must not move Voice gain before the user chooses Use');
 });
 
 test('Listen owns only local playback state and preserves volume while off', () => {

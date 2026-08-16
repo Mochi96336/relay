@@ -6,13 +6,27 @@ const SEEK_MUTATION_THRESHOLD_SECONDS = 0.75;
 const COMMAND_POSITION_TOLERANCE_SECONDS = 1.5;
 const MAX_RECENT_COMMANDS = 64;
 
+type DesiredPlaybackState = 1 | 2 | 5;
+
+export type RoomSongDesiredState = {
+  videoId: string;
+  positionSeconds: number;
+  state: DesiredPlaybackState;
+  playbackRate: number;
+};
+
+export type AppliedRoomSongCommandBody = RoomSongCommandBody & {
+  desired: RoomSongDesiredState;
+};
+
 export type AcceptedRoomSongCommand = {
   commandId: string;
   expectedRevision: number;
+  supersedesCommandId: string | null;
   revision: number;
   issuedByParticipantId: string;
   target: PlaybackIdentity;
-  body: RoomSongCommandBody;
+  body: AppliedRoomSongCommandBody;
 };
 
 type PendingRoomSongCommand = AcceptedRoomSongCommand & {
@@ -26,6 +40,7 @@ export type RoomSongCommandDecision =
     reason:
       | 'invalid-identity'
       | 'stale-revision'
+      | 'supersession-mismatch'
       | 'handoff-active'
       | 'mic-owner-required'
       | 'playback-leader-required'
@@ -79,12 +94,67 @@ function sameCommandBody(a: RoomSongCommandBody, b: RoomSongCommandBody) {
   return true;
 }
 
+function desiredPlaybackState(value: unknown): DesiredPlaybackState {
+  const state = Number(value);
+  if (state === 1 || state === 3) return 1;
+  if (state === 0 || state === 2) return 2;
+  return 5;
+}
+
+function desiredFromRoom(status: RoomSongStatus): RoomSongDesiredState | null {
+  const videoId = typeof status.videoId === 'string' ? status.videoId : null;
+  const positionSeconds = Number(status.serverTime);
+  const playbackRate = Number(status.playbackRate ?? 1);
+  if (!videoId || !Number.isFinite(positionSeconds) || positionSeconds < 0) return null;
+  return {
+    videoId,
+    positionSeconds,
+    state: desiredPlaybackState(status.state),
+    playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
+  };
+}
+
+function projectDesired(command: PendingRoomSongCommand, nowMs: number): RoomSongDesiredState {
+  const desired = command.body.desired;
+  const elapsedSeconds = desired.state === 1
+    ? Math.max(0, nowMs - command.issuedAtMs) / 1000
+    : 0;
+  return {
+    ...desired,
+    positionSeconds: Math.max(0, desired.positionSeconds + elapsedSeconds * desired.playbackRate),
+  };
+}
+
+function foldDesired(
+  base: RoomSongDesiredState | null,
+  body: RoomSongCommandBody,
+): RoomSongDesiredState | null {
+  if (body.action === 'load') {
+    return {
+      videoId: body.videoId,
+      positionSeconds: body.positionSeconds,
+      state: 5,
+      playbackRate: base?.playbackRate ?? 1,
+    };
+  }
+  if (!base) return null;
+  if (body.action === 'play') return { ...base, state: 1 };
+  if (body.action === 'pause') return { ...base, state: 2 };
+  if (body.action === 'seek') return { ...base, positionSeconds: body.positionSeconds };
+  return { ...base, playbackRate: body.playbackRate };
+}
+
 /**
- * Serial room-song command gate for Phase 1A.
+ * Room-song command/intent gate.
  *
- * This class deliberately does not decide media-clock authority; SongSession
- * still owns that. It establishes a single product-command path in front of
- * semantic media mutations and leaves replacement/latest-intent policy for 1B.
+ * Phase 1A established the one server-authoritative mutation path. Phase 1B
+ * lets the same exact actor/target advance that path while an earlier command
+ * is still pending. Each successor names its causal predecessor and is folded
+ * into a complete desired playback state, so the latest accepted intent can be
+ * applied on its own even when older applies/telemetry arrive late.
+ *
+ * SongSession still owns playback-leader/media-clock authority. This class
+ * owns only product intent ordering, command revisions and semantic proof.
  */
 export class RoomSongCommandSession {
   private pending: PendingRoomSongCommand | null = null;
@@ -112,26 +182,16 @@ export class RoomSongCommandSession {
       if (
         prior.issuedByParticipantId === actorParticipantId
         && sameIdentity(prior.target, target)
+        && prior.supersedesCommandId === request.supersedesCommandId
         && sameCommandBody(prior.body, request.body)
       ) {
-        return { ok: true, command: prior, duplicate: true };
+        return { ok: true, command: this.publicCommand(prior), duplicate: true };
       }
       return { ok: false, reason: 'command-id-conflict' };
     }
 
-    if (request.expectedRevision !== currentRevision) {
-      return { ok: false, reason: 'stale-revision' };
-    }
-
     if (roomStatus.handoffState && roomStatus.handoffState !== 'idle') {
       return { ok: false, reason: 'handoff-active' };
-    }
-
-    if (this.pending) return { ok: false, reason: 'command-pending' };
-
-    const hasSong = typeof roomStatus.videoId === 'string';
-    if (!hasSong && request.body.action !== 'load') {
-      return { ok: false, reason: 'song-required' };
     }
 
     const leader = statusLeader(roomStatus);
@@ -166,13 +226,53 @@ export class RoomSongCommandSession {
       }
     }
 
+    let causalPredecessor: AcceptedRoomSongCommand | null = null;
+    if (request.supersedesCommandId) {
+      const candidate = this.recent.get(request.supersedesCommandId) ?? null;
+      if (
+        !candidate
+        || candidate.issuedByParticipantId !== actorParticipantId
+        || !sameIdentity(candidate.target, target)
+      ) {
+        return { ok: false, reason: 'supersession-mismatch' };
+      }
+
+      const isPendingPredecessor = this.pending?.commandId === candidate.commandId;
+      const isLatestTerminalPredecessor = this.pending === null && candidate.revision === currentRevision;
+      if (!isPendingPredecessor && !isLatestTerminalPredecessor) {
+        return { ok: false, reason: 'supersession-mismatch' };
+      }
+      if (
+        request.expectedRevision !== currentRevision
+        && request.expectedRevision !== candidate.expectedRevision
+      ) {
+        return { ok: false, reason: 'stale-revision' };
+      }
+      causalPredecessor = candidate;
+    } else {
+      if (request.expectedRevision !== currentRevision) {
+        return { ok: false, reason: 'stale-revision' };
+      }
+      if (this.pending) return { ok: false, reason: 'command-pending' };
+    }
+
+    const baseDesired = this.pending && causalPredecessor?.commandId === this.pending.commandId
+      ? projectDesired(this.pending, nowMs)
+      : desiredFromRoom(roomStatus);
+    const desired = foldDesired(baseDesired, request.body);
+    if (!desired) return { ok: false, reason: 'song-required' };
+
     const command: PendingRoomSongCommand = {
       commandId: request.commandId,
       expectedRevision: request.expectedRevision,
+      supersedesCommandId: request.supersedesCommandId,
       revision: nextRevision,
       issuedByParticipantId: actorParticipantId,
       target: { ...target },
-      body: request.body,
+      body: {
+        ...request.body,
+        desired,
+      } as AppliedRoomSongCommandBody,
       issuedAtMs: nowMs,
     };
 
@@ -206,7 +306,7 @@ export class RoomSongCommandSession {
         return { ok: false, reason: 'command-target-mismatch' };
       }
 
-      if (this.matchesPending(payload, this.pending, roomStatus)) {
+      if (this.matchesPending(payload, this.pending, nowMs)) {
         return { ok: true, completesCommandId: this.pending.commandId };
       }
 
@@ -254,6 +354,7 @@ export class RoomSongCommandSession {
       revision,
       pendingCommandId: this.pending?.commandId ?? null,
       pendingAction: this.pending?.body.action ?? null,
+      pendingSupersedesCommandId: this.pending?.supersedesCommandId ?? null,
     };
   }
 
@@ -263,15 +364,19 @@ export class RoomSongCommandSession {
     }
   }
 
-  private publicCommand(command: PendingRoomSongCommand): AcceptedRoomSongCommand {
+  private publicCommand(command: AcceptedRoomSongCommand) {
     return {
       commandId: command.commandId,
       expectedRevision: command.expectedRevision,
+      supersedesCommandId: command.supersedesCommandId,
       revision: command.revision,
       issuedByParticipantId: command.issuedByParticipantId,
       target: { ...command.target },
-      body: command.body,
-    };
+      body: {
+        ...command.body,
+        desired: { ...command.body.desired },
+      } as AppliedRoomSongCommandBody,
+    } satisfies AcceptedRoomSongCommand;
   }
 
   private detectMutation(payload: Record<string, unknown>, roomStatus: RoomSongStatus): CommandMutation {
@@ -308,33 +413,22 @@ export class RoomSongCommandSession {
   private matchesPending(
     payload: Record<string, unknown>,
     command: PendingRoomSongCommand,
-    roomStatus: RoomSongStatus,
+    nowMs: number,
   ) {
+    const desired = projectDesired(command, nowMs);
     const videoId = typeof payload.videoId === 'string' ? payload.videoId : null;
     const currentTime = Number(payload.currentTime);
     const state = Number(payload.state);
     const rate = Number(payload.playbackRate ?? 1);
-    const roomVideoId = typeof roomStatus.videoId === 'string' ? roomStatus.videoId : null;
 
-    if (command.body.action === 'load') {
-      return videoId === command.body.videoId
-        && Number.isFinite(currentTime)
-        && Math.abs(currentTime - command.body.positionSeconds) <= COMMAND_POSITION_TOLERANCE_SECONDS
-        && [-1, 1, 2, 5].includes(state);
-    }
-    if (command.body.action === 'play') {
-      return videoId === roomVideoId && state === 1;
-    }
-    if (command.body.action === 'pause') {
-      return videoId === roomVideoId && state === 2;
-    }
-    if (command.body.action === 'seek') {
-      return videoId === roomVideoId
-        && Number.isFinite(currentTime)
-        && Math.abs(currentTime - command.body.positionSeconds) <= COMMAND_POSITION_TOLERANCE_SECONDS;
-    }
-    return videoId === roomVideoId
-      && Number.isFinite(rate)
-      && Math.abs(rate - command.body.playbackRate) <= 0.0001;
+    if (videoId !== desired.videoId) return false;
+    if (!Number.isFinite(rate) || Math.abs(rate - desired.playbackRate) > 0.0001) return false;
+    if (
+      !Number.isFinite(currentTime)
+      || Math.abs(currentTime - desired.positionSeconds) > COMMAND_POSITION_TOLERANCE_SECONDS
+    ) return false;
+    if (desired.state === 1) return state === 1;
+    if (desired.state === 2) return state === 2;
+    return state === 2 || state === 5;
   }
 }

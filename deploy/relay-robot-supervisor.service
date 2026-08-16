@@ -1,0 +1,29 @@
+# Semantic recovery for the robot browser/capture route.
+#
+# This unit never restarts Relay itself and never reboots the host. It polls
+# /readyz and systemd state, and may restart only relay-robot-source.service for
+# a narrow allowlist of persistent Robot-route faults. See ROBOT_RECOVERY.md.
+#
+# Not enabled by being committed here. Rehearse with RELAY_SUPERVISOR_DRY_RUN=1
+# before enabling it on the robot.
+
+[Unit]
+Description=Relay robot semantic recovery supervisor
+Documentation=https://github.com/Mochi96336/relay/blob/main/ROBOT_RECOVERY.md
+Wants=relay-server.service
+After=relay-server.service relay-robot-source.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/relay
+Environment=PORT=3100
+EnvironmentFile=-%h/.config/relay/robot.env
+ExecStart=/usr/bin/npm run robot:supervisor
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=relay-robot-supervisor
+
+[Install]
+WantedBy=default.target

@@ -12,6 +12,7 @@
     "backing:stdin": "tsx src/backing-entry.ts",
     "robot:doctor": "bash scripts/robot-doctor.sh",
     "robot:source": "bash scripts/robot-source.sh",
+    "robot:supervisor": "tsx src/robot-supervisor.ts",
     "check": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "test:webtransport-loopback": "node --import tsx scripts/webtransport-loopback.mjs"

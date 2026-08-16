@@ -55,6 +55,8 @@ On the validated installation, the same YouTube video played through the `localh
 
 The port is not part of that contract. Relay defaults to `3000`; use another port when the host already reserves it.
 
+This hostname requirement belongs only to the browser page. Machine-local readiness polling has no YouTube-origin constraint, so the semantic supervisor deliberately uses `http://127.0.0.1:$PORT/readyz` to avoid an IPv6 `localhost` resolution against Relay's IPv4 listener.
+
 ## Launcher
 
 Before launching, the read-only doctor checks dependencies, the PipeWire
@@ -129,8 +131,13 @@ Relay binds `0.0.0.0`, and the endpoint is unauthenticated like `/healthz`
 even when `RELAY_KEY` is set, so a poller needs no credentials — and the
 payload therefore contains no nicknames and no key.
 
-This is observation only. Nothing acts on a fault yet; restarting the route is
-still manual, and remains so until the boot-service checkpoint below.
+`/statusz` remains observation for people and external monitors; automatic
+recovery does not parse its prose. The optional semantic supervisor instead
+combines systemd `ActiveState` (whether the Robot route is intended to exist)
+with `/readyz` component facts (whether it is actually present and streaming).
+Its authority is deliberately limited to restarting
+`relay-robot-source.service` for a small allowlist of persistent Robot-route
+faults. See `ROBOT_RECOVERY.md` for the exact policy and rehearsal procedure.
 
 ## Ownership boundaries
 
@@ -140,16 +147,22 @@ still manual, and remains so until the boot-service checkpoint below.
 - `src/server.ts` owns WebSocket routing and source lifecycle orchestration.
 - `AudioSession` owns the shared PCM timelines, alignment, mixer, and signal processing.
 - `CalibrationSession` observes those timelines and owns measurement validity.
+- `robot-supervisor` owns only the bounded semantic decision to restart the Robot route; it does not own media, calibration, the Relay server, or host reboot.
 
 The launcher does not create a second mixer clock or alignment model. Observed follower deltas are diagnostics, not configuration: final audio alignment remains the calibration system's job.
 
 ## Boot services: written, deliberately not enabled
 
-`deploy/` holds two systemd **user** units, `relay-server.service` and
-`relay-robot-source.service`. They are committed so the boot design can be
-reviewed and rehearsed by hand; nothing here enables them, and the first
-unattended boot should not also be the first time the whole route runs
-unattended.
+`deploy/` holds three systemd **user** units:
+
+- `relay-server.service`
+- `relay-robot-source.service`
+- `relay-robot-supervisor.service`
+
+They are committed so the boot design can be reviewed and rehearsed by hand;
+nothing here enables them. The server and Robot route should be validated
+first, and the supervisor must be rehearsed in dry-run mode before it is given
+restart authority or enabled at boot.
 
 ### Why user units
 
@@ -184,18 +197,31 @@ repository.
 
 ### Rehearse before enabling
 
+Start the two workload units first:
+
 ```bash
 systemctl --user start relay-server.service
 systemctl --user start relay-robot-source.service
 curl -s http://localhost:3100/statusz | jq '{ok, state, faults}'
+```
+
+Then rehearse semantic recovery separately and in dry-run mode as documented
+in `ROBOT_RECOVERY.md`. In particular, stopping `relay-robot-source.service`
+must withdraw Supervisor authority rather than cause an implicit start.
+
+A normal maintenance stop remains:
+
+```bash
 systemctl --user stop relay-robot-source.service    # sink and Chromium go too
 ```
 
 Only after the integrated phone-microphone + robot-backing + calibration test
-passes on real devices, and the units have been exercised by hand:
+passes on real devices, the workload units have been exercised by hand, and
+the Supervisor fault-injection rehearsal passes:
 
 ```bash
 systemctl --user enable relay-server.service relay-robot-source.service
+systemctl --user enable relay-robot-supervisor.service
 ```
 
 ### What the units add over running the scripts
@@ -205,24 +231,34 @@ systemctl --user enable relay-server.service relay-robot-source.service
   `ExecStartPre` polls `/healthz` the way `robot:doctor` does, so a boot race
   cannot leave the source page on an error screen while every process in the
   unit looks healthy.
-- **Failure that stays still.** `Restart=on-failure` uses the exit status the
-  launcher already reports, and `StartLimitBurst` stops the retrying after five
-  attempts in two minutes rather than respawning Chromium indefinitely. A
-  stopped unit reads the same on every `/statusz` poll; a thrashing one does
-  not.
+- **Process failure that stays bounded.** `Restart=on-failure` uses the exit
+  status the launcher already reports, and `StartLimitBurst` stops the retrying
+  after repeated process failures rather than respawning Chromium indefinitely.
 - **Cleanup that survives SIGKILL.** The launcher's own trap handles signals,
   and systemd's cgroup sweep handles the case where the trap never runs.
+- **Semantic recovery above process liveness.** When the Robot route unit is
+  still active but its backing/source function remains broken, the Supervisor
+  waits for a persistent allowlisted `/readyz` fault and may restart that route
+  within its cooldown and retry budget.
 
-Two units rather than one because the phone talks to the server: collapsing
-them would make a Chromium crash end the singer's session along with the
-backing route.
+The server and Robot route remain separate because the phone talks to the
+server: a Chromium/capture problem must not end the singer's Relay session.
+The Supervisor is a third, narrower unit so its policy can fail or be stopped
+without changing either workload's lifecycle.
 
-### Still manual after this
+### What remains manual
 
-Nothing acts on a `/statusz` fault. Recovery is restarting a unit by hand, and
-a watchdog would need a narrower signal than `ok: false` — several faults it
-reports are phone-side, and restarting the robot route would not touch them.
+The Supervisor is intentionally not a general fixer. Mic and phone-side
+failures, playback/timeline problems, calibration faults, non-Robot backing,
+unknown readiness reasons, Relay server restart, and host reboot all remain
+manual diagnosis/recovery boundaries. An inactive Robot route also remains
+inactive; the Supervisor has restart authority only while that unit is already
+active.
 
 ## Current checkpoint and next stage
 
-The manually launched robot backing route is reproducible and validated. Full phone microphone + robot backing + automatic calibration still needs an integrated real-device monitor/recording test. That test is the gate on enabling the units above.
+The Robot backing route and the bounded semantic-recovery policy are covered by
+the automated regression suite, including the real HTTP/3/WebTransport loopback.
+The remaining deployment gate is real Pi rehearsal: first dry-run fault
+injection, then one controlled semantic hang with restart authority enabled.
+Only after that evidence should the Supervisor be enabled for unattended boot.

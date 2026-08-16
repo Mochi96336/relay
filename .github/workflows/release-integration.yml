@@ -23,7 +23,15 @@ jobs:
       - name: Build feeder integration tree
         shell: bash
         run: |
-          sed "/echo '=== verify integrated feeder tree ==='/,$d" .github/release-integrate.sh > /tmp/release-build.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/release-integrate.sh').read_text()
+          marker = "echo '=== verify integrated feeder tree ==='"
+          before, found, _ = source.partition(marker)
+          if not found:
+              raise SystemExit('release integration verification marker not found')
+          Path('/tmp/release-build.sh').write_text(before)
+          PY
           bash /tmp/release-build.sh
           echo FEEDER_TREE_BUILT
       - name: Verify reconciled product tree

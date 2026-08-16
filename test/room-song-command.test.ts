@@ -13,7 +13,7 @@ const OTHER_VIDEO = '9bZkp7q19f0';
 function command(commandId: string, expectedRevision: number, action: string, extra: Record<string, unknown> = {}) {
   const parsed = parseRoomSongCommand({ commandId, expectedRevision, action, ...extra });
   assert.equal(parsed.ok, true);
-  if (!parsed.ok) throw new Error(parsed.reason);
+  if (!parsed.ok) throw new Error('invalid room song command fixture');
   return parsed.request;
 }
 

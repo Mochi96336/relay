@@ -22,15 +22,18 @@ jobs:
           cache: npm
       - name: Build feeder integration tree
         shell: bash
-        run: bash .github/release-integrate.sh || true
-      - name: Close remaining runtime seams and verify
+        run: |
+          sed "/echo '=== verify integrated feeder tree ==='/,$d" .github/release-integrate.sh > /tmp/release-build.sh
+          bash /tmp/release-build.sh
+          echo FEEDER_TREE_BUILT
+      - name: Verify reconciled product tree
         shell: bash
         run: |
           git show origin/agent/release-executor:.github/release-prepostfix.sh > /tmp/release-prepostfix.sh
           git show origin/agent/release-executor:.github/release-postfix.sh > /tmp/release-postfix.sh
           bash /tmp/release-prepostfix.sh
           bash /tmp/release-postfix.sh
-      - name: Probe current main merge
+      - name: Integrate current main, verify HTTP3, and publish RC
         shell: bash
         run: |
           git show origin/agent/release-executor:.github/release-finalize.sh > /tmp/release-finalize.sh

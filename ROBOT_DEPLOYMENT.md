@@ -88,6 +88,29 @@ It:
 
 Run the Relay server separately before starting the launcher. Robot mode automatically arms source audio, and Chromium is launched with the autoplay policy needed for that unattended local page; no source-page gesture or extension invocation is required.
 
+## Watching the route from another machine
+
+The robot is unattended, so the interesting question from a second host is not
+"is Relay running" but "is the route still carrying audio". `/healthz` cannot
+answer that — it stays `{"ok": true}` while Chromium is dead.
+
+```bash
+curl -s http://<robot>:3100/statusz | jq '{ok, state, faults}'
+```
+
+`ok` is false only for a fault: a client that is connected but has stopped
+sending audio, or a robot route missing its backing source or its source page.
+Warnings such as a stale calibration are reported separately and leave `ok`
+true, because audio still flows. With nothing connected the state is `idle`,
+not a failure.
+
+Relay binds `0.0.0.0`, and the endpoint is unauthenticated like `/healthz`
+even when `RELAY_KEY` is set, so a poller needs no credentials — and the
+payload therefore contains no nicknames and no key.
+
+This is observation only. Nothing acts on a fault yet; restarting the route is
+still manual, and remains so until the boot-service checkpoint below.
+
 ## Ownership boundaries
 
 - `source.html` mirrors the phone's YouTube media timeline.

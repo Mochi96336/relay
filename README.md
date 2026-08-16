@@ -175,6 +175,29 @@ Reloading `source.html` destroys the tab capture, but the extension's WebSocket 
 
 That state used to be invisible until a calibration started against it and sat at 0 % for the full timeout, reporting only that progress had stopped. Calibration now refuses to start unless frames have actually arrived from both sides recently, gives up quickly if one goes quiet mid-collection, and names the side in both cases. `source-status` carries `micStreaming` / `backingStreaming` so `source.html` can say it without anyone pressing anything.
 
+### Status another machine can poll
+
+`GET /healthz` is liveness only: it returns `{ "ok": true }` for as long as the Relay process exists, which includes every robot failure worth knowing about — the browser died, the sink vanished, the backing bridge stopped. Nothing else was readable from outside, because `mix-health` and `source-status` are pushed over WebSocket to clients that are already connected.
+
+`GET /statusz` reports the route instead, and decides rather than dumps:
+
+```json
+{
+  "ok": false,
+  "state": "fault",
+  "faults": ["backing source is connected but no longer sending audio"],
+  "warnings": [],
+  "uptimeMs": 812345,
+  "source": { "backingConnected": true, "backingStreaming": false, "backingFrameAgeMs": 9421, "micConnected": false, "...": "..." },
+  "robot": { "route": true, "sourceConnected": false, "deltaFresh": false, "...": "..." },
+  "mix": { "micStarvedFrames": 0, "backingGapMs": 0, "...": "..." }
+}
+```
+
+The split that makes it pollable is between **faults**, which clear `ok` and mean something is definitely broken, and **warnings**, which do not. "Connected but no longer streaming" is a fault; a stale calibration is a warning, because audio still flows on the network estimate. Nobody being connected is neither — that is `state: "idle"` with `ok: true`, since a robot with no singer on it is not a robot that failed.
+
+It is unauthenticated like `/healthz`, so it carries counts and states but never nicknames or keys.
+
 ### Why a measurement has to repeat itself
 
 The analyser accepts unrelated audio at a confidence of 0.4–0.6 against 1.0 for a true match, reporting plausible-looking lags that are simply wrong (`test/timing-calibration.test.ts` pins the margin). While a person pressed the button that was survivable: an implausible number got re-run. Automating the trigger removed the reviewer and the flaw started reaching the mix, heard as the song arriving twice, badly offset, intermittently.

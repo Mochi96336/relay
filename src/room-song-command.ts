@@ -8,6 +8,7 @@ export type RoomSongCommandBody =
 export type RoomSongCommandRequest = {
   commandId: string;
   expectedRevision: number;
+  supersedesCommandId: string | null;
   body: RoomSongCommandBody;
 };
 
@@ -37,6 +38,11 @@ function finiteRate(value: unknown) {
  * Parse the public room-song command envelope without trusting any client
  * identity or playback target. Those are attached by the server from the
  * authenticated websocket transport after this shape check succeeds.
+ *
+ * supersedesCommandId is only causal evidence: the command session still
+ * verifies that it names the current pending/latest accepted command from the
+ * same actor and exact playback transport before allowing an older observed
+ * revision to advance the intent chain.
  */
 export function parseRoomSongCommand(payload: Record<string, unknown>): RoomSongCommandParseResult {
   const commandId = typeof payload.commandId === 'string' ? payload.commandId.trim() : '';
@@ -49,6 +55,17 @@ export function parseRoomSongCommand(payload: Record<string, unknown>): RoomSong
     return { ok: false, reason: 'invalid-revision' };
   }
 
+  let supersedesCommandId: string | null = null;
+  if (payload.supersedesCommandId !== undefined && payload.supersedesCommandId !== null) {
+    supersedesCommandId = typeof payload.supersedesCommandId === 'string'
+      ? payload.supersedesCommandId.trim()
+      : '';
+    if (!COMMAND_ID_PATTERN.test(supersedesCommandId) || supersedesCommandId === commandId) {
+      return { ok: false, reason: 'invalid-command-id' };
+    }
+  }
+
+  const base = { commandId, expectedRevision, supersedesCommandId };
   const action = payload.action;
   if (action === 'load') {
     const videoId = typeof payload.videoId === 'string' ? payload.videoId.trim() : '';
@@ -61,8 +78,7 @@ export function parseRoomSongCommand(payload: Record<string, unknown>): RoomSong
     return {
       ok: true,
       request: {
-        commandId,
-        expectedRevision,
+        ...base,
         body: { action, videoId, positionSeconds },
       },
     };
@@ -72,8 +88,7 @@ export function parseRoomSongCommand(payload: Record<string, unknown>): RoomSong
     return {
       ok: true,
       request: {
-        commandId,
-        expectedRevision,
+        ...base,
         body: { action },
       },
     };
@@ -85,8 +100,7 @@ export function parseRoomSongCommand(payload: Record<string, unknown>): RoomSong
     return {
       ok: true,
       request: {
-        commandId,
-        expectedRevision,
+        ...base,
         body: { action, positionSeconds },
       },
     };
@@ -98,8 +112,7 @@ export function parseRoomSongCommand(payload: Record<string, unknown>): RoomSong
     return {
       ok: true,
       request: {
-        commandId,
-        expectedRevision,
+        ...base,
         body: { action, playbackRate },
       },
     };

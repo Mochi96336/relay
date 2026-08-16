@@ -8,8 +8,9 @@ export type ReadinessInput = {
    * state rather than failure. `legacy` requires only a live backing stream.
    * `robot` requires the formal Robot backing identity plus its source page.
    *
-   * Optional for compatibility with the Phase 0F / PR #2 contract; callers
-   * that own runtime route expectation should always pass it explicitly.
+   * Runtime callers should pass this explicitly when they retain route intent
+   * across reconnect grace. Older callers can omit it and the pure model will
+   * infer the current route from observable facts.
    */
   routeMode?: RouteMode;
   backingConnected: boolean;
@@ -46,10 +47,16 @@ export type ReadinessReason =
   | 'calibration-stale'
   | 'calibration-missing';
 
+function inferRouteMode(input: ReadinessInput): RouteMode {
+  if (input.backingIsRobot || input.robotSourceConnected || input.calibrationKind === 'boot-probe') {
+    return 'robot';
+  }
+  if (input.backingConnected || input.sessionActive) return 'legacy';
+  return 'idle';
+}
+
 export function buildReadiness(input: ReadinessInput) {
-  // Omitted routeMode deliberately preserves PR #2's old strict Robot contract.
-  // The runtime integration owns the expectation and always passes it.
-  const routeMode = input.routeMode ?? 'robot';
+  const routeMode = input.routeMode ?? inferRouteMode(input);
   const reasons: ReadinessReason[] = [];
 
   if (routeMode !== 'idle') {

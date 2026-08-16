@@ -15,6 +15,7 @@ import type { PcmFrame } from './pcm-frame.js';
 type PcmChunk = {
   start: number;
   samples: Int16Array;
+  positioned: boolean;
 };
 
 type PcmTimeline = {
@@ -37,6 +38,26 @@ export type AlignmentState = {
   fineTuneMs: number;
 };
 
+/**
+ * Raw evidence for exactly one mixed output frame.
+ *
+ * These values describe what the mixer actually read for the samples it just
+ * emitted. They intentionally do not say whether a Take is good or bad; that
+ * policy belongs to the Take domain. Epoch-level health counters below remain
+ * useful engineering diagnostics but cannot answer which WAV a gap belonged to.
+ */
+export type MixFrameEvidence = {
+  micGapSamples: number;
+  backingGapSamples: number;
+  micStarvedSamples: number;
+  backingStarvedSamples: number;
+  micUnavailableSamples: number;
+  backingUnavailableSamples: number;
+  clippedSamples: number;
+  limitedSamples: number;
+  unheaderedSamples: number;
+};
+
 export type MixHealth = {
   micStarvedFrames: number;
   backingStarvedFrames: number;
@@ -48,6 +69,11 @@ export type MixHealth = {
   clippedSamples: number;
   /** Samples the microphone limiter held down. Working, not failing. */
   limitedSamples: number;
+  /**
+   * Evidence for the exact frame most recently emitted by `drain()`.
+   * Null before the first mixed frame in an epoch.
+   */
+  lastMixedFrame: MixFrameEvidence | null;
   /**
    * The raw microphone over the last few seconds, before any mix gain. Peak is
    * what decides the gain - it is what runs into the limiter - and RMS says
@@ -145,6 +171,20 @@ function emptyTimeline(): PcmTimeline {
   };
 }
 
+function emptyMixFrameEvidence(): MixFrameEvidence {
+  return {
+    micGapSamples: 0,
+    backingGapSamples: 0,
+    micStarvedSamples: 0,
+    backingStarvedSamples: 0,
+    micUnavailableSamples: 0,
+    backingUnavailableSamples: 0,
+    clippedSamples: 0,
+    limitedSamples: 0,
+    unheaderedSamples: 0,
+  };
+}
+
 export class AudioSession {
   readonly sampleRate: number;
   readonly frameMs: number;
@@ -179,6 +219,7 @@ export class AudioSession {
   private backingStarvedFrames = 0;
   private clippedSamples = 0;
   private limitedSamples = 0;
+  private lastMixedFrame: MixFrameEvidence | null = null;
 
   // Envelope and gain reduction carry across frames; resetting them per frame
   // would put a 20 ms sawtooth on the vocal.
@@ -386,6 +427,7 @@ export class AudioSession {
       backingGapMs: Math.round((this.backing.gapSamples / this.sampleRate) * 1000),
       clippedSamples: this.clippedSamples,
       limitedSamples: this.limitedSamples,
+      lastMixedFrame: this.lastMixedFrame ? { ...this.lastMixedFrame } : null,
       micPeakDbfs: this.micMeterPeak > 0 ? 20 * Math.log10(this.micMeterPeak) : null,
       micRmsDbfs: this.micMeterWeight > 0 && this.micMeterPower > 0
         ? 20 * Math.log10(Math.sqrt(this.micMeterPower / this.micMeterWeight))
@@ -399,6 +441,7 @@ export class AudioSession {
     this.backingStarvedFrames = 0;
     this.clippedSamples = 0;
     this.limitedSamples = 0;
+    this.lastMixedFrame = null;
     this.micMeterPeak = 0;
     this.micMeterPower = 0;
     this.micMeterWeight = 0;
@@ -435,8 +478,9 @@ export class AudioSession {
     if (samples.length === 0) return { samples, start: timeline.totalSamples };
 
     let start: number;
+    const positioned = frame.firstSampleIndex !== null;
 
-    if (frame.firstSampleIndex === null) {
+    if (!positioned) {
       // No header: the only thing left to do is append at the frontier, which
       // is the old lossy behaviour. Flag it so the UI can say the client is
       // stale rather than letting it degrade invisibly.
@@ -446,7 +490,7 @@ export class AudioSession {
       // Each frame states its own position, so rounding never accumulates and a
       // missing frame leaves a hole of exactly the right length instead of
       // pulling everything after it earlier.
-      const streamStart = Math.round((frame.firstSampleIndex * this.sampleRate) / sourceRate);
+      const streamStart = Math.round((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
 
       if (timeline.generation !== frame.generation) {
         // A fresh capture session. Anchor it to the session clock; the previous
@@ -466,7 +510,7 @@ export class AudioSession {
       timeline.gapSamples += start - timeline.totalSamples;
     }
 
-    timeline.chunks.push({ start, samples });
+    timeline.chunks.push({ start, samples, positioned });
     timeline.totalSamples = start + samples.length;
     return { samples, start };
   }
@@ -564,6 +608,64 @@ export class AudioSession {
     return output;
   }
 
+  /**
+   * Describes missing/legacy source samples for exactly the requested output
+   * range. Silence before session sample zero is structural pre-roll and is not
+   * counted as a source failure. Missing samples inside an established frontier
+   * are gaps; samples beyond the frontier are starvation/unavailability.
+   */
+  private readEvidence(timeline: PcmTimeline, startSample: number, count: number) {
+    let cursor = startSample;
+    let remaining = count;
+    let gapSamples = 0;
+    let frontierMissingSamples = 0;
+    let unheaderedSamples = 0;
+
+    if (remaining <= 0) return { gapSamples, frontierMissingSamples, unheaderedSamples };
+    if (cursor < 0) {
+      const preRoll = Math.min(remaining, -cursor);
+      cursor += preRoll;
+      remaining -= preRoll;
+    }
+    if (remaining <= 0) return { gapSamples, frontierMissingSamples, unheaderedSamples };
+
+    if (timeline.chunks.length === 0 || cursor >= timeline.totalSamples) {
+      frontierMissingSamples += remaining;
+      return { gapSamples, frontierMissingSamples, unheaderedSamples };
+    }
+
+    let chunkIndex = this.firstChunkAtOrBefore(timeline, cursor);
+    while (remaining > 0) {
+      if (cursor >= timeline.totalSamples || chunkIndex >= timeline.chunks.length) {
+        frontierMissingSamples += remaining;
+        break;
+      }
+
+      const chunk = timeline.chunks[chunkIndex];
+      const chunkEnd = chunk.start + chunk.samples.length;
+      if (cursor >= chunkEnd) {
+        chunkIndex += 1;
+        continue;
+      }
+
+      if (cursor < chunk.start) {
+        const missing = Math.min(remaining, chunk.start - cursor);
+        gapSamples += missing;
+        cursor += missing;
+        remaining -= missing;
+        continue;
+      }
+
+      const available = Math.min(remaining, chunkEnd - cursor);
+      if (!chunk.positioned) unheaderedSamples += available;
+      cursor += available;
+      remaining -= available;
+      chunkIndex += 1;
+    }
+
+    return { gapSamples, frontierMissingSamples, unheaderedSamples };
+  }
+
   private trim(timeline: PcmTimeline, beforeSample: number) {
     while (timeline.chunks.length > 1) {
       const chunk = timeline.chunks[0];
@@ -642,6 +744,14 @@ export class AudioSession {
     if (this.micHeadroomMs < 0 && this.micExpected) this.micStarvedFrames += 1;
     if (this.backingHeadroomMs < 0 && this.backingExpected) this.backingStarvedFrames += 1;
 
+    // Take evidence is scoped only to source samples that feed this emitted
+    // frame. In particular, the limiter look-ahead may be short without a single
+    // emitted vocal sample being missing, so it is deliberately excluded here.
+    const micReadEvidence = this.readEvidence(this.mic, micReadStart, this.frameSamples);
+    const backingReadEvidence = this.readEvidence(this.backing, startSample, this.frameSamples);
+    const clippedBefore = this.clippedSamples;
+    const limitedBefore = this.limitedSamples;
+
     // The extra tail is the limiter's look-ahead, not audio to be emitted.
     const lookahead = this.limiterLookaheadSamples;
     const mic = this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
@@ -659,6 +769,19 @@ export class AudioSession {
       const clamped = Math.max(-1, Math.min(1, value));
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
     }
+
+    this.lastMixedFrame = {
+      ...emptyMixFrameEvidence(),
+      micGapSamples: micReadEvidence.gapSamples,
+      backingGapSamples: backingReadEvidence.gapSamples,
+      micStarvedSamples: this.micExpected ? micReadEvidence.frontierMissingSamples : 0,
+      backingStarvedSamples: this.backingExpected ? backingReadEvidence.frontierMissingSamples : 0,
+      micUnavailableSamples: this.micExpected ? 0 : micReadEvidence.frontierMissingSamples,
+      backingUnavailableSamples: this.backingExpected ? 0 : backingReadEvidence.frontierMissingSamples,
+      clippedSamples: this.clippedSamples - clippedBefore,
+      limitedSamples: this.limitedSamples - limitedBefore,
+      unheaderedSamples: micReadEvidence.unheaderedSamples + backingReadEvidence.unheaderedSamples,
+    };
 
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);

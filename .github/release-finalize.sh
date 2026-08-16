@@ -89,7 +89,11 @@ function observationStatusV1Payload() {
       },
     },
     calibration: {
-      kind: remote.robot.calibrationKind ?? 'none',
+      kind: remote.robot.calibrationKind === 'boot-probe'
+        ? 'boot-probe'
+        : remote.robot.calibrationKind === 'content'
+          ? 'content'
+          : 'none',
       stale: remote.robot.calibrationStale,
       timingMode: remote.robot.timingMode,
       activeCalibratedMicLagMs: remote.robot.activeCalibratedMicLagMs,

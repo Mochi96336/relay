@@ -49,6 +49,17 @@ if (
     failed: 'Needs attention',
   };
 
+  function microphoneFailureCopy(rawMessage) {
+    const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
+    if (/https/i.test(message)) {
+      return 'Open Relay over HTTPS so this phone can use its microphone.';
+    }
+    if (/permission|notallowed|denied/i.test(message)) {
+      return 'Allow microphone access in your browser, then try again.';
+    }
+    return message || 'Check microphone access on this phone, then try again.';
+  }
+
   function wsUrl() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const source = new URLSearchParams(location.search);
@@ -233,6 +244,12 @@ if (
 
     next.send(JSON.stringify({ type: 'product-status-request' }));
   }
+
+  window.addEventListener('relay-microphone-start-failed', (event) => {
+    title.textContent = 'Microphone unavailable';
+    detail.textContent = microphoneFailureCopy(event.detail?.message);
+    document.body.dataset.selfMic = 'off';
+  });
 
   attentionButton.addEventListener('click', () => {
     systemPanel.open = true;

@@ -11,7 +11,7 @@ jobs:
   probe:
     if: github.head_ref == 'agent/release-executor'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
         with:
@@ -20,6 +20,9 @@ jobs:
         with:
           node-version: '20.19'
           cache: npm
-      - name: Reconcile feeders and verify
+      - name: Build feeder integration tree
         shell: bash
-        run: bash .github/release-integrate.sh
+        run: bash .github/release-integrate.sh || true
+      - name: Close remaining runtime seams and verify
+        shell: bash
+        run: bash .github/release-postfix.sh

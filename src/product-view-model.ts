@@ -12,6 +12,7 @@ export type ProductAttentionCode =
   | 'robot-player-unavailable'
   | 'song-clock-unavailable'
   | 'mic-reconnecting'
+  | 'mic-audio-stalled'
   | 'timing-recovering'
   | 'timing-clamped'
   | 'take-failed';
@@ -65,7 +66,7 @@ export type ProductStatus = {
   room: {
     participantCount: number;
     mic: {
-      state: 'free' | 'live' | 'reconnecting';
+      state: 'free' | 'starting' | 'live' | 'interrupted' | 'reconnecting';
       ownerId: string | null;
       ownerNickname: string | null;
     };
@@ -102,21 +103,25 @@ function productLifecycle(input: ProductViewModelInput): ProductLifecycle {
   }
 
   const mic = micState(input);
+  if (!songLoaded && mic === 'starting') return 'preparing';
   if (songLoaded) {
     if (input.roomSong.state === 1 && input.readiness.components.session.active) return 'live';
     return 'ready';
   }
   if (
     input.readiness.components.session.active
-    && (mic === 'live' || mic === 'reconnecting')
+    && (mic === 'live' || mic === 'interrupted' || mic === 'reconnecting')
   ) return 'live';
   return 'idle';
 }
 
 function micState(input: ProductViewModelInput): ProductStatus['room']['mic']['state'] {
   if (input.micOwnerId === null) return 'free';
-  if (input.readiness.components.mic.connected && input.readiness.components.mic.streaming) return 'live';
-  return 'reconnecting';
+  const mic = input.readiness.components.mic;
+  if (!mic.connected) return 'reconnecting';
+  if (!mic.flowObserved) return 'starting';
+  if (mic.streaming) return 'live';
+  return 'interrupted';
 }
 
 function songState(input: ProductViewModelInput): ProductStatus['room']['song']['state'] {
@@ -195,6 +200,14 @@ function productAttention(
       code: 'song-clock-unavailable',
       scope: 'song',
       severity: performanceActive ? 'critical' : 'warning',
+    };
+  }
+
+  if (input.micOwnerId !== null && micState(input) === 'interrupted') {
+    return {
+      code: 'mic-audio-stalled',
+      scope: 'mic',
+      severity: 'warning',
     };
   }
 

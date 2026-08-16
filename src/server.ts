@@ -291,7 +291,33 @@ const ROBOT_OFFSET_FRESH_MS = 2_000;
 const STREAM_LIVE_MS = 1_000;
 const COLLECTION_SILENCE_GRACE_MS = 1_500;
 let lastMicFrameAt = -Infinity;
+let lastMicFrameOwnerId: string | null = null;
+let lastMicFrameGeneration: number | null = null;
 let lastBackingFrameAt = -Infinity;
+
+function resetMicFlowEvidence() {
+  lastMicFrameAt = -Infinity;
+  lastMicFrameOwnerId = micMediaOwnerId;
+  lastMicFrameGeneration = micMediaGeneration;
+}
+
+function noteMicFrame(nowMs: number) {
+  lastMicFrameAt = nowMs;
+  lastMicFrameOwnerId = micMediaOwnerId;
+  lastMicFrameGeneration = micMediaGeneration;
+}
+
+function micFlowObserved() {
+  return Number.isFinite(lastMicFrameAt)
+    && lastMicFrameOwnerId === micMediaOwnerId
+    && lastMicFrameGeneration === micMediaGeneration;
+}
+
+function micStreaming(nowMs = performance.now()) {
+  return micMediaConnected()
+    && micFlowObserved()
+    && nowMs - lastMicFrameAt < STREAM_LIVE_MS;
+}
 
 function bothStreamsFlowing(nowMs: number) {
   return silentSides(nowMs).length === 0;
@@ -299,7 +325,7 @@ function bothStreamsFlowing(nowMs: number) {
 
 function silentSides(nowMs: number) {
   const silent: string[] = [];
-  if (nowMs - lastMicFrameAt >= STREAM_LIVE_MS) silent.push('phone microphone');
+  if (!micStreaming(nowMs)) silent.push('phone microphone');
   if (nowMs - lastBackingFrameAt >= STREAM_LIVE_MS) silent.push('desktop capture');
   return silent;
 }
@@ -338,6 +364,7 @@ function clearMicMediaAuthority() {
   micMediaTicket = null;
   micMediaOwnerId = null;
   micMediaGeneration = null;
+  resetMicFlowEvidence();
   micUplinkHealth = null;
   micUplinkHealthAt = -Infinity;
   publisherSampleRate = null;
@@ -356,6 +383,17 @@ function scheduleMicTransportGrace(ownerId: string) {
       publisher?.readyState === WebSocket.OPEN
       && publisher.participantId === expectedOwnerId
     ) return;
+
+    const directMediaStillFlowing = micMediaOwnerId === expectedOwnerId
+      && webTransportMicConnected()
+      && micStreaming(performance.now());
+    if (directMediaStillFlowing) {
+      // Control-plane loss must not revoke a Mic whose independent media plane
+      // is still carrying the same capture. Keep checking until control returns
+      // or the direct media path actually stops carrying fresh PCM.
+      scheduleMicTransportGrace(expectedOwnerId);
+      return;
+    }
 
     const released = participants.releaseMic(expectedOwnerId);
     if (!released.ok) return;
@@ -431,12 +469,15 @@ function participantIdentity(request: IncomingMessage) {
 
 function sessionStatusPayload() {
   const snapshot = participants.snapshot();
+  const ownerId = snapshot.micOwnerId;
   return {
     type: 'session-status',
     ...snapshot,
-    micConnected: snapshot.micOwnerId !== null
-      && publisher?.readyState === WebSocket.OPEN
-      && publisher.participantId === snapshot.micOwnerId,
+    // Presence reports whether the owner's Mic media is available. The control
+    // WebSocket can reconnect independently while WebTransport keeps PCM live.
+    micConnected: ownerId !== null
+      && micMediaOwnerId === ownerId
+      && micMediaConnected(),
   };
 }
 
@@ -821,7 +862,7 @@ function sourceStatusPayload() {
     micConnected: micMediaConnected(),
     micMediaPath: micMediaPath(),
     backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
-    micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
+    micStreaming: micStreaming(nowMs),
     sampleRate: backingSampleRate,
     active: session.active,
     prebufferMs: session.prebufferMs,
@@ -952,7 +993,7 @@ function remoteStatusPayload() {
       micConnected,
       micStreaming,
       micMediaPath: micMediaPath(),
-      micFrameAgeMs: frameAgeMs(lastMicFrameAt, nowMs),
+      micFrameAgeMs: micFlowObserved() ? frameAgeMs(lastMicFrameAt, nowMs) : null,
       participants: snapshot.participants.length,
       participantsConnected: snapshot.participants.filter((participant) => participant.connected).length,
     },
@@ -1093,9 +1134,13 @@ function currentTimelineStatus(nowMs = performance.now()) {
  * browser, or ProductViewModel independently. The pure readiness model decides
  * what those facts mean; this function only samples the live server once.
  */
-function readinessRouteMode() {
+function readinessRouteMode(nowMs = performance.now()) {
   if (backingIsRobot || activeRobotSource?.readyState === WebSocket.OPEN) return 'robot' as const;
   if (backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null) return 'legacy' as const;
+  // Voice-only is valid only while the room truly has no Song. Once a Song
+  // exists, backing is an expected dependency even before a concrete route
+  // has announced itself.
+  if (roomHasSong(nowMs)) return 'song' as const;
   return 'idle' as const;
 }
 
@@ -1105,13 +1150,14 @@ function readinessPayload(nowMs = performance.now()) {
   const timelineState = Number(timeline.state);
 
   return buildReadiness({
-    routeMode: readinessRouteMode(),
+    routeMode: readinessRouteMode(nowMs),
     backingConnected: backing?.readyState === WebSocket.OPEN,
     backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
     backingSampleRate,
     backingIsRobot,
     micConnected: micMediaConnected(),
-    micStreaming: nowMs - lastMicFrameAt < STREAM_LIVE_MS,
+    micStreaming: micStreaming(nowMs),
+    micFlowObserved: micFlowObserved(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     sessionActive: session.active,
     timelineConnected: Boolean(timeline.connected && timeline.videoId),
@@ -1309,7 +1355,7 @@ function processPublisherFrame(frame: PcmFrame) {
 
   if (session.active) {
     const previousGeneration = session.micGeneration;
-    lastMicFrameAt = performance.now();
+    noteMicFrame(performance.now());
     const { samples, start } = session.ingestMic(frame, publisherSampleRate);
 
     if (session.active) {
@@ -1375,7 +1421,7 @@ function probeGeneration(target: ProbeTarget) {
 
 function probePathReady(target: ProbeTarget, nowMs: number) {
   if (target === 'mic') {
-    return publisher?.readyState === WebSocket.OPEN && nowMs - lastMicFrameAt < STREAM_LIVE_MS;
+    return publisher?.readyState === WebSocket.OPEN && micStreaming(nowMs);
   }
   return backing?.readyState === WebSocket.OPEN
     && nowMs - lastBackingFrameAt < STREAM_LIVE_MS
@@ -1827,8 +1873,8 @@ wss.on('connection', (rawSocket, request) => {
       }
       const nowMs = performance.now();
       const song = takeSongSnapshot(nowMs);
-      const micStreaming = micMediaConnected() && nowMs - lastMicFrameAt < STREAM_LIVE_MS;
-      if (song.videoId === null && !micStreaming) {
+      const currentMicStreaming = micStreaming(nowMs);
+      if (song.videoId === null && !currentMicStreaming) {
         rejectTakeCommand(socket, 'start', 'take-not-ready');
         return;
       }
@@ -2362,6 +2408,7 @@ wss.on('connection', (rawSocket, request) => {
           micMediaOwnerId = socket.participantId ?? null;
           micMediaTicket = null;
         }
+        resetMicFlowEvidence();
       }
 
       if (ownershipChanged || (sameParticipantReplacement && !sameCapture)) {
@@ -2408,6 +2455,7 @@ wss.on('connection', (rawSocket, request) => {
       if (previousBacking && previousBacking !== socket) {
         takeController.noteQualityEvent('backing-transport-replaced');
       }
+      if (previousBacking !== socket) lastBackingFrameAt = -Infinity;
       replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
       socket.role = 'backing';
       socket.sampleRate = sampleRate;
@@ -2569,6 +2617,7 @@ wss.on('connection', (rawSocket, request) => {
         takeController.noteQualityEvent('backing-transport-disconnected');
         backing = null;
         backingSampleRate = null;
+        lastBackingFrameAt = -Infinity;
         session.setBackingExpected(false);
         if (calibration.collecting) {
           calibration.fail('Desktop Source disconnected during calibration.');

@@ -219,7 +219,7 @@ test('product-status carries person-facing Mic ownership instead of exposing tra
     );
 
     assert.equal(product.room.mic.ownerNickname, 'Blue Fox');
-    assert.equal(product.room.mic.state, 'reconnecting');
+    assert.equal(product.room.mic.state, 'starting');
     assert.equal(product.room.participantCount, 2);
     assert.equal('playbackTransportId' in product.room.mic, false);
 

@@ -27,6 +27,7 @@ if (
     'robot-player-unavailable': 'Robot player unavailable',
     'song-clock-unavailable': 'Song playback unavailable',
     'mic-reconnecting': 'Microphone reconnecting',
+    'mic-audio-stalled': 'Microphone audio interrupted',
     'timing-recovering': 'Timing is recovering',
     'timing-clamped': 'Timing needs attention',
     'take-failed': 'Take failed',
@@ -122,6 +123,12 @@ if (
     }
 
     if (selfOwner) {
+      if (mic.state === 'starting') {
+        return { title: 'Starting your mic…', detail: 'Waiting for the first audio frame from this phone.' };
+      }
+      if (mic.state === 'interrupted') {
+        return { title: 'Mic audio interrupted', detail: 'The media path is connected, but audio stopped arriving.' };
+      }
       if (mic.state === 'reconnecting') {
         return { title: 'Reconnecting your mic…', detail: 'Relay is holding your place for a moment.' };
       }
@@ -132,6 +139,12 @@ if (
     }
 
     const owner = mic.ownerNickname || 'Someone';
+    if (mic.state === 'starting') {
+      return { title: owner, detail: 'is starting the microphone…' };
+    }
+    if (mic.state === 'interrupted') {
+      return { title: owner, detail: 'microphone audio interrupted' };
+    }
     if (mic.state === 'reconnecting') {
       return { title: owner, detail: 'microphone reconnecting…' };
     }
@@ -157,9 +170,11 @@ if (
       ? 'Needs attention'
       : songState === 'playing' || micState === 'live'
         ? 'Live'
-        : micState === 'reconnecting'
-          ? 'Recovering'
-          : songState === 'ready' || songState === 'handoff'
+        : micState === 'starting'
+          ? 'Starting'
+          : micState === 'interrupted' || micState === 'reconnecting'
+            ? 'Recovering'
+            : songState === 'ready' || songState === 'handoff'
             ? 'Ready'
             : songState === 'unavailable'
               ? 'Needs attention'

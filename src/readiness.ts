@@ -1,12 +1,14 @@
-export type RouteMode = 'idle' | 'legacy' | 'robot';
+export type RouteMode = 'idle' | 'song' | 'legacy' | 'robot';
 
 export type ReadinessInput = {
   /**
    * Which backing route the host is expected to provide right now.
    *
-   * `idle` means no route has been armed, so missing Robot infrastructure is
-   * state rather than failure. `legacy` requires only a live backing stream.
-   * `robot` requires the formal Robot backing identity plus its source page.
+   * `idle` means no route has been armed and no Song requires one, so missing
+   * Robot infrastructure is state rather than failure. `song` means a Song is
+   * present but no concrete backing route has armed yet. `legacy` requires only
+   * a live backing stream. `robot` requires the formal Robot backing identity
+   * plus its source page.
    *
    * Runtime callers should pass this explicitly when they retain route intent
    * across reconnect grace. Older callers can omit it and the pure model will
@@ -19,6 +21,8 @@ export type ReadinessInput = {
   backingIsRobot: boolean;
   micConnected: boolean;
   micStreaming: boolean;
+  /** Current Mic owner/capture has produced at least one PCM frame. */
+  micFlowObserved?: boolean;
   robotSourceConnected: boolean;
   sessionActive: boolean;
   timelineConnected: boolean;
@@ -115,6 +119,7 @@ export function buildReadiness(input: ReadinessInput) {
       mic: {
         connected: input.micConnected,
         streaming: input.micStreaming,
+        flowObserved: input.micFlowObserved ?? input.micStreaming,
       },
       robotSource: {
         connected: input.robotSourceConnected,

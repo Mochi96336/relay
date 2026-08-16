@@ -393,8 +393,32 @@ function handleReady(event) {
   const iframe = event.target.getIframe();
   iframe.referrerPolicy = 'strict-origin-when-cross-origin';
   setPlayerState(event.target.getPlayerState(), 'ready');
+
+  if (pendingHandoff?.phase === 'preparing') {
+    startTelemetry();
+    cuePendingHandoff();
+    return;
+  }
+
+  const pendingRoomApply = serverMutation?.source === 'room-command'
+    ? {
+        commandId: serverMutation.commandId,
+        revision: serverMutation.revision,
+        action: serverMutation.action,
+        desired: serverMutation.desired,
+      }
+    : null;
+  if (pendingRoomApply) {
+    // The first load can create the iframe before YT reports ready. Re-apply the
+    // latest self-contained desired state here rather than relying on whatever
+    // initial state the iframe happened to choose.
+    applyRoomSongCommand(pendingRoomApply)
+      .catch(console.error)
+      .finally(startTelemetry);
+    return;
+  }
+
   startTelemetry();
-  if (pendingHandoff?.phase === 'preparing') cuePendingHandoff();
 }
 
 function handleStateChange(event) {
@@ -516,7 +540,9 @@ async function applyRoomSongCommand(message) {
       throw new Error('player not ready');
     }
 
-    previousSnapshot = null;
+    // Keep the previous sample across a command apply. The full desired-state
+    // matcher distinguishes server mutations, while preserving enough history
+    // to notice a user seek/play/pause that lands before the next sample.
     loadedVideoId = desired.videoId;
     serverMutation.appliedAtPerformanceMs = performance.now();
 

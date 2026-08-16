@@ -229,3 +229,66 @@ test('stale revisions and concurrent pending intents are rejected without replac
     await server.stop();
   }
 });
+
+test('a rebuffering player keeps the room clock instead of being locked out of it', async () => {
+  const server = await startRelay();
+  try {
+    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
+    const transport = 'playback-stall-a';
+    await registerPlayback(a, transport);
+
+    const revision = await loadRoomSong(a, transport, 0, 'command-load-stall');
+    a.send({
+      type: 'room-song-command',
+      commandId: 'command-play-stall',
+      expectedRevision: revision,
+      action: 'play',
+    });
+    await a.waitFor((message) => (
+      message.type === 'room-song-command-apply' && message.commandId === 'command-play-stall'
+    ));
+    a.send(telemetry(0.05, 1, transport));
+    await a.waitFor((message) => (
+      message.type === 'room-song-command-complete' && message.commandId === 'command-play-stall'
+    ));
+
+    for (let i = 1; i <= 3; i += 1) {
+      a.send(telemetry(0.05 + i * 0.25, 1, transport));
+      await sleep(250);
+    }
+
+    // The player rebuffers for two seconds. Its position stops; the room clock
+    // keeps predicting forward. Judged against that prediction, everything the
+    // player says next looks like an unrequested seek — and a refused packet
+    // never reaches the timeline, so the clock could never re-anchor and the
+    // room stayed permanently ahead of the audio.
+    const from = a.messages.length;
+    await sleep(2_000);
+    a.send(telemetry(0.85, 3, transport));
+    await sleep(150);
+    for (let i = 0; i < 6; i += 1) {
+      a.send(telemetry(0.85 + i * 0.25, 1, transport));
+      await sleep(250);
+    }
+
+    const refusals = a.messages.slice(from).filter((message) => (
+      message.type === 'room-song-telemetry-rejected'
+    ));
+    assert.deepEqual(
+      refusals.map((message) => message.reason),
+      [],
+      'honest reports from a stalled player were treated as unrequested seeks',
+    );
+
+    a.send({ type: 'youtube-timeline-request' });
+    await sleep(100);
+    const status = a.latest('youtube-timeline-status');
+    assert.ok(status);
+    assert.ok(
+      Math.abs(Number(status.serverTime) - 2.1) < 1,
+      `room clock drifted away from the player: ${status.serverTime} vs ~2.1`,
+    );
+  } finally {
+    await server.stop();
+  }
+});

@@ -282,6 +282,7 @@ function scheduleMicTransportGrace(ownerId: string) {
 
     const released = participants.releaseMic(expectedOwnerId);
     if (!released.ok) return;
+    cancelPendingRoomSongCommand('mic-owner-released');
     invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
     broadcastSessionStatus();
   }, MIC_TRANSPORT_GRACE_MS);
@@ -448,6 +449,20 @@ function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: 
     revision: roomSongCommandRevision,
     room: youtubeTimeline.roomStatusPayload(),
   });
+}
+
+function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now()) {
+  const cancelled = roomSongCommands.cancelPending();
+  if (!cancelled) return false;
+  sendToPlayback(cancelled.target, {
+    type: 'room-song-command-failed-ack',
+    commandId: cancelled.commandId,
+    revision: roomSongCommandRevision,
+    reason,
+    room: youtubeTimeline.roomStatusPayload(nowMs),
+  });
+  broadcastJson(roomSongCommandStatusPayload(nowMs));
+  return true;
 }
 
 function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
@@ -1189,6 +1204,7 @@ const youtubeTimelineTimer = setInterval(() => {
   const presenceSweep = participants.sweep(Date.now());
   if (presenceSweep.releasedMicOwnerId) {
     cancelMicTransportGrace();
+    cancelPendingRoomSongCommand('mic-owner-released', nowMs);
     if (youtubeTimeline.cancelHandoff()) broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
     invalidateMicTiming('Microphone owner left the Relay session.');
   }
@@ -1341,6 +1357,7 @@ wss.on('connection', (rawSocket, request) => {
       if (!result.ok) return;
 
       cancelMicTransportGrace();
+      cancelPendingRoomSongCommand('mic-owner-released');
       if (youtubeTimeline.cancelHandoff()) {
         broadcastJson(youtubeTimeline.statusPayload());
         broadcastJson(youtubeTimeline.roomStatusPayload());
@@ -1712,6 +1729,8 @@ wss.on('connection', (rawSocket, request) => {
         sendJson(socket, { type: 'error', message: 'Microphone is owned by an active Relay participant.' });
         return;
       }
+
+      if (ownershipChanged) cancelPendingRoomSongCommand('mic-owner-changed');
 
       const previousPublisher = publisher;
       const sameParticipantReplacement = Boolean(

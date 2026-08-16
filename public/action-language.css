@@ -1,1 +1,82 @@
-/* Relay actions use shape to communicate commitment, not merely clickability. */
+/* Relay actions use shape to communicate commitment, not merely clickability.
+   Commit actions get a physical surface. Context and mode actions stay typographic. */
+
+/* Context + mode actions: no capsule silhouette, including hover feedback. */
+.text-action {
+  border-radius: 0;
+  padding-left: 0;
+  padding-right: 0;
+  background: transparent;
+  transition: color 120ms ease, opacity 120ms ease;
+}
+.text-action:hover:not(:disabled) {
+  background: transparent;
+  color: #fff;
+}
+
+#change-youtube,
+#release-mic,
+#cancel-takeover,
+#listen-toggle,
+.recommendation-action,
+#calibrate-timing {
+  border-radius: 0;
+  background: transparent;
+}
+
+/* Primary commitment: taking room microphone ownership. */
+#start-publisher,
+#confirm-takeover {
+  border: 1px solid #dedbd3;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #111214;
+  box-shadow: none;
+}
+#start-publisher {
+  min-width: 132px;
+  padding: 12px 16px;
+}
+#confirm-takeover {
+  padding: 10px 13px;
+}
+#start-publisher:hover:not(:disabled),
+#confirm-takeover:hover:not(:disabled) {
+  border-color: #f5f2ea;
+  background: #f5f2ea;
+}
+
+/* Recording starts a lifecycle, but is deliberately quieter than taking Mic. */
+#start-recording {
+  border: 1px solid #34363c;
+  border-radius: 9px;
+  padding: 10px 14px;
+  background: #16171a;
+  color: #d9d8d4;
+}
+#start-recording:hover:not(:disabled) {
+  border-color: #464950;
+  background: #1c1e22;
+}
+
+/* Once recording is underway, elapsed time is the state surface; Stop is text. */
+#stop-recording:not(:disabled) {
+  border: 0;
+  border-radius: 0;
+  padding: 7px 0;
+  background: transparent;
+  color: #ffaaa3;
+}
+#stop-recording:hover:not(:disabled) {
+  background: transparent;
+  color: #ffc0bb;
+}
+
+/* Shared-song commit inside its input row: rectangular, never a pill. */
+#load-youtube {
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .text-action { transition: none; }
+}

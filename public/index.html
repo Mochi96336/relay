@@ -7,6 +7,7 @@
     <title>Relay</title>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/live-state.css" />
+    <link rel="stylesheet" href="/adjust.css" />
     <link rel="stylesheet" href="/song-surface.css" />
     <link rel="stylesheet" href="/system-details.css" />
   </head>
@@ -105,35 +106,76 @@
           <div class="adjust-sheet">
             <div class="adjust-heading">
               <strong>Adjust</strong>
-              <span>Room mix + this phone</span>
+              <span>Performance tuning</span>
             </div>
 
-            <label class="mix-row" for="mic-gain">
-              <span>Voice</span>
-              <input id="mic-gain" type="range" min="0" max="36" step="1" value="24" disabled />
-              <output id="mic-gain-value" for="mic-gain">+24 dB</output>
-            </label>
-            <p id="mic-gain-advice" class="microcopy">Voice guidance appears while singing.</p>
-
-            <label class="mix-row" for="song-level">
-              <span>Song</span>
-              <input id="song-level" type="range" min="0" max="100" step="1" value="40" disabled />
-              <output id="song-level-value" for="song-level">40%</output>
-            </label>
-
-            <label class="mix-row" for="listen-gain">
-              <span>Monitor</span>
-              <input id="listen-gain" type="range" min="0" max="100" step="1" value="70" />
-              <output id="listen-gain-value" for="listen-gain">70%</output>
-            </label>
-
-            <div class="timing-row">
-              <div>
-                <span class="section-label">Timing</span>
-                <strong id="calibrate-status">Waiting for playback</strong>
+            <section class="adjust-group room-mix" aria-labelledby="room-mix-label">
+              <div class="adjust-group-heading">
+                <span id="room-mix-label" class="section-label">Room mix</span>
+                <span>Shared</span>
               </div>
-              <button id="calibrate-timing" class="text-action" type="button">Recalibrate</button>
-            </div>
+
+              <div class="adjust-control voice-adjust">
+                <div class="adjust-row-heading">
+                  <strong>Voice</strong>
+                  <output id="mic-gain-value" for="mic-gain">+24 dB</output>
+                </div>
+
+                <div class="voice-input-evidence">
+                  <div class="evidence-heading">
+                    <span>Input</span>
+                    <output id="mic-input-value">Listening…</output>
+                  </div>
+                  <div id="mic-input-meter" class="voice-input-meter" aria-hidden="true"></div>
+                </div>
+
+                <div class="gain-control">
+                  <div class="gain-rail">
+                    <input id="mic-gain" class="adjust-range" type="range" min="0" max="36" step="1" value="24" disabled aria-label="Voice gain" />
+                    <span id="mic-gain-recommendation-marker" class="recommendation-marker" hidden aria-hidden="true"></span>
+                  </div>
+                  <div class="recommendation-meta">
+                    <span id="mic-gain-recommendation">Sing normally for a moment.</span>
+                    <button id="use-mic-gain-suggestion" class="text-action recommendation-action" type="button" hidden>Use suggestion</button>
+                  </div>
+                  <p id="mic-gain-advice" class="adjust-helper">Relay will suggest a stable gain after it has enough voice.</p>
+                </div>
+              </div>
+
+              <label class="adjust-control" for="song-level">
+                <div class="adjust-row-heading">
+                  <strong>Song</strong>
+                  <output id="song-level-value" for="song-level">40%</output>
+                </div>
+                <input id="song-level" class="adjust-range" type="range" min="0" max="100" step="1" value="40" disabled />
+              </label>
+            </section>
+
+            <section class="adjust-group local-listen" aria-labelledby="local-listen-label">
+              <div class="adjust-group-heading">
+                <span id="local-listen-label" class="section-label">This phone</span>
+                <span>Local only</span>
+              </div>
+              <label class="adjust-control" for="listen-gain">
+                <div class="adjust-row-heading">
+                  <strong>Listen volume</strong>
+                  <output id="listen-gain-value" for="listen-gain">70%</output>
+                </div>
+                <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="70" />
+              </label>
+              <p id="listen-adjust-state" class="adjust-helper">Listen is off. Volume is kept for next time.</p>
+            </section>
+
+            <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">
+              <div class="adjust-group-heading">
+                <span id="timing-adjust-label" class="section-label">Timing</span>
+                <span>Room alignment</span>
+              </div>
+              <div class="timing-row">
+                <strong id="calibrate-status">Waiting for playback</strong>
+                <button id="calibrate-timing" class="text-action" type="button">Recalibrate</button>
+              </div>
+            </section>
           </div>
         </details>
       </footer>

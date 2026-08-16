@@ -2,8 +2,9 @@ const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
 const gainValue = document.querySelector('#listen-gain-value');
 const note = document.querySelector('#listen-note');
+const adjustState = document.querySelector('#listen-adjust-state');
 
-if (toggle && gainControl && gainValue && note) {
+if (toggle && gainControl && gainValue && note && adjustState) {
   const MIX_SAMPLE_RATE = 48_000;
   const RECONNECT_MS = 1_000;
   const PREBUFFER_MS = 250;
@@ -85,6 +86,12 @@ if (toggle && gainControl && gainValue && note) {
     toggle.setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
     toggle.textContent = state === 'on' ? '● Listen' : 'Listen';
     note.textContent = copy;
+    document.body.dataset.listen = state;
+    adjustState.textContent = state === 'on'
+      ? 'Playing Relay mix on this phone.'
+      : copy.includes('timing setup')
+        ? 'Listen is off for timing setup. Volume is kept for next time.'
+        : 'Listen is off. Volume is kept for next time.';
   }
 
   function clearReconnect() {

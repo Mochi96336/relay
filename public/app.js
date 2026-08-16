@@ -6,6 +6,11 @@ const details = document.querySelector('#details');
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
 const micGainAdvice = document.querySelector('#mic-gain-advice');
+const micInputMeter = document.querySelector('#mic-input-meter');
+const micInputValue = document.querySelector('#mic-input-value');
+const micGainRecommendation = document.querySelector('#mic-gain-recommendation');
+const micGainRecommendationMarker = document.querySelector('#mic-gain-recommendation-marker');
+const useMicGainSuggestion = document.querySelector('#use-mic-gain-suggestion');
 const songLevel = document.querySelector('#song-level');
 const songLevelValue = document.querySelector('#song-level-value');
 const calibrateButton = document.querySelector('#calibrate-timing');
@@ -34,7 +39,11 @@ let pendingPublisherTakeoverOwnerId = null;
  * the desktop screen while singing.
  */
 function renderGainAdvice() {
-  if (!micGainAdvice) return;
+  if (
+    !micGainAdvice || !micInputMeter || !micInputValue
+    || !micGainRecommendation || !micGainRecommendationMarker || !useMicGainSuggestion
+  ) return;
+
   const rawPeak = latestMixHealth?.micPeakDbfs;
   const rawRecommended = latestMixHealth?.recommendedMicGainDb;
   const peak = rawPeak === null || rawPeak === undefined ? Number.NaN : Number(rawPeak);
@@ -42,20 +51,43 @@ function renderGainAdvice() {
     ? Number.NaN
     : Number(rawRecommended);
 
-  if (!Number.isFinite(peak) || !Number.isFinite(recommended)) {
-    micGainAdvice.textContent = '開始唱之後，這裡會顯示實際電平與建議的 Mic gain。';
-    return;
+  if (Number.isFinite(peak)) {
+    // Evidence only: the rail shows the measured input, not another setting.
+    // -60 dBFS maps to the quiet edge and 0 dBFS to full scale.
+    const inputPercent = Math.max(0, Math.min(100, ((peak + 60) / 60) * 100));
+    micInputMeter.style.setProperty('--input-level', `${inputPercent}%`);
+    micInputValue.value = `${peak.toFixed(1)} dBFS`;
+  } else {
+    micInputMeter.style.setProperty('--input-level', '0%');
+    micInputValue.value = 'Listening…';
   }
 
   const current = Math.round(Number(micGain.value) || 0);
-  const off = recommended - current;
-  const verdict = Math.abs(off) <= 3
-    ? '目前設定合適'
-    : off < 0
-      ? `偏高 ${-off} dB，動態會被壓平`
-      : `偏低 ${off} dB，人聲會太小`;
+  if (!Number.isFinite(recommended)) {
+    micGainRecommendationMarker.hidden = true;
+    micGainRecommendation.textContent = 'Sing normally for a moment.';
+    micGainAdvice.textContent = 'Relay will suggest a stable gain after it has enough voice.';
+    useMicGainSuggestion.hidden = true;
+    return;
+  }
 
-  micGainAdvice.textContent = `峰值 ${peak.toFixed(1)} dBFS · 建議 +${recommended} dB · ${verdict}`;
+  const suggested = Math.max(0, Math.min(36, Math.round(recommended)));
+  const markerPercent = (suggested / 36) * 100;
+  micGainRecommendationMarker.hidden = false;
+  micGainRecommendationMarker.style.left = `${markerPercent}%`;
+  micGainRecommendation.textContent = `Recommended +${suggested} dB`;
+
+  const off = suggested - current;
+  micGainAdvice.textContent = Math.abs(off) <= 3
+    ? 'Sounds good'
+    : off < 0
+      ? `${-off} dB above suggestion`
+      : `${off} dB below suggestion`;
+
+  const canApply = publisherActive && Math.abs(off) > 3;
+  useMicGainSuggestion.hidden = !canApply;
+  useMicGainSuggestion.disabled = !publisherActive;
+  useMicGainSuggestion.textContent = `Use +${suggested} dB`;
 }
 let clickScheduler = null;
 let nextClickTime = 0;
@@ -158,6 +190,7 @@ function updateTestButtons() {
   testStopButton.disabled = !publisherActive || !testActive;
   micGain.disabled = !publisherActive;
   songLevel.disabled = !publisherActive;
+  renderGainAdvice();
   // Same dependency on publisher state, so it rides along rather than needing a
   // call at every site that changes roles.
   updateCalibrateButton();
@@ -698,6 +731,14 @@ for (const slider of [micGain, songLevel]) {
   });
   slider.addEventListener('change', () => markSliderTouched(slider));
 }
+
+useMicGainSuggestion.addEventListener('click', () => {
+  const recommended = Number(latestMixHealth?.recommendedMicGainDb);
+  if (!publisherActive || !Number.isFinite(recommended)) return;
+  micGain.value = String(Math.max(0, Math.min(36, Math.round(recommended))));
+  markSliderTouched(micGain);
+  sendMixSettings();
+});
 
 calibrateButton.addEventListener('click', () => {
   if (socket?.readyState !== WebSocket.OPEN) return;

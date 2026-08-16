@@ -1,0 +1,183 @@
+/* Adjust is a performance-tuning layer, not a second mixer dashboard. */
+.adjust-sheet {
+  position: absolute;
+  left: -22px;
+  right: -22px;
+  bottom: calc(100% + 1px);
+  max-height: min(72svh, 660px);
+  overflow: auto;
+  padding: 22px 22px 26px;
+  border: 0;
+  border-top: 1px solid #2a2c31;
+  border-radius: 0;
+  background: rgba(13, 14, 16, .985);
+  box-shadow: 0 -24px 64px rgba(0, 0, 0, .34);
+  display: grid;
+  gap: 26px;
+}
+
+.adjust-heading,
+.adjust-group-heading,
+.adjust-row-heading,
+.evidence-heading,
+.recommendation-meta,
+.timing-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.adjust-heading strong {
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: -.035em;
+  font-weight: 640;
+}
+.adjust-heading > span,
+.adjust-group-heading > span:last-child {
+  color: #777a82;
+  font-size: 10px;
+}
+
+.adjust-group {
+  display: grid;
+  gap: 17px;
+}
+.adjust-group + .adjust-group {
+  padding-top: 22px;
+  border-top: 1px solid #25272c;
+}
+.adjust-group-heading .section-label { margin: 0; }
+
+.adjust-control {
+  display: grid;
+  gap: 10px;
+  color: #d2d3d6;
+}
+.adjust-row-heading strong {
+  font-size: 14px;
+  font-weight: 610;
+}
+.adjust-row-heading output,
+.evidence-heading output {
+  color: #a6a8ae;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.voice-input-evidence {
+  display: grid;
+  gap: 7px;
+  margin-top: 2px;
+}
+.evidence-heading {
+  color: #767981;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.voice-input-meter {
+  --input-level: 0%;
+  position: relative;
+  height: 2px;
+  background: #303239;
+  overflow: hidden;
+}
+.voice-input-meter::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--input-level);
+  background: #d8d6d1;
+  transition: width 90ms linear;
+}
+
+.gain-control { display: grid; gap: 9px; }
+.gain-rail { position: relative; }
+.adjust-range {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.adjust-range::-webkit-slider-runnable-track {
+  height: 2px;
+  background: #3a3c42;
+}
+.adjust-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  border: 1px solid #0d0e10;
+  border-radius: 50%;
+  background: #e5e2db;
+}
+.adjust-range::-moz-range-track { height: 2px; background: #3a3c42; }
+.adjust-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 1px solid #0d0e10;
+  border-radius: 50%;
+  background: #e5e2db;
+}
+.adjust-range:disabled { opacity: .42; cursor: default; }
+
+.recommendation-marker {
+  position: absolute;
+  top: 4px;
+  width: 1px;
+  height: 14px;
+  background: #858991;
+  transform: translateX(-.5px);
+  pointer-events: none;
+}
+.recommendation-meta { min-height: 24px; }
+.recommendation-meta > span {
+  color: #b4b5b9;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.recommendation-action {
+  padding: 3px 0;
+  color: #ddd9d2;
+  font-size: 11px;
+}
+.adjust-helper {
+  margin: 0;
+  color: #74777e;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.local-listen .adjust-row-heading strong { font-weight: 560; }
+body[data-listen="off"] .local-listen .adjust-range { opacity: .6; }
+
+.timing-row { align-items: center; }
+#calibrate-status {
+  min-width: 0;
+  color: #c9c9cc;
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.45;
+}
+#calibrate-timing {
+  flex: 0 0 auto;
+  padding-right: 0;
+  color: #bdbec2;
+}
+
+@media (max-height: 760px) {
+  .adjust-sheet {
+    max-height: min(78svh, 610px);
+    gap: 20px;
+    padding-top: 18px;
+  }
+  .adjust-group { gap: 13px; }
+  .adjust-group + .adjust-group { padding-top: 17px; }
+}

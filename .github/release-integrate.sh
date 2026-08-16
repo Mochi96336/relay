@@ -18,7 +18,7 @@ path = Path('src/server.ts')
 text = path.read_text()
 anchor = "function processPublisherFrame(frame: PcmFrame) {"
 helpers = """function roomHasSong(nowMs = performance.now()) {
-  return takeSongSnapshot(nowMs).videoId !== null;
+  return takeSongSnapshot(nowMs) !== null;
 }
 
 function maybeStopLiveSourceWhenUnarmed() {
@@ -64,8 +64,6 @@ PY
   git add src/server.ts
 fi
 
-# #14 predates #20's explicit timing-dependency rename. Keep the voice-only
-# cases, but express them against the current ProductViewModel contract.
 python3 - <<'PY'
 from pathlib import Path
 path = Path('test/voice-only-room.test.ts')

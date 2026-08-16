@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { generateProbeReference } from '../src/calibration-probe.js';
 import {
   RelayClient,
   pulseTrain,
@@ -14,6 +15,19 @@ const RATE = 48_000;
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
+}
+
+function probeAudio(leadMs = 20, tailMs = 1_800) {
+  const reference = generateProbeReference(RATE);
+  const probe = Buffer.alloc(reference.length * 2);
+  for (let i = 0; i < reference.length; i += 1) {
+    probe.writeInt16LE(reference[i], i * 2);
+  }
+  return Buffer.concat([
+    Buffer.alloc(Math.round((RATE * leadMs) / 1000) * 2),
+    probe,
+    Buffer.alloc(Math.round((RATE * tailMs) / 1000) * 2),
+  ]);
 }
 
 async function waitForNewMessage(
@@ -50,11 +64,12 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     RELAY_CALIBRATION_PROBE: '1',
     RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
     RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
-    RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-    // The state-machine contract is under test, not detector quality. Any
-    // deterministic window can stand in for a heard probe here.
-    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-2',
-    RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
+    // The test sends capture frames faster than wall time. Give the detector
+    // enough room to find the exact probe at its framed sample position rather
+    // than weakening the production correlation threshold to bypass detection.
+    RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '1200',
+    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0.5',
+    RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '5000',
   });
 
   try {
@@ -88,22 +103,19 @@ test('robot source disconnect suspends the applied delta until a fresh source of
       requestId: micRequest.requestId,
       generation: publisher.generationId,
     });
-    await sendPcmInChunks(publisher, tone(1.5, 0.4));
+    await sendPcmInChunks(publisher, probeAudio());
 
     const backingRequest = await robot.waitFor(
       (m) => m.type === 'play-calibration-probe' && m.target === 'backing',
-      4_000,
+      5_000,
     );
     robot.send({
       type: 'calibration-probe-played',
       target: 'backing',
       requestId: backingRequest.requestId,
     });
-    await sendPcmInChunks(backing, tone(1.5, 0.8));
+    await sendPcmInChunks(backing, probeAudio());
 
-    // The two path legs may finish before playback has a stable player offset.
-    // Their result is evidence, not a complete three-term alignment: unknown
-    // delta must never be silently treated as zero.
     const beforeFirstDelta = monitor.messages.length;
     monitor.send({ type: 'timing-calibration-status-request' });
     const measured = await waitForNewMessage(
@@ -117,9 +129,9 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     assert.equal(measured.timingMode, 'network-estimate');
     assert.equal(measured.activeMicLagMs, null);
     assert.equal(measured.robotDeltaFresh, false);
+    assert.ok(measured.probeCorrelation.mic >= 0.5);
+    assert.ok(measured.probeCorrelation.backing >= 0.5);
 
-    // Only a fresh active-player delta completes the equation and grants the
-    // boot measurement authority over the mixer.
     robot.send({ type: 'robot-player-offset', offsetMs: 80 });
     const firstApplied = await monitor.waitFor(
       (m) => m.type === 'timing-calibration-status'
@@ -163,9 +175,6 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     assert.equal(restored.calibrationKind, 'boot-probe');
     assertBootUsesDelta(restored, 35);
 
-    // A page can freeze without its WebSocket closing. Once the last offset is
-    // older than the freshness budget, it is no longer timing evidence and the
-    // mixer must withdraw the boot alignment on its own.
     await sleep(2_300);
     const beforeExpiryStatus = monitor.messages.length;
     monitor.send({ type: 'source-status-request' });
@@ -190,8 +199,6 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     );
     assertBootUsesDelta(resumed, 25);
 
-    // Player/socket churn and delta expiry change only delta. The two measured
-    // path legs must be reused rather than making the phone beep again.
     await sleep(300);
     const probeRequestsAfterReconnect = publisher.messages.filter(
       (m) => m.type === 'play-calibration-probe',

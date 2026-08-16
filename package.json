@@ -7,9 +7,9 @@
     "node": ">=20.19"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
-    "backing:stdin": "tsx src/backing-stdin.ts",
+    "dev": "tsx watch src/server-entry.ts",
+    "start": "tsx src/server-entry.ts",
+    "backing:stdin": "tsx src/backing-entry.ts",
     "robot:doctor": "bash scripts/robot-doctor.sh",
     "robot:source": "bash scripts/robot-source.sh",
     "check": "tsc --noEmit",

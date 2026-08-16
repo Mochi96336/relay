@@ -126,6 +126,15 @@ function dispatchRoomCommand(type, detail) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
 
+function withLatestRoom(message) {
+  return {
+    ...message,
+    room: message.room && typeof message.room === 'object'
+      ? message.room
+      : latestRoomSongStatus,
+  };
+}
+
 function updateRoomCommandRevision(value) {
   const revision = Number(value);
   if (Number.isSafeInteger(revision) && revision >= 0) {
@@ -252,7 +261,7 @@ function handleMessage(event) {
 
   if (message.type === 'room-song-command-status') {
     updateRoomCommandRevision(message.revision);
-    dispatchRoomCommand('relay:room-song-command-status', message);
+    dispatchRoomCommand('relay:room-song-command-status', withLatestRoom(message));
     return;
   }
 
@@ -265,7 +274,7 @@ function handleMessage(event) {
   if (message.type === 'room-song-command-rejected') {
     updateRoomCommandRevision(message.revision);
     if (message.room && typeof message.room === 'object') latestRoomSongStatus = message.room;
-    dispatchRoomCommand('relay:room-song-command-rejected', message);
+    dispatchRoomCommand('relay:room-song-command-rejected', withLatestRoom(message));
     return;
   }
 
@@ -283,7 +292,7 @@ function handleMessage(event) {
 
   if (message.type === 'room-song-command-failed-ack') {
     updateRoomCommandRevision(message.revision);
-    dispatchRoomCommand('relay:room-song-command-failed-ack', message);
+    dispatchRoomCommand('relay:room-song-command-failed-ack', withLatestRoom(message));
     return;
   }
 

@@ -75,6 +75,7 @@
   let latestSession = null;
   let takeoverOwnerId = null;
   let startAfterTakeover = false;
+  let localPublisherActive = window.relayActiveRole === 'publisher';
 
   // app.js reads these when it opens publisher / monitor transports. Identity
   // is explicit per socket; Relay deliberately does not use an origin-wide
@@ -101,6 +102,15 @@
 
   function owner() {
     return participantById(latestSession?.micOwnerId ?? null);
+  }
+
+  function updateReleaseVisibility() {
+    const serverOwnsMic = latestSession?.micOwnerId === participantId;
+    // Local capture starts before publisher registration is accepted. Keep a
+    // release path visible during that gap and during control-plane reconnects;
+    // server presence alone must not decide whether this phone can stop using
+    // its own microphone hardware.
+    releaseButton.hidden = !serverOwnsMic && !localPublisherActive;
   }
 
   function hideTakeover() {
@@ -130,7 +140,10 @@
   }
 
   function renderParticipants() {
-    if (!latestSession) return;
+    if (!latestSession) {
+      updateReleaseVisibility();
+      return;
+    }
 
     const connected = latestSession.participants.filter((participant) => participant.connected).length;
     participantCount.textContent = t('people.online', { count: connected });
@@ -177,7 +190,7 @@
 
     const currentOwner = owner();
     const mine = latestSession.micOwnerId === participantId;
-    releaseButton.hidden = !mine;
+    updateReleaseVisibility();
 
     if (currentOwner && !mine) {
       publisherButton.dataset.presenceLabel = 'takeover';
@@ -276,7 +289,11 @@
   });
 
   releaseButton.addEventListener('click', () => {
+    // Presence may be the only healthy control socket, so keep the idempotent
+    // server release here. app.js receives the local event below and tears down
+    // capture immediately even when this socket is already disconnected.
     send({ type: 'release-mic' });
+    window.dispatchEvent(new CustomEvent('relay-release-microphone'));
   });
 
   function beginRename() {
@@ -315,6 +332,11 @@
     takeoverCopy.textContent = copy;
     takeoverPanel.hidden = false;
   }
+
+  window.addEventListener('relay-microphone-local-state', (event) => {
+    localPublisherActive = event.detail?.active === true;
+    updateReleaseVisibility();
+  });
 
   window.addEventListener('relay-microphone-start-failed', (event) => {
     if (!startAfterTakeover) return;
@@ -361,5 +383,6 @@
     }
   });
 
+  updateReleaseVisibility();
   connect().catch(scheduleReconnect);
 })();

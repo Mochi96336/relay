@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
+const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 
 test('the playback holder never monitors the Relay mix back into the same phone', () => {
@@ -27,4 +28,14 @@ test('playback forced mute composes with Mic mute and preserves the user prefere
     'giving playback away must not resume Listen while this phone still owns the Mic');
   assert.match(listen, /if \(userMuted\) \{[\s\S]*Muted on this phone/,
     'automatic role changes must not overwrite an explicit user mute');
+});
+
+test('Last Take speaker playback cannot be fed back through the same phone Mic', () => {
+  assert.match(recorder, /function phoneOwnsMic\(\)[\s\S]*window\.relayActiveRole === 'publisher'/,
+    'Take review must use the same local Mic ownership fact as the capture controller');
+  assert.match(recorder, /recordingPlayer\.addEventListener\('play'[\s\S]*phoneOwnsMic\(\)[\s\S]*recordingPlayer\.pause\(\)/,
+    'starting Take review while publishing Mic must stop local playback immediately');
+  assert.match(recorder, /window\.addEventListener\('relay-microphone-started'[\s\S]*recordingPlayer\.paused[\s\S]*recordingPlayer\.pause\(\)/,
+    'taking Mic while a Take is already playing must stop that local speaker source');
+  assert.match(recorder, /Release mic before reviewing the last Take\./);
 });

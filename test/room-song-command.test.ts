@@ -53,6 +53,7 @@ describe('room song command parser', () => {
       {
         commandId: 'command-load-1',
         expectedRevision: 0,
+        supersedesCommandId: null,
         body: { action: 'load', videoId: VIDEO, positionSeconds: 12 },
       },
     );
@@ -173,7 +174,7 @@ describe('room song command authority and serialization', () => {
     assert.deepEqual(result, { ok: false, reason: 'stale-revision' });
   });
 
-  test('keeps 1A serial: a second intent cannot replace a pending command yet', () => {
+  test('keeps unchained writes serial while causal successors use the 1B path', () => {
     const session = new RoomSongCommandSession();
     const first = session.begin(
       command('command-play-1', 0, 'play'),

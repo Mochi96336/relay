@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { MixHealth } from '../src/audio-session.js';
+import type { MixFrameEvidence, MixHealth } from '../src/audio-session.js';
 import {
   TAKE_QUALITY_POLICY_VERSION,
   TakeQualityTracker,
@@ -9,6 +9,21 @@ import {
   type TakeQualityEvidence,
   type TakeQualityFrameState,
 } from '../src/take-quality.js';
+
+function mixedFrame(patch: Partial<MixFrameEvidence> = {}): MixFrameEvidence {
+  return {
+    micGapSamples: 0,
+    backingGapSamples: 0,
+    micStarvedSamples: 0,
+    backingStarvedSamples: 0,
+    micUnavailableSamples: 0,
+    backingUnavailableSamples: 0,
+    clippedSamples: 0,
+    limitedSamples: 0,
+    unheaderedSamples: 0,
+    ...patch,
+  };
+}
 
 function health(patch: Partial<MixHealth> = {}): MixHealth {
   return {
@@ -20,6 +35,7 @@ function health(patch: Partial<MixHealth> = {}): MixHealth {
     backingGapMs: 0,
     clippedSamples: 0,
     limitedSamples: 0,
+    lastMixedFrame: mixedFrame(),
     micPeakDbfs: -12,
     micRmsDbfs: -24,
     unheadered: false,
@@ -78,8 +94,16 @@ function evidence(patch: Partial<TakeQualityEvidence> = {}): TakeQualityEvidence
   };
 }
 
-test('Take quality baselines epoch counters instead of inheriting pre-Take failures', () => {
-  const tracker = new TakeQualityTracker({
+function tracker() {
+  return new TakeQualityTracker({
+    sampleRate: 48_000,
+    frameMs: 20,
+    baselineHealth: health({ lastMixedFrame: null }),
+  });
+}
+
+test('Take quality ignores epoch counters and follows exact mixed-frame evidence', () => {
+  const quality = new TakeQualityTracker({
     sampleRate: 48_000,
     frameMs: 20,
     baselineHealth: health({
@@ -90,10 +114,11 @@ test('Take quality baselines epoch counters instead of inheriting pre-Take failu
       clippedSamples: 800,
       limitedSamples: 4_000,
       unheadered: true,
+      lastMixedFrame: null,
     }),
   });
 
-  tracker.observeFrame(960, frameState(), health({
+  quality.observeFrame(960, frameState(), health({
     micGapMs: 180,
     backingGapMs: 60,
     micStarvedFrames: 9,
@@ -101,9 +126,10 @@ test('Take quality baselines epoch counters instead of inheriting pre-Take failu
     clippedSamples: 800,
     limitedSamples: 4_000,
     unheadered: true,
+    lastMixedFrame: mixedFrame(),
   }));
 
-  const result = tracker.assessment();
+  const result = quality.assessment();
   assert.equal(result.verdict, 'clean');
   assert.equal(result.evidence.recordedDurationMs, 20);
   assert.equal(result.evidence.micGapMs, 0);
@@ -114,24 +140,52 @@ test('Take quality baselines epoch counters instead of inheriting pre-Take failu
   assert.equal(result.evidence.unheadered, false);
 });
 
-test('Take quality accumulates duration from exact frames accepted by the recorder', () => {
-  const tracker = new TakeQualityTracker({
+test('a gap detected before Start is still charged when the recorded frame actually reads it', () => {
+  const quality = new TakeQualityTracker({
     sampleRate: 48_000,
     frameMs: 20,
-    baselineHealth: health(),
+    baselineHealth: health({ micGapMs: 20, lastMixedFrame: null }),
   });
+  quality.observeFrame(960, frameState(), health({
+    micGapMs: 20,
+    lastMixedFrame: mixedFrame({ micGapSamples: 960 }),
+  }));
 
-  tracker.observeFrame(960, frameState({
-    micAvailable: false,
+  const result = quality.assessment();
+  assert.equal(result.evidence.micGapMs, 20);
+  assert.equal(result.verdict, 'review');
+  assert.equal(result.issues.some((issue) => issue.code === 'mic-pcm-gap'), true);
+});
+
+test('a future gap detected before Stop is not charged until a recorded frame reaches it', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), health({
+    micGapMs: 500,
+    lastMixedFrame: mixedFrame(),
+  }));
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.micGapMs, 0);
+  assert.equal(result.verdict, 'clean');
+});
+
+test('Take quality accumulates timing duration from exact frames accepted by the recorder', () => {
+  const quality = tracker();
+
+  quality.observeFrame(960, frameState({
     timingMode: 'network-estimate',
     calibrationStale: true,
     alignmentClamped: true,
     robotRoute: true,
     robotDeltaFresh: false,
-  }), health());
-  tracker.observeFrame(960, frameState({ backingAvailable: false }), health());
+  }), health({
+    lastMixedFrame: mixedFrame({ micUnavailableSamples: 960 }),
+  }));
+  quality.observeFrame(960, frameState(), health({
+    lastMixedFrame: mixedFrame({ backingUnavailableSamples: 960 }),
+  }));
 
-  const result = tracker.assessment();
+  const result = quality.assessment();
   assert.equal(result.evidence.recordedSamples, 1_920);
   assert.equal(result.evidence.recordedDurationMs, 40);
   assert.equal(result.evidence.micUnavailableMs, 20);
@@ -143,55 +197,73 @@ test('Take quality accumulates duration from exact frames accepted by the record
   assert.equal(result.verdict, 'review');
 });
 
-test('microphone limiting is retained as evidence but is not itself a failed Take', () => {
-  const tracker = new TakeQualityTracker({
-    sampleRate: 48_000,
-    frameMs: 20,
-    baselineHealth: health({ limitedSamples: 2_000 }),
-  });
-  tracker.observeFrame(960, frameState(), health({ limitedSamples: 2_960 }));
+test('transport liveness does not claim missing audio while the exact mixed frame is still buffered', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState({ micAvailable: false, backingAvailable: false }), health({
+    lastMixedFrame: mixedFrame(),
+  }));
 
-  const result = tracker.assessment();
+  const result = quality.assessment();
+  assert.equal(result.evidence.micUnavailableMs, 0);
+  assert.equal(result.evidence.backingUnavailableMs, 0);
+  assert.equal(result.verdict, 'clean');
+});
+
+test('partial starvation is measured by missing samples rather than whole output frames', () => {
+  const quality = tracker();
+  for (let i = 0; i < 13; i += 1) {
+    quality.observeFrame(960, frameState(), health({
+      lastMixedFrame: mixedFrame({ micStarvedSamples: 1 }),
+    }));
+  }
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.micStarvedFrames, 13);
+  assert.equal(result.evidence.micStarvedMs, 0);
+  assert.equal(result.issues.some((issue) => issue.code === 'mic-starvation'), false);
+  assert.equal(result.verdict, 'clean');
+});
+
+test('microphone limiting is retained as evidence but is not itself a failed Take', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), health({
+    limitedSamples: 100_000,
+    lastMixedFrame: mixedFrame({ limitedSamples: 960 }),
+  }));
+
+  const result = quality.assessment();
   assert.equal(result.evidence.limitedSamples, 960);
   assert.equal(result.evidence.limitedMs, 20);
   assert.equal(result.verdict, 'clean');
   assert.deepEqual(result.issues, []);
 });
 
-test('legacy unpositioned PCM is scoped to a new warning observed during the active Take', () => {
-  const inherited = new TakeQualityTracker({
-    sampleRate: 48_000,
-    frameMs: 20,
-    baselineHealth: health({ unheadered: true }),
-  });
-  inherited.observeFrame(960, frameState(), health({ unheadered: true }));
-  assert.equal(inherited.assessment().evidence.unheadered, false);
+test('legacy unpositioned PCM is scoped to samples actually mixed into the Take', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), health({
+    unheadered: true,
+    lastMixedFrame: mixedFrame(),
+  }));
+  assert.equal(quality.assessment().evidence.unheadered, false);
 
-  const appearedDuringTake = new TakeQualityTracker({
-    sampleRate: 48_000,
-    frameMs: 20,
-    baselineHealth: health({ unheadered: false }),
-  });
-  appearedDuringTake.observeFrame(960, frameState(), health({ unheadered: false }));
-  appearedDuringTake.observeFrame(960, frameState(), health({ unheadered: true }));
-  const result = appearedDuringTake.assessment();
+  quality.observeFrame(960, frameState(), health({
+    unheadered: true,
+    lastMixedFrame: mixedFrame({ unheaderedSamples: 480 }),
+  }));
+  const result = quality.assessment();
   assert.equal(result.evidence.unheadered, true);
   assert.equal(result.verdict, 'review');
   assert.equal(result.issues.some((issue) => issue.code === 'unheadered-pcm'), true);
 });
 
 test('transport changes are review evidence, not proof that audible recording was damaged', () => {
-  const tracker = new TakeQualityTracker({
-    sampleRate: 48_000,
-    frameMs: 20,
-    baselineHealth: health(),
-  });
-  tracker.observeFrame(960, frameState(), health());
-  tracker.noteEvent('mic-transport-disconnected');
-  tracker.noteEvent('mic-transport-connected');
-  tracker.observeFrame(960, frameState(), health());
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), health());
+  quality.noteEvent('mic-transport-disconnected');
+  quality.noteEvent('mic-transport-connected');
+  quality.observeFrame(960, frameState(), health());
 
-  const result = tracker.assessment();
+  const result = quality.assessment();
   assert.equal(result.verdict, 'review');
   assert.equal(result.evidence.events['mic-transport-disconnected'], 1);
   assert.equal(result.evidence.events['mic-transport-connected'], 1);

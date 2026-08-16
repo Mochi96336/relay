@@ -5,11 +5,11 @@ import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 
-function telemetry(currentTime: number, transportId = 'playback-transport-a', generation = 1) {
+function telemetry(currentTime: number, transportId = 'playback-transport-a', generation = 1, state = 1) {
   return {
     type: 'youtube-telemetry',
     videoId: VIDEO,
-    state: 1,
+    state,
     currentTime,
     duration: 200,
     playbackRate: 1,
@@ -19,21 +19,67 @@ function telemetry(currentTime: number, transportId = 'playback-transport-a', ge
   };
 }
 
+async function registerPlayback(client: RelayClient, transportId: string, generation = 1) {
+  client.send({
+    type: 'playback-hello',
+    playbackTransportId: transportId,
+    playbackGeneration: generation,
+  });
+  await client.waitFor((message) => (
+    message.type === 'playback-registered'
+    && message.playbackTransportId === transportId
+    && message.playbackGeneration === generation
+  ));
+}
+
+async function establishRoomSong(client: RelayClient, transportId: string, currentTime: number) {
+  client.send({
+    type: 'room-song-command',
+    commandId: 'authority-load-1',
+    expectedRevision: 0,
+    action: 'load',
+    videoId: VIDEO,
+    positionSeconds: currentTime,
+  });
+  await client.waitFor((message) => (
+    message.type === 'room-song-command-accepted'
+    && message.commandId === 'authority-load-1'
+  ));
+  await client.waitFor((message) => (
+    message.type === 'room-song-command-apply'
+    && message.commandId === 'authority-load-1'
+  ));
+  client.send(telemetry(currentTime, transportId, 1, 5));
+  await client.waitFor((message) => (
+    message.type === 'room-song-command-complete'
+    && message.commandId === 'authority-load-1'
+  ));
+}
+
 test('server keeps one authoritative participant playback transport', async () => {
   const server = await startRelay();
   try {
     const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
     const b = await RelayClient.connect(server, '?participant=participant-b&name=B');
 
-    a.send(telemetry(10));
+    await registerPlayback(a, 'playback-transport-a');
+    await registerPlayback(b, 'playback-transport-b');
+    await establishRoomSong(a, 'playback-transport-a', 10);
+
+    a.send({ type: 'youtube-timeline-request' });
     const leader = await a.waitFor((message) => (
       message.type === 'youtube-timeline-status'
       && message.playbackLeaderParticipantId === 'participant-a'
     ));
     assert.equal(leader.playbackTransportId, 'playback-transport-a');
 
+    // Once 1A exists, a competing identified tab cannot even use telemetry as
+    // a product mutation. The lower SongSession authority remains covered by
+    // its focused domain tests; this server contract pins the layered result.
     b.send(telemetry(90, 'playback-transport-b'));
-    await sleep(100);
+    const rejected = await b.waitFor((message) => message.type === 'room-song-telemetry-rejected');
+    assert.equal(rejected.reason, 'command-required');
+
     b.send({ type: 'youtube-timeline-request' });
     await sleep(50);
     const status = b.latest('youtube-timeline-status');

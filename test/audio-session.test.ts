@@ -73,6 +73,23 @@ describe('AudioSession timelines', () => {
     assert.equal(session.health().micGapMs, 0);
   });
 
+  test('never relocates late overlapping audio to the write frontier', () => {
+    const session = makeSession();
+    session.start(0);
+
+    session.ingestMic(frame(0, pcmOf([1, 2, 3, 4])), RATE, 0);
+    const late = session.ingestMic(frame(2, pcmOf([9, 9])), RATE, 0);
+    assert.equal(late.samples.length, 0, 'a fully late frame is discarded, not moved later');
+    assert.deepEqual([...session.readMic(0, 4)], [1, 2, 3, 4]);
+
+    session.ingestMic(frame(3, pcmOf([7, 8, 9])), RATE, 0);
+    assert.deepEqual(
+      [...session.readMic(0, 6)],
+      [1, 2, 3, 4, 8, 9],
+      'only the non-overlapping tail keeps its original sample positions',
+    );
+  });
+
   // The mixer reads the song at the read head, so a second of history is all
   // it ever wanted - but a probe calibration reads back across its whole
   // search window, and cannot do so until enough audio has arrived to cover

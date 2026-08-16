@@ -431,7 +431,7 @@ export class AudioSession {
 
   private ingest(timeline: PcmTimeline, frame: PcmFrame, sourceRate: number | null, nowMs: number): IngestResult {
     if (!sourceRate) return { samples: new Int16Array(0), start: timeline.totalSamples };
-    const samples = this.resample(frame.pcm, sourceRate);
+    let samples = this.resample(frame.pcm, sourceRate);
     if (samples.length === 0) return { samples, start: timeline.totalSamples };
 
     let start: number;
@@ -459,13 +459,21 @@ export class AudioSession {
     }
 
     if (start < timeline.totalSamples) {
-      // Out of order or overlapping. Ordered transport makes this a rounding
-      // artefact at worst, so keep the frontier rather than corrupting the sort.
+      // Transport ordering is no longer an AudioSession contract. The packet
+      // receiver normally prevents late overlap, but this boundary still must
+      // not relocate old audio to "now" if a caller violates it. Keep only a
+      // genuinely new tail; a fully late packet contributes nothing.
+      const overlap = timeline.totalSamples - start;
+      if (overlap >= samples.length) {
+        return { samples: new Int16Array(0), start: timeline.totalSamples };
+      }
+      samples = samples.slice(overlap);
       start = timeline.totalSamples;
     } else if (start > timeline.totalSamples && timeline.chunks.length > 0) {
       timeline.gapSamples += start - timeline.totalSamples;
     }
 
+    if (samples.length === 0) return { samples, start };
     timeline.chunks.push({ start, samples });
     timeline.totalSamples = start + samples.length;
     return { samples, start };

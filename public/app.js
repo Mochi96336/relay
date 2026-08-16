@@ -92,24 +92,28 @@ let monitorHealth = null;
 // millisecond as a previous one, which a real reload never is.
 let captureGeneration = Date.now();
 let captureSampleCursor = 0;
+let capturePacketSequence = 0;
 
-// Byte layout is pinned by src/pcm-frame.ts and test/pcm-frame.test.ts. Each
-// frame states where it belongs, so a chunk dropped here leaves a hole of the
-// right length on the server instead of pulling all later audio earlier.
-const FRAME_MAGIC = 0x4c52;
-const FRAME_VERSION = 1;
-const FRAME_HEADER_BYTES = 16;
+// AudioPacket v2 keeps transport order (`sequence`) separate from capture time
+// (`firstSampleIndex`). The server accepts this strictly after registration;
+// malformed v2 can never fall back to being interpreted as raw PCM.
+const AUDIO_PACKET_MAGIC = 0x4c52;
+const AUDIO_PACKET_VERSION = 2;
+const AUDIO_PACKET_HEADER_BYTES = 24;
+const AUDIO_PACKET_SOURCE_MIC = 1;
 
-function framePcm(pcm, generation, firstSampleIndex) {
-  const frame = new ArrayBuffer(FRAME_HEADER_BYTES + pcm.byteLength);
-  const view = new DataView(frame);
-  view.setUint16(0, FRAME_MAGIC, true);
-  view.setUint8(2, FRAME_VERSION);
-  view.setUint8(3, 0);
+function framePcm(pcm, generation, sequence, firstSampleIndex) {
+  const packet = new ArrayBuffer(AUDIO_PACKET_HEADER_BYTES + pcm.byteLength);
+  const view = new DataView(packet);
+  view.setUint16(0, AUDIO_PACKET_MAGIC, true);
+  view.setUint8(2, AUDIO_PACKET_VERSION);
+  view.setUint8(3, AUDIO_PACKET_SOURCE_MIC);
   view.setUint32(4, generation >>> 0, true);
-  view.setFloat64(8, firstSampleIndex, true);
-  new Uint8Array(frame, FRAME_HEADER_BYTES).set(new Uint8Array(pcm));
-  return frame;
+  view.setUint32(8, sequence >>> 0, true);
+  view.setUint32(12, pcm.byteLength / 2, true);
+  view.setFloat64(16, firstSampleIndex, true);
+  new Uint8Array(packet, AUDIO_PACKET_HEADER_BYTES).set(new Uint8Array(pcm));
+  return packet;
 }
 
 // recorder.js reads this so it can warn when Solo recording is started on the
@@ -607,6 +611,7 @@ async function connectPublisherSocket() {
     role: 'publisher',
     sampleRate: audioContext.sampleRate,
     captureGeneration: captureGeneration >>> 0,
+    audioPacketVersion: AUDIO_PACKET_VERSION,
   };
   if (pendingPublisherTakeoverOwnerId) {
     registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
@@ -762,6 +767,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   // can place the reconnected frames on the timeline they already belonged to.
   captureGeneration += 1;
   captureSampleCursor = 0;
+  capturePacketSequence = 0;
 
   const [track] = mediaStream.getAudioTracks();
   track?.addEventListener('ended', () => {
@@ -811,7 +817,9 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       return;
     }
 
-    socket.send(framePcm(event.data, captureGeneration, firstSampleIndex));
+    const sequence = capturePacketSequence;
+    capturePacketSequence = (capturePacketSequence + 1) >>> 0;
+    socket.send(framePcm(event.data, captureGeneration, sequence, firstSampleIndex));
   };
 
   source.connect(capture).connect(silent).connect(audioContext.destination);

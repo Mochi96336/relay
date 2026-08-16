@@ -45,6 +45,14 @@ test('L2 consumes ProductStatus and only refreshes readiness when System is open
   assert.doesNotMatch(liveStatus, /robotProblem \? 'Needs attention' : 'Ready'/);
 });
 
+test('legacy backing failure is Audio attention rather than a false Robot failure', () => {
+  assert.match(liveStatus, /'audio-unavailable': 'Room audio unavailable'/);
+  assert.match(liveStatus, /const audioProblem = attention\?\.scope === 'audio' \|\| attention\?\.scope === 'song'/);
+  assert.match(system, /const audioAttention = product\.attention\?\.scope === 'audio'/);
+  assert.match(system, /The room audio path is unavailable\. Open Technical details for backing evidence\./);
+  assert.match(system, /audio:\s*'audio'/);
+});
+
 test('L3 opens an evidence socket only while Technical details is open', () => {
   assert.match(system, /if \(!diagnosticsPanel\.open\) return/);
   assert.match(system, /diagnosticsPanel\.addEventListener\('toggle'/);
@@ -63,6 +71,7 @@ test('L3 opens an evidence socket only while Technical details is open', () => {
 });
 
 test('product attention opens the matching L2 evidence line instead of jumping straight to Raw', () => {
+  assert.match(system, /audio:\s*'audio'/);
   assert.match(system, /robot:\s*'robot'/);
   assert.match(system, /song:\s*'audio'/);
   assert.match(system, /mic:\s*'phones'/);

@@ -57,4 +57,52 @@ describe('technical readiness boundary', () => {
     assert.equal(result.sessionReady, false);
     assert.ok(result.sessionReasons.includes('robot-player-offset-stale'));
   });
+
+  test('treats an unarmed host as idle rather than a failed robot', () => {
+    const result = buildReadiness({
+      ...BASE,
+      routeMode: 'idle',
+      backingConnected: false,
+      backingStreaming: false,
+      backingSampleRate: null,
+      backingIsRobot: false,
+      robotSourceConnected: false,
+      micConnected: false,
+      micStreaming: false,
+      sessionActive: false,
+      timelineConnected: false,
+      timelineState: null,
+      playerOffsetMs: null,
+      playerOffsetFresh: false,
+      calibrationState: 'idle',
+      calibrationValid: false,
+      calibrationStale: false,
+      calibrationKind: 'none',
+      probeCorrelation: { mic: null, backing: null },
+      bootCalibration: null,
+    });
+
+    assert.equal(result.ready, true);
+    assert.deepEqual(result.reasons, []);
+    assert.equal(result.components.route.mode, 'idle');
+    assert.equal(result.sessionReady, false);
+  });
+
+  test('legacy route readiness requires backing but not Robot identity or player delta', () => {
+    const result = buildReadiness({
+      ...BASE,
+      routeMode: 'legacy',
+      backingIsRobot: false,
+      robotSourceConnected: false,
+      playerOffsetMs: null,
+      playerOffsetFresh: false,
+      calibrationKind: 'content',
+    });
+
+    assert.equal(result.ready, true);
+    assert.equal(result.sessionReady, true);
+    assert.deepEqual(result.reasons, []);
+    assert.ok(!result.sessionReasons.includes('robot-player-offset-stale'));
+    assert.equal(result.components.route.mode, 'legacy');
+  });
 });

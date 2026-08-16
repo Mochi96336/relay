@@ -6,11 +6,18 @@ import {
   type TakeSongSnapshot,
   type TakeStopReason,
 } from './take-session.js';
+import {
+  prepareTakeStorage,
+  pruneTakeArtifacts,
+  takeStorageBudget,
+  takeStoragePolicyFromEnv,
+  type TakeStoragePolicy,
+} from './take-storage.js';
 import { WavTakeWriter } from './wav-take-writer.js';
 
 export type StartTakeResult =
   | { ok: true; takeId: string }
-  | { ok: false; reason: 'take-active' | 'writer-failed' };
+  | { ok: false; reason: 'take-active' | 'writer-failed' | 'storage-unavailable' };
 
 export type StopTakeResult = StopTakeDecision;
 
@@ -28,14 +35,21 @@ function errorMessage(error: unknown) {
  */
 export class TakeController {
   private readonly session = new TakeSession();
+  private readonly storagePolicy: TakeStoragePolicy;
   private writer: WavTakeWriter | null = null;
+  private storagePrepared = false;
+  private pruneChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: {
     directory: string;
     sampleRate: number;
     artifactBaseUrl?: string;
+    storagePolicy?: TakeStoragePolicy;
     onChange?: (status: ReturnType<TakeSession['statusPayload']>) => void;
-  }) {}
+    onStorageError?: (error: unknown) => void;
+  }) {
+    this.storagePolicy = options.storagePolicy ?? takeStoragePolicyFromEnv();
+  }
 
   get lifecycle() {
     return this.session.lifecycle;
@@ -50,6 +64,20 @@ export class TakeController {
   }
 
   start(actorParticipantId: string, song: TakeSongSnapshot, nowMs = Date.now()): StartTakeResult {
+    let maxTakeDataBytes: number;
+    try {
+      if (!this.storagePrepared) {
+        const prepared = prepareTakeStorage(this.options.directory, this.storagePolicy, nowMs);
+        this.storagePrepared = true;
+        maxTakeDataBytes = prepared.maxTakeDataBytes;
+      } else {
+        maxTakeDataBytes = takeStorageBudget(this.options.directory, this.storagePolicy);
+      }
+    } catch (error) {
+      this.reportStorageError(error);
+      return { ok: false, reason: 'storage-unavailable' };
+    }
+
     const takeId = randomUUID();
     const started = this.session.start({
       takeId,
@@ -59,14 +87,22 @@ export class TakeController {
     });
     if (!started.ok) return started;
 
-    let writer: WavTakeWriter;
+    let writer: WavTakeWriter | null = null;
     try {
-      writer = new WavTakeWriter({
+      const createdWriter = new WavTakeWriter({
         directory: this.options.directory,
         takeId,
         sampleRate: this.options.sampleRate,
-        onError: (error) => this.failWriter(writer, error),
+        maxDataBytes: maxTakeDataBytes,
+        onError: (error) => {
+          // Deferring makes this safe even if a future writer implementation
+          // invokes its error callback synchronously during construction.
+          queueMicrotask(() => {
+            if (writer) this.failWriter(writer, error);
+          });
+        },
       });
+      writer = createdWriter;
     } catch (error) {
       this.session.fail(takeId, errorMessage(error), Date.now());
       this.emitChange();
@@ -105,7 +141,7 @@ export class TakeController {
     void writer.finalize()
       .then((file) => {
         const base = this.options.artifactBaseUrl ?? '/takes';
-        if (this.session.complete(takeId, {
+        const completed = this.session.complete(takeId, {
           fileName: file.fileName,
           url: `${base}/${encodeURIComponent(takeId)}.wav`,
           mimeType: 'audio/wav',
@@ -115,7 +151,15 @@ export class TakeController {
           bitsPerSample: 16,
           sampleCount: file.sampleCount,
           durationMs: file.durationMs,
-        })) this.emitChange();
+        });
+        if (completed) {
+          this.emitChange();
+          this.scheduleRetentionPrune();
+        } else {
+          // A finalized file without a matching ready Take is not a valid
+          // artifact and must not become an unreferenced disk leak.
+          void writer.discardFinalized();
+        }
       })
       .catch((error) => {
         if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();
@@ -155,6 +199,30 @@ export class TakeController {
     this.writer = null;
     if (this.session.fail(writer.takeId, errorMessage(error), Date.now())) this.emitChange();
     void writer.abort();
+  }
+
+  private scheduleRetentionPrune() {
+    this.pruneChain = this.pruneChain
+      .then(async () => {
+        const current = this.session.currentTake();
+        const preserveFileName = current ? `${current.takeId}.wav` : null;
+        await pruneTakeArtifacts(
+          this.options.directory,
+          this.storagePolicy,
+          preserveFileName,
+        );
+      })
+      .catch((error) => {
+        this.reportStorageError(error);
+      });
+  }
+
+  private reportStorageError(error: unknown) {
+    if (this.options.onStorageError) {
+      this.options.onStorageError(error);
+      return;
+    }
+    console.error(`Take storage error: ${errorMessage(error)}`);
   }
 
   private emitChange() {

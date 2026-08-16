@@ -118,6 +118,36 @@ test('a legacy backing route stays healthy without Robot identity or player delt
   }
 });
 
+test('legacy route expectation survives backing grace instead of collapsing to idle', async () => {
+  const server = await startRelay({
+    ...FAST,
+    RELAY_BACKING_GRACE_MS: '250',
+  });
+  try {
+    const backing = await RelayClient.connect(server);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+    await backing.waitForType('registered');
+    backing.sendPcm(pcm(40));
+    await sleep(30);
+
+    backing.close();
+    await sleep(60);
+
+    const readyResponse = await fetch(server.httpUrl('/readyz'));
+    assert.equal(readyResponse.status, 503);
+    const readiness = await readyResponse.json() as any;
+    assert.equal(readiness.components.route.mode, 'legacy');
+    assert.ok(readiness.reasons.includes('backing-not-connected'));
+
+    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    assert.equal(remote.ok, false);
+    assert.equal(remote.state, 'fault');
+    assert.equal(remote.robot.route, false);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('Robot route expectation survives simultaneous source loss during backing grace', async () => {
   const server = await startRelay({
     ...FAST,

@@ -1,0 +1,41 @@
+name: Narrow Mic state
+
+on:
+  push:
+    branches:
+      - agent/live-ui-shell
+    paths:
+      - scripts/narrow-mic-state.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - run: npm ci
+      - run: node scripts/narrow-mic-state.mjs
+      - run: npm run check
+      - name: Check browser JavaScript syntax
+        run: find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Check launcher shell syntax
+        run: bash -n scripts/*.sh
+      - run: npm test
+      - name: Commit verified refactor
+        shell: bash
+        run: |
+          rm -f scripts/narrow-mic-state.mjs .github/workflows/narrow-mic-state.yml
+          git config user.name 'Mochi96336'
+          git config user.email '144137376+Mochi96336@users.noreply.github.com'
+          git add public/app.js test/legacy-monitor-retirement.test.ts scripts/narrow-mic-state.mjs .github/workflows/narrow-mic-state.yml
+          git commit -m 'narrow browser audio state to Mic ownership'
+          git push origin HEAD:agent/live-ui-shell

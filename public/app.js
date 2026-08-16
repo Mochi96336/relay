@@ -1,3 +1,5 @@
+import { WebSocketAudioTransport } from './audio-transport.js';
+
 const publisherButton = document.querySelector('#start-publisher');
 const monitorButton = document.querySelector('#start-monitor');
 const stopButton = document.querySelector('#stop');
@@ -21,6 +23,10 @@ const SOCKET_RECONNECT_MS = 1000;
 const SLIDER_HOLD_MS = 2000;
 const MONITOR_PREBUFFER_MS = 250;
 const MONITOR_MAX_QUEUE_MS = 800;
+
+const audioTransport = new WebSocketAudioTransport({
+  maxBufferedBytes: 256 * 1024,
+});
 
 let socket = null;
 let socketReconnectTimer = null;
@@ -638,6 +644,7 @@ async function connectPublisherSocket() {
     registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
   }
   ws.send(JSON.stringify(registration));
+  audioTransport.bind(ws);
 
   ws.addEventListener('message', (event) => {
     if (socket !== ws || typeof event.data !== 'string') return;
@@ -646,6 +653,7 @@ async function connectPublisherSocket() {
 
   ws.addEventListener('close', () => {
     if (socket !== ws) return;
+    audioTransport.unbind(ws);
     socket = null;
     if (!canKeepPublishing()) return;
     setStatus('Reconnecting microphone…', 'Relay connection closed; microphone capture stays active.');
@@ -720,6 +728,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
     } catch {}
   }
 
+  if (activeRole === 'publisher') audioTransport.unbind(closingSocket);
   setActiveRole(null);
   pendingPublisherTakeoverOwnerId = null;
   if (closingSocket) {
@@ -822,9 +831,13 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     const firstSampleIndex = captureSampleCursor;
     captureSampleCursor += event.data.byteLength / 2;
 
-    if (socket?.readyState !== WebSocket.OPEN) return;
+    const sequence = capturePacketSequence;
+    const sendResult = audioTransport.send(
+      framePcm(event.data, captureGeneration, sequence, firstSampleIndex),
+    );
+    if (!sendResult.sent) {
+      if (sendResult.reason !== 'congested') return;
 
-    if (socket.bufferedAmount >= 256 * 1024) {
       uplinkDroppedChunks += 1;
       const now = performance.now();
       if (now - lastUplinkWarningAt > 2000) {
@@ -838,9 +851,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       return;
     }
 
-    const sequence = capturePacketSequence;
     capturePacketSequence = (capturePacketSequence + 1) >>> 0;
-    socket.send(framePcm(event.data, captureGeneration, sequence, firstSampleIndex));
   };
 
   source.connect(capture).connect(silent).connect(audioContext.destination);

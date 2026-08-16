@@ -6,9 +6,8 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { AudioPacketReceiver } from './audio-packet-receiver.js';
-import type { AudioPacket } from './audio-packet.js';
 import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
+import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
@@ -183,7 +182,7 @@ type TimelineStatus = {
 
 let publisher: RelaySocket | null = null;
 let publisherSampleRate: number | null = null;
-let micPacketReceiver: AudioPacketReceiver | null = null;
+let micAudioTransport: AudioTransport | null = null;
 let backing: RelaySocket | null = null;
 let backingSampleRate: number | null = null;
 let backingIsRobot = false;
@@ -332,7 +331,7 @@ function scheduleMicTransportGrace(ownerId: string) {
 
     const released = participants.releaseMic(expectedOwnerId);
     if (!released.ok) return;
-    micPacketReceiver = null;
+    micAudioTransport = null;
     takeController.noteQualityEvent('mic-owner-changed');
     cancelPendingRoomSongCommand('mic-owner-released');
     invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
@@ -826,7 +825,7 @@ function mixHealthPayload() {
     micGainDb,
     monitorDroppedFrames,
     prebufferMs: session.prebufferMs,
-    micTransport: micPacketReceiver?.stats() ?? null,
+    micTransport: micAudioTransport?.stats() ?? null,
   };
 }
 
@@ -1070,7 +1069,7 @@ function revokePublisherTransport(message: string) {
   if (!previous) return false;
   publisher = null;
   publisherSampleRate = null;
-  micPacketReceiver = null;
+  micAudioTransport = null;
   session.setMicExpected(false);
   retirePublisherTransport(previous, 'mic-revoked', message);
   if (testActive) stopSyncTest();
@@ -1247,13 +1246,13 @@ function processPublisherFrame(frame: PcmFrame) {
   }
 }
 
-function deliverMicPackets(packets: AudioPacket[]) {
+function deliverMicPackets(packets: PcmFrame[]) {
   for (const packet of packets) processPublisherFrame(packet);
 }
 
 const mixerTimer = setInterval(() => {
-  if (publisher?.audioPacketVersion === 2 && micPacketReceiver) {
-    deliverMicPackets(micPacketReceiver.flush(performance.now()));
+  if (micAudioTransport) {
+    deliverMicPackets(micAudioTransport.flush(performance.now()));
   }
 
   if (testActive) {
@@ -1605,7 +1604,7 @@ const youtubeTimelineTimer = setInterval(() => {
   if (presenceSweep.releasedMicOwnerId) {
     takeController.noteQualityEvent('mic-owner-changed');
     cancelMicTransportGrace();
-    micPacketReceiver = null;
+    micAudioTransport = null;
     cancelPendingRoomSongCommand('mic-owner-released', nowMs);
     if (youtubeTimeline.cancelHandoff()) broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
     invalidateMicTiming('Microphone owner left the Relay session.');
@@ -1666,12 +1665,8 @@ wss.on('connection', (rawSocket, request) => {
 
     if (isBinary) {
       if (socket === publisher && socket.role === 'publisher') {
-        if (socket.audioPacketVersion === 2) {
-          if (micPacketReceiver) {
-            deliverMicPackets(micPacketReceiver.receive(data as Buffer, performance.now()));
-          }
-        } else {
-          processPublisherFrame(decodePcmFrame(data as Buffer));
+        if (micAudioTransport) {
+          deliverMicPackets(micAudioTransport.receive(data as Buffer, performance.now()));
         }
         return;
       }
@@ -2218,11 +2213,11 @@ wss.on('connection', (rawSocket, request) => {
         && captureGeneration !== null
         && previousPublisher.captureGeneration === captureGeneration,
       );
-      const preservePacketReceiver = Boolean(
+      const preserveAudioTransport = Boolean(
         sameCapture
         && previousPublisher?.audioPacketVersion === 2
         && audioPacketVersion === 2
-        && micPacketReceiver,
+        && micAudioTransport,
       );
 
       if (previousPublisher && previousPublisher !== socket) {
@@ -2248,18 +2243,21 @@ wss.on('connection', (rawSocket, request) => {
       session.setMicExpected(true);
       if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
 
-      if (audioPacketVersion === 2) {
-        if (!preservePacketReceiver) {
-          micPacketReceiver = new AudioPacketReceiver({
-            source: 'mic',
-            generation: captureGeneration!,
-            reorderWindowPackets: MIC_REORDER_WINDOW_PACKETS,
-            reorderDeadlineMs: MIC_REORDER_DEADLINE_MS,
-            maxForwardJumpPackets: Math.max(MIC_REORDER_WINDOW_PACKETS, MIC_MAX_FORWARD_JUMP_PACKETS),
+      if (!preserveAudioTransport) {
+        if (audioPacketVersion === 2) {
+          micAudioTransport = createWebSocketAudioTransport({
+            packetVersion: 2,
+            receiver: {
+              source: 'mic',
+              generation: captureGeneration!,
+              reorderWindowPackets: MIC_REORDER_WINDOW_PACKETS,
+              reorderDeadlineMs: MIC_REORDER_DEADLINE_MS,
+              maxForwardJumpPackets: Math.max(MIC_REORDER_WINDOW_PACKETS, MIC_MAX_FORWARD_JUMP_PACKETS),
+            },
           });
+        } else {
+          micAudioTransport = createWebSocketAudioTransport({ packetVersion: 1 });
         }
-      } else {
-        micPacketReceiver = null;
       }
 
       if (ownershipChanged || (sameParticipantReplacement && !sameCapture)) {
@@ -2459,7 +2457,7 @@ wss.on('connection', (rawSocket, request) => {
         publisher = null;
         publisherSampleRate = null;
         session.setMicExpected(false);
-        if (!reconnectingOwnerId) micPacketReceiver = null;
+        if (!reconnectingOwnerId) micAudioTransport = null;
         micTransportChanged = true;
         if (reconnectingOwnerId) scheduleMicTransportGrace(reconnectingOwnerId);
         if (calibration.collecting) {

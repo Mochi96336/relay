@@ -48,6 +48,13 @@ test('Voice Adjust distinguishes live input evidence from the gain setting and s
     'incoming recommendation evidence must not move Voice gain before the user chooses Use');
 });
 
+test('Timing is explicitly out of scope when the room has no Song', () => {
+  assert.equal(app.includes('roomSongAvailable'), true);
+  assert.equal(app.includes("roomSongAvailable !== true"), true);
+  assert.equal(app.includes("No song to align."), true);
+  assert.equal(app.includes("event.detail?.room?.song?.videoId"), true);
+});
+
 test('Listen owns only local playback state and preserves volume while off', () => {
   assert.equal(listen.includes('document.body.dataset.listen = state'), true);
   assert.equal(listen.includes('Playing Relay mix on this phone.'), true);

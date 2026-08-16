@@ -51,7 +51,10 @@ function inferRouteMode(input: ReadinessInput): RouteMode {
   if (input.backingIsRobot || input.robotSourceConnected || input.calibrationKind === 'boot-probe') {
     return 'robot';
   }
-  if (input.backingConnected || input.sessionActive) return 'legacy';
+  // An active mixer no longer implies backing exists: a Mic-only room has a
+  // real session clock without arming any backing route. Runtime callers pass
+  // routeMode explicitly when reconnect grace must retain a legacy/Robot route.
+  if (input.backingConnected) return 'legacy';
   return 'idle';
 }
 
@@ -71,25 +74,25 @@ export function buildReadiness(input: ReadinessInput) {
   }
 
   const sessionReasons: ReadinessReason[] = [...reasons];
-  if (input.sessionActive && routeMode === 'idle') {
-    // A live mixer without a backing route is a degraded transition (for
-    // example the backing grace window), not a legitimately idle host.
-    sessionReasons.push('backing-not-connected');
-  }
 
   if (!input.micConnected) sessionReasons.push('mic-not-connected');
   else if (!input.micStreaming) sessionReasons.push('mic-not-streaming');
 
-  if (!input.timelineConnected) sessionReasons.push('phone-timeline-not-connected');
-  else if (input.timelineState !== 1) sessionReasons.push('phone-not-playing');
-  else if (routeMode === 'robot' && !input.playerOffsetFresh) {
-    sessionReasons.push('robot-player-offset-stale');
-  }
+  // Timeline and calibration describe the relationship between Voice and Song.
+  // A voice-only room has nothing to align, so missing playback/calibration is
+  // normal state rather than incomplete session readiness.
+  if (routeMode !== 'idle') {
+    if (!input.timelineConnected) sessionReasons.push('phone-timeline-not-connected');
+    else if (input.timelineState !== 1) sessionReasons.push('phone-not-playing');
+    else if (routeMode === 'robot' && !input.playerOffsetFresh) {
+      sessionReasons.push('robot-player-offset-stale');
+    }
 
-  if (!input.calibrationValid) {
-    if (input.calibrationState === 'collecting') sessionReasons.push('calibration-collecting');
-    else if (input.calibrationStale) sessionReasons.push('calibration-stale');
-    else sessionReasons.push('calibration-missing');
+    if (!input.calibrationValid) {
+      if (input.calibrationState === 'collecting') sessionReasons.push('calibration-collecting');
+      else if (input.calibrationStale) sessionReasons.push('calibration-stale');
+      else sessionReasons.push('calibration-missing');
+    }
   }
 
   const ready = reasons.length === 0;

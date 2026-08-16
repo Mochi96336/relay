@@ -113,7 +113,7 @@ if (
 
     if (mic.state === 'free') {
       if (song.state === 'empty') {
-        return { title: 'Mic is free', detail: 'Add a song to begin.' };
+        return { title: 'Mic is free', detail: 'Take the mic, or add a song for backing.' };
       }
       if (status.lifecycle === 'ready') {
         return { title: 'Ready when you are', detail: 'Take the mic when you want to sing.' };
@@ -143,6 +143,7 @@ if (
     const robotProblem = attention?.scope === 'robot';
     const audioProblem = attention?.scope === 'audio' || attention?.scope === 'song';
     const songState = status.room?.song?.state;
+    const micState = status.room?.mic?.state;
 
     systemRelay.textContent = socket?.readyState === WebSocket.OPEN ? 'Connected' : 'Reconnecting';
     const people = Number(status.room?.participantCount) || 0;
@@ -154,13 +155,15 @@ if (
         : 'OK';
     systemAudio.textContent = audioProblem
       ? 'Needs attention'
-      : songState === 'playing'
+      : songState === 'playing' || micState === 'live'
         ? 'Live'
-        : songState === 'ready' || songState === 'handoff'
-          ? 'Ready'
-          : songState === 'unavailable'
-            ? 'Needs attention'
-            : 'Idle';
+        : micState === 'reconnecting'
+          ? 'Recovering'
+          : songState === 'ready' || songState === 'handoff'
+            ? 'Ready'
+            : songState === 'unavailable'
+              ? 'Needs attention'
+              : 'Idle';
     systemTiming.textContent = timingLabels[status.timing?.state] ?? 'Unknown';
     systemRecording.textContent = takeLabels[status.take?.lifecycle] ?? 'Unknown';
   }

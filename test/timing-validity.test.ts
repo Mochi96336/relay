@@ -352,24 +352,33 @@ describe('boot probe lifecycle', () => {
         4_000,
       );
 
+      const sessionEndFrom = monitor.messages.length;
       backing.close();
-      await monitor.waitFor(
+      publisher.close();
+      await waitForNewMessage(
+        monitor,
+        sessionEndFrom,
         (m) => m.type === 'source-status' && m.active === false,
         3_000,
       );
 
-      const from = publisher.messages.length;
       const newBacking = await RelayClient.connect(server);
       newBacking.newCaptureSession();
       newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE });
       await newBacking.waitForType('registered');
+
+      const newPublisher = await RelayClient.connect(server);
+      newPublisher.newCaptureSession();
+      newPublisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+      await newPublisher.waitForType('registered');
+      const from = newPublisher.messages.length;
       await Promise.all([
         sendPcmInChunks(newBacking, tone(1, 0.8)),
-        sendPcmInChunks(publisher, tone(1, 0.4)),
+        sendPcmInChunks(newPublisher, tone(1, 0.4)),
       ]);
 
       const nextProbe = await waitForNewMessage(
-        publisher,
+        newPublisher,
         from,
         (m) => m.type === 'play-calibration-probe',
         4_000,
@@ -381,7 +390,7 @@ describe('boot probe lifecycle', () => {
       );
 
       newBacking.close();
-      publisher.close();
+      newPublisher.close();
       monitor.close();
       robot.close();
     } finally {

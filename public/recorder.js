@@ -179,9 +179,8 @@ async function connect() {
       const reasons = {
         'participant-required': 'Take needs a Relay participant identity.',
         'mix-not-active': 'There is no room mix to record yet.',
-        'song-required': 'Add a song before recording a Take.',
         'product-blocked': 'Fix the room audio before recording a Take.',
-        'take-not-ready': 'The room is not ready to record yet.',
+        'take-not-ready': 'Start the mic before recording a voice-only Take.',
         'take-active': 'A Take is already recording or finishing.',
         'take-not-recording': 'There is no Take recording right now.',
         'stale-take': 'That Stop belonged to an older Take.',

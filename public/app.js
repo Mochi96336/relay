@@ -30,6 +30,7 @@ let testActive = false;
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestCalibration = null;
+let roomSongAvailable = null;
 let pendingPublisherTakeoverOwnerId = null;
 
 /**
@@ -202,7 +203,20 @@ function updateTestButtons() {
  */
 function updateCalibrateButton() {
   const collecting = latestCalibration?.state === 'collecting';
-  calibrateButton.disabled = !publisherActive || !liveMixActive || collecting;
+  calibrateButton.disabled = !publisherActive
+    || !liveMixActive
+    || roomSongAvailable !== true
+    || collecting;
+
+  if (roomSongAvailable === false) {
+    calibrateStatus.textContent = 'No song to align.';
+    return;
+  }
+
+  if (roomSongAvailable === null) {
+    calibrateStatus.textContent = 'Waiting for room state.';
+    return;
+  }
 
   if (!liveMixActive) {
     calibrateStatus.textContent = '播放開始後會自動校正；覺得對不上可以在這裡手動重跑。';
@@ -700,6 +714,12 @@ async function requestPublisherStart(takeoverExpectedOwnerId = null) {
     await stop(false, { releaseMic: false });
   }
 }
+
+window.addEventListener('relay-product-status', (event) => {
+  const videoId = event.detail?.room?.song?.videoId;
+  roomSongAvailable = typeof videoId === 'string' && videoId.length > 0;
+  updateCalibrateButton();
+});
 
 publisherButton.addEventListener('click', () => {
   requestPublisherStart().catch(console.error);

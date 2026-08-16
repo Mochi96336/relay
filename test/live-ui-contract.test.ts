@@ -99,6 +99,14 @@ test('formal Live copy consumes server product-status instead of rebuilding life
   assert.doesNotMatch(liveStatus, /buildReadiness|buildProductViewModel/);
 });
 
+test('an empty Song surface does not gate the formal Mic or imply that singing requires backing', () => {
+  assert.match(liveStatus, /Take the mic, or add a song for backing\./);
+  assert.doesNotMatch(liveStatus, /Add a song to begin\./);
+  assert.match(liveStatus, /songState === 'playing' \|\| micState === 'live'/);
+  assert.match(recorder, /Start the mic before recording a voice-only Take\./);
+  assert.doesNotMatch(recorder, /song-required/);
+});
+
 test('local Mic permission/start failures surface in the formal Voice field instead of hidden legacy status', () => {
   assert.match(liveStatus, /relay-microphone-start-failed/);
   assert.match(liveStatus, /Microphone unavailable/);

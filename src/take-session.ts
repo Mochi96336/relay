@@ -5,7 +5,8 @@ export type TakeLifecycle = 'idle' | 'recording' | 'finalizing' | 'ready' | 'fai
 export type TakeStopReason = 'user' | 'mix-ended';
 
 export type TakeSongSnapshot = {
-  videoId: string;
+  // Null is an intentional voice-only Take, not a missing required field.
+  videoId: string | null;
   revision: number | null;
   state: number | null;
   serverTime: number | null;

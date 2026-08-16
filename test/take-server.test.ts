@@ -397,7 +397,7 @@ test('ending the authoritative live mix auto-finalizes the active Take instead o
   }
 });
 
-test('Take commands require participant identity, an active mix, a song, and the current Take id', async () => {
+test('Take commands require participant identity, recordable room audio, and the current Take id', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-reject-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
@@ -414,9 +414,9 @@ test('Take commands require participant identity, an active mix, a song, and the
     const noSong = await control.waitFor((message) => (
       message.type === 'take-command-rejected'
       && message.command === 'start'
-      && message.reason === 'song-required'
+      && message.reason === 'take-not-ready'
     ));
-    assert.equal(noSong.reason, 'song-required');
+    assert.equal(noSong.reason, 'take-not-ready');
 
     await establishRoomSong(control, 'reject-playback-a');
     control.send({ type: 'start-take' });

@@ -293,11 +293,12 @@ export class TakeQualityTracker {
     if (state.calibrationStale) this.calibrationStaleSamples += sampleCount;
     if (state.alignmentClamped) this.alignmentClampedSamples += sampleCount;
     if (state.robotRoute && !state.robotDeltaFresh) this.robotDeltaMissingSamples += sampleCount;
+    // `unheadered` is an epoch-level latch, not a counter. Attribute it only
+    // when the latch was clear at Start and becomes set while this Take is
+    // actually accepting mixed frames; a pre-existing legacy warning belongs
+    // to the earlier epoch history, not automatically to this WAV.
+    if (!this.baseline.unheadered && health.unheadered) this.unheaderedObserved = true;
     this.lastHealth = { ...health };
-  }
-
-  noteUnheaderedPcm() {
-    this.unheaderedObserved = true;
   }
 
   noteEvent(kind: TakeQualityEventKind) {

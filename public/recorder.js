@@ -13,6 +13,7 @@ let socket = null;
 let reconnectTimer = null;
 let latestStatus = { lifecycle: 'idle', take: null };
 let commandError = null;
+let reviewNotice = null;
 let productCanStartTake = false;
 let reviewOpen = false;
 let currentArtifactHref = null;
@@ -69,11 +70,21 @@ function setReviewOpen(open) {
   lastTakeReview.hidden = !reviewOpen;
 }
 
+function phoneOwnsMic() {
+  return window.relayActiveRole === 'publisher';
+}
+
+function stopReviewForMic(copy) {
+  if (!recordingPlayer.paused) recordingPlayer.pause();
+  reviewNotice = copy;
+}
+
 function clearArtifact() {
   setReviewOpen(false);
   lastTake.hidden = true;
   recordingDownload.removeAttribute('href');
   recordingDownload.removeAttribute('download');
+  reviewNotice = null;
   if (currentArtifactHref !== null) {
     recordingPlayer.pause();
     recordingPlayer.removeAttribute('src');
@@ -121,7 +132,7 @@ function render() {
     lastTakeToggle.textContent = `Last take · ${formatDuration(take.artifact.durationMs)} · ${verdictLabel(take.quality?.verdict)}`;
     recordingDownload.href = href;
     recordingDownload.download = `relay-take-${shortTakeId(take.takeId)}.wav`;
-    recordingStatus.textContent = '';
+    recordingStatus.textContent = reviewNotice ?? '';
     setReviewOpen(reviewOpen);
     return;
   }
@@ -247,6 +258,31 @@ stopButton.addEventListener('click', () => {
 
 lastTakeToggle.addEventListener('click', () => {
   setReviewOpen(!reviewOpen);
+});
+
+// Last Take is local speaker output. Letting it play while this phone is the
+// microphone source would feed the finished mix acoustically back into a new
+// Mic uplink (capture intentionally runs without browser echo cancellation).
+recordingPlayer.addEventListener('play', () => {
+  if (phoneOwnsMic()) {
+    stopReviewForMic('Release mic before reviewing the last Take.');
+    render();
+    return;
+  }
+  reviewNotice = null;
+  render();
+});
+
+window.addEventListener('relay-microphone-started', () => {
+  if (recordingPlayer.paused) return;
+  stopReviewForMic('Take review paused while this phone has the mic.');
+  render();
+});
+
+window.addEventListener('relay-microphone-ended', () => {
+  if (!reviewNotice) return;
+  reviewNotice = null;
+  render();
 });
 
 setInterval(() => {

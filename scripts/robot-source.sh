@@ -14,6 +14,20 @@ CAPTURE_RATE="${RELAY_BACKING_SAMPLE_RATE:-48000}"
 # boot calibration measured as 2110 ms of backing latency and the mixer then
 # had to correct for. It is buffering, not load: the Pi sat at 0.9 with four cores.
 CAPTURE_LATENCY_MS="${RELAY_BACKING_CAPTURE_LATENCY_MS:-40}"
+# Nobody looks at this screen: Relay takes the rendered audio and throws every
+# pixel away. But YouTube picks its video ladder from the size of the player
+# element, and the robot page sizes that element off the viewport
+# (`.youtube-player-shell` is `width: 100%`), so `xvfb-run`'s 1280x1024 default
+# had the Pi software-decoding 720p - no GPU here, Chromium blocklists WebGL
+# and the Vulkan driver will not open - to feed a soundcard.
+#
+# 480x360 keeps the 16:9 shell well under 360p worth of pixels. Audio is a
+# separate DASH stream whose bitrate this does not touch. Raise it only to
+# watch the robot's screen for debugging.
+SCREEN_GEOMETRY="${RELAY_ROBOT_SCREEN:-480x360x24}"
+SCREEN_WIDTH="${SCREEN_GEOMETRY%%x*}"
+SCREEN_HEIGHT="${SCREEN_GEOMETRY#*x}"
+SCREEN_HEIGHT="${SCREEN_HEIGHT%%x*}"
 created_module=""
 parec_pid=""
 backing_pid=""
@@ -133,9 +147,11 @@ if [[ -n "${RELAY_KEY:-}" ]]; then
   source_url+="&key=$encoded_key"
 fi
 log "opening http://localhost:${PORT}/source.html?robot=1 with audio routed to $SINK_NAME at $CAPTURE_RATE Hz / ${CAPTURE_LATENCY_MS} ms${RELAY_KEY:+ (authenticated)}"
-PULSE_SINK="$SINK_NAME" xvfb-run -a "$CHROMIUM_BIN" \
+PULSE_SINK="$SINK_NAME" xvfb-run -a -s "-screen 0 $SCREEN_GEOMETRY" \
+  "$CHROMIUM_BIN" \
   --user-data-dir="$profile_dir" \
   --autoplay-policy=no-user-gesture-required \
+  --window-size="$SCREEN_WIDTH,$SCREEN_HEIGHT" \
   "$source_url" &
 browser_pid=$!
 

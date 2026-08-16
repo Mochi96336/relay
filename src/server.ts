@@ -600,6 +600,15 @@ function beginPreparedSongHandoff(participantId: string, nowMs = performance.now
 }
 
 /**
+ * Tells a playback page why its telemetry is being ignored.
+ *
+ * Rejection used to be a bare `return`, which is indistinguishable from a lost
+ * connection: the page keeps sending several times a second and its server
+ * timeline readout simply never advances. Telemetry is far too frequent to
+ * answer every time, so only a *change* of reason is reported, and an accepted
+ * packet clears the memory so the next problem is reported again.
+ */
+/**
  * The same discipline for the room-command gate's refusals.
  *
  * Shares `telemetryRejectedReason` with the authority refusals above so that
@@ -617,15 +626,6 @@ function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
   });
 }
 
-/**
- * Tells a playback page why its telemetry is being ignored.
- *
- * Rejection used to be a bare `return`, which is indistinguishable from a lost
- * connection: the page keeps sending several times a second and its server
- * timeline readout simply never advances. Telemetry is far too frequent to
- * answer every time, so only a *change* of reason is reported, and an accepted
- * packet clears the memory so the next problem is reported again.
- */
 function reportTelemetryRejected(socket: RelaySocket, reason: string) {
   if (socket.telemetryRejectedReason === reason) return;
   socket.telemetryRejectedReason = reason;
@@ -1373,7 +1373,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
 function validSampleRate(value: unknown) {
   const sampleRate = Number(value);
-  return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000
+  return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000
     ? sampleRate
     : null;
 }

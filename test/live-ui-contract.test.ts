@@ -99,6 +99,13 @@ test('formal Live copy consumes server product-status instead of rebuilding life
   assert.doesNotMatch(liveStatus, /buildReadiness|buildProductViewModel/);
 });
 
+test('local Mic permission/start failures surface in the formal Voice field instead of hidden legacy status', () => {
+  assert.match(liveStatus, /relay-microphone-start-failed/);
+  assert.match(liveStatus, /Microphone unavailable/);
+  assert.match(liveStatus, /Allow microphone access in your browser, then try again\./);
+  assert.match(liveStatus, /Open Relay over HTTPS so this phone can use its microphone\./);
+});
+
 test('Voice motion follows product self-Mic state rather than legacy button disabled state', () => {
   const baseStyle = position('href="/style.css"');
   const stateStyle = position('href="/live-state.css"');

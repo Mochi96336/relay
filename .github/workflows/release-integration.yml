@@ -30,6 +30,9 @@ jobs:
             echo 'RUNTIME_CONFLICTS_BEGIN'
             git diff --name-only --diff-filter=U
             echo 'RUNTIME_CONFLICTS_END'
+            echo 'SERVER_CONFLICT_DIFF_BEGIN'
+            git diff --cc -- src/server.ts
+            echo 'SERVER_CONFLICT_DIFF_END'
             exit 1
           fi
           git commit -m 'integrate latest runtime feeder'
@@ -39,6 +42,9 @@ jobs:
             echo 'UI_CONFLICTS_BEGIN'
             git diff --name-only --diff-filter=U
             echo 'UI_CONFLICTS_END'
+            echo 'UI_CONFLICT_DIFF_BEGIN'
+            git diff --cc
+            echo 'UI_CONFLICT_DIFF_END'
             exit 1
           fi
           git commit -m 'integrate latest Live UI feeder'

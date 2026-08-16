@@ -90,6 +90,49 @@ describe('http surface', () => {
   });
 });
 
+describe('remote status', () => {
+  let server: RelayServer;
+  before(async () => { server = await startRelay(FAST); });
+  after(async () => { await server.stop(); });
+
+  const status = async () => (await fetch(server.httpUrl('/statusz'))).json();
+
+  test('calls a server with nothing connected idle rather than broken', async () => {
+    const body = await status();
+    assert.equal(body.ok, true);
+    assert.equal(body.state, 'idle');
+    assert.deepEqual(body.faults, []);
+    assert.equal(body.source.backingConnected, false);
+    assert.equal(body.source.backingFrameAgeMs, null);
+  });
+
+  /**
+   * The failure a liveness probe cannot see. Every process is still up and the
+   * socket is still open; only the audio stopped, which is what a dead browser
+   * or a collapsed capture looks like from the server.
+   */
+  test('faults when a connected source stops sending audio', async () => {
+    const backing = await RelayClient.connect(server);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+    await backing.waitForType('registered');
+    await sendPcmInChunks(backing, tone(0.3));
+
+    const streaming = await status();
+    assert.equal(streaming.ok, true);
+    assert.equal(streaming.state, 'live');
+    assert.equal(streaming.source.backingStreaming, true);
+
+    await sleep(1_200);
+
+    const stalled = await status();
+    assert.equal(stalled.ok, false);
+    assert.equal(stalled.state, 'fault');
+    assert.match(stalled.faults.join(' '), /backing source is connected but no longer sending audio/);
+    assert.ok(stalled.source.backingFrameAgeMs >= 1_000);
+    backing.close();
+  });
+});
+
 describe('shared-key auth', () => {
   let server: RelayServer;
   before(async () => { server = await startRelay({ ...FAST, RELAY_KEY: 'sekrit' }); });

@@ -162,6 +162,10 @@ function readSnapshot() {
 
 function activeServerMutation() {
   if (!serverMutation) return null;
+  // A room command stays active until the server proves completion/failure or
+  // reports that no command is pending. Local timeouts would otherwise erase
+  // the recovery identity before the authoritative command timeout lands.
+  if (serverMutation.source === 'room-command') return serverMutation;
   if (performance.now() <= serverMutation.expiresAt) return serverMutation;
   serverMutation = null;
   return null;
@@ -661,7 +665,7 @@ window.addEventListener('relay:room-song-command-rejected', (event) => {
     && localCommandPending.commandId !== detail.commandId
   ) return;
   localCommandPending = null;
-  serverMutation = null;
+  if (serverMutation?.source === 'room-command') serverMutation = null;
   noteNode.textContent = `Room song command rejected: ${detail.reason ?? 'not allowed'}.`;
   restoreAuthoritativeRoom(detail.room).catch(console.error);
 });
@@ -671,13 +675,30 @@ window.addEventListener('relay:room-song-command-complete', (event) => {
   if (localCommandPending?.commandId === commandId) localCommandPending = null;
   noteNode.textContent = 'Room song command applied.';
 });
+window.addEventListener('relay:room-song-command-failed-ack', (event) => {
+  const detail = event.detail ?? {};
+  const commandId = detail.commandId;
+  if (serverMutation?.commandId && commandId && serverMutation.commandId !== commandId) return;
+  if (localCommandPending?.commandId && commandId && localCommandPending.commandId !== commandId) return;
+  localCommandPending = null;
+  if (serverMutation?.source === 'room-command') serverMutation = null;
+  noteNode.textContent = 'Playback could not apply the room command. Restoring the authoritative room song.';
+  restoreAuthoritativeRoom(detail.room).catch(console.error);
+});
 window.addEventListener('relay:room-song-command-status', (event) => {
-  if (!localCommandPending?.commandId) return;
-  const pendingCommandId = event.detail?.pendingCommandId;
-  if (pendingCommandId === null && performance.now() - localCommandPending.requestedAt > 1_000) {
-    localCommandPending = null;
-    noteNode.textContent = 'Room song command expired before the playback device confirmed it.';
-  }
+  const detail = event.detail ?? {};
+  const pendingCommandId = detail.pendingCommandId;
+  const trackedCommandId = localCommandPending?.commandId
+    ?? (serverMutation?.source === 'room-command' ? serverMutation.commandId : null);
+  if (!trackedCommandId || pendingCommandId !== null) return;
+
+  // Completion is delivered before the terminal pending=null status on the
+  // same WebSocket. Reaching this branch therefore means timeout, disconnect,
+  // or another terminal cleanup for a command this page still believes active.
+  localCommandPending = null;
+  if (serverMutation?.source === 'room-command') serverMutation = null;
+  noteNode.textContent = 'Room song command ended without playback confirmation. Restoring the authoritative room song.';
+  restoreAuthoritativeRoom(detail.room).catch(console.error);
 });
 
 window.addEventListener('relay:song-handoff-prepare', (event) => {

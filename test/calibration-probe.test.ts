@@ -36,6 +36,55 @@ function noise(samples: number, amplitude: number, seed: number) {
   return output;
 }
 
+/**
+ * Browser-side probe shape from public/app.js / public/source.js.
+ *
+ * The server reference is deliberately not byte-identical to WebAudio's ramp,
+ * so this catches detector changes that only work against the synthetic server
+ * waveform and fail against what a phone actually emits.
+ */
+function browserProbe(sampleRate: number) {
+  const totalSamples = Math.round((sampleRate * PROBE_REFERENCE_MS) / 1000);
+  const output = new Float64Array(totalSamples);
+  const attackSeconds = 0.004;
+  const noteSeconds = 0.105;
+
+  for (const note of PROBE_NOTES) {
+    const startSample = Math.round((sampleRate * note.offsetMs) / 1000);
+    const noteSamples = Math.round(sampleRate * noteSeconds);
+    for (let i = 0; i < noteSamples && startSample + i < output.length; i += 1) {
+      const seconds = i / sampleRate;
+      const gain = seconds <= attackSeconds
+        ? 0.0001 * ((note.gain / 0.0001) ** (seconds / attackSeconds))
+        : note.gain * ((0.0001 / note.gain) ** ((seconds - attackSeconds) / (noteSeconds - attackSeconds)));
+      output[startSample + i] += Math.sin(2 * Math.PI * note.frequencyHz * seconds) * gain;
+    }
+  }
+
+  return output;
+}
+
+/**
+ * A deterministic, structured music-like bed rather than white noise.
+ * Includes a harmonic close to E6 so the detector has to use the complete
+ * frequency/timing signature instead of merely finding a quiet 470 ms patch.
+ */
+function musicBed(samples: number, amplitude: number) {
+  const output = new Float64Array(samples);
+  for (let i = 0; i < samples; i += 1) {
+    const seconds = i / RATE;
+    const carrier = (
+      0.45 * Math.sin(2 * Math.PI * 220 * seconds + 0.1)
+      + 0.32 * Math.sin(2 * Math.PI * 440 * seconds + 0.7)
+      + 0.22 * Math.sin(2 * Math.PI * 880 * seconds + 1.2)
+      + 0.16 * Math.sin(2 * Math.PI * 1320 * seconds + 0.5)
+    );
+    const beat = 0.35 + 0.65 * (Math.sin(2 * Math.PI * 1.91 * seconds + 0.33) ** 2);
+    output[i] = amplitude * carrier * beat;
+  }
+  return output;
+}
+
 describe('calibration-probe', () => {
   test('uses a restrained ascending success chime with irregular timing', () => {
     assert.ok(PROBE_NOTES.every((note) => note.gain <= 0.32), 'does not become a loud notification');
@@ -64,6 +113,31 @@ describe('calibration-probe', () => {
       `expected ~${trueOffsetSamples} samples, got ${result.offsetSamples}`,
     );
     assert.ok(result.correlation > 0.5, `correlation too low: ${result.correlation}`);
+  });
+
+  test('locates the actual browser chime while a structured song is playing', () => {
+    const windowSamples = Math.round(RATE * 1.5);
+    const trueOffsetMs = 400;
+    const trueOffsetSamples = Math.round((RATE * trueOffsetMs) / 1000);
+    const probe = browserProbe(RATE);
+    const window = musicBed(windowSamples, 0.4);
+
+    for (let i = 0; i < probe.length; i += 1) {
+      window[trueOffsetSamples + i] += probe[i];
+    }
+
+    const result = locateProbe(toInt16(window), RATE);
+    assert.ok(
+      Math.abs(result.offsetSamples - trueOffsetSamples) <= Math.round((RATE * 10) / 1000),
+      `expected browser probe near ${trueOffsetSamples} samples, got ${result.offsetSamples}`,
+    );
+    assert.ok(result.correlation > 0.65, `song masked the probe: ${result.correlation}`);
+  });
+
+  test('structured song without a probe does not become a false calibration match', () => {
+    const windowSamples = Math.round(RATE * 1.5);
+    const result = locateProbe(toInt16(musicBed(windowSamples, 0.4)), RATE);
+    assert.ok(result.correlation < 0.5, `song was mistaken for the probe: ${result.correlation}`);
   });
 
   test('scores low when the probe was never actually heard', () => {

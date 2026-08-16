@@ -1,0 +1,59 @@
+name: Fix legacy grace status
+
+on:
+  push:
+    branches:
+      - agent/legacy-grace-status-fix
+    paths:
+      - .github/workflows/fix-legacy-grace-status.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/legacy-grace-status-fix
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+      - name: Make armed route backing loss operationally unhealthy
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'relay-runtime-fix[bot]'
+          git config user.email 'relay-runtime-fix[bot]@users.noreply.github.com'
+
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+          const path = 'src/server.ts';
+          let source = readFileSync(path, 'utf8');
+
+          const before = `  const robotRoute = readinessPayload(nowMs).components.route.mode === 'robot';\n  const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;`;
+          const after = `  const routeMode = readinessPayload(nowMs).components.route.mode;\n  const robotRoute = routeMode === 'robot';\n  const robotSourceConnected = activeRobotSource?.readyState === WebSocket.OPEN;`;
+          if (source.split(before).length - 1 !== 1) throw new Error('expected one route-mode target');
+          source = source.replace(before, after);
+
+          const faultBefore = `  if (robotRoute && !backingConnected) faults.push('robot route has no backing source');`;
+          const faultAfter = `  if (routeMode !== 'idle' && !backingConnected) {\n    faults.push(\`${'${routeMode}'} route has no backing source\`);\n  }`;
+          if (source.split(faultBefore).length - 1 !== 1) throw new Error('expected one backing fault target');
+          source = source.replace(faultBefore, faultAfter);
+          writeFileSync(path, source);
+          NODE
+
+          rm .github/workflows/fix-legacy-grace-status.yml
+          git add -A
+
+          npm ci
+          npm run check
+          find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check
+          bash -n scripts/*.sh
+          npm test
+
+          git commit -m 'fix: treat backing loss as fault on any armed route'
+          git push origin HEAD:agent/legacy-grace-status-fix

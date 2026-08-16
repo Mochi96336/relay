@@ -17,6 +17,11 @@ import {
   normalizeNickname,
   normalizeParticipantId,
 } from './participant-session.js';
+import { parseRoomSongCommand } from './room-song-command.js';
+import {
+  RoomSongCommandSession,
+  type AcceptedRoomSongCommand,
+} from './room-song-command-session.js';
 import {
   SongSession,
   normalizePlaybackGeneration,
@@ -85,6 +90,8 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 const youtubeTimeline = new SongSession();
+const roomSongCommands = new RoomSongCommandSession();
+let roomSongCommandRevision = 0;
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -415,6 +422,32 @@ function sendToPlayback(identity: PlaybackIdentity, payload: unknown) {
     }
   }
   return sent;
+}
+
+function roomSongCommandStatusPayload(nowMs = performance.now()) {
+  return roomSongCommands.statusPayload(roomSongCommandRevision, nowMs);
+}
+
+function roomSongCommandApplyPayload(command: AcceptedRoomSongCommand) {
+  return {
+    type: 'room-song-command-apply',
+    commandId: command.commandId,
+    revision: command.revision,
+    issuedByParticipantId: command.issuedByParticipantId,
+    targetPlaybackTransportId: command.target.transportId,
+    targetPlaybackGeneration: command.target.generation,
+    ...command.body,
+  };
+}
+
+function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: string) {
+  sendJson(socket, {
+    type: 'room-song-command-rejected',
+    commandId: typeof commandId === 'string' ? commandId : null,
+    reason,
+    revision: roomSongCommandRevision,
+    room: youtubeTimeline.roomStatusPayload(),
+  });
 }
 
 function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
@@ -1118,6 +1151,10 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
   }
 
+  if (roomSongCommands.sweep(nowMs)) {
+    broadcastJson(roomSongCommandStatusPayload(nowMs));
+  }
+
   if (calibration.collecting) {
     const silent = silentSides(nowMs - COLLECTION_SILENCE_GRACE_MS);
     if (silent.length > 0) {
@@ -1331,12 +1368,18 @@ wss.on('connection', (rawSocket, request) => {
       socket.playbackGeneration = generation;
       sendJson(socket, { type: 'playback-registered', playbackTransportId: transportId, playbackGeneration: generation });
       sendJson(socket, youtubeTimeline.roomStatusPayload());
+      sendJson(socket, roomSongCommandStatusPayload());
 
       const playbackIdentity = playbackIdentityForSocket(socket);
       const pendingPlan = playbackIdentity
         ? youtubeTimeline.handoffPlanForTarget(playbackIdentity)
         : null;
       if (pendingPlan) sendHandoffPlan('song-handoff-prepare', pendingPlan);
+
+      const pendingCommand = playbackIdentity
+        ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
+        : null;
+      if (pendingCommand) sendToPlayback(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
       return;
     }
 
@@ -1350,6 +1393,75 @@ wss.on('connection', (rawSocket, request) => {
 
     if (payload.type === 'room-song-status-request') {
       sendJson(socket, youtubeTimeline.roomStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'room-song-command-status-request') {
+      sendJson(socket, roomSongCommandStatusPayload());
+      return;
+    }
+
+    if (payload.type === 'room-song-command') {
+      if (!socket.participantId) {
+        rejectRoomSongCommand(socket, payload.commandId, 'participant-required');
+        return;
+      }
+
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) {
+        rejectRoomSongCommand(socket, payload.commandId, 'playback-transport-required');
+        return;
+      }
+
+      const parsed = parseRoomSongCommand(payload);
+      if (!parsed.ok) {
+        rejectRoomSongCommand(socket, payload.commandId, parsed.reason);
+        return;
+      }
+
+      const nowMs = performance.now();
+      const decision = roomSongCommands.begin(
+        parsed.request,
+        socket.participantId,
+        playbackIdentity,
+        participants.micOwnerId,
+        youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
+        roomSongCommandRevision,
+        roomSongCommandRevision + 1,
+        nowMs,
+      );
+      if (!decision.ok) {
+        rejectRoomSongCommand(socket, parsed.request.commandId, decision.reason);
+        return;
+      }
+
+      if (!decision.duplicate) roomSongCommandRevision = decision.command.revision;
+      sendJson(socket, {
+        type: 'room-song-command-accepted',
+        commandId: decision.command.commandId,
+        revision: decision.command.revision,
+        duplicate: decision.duplicate,
+      });
+
+      const stillPending = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
+      if (stillPending?.commandId === decision.command.commandId) {
+        sendToPlayback(playbackIdentity, roomSongCommandApplyPayload(decision.command));
+      }
+      broadcastJson(roomSongCommandStatusPayload(nowMs));
+      return;
+    }
+
+    if (payload.type === 'room-song-command-failed') {
+      const playbackIdentity = playbackIdentityForSocket(socket);
+      if (!playbackIdentity) return;
+      if (roomSongCommands.fail(playbackIdentity, payload.commandId)) {
+        sendJson(socket, {
+          type: 'room-song-command-failed-ack',
+          commandId: payload.commandId,
+          revision: roomSongCommandRevision,
+        });
+        broadcastJson(roomSongCommandStatusPayload());
+      }
       return;
     }
 
@@ -1403,18 +1515,47 @@ wss.on('connection', (rawSocket, request) => {
         transportId: playbackTransportId,
         generation: playbackGeneration,
       };
+      const nowMs = performance.now();
+      const commandGate = roomSongCommands.gateTelemetry(
+        payload,
+        acceptedIdentity,
+        youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
+        nowMs,
+      );
+      if (!commandGate.ok) {
+        sendJson(socket, {
+          type: 'room-song-telemetry-rejected',
+          reason: commandGate.reason,
+          revision: roomSongCommandRevision,
+        });
+        return;
+      }
+
       const result = youtubeTimeline.update(
         payload,
         acceptedIdentity,
         participants.micOwnerId,
+        nowMs,
       );
       if (result.accepted) {
         socket.playbackParticipantId = playbackParticipantId;
         socket.playbackTransportId = playbackTransportId;
         socket.playbackGeneration = playbackGeneration;
-        const timelineStatus = youtubeTimeline.statusPayload();
+        const timelineStatus = youtubeTimeline.statusPayload(nowMs);
         broadcastJson(timelineStatus);
-        broadcastJson(youtubeTimeline.roomStatusPayload());
+        broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+
+        if (
+          commandGate.completesCommandId
+          && roomSongCommands.complete(commandGate.completesCommandId)
+        ) {
+          sendToPlayback(acceptedIdentity, {
+            type: 'room-song-command-complete',
+            commandId: commandGate.completesCommandId,
+            revision: roomSongCommandRevision,
+          });
+          broadcastJson(roomSongCommandStatusPayload(nowMs));
+        }
 
         if (result.handoffCompleted && result.handoffId) {
           if (result.previousLeader) {
@@ -1625,6 +1766,7 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeTimeline.roomStatusPayload());
+      sendJson(socket, roomSongCommandStatusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());
       broadcastStatus();
@@ -1666,6 +1808,7 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, mixSettingsPayload());
       sendJson(socket, youtubeTimeline.statusPayload());
       sendJson(socket, youtubeTimeline.roomStatusPayload());
+      sendJson(socket, roomSongCommandStatusPayload());
       if (socket.participantId) sendJson(socket, sessionStatusPayload());
       return;
     }
@@ -1745,6 +1888,17 @@ wss.on('connection', (rawSocket, request) => {
 
   socket.on('close', () => {
     let micTransportChanged = false;
+
+    const closingPlaybackIdentity = playbackIdentityForSocket(socket);
+    if (closingPlaybackIdentity) {
+      const pendingCommand = roomSongCommands.pendingForTarget(closingPlaybackIdentity, performance.now());
+      if (
+        pendingCommand
+        && roomSongCommands.fail(closingPlaybackIdentity, pendingCommand.commandId)
+      ) {
+        broadcastJson(roomSongCommandStatusPayload());
+      }
+    }
 
     if (
       socket.playbackParticipantId

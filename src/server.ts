@@ -8,6 +8,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 
 import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
+import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
@@ -53,11 +54,6 @@ function envMs(name: string, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function envNonNegativeInt(name: string, fallback: number) {
-  const value = Number(process.env[name]);
-  return Number.isInteger(value) && value >= 0 ? value : fallback;
-}
-
 const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
 const MIX_FRAME_SAMPLES = Math.round((MIX_SAMPLE_RATE * MIX_FRAME_MS) / 1000);
@@ -95,11 +91,7 @@ const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
 const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
 const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
-// Provisional knobs rather than packet-format constants. Ordered WebSocket
-// never exercises the wait; T2 real-device metrics will tune these for QUIC.
-const MIC_REORDER_WINDOW_PACKETS = envNonNegativeInt('RELAY_AUDIO_REORDER_WINDOW_PACKETS', 8);
-const MIC_REORDER_DEADLINE_MS = envNonNegativeInt('RELAY_AUDIO_REORDER_DEADLINE_MS', 40);
-const MIC_MAX_FORWARD_JUMP_PACKETS = envNonNegativeInt('RELAY_AUDIO_MAX_FORWARD_JUMP_PACKETS', 256);
+const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
 const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const TAKE_ARTIFACT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -2302,9 +2294,7 @@ wss.on('connection', (rawSocket, request) => {
             receiver: {
               source: 'mic',
               generation: captureGeneration!,
-              reorderWindowPackets: MIC_REORDER_WINDOW_PACKETS,
-              reorderDeadlineMs: MIC_REORDER_DEADLINE_MS,
-              maxForwardJumpPackets: Math.max(MIC_REORDER_WINDOW_PACKETS, MIC_MAX_FORWARD_JUMP_PACKETS),
+              ...AUDIO_TRANSPORT_CONFIG,
             },
           });
           micMediaGeneration = captureGeneration;

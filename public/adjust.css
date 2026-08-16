@@ -1,17 +1,10 @@
-/* Adjust is a performance-tuning layer, not a second mixer dashboard. */
-
-/* L1 morphs the performance area instead of floating over the media field.
-   The YouTube player remains in normal document flow and unobscured. */
-body:has(.adjust-panel[open]) .performance-stage,
-body:has(.adjust-panel[open]) .take-strip {
-  display: none;
-}
+/* Adjust extends the live performance task; it is not a replacement screen. */
 
 body:has(.adjust-panel[open]) .live-actions {
-  margin-top: 26px;
+  margin-top: 28px;
   flex-wrap: wrap;
   align-items: flex-start;
-  row-gap: 10px;
+  row-gap: 8px;
 }
 
 .adjust-panel > summary {
@@ -23,18 +16,17 @@ body:has(.adjust-panel[open]) .live-actions {
   order: 3;
 }
 .adjust-panel[open] > summary {
-  position: absolute;
-  top: 18px;
-  right: 0;
+  width: max-content;
+  margin-left: auto;
 }
 
+/* Keep the YouTube and Voice/Take context in normal page flow while tuning.
+   The page owns scrolling; Adjust does not create a second viewport. */
 .adjust-sheet {
   position: static;
   width: calc(100% + 44px);
-  max-height: min(50svh, 520px);
-  overflow: auto;
-  margin: 10px -22px 0;
-  padding: 22px 22px 26px;
+  margin: 8px -22px 0;
+  padding: 22px 22px 28px;
   border: 0;
   border-top: 1px solid #2a2c31;
   border-radius: 0;
@@ -47,7 +39,6 @@ body:has(.adjust-panel[open]) .live-actions {
 .adjust-heading,
 .adjust-group-heading,
 .adjust-row-heading,
-.evidence-heading,
 .recommendation-meta,
 .timing-row {
   display: flex;
@@ -87,38 +78,10 @@ body:has(.adjust-panel[open]) .live-actions {
   font-size: 14px;
   font-weight: 610;
 }
-.adjust-row-heading output,
-.evidence-heading output {
+.adjust-row-heading output {
   color: #a6a8ae;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-}
-
-.voice-input-evidence {
-  display: grid;
-  gap: 7px;
-  margin-top: 2px;
-}
-.evidence-heading {
-  color: #767981;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-}
-.voice-input-meter {
-  --input-level: 0%;
-  position: relative;
-  height: 2px;
-  background: #303239;
-  overflow: hidden;
-}
-.voice-input-meter::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--input-level);
-  background: #d8d6d1;
-  transition: width 90ms linear;
 }
 
 .gain-control { display: grid; gap: 9px; }
@@ -202,10 +165,9 @@ body[data-listen="off"] .local-listen .adjust-range { opacity: .6; }
 
 @media (max-height: 760px) {
   body:has(.adjust-panel[open]) .live-actions {
-    margin-top: 20px;
+    margin-top: 24px;
   }
   .adjust-sheet {
-    max-height: min(50svh, 380px);
     gap: 20px;
     padding-top: 18px;
   }

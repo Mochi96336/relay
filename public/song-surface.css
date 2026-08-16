@@ -78,6 +78,12 @@
   font-size: 11px;
   white-space: nowrap;
 }
+.playback-recovery-actions {
+  margin-top: 2px;
+}
+.playback-recovery-actions button {
+  min-height: 40px;
+}
 
 .song-stage[data-playback-role="preparing"] .youtube-player-shell {
   border-color: #3d4047;
@@ -90,6 +96,17 @@
 .song-stage[data-playback-role="observer"] .youtube-readout,
 .song-stage[data-playback-role="observer"] #youtube-note {
   display: none;
+}
+
+/* A dead remembered leader is still an observer identity, but it is no longer
+   a read-only product state. The server already allows a replacement transport
+   when the leader is disconnected or stale, so reveal the normal song command
+   form alongside the explicit resume action. The embedded player stays hidden
+   until the server actually grants this transport playback authority. */
+.song-stage[data-playback-role="observer"][data-playback-health="missing"] .youtube-form,
+.song-stage[data-playback-role="observer"][data-playback-health="disconnected"] .youtube-form,
+.song-stage[data-playback-role="observer"][data-playback-health="stale"] .youtube-form {
+  display: grid;
 }
 
 /* Empty and connecting rooms stay spatially quiet; media appears only when it exists. */

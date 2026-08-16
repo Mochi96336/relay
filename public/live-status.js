@@ -23,16 +23,16 @@ if (
   let latestProductStatus = null;
 
   const attentionLabels = {
-    'audio-unavailable': 'Room audio unavailable',
-    'robot-audio-unavailable': 'Robot audio unavailable',
-    'robot-route-invalid': 'Robot audio route needs attention',
-    'robot-player-unavailable': 'Robot player unavailable',
-    'song-clock-unavailable': 'Song playback unavailable',
-    'mic-reconnecting': 'Microphone reconnecting',
-    'mic-audio-stalled': 'Microphone audio interrupted',
-    'timing-recovering': 'Timing is recovering',
-    'timing-clamped': 'Timing needs attention',
-    'take-failed': 'Take failed',
+    'audio-unavailable': () => t('system.attention.audio-unavailable'),
+    'robot-audio-unavailable': () => t('system.attention.robot-audio-unavailable'),
+    'robot-route-invalid': () => t('system.attention.robot-route-invalid'),
+    'robot-player-unavailable': () => t('system.attention.robot-player-unavailable'),
+    'song-clock-unavailable': () => t('system.attention.song-clock-unavailable'),
+    'mic-reconnecting': () => t('system.attention.mic-reconnecting'),
+    'mic-audio-stalled': () => t('system.attention.mic-audio-stalled'),
+    'timing-recovering': () => t('system.attention.timing-recovering'),
+    'timing-clamped': () => t('system.attention.timing-clamped'),
+    'take-failed': () => t('system.attention.take-failed'),
   };
 
   const timingLabels = {
@@ -116,7 +116,7 @@ if (
 
     if (mic.state === 'free') {
       if (song.state === 'empty') {
-        return { title: 'Mic is free', detail: 'Take the mic, or add a song for backing.' };
+        return { title: t('voice.micFree'), detail: t('voice.addSongToBegin') };
       }
       if (status.lifecycle === 'ready') {
         return { title: t('voice.ready'), detail: t('voice.takeMicWhenReady') };
@@ -126,10 +126,10 @@ if (
 
     if (selfOwner) {
       if (mic.state === 'starting') {
-        return { title: 'Starting your mic…', detail: 'Waiting for the first audio frame from this phone.' };
+        return { title: t('voice.startingYours'), detail: t('voice.waitingFirstAudio') };
       }
       if (mic.state === 'interrupted') {
-        return { title: 'Mic audio interrupted', detail: 'The media path is connected, but audio stopped arriving.' };
+        return { title: t('voice.interruptedYours'), detail: t('voice.mediaConnectedAudioStopped') };
       }
       if (mic.state === 'reconnecting') {
         return { title: t('voice.reconnectingYours'), detail: t('voice.holdingPlace') };
@@ -138,17 +138,17 @@ if (
         return { title: t('voice.live'), detail: t('voice.timingRecovering') };
       }
       if (song.state === 'playing') {
-        return { title: 'You’re live', detail: 'Use headphones so the song stays out of your mic.' };
+        return { title: t('voice.live'), detail: t('voice.useHeadphones') };
       }
-      return { title: 'You’re live', detail: 'Your voice is going to the room.' };
+      return { title: t('voice.live'), detail: t('voice.toRoom') };
     }
 
-    const owner = mic.ownerNickname || 'Someone';
+    const owner = mic.ownerNickname || t('voice.someone');
     if (mic.state === 'starting') {
-      return { title: owner, detail: 'is starting the microphone…' };
+      return { title: owner, detail: t('voice.startingOther') };
     }
     if (mic.state === 'interrupted') {
-      return { title: owner, detail: 'microphone audio interrupted' };
+      return { title: owner, detail: t('voice.interruptedOther') };
     }
     if (mic.state === 'reconnecting') {
       return { title: owner, detail: t('voice.reconnecting') };
@@ -172,20 +172,20 @@ if (
         ? t('system.idle')
         : t('system.ok');
     systemAudio.textContent = audioProblem
-      ? 'Needs attention'
+      ? t('system.needsAttention')
       : songState === 'playing' || micState === 'live'
-        ? 'Live'
+        ? t('system.live')
         : micState === 'starting'
-          ? 'Starting'
+          ? t('system.starting')
           : micState === 'interrupted' || micState === 'reconnecting'
-            ? 'Recovering'
+            ? t('system.recovering')
             : songState === 'ready' || songState === 'handoff'
-            ? 'Ready'
+            ? t('system.ready')
             : songState === 'unavailable'
-              ? 'Needs attention'
-              : 'Idle';
-    systemTiming.textContent = timingLabels[status.timing?.state] ?? 'Unknown';
-    systemRecording.textContent = takeLabels[status.take?.lifecycle] ?? 'Unknown';
+              ? t('system.needsAttention')
+              : t('system.idle');
+    systemTiming.textContent = timingLabels[status.timing?.state] ?? t('system.unknown');
+    systemRecording.textContent = takeLabels[status.take?.lifecycle] ?? t('system.unknown');
   }
 
   function renderAttention(status) {

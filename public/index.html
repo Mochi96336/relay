@@ -104,8 +104,13 @@
             <button id="stop-recording" class="record-action recording" type="button" disabled data-i18n="take.stop">Stop</button>
           </div>
           <p id="recording-status" class="microcopy"></p>
-          <audio id="recording-player" controls hidden></audio>
-          <a id="download-recording" class="take-link" hidden>Last take</a>
+          <div id="last-take" class="last-take" hidden>
+            <button id="last-take-toggle" class="take-link text-action" type="button" aria-expanded="false" data-i18n="take.lastReady">Last take</button>
+            <div id="last-take-review" class="take-review" hidden>
+              <audio id="recording-player" controls preload="metadata"></audio>
+              <a id="download-recording" class="take-download text-action" download data-i18n="take.download">Download WAV</a>
+            </div>
+          </div>
         </section>
       </section>
 

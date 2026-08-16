@@ -65,3 +65,26 @@ test('locale is not room authority or a protocol command', () => {
   assert.equal(localeHandler.includes('requestRoomSongCommand('), false,
     'locale rerender must not synthesize room song commands');
 });
+
+test('release-era Mic, feedback, and Take review states stay inside the locale boundary', () => {
+  const i18n = readFileSync('public/i18n.js', 'utf8');
+  const live = readFileSync('public/live-status.js', 'utf8');
+  const listen = readFileSync('public/listen.js', 'utf8');
+  const recorder = readFileSync('public/recorder.js', 'utf8');
+
+  assert.match(i18n, /'voice\.startingYours':/);
+  assert.match(i18n, /'voice\.interruptedYours':/);
+  assert.match(i18n, /'voice\.useHeadphones':/);
+  assert.match(i18n, /'system\.attention\.mic-audio-stalled':/);
+  assert.match(i18n, /'listen\.mutedForSong':/);
+  assert.match(i18n, /'listen\.adjust\.songMuted':/);
+  assert.match(i18n, /'take\.reviewReleaseMic':/);
+  assert.match(i18n, /'take\.reviewPausedForMic':/);
+  assert.match(live, /t\('voice\.startingYours'\)/);
+  assert.match(live, /t\('voice\.interruptedYours'\)/);
+  assert.match(live, /t\('voice\.useHeadphones'\)/);
+  assert.match(listen, /t\('listen\.mutedForSong'\)/);
+  assert.match(listen, /t\('listen\.adjust\.songMuted'\)/);
+  assert.match(recorder, /t\('take\.reviewReleaseMic'\)/);
+  assert.match(recorder, /t\('take\.reviewPausedForMic'\)/);
+});

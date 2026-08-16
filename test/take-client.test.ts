@@ -50,6 +50,6 @@ test('ready Take artifacts review inline instead of navigating away from Live', 
   assert.match(html, /id="last-take-toggle"[^>]*type="button"[^>]*aria-expanded="false"/);
   assert.match(html, /id="last-take-review"[^>]*hidden/);
   assert.match(html, /id="recording-player" controls preload="metadata"/);
-  assert.match(html, /id="download-recording"[^>]*download>Download WAV<\/a>/);
+  assert.match(html, /id="download-recording"[^>]*download[^>]*data-i18n="take\.download"[^>]*>Download WAV<\/a>/);
   assert.doesNotMatch(html, /id="download-recording"[^>]*target=/);
 });

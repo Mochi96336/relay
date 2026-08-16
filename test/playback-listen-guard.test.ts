@@ -14,7 +14,7 @@ test('the playback holder never monitors the Relay mix back into the same phone'
   assert.match(listen, /setPlaybackForcedMute\(true\)/);
   assert.match(listen, /role === 'observer' \|\| role === 'empty'/);
   assert.match(listen, /setPlaybackForcedMute\(false\)/);
-  assert.match(listen, /Muted while this phone plays the room song\./);
+  assert.match(listen, /reconcile\(t\('listen\.songOwned'\)\)/);
   assert.match(youtubeSync, /new CustomEvent\('relay:playback-view'/,
     'Listen must follow the server-resolved playback role rather than guessing from local YouTube state');
 });
@@ -22,11 +22,11 @@ test('the playback holder never monitors the Relay mix back into the same phone'
 test('playback forced mute composes with Mic mute and preserves the user preference', () => {
   assert.match(listen, /if \(micForcedMuted \|\| playbackForcedMuted\) return;/,
     'forced source roles must make the local Listen toggle non-actionable');
-  assert.match(listen, /if \(playbackForcedMuted\) \{[\s\S]*Muted while this phone plays the room song/,
+  assert.match(listen, /if \(playbackForcedMuted\) \{[\s\S]*t\('listen\.songOwned'\)/,
     'ending Mic ownership must not resume Listen while this phone still owns playback');
-  assert.match(listen, /if \(micForcedMuted\) \{[\s\S]*Muted while this phone has the mic/,
+  assert.match(listen, /if \(micForcedMuted\) \{[\s\S]*t\('listen\.micOwned'\)/,
     'giving playback away must not resume Listen while this phone still owns the Mic');
-  assert.match(listen, /if \(userMuted\) \{[\s\S]*Muted on this phone/,
+  assert.match(listen, /if \(userMuted\) \{[\s\S]*t\('listen\.adjust\.userMuted'\)/,
     'automatic role changes must not overwrite an explicit user mute');
 });
 
@@ -35,8 +35,8 @@ test('Last Take speaker playback cannot be fed back through the same phone Mic',
     'Take review must use the same local Mic ownership fact as the capture controller');
   assert.match(recorder, /function stopReviewForMic\(copy\)[\s\S]*recordingPlayer\.pause\(\)[\s\S]*reviewNotice = copy/,
     'the shared feedback guard must actually stop local speaker playback');
-  assert.match(recorder, /recordingPlayer\.addEventListener\('play'[\s\S]*phoneOwnsMic\(\)[\s\S]*stopReviewForMic\('Release mic before reviewing the last Take\.'/,
+  assert.match(recorder, /recordingPlayer\.addEventListener\('play'[\s\S]*phoneOwnsMic\(\)[\s\S]*stopReviewForMic\(t\('take\.reviewReleaseMic'\)\)/,
     'starting Take review while publishing Mic must invoke the feedback guard immediately');
-  assert.match(recorder, /window\.addEventListener\('relay-microphone-started'[\s\S]*recordingPlayer\.paused[\s\S]*stopReviewForMic\('Take review paused while this phone has the mic\.'/,
+  assert.match(recorder, /window\.addEventListener\('relay-microphone-started'[\s\S]*recordingPlayer\.paused[\s\S]*stopReviewForMic\(t\('take\.reviewPausedForMic'\)\)/,
     'taking Mic while a Take is already playing must invoke the same feedback guard');
 });

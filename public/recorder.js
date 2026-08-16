@@ -130,7 +130,7 @@ function render() {
       setReviewOpen(false);
     }
     lastTake.hidden = false;
-    lastTakeToggle.textContent = `Last take · ${formatDuration(take.artifact.durationMs)} · ${verdictLabel(take.quality?.verdict)}`;
+    lastTakeToggle.textContent = t('take.last', { duration: formatDuration(take.artifact.durationMs), verdict: verdictLabel(take.quality?.verdict) });
     recordingDownload.href = href;
     recordingDownload.download = `relay-take-${shortTakeId(take.takeId)}.wav`;
     recordingStatus.textContent = reviewNotice ?? '';
@@ -268,7 +268,7 @@ lastTakeToggle.addEventListener('click', () => {
 // Mic uplink (capture intentionally runs without browser echo cancellation).
 recordingPlayer.addEventListener('play', () => {
   if (phoneOwnsMic()) {
-    stopReviewForMic('Release mic before reviewing the last Take.');
+    stopReviewForMic(t('take.reviewReleaseMic'));
     render();
     return;
   }
@@ -278,7 +278,7 @@ recordingPlayer.addEventListener('play', () => {
 
 window.addEventListener('relay-microphone-started', () => {
   if (recordingPlayer.paused) return;
-  stopReviewForMic('Take review paused while this phone has the mic.');
+  stopReviewForMic(t('take.reviewPausedForMic'));
   render();
 });
 

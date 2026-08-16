@@ -115,19 +115,19 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
     toggle.disabled = Boolean(forcedReason);
     toggle.textContent = forcedReason === 'mic'
-      ? 'Muted for Mic'
+      ? t('listen.mutedForMic')
       : forcedReason === 'playback'
-        ? 'Muted for Song'
+        ? t('listen.mutedForSong')
         : userMuted
-          ? 'Unmute'
-          : 'Mute';
+          ? t('listen.unmute')
+          : t('listen.mute');
     note.textContent = copy;
     document.body.dataset.listen = state;
 
     if (forcedReason === 'mic') {
-      adjustState.textContent = 'Muted while this phone has the mic. Sound restores automatically afterward.';
+      adjustState.textContent = t('listen.adjust.micMuted');
     } else if (forcedReason === 'playback') {
-      adjustState.textContent = 'Muted while this phone plays the room song. Sound restores automatically afterward.';
+      adjustState.textContent = t('listen.adjust.songMuted');
     } else if (userMuted) {
       adjustState.textContent = t('listen.adjust.userMuted');
     } else if (!audioContext) {
@@ -301,11 +301,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   function restoreAfterMic(copy = t('listen.resumed')) {
     micForcedMuted = false;
     if (playbackForcedMuted) {
-      reconcile('Muted while this phone plays the room song.');
+      reconcile(t('listen.songOwned'));
       return;
     }
     if (userMuted) {
-      reconcile('Muted on this phone.');
+      reconcile(t('listen.adjust.userMuted'));
       return;
     }
     reconcile(copy);
@@ -315,18 +315,18 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     if (playbackForcedMuted === forced) return;
     playbackForcedMuted = forced;
     if (forced) {
-      reconcile('Muted while this phone plays the room song.');
+      reconcile(t('listen.songOwned'));
       return;
     }
     if (micForcedMuted) {
-      reconcile('Muted while this phone has the mic.');
+      reconcile(t('listen.micOwned'));
       return;
     }
     if (userMuted) {
-      reconcile('Muted on this phone.');
+      reconcile(t('listen.adjust.userMuted'));
       return;
     }
-    reconcile('Listening resumed.');
+    reconcile(t('listen.resumed'));
   }
 
   async function activateFromGesture(event) {
@@ -373,7 +373,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   window.addEventListener('relay-request-microphone', () => forceMicMute(t('listen.handoffStarting')));
   window.addEventListener('relay-microphone-started', () => forceMicMute(t('listen.micOwned')));
   window.addEventListener('relay-microphone-ended', () => restoreAfterMic());
-  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic('Microphone did not start. Listening resumed.'));
+  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMic(t('listen.micFailedResume')));
   window.addEventListener('relay:playback-view', (event) => {
     const role = event.detail?.role;
     if (role === 'holder' || role === 'preparing') {

@@ -179,12 +179,12 @@ export class WavTakeWriter {
   }
 
   async abort() {
-    if (!this.closed) this.closed = true;
+    this.closed = true;
 
-    // `createWriteStream()` opens its file asynchronously. Removing the partial
-    // immediately after destroy() can race that open and leave a newly-created
-    // `.wav.part` behind after abort has already returned. Wait until the
-    // stream is genuinely closed, then remove the only possible partial path.
+    // `createWriteStream()` opens the file asynchronously. Removing the partial
+    // path immediately after `destroy()` can race that pending open: rm wins,
+    // then the stream opens with `wx` and recreates the orphan `.wav.part`.
+    // Wait until the stream is actually closed before unlinking the path.
     if (!this.stream.closed) {
       await new Promise<void>((resolve) => {
         this.stream.once('close', resolve);

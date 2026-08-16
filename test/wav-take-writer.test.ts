@@ -79,8 +79,7 @@ test('WavTakeWriter fails explicitly instead of buffering an unbounded disk queu
     assert.equal(writer.sampleCount, 0, 'rejected PCM must not be counted as recorded audio');
   } finally {
     await writer.abort();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(await readdir(directory), []);
+    assert.deepEqual(await readdir(directory), [], 'abort resolves only after the partial path is gone');
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -91,8 +90,7 @@ test('aborting a Take removes its partial artifact', async () => {
     const writer = new WavTakeWriter({ directory, takeId: 'take-abort', sampleRate: 48_000 });
     writer.append(Buffer.alloc(1_920));
     await writer.abort();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(await readdir(directory), []);
+    assert.deepEqual(await readdir(directory), [], 'abort owns stream closure and partial cleanup');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

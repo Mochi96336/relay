@@ -1,0 +1,46 @@
+name: Release integration probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.head_ref == 'agent/release-executor'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Probe feeder merges
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          git config user.name 'relay-release-bot'
+          git config user.email 'relay-release-bot@users.noreply.github.com'
+          git checkout -B integration origin/agent/listen-default-audible
+
+          echo '=== merge latest runtime feeder (#14) ==='
+          if ! git merge --no-ff --no-commit origin/agent/runtime-product-status; then
+            echo 'RUNTIME_CONFLICTS_BEGIN'
+            git diff --name-only --diff-filter=U
+            echo 'RUNTIME_CONFLICTS_END'
+            exit 1
+          fi
+          git commit -m 'integrate latest runtime feeder'
+
+          echo '=== merge latest Live UI feeder (#13) ==='
+          if ! git merge --no-ff --no-commit origin/agent/live-ui-shell; then
+            echo 'UI_CONFLICTS_BEGIN'
+            git diff --name-only --diff-filter=U
+            echo 'UI_CONFLICTS_END'
+            exit 1
+          fi
+          git commit -m 'integrate latest Live UI feeder'
+
+          echo 'FEEDER_MERGES_CLEAN'

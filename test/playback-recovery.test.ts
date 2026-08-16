@@ -51,12 +51,19 @@ test('a room song with no playback leader can be recovered', () => {
   assert.equal(canRecoverPlayback({ role: 'observer', timeline: status }), true);
 });
 
+test('missing health fields never count as stale evidence', () => {
+  const status = timeline({ leaderConnected: undefined, leaderFresh: undefined });
+  assert.equal(playbackLeaderHealth(status), 'unknown');
+  assert.equal(canRecoverPlayback({ role: 'observer', timeline: status }), false);
+  assert.equal(shouldForceMuteListen({ role: 'holder', timeline: status }), true);
+});
+
 test('active handoff is never bypassed by recovery UI', () => {
   const status = timeline({ leaderFresh: false, handoffState: 'preparing' });
   assert.equal(canRecoverPlayback({ role: 'observer', timeline: status }), false);
 });
 
-test('Listen mutes only for healthy local playback that is playing or buffering', () => {
+test('Listen mutes only for active local playback while health is healthy or unknown', () => {
   assert.equal(shouldForceMuteListen({ role: 'holder', timeline: timeline({ state: 1 }) }), true);
   assert.equal(shouldForceMuteListen({ role: 'holder', timeline: timeline({ state: 3 }) }), true);
   assert.equal(shouldForceMuteListen({ role: 'preparing', timeline: timeline({ state: 1 }) }), true);

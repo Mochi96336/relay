@@ -27,10 +27,17 @@ test('measured Mic input lives in the performance task while gain stays in Adjus
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
 });
 
-test('Listen defaults audible at 30% and exposes mute rather than enable', () => {
+/**
+ * The slider curve is `(percent / 100) ** 1.5`, so 30% was 16% amplitude -
+ * -15.7 dB before a listener heard anything, on every page load, because the
+ * value is neither stored nor synced. The server mix is already limited, and
+ * the curve reaches unity exactly at 100, so unity is the honest starting
+ * point and the slider exists to come down from it.
+ */
+test('Listen defaults at unity and exposes mute rather than enable', () => {
   assert.match(html, /id="listen-toggle"[^>]*data-i18n="listen\.mute"[^>]*>Mute<\/button>/);
-  assert.match(html, /id="listen-gain-value"[^>]*>30%<\/output>/);
-  assert.match(html, /id="listen-gain"[^>]*value="30"/);
+  assert.match(html, /id="listen-gain-value"[^>]*>100%<\/output>/);
+  assert.match(html, /id="listen-gain"[^>]*value="100"/);
   assert.equal(listen.includes('let userMuted = false;'), true);
   assert.equal(listen.includes('let micForcedMuted = false;'), true);
 });

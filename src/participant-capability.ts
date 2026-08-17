@@ -21,7 +21,7 @@ export function participantIdForCapability(value: unknown) {
   return `participant-${digest.slice(0, 32)}`;
 }
 
-function legacyTestParticipantIdentityEnabled() {
+export function legacyTestParticipantIdentityEnabled() {
   return process.env.NODE_ENV === 'test'
     && process.env.RELAY_TEST_LEGACY_PARTICIPANTS === '1';
 }

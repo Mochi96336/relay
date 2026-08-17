@@ -26,7 +26,11 @@ import {
   normalizeNickname,
   normalizeParticipantId,
 } from './participant-session.js';
-import { browserParticipantIdentity, participantCapabilityMatches } from './participant-capability.js';
+import {
+  browserParticipantIdentity,
+  legacyTestParticipantIdentityEnabled,
+  participantCapabilityMatches,
+} from './participant-capability.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import {
   RoomSongCommandSession,
@@ -2484,6 +2488,18 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'register' && payload.role === 'publisher') {
+      // A publisher is the microphone media authority. Browser clients must
+      // authenticate that authority before registration; anonymous publishers
+      // remain available only to the explicitly enabled legacy test harness.
+      if (!socket.participantId && !legacyTestParticipantIdentityEnabled()) {
+        sendJson(socket, {
+          type: 'participant-auth-rejected',
+          message: 'Authenticate this Relay participant before registering the microphone.',
+        });
+        socket.close(1008, 'Participant authentication required.');
+        return;
+      }
+
       const sampleRate = validSampleRate(payload.sampleRate);
       if (!sampleRate) {
         sendJson(socket, { type: 'error', message: 'Invalid sample rate.' });

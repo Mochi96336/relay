@@ -1,44 +1,4 @@
-from pathlib import Path
-
-
-def replace_once(path: str, old: str, new: str, label: str) -> None:
-    target = Path(path)
-    text = target.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f'{path}: {label}: expected one match, found {count}')
-    target.write_text(text.replace(old, new, 1))
-
-
-replace_once(
-    'src/participant-capability.ts',
-    """function legacyTestParticipantIdentityEnabled() {\n  return process.env.NODE_ENV === 'test'\n    && process.env.RELAY_TEST_LEGACY_PARTICIPANTS === '1';\n}\n""",
-    """export function legacyTestParticipantIdentityEnabled() {\n  return process.env.NODE_ENV === 'test'\n    && process.env.RELAY_TEST_LEGACY_PARTICIPANTS === '1';\n}\n""",
-    'expose explicit test-only legacy identity gate',
-)
-
-replace_once(
-    'src/server.ts',
-    """import { browserParticipantIdentity, participantCapabilityMatches } from './participant-capability.js';\n""",
-    """import {\n  browserParticipantIdentity,\n  legacyTestParticipantIdentityEnabled,\n  participantCapabilityMatches,\n} from './participant-capability.js';\n""",
-    'import test-only legacy identity gate',
-)
-
-replace_once(
-    'src/server.ts',
-    """    if (payload.type === 'register' && payload.role === 'publisher') {\n      const sampleRate = validSampleRate(payload.sampleRate);\n""",
-    """    if (payload.type === 'register' && payload.role === 'publisher') {\n      // A publisher is the microphone media authority. Browser clients must\n      // authenticate that authority before registration; anonymous publishers\n      // remain available only to the explicitly enabled legacy test harness.\n      if (!socket.participantId && !legacyTestParticipantIdentityEnabled()) {\n        sendJson(socket, {\n          type: 'participant-auth-rejected',\n          message: 'Authenticate this Relay participant before registering the microphone.',\n        });\n        socket.close(1008, 'Participant authentication required.');\n        return;\n      }\n\n      const sampleRate = validSampleRate(payload.sampleRate);\n""",
-    'require server-attached participant identity before publisher authority',
-)
-
-replace_once(
-    'public/listen.js',
-    """  function handleMessage(message) {\n    if (message.type === 'source-status') {\n      sourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;\n    }\n  }\n""",
-    """  function handleMessage(message) {\n    if (message.type === 'session-status') {\n      // The monitor socket already receives authoritative room state. Consume it\n      // directly so feedback protection does not depend on the Presence socket\n      // being healthy in this tab.\n      applyRoomSessionStatus(message);\n      return;\n    }\n    if (message.type === 'source-status') {\n      sourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;\n    }\n  }\n""",
-    'consume room Mic ownership on the Listen monitor socket',
-)
-
-Path('test/mic-boundary-hardening-server.test.ts').write_text("""import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
@@ -177,4 +137,3 @@ test('a connected Mic that never sends its first frame times out and recovers on
     await server.stop();
   }
 });
-""")

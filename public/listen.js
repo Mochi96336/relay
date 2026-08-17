@@ -163,6 +163,13 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   function handleMessage(message) {
+    if (message.type === 'session-status') {
+      // The monitor socket already receives authoritative room state. Consume it
+      // directly so feedback protection does not depend on the Presence socket
+      // being healthy in this tab.
+      applyRoomSessionStatus(message);
+      return;
+    }
     if (message.type === 'source-status') {
       sourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;
     }

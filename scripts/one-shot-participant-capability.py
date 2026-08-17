@@ -10,9 +10,44 @@ def replace_once(path: str, old: str, new: str):
     target.write_text(text.replace(old, new, 1))
 
 
-Path('src/participant-capability.ts').write_text("""import { timingSafeEqual } from 'node:crypto';
+def patch_browser_identity(path: str):
+    target = Path(path)
+    text = target.read_text()
+    marker = "const nickname = typeof window.relayNickname === 'string'"
+    index = text.find(marker)
+    if index < 0:
+        raise SystemExit(f'{path}: nickname identity block not found')
+    line_start = text.rfind('\n', 0, index) + 1
+    indent = text[line_start:index]
+    block_end_marker = f"{indent}  : '';"
+    block_end = text.find(block_end_marker, index)
+    if block_end < 0:
+        raise SystemExit(f'{path}: nickname identity block end not found')
+    insert_at = block_end + len(block_end_marker)
+    capability_block = (
+        f"\n{indent}const participantCapability = typeof window.relayParticipantCapability === 'string'\n"
+        f"{indent}  ? window.relayParticipantCapability.trim()\n"
+        f"{indent}  : '';"
+    )
+    text = text[:insert_at] + capability_block + text[insert_at:]
 
-const CAPABILITY_PATTERN = /^[0-9a-f]{64}$/;
+    old_condition = 'if (participantId && nickname) {'
+    if text.count(old_condition) != 1:
+        raise SystemExit(f'{path}: participant identity condition count={text.count(old_condition)}')
+    text = text.replace(old_condition, 'if (participantId && nickname && participantCapability) {', 1)
+
+    old_param = "params.set('participant', participantId);\n"
+    if text.count(old_param) != 1:
+        raise SystemExit(f'{path}: participant query count={text.count(old_param)}')
+    text = text.replace(
+        old_param,
+        old_param + f"{indent}  params.set('cap', participantCapability);\n",
+        1,
+    )
+    target.write_text(text)
+
+
+Path('src/participant-capability.ts').write_text("""const CAPABILITY_PATTERN = /^[0-9a-f]{64}$/;
 
 export function normalizeParticipantCapability(value: unknown) {
   if (typeof value !== 'string') return null;
@@ -21,28 +56,19 @@ export function normalizeParticipantCapability(value: unknown) {
 }
 
 /**
- * Process-local proof that multiple sockets claiming one public participant ID
- * actually came from the same browser identity.
- *
- * Participant IDs remain safe to broadcast for presence/UI. The capability is
- * never included in room snapshots; the first authenticated socket pins it for
- * this Relay process and later sockets must present exactly the same value.
+ * Public participant IDs expose only half of a random 256-bit browser
+ * capability. Relay can therefore verify identity after any server restart
+ * without persisting accounts or trusting whichever socket happened to arrive
+ * first. Knowing the broadcast participant ID still leaves 128 secret bits.
  */
-export class ParticipantCapabilityRegistry {
-  private readonly capabilities = new Map<string, string>();
+export function participantIdForCapability(value: unknown) {
+  const capability = normalizeParticipantCapability(value);
+  return capability ? `participant-${capability.slice(0, 32)}` : null;
+}
 
-  claim(participantId: string, value: unknown) {
-    const capability = normalizeParticipantCapability(value);
-    if (!capability) return false;
-
-    const current = this.capabilities.get(participantId);
-    if (current === undefined) {
-      this.capabilities.set(participantId, capability);
-      return true;
-    }
-
-    return timingSafeEqual(Buffer.from(current), Buffer.from(capability));
-  }
+export function participantCapabilityMatches(participantId: string, value: unknown) {
+  const expectedParticipantId = participantIdForCapability(value);
+  return expectedParticipantId !== null && expectedParticipantId === participantId;
 }
 """)
 
@@ -51,28 +77,26 @@ import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 
 import {
-  ParticipantCapabilityRegistry,
   normalizeParticipantCapability,
+  participantCapabilityMatches,
+  participantIdForCapability,
 } from '../src/participant-capability.js';
 
 describe('participant capability', () => {
-  test('accepts only a 256-bit lowercase hex capability', () => {
+  test('derives a stable public participant id while keeping 128 secret bits', () => {
     const capability = 'ab'.repeat(32);
+    const participantId = `participant-${'ab'.repeat(16)}`;
     assert.equal(normalizeParticipantCapability(capability), capability);
+    assert.equal(participantIdForCapability(capability), participantId);
+    assert.equal(participantCapabilityMatches(participantId, capability), true);
+    assert.equal(participantCapabilityMatches(participantId, `${'ab'.repeat(16)}${'cd'.repeat(16)}`), false);
+  });
+
+  test('rejects malformed participant capabilities', () => {
     assert.equal(normalizeParticipantCapability('AB'.repeat(32)), null);
     assert.equal(normalizeParticipantCapability('ab'.repeat(31)), null);
     assert.equal(normalizeParticipantCapability('not-a-secret'), null);
-  });
-
-  test('pins the first capability for a participant and rejects impersonation', () => {
-    const registry = new ParticipantCapabilityRegistry();
-    const alice = '01'.repeat(32);
-    const attacker = '02'.repeat(32);
-
-    assert.equal(registry.claim('participant-alice', alice), true);
-    assert.equal(registry.claim('participant-alice', alice), true);
-    assert.equal(registry.claim('participant-alice', attacker), false);
-    assert.equal(registry.claim('participant-bob', attacker), true);
+    assert.equal(participantIdForCapability(null), null);
   });
 
   test('human browser sockets carry the private capability with the public identity', () => {
@@ -87,12 +111,12 @@ describe('participant capability', () => {
     ]) {
       const source = readFileSync(path, 'utf8');
       assert.match(source, /relayParticipantCapability/);
-      assert.match(source, /params\\.set\\('cap',/);
+      assert.match(source, /params\.set\('cap',/);
     }
 
     const server = readFileSync('src/server.ts', 'utf8');
-    assert.match(server, /participantCapabilities\\.claim\\(/);
-    assert.match(server, /normalizeParticipantCapability\\(/);
+    assert.match(server, /participantCapabilityMatches\(/);
+    assert.match(server, /participant-auth-rejected/);
   });
 });
 """)
@@ -106,12 +130,7 @@ server_import = """import {
 replace_once(
     'src/server.ts',
     server_import,
-    server_import + "import { ParticipantCapabilityRegistry, normalizeParticipantCapability } from './participant-capability.js';\n",
-)
-replace_once(
-    'src/server.ts',
-    "const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);\nconst youtubeTimeline = new SongSession();",
-    "const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);\nconst participantCapabilities = new ParticipantCapabilityRegistry();\nconst youtubeTimeline = new SongSession();",
+    server_import + "import { participantCapabilityMatches } from './participant-capability.js';\n",
 )
 replace_once(
     'src/server.ts',
@@ -124,14 +143,24 @@ replace_once(
   return { participantId, nickname };
 }
 """,
-    """function participantIdentity(request: IncomingMessage) {
+    """type ParticipantIdentityResult =
+  | { kind: 'none' }
+  | { kind: 'invalid' }
+  | { kind: 'valid'; participantId: string; nickname: string };
+
+function participantIdentity(request: IncomingMessage): ParticipantIdentityResult {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  const participantId = normalizeParticipantId(url.searchParams.get('participant'));
-  const capability = normalizeParticipantCapability(url.searchParams.get('cap'));
-  if (!participantId || !capability) return null;
+  const rawParticipantId = url.searchParams.get('participant');
+  const rawCapability = url.searchParams.get('cap');
+  if (rawParticipantId === null && rawCapability === null) return { kind: 'none' };
+
+  const participantId = normalizeParticipantId(rawParticipantId);
+  if (!participantId || !participantCapabilityMatches(participantId, rawCapability)) {
+    return { kind: 'invalid' };
+  }
 
   const nickname = normalizeNickname(url.searchParams.get('name')) ?? 'Guest';
-  return { participantId, nickname, capability };
+  return { kind: 'valid', participantId, nickname };
 }
 """,
 )
@@ -153,16 +182,15 @@ replace_once(
   }
 """,
     """  const identity = participantIdentity(request);
-  if (identity) {
-    if (!participantCapabilities.claim(identity.participantId, identity.capability)) {
-      sendJson(socket, {
-        type: 'participant-auth-rejected',
-        message: 'This participant identity belongs to another browser capability.',
-      });
-      socket.close(1008, 'Participant capability mismatch.');
-      return;
-    }
-
+  if (identity.kind === 'invalid') {
+    sendJson(socket, {
+      type: 'participant-auth-rejected',
+      message: 'Participant identity did not match its private browser capability. Reload Relay.',
+    });
+    socket.close(1008, 'Participant capability mismatch.');
+    return;
+  }
+  if (identity.kind === 'valid') {
     participantConnectionSequence += 1;
     socket.participantId = identity.participantId;
     socket.participantConnectionId = `connection-${participantConnectionSequence}`;
@@ -197,46 +225,47 @@ replace_once(
   }
 
   function storedIdentity() {
-""",
-    """  function randomParticipantId() {
-    const random = new Uint32Array(4);
-    crypto.getRandomValues(random);
-    return `participant-${Array.from(random, (value) => value.toString(16).padStart(8, '0')).join('')}`;
-  }
+    let participantId = localStorage.getItem(PARTICIPANT_ID_KEY);
+    if (!participantId || !/^[A-Za-z0-9_-]{8,128}$/.test(participantId)) {
+      participantId = randomParticipantId();
+      localStorage.setItem(PARTICIPANT_ID_KEY, participantId);
+    }
 
-  function randomParticipantCapability() {
+    let nickname = normalizeNickname(localStorage.getItem(NICKNAME_KEY));
+""",
+    """  function randomParticipantCapability() {
     const random = new Uint8Array(32);
     crypto.getRandomValues(random);
     return Array.from(random, (value) => value.toString(16).padStart(2, '0')).join('');
   }
 
-  function storedIdentity() {
-""",
-)
-replace_once(
-    'public/presence.js',
-    """    let nickname = normalizeNickname(localStorage.getItem(NICKNAME_KEY));
-    if (!nickname) {
-      nickname = randomNickname();
-      localStorage.setItem(NICKNAME_KEY, nickname);
-    }
-    return { participantId, nickname };
+  function participantIdForCapability(capability) {
+    return `participant-${capability.slice(0, 32)}`;
   }
 
-  let { participantId, nickname } = storedIdentity();
-""",
-    """    let participantCapability = localStorage.getItem(PARTICIPANT_CAPABILITY_KEY);
+  function storedIdentity() {
+    let participantCapability = localStorage.getItem(PARTICIPANT_CAPABILITY_KEY);
     if (!participantCapability || !/^[0-9a-f]{64}$/.test(participantCapability)) {
       participantCapability = randomParticipantCapability();
       localStorage.setItem(PARTICIPANT_CAPABILITY_KEY, participantCapability);
     }
 
-    let nickname = normalizeNickname(localStorage.getItem(NICKNAME_KEY));
-    if (!nickname) {
-      nickname = randomNickname();
-      localStorage.setItem(NICKNAME_KEY, nickname);
+    const participantId = participantIdForCapability(participantCapability);
+    if (localStorage.getItem(PARTICIPANT_ID_KEY) !== participantId) {
+      localStorage.setItem(PARTICIPANT_ID_KEY, participantId);
     }
-    return { participantId, participantCapability, nickname };
+
+    let nickname = normalizeNickname(localStorage.getItem(NICKNAME_KEY));
+""",
+)
+replace_once(
+    'public/presence.js',
+    """    return { participantId, nickname };
+  }
+
+  let { participantId, nickname } = storedIdentity();
+""",
+    """    return { participantId, participantCapability, nickname };
   }
 
   let { participantId, participantCapability, nickname } = storedIdentity();
@@ -263,26 +292,6 @@ replace_once(
 """,
 )
 
-shared_old = """    const nickname = typeof window.relayNickname === 'string'
-      ? window.relayNickname.trim()
-      : '';
-    if (participantId && nickname) {
-      params.set('participant', participantId);
-      params.set('name', nickname);
-    }
-"""
-shared_new = """    const nickname = typeof window.relayNickname === 'string'
-      ? window.relayNickname.trim()
-      : '';
-    const participantCapability = typeof window.relayParticipantCapability === 'string'
-      ? window.relayParticipantCapability.trim()
-      : '';
-    if (participantId && nickname && participantCapability) {
-      params.set('participant', participantId);
-      params.set('cap', participantCapability);
-      params.set('name', nickname);
-    }
-"""
 for path in [
     'public/app.js',
     'public/listen.js',
@@ -290,7 +299,7 @@ for path in [
     'public/system-details.js',
     'public/youtube-sync.js',
 ]:
-    replace_once(path, shared_old, shared_new)
+    patch_browser_identity(path)
 
 replace_once(
     'public/recorder.js',

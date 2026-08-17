@@ -168,6 +168,28 @@ describe('participant session', () => {
     assert.equal(session.micOwnerId, 'participant-bobby');
   });
 
+  test('transport grace expiry returns transport-specific room effects', () => {
+    const session = new ParticipantSession();
+    session.attach({
+      connectionId: 'a',
+      participantId: 'participant-alice',
+      nickname: 'Alice',
+      nowMs: 100,
+    });
+    session.acquireMic('participant-alice');
+
+    const release = session.releaseMic('participant-alice', 'transport-expired');
+    assert.equal(release.ok, true);
+    assert.deepEqual(release.effects, {
+      changed: true,
+      noteQualityEvent: 'mic-owner-changed',
+      cancelRoomSongCommand: 'mic-owner-released',
+      cancelSongHandoff: false,
+      invalidateTimingReason: 'Microphone transport did not reconnect before its grace period expired.',
+      prepareSongHandoffFor: null,
+    });
+  });
+
   test('sanitizes identity inputs without turning a nickname into authentication', () => {
     assert.equal(normalizeParticipantId('participant_123'), 'participant_123');
     assert.equal(normalizeParticipantId('short'), null);

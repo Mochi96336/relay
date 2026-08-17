@@ -1,3 +1,8 @@
+import {
+  micOwnerTransitionEffects,
+  type MicOwnerTransitionEffects,
+} from './mic-owner-transition.js';
+
 export type ParticipantSnapshot = {
   id: string;
   nickname: string;
@@ -22,11 +27,12 @@ type ParticipantRecord = {
   reconnectingUntil: number | null;
 };
 
-type MicResult = {
+export type MicResult = {
   ok: boolean;
   changed: boolean;
   ownerId: string | null;
   previousOwnerId: string | null;
+  effects: MicOwnerTransitionEffects;
   reason?: 'busy' | 'unknown-participant' | 'not-owner' | 'owner-changed';
 };
 
@@ -159,6 +165,11 @@ export class ParticipantSession {
       changed: true,
       ownerId: participantId,
       previousOwnerId,
+      effects: micOwnerTransitionEffects({
+        previousOwnerId,
+        ownerId: participantId,
+        cause: 'publisher-registration',
+      }),
     };
   }
 
@@ -187,6 +198,11 @@ export class ParticipantSession {
       changed: true,
       ownerId: participantId,
       previousOwnerId,
+      effects: micOwnerTransitionEffects({
+        previousOwnerId,
+        ownerId: participantId,
+        cause: 'publisher-registration',
+      }),
     };
   }
 
@@ -202,12 +218,18 @@ export class ParticipantSession {
       changed: true,
       ownerId: null,
       previousOwnerId,
+      effects: micOwnerTransitionEffects({
+        previousOwnerId,
+        ownerId: null,
+        cause: 'explicit-release',
+      }),
     };
   }
 
   sweep(nowMs: number) {
     let changed = false;
     let releasedMicOwnerId: string | null = null;
+    let micOwnerEffects: MicOwnerTransitionEffects | null = null;
 
     for (const [participantId, record] of this.participants) {
       if (record.connections.size > 0) continue;
@@ -218,11 +240,16 @@ export class ParticipantSession {
       if (this.micOwnerValue === participantId) {
         releasedMicOwnerId = participantId;
         this.micOwnerValue = null;
+        micOwnerEffects = micOwnerTransitionEffects({
+          previousOwnerId: participantId,
+          ownerId: null,
+          cause: 'presence-expired',
+        });
       }
     }
 
     if (changed) this.bump();
-    return { changed, releasedMicOwnerId };
+    return { changed, releasedMicOwnerId, micOwnerEffects };
   }
 
   snapshot(): ParticipantSessionSnapshot {
@@ -274,6 +301,11 @@ export class ParticipantSession {
       changed,
       ownerId,
       previousOwnerId: this.micOwnerValue,
+      effects: micOwnerTransitionEffects({
+        previousOwnerId: this.micOwnerValue,
+        ownerId: this.micOwnerValue,
+        cause: 'publisher-registration',
+      }),
       ...(reason ? { reason } : {}),
     };
   }

@@ -14,6 +14,9 @@ test('the first Mic click starts only a local playback prewarm, before takeover 
   const continuation = await readFile(new URL('../public/playback-continuation.js', import.meta.url), 'utf8');
 
   assert.match(continuation, /import '\.\/playback-prewarm-trigger\.js'/);
+  assert.match(trigger, /typeof window !== 'undefined'/,
+    'the trigger is imported transitively by Node tests and must remain browser-only');
+  assert.match(trigger, /typeof document !== 'undefined'/);
   assert.match(trigger, /document\.addEventListener\('click',[\s\S]*true\);/);
   assert.match(trigger, /#start-publisher/);
   assert.match(trigger, /relay:playback-prewarm-intent/);

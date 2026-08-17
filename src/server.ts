@@ -704,6 +704,8 @@ function applyMicOwnerEffects(
     afterQualityEvent?: () => void;
     beforeTimingInvalidation?: () => void;
     publishFullHandoffStatus?: boolean;
+    invalidateTiming?: (reason: string) => void;
+    prepareSongHandoff?: (participantId: string) => void;
   } = {},
 ) {
   return applyMicOwnerTransitionEffects(effects, {
@@ -721,9 +723,13 @@ function applyMicOwnerEffects(
     },
     invalidateTiming: (reason) => {
       options.beforeTimingInvalidation?.();
-      invalidateMicTiming(reason);
+      if (options.invalidateTiming) options.invalidateTiming(reason);
+      else invalidateMicTiming(reason);
     },
-    prepareSongHandoff: (participantId) => beginPreparedSongHandoff(participantId, nowMs),
+    prepareSongHandoff: (participantId) => {
+      if (options.prepareSongHandoff) options.prepareSongHandoff(participantId);
+      else beginPreparedSongHandoff(participantId, nowMs);
+    },
   });
 }
 
@@ -2451,7 +2457,7 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      let ownershipChanged = false;
+      let ownershipEffects: Parameters<typeof applyMicOwnerTransitionEffects>[0] | null = null;
       let previousOwnerId: string | null = participants.micOwnerId;
       if (socket.participantId) {
         const ownership = hasTakeoverExpectation
@@ -2475,16 +2481,24 @@ wss.on('connection', (rawSocket, request) => {
           sendJson(socket, sessionStatusPayload());
           return;
         }
-        ownershipChanged = ownership.changed;
+        ownershipEffects = ownership.effects;
         previousOwnerId = ownership.previousOwnerId;
       } else if (participants.micOwnerId !== null) {
         sendJson(socket, { type: 'error', message: 'Microphone is owned by an active Relay participant.' });
         return;
       }
 
-      if (ownershipChanged) {
-        cancelPendingRoomSongCommand('mic-owner-changed');
-        takeController.noteQualityEvent('mic-owner-changed');
+      let deferredOwnershipTimingReason: string | null = null;
+      let deferredHandoffParticipantId: string | null = null;
+      if (ownershipEffects) {
+        applyMicOwnerEffects(ownershipEffects, performance.now(), {
+          invalidateTiming: (reason) => {
+            deferredOwnershipTimingReason = reason;
+          },
+          prepareSongHandoff: (participantId) => {
+            deferredHandoffParticipantId = participantId;
+          },
+        });
       }
 
       const previousPublisher = publisher;
@@ -2566,12 +2580,10 @@ wss.on('connection', (rawSocket, request) => {
         resetMicFlowEvidence();
       }
 
-      if (ownershipChanged || (sameParticipantReplacement && !sameCapture)) {
-        invalidateMicTiming(
-          ownershipChanged
-            ? 'Microphone ownership changed.'
-            : 'Microphone capture changed.',
-        );
+      if (deferredOwnershipTimingReason) {
+        invalidateMicTiming(deferredOwnershipTimingReason);
+      } else if (sameParticipantReplacement && !sameCapture) {
+        invalidateMicTiming('Microphone capture changed.');
       }
 
       restartLiveSourceAfterMicReconnect();
@@ -2594,7 +2606,7 @@ wss.on('connection', (rawSocket, request) => {
       broadcastStatus();
       if (socket.participantId) {
         broadcastSessionStatus();
-        if (ownershipChanged) beginPreparedSongHandoff(socket.participantId);
+        if (deferredHandoffParticipantId) beginPreparedSongHandoff(deferredHandoffParticipantId);
       }
       return;
     }

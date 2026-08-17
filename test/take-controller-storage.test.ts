@@ -55,3 +55,44 @@ test('TakeController rejects Start without entering a failed Take when storage r
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('TakeController publishes a finalized Take into durable recording history', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-controller-history-'));
+  try {
+    let resolveReady: (() => void) | null = null;
+    const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const controller = new TakeController({
+      directory,
+      sampleRate: 48_000,
+      storagePolicy: { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 },
+      onStorageError: (error) => { throw error; },
+      onChange: (status) => {
+        if (status.lifecycle === 'ready') resolveReady?.();
+      },
+    });
+
+    const started = controller.start('participant-a', {
+      videoId: null,
+      revision: null,
+      state: null,
+      serverTime: null,
+      playbackRate: null,
+    }, 1_000);
+    assert.equal(started.ok, true);
+    if (!started.ok) return;
+
+    const stopped = controller.stop(started.takeId, 'participant-a', 'user', 1_100);
+    assert.equal(stopped.ok, true);
+    await ready;
+
+    const history = controller.listHistory();
+    assert.equal(history.length, 1);
+    assert.equal(history[0].takeId, started.takeId);
+    assert.equal(history[0].recovered, false);
+    assert.equal(history[0].startedByParticipantId, 'participant-a');
+    assert.equal(history[0].endedAtMs, 1_100);
+    assert.ok((await readdir(directory)).includes(`${started.takeId}.json`));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

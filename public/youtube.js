@@ -135,13 +135,17 @@ function setPlayerState(state, detail = '') {
   stateNode.textContent = detail ? `${label} · ${detail}` : label;
 }
 
-function actualVideoId() {
+function reportedVideoId() {
   try {
     const value = player?.getVideoData?.()?.video_id;
-    return typeof value === 'string' && value ? value : loadedVideoId;
+    return typeof value === 'string' && value ? value : null;
   } catch {
-    return loadedVideoId;
+    return null;
   }
+}
+
+function actualVideoId() {
+  return reportedVideoId() ?? loadedVideoId;
 }
 
 function readSnapshot() {
@@ -326,6 +330,15 @@ function renderSnapshot(snapshot) {
   // owns the room clock. Do not turn that local preparation into product input.
   if (pendingHandoff?.phase === 'preparing') return;
 
+  // Even after commit, the expected video id is not proof that the iframe has
+  // switched. YouTube may temporarily return no video data while changing
+  // media; loadedVideoId is only our intent. Never let that fallback complete a
+  // handoff or overwrite the room clock with the outgoing video's position.
+  if (
+    pendingHandoff?.phase === 'committing'
+    && reportedVideoId() !== pendingHandoff.videoId
+  ) return;
+
   // Detect a newer native control gesture even while an earlier command is
   // awaiting acceptance/proof. Stable intermediate telemetry stays suppressed
   // until the latest local intent has a server apply.
@@ -381,7 +394,7 @@ function clearHandoffReadyTimers() {
 
 function announceHandoffReady() {
   if (!pendingHandoff || pendingHandoff.phase !== 'preparing' || handoffReadySent) return false;
-  if (!playerReady || !player || actualVideoId() !== pendingHandoff.videoId) return false;
+  if (!playerReady || !player || reportedVideoId() !== pendingHandoff.videoId) return false;
 
   const state = Number(player.getPlayerState());
   if (![1, 2, 5].includes(state)) return false;
@@ -452,7 +465,7 @@ function applyAuthoritativeRestore() {
     });
     player.setPlaybackRate(desired.playbackRate);
   } else {
-    if (actualVideoId() !== desired.videoId) {
+    if (reportedVideoId() !== desired.videoId) {
       player.cueVideoById({
         videoId: desired.videoId,
         startSeconds: targetPosition,
@@ -644,7 +657,7 @@ async function applyRoomSongCommand(message) {
         startSeconds: Math.max(0, desired.positionSeconds),
       });
     } else {
-      if (actualVideoId() !== desired.videoId) {
+      if (reportedVideoId() !== desired.videoId) {
         player.cueVideoById({
           videoId: desired.videoId,
           startSeconds: Math.max(0, desired.positionSeconds),
@@ -790,7 +803,7 @@ function commitRoomSong(message) {
   };
 
   try {
-    if (actualVideoId() !== pendingHandoff.videoId) {
+    if (reportedVideoId() !== pendingHandoff.videoId) {
       player.cueVideoById({
         videoId: pendingHandoff.videoId,
         startSeconds: pendingHandoff.targetTime,

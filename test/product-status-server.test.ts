@@ -83,9 +83,9 @@ test('arming the Robot source makes missing Robot audio a blocker everywhere', a
       scope: 'robot',
       severity: 'critical',
     });
-    assert.equal(product.issues[0].cause, 'backing-unavailable');
+    assert.equal(product.issues[0].cause, 'backing-not-ready');
     assert.deepEqual(product.issues[0].affects, ['song', 'recording']);
-    assert.equal(product.issues[0].recovery, 'host-service');
+    assert.equal(product.issues[0].recovery, 'automatic');
 
     observer.close();
     robot.close();

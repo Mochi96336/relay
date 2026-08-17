@@ -402,6 +402,20 @@ export class RoomSongCommandSession {
     return cancelled;
   }
 
+  cancelSupersededTransport(identity: PlaybackIdentity) {
+    if (!this.pending) return null;
+    const target = this.pending.target;
+    if (
+      target.participantId !== identity.participantId
+      || target.transportId !== identity.transportId
+      || identity.generation <= target.generation
+    ) return null;
+
+    const cancelled = this.publicCommand(this.pending);
+    this.pending = null;
+    return cancelled;
+  }
+
   pendingForTarget(identity: PlaybackIdentity, nowMs: number) {
     this.expire(nowMs);
     if (!this.pending || !sameIdentity(this.pending.target, identity)) return null;

@@ -227,3 +227,34 @@ count = text.count(anchor)
 if count != 1:
     raise SystemExit(f'test/mic-lifecycle-recovery.test.ts: multitab anchor count={count}')
 path.write_text(text.replace(anchor, contract + anchor, 1))
+
+replace_once(
+    'test/playback-listen-guard.test.ts',
+    r"""  assert.match(listen, /return userMuted \|\| micForcedMuted \|\| playbackForcedMuted;/);
+""",
+    r"""  assert.match(listen, /return userMuted \|\| micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted;/);
+""",
+    'compose room Mic ownership into effective mute contract',
+)
+
+replace_once(
+    'test/playback-listen-guard.test.ts',
+    r"""  assert.match(listen, /if \(micForcedMuted \|\| playbackForcedMuted\) return;/,
+    'forced source roles must make the local Listen toggle non-actionable');
+""",
+    r"""  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted\) return;/,
+    'forced source roles or same-participant Mic ownership must make the local Listen toggle non-actionable');
+""",
+    'include room Mic ownership in Listen toggle contract',
+)
+
+replace_once(
+    'test/playback-listen-guard.test.ts',
+    r"""  assert.match(listen, /if \(micForcedMuted\) \{[\s\S]*t\('listen\.micOwned'\)/,
+    'ending local playback must not resume Listen while this phone still owns the Mic');
+""",
+    r"""  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) \{[\s\S]*t\('listen\.micOwned'\)/,
+    'ending local playback must not resume Listen while this participant owns the Mic in any tab');
+""",
+    'keep playback release muted for sibling-tab Mic ownership',
+)

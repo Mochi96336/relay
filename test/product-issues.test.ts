@@ -116,6 +116,23 @@ describe('product issue contract', () => {
     }]);
   });
 
+  test('a Robot source may arm before its first Robot backing socket is ready', () => {
+    const issues = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      backing: { connected: false, streaming: false, robot: false },
+      robotSourceConnected: true,
+    });
+
+    assert.deepEqual(issues, [{
+      code: 'robot-audio-unavailable',
+      scope: 'robot',
+      severity: 'critical',
+      cause: 'backing-not-ready',
+      affects: ['song', 'recording'],
+      recovery: 'automatic',
+    }]);
+  });
+
   test('describes cause, impact and recovery for concurrent user-visible warnings', () => {
     const issues = buildProductIssues({
       ...HEALTHY_ISSUES,

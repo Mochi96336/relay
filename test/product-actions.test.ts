@@ -35,6 +35,7 @@ function model(
     participantCount: 1,
     micOwnerId: 'participant-alice',
     micOwnerNickname: 'Alice',
+    publisherControlConnected: true,
     roomSong: {
       videoId: 'abcdefghijk',
       connected: true,
@@ -54,6 +55,7 @@ function model(
       calibrationStale: false,
       alignmentClamped: false,
       requiresRobotPlayerDelta: true,
+      robotProbeTimingActive: true,
       robotDeltaFresh: true,
     },
   });
@@ -82,6 +84,8 @@ test('active calibration disables Start Take even though calibration is normal p
   assert.equal(status.health, 'healthy');
   assert.equal(status.actions.canStartTake, false);
   assert.equal(status.actions.startTakeBlockedReason, 'timing-calibration-active');
+  assert.equal(status.actions.canStartCalibration, false);
+  assert.equal(status.actions.startCalibrationBlockedReason, 'calibration-active');
 });
 
 test('an active Take remains stoppable even if Robot health becomes blocked', () => {
@@ -91,4 +95,14 @@ test('an active Take remains stoppable even if Robot health becomes blocked', ()
   assert.equal(status.health, 'blocked');
   assert.equal(status.actions.canStartTake, false);
   assert.equal(status.actions.canStopTake, true);
+  assert.equal(status.actions.canStartCalibration, false);
+  assert.equal(status.actions.startCalibrationBlockedReason, 'take-active');
+});
+
+test('healthy Robot room exposes boot-probe calibration as the canonical action mode', () => {
+  const status = model(READY);
+
+  assert.equal(status.actions.canStartCalibration, true);
+  assert.equal(status.actions.startCalibrationBlockedReason, null);
+  assert.equal(status.actions.startCalibrationMode, 'boot-probe');
 });

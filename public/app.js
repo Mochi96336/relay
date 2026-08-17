@@ -38,6 +38,7 @@ let liveMixActive = false;
 let latestMixHealth = null;
 let latestCalibration = null;
 let roomSongAvailable = null;
+let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
 
 /**
@@ -272,10 +273,8 @@ function updateCalibrateButton() {
   const collecting = latestCalibration?.state === 'collecting';
   const probeActive = latestCalibration?.probeActive === true;
   calibrateButton.disabled = !publisherActive
-    || !liveMixActive
     || roomSongAvailable !== true
-    || collecting
-    || probeActive;
+    || roomCanStartCalibration !== true;
 
   if (roomSongAvailable === false) {
     calibrateStatus.textContent = 'No song to align.';
@@ -942,6 +941,7 @@ async function requestPublisherStart(takeoverExpectedOwnerId = null) {
 window.addEventListener('relay-product-status', (event) => {
   const videoId = event.detail?.room?.song?.videoId;
   roomSongAvailable = typeof videoId === 'string' && videoId.length > 0;
+  roomCanStartCalibration = event.detail?.actions?.canStartCalibration === true;
   updateCalibrateButton();
 });
 

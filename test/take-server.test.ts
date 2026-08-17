@@ -465,6 +465,22 @@ test('Take commands require participant identity, recordable room audio, and the
     const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
     const takeId = String(start.takeId);
 
+    control.send({ type: 'product-status-request' });
+    const recordingProduct = await control.waitFor((message) => (
+      message.type === 'product-status'
+      && message.take?.takeId === takeId
+      && message.take?.lifecycle === 'recording'
+    ));
+    assert.equal(recordingProduct.actions.canStartCalibration, false);
+    assert.equal(recordingProduct.actions.startCalibrationBlockedReason, 'take-active');
+
+    control.send({ type: 'start-timing-calibration' });
+    const calibrationRejected = await control.waitFor((message) => (
+      message.type === 'calibration-command-rejected'
+      && message.reason === 'take-active'
+    ));
+    assert.equal(calibrationRejected.reason, 'take-active');
+
     control.send({ type: 'stop-take', takeId: 'older-take' });
     const stale = await control.waitFor((message) => message.type === 'take-command-rejected' && message.command === 'stop');
     assert.equal(stale.reason, 'stale-take');

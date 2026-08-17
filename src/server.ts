@@ -1248,6 +1248,7 @@ function productStatusPayload(nowMs = performance.now()) {
     participantCount: participantSnapshot.participants.length,
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
+    publisherControlConnected: publisher?.readyState === WebSocket.OPEN,
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),
@@ -1267,6 +1268,7 @@ function productStatusPayload(nowMs = performance.now()) {
       calibrationStale: calibrationIsStale(),
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
       requiresRobotPlayerDelta: robotProbeTimingActive(),
+      robotProbeTimingActive: robotProbeTimingActive(),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
     },
   });
@@ -2353,42 +2355,41 @@ wss.on('connection', (rawSocket, request) => {
     if (payload.type === 'start-timing-calibration') {
       if (!requireMicOwnerCommand(socket, 'start-timing-calibration')) return;
       const nowMs = performance.now();
-      if (takeBlocksCalibration()) {
-        sendJson(socket, { type: 'calibration-command-rejected', reason: 'take-active' });
-        return;
-      }
-      if (timingCalibrationInProgress(nowMs)) {
-        sendJson(socket, timingCalibrationStatusPayload());
-        return;
-      }
-      if (
-        !session.active
-        || backing?.readyState !== WebSocket.OPEN
-        || publisher?.readyState !== WebSocket.OPEN
-      ) {
-        calibration.fail('Connect both phone Microphone and Desktop Source before calibration.');
+      const calibrationAction = productStatusPayload(nowMs).actions;
+      if (!calibrationAction.canStartCalibration) {
+        switch (calibrationAction.startCalibrationBlockedReason) {
+          case 'take-active':
+            sendJson(socket, {
+              type: 'calibration-command-rejected',
+              reason: 'take-active',
+            });
+            return;
+          case 'calibration-active':
+            sendJson(socket, timingCalibrationStatusPayload());
+            return;
+          case 'sources-not-connected':
+            calibration.fail('Connect both phone Microphone and Desktop Source before calibration.');
+            return;
+          case 'sources-not-streaming': {
+            const silent = silentSides(nowMs);
+            calibration.fail(
+              `No audio arriving from the ${silent.join(' or ')}. `
+              + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
+            );
+            return;
+          }
+          case 'phone-not-playing':
+            calibration.fail('Play YouTube on the phone before calibration.');
+            return;
+        }
         return;
       }
 
-      const silent = silentSides(nowMs);
-      if (silent.length > 0) {
-        calibration.fail(
-          `No audio arriving from the ${silent.join(' or ')}. `
-          + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
-        );
-        return;
-      }
-
-      if (robotProbeTimingActive()) {
+      if (calibrationAction.startCalibrationMode === 'boot-probe') {
         restartBootCalibration(nowMs, false);
         return;
       }
 
-      const timeline = currentTimelineStatus(nowMs);
-      if (!timeline.connected || Number(timeline.state) !== 1) {
-        calibration.fail('Play YouTube on the phone before calibration.');
-        return;
-      }
       calibrationWasAutomatic = false;
       calibrationKind = 'content';
       calibration.start(nowMs);

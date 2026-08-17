@@ -10,6 +10,11 @@ import {
 import type { TakeQualityVerdict } from './take-quality.js';
 import type { TakeLifecycle } from './take-session.js';
 import { decideTakeStart, type TakeStartBlockReason } from './take-start-policy.js';
+import {
+  decideCalibrationStart,
+  type CalibrationStartBlockReason,
+  type CalibrationStartMode,
+} from './calibration-start-policy.js';
 
 export type ProductLifecycle = 'idle' | 'preparing' | 'ready' | 'live' | 'recording';
 export type ProductHealth = 'healthy' | 'degraded' | 'blocked';
@@ -45,6 +50,8 @@ export type ProductViewModelInput = {
   participantCount: number;
   micOwnerId: string | null;
   micOwnerNickname: string | null;
+  /** Manual calibration needs the publisher control socket, not only Mic media. */
+  publisherControlConnected?: boolean;
   roomSong: ProductRoomSongInput;
   take: ProductTakeInput;
   timing: {
@@ -60,6 +67,8 @@ export type ProductViewModelInput = {
      * `readiness.components.route.mode`.
      */
     requiresRobotPlayerDelta: boolean;
+    /** Whether manual calibration should use the Robot boot-probe path. */
+    robotProbeTimingActive?: boolean;
     robotDeltaFresh: boolean;
   };
 };
@@ -94,6 +103,9 @@ export type ProductStatus = {
     canStartTake: boolean;
     startTakeBlockedReason: TakeStartBlockReason | null;
     canStopTake: boolean;
+    canStartCalibration: boolean;
+    startCalibrationBlockedReason: CalibrationStartBlockReason | null;
+    startCalibrationMode: CalibrationStartMode | null;
   };
 };
 
@@ -284,6 +296,18 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     roomBlocked: health === 'blocked',
     takeLifecycle: input.take.lifecycle,
   });
+  const startCalibration = decideCalibrationStart({
+    takeLifecycle: input.take.lifecycle,
+    calibrationActive: calibrationActive(input),
+    sessionActive: input.readiness.components.session.active,
+    backingConnected: input.readiness.components.backing.connected,
+    publisherControlConnected: input.publisherControlConnected === true,
+    backingStreaming: input.readiness.components.backing.streaming,
+    micStreaming: input.readiness.components.mic.streaming,
+    robotProbeTimingActive: input.timing.robotProbeTimingActive === true,
+    timelineConnected: input.readiness.components.player.timelineConnected,
+    timelineState: input.readiness.components.player.state,
+  });
 
   return {
     type: 'product-status',
@@ -313,6 +337,9 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       canStartTake: startTake.ok,
       startTakeBlockedReason: startTake.ok ? null : startTake.reason,
       canStopTake: input.take.lifecycle === 'recording',
+      canStartCalibration: startCalibration.ok,
+      startCalibrationBlockedReason: startCalibration.ok ? null : startCalibration.reason,
+      startCalibrationMode: startCalibration.ok ? startCalibration.mode : null,
     },
   };
 }

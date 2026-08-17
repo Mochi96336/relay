@@ -59,3 +59,28 @@ test('gain controls remain thin rails with explicit recommendation action', () =
   assert.equal(css.includes('height: 2px;'), true);
   assert.equal(css.includes('.recommendation-marker'), true);
 });
+
+
+
+test('Calibration enablement follows ProductStatus action authority', () => {
+  assert.equal(app.includes('let roomCanStartCalibration = null;'), true);
+  assert.equal(
+    app.includes('roomCanStartCalibration = event.detail?.actions?.canStartCalibration === true;'),
+    true,
+  );
+
+  const updateStart = app.indexOf('function updateCalibrateButton() {');
+  const updateEnd = app.indexOf('function wsUrl()', updateStart);
+  assert.ok(updateStart >= 0 && updateEnd > updateStart);
+  const updateBlock = app.slice(updateStart, updateEnd);
+  const disabledStart = updateBlock.indexOf('calibrateButton.disabled = ');
+  const disabledEnd = updateBlock.indexOf(';', disabledStart);
+  assert.ok(disabledStart >= 0 && disabledEnd > disabledStart);
+  const disabled = updateBlock.slice(disabledStart, disabledEnd);
+  assert.equal(disabled.includes('publisherActive'), true);
+  assert.equal(disabled.includes('roomSongAvailable'), true);
+  assert.equal(disabled.includes('roomCanStartCalibration'), true);
+  assert.equal(disabled.includes('liveMixActive'), false);
+  assert.equal(disabled.includes('collecting'), false);
+  assert.equal(disabled.includes('probeActive'), false);
+});

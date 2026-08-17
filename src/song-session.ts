@@ -228,7 +228,7 @@ export class SongSession {
   }
 
   cancelHandoff() {
-    if (!this.handoff) return false;
+    if (!this.handoff && !this.failedHandoffHoldover) return false;
     this.handoff = null;
     this.failedHandoffHoldover = null;
     this.bump();

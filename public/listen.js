@@ -77,9 +77,9 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   function listenGain() {
     const percent = Math.max(0, Math.min(100, Number(gainControl.value) || 0));
     if (percent === 0) return 0;
-    // A curved local volume control preserves useful headroom for quiet phone
-    // speakers without exposing the old engineering dB control in Live UI.
-    return ((percent / 100) ** 1.5) * 8;
+    // Keep local playback at or below unity. The server mix is already
+    // full-scale limited; multiplying it again here would create phone-only clipping.
+    return (percent / 100) ** 1.5;
   }
 
   function effectiveMuted() {
@@ -172,7 +172,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
 
   function handleMessage(message) {
     if (message.type === 'source-status') {
-      sourceSampleRate = Number(message.sampleRate ?? message.mixSampleRate) || MIX_SAMPLE_RATE;
+      sourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;
     }
   }
 
@@ -218,9 +218,23 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     });
   }
 
+  async function resumeAudioGraph() {
+    if (!audioContext || audioContext.state !== 'suspended') return;
+    try {
+      await audioContext.resume();
+    } catch (error) {
+      console.warn('Listen AudioContext resume failed', error);
+    }
+  }
+
+  function recoverAudioGraph() {
+    if (effectiveMuted() || !audioContext) return;
+    void resumeAudioGraph().then(() => reconcile());
+  }
+
   async function ensureAudioGraph() {
     if (audioContext && playbackNode && gainNode) {
-      if (audioContext.state === 'suspended') await audioContext.resume();
+      await resumeAudioGraph();
       return;
     }
     if (audioSetupPromise) return audioSetupPromise;
@@ -228,6 +242,10 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     audioSetupPromise = (async () => {
       const context = new AudioContext({ latencyHint: 'interactive' });
       audioContext = context;
+      context.addEventListener('statechange', () => {
+        if (audioContext !== context || context.state !== 'suspended' || effectiveMuted()) return;
+        void resumeAudioGraph();
+      });
       // Consume the user's first interaction immediately. Fetching the worklet
       // before resume can lose transient autoplay permission on mobile.
       await context.resume();
@@ -281,6 +299,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       render(copy || t('listen.firstInteraction'));
       return;
     }
+    if (audioContext.state === 'suspended') void resumeAudioGraph();
     if (transportEnabled) {
       render(copy);
       return;
@@ -395,6 +414,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   // default-unmuted state and later forced-mute restore can run without another tap.
   window.addEventListener('pointerdown', activateFromGesture, { capture: true, once: true });
   window.addEventListener('keydown', activateFromGesture, { capture: true, once: true });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') recoverAudioGraph();
+  });
+  window.addEventListener('pageshow', recoverAudioGraph);
 
   window.addEventListener('beforeunload', () => {
     closeTransport();

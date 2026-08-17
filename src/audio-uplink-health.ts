@@ -21,6 +21,7 @@ export type AudioUplinkHealth = {
   captureGeneration: number;
   capturedSamples: number;
   inputGapSamples: number;
+  inputMuted: boolean;
   droppedSamples: {
     total: number;
     disconnected: number;
@@ -126,6 +127,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     captureGeneration,
     capturedSamples,
     inputGapSamples,
+    inputMuted: payload.inputMuted === true,
     droppedSamples: { total, disconnected, congested, packetTooLarge },
     controlReconnects,
     transport: {

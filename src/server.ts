@@ -39,6 +39,7 @@ import {
   type SongHandoffPlan,
 } from './song-session.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
+import { SERVER_INCARNATION } from './server-incarnation.js';
 import {
   createWebTransportMediaTicket,
   startWebTransportMediaServer,
@@ -308,6 +309,7 @@ function micFlowObserved() {
 function micStreaming(nowMs = performance.now()) {
   return micMediaConnected()
     && micFlowObserved()
+    && micUplinkHealth?.inputMuted !== true
     && nowMs - lastMicFrameAt < STREAM_LIVE_MS;
 }
 
@@ -538,7 +540,10 @@ function sendToPlayback(identity: PlaybackIdentity, payload: unknown) {
 }
 
 function roomSongCommandStatusPayload(nowMs = performance.now()) {
-  return roomSongCommands.statusPayload(roomSongCommandRevision, nowMs);
+  return {
+    ...roomSongCommands.statusPayload(roomSongCommandRevision, nowMs),
+    serverIncarnation: SERVER_INCARNATION,
+  };
 }
 
 function roomSongCommandApplyPayload(command: AcceptedRoomSongCommand) {
@@ -813,6 +818,7 @@ function calibrationCanApply() {
  * can publish the transition immediately.
  */
 function syncAppliedCalibration() {
+  if (takeBlocksCalibration()) return false;
   const active = session.alignment.calibratedMicLagMs;
 
   if (robotProbeTimingActive() && calibrationKind === 'boot-probe') {
@@ -1745,6 +1751,7 @@ function currentDeltaMs(nowMs: number) {
 }
 
 function maybeReapplyBootCalibration(nowMs: number) {
+  if (takeBlocksCalibration()) return;
   if (!robotProbeTimingActive() || calibrationKind !== 'boot-probe') return;
   if (bootPathDifferenceMs === null || calibration.collecting) return;
   if (!robotDeltaIsFresh(nowMs)) return;
@@ -2396,6 +2403,9 @@ wss.on('connection', (rawSocket, request) => {
       }
 
       const captureGeneration = validCaptureGeneration(payload.captureGeneration);
+      const initialSequence = payload.initialSequence === undefined
+        ? undefined
+        : validCaptureGeneration(payload.initialSequence);
       const audioPacketVersion = validAudioPacketVersion(payload.audioPacketVersion);
       if (!audioPacketVersion) {
         sendJson(socket, { type: 'error', message: 'Unsupported audio packet version.' });
@@ -2405,6 +2415,13 @@ wss.on('connection', (rawSocket, request) => {
         sendJson(socket, {
           type: 'error',
           message: 'AudioPacket v2 requires a capture generation in publisher registration.',
+        });
+        return;
+      }
+      if (audioPacketVersion === 2 && initialSequence === null) {
+        sendJson(socket, {
+          type: 'error',
+          message: 'AudioPacket v2 initial sequence must be a uint32 when provided.',
         });
         return;
       }
@@ -2527,6 +2544,7 @@ wss.on('connection', (rawSocket, request) => {
             receiver: {
               source: 'mic',
               generation: captureGeneration!,
+              initialSequence: initialSequence ?? undefined,
               ...AUDIO_TRANSPORT_CONFIG,
             },
           });

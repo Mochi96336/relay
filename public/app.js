@@ -95,6 +95,7 @@ function renderGainAdvice() {
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
 let captureInputGapSamples = 0;
+let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
 let lastUplinkWarningAt = 0;
@@ -165,6 +166,7 @@ function audioUplinkHealthPayload() {
     captureGeneration: captureGeneration >>> 0,
     capturedSamples: captureSampleCursor,
     inputGapSamples: captureInputGapSamples,
+    inputMuted: captureInputMuted,
     droppedSamples: { total: uplinkDroppedSamples, ...uplinkDroppedSamplesByReason },
     controlReconnects: Math.max(0, publisherControlConnections - 1),
     transport: audioTransport.stats(),
@@ -558,6 +560,20 @@ function canKeepPublishing() {
   return publisherActive && Boolean(mediaStream) && Boolean(audioContext);
 }
 
+async function resumePublisherAudioContext() {
+  if (!publisherActive || !audioContext || audioContext.state !== 'suspended') return;
+  try {
+    await audioContext.resume();
+  } catch (error) {
+    console.warn('Microphone AudioContext resume failed', error);
+  }
+}
+
+function recoverPublisherAudio() {
+  if (!publisherActive) return;
+  void resumePublisherAudioContext();
+}
+
 function schedulePublisherReconnect() {
   if (!canKeepPublishing()) return;
   clearSocketReconnect();
@@ -598,6 +614,7 @@ async function connectPublisherSocket() {
     role: 'publisher',
     sampleRate: audioContext.sampleRate,
     captureGeneration: captureGeneration >>> 0,
+    initialSequence: capturePacketSequence >>> 0,
     audioPacketVersion: AUDIO_PACKET_VERSION,
   };
   if (pendingPublisherTakeoverOwnerId) {
@@ -667,6 +684,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
   captureInputGapSamples = 0;
+  captureInputMuted = false;
   publisherControlConnections = 0;
   publisherButton.disabled = false;
   updateSingerControls();
@@ -695,6 +713,11 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   });
 
   audioContext = new AudioContext({ latencyHint: 'interactive' });
+  const captureContext = audioContext;
+  captureContext.addEventListener('statechange', () => {
+    if (!publisherActive || audioContext !== captureContext || captureContext.state !== 'suspended') return;
+    void resumePublisherAudioContext();
+  });
   await audioContext.audioWorklet.addModule('/capture-worklet.js');
   await audioContext.resume();
 
@@ -707,6 +730,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   captureSampleCursor = 0;
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
+  captureInputMuted = false;
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
   publisherControlConnections = 0;
@@ -714,6 +738,21 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   startAudioUplinkHealthReporting();
 
   const [track] = mediaStream.getAudioTracks();
+  captureInputMuted = track?.muted === true;
+  track?.addEventListener('mute', () => {
+    if (!publisherActive) return;
+    captureInputMuted = true;
+    sendAudioUplinkHealth();
+    setStatus('Microphone interrupted', 'The phone muted the microphone input; trying to recover it.');
+    void resumePublisherAudioContext();
+  });
+  track?.addEventListener('unmute', () => {
+    if (!publisherActive) return;
+    captureInputMuted = false;
+    sendAudioUplinkHealth();
+    setStatus('Microphone is live', 'Microphone input recovered.');
+    void resumePublisherAudioContext();
+  });
   track?.addEventListener('ended', () => {
     if (!publisherActive) return;
     stop(false, { releaseMic: true })
@@ -855,6 +894,11 @@ window.addEventListener('relay-request-microphone', (event) => {
     : null;
   requestPublisherStart(expectedOwnerId).catch(console.error);
 });
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') recoverPublisherAudio();
+});
+window.addEventListener('pageshow', recoverPublisherAudio);
 
 window.addEventListener('relay-release-microphone', () => {
   if (!publisherActive) return;

@@ -5,26 +5,24 @@ import { YouTubeTimelineTracker } from './youtube-timeline.js';
 const LEADER_STALE_AFTER_MS = 1_500;
 const HANDOFF_TIME_TOLERANCE_SECONDS = 1.5;
 /**
- * How long a target may leave a prepared handoff unacknowledged.
- *
- * A live handoff deliberately freezes the room song: the old leader may only
- * repeat what it is already playing, and no other transport may touch the
- * clock at all. That is correct for the seconds a real handoff takes and
- * intolerable for anything longer, so a target that never answers the plan
- * must not be able to hold the room indefinitely.
+ * How long a target that has never acknowledged preparation may hold a handoff.
  */
 const HANDOFF_PREPARE_TIMEOUT_MS = 20_000;
 /**
- * A commit should be a short proof window, not another indefinite state.
- *
- * Once the target says it is ready the old leader is still kept alive until
- * matching target telemetry arrives. If that proof never appears, roll the
- * handoff back to preparation so a later retry has to cross the ready boundary
- * again instead of leaving the room stuck in `committing` forever.
+ * Hard ceiling for the whole handoff, including retries after an acknowledged
+ * ready state. A target may need a short retry or a user gesture, but it must
+ * never freeze the room indefinitely once it has said "ready" once.
+ */
+const HANDOFF_TOTAL_TIMEOUT_MS = 30_000;
+/**
+ * A commit is only a short proof window. If the target does not produce proof,
+ * the server cancels the handoff; a healthy client can explicitly defer before
+ * this deadline and retry, but a stuck client cannot make the server roll back
+ * silently into an immortal preparing state.
  */
 const HANDOFF_COMMIT_TIMEOUT_MS = 5_000;
 const HOLDOVER_TIME_TOLERANCE_SECONDS = 0.9;
-/** YT.PlayerState.BUFFERING: on its way to a state, not refusing one. */
+/** YT.PlayerState.BUFFERING: transport progress, not playback proof. */
 const BUFFERING_STATE = 3;
 
 /**
@@ -85,15 +83,13 @@ type Handoff = {
   state: 'preparing' | 'committing';
   startedAtMs: number;
   commitStartedAtMs: number | null;
+  readyAcknowledged: boolean;
   /**
-   * Whether the target has ever reported itself prepared.
-   *
-   * A target that has acknowledged the plan and explicitly returned to
-   * preparation (for example because autoplay needs a real user gesture) is
-   * trusted to wait there. The short-lived `committing` phase has its own
-   * deadline above because it is only waiting for proof telemetry.
+   * Candidate-only clock evidence. BUFFERING reports may advance this tracker
+   * so a real PLAYING proof can be judged against the target's own recent
+   * reports without overwriting the authoritative room timeline or leader.
    */
-  everReady: boolean;
+  targetTimeline: YouTubeTimelineTracker;
 };
 
 export function normalizePlaybackTransportId(value: unknown) {
@@ -122,8 +118,8 @@ export function normalizePlaybackGeneration(value: unknown) {
  * The playback leader remains an implementation detail, not a visible DJ role.
  * A prepared handoff is also intentionally not triggered by presence alone:
  * callers must begin it from an explicit product action such as microphone
- * acquisition. The target is cued first, then committed, and only valid target
- * telemetry completes the handoff.
+ * acquisition. The target is prepared first, then committed, and only real
+ * target playback proof completes the handoff.
  */
 export class SongSession {
   private readonly timeline = new YouTubeTimelineTracker();
@@ -154,14 +150,7 @@ export class SongSession {
     }
 
     this.handoffSequence += 1;
-    this.handoff = {
-      id: `song-handoff-${this.handoffSequence}`,
-      target,
-      state: 'preparing',
-      startedAtMs: nowMs,
-      commitStartedAtMs: null,
-      everReady: false,
-    };
+    this.handoff = this.newHandoff(`song-handoff-${this.handoffSequence}`, target, nowMs);
     this.bump();
     return this.handoffPlan(nowMs);
   }
@@ -182,14 +171,7 @@ export class SongSession {
       && identity.generation > this.handoff.target.generation
     ) {
       this.handoffSequence += 1;
-      this.handoff = {
-        id: `song-handoff-${this.handoffSequence}`,
-        target: identity,
-        state: 'preparing',
-        startedAtMs: nowMs,
-        commitStartedAtMs: null,
-        everReady: false,
-      };
+      this.handoff = this.newHandoff(`song-handoff-${this.handoffSequence}`, identity, nowMs);
       this.bump();
       return this.handoffPlan(nowMs);
     }
@@ -212,7 +194,7 @@ export class SongSession {
       || micOwnerId !== identity.participantId
     ) return null;
 
-    this.handoff.everReady = true;
+    this.handoff.readyAcknowledged = true;
     if (this.handoff.state !== 'committing') {
       this.handoff.state = 'committing';
       this.handoff.commitStartedAtMs = nowMs;
@@ -233,6 +215,7 @@ export class SongSession {
     if (this.handoff.state === 'preparing') return false;
     this.handoff.state = 'preparing';
     this.handoff.commitStartedAtMs = null;
+    this.handoff.targetTimeline = new YouTubeTimelineTracker();
     this.bump();
     return true;
   }
@@ -250,36 +233,39 @@ export class SongSession {
   }
 
   /**
-   * Abandons a handoff whose target is never going to answer and rolls a stale
-   * commit back to preparation while preserving the old playback leader.
+   * Abandons a handoff whose target is never going to answer.
    *
-   * `targetPresent` is supplied by the caller because SongSession does not know
-   * about sockets. Without this, closing the tab that was about to take over
-   * left the room frozen for good: the old leader restricted to repeating
-   * itself, every other transport refused as `handoff-not-target`, and the only
-   * escapes were releasing the microphone or leaving the room.
+   * A client that detects an autoplay/apply failure can explicitly defer back
+   * to preparation and retry inside the total deadline. The server watchdog is
+   * different: if a live client simply stops producing commit proof, the
+   * timeout cancels the handoff so the existing server caller can notify the
+   * target and broadcast the authoritative idle state. There is deliberately no
+   * silent `committing -> preparing` transition here.
    */
   sweepHandoff(targetPresent: boolean, nowMs = performance.now()) {
     if (!this.handoff) return false;
     if (!targetPresent) return this.cancelHandoff();
+
+    if (nowMs - this.handoff.startedAtMs > HANDOFF_TOTAL_TIMEOUT_MS) {
+      return this.cancelHandoff();
+    }
 
     if (
       this.handoff.state === 'committing'
       && this.handoff.commitStartedAtMs !== null
       && nowMs - this.handoff.commitStartedAtMs > HANDOFF_COMMIT_TIMEOUT_MS
     ) {
-      this.handoff.state = 'preparing';
-      this.handoff.commitStartedAtMs = null;
-      this.bump();
-      // This is deliberately not a cancellation. The server's sweep caller
-      // interprets true as "send song-handoff-cancelled"; returning false keeps
-      // the target locked and requires it to cross the ready boundary again.
-      return false;
+      return this.cancelHandoff();
     }
 
-    if (this.handoff.everReady) return false;
-    if (nowMs - this.handoff.startedAtMs <= HANDOFF_PREPARE_TIMEOUT_MS) return false;
-    return this.cancelHandoff();
+    if (
+      !this.handoff.readyAcknowledged
+      && nowMs - this.handoff.startedAtMs > HANDOFF_PREPARE_TIMEOUT_MS
+    ) {
+      return this.cancelHandoff();
+    }
+
+    return false;
   }
 
   update(
@@ -298,6 +284,24 @@ export class SongSession {
       return { accepted: false, reason: authority.reason, leaderChanged: false };
     }
 
+    const targetDuringCommit = Boolean(
+      this.handoff
+      && this.handoff.state === 'committing'
+      && this.sameIdentity(this.handoff.target, identity),
+    );
+
+    // BUFFERING from the target is useful evidence that its media pipeline is
+    // alive, but it is not proof that the singer can actually hear/see the new
+    // playback. Keep that evidence on a candidate-only tracker. This preserves
+    // the old leader and authoritative room clock while still giving later
+    // PLAYING telemetry a recent target-local reference after a real rebuffer.
+    if (targetDuringCommit && !this.targetTelemetryCompletes(payload, nowMs)) {
+      if (!this.handoff!.targetTimeline.update(payload, nowMs)) {
+        return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
+      }
+      return { accepted: true, leaderChanged: false };
+    }
+
     // Validate the media payload before granting authority. A malformed packet
     // must never be able to steal the room clock merely by arriving first.
     const before = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
@@ -305,11 +309,7 @@ export class SongSession {
       return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
     }
 
-    const completingHandoff = Boolean(
-      this.handoff
-      && this.handoff.state === 'committing'
-      && this.sameIdentity(this.handoff.target, identity),
-    );
+    const completingHandoff = targetDuringCommit;
     const completedHandoffId = completingHandoff ? this.handoff!.id : undefined;
     const previousLeader = completingHandoff ? this.leaderIdentity() : undefined;
 
@@ -436,6 +436,22 @@ export class SongSession {
       return { ok: false, reason: 'handoff-not-target' };
     }
 
+    // If a prepared handoff was cancelled/expired after Mic ownership already
+    // moved, the previous playback leader may continue only the same semantic
+    // song as holdover. Playback authority and Mic authority are deliberately
+    // not atomic: a failed playback transfer must not make the old media clock
+    // disappear just because the microphone transfer succeeded earlier.
+    if (
+      this.leader
+      && micOwnerId !== null
+      && this.leader.participantId !== micOwnerId
+      && this.sameIdentity(this.leader, identity)
+    ) {
+      return this.safeHoldoverTelemetry(payload, nowMs)
+        ? { ok: true }
+        : { ok: false, reason: 'handoff-holdover-semantic-change' };
+    }
+
     if (micOwnerId !== null && identity.participantId !== micOwnerId) {
       return { ok: false, reason: 'mic-owner-required' };
     }
@@ -513,20 +529,36 @@ export class SongSession {
   }
 
   private safeTargetTelemetry(payload: Record<string, unknown>, nowMs: number) {
+    if (!this.handoff) return false;
     const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
+    const reference = this.handoff.targetTimeline.hasTelemetry
+      ? this.handoff.targetTimeline.statusPayload(nowMs) as Record<string, unknown>
+      : room;
     const desiredState = Number(room.state);
     const incomingState = Number(payload.state);
-    // A target that has just been told to take a song is loading it, and a
-    // phone loading a video reports BUFFERING before it reports playing.
-    // Requiring the finished state here meant a handoff could only complete on
-    // a device that never had to buffer, which is not a phone.
-    const stateReady = incomingState === BUFFERING_STATE
-      || (desiredState === 1 ? incomingState === 1 : [0, 2, 5].includes(incomingState));
+    const roomRate = Number(room.playbackRate);
+    const incomingRate = Number(payload.playbackRate ?? 1);
+    const desiredPlaying = desiredState === 1 || desiredState === BUFFERING_STATE;
+    const stateRelevant = incomingState === BUFFERING_STATE
+      || (desiredPlaying ? incomingState === 1 : [0, 2, 5].includes(incomingState));
 
     return typeof room.videoId === 'string'
       && payload.videoId === room.videoId
-      && stateReady
-      && this.withinOwnReport(room, payload, HANDOFF_TIME_TOLERANCE_SECONDS);
+      && stateRelevant
+      && Number.isFinite(roomRate)
+      && Number.isFinite(incomingRate)
+      && Math.abs(roomRate - incomingRate) < 0.0001
+      && this.withinOwnReport(reference, payload, HANDOFF_TIME_TOLERANCE_SECONDS);
+  }
+
+  private targetTelemetryCompletes(payload: Record<string, unknown>, nowMs: number) {
+    if (!this.handoff) return false;
+    const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
+    const desiredState = Number(room.state);
+    const incomingState = Number(payload.state);
+    if (incomingState === BUFFERING_STATE) return false;
+    if (desiredState === 1 || desiredState === BUFFERING_STATE) return incomingState === 1;
+    return [0, 2, 5].includes(incomingState);
   }
 
   private handoffPlan(nowMs: number): SongHandoffPlan | null {
@@ -539,14 +571,27 @@ export class SongSession {
       || !Number.isFinite(Number(room.playbackRate))
     ) return null;
 
+    const roomState = Number(room.state);
     return {
       handoffId: this.handoff.id,
       revision: this.revisionValue,
       target: { ...this.handoff.target },
       videoId: room.videoId,
-      state: Number(room.state),
+      state: roomState === BUFFERING_STATE ? 1 : roomState,
       serverTime: Number(room.serverTime),
       playbackRate: Number(room.playbackRate),
+    };
+  }
+
+  private newHandoff(id: string, target: PlaybackIdentity, nowMs: number): Handoff {
+    return {
+      id,
+      target,
+      state: 'preparing',
+      startedAtMs: nowMs,
+      commitStartedAtMs: null,
+      readyAcknowledged: false,
+      targetTimeline: new YouTubeTimelineTracker(),
     };
   }
 

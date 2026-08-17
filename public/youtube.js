@@ -513,7 +513,7 @@ function cancelPlaybackPrewarm() {
   restorePrewarmMute(prewarm);
 }
 
-function cuePendingHandoff({ reusePreparedPlayer = false } = {}) {
+function cuePendingHandoff() {
   if (!pendingHandoff || !playerReady || !player) return;
   try {
     serverMutation = {
@@ -525,7 +525,8 @@ function cuePendingHandoff({ reusePreparedPlayer = false } = {}) {
     loadedVideoId = pendingHandoff.videoId;
     previousSnapshot = null;
 
-    const canReuse = reusePreparedPlayer && reportedVideoId() === pendingHandoff.videoId;
+    const canReuse = pendingHandoff.reusePreparedPlayer === true
+      && reportedVideoId() === pendingHandoff.videoId;
     if (canReuse) {
       const currentTime = Number(player.getCurrentTime());
       if (!Number.isFinite(currentTime) || Math.abs(currentTime - pendingHandoff.targetTime) > 0.75) {
@@ -903,6 +904,7 @@ async function prepareRoomSong(message) {
     playbackRate: Number.isFinite(Number(message.playbackRate)) && Number(message.playbackRate) > 0
       ? Number(message.playbackRate)
       : 1,
+    reusePreparedPlayer,
     prewarmWasMuted: reusePreparedPlayer ? preparedPrewarm?.wasMuted ?? null : null,
     phase: 'preparing',
   };
@@ -912,7 +914,7 @@ async function prepareRoomSong(message) {
 
   try {
     await ensurePlayer(videoId);
-    if (playerReady) cuePendingHandoff({ reusePreparedPlayer });
+    if (playerReady) cuePendingHandoff();
   } catch (error) {
     console.error(error);
     window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {

@@ -32,7 +32,7 @@ const RTT_WINDOW = 8;
 const recentRttMs = [];
 
 const PLAYBACK_TRANSPORT_KEY = 'relay.playbackTransportId.v1';
-const playbackGeneration = Date.now() >>> 0;
+const PLAYBACK_GENERATION_KEY = 'relay.playbackGeneration.v1';
 const MIC_INTENT_REPLAY_MS = 8_000;
 
 function randomPlaybackTransportId() {
@@ -56,6 +56,31 @@ function playbackTransportId() {
   return id;
 }
 
+function nextPlaybackGeneration() {
+  const previous = Number(sessionStorage.getItem(PLAYBACK_GENERATION_KEY));
+  const wallClock = Date.now();
+
+  // Generation is only ordered within one logical tab transport. If a tab ever
+  // exhausted the JS safe-integer range, rotate the transport instead of
+  // wrapping and making the newest page look older than an earlier incarnation.
+  if (Number.isSafeInteger(previous) && previous >= Number.MAX_SAFE_INTEGER) {
+    sessionStorage.removeItem(PLAYBACK_TRANSPORT_KEY);
+    sessionStorage.setItem(PLAYBACK_GENERATION_KEY, String(wallClock));
+    return wallClock;
+  }
+
+  // Seed from wall clock so the first page after upgrading from the old uint32
+  // scheme is newer than any still-connected legacy incarnation. Afterwards
+  // the stored counter is authoritative: clock rollback cannot reverse page
+  // ordering, and two reloads in the same millisecond still get distinct IDs.
+  const generation = Number.isSafeInteger(previous) && previous >= 0
+    ? Math.max(previous + 1, wallClock)
+    : wallClock;
+  sessionStorage.setItem(PLAYBACK_GENERATION_KEY, String(generation));
+  return generation;
+}
+
+const playbackGeneration = nextPlaybackGeneration();
 const transportId = playbackTransportId();
 // Expose the page transport as a debugging/introspection aid. Product authority
 // still comes from the server-attached participant identity, never from a

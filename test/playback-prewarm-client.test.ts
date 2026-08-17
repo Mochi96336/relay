@@ -68,11 +68,13 @@ test('formal handoff consumes a matching warmed player instead of rebuilding it'
   const prepareSection = topLevelFunctionSection(source, 'async function prepareRoomSong');
   assert.match(prepareSection, /preparedPrewarm\.videoId === videoId/);
   assert.match(prepareSection, /reportedVideoId\(\) === videoId/);
+  assert.match(prepareSection, /reusePreparedPlayer,/,
+    'reuse belongs to this pending handoff rather than a one-off function argument');
   assert.match(prepareSection, /prewarmWasMuted:/);
-  assert.match(prepareSection, /cuePendingHandoff\(\{ reusePreparedPlayer \}\)/);
+  assert.match(prepareSection, /cuePendingHandoff\(\)/);
 
-  const cueSection = topLevelFunctionSection(source, 'function cuePendingHandoff');
-  assert.match(cueSection, /reusePreparedPlayer/);
+  const cueSection = topLevelFunctionSection(source, 'function cuePendingHandoff()');
+  assert.match(cueSection, /pendingHandoff\.reusePreparedPlayer === true/);
   assert.match(cueSection, /player\.seekTo/,
     'a warmed player may be corrected to the newer projected handoff time');
   assert.match(cueSection, /player\.cueVideoById/,

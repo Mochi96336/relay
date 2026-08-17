@@ -82,13 +82,21 @@ function hostIssues(facts: ProductIssueFacts) {
   if (facts.routeMode === 'idle') return issues;
 
   if (!facts.backing.connected) {
-    const waitingForRoute = facts.routeMode === 'song';
+    const waitingForRoute = facts.routeMode === 'song'
+      || (
+        facts.routeMode === 'robot'
+        && facts.robotSourceConnected
+        && !facts.backing.robot
+      );
     issues.push({
       code: facts.routeMode === 'robot' ? 'robot-audio-unavailable' : 'audio-unavailable',
       scope: facts.routeMode === 'robot' ? 'robot' : 'audio',
       severity: 'critical',
-      // `song` means a Song requires backing but no concrete route has armed
-      // yet. A false `connected` bit cannot tell us that something disconnected.
+      // `song` has no concrete backing route yet. Likewise a Robot source can
+      // arm the route before its first Robot backing socket registers. In both
+      // cases a false `connected` bit means "not ready", not "disconnected".
+      // Once Robot identity (or legacy grace) has been established, absence is
+      // an actual unavailable route instead of normal startup.
       cause: waitingForRoute ? 'backing-not-ready' : 'backing-unavailable',
       affects: ['song', 'recording'],
       recovery: waitingForRoute ? 'automatic' : 'host-service',

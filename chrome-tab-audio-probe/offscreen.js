@@ -48,6 +48,11 @@ function relayWsUrl(pageUrl) {
   return `${protocol}//${url.host}/ws${query}`;
 }
 
+function relayInfrastructureKey(pageUrl) {
+  const url = new URL(pageUrl);
+  return new URLSearchParams(url.hash.slice(1)).get('infra') ?? '';
+}
+
 function reportState(state) {
   if (!Number.isInteger(activeTabId)) return;
   chrome.runtime.sendMessage({
@@ -83,10 +88,16 @@ function connectRelay() {
 
   socket.addEventListener('open', () => {
     if (relaySocket !== socket || !audioContext) return;
+    const infrastructureKey = relayInfrastructureKey(relayPageUrl);
+    if (!/^[0-9a-f]{64}$/.test(infrastructureKey)) {
+      console.error('Relay source page is missing a valid #infra= capability.');
+      reportState('error');
+      socket.close();
+      return;
+    }
     socket.send(JSON.stringify({
-      type: 'register',
-      role: 'backing',
-      sampleRate: audioContext.sampleRate,
+      type: 'infrastructure-authenticate',
+      key: infrastructureKey,
     }));
   });
 
@@ -96,6 +107,21 @@ function connectRelay() {
     try {
       message = JSON.parse(event.data);
     } catch {
+      return;
+    }
+
+    if (message.type === 'infrastructure-authenticated') {
+      socket.send(JSON.stringify({
+        type: 'register',
+        role: 'backing',
+        sampleRate: audioContext.sampleRate,
+      }));
+      return;
+    }
+
+    if (message.type === 'infrastructure-auth-rejected') {
+      console.error('Relay rejected infrastructure capability:', message.message);
+      reportState('error');
       return;
     }
 

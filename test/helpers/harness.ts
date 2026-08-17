@@ -32,6 +32,7 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         PORT: '0',
         NODE_ENV: 'test',
         RELAY_TEST_LEGACY_PARTICIPANTS: '1',
+        RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

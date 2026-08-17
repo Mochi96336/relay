@@ -16,7 +16,7 @@ test('locale stays local to this phone and switches without navigation', () => {
 test('locale loads before product runtimes and the switch stays inside the people popover', () => {
   const html = read('public/index.html');
   const locale = html.indexOf('<script src="/i18n.js"></script>');
-  const presence = html.indexOf('<script src="/presence.js"></script>');
+  const presence = html.indexOf('src="/presence.js"');
   assert.ok(locale >= 0);
   assert.ok(presence > locale);
   assert.equal(html.includes('class="locale-control"'), true);

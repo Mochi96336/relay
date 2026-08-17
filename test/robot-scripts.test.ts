@@ -124,14 +124,16 @@ afterEach(() => {
 });
 
 describe('robot-source launcher', () => {
-  test('uses one sample rate, hides the key, and treats a child exit as failure', () => {
+  test('uses one sample rate, hides deployment secrets, and treats a child exit as failure', () => {
     const { env, state } = mockedEnvironment();
+    const infrastructureKey = 'cd'.repeat(32);
     const result = run('robot-source.sh', {
       ...env,
       PORT: '3100',
       RELAY_BACKING_SAMPLE_RATE: '44100',
       RELAY_BACKING_CAPTURE_LATENCY_MS: '60',
       RELAY_KEY: 'do-not-print-this-key',
+      RELAY_INFRA_KEY: infrastructureKey,
     });
 
     assert.ifError(result.error);
@@ -140,6 +142,7 @@ describe('robot-source launcher', () => {
     assert.equal(readFileSync(path.join(state, 'parec-latency'), 'utf8'), '60');
     assert.equal(readFileSync(path.join(state, 'npm-rate'), 'utf8'), '44100');
     assert.doesNotMatch(result.stderr, /do-not-print-this-key/);
+    assert.doesNotMatch(result.stderr, new RegExp(infrastructureKey));
     assert.match(result.stderr, /localhost:3100\/source\.html\?robot=1/);
     assert.match(result.stderr, /authenticated/);
     assert.match(result.stderr, /component exited unexpectedly/);

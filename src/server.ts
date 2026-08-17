@@ -59,6 +59,11 @@ const publicDir = path.resolve(__dirname, '../public');
 const takeDir = path.resolve(process.env.RELAY_TAKE_DIR ?? path.join(process.cwd(), 'takes'));
 const port = Number(process.env.PORT ?? 3000);
 const relayKey = process.env.RELAY_KEY ?? null;
+const rawInfrastructureKey = process.env.RELAY_INFRA_KEY?.trim() ?? '';
+if (rawInfrastructureKey && !/^[0-9a-f]{64}$/.test(rawInfrastructureKey)) {
+  throw new Error('RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret.');
+}
+const infrastructureKey = rawInfrastructureKey || null;
 
 function envMs(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -184,6 +189,7 @@ type RelaySocket = WebSocket & {
   playbackMicIntentAtMs?: number;
   legacyPlaybackGeneration?: number;
   telemetryRejectedReason?: string;
+  infrastructureAuthenticated?: boolean;
 };
 
 type TimelineStatus = {
@@ -459,6 +465,47 @@ function sendJson(socket: WebSocket, payload: unknown) {
   }
 }
 
+function legacyTestInfrastructureEnabled() {
+  return process.env.NODE_ENV === 'test'
+    && process.env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1';
+}
+
+function infrastructureAuthorized(socket: RelaySocket) {
+  return socket.infrastructureAuthenticated === true || legacyTestInfrastructureEnabled();
+}
+
+function rejectInfrastructure(socket: RelaySocket, message: string) {
+  sendJson(socket, { type: 'infrastructure-auth-rejected', message });
+  socket.close(1008, 'Infrastructure authentication required.');
+}
+
+type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
+
+/**
+ * A physical media/monitor WebSocket may bind exactly one transport role.
+ * Authentication says who may use it; playback identity remains orthogonal
+ * because a participant's playback-control capability can intentionally live
+ * on the same socket as its publisher transport. Reconnects get a new socket
+ * instead of morphing publisher/backing/monitor while authority pointers still
+ * reference the old transport.
+ */
+function canClaimSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
+  if (socket.role === 'unknown' || socket.role === requestedRole) return true;
+  sendJson(socket, {
+    type: 'role-conflict',
+    currentRole: socket.role,
+    requestedRole,
+  });
+  return false;
+}
+
+function commitSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
+  if (socket.role !== 'unknown' && socket.role !== requestedRole) {
+    throw new Error(`Cannot change WebSocket role from ${socket.role} to ${requestedRole}.`);
+  }
+  socket.role = requestedRole;
+}
+
 function broadcastJson(payload: unknown) {
   const message = JSON.stringify(payload);
   for (const client of wss.clients) {
@@ -510,6 +557,7 @@ function attachParticipantIdentity(
   socket: RelaySocket,
   identity: Extract<ParticipantIdentityResult, { kind: 'valid' }>,
 ) {
+  if (socket.infrastructureAuthenticated === true) return false;
   if (socket.participantId) return socket.participantId === identity.participantId;
   participantConnectionSequence += 1;
   socket.participantId = identity.participantId;
@@ -850,7 +898,6 @@ function broadcastToMonitors(payload: string | Buffer, binary = false) {
 function replacePrevious(previous: RelaySocket | null, next: RelaySocket, message: string) {
   if (!previous || previous === next) return;
   previous.replaced = true;
-  previous.role = 'unknown';
   sendJson(previous, { type: 'error', message });
   try {
     previous.close();
@@ -867,7 +914,6 @@ function retirePublisherTransport(
 ) {
   if (!previous) return false;
   previous.replaced = true;
-  previous.role = 'unknown';
   sendJson(previous, { type, message });
   try {
     previous.close();
@@ -2023,10 +2069,28 @@ wss.on('connection', (rawSocket, request) => {
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
 
+    if (payload.type === 'infrastructure-authenticate') {
+      if (
+        socket.participantId !== undefined
+        || !infrastructureKey
+        || payload.key !== infrastructureKey
+      ) {
+        rejectInfrastructure(
+          socket,
+          'Infrastructure capability did not match this Relay deployment.',
+        );
+        return;
+      }
+      socket.infrastructureAuthenticated = true;
+      sendJson(socket, { type: 'infrastructure-authenticated' });
+      return;
+    }
+
     if (payload.type === 'participant-authenticate') {
       const authenticated = participantIdentityFromMessage(payload);
       if (
         authenticated.kind !== 'valid'
+        || socket.infrastructureAuthenticated === true
         || (socket.participantId !== undefined && socket.participantId !== authenticated.participantId)
       ) {
         sendJson(socket, {
@@ -2461,6 +2525,10 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'source-seeked') {
+      if (!infrastructureAuthorized(socket)) {
+        rejectInfrastructure(socket, 'Authenticate the active Source before reporting a seek.');
+        return;
+      }
       // `isRobotSource` is intentionally tri-state here: undefined means this
       // socket was never a Robot source, while true/false means it has entered
       // the Robot source lifecycle. Replacement clears the active flag to
@@ -2493,6 +2561,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'register' && payload.role === 'publisher') {
+      if (!canClaimSocketRole(socket, 'publisher')) return;
       // A publisher is the microphone media authority. Browser clients must
       // authenticate that authority before registration; anonymous publishers
       // remain available only to the explicitly enabled legacy test harness.
@@ -2585,6 +2654,8 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
+      commitSocketRole(socket, 'publisher');
+
       let deferredOwnershipTimingReason: string | null = null;
       let deferredHandoffParticipantId: string | null = null;
       if (ownershipEffects) {
@@ -2642,7 +2713,6 @@ wss.on('connection', (rawSocket, request) => {
         );
       }
 
-      socket.role = 'publisher';
       socket.sampleRate = sampleRate;
       socket.captureGeneration = captureGeneration ?? undefined;
       socket.audioPacketVersion = audioPacketVersion;
@@ -2709,19 +2779,24 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'register' && payload.role === 'backing') {
+      if (!infrastructureAuthorized(socket)) {
+        rejectInfrastructure(socket, 'Authenticate Relay infrastructure before registering backing audio.');
+        return;
+      }
+      if (!canClaimSocketRole(socket, 'backing')) return;
       const sampleRate = validSampleRate(payload.sampleRate);
       if (!sampleRate) {
         sendJson(socket, { type: 'error', message: 'Invalid backing sample rate.' });
         return;
       }
 
+      commitSocketRole(socket, 'backing');
       const previousBacking = backing;
       if (previousBacking && previousBacking !== socket) {
         takeController.noteQualityEvent('backing-transport-replaced');
       }
       if (previousBacking !== socket) lastBackingFrameAt = -Infinity;
       replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
-      socket.role = 'backing';
       socket.sampleRate = sampleRate;
       backing = socket;
       backingSampleRate = sampleRate;
@@ -2736,7 +2811,12 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'register' && payload.role === 'monitor') {
-      socket.role = 'monitor';
+      if (!socket.participantId && !infrastructureAuthorized(socket)) {
+        rejectInfrastructure(socket, 'Monitor audio requires a Relay participant or infrastructure capability.');
+        return;
+      }
+      if (!canClaimSocketRole(socket, 'monitor')) return;
+      commitSocketRole(socket, 'monitor');
       sendJson(socket, { type: 'registered', role: 'monitor' });
       sendJson(socket, publisherStatusPayload());
       sendJson(socket, sourceStatusPayload());
@@ -2769,6 +2849,10 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'robot-source-hello') {
+      if (!infrastructureAuthorized(socket)) {
+        rejectInfrastructure(socket, 'Authenticate Relay infrastructure before becoming the Robot source.');
+        return;
+      }
       if (activeRobotSource === socket) return;
 
       const previous = activeRobotSource;

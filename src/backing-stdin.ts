@@ -51,6 +51,7 @@ const MAX_BUFFERED_BYTES = envNumber('RELAY_BACKING_MAX_BUFFERED_BYTES', 512 * 1
  * declares that fact at registration time instead of making the server infer it.
  */
 const ROBOT_BACKING = process.env.RELAY_BACKING_ROBOT === '1';
+const INFRASTRUCTURE_KEY = process.env.RELAY_INFRA_KEY?.trim() ?? '';
 /**
  * How long to throw away audio after the first byte arrives.
  *
@@ -70,8 +71,12 @@ const ROBOT_BACKING = process.env.RELAY_BACKING_ROBOT === '1';
 const STARTUP_FLUSH_MS = envNumber('RELAY_BACKING_STARTUP_FLUSH_MS', 250, 0);
 
 if (process.argv.includes('--help')) {
-  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  drop threshold (default 524288)\n  RELAY_BACKING_STARTUP_FLUSH_MS    discard startup backlog (default 250)\n  RELAY_BACKING_ROBOT               declare this backing stream as the robot route (1 enables)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
+  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_INFRA_KEY                   64-hex infrastructure capability (required)\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  drop threshold (default 524288)\n  RELAY_BACKING_STARTUP_FLUSH_MS    discard startup backlog (default 250)\n  RELAY_BACKING_ROBOT               declare this backing stream as the robot route (1 enables)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
   process.exit(0);
+}
+
+if (!/^[0-9a-f]{64}$/.test(INFRASTRUCTURE_KEY)) {
+  throw new Error('RELAY_INFRA_KEY must be set to a 64-character lowercase hexadecimal secret.');
 }
 
 const generation = randomBytes(4).readUInt32LE(0);
@@ -134,10 +139,8 @@ function connect() {
   next.on('open', () => {
     if (socket !== next) return;
     next.send(JSON.stringify({
-      type: 'register',
-      role: 'backing',
-      sampleRate: SAMPLE_RATE,
-      robot: ROBOT_BACKING,
+      type: 'infrastructure-authenticate',
+      key: INFRASTRUCTURE_KEY,
     }));
   });
 
@@ -148,6 +151,21 @@ function connect() {
     try {
       message = JSON.parse(data.toString()) as Record<string, unknown>;
     } catch {
+      return;
+    }
+
+    if (message.type === 'infrastructure-authenticated') {
+      next.send(JSON.stringify({
+        type: 'register',
+        role: 'backing',
+        sampleRate: SAMPLE_RATE,
+        robot: ROBOT_BACKING,
+      }));
+      return;
+    }
+
+    if (message.type === 'infrastructure-auth-rejected') {
+      log(`Relay infrastructure authentication failed: ${String(message.message ?? 'unknown error')}`);
       return;
     }
 

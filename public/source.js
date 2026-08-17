@@ -38,6 +38,7 @@ const ROBOT_DELTA_SETTLE_MS = 1000;
 // through a PipeWire sink into backing:stdin. Advice that names the extension
 // is wrong there, and this page is the same page in both deployments.
 const ROBOT_MODE = new URLSearchParams(location.search).get('robot') === '1';
+const INFRASTRUCTURE_KEY = new URLSearchParams(location.hash.slice(1)).get('infra') ?? '';
 
 let socket = null;
 let reconnectTimer = null;
@@ -539,7 +540,11 @@ function connect() {
       next.close();
       return;
     }
-    if (ROBOT_MODE) send({ type: 'robot-source-hello' });
+    if (INFRASTRUCTURE_KEY) {
+      send({ type: 'infrastructure-authenticate', key: INFRASTRUCTURE_KEY });
+    } else if (ROBOT_MODE) {
+      timingStatus.textContent = 'Robot Source 缺少 RELAY_INFRA_KEY；不會取得來源控制權。';
+    }
     send({ type: 'youtube-timeline-request' });
     send({ type: 'source-status-request' });
     send({ type: 'timing-calibration-status-request' });
@@ -553,6 +558,16 @@ function connect() {
     try {
       message = JSON.parse(event.data);
     } catch {
+      return;
+    }
+
+    if (message.type === 'infrastructure-authenticated') {
+      if (ROBOT_MODE) send({ type: 'robot-source-hello' });
+      return;
+    }
+
+    if (message.type === 'infrastructure-auth-rejected') {
+      timingStatus.textContent = message.message ?? 'Infrastructure authentication failed.';
       return;
     }
 

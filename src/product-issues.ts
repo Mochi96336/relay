@@ -17,10 +17,11 @@ export type ProductIssueCode =
 export type ProductAttentionCode = ProductIssueCode;
 
 export type ProductIssueCause =
-  | 'backing-disconnected'
+  | 'backing-not-ready'
+  | 'backing-unavailable'
   | 'backing-stalled'
   | 'backing-route-mismatch'
-  | 'robot-source-disconnected'
+  | 'robot-source-unavailable'
   | 'song-clock-lost'
   | 'mic-transport-disconnected'
   | 'mic-audio-stalled'
@@ -48,8 +49,15 @@ export type ProductIssue = {
   recovery: ProductRecovery;
 };
 
-/** Compatibility shape: attention is simply the highest-priority ProductIssue. */
-export type ProductAttention = ProductIssue;
+/**
+ * Legacy compatibility surface. Keep this exact three-field shape while richer
+ * product UI moves to `issues[]`.
+ */
+export type ProductAttention = {
+  code: ProductAttentionCode;
+  scope: ProductIssue['scope'];
+  severity: ProductIssue['severity'];
+};
 
 export type ProductIssueFacts = {
   routeMode: 'idle' | 'song' | 'legacy' | 'robot';
@@ -74,13 +82,16 @@ function hostIssues(facts: ProductIssueFacts) {
   if (facts.routeMode === 'idle') return issues;
 
   if (!facts.backing.connected) {
+    const waitingForRoute = facts.routeMode === 'song';
     issues.push({
       code: facts.routeMode === 'robot' ? 'robot-audio-unavailable' : 'audio-unavailable',
       scope: facts.routeMode === 'robot' ? 'robot' : 'audio',
       severity: 'critical',
-      cause: 'backing-disconnected',
+      // `song` means a Song requires backing but no concrete route has armed
+      // yet. A false `connected` bit cannot tell us that something disconnected.
+      cause: waitingForRoute ? 'backing-not-ready' : 'backing-unavailable',
       affects: ['song', 'recording'],
-      recovery: 'host-service',
+      recovery: waitingForRoute ? 'automatic' : 'host-service',
     });
   } else if (!facts.backing.streaming) {
     issues.push({
@@ -109,7 +120,8 @@ function hostIssues(facts: ProductIssueFacts) {
       code: 'robot-player-unavailable',
       scope: 'robot',
       severity: 'critical',
-      cause: 'robot-source-disconnected',
+      // Availability is observable; whether it ever connected is not.
+      cause: 'robot-source-unavailable',
       affects: ['song', 'recording'],
       recovery: 'host-service',
     });
@@ -123,8 +135,9 @@ function hostIssues(facts: ProductIssueFacts) {
  * without reading readiness snapshots or diagnostics evidence.
  *
  * Ordering is intentional: infrastructure/room continuity first, then song,
- * Mic, recording and finally timing. `attention` consumers can safely use the
- * first issue while richer product surfaces render the whole list.
+ * Mic, recording and finally timing. Legacy `attention` consumers receive a
+ * three-field projection of the first issue while richer surfaces render all
+ * issues directly.
  */
 export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
   const issues = hostIssues(facts);

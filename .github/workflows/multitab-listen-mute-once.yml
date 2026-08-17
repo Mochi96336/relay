@@ -58,8 +58,40 @@ jobs:
       - name: Run focused Mic lifecycle contracts
         run: node --import tsx --test --test-concurrency=1 test/mic-lifecycle-recovery.test.ts
 
-      - name: Run full suite
-        run: npm test
+      - name: Run full suite with failure annotation
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee /tmp/relay-full-suite.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+
+          lines = Path('/tmp/relay-full-suite.log').read_text(errors='replace').splitlines()
+          markers = [
+              i for i, line in enumerate(lines)
+              if ('not ok' in line.lower()
+                  or 'assertionerror' in line.lower()
+                  or 'err_assertion' in line.lower()
+                  or 'test failed' in line.lower())
+          ]
+          if markers:
+              start = max(0, min(markers) - 8)
+              end = min(len(lines), max(markers) + 45)
+          else:
+              start = max(0, len(lines) - 120)
+              end = len(lines)
+          snippet = '\n'.join(lines[start:end])[-12000:]
+          escaped = (snippet
+              .replace('%', '%25')
+              .replace('\r', '%0D')
+              .replace('\n', '%0A'))
+          print(f'::error title=Relay full suite failure::{escaped}')
+          PY
+            exit "$status"
+          fi
 
       - name: Commit tested product diff and remove gate
         run: |

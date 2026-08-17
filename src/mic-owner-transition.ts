@@ -1,7 +1,8 @@
 export type MicOwnerTransitionCause =
   | 'publisher-registration'
   | 'explicit-release'
-  | 'presence-expired';
+  | 'presence-expired'
+  | 'transport-expired';
 
 export type MicOwnerTransition = {
   previousOwnerId: string | null;
@@ -60,14 +61,20 @@ export function micOwnerTransitionEffects(
 
   if (previousOwnerId === null) return NO_EFFECTS;
 
+  const transportExpired = cause === 'transport-expired';
   return {
     changed: true,
     noteQualityEvent: 'mic-owner-changed',
     cancelRoomSongCommand: 'mic-owner-released',
-    cancelSongHandoff: true,
+    // Preserve the existing transport-grace behavior: losing the Mic transport
+    // releases ownership but does not itself tear down an independent prepared
+    // playback handoff. Explicit release/presence expiry still abandon it.
+    cancelSongHandoff: !transportExpired,
     invalidateTimingReason: cause === 'presence-expired'
       ? 'Microphone owner left the Relay session.'
-      : 'Microphone was released.',
+      : transportExpired
+        ? 'Microphone transport did not reconnect before its grace period expired.'
+        : 'Microphone was released.',
     prepareSongHandoffFor: null,
   };
 }

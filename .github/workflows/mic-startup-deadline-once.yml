@@ -38,6 +38,7 @@ jobs:
 
       - name: Verify focused diff
         run: |
+          git add -N -- public/mic-startup.d.ts public/mic-startup.js test/mic-startup.test.ts
           git diff --check
           actual="$(git diff --name-only | sort)"
           expected="$(printf '%s\n' \

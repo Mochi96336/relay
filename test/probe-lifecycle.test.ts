@@ -24,6 +24,25 @@ test('a stale probe reply cannot clear the current request', () => {
   assert.equal(lifecycle.pendingRequest, null);
 });
 
+test('a wrong Mic generation cannot consume the current browser acknowledgement', () => {
+  const lifecycle = new ProbeLifecycle(3, 100);
+  assert.equal(lifecycle.beginRequest(request('mic', 2)), true);
+
+  assert.equal(lifecycle.acceptClientReply(2, 10), null);
+  assert.equal(lifecycle.pendingRequest?.requestId, 2);
+
+  assert.equal(lifecycle.acceptClientReply(2, 11)?.requestId, 2);
+  assert.equal(lifecycle.pendingRequest, null);
+});
+
+test('the backing browser may acknowledge without inventing a capture generation', () => {
+  const lifecycle = new ProbeLifecycle(3, 100);
+  assert.equal(lifecycle.beginRequest(request('backing', 3)), true);
+
+  assert.equal(lifecycle.acceptClientReply(3, undefined)?.requestId, 3);
+  assert.equal(lifecycle.pendingRequest, null);
+});
+
 test('probe retries are bounded and settle on a terminal failure', () => {
   const lifecycle = new ProbeLifecycle(2, 100);
 

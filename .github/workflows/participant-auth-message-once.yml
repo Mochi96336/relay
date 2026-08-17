@@ -37,6 +37,7 @@ jobs:
 
       - name: Verify focused diff
         run: |
+          git add -N public/participant-auth.js
           git diff --check
           actual="$(git diff --name-only | sort)"
           expected="$(printf '%s\n' \

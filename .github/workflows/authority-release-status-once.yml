@@ -32,11 +32,41 @@ jobs:
       - name: Apply exact authority wiring
         run: python3 .github/authority-release-status.py
 
+      - name: Align authority source contracts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('test/webtransport-media-server.test.ts')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  """    /participants\\.releaseMic\\(expectedOwnerId\\)[\\s\\S]{0,500}clearMicMediaAuthority\\(\\)[\\s\\S]{0,500}takeController\\.noteQualityEvent\\('mic-owner-changed'\\)[\\s\\S]{0,500}cancelPendingRoomSongCommand\\('mic-owner-released'\\)/,""",
+                  """    /participants\\.releaseMic\\(expectedOwnerId, 'transport-expired'\\)[\\s\\S]{0,500}clearMicMediaAuthority\\(\\)[\\s\\S]{0,500}applyMicOwnerEffects\\(released\\.effects\\)/,""",
+                  'transport expiry source contract',
+              ),
+              (
+                  """    /presenceSweep\\.releasedMicOwnerId[\\s\\S]{0,500}clearMicMediaAuthority\\(\\)[\\s\\S]{0,500}cancelPendingRoomSongCommand\\('mic-owner-released', nowMs\\)[\\s\\S]{0,500}youtubeTimeline\\.cancelHandoff\\(\\)/,""",
+                  """    /presenceSweep\\.releasedMicOwnerId && presenceSweep\\.micOwnerEffects[\\s\\S]{0,500}clearMicMediaAuthority\\(\\)[\\s\\S]{0,500}applyMicOwnerEffects\\(presenceSweep\\.micOwnerEffects, nowMs\\)/,""",
+                  'presence expiry source contract',
+              ),
+          ]
+
+          for old, new, label in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
       - name: Verify focused diff
         run: |
           git diff --check
           git diff --stat
-          git diff -- src/server.ts test/runtime-single-snapshot.test.ts
+          git diff -- src/server.ts test/runtime-single-snapshot.test.ts test/webtransport-media-server.test.ts
 
       - run: npm ci
       - run: npm run check
@@ -58,7 +88,7 @@ jobs:
             }
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add -- .github/authority-failure.txt
+            git add -f -- .github/authority-failure.txt
             git commit -m 'chore: capture authority wiring failure'
             git push origin HEAD:"$BRANCH"
             exit "$status"
@@ -76,6 +106,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           rm -f .github/authority-release-status.py .github/workflows/authority-release-status-once.yml .github/authority-failure.log .github/authority-failure.txt
-          git add -A -- src/server.ts test/runtime-single-snapshot.test.ts .github
+          git add -A -- src/server.ts test/runtime-single-snapshot.test.ts test/webtransport-media-server.test.ts .github
           git commit -m 'refactor: wire mic release effects and remote status'
           git push origin HEAD:"$BRANCH"

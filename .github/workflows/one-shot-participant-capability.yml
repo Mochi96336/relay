@@ -22,6 +22,7 @@ jobs:
           node-version: 22
 
       - run: python3 scripts/one-shot-participant-capability.py
+      - run: python3 .github/harden-participant-capability.py
       - run: npm ci
       - run: npm run check
 

@@ -26,6 +26,19 @@ test('controlled server shutdown is explicit review evidence', () => {
 
 shutdown_test = Path('test/server-take-shutdown.test.ts')
 shutdown_text = shutdown_test.read_text()
+old_env = """      RELAY_CALIBRATION_PROBE: '0',
+      RELAY_HEARTBEAT_MS: '60000',
+    };
+"""
+new_env = """      RELAY_CALIBRATION_PROBE: '0',
+      RELAY_HEARTBEAT_MS: '60000',
+      RELAY_LIVE_PREBUFFER_MS: '0',
+    };
+"""
+if shutdown_text.count(old_env) != 1:
+    raise SystemExit(f'test/server-take-shutdown.test.ts: expected one test env block, found {shutdown_text.count(old_env)}')
+shutdown_text = shutdown_text.replace(old_env, new_env, 1)
+
 old_assertions = """    assert.equal(ready.take.stopReason, 'server-shutdown');
     assert.equal(ready.take.quality?.verdict, 'review');
     assert.ok(ready.take.quality?.issues?.some((issue: any) => issue.code === 'recording-interrupted'));
@@ -44,6 +57,10 @@ new_assertions = """    assert.equal(ready.take.stopReason, 'server-shutdown');
     assert.ok(
       ready.take.quality?.issues?.some((issue: any) => issue.code === 'recording-interrupted'),
       `controlled shutdown must publish recording-interrupted: ${JSON.stringify(ready.take.quality)}`,
+    );
+    assert.ok(
+      Number(ready.take.artifact?.sampleCount) > 0,
+      `fault injection must happen after authoritative mixed PCM reached the Take: ${JSON.stringify(ready.take.artifact)}`,
     );
 """
 if shutdown_text.count(old_assertions) != 1:

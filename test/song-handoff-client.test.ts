@@ -21,6 +21,19 @@ test('browser prepares playback without autoplay and starts only after server co
   assert.match(commitSection, /seekTo\s*\(/, 'commit must refresh the projected room position before starting');
 });
 
+test('a replacement handoff retires delayed readiness checks from the previous plan', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const prepareSection = topLevelFunctionSection(source, 'async function prepareRoomSong');
+
+  const clearIndex = prepareSection.indexOf('clearHandoffReadyTimers()');
+  const installIndex = prepareSection.indexOf('pendingHandoff = {');
+  assert.ok(clearIndex >= 0, 'a new handoff must retire old readiness timers');
+  assert.ok(
+    installIndex > clearIndex,
+    'old readiness timers must be retired before the new handoff identity is installed',
+  );
+});
+
 test('playback transport is registered independently and Mic intent is explicit', async () => {
   const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 

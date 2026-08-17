@@ -44,6 +44,7 @@ let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
 let activeCalibrationProbeRequestId = null;
+let publisherSessionEpoch = 0;
 
 /**
  * The same measured advice source.html shows, put where the singer can act on
@@ -270,7 +271,7 @@ function sendMixSettings() {
     micGainDb: Number(micGain.value),
     // The song is played by the machine hosting the mirrored player, which in
     // the finished topology is the robot - nobody is at its screen, so the
-    // value belongs to the server and the phone drives it from here.
+    // value belongs to the server and arrives here as a message.
     songLevel: Number(songLevel.value),
   }));
 }
@@ -476,7 +477,7 @@ function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
 
-function handleServerMessage(message) {
+function handleServerMessage(message, sessionEpoch = publisherSessionEpoch) {
   if (message.type === 'error') {
     setStatus('Error', message.message);
     // Protocol errors are not transport failures. Retrying the publisher after
@@ -509,7 +510,10 @@ function handleServerMessage(message) {
     setStatus('Microphone is in use', owner ? `${owner.nickname} has the mic.` : 'Another participant has the mic.');
     dispatchRelayEvent('relay-mic-busy', { owner });
     stop(false, { releaseMic: false })
-      .then(() => dispatchRelayEvent('relay-microphone-ended', { reason: 'busy' }))
+      .then((stoppedEpoch) => {
+        if (publisherSessionEpoch !== stoppedEpoch) return;
+        dispatchRelayEvent('relay-microphone-ended', { reason: 'busy' });
+      })
       .catch(console.error);
     return;
   }
@@ -519,7 +523,10 @@ function handleServerMessage(message) {
     setStatus('Takeover changed', owner ? `${owner.nickname} has the mic now.` : 'The mic state changed.');
     dispatchRelayEvent('relay-mic-takeover-rejected', { owner, reason: message.reason });
     stop(false, { releaseMic: false })
-      .then(() => dispatchRelayEvent('relay-microphone-ended', { reason: 'takeover-rejected' }))
+      .then((stoppedEpoch) => {
+        if (publisherSessionEpoch !== stoppedEpoch) return;
+        dispatchRelayEvent('relay-microphone-ended', { reason: 'takeover-rejected' });
+      })
       .catch(console.error);
     return;
   }
@@ -538,10 +545,14 @@ function handleServerMessage(message) {
     return;
   }
 
-  if (message.type === 'registered' && message.role === 'publisher' && publisherActive) {
+  if (
+    message.type === 'registered'
+    && message.role === 'publisher'
+    && isCurrentPublisherSession(sessionEpoch)
+  ) {
     pendingPublisherTakeoverOwnerId = null;
     void audioTransport.prefer(message.mediaTransport ?? null).then((preferred) => {
-      if (!publisherActive) return;
+      if (!isCurrentPublisherSession(sessionEpoch)) return;
       const path = preferred ? 'WebTransport datagrams' : 'WebSocket fallback';
       setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM · ${path}`);
       sendAudioUplinkHealth();
@@ -605,6 +616,10 @@ function canKeepPublishing() {
   return publisherActive && Boolean(mediaStream) && Boolean(audioContext);
 }
 
+function isCurrentPublisherSession(sessionEpoch) {
+  return publisherSessionEpoch === sessionEpoch && canKeepPublishing();
+}
+
 async function resumePublisherAudioContext() {
   if (!publisherActive || !audioContext || audioContext.state !== 'suspended') return;
   try {
@@ -619,17 +634,20 @@ function recoverPublisherAudio() {
   void resumePublisherAudioContext();
 }
 
-function schedulePublisherReconnect() {
-  if (!canKeepPublishing()) return;
+function schedulePublisherReconnect(sessionEpoch = publisherSessionEpoch) {
+  if (!isCurrentPublisherSession(sessionEpoch)) return;
   clearSocketReconnect();
-  socketReconnectTimer = setTimeout(() => {
+  const timer = setTimeout(() => {
+    if (socketReconnectTimer !== timer) return;
     socketReconnectTimer = null;
-    connectPublisherSocket().catch(() => {
-      if (!canKeepPublishing()) return;
+    if (!isCurrentPublisherSession(sessionEpoch)) return;
+    connectPublisherSocket(sessionEpoch).catch(() => {
+      if (!isCurrentPublisherSession(sessionEpoch)) return;
       setStatus('Reconnecting microphone…', 'Relay is still unavailable; retrying automatically.');
-      schedulePublisherReconnect();
+      schedulePublisherReconnect(sessionEpoch);
     });
   }, SOCKET_RECONNECT_MS);
+  socketReconnectTimer = timer;
 }
 
 function adoptSocket(ws) {
@@ -642,12 +660,12 @@ function adoptSocket(ws) {
   }
 }
 
-async function connectPublisherSocket() {
-  if (!canKeepPublishing()) return;
+async function connectPublisherSocket(sessionEpoch = publisherSessionEpoch) {
+  if (!isCurrentPublisherSession(sessionEpoch)) return;
   clearSocketReconnect();
 
   const ws = await connectSocket();
-  if (!canKeepPublishing()) {
+  if (!isCurrentPublisherSession(sessionEpoch)) {
     ws.close();
     return;
   }
@@ -670,8 +688,12 @@ async function connectPublisherSocket() {
   publisherControlConnections += 1;
 
   ws.addEventListener('message', (event) => {
-    if (socket !== ws || typeof event.data !== 'string') return;
-    handleServerMessage(JSON.parse(event.data));
+    if (
+      socket !== ws
+      || !isCurrentPublisherSession(sessionEpoch)
+      || typeof event.data !== 'string'
+    ) return;
+    handleServerMessage(JSON.parse(event.data), sessionEpoch);
   });
 
   ws.addEventListener('close', () => {
@@ -679,9 +701,9 @@ async function connectPublisherSocket() {
     activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
-    if (!canKeepPublishing()) return;
+    if (!isCurrentPublisherSession(sessionEpoch)) return;
     setStatus('Reconnecting microphone…', 'Relay connection closed; microphone capture stays active.');
-    schedulePublisherReconnect();
+    schedulePublisherReconnect(sessionEpoch);
   });
 
   ws.addEventListener('error', () => {
@@ -692,6 +714,9 @@ async function connectPublisherSocket() {
 }
 
 async function stop(setIdle = true, { releaseMic = true } = {}) {
+  // Revoke this session before any asynchronous close can yield. Everything
+  // after the first await is allowed to touch only captured old resources.
+  const stoppedEpoch = ++publisherSessionEpoch;
   micStartup.cancel();
   publisherStarting = false;
   activeCalibrationProbeRequestId = null;
@@ -699,36 +724,38 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   stopAudioUplinkHealthReporting();
 
   const closingSocket = socket;
-  const shouldReleaseMic = releaseMic && publisherActive;
+  const closingStream = mediaStream;
+  const closingNode = activeNode;
+  const closingContext = audioContext;
+  const wasPublisherActive = publisherActive;
+
+  socket = null;
+  mediaStream = null;
+  activeNode = null;
+  audioContext = null;
+
+  const shouldReleaseMic = releaseMic && wasPublisherActive;
   if (shouldReleaseMic && closingSocket?.readyState === WebSocket.OPEN) {
     try {
       closingSocket.send(JSON.stringify({ type: 'release-mic' }));
     } catch {}
   }
 
-  if (publisherActive) audioTransport.close();
-  setPublisherActive(false);
+  if (wasPublisherActive) audioTransport.close();
   pendingPublisherTakeoverOwnerId = null;
   if (closingSocket) {
     try {
       closingSocket.close();
     } catch {}
-    if (socket === closingSocket) socket = null;
   }
-  if (mediaStream) {
-    mediaStream.getTracks().forEach((track) => track.stop());
-    mediaStream = null;
-  }
-  if (activeNode) {
+  if (closingStream) closingStream.getTracks().forEach((track) => track.stop());
+  if (closingNode) {
     try {
-      activeNode.disconnect();
+      closingNode.disconnect();
     } catch {}
-    activeNode = null;
   }
-  if (audioContext) {
-    await audioContext.close();
-    audioContext = null;
-  }
+  setPublisherActive(false);
+
   liveMixActive = false;
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
@@ -738,6 +765,13 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   publisherButton.disabled = false;
   updateSingerControls();
   if (setIdle) setStatus('Idle', 'Take the mic when you are ready.');
+
+  if (closingContext) {
+    try {
+      await closingContext.close();
+    } catch {}
+  }
+  return stoppedEpoch;
 }
 
 async function startPublisher(takeoverExpectedOwnerId = null) {
@@ -797,6 +831,8 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     preparedStream = null;
     audioContext = preparedContext;
     preparedContext = null;
+    const sessionEpoch = ++publisherSessionEpoch;
+    const captureStream = mediaStream;
     setPublisherActive(true);
     publisherStarting = false;
     micStartup.complete(startup);
@@ -815,42 +851,49 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   audioTransport.resetStats();
   startAudioUplinkHealthReporting();
 
-  const [track] = mediaStream.getAudioTracks();
+  const captureIsCurrent = () => isCurrentPublisherSession(sessionEpoch)
+    && mediaStream === captureStream
+    && audioContext === captureContext;
+  const [track] = captureStream.getAudioTracks();
   captureInputMuted = track?.muted === true;
   track?.addEventListener('mute', () => {
-    if (!publisherActive) return;
+    if (!captureIsCurrent()) return;
     captureInputMuted = true;
     sendAudioUplinkHealth();
     setStatus('Microphone interrupted', 'The phone muted the microphone input; trying to recover it.');
     void resumePublisherAudioContext();
   });
   track?.addEventListener('unmute', () => {
-    if (!publisherActive) return;
+    if (!captureIsCurrent()) return;
     captureInputMuted = false;
     sendAudioUplinkHealth();
     setStatus('Microphone is live', 'Microphone input recovered.');
     void resumePublisherAudioContext();
   });
   track?.addEventListener('ended', () => {
-    if (!publisherActive) return;
+    if (!captureIsCurrent()) return;
     stop(false, { releaseMic: true })
-      .then(() => {
+      .then((stoppedEpoch) => {
+        if (publisherSessionEpoch !== stoppedEpoch) return;
         dispatchRelayEvent('relay-microphone-ended', { reason: 'input-ended' });
         setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.');
       })
       .catch(console.error);
   });
 
-  const source = audioContext.createMediaStreamSource(mediaStream);
-  const capture = new AudioWorkletNode(audioContext, 'capture-processor', {
+  const source = captureContext.createMediaStreamSource(captureStream);
+  const capture = new AudioWorkletNode(captureContext, 'capture-processor', {
     numberOfInputs: 1,
     numberOfOutputs: 1,
     outputChannelCount: [1],
   });
-  const silent = audioContext.createGain();
+  const silent = captureContext.createGain();
   silent.gain.value = 0;
 
   capture.port.onmessage = (event) => {
+    // MessagePort delivery is asynchronous. A chunk queued by an old worklet
+    // must never be reframed with a replacement session's generation/cursor.
+    if (!captureIsCurrent()) return;
     if (!(event.data instanceof ArrayBuffer)) {
       if (event.data?.type === 'input-gap') {
         const samples = Number(event.data.samples);
@@ -926,18 +969,19 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     }
   };
 
-  source.connect(capture).connect(silent).connect(audioContext.destination);
+  source.connect(capture).connect(silent).connect(captureContext.destination);
   activeNode = capture;
 
   publisherButton.disabled = true;
   updateSingerControls();
-  setStatus('Connecting microphone…', `${audioContext.sampleRate} Hz capture is active; connecting to Relay.`);
+  setStatus('Connecting microphone…', `${captureContext.sampleRate} Hz capture is active; connecting to Relay.`);
 
     try {
-      await connectPublisherSocket();
+      await connectPublisherSocket(sessionEpoch);
     } catch {
+      if (!isCurrentPublisherSession(sessionEpoch)) return;
       setStatus('Reconnecting microphone…', 'Initial Relay connection failed; retrying automatically.');
-      schedulePublisherReconnect();
+      schedulePublisherReconnect(sessionEpoch);
     }
   } finally {
     if (preparedStream) preparedStream.getTracks().forEach((track) => track.stop());
@@ -1007,7 +1051,8 @@ window.addEventListener('pageshow', recoverPublisherAudio);
 window.addEventListener('relay-release-microphone', () => {
   if (!publisherActive) return;
   stop(false, { releaseMic: true })
-    .then(() => {
+    .then((stoppedEpoch) => {
+      if (publisherSessionEpoch !== stoppedEpoch) return;
       dispatchRelayEvent('relay-microphone-ended', { reason: 'released' });
       setStatus('Microphone released', 'This phone is no longer using the microphone.');
     })

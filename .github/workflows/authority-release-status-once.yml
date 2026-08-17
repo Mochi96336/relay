@@ -1,3 +1,4 @@
+# Retrigger on the latest branch head after unrelated concurrent workflow work landed.
 name: One-shot authority release and status wiring
 
 on:

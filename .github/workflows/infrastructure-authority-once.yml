@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/infrastructure-authority-once.yml
       - scripts/one-shot-infrastructure-authority.py
+      - scripts/one-shot-infrastructure-authority-followup.py
 
 permissions:
   contents: write
@@ -36,6 +37,7 @@ jobs:
       - name: Apply exact infrastructure authority patch
         run: |
           python3 scripts/one-shot-infrastructure-authority.py
+          python3 scripts/one-shot-infrastructure-authority-followup.py
           git add -N test/infrastructure-authority.test.ts
 
       - name: Verify focused diff
@@ -50,7 +52,8 @@ jobs:
             src/backing-stdin.ts \
             src/server.ts \
             test/helpers/harness.ts \
-            test/infrastructure-authority.test.ts | sort)"
+            test/infrastructure-authority.test.ts \
+            test/robot-scripts.test.ts | sort)"
           test "$actual" = "$expected" || {
             printf 'Unexpected diff:\n%s\n' "$actual"
             exit 1
@@ -74,7 +77,8 @@ jobs:
             test/participant-server.test.ts \
             test/source-seek-authority.test.ts \
             test/source-control-authority.test.ts \
-            test/backing-generation-recreation.test.ts
+            test/backing-generation-recreation.test.ts \
+            test/robot-scripts.test.ts
 
       - name: Verify systemd units
         run: |
@@ -114,7 +118,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/infrastructure-authority-once.yml \
-            scripts/one-shot-infrastructure-authority.py
+            scripts/one-shot-infrastructure-authority.py \
+            scripts/one-shot-infrastructure-authority-followup.py
           git add -- \
             ROBOT_DEPLOYMENT.md \
             chrome-tab-audio-probe/offscreen.js \
@@ -123,7 +128,8 @@ jobs:
             src/backing-stdin.ts \
             src/server.ts \
             test/helpers/harness.ts \
-            test/infrastructure-authority.test.ts
+            test/infrastructure-authority.test.ts \
+            test/robot-scripts.test.ts
           git diff --cached --check
           git commit -m 'fix: authenticate Relay infrastructure roles'
 

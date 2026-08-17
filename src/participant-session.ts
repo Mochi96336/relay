@@ -3,6 +3,7 @@ import {
   type MicOwnerTransitionCause,
   type MicOwnerTransitionEffects,
 } from './mic-owner-transition.js';
+import { SERVER_INCARNATION } from './server-incarnation.js';
 
 export type ParticipantSnapshot = {
   id: string;
@@ -14,6 +15,7 @@ export type ParticipantSnapshot = {
 };
 
 export type ParticipantSessionSnapshot = {
+  serverIncarnation: string;
   revision: number;
   micOwnerId: string | null;
   participants: ParticipantSnapshot[];
@@ -274,6 +276,7 @@ export class ParticipantSession {
       });
 
     return {
+      serverIncarnation: SERVER_INCARNATION,
       revision: this.revisionValue,
       micOwnerId: this.micOwnerValue,
       participants,

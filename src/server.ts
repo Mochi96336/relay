@@ -16,6 +16,7 @@ import { CalibrationSession, type CalibrationContext } from './calibration-sessi
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
+import { ProbeLifecycle, type ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import {
@@ -54,6 +55,11 @@ const relayKey = process.env.RELAY_KEY ?? null;
 function envMs(name: string, fallback: number) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function envPositiveInt(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 const MIX_SAMPLE_RATE = 48_000;
@@ -233,7 +239,8 @@ const PROBE_RETRY_MS = envMs('RELAY_CALIBRATION_PROBE_RETRY_MS', 6_000);
 const PROBE_LEAD_MS = envMs('RELAY_CALIBRATION_PROBE_LEAD_MS', 200);
 const PROBE_MIN_CORRELATION = Number(process.env.RELAY_CALIBRATION_PROBE_MIN_CORRELATION ?? 0.5);
 const PROBE_DEBUG = process.env.RELAY_CALIBRATION_PROBE_DEBUG === '1';
-const PROBE_REPLY_TIMEOUT_MS = 3_000;
+const PROBE_REPLY_TIMEOUT_MS = envMs('RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS', 3_000);
+const PROBE_MAX_ATTEMPTS = envPositiveInt('RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS', 3);
 /**
  * Long enough for the probe to play, be captured and reach the server.
  *
@@ -248,7 +255,6 @@ const PROBE_ANALYSIS_TIMEOUT_MS = Math.max(
   PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 5_000,
 );
 
-type ProbeTarget = 'mic' | 'backing';
 type MeasuredMicLeg = {
   targetSample: number;
   actualSample: number;
@@ -257,22 +263,8 @@ type MeasuredMicLeg = {
   micGeneration: number | null;
 };
 
-let lastProbeAttemptAt = -Infinity;
+const probeLifecycle = new ProbeLifecycle(PROBE_MAX_ATTEMPTS, PROBE_RETRY_MS);
 let probeRequestId = 0;
-let pendingProbe: {
-  target: ProbeTarget;
-  requestId: number;
-  serverSentAtMs: number;
-  generation: number | null;
-} | null = null;
-let pendingProbeAnalysis: {
-  target: ProbeTarget;
-  targetSample: number;
-  windowStart: number;
-  windowSamples: number;
-  generation: number | null;
-  deadlineMs: number;
-} | null = null;
 let measuredMicLeg: MeasuredMicLeg | null = null;
 let lastProbeCorrelation: { mic: number | null; backing: number | null } = { mic: null, backing: null };
 let lastProbeContext: {
@@ -1100,10 +1092,29 @@ function recommendedMicGainDb(micPeakDbfs: number | null) {
   return Math.max(0, Math.min(36, Math.round(LIMITER_THRESHOLD_DBFS - micPeakDbfs)));
 }
 
+function probeStatus(nowMs = performance.now()) {
+  return probeLifecycle.status(nowMs);
+}
+
+function bootProbeInProgress(nowMs = performance.now()) {
+  return calibrationKind === 'boot-probe'
+    && calibration.result === null
+    && probeStatus(nowMs).active;
+}
+
+function timingCalibrationInProgress(nowMs = performance.now()) {
+  return calibration.collecting || bootProbeInProgress(nowMs);
+}
+
+function takeBlocksCalibration() {
+  return takeController.lifecycle === 'recording' || takeController.lifecycle === 'finalizing';
+}
+
 function timingCalibrationStatusPayload() {
   const alignment = session.alignment;
   const status = calibration.status();
   const nowMs = performance.now();
+  const probe = probeStatus(nowMs);
   return {
     type: 'timing-calibration-status',
     ...status,
@@ -1119,6 +1130,11 @@ function timingCalibrationStatusPayload() {
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
     probeCorrelation: lastProbeCorrelation,
+    probeActive: bootProbeInProgress(nowMs),
+    probePhase: probe.phase,
+    probeAttempts: probe.attempts,
+    probeMaxAttempts: probe.maxAttempts,
+    probeError: probe.error,
     bootCalibration: lastBootCalibration,
     robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs : null,
     automatic: calibrationWasAutomatic,
@@ -1305,8 +1321,7 @@ function restartLiveSourceAfterMicReconnect() {
 }
 
 function abandonProbeRun() {
-  pendingProbe = null;
-  pendingProbeAnalysis = null;
+  probeLifecycle.reset();
   measuredMicLeg = null;
 }
 
@@ -1416,7 +1431,7 @@ const mixerTimer = setInterval(() => {
 }, 5);
 
 function maybeAutoCalibrate(nowMs: number) {
-  if (!AUTO_CALIBRATE) return;
+  if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
   if (robotProbeTimingActive()) return;
   if (!session.active || calibration.collecting) return;
   if (calibration.result !== null && !calibrationIsStale()) return;
@@ -1447,17 +1462,38 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
     && activeRobotSource?.readyState === WebSocket.OPEN;
 }
 
+function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
+  if (target === 'mic') {
+    measuredMicLeg = null;
+    probeLifecycle.setMicMeasured(false);
+  }
+
+  const failure = probeLifecycle.failAttempt(target, reason, nowMs);
+  if (failure) {
+    calibrationKind = 'boot-probe';
+    calibration.fail(failure.message);
+    return;
+  }
+  broadcastJson(timingCalibrationStatusPayload());
+}
+
 function sendProbeRequest(target: ProbeTarget, nowMs: number) {
-  lastProbeAttemptAt = nowMs;
+  if (calibrationKind !== 'boot-probe') {
+    calibrationWasAutomatic = true;
+    calibrationKind = 'boot-probe';
+  }
+
   probeRequestId += 1;
-  pendingProbe = {
+  const request = {
     target,
     requestId: probeRequestId,
     serverSentAtMs: nowMs,
+    sessionGeneration: session.generation,
     generation: probeGeneration(target),
   };
-  calibrationKind = 'boot-probe';
-  if (PROBE_DEBUG) console.log(`[probe] ${pendingProbe.target} sent #${probeRequestId} generation=${probeGeneration(target)}`);
+  if (!probeLifecycle.beginRequest(request)) return;
+
+  if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${probeRequestId} generation=${request.generation}`);
 
   const payload = { type: 'play-calibration-probe', target, requestId: probeRequestId, leadMs: PROBE_LEAD_MS };
   if (target === 'mic') {
@@ -1465,10 +1501,11 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
   } else if (activeRobotSource) {
     sendJson(activeRobotSource, payload);
   }
+  broadcastJson(timingCalibrationStatusPayload());
 }
 
 function maybeStartProbeCalibration(nowMs: number) {
-  if (!PROBE_CALIBRATE || !robotProbeTimingActive()) return;
+  if (!PROBE_CALIBRATE || !robotProbeTimingActive() || takeBlocksCalibration()) return;
   if (!session.active || calibration.collecting) return;
 
   if (
@@ -1486,8 +1523,8 @@ function maybeStartProbeCalibration(nowMs: number) {
     && calibration.result !== null
     && !calibrationIsStale()
   ) return;
-  if (pendingProbe !== null || pendingProbeAnalysis !== null) return;
-  if (nowMs - lastProbeAttemptAt < PROBE_RETRY_MS) return;
+  if (probeLifecycle.pendingRequest !== null || probeLifecycle.pendingAnalysis !== null) return;
+  if (probeStatus(nowMs).error !== null) return;
 
   if (
     measuredMicLeg === null
@@ -1498,23 +1535,34 @@ function maybeStartProbeCalibration(nowMs: number) {
   ) return;
 
   const target: ProbeTarget = measuredMicLeg === null ? 'mic' : 'backing';
+  if (!probeLifecycle.canStart(target, nowMs)) return;
   if (!probePathReady(target, nowMs)) return;
   sendProbeRequest(target, nowMs);
 }
 
 function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
-  const pending = pendingProbe;
-  pendingProbe = null;
-  if (!pending || Number(reply.requestId) !== pending.requestId) return;
-  if (!session.active) return;
+  const pending = probeLifecycle.acceptReply(reply.requestId);
+  if (!pending) return;
+  if (!session.active || pending.sessionGeneration !== session.generation) {
+    abandonProbeRun();
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
 
   const generationHeld = probeGeneration(pending.target) === pending.generation;
+  if (!generationHeld) {
+    if (PROBE_DEBUG) console.log(`[probe] ${pending.target} dropped: capture generation changed`);
+    abandonProbeRun();
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
   const clientAgrees = pending.target === 'mic'
     ? (Number(reply.generation) >>> 0) === pending.generation
     : true;
-  if (!generationHeld || !clientAgrees) {
-    if (PROBE_DEBUG) console.log(`[probe] ${pending.target} dropped: generation mismatch`);
-    abandonProbeRun();
+  if (!clientAgrees) {
+    if (PROBE_DEBUG) console.log(`[probe] ${pending.target} dropped: client generation mismatch`);
+    failProbeAttempt(pending.target, 'client reported a different capture generation', nowMs);
     return;
   }
 
@@ -1523,45 +1571,91 @@ function handleProbeReply(reply: { requestId: unknown; generation: unknown }, no
   const marginSamples = Math.round((MIX_SAMPLE_RATE * PROBE_SEARCH_MARGIN_MS) / 1000);
   const referenceSamples = Math.round((MIX_SAMPLE_RATE * PROBE_REFERENCE_MS) / 1000);
 
-  pendingProbeAnalysis = {
+  probeLifecycle.beginAnalysis({
     target: pending.target,
     targetSample,
     windowStart: targetSample - Math.round(marginSamples / 8),
     windowSamples: referenceSamples + marginSamples,
+    sessionGeneration: pending.sessionGeneration,
     generation: pending.generation,
     deadlineMs: nowMs + PROBE_ANALYSIS_TIMEOUT_MS,
-  };
+  });
+  broadcastJson(timingCalibrationStatusPayload());
+}
+
+function handleProbeFailure(
+  reply: { requestId: unknown; generation: unknown; reason: unknown },
+  nowMs: number,
+) {
+  const pending = probeLifecycle.acceptReply(reply.requestId);
+  if (!pending) return;
+  if (!session.active || pending.sessionGeneration !== session.generation) {
+    abandonProbeRun();
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
+  if (probeGeneration(pending.target) !== pending.generation) {
+    abandonProbeRun();
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
+  if (
+    pending.target === 'mic'
+    && (Number(reply.generation) >>> 0) !== pending.generation
+  ) {
+    failProbeAttempt('mic', 'client failed from a different capture generation', nowMs);
+    return;
+  }
+
+  const rawReason = typeof reply.reason === 'string' ? reply.reason.trim() : '';
+  const reason = rawReason ? rawReason.slice(0, 240) : 'client could not play the probe';
+  failProbeAttempt(pending.target, reason, nowMs);
 }
 
 function maybeFinishProbeAnalysis(nowMs: number) {
-  const waiting = pendingProbeAnalysis;
+  const waiting = probeLifecycle.pendingAnalysis;
   if (!waiting) return;
 
   const reached = waiting.target === 'mic' ? session.micTotalSamples : session.backingTotalSamples;
   const needed = waiting.windowStart + waiting.windowSamples;
 
-  if (!session.active || probeGeneration(waiting.target) !== waiting.generation || nowMs > waiting.deadlineMs) {
+  if (!session.active || waiting.sessionGeneration !== session.generation) {
+    abandonProbeRun();
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
+  if (probeGeneration(waiting.target) !== waiting.generation) {
+    if (PROBE_DEBUG) console.log(`[probe] ${waiting.target} analysis dropped: capture generation changed`);
+    abandonProbeRun();
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
+  if (nowMs > waiting.deadlineMs) {
     if (PROBE_DEBUG) {
       console.log(
-        `[probe] ${waiting.target} analysis dropped: active=${session.active}`
-        + ` generation=${probeGeneration(waiting.target)}/${waiting.generation}`
-        + ` timedOut=${nowMs > waiting.deadlineMs} reached=${reached} needed=${needed}`,
+        `[probe] ${waiting.target} analysis timed out: reached=${reached} needed=${needed}`,
       );
     }
-    abandonProbeRun();
+    probeLifecycle.takeAnalysis();
+    failProbeAttempt(waiting.target, 'captured audio did not reach the analyzer before timeout', nowMs);
     return;
   }
 
   if (reached < needed) return;
-  pendingProbeAnalysis = null;
+  const analysis = probeLifecycle.takeAnalysis();
+  if (!analysis) return;
 
-  const window = waiting.target === 'mic'
-    ? session.readMic(waiting.windowStart, waiting.windowSamples)
-    : session.readBacking(waiting.windowStart, waiting.windowSamples);
+  const window = analysis.target === 'mic'
+    ? session.readMic(analysis.windowStart, analysis.windowSamples)
+    : session.readBacking(analysis.windowStart, analysis.windowSamples);
   const { offsetSamples, correlation } = locateProbe(window, MIX_SAMPLE_RATE);
-  const actualSample = waiting.windowStart + offsetSamples;
-  const latencyMs = ((actualSample - waiting.targetSample) / MIX_SAMPLE_RATE) * 1000;
-  lastProbeCorrelation = { ...lastProbeCorrelation, [waiting.target]: correlation };
+  const actualSample = analysis.windowStart + offsetSamples;
+  const latencyMs = ((actualSample - analysis.targetSample) / MIX_SAMPLE_RATE) * 1000;
+  lastProbeCorrelation = { ...lastProbeCorrelation, [analysis.target]: correlation };
 
   if (PROBE_DEBUG) {
     let peak = 0;
@@ -1570,7 +1664,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
       if (magnitude > peak) peak = magnitude;
     }
     const controlSeconds = 20;
-    const recent = waiting.target === 'mic'
+    const recent = analysis.target === 'mic'
       ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
       : session.readBacking(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds);
     let recentPeak = 0;
@@ -1579,32 +1673,37 @@ function maybeFinishProbeAnalysis(nowMs: number) {
       if (magnitude > recentPeak) recentPeak = magnitude;
     }
     console.log(
-      `[probe] ${waiting.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
+      `[probe] ${analysis.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
       + ` windowPeak=${peak} recent${controlSeconds}sPeak=${recentPeak}`
-      + ` windowStart=${waiting.windowStart} needed=${needed} reached=${reached}`,
+      + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`,
     );
   }
 
   if (correlation < PROBE_MIN_CORRELATION) {
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
+    failProbeAttempt(
+      analysis.target,
+      `correlation ${correlation.toFixed(3)} was below ${PROBE_MIN_CORRELATION.toFixed(3)}`,
+      nowMs,
+    );
     return;
   }
 
-  const leg = { targetSample: waiting.targetSample, actualSample, correlation };
+  const leg = { targetSample: analysis.targetSample, actualSample, correlation };
 
-  if (waiting.target === 'mic') {
+  if (analysis.target === 'mic') {
     measuredMicLeg = {
       ...leg,
       sessionGeneration: session.generation,
-      micGeneration: waiting.generation,
+      micGeneration: analysis.generation,
     };
+    probeLifecycle.setMicMeasured(true);
     broadcastJson(timingCalibrationStatusPayload());
     return;
   }
 
   const micLeg = measuredMicLeg;
   measuredMicLeg = null;
+  probeLifecycle.setMicMeasured(false);
   if (
     micLeg === null
     || micLeg.sessionGeneration !== session.generation
@@ -1687,7 +1786,6 @@ function restartBootCalibration(nowMs: number, automatic: boolean) {
   clearBootCalibrationState();
   robotPlayerOffsetMs = null;
   robotPlayerOffsetAt = -Infinity;
-  lastProbeAttemptAt = -Infinity;
   syncAppliedCalibration();
   maybeStartProbeCalibration(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
@@ -1723,8 +1821,10 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(mixHealthPayload());
   }
 
+  const pendingProbe = probeLifecycle.pendingRequest;
   if (pendingProbe !== null && nowMs - pendingProbe.serverSentAtMs > PROBE_REPLY_TIMEOUT_MS) {
-    pendingProbe = null;
+    const expired = probeLifecycle.acceptReply(pendingProbe.requestId);
+    if (expired) failProbeAttempt(expired.target, 'playback acknowledgement timed out', nowMs);
   }
 
   dropLegacyCalibrationForRobot();
@@ -1755,7 +1855,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
 function validSampleRate(value: unknown) {
   const sampleRate = Number(value);
-  return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000
+  return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000
     ? sampleRate
     : null;
 }
@@ -1891,6 +1991,10 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
       const nowMs = performance.now();
+      if (timingCalibrationInProgress(nowMs)) {
+        rejectTakeCommand(socket, 'start', 'timing-calibration-active');
+        return;
+      }
       const song = takeSongSnapshot(nowMs);
       const currentMicStreaming = micStreaming(nowMs);
       if (song.videoId === null && !currentMicStreaming) {
@@ -2214,6 +2318,14 @@ wss.on('connection', (rawSocket, request) => {
     if (payload.type === 'start-timing-calibration') {
       if (!requireMicOwnerCommand(socket, 'start-timing-calibration')) return;
       const nowMs = performance.now();
+      if (takeBlocksCalibration()) {
+        sendJson(socket, { type: 'calibration-command-rejected', reason: 'take-active' });
+        return;
+      }
+      if (timingCalibrationInProgress(nowMs)) {
+        sendJson(socket, timingCalibrationStatusPayload());
+        return;
+      }
       if (
         !session.active
         || backing?.readyState !== WebSocket.OPEN
@@ -2505,12 +2617,20 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'calibration-probe-played') {
+    if (payload.type === 'calibration-probe-played' || payload.type === 'calibration-probe-failed') {
       const fromPublisher = socket === publisher && socket.role === 'publisher';
       const target = payload.target === 'backing' ? 'backing' : 'mic';
       const fromActiveRobot = socket === activeRobotSource && socket.isRobotSource === true;
       if (target === 'mic' ? fromPublisher : fromActiveRobot) {
-        handleProbeReply({ requestId: payload.requestId, generation: payload.generation }, performance.now());
+        const nowMs = performance.now();
+        if (payload.type === 'calibration-probe-played') {
+          handleProbeReply({ requestId: payload.requestId, generation: payload.generation }, nowMs);
+        } else {
+          handleProbeFailure(
+            { requestId: payload.requestId, generation: payload.generation, reason: payload.reason },
+            nowMs,
+          );
+        }
       }
       return;
     }
@@ -2524,6 +2644,7 @@ wss.on('connection', (rawSocket, request) => {
         sendJson(previous, { type: 'robot-source-replaced' });
         sourceGeneration += 1;
         takeController.noteQualityEvent('robot-source-replaced');
+        abandonProbeRun();
       } else if (!previous && session.active) {
         takeController.noteQualityEvent('robot-source-connected');
       }
@@ -2602,6 +2723,7 @@ wss.on('connection', (rawSocket, request) => {
         robotPlayerOffsetMs = null;
         robotPlayerOffsetAt = -Infinity;
         sourceGeneration += 1;
+        abandonProbeRun();
         syncAppliedCalibration();
         broadcastJson(sourceStatusPayload());
         broadcastJson(timingCalibrationStatusPayload());
@@ -2629,7 +2751,7 @@ wss.on('connection', (rawSocket, request) => {
         if (calibration.collecting) {
           calibration.fail('Microphone disconnected during calibration.');
         }
-              broadcastStatus();
+        broadcastStatus();
       }
 
       if (socket === backing) {

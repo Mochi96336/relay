@@ -10,6 +10,7 @@ import { RelayClient, startRelay } from './helpers/harness.js';
 const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const listenSource = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
+const liveStatusSource = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
 const presenceSource = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
 const youtubeSyncSource = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 
@@ -114,4 +115,27 @@ test('Mic recovery exposes OS input mute to server liveness', () => {
     },
   });
   assert.equal(parsed?.inputMuted, true);
+});
+
+/**
+ * A backgrounded phone came back to a page still saying the singer was live
+ * while no audio was leaving it. Two separate faults met there: the capture
+ * context could not be restarted, and the headline kept asserting a room state
+ * the page had lost the connection to observe.
+ */
+test('a lost connection stops the page claiming the singer is live', () => {
+  const closeHandler = liveStatusSource.match(
+    /addEventListener\('close', \(\) => \{[\s\S]*?\n {4}\}\);/,
+  )?.[0] ?? '';
+  assert.notEqual(closeHandler, '', 'live-status must handle its socket closing');
+  assert.match(closeHandler, /title\.textContent =/);
+});
+
+test('the capture context is restarted from every state Safari reports', () => {
+  // `interrupted` is the state a backgrounded iPhone reports, and checking only
+  // for `suspended` skipped the commonest case entirely.
+  assert.match(appSource, /import \{ shouldRequestAudioResume \}/);
+  assert.match(appSource, /function resumePublisherAudioContext[\s\S]*shouldRequestAudioResume\(audioContext\.state\)/);
+  // And nothing waits on it: that promise can be accepted and never settle.
+  assert.doesNotMatch(appSource, /await audioContext\.resume\(\)/);
 });

@@ -1,6 +1,7 @@
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
+import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
@@ -620,10 +621,24 @@ function isCurrentPublisherSession(sessionEpoch) {
   return publisherSessionEpoch === sessionEpoch && canKeepPublishing();
 }
 
-async function resumePublisherAudioContext() {
-  if (!publisherActive || !audioContext || audioContext.state !== 'suspended') return;
+/**
+ * Asks the capture context to start again, and never waits on the answer.
+ *
+ * Safari suspends this context when the phone is backgrounded and reports
+ * `interrupted` as well as `suspended` - the old check saw only the latter, so
+ * the commonest case was skipped entirely. Its `resume()` can also be accepted
+ * and then never settle, which is why nothing may await it: the singer came
+ * back to a page still saying they were live while no audio was leaving the
+ * phone, and the only way out was releasing and re-taking the microphone.
+ */
+function resumePublisherAudioContext() {
+  if (!publisherActive || !audioContext) return;
+  if (!shouldRequestAudioResume(audioContext.state)) return;
   try {
-    await audioContext.resume();
+    const pending = audioContext.resume();
+    if (pending && typeof pending.catch === 'function') {
+      pending.catch((error) => console.warn('Microphone AudioContext resume failed', error));
+    }
   } catch (error) {
     console.warn('Microphone AudioContext resume failed', error);
   }
@@ -631,7 +646,7 @@ async function resumePublisherAudioContext() {
 
 function recoverPublisherAudio() {
   if (!publisherActive) return;
-  void resumePublisherAudioContext();
+  resumePublisherAudioContext();
 }
 
 function schedulePublisherReconnect(sessionEpoch = publisherSessionEpoch) {
@@ -812,8 +827,8 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     preparedContext = new AudioContext({ latencyHint: 'interactive' });
     const captureContext = preparedContext;
     captureContext.addEventListener('statechange', () => {
-      if (!publisherActive || audioContext !== captureContext || captureContext.state !== 'suspended') return;
-      void resumePublisherAudioContext();
+      if (!publisherActive || audioContext !== captureContext) return;
+      resumePublisherAudioContext();
     });
     await micStartup.wait(
       startup,
@@ -861,14 +876,14 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     captureInputMuted = true;
     sendAudioUplinkHealth();
     setStatus('Microphone interrupted', 'The phone muted the microphone input; trying to recover it.');
-    void resumePublisherAudioContext();
+    resumePublisherAudioContext();
   });
   track?.addEventListener('unmute', () => {
     if (!captureIsCurrent()) return;
     captureInputMuted = false;
     sendAudioUplinkHealth();
     setStatus('Microphone is live', 'Microphone input recovered.');
-    void resumePublisherAudioContext();
+    resumePublisherAudioContext();
   });
   track?.addEventListener('ended', () => {
     if (!captureIsCurrent()) return;

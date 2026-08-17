@@ -251,6 +251,13 @@ if (
       if (socket !== next) return;
       socket = null;
       systemRelay.textContent = t('system.reconnecting');
+      // Stop asserting what the room was doing when the connection went away.
+      // "You're live" is the most consequential line on this page - it is the
+      // singer's only evidence that anyone can hear them - and a backgrounded
+      // phone kept showing it while its microphone had actually stopped. State
+      // this page can no longer observe must not keep being reported.
+      title.textContent = t('voice.connecting');
+      detail.textContent = '';
       scheduleReconnect();
     });
     next.addEventListener('error', () => {

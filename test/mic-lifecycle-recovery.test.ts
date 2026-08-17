@@ -64,6 +64,25 @@ test('hardware input ending completes the same Mic lifecycle', () => {
   assert.match(handler, /relay-microphone-ended'[\s\S]*reason: 'input-ended'/);
 });
 
+test('Mic startup is single-flight, deadline-bound, and disposes late permission capture', () => {
+  const startAt = app.indexOf('async function startPublisher');
+  const requestAt = app.indexOf('async function requestPublisherStart', startAt);
+  assert.ok(startAt >= 0 && requestAt > startAt);
+  const startup = app.slice(startAt, requestAt);
+
+  assert.match(app, /const micStartup = new MicStartupGate\(\)/);
+  assert.match(startup, /publisherButton\.disabled = true[\s\S]*navigator\.mediaDevices\.getUserMedia/,
+    'the button must become single-flight before the permission promise starts');
+  assert.match(startup, /micStartup\.wait\([\s\S]*waiting for microphone permission/);
+  assert.match(startup, /dispose: \(stream\) => stream\.getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\)/);
+  assert.match(startup, /loading the microphone audio processor/);
+  assert.match(startup, /starting microphone audio/);
+  assert.match(app, /async function stop[\s\S]*micStartup\.cancel\(\)/,
+    'every local stop invalidates an in-flight startup before late browser work can resolve');
+  assert.match(app, /if \(publisherStartRequest\) return publisherStartRequest/,
+    'duplicate clicks and takeover events must share one startup request');
+});
+
 test('initial Relay connection failure remains cancellable instead of trapping an active Mic', () => {
   const activeAt = app.indexOf('setPublisherActive(true)');
   const disabledAt = app.indexOf('publisherButton.disabled = true', activeAt);

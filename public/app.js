@@ -1,5 +1,6 @@
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
+import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
@@ -30,6 +31,9 @@ let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
 let publisherActive = false;
+let publisherStarting = false;
+let publisherStartRequest = null;
+const micStartup = new MicStartupGate();
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestCalibration = null;
@@ -651,6 +655,8 @@ async function connectPublisherSocket() {
 }
 
 async function stop(setIdle = true, { releaseMic = true } = {}) {
+  micStartup.cancel();
+  publisherStarting = false;
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
 
@@ -700,33 +706,62 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error('Microphone capture is unavailable. On a phone, open Relay through HTTPS.');
   }
-  await stop();
+
+  const startup = micStartup.begin();
+  publisherStarting = true;
+  publisherButton.disabled = true;
+  updateSingerControls();
   pendingPublisherTakeoverOwnerId = takeoverExpectedOwnerId;
   setStatus('Starting microphone…');
 
-  // Capture is prepared before the server is allowed to change ownership. A
-  // denied permission or failed AudioWorklet therefore leaves the current
-  // singer untouched.
-  mediaStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-    },
-    video: false,
-  });
+  let preparedStream = null;
+  let preparedContext = null;
+  try {
+    // Browser permission promises are not abortable on every supported phone.
+    // The gate gives the UI a deadline and stops a stream that resolves after
+    // this attempt was cancelled or superseded.
+    preparedStream = await micStartup.wait(
+      startup,
+      navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+        video: false,
+      }),
+      {
+        stage: 'waiting for microphone permission',
+        dispose: (stream) => stream.getTracks().forEach((track) => track.stop()),
+      },
+    );
 
-  audioContext = new AudioContext({ latencyHint: 'interactive' });
-  const captureContext = audioContext;
-  captureContext.addEventListener('statechange', () => {
-    if (!publisherActive || audioContext !== captureContext || captureContext.state !== 'suspended') return;
-    void resumePublisherAudioContext();
-  });
-  await audioContext.audioWorklet.addModule('/capture-worklet.js');
-  await audioContext.resume();
+    preparedContext = new AudioContext({ latencyHint: 'interactive' });
+    const captureContext = preparedContext;
+    captureContext.addEventListener('statechange', () => {
+      if (!publisherActive || audioContext !== captureContext || captureContext.state !== 'suspended') return;
+      void resumePublisherAudioContext();
+    });
+    await micStartup.wait(
+      startup,
+      captureContext.audioWorklet.addModule('/capture-worklet.js'),
+      { stage: 'loading the microphone audio processor' },
+    );
+    await micStartup.wait(
+      startup,
+      captureContext.resume(),
+      { stage: 'starting microphone audio' },
+    );
+    if (!micStartup.isCurrent(startup)) throw new MicStartupCancelledError();
 
-  setPublisherActive(true);
+    mediaStream = preparedStream;
+    preparedStream = null;
+    audioContext = preparedContext;
+    preparedContext = null;
+    setPublisherActive(true);
+    publisherStarting = false;
+    micStartup.complete(startup);
 
   // A new capture session. Reconnecting the websocket does not bump this: the
   // capture keeps running and its sample cursor stays continuous, so the server
@@ -860,26 +895,47 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   updateSingerControls();
   setStatus('Connecting microphone…', `${audioContext.sampleRate} Hz capture is active; connecting to Relay.`);
 
-  try {
-    await connectPublisherSocket();
-  } catch {
-    setStatus('Reconnecting microphone…', 'Initial Relay connection failed; retrying automatically.');
-    schedulePublisherReconnect();
+    try {
+      await connectPublisherSocket();
+    } catch {
+      setStatus('Reconnecting microphone…', 'Initial Relay connection failed; retrying automatically.');
+      schedulePublisherReconnect();
+    }
+  } finally {
+    if (preparedStream) preparedStream.getTracks().forEach((track) => track.stop());
+    if (preparedContext) {
+      try {
+        await preparedContext.close();
+      } catch {}
+    }
   }
 }
 
 async function requestPublisherStart(takeoverExpectedOwnerId = null) {
+  if (publisherStartRequest) return publisherStartRequest;
+
+  const request = (async () => {
+    try {
+      await stop(false, { releaseMic: true });
+      await startPublisher(takeoverExpectedOwnerId);
+    } catch (error) {
+      if (error?.code === 'mic-startup-cancelled') return;
+      console.error(error);
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus('Could not start microphone', message);
+      dispatchRelayEvent('relay-microphone-start-failed', {
+        message,
+        takeoverExpectedOwnerId,
+      });
+      await stop(false, { releaseMic: false });
+    }
+  })();
+
+  publisherStartRequest = request;
   try {
-    await startPublisher(takeoverExpectedOwnerId);
-  } catch (error) {
-    console.error(error);
-    const message = error instanceof Error ? error.message : String(error);
-    setStatus('Could not start microphone', message);
-    dispatchRelayEvent('relay-microphone-start-failed', {
-      message,
-      takeoverExpectedOwnerId,
-    });
-    await stop(false, { releaseMic: false });
+    await request;
+  } finally {
+    if (publisherStartRequest === request) publisherStartRequest = null;
   }
 }
 

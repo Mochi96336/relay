@@ -1,6 +1,4 @@
-from pathlib import Path
-
-Path('public/mic-startup.d.ts').write_text("""export const MIC_STARTUP_TIMEOUT_MS: number;
+export const MIC_STARTUP_TIMEOUT_MS: number;
 
 export class MicStartupCancelledError extends Error {
   readonly code: 'mic-startup-cancelled';
@@ -36,4 +34,3 @@ export class MicStartupGate {
     },
   ): Promise<T>;
 }
-""")

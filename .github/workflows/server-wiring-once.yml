@@ -1,11 +1,10 @@
-name: One-shot core stabilization wiring
+name: One-shot calibration server fix
 
 on:
   push:
     branches:
       - agent/stabilize-room-kernel
     paths:
-      - .github/server-wiring-once.py
       - .github/workflows/server-wiring-once.yml
 
 permissions:
@@ -16,57 +15,65 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  wire:
+  patch-and-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: agent/stabilize-room-kernel
           fetch-depth: 0
+
       - uses: actions/setup-node@v5
         with:
           node-version: '20.19'
           cache: npm
-      - name: Apply exact stabilization replacements
-        run: python3 .github/server-wiring-once.py
+
+      - name: Apply exact server fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text()
+
+          old_reply = 'probeLifecycle.acceptReply(reply.requestId)'
+          new_reply = 'probeLifecycle.acceptClientReply(reply.requestId, reply.generation)'
+          count = text.count(old_reply)
+          if count != 2:
+              raise SystemExit(f'expected exactly 2 probe reply consumers, found {count}')
+          text = text.replace(old_reply, new_reply)
+
+          old_rate = 'if (!Number.isFinite(value) || sampleRate < 8_000 || sampleRate > 192_000) {'
+          new_rate = 'if (!Number.isFinite(sampleRate) || sampleRate < 8_000 || sampleRate > 192_000) {'
+          count = text.count(old_rate)
+          if count != 1:
+              raise SystemExit(f'expected exactly 1 sample-rate guard, found {count}')
+          text = text.replace(old_rate, new_rate)
+
+          path.write_text(text)
+          PY
+
       - name: Verify patch shape
-        shell: bash
         run: |
           git diff --check
-          git diff -- \
-            src/server.ts \
-            src/audio-packet-receiver.ts \
-            public/app.js \
-            public/listen.js \
-            test/probe-server-lifecycle.test.ts \
-            test/audio-packet-server.test.ts
-          for file in \
-            src/server.ts \
-            src/audio-packet-receiver.ts \
-            public/app.js \
-            public/listen.js \
-            test/probe-server-lifecycle.test.ts \
-            test/audio-packet-server.test.ts
-          do
-            git status --short -- "$file" | grep -q .
-          done
+          test "$(git diff --name-only -- src/server.ts | wc -l)" -eq 1
+          git diff -- src/server.ts
+
       - run: npm ci
       - run: npm run check
       - name: Run full tests before writing branch
         run: npm test
-      - name: Commit only validated stabilization changes
-        shell: bash
+
+      - name: Commit verified fix and remove one-shot tooling
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            src/server.ts \
-            src/audio-packet-receiver.ts \
-            public/app.js \
-            public/listen.js \
-            test/probe-server-lifecycle.test.ts \
-            test/audio-packet-server.test.ts
-          test "$(git diff --cached --name-only | wc -l)" -eq 6
-          git commit -m 'fix: recover restart and mobile audio authority'
+          rm -f \
+            .github/server-wiring-once.py \
+            .github/workflows/server-wiring-once.yml \
+            .github/workflows/calibration-server-fix-once.yml
+          git add src/server.ts .github/server-wiring-once.py .github/workflows/server-wiring-once.yml .github/workflows/calibration-server-fix-once.yml
+          git commit -m 'fix(audio): validate calibration ACK before consuming request'
           git pull --rebase origin agent/stabilize-room-kernel
           git push origin HEAD:agent/stabilize-room-kernel

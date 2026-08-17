@@ -11,7 +11,12 @@ const MAX_CONTINUITY_SNAPSHOTS = 8;
 export type AudioPacketReceiverOptions = {
   source: AudioPacketSource;
   generation: number;
-  /** First sequence authorized for this capture. Fresh browser captures start at zero. */
+  /**
+   * First sequence authorized for this receiver. When omitted, the first valid
+   * packet establishes the sequence origin; this is required after a Relay
+   * process restart because the continuing phone capture does not reset its
+   * sequence counter.
+   */
   initialSequence?: number;
   reorderWindowPackets: number;
   reorderDeadlineMs: number;
@@ -93,6 +98,12 @@ function pruneContinuitySnapshots(wallNowMs = Date.now()) {
  * sequence 0 / sample 0 always resets the snapshot, so a coincidental generation
  * reuse cannot silently inherit another capture's frontier.
  *
+ * If no in-process continuity snapshot exists and the caller did not provide an
+ * explicit initial sequence, the first valid packet establishes the frontier.
+ * That is the only sequence authority available after a Relay process restart:
+ * the phone deliberately keeps its capture generation, sequence and sample
+ * timeline across WebSocket reconnects.
+ *
  * Reorder deadlines use the caller's monotonic media clock. Continuity expiry
  * deliberately uses wall time so socket replacement cannot compare unlike
  * clock domains (for example performance.now() against Date.now()).
@@ -139,12 +150,14 @@ export class AudioPacketReceiver {
       throw new RangeError('reorderWindowPackets cannot exceed maxForwardJumpPackets');
     }
 
-    const initialSequence = options.initialSequence ?? 0;
-    if (!uint32(initialSequence)) throw new RangeError('initialSequence must be a uint32');
+    const initialSequence = options.initialSequence;
+    if (initialSequence !== undefined && !uint32(initialSequence)) {
+      throw new RangeError('initialSequence must be a uint32');
+    }
 
     this.source = options.source;
     this.generation = options.generation >>> 0;
-    this.expectedSequence = initialSequence >>> 0;
+    this.expectedSequence = initialSequence === undefined ? null : initialSequence >>> 0;
     this.reorderWindowPackets = options.reorderWindowPackets;
     this.reorderDeadlineMs = options.reorderDeadlineMs;
     this.maxForwardJumpPackets = options.maxForwardJumpPackets;
@@ -250,6 +263,7 @@ export class AudioPacketReceiver {
     const candidate = this.continuityCandidate;
     this.continuityCandidate = null;
     if (!candidate) {
+      if (this.expectedSequence === null) this.expectedSequence = packet.sequence;
       this.rememberContinuity();
       return;
     }
@@ -281,6 +295,7 @@ export class AudioPacketReceiver {
       this.counters.wrongSourcePackets += currentWrongSourcePackets;
     } else {
       continuitySnapshots.delete(continuityKey(this.source, this.generation));
+      if (this.expectedSequence === null) this.expectedSequence = packet.sequence;
     }
 
     this.rememberContinuity();

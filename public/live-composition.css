@@ -84,7 +84,7 @@
   letter-spacing: 0;
 }
 
-/* app.js drives --input-level from the server's measured micPeakDbfs. This is
+/* app.js drives --input-level from local AudioWorklet capture evidence. This is
    evidence, not decorative state animation. */
 .voice-input-meter {
   --input-level: 0%;

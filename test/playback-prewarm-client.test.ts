@@ -9,16 +9,17 @@ function topLevelFunctionSection(source: string, declaration: string) {
   return source.slice(start, nextFunction >= 0 ? nextFunction : source.length);
 }
 
-test('the first Mic click starts only a local playback prewarm, before takeover confirmation', async () => {
+test('the first Mic click installs a local playback prewarm trigger deterministically', async () => {
   const trigger = await readFile(new URL('../public/playback-prewarm-trigger.js', import.meta.url), 'utf8');
   const continuation = await readFile(new URL('../public/playback-continuation.js', import.meta.url), 'utf8');
+  const youtube = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
-  assert.match(continuation, /typeof window !== 'undefined'[\s\S]*typeof document !== 'undefined'/,
-    'pure continuation helpers must not require browser globals in Node');
-  assert.match(continuation, /import\('\.\/playback-prewarm-trigger\.js'\)/,
-    'the browser runtime should still install the takeover prewarm trigger');
+  assert.doesNotMatch(continuation, /playback-prewarm-trigger/,
+    'pure continuation helpers must not hide browser side effects behind a dynamic import');
+  assert.match(youtube, /^import '\.\/playback-prewarm-trigger\.js';/,
+    'the visible YouTube runtime must install the capture listener before its module body runs');
   assert.match(trigger, /typeof window !== 'undefined'/,
-    'the trigger itself keeps a second browser-only guard');
+    'the trigger itself keeps a browser-only guard');
   assert.match(trigger, /typeof document !== 'undefined'/);
   assert.match(trigger, /document\.addEventListener\('click',[\s\S]*true\);/);
   assert.match(trigger, /#start-publisher/);
@@ -37,6 +38,9 @@ test('speculative preparation requests real media while staying muted and local'
   assert.match(startSection, /ensurePlayer\(prewarm\.videoId\)/);
   assert.match(startSection, /playbackRole === 'holder' \|\| playbackRole === 'preparing'/,
     'an existing holder must never be muted by speculative Mic preparation');
+  assert.match(startSection, /speculativePrewarm\?\.videoId === desired\.videoId/,
+    'a duplicate Mic tap must refresh the existing attempt instead of replacing its mute provenance');
+  assert.match(startSection, /speculativePrewarm\.targetTime =/);
 
   const primeSection = topLevelFunctionSection(source, 'function primeSpeculativePrewarm()');
   assert.match(primeSection, /player\.mute\(\)/,
@@ -51,8 +55,9 @@ test('speculative preparation requests real media while staying muted and local'
     'speculative player movement must never become room telemetry or a room command');
 });
 
-test('cancel parks speculative playback and restores the user mute state', async () => {
+test('abandoned takeover paths cancel speculative playback and restore mute provenance', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const presence = await readFile(new URL('../public/presence.js', import.meta.url), 'utf8');
   const cancelSection = topLevelFunctionSection(source, 'function cancelPlaybackPrewarm()');
   const restoreSection = topLevelFunctionSection(source, 'function restorePrewarmMute');
 
@@ -60,6 +65,8 @@ test('cancel parks speculative playback and restores the user mute state', async
   assert.match(cancelSection, /restorePrewarmMute\(prewarm\)/);
   assert.match(restoreSection, /prewarm\.wasMuted === false/);
   assert.match(restoreSection, /player\.unMute/);
+  assert.match(presence, /hideTakeover\(\{ cancelPrewarm: true \}\)/,
+    'owner changes/server restart must cancel a confirmation-time prewarm even without a Cancel click');
 });
 
 test('formal handoff consumes a matching warmed player and cold preparation still loads real media', async () => {
@@ -85,25 +92,29 @@ test('formal handoff consumes a matching warmed player and cold preparation stil
     'formal preparation still must not explicitly start audible playback before commit');
 });
 
-test('handoff ready requires a buffered active media state and polls through slow mobile startup', async () => {
+test('handoff ready requires the desired renderable state, not BUFFERING or CUED', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const readySection = topLevelFunctionSection(source, 'function announceHandoffReady()');
   const scheduleSection = topLevelFunctionSection(source, 'function scheduleHandoffReadyChecks()');
 
   assert.match(readySection, /getVideoLoadedFraction/);
-  assert.match(readySection, /\[1, 2, 3\]\.includes\(state\)/);
+  assert.match(readySection, /const desiredPlaying =/);
+  assert.match(readySection, /desiredPlaying \? state !== 1 : state !== 2/,
+    'a playing room requires PLAYING and a paused room requires PAUSED');
   assert.match(readySection, /bufferedFraction <= 0/);
-  assert.doesNotMatch(readySection, /\[1, 2, 5\]\.includes\(state\)/,
-    'CUED must not be treated as proof that media is buffered');
+  assert.doesNotMatch(readySection, /\[1, 2, 3\]\.includes\(state\)/,
+    'BUFFERING must not cross the ready boundary');
   assert.match(scheduleSection, /16_000/,
     'readiness polling should continue near the server preparation deadline');
 });
 
-test('commit starts the target clock muted and only server completion restores audibility', async () => {
+test('commit starts the target clock muted and only direct server completion restores audibility', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const commitSection = topLevelFunctionSection(source, 'function commitRoomSong');
   const completeSection = topLevelFunctionSection(source, 'function completeRoomSong');
 
+  assert.match(source, /const HANDOFF_COMMIT_TIMEOUT_MS = 6_500/,
+    'the local watchdog must trail the authoritative 5 s server deadline');
   assert.match(commitSection, /clearHandoffCommitTimer\(\)/);
   assert.match(commitSection, /const currentTime = Number\(player\.getCurrentTime\(\)\)/);
   assert.match(commitSection, /Math\.abs\(currentTime - pendingHandoff\.targetTime\) > 0\.75/);
@@ -113,29 +124,30 @@ test('commit starts the target clock muted and only server completion restores a
   assert.doesNotMatch(commitSection, /player\.unMute/,
     'commit acknowledgement is not yet audible-room authority');
   assert.match(commitSection, /player\.playVideo/);
-  assert.match(commitSection, /HANDOFF_COMMIT_TIMEOUT_MS/);
-  assert.match(commitSection, /rollbackCommittedHandoff\('commit-timeout', \{ reprepare: true \}\)/);
+  assert.match(commitSection, /rollbackCommittedHandoff\('commit-timeout'\)/);
+  assert.doesNotMatch(commitSection, /reprepare:\s*true/,
+    'the late client watchdog must not seek again using a stale commit target');
 
   assert.match(completeSection, /prewarmWasMuted = pendingHandoff\.prewarmWasMuted/);
   assert.match(completeSection, /prewarmWasMuted === false/);
   assert.match(completeSection, /player\.unMute/,
-    'only server-confirmed handoff completion may restore an originally audible player');
+    'only the explicit server completion packet may restore an originally audible player');
 });
 
-test('authoritative holder timeline can complete audibility after a reconnect loses the direct packet', async () => {
+test('timeline promotion alone cannot unmute the new holder before the old leader is released', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const viewSection = source.slice(source.indexOf("window.addEventListener('relay:playback-view'"));
 
-  assert.match(viewSection, /pendingHandoff\?\.phase === 'committing'/);
-  assert.match(viewSection, /nextRole === 'holder'/);
-  assert.match(viewSection, /timeline\?\.handoffState === 'idle'/);
-  assert.match(viewSection, /sameTransport/);
-  assert.match(viewSection, /leaderGeneration === currentGeneration/);
-  assert.match(viewSection, /completeRoomSong\(\{ handoffId: pendingHandoff\.handoffId \}\)/,
-    'reconnect-safe timeline proof must be equivalent to the direct complete packet');
+  assert.doesNotMatch(
+    viewSection,
+    /completeRoomSong\(\{ handoffId: pendingHandoff\.handoffId \}\)/,
+    'server broadcasts promoted timeline before sending release/complete, so status cannot be an audibility barrier',
+  );
+  assert.match(source, /window\.addEventListener\('relay:song-handoff-complete'[\s\S]*completeRoomSong\(event\.detail/,
+    'audibility still follows the direct ordered completion packet');
 });
 
-test('commit timeout parks and re-mutes the target before asking the server for a fresh prepare phase', async () => {
+test('local commit timeout parks and reports failure without starting a stale local reprepare', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const rollbackSection = topLevelFunctionSection(source, 'function rollbackCommittedHandoff');
 
@@ -143,6 +155,6 @@ test('commit timeout parks and re-mutes the target before asking the server for 
   assert.match(rollbackSection, /player\.pauseVideo/);
   assert.match(rollbackSection, /player\.mute/);
   assert.match(rollbackSection, /relay:song-handoff-failed/);
-  assert.match(rollbackSection, /cuePendingHandoff\(\)/,
-    'a timeout may retry only after it first reports the failed commit');
+  assert.doesNotMatch(rollbackSection, /cuePendingHandoff\(\)/,
+    'the server owns retry/cancel timing; a late client timeout must not reuse stale targetTime');
 });

@@ -217,6 +217,7 @@ async function connect() {
         'mix-not-active': 'There is no room mix to record yet.',
         'product-blocked': 'Fix the room audio before recording a Take.',
         'take-not-ready': 'Start the mic before recording a voice-only Take.',
+        'timing-calibration-active': 'Timing calibration is still measuring the room. Wait for it to finish before recording.',
         'take-active': 'A Take is already recording or finishing.',
         'take-not-recording': 'There is no Take recording right now.',
         'stale-take': 'That Stop belonged to an older Take.',

@@ -40,7 +40,7 @@ test('a replacement handoff retires delayed readiness and commit work from the p
   );
 });
 
-test('handoff readiness requires the exact YouTube video and actual buffered media', async () => {
+test('handoff readiness requires the exact YouTube video and the desired rendered state', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
   const reportSection = topLevelFunctionSection(source, 'function reportedVideoId()');
@@ -50,12 +50,13 @@ test('handoff readiness requires the exact YouTube video and actual buffered med
   const readySection = topLevelFunctionSection(source, 'function announceHandoffReady()');
   assert.match(readySection, /reportedVideoId\(\) !== pendingHandoff\.videoId/);
   assert.match(readySection, /getVideoLoadedFraction/);
-  assert.match(readySection, /\[1, 2, 3\]\.includes\(state\)/,
-    'PLAYING, PAUSED or BUFFERING may prove a live media pipeline');
+  assert.match(readySection, /const desiredPlaying =/);
+  assert.match(readySection, /desiredPlaying \? state !== 1 : state !== 2/,
+    'playing rooms require PLAYING and paused rooms require PAUSED');
   assert.match(readySection, /bufferedFraction <= 0/,
     'zero buffered media must not cross the ready boundary');
-  assert.doesNotMatch(readySection, /\[1, 2, 5\]\.includes\(state\)/,
-    'CUED alone is not media readiness');
+  assert.doesNotMatch(readySection, /\[1, 2, 3\]\.includes\(state\)/,
+    'BUFFERING is transport progress, not playback readiness');
 
   const commitSection = topLevelFunctionSection(source, 'function commitRoomSong');
   assert.match(commitSection, /reportedVideoId\(\) !== pendingHandoff\.videoId/);

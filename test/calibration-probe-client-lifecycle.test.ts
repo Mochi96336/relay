@@ -12,7 +12,7 @@ test('phone calibration probe loses authority before a late AudioContext resume 
     'a late resume must re-check that the request is still current before creating audible nodes');
   assert.match(source, /message\.probePhase !== 'mic-requested'[\s\S]*activeCalibrationProbeRequestId = null/,
     'canonical server probe phase must retire timed-out or advanced requests');
-  assert.match(source, /next\.addEventListener\('close'[\s\S]*activeCalibrationProbeRequestId = null/,
+  assert.match(source, /ws\.addEventListener\('close'[\s\S]*activeCalibrationProbeRequestId = null/,
     'losing the control socket must retire the request locally');
   assert.match(source, /document\.visibilityState === 'hidden'[\s\S]*activeCalibrationProbeRequestId = null/,
     'backgrounding the phone must retire a request that Safari may resume later');

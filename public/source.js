@@ -54,6 +54,7 @@ let lastSeekAt = 0;
 let playerError = null;
 let robotSuperseded = false;
 let robotDeltaSuppressedUntil = 0;
+let activeBackingProbeRequestId = null;
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -147,6 +148,7 @@ function safePlayerState() {
 function parkSupersededRobot() {
   if (!ROBOT_MODE || robotSuperseded) return;
   robotSuperseded = true;
+  activeBackingProbeRequestId = null;
   armed = false;
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
@@ -234,13 +236,15 @@ function probeContext() {
  * Nothing here is audible to anyone. The sink has no speaker behind it.
  */
 async function playBackingProbe(requestId, leadMs) {
-  if (robotSuperseded) return;
+  if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
   try {
     const context = probeContext();
     // Unconditionally, not only when it reports 'suspended': the state a stale
     // stream leaves behind is 'running', so trusting the state is what let this
-    // fail silently.
+    // fail silently. The resume may still settle late, so request identity must
+    // be re-proved before any oscillator is scheduled into the backing path.
     await context.resume();
+    if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
     if (context.state !== 'running') {
       throw new Error(`Robot probe AudioContext is ${context.state}.`);
     }
@@ -260,11 +264,16 @@ async function playBackingProbe(requestId, leadMs) {
     }
 
     // No generation: the capture this lands in belongs to `backing:stdin`,
-    // not to this page, so the server checks its own view rather than taking
-    // a number this page would only be guessing at.
+    // not to this page, so that page intentionally has no capture generation
+    // to report. Request identity still belongs here: a timeout/retry can retire
+    // this browser side effect even while the old resume promise is unresolved.
+    if (activeBackingProbeRequestId !== requestId) return;
+    activeBackingProbeRequestId = null;
     send({ type: 'calibration-probe-played', target: 'backing', requestId });
   } catch (error) {
     console.warn('backing probe failed', error);
+    if (activeBackingProbeRequestId !== requestId) return;
+    activeBackingProbeRequestId = null;
     send({
       type: 'calibration-probe-failed',
       target: 'backing',
@@ -610,6 +619,12 @@ function connect() {
 
     if (message.type === 'timing-calibration-status') {
       latestCalibration = message;
+      if (
+        activeBackingProbeRequestId !== null
+        && (message.probeActive !== true || message.probePhase !== 'backing-requested')
+      ) {
+        activeBackingProbeRequestId = null;
+      }
       renderCalibration();
       return;
     }
@@ -623,7 +638,10 @@ function connect() {
 
     if (message.type === 'play-calibration-probe') {
       if (ROBOT_MODE && !robotSuperseded && message.target === 'backing') {
-        void playBackingProbe(message.requestId, Number(message.leadMs) || 200);
+        const requestId = Number(message.requestId);
+        if (!Number.isSafeInteger(requestId) || requestId < 0) return;
+        activeBackingProbeRequestId = requestId;
+        void playBackingProbe(requestId, Number(message.leadMs) || 200);
       }
       return;
     }
@@ -642,6 +660,7 @@ function connect() {
 
   next.addEventListener('close', () => {
     if (socket !== next) return;
+    activeBackingProbeRequestId = null;
     socket = null;
     latestTimeline = null;
     latestSourceStatus = null;

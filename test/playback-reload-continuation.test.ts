@@ -258,10 +258,15 @@ test('reload hello clears an old-generation command without waiting for command 
     // command-pending tombstone from the page that was reloaded.
     const nextId = 'reload-command-play';
     reloaded.send({ type: 'room-song-command', commandId: nextId, expectedRevision: 3, action: 'play' });
-    const accepted = await reloaded.waitFor((message) => (
-      message.type === 'room-song-command-accepted' && message.commandId === nextId
+    const decision = await reloaded.waitFor((message) => (
+      (message.type === 'room-song-command-accepted' || message.type === 'room-song-command-rejected')
+      && message.commandId === nextId
     ));
-    assert.equal(accepted.commandId, nextId);
+    assert.equal(
+      decision.type,
+      'room-song-command-accepted',
+      `reload command was rejected: ${JSON.stringify(decision)}`,
+    );
 
     aPlayback.close();
     aPublisher.close();

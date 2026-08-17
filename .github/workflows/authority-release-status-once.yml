@@ -44,43 +44,22 @@ jobs:
       - run: npm ci
       - run: npm run check
       - name: Run full suite before writing branch
-        env:
-          BRANCH: agent/stabilize-room-kernel
-        run: |
-          set +e
-          npm test > /tmp/authority-full-suite.log 2>&1
-          status=$?
-          set -e
-          tail -n 300 /tmp/authority-full-suite.log
-          if [ "$status" -ne 0 ]; then
-            tail -n 300 /tmp/authority-full-suite.log > .github/authority-failure.txt
-            git fetch origin "$BRANCH"
-            test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$BRANCH")" || {
-              echo 'Branch moved while capturing diagnostics; refusing to overwrite newer work.' >&2
-              exit "$status"
-            }
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add -f -- .github/authority-failure.txt
-            if ! git diff --cached --quiet; then
-              git commit -m 'chore: capture authority wiring failure'
-              git push origin HEAD:"$BRANCH"
-            fi
-            exit "$status"
-          fi
+        run: npm test
 
-      - name: Commit verified wiring and remove one-shot tooling
+      - name: Commit verified product wiring
         env:
           BRANCH: agent/stabilize-room-kernel
         run: |
-          git fetch origin "$BRANCH"
-          test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$BRANCH")" || {
-            echo 'Branch moved while the gate was running; refusing to overwrite newer work.' >&2
-            exit 1
-          }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f .github/authority-release-status.py .github/authority-ordering-fix.py .github/workflows/authority-release-status-once.yml .github/authority-failure.log .github/authority-failure.txt
-          git add -A -- src/server.ts test/runtime-single-snapshot.test.ts test/webtransport-media-server.test.ts .github
+          git add -- src/server.ts test/runtime-single-snapshot.test.ts test/webtransport-media-server.test.ts
+          git diff --cached --check
           git commit -m 'refactor: wire mic release effects and remote status'
+
+          # Concurrent stabilization commits have repeatedly touched only .github.
+          # Rebase the already-verified product commit onto the latest branch head;
+          # a real product-file collision becomes a normal rebase conflict and stops
+          # here instead of overwriting newer work.
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
           git push origin HEAD:"$BRANCH"

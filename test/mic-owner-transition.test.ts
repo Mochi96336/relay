@@ -79,6 +79,21 @@ describe('mic owner transition policy', () => {
     });
   });
 
+  test('transport expiry preserves its distinct diagnostic and does not cancel an independent handoff', () => {
+    assert.deepEqual(micOwnerTransitionEffects({
+      previousOwnerId: 'participant-alice',
+      ownerId: null,
+      cause: 'transport-expired',
+    }), {
+      changed: true,
+      noteQualityEvent: 'mic-owner-changed',
+      cancelRoomSongCommand: 'mic-owner-released',
+      cancelSongHandoff: false,
+      invalidateTimingReason: 'Microphone transport did not reconnect before its grace period expired.',
+      prepareSongHandoffFor: null,
+    });
+  });
+
   test('cannot manufacture a release transition when the room already had no owner', () => {
     assert.equal(micOwnerTransitionEffects({
       previousOwnerId: null,

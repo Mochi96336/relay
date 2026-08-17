@@ -218,23 +218,37 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     });
   }
 
-  async function resumeAudioGraph() {
-    if (!audioContext || audioContext.state !== 'suspended') return;
+  /**
+   * Requests a resume without giving anything the chance to wait on it.
+   *
+   * See ensureAudioGraph: on iOS Safari this promise can stay pending for the
+   * life of the page. Callers may only ever fire it and move on.
+   */
+  function startResume(context) {
+    if (!context || context.state !== 'suspended') return;
     try {
-      await audioContext.resume();
+      const pending = context.resume();
+      if (pending && typeof pending.catch === 'function') {
+        pending.catch((error) => console.warn('Listen AudioContext resume failed', error));
+      }
     } catch (error) {
       console.warn('Listen AudioContext resume failed', error);
     }
   }
 
+  function resumeAudioGraph() {
+    startResume(audioContext);
+  }
+
   function recoverAudioGraph() {
     if (effectiveMuted() || !audioContext) return;
-    void resumeAudioGraph().then(() => reconcile());
+    resumeAudioGraph();
+    reconcile();
   }
 
   async function ensureAudioGraph() {
     if (audioContext && playbackNode && gainNode) {
-      await resumeAudioGraph();
+      resumeAudioGraph();
       return;
     }
     if (audioSetupPromise) return audioSetupPromise;
@@ -248,7 +262,18 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       });
       // Consume the user's first interaction immediately. Fetching the worklet
       // before resume can lose transient autoplay permission on mobile.
-      await context.resume();
+      // Asked for, never waited on. iOS Safari leaves this promise pending
+      // indefinitely when it will not start the context yet - no error, no
+      // resolution - and awaiting it here stranded the whole graph: the
+      // worklet was never fetched, `reconcile()` never ran, and because
+      // `audioSetupPromise` is only cleared in a `finally` that also never
+      // ran, every later press awaited the same dead promise. The button
+      // stopped responding for the rest of the session.
+      //
+      // The gesture is what authorises playback, and it has already happened.
+      // The `statechange` listener above resumes the context if iOS starts it
+      // later, so nothing is lost by carrying on without an answer.
+      startResume(context);
       await context.audioWorklet.addModule('/playback-worklet.js');
 
       const node = new AudioWorkletNode(context, 'playback-processor', {

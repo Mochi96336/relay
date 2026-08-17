@@ -1,0 +1,50 @@
+name: One-shot server authority wiring
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/server-wiring-once.py
+      - .github/workflows/server-wiring-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-server-wiring-once
+  cancel-in-progress: false
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Apply exact server replacements
+        run: python3 .github/server-wiring-once.py
+      - name: Verify patch shape
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- src/server.ts
+          test -n "$(git status --short src/server.ts)"
+      - run: npm ci
+      - run: npm run check
+      - name: Run full tests before writing branch
+        run: npm test
+      - name: Commit only the validated server wiring
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts
+          test "$(git diff --cached --name-only)" = "src/server.ts"
+          git commit -m 'refactor(server): apply canonical room authority effects'
+          git push origin HEAD:agent/stabilize-room-kernel

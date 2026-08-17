@@ -93,6 +93,7 @@ it('falls back to a no-op direct-media adapter when HTTP/3 startup fails', async
       onDatagram: () => {},
     });
 
+    assert.equal(media.available, false);
     assert.equal(media.offer('ticket'), undefined);
     assert.equal(media.hasSession('ticket'), false);
     await media.stop();
@@ -101,6 +102,16 @@ it('falls back to a no-op direct-media adapter when HTTP/3 startup fails', async
   }
   assert.equal(warnings.length, 1);
   assert.match(String(warnings[0]?.[0]), /WebSocket microphone fallback/);
+});
+
+it('logs direct-media listening only when HTTP/3 actually started', () => {
+  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+
+  assert.match(
+    server,
+    /if \(webTransportMedia\.available\) \{[\s\S]{0,300}Relay WebTransport media listening/ ,
+    'the no-op fallback must not emit a false listening success message',
+  );
 });
 
 it('retires direct-media authority at every Mic ownership terminal boundary', () => {

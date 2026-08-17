@@ -2877,10 +2877,12 @@ if (directMediaConfig) {
         deliverMicPackets(micAudioTransport.receive(packet, nowMs));
       },
     });
-    console.log(
-      `Relay WebTransport media listening on udp://${directMediaConfig.bindHost}:${directMediaConfig.bindPort}`
-      + ` and advertised as ${directMediaConfig.publicUrl.toString()}`,
-    );
+    if (webTransportMedia.available) {
+      console.log(
+        `Relay WebTransport media listening on udp://${directMediaConfig.bindHost}:${directMediaConfig.bindPort}`
+        + ` and advertised as ${directMediaConfig.publicUrl.toString()}`,
+      );
+    }
   } catch (error) {
     console.error('Failed to start Relay WebTransport media endpoint', error);
     process.exit(1);

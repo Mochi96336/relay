@@ -28,6 +28,7 @@ export type WebTransportMediaHooks = {
 };
 
 export type WebTransportMediaServer = {
+  available: boolean;
   offer(ticket: string): WebTransportMediaOffer | undefined;
   hasSession(ticket: string | null): boolean;
   stop(): Promise<void>;
@@ -151,6 +152,7 @@ function unavailableWebTransportMediaServer(error: unknown): WebTransportMediaSe
     error,
   );
   return {
+    available: false,
     offer() {
       return undefined;
     },
@@ -261,6 +263,7 @@ async function startConfiguredWebTransportMediaServer(
   })();
 
   return {
+    available: true,
     offer(ticket) {
       return offerFor(config, ticket, certificateHash);
     },

@@ -24,7 +24,31 @@ jobs:
       - run: python3 scripts/one-shot-participant-capability.py
       - run: npm ci
       - run: npm run check
-      - run: npm test
+
+      - name: Run full tests
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/relay-test.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          lines = Path('/tmp/relay-test.log').read_text(errors='replace').splitlines()
+          selected = []
+          for index, line in enumerate(lines):
+              if re.search(r'(^|\s)(not ok|fail|ERR_|AssertionError|Error:)', line, re.I):
+                  selected.extend(lines[max(0, index - 4):min(len(lines), index + 14)])
+          if not selected:
+              selected = lines[-160:]
+          text = '\n'.join(selected[-160:])
+          text = text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f'::error title=Relay full test failure::{text}')
+          PY
+          fi
+          exit "$status"
 
       - name: Commit validated fix
         shell: bash

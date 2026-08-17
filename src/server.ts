@@ -1541,7 +1541,7 @@ function maybeStartProbeCalibration(nowMs: number) {
 }
 
 function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
-  const pending = probeLifecycle.acceptReply(reply.requestId);
+  const pending = probeLifecycle.acceptClientReply(reply.requestId, reply.generation);
   if (!pending) return;
   if (!session.active || pending.sessionGeneration !== session.generation) {
     abandonProbeRun();
@@ -1587,7 +1587,7 @@ function handleProbeFailure(
   reply: { requestId: unknown; generation: unknown; reason: unknown },
   nowMs: number,
 ) {
-  const pending = probeLifecycle.acceptReply(reply.requestId);
+  const pending = probeLifecycle.acceptClientReply(reply.requestId, reply.generation);
   if (!pending) return;
   if (!session.active || pending.sessionGeneration !== session.generation) {
     abandonProbeRun();

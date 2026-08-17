@@ -392,6 +392,10 @@ describe('AudioSession microphone limiter', () => {
     const session = makeSession({ backingGain: 1 });
     session.setMicGainDb(36);
     session.setBackingExpected(true);
+    // Both, because the reservation is headroom for a sum. This room really
+    // does have two sources; declaring only one would be asking for headroom
+    // against something that cannot arrive.
+    session.setMicExpected(true);
     session.start(0);
     session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
     session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(30_000))), RATE, 0);
@@ -415,6 +419,42 @@ describe('AudioSession microphone limiter', () => {
     const mixed = drainAll(session, 20);
     assert.equal(mixed.readInt16LE(0), 1_000, 'voice-only output stays at unity');
     assert.equal(session.health().clippedSamples, 0);
+  });
+
+  /**
+   * The symptom this came from: a song playing to a room where nobody had taken
+   * the microphone arrived audibly quiet. The reservation is headroom for a sum,
+   * and it was being charged to a source that had nothing to sum with.
+   */
+  test('does not attenuate a song-only room for a voice nobody is singing', () => {
+    const session = makeSession({ backingGain: 1 });
+    session.setBackingExpected(true);
+    session.start(0);
+    session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(20_000))), RATE, 0);
+
+    const mixed = drainAll(session, 20);
+    // Within one LSB: the mix scales positives by 32767 and negatives by 32768,
+    // so unity costs a quantisation step. The headroom reservation would cost
+    // 3.8 dB - about 7,000 counts here - and is what this pins.
+    assert.ok(
+      Math.abs(mixed.readInt16LE(0) - 20_000) <= 1,
+      `song-only output stays at unity, got ${mixed.readInt16LE(0)}`,
+    );
+    assert.equal(session.health().clippedSamples, 0);
+  });
+
+  test('still reserves headroom once a microphone is expected', () => {
+    const session = makeSession({ backingGain: 1 });
+    session.setBackingExpected(true);
+    session.setMicExpected(true);
+    session.start(0);
+    session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(20_000))), RATE, 0);
+
+    const mixed = drainAll(session, 20);
+    assert.ok(
+      mixed.readInt16LE(0) < 20_000,
+      'a room that can sum two sources still pays for the headroom',
+    );
   });
 
   test('does not carry limiter gain reduction into the next session', () => {

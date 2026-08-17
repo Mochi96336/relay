@@ -117,7 +117,12 @@ const LIMITER_LOOKAHEAD_MS = 3;
 /**
  * Worst-case linear sum after the microphone limiter plus the configured song
  * gain. A fixed attenuation preserves their relative balance and introduces no
- * attack/release artefacts. Voice-only rooms deliberately stay at unity.
+ * attack/release artefacts.
+ *
+ * Only worth paying when both sources are actually present: it is headroom for
+ * a sum, and a room with one source has nothing to sum. Charging it to a song
+ * playing on its own made the song quieter to leave room for a voice that was
+ * not there.
  */
 function sumHeadroomGain(backingGain: number) {
   const maximumLinearSum = LIMITER_THRESHOLD + Math.abs(backingGain);
@@ -761,10 +766,15 @@ export class AudioSession {
     const mic = this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     const micGain = 10 ** (this.micGainDb / 20);
-    // `backingExpected` is the room's semantic signal that this is a two-source
-    // mix. Do not attenuate voice-only rooms merely because a stale backing
-    // timeline still exists from an earlier route.
-    const mixHeadroomGain = this.backingExpected ? this.backingSumHeadroomGain : 1;
+    // `backingExpected` and `micExpected` are the room's semantic signals for
+    // which sources this mix has. Both must hold: the reservation is headroom
+    // for a sum, so a room with only one source has nothing to reserve against.
+    // Do not attenuate voice-only rooms merely because a stale backing timeline
+    // still exists from an earlier route, and do not quieten a song playing on
+    // its own to leave room for a voice nobody is singing.
+    const mixHeadroomGain = this.backingExpected && this.micExpected
+      ? this.backingSumHeadroomGain
+      : 1;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
 
     for (let i = 0; i < this.frameSamples; i += 1) {

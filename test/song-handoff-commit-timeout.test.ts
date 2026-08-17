@@ -49,4 +49,13 @@ test('a live target that never proves commit is cancelled without replacing the 
   );
   assert.equal(semanticChange.accepted, false);
   assert.equal(semanticChange.reason, 'handoff-holdover-semantic-change');
+
+  // Mic release/presence cleanup calls cancelHandoff even after the live
+  // handoff object is already gone. That lifecycle boundary must retire the
+  // failed-handoff exception too, or a later ownership epoch for B could revive
+  // stale authority for A.
+  assert.equal(songs.cancelHandoff(), true);
+  const staleEpoch = songs.update(telemetry(15.3), A, B.participantId, 5_300);
+  assert.equal(staleEpoch.accepted, false);
+  assert.equal(staleEpoch.reason, 'mic-owner-required');
 });

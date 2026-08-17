@@ -1,0 +1,106 @@
+name: One-shot Mic first-frame deadline
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/mic-first-frame-deadline-once.yml
+      - scripts/one-shot-mic-first-frame-deadline.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-mic-first-frame-deadline-once
+  cancel-in-progress: false
+
+jobs:
+  patch-test-rebase-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/stabilize-room-kernel
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Apply exact Mic deadline patch
+        run: |
+          python3 scripts/one-shot-mic-first-frame-deadline.py
+          git add -N test/mic-first-frame-deadline.test.ts
+
+      - name: Verify focused diff
+        run: |
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            src/product-view-model.ts \
+            src/readiness.ts \
+            src/remote-status.ts \
+            src/room-domain.ts \
+            src/server.ts \
+            test/mic-first-frame-deadline.test.ts \
+            test/remote-status.test.ts \
+            test/room-domain.test.ts | sort)"
+          test "$actual" = "$expected" || {
+            printf 'Unexpected diff:\n%s\n' "$actual"
+            exit 1
+          }
+          git diff --stat
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Run focused Mic state contracts
+        run: |
+          node --import tsx --test --test-concurrency=1 \
+            test/mic-first-frame-deadline.test.ts \
+            test/room-domain.test.ts \
+            test/remote-status.test.ts \
+            test/product-view-model.test.ts
+
+      - name: Run full suite with failure annotation
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee /tmp/relay-full-suite.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            tail -n 160 /tmp/relay-full-suite.log | sed 's/%/%25/g;s/\r/%0D/g;s/\n/%0A/g' | while IFS= read -r line; do
+              echo "::error title=Mic first-frame full-suite failure::$line"
+            done
+            exit "$status"
+          fi
+
+      - name: Commit tested product diff and remove gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/mic-first-frame-deadline-once.yml \
+            scripts/one-shot-mic-first-frame-deadline.py
+          git add -- \
+            src/product-view-model.ts \
+            src/readiness.ts \
+            src/remote-status.ts \
+            src/room-domain.ts \
+            src/server.ts \
+            test/mic-first-frame-deadline.test.ts \
+            test/remote-status.test.ts \
+            test/room-domain.test.ts
+          git diff --cached --check
+          git commit -m 'fix: bound server Mic first-frame startup'
+
+      - name: Rebase tested product commit onto latest branch and push
+        env:
+          BRANCH: agent/stabilize-room-kernel
+        run: |
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

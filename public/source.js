@@ -450,7 +450,10 @@ function applyTimeline() {
       loadedVideoId = timeline.videoId;
       lastSeekAt = performance.now();
       robotDeltaSuppressedUntil = lastSeekAt + ROBOT_DELTA_SETTLE_MS;
-      send({ type: 'source-seeked' });
+      // Loading a preview while Source is unarmed is not an authoritative
+      // playback discontinuity. Only the player actually feeding Relay may
+      // invalidate timing calibration.
+      if (armed) send({ type: 'source-seeked' });
       renderTimeline();
       return;
     }
@@ -459,7 +462,8 @@ function applyTimeline() {
     const errorSeconds = Number.isFinite(current) ? current - target : Number.NaN;
     const now = performance.now();
     const playerState = safePlayerState();
-    const shouldSeek = Number.isFinite(errorSeconds)
+    const shouldSeek = armed
+      && Number.isFinite(errorSeconds)
       && Math.abs(errorSeconds) > 0.45
       && now - lastSeekAt > 700;
 

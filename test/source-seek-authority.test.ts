@@ -1,37 +1,4 @@
-from pathlib import Path
-
-
-def replace_once(path: str, old: str, new: str, label: str) -> None:
-    target = Path(path)
-    text = target.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f'{path}: {label}: expected one match, found {count}')
-    target.write_text(text.replace(old, new, 1))
-
-
-replace_once(
-    'public/source.js',
-    """      lastSeekAt = performance.now();\n      robotDeltaSuppressedUntil = lastSeekAt + ROBOT_DELTA_SETTLE_MS;\n      send({ type: 'source-seeked' });\n      renderTimeline();\n""",
-    """      lastSeekAt = performance.now();\n      robotDeltaSuppressedUntil = lastSeekAt + ROBOT_DELTA_SETTLE_MS;\n      // Loading a preview while Source is unarmed is not an authoritative\n      // playback discontinuity. Only the player actually feeding Relay may\n      // invalidate timing calibration.\n      if (armed) send({ type: 'source-seeked' });\n      renderTimeline();\n""",
-    'do not publish preview cue as an active source seek',
-)
-
-replace_once(
-    'public/source.js',
-    """    const shouldSeek = Number.isFinite(errorSeconds)\n      && Math.abs(errorSeconds) > 0.45\n      && now - lastSeekAt > 700;\n""",
-    """    const shouldSeek = armed\n      && Number.isFinite(errorSeconds)\n      && Math.abs(errorSeconds) > 0.45\n      && now - lastSeekAt > 700;\n""",
-    'do not drift-seek an unarmed source preview',
-)
-
-replace_once(
-    'src/server.ts',
-    """    if (payload.type === 'source-seeked') {\n      sourceGeneration += 1;\n""",
-    """    if (payload.type === 'source-seeked') {\n      // `isRobotSource` is intentionally tri-state here: undefined means this\n      // socket was never a Robot source, while true/false means it has entered\n      // the Robot source lifecycle. Replacement clears the active flag to\n      // false, but must not restore seek authority to that old socket.\n      if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;\n      sourceGeneration += 1;\n""",
-    'reject seek discontinuities from superseded Robot source',
-)
-
-Path('test/source-seek-authority.test.ts').write_text("""import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
@@ -115,4 +82,3 @@ test('superseded Robot seek cannot erase the active Robot delta', async () => {
     await relay.stop();
   }
 });
-""")

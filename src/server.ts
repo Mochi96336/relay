@@ -2461,6 +2461,11 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'source-seeked') {
+      // `isRobotSource` is intentionally tri-state here: undefined means this
+      // socket was never a Robot source, while true/false means it has entered
+      // the Robot source lifecycle. Replacement clears the active flag to
+      // false, but must not restore seek authority to that old socket.
+      if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
       sourceGeneration += 1;
       robotPlayerOffsetMs = null;
       robotPlayerOffsetAt = -Infinity;

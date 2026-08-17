@@ -92,6 +92,11 @@ type Handoff = {
   targetTimeline: YouTubeTimelineTracker;
 };
 
+type FailedHandoffHoldover = {
+  leader: PlaybackIdentity;
+  micOwnerId: string;
+};
+
 export function normalizePlaybackTransportId(value: unknown) {
   if (typeof value !== 'string') return null;
   const id = value.trim();
@@ -125,6 +130,7 @@ export class SongSession {
   private readonly timeline = new YouTubeTimelineTracker();
   private leader: Leader | null = null;
   private handoff: Handoff | null = null;
+  private failedHandoffHoldover: FailedHandoffHoldover | null = null;
   private handoffSequence = 0;
   private revisionValue = 0;
 
@@ -149,6 +155,7 @@ export class SongSession {
       return this.handoffPlan(nowMs);
     }
 
+    this.failedHandoffHoldover = null;
     this.handoffSequence += 1;
     this.handoff = this.newHandoff(`song-handoff-${this.handoffSequence}`, target, nowMs);
     this.bump();
@@ -223,6 +230,7 @@ export class SongSession {
   cancelHandoff() {
     if (!this.handoff) return false;
     this.handoff = null;
+    this.failedHandoffHoldover = null;
     this.bump();
     return true;
   }
@@ -244,10 +252,10 @@ export class SongSession {
    */
   sweepHandoff(targetPresent: boolean, nowMs = performance.now()) {
     if (!this.handoff) return false;
-    if (!targetPresent) return this.cancelHandoff();
+    if (!targetPresent) return this.cancelFailedHandoff();
 
     if (nowMs - this.handoff.startedAtMs > HANDOFF_TOTAL_TIMEOUT_MS) {
-      return this.cancelHandoff();
+      return this.cancelFailedHandoff();
     }
 
     if (
@@ -255,14 +263,14 @@ export class SongSession {
       && this.handoff.commitStartedAtMs !== null
       && nowMs - this.handoff.commitStartedAtMs > HANDOFF_COMMIT_TIMEOUT_MS
     ) {
-      return this.cancelHandoff();
+      return this.cancelFailedHandoff();
     }
 
     if (
       !this.handoff.readyAcknowledged
       && nowMs - this.handoff.startedAtMs > HANDOFF_PREPARE_TIMEOUT_MS
     ) {
-      return this.cancelHandoff();
+      return this.cancelFailedHandoff();
     }
 
     return false;
@@ -320,6 +328,7 @@ export class SongSession {
         connected: true,
         lastTelemetryAtMs: nowMs,
       };
+      this.failedHandoffHoldover = null;
       if (completingHandoff) this.handoff = null;
       this.bump();
     } else if (this.leader) {
@@ -327,6 +336,7 @@ export class SongSession {
       this.leader.lastTelemetryAtMs = nowMs;
       if (completingHandoff) {
         this.handoff = null;
+        this.failedHandoffHoldover = null;
         this.bump();
       }
     }
@@ -436,16 +446,14 @@ export class SongSession {
       return { ok: false, reason: 'handoff-not-target' };
     }
 
-    // If a prepared handoff was cancelled/expired after Mic ownership already
-    // moved, the previous playback leader may continue only the same semantic
-    // song as holdover. Playback authority and Mic authority are deliberately
-    // not atomic: a failed playback transfer must not make the old media clock
-    // disappear just because the microphone transfer succeeded earlier.
+    // Only a handoff that failed after Mic ownership moved earns the old media
+    // leader a narrow same-song holdover exception. A plain Mic ownership
+    // change with no failed playback transfer must keep the original 0A rule:
+    // the old participant is refused with `mic-owner-required`.
     if (
-      this.leader
-      && micOwnerId !== null
-      && this.leader.participantId !== micOwnerId
-      && this.sameIdentity(this.leader, identity)
+      this.failedHandoffHoldover
+      && micOwnerId === this.failedHandoffHoldover.micOwnerId
+      && this.sameIdentity(this.failedHandoffHoldover.leader, identity)
     ) {
       return this.safeHoldoverTelemetry(payload, nowMs)
         ? { ok: true }
@@ -593,6 +601,18 @@ export class SongSession {
       readyAcknowledged: false,
       targetTimeline: new YouTubeTimelineTracker(),
     };
+  }
+
+  private cancelFailedHandoff() {
+    if (!this.handoff) return false;
+    const leader = this.leaderIdentity();
+    this.failedHandoffHoldover = leader ? {
+      leader,
+      micOwnerId: this.handoff.target.participantId,
+    } : null;
+    this.handoff = null;
+    this.bump();
+    return true;
   }
 
   private normalizeIdentity(identity: PlaybackIdentity): PlaybackIdentity | null {

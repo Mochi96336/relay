@@ -38,6 +38,8 @@ let localCommandPending = null;
 let serverMutation = null;
 let playbackRole = 'connecting';
 let continuationRestoreKey = null;
+let latestPlaybackRoom = null;
+let speculativePrewarm = null;
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
@@ -322,6 +324,11 @@ function renderSnapshot(snapshot) {
 
   const mutationContext = activeServerMutation();
 
+  // Speculative warming is strictly local. In particular, an empty/recoverable
+  // surface must not turn the cue/seek it performs while the Mic confirmation
+  // is open into a new room command or a competing media clock.
+  if (speculativePrewarm && !pendingHandoff) return;
+
   // A normal observer never publishes a competing media clock. A server-applied
   // room command is different: the server has already authorized this exact
   // transport as the recovery target, so it must be allowed to publish proof
@@ -417,7 +424,72 @@ function scheduleHandoffReadyChecks() {
   }
 }
 
-function cuePendingHandoff() {
+function projectedPrewarmPosition(prewarm, now = performance.now()) {
+  if (!prewarm) return 0;
+  const elapsedSeconds = prewarm.desiredState === 1
+    ? Math.max(0, now - prewarm.startedAtPerformanceMs) / 1000
+    : 0;
+  return Math.max(0, prewarm.targetTime + elapsedSeconds * prewarm.playbackRate);
+}
+
+function cueSpeculativePrewarm() {
+  if (!speculativePrewarm || pendingHandoff || !playerReady || !player) return false;
+
+  const prewarm = speculativePrewarm;
+  const targetTime = projectedPrewarmPosition(prewarm);
+  try {
+    loadedVideoId = prewarm.videoId;
+    previousSnapshot = null;
+    player.cueVideoById({
+      videoId: prewarm.videoId,
+      startSeconds: targetTime,
+    });
+    try { player.setPlaybackRate(prewarm.playbackRate); } catch {}
+    return true;
+  } catch (error) {
+    console.warn('Could not prewarm room song playback', error);
+    if (speculativePrewarm === prewarm) speculativePrewarm = null;
+    return false;
+  }
+}
+
+async function startPlaybackPrewarm() {
+  if (pendingHandoff || localCommandPending) return false;
+  if (serverMutation?.source === 'room-command' || serverMutation?.source === 'restore') return false;
+
+  const desired = reloadDesiredFromRoom(latestPlaybackRoom);
+  if (!desired?.videoId) return false;
+
+  const prewarm = {
+    videoId: desired.videoId,
+    targetTime: Math.max(0, desired.positionSeconds),
+    desiredState: desired.state,
+    playbackRate: desired.playbackRate,
+    startedAtPerformanceMs: performance.now(),
+  };
+  speculativePrewarm = prewarm;
+
+  try {
+    await ensurePlayer(prewarm.videoId);
+    if (speculativePrewarm !== prewarm || pendingHandoff) return false;
+    if (playerReady) cueSpeculativePrewarm();
+    return true;
+  } catch (error) {
+    console.warn('Could not initialize speculative room playback', error);
+    if (speculativePrewarm === prewarm) speculativePrewarm = null;
+    return false;
+  }
+}
+
+function cancelPlaybackPrewarm() {
+  const prewarm = speculativePrewarm;
+  speculativePrewarm = null;
+  if (!prewarm || pendingHandoff || !playerReady || !player) return;
+  if (reportedVideoId() !== prewarm.videoId) return;
+  try { player.pauseVideo(); } catch {}
+}
+
+function cuePendingHandoff({ reusePreparedPlayer = false } = {}) {
   if (!pendingHandoff || !playerReady || !player) return;
   try {
     serverMutation = {
@@ -428,10 +500,20 @@ function cuePendingHandoff() {
     };
     loadedVideoId = pendingHandoff.videoId;
     previousSnapshot = null;
-    player.cueVideoById({
-      videoId: pendingHandoff.videoId,
-      startSeconds: Math.max(0, pendingHandoff.targetTime),
-    });
+
+    const canReuse = reusePreparedPlayer && reportedVideoId() === pendingHandoff.videoId;
+    if (canReuse) {
+      const currentTime = Number(player.getCurrentTime());
+      if (!Number.isFinite(currentTime) || Math.abs(currentTime - pendingHandoff.targetTime) > 0.75) {
+        player.seekTo(pendingHandoff.targetTime, true);
+      }
+    } else {
+      player.cueVideoById({
+        videoId: pendingHandoff.videoId,
+        startSeconds: Math.max(0, pendingHandoff.targetTime),
+      });
+    }
+    try { player.setPlaybackRate(pendingHandoff.playbackRate); } catch {}
     scheduleHandoffReadyChecks();
   } catch (error) {
     console.warn('Could not prepare room song handoff', error);
@@ -497,6 +579,12 @@ function handleReady(event) {
     return;
   }
 
+  if (speculativePrewarm) {
+    startTelemetry();
+    cueSpeculativePrewarm();
+    return;
+  }
+
   const pendingRoomApply = serverMutation?.source === 'room-command'
     ? {
         commandId: serverMutation.commandId,
@@ -543,6 +631,7 @@ function handleError(event) {
   const label = ERROR_NAMES.get(event.data) ?? `YouTube error ${event.data}`;
   setPlayerState(-1, label);
   noteNode.textContent = `Player error ${event.data}: ${label}.`;
+  if (speculativePrewarm && !pendingHandoff) speculativePrewarm = null;
   if (pendingHandoff) {
     window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
       detail: {
@@ -623,6 +712,7 @@ async function applyRoomSongCommand(message) {
     && serverMutation.revision > revision
   ) return;
 
+  speculativePrewarm = null;
   serverMutation = {
     source: 'room-command',
     commandId,
@@ -695,6 +785,7 @@ async function applyRoomSongCommand(message) {
 async function restoreAuthoritativeRoom(room) {
   if (!room || typeof room !== 'object') return;
   localCommandPending = null;
+  speculativePrewarm = null;
 
   const desired = reloadDesiredFromRoom(room);
   const videoId = desired?.videoId ?? null;
@@ -743,6 +834,15 @@ async function prepareRoomSong(message) {
   const targetTime = Number(message.serverTime);
   if (!handoffId || !videoId || !Number.isFinite(targetTime)) return;
 
+  const reusePreparedPlayer = Boolean(
+    speculativePrewarm
+    && speculativePrewarm.videoId === videoId
+    && playerReady
+    && player
+    && reportedVideoId() === videoId,
+  );
+  speculativePrewarm = null;
+
   // A newer handoff can replace an older preparation on the same page, for
   // example when Mic ownership changes while a reload is still converging.
   // Retire every delayed readiness callback before installing the new identity;
@@ -754,6 +854,9 @@ async function prepareRoomSong(message) {
     videoId,
     targetTime: Math.max(0, targetTime),
     desiredState: Number(message.state),
+    playbackRate: Number.isFinite(Number(message.playbackRate)) && Number(message.playbackRate) > 0
+      ? Number(message.playbackRate)
+      : 1,
     phase: 'preparing',
   };
   handoffReadySent = false;
@@ -762,7 +865,7 @@ async function prepareRoomSong(message) {
 
   try {
     await ensurePlayer(videoId);
-    if (playerReady) cuePendingHandoff();
+    if (playerReady) cuePendingHandoff({ reusePreparedPlayer });
   } catch (error) {
     console.error(error);
     window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
@@ -802,7 +905,10 @@ function commitRoomSong(message) {
         startSeconds: pendingHandoff.targetTime,
       });
     }
-    player.seekTo(pendingHandoff.targetTime, true);
+    const currentTime = Number(player.getCurrentTime());
+    if (!Number.isFinite(currentTime) || Math.abs(currentTime - pendingHandoff.targetTime) > 0.75) {
+      player.seekTo(pendingHandoff.targetTime, true);
+    }
     if (desiredState === 1) player.playVideo();
     else player.pauseVideo();
     setTimeout(sampleNow, 80);
@@ -876,6 +982,9 @@ function trackedRoomCommandId() {
 
 window.addEventListener('relay:playback-view', (event) => {
   const detail = event.detail ?? {};
+  latestPlaybackRoom = detail.room && typeof detail.room === 'object'
+    ? detail.room
+    : null;
   const nextRole = detail.role;
   if (!['empty', 'holder', 'preparing', 'observer'].includes(nextRole)) return;
 
@@ -945,6 +1054,13 @@ window.addEventListener('relay:playback-view', (event) => {
   }
 
   if (serverMutation?.source === 'observer-quiet') serverMutation = null;
+});
+
+window.addEventListener('relay:playback-prewarm-intent', () => {
+  startPlaybackPrewarm().catch(console.error);
+});
+window.addEventListener('relay:playback-prewarm-cancel', () => {
+  cancelPlaybackPrewarm();
 });
 
 window.addEventListener('relay:recover-room-song', () => {

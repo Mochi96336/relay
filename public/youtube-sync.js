@@ -15,6 +15,8 @@ let rttTimer = null;
 let pingSequence = 0;
 let pendingMicIntentAt = -Infinity;
 let roomCommandRevision = 0;
+let roomCommandServerIncarnation = null;
+let roomCommandRevisionReady = false;
 let latestRoomCommandId = null;
 let latestRoomSongStatus = null;
 let latestTimelineStatus = null;
@@ -144,6 +146,23 @@ function updateRoomCommandRevision(value) {
   if (Number.isSafeInteger(revision) && revision >= 0) {
     roomCommandRevision = Math.max(roomCommandRevision, revision);
   }
+}
+
+function adoptRoomCommandStatus(message) {
+  const revision = Number(message.revision);
+  if (!Number.isSafeInteger(revision) || revision < 0) return;
+
+  const incarnation = typeof message.serverIncarnation === 'string'
+    ? message.serverIncarnation
+    : null;
+  if (incarnation && incarnation !== roomCommandServerIncarnation) {
+    roomCommandServerIncarnation = incarnation;
+    roomCommandRevision = revision;
+    latestRoomCommandId = null;
+  } else {
+    updateRoomCommandRevision(revision);
+  }
+  roomCommandRevisionReady = true;
 }
 
 function clearLatestRoomCommand(commandId) {
@@ -327,7 +346,7 @@ function handleMessage(event) {
   }
 
   if (message.type === 'room-song-command-status') {
-    updateRoomCommandRevision(message.revision);
+    adoptRoomCommandStatus(message);
     if (message.pendingCommandId === null) latestRoomCommandId = null;
     dispatchRoomCommand('relay:room-song-command-status', withLatestRoom(message));
     return;
@@ -405,6 +424,7 @@ function connect() {
     if (socket !== next) return;
     recentRttMs.length = 0;
     pendingPings.clear();
+    roomCommandRevisionReady = false;
     sendPlaybackHello();
     replayRecentMicIntent();
     send({ type: 'youtube-timeline-request' });
@@ -417,10 +437,14 @@ function connect() {
     rttTimer = setInterval(sendRttPing, 5_000);
   });
 
-  next.addEventListener('message', handleMessage);
+  next.addEventListener('message', (event) => {
+    if (socket !== next) return;
+    handleMessage(event);
+  });
   next.addEventListener('close', () => {
     if (socket !== next) return;
     socket = null;
+    roomCommandRevisionReady = false;
     clearInterval(rttTimer);
     if (serverState) serverState.textContent = 'Server timeline · disconnected';
     reconnectTimer = setTimeout(connect, 1_000);
@@ -449,6 +473,17 @@ window.addEventListener('relay:room-song-command-intent', (event) => {
   if (!detail || typeof detail !== 'object' || typeof detail.action !== 'string') return;
 
   const commandId = randomRoomCommandId();
+  if (!roomCommandRevisionReady) {
+    dispatchRoomCommand('relay:room-song-command-rejected', {
+      type: 'room-song-command-rejected',
+      commandId,
+      reason: 'syncing',
+      revision: roomCommandRevision,
+      room: latestRoomSongStatus,
+    });
+    return;
+  }
+
   const supersedesCommandId = latestRoomCommandId;
   const expectedRevision = roomCommandRevision;
   const sent = send({

@@ -40,6 +40,7 @@ let publisherStartRequest = null;
 const micStartup = new MicStartupGate();
 let liveMixActive = false;
 let latestMixHealth = null;
+let latestLocalMicLevel = null;
 let latestCalibration = null;
 let roomSongAvailable = null;
 let roomCanStartCalibration = null;
@@ -48,10 +49,9 @@ let activeCalibrationProbeRequestId = null;
 let publisherSessionEpoch = 0;
 
 /**
- * The same measured advice source.html shows, put where the singer can act on
- * it. Mic gain is one server value with a slider on each page, and the person
- * whose voice decides the right setting is holding the phone - they cannot see
- * the desktop screen while singing.
+ * The local capture owns the live meter; server mix health owns slower gain
+ * advice. Keeping those evidence paths separate prevents a 1 Hz health cadence
+ * from masquerading as a realtime microphone display.
  */
 function renderGainAdvice() {
   if (
@@ -59,7 +59,7 @@ function renderGainAdvice() {
     || !micGainRecommendation || !micGainRecommendationMarker || !useMicGainSuggestion
   ) return;
 
-  const rawPeak = latestMixHealth?.micPeakDbfs;
+  const rawPeak = latestLocalMicLevel?.peakDbfs;
   const rawRecommended = latestMixHealth?.recommendedMicGainDb;
   const peak = rawPeak === null || rawPeak === undefined ? Number.NaN : Number(rawPeak);
   const recommended = rawRecommended === null || rawRecommended === undefined
@@ -608,6 +608,8 @@ function handleServerMessage(message, sessionEpoch = publisherSessionEpoch) {
 
   if (message.type === 'mix-health') {
     latestMixHealth = message;
+    // Mix health can update the gain recommendation, but the meter itself is
+    // intentionally driven only by local capture evidence.
     renderGainAdvice();
     return;
   }
@@ -772,6 +774,8 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   setPublisherActive(false);
 
   liveMixActive = false;
+  latestLocalMicLevel = null;
+  dispatchRelayEvent('relay-local-mic-level', { active: false, peakDbfs: null, rmsDbfs: null });
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
   captureInputGapSamples = 0;
@@ -860,6 +864,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
   captureInputMuted = false;
+  latestLocalMicLevel = null;
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
   publisherControlConnections = 0;
@@ -910,6 +915,20 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     // must never be reframed with a replacement session's generation/cursor.
     if (!captureIsCurrent()) return;
     if (!(event.data instanceof ArrayBuffer)) {
+      if (event.data?.type === 'input-level') {
+        const peakDbfs = Number(event.data.peakDbfs);
+        const rmsDbfs = Number(event.data.rmsDbfs);
+        if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs)) {
+          latestLocalMicLevel = { peakDbfs, rmsDbfs };
+          dispatchRelayEvent('relay-local-mic-level', {
+            active: true,
+            peakDbfs,
+            rmsDbfs,
+          });
+          renderGainAdvice();
+        }
+        return;
+      }
       if (event.data?.type === 'input-gap') {
         const samples = Number(event.data.samples);
         if (Number.isSafeInteger(samples) && samples > 0) captureInputGapSamples += samples;

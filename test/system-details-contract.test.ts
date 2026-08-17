@@ -100,3 +100,26 @@ test('Technical details ships diagnostics without retired development controls',
   }
   assert.doesNotMatch(html, /id="monitor-gain"|id="start-monitor"|legacy-transport-controls/);
 });
+/**
+ * The System panel showed `() => t('system.timing.recovering')` to the singer:
+ * the label maps hold thunks so they re-read the active locale, and two of the
+ * three readers assigned the thunk itself to `textContent`, which stringifies
+ * the function source. The third called it, which is why only two lines were
+ * wrong and the bug survived review.
+ */
+test('every localized label thunk is called before it reaches the DOM', () => {
+  const thunkMaps = [...liveStatus.matchAll(/const (\w+) = \{[\s\S]*?\n {2}\};/g)]
+    .filter(([body]) => /\(\) => t\(/.test(body))
+    .map(([, name]) => name);
+  assert.ok(thunkMaps.length > 0, 'expected live-status to hold localized label maps');
+
+  for (const name of thunkMaps) {
+    for (const [lookup] of liveStatus.matchAll(new RegExp(`${name}\\[[^\\]]+\\](\\?\\.\\(\\)|\\(\\))?`, 'g'))) {
+      assert.match(
+        lookup,
+        /\)$/,
+        `${name} is a map of thunks, so ${lookup} must be called, not rendered`,
+      );
+    }
+  }
+});

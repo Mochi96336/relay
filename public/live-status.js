@@ -175,8 +175,8 @@ if (
             : songState === 'unavailable'
               ? t('system.needsAttention')
               : t('system.idle');
-    systemTiming.textContent = timingLabels[status.timing?.state] ?? t('system.unknown');
-    systemRecording.textContent = takeLabels[status.take?.lifecycle] ?? t('system.unknown');
+    systemTiming.textContent = timingLabels[status.timing?.state]?.() ?? t('system.unknown');
+    systemRecording.textContent = takeLabels[status.take?.lifecycle]?.() ?? t('system.unknown');
   }
 
   function renderAttention(status) {

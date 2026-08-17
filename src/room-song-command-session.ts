@@ -418,6 +418,7 @@ export class RoomSongCommandSession {
 
   pendingForTarget(identity: PlaybackIdentity, nowMs: number) {
     this.expire(nowMs);
+    if (this.cancelSupersededTransport(identity)) return null;
     if (!this.pending || !sameIdentity(this.pending.target, identity)) return null;
     return this.publicCommand(this.pending);
   }

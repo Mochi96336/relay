@@ -46,10 +46,16 @@ jobs:
 
           old_rate = 'if (!Number.isFinite(value) || sampleRate < 8_000 || sampleRate > 192_000) {'
           new_rate = 'if (!Number.isFinite(sampleRate) || sampleRate < 8_000 || sampleRate > 192_000) {'
-          count = text.count(old_rate)
-          if count != 1:
-              raise SystemExit(f'expected exactly 1 sample-rate guard, found {count}')
-          text = text.replace(old_rate, new_rate)
+          old_count = text.count(old_rate)
+          new_count = text.count(new_rate)
+          if old_count == 1 and new_count == 0:
+              text = text.replace(old_rate, new_rate)
+          elif old_count == 0 and new_count == 1:
+              pass
+          else:
+              raise SystemExit(
+                  f'unexpected sample-rate guard shape: old={old_count}, new={new_count}'
+              )
 
           path.write_text(text)
           PY

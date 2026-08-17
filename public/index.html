@@ -10,30 +10,47 @@
     <link rel="stylesheet" href="/adjust.css" />
     <link rel="stylesheet" href="/song-surface.css" />
     <link rel="stylesheet" href="/system-details.css" />
+    <link rel="stylesheet" href="/live-ia.css" />
   </head>
   <body data-lifecycle="idle" data-health="healthy" data-timing="idle" data-self-mic="off" data-playback-role="connecting">
     <main class="live-shell">
       <header class="room-header">
         <div class="room-mark" aria-label="Relay">Relay</div>
-        <details class="people-menu">
-          <summary><strong id="participant-count" data-i18n="people.connecting">Connecting…</strong></summary>
-          <div class="people-popover">
-            <div class="identity-editor">
-              <span class="identity-label" data-i18n="people.you">You</span>
-              <button id="identity-name" class="identity-name" type="button" title="Rename yourself" data-i18n-title="people.renameTitle"></button>
-              <input id="identity-input" class="identity-input" type="text" maxlength="32" autocomplete="off" aria-label="Your Relay nickname" data-i18n-aria-label="people.nicknameLabel" hidden />
+        <div class="room-header-actions">
+          <details class="people-menu">
+            <summary><strong id="participant-count" data-i18n="people.connecting">Connecting…</strong></summary>
+            <div class="people-popover">
+              <div class="identity-editor">
+                <span class="identity-label" data-i18n="people.you">You</span>
+                <button id="identity-name" class="identity-name" type="button" title="Rename yourself" data-i18n-title="people.renameTitle"></button>
+                <input id="identity-input" class="identity-input" type="text" maxlength="32" autocomplete="off" aria-label="Your Relay nickname" data-i18n-aria-label="people.nicknameLabel" hidden />
+              </div>
+              <div id="participant-list" class="participant-list" aria-live="polite"></div>
             </div>
-            <div id="participant-list" class="participant-list" aria-live="polite"></div>
-            <div class="locale-control">
-              <span class="identity-label" data-i18n="language.label">Language</span>
-              <div class="locale-options" role="group" aria-label="Language">
-                <button class="text-action locale-option" type="button" data-relay-locale="zh-Hant" aria-pressed="false">中文</button>
-                <span aria-hidden="true">/</span>
-                <button class="text-action locale-option" type="button" data-relay-locale="en" aria-pressed="false">EN</button>
+          </details>
+
+          <details id="room-more" class="more-menu">
+            <summary aria-label="Menu / 選項"><span aria-hidden="true">•••</span></summary>
+            <div class="more-popover">
+              <div class="more-actions">
+                <button id="open-adjust" class="more-action" type="button">
+                  <span data-i18n="adjust.summary">Adjust</span><span aria-hidden="true">›</span>
+                </button>
+                <button id="open-system" class="more-action" type="button">
+                  <span data-i18n="system.summary">System</span><span aria-hidden="true">›</span>
+                </button>
+              </div>
+              <div class="locale-control">
+                <span class="identity-label" data-i18n="language.label">Language</span>
+                <div class="locale-options" role="group" aria-label="Language">
+                  <button class="text-action locale-option" type="button" data-relay-locale="zh-Hant" aria-pressed="false">中文</button>
+                  <span aria-hidden="true">/</span>
+                  <button class="text-action locale-option" type="button" data-relay-locale="en" aria-pressed="false">EN</button>
+                </div>
               </div>
             </div>
-          </div>
-        </details>
+          </details>
+        </div>
       </header>
 
       <section class="song-stage" data-playback-role="connecting" aria-label="Room song" data-i18n-aria-label="song.roomSong">
@@ -116,88 +133,92 @@
 
       <footer class="live-actions">
         <div class="listen-action">
+          <div class="listen-copy">
+            <strong data-i18n="adjust.thisPhone">This phone</strong>
+            <span id="listen-note" class="action-note" aria-live="polite"></span>
+          </div>
           <button id="listen-toggle" class="text-action" type="button" aria-pressed="false" data-i18n="listen.mute">Mute</button>
-          <span id="listen-note" class="action-note" aria-live="polite"></span>
         </div>
+      </footer>
 
-        <details class="adjust-panel">
-          <summary>Adjust</summary>
-          <div class="adjust-sheet">
-            <div class="adjust-heading">
-              <strong data-i18n="adjust.heading">Adjust</strong>
-              <span data-i18n="adjust.subtitle">Performance tuning</span>
+      <details class="adjust-panel">
+        <summary>Adjust</summary>
+        <div class="adjust-sheet">
+          <div class="adjust-heading">
+            <strong data-i18n="adjust.heading">Adjust</strong>
+            <button id="close-adjust" class="text-action panel-done" type="button" data-i18n="adjust.done">Done</button>
+            <span data-i18n="adjust.subtitle">Performance tuning</span>
+          </div>
+
+          <section class="adjust-group room-mix" aria-labelledby="room-mix-label">
+            <div class="adjust-group-heading">
+              <span id="room-mix-label" class="section-label" data-i18n="adjust.roomMix">Room mix</span>
+              <span data-i18n="adjust.shared">Shared</span>
             </div>
 
-            <section class="adjust-group room-mix" aria-labelledby="room-mix-label">
-              <div class="adjust-group-heading">
-                <span id="room-mix-label" class="section-label" data-i18n="adjust.roomMix">Room mix</span>
-                <span data-i18n="adjust.shared">Shared</span>
+            <div class="adjust-control voice-adjust">
+              <div class="adjust-row-heading">
+                <strong data-i18n="adjust.voice">Voice</strong>
+                <output id="mic-gain-value" for="mic-gain">+24 dB</output>
               </div>
 
-              <div class="adjust-control voice-adjust">
-                <div class="adjust-row-heading">
-                  <strong data-i18n="adjust.voice">Voice</strong>
-                  <output id="mic-gain-value" for="mic-gain">+24 dB</output>
+              <div class="gain-control">
+                <div class="gain-rail">
+                  <input id="mic-gain" class="adjust-range" type="range" min="0" max="36" step="1" value="24" disabled aria-label="Voice gain" data-i18n-aria-label="adjust.voiceGainAria" />
+                  <span id="mic-gain-recommendation-marker" class="recommendation-marker" hidden aria-hidden="true"></span>
                 </div>
-
-                <div class="gain-control">
-                  <div class="gain-rail">
-                    <input id="mic-gain" class="adjust-range" type="range" min="0" max="36" step="1" value="24" disabled aria-label="Voice gain" data-i18n-aria-label="adjust.voiceGainAria" />
-                    <span id="mic-gain-recommendation-marker" class="recommendation-marker" hidden aria-hidden="true"></span>
-                  </div>
-                  <div class="recommendation-meta">
-                    <span id="mic-gain-recommendation" data-i18n="adjust.singNormally">Sing normally for a moment.</span>
-                    <button id="use-mic-gain-suggestion" class="text-action recommendation-action" type="button" hidden data-i18n="adjust.useSuggestion">Use suggestion</button>
-                  </div>
-                  <p id="mic-gain-advice" class="adjust-helper" data-i18n="adjust.suggestionHelp">Relay will suggest a stable gain after it has enough voice.</p>
+                <div class="recommendation-meta">
+                  <span id="mic-gain-recommendation" data-i18n="adjust.singNormally">Sing normally for a moment.</span>
+                  <button id="use-mic-gain-suggestion" class="text-action recommendation-action" type="button" hidden data-i18n="adjust.useSuggestion">Use suggestion</button>
                 </div>
+                <p id="mic-gain-advice" class="adjust-helper" data-i18n="adjust.suggestionHelp">Relay will suggest a stable gain after it has enough voice.</p>
               </div>
+            </div>
 
-              <label class="adjust-control" for="song-level">
-                <div class="adjust-row-heading">
-                  <strong data-i18n="adjust.song">Song</strong>
-                  <output id="song-level-value" for="song-level">40%</output>
-                </div>
-                <input id="song-level" class="adjust-range" type="range" min="0" max="100" step="1" value="40" disabled />
-              </label>
-            </section>
+            <label class="adjust-control" for="song-level">
+              <div class="adjust-row-heading">
+                <strong data-i18n="adjust.song">Song</strong>
+                <output id="song-level-value" for="song-level">40%</output>
+              </div>
+              <input id="song-level" class="adjust-range" type="range" min="0" max="100" step="1" value="40" disabled />
+            </label>
+          </section>
 
-            <section class="adjust-group local-listen" aria-labelledby="local-listen-label">
-              <div class="adjust-group-heading">
-                <span id="local-listen-label" class="section-label" data-i18n="adjust.thisPhone">This phone</span>
-                <span data-i18n="adjust.localOnly">Local only</span>
+          <section class="adjust-group local-listen" aria-labelledby="local-listen-label">
+            <div class="adjust-group-heading">
+              <span id="local-listen-label" class="section-label" data-i18n="adjust.thisPhone">This phone</span>
+              <span data-i18n="adjust.localOnly">Local only</span>
+            </div>
+            <label class="adjust-control" for="listen-gain">
+              <div class="adjust-row-heading">
+                <strong data-i18n="adjust.listenVolume">Listen volume</strong>
+                <output id="listen-gain-value" for="listen-gain">100%</output>
               </div>
-              <label class="adjust-control" for="listen-gain">
-                <div class="adjust-row-heading">
-                  <strong data-i18n="adjust.listenVolume">Listen volume</strong>
-                  <output id="listen-gain-value" for="listen-gain">100%</output>
-                </div>
-                <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="100" />
-              </label>
-              <p id="listen-adjust-state" class="adjust-helper" data-i18n="listen.adjust.ready">Sound is on by default after your first interaction.</p>
-            </section>
+              <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="100" />
+            </label>
+            <p id="listen-adjust-state" class="adjust-helper" data-i18n="listen.adjust.ready">Sound is on by default after your first interaction.</p>
+          </section>
 
-            <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">
-              <div class="adjust-group-heading">
-                <span id="timing-adjust-label" class="section-label" data-i18n="adjust.timing">Timing</span>
-                <span data-i18n="adjust.roomAlignment">Room alignment</span>
+          <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">
+            <div class="adjust-group-heading">
+              <span id="timing-adjust-label" class="section-label" data-i18n="adjust.timing">Timing</span>
+              <span data-i18n="adjust.roomAlignment">Room alignment</span>
+            </div>
+            <label class="adjust-control" for="vocal-fine-tune">
+              <div class="adjust-row-heading">
+                <strong data-i18n="adjust.vocalFineTune">Vocal fine tune</strong>
+                <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
               </div>
-              <label class="adjust-control" for="vocal-fine-tune">
-                <div class="adjust-row-heading">
-                  <strong data-i18n="adjust.vocalFineTune">Vocal fine tune</strong>
-                  <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
-                </div>
-                <input id="vocal-fine-tune" class="adjust-range" type="range" min="-100" max="100" step="5" value="0" disabled aria-label="Vocal fine tune" data-i18n-aria-label="adjust.vocalFineTuneAria" />
-                <p class="adjust-helper" data-i18n="adjust.vocalFineTuneHelp">Negative moves voice earlier; positive moves it later.</p>
-              </label>
-              <div class="timing-row">
-                <strong id="calibrate-status" data-i18n="adjust.waitingPlayback">Waiting for playback</strong>
-                <button id="calibrate-timing" class="text-action" type="button" data-i18n="adjust.recalibrate">Recalibrate</button>
-              </div>
-            </section>
-          </div>
-        </details>
-      </footer>
+              <input id="vocal-fine-tune" class="adjust-range" type="range" min="-100" max="100" step="5" value="0" disabled aria-label="Vocal fine tune" data-i18n-aria-label="adjust.vocalFineTuneAria" />
+              <p class="adjust-helper" data-i18n="adjust.vocalFineTuneHelp">Negative moves voice earlier; positive moves it later.</p>
+            </label>
+            <div class="timing-row">
+              <strong id="calibrate-status" data-i18n="adjust.waitingPlayback">Waiting for playback</strong>
+              <button id="calibrate-timing" class="text-action" type="button" data-i18n="adjust.recalibrate">Recalibrate</button>
+            </div>
+          </section>
+        </div>
+      </details>
 
       <section id="system-attention" class="attention-region" aria-live="polite" hidden>
         <button id="attention-link" type="button" class="attention-link">
@@ -208,6 +229,10 @@
       <details id="system-panel" class="system-panel">
         <summary data-i18n="system.summary">System</summary>
         <div class="system-sheet">
+          <div class="system-panel-heading">
+            <strong data-i18n="system.summary">System</strong>
+            <button id="close-system" class="text-action panel-done" type="button" data-i18n="adjust.done">Done</button>
+          </div>
           <details class="system-item" data-system-scope="relay">
             <summary><span class="system-item-name" data-i18n="system.relay">Relay</span><strong id="system-relay">Connecting</strong><span class="system-chevron">›</span></summary>
             <p id="system-relay-detail" class="system-item-detail" data-i18n="system.relayDetail">Room connection and lifecycle.</p>
@@ -310,6 +335,7 @@
     </main>
 
     <script src="/i18n.js"></script>
+    <script type="module" src="/live-ia.js"></script>
     <script type="module" src="/presence.js"></script>
     <script type="module" src="/live-status.js"></script>
     <script type="module" src="/system-details.js"></script>

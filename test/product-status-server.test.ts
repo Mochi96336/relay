@@ -39,6 +39,7 @@ test('/statusz, /readyz and product-status agree that a completely unarmed room 
     assert.equal(product.lifecycle, 'idle');
     assert.equal(product.health, 'healthy');
     assert.equal(product.attention, null);
+    assert.deepEqual(product.issues, []);
     assert.equal(product.room.participantCount, 1);
     assert.equal(product.room.mic.state, 'free');
     assert.equal(product.room.song.state, 'empty');
@@ -81,10 +82,10 @@ test('arming the Robot source makes missing Robot audio a blocker everywhere', a
       code: 'robot-audio-unavailable',
       scope: 'robot',
       severity: 'critical',
-      cause: 'backing-disconnected',
-      affects: ['song', 'recording'],
-      recovery: 'host-service',
     });
+    assert.equal(product.issues[0].cause, 'backing-unavailable');
+    assert.deepEqual(product.issues[0].affects, ['song', 'recording']);
+    assert.equal(product.issues[0].recovery, 'host-service');
 
     observer.close();
     robot.close();
@@ -158,10 +159,10 @@ test('legacy route expectation survives backing grace instead of collapsing to i
       code: 'audio-unavailable',
       scope: 'audio',
       severity: 'critical',
-      cause: 'backing-disconnected',
-      affects: ['song', 'recording'],
-      recovery: 'host-service',
     });
+    assert.equal(product.issues[0].cause, 'backing-unavailable');
+    assert.deepEqual(product.issues[0].affects, ['song', 'recording']);
+    assert.equal(product.issues[0].recovery, 'host-service');
     observer.close();
   } finally {
     await server.stop();

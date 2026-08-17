@@ -27,7 +27,7 @@ replace_once(
 replace_once(
     'src/server.ts',
     """    if (payload.type === 'source-seeked') {\n      sourceGeneration += 1;\n""",
-    """    if (payload.type === 'source-seeked') {\n      // Robot source control has explicit newest-socket authority. A replaced\n      // Robot page can remain alive long enough to emit one last control event;\n      // it must not invalidate timing owned by its replacement. Legacy desktop\n      // Source does not yet have a control↔capture identity, so its client-side\n      // armed gate remains the narrow authority boundary there.\n      if (socket.isRobotSource && socket !== activeRobotSource) return;\n      sourceGeneration += 1;\n""",
+    """    if (payload.type === 'source-seeked') {\n      // `isRobotSource` is intentionally tri-state here: undefined means this\n      // socket was never a Robot source, while true/false means it has entered\n      // the Robot source lifecycle. Replacement clears the active flag to\n      // false, but must not restore seek authority to that old socket.\n      if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;\n      sourceGeneration += 1;\n""",
     'reject seek discontinuities from superseded Robot source',
 )
 
@@ -53,10 +53,10 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
   );
 });
 
-test('server fences source-seeked from a superseded Robot source', () => {
+test('server fences source-seeked from any no-longer-active Robot source', () => {
   assert.match(
     serverSource,
-    /if \(payload\.type === 'source-seeked'\) \{[\s\S]{0,700}if \(socket\.isRobotSource && socket !== activeRobotSource\) return;[\s\S]{0,200}sourceGeneration \+= 1/,
+    /if \(payload\.type === 'source-seeked'\) \{[\s\S]{0,700}if \(socket\.isRobotSource !== undefined && socket !== activeRobotSource\) return;[\s\S]{0,200}sourceGeneration \+= 1/,
   );
 });
 

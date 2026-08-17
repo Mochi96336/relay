@@ -23,17 +23,21 @@ test('the first Mic click starts only a local playback prewarm, before takeover 
     'speculative warming must not cross the Mic or playback authority boundary');
 });
 
-test('speculative preparation cues the authoritative room song without autoplay or telemetry', async () => {
+test('speculative preparation requests real media while staying muted and local', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
   const startSection = topLevelFunctionSection(source, 'async function startPlaybackPrewarm()');
   assert.match(startSection, /reloadDesiredFromRoom\(latestPlaybackRoom\)/);
   assert.match(startSection, /ensurePlayer\(prewarm\.videoId\)/);
+  assert.match(startSection, /playbackRole === 'holder' \|\| playbackRole === 'preparing'/,
+    'an existing holder must never be muted by speculative Mic preparation');
 
-  const cueSection = topLevelFunctionSection(source, 'function cueSpeculativePrewarm()');
-  assert.match(cueSection, /cueVideoById/);
-  assert.doesNotMatch(cueSection, /playVideo\s*\(/, 'prewarm must never start room playback');
-  assert.doesNotMatch(cueSection, /relay:youtube-telemetry|room-song-command/,
+  const primeSection = topLevelFunctionSection(source, 'function primeSpeculativePrewarm()');
+  assert.match(primeSection, /player\.mute\(\)/,
+    'the media request must be inaudible while takeover is unconfirmed');
+  assert.match(primeSection, /player\.loadVideoById/,
+    'cueVideoById alone does not request YouTube media and is not a real prewarm');
+  assert.doesNotMatch(primeSection, /relay:youtube-telemetry|room-song-command/,
     'prewarm must stay local');
 
   const renderSection = topLevelFunctionSection(source, 'function renderSnapshot');
@@ -41,12 +45,24 @@ test('speculative preparation cues the authoritative room song without autoplay 
     'speculative player movement must never become room telemetry or a room command');
 });
 
+test('cancel parks speculative playback and restores the user mute state', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const cancelSection = topLevelFunctionSection(source, 'function cancelPlaybackPrewarm()');
+  const restoreSection = topLevelFunctionSection(source, 'function restorePrewarmMute');
+
+  assert.match(cancelSection, /player\.pauseVideo/);
+  assert.match(cancelSection, /restorePrewarmMute\(prewarm\)/);
+  assert.match(restoreSection, /prewarm\.wasMuted === false/);
+  assert.match(restoreSection, /player\.unMute/);
+});
+
 test('formal handoff consumes a matching warmed player instead of rebuilding it', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
   const prepareSection = topLevelFunctionSection(source, 'async function prepareRoomSong');
-  assert.match(prepareSection, /speculativePrewarm\.videoId === videoId/);
+  assert.match(prepareSection, /preparedPrewarm\.videoId === videoId/);
   assert.match(prepareSection, /reportedVideoId\(\) === videoId/);
+  assert.match(prepareSection, /prewarmWasMuted:/);
   assert.match(prepareSection, /cuePendingHandoff\(\{ reusePreparedPlayer \}\)/);
 
   const cueSection = topLevelFunctionSection(source, 'function cuePendingHandoff');
@@ -56,15 +72,17 @@ test('formal handoff consumes a matching warmed player instead of rebuilding it'
   assert.match(cueSection, /player\.cueVideoById/,
     'a cold or mismatched player still needs the normal cue path');
   assert.doesNotMatch(cueSection, /playVideo\s*\(/,
-    'formal preparation still must not play before commit');
+    'formal preparation still must not explicitly start playback before commit');
 });
 
-test('commit does not throw away a close warmed position with an unconditional seek', async () => {
+test('commit restores speculative mute and avoids an unconditional seek', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const commitSection = topLevelFunctionSection(source, 'function commitRoomSong');
 
   assert.match(commitSection, /const currentTime = Number\(player\.getCurrentTime\(\)\)/);
   assert.match(commitSection, /Math\.abs\(currentTime - pendingHandoff\.targetTime\) > 0\.75/);
   assert.match(commitSection, /player\.seekTo/);
+  assert.match(commitSection, /pendingHandoff\.prewarmWasMuted === false/);
+  assert.match(commitSection, /player\.unMute/);
   assert.match(commitSection, /player\.playVideo/);
 });

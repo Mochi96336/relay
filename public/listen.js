@@ -26,6 +26,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   let transportEnabled = false;
   let userMuted = false;
   let micForcedMuted = false;
+  let micMuteEpoch = 0;
   let roomMicForcedMuted = false;
   let playbackForcedMuted = false;
   let sourceSampleRate = MIX_SAMPLE_RATE;
@@ -340,6 +341,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   function forceMicMute(copy = t('listen.micActive')) {
+    micMuteEpoch += 1;
     micForcedMuted = true;
     reconcile(copy);
   }
@@ -364,8 +366,14 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   function restoreAfterMicBoundary(copy = t('listen.resumed')) {
     // Legacy terminal notifications can be dispatched immediately before
     // app.js enters stop(). Defer one task so stop() has synchronously stopped
-    // MediaStream tracks before room audio can become audible again.
-    setTimeout(() => restoreAfterMic(copy), 0);
+    // MediaStream tracks before room audio can become audible again. Fence the
+    // deferred restore to this Mic transition: a new Mic request in the same
+    // turn must not be unmuted by the previous session's stale timer.
+    const restoreEpoch = micMuteEpoch;
+    setTimeout(() => {
+      if (micMuteEpoch !== restoreEpoch) return;
+      restoreAfterMic(copy);
+    }, 0);
   }
 
   function setRoomMicForcedMute(forced) {

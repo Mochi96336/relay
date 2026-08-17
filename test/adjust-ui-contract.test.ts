@@ -22,8 +22,10 @@ test('measured Mic input lives in the performance task while gain stays in Adjus
   const adjust = html.indexOf('class="adjust-panel"');
   const gain = html.indexOf('id="mic-gain"');
   assert.ok(performance >= 0 && performance < meter && meter < adjust && adjust < gain);
-  assert.equal(app.includes('micPeakDbfs'), true);
-  assert.equal(app.includes('recommendedMicGainDb'), true);
+  assert.equal(app.includes('latestLocalMicLevel?.peakDbfs'), true);
+  assert.equal(app.includes("event.data?.type === 'input-level'"), true);
+  assert.equal(app.includes('latestMixHealth?.recommendedMicGainDb'), true);
+  assert.equal(app.includes('latestMixHealth?.micPeakDbfs'), false);
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
 });
 

@@ -9,6 +9,7 @@ on:
       - scripts/one-shot-infrastructure-authority.py
       - scripts/one-shot-infrastructure-authority-followup.py
       - scripts/one-shot-infrastructure-role-immutability.py
+      - scripts/one-shot-contract-path-fix.py
 
 permissions:
   contents: write
@@ -40,6 +41,7 @@ jobs:
           python3 scripts/one-shot-infrastructure-authority.py
           python3 scripts/one-shot-infrastructure-authority-followup.py
           python3 scripts/one-shot-infrastructure-role-immutability.py
+          python3 scripts/one-shot-contract-path-fix.py
           git add -N test/infrastructure-authority.test.ts test/socket-role-authority.test.ts
 
       - name: Verify focused diff
@@ -54,6 +56,7 @@ jobs:
             src/backing-stdin.ts \
             src/server.ts \
             test/helpers/harness.ts \
+            test/i18n-contract.test.ts \
             test/infrastructure-authority.test.ts \
             test/robot-scripts.test.ts \
             test/socket-role-authority.test.ts | sort)"
@@ -77,7 +80,7 @@ jobs:
           grep -n 'class="locale-control"' public/index.html
           node --input-type=module - <<'NODE'
           import { readFileSync } from 'node:fs';
-          const html = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
+          const html = readFileSync('./public/index.html', 'utf8');
           if (!html.includes('class="locale-control"')) throw new Error('direct Node read cannot see locale-control');
           NODE
           node --import tsx --test --test-concurrency=1 test/i18n-contract.test.ts
@@ -138,7 +141,8 @@ jobs:
           git rm .github/workflows/infrastructure-authority-once.yml \
             scripts/one-shot-infrastructure-authority.py \
             scripts/one-shot-infrastructure-authority-followup.py \
-            scripts/one-shot-infrastructure-role-immutability.py
+            scripts/one-shot-infrastructure-role-immutability.py \
+            scripts/one-shot-contract-path-fix.py
           for path in \
             .github/socket-role-authority.py \
             .github/socket-role-authority-testfix.py \
@@ -155,6 +159,7 @@ jobs:
             src/backing-stdin.ts \
             src/server.ts \
             test/helpers/harness.ts \
+            test/i18n-contract.test.ts \
             test/infrastructure-authority.test.ts \
             test/robot-scripts.test.ts \
             test/socket-role-authority.test.ts
@@ -175,6 +180,7 @@ jobs:
             src/backing-stdin.ts \
             src/server.ts \
             test/helpers/harness.ts \
+            test/i18n-contract.test.ts \
             test/robot-scripts.test.ts)"
           test -z "$changed" || {
             printf 'Authority target changed while gate was running:\n%s\n' "$changed"

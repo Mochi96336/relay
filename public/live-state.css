@@ -1,0 +1,50 @@
+@import url('/live-composition.css');
+@import url('/action-language.css');
+
+/* Product-state presentation lives after the formal composition so legacy DOM
+   control state cannot accidentally become a second lifecycle model. */
+
+/* The real input meter is only useful as confidence evidence for this phone's
+   live microphone. Other phones already get the singer identity from Voice. */
+body[data-self-mic="off"] .voice-input-evidence {
+  display: none;
+}
+
+/* Once this phone is the live Mic, tighten the handoff from media into the
+   performance task. The meter width itself is never animated here: app.js
+   owns it from measured micPeakDbfs. */
+body[data-self-mic="live"] .performance-stage {
+  padding-top: 26px;
+}
+body[data-self-mic="live"] #youtube-note {
+  display: none;
+}
+body[data-self-mic="live"] .voice-input-meter {
+  background: #303239;
+}
+body[data-self-mic="live"] .voice-input-meter::before {
+  background: #f0ede5;
+}
+body[data-self-mic="live"] .voice-copy strong {
+  font-size: clamp(38px, 10.5vw, 52px);
+  font-weight: 610;
+}
+
+body[data-health="degraded"] .attention-link {
+  color: #d8c8a9;
+  border-top-color: #4a4234;
+}
+
+body[data-health="blocked"] .attention-link {
+  color: #ffaaa3;
+  border-top-color: #4b3434;
+}
+
+@media (max-height: 760px) {
+  body[data-self-mic="live"] .performance-stage {
+    padding-top: 20px;
+  }
+  body[data-self-mic="live"] .voice-copy strong {
+    font-size: clamp(34px, 9.5vw, 46px);
+  }
+}

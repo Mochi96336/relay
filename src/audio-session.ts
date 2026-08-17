@@ -15,6 +15,7 @@ import type { PcmFrame } from './pcm-frame.js';
 type PcmChunk = {
   start: number;
   samples: Int16Array;
+  positioned: boolean;
 };
 
 type PcmTimeline = {
@@ -35,6 +36,26 @@ export type AlignmentState = {
   networkCompensationMs: number;
   calibratedMicLagMs: number | null;
   fineTuneMs: number;
+};
+
+/**
+ * Raw evidence for exactly one mixed output frame.
+ *
+ * These values describe what the mixer actually read for the samples it just
+ * emitted. They deliberately contain no Take verdict or policy: the audio
+ * domain reports facts, while the Take domain decides whether those facts mean
+ * clean, review or degraded.
+ */
+export type MixFrameEvidence = {
+  micGapSamples: number;
+  backingGapSamples: number;
+  micStarvedSamples: number;
+  backingStarvedSamples: number;
+  micUnavailableSamples: number;
+  backingUnavailableSamples: number;
+  clippedSamples: number;
+  limitedSamples: number;
+  unheaderedSamples: number;
 };
 
 export type MixHealth = {
@@ -83,14 +104,41 @@ const ADVANCE_SAFETY_MS = 200;
  * alignment. Without it the first few milliseconds of every transient reach
  * the sum at full height before the envelope catches up.
  *
- * The clamp further down stays as a backstop regardless: the limiter only holds
- * down the voice, and the voice plus the song can still overflow.
+ * The final two-source sum also reserves fixed headroom. That keeps ordinary
+ * voice + song peaks out of the hard clamp without adding a second dynamic
+ * limiter that would pump the whole mix and change the singer/song balance.
  */
 export const LIMITER_THRESHOLD_DBFS = -1;
 const LIMITER_THRESHOLD = 10 ** (LIMITER_THRESHOLD_DBFS / 20);
 const LIMITER_ATTACK_MS = 1.5;
 const LIMITER_RELEASE_MS = 150;
 const LIMITER_LOOKAHEAD_MS = 3;
+
+/**
+ * Worst-case linear sum after the microphone limiter plus the configured song
+ * gain. A fixed attenuation preserves their relative balance and introduces no
+ * attack/release artefacts.
+ *
+ * Only worth paying when both sources are actually present: it is headroom for
+ * a sum, and a room with one source has nothing to sum. Charging it to a song
+ * playing on its own made the song quieter to leave room for a voice that was
+ * not there.
+ */
+function sumHeadroomGain(backingGain: number) {
+  const maximumLinearSum = LIMITER_THRESHOLD + Math.abs(backingGain);
+  return maximumLinearSum > 1 ? 1 / maximumLinearSum : 1;
+}
+
+/**
+ * How long the song takes to duck out of a singer's way, and to come back.
+ *
+ * The song gain and the summing headroom both exist to leave room for a voice,
+ * so both follow whether a microphone is expected. Switched instantly that is a
+ * step of several dB in the middle of a song - plainly audible, and a worse
+ * fault than the level it corrects. A microphone registers before any audio
+ * flows, so this ramp is finished long before the first note.
+ */
+const SONG_DUCK_RAMP_MS = 150;
 
 /**
  * How fast the raw microphone meter forgets. Long enough that a breath between
@@ -154,6 +202,10 @@ export class AudioSession {
   readonly backingRetentionMs: number;
 
   private readonly backingGain: number;
+  private readonly backingSumHeadroomGain: number;
+  private readonly songDuckStep: number;
+  /** 0 while the song has the room to itself, 1 once it is out of a voice's way. */
+  private songDuck = 0;
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
@@ -200,6 +252,11 @@ export class AudioSession {
     this.frameSamples = Math.round((options.sampleRate * options.frameMs) / 1000);
     this.prebufferMs = options.prebufferMs;
     this.backingGain = options.backingGain;
+    this.backingSumHeadroomGain = sumHeadroomGain(options.backingGain);
+    this.songDuckStep = 1 / Math.max(
+      1,
+      Math.round((SONG_DUCK_RAMP_MS / 1000) * options.sampleRate),
+    );
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
     this.backingRetentionMs = options.backingRetentionMs ?? 1_000;
@@ -265,6 +322,9 @@ export class AudioSession {
     this.sessionGeneration += 1;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
+    // A new session starts from what the room currently is, not from wherever
+    // the previous one's ramp happened to stop.
+    this.songDuck = this.backingExpected && this.micExpected ? 1 : 0;
     this.resetHealth();
   }
 
@@ -356,7 +416,11 @@ export class AudioSession {
   }
 
   /** Emits every frame whose time has come. Returns how many were produced. */
-  drain(emit: (frame: Buffer) => void, nowMs = performance.now(), maxFrames = 5) {
+  drain(
+    emit: (frame: Buffer, evidence: MixFrameEvidence) => void,
+    nowMs = performance.now(),
+    maxFrames = 5,
+  ) {
     if (!this.running) return 0;
 
     const elapsed = nowMs - this.startedAt - this.prebufferMs;
@@ -367,7 +431,8 @@ export class AudioSession {
     let sent = 0;
 
     while (remaining > 0) {
-      emit(this.mixFrame(this.frameIndex));
+      const mixed = this.mixFrame(this.frameIndex);
+      emit(mixed.frame, mixed.evidence);
       this.frameIndex += 1;
       remaining -= 1;
       sent += 1;
@@ -431,12 +496,13 @@ export class AudioSession {
 
   private ingest(timeline: PcmTimeline, frame: PcmFrame, sourceRate: number | null, nowMs: number): IngestResult {
     if (!sourceRate) return { samples: new Int16Array(0), start: timeline.totalSamples };
-    const samples = this.resample(frame.pcm, sourceRate);
+    let samples = this.resample(frame.pcm, sourceRate);
     if (samples.length === 0) return { samples, start: timeline.totalSamples };
 
     let start: number;
+    const positioned = frame.firstSampleIndex !== null;
 
-    if (frame.firstSampleIndex === null) {
+    if (!positioned) {
       // No header: the only thing left to do is append at the frontier, which
       // is the old lossy behaviour. Flag it so the UI can say the client is
       // stale rather than letting it degrade invisibly.
@@ -446,7 +512,7 @@ export class AudioSession {
       // Each frame states its own position, so rounding never accumulates and a
       // missing frame leaves a hole of exactly the right length instead of
       // pulling everything after it earlier.
-      const streamStart = Math.round((frame.firstSampleIndex * this.sampleRate) / sourceRate);
+      const streamStart = Math.round((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
 
       if (timeline.generation !== frame.generation) {
         // A fresh capture session. Anchor it to the session clock; the previous
@@ -459,14 +525,22 @@ export class AudioSession {
     }
 
     if (start < timeline.totalSamples) {
-      // Out of order or overlapping. Ordered transport makes this a rounding
-      // artefact at worst, so keep the frontier rather than corrupting the sort.
+      // Transport ordering is no longer an AudioSession contract. The packet
+      // receiver normally prevents late overlap, but this boundary still must
+      // not relocate old audio to "now" if a caller violates it. Keep only a
+      // genuinely new tail; a fully late packet contributes nothing.
+      const overlap = timeline.totalSamples - start;
+      if (overlap >= samples.length) {
+        return { samples: new Int16Array(0), start: timeline.totalSamples };
+      }
+      samples = samples.slice(overlap);
       start = timeline.totalSamples;
     } else if (start > timeline.totalSamples && timeline.chunks.length > 0) {
       timeline.gapSamples += start - timeline.totalSamples;
     }
 
-    timeline.chunks.push({ start, samples });
+    if (samples.length === 0) return { samples, start };
+    timeline.chunks.push({ start, samples, positioned });
     timeline.totalSamples = start + samples.length;
     return { samples, start };
   }
@@ -564,6 +638,64 @@ export class AudioSession {
     return output;
   }
 
+  /**
+   * Describes missing/legacy source samples for exactly the requested output
+   * range. Silence before session sample zero is structural pre-roll and is not
+   * counted as a source failure. Missing samples inside an established frontier
+   * are gaps; samples beyond the frontier are starvation/unavailability.
+   */
+  private readEvidence(timeline: PcmTimeline, startSample: number, count: number) {
+    let cursor = startSample;
+    let remaining = count;
+    let gapSamples = 0;
+    let frontierMissingSamples = 0;
+    let unheaderedSamples = 0;
+
+    if (remaining <= 0) return { gapSamples, frontierMissingSamples, unheaderedSamples };
+    if (cursor < 0) {
+      const preRoll = Math.min(remaining, -cursor);
+      cursor += preRoll;
+      remaining -= preRoll;
+    }
+    if (remaining <= 0) return { gapSamples, frontierMissingSamples, unheaderedSamples };
+
+    if (timeline.chunks.length === 0 || cursor >= timeline.totalSamples) {
+      frontierMissingSamples += remaining;
+      return { gapSamples, frontierMissingSamples, unheaderedSamples };
+    }
+
+    let chunkIndex = this.firstChunkAtOrBefore(timeline, cursor);
+    while (remaining > 0) {
+      if (cursor >= timeline.totalSamples || chunkIndex >= timeline.chunks.length) {
+        frontierMissingSamples += remaining;
+        break;
+      }
+
+      const chunk = timeline.chunks[chunkIndex];
+      const chunkEnd = chunk.start + chunk.samples.length;
+      if (cursor >= chunkEnd) {
+        chunkIndex += 1;
+        continue;
+      }
+
+      if (cursor < chunk.start) {
+        const missing = Math.min(remaining, chunk.start - cursor);
+        gapSamples += missing;
+        cursor += missing;
+        remaining -= missing;
+        continue;
+      }
+
+      const available = Math.min(remaining, chunkEnd - cursor);
+      if (!chunk.positioned) unheaderedSamples += available;
+      cursor += available;
+      remaining -= available;
+      chunkIndex += 1;
+    }
+
+    return { gapSamples, frontierMissingSamples, unheaderedSamples };
+  }
+
   private trim(timeline: PcmTimeline, beforeSample: number) {
     while (timeline.chunks.length > 1) {
       const chunk = timeline.chunks[0];
@@ -626,7 +758,7 @@ export class AudioSession {
     return value * this.limiterGain;
   }
 
-  private mixFrame(frameIndex: number) {
+  private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
     const startSample = frameIndex * this.frameSamples;
     const advanceSamples = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
     const micReadStart = startSample + advanceSamples;
@@ -642,26 +774,70 @@ export class AudioSession {
     if (this.micHeadroomMs < 0 && this.micExpected) this.micStarvedFrames += 1;
     if (this.backingHeadroomMs < 0 && this.backingExpected) this.backingStarvedFrames += 1;
 
+    // Take evidence is scoped only to source samples that feed this emitted
+    // frame. In particular, the limiter look-ahead may be short without a single
+    // emitted vocal sample being missing, so it is deliberately excluded here.
+    const micReadEvidence = this.readEvidence(this.mic, micReadStart, this.frameSamples);
+    const backingReadEvidence = this.readEvidence(this.backing, startSample, this.frameSamples);
+    const clippedBefore = this.clippedSamples;
+    const limitedBefore = this.limitedSamples;
+
     // The extra tail is the limiter's look-ahead, not audio to be emitted.
     const lookahead = this.limiterLookaheadSamples;
     const mic = this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     const micGain = 10 ** (this.micGainDb / 20);
+    // `backingExpected` and `micExpected` are the room's semantic signals for
+    // which sources this mix has. Both must hold: the reservation is headroom
+    // for a sum, so a room with only one source has nothing to reserve against.
+    // Do not attenuate voice-only rooms merely because a stale backing timeline
+    // still exists from an earlier route, and do not quieten a song playing on
+    // its own to leave room for a voice nobody is singing.
+    // `backingExpected` and `micExpected` are the room's semantic signals for
+    // which sources this mix has. The song gain and the summing headroom both
+    // exist to leave space for a voice, so both are worth paying only when a
+    // voice can actually arrive: a song playing to a room where nobody has
+    // taken the microphone was being quietened for a singer who was not there,
+    // and the balance a real performance was tuned against is unchanged.
+    const duckTarget = this.backingExpected && this.micExpected ? 1 : 0;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
 
     for (let i = 0; i < this.frameSamples; i += 1) {
+      // Ramped per sample: the room can gain or lose a microphone mid-song, and
+      // several dB arriving in one sample is a click.
+      if (this.songDuck < duckTarget) {
+        this.songDuck = Math.min(duckTarget, this.songDuck + this.songDuckStep);
+      } else if (this.songDuck > duckTarget) {
+        this.songDuck = Math.max(duckTarget, this.songDuck - this.songDuckStep);
+      }
+      const songGain = 1 + this.songDuck * (this.backingGain - 1);
+      const mixHeadroomGain = 1 + this.songDuck * (this.backingSumHeadroomGain - 1);
+
       const voice = this.limit((mic[i] / 32768) * micGain, (mic[i + lookahead] / 32768) * micGain);
-      const value = voice + (song[i] / 32768) * this.backingGain;
-      // The limiter holds the voice under the threshold, so anything reaching
-      // here is the sum overflowing. Clamping keeps the wraparound crack out of
-      // the mix but is still distortion, so count it rather than hide it.
+      const summed = voice + (song[i] / 32768) * songGain;
+      const value = summed * mixHeadroomGain;
+      // Normal two-source peaks have already had deterministic summing headroom
+      // reserved. Keep this clamp as an invariant/backstop for unexpected future
+      // inputs or limiter overshoot, and keep counting it as audible distortion.
       if (value > 1 || value < -1) this.clippedSamples += 1;
       const clamped = Math.max(-1, Math.min(1, value));
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
     }
 
+    const evidence: MixFrameEvidence = {
+      micGapSamples: micReadEvidence.gapSamples,
+      backingGapSamples: backingReadEvidence.gapSamples,
+      micStarvedSamples: this.micExpected ? micReadEvidence.frontierMissingSamples : 0,
+      backingStarvedSamples: this.backingExpected ? backingReadEvidence.frontierMissingSamples : 0,
+      micUnavailableSamples: this.micExpected ? 0 : micReadEvidence.frontierMissingSamples,
+      backingUnavailableSamples: this.backingExpected ? 0 : backingReadEvidence.frontierMissingSamples,
+      clippedSamples: this.clippedSamples - clippedBefore,
+      limitedSamples: this.limitedSamples - limitedBefore,
+      unheaderedSamples: micReadEvidence.unheaderedSamples + backingReadEvidence.unheaderedSamples,
+    };
+
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);
-    return output;
+    return { frame: output, evidence };
   }
 }

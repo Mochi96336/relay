@@ -49,7 +49,6 @@ async function liveSession(server: RelayServer, robotBacking = false) {
   const monitor = await RelayClient.connect(server);
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
-  await monitor.waitForType('test-status');
 
   return { backing, publisher, monitor };
 }
@@ -69,7 +68,7 @@ async function calibrate(
 ) {
   publisher.send(playingTelemetry);
   await primeStreams(backing, publisher);
-  monitor.send({ type: 'start-timing-calibration' });
+  publisher.send({ type: 'start-timing-calibration' });
   await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
 
   const { mic, backing: song } = laggedPair(8, RATE, lagMs);
@@ -208,7 +207,7 @@ describe('robot calibration ownership', () => {
     RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
     RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
     RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-2',
+    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
     RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
   };
 
@@ -251,10 +250,8 @@ describe('robot calibration ownership', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      // Ignore any unattended boot request that may have been emitted while the
-      // streams were primed; the manual click must start a fresh run of its own.
       const from = publisher.messages.length;
-      monitor.send({ type: 'start-timing-calibration' });
+      publisher.send({ type: 'start-timing-calibration' });
       const probe = await waitForNewMessage(
         publisher,
         from,
@@ -326,7 +323,7 @@ describe('boot probe lifecycle', () => {
       RELAY_CALIBRATION_PROBE_RETRY_MS: '1000',
       RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
       RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-      RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-2',
+      RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
       RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
       RELAY_BACKING_GRACE_MS: '100',
     });
@@ -354,24 +351,33 @@ describe('boot probe lifecycle', () => {
         4_000,
       );
 
+      const sessionEndFrom = monitor.messages.length;
       backing.close();
-      await monitor.waitFor(
+      publisher.close();
+      await waitForNewMessage(
+        monitor,
+        sessionEndFrom,
         (m) => m.type === 'source-status' && m.active === false,
         3_000,
       );
 
-      const from = publisher.messages.length;
       const newBacking = await RelayClient.connect(server);
       newBacking.newCaptureSession();
       newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE });
       await newBacking.waitForType('registered');
+
+      const newPublisher = await RelayClient.connect(server);
+      newPublisher.newCaptureSession();
+      newPublisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+      await newPublisher.waitForType('registered');
+      const from = newPublisher.messages.length;
       await Promise.all([
         sendPcmInChunks(newBacking, tone(1, 0.8)),
-        sendPcmInChunks(publisher, tone(1, 0.4)),
+        sendPcmInChunks(newPublisher, tone(1, 0.4)),
       ]);
 
       const nextProbe = await waitForNewMessage(
-        publisher,
+        newPublisher,
         from,
         (m) => m.type === 'play-calibration-probe',
         4_000,
@@ -383,7 +389,7 @@ describe('boot probe lifecycle', () => {
       );
 
       newBacking.close();
-      publisher.close();
+      newPublisher.close();
       monitor.close();
       robot.close();
     } finally {

@@ -1,0 +1,188 @@
+/* Formal phone composition.
+   This layer owns spatial hierarchy only. Product-state emphasis stays in
+   live-state.css and playback-role behavior stays in song-surface.css. */
+
+.live-shell {
+  padding-top: 18px;
+  padding-bottom: max(22px, env(safe-area-inset-bottom));
+}
+
+.room-header {
+  min-height: 38px;
+}
+
+.room-mark {
+  font-size: 15px;
+  letter-spacing: -.04em;
+}
+
+.song-stage {
+  padding-top: clamp(20px, 3.5vh, 32px);
+}
+
+/* The playback holder keeps a real YouTube surface. Never collapse the iframe
+   into a fake mini-player: the embedded player remains visible and usable. */
+.youtube-player-shell {
+  width: calc(100% + 12px);
+  margin-left: -6px;
+  min-height: 200px;
+  border-color: rgba(255, 255, 255, .07);
+  border-radius: 18px;
+}
+
+.youtube-player-shell > div,
+.youtube-player-shell iframe {
+  min-height: 200px;
+}
+
+.youtube-readout {
+  margin: 8px 2px 0;
+}
+
+/* Secondary song context must survive normal phone brightness without
+   competing with the media field itself. */
+.song-device-note {
+  color: #85888f;
+}
+
+#youtube-note {
+  color: #7f8289;
+}
+
+/* Performance is one stage: room Mic evidence, ownership, and Take all belong
+   to the same task instead of reading as separate product sections. */
+.performance-stage {
+  padding-top: clamp(28px, 4.5vh, 44px);
+}
+
+.performance-stage > .section-label {
+  margin-bottom: 10px;
+}
+
+.voice-input-evidence {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 18px;
+}
+
+.evidence-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  color: #767981;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.evidence-heading output {
+  color: #a6a8ae;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* app.js drives --input-level from the server's measured micPeakDbfs. This is
+   evidence, not decorative state animation. */
+.voice-input-meter {
+  --input-level: 0%;
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #27292e;
+}
+
+.voice-input-meter::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--input-level);
+  border-radius: inherit;
+  background: #d8d6d1;
+  transition: width 90ms linear;
+}
+
+.voice-copy {
+  min-height: 0;
+}
+
+.voice-copy strong {
+  max-width: 18ch;
+  font-size: clamp(30px, 8vw, 42px);
+  line-height: .98;
+  letter-spacing: -.045em;
+  font-weight: 640;
+}
+
+.mic-actions {
+  min-height: 38px;
+  margin-top: 18px;
+}
+
+.take-strip {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #202227;
+  text-align: left;
+}
+
+.take-actions {
+  min-height: 34px;
+  justify-content: flex-start;
+}
+
+#start-recording:not(:disabled)::before,
+#stop-recording:not(:disabled)::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  vertical-align: 1px;
+  opacity: .72;
+}
+
+.take-strip .microcopy {
+  min-height: 15px;
+  text-align: left;
+}
+
+/* Listen and Adjust are the persistent local-control horizon. They follow the
+   performance task closely instead of floating at the bottom of a long page. */
+.live-actions {
+  margin-top: 28px;
+  padding-top: 14px;
+}
+
+.system-panel {
+  margin-top: 4px;
+}
+
+.system-panel > summary {
+  padding: 12px 0 2px;
+  color: #60636a;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 420px) {
+  .song-stage { padding-top: 18px; }
+  .performance-stage { padding-top: 26px; }
+}
+
+@media (max-height: 760px) {
+  .live-shell { padding-top: 14px; }
+  .song-stage { padding-top: 14px; }
+  .performance-stage { padding-top: 22px; }
+  .voice-input-evidence { margin-bottom: 14px; }
+  .mic-actions { margin-top: 14px; }
+  .take-strip { margin-top: 14px; padding-top: 13px; }
+  .live-actions { margin-top: 24px; padding-top: 12px; }
+}

@@ -73,6 +73,23 @@ describe('AudioSession timelines', () => {
     assert.equal(session.health().micGapMs, 0);
   });
 
+  test('never relocates late overlapping audio to the write frontier', () => {
+    const session = makeSession();
+    session.start(0);
+
+    session.ingestMic(frame(0, pcmOf([1, 2, 3, 4])), RATE, 0);
+    const late = session.ingestMic(frame(2, pcmOf([9, 9])), RATE, 0);
+    assert.equal(late.samples.length, 0, 'a fully late frame is discarded, not moved later');
+    assert.deepEqual([...session.readMic(0, 4)], [1, 2, 3, 4]);
+
+    session.ingestMic(frame(3, pcmOf([7, 8, 9])), RATE, 0);
+    assert.deepEqual(
+      [...session.readMic(0, 6)],
+      [1, 2, 3, 4, 8, 9],
+      'only the non-overlapping tail keeps its original sample positions',
+    );
+  });
+
   // The mixer reads the song at the read head, so a second of history is all
   // it ever wanted - but a probe calibration reads back across its whole
   // search window, and cannot do so until enough audio has arrived to cover
@@ -232,7 +249,10 @@ describe('AudioSession alignment', () => {
     const peakMs = (peak.index / RATE) * 1000;
 
     assert.ok(Math.abs(peakMs - 400) < 5, `expected both events at ~400 ms, peak at ${peakMs.toFixed(1)} ms`);
-    assert.ok(peak.value > 20_000, `the two should sum, got ${peak.value}`);
+    assert.ok(
+      peak.value > 12_000,
+      `the two should still sum after deterministic bus headroom, got ${peak.value}`,
+    );
   });
 
   test('a wrong calibration pulls the vocal off the beat', () => {
@@ -368,16 +388,117 @@ describe('AudioSession microphone limiter', () => {
     assert.equal(session.health().clippedSamples, 0);
   });
 
-  test('still reports a clamp when the sum overflows despite the limiter', () => {
-    // The limiter only holds the voice down; the song is added after it.
+  test('reserves summing headroom before a hot voice and song can reach the clamp', () => {
     const session = makeSession({ backingGain: 1 });
     session.setMicGainDb(36);
+    session.setBackingExpected(true);
+    // Both, because the reservation is headroom for a sum. This room really
+    // does have two sources; declaring only one would be asking for headroom
+    // against something that cannot arrive.
+    session.setMicExpected(true);
     session.start(0);
     session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
     session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(30_000))), RATE, 0);
 
-    drainAll(session, 500);
-    assert.ok(session.health().clippedSamples > 0, 'the backstop still has to report itself');
+    const mixed = drainAll(session, 500);
+    assert.equal(
+      session.health().clippedSamples,
+      0,
+      'normal two-source gain staging must not depend on the hard clamp',
+    );
+    assert.ok(session.health().limitedSamples > 0, 'the microphone limiter still owns vocal peaks');
+    assert.ok(peakSampleIndex(mixed).value < 32_767, 'the mixed bus keeps real headroom');
+  });
+
+  test('does not attenuate a voice-only room for backing headroom', () => {
+    const session = makeSession({ backingGain: 1 });
+    session.setMicGainDb(0);
+    session.start(0);
+    session.ingestMic(frame(0, pcmOf(new Array(RATE).fill(1_000))), RATE, 0);
+
+    const mixed = drainAll(session, 20);
+    assert.equal(mixed.readInt16LE(0), 1_000, 'voice-only output stays at unity');
+    assert.equal(session.health().clippedSamples, 0);
+  });
+
+  /**
+   * The symptom this came from: a song playing to a room where nobody had taken
+   * the microphone arrived audibly quiet. The reservation is headroom for a sum,
+   * and it was being charged to a source that had nothing to sum with.
+   */
+  test('does not attenuate a song-only room for a voice nobody is singing', () => {
+    const session = makeSession({ backingGain: 1 });
+    session.setBackingExpected(true);
+    session.start(0);
+    session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(20_000))), RATE, 0);
+
+    const mixed = drainAll(session, 20);
+    // Within one LSB: the mix scales positives by 32767 and negatives by 32768,
+    // so unity costs a quantisation step. The headroom reservation would cost
+    // 3.8 dB - about 7,000 counts here - and is what this pins.
+    assert.ok(
+      Math.abs(mixed.readInt16LE(0) - 20_000) <= 1,
+      `song-only output stays at unity, got ${mixed.readInt16LE(0)}`,
+    );
+    assert.equal(session.health().clippedSamples, 0);
+  });
+
+  test('still reserves headroom once a microphone is expected', () => {
+    const session = makeSession({ backingGain: 1 });
+    session.setBackingExpected(true);
+    session.setMicExpected(true);
+    session.start(0);
+    session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(20_000))), RATE, 0);
+
+    const mixed = drainAll(session, 20);
+    assert.ok(
+      mixed.readInt16LE(0) < 20_000,
+      'a room that can sum two sources still pays for the headroom',
+    );
+  });
+
+  /**
+   * The song gain and the summing headroom both follow whether a microphone is
+   * expected, so taking the mic mid-song moves the song by several dB. Switched
+   * in one sample that is a click - a worse fault than the level it corrects.
+   */
+  test('ducks the song for an arriving voice without a step', () => {
+    const session = makeSession({ backingGain: 0.65 });
+    session.setBackingExpected(true);
+    session.start(0);
+    // Three seconds, so the drains below never read past the audio.
+    session.ingestBacking(frame(0, pcmOf(new Array(RATE * 3).fill(20_000))), RATE, 0);
+
+    const before = drainAll(session, 100);
+    const unducked = before.readInt16LE(0);
+
+    // The room gains a microphone in the middle of the song.
+    session.setMicExpected(true);
+    const during = drainAll(session, 600);
+
+    // Across the join as well: a hard switch puts its whole step between the
+    // last unducked sample and the first ducked one.
+    const across = Buffer.concat([before, during]);
+    let worstStep = 0;
+    for (let i = 1; i < across.length / 2; i += 1) {
+      const step = Math.abs(across.readInt16LE(i * 2) - across.readInt16LE((i - 1) * 2));
+      if (step > worstStep) worstStep = step;
+    }
+    assert.ok(
+      worstStep <= unducked / 100,
+      `the duck must ramp, largest single-sample step was ${worstStep} of ${unducked}`,
+    );
+
+    const ducked = during.readInt16LE(during.length - 2);
+    assert.ok(ducked < unducked * 0.8, `the song must actually duck, got ${ducked} from ${unducked}`);
+
+    // And it comes back when the microphone leaves, equally smoothly.
+    session.setMicExpected(false);
+    const after = drainAll(session, 1_200);
+    assert.ok(
+      after.readInt16LE(after.length - 2) > unducked * 0.95,
+      'the song returns to its own level once no voice is expected',
+    );
   });
 
   test('does not carry limiter gain reduction into the next session', () => {

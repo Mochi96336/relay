@@ -6,8 +6,8 @@
  * genuinely strong correlations, not noise, and tightening thresholds cannot
  * fix an ambiguity that is a property of the signal being correlated, not of
  * the threshold. Three short notes at irregular offsets have no self-similar
- * repeat to alias onto, so the same envelope-correlation technique that
- * struggles against a beat is unambiguous against this.
+ * repeat to alias onto, so the detector can look for both their timing and
+ * their known frequencies instead of treating every loud beat as probe energy.
  *
  * The client (public/app.js, playCalibrationProbe) plays the audible version
  * of the same three notes - same offsets, frequencies and decay - through the
@@ -16,7 +16,7 @@
  * enough for correlation to lock onto it; keep the two in sync by hand.
  */
 
-const ENVELOPE_FRAME_MS = 5;
+const FEATURE_FRAME_MS = 5;
 
 /**
  * A restrained C6-E6-G6 success chime. The unequal 125/205 ms gaps are
@@ -70,22 +70,44 @@ export function generateProbeReference(sampleRate: number): Int16Array {
   return output;
 }
 
-function featureEnvelope(samples: Int16Array, sampleRate: number): Float64Array {
-  const frameSamples = Math.max(1, Math.round((sampleRate * ENVELOPE_FRAME_MS) / 1000));
+/**
+ * Extracts energy only at the three frequencies Relay itself emits.
+ *
+ * The previous detector reduced every 5 ms frame to broadband RMS. That threw
+ * away the strongest discriminator in the probe: each note has a known pitch.
+ * With a real song still playing, kick/snare/vocal energy could therefore hide
+ * the restrained chime or create a stronger false envelope. Quadrature energy
+ * is phase-insensitive like RMS but rejects most unrelated song energy.
+ *
+ * Features are interleaved by frame then note, so one correlation checks both
+ * the irregular note timing and the C6/E6/G6 frequency sequence.
+ */
+function probeToneFeatures(samples: Int16Array, sampleRate: number): Float64Array {
+  const frameSamples = Math.max(1, Math.round((sampleRate * FEATURE_FRAME_MS) / 1000));
   const frameCount = Math.floor(samples.length / frameSamples);
-  const energy = new Float64Array(frameCount);
+  const channels = PROBE_NOTES.length;
+  const features = new Float64Array(frameCount * channels);
 
   for (let frame = 0; frame < frameCount; frame += 1) {
     const start = frame * frameSamples;
-    let sumSquares = 0;
-    for (let i = 0; i < frameSamples; i += 1) {
-      const value = samples[start + i] / 32768;
-      sumSquares += value * value;
+
+    for (let channel = 0; channel < channels; channel += 1) {
+      const frequencyHz = PROBE_NOTES[channel].frequencyHz;
+      let sumCos = 0;
+      let sumSin = 0;
+
+      for (let i = 0; i < frameSamples; i += 1) {
+        const value = samples[start + i] / 32768;
+        const phase = (2 * Math.PI * frequencyHz * i) / sampleRate;
+        sumCos += value * Math.cos(phase);
+        sumSin += value * Math.sin(phase);
+      }
+
+      features[frame * channels + channel] = Math.hypot(sumCos, sumSin) / frameSamples;
     }
-    energy[frame] = Math.sqrt(sumSquares / frameSamples);
   }
 
-  return energy;
+  return features;
 }
 
 function normalizedCorrelation(a: Float64Array, aStart: number, b: Float64Array, length: number) {
@@ -121,19 +143,27 @@ function normalizedCorrelation(a: Float64Array, aStart: number, b: Float64Array,
  */
 export function locateProbe(micWindow: Int16Array, sampleRate: number): ProbeLocation {
   const reference = generateProbeReference(sampleRate);
-  const micFeature = featureEnvelope(micWindow, sampleRate);
-  const refFeature = featureEnvelope(reference, sampleRate);
+  const micFeature = probeToneFeatures(micWindow, sampleRate);
+  const refFeature = probeToneFeatures(reference, sampleRate);
+  const channels = PROBE_NOTES.length;
+  const micFrames = Math.floor(micFeature.length / channels);
+  const refFrames = Math.floor(refFeature.length / channels);
 
   let bestFrame = 0;
   let bestCorrelation = -1;
-  for (let start = 0; start <= micFeature.length - refFeature.length; start += 1) {
-    const correlation = normalizedCorrelation(micFeature, start, refFeature, refFeature.length);
+  for (let start = 0; start <= micFrames - refFrames; start += 1) {
+    const correlation = normalizedCorrelation(
+      micFeature,
+      start * channels,
+      refFeature,
+      refFeature.length,
+    );
     if (correlation > bestCorrelation) {
       bestCorrelation = correlation;
       bestFrame = start;
     }
   }
 
-  const frameSamples = Math.max(1, Math.round((sampleRate * ENVELOPE_FRAME_MS) / 1000));
+  const frameSamples = Math.max(1, Math.round((sampleRate * FEATURE_FRAME_MS) / 1000));
   return { offsetSamples: bestFrame * frameSamples, correlation: bestCorrelation };
 }

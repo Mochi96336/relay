@@ -10,9 +10,9 @@ The important boundary is that a **person**, a **mic lease**, and a **WebSocket 
 
 ## Identity
 
-A browser creates a random `participantId` and a random display nickname on first use. Both are client-local convenience identity, not authentication. The nickname is editable inline and the server sanitizes it before broadcasting it.
+A browser creates a random private participant capability and a random display nickname on first use. The public `participantId` is derived from that capability and is safe to publish as room identity; the capability itself is the proof used to bind participant-authoritative browser transports. This is still lightweight room identity, not an account system. The nickname remains client-local convenience identity, is editable inline, and the server sanitizes it before broadcasting it.
 
-Participant binding is explicit per WebSocket. Human presence / publisher / monitor sockets include the participant ID and nickname when they connect. Relay does **not** infer a human identity from ambient origin-wide cookies, so `source.html`, robot sources, backing capture and other infrastructure sockets cannot accidentally keep somebody online.
+Participant binding is explicit per WebSocket. The private capability is **not** placed in a WebSocket URL or ambient cookie: after the WebSocket upgrade, human presence / publisher / monitor and other participant-bound browser sockets send a participant-auth application message, and the server verifies that the supplied capability derives the claimed public participant ID before accepting participant authority. This keeps the reusable secret out of proxy/tunnel URL logs and ensures `source.html`, robot sources, backing capture and other infrastructure sockets cannot accidentally become human participants.
 
 A connection handshake proves liveness only. It does not rename an existing participant: a stale tab reconnecting with an old locally cached nickname cannot undo a newer explicit `participant-rename` action.
 

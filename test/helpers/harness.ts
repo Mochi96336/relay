@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import WebSocket from 'ws';
 
+import { encodeAudioPacket } from '../../src/audio-packet.js';
 import { encodePcmFrame } from '../../src/pcm-frame.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -23,10 +24,17 @@ export type RelayServer = {
 export function startRelay(env: Record<string, string> = {}): Promise<RelayServer> {
   const child = spawn(
     process.execPath,
-    ['--import', 'tsx', path.join(root, 'src', 'server.ts')],
+    ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
     {
       cwd: root,
-      env: { ...process.env, PORT: '0', ...env },
+      env: {
+        ...process.env,
+        PORT: '0',
+        NODE_ENV: 'test',
+        RELAY_TEST_LEGACY_PARTICIPANTS: '1',
+        RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
+        ...env,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
@@ -84,6 +92,7 @@ export class RelayClient {
   binarySamples = 0;
   private generation = 1;
   private sampleCursor = 0;
+  private packetSequence = 0;
   private readonly waiters: { predicate: (m: JsonMessage) => boolean; resolve: (m: JsonMessage) => void }[] = [];
 
   private constructor(private readonly socket: WebSocket) {
@@ -132,6 +141,26 @@ export class RelayClient {
     this.socket.send(encodePcmFrame(this.generation, index, buffer), { binary: true });
   }
 
+  /** AudioPacket v2, used by the phone media path. */
+  sendAudioPacket(buffer: Buffer) {
+    const index = this.sampleCursor;
+    const sequence = this.packetSequence;
+    this.sampleCursor += buffer.byteLength / 2;
+    this.packetSequence = (this.packetSequence + 1) >>> 0;
+    this.sendBinary(encodeAudioPacket({
+      source: 'mic',
+      generation: this.generation,
+      sequence,
+      firstSampleIndex: index,
+      pcm: buffer,
+    }));
+  }
+
+  /** Sends an already-framed binary packet without mutating capture state. */
+  sendBinary(buffer: Buffer) {
+    this.socket.send(buffer, { binary: true });
+  }
+
   /** Captured but never sent: what a congested uplink does. */
   skipPcm(buffer: Buffer) {
     this.sampleCursor += buffer.byteLength / 2;
@@ -146,6 +175,7 @@ export class RelayClient {
   newCaptureSession() {
     this.generation += 1;
     this.sampleCursor = 0;
+    this.packetSequence = 0;
   }
 
   get cursor() {
@@ -157,9 +187,14 @@ export class RelayClient {
   }
 
   /** Same capture, new socket: what app.js does when only the websocket died. */
-  resumeCaptureSession(generation: number, sampleCursor: number) {
+  resumeCaptureSession(generation: number, sampleCursor: number, packetSequence = 0) {
     this.generation = generation;
     this.sampleCursor = sampleCursor;
+    this.packetSequence = packetSequence >>> 0;
+  }
+
+  get packetSequenceId() {
+    return this.packetSequence;
   }
 
   /** Resolves on the first matching message, including ones already received. */

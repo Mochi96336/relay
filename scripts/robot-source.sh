@@ -90,6 +90,8 @@ fi
   || die "RELAY_BACKING_SAMPLE_RATE must be an integer from 8000 to 192000"
 [[ "$CAPTURE_LATENCY_MS" =~ ^[0-9]+$ ]] && ((10#$CAPTURE_LATENCY_MS >= 5 && 10#$CAPTURE_LATENCY_MS <= 2000)) \
   || die "RELAY_BACKING_CAPTURE_LATENCY_MS must be an integer from 5 to 2000"
+[[ "${RELAY_INFRA_KEY:-}" =~ ^[0-9a-f]{64}$ ]] \
+  || die "RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret"
 
 # Two launchers mean two Chromium players and two probes feeding the same sink.
 # Protocol-level source ownership can ignore duplicate telemetry, but it cannot
@@ -132,6 +134,8 @@ if [[ -n "${RELAY_KEY:-}" ]]; then
   encoded_key="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$RELAY_KEY")"
   source_url+="&key=$encoded_key"
 fi
+encoded_infra_key="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$RELAY_INFRA_KEY")"
+source_url+="#infra=$encoded_infra_key"
 log "opening http://localhost:${PORT}/source.html?robot=1 with audio routed to $SINK_NAME at $CAPTURE_RATE Hz / ${CAPTURE_LATENCY_MS} ms${RELAY_KEY:+ (authenticated)}"
 PULSE_SINK="$SINK_NAME" xvfb-run -a "$CHROMIUM_BIN" \
   --user-data-dir="$profile_dir" \

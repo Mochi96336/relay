@@ -8,6 +8,21 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.offset = 0;
     this.started = false;
     this.silenceQuanta = 0;
+    this.activeGapQuanta = 0;
+    this.reportedActiveGapQuanta = 0;
+  }
+
+  reportInputGap(recovered) {
+    const unreported = this.activeGapQuanta - this.reportedActiveGapQuanta;
+    if (unreported <= 0) return;
+    this.reportedActiveGapQuanta = this.activeGapQuanta;
+    this.port.postMessage({
+      type: 'input-gap',
+      quanta: unreported,
+      samples: unreported * RENDER_QUANTUM,
+      totalQuanta: this.silenceQuanta,
+      recovered,
+    });
   }
 
   writeSilence(count) {
@@ -39,14 +54,20 @@ class CaptureProcessor extends AudioWorkletProcessor {
     if (!input) {
       if (this.started) {
         this.silenceQuanta += 1;
+        this.activeGapQuanta += 1;
         this.writeSilence(RENDER_QUANTUM);
-        if (this.silenceQuanta % 400 === 0) {
-          this.port.postMessage({ type: 'input-gap', quanta: this.silenceQuanta });
+        if (this.activeGapQuanta - this.reportedActiveGapQuanta >= 400) {
+          this.reportInputGap(false);
         }
       }
       return true;
     }
 
+    if (this.activeGapQuanta > 0) {
+      this.reportInputGap(true);
+      this.activeGapQuanta = 0;
+      this.reportedActiveGapQuanta = 0;
+    }
     this.started = true;
     let sourceOffset = 0;
     while (sourceOffset < input.length) {

@@ -55,6 +55,14 @@ On the validated installation, the same YouTube video played through the `localh
 
 The port is not part of that contract. Relay defaults to `3000`; use another port when the host already reserves it.
 
+Robot/backing authority is protected by a separate `RELAY_INFRA_KEY`, not by the human participant capability and not by the shared outer `RELAY_KEY`. Generate one 256-bit value once (for example `openssl rand -hex 32`) and put it in `~/.config/relay/robot.env` so both checked-in user units inherit the same secret:
+
+```bash
+RELAY_INFRA_KEY=<64 lowercase hex characters>
+```
+
+The launcher passes this key to `source.html` in the URL **fragment** (`#infra=...`), which browsers do not send in HTTP requests or access logs. The backing bridge sends the same capability only after the WebSocket upgrade.
+
 ## Launcher
 
 Before launching, the read-only doctor checks dependencies, the PipeWire
@@ -84,9 +92,30 @@ It:
 - always opens `http://localhost:$PORT/source.html?robot=1`; and
 - stops its child processes and unloads only a sink module it created itself.
 
-`PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. The launcher applies `RELAY_BACKING_SAMPLE_RATE` to both `parec` and the bridge so the declared rate always matches the PCM; the validated default remains 48 kHz. `RELAY_BACKING_CAPTURE_LATENCY_MS` controls `parec --latency-msec` and defaults to 40 ms; setting it explicitly avoids the roughly two-second default capture buffer observed on the robot. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate, without writing the key into its log line.
+`PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge requires `RELAY_INFRA_KEY` and continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. The launcher applies `RELAY_BACKING_SAMPLE_RATE` to both `parec` and the bridge so the declared rate always matches the PCM; the validated default remains 48 kHz. `RELAY_BACKING_CAPTURE_LATENCY_MS` controls `parec --latency-msec` and defaults to 40 ms; setting it explicitly avoids the roughly two-second default capture buffer observed on the robot. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate, without writing the key into its log line.
 
 Run the Relay server separately before starting the launcher. Robot mode automatically arms source audio, and Chromium is launched with the autoplay policy needed for that unattended local page; no source-page gesture or extension invocation is required.
+
+## Optional direct WebTransport microphone path
+
+Relay keeps the phone page and control WebSocket on the existing HTTPS origin, but microphone media can use a separate **direct HTTP/3/UDP endpoint**. This is optional: if it is not configured, or if the browser cannot establish it, AudioPacket v2 continues over the existing WebSocket binary path.
+
+A Cloudflare Tunnel URL is **not** the WebTransport media endpoint. Cloudflare can accept HTTP/3 from the browser at its edge, but Tunnel published applications currently connect from `cloudflared` to the origin with HTTP/1.1 or HTTP/2 rather than forwarding an end-to-end HTTP/3 WebTransport session. The media hostname therefore has to reach the robot's UDP port directly (or through infrastructure that explicitly supports WebTransport end to end).
+
+Configure the direct path in `~/.config/relay/robot.env` only after DNS, UDP forwarding/firewall, and a certificate are ready:
+
+```bash
+RELAY_WEBTRANSPORT_PUBLIC_URL=https://media.example.com:4433/media
+RELAY_WEBTRANSPORT_CERT=/home/mochi/.config/relay/media-cert.pem
+RELAY_WEBTRANSPORT_KEY=/home/mochi/.config/relay/media-key.pem
+# Optional when the public UDP port differs from the local bind port:
+# RELAY_WEBTRANSPORT_PORT=4433
+# RELAY_WEBTRANSPORT_HOST=0.0.0.0
+```
+
+With a normal publicly trusted certificate, leave `RELAY_WEBTRANSPORT_PIN_CERT` unset. For a short-lived local/test certificate, `RELAY_WEBTRANSPORT_PIN_CERT=1` makes Relay advertise the SHA-256 certificate hash to the browser; pinned WebTransport certificates are deliberately restricted to a validity period shorter than 14 days and an EC/P-256-compatible key.
+
+The WebTransport URL carries a random, capture-scoped media ticket issued only after publisher registration. A fresh capture or ownership change rotates it. A same-capture control reconnect preserves it until the existing microphone reconnect grace expires. This ticket is a narrow media capability, not a replacement for `RELAY_KEY` or participant ownership.
 
 ## Watching the route from another machine
 

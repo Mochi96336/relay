@@ -13,7 +13,12 @@ let meterSamples = 0;
 let lastMeterAt = 0;
 let droppedChunks = 0;
 let lastDropWarningAt = 0;
-let captureGeneration = 0;
+// The offscreen document is disposable: Chrome may tear it down and later
+// recreate it while Relay still retains the previous backing timeline. A
+// module-local zero would therefore reuse generation 1 with sample cursor 0,
+// making the new capture look like late data from the old incarnation. Seed
+// each offscreen document independently so recreation is a fresh capture.
+let captureGeneration = crypto.getRandomValues(new Uint32Array(1))[0];
 let captureSampleCursor = 0;
 
 // Byte layout is pinned by src/pcm-frame.ts and test/pcm-frame.test.ts. Each
@@ -41,6 +46,11 @@ function relayWsUrl(pageUrl) {
   const key = url.searchParams.get('key');
   const query = key ? `?key=${encodeURIComponent(key)}` : '';
   return `${protocol}//${url.host}/ws${query}`;
+}
+
+function relayInfrastructureKey(pageUrl) {
+  const url = new URL(pageUrl);
+  return new URLSearchParams(url.hash.slice(1)).get('infra') ?? '';
 }
 
 function reportState(state) {
@@ -78,10 +88,16 @@ function connectRelay() {
 
   socket.addEventListener('open', () => {
     if (relaySocket !== socket || !audioContext) return;
+    const infrastructureKey = relayInfrastructureKey(relayPageUrl);
+    if (!/^[0-9a-f]{64}$/.test(infrastructureKey)) {
+      console.error('Relay source page is missing a valid #infra= capability.');
+      reportState('error');
+      socket.close();
+      return;
+    }
     socket.send(JSON.stringify({
-      type: 'register',
-      role: 'backing',
-      sampleRate: audioContext.sampleRate,
+      type: 'infrastructure-authenticate',
+      key: infrastructureKey,
     }));
   });
 
@@ -91,6 +107,21 @@ function connectRelay() {
     try {
       message = JSON.parse(event.data);
     } catch {
+      return;
+    }
+
+    if (message.type === 'infrastructure-authenticated') {
+      socket.send(JSON.stringify({
+        type: 'register',
+        role: 'backing',
+        sampleRate: audioContext.sampleRate,
+      }));
+      return;
+    }
+
+    if (message.type === 'infrastructure-auth-rejected') {
+      console.error('Relay rejected infrastructure capability:', message.message);
+      reportState('error');
       return;
     }
 
@@ -243,7 +274,7 @@ async function startCapture(streamId, tabId, pageUrl) {
   await audioContext.audioWorklet.addModule(chrome.runtime.getURL('capture-worklet.js'));
   await audioContext.resume();
 
-  captureGeneration += 1;
+  captureGeneration = (captureGeneration + 1) >>> 0;
   captureSampleCursor = 0;
 
   source = audioContext.createMediaStreamSource(stream);

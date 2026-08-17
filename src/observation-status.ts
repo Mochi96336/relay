@@ -1,4 +1,6 @@
-export type RelayObservationState = 'idle' | 'live' | 'degraded' | 'fault';
+import type { RemoteStatusState } from './remote-status.js';
+
+export type RelayObservationState = RemoteStatusState;
 export type RelayTimingMode = 'network-estimate' | 'acoustic-calibration';
 
 export type RelayObservationStatusV1 = {

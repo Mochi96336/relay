@@ -32,13 +32,13 @@ const ERROR_NAMES = new Map([
   [153, 'missing Referer / client identity'],
 ]);
 
-const SLIDER_HOLD_MS = 2000;
 const ROBOT_DELTA_SETTLE_MS = 1000;
 
 // The robot has no Chrome extension: `scripts/robot-source.sh` routes Chromium
 // through a PipeWire sink into backing:stdin. Advice that names the extension
 // is wrong there, and this page is the same page in both deployments.
 const ROBOT_MODE = new URLSearchParams(location.search).get('robot') === '1';
+const INFRASTRUCTURE_KEY = new URLSearchParams(location.hash.slice(1)).get('infra') ?? '';
 
 let socket = null;
 let reconnectTimer = null;
@@ -52,22 +52,9 @@ let latestMixHealth = null;
 let loadedVideoId = null;
 let lastSeekAt = 0;
 let playerError = null;
-let vocalFineTuneTouchedAt = 0;
 let robotSuperseded = false;
 let robotDeltaSuppressedUntil = 0;
-const sliderTouchedAt = new Map();
-
-// The server echoes every source-status back to every client, which used to
-// snap this slider back to a stale value while the user was still dragging it.
-function fineTuneIsBusy() {
-  return document.activeElement === vocalFineTune
-    || performance.now() - vocalFineTuneTouchedAt < SLIDER_HOLD_MS;
-}
-
-function sliderIsBusy(slider) {
-  return document.activeElement === slider
-    || performance.now() - (sliderTouchedAt.get(slider) ?? -Infinity) < SLIDER_HOLD_MS;
-}
+let activeBackingProbeRequestId = null;
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -161,6 +148,7 @@ function safePlayerState() {
 function parkSupersededRobot() {
   if (!ROBOT_MODE || robotSuperseded) return;
   robotSuperseded = true;
+  activeBackingProbeRequestId = null;
   armed = false;
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
@@ -174,7 +162,7 @@ function parkSupersededRobot() {
   timingButton.disabled = true;
 }
 
-function applyBalance(sendToServer = true) {
+function applyBalance() {
   const songLevel = Math.max(0, Math.min(100, Number(sourceVolume.value) || 0));
   const micGainDb = Math.max(0, Math.min(36, Number(sourceMicGain.value) || 0));
 
@@ -189,19 +177,14 @@ function applyBalance(sendToServer = true) {
     } catch {}
   }
 
-  if (sendToServer && armed && !robotSuperseded) {
-    send({ type: 'set-mix', micGainDb, songLevel });
-  }
-
   // The verdict compares the slider against the measurement, so it has to move
   // with the slider and not just with a fresh calibration.
   renderGainAdvice();
 }
 
-function applyFineTune(sendToServer = true) {
+function applyFineTune() {
   const valueMs = Math.max(-100, Math.min(100, Number(vocalFineTune.value) || 0));
   vocalFineTuneValue.value = signed(valueMs, ' ms');
-  if (sendToServer) send({ type: 'set-vocal-fine-tune', valueMs });
 }
 
 // Must match src/calibration-probe.ts, which builds the reference the server
@@ -253,13 +236,18 @@ function probeContext() {
  * Nothing here is audible to anyone. The sink has no speaker behind it.
  */
 async function playBackingProbe(requestId, leadMs) {
-  if (robotSuperseded) return;
+  if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
   try {
     const context = probeContext();
     // Unconditionally, not only when it reports 'suspended': the state a stale
     // stream leaves behind is 'running', so trusting the state is what let this
-    // fail silently.
+    // fail silently. The resume may still settle late, so request identity must
+    // be re-proved before any oscillator is scheduled into the backing path.
     await context.resume();
+    if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
+    if (context.state !== 'running') {
+      throw new Error(`Robot probe AudioContext is ${context.state}.`);
+    }
 
     const startTime = context.currentTime + leadMs / 1000;
     for (const note of PROBE_NOTES) {
@@ -276,11 +264,22 @@ async function playBackingProbe(requestId, leadMs) {
     }
 
     // No generation: the capture this lands in belongs to `backing:stdin`,
-    // not to this page, so the server checks its own view rather than taking
-    // a number this page would only be guessing at.
+    // not to this page, so that page intentionally has no capture generation
+    // to report. Request identity still belongs here: a timeout/retry can retire
+    // this browser side effect even while the old resume promise is unresolved.
+    if (activeBackingProbeRequestId !== requestId) return;
+    activeBackingProbeRequestId = null;
     send({ type: 'calibration-probe-played', target: 'backing', requestId });
   } catch (error) {
     console.warn('backing probe failed', error);
+    if (activeBackingProbeRequestId !== requestId) return;
+    activeBackingProbeRequestId = null;
+    send({
+      type: 'calibration-probe-failed',
+      target: 'backing',
+      requestId,
+      reason: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -289,10 +288,22 @@ function renderCalibration() {
   const micConnected = Boolean(latestSourceStatus?.micConnected);
   const phonePlaying = Boolean(latestTimeline?.connected) && Number(latestTimeline?.state) === 1;
   const collecting = latestCalibration?.state === 'collecting';
-  timingButton.disabled = robotSuperseded || collecting || !sourceConnected || !micConnected || !phonePlaying;
+  const probeActive = latestCalibration?.probeActive === true;
+  timingButton.disabled = robotSuperseded || collecting || probeActive || !sourceConnected || !micConnected || !phonePlaying;
 
   if (robotSuperseded) {
     timingStatus.textContent = '這個 Robot Source 已被較新的頁面取代；不再參與播放或校正。';
+    return;
+  }
+
+  if (probeActive) {
+    const phase = String(latestCalibration?.probePhase ?? '');
+    const attempts = latestCalibration?.probeAttempts ?? {};
+    const max = Number(latestCalibration?.probeMaxAttempts) || 1;
+    const target = phase.startsWith('backing') ? '歌曲路徑' : '手機麥克風';
+    const attempt = Number(phase.startsWith('backing') ? attempts.backing : attempts.mic) || 1;
+    timingButton.textContent = 'Calibrating…';
+    timingStatus.textContent = `校正中 · ${target} ${Math.min(attempt, max)}/${max} · 這段先不要唱。`;
     return;
   }
 
@@ -327,9 +338,11 @@ function renderCalibration() {
   }
 
   if (latestCalibration?.state === 'failed') {
-    timingStatus.textContent = latestCalibration.automatic
-      ? `自動校正等待可用音訊中 · 上次未成功：${latestCalibration.error ?? '訊號不足'}`
-      : `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
+    timingStatus.textContent = latestCalibration.probeError
+      ? `校正停止 · ${latestCalibration.probeError} · 可按 Calibrate timing 手動重試。`
+      : latestCalibration.automatic
+        ? `自動校正等待可用音訊中 · 上次未成功：${latestCalibration.error ?? '訊號不足'}`
+        : `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
     return;
   }
 
@@ -427,7 +440,10 @@ function applyTimeline() {
       loadedVideoId = timeline.videoId;
       lastSeekAt = performance.now();
       robotDeltaSuppressedUntil = lastSeekAt + ROBOT_DELTA_SETTLE_MS;
-      send({ type: 'source-seeked' });
+      // Loading a preview while Source is unarmed is not an authoritative
+      // playback discontinuity. Only the player actually feeding Relay may
+      // invalidate timing calibration.
+      if (armed) send({ type: 'source-seeked' });
       renderTimeline();
       return;
     }
@@ -436,7 +452,8 @@ function applyTimeline() {
     const errorSeconds = Number.isFinite(current) ? current - target : Number.NaN;
     const now = performance.now();
     const playerState = safePlayerState();
-    const shouldSeek = Number.isFinite(errorSeconds)
+    const shouldSeek = armed
+      && Number.isFinite(errorSeconds)
       && Math.abs(errorSeconds) > 0.45
       && now - lastSeekAt > 700;
 
@@ -491,9 +508,9 @@ function renderSourceStatus(message) {
       : `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`;
   renderMixHealth();
 
-  if (Number.isFinite(Number(message.vocalFineTuneMs)) && !fineTuneIsBusy()) {
+  if (Number.isFinite(Number(message.vocalFineTuneMs))) {
     vocalFineTune.value = String(Number(message.vocalFineTuneMs));
-    applyFineTune(false);
+    applyFineTune();
   }
   renderCalibration();
 }
@@ -532,7 +549,11 @@ function connect() {
       next.close();
       return;
     }
-    if (ROBOT_MODE) send({ type: 'robot-source-hello' });
+    if (INFRASTRUCTURE_KEY) {
+      send({ type: 'infrastructure-authenticate', key: INFRASTRUCTURE_KEY });
+    } else if (ROBOT_MODE) {
+      timingStatus.textContent = 'Robot Source 缺少 RELAY_INFRA_KEY；不會取得來源控制權。';
+    }
     send({ type: 'youtube-timeline-request' });
     send({ type: 'source-status-request' });
     send({ type: 'timing-calibration-status-request' });
@@ -546,6 +567,16 @@ function connect() {
     try {
       message = JSON.parse(event.data);
     } catch {
+      return;
+    }
+
+    if (message.type === 'infrastructure-authenticated') {
+      if (ROBOT_MODE) send({ type: 'robot-source-hello' });
+      return;
+    }
+
+    if (message.type === 'infrastructure-auth-rejected') {
+      timingStatus.textContent = message.message ?? 'Infrastructure authentication failed.';
       return;
     }
 
@@ -571,13 +602,13 @@ function connect() {
     }
 
     if (message.type === 'mix-settings') {
-      if (!sliderIsBusy(sourceMicGain) && Number.isFinite(Number(message.micGainDb))) {
+      if (Number.isFinite(Number(message.micGainDb))) {
         sourceMicGain.value = String(message.micGainDb);
       }
-      if (!sliderIsBusy(sourceVolume) && Number.isFinite(Number(message.songLevel))) {
+      if (Number.isFinite(Number(message.songLevel))) {
         sourceVolume.value = String(message.songLevel);
       }
-      applyBalance(false);
+      applyBalance();
       return;
     }
 
@@ -588,13 +619,29 @@ function connect() {
 
     if (message.type === 'timing-calibration-status') {
       latestCalibration = message;
+      if (
+        activeBackingProbeRequestId !== null
+        && (message.probeActive !== true || message.probePhase !== 'backing-requested')
+      ) {
+        activeBackingProbeRequestId = null;
+      }
       renderCalibration();
+      return;
+    }
+
+    if (message.type === 'calibration-command-rejected') {
+      timingStatus.textContent = message.reason === 'take-active'
+        ? '錄音進行中；請先結束目前 Take，再重新校正。'
+        : `Calibration unavailable · ${message.reason ?? 'unknown reason'}`;
       return;
     }
 
     if (message.type === 'play-calibration-probe') {
       if (ROBOT_MODE && !robotSuperseded && message.target === 'backing') {
-        playBackingProbe(message.requestId, Number(message.leadMs) || 200);
+        const requestId = Number(message.requestId);
+        if (!Number.isSafeInteger(requestId) || requestId < 0) return;
+        activeBackingProbeRequestId = requestId;
+        void playBackingProbe(requestId, Number(message.leadMs) || 200);
       }
       return;
     }
@@ -613,6 +660,7 @@ function connect() {
 
   next.addEventListener('close', () => {
     if (socket !== next) return;
+    activeBackingProbeRequestId = null;
     socket = null;
     latestTimeline = null;
     latestSourceStatus = null;
@@ -632,25 +680,6 @@ armButton.addEventListener('click', () => {
   } catch {}
   applyBalance();
   applyTimeline();
-});
-
-for (const slider of [sourceVolume, sourceMicGain]) {
-  slider.addEventListener('input', () => {
-    sliderTouchedAt.set(slider, performance.now());
-    applyBalance();
-  });
-}
-vocalFineTune.addEventListener('input', () => {
-  vocalFineTuneTouchedAt = performance.now();
-  applyFineTune(true);
-});
-vocalFineTune.addEventListener('change', () => {
-  vocalFineTuneTouchedAt = performance.now();
-});
-timingButton.addEventListener('click', () => {
-  if (!send({ type: 'start-timing-calibration' })) {
-    timingStatus.textContent = 'Server 尚未連線。';
-  }
 });
 
 window.onYouTubeIframeAPIReady = () => {
@@ -737,6 +766,6 @@ const apiRetryTimer = setInterval(() => {
 loadYouTubeApi();
 
 applyBalance();
-applyFineTune(false);
+applyFineTune();
 renderTimeline();
 connect();

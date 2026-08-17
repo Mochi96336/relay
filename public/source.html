@@ -42,19 +42,19 @@
         <div class="test-heading">
           <div>
             <strong>Live mix balance</strong>
-            <span>只改送進 Relay 的歌曲 / 人聲比例，不影響手機端歌手聽到的 YouTube 音量。</span>
+            <span>由拿著 Mic 的手機控制；這頁只顯示並套用 Relay 的共享設定。</span>
           </div>
         </div>
 
         <label class="gain-control" for="source-volume">
           <span>Song level</span>
-          <input id="source-volume" type="range" min="0" max="100" step="1" value="40" />
+          <input id="source-volume" type="range" min="0" max="100" step="1" value="40" disabled />
           <output id="source-volume-value" for="source-volume">40%</output>
         </label>
 
         <label class="gain-control" for="source-mic-gain">
           <span>Mic gain</span>
-          <input id="source-mic-gain" type="range" min="0" max="36" step="1" value="24" />
+          <input id="source-mic-gain" type="range" min="0" max="36" step="1" value="24" disabled />
           <output id="source-mic-gain-value" for="source-mic-gain">+24 dB</output>
         </label>
 
@@ -69,7 +69,7 @@
             <span>用 6 秒手機喇叭漏進 Mic 的同一段音樂，自動量出 Mic 相對 Desktop Source 晚多少。</span>
           </div>
           <div class="test-actions">
-            <button id="start-timing-calibration" disabled>Calibrate timing</button>
+            <button id="start-timing-calibration" hidden disabled>Calibrate timing</button>
           </div>
         </div>
 
@@ -78,10 +78,10 @@
 
         <label class="gain-control" for="vocal-fine-tune">
           <span>Vocal fine tune</span>
-          <input id="vocal-fine-tune" type="range" min="-100" max="100" step="5" value="0" />
+          <input id="vocal-fine-tune" type="range" min="-100" max="100" step="5" value="0" disabled />
           <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
         </label>
-        <p class="hint">負值讓人聲更早，正值讓人聲更晚；自動校準完成後通常只需要很小的微調。</p>
+        <p class="hint">這裡只顯示目前設定；Vocal fine tune 請在拿著 Mic 的手機 Adjust → Timing 調整。</p>
       </section>
 
       <section class="test-panel">
@@ -97,6 +97,7 @@
       <p class="note">順序只要一次：手機開始 YouTube → 這頁按 Enable source audio → 在這頁點擴充功能。Mic 暫時斷線後可直接重連，不需要重新 Open source。</p>
     </main>
     <script type="module" src="/source.js"></script>
+    <script type="module" src="/robot-player-watchdog.js"></script>
     <script type="module" src="/robot-auto-arm.js"></script>
   </body>
 </html>

@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+
+const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+
+test('app.js owns Mic capture but no longer contains a second monitor runtime', () => {
+  assert.match(app, /role:\s*'publisher'/);
+  assert.match(app, /let publisherActive = false/);
+  assert.match(app, /setPublisherActive\(true\)/);
+  assert.match(app, /new PreferredAudioTransport/);
+  assert.match(app, /splitPcmForPacketLimit/);
+  assert.match(app, /audioTransport\.send\(/);
+  assert.doesNotMatch(app, /role:\s*'monitor'/);
+  assert.doesNotMatch(app, /\bactiveRole\b|setActiveRole|setPublisherActive\('monitor'\)/);
+  assert.doesNotMatch(app, /startMonitor|connectMonitorSocket|monitorGainNode|playbackNode|linearResample|int16ToFloat32/);
+});
+
+test('formal Listen is the only browser monitor implementation', () => {
+  assert.match(listen, /role:\s*'monitor'/);
+  assert.match(listen, /playback-processor/);
+  assert.doesNotMatch(html, /id="start-monitor"|id="monitor-gain"|legacy-transport-controls/);
+});

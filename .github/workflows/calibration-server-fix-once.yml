@@ -1,0 +1,69 @@
+name: Calibration server fix once
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/calibration-server-fix-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/stabilize-room-kernel
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply exact server fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text()
+
+          old_reply = 'probeLifecycle.acceptReply(reply.requestId)'
+          new_reply = 'probeLifecycle.acceptClientReply(reply.requestId, reply.generation)'
+          count = text.count(old_reply)
+          if count != 2:
+              raise SystemExit(f'expected exactly 2 probe reply consumers, found {count}')
+          text = text.replace(old_reply, new_reply)
+
+          old_rate = 'if (!Number.isFinite(value) || sampleRate < 8_000 || sampleRate > 192_000) {'
+          new_rate = 'if (!Number.isFinite(sampleRate) || sampleRate < 8_000 || sampleRate > 192_000) {'
+          count = text.count(old_rate)
+          if count != 1:
+              raise SystemExit(f'expected exactly 1 sample-rate guard, found {count}')
+          text = text.replace(old_rate, new_rate)
+
+          path.write_text(text)
+          PY
+
+      - name: Verify patch shape
+        run: |
+          git diff --check
+          git diff -- src/server.ts
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+      - name: Commit verified fix and remove one-shot workflow
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          rm .github/workflows/calibration-server-fix-once.yml
+          git add src/server.ts .github/workflows/calibration-server-fix-once.yml
+          git commit -m "fix(audio): validate calibration ACK before consuming request"
+          git pull --rebase origin agent/stabilize-room-kernel
+          git push origin HEAD:agent/stabilize-room-kernel

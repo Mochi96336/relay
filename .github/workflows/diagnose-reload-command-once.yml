@@ -1,0 +1,39 @@
+name: Diagnose playback reload command
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/diagnose-reload-command-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/stabilize-room-kernel
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - run: npm ci
+      - name: Expose reload command rejection reason
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('test/playback-reload-continuation.test.ts')
+          text = path.read_text()
+          old = """    const accepted = await reloaded.waitFor((message) => (\n      message.type === 'room-song-command-accepted' && message.commandId === nextId\n    ));\n    assert.equal(accepted.commandId, nextId);\n"""
+          new = """    const outcome = await reloaded.waitFor((message) => (\n      (message.type === 'room-song-command-accepted' || message.type === 'room-song-command-rejected')\n      && message.commandId === nextId\n    ));\n    console.log('RELOAD_COMMAND_OUTCOME', JSON.stringify(outcome));\n    assert.equal(outcome.type, 'room-song-command-accepted', JSON.stringify(outcome));\n"""
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one reload accepted block, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - run: node --import tsx --test --test-name-pattern='reload hello clears an old-generation command' test/playback-reload-continuation.test.ts

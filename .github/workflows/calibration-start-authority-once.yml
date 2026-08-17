@@ -33,6 +33,7 @@ jobs:
         run: |
           python3 .github/calibration-start-authority-normalize.py
           python3 .github/calibration-start-authority-once.py
+          python3 .github/calibration-start-authority-test-fix.py
 
       - name: Verify focused diff
         run: |

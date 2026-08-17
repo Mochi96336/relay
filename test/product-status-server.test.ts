@@ -81,6 +81,9 @@ test('arming the Robot source makes missing Robot audio a blocker everywhere', a
       code: 'robot-audio-unavailable',
       scope: 'robot',
       severity: 'critical',
+      cause: 'backing-disconnected',
+      affects: ['song', 'recording'],
+      recovery: 'host-service',
     });
 
     observer.close();
@@ -155,6 +158,9 @@ test('legacy route expectation survives backing grace instead of collapsing to i
       code: 'audio-unavailable',
       scope: 'audio',
       severity: 'critical',
+      cause: 'backing-disconnected',
+      affects: ['song', 'recording'],
+      recovery: 'host-service',
     });
     observer.close();
   } finally {

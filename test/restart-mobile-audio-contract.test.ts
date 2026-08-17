@@ -62,7 +62,10 @@ test('Listen consumes mix rate, stays at unity or below, and recovers suspended 
   assert.match(listenSource, /message\.mixSampleRate \?\? message\.sampleRate/);
   assert.match(listenSource, /return \(percent \/ 100\) \*\* 1\.5;/);
   assert.doesNotMatch(listenSource, /\* 8;/);
-  assert.match(listenSource, /async function resumeAudioGraph/);
+  assert.match(listenSource, /function startResume\(context\)/);
+  assert.match(listenSource, /const pending = context\.resume\(\)/);
+  assert.match(listenSource, /function resumeAudioGraph\(\) \{\n    startResume\(audioContext\);\n  \}/);
+  assert.doesNotMatch(listenSource, /await (?:audioContext|context)\.resume\(\)/);
   assert.match(listenSource, /addEventListener\('statechange'/);
   assert.match(listenSource, /document\.addEventListener\('visibilitychange'/);
   assert.match(listenSource, /window\.addEventListener\('pageshow', recoverAudioGraph\)/);

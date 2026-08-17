@@ -737,6 +737,11 @@ async function prepareRoomSong(message) {
   const targetTime = Number(message.serverTime);
   if (!handoffId || !videoId || !Number.isFinite(targetTime)) return;
 
+  // A newer handoff can replace an older preparation on the same page, for
+  // example when Mic ownership changes while a reload is still converging.
+  // Retire every delayed readiness callback before installing the new identity;
+  // otherwise an old timer can announce the new handoff ready prematurely.
+  clearHandoffReadyTimers();
   localCommandPending = null;
   pendingHandoff = {
     handoffId,

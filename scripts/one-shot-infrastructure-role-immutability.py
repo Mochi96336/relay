@@ -12,15 +12,11 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A physical WebSocket has one transport purpose for its lifetime.
-# Participant and infrastructure authentication stay orthogonal to this role.
+# A physical media/monitor WebSocket has one transport role for its lifetime.
+# Participant identity, infrastructure authentication and playback identity are
+# orthogonal capabilities; only roles that change binary ingest/global transport
+# pointers participate in this one-way state machine.
 # ---------------------------------------------------------------------------
-replace_once(
-    'src/server.ts',
-    "type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';\n",
-    "type ClientRole = 'publisher' | 'monitor' | 'backing' | 'playback' | 'unknown';\n",
-)
-
 replace_once(
     'src/server.ts',
     "function rejectInfrastructure(socket: RelaySocket, message: string) {\n"
@@ -33,10 +29,12 @@ replace_once(
     "}\n\n"
     "type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;\n\n"
     "/**\n"
-    " * A WebSocket may bind exactly one transport purpose. Authentication says\n"
-    " * who may use a transport; this role says what that physical transport is.\n"
-    " * Reconnects therefore get a new WebSocket instead of morphing an existing\n"
-    " * media/control socket while global authority pointers still reference it.\n"
+    " * A physical media/monitor WebSocket may bind exactly one transport role.\n"
+    " * Authentication says who may use it; playback identity remains orthogonal\n"
+    " * because a participant's playback-control capability can intentionally live\n"
+    " * on the same socket as its publisher transport. Reconnects get a new socket\n"
+    " * instead of morphing publisher/backing/monitor while authority pointers still\n"
+    " * reference the old transport.\n"
     " */\n"
     "function canClaimSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {\n"
     "  if (socket.role === 'unknown' || socket.role === requestedRole) return true;\n"
@@ -67,33 +65,6 @@ replace_once(
     'src/server.ts',
     "  previous.replaced = true;\n  previous.role = 'unknown';\n  sendJson(previous, { type, message });\n",
     "  previous.replaced = true;\n  sendJson(previous, { type, message });\n",
-)
-
-# Playback is a participant-bound control transport. Validate its identity
-# before committing the role so malformed hello messages do not pin the socket.
-replace_once(
-    'src/server.ts',
-    "    if (payload.type === 'playback-hello') {\n"
-    "      if (!socket.participantId) return;\n"
-    "      const transportId = normalizePlaybackTransportId(payload.playbackTransportId);\n",
-    "    if (payload.type === 'playback-hello') {\n"
-    "      if (!socket.participantId) return;\n"
-    "      if (!canClaimSocketRole(socket, 'playback')) return;\n"
-    "      const transportId = normalizePlaybackTransportId(payload.playbackTransportId);\n",
-)
-replace_once(
-    'src/server.ts',
-    "      if (!transportId || generation === null) {\n"
-    "        sendJson(socket, { type: 'error', message: 'Invalid playback transport identity.' });\n"
-    "        return;\n"
-    "      }\n\n"
-    "      socket.playbackParticipantId = socket.participantId;\n",
-    "      if (!transportId || generation === null) {\n"
-    "        sendJson(socket, { type: 'error', message: 'Invalid playback transport identity.' });\n"
-    "        return;\n"
-    "      }\n\n"
-    "      commitSocketRole(socket, 'playback');\n"
-    "      socket.playbackParticipantId = socket.participantId;\n",
 )
 
 # Publisher: reject a cross-role reuse before touching Mic ownership, but only
@@ -277,30 +248,33 @@ test('a publisher WebSocket cannot become a monitor while the Mic pointer still 
   }
 });
 
-test('a playback transport cannot be repurposed as a monitor', async () => {
+test('playback identity remains orthogonal to the immutable publisher role', async () => {
   const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
   try {
-    const playback = await RelayClient.connect(
+    const client = await RelayClient.connect(
       server,
       '?participant=participant-playback-role&name=Playback',
     );
-    playback.send({
+    client.send({
       type: 'playback-hello',
       playbackTransportId: 'playback-role-test',
       playbackGeneration: 1,
     });
-    await playback.waitForType('playback-registered');
+    await client.waitForType('playback-registered');
 
-    const from = playback.messages.length;
-    playback.send({ type: 'register', role: 'monitor' });
+    client.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+
+    const from = client.messages.length;
+    client.send({ type: 'register', role: 'monitor' });
     const conflict = await waitForNewMessage(
-      playback,
+      client,
       from,
       (message) => message.type === 'role-conflict',
     );
-    assert.equal(conflict.currentRole, 'playback');
+    assert.equal(conflict.currentRole, 'publisher');
     assert.equal(conflict.requestedRole, 'monitor');
-    playback.close();
+    client.close();
   } finally {
     await server.stop();
   }

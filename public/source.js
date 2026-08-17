@@ -260,6 +260,9 @@ async function playBackingProbe(requestId, leadMs) {
     // stream leaves behind is 'running', so trusting the state is what let this
     // fail silently.
     await context.resume();
+    if (context.state !== 'running') {
+      throw new Error(`Robot probe AudioContext is ${context.state}.`);
+    }
 
     const startTime = context.currentTime + leadMs / 1000;
     for (const note of PROBE_NOTES) {
@@ -281,6 +284,12 @@ async function playBackingProbe(requestId, leadMs) {
     send({ type: 'calibration-probe-played', target: 'backing', requestId });
   } catch (error) {
     console.warn('backing probe failed', error);
+    send({
+      type: 'calibration-probe-failed',
+      target: 'backing',
+      requestId,
+      reason: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -289,10 +298,22 @@ function renderCalibration() {
   const micConnected = Boolean(latestSourceStatus?.micConnected);
   const phonePlaying = Boolean(latestTimeline?.connected) && Number(latestTimeline?.state) === 1;
   const collecting = latestCalibration?.state === 'collecting';
-  timingButton.disabled = robotSuperseded || collecting || !sourceConnected || !micConnected || !phonePlaying;
+  const probeActive = latestCalibration?.probeActive === true;
+  timingButton.disabled = robotSuperseded || collecting || probeActive || !sourceConnected || !micConnected || !phonePlaying;
 
   if (robotSuperseded) {
     timingStatus.textContent = '這個 Robot Source 已被較新的頁面取代；不再參與播放或校正。';
+    return;
+  }
+
+  if (probeActive) {
+    const phase = String(latestCalibration?.probePhase ?? '');
+    const attempts = latestCalibration?.probeAttempts ?? {};
+    const max = Number(latestCalibration?.probeMaxAttempts) || 1;
+    const target = phase.startsWith('backing') ? '歌曲路徑' : '手機麥克風';
+    const attempt = Number(phase.startsWith('backing') ? attempts.backing : attempts.mic) || 1;
+    timingButton.textContent = 'Calibrating…';
+    timingStatus.textContent = `校正中 · ${target} ${Math.min(attempt, max)}/${max} · 這段先不要唱。`;
     return;
   }
 
@@ -327,9 +348,11 @@ function renderCalibration() {
   }
 
   if (latestCalibration?.state === 'failed') {
-    timingStatus.textContent = latestCalibration.automatic
-      ? `自動校正等待可用音訊中 · 上次未成功：${latestCalibration.error ?? '訊號不足'}`
-      : `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
+    timingStatus.textContent = latestCalibration.probeError
+      ? `校正停止 · ${latestCalibration.probeError} · 可按 Calibrate timing 手動重試。`
+      : latestCalibration.automatic
+        ? `自動校正等待可用音訊中 · 上次未成功：${latestCalibration.error ?? '訊號不足'}`
+        : `Calibration failed · ${latestCalibration.error ?? 'signal not usable'}。`;
     return;
   }
 
@@ -592,9 +615,16 @@ function connect() {
       return;
     }
 
+    if (message.type === 'calibration-command-rejected') {
+      timingStatus.textContent = message.reason === 'take-active'
+        ? '錄音進行中；請先結束目前 Take，再重新校正。'
+        : `Calibration unavailable · ${message.reason ?? 'unknown reason'}`;
+      return;
+    }
+
     if (message.type === 'play-calibration-probe') {
       if (ROBOT_MODE && !robotSuperseded && message.target === 'backing') {
-        playBackingProbe(message.requestId, Number(message.leadMs) || 200);
+        void playBackingProbe(message.requestId, Number(message.leadMs) || 200);
       }
       return;
     }

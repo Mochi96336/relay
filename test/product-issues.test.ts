@@ -133,6 +133,22 @@ describe('product issue contract', () => {
     }]);
   });
 
+  test('Song clock issues describe availability without inventing connection history', () => {
+    const issues = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      songClockSeverity: 'warning',
+    });
+
+    assert.deepEqual(issues, [{
+      code: 'song-clock-unavailable',
+      scope: 'song',
+      severity: 'warning',
+      cause: 'song-clock-unavailable',
+      affects: ['song', 'timing'],
+      recovery: 'automatic',
+    }]);
+  });
+
   test('describes cause, impact and recovery for concurrent user-visible warnings', () => {
     const issues = buildProductIssues({
       ...HEALTHY_ISSUES,

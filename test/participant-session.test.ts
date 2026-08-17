@@ -65,7 +65,11 @@ describe('participant session', () => {
     assert.equal(snapshot.participants[0].connected, false);
     assert.equal(snapshot.participants[0].reconnectingUntil, 1_600);
 
-    assert.deepEqual(session.sweep(1_500), { changed: false, releasedMicOwnerId: null });
+    assert.deepEqual(session.sweep(1_500), {
+      changed: false,
+      releasedMicOwnerId: null,
+      micOwnerEffects: null,
+    });
     session.attach({
       connectionId: 'alice-2',
       participantId: 'participant-alice',
@@ -80,6 +84,14 @@ describe('participant session', () => {
     assert.deepEqual(session.sweep(2_501), {
       changed: true,
       releasedMicOwnerId: 'participant-alice',
+      micOwnerEffects: {
+        changed: true,
+        noteQualityEvent: 'mic-owner-changed',
+        cancelRoomSongCommand: 'mic-owner-released',
+        cancelSongHandoff: true,
+        invalidateTimingReason: 'Microphone owner left the Relay session.',
+        prepareSongHandoffFor: null,
+      },
     });
     assert.equal(session.snapshot().micOwnerId, null);
     assert.deepEqual(session.snapshot().participants, []);
@@ -98,11 +110,20 @@ describe('participant session', () => {
     const busy = session.acquireMic('participant-bobby');
     assert.equal(busy.ok, false);
     assert.equal(busy.reason, 'busy');
+    assert.equal(busy.effects.changed, false);
     assert.equal(session.micOwnerId, 'participant-alice');
 
     const takeover = session.takeoverMic('participant-bobby', 'participant-alice');
     assert.equal(takeover.ok, true);
     assert.equal(takeover.previousOwnerId, 'participant-alice');
+    assert.deepEqual(takeover.effects, {
+      changed: true,
+      noteQualityEvent: 'mic-owner-changed',
+      cancelRoomSongCommand: 'mic-owner-changed',
+      cancelSongHandoff: false,
+      invalidateTimingReason: 'Microphone ownership changed.',
+      prepareSongHandoffFor: 'participant-bobby',
+    });
     assert.equal(session.micOwnerId, 'participant-bobby');
   });
 
@@ -126,6 +147,7 @@ describe('participant session', () => {
     assert.equal(stale.ok, false);
     assert.equal(stale.reason, 'owner-changed');
     assert.equal(stale.ownerId, 'participant-carol');
+    assert.equal(stale.effects.changed, false);
     assert.equal(session.micOwnerId, 'participant-carol');
   });
 
@@ -134,11 +156,15 @@ describe('participant session', () => {
     session.attach({ connectionId: 'a', participantId: 'participant-alice', nickname: 'Alice', nowMs: 100 });
     session.attach({ connectionId: 'b', participantId: 'participant-bobby', nickname: 'Bob', nowMs: 100 });
     session.acquireMic('participant-alice');
-    session.releaseMic('participant-alice');
+    const release = session.releaseMic('participant-alice');
+    assert.equal(release.effects.cancelRoomSongCommand, 'mic-owner-released');
+    assert.equal(release.effects.cancelSongHandoff, true);
+    assert.equal(release.effects.invalidateTimingReason, 'Microphone was released.');
 
     const result = session.takeoverMic('participant-bobby', 'participant-alice');
     assert.equal(result.ok, true);
     assert.equal(result.previousOwnerId, null);
+    assert.equal(result.effects.prepareSongHandoffFor, 'participant-bobby');
     assert.equal(session.micOwnerId, 'participant-bobby');
   });
 

@@ -256,7 +256,7 @@ test('reload hello clears an old-generation command without waiting for command 
     // The newer page may issue the next intent immediately at the already
     // accepted room-command revision; it does not sit behind a four-second
     // command-pending tombstone from the page that was reloaded.
-    const nextId = 'reload-command-play';
+    const nextId = 'reload-command-play-after-reload';
     reloaded.send({ type: 'room-song-command', commandId: nextId, expectedRevision: 3, action: 'play' });
     const decision = await reloaded.waitFor((message) => (
       (message.type === 'room-song-command-accepted' || message.type === 'room-song-command-rejected')

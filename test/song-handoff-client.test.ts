@@ -52,6 +52,28 @@ test('handoff readiness and completion require the video actually reported by Yo
   assert.match(renderSection, /reportedVideoId\(\) !== pendingHandoff\.videoId/);
 });
 
+test('same-page reconnect cannot rewind an already committed handoff', async () => {
+  const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+
+  assert.match(sync, /let activeHandoffId = null/);
+  assert.match(sync, /let activeHandoffPhase = 'idle'/);
+  assert.match(
+    sync,
+    /activeHandoffId === handoffId && activeHandoffPhase === 'committing'\) return/,
+    'a replayed prepare for the same committed handoff must be ignored',
+  );
+  assert.match(
+    sync,
+    /activeHandoffPhase = 'committing';[\s\S]*relay:song-handoff-commit/,
+    'commit must advance the adapter phase before dispatching to the player',
+  );
+  assert.match(
+    sync,
+    /activeHandoffId === handoffId\) activeHandoffPhase = 'preparing'/,
+    'a real playback failure must re-open preparation so reconnect recovery remains possible',
+  );
+});
+
 test('playback transport is registered independently and Mic intent is explicit', async () => {
   const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 

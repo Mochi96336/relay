@@ -8,13 +8,14 @@ on:
       - .github/workflows/infrastructure-authority-once.yml
       - scripts/one-shot-infrastructure-authority.py
       - scripts/one-shot-infrastructure-authority-followup.py
+      - scripts/one-shot-infrastructure-role-immutability.py
 
 permissions:
   contents: write
 
 concurrency:
   group: relay-infrastructure-authority-once
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   patch-test-rebase-push:
@@ -38,7 +39,8 @@ jobs:
         run: |
           python3 scripts/one-shot-infrastructure-authority.py
           python3 scripts/one-shot-infrastructure-authority-followup.py
-          git add -N test/infrastructure-authority.test.ts
+          python3 scripts/one-shot-infrastructure-role-immutability.py
+          git add -N test/infrastructure-authority.test.ts test/socket-role-authority.test.ts
 
       - name: Verify focused diff
         run: |
@@ -53,7 +55,8 @@ jobs:
             src/server.ts \
             test/helpers/harness.ts \
             test/infrastructure-authority.test.ts \
-            test/robot-scripts.test.ts | sort)"
+            test/robot-scripts.test.ts \
+            test/socket-role-authority.test.ts | sort)"
           test "$actual" = "$expected" || {
             printf 'Unexpected diff:\n%s\n' "$actual"
             exit 1
@@ -73,6 +76,7 @@ jobs:
         run: |
           node --import tsx --test --test-concurrency=1 \
             test/infrastructure-authority.test.ts \
+            test/socket-role-authority.test.ts \
             test/participant-capability.test.ts \
             test/participant-server.test.ts \
             test/source-seek-authority.test.ts \
@@ -113,13 +117,22 @@ jobs:
             exit "$status"
           fi
 
-      - name: Commit tested product diff and remove gate
+      - name: Commit tested product diff and remove gates
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/infrastructure-authority-once.yml \
             scripts/one-shot-infrastructure-authority.py \
-            scripts/one-shot-infrastructure-authority-followup.py
+            scripts/one-shot-infrastructure-authority-followup.py \
+            scripts/one-shot-infrastructure-role-immutability.py
+          for path in \
+            .github/socket-role-authority.py \
+            .github/socket-role-authority-testfix.py \
+            .github/workflows/socket-role-authority-once.yml; do
+            if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+              git rm "$path"
+            fi
+          done
           git add -- \
             ROBOT_DEPLOYMENT.md \
             chrome-tab-audio-probe/offscreen.js \
@@ -129,14 +142,29 @@ jobs:
             src/server.ts \
             test/helpers/harness.ts \
             test/infrastructure-authority.test.ts \
-            test/robot-scripts.test.ts
+            test/robot-scripts.test.ts \
+            test/socket-role-authority.test.ts
           git diff --cached --check
-          git commit -m 'fix: authenticate Relay infrastructure roles'
+          git commit -m 'fix: authenticate infrastructure and freeze socket roles'
 
       - name: Rebase tested product commit onto latest branch and push
         env:
           BRANCH: agent/stabilize-room-kernel
         run: |
           git fetch origin "$BRANCH"
+          base="$(git rev-parse HEAD^)"
+          changed="$(git diff --name-only "$base" "origin/$BRANCH" -- \
+            ROBOT_DEPLOYMENT.md \
+            chrome-tab-audio-probe/offscreen.js \
+            public/source.js \
+            scripts/robot-source.sh \
+            src/backing-stdin.ts \
+            src/server.ts \
+            test/helpers/harness.ts \
+            test/robot-scripts.test.ts)"
+          test -z "$changed" || {
+            printf 'Authority target changed while gate was running:\n%s\n' "$changed"
+            exit 1
+          }
           git rebase "origin/$BRANCH"
           git push origin HEAD:"$BRANCH"

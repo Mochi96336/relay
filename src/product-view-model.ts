@@ -9,6 +9,7 @@ import {
 } from './room-domain.js';
 import type { TakeQualityVerdict } from './take-quality.js';
 import type { TakeLifecycle } from './take-session.js';
+import { decideTakeStart, type TakeStartBlockReason } from './take-start-policy.js';
 
 export type ProductLifecycle = 'idle' | 'preparing' | 'ready' | 'live' | 'recording';
 export type ProductHealth = 'healthy' | 'degraded' | 'blocked';
@@ -49,6 +50,8 @@ export type ProductViewModelInput = {
   timing: {
     timingMode: 'network-estimate' | 'acoustic-calibration';
     calibrationState: string;
+    /** Explicitly includes boot-probe activity that CalibrationSession alone cannot represent. */
+    calibrationActive?: boolean;
     calibrationStale: boolean;
     alignmentClamped: boolean;
     /**
@@ -89,9 +92,15 @@ export type ProductStatus = {
   };
   actions: {
     canStartTake: boolean;
+    startTakeBlockedReason: TakeStartBlockReason | null;
     canStopTake: boolean;
   };
 };
+
+function calibrationActive(input: ProductViewModelInput) {
+  return input.timing.calibrationActive === true
+    || input.timing.calibrationState === 'collecting';
+}
 
 function micState(input: ProductViewModelInput): RoomMicState {
   const mic = input.readiness.components.mic;
@@ -110,7 +119,7 @@ function productLifecycle(input: ProductViewModelInput): ProductLifecycle {
   const songLoaded = input.roomSong.videoId !== null;
   if (
     input.roomSong.handoffState !== 'idle'
-    || (songLoaded && input.timing.calibrationState === 'collecting')
+    || (songLoaded && calibrationActive(input))
   ) {
     return 'preparing';
   }
@@ -138,7 +147,7 @@ function timingState(
 ): ProductStatus['timing']['state'] {
   const songLoaded = input.roomSong.videoId !== null;
   if (!songLoaded) return 'idle';
-  if (input.timing.calibrationState === 'collecting') return 'calibrating';
+  if (calibrationActive(input)) return 'calibrating';
   const performanceActive = input.roomSong.state === 1
     && (lifecycle === 'live' || lifecycle === 'recording');
   if (!performanceActive) return 'idle';
@@ -267,6 +276,14 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       ? 'degraded'
       : 'healthy';
   const mic = micState(input);
+  const startTake = decideTakeStart({
+    sessionActive: input.readiness.components.session.active,
+    timingCalibrationActive: calibrationActive(input),
+    songLoaded: input.roomSong.videoId !== null,
+    voiceOnlyMicReady: mic === 'live',
+    roomBlocked: health === 'blocked',
+    takeLifecycle: input.take.lifecycle,
+  });
 
   return {
     type: 'product-status',
@@ -293,14 +310,8 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       verdict: input.take.qualityVerdict,
     },
     actions: {
-      canStartTake: input.readiness.components.session.active
-        && (
-          input.roomSong.videoId === null
-            ? mic === 'live'
-            : health !== 'blocked'
-        )
-        && input.take.lifecycle !== 'recording'
-        && input.take.lifecycle !== 'finalizing',
+      canStartTake: startTake.ok,
+      startTakeBlockedReason: startTake.ok ? null : startTake.reason,
       canStopTake: input.take.lifecycle === 'recording',
     },
   };

@@ -1263,6 +1263,7 @@ function productStatusPayload(nowMs = performance.now()) {
     timing: {
       timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
       calibrationState: String(calibrationStatus.state ?? 'idle'),
+      calibrationActive: timingCalibrationInProgress(nowMs),
       calibrationStale: calibrationIsStale(),
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
       requiresRobotPlayerDelta: robotProbeTimingActive(),
@@ -2019,21 +2020,17 @@ wss.on('connection', (rawSocket, request) => {
         rejectTakeCommand(socket, 'start', 'participant-required');
         return;
       }
-      if (!session.active) {
-        rejectTakeCommand(socket, 'start', 'mix-not-active');
-        return;
-      }
       const nowMs = performance.now();
-      if (timingCalibrationInProgress(nowMs)) {
-        rejectTakeCommand(socket, 'start', 'timing-calibration-active');
+      const productStatus = productStatusPayload(nowMs);
+      if (!productStatus.actions.canStartTake) {
+        rejectTakeCommand(
+          socket,
+          'start',
+          productStatus.actions.startTakeBlockedReason ?? 'take-not-ready',
+        );
         return;
       }
       const song = takeSongSnapshot(nowMs);
-      const currentMicStreaming = micStreaming(nowMs);
-      if (song.videoId === null && !currentMicStreaming) {
-        rejectTakeCommand(socket, 'start', 'take-not-ready');
-        return;
-      }
 
       const result = takeController.start(socket.participantId, song);
       if (!result.ok) {

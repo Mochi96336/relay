@@ -25,7 +25,11 @@ const READY: ReadinessInput = {
   bootCalibration: { advanceMs: 0 },
 };
 
-function model(readinessInput: ReadinessInput, takeLifecycle: 'idle' | 'recording' = 'idle') {
+function model(
+  readinessInput: ReadinessInput,
+  takeLifecycle: 'idle' | 'recording' = 'idle',
+  calibrationActive = false,
+) {
   return buildProductViewModel({
     readiness: buildReadiness(readinessInput),
     participantCount: 1,
@@ -46,6 +50,7 @@ function model(readinessInput: ReadinessInput, takeLifecycle: 'idle' | 'recordin
     timing: {
       timingMode: 'acoustic-calibration',
       calibrationState: 'complete',
+      calibrationActive,
       calibrationStale: false,
       alignmentClamped: false,
       requiresRobotPlayerDelta: true,
@@ -67,6 +72,16 @@ test('a lingering active mix cannot start a new Take while Robot audio is blocke
   assert.equal(status.health, 'blocked');
   assert.equal(status.attention?.code, 'robot-audio-unavailable');
   assert.equal(status.actions.canStartTake, false);
+  assert.equal(status.actions.startTakeBlockedReason, 'take-not-ready');
+});
+
+test('active calibration disables Start Take even though calibration is normal preparation', () => {
+  const status = model(READY, 'idle', true);
+
+  assert.equal(status.lifecycle, 'preparing');
+  assert.equal(status.health, 'healthy');
+  assert.equal(status.actions.canStartTake, false);
+  assert.equal(status.actions.startTakeBlockedReason, 'timing-calibration-active');
 });
 
 test('an active Take remains stoppable even if Robot health becomes blocked', () => {

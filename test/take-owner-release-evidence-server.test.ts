@@ -7,6 +7,7 @@ import test from 'node:test';
 import { RelayClient, sleep, startRelay, type RelayServer } from './helpers/harness.js';
 
 const RATE = 48_000;
+const FRAME_SAMPLES = 960;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
@@ -64,6 +65,12 @@ async function startBacking(server: RelayServer) {
   return backing;
 }
 
+function feedBacking(backing: RelayClient, frames = 8, value = 10_000) {
+  const frame = Buffer.alloc(FRAME_SAMPLES * 2);
+  for (let i = 0; i < FRAME_SAMPLES; i += 1) frame.writeInt16LE(value, i * 2);
+  for (let i = 0; i < frames; i += 1) backing.sendPcm(frame);
+}
+
 async function registerMic(server: RelayServer, participantId: string, name: string) {
   const mic = await RelayClient.connect(server, participantQuery(participantId, name));
   mic.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
@@ -116,6 +123,8 @@ async function room(server: RelayServer, controllerId = 'participant-a') {
   const control = await RelayClient.connect(server, participantQuery(controllerId, 'Controller'));
   await establishRoomSong(control, `owner-release-${controllerId}`);
   const backing = await startBacking(server);
+  feedBacking(backing);
+  await sleep(60);
   return { control, backing };
 }
 

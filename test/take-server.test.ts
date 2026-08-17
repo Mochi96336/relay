@@ -130,6 +130,8 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     const control = await RelayClient.connect(server, participantQuery('participant-a', 'A', key));
     await establishRoomSong(control, 'take-playback-a');
     const backing = await startBacking(server, key);
+    feedBacking(backing, 8);
+    await sleep(60);
 
     control.send({ type: 'start-take' });
     const accepted = await control.waitFor((message) => (
@@ -218,6 +220,8 @@ test('a Take survives Mic takeover and can be stopped by the new participant wit
     await a.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === 'takeover-load');
 
     const backing = await startBacking(server);
+    feedBacking(backing, 8);
+    await sleep(60);
     a.send({ type: 'start-take' });
     const start = await a.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
     const takeId = String(start.takeId);
@@ -267,6 +271,8 @@ test('Take keeps recording after the controller socket disconnects and another p
     const a = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
     await establishRoomSong(a, 'controller-playback-a');
     const backing = await startBacking(server);
+    feedBacking(backing, 8);
+    await sleep(60);
 
     a.send({ type: 'start-take' });
     const start = await a.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
@@ -376,6 +382,8 @@ test('ending the authoritative live mix auto-finalizes the active Take instead o
     const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
     await establishRoomSong(control, 'mix-end-playback-a');
     const backing = await startBacking(server);
+    feedBacking(backing, 8);
+    await sleep(60);
 
     control.send({ type: 'start-take' });
     const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
@@ -397,6 +405,38 @@ test('ending the authoritative live mix auto-finalizes the active Take instead o
   }
 });
 
+test('Start Take follows blocked product health while a Song route has no audio flow', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-health-gate-'));
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
+  try {
+    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    await establishRoomSong(control, 'health-gate-playback-a');
+    const backing = await startBacking(server);
+
+    control.send({ type: 'product-status-request' });
+    const product = await control.waitFor((message) => (
+      message.type === 'product-status'
+      && message.health === 'blocked'
+      && message.attention?.code === 'audio-unavailable'
+    ));
+    assert.equal(product.actions.canStartTake, false);
+    assert.equal(product.actions.startTakeBlockedReason, 'take-not-ready');
+
+    control.send({ type: 'start-take' });
+    const rejected = await control.waitFor((message) => (
+      message.type === 'take-command-rejected'
+      && message.command === 'start'
+    ));
+    assert.equal(rejected.reason, 'take-not-ready');
+
+    backing.close();
+    control.close();
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('Take commands require participant identity, recordable room audio, and the current Take id', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-reject-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
@@ -410,6 +450,8 @@ test('Take commands require participant identity, recordable room audio, and the
     assert.equal((await control.waitForType('take-command-rejected')).reason, 'mix-not-active');
 
     const backing = await startBacking(server);
+    feedBacking(backing, 8);
+    await sleep(60);
     control.send({ type: 'start-take' });
     const noSong = await control.waitFor((message) => (
       message.type === 'take-command-rejected'

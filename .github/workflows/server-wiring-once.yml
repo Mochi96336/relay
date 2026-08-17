@@ -1,4 +1,4 @@
-name: One-shot calibration server fix
+name: One-shot sample-rate validator cleanup
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
           node-version: '20.19'
           cache: npm
 
-      - name: Apply exact server fixes
+      - name: Apply exact sample-rate validator fix
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -40,13 +40,13 @@ jobs:
           client_reply = 'probeLifecycle.acceptClientReply(reply.requestId, reply.generation)'
           count = text.count(client_reply)
           if count != 2:
-              raise SystemExit(f'expected exactly 2 atomic client probe consumers, found {count}')
+              raise SystemExit(f'expected exactly 2 already-wired calibration ACK consumers, found {count}')
 
           old_rate = 'return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000'
           new_rate = 'return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000'
           count = text.count(old_rate)
           if count != 1:
-              raise SystemExit(f'expected exactly 1 current sample-rate guard, found {count}')
+              raise SystemExit(f'expected exactly 1 sample-rate validator bug, found {count}')
           text = text.replace(old_rate, new_rate)
 
           path.write_text(text)
@@ -68,10 +68,12 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           rm -f \
+            .github/server-authority-wiring-once.py \
             .github/server-wiring-once.py \
+            .github/workflows/server-authority-wiring-once.yml \
             .github/workflows/server-wiring-once.yml \
             .github/workflows/calibration-server-fix-once.yml
-          git add src/server.ts .github/server-wiring-once.py .github/workflows/server-wiring-once.yml .github/workflows/calibration-server-fix-once.yml
-          git commit -m 'fix(audio): validate calibration ACK before consuming request'
+          git add -A -- src/server.ts .github
+          git commit -m 'fix(audio): validate normalized sample rate'
           git pull --rebase origin agent/stabilize-room-kernel
           git push origin HEAD:agent/stabilize-room-kernel

@@ -1,0 +1,118 @@
+name: One-shot Mic boundary hardening
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/mic-boundary-hardening-once.yml
+      - scripts/one-shot-mic-boundary-hardening.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-mic-boundary-hardening-once
+  cancel-in-progress: false
+
+jobs:
+  patch-test-rebase-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/stabilize-room-kernel
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Expose deployment npm path for systemd verifier
+        run: sudo ln -sf "$(command -v npm)" /usr/bin/npm
+
+      - name: Apply exact reverse-audit patch
+        run: |
+          python3 scripts/one-shot-mic-boundary-hardening.py
+          git add -N test/mic-boundary-hardening-server.test.ts
+
+      - name: Verify focused diff
+        run: |
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            public/listen.js \
+            src/participant-capability.ts \
+            src/server.ts \
+            test/mic-boundary-hardening-server.test.ts | sort)"
+          test "$actual" = "$expected" || {
+            printf 'Unexpected diff:\n%s\n' "$actual"
+            exit 1
+          }
+          git diff --stat
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Check Listen browser syntax
+        run: node --check public/listen.js
+
+      - name: Run focused Mic boundary contracts
+        run: |
+          node --import tsx --test --test-concurrency=1 \
+            test/mic-boundary-hardening-server.test.ts \
+            test/mic-flow-semantics-server.test.ts \
+            test/participant-server.test.ts \
+            test/playback-listen-guard.test.ts
+
+      - name: Run real HTTP/3 loopback
+        run: npm run test:webtransport-loopback
+
+      - name: Run full suite with failure annotation
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee /tmp/relay-full-suite.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/relay-full-suite.log').read_text(errors='replace').splitlines()
+          markers = [i for i, line in enumerate(lines) if ('not ok' in line.lower() or 'assertionerror' in line.lower() or 'err_assertion' in line.lower())]
+          if markers:
+              start = max(0, min(markers) - 8)
+              end = min(len(lines), max(markers) + 50)
+          else:
+              start = max(0, len(lines) - 140)
+              end = len(lines)
+          snippet = '\n'.join(lines[start:end])[-12000:]
+          escaped = snippet.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f'::error title=Mic boundary full-suite failure::{escaped}')
+          PY
+            exit "$status"
+          fi
+
+      - name: Commit tested product diff and remove gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/mic-boundary-hardening-once.yml \
+            scripts/one-shot-mic-boundary-hardening.py
+          git add -- \
+            public/listen.js \
+            src/participant-capability.ts \
+            src/server.ts \
+            test/mic-boundary-hardening-server.test.ts
+          git diff --cached --check
+          git commit -m 'fix: harden microphone authority boundaries'
+
+      - name: Rebase tested product commit onto latest branch and push
+        env:
+          BRANCH: agent/stabilize-room-kernel
+        run: |
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

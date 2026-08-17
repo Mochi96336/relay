@@ -13,7 +13,12 @@ let meterSamples = 0;
 let lastMeterAt = 0;
 let droppedChunks = 0;
 let lastDropWarningAt = 0;
-let captureGeneration = 0;
+// The offscreen document is disposable: Chrome may tear it down and later
+// recreate it while Relay still retains the previous backing timeline. A
+// module-local zero would therefore reuse generation 1 with sample cursor 0,
+// making the new capture look like late data from the old incarnation. Seed
+// each offscreen document independently so recreation is a fresh capture.
+let captureGeneration = crypto.getRandomValues(new Uint32Array(1))[0];
 let captureSampleCursor = 0;
 
 // Byte layout is pinned by src/pcm-frame.ts and test/pcm-frame.test.ts. Each
@@ -243,7 +248,7 @@ async function startCapture(streamId, tabId, pageUrl) {
   await audioContext.audioWorklet.addModule(chrome.runtime.getURL('capture-worklet.js'));
   await audioContext.resume();
 
-  captureGeneration += 1;
+  captureGeneration = (captureGeneration + 1) >>> 0;
   captureSampleCursor = 0;
 
   source = audioContext.createMediaStreamSource(stream);

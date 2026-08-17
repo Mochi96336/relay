@@ -1,29 +1,4 @@
-from pathlib import Path
-
-
-def replace_once(path: str, old: str, new: str, label: str) -> None:
-    target = Path(path)
-    text = target.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f'{path}: {label}: expected one match, found {count}')
-    target.write_text(text.replace(old, new, 1))
-
-
-replace_once(
-    'chrome-tab-audio-probe/offscreen.js',
-    """let captureGeneration = 0;\nlet captureSampleCursor = 0;\n""",
-    """// The offscreen document is disposable: Chrome may tear it down and later\n// recreate it while Relay still retains the previous backing timeline. A\n// module-local zero would therefore reuse generation 1 with sample cursor 0,\n// making the new capture look like late data from the old incarnation. Seed\n// each offscreen document independently so recreation is a fresh capture.\nlet captureGeneration = crypto.getRandomValues(new Uint32Array(1))[0];\nlet captureSampleCursor = 0;\n""",
-    'seed backing capture generation per offscreen incarnation',
-)
-replace_once(
-    'chrome-tab-audio-probe/offscreen.js',
-    """  captureGeneration += 1;\n  captureSampleCursor = 0;\n""",
-    """  captureGeneration = (captureGeneration + 1) >>> 0;\n  captureSampleCursor = 0;\n""",
-    'keep backing generation in wire uint32 domain',
-)
-
-Path('test/backing-generation-recreation.test.ts').write_text("""import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
@@ -93,4 +68,3 @@ test('reusing a backing generation with cursor zero is dropped, while a new gene
   assert.equal(freshReload.samples.length, 960);
   assert.equal(session.backingGeneration, 8);
 });
-""")

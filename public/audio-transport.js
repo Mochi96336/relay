@@ -361,10 +361,21 @@ export class PreferredAudioTransport extends AudioTransport {
 
     try {
       const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
+      const transport = this.webTransport;
+      const generation = this.preferenceGeneration;
       this.telemetry.webTransportPacketsSubmitted += 1;
       Promise.resolve(writer.write(bytes)).catch(() => {
+        // A write belongs to the transport generation that submitted it. The
+        // promise may reject after Mic teardown/restart has already installed a
+        // newer WebTransport; that stale completion must not demote the new
+        // capture or contaminate its transport-health evidence.
+        if (
+          generation !== this.preferenceGeneration
+          || writer !== this.datagramWriter
+          || transport !== this.webTransport
+        ) return;
         this.telemetry.webTransportSendFailures += 1;
-        this.demoteWebTransport();
+        this.demoteWebTransport(transport);
       });
       return {
         ready: true,

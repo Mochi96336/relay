@@ -56,12 +56,16 @@ test('ready Take artifacts review inline instead of navigating away from Live', 
   assert.doesNotMatch(html, /id="download-recording"[^>]*target=/);
 });
 
-test('Take review consumes explicit local Mic lifecycle instead of a shared role global', async () => {
+test('Take review composes local Mic lifecycle with same-participant room ownership', async () => {
   const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
 
   assert.match(source, /let localMicActive = false/);
+  assert.match(source, /let roomMicActive = false/);
   assert.match(source, /relay-microphone-local-state/);
   assert.match(source, /localMicActive = event\.detail\?\.active === true/);
-  assert.match(source, /function phoneOwnsMic\(\) \{\s*return localMicActive;\s*\}/);
+  assert.match(source, /relay-session-status/);
+  assert.match(source, /ownerId === participantId/);
+  assert.match(source, /relay-request-session-status/);
+  assert.match(source, /function phoneOwnsMic\(\) \{[\s\S]*return localMicActive \|\| roomMicActive;[\s\S]*\}/);
   assert.doesNotMatch(source, /relayActiveRole/);
 });

@@ -21,6 +21,7 @@ let productCanStartTake = false;
 let reviewOpen = false;
 let currentArtifactHref = null;
 let localMicActive = false;
+let roomMicActive = false;
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -69,12 +70,37 @@ function setReviewOpen(open) {
 }
 
 function phoneOwnsMic() {
-  return localMicActive;
+  // A phone participant can own Mic through another tab. Local lifecycle is
+  // the fastest boundary for this tab; room ownership closes the sibling-tab
+  // feedback path that local window events cannot see.
+  return localMicActive || roomMicActive;
 }
 
 function stopReviewForMic(copy) {
   if (!recordingPlayer.paused) recordingPlayer.pause();
   reviewNotice = copy;
+}
+
+function reconcileMicFeedbackGuard(copy = t('take.reviewPausedForMic')) {
+  if (phoneOwnsMic()) {
+    if (!recordingPlayer.paused) stopReviewForMic(copy);
+    return;
+  }
+  if (reviewNotice) reviewNotice = null;
+}
+
+function applyRoomSessionStatus(status) {
+  const participantId = typeof window.relayParticipantId === 'string'
+    ? window.relayParticipantId
+    : null;
+  const ownerId = typeof status?.micOwnerId === 'string'
+    ? status.micOwnerId
+    : null;
+  const nextRoomMicActive = Boolean(participantId && ownerId === participantId);
+  if (roomMicActive === nextRoomMicActive) return;
+  roomMicActive = nextRoomMicActive;
+  reconcileMicFeedbackGuard();
+  render();
 }
 
 function clearArtifact() {
@@ -277,6 +303,8 @@ recordingPlayer.addEventListener('play', () => {
 
 window.addEventListener('relay-microphone-local-state', (event) => {
   localMicActive = event.detail?.active === true;
+  reconcileMicFeedbackGuard();
+  render();
 });
 
 window.addEventListener('relay-microphone-started', () => {
@@ -286,10 +314,15 @@ window.addEventListener('relay-microphone-started', () => {
 });
 
 window.addEventListener('relay-microphone-ended', () => {
-  if (!reviewNotice) return;
-  reviewNotice = null;
+  reconcileMicFeedbackGuard();
   render();
 });
+
+window.addEventListener('relay-session-status', (event) => applyRoomSessionStatus(event.detail));
+// Presence may already have received the owner snapshot before recorder.js
+// loaded. Ask for the same replay Listen uses so a sibling-tab Mic cannot race
+// the feedback guard during module startup.
+window.dispatchEvent(new Event('relay-request-session-status'));
 
 setInterval(() => {
   if (latestStatus?.lifecycle === 'recording') render();

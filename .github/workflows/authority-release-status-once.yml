@@ -50,7 +50,7 @@ jobs:
           set -e
           tail -n 300 /tmp/authority-full-suite.log
           if [ "$status" -ne 0 ]; then
-            tail -n 300 /tmp/authority-full-suite.log > .github/authority-failure.log
+            tail -n 300 /tmp/authority-full-suite.log > .github/authority-failure.txt
             git fetch origin "$BRANCH"
             test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$BRANCH")" || {
               echo 'Branch moved while capturing diagnostics; refusing to overwrite newer work.' >&2
@@ -58,7 +58,7 @@ jobs:
             }
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add -- .github/authority-failure.log
+            git add -- .github/authority-failure.txt
             git commit -m 'chore: capture authority wiring failure'
             git push origin HEAD:"$BRANCH"
             exit "$status"
@@ -75,7 +75,7 @@ jobs:
           }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f .github/authority-release-status.py .github/workflows/authority-release-status-once.yml .github/authority-failure.log
+          rm -f .github/authority-release-status.py .github/workflows/authority-release-status-once.yml .github/authority-failure.log .github/authority-failure.txt
           git add -A -- src/server.ts test/runtime-single-snapshot.test.ts .github
           git commit -m 'refactor: wire mic release effects and remote status'
           git push origin HEAD:"$BRANCH"

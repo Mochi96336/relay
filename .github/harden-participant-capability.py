@@ -83,12 +83,11 @@ test_path.write_text(test_text.replace(old_browser_asserts, new_browser_asserts,
 
 presence_path = Path('public/presence.js')
 presence = presence_path.read_text()
+outer = "(() => {\n"
+if not presence.startswith(outer):
+    raise SystemExit('identity readiness promise: presence outer IIFE changed')
+presence = "window.relayIdentityReady = (async () => {\n" + presence[len(outer):]
 replacements = [
-    (
-        "(() => {\n",
-        "window.relayIdentityReady = (async () => {\n",
-        'identity readiness promise',
-    ),
     (
         """  function participantIdForCapability(capability) {
     return `participant-${capability.slice(0, 32)}`;

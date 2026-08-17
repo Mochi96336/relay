@@ -23,6 +23,8 @@ export type ReadinessInput = {
   micStreaming: boolean;
   /** Current Mic owner/capture has produced at least one PCM frame. */
   micFlowObserved?: boolean;
+  /** Current connected Mic capture exceeded its first-frame startup deadline. */
+  micStartupTimedOut?: boolean;
   robotSourceConnected: boolean;
   sessionActive: boolean;
   timelineConnected: boolean;
@@ -120,6 +122,7 @@ export function buildReadiness(input: ReadinessInput) {
         connected: input.micConnected,
         streaming: input.micStreaming,
         flowObserved: input.micFlowObserved ?? input.micStreaming,
+        startupTimedOut: input.micStartupTimedOut === true,
       },
       robotSource: {
         connected: input.robotSourceConnected,

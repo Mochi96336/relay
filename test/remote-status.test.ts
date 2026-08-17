@@ -13,6 +13,7 @@ const BASE: ReadinessInput = {
   micConnected: false,
   micStreaming: false,
   micFlowObserved: false,
+  micStartupTimedOut: false,
   robotSourceConnected: false,
   sessionActive: false,
   timelineConnected: false,
@@ -64,6 +65,20 @@ describe('remote status health projection', () => {
     assert.equal(result.ok, true);
     assert.equal(result.state, 'live');
     assert.deepEqual(result.faults, []);
+  });
+
+  test('a Mic that never produced its first frame becomes a fault after startup grace', () => {
+    const result = status({
+      micConnected: true,
+      micStreaming: false,
+      micFlowObserved: false,
+      micStartupTimedOut: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.state, 'fault');
+    assert.deepEqual(result.faults, [
+      'microphone is connected but did not send its first audio frame in time',
+    ]);
   });
 
   test('a Mic that flowed and then stalled is a fault', () => {

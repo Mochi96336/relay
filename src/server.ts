@@ -100,6 +100,7 @@ const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
 const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
 const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
+const MIC_FIRST_FRAME_TIMEOUT_MS = envMs('RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_000);
 const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
 const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -289,12 +290,14 @@ const COLLECTION_SILENCE_GRACE_MS = 1_500;
 let lastMicFrameAt = -Infinity;
 let lastMicFrameOwnerId: string | null = null;
 let lastMicFrameGeneration: number | null = null;
+let micFirstFrameWaitStartedAt = -Infinity;
 let lastBackingFrameAt = -Infinity;
 
-function resetMicFlowEvidence() {
+function resetMicFlowEvidence(nowMs = performance.now()) {
   lastMicFrameAt = -Infinity;
   lastMicFrameOwnerId = micMediaOwnerId;
   lastMicFrameGeneration = micMediaGeneration;
+  micFirstFrameWaitStartedAt = micMediaOwnerId === null ? -Infinity : nowMs;
 }
 
 function noteMicFrame(nowMs: number) {
@@ -307,6 +310,13 @@ function micFlowObserved() {
   return Number.isFinite(lastMicFrameAt)
     && lastMicFrameOwnerId === micMediaOwnerId
     && lastMicFrameGeneration === micMediaGeneration;
+}
+
+function micStartupTimedOut(nowMs = performance.now()) {
+  return micMediaConnected()
+    && !micFlowObserved()
+    && Number.isFinite(micFirstFrameWaitStartedAt)
+    && nowMs - micFirstFrameWaitStartedAt >= MIC_FIRST_FRAME_TIMEOUT_MS;
 }
 
 function micStreaming(nowMs = performance.now()) {
@@ -1208,6 +1218,7 @@ function readinessPayload(nowMs = performance.now()) {
     micConnected: micMediaConnected(),
     micStreaming: micStreaming(nowMs),
     micFlowObserved: micFlowObserved(),
+    micStartupTimedOut: micStartupTimedOut(nowMs),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     sessionActive: session.active,
     timelineConnected: Boolean(timeline.connected && timeline.videoId),

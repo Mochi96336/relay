@@ -29,9 +29,11 @@ export function deriveRemoteStatusHealth(readiness: ReadinessSnapshot): RemoteSt
     faults.push('backing source is connected but no longer sending audio');
   }
 
-  // "No longer" requires evidence that this Mic capture has actually flowed.
-  // A newly acquired Mic before its first frame is starting, not broken.
-  if (components.mic.connected && components.mic.flowObserved && !components.mic.streaming) {
+  // A newly acquired Mic gets a short first-frame grace. Once that bounded
+  // startup window expires, "starting" is no longer a truthful operator state.
+  if (components.mic.connected && components.mic.startupTimedOut) {
+    faults.push('microphone is connected but did not send its first audio frame in time');
+  } else if (components.mic.connected && components.mic.flowObserved && !components.mic.streaming) {
     faults.push('microphone is connected but no longer sending audio');
   }
 

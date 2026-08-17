@@ -4,13 +4,14 @@ export type RoomMicFacts = {
   ownerId: string | null;
   connected: boolean;
   flowObserved: boolean;
+  startupTimedOut?: boolean;
   streaming: boolean;
 };
 
 export function deriveRoomMicState(facts: RoomMicFacts): RoomMicState {
   if (facts.ownerId === null) return 'free';
   if (!facts.connected) return 'reconnecting';
-  if (!facts.flowObserved) return 'starting';
+  if (!facts.flowObserved) return facts.startupTimedOut ? 'interrupted' : 'starting';
   if (facts.streaming) return 'live';
   return 'interrupted';
 }

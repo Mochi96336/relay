@@ -28,6 +28,14 @@ test('Mic state separates lease, connectivity, first flow and current flow', () 
   assert.equal(deriveRoomMicState({
     ownerId: 'participant-a',
     connected: true,
+    flowObserved: false,
+    startupTimedOut: true,
+    streaming: false,
+  }), 'interrupted');
+
+  assert.equal(deriveRoomMicState({
+    ownerId: 'participant-a',
+    connected: true,
     flowObserved: true,
     streaming: true,
   }), 'live');

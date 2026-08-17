@@ -120,6 +120,7 @@ function micState(input: ProductViewModelInput): RoomMicState {
     ownerId: input.micOwnerId,
     connected: mic.connected,
     flowObserved: mic.flowObserved,
+    startupTimedOut: mic.startupTimedOut,
     streaming: mic.streaming,
   });
 }

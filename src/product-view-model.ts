@@ -9,6 +9,7 @@ import {
 } from './room-domain.js';
 import {
   buildProductIssues,
+  type ProductAttention,
   type ProductIssue,
 } from './product-issues.js';
 import type { TakeQualityVerdict } from './take-quality.js';
@@ -75,8 +76,8 @@ export type ProductStatus = {
   health: ProductHealth;
   /** Ordered product-semantic issues. Normal UI must not need diagnostics to explain them. */
   issues: ProductIssue[];
-  /** Compatibility surface for existing clients: the highest-priority issue. */
-  attention: ProductIssue | null;
+  /** Exact legacy compatibility shape: the highest-priority issue projected to three fields. */
+  attention: ProductAttention | null;
   room: {
     participantCount: number;
     mic: {
@@ -173,6 +174,16 @@ function timingState(
   return 'fallback';
 }
 
+function primaryAttention(issues: ProductIssue[]): ProductAttention | null {
+  const issue = issues[0];
+  if (!issue) return null;
+  return {
+    code: issue.code,
+    scope: issue.scope,
+    severity: issue.severity,
+  };
+}
+
 /**
  * Converts Relay's transport/readiness state into the small semantic surface a
  * product UI is allowed to depend on.
@@ -206,7 +217,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     performanceActive,
     timingState: timing,
   });
-  const attention = issues[0] ?? null;
+  const attention = primaryAttention(issues);
   const health: ProductHealth = issues.some((issue) => issue.severity === 'critical')
     ? 'blocked'
     : issues.length > 0

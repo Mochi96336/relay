@@ -108,13 +108,13 @@ it('retires direct-media authority at every Mic ownership terminal boundary', ()
 
   assert.match(
     server,
-    /participants\.releaseMic\(expectedOwnerId\)[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}takeController\.noteQualityEvent\('mic-owner-changed'\)[\s\S]{0,500}cancelPendingRoomSongCommand\('mic-owner-released'\)/,
-    'Mic transport-grace expiry must retire WebTransport authority without dropping Take/command semantics',
+    /participants\.releaseMic\(expectedOwnerId, 'transport-expired'\)[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}applyMicOwnerEffects\(released\.effects\)/,
+    'Mic transport-grace expiry must retire WebTransport authority while applying canonical room effects',
   );
   assert.match(
     server,
-    /presenceSweep\.releasedMicOwnerId[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}cancelPendingRoomSongCommand\('mic-owner-released', nowMs\)[\s\S]{0,500}youtubeTimeline\.cancelHandoff\(\)/,
-    'participant expiry must retire media authority and the old owner command/handoff epoch together',
+    /presenceSweep\.releasedMicOwnerId && presenceSweep\.micOwnerEffects[\s\S]{0,800}applyMicOwnerEffects\(presenceSweep\.micOwnerEffects, nowMs, \{[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}publishFullHandoffStatus: false/,
+    'participant expiry must retire media authority inside the canonical effect epoch without adding a full Song-status broadcast',
   );
   assert.match(
     server,

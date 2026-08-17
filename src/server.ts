@@ -13,12 +13,14 @@ import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-h
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
+import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import { ProbeLifecycle, type ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
+import { deriveRemoteStatusHealth } from './remote-status.js';
 import {
   ParticipantSession,
   normalizeNickname,
@@ -389,12 +391,10 @@ function scheduleMicTransportGrace(ownerId: string) {
       return;
     }
 
-    const released = participants.releaseMic(expectedOwnerId);
+    const released = participants.releaseMic(expectedOwnerId, 'transport-expired');
     if (!released.ok) return;
     clearMicMediaAuthority();
-    takeController.noteQualityEvent('mic-owner-changed');
-    cancelPendingRoomSongCommand('mic-owner-released');
-    invalidateMicTiming('Microphone transport did not reconnect before its grace period expired.');
+    applyMicOwnerEffects(released.effects);
     broadcastSessionStatus();
   }, MIC_TRANSPORT_GRACE_MS);
   micTransportGraceTimer.unref();
@@ -697,6 +697,36 @@ function beginPreparedSongHandoff(participantId: string, nowMs = performance.now
   return true;
 }
 
+function applyMicOwnerEffects(
+  effects: Parameters<typeof applyMicOwnerTransitionEffects>[0],
+  nowMs = performance.now(),
+  options: {
+    afterQualityEvent?: () => void;
+    beforeTimingInvalidation?: () => void;
+    publishFullHandoffStatus?: boolean;
+  } = {},
+) {
+  return applyMicOwnerTransitionEffects(effects, {
+    noteQualityEvent: (event) => {
+      takeController.noteQualityEvent(event);
+      options.afterQualityEvent?.();
+    },
+    cancelRoomSongCommand: (reason) => cancelPendingRoomSongCommand(reason, nowMs),
+    cancelSongHandoff: () => youtubeTimeline.cancelHandoff(),
+    publishSongHandoffCancellation: () => {
+      if (options.publishFullHandoffStatus !== false) {
+        broadcastJson(youtubeTimeline.statusPayload(nowMs));
+      }
+      broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+    },
+    invalidateTiming: (reason) => {
+      options.beforeTimingInvalidation?.();
+      invalidateMicTiming(reason);
+    },
+    prepareSongHandoff: (participantId) => beginPreparedSongHandoff(participantId, nowMs),
+  });
+}
+
 /**
  * Tells a playback page why its telemetry is being ignored.
  *
@@ -946,52 +976,22 @@ function remoteStatusPayload() {
   const mixHealth = session.health();
 
   const readiness = readinessPayload(nowMs);
+  const health = deriveRemoteStatusHealth(readiness);
   const components = readiness.components;
   const backingConnected = components.backing.connected;
   const micConnected = components.mic.connected;
   const backingStreaming = components.backing.streaming;
   const micStreaming = components.mic.streaming;
-  const micFlowSeen = components.mic.flowObserved;
   const routeMode = components.route.mode;
   const robotRoute = routeMode === 'robot';
   const robotSourceConnected = components.robotSource.connected;
   const deltaFresh = components.player.offsetFresh;
 
-  const faults: string[] = [];
-  if (backingConnected && !backingStreaming) faults.push('backing source is connected but no longer sending audio');
-  // "No longer" is a claim about a stream that once existed. A microphone that
-  // has been taken but has not produced its first frame yet is starting, not
-  // failing - the phone is still resolving permission, opening the capture and
-  // filling its first buffers. Reporting that as a fault told an operator the
-  // opposite of what was happening, and it is the ordinary state of every take
-  // for its first moments. `flowObserved` is what separates the two, and the
-  // product view already draws that line: `starting` before the first frame,
-  // `interrupted` after one stops arriving.
-  if (micConnected && micFlowSeen && !micStreaming) {
-    faults.push('microphone is connected but no longer sending audio');
-  }
-  if (routeMode !== 'idle' && !backingConnected) {
-    faults.push(`${routeMode} route has no backing source`);
-  }
-  if (robotRoute && !robotSourceConnected) faults.push('robot route has no source page');
-
-  const warnings: string[] = [];
-  if (robotRoute && robotSourceConnected && !deltaFresh) {
-    warnings.push('robot player delta is stale; alignment fell back to the network estimate');
-  }
-  if (components.calibration.stale) warnings.push('timing calibration no longer matches the current capture');
-
-  const idle = !backingConnected && !micConnected && !robotSourceConnected;
-  const state = faults.length > 0 ? 'fault'
-    : idle ? 'idle'
-      : warnings.length > 0 ? 'degraded'
-        : 'live';
-
   return {
-    ok: faults.length === 0,
-    state,
-    faults,
-    warnings,
+    ok: health.ok,
+    state: health.state,
+    faults: health.faults,
+    warnings: health.warnings,
     uptimeMs: Math.round(nowMs),
     source: {
       backingConnected,
@@ -1847,13 +1847,14 @@ const youtubeTimelineTimer = setInterval(() => {
   sweepPreparedSongHandoff(nowMs);
 
   const presenceSweep = participants.sweep(Date.now());
-  if (presenceSweep.releasedMicOwnerId) {
-    takeController.noteQualityEvent('mic-owner-changed');
-    cancelMicTransportGrace();
-    clearMicMediaAuthority();
-    cancelPendingRoomSongCommand('mic-owner-released', nowMs);
-    if (youtubeTimeline.cancelHandoff()) broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
-    invalidateMicTiming('Microphone owner left the Relay session.');
+  if (presenceSweep.releasedMicOwnerId && presenceSweep.micOwnerEffects) {
+    applyMicOwnerEffects(presenceSweep.micOwnerEffects, nowMs, {
+      afterQualityEvent: () => {
+        cancelMicTransportGrace();
+        clearMicMediaAuthority();
+      },
+      publishFullHandoffStatus: false,
+    });
   }
   if (presenceSweep.changed) broadcastSessionStatus();
 
@@ -2070,19 +2071,24 @@ wss.on('connection', (rawSocket, request) => {
       const result = participants.releaseMic(socket.participantId);
       if (!result.ok) return;
 
-      takeController.noteQualityEvent('mic-owner-changed');
-      cancelMicTransportGrace();
-      cancelPendingRoomSongCommand('mic-owner-released');
-      if (youtubeTimeline.cancelHandoff()) {
-        broadcastJson(youtubeTimeline.statusPayload());
-        broadcastJson(youtubeTimeline.roomStatusPayload());
-      }
-      if (publisher?.participantId === socket.participantId) {
-        revokePublisherTransport('You released the microphone.');
-      } else if (micMediaOwnerId === socket.participantId) {
-        clearMicMediaAuthority();
-      }
-      invalidateMicTiming('Microphone was released.');
+      let transportCleaned = false;
+      const cleanReleasedMicTransport = () => {
+        if (transportCleaned) return;
+        transportCleaned = true;
+        if (publisher?.participantId === socket.participantId) {
+          revokePublisherTransport('You released the microphone.');
+        } else if (micMediaOwnerId === socket.participantId) {
+          clearMicMediaAuthority();
+        }
+      };
+      applyMicOwnerEffects(result.effects, performance.now(), {
+        afterQualityEvent: () => cancelMicTransportGrace(),
+        beforeTimingInvalidation: cleanReleasedMicTransport,
+      });
+      // A successful explicit release always invalidates timing today. Keep this
+      // fallback so transport cleanup remains adapter-owned even if that domain
+      // effect is deliberately changed later.
+      cleanReleasedMicTransport();
       broadcastSessionStatus();
       sendJson(socket, { type: 'mic-released' });
       return;

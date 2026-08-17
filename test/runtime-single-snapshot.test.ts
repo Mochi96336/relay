@@ -17,6 +17,11 @@ test('/statusz projects readiness-owned facts from one sampled snapshot', () => 
   const body = functionBody('remoteStatusPayload');
 
   assert.match(body, /const readiness = readinessPayload\(nowMs\);/);
+  assert.match(body, /const health = deriveRemoteStatusHealth\(readiness\);/);
+  assert.match(body, /ok: health\.ok/);
+  assert.match(body, /state: health\.state/);
+  assert.match(body, /faults: health\.faults/);
+  assert.match(body, /warnings: health\.warnings/);
   assert.match(body, /const components = readiness\.components;/);
   assert.match(body, /components\.backing\.connected/);
   assert.match(body, /components\.backing\.streaming/);

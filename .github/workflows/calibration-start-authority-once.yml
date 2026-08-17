@@ -30,7 +30,9 @@ jobs:
           cache: npm
 
       - name: Apply exact calibration start authority patch
-        run: python3 .github/calibration-start-authority-once.py
+        run: |
+          python3 .github/calibration-start-authority-normalize.py
+          python3 .github/calibration-start-authority-once.py
 
       - name: Verify focused diff
         run: |

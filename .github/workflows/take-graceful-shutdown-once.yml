@@ -8,6 +8,7 @@ on:
       - .github/workflows/take-graceful-shutdown-once.yml
       - scripts/one-shot-take-graceful-shutdown.py
       - scripts/one-shot-take-graceful-shutdown-fixtures.py
+      - scripts/one-shot-take-graceful-shutdown-harness.py
 
 permissions:
   contents: write
@@ -38,6 +39,7 @@ jobs:
         run: |
           python3 scripts/one-shot-take-graceful-shutdown.py
           python3 scripts/one-shot-take-graceful-shutdown-fixtures.py
+          python3 scripts/one-shot-take-graceful-shutdown-harness.py
           git add -N test/server-take-shutdown.test.ts
 
       - name: Verify focused diff
@@ -110,7 +112,8 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/take-graceful-shutdown-once.yml \
             scripts/one-shot-take-graceful-shutdown.py \
-            scripts/one-shot-take-graceful-shutdown-fixtures.py
+            scripts/one-shot-take-graceful-shutdown-fixtures.py \
+            scripts/one-shot-take-graceful-shutdown-harness.py
           git add -- \
             src/server.ts \
             src/take-controller.ts \

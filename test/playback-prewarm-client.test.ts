@@ -13,9 +13,12 @@ test('the first Mic click starts only a local playback prewarm, before takeover 
   const trigger = await readFile(new URL('../public/playback-prewarm-trigger.js', import.meta.url), 'utf8');
   const continuation = await readFile(new URL('../public/playback-continuation.js', import.meta.url), 'utf8');
 
-  assert.match(continuation, /import '\.\/playback-prewarm-trigger\.js'/);
+  assert.match(continuation, /typeof window !== 'undefined'[\s\S]*typeof document !== 'undefined'/,
+    'pure continuation helpers must not require browser globals in Node');
+  assert.match(continuation, /import\('\.\/playback-prewarm-trigger\.js'\)/,
+    'the browser runtime should still install the takeover prewarm trigger');
   assert.match(trigger, /typeof window !== 'undefined'/,
-    'the trigger is imported transitively by Node tests and must remain browser-only');
+    'the trigger itself keeps a second browser-only guard');
   assert.match(trigger, /typeof document !== 'undefined'/);
   assert.match(trigger, /document\.addEventListener\('click',[\s\S]*true\);/);
   assert.match(trigger, /#start-publisher/);

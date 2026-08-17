@@ -1,0 +1,76 @@
+name: One-shot WebTransport log truth
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/webtransport-log-truth-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-webtransport-log-truth-once
+  cancel-in-progress: false
+
+jobs:
+  patch-test-rebase-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/stabilize-room-kernel
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Apply exact logging patch
+        run: python3 scripts/one-shot-webtransport-log-truth.py
+
+      - name: Verify focused diff
+        run: |
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            src/server.ts \
+            src/webtransport-media-server.ts \
+            test/webtransport-media-server.test.ts | sort)"
+          test "$actual" = "$expected" || {
+            printf 'Unexpected diff:\n%s\n' "$actual"
+            exit 1
+          }
+          git diff --stat
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Run focused WebTransport tests
+        run: node --import tsx --test --test-concurrency=1 test/webtransport-media-server.test.ts test/webtransport-loopback-ci.test.ts
+
+      - name: Run real HTTP/3 loopback
+        run: npm run test:webtransport-loopback
+
+      - name: Run full suite
+        run: npm test
+
+      - name: Commit tested product diff and remove gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/webtransport-log-truth-once.yml scripts/one-shot-webtransport-log-truth.py
+          git add -- src/server.ts src/webtransport-media-server.ts test/webtransport-media-server.test.ts
+          git diff --cached --check
+          git commit -m 'fix: report WebTransport startup truthfully'
+
+      - name: Rebase tested product commit onto latest branch and push
+        env:
+          BRANCH: agent/stabilize-room-kernel
+        run: |
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

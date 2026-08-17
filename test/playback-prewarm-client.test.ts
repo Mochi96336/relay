@@ -62,7 +62,7 @@ test('cancel parks speculative playback and restores the user mute state', async
   assert.match(restoreSection, /player\.unMute/);
 });
 
-test('formal handoff consumes a matching warmed player instead of rebuilding it', async () => {
+test('formal handoff consumes a matching warmed player and cold preparation still loads real media', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
   const prepareSection = topLevelFunctionSection(source, 'async function prepareRoomSong');
@@ -75,22 +75,53 @@ test('formal handoff consumes a matching warmed player instead of rebuilding it'
 
   const cueSection = topLevelFunctionSection(source, 'function cuePendingHandoff()');
   assert.match(cueSection, /pendingHandoff\.reusePreparedPlayer === true/);
+  assert.match(cueSection, /player\.mute\(\)/,
+    'formal preparation must stay inaudible before authority commits');
   assert.match(cueSection, /player\.seekTo/,
     'a warmed player may be corrected to the newer projected handoff time');
-  assert.match(cueSection, /player\.cueVideoById/,
-    'a cold or mismatched player still needs the normal cue path');
+  assert.match(cueSection, /player\.loadVideoById/,
+    'a cold or mismatched player must request actual media, not merely cue a thumbnail');
   assert.doesNotMatch(cueSection, /playVideo\s*\(/,
-    'formal preparation still must not explicitly start playback before commit');
+    'formal preparation still must not explicitly start audible playback before commit');
 });
 
-test('commit restores speculative mute and avoids an unconditional seek', async () => {
+test('handoff ready requires a buffered active media state and polls through slow mobile startup', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const readySection = topLevelFunctionSection(source, 'function announceHandoffReady()');
+  const scheduleSection = topLevelFunctionSection(source, 'function scheduleHandoffReadyChecks()');
+
+  assert.match(readySection, /getVideoLoadedFraction/);
+  assert.match(readySection, /\[1, 2, 3\]\.includes\(state\)/);
+  assert.match(readySection, /bufferedFraction <= 0/);
+  assert.doesNotMatch(readySection, /\[1, 2, 5\]\.includes\(state\)/,
+    'CUED must not be treated as proof that media is buffered');
+  assert.match(scheduleSection, /16_000/,
+    'readiness polling should continue near the server preparation deadline');
+});
+
+test('commit restores the prior mute state, avoids an unconditional seek, and starts a bounded proof window', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const commitSection = topLevelFunctionSection(source, 'function commitRoomSong');
 
+  assert.match(commitSection, /clearHandoffCommitTimer\(\)/);
   assert.match(commitSection, /const currentTime = Number\(player\.getCurrentTime\(\)\)/);
   assert.match(commitSection, /Math\.abs\(currentTime - pendingHandoff\.targetTime\) > 0\.75/);
   assert.match(commitSection, /player\.seekTo/);
   assert.match(commitSection, /pendingHandoff\.prewarmWasMuted === false/);
   assert.match(commitSection, /player\.unMute/);
   assert.match(commitSection, /player\.playVideo/);
+  assert.match(commitSection, /HANDOFF_COMMIT_TIMEOUT_MS/);
+  assert.match(commitSection, /rollbackCommittedHandoff\('commit-timeout', \{ reprepare: true \}\)/);
+});
+
+test('commit timeout parks and re-mutes the target before asking the server for a fresh prepare phase', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const rollbackSection = topLevelFunctionSection(source, 'function rollbackCommittedHandoff');
+
+  assert.match(rollbackSection, /pendingHandoff\.phase = 'preparing'/);
+  assert.match(rollbackSection, /player\.pauseVideo/);
+  assert.match(rollbackSection, /player\.mute/);
+  assert.match(rollbackSection, /relay:song-handoff-failed/);
+  assert.match(rollbackSection, /cuePendingHandoff\(\)/,
+    'a timeout may retry only after it first reports the failed commit');
 });

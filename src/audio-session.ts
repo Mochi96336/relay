@@ -104,14 +104,25 @@ const ADVANCE_SAFETY_MS = 200;
  * alignment. Without it the first few milliseconds of every transient reach
  * the sum at full height before the envelope catches up.
  *
- * The clamp further down stays as a backstop regardless: the limiter only holds
- * down the voice, and the voice plus the song can still overflow.
+ * The final two-source sum also reserves fixed headroom. That keeps ordinary
+ * voice + song peaks out of the hard clamp without adding a second dynamic
+ * limiter that would pump the whole mix and change the singer/song balance.
  */
 export const LIMITER_THRESHOLD_DBFS = -1;
 const LIMITER_THRESHOLD = 10 ** (LIMITER_THRESHOLD_DBFS / 20);
 const LIMITER_ATTACK_MS = 1.5;
 const LIMITER_RELEASE_MS = 150;
 const LIMITER_LOOKAHEAD_MS = 3;
+
+/**
+ * Worst-case linear sum after the microphone limiter plus the configured song
+ * gain. A fixed attenuation preserves their relative balance and introduces no
+ * attack/release artefacts. Voice-only rooms deliberately stay at unity.
+ */
+function sumHeadroomGain(backingGain: number) {
+  const maximumLinearSum = LIMITER_THRESHOLD + Math.abs(backingGain);
+  return maximumLinearSum > 1 ? 1 / maximumLinearSum : 1;
+}
 
 /**
  * How fast the raw microphone meter forgets. Long enough that a breath between
@@ -175,6 +186,7 @@ export class AudioSession {
   readonly backingRetentionMs: number;
 
   private readonly backingGain: number;
+  private readonly backingSumHeadroomGain: number;
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
@@ -221,6 +233,7 @@ export class AudioSession {
     this.frameSamples = Math.round((options.sampleRate * options.frameMs) / 1000);
     this.prebufferMs = options.prebufferMs;
     this.backingGain = options.backingGain;
+    this.backingSumHeadroomGain = sumHeadroomGain(options.backingGain);
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
     this.backingRetentionMs = options.backingRetentionMs ?? 1_000;
@@ -748,14 +761,19 @@ export class AudioSession {
     const mic = this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     const micGain = 10 ** (this.micGainDb / 20);
+    // `backingExpected` is the room's semantic signal that this is a two-source
+    // mix. Do not attenuate voice-only rooms merely because a stale backing
+    // timeline still exists from an earlier route.
+    const mixHeadroomGain = this.backingExpected ? this.backingSumHeadroomGain : 1;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
 
     for (let i = 0; i < this.frameSamples; i += 1) {
       const voice = this.limit((mic[i] / 32768) * micGain, (mic[i + lookahead] / 32768) * micGain);
-      const value = voice + (song[i] / 32768) * this.backingGain;
-      // The limiter holds the voice under the threshold, so anything reaching
-      // here is the sum overflowing. Clamping keeps the wraparound crack out of
-      // the mix but is still distortion, so count it rather than hide it.
+      const summed = voice + (song[i] / 32768) * this.backingGain;
+      const value = summed * mixHeadroomGain;
+      // Normal two-source peaks have already had deterministic summing headroom
+      // reserved. Keep this clamp as an invariant/backstop for unexpected future
+      // inputs or limiter overshoot, and keep counting it as audible distortion.
       if (value > 1 || value < -1) this.clippedSamples += 1;
       const clamped = Math.max(-1, Math.min(1, value));
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);

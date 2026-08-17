@@ -249,7 +249,10 @@ describe('AudioSession alignment', () => {
     const peakMs = (peak.index / RATE) * 1000;
 
     assert.ok(Math.abs(peakMs - 400) < 5, `expected both events at ~400 ms, peak at ${peakMs.toFixed(1)} ms`);
-    assert.ok(peak.value > 20_000, `the two should sum, got ${peak.value}`);
+    assert.ok(
+      peak.value > 12_000,
+      `the two should still sum after deterministic bus headroom, got ${peak.value}`,
+    );
   });
 
   test('a wrong calibration pulls the vocal off the beat', () => {
@@ -385,16 +388,33 @@ describe('AudioSession microphone limiter', () => {
     assert.equal(session.health().clippedSamples, 0);
   });
 
-  test('still reports a clamp when the sum overflows despite the limiter', () => {
-    // The limiter only holds the voice down; the song is added after it.
+  test('reserves summing headroom before a hot voice and song can reach the clamp', () => {
     const session = makeSession({ backingGain: 1 });
     session.setMicGainDb(36);
+    session.setBackingExpected(true);
     session.start(0);
     session.ingestMic(frame(0, sung(1, 3_200)), RATE, 0);
     session.ingestBacking(frame(0, pcmOf(new Array(RATE).fill(30_000))), RATE, 0);
 
-    drainAll(session, 500);
-    assert.ok(session.health().clippedSamples > 0, 'the backstop still has to report itself');
+    const mixed = drainAll(session, 500);
+    assert.equal(
+      session.health().clippedSamples,
+      0,
+      'normal two-source gain staging must not depend on the hard clamp',
+    );
+    assert.ok(session.health().limitedSamples > 0, 'the microphone limiter still owns vocal peaks');
+    assert.ok(peakSampleIndex(mixed).value < 32_767, 'the mixed bus keeps real headroom');
+  });
+
+  test('does not attenuate a voice-only room for backing headroom', () => {
+    const session = makeSession({ backingGain: 1 });
+    session.setMicGainDb(0);
+    session.start(0);
+    session.ingestMic(frame(0, pcmOf(new Array(RATE).fill(1_000))), RATE, 0);
+
+    const mixed = drainAll(session, 20);
+    assert.equal(mixed.readInt16LE(0), 1_000, 'voice-only output stays at unity');
+    assert.equal(session.health().clippedSamples, 0);
   });
 
   test('does not carry limiter gain reduction into the next session', () => {

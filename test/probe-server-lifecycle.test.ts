@@ -14,7 +14,7 @@ const PROBE_FAST = {
   RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '2',
   RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
   RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '1500',
-  RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '-1',
+  RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
   RELAY_HEARTBEAT_MS: '60000',
 };
 
@@ -133,9 +133,9 @@ test('a stale acknowledgement cannot cancel the newer Mic probe request', async 
       generation: clients.publisher.generationId,
     });
 
-    // Push the Mic frontier beyond the complete analysis window. Correlation is
-    // allowed down to -1 in this lifecycle test because the detector itself has
-    // its own deterministic signal tests; here we are testing request ownership.
+    // Push the Mic frontier beyond the complete analysis window. A legal zero
+    // threshold keeps this integration test focused on request ownership; the
+    // detector's quality threshold has separate deterministic signal tests.
     clients.publisher.sendPcm(Buffer.alloc(RATE * 2 * 2));
 
     const backingProbe = (await waitForProbeCount(clients.robot, 'backing', 1, 3_000))[0];

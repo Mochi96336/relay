@@ -774,6 +774,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   setPublisherActive(false);
 
   liveMixActive = false;
+  latestMixHealth = null;
   latestLocalMicLevel = null;
   dispatchRelayEvent('relay-local-mic-level', { active: false, peakDbfs: null, rmsDbfs: null });
   uplinkDroppedSamples = 0;
@@ -864,6 +865,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
   captureInputMuted = false;
+  latestMixHealth = null;
   latestLocalMicLevel = null;
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };

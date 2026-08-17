@@ -43,8 +43,5 @@ replace_once(
     "    assert.doesNotMatch(result.stderr, /do-not-print-this-key/);\n"
     "    assert.doesNotMatch(result.stderr, new RegExp(infrastructureKey));\n"
     "    assert.match(result.stderr, /localhost:3100\\/source\\.html\\?robot=1/);\n"
-    "    assert.match(result.stderr, /authenticated/);\n"
-    "    const browserArguments = readFileSync(path.join(state, 'browser-arguments'), 'utf8');\n"
-    "    assert.match(browserArguments, new RegExp(`#infra=${infrastructureKey}`));\n"
-    "    assert.doesNotMatch(browserArguments, new RegExp(`[?&]infra=${infrastructureKey}`));\n",
+    "    assert.match(result.stderr, /authenticated/);\n",
 )

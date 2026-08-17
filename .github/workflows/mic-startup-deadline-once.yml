@@ -1,0 +1,91 @@
+name: One-shot Mic startup deadline fix
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/mic-startup-deadline-once.yml
+      - scripts/one-shot-mic-startup-deadline.py
+      - scripts/one-shot-mic-startup-types.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-mic-startup-deadline-once
+  cancel-in-progress: false
+
+jobs:
+  patch-test-rebase-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/stabilize-room-kernel
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Apply exact Mic startup patch
+        run: |
+          python3 scripts/one-shot-mic-startup-deadline.py
+          python3 scripts/one-shot-mic-startup-types.py
+
+      - name: Verify focused diff
+        run: |
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            public/app.js \
+            public/mic-startup.d.ts \
+            public/mic-startup.js \
+            test/mic-lifecycle-recovery.test.ts \
+            test/mic-startup.test.ts | sort)"
+          test "$actual" = "$expected" || {
+            printf 'Unexpected diff:\n%s\n' "$actual"
+            exit 1
+          }
+          git diff --stat
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check public/app.js
+          node --check public/mic-startup.js
+
+      - name: Run focused Mic startup tests
+        run: node --import tsx --test --test-concurrency=1 test/mic-startup.test.ts test/mic-lifecycle-recovery.test.ts
+
+      - name: Run full suite
+        run: npm test
+
+      - name: Commit tested product diff and remove gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/mic-startup-deadline-once.yml \
+            scripts/one-shot-mic-startup-deadline.py \
+            scripts/one-shot-mic-startup-types.py
+          git add -- \
+            public/app.js \
+            public/mic-startup.d.ts \
+            public/mic-startup.js \
+            test/mic-lifecycle-recovery.test.ts \
+            test/mic-startup.test.ts
+          git diff --cached --check
+          git commit -m 'fix: bound microphone startup lifecycle'
+
+      - name: Rebase tested product commit onto latest branch and push
+        env:
+          BRANCH: agent/stabilize-room-kernel
+        run: |
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

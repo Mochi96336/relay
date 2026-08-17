@@ -43,6 +43,7 @@ let latestCalibration = null;
 let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
+let activeCalibrationProbeRequestId = null;
 
 /**
  * The same measured advice source.html shows, put where the singer can act on
@@ -403,15 +404,25 @@ const PROBE_NOTE_SECONDS = 0.105;
  */
 async function playCalibrationProbe(requestId, leadMs) {
   const context = audioContext;
-  if (!context || !publisherActive) return;
+  if (
+    !context
+    || !publisherActive
+    || document.visibilityState === 'hidden'
+    || activeCalibrationProbeRequestId !== requestId
+  ) return;
 
   try {
-    // Mobile Safari may suspend/interupt WebAudio while the page backgrounds.
-    // Never tell the server a probe played until the actual capture context is
-    // back in the running state; a false acknowledgement only turns silence
-    // into a correlation failure and another audible retry.
+    // Mobile Safari may leave resume() pending while a page is suspended. The
+    // server can retire this request meanwhile, so every continuation has to
+    // re-prove request ownership before it is allowed to create audible nodes.
     await context.resume();
-    if (!publisherActive || audioContext !== context || context.state !== 'running') {
+    if (activeCalibrationProbeRequestId !== requestId) return;
+    if (
+      !publisherActive
+      || audioContext !== context
+      || document.visibilityState === 'hidden'
+      || context.state !== 'running'
+    ) {
       throw new Error(`Phone probe AudioContext is ${context.state}.`);
     }
 
@@ -431,6 +442,11 @@ async function playCalibrationProbe(requestId, leadMs) {
       oscillator.stop(at + PROBE_NOTE_SECONDS);
     }
 
+    // Scheduling the nodes is the irreversible side effect. Retire the local
+    // request before acknowledging it so a later status/retry cannot revive the
+    // same identity on this page.
+    if (activeCalibrationProbeRequestId !== requestId) return;
+    activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({
       type: 'calibration-probe-played',
@@ -443,6 +459,8 @@ async function playCalibrationProbe(requestId, leadMs) {
     }));
   } catch (error) {
     console.warn('phone calibration probe failed', error);
+    if (activeCalibrationProbeRequestId !== requestId) return;
+    activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({
       type: 'calibration-probe-failed',
@@ -553,6 +571,12 @@ function handleServerMessage(message) {
 
   if (message.type === 'timing-calibration-status') {
     latestCalibration = message;
+    if (
+      activeCalibrationProbeRequestId !== null
+      && (message.probeActive !== true || message.probePhase !== 'mic-requested')
+    ) {
+      activeCalibrationProbeRequestId = null;
+    }
     updateCalibrateButton();
     return;
   }
@@ -562,7 +586,10 @@ function handleServerMessage(message) {
     // publisher role. The phone must ignore that leg or its faster reply can
     // be mistaken for the robot probe that is still waiting to play.
     if (message.target === undefined || message.target === 'mic') {
-      void playCalibrationProbe(message.requestId, Number(message.leadMs) || 200);
+      const requestId = Number(message.requestId);
+      if (!Number.isSafeInteger(requestId) || requestId < 0) return;
+      activeCalibrationProbeRequestId = requestId;
+      void playCalibrationProbe(requestId, Number(message.leadMs) || 200);
     }
     return;
   }
@@ -649,6 +676,7 @@ async function connectPublisherSocket() {
 
   ws.addEventListener('close', () => {
     if (socket !== ws) return;
+    activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
     if (!canKeepPublishing()) return;
@@ -666,6 +694,7 @@ async function connectPublisherSocket() {
 async function stop(setIdle = true, { releaseMic = true } = {}) {
   micStartup.cancel();
   publisherStarting = false;
+  activeCalibrationProbeRequestId = null;
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
 
@@ -967,7 +996,11 @@ window.addEventListener('relay-request-microphone', (event) => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') recoverPublisherAudio();
+  if (document.visibilityState === 'hidden') {
+    activeCalibrationProbeRequestId = null;
+    return;
+  }
+  recoverPublisherAudio();
 });
 window.addEventListener('pageshow', recoverPublisherAudio);
 

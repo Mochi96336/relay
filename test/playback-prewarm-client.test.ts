@@ -99,19 +99,40 @@ test('handoff ready requires a buffered active media state and polls through slo
     'readiness polling should continue near the server preparation deadline');
 });
 
-test('commit restores the prior mute state, avoids an unconditional seek, and starts a bounded proof window', async () => {
+test('commit starts the target clock muted and only server completion restores audibility', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const commitSection = topLevelFunctionSection(source, 'function commitRoomSong');
+  const completeSection = topLevelFunctionSection(source, 'function completeRoomSong');
 
   assert.match(commitSection, /clearHandoffCommitTimer\(\)/);
   assert.match(commitSection, /const currentTime = Number\(player\.getCurrentTime\(\)\)/);
   assert.match(commitSection, /Math\.abs\(currentTime - pendingHandoff\.targetTime\) > 0\.75/);
   assert.match(commitSection, /player\.seekTo/);
-  assert.match(commitSection, /pendingHandoff\.prewarmWasMuted === false/);
-  assert.match(commitSection, /player\.unMute/);
+  assert.match(commitSection, /player\.mute\(\)/,
+    'the target must remain inaudible while its telemetry is only a commit candidate');
+  assert.doesNotMatch(commitSection, /player\.unMute/,
+    'commit acknowledgement is not yet audible-room authority');
   assert.match(commitSection, /player\.playVideo/);
   assert.match(commitSection, /HANDOFF_COMMIT_TIMEOUT_MS/);
   assert.match(commitSection, /rollbackCommittedHandoff\('commit-timeout', \{ reprepare: true \}\)/);
+
+  assert.match(completeSection, /prewarmWasMuted = pendingHandoff\.prewarmWasMuted/);
+  assert.match(completeSection, /prewarmWasMuted === false/);
+  assert.match(completeSection, /player\.unMute/,
+    'only server-confirmed handoff completion may restore an originally audible player');
+});
+
+test('authoritative holder timeline can complete audibility after a reconnect loses the direct packet', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const viewSection = source.slice(source.indexOf("window.addEventListener('relay:playback-view'"));
+
+  assert.match(viewSection, /pendingHandoff\?\.phase === 'committing'/);
+  assert.match(viewSection, /nextRole === 'holder'/);
+  assert.match(viewSection, /timeline\?\.handoffState === 'idle'/);
+  assert.match(viewSection, /sameTransport/);
+  assert.match(viewSection, /leaderGeneration === currentGeneration/);
+  assert.match(viewSection, /completeRoomSong\(\{ handoffId: pendingHandoff\.handoffId \}\)/,
+    'reconnect-safe timeline proof must be equivalent to the direct complete packet');
 });
 
 test('commit timeout parks and re-mutes the target before asking the server for a fresh prepare phase', async () => {

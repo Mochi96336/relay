@@ -110,3 +110,46 @@ test('a successful startup clears its deadline without disposing the adopted res
   assert.equal(stream.stopped, false);
   assert.equal(timers.cleared(), 1);
 });
+
+/**
+ * The gate stores its timers on the instance and then calls them as
+ * `this.setTimer(...)`, which hands the native timer a receiver that is not the
+ * window. Chrome tolerates that; Safari and Firefox throw "can only call
+ * window.setTimeout on instances of window" - from inside the microphone start
+ * path, so a healthy phone reports that its microphone is unavailable.
+ *
+ * Node does not enforce the receiver, so the browser rule is simulated here.
+ * Every other test injects fakes, which is exactly why this went unnoticed.
+ */
+test('does not hand the native timers a receiver they will refuse', () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let refusals = 0;
+
+  // A timer as strict about its receiver as the browsers' are.
+  globalThis.setTimeout = function strictSetTimeout(this: unknown, ...args: unknown[]) {
+    if (this !== globalThis) {
+      refusals += 1;
+      throw new TypeError('can only call window.setTimeout on instances of window');
+    }
+    return (realSetTimeout as (...a: unknown[]) => unknown)(...args);
+  } as typeof globalThis.setTimeout;
+  globalThis.clearTimeout = function strictClearTimeout(this: unknown, ...args: unknown[]) {
+    if (this !== globalThis) {
+      refusals += 1;
+      throw new TypeError('can only call window.clearTimeout on instances of window');
+    }
+    return (realClearTimeout as (...a: unknown[]) => unknown)(...args);
+  } as typeof globalThis.clearTimeout;
+
+  try {
+    const gate = new MicStartupGate();
+    const attempt = gate.begin();
+    gate.cancel(attempt);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+
+  assert.equal(refusals, 0, 'the gate called a native timer with itself as the receiver');
+});

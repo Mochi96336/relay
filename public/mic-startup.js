@@ -28,8 +28,15 @@ export class MicStartupTimeoutError extends Error {
 export class MicStartupGate {
   constructor({
     timeoutMs = MIC_STARTUP_TIMEOUT_MS,
-    setTimer = globalThis.setTimeout,
-    clearTimer = globalThis.clearTimeout,
+    // Bound, because these are stored on the instance and then called as
+    // `this.setTimer(...)`. That hands the timer `this` = the gate, and the
+    // native timers refuse a receiver that is not the window: Chrome tolerates
+    // it, Safari and Firefox throw "can only call window.setTimeout on
+    // instances of window" - from inside the microphone start path, which is
+    // how a healthy phone ends up reporting that its microphone is
+    // unavailable. An injected fake is a plain function and does not care.
+    setTimer = globalThis.setTimeout.bind(globalThis),
+    clearTimer = globalThis.clearTimeout.bind(globalThis),
   } = {}) {
     this.timeoutMs = timeoutMs;
     this.setTimer = setTimer;

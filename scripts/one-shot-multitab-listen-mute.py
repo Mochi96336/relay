@@ -12,6 +12,25 @@ def replace_once(path: str, old: str, new: str, label: str):
 
 replace_once(
     'public/presence.js',
+    """  function handleMessage(message) {
+""",
+    """  function publishSessionStatus() {
+    if (!latestSession) return;
+    window.dispatchEvent(new CustomEvent('relay-session-status', { detail: latestSession }));
+  }
+
+  // Module scripts such as Listen can start after the first Presence snapshot
+  // has already arrived. Let late consumers explicitly request a replay instead
+  // of relying on script/network timing.
+  window.addEventListener('relay-request-session-status', publishSessionStatus);
+
+  function handleMessage(message) {
+""",
+    'add replayable room session projection',
+)
+
+replace_once(
+    'public/presence.js',
     """    latestSession = message;
     renderParticipants();
   }
@@ -19,9 +38,10 @@ replace_once(
     """    latestSession = message;
     renderParticipants();
     // Every tab has its own Presence socket but tabs from the same browser share
-    // one participant capability/ID. Publish the authoritative owner snapshot
-    // locally so a Listen tab can mute when a sibling tab owns the microphone.
-    window.dispatchEvent(new CustomEvent('relay-session-status', { detail: message }));
+    // one participant capability/ID. Project authoritative room ownership to
+    // local page consumers so sibling Listen tabs follow the server, not each
+    // other's process-local Mic events.
+    publishSessionStatus();
   }
 """,
     'publish authoritative room session status to page consumers',
@@ -136,43 +156,70 @@ replace_once(
 
 replace_once(
     'public/listen.js',
+    """  toggle.addEventListener('click', async () => {
+    if (micForcedMuted || playbackForcedMuted) return;
+""",
+    """  toggle.addEventListener('click', async () => {
+    if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted) return;
+""",
+    'block Listen toggles while room Mic ownership forces mute',
+)
+
+replace_once(
+    'public/listen.js',
     """  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMicBoundary(t('listen.micFailedResume')));
   window.addEventListener('relay:playback-view', (event) => {
 """,
     """  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMicBoundary(t('listen.micFailedResume')));
-  window.addEventListener('relay-session-status', (event) => {
+
+  function applyRoomSessionStatus(status) {
     const participantId = typeof window.relayParticipantId === 'string'
       ? window.relayParticipantId
       : null;
-    const ownerId = typeof event.detail?.micOwnerId === 'string'
-      ? event.detail.micOwnerId
+    const ownerId = typeof status?.micOwnerId === 'string'
+      ? status.micOwnerId
       : null;
     setRoomMicForcedMute(Boolean(participantId && ownerId === participantId));
-  });
+  }
+
+  window.addEventListener('relay-session-status', (event) => applyRoomSessionStatus(event.detail));
+  // Presence may have received its first snapshot before this module loaded.
+  // Request an immediate replay so initial multi-tab ownership cannot race the
+  // listener registration above.
+  window.dispatchEvent(new Event('relay-request-session-status'));
+
   window.addEventListener('relay:playback-view', (event) => {
 """,
-    'consume authoritative Mic ownership in every tab',
+    'consume and replay authoritative Mic ownership in every tab',
 )
 
 path = Path('test/mic-lifecycle-recovery.test.ts')
 text = path.read_text()
 anchor = """test('hardware input ending completes the same Mic lifecycle', () => {
 """
-contract = """test('room Mic ownership force-mutes Listen in sibling tabs that share the participant identity', () => {
-  const presenceSessionAt = presence.indexOf('latestSession = message;');
-  const presenceReconnectAt = presence.indexOf('function scheduleReconnect', presenceSessionAt);
-  assert.ok(presenceSessionAt >= 0 && presenceReconnectAt > presenceSessionAt);
-  const presenceStatus = presence.slice(presenceSessionAt, presenceReconnectAt);
-  assert.match(presenceStatus, /relay-session-status/,
+contract = r"""test('room Mic ownership force-mutes Listen in sibling tabs that share the participant identity', () => {
+  const publishAt = presence.indexOf('function publishSessionStatus');
+  const handleAt = presence.indexOf('function handleMessage', publishAt);
+  assert.ok(publishAt >= 0 && handleAt > publishAt);
+  const presenceProjection = presence.slice(publishAt, handleAt);
+  assert.match(presenceProjection, /relay-session-status/,
     'Presence must project authoritative room ownership to each tab');
+  assert.match(presenceProjection, /relay-request-session-status/,
+    'late module consumers must be able to replay the current ownership snapshot');
 
   assert.match(listen, /let roomMicForcedMuted = false/);
   assert.match(listen, /return userMuted \|\| micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted/);
   assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) return 'mic'/);
   assert.match(listen, /function restoreAfterMic[\s\S]*if \(roomMicForcedMuted\)[\s\S]*listen\.micOwned/,
     'a local terminal event must not unmute while another tab still owns the room Mic');
-  assert.match(listen, /relay-session-status[\s\S]*ownerId === participantId[\s\S]*setRoomMicForcedMute/,
+  assert.match(listen, /setRoomMicForcedMute\(Boolean\(participantId && ownerId === participantId\)\)/,
     'all tabs with the owner participant identity must follow server Mic ownership');
+  const sessionListenerAt = listen.indexOf("window.addEventListener('relay-session-status'");
+  const replayAt = listen.indexOf("window.dispatchEvent(new Event('relay-request-session-status'))", sessionListenerAt);
+  assert.ok(sessionListenerAt >= 0 && replayAt > sessionListenerAt,
+    'Listen must subscribe before requesting the initial authoritative replay');
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted\) return/,
+    'forced room ownership cannot be bypassed by the Listen toggle');
 });
 
 """

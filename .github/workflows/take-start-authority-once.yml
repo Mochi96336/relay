@@ -44,6 +44,7 @@ jobs:
             src/server.ts \
             src/take-start-policy.ts \
             test/product-actions.test.ts \
+            test/take-owner-release-evidence-server.test.ts \
             test/take-server.test.ts \
             test/take-start-policy.test.ts | sort)"
           test "$actual" = "$expected" || {
@@ -55,7 +56,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - name: Run focused Take authority tests
-        run: node --import tsx --test --test-concurrency=1 test/take-start-policy.test.ts test/product-actions.test.ts test/take-server.test.ts test/voice-only-room.test.ts
+        run: node --import tsx --test --test-concurrency=1 test/take-start-policy.test.ts test/product-actions.test.ts test/take-server.test.ts test/take-owner-release-evidence-server.test.ts test/voice-only-room.test.ts
       - name: Run full suite
         run: npm test
 
@@ -68,6 +69,7 @@ jobs:
             src/server.ts \
             src/take-start-policy.ts \
             test/product-actions.test.ts \
+            test/take-owner-release-evidence-server.test.ts \
             test/take-server.test.ts \
             test/take-start-policy.test.ts
           git commit -m 'refactor: centralize Take start authority'

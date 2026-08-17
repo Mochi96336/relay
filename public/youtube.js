@@ -35,6 +35,7 @@ let handoffReadyTimers = [];
 let localCommandPending = null;
 let serverMutation = null;
 let playbackRole = 'connecting';
+let continuationRestoreKey = null;
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
@@ -186,10 +187,11 @@ function readSnapshot() {
 
 function activeServerMutation() {
   if (!serverMutation) return null;
-  // A room command stays active until the server proves completion/failure or
-  // reports that no command is pending. Local timeouts would otherwise erase
-  // the recovery identity before the authoritative command timeout lands.
-  if (serverMutation.source === 'room-command') return serverMutation;
+  // Room commands and same-tab reload restoration stay authoritative until the
+  // server proves convergence. Local timeouts would otherwise erase the exact
+  // mutation identity while the iframe is still loading or autoplay is waiting
+  // on a user gesture.
+  if (serverMutation.source === 'room-command' || serverMutation.source === 'restore') return serverMutation;
   if (performance.now() <= serverMutation.expiresAt) return serverMutation;
   serverMutation = null;
   return null;
@@ -336,6 +338,15 @@ function renderSnapshot(snapshot) {
 
   if (mutationContext?.suppressTelemetry) return;
 
+  // A reload continuation creates a fresh iframe whose first observable state
+  // can be CUED at 0 seconds. That transient state is not room truth. Publish
+  // only after the fresh player has converged on the authoritative snapshot;
+  // that packet is the proof SongSession needs to promote the new generation.
+  if (
+    mutationContext?.source === 'restore'
+    && !snapshotMatchesDesired(snapshot, mutationContext)
+  ) return;
+
   window.dispatchEvent(new CustomEvent('relay:youtube-telemetry', {
     detail: {
       videoId: snapshot.videoId,
@@ -418,6 +429,47 @@ function cuePendingHandoff() {
   }
 }
 
+function applyAuthoritativeRestore() {
+  if (serverMutation?.source !== 'restore' || !playerReady || !player) return false;
+  const mutation = serverMutation;
+  const desired = mutation.desired;
+  if (!desired) return false;
+
+  const projectedPosition = projectedDesiredPosition(mutation);
+  const targetPosition = Number.isFinite(projectedPosition)
+    ? Math.max(0, projectedPosition)
+    : desired.positionSeconds;
+
+  loadedVideoId = desired.videoId;
+  previousSnapshot = null;
+  mutation.desired = { ...desired, positionSeconds: targetPosition };
+  mutation.appliedAtPerformanceMs = performance.now();
+
+  if (desired.state === 5) {
+    player.cueVideoById({
+      videoId: desired.videoId,
+      startSeconds: targetPosition,
+    });
+    player.setPlaybackRate(desired.playbackRate);
+  } else {
+    if (actualVideoId() !== desired.videoId) {
+      player.cueVideoById({
+        videoId: desired.videoId,
+        startSeconds: targetPosition,
+      });
+    }
+    player.seekTo(targetPosition, true);
+    player.setPlaybackRate(desired.playbackRate);
+    if (desired.state === 1) player.playVideo();
+    else player.pauseVideo();
+  }
+
+  noteNode.textContent = 'Restoring this playback after reload…';
+  setTimeout(sampleNow, 100);
+  setTimeout(sampleNow, 260);
+  return true;
+}
+
 function handleReady(event) {
   playerReady = true;
   const iframe = event.target.getIframe();
@@ -446,6 +498,16 @@ function handleReady(event) {
       .catch(console.error)
       .finally(startTelemetry);
     return;
+  }
+
+  if (serverMutation?.source === 'restore') {
+    try {
+      applyAuthoritativeRestore();
+    } catch (error) {
+      console.warn('Could not apply reload playback restore', error);
+      serverMutation = null;
+      continuationRestoreKey = null;
+    }
   }
 
   startTelemetry();
@@ -621,9 +683,11 @@ async function restoreAuthoritativeRoom(room) {
 
   const videoId = typeof room.videoId === 'string' ? room.videoId : null;
   if (!videoId) {
+    continuationRestoreKey = null;
+    if (serverMutation?.source === 'restore') serverMutation = null;
     if (playerReady && player) {
       serverMutation = {
-        source: 'restore',
+        source: 'restore-empty',
         action: 'pause',
         suppressTelemetry: true,
         expiresAt: performance.now() + 1_500,
@@ -636,30 +700,32 @@ async function restoreAuthoritativeRoom(room) {
   const targetTime = Number(room.serverTime);
   const desiredState = Number(room.state);
   const playbackRate = Number(room.playbackRate);
+  const desired = {
+    videoId,
+    positionSeconds: Number.isFinite(targetTime) ? Math.max(0, targetTime) : 0,
+    state: desiredState === 1 || desiredState === 3 ? 1 : desiredState === 5 ? 5 : 2,
+    playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
+  };
 
   try {
     serverMutation = {
       source: 'restore',
       action: 'restore',
+      desired,
+      appliedAtPerformanceMs: performance.now(),
       suppressTelemetry: false,
-      expiresAt: performance.now() + 2_000,
+      expiresAt: Number.POSITIVE_INFINITY,
     };
     await ensurePlayer(videoId);
-    if (!playerReady || !player) return;
-
-    if (actualVideoId() !== videoId) {
-      loadedVideoId = videoId;
-      previousSnapshot = null;
-      player.cueVideoById({ videoId, startSeconds: Number.isFinite(targetTime) ? Math.max(0, targetTime) : 0 });
+    if (!playerReady || !player) {
+      noteNode.textContent = 'Restoring this playback after reload…';
+      return;
     }
-    if (Number.isFinite(targetTime)) player.seekTo(Math.max(0, targetTime), true);
-    if (Number.isFinite(playbackRate)) player.setPlaybackRate(playbackRate);
-    if (desiredState === 1) player.playVideo();
-    else if ([0, 2, 5].includes(desiredState)) player.pauseVideo();
-    setTimeout(sampleNow, 100);
-    setTimeout(sampleNow, 260);
+    applyAuthoritativeRestore();
   } catch (error) {
     console.warn('Could not restore authoritative room song', error);
+    if (serverMutation?.source === 'restore') serverMutation = null;
+    continuationRestoreKey = null;
   }
 }
 
@@ -798,14 +864,57 @@ function trackedRoomCommandId() {
 }
 
 window.addEventListener('relay:playback-view', (event) => {
-  const nextRole = event.detail?.role;
+  const detail = event.detail ?? {};
+  const nextRole = detail.role;
   if (!['empty', 'holder', 'preparing', 'observer'].includes(nextRole)) return;
+
+  const timeline = detail.timeline && typeof detail.timeline === 'object'
+    ? detail.timeline
+    : null;
+  const leaderGeneration = Number(timeline?.playbackGeneration);
+  const currentGeneration = Number(detail.playbackGeneration);
+  const sameTransport = Boolean(
+    timeline
+    && typeof detail.transportId === 'string'
+    && timeline.playbackTransportId === detail.transportId,
+  );
+  const continuingSameTransport = Boolean(
+    nextRole === 'holder'
+    && typeof detail.room?.videoId === 'string'
+    && sameTransport
+    && Number.isInteger(leaderGeneration)
+    && Number.isInteger(currentGeneration)
+    && currentGeneration > leaderGeneration,
+  );
+  const continuationComplete = Boolean(
+    nextRole === 'holder'
+    && sameTransport
+    && Number.isInteger(leaderGeneration)
+    && Number.isInteger(currentGeneration)
+    && currentGeneration === leaderGeneration,
+  );
+
+  if (continuingSameTransport) {
+    const restoreKey = `${detail.transportId}:${currentGeneration}:${leaderGeneration}`;
+    if (continuationRestoreKey !== restoreKey) {
+      continuationRestoreKey = restoreKey;
+      restoreAuthoritativeRoom(detail.room).catch((error) => {
+        continuationRestoreKey = null;
+        console.error(error);
+      });
+    }
+  } else if (continuationComplete) {
+    continuationRestoreKey = null;
+    if (serverMutation?.source === 'restore') serverMutation = null;
+  }
+
   if (nextRole === playbackRole) return;
 
   playbackRole = nextRole;
   if (nextRole === 'observer') {
+    continuationRestoreKey = null;
     localCommandPending = null;
-    if (serverMutation?.source === 'room-command') serverMutation = null;
+    if (serverMutation?.source === 'room-command' || serverMutation?.source === 'restore') serverMutation = null;
     if (playerReady && player) {
       serverMutation = {
         source: 'observer-quiet',

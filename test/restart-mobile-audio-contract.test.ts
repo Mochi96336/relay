@@ -62,10 +62,17 @@ test('Listen consumes mix rate, stays at unity or below, and recovers suspended 
   assert.match(listenSource, /message\.mixSampleRate \?\? message\.sampleRate/);
   assert.match(listenSource, /return \(percent \/ 100\) \*\* 1\.5;/);
   assert.doesNotMatch(listenSource, /\* 8;/);
+  // iOS Safari can leave `resume()` pending for the life of the page - no
+  // error, no resolution - and awaiting it stranded the whole graph: the
+  // worklet was never fetched and the cached setup promise never cleared, so
+  // Listen stayed dead for the rest of the session.
   assert.match(listenSource, /function startResume\(context\)/);
   assert.match(listenSource, /const pending = context\.resume\(\)/);
   assert.match(listenSource, /function resumeAudioGraph\(\) \{\n    startResume\(audioContext\);\n  \}/);
   assert.doesNotMatch(listenSource, /await (?:audioContext|context)\.resume\(\)/);
+  // Including through the wrapper: it returns nothing precisely so that it
+  // cannot be waited on by accident.
+  assert.doesNotMatch(listenSource, /await\s+resumeAudioGraph\(/);
   assert.match(listenSource, /addEventListener\('statechange'/);
   assert.match(listenSource, /document\.addEventListener\('visibilitychange'/);
   assert.match(listenSource, /window\.addEventListener\('pageshow', recoverAudioGraph\)/);

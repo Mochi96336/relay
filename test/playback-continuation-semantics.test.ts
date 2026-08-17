@@ -62,7 +62,7 @@ test('reload desired state maps terminal YouTube state to paused at the same pos
     playbackRate: 1,
   });
 
-  assert.equal(reloadDesiredFromRoom({ videoId: 'not-a-video' }), null);
+  assert.equal(reloadDesiredFromRoom({ videoId: 'bad' }), null);
 });
 
 test('reload continuation key changes when authoritative room revision changes', () => {

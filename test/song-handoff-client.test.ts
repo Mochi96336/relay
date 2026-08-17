@@ -34,6 +34,24 @@ test('a replacement handoff retires delayed readiness checks from the previous p
   );
 });
 
+test('handoff readiness and completion require the video actually reported by YouTube', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+
+  const reportSection = topLevelFunctionSection(source, 'function reportedVideoId()');
+  assert.match(reportSection, /getVideoData/);
+  assert.doesNotMatch(reportSection, /loadedVideoId/, 'reported video proof must never fall back to local intent');
+
+  const readySection = topLevelFunctionSection(source, 'function announceHandoffReady()');
+  assert.match(readySection, /reportedVideoId\(\) !== pendingHandoff\.videoId/);
+
+  const commitSection = topLevelFunctionSection(source, 'function commitRoomSong');
+  assert.match(commitSection, /reportedVideoId\(\) !== pendingHandoff\.videoId/);
+
+  const renderSection = topLevelFunctionSection(source, 'function renderSnapshot');
+  assert.match(renderSection, /pendingHandoff\?\.phase === 'committing'/);
+  assert.match(renderSection, /reportedVideoId\(\) !== pendingHandoff\.videoId/);
+});
+
 test('playback transport is registered independently and Mic intent is explicit', async () => {
   const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 

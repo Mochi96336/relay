@@ -32,7 +32,7 @@ old_env = """      RELAY_CALIBRATION_PROBE: '0',
 """
 new_env = """      RELAY_CALIBRATION_PROBE: '0',
       RELAY_HEARTBEAT_MS: '60000',
-      RELAY_LIVE_PREBUFFER_MS: '0',
+      RELAY_LIVE_PREBUFFER_MS: '1',
     };
 """
 if shutdown_text.count(old_env) != 1:

@@ -18,6 +18,8 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   const MAX_QUEUE_MS = 800;
 
   let socket = null;
+  let pendingSocket = null;
+  let transportEpoch = 0;
   let reconnectTimer = null;
   let audioContext = null;
   let playbackNode = null;
@@ -142,7 +144,13 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
 
   function closeTransport() {
     transportEnabled = false;
+    transportEpoch += 1;
     clearReconnect();
+    const opening = pendingSocket;
+    pendingSocket = null;
+    if (opening) {
+      try { opening.close(); } catch {}
+    }
     const closing = socket;
     socket = null;
     if (closing) {
@@ -177,26 +185,46 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   async function connect() {
-    if (!transportEnabled || effectiveMuted() || !audioContext || !playbackNode) return;
+    if (
+      !transportEnabled
+      || effectiveMuted()
+      || !audioContext
+      || !playbackNode
+      || pendingSocket
+    ) return;
+    const connectEpoch = transportEpoch;
     const next = new WebSocket(wsUrl());
+    pendingSocket = next;
     next.binaryType = 'arraybuffer';
-    await new Promise((resolve, reject) => {
-      next.addEventListener('open', resolve, { once: true });
-      next.addEventListener('error', reject, { once: true });
-    });
+    try {
+      await new Promise((resolve, reject) => {
+        next.addEventListener('open', resolve, { once: true });
+        next.addEventListener('error', () => reject(new Error('Listen WebSocket connection failed.')), { once: true });
+        next.addEventListener('close', () => reject(new Error('Listen WebSocket closed before opening.')), { once: true });
+      });
+    } catch (error) {
+      try { next.close(); } catch {}
+      throw error;
+    } finally {
+      if (pendingSocket === next) pendingSocket = null;
+    }
 
-    if (!transportEnabled || effectiveMuted()) {
+    if (connectEpoch !== transportEpoch || !transportEnabled || effectiveMuted()) {
       next.close();
       return;
     }
 
+    const previous = socket;
     socket = next;
+    if (previous && previous !== next) {
+      try { previous.close(); } catch {}
+    }
     playbackNode.port.postMessage({ type: 'reset' });
     sendParticipantAuthentication(next);
     next.send(JSON.stringify({ type: 'register', role: 'monitor' }));
 
     next.addEventListener('message', (event) => {
-      if (socket !== next) return;
+      if (socket !== next || connectEpoch !== transportEpoch) return;
       if (typeof event.data === 'string') {
         try { handleMessage(JSON.parse(event.data)); } catch {}
         return;
@@ -208,7 +236,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     });
 
     next.addEventListener('close', () => {
-      if (socket !== next) return;
+      if (socket !== next || connectEpoch !== transportEpoch) return;
       socket = null;
       if (!transportEnabled || effectiveMuted()) return;
       render(t('listen.reconnecting'));

@@ -14,6 +14,15 @@ const HANDOFF_TIME_TOLERANCE_SECONDS = 1.5;
  * must not be able to hold the room indefinitely.
  */
 const HANDOFF_PREPARE_TIMEOUT_MS = 20_000;
+/**
+ * A commit should be a short proof window, not another indefinite state.
+ *
+ * Once the target says it is ready the old leader is still kept alive until
+ * matching target telemetry arrives. If that proof never appears, roll the
+ * handoff back to preparation so a later retry has to cross the ready boundary
+ * again instead of leaving the room stuck in `committing` forever.
+ */
+const HANDOFF_COMMIT_TIMEOUT_MS = 5_000;
 const HOLDOVER_TIME_TOLERANCE_SECONDS = 0.9;
 /** YT.PlayerState.BUFFERING: on its way to a state, not refusing one. */
 const BUFFERING_STATE = 3;
@@ -75,13 +84,14 @@ type Handoff = {
   target: PlaybackIdentity;
   state: 'preparing' | 'committing';
   startedAtMs: number;
+  commitStartedAtMs: number | null;
   /**
    * Whether the target has ever reported itself prepared.
    *
-   * A target that has acknowledged the plan is trusted to take as long as it
-   * needs, because a blocked autoplay legitimately waits for a user gesture.
-   * A target that has never answered at all is a different situation, and is
-   * the one the preparation deadline exists for.
+   * A target that has acknowledged the plan and explicitly returned to
+   * preparation (for example because autoplay needs a real user gesture) is
+   * trusted to wait there. The short-lived `committing` phase has its own
+   * deadline above because it is only waiting for proof telemetry.
    */
   everReady: boolean;
 };
@@ -149,6 +159,7 @@ export class SongSession {
       target,
       state: 'preparing',
       startedAtMs: nowMs,
+      commitStartedAtMs: null,
       everReady: false,
     };
     this.bump();
@@ -176,6 +187,7 @@ export class SongSession {
         target: identity,
         state: 'preparing',
         startedAtMs: nowMs,
+        commitStartedAtMs: null,
         everReady: false,
       };
       this.bump();
@@ -203,6 +215,7 @@ export class SongSession {
     this.handoff.everReady = true;
     if (this.handoff.state !== 'committing') {
       this.handoff.state = 'committing';
+      this.handoff.commitStartedAtMs = nowMs;
       this.bump();
     }
     return this.handoffPlan(nowMs);
@@ -219,6 +232,7 @@ export class SongSession {
 
     if (this.handoff.state === 'preparing') return false;
     this.handoff.state = 'preparing';
+    this.handoff.commitStartedAtMs = null;
     this.bump();
     return true;
   }
@@ -236,7 +250,8 @@ export class SongSession {
   }
 
   /**
-   * Abandons a handoff whose target is never going to answer.
+   * Abandons a handoff whose target is never going to answer and rolls a stale
+   * commit back to preparation while preserving the old playback leader.
    *
    * `targetPresent` is supplied by the caller because SongSession does not know
    * about sockets. Without this, closing the tab that was about to take over
@@ -247,6 +262,21 @@ export class SongSession {
   sweepHandoff(targetPresent: boolean, nowMs = performance.now()) {
     if (!this.handoff) return false;
     if (!targetPresent) return this.cancelHandoff();
+
+    if (
+      this.handoff.state === 'committing'
+      && this.handoff.commitStartedAtMs !== null
+      && nowMs - this.handoff.commitStartedAtMs > HANDOFF_COMMIT_TIMEOUT_MS
+    ) {
+      this.handoff.state = 'preparing';
+      this.handoff.commitStartedAtMs = null;
+      this.bump();
+      // This is deliberately not a cancellation. The server's sweep caller
+      // interprets true as "send song-handoff-cancelled"; returning false keeps
+      // the target locked and requires it to cross the ready boundary again.
+      return false;
+    }
+
     if (this.handoff.everReady) return false;
     if (nowMs - this.handoff.startedAtMs <= HANDOFF_PREPARE_TIMEOUT_MS) return false;
     return this.cancelHandoff();

@@ -198,10 +198,6 @@ function readSnapshot() {
 
 function activeServerMutation() {
   if (!serverMutation) return null;
-  // Room commands and same-tab reload restoration stay authoritative until the
-  // server proves convergence. Local timeouts would otherwise erase the exact
-  // mutation identity while the iframe is still loading or autoplay is waiting
-  // on a user gesture.
   if (serverMutation.source === 'room-command' || serverMutation.source === 'restore') return serverMutation;
   if (performance.now() <= serverMutation.expiresAt) return serverMutation;
   serverMutation = null;
@@ -209,9 +205,6 @@ function activeServerMutation() {
 }
 
 function requestRoomSongCommand(detail) {
-  // The server is the playback-authority boundary. In particular, a page that
-  // still renders as observer may legitimately recover a stale/disconnected
-  // leader. Do not veto that request from a possibly older client snapshot.
   localCommandPending = {
     action: detail.action,
     commandId: null,
@@ -271,10 +264,6 @@ function localMutationForSnapshot(snapshot) {
   const mutationContext = activeServerMutation();
   if (mutationContext && mutationContext.source !== 'room-command') return null;
 
-  // Server apply itself is not a new product intent. If the player has reached
-  // the latest complete desired state, report proof instead of recursively
-  // turning that state transition into another command. A later deviation from
-  // that desired state is a genuine user gesture and may supersede it.
   if (mutationContext?.source === 'room-command' && snapshotMatchesDesired(snapshot, mutationContext)) {
     return null;
   }
@@ -326,48 +315,23 @@ function renderSnapshot(snapshot) {
   }
 
   const mutationContext = activeServerMutation();
-
-  // Speculative warming is strictly local. In particular, an empty/recoverable
-  // surface must not turn the hidden muted playback performed while the Mic
-  // confirmation is open into a new room command or a competing media clock.
   if (speculativePrewarm && !pendingHandoff) return;
-
-  // A normal observer never publishes a competing media clock. A server-applied
-  // room command is different: the server has already authorized this exact
-  // transport as the recovery target, so it must be allowed to publish proof
-  // even before the next snapshot promotes the page from observer to holder.
   if (playbackRole === 'observer' && mutationContext?.source !== 'room-command') return;
-
-  // During preparation the target player is deliberately loading while muted
-  // before it owns the room clock. Do not turn that local preparation into
-  // product input.
   if (pendingHandoff?.phase === 'preparing') return;
 
-  // Even after commit, the expected video id is not proof that the iframe has
-  // switched. YouTube may temporarily return no video data while changing
-  // media; loadedVideoId is only our intent. Never let that fallback complete a
-  // handoff or overwrite the room clock with the outgoing video's position.
   if (
     pendingHandoff?.phase === 'committing'
     && reportedVideoId() !== pendingHandoff.videoId
   ) return;
 
-  // Detect a newer native control gesture even while an earlier command is
-  // awaiting acceptance/proof. Stable intermediate telemetry stays suppressed
-  // until the latest local intent has a server apply.
   const mutation = localMutationForSnapshot(snapshot);
   if (mutation) {
     requestRoomSongCommand(mutation);
     return;
   }
   if (localCommandPending) return;
-
   if (mutationContext?.suppressTelemetry) return;
 
-  // A reload continuation creates a fresh iframe whose first observable state
-  // can be CUED at 0 seconds. That transient state is not room truth. Publish
-  // only after the fresh player has converged on the authoritative snapshot;
-  // that packet is the proof SongSession needs to promote the new generation.
   if (
     mutationContext?.source === 'restore'
     && !snapshotMatchesDesired(snapshot, mutationContext)
@@ -416,10 +380,6 @@ function announceHandoffReady() {
 
   const state = Number(player.getPlayerState());
   const bufferedFraction = Number(player.getVideoLoadedFraction());
-  // CUED (5) only proves that YouTube accepted the video identity. It does not
-  // prove that media has been requested/buffered. A real handoff may announce
-  // readiness only after the player has entered an active media state and the
-  // API reports a non-zero buffered fraction.
   if (![1, 2, 3].includes(state)) return false;
   if (!Number.isFinite(bufferedFraction) || bufferedFraction <= 0) return false;
 
@@ -434,9 +394,6 @@ function announceHandoffReady() {
 
 function scheduleHandoffReadyChecks() {
   clearHandoffReadyTimers();
-  // Buffered fraction can advance without another state-change callback. Keep
-  // polling beneath the server's 20 s prepare deadline so a slow phone can
-  // become ready without a reload or another user gesture.
   for (const delayMs of [80, 220, 500, 900, 1_500, 2_400, 4_000, 7_000, 11_000, 16_000]) {
     handoffReadyTimers.push(setTimeout(announceHandoffReady, delayMs));
   }
@@ -457,6 +414,13 @@ function restorePrewarmMute(prewarm) {
   }
 }
 
+function restoreHandoffMute(handoff) {
+  if (!handoff || !playerReady || !player) return;
+  if (handoff.prewarmWasMuted === false) {
+    try { player.unMute(); } catch {}
+  }
+}
+
 function primeSpeculativePrewarm() {
   if (!speculativePrewarm || pendingHandoff || !playerReady || !player) return false;
 
@@ -469,9 +433,6 @@ function primeSpeculativePrewarm() {
     try { player.mute(); } catch {}
     loadedVideoId = prewarm.videoId;
     previousSnapshot = null;
-    // cueVideoById only loads a thumbnail. A muted load is deliberate here: it
-    // makes YouTube request and decode the actual media while the confirmation
-    // is open, without becoming audible or gaining any room authority.
     player.loadVideoById({
       videoId: prewarm.videoId,
       startSeconds: targetTime,
@@ -556,9 +517,6 @@ function cuePendingHandoff() {
         player.seekTo(pendingHandoff.targetTime, true);
       }
     } else {
-      // A cold formal handoff needs the same real-media preparation as the
-      // speculative path. `loadVideoById` starts the request/decode pipeline;
-      // muting above keeps it inaudible until the server commits authority.
       player.loadVideoById({
         videoId: pendingHandoff.videoId,
         startSeconds: Math.max(0, pendingHandoff.targetTime),
@@ -645,9 +603,6 @@ function handleReady(event) {
       }
     : null;
   if (pendingRoomApply) {
-    // The first load can create the iframe before YT reports ready. Re-apply the
-    // latest self-contained desired state here rather than relying on whatever
-    // initial state the iframe happened to choose.
     applyRoomSongCommand(pendingRoomApply)
       .catch(console.error)
       .finally(startTelemetry);
@@ -672,9 +627,6 @@ function handleStateChange(event) {
   sampleNow();
   if (speculativePrewarm && !pendingHandoff) {
     try { player.setPlaybackRate(speculativePrewarm.playbackRate); } catch {}
-    // A paused/cued authoritative room still benefits from forcing one real
-    // media request. Stop as soon as the muted player proves it can play so the
-    // speculative copy does not drift away from the fixed room position.
     if (speculativePrewarm.desiredState !== 1 && event.data === 1) {
       try { player.pauseVideo(); } catch {}
     }
@@ -822,8 +774,6 @@ async function applyRoomSongCommand(message) {
 
   try {
     await ensurePlayer(desired.videoId);
-    // A newer apply may have arrived while the YouTube API/player was loading.
-    // Never let the older async continuation mutate playback afterward.
     if (serverMutation?.source !== 'room-command' || serverMutation.commandId !== commandId) return;
     if (!playerReady || !player) {
       if (desired.state === 5) {
@@ -833,9 +783,6 @@ async function applyRoomSongCommand(message) {
       throw new Error('player not ready');
     }
 
-    // Keep the previous sample across a command apply. The full desired-state
-    // matcher distinguishes server mutations, while preserving enough history
-    // to notice a user seek/play/pause that lands before the next sample.
     loadedVideoId = desired.videoId;
     serverMutation.appliedAtPerformanceMs = performance.now();
 
@@ -946,10 +893,6 @@ async function prepareRoomSong(message) {
     restorePrewarmMute(preparedPrewarm);
   }
 
-  // A newer handoff can replace an older preparation on the same page, for
-  // example when Mic ownership changes while a reload is still converging.
-  // Retire every delayed readiness/commit callback before installing the new
-  // identity; otherwise old work can mutate the replacement handoff.
   clearHandoffReadyTimers();
   clearHandoffCommitTimer();
   localCommandPending = null;
@@ -1016,9 +959,7 @@ function commitRoomSong(message) {
     if (!Number.isFinite(currentTime) || Math.abs(currentTime - pendingHandoff.targetTime) > 0.75) {
       player.seekTo(pendingHandoff.targetTime, true);
     }
-    if (pendingHandoff.prewarmWasMuted === false) {
-      try { player.unMute(); } catch {}
-    }
+    try { player.mute(); } catch {}
     if (desiredState === 1) player.playVideo();
     else player.pauseVideo();
 
@@ -1057,36 +998,30 @@ function releaseRoomSong(message) {
   noteNode.textContent = t('song.movedWithMic');
 }
 
-/**
- * The server gave up waiting for this player to take over.
- *
- * Dropping the pending state matters as much as the note: a stale prepared
- * handoff would otherwise keep answering with a `handoffId` the server has
- * already forgotten.
- */
 function cancelRoomSongHandoff() {
   if (!pendingHandoff) return;
-  const prewarmWasMuted = pendingHandoff.prewarmWasMuted;
+  const cancelledHandoff = pendingHandoff;
   clearHandoffReadyTimers();
   clearHandoffCommitTimer();
   pendingHandoff = null;
   handoffReadySent = false;
   if (playerReady && player) {
     try { player.pauseVideo(); } catch {}
-    if (prewarmWasMuted === false) {
-      try { player.unMute(); } catch {}
-    }
+    restoreHandoffMute(cancelledHandoff);
   }
   noteNode.textContent = t('song.handoffCancelled');
 }
 
 function completeRoomSong(message) {
-  if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
+  if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return false;
+  const completedHandoff = pendingHandoff;
   clearHandoffReadyTimers();
   clearHandoffCommitTimer();
   pendingHandoff = null;
   handoffReadySent = false;
+  restoreHandoffMute(completedHandoff);
   noteNode.textContent = t('song.handoffComplete');
+  return true;
 }
 
 function loadVideo() {
@@ -1138,6 +1073,16 @@ window.addEventListener('relay:playback-view', (event) => {
     && Number.isInteger(currentGeneration)
     && currentGeneration === leaderGeneration,
   );
+
+  if (
+    pendingHandoff?.phase === 'committing'
+    && nextRole === 'holder'
+    && timeline?.handoffState === 'idle'
+    && sameTransport
+    && leaderGeneration === currentGeneration
+  ) {
+    completeRoomSong({ handoffId: pendingHandoff.handoffId });
+  }
 
   if (continuingSameTransport) {
     const restoreKey = playbackContinuationDecision({
@@ -1227,7 +1172,7 @@ window.addEventListener('relay:room-song-command-failed-ack', (event) => {
   const detail = event.detail ?? {};
   const commandId = detail.commandId;
   const trackedCommandId = trackedRoomCommandId();
-  if (trackedCommandId && commandId && trackedCommandId !== commandId) return;
+  if (trackedCommandId && commandId && trackedCommandId !== detail.commandId) return;
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
   noteNode.textContent = 'Playback could not apply the latest room intent. Restoring the authoritative room song.';
@@ -1239,9 +1184,6 @@ window.addEventListener('relay:room-song-command-status', (event) => {
   const trackedCommandId = trackedRoomCommandId();
   if (!trackedCommandId || pendingCommandId !== null) return;
 
-  // Completion is delivered before the terminal pending=null status on the
-  // same WebSocket. Reaching this branch therefore means timeout, disconnect,
-  // or another terminal cleanup for the latest command this page still tracks.
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
   noteNode.textContent = 'Latest room song intent ended without playback confirmation. Restoring the authoritative room song.';

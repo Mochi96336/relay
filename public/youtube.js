@@ -1,3 +1,5 @@
+import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
+
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const input = document.querySelector('#youtube-url');
 const loadButton = document.querySelector('#load-youtube');
@@ -694,7 +696,8 @@ async function restoreAuthoritativeRoom(room) {
   if (!room || typeof room !== 'object') return;
   localCommandPending = null;
 
-  const videoId = typeof room.videoId === 'string' ? room.videoId : null;
+  const desired = reloadDesiredFromRoom(room);
+  const videoId = desired?.videoId ?? null;
   if (!videoId) {
     continuationRestoreKey = null;
     if (serverMutation?.source === 'restore') serverMutation = null;
@@ -709,16 +712,6 @@ async function restoreAuthoritativeRoom(room) {
     }
     return;
   }
-
-  const targetTime = Number(room.serverTime);
-  const desiredState = Number(room.state);
-  const playbackRate = Number(room.playbackRate);
-  const desired = {
-    videoId,
-    positionSeconds: Number.isFinite(targetTime) ? Math.max(0, targetTime) : 0,
-    state: desiredState === 1 || desiredState === 3 ? 1 : desiredState === 5 ? 5 : 2,
-    playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
-  };
 
   try {
     serverMutation = {
@@ -913,8 +906,14 @@ window.addEventListener('relay:playback-view', (event) => {
   );
 
   if (continuingSameTransport) {
-    const restoreKey = `${detail.transportId}:${currentGeneration}:${leaderGeneration}`;
-    if (continuationRestoreKey !== restoreKey) {
+    const restoreKey = playbackContinuationDecision({
+      role: nextRole,
+      room: detail.room,
+      timeline,
+      transportId: detail.transportId,
+      playbackGeneration: currentGeneration,
+    }).key;
+    if (restoreKey && continuationRestoreKey !== restoreKey) {
       continuationRestoreKey = restoreKey;
       restoreAuthoritativeRoom(detail.room).catch((error) => {
         continuationRestoreKey = null;

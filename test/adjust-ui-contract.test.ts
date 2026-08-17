@@ -29,6 +29,19 @@ test('measured Mic input lives in the performance task while gain stays in Adjus
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
 });
 
+test('Mic capture epochs cannot reuse a previous capture gain recommendation', () => {
+  const resets = app.match(/latestMixHealth = null;/g) ?? [];
+  assert.ok(resets.length >= 3, 'initial state, stop, and new capture must all clear mix-health authority');
+
+  const captureReset = app.indexOf('captureGeneration += 1;');
+  const nextHealthReset = app.indexOf('latestMixHealth = null;', captureReset);
+  const nextLocalReset = app.indexOf('latestLocalMicLevel = null;', captureReset);
+  const healthReporting = app.indexOf('startAudioUplinkHealthReporting();', captureReset);
+  assert.ok(captureReset >= 0);
+  assert.ok(nextHealthReset > captureReset && nextHealthReset < healthReporting);
+  assert.ok(nextLocalReset > nextHealthReset && nextLocalReset < healthReporting);
+});
+
 /**
  * The slider curve is `(percent / 100) ** 1.5`, so 30% was 16% amplitude -
  * -15.7 dB before a listener heard anything, on every page load, because the

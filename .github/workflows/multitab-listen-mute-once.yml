@@ -1,0 +1,80 @@
+name: One-shot multi-tab Listen mute fix
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/multitab-listen-mute-once.yml
+      - scripts/one-shot-multitab-listen-mute.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-multitab-listen-mute-once
+  cancel-in-progress: false
+
+jobs:
+  patch-test-rebase-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/stabilize-room-kernel
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Apply exact multi-tab Listen patch
+        run: python3 scripts/one-shot-multitab-listen-mute.py
+
+      - name: Verify focused diff
+        run: |
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            public/listen.js \
+            public/presence.js \
+            test/mic-lifecycle-recovery.test.ts | sort)"
+          test "$actual" = "$expected" || {
+            printf 'Unexpected diff:\n%s\n' "$actual"
+            exit 1
+          }
+          git diff --stat
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check public/listen.js
+          node --check public/presence.js
+
+      - name: Run focused Mic lifecycle contracts
+        run: node --import tsx --test --test-concurrency=1 test/mic-lifecycle-recovery.test.ts
+
+      - name: Run full suite
+        run: npm test
+
+      - name: Commit tested product diff and remove gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/multitab-listen-mute-once.yml \
+            scripts/one-shot-multitab-listen-mute.py
+          git add -- public/listen.js public/presence.js test/mic-lifecycle-recovery.test.ts
+          git diff --cached --check
+          git commit -m 'fix: mute Listen across participant tabs'
+
+      - name: Rebase tested product commit onto latest branch and push
+        env:
+          BRANCH: agent/stabilize-room-kernel
+        run: |
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

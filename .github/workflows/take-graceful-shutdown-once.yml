@@ -66,10 +66,12 @@ jobs:
         run: |
           node --import tsx --test --test-concurrency=1 \
             test/server-take-shutdown.test.ts \
-            test/take-controller.test.ts \
+            test/take-controller-storage.test.ts \
             test/take-quality.test.ts \
             test/take-session.test.ts \
-            test/take-storage.test.ts
+            test/take-storage.test.ts \
+            test/wav-take-writer.test.ts \
+            test/take-server.test.ts
 
       - name: Verify systemd unit
         run: systemd-analyze --user verify deploy/relay-server.service

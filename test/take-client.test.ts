@@ -34,6 +34,17 @@ test('browser reconnects to TakeSession state instead of coupling recording life
   assert.doesNotMatch(closeSection, /stop-take|mediaRecorder|stopRecording/);
 });
 
+test('Take control connection recovers when the socket closes before opening', async () => {
+  const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+
+  assert.match(source, /const onClose = \(\) => settle\(reject, new Error\('Take WebSocket closed before opening\.'\)\)/,
+    'pre-open close must settle the pending connection instead of hanging forever');
+  assert.match(source, /next\.addEventListener\('close', onClose\)/,
+    'the close listener must be installed before awaiting the opening handshake');
+  assert.match(source, /catch \(error\) \{[\s\S]*if \(socket === next\) socket = null;[\s\S]*throw error;/,
+    'a failed opening handshake must release the stranded socket so reconnect can create a replacement');
+});
+
 test('ready Take artifacts review inline instead of navigating away from Live', async () => {
   const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');

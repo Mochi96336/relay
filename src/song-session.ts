@@ -157,8 +157,32 @@ export class SongSession {
 
   handoffPlanForTarget(identityInput: PlaybackIdentity, nowMs = performance.now()) {
     const identity = this.normalizeIdentity(identityInput);
-    if (!identity || !this.handoff || !this.sameIdentity(this.handoff.target, identity)) return null;
-    return this.handoffPlan(nowMs);
+    if (!identity || !this.handoff) return null;
+    if (this.sameIdentity(this.handoff.target, identity)) return this.handoffPlan(nowMs);
+
+    // A page reload keeps the logical playback transport but creates a newer
+    // incarnation. If that exact tab was already the prepared handoff target,
+    // move the plan forward instead of leaving the room frozen behind an old
+    // generation that can never acknowledge it. A different tab is still a
+    // different transport and may not inherit the handoff by coincidence.
+    if (
+      this.handoff.target.participantId === identity.participantId
+      && this.handoff.target.transportId === identity.transportId
+      && identity.generation > this.handoff.target.generation
+    ) {
+      this.handoffSequence += 1;
+      this.handoff = {
+        id: `song-handoff-${this.handoffSequence}`,
+        target: identity,
+        state: 'preparing',
+        startedAtMs: nowMs,
+        everReady: false,
+      };
+      this.bump();
+      return this.handoffPlan(nowMs);
+    }
+
+    return null;
   }
 
   markHandoffReady(

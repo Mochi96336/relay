@@ -1,3 +1,5 @@
+import './playback-prewarm-trigger.js';
+
 function safeGeneration(value) {
   const generation = Number(value);
   return Number.isSafeInteger(generation) && generation >= 0 ? generation : null;

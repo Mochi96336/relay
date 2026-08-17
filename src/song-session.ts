@@ -24,6 +24,8 @@ const HANDOFF_COMMIT_TIMEOUT_MS = 5_000;
 const HOLDOVER_TIME_TOLERANCE_SECONDS = 0.9;
 /** YT.PlayerState.BUFFERING: transport progress, not playback proof. */
 const BUFFERING_STATE = 3;
+const PLAYING_STATE = 1;
+const PAUSED_STATE = 2;
 
 /**
  * The single synthetic playback identity shared by pre-participant clients.
@@ -393,7 +395,7 @@ export class SongSession {
       type: 'room-song-status',
       revision: this.revisionValue,
       connected: Boolean(timeline.connected),
-      videoId: hasSong ? timeline.videoId : null,
+      videoId: hasSong ? timeline.videoId ?? null : null,
       state: hasSong ? timeline.state ?? null : null,
       serverTime: hasSong ? timeline.serverTime ?? null : null,
       duration: hasSong ? timeline.duration ?? null : null,
@@ -542,13 +544,11 @@ export class SongSession {
     const reference = this.handoff.targetTimeline.hasTelemetry
       ? this.handoff.targetTimeline.statusPayload(nowMs) as Record<string, unknown>
       : room;
-    const desiredState = Number(room.state);
     const incomingState = Number(payload.state);
     const roomRate = Number(room.playbackRate);
     const incomingRate = Number(payload.playbackRate ?? 1);
-    const desiredPlaying = desiredState === 1 || desiredState === BUFFERING_STATE;
-    const stateRelevant = incomingState === BUFFERING_STATE
-      || (desiredPlaying ? incomingState === 1 : [0, 2, 5].includes(incomingState));
+    const targetState = this.handoffTargetState(Number(room.state));
+    const stateRelevant = incomingState === BUFFERING_STATE || incomingState === targetState;
 
     return typeof room.videoId === 'string'
       && payload.videoId === room.videoId
@@ -562,11 +562,22 @@ export class SongSession {
   private targetTelemetryCompletes(payload: Record<string, unknown>, nowMs: number) {
     if (!this.handoff) return false;
     const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
-    const desiredState = Number(room.state);
     const incomingState = Number(payload.state);
     if (incomingState === BUFFERING_STATE) return false;
-    if (desiredState === 1 || desiredState === BUFFERING_STATE) return incomingState === 1;
-    return [0, 2, 5].includes(incomingState);
+    return incomingState === this.handoffTargetState(Number(room.state));
+  }
+
+  /**
+   * Handoff proof is intentionally narrower than the room's historical player
+   * state space. PLAYING/BUFFERING room intent transfers as PLAYING. Every
+   * dormant state (PAUSED, CUED, ENDED, unstarted) transfers as PAUSED. CUED is
+   * useful as an iframe setup state but is never proof that the target can
+   * render the handoff position, and ENDED is not needed to prove audibility.
+   */
+  private handoffTargetState(roomState: number) {
+    return roomState === PLAYING_STATE || roomState === BUFFERING_STATE
+      ? PLAYING_STATE
+      : PAUSED_STATE;
   }
 
   private handoffPlan(nowMs: number): SongHandoffPlan | null {
@@ -585,7 +596,7 @@ export class SongSession {
       revision: this.revisionValue,
       target: { ...this.handoff.target },
       videoId: room.videoId,
-      state: roomState === BUFFERING_STATE ? 1 : roomState,
+      state: this.handoffTargetState(roomState),
       serverTime: Number(room.serverTime),
       playbackRate: Number(room.playbackRate),
     };

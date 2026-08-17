@@ -22,7 +22,7 @@ export type ProductIssueCause =
   | 'backing-stalled'
   | 'backing-route-mismatch'
   | 'robot-source-unavailable'
-  | 'song-clock-lost'
+  | 'song-clock-unavailable'
   | 'mic-transport-disconnected'
   | 'mic-audio-stalled'
   | 'timing-calibrating'
@@ -155,7 +155,9 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       code: 'song-clock-unavailable',
       scope: 'song',
       severity: facts.songClockSeverity,
-      cause: 'song-clock-lost',
+      // The product model knows current clock availability and age, but not
+      // whether a playback holder ever established the clock in this lifecycle.
+      cause: 'song-clock-unavailable',
       affects: ['song', 'timing'],
       recovery: 'automatic',
     });

@@ -342,4 +342,24 @@ describe('participant presence and microphone ownership', () => {
       await server.stop();
     }
   });
+
+  test('production websocket identities cannot bypass capability binding with a legacy-shaped id', async () => {
+    const server = await startRelay({
+      ...FAST,
+      NODE_ENV: 'production',
+      RELAY_TEST_LEGACY_PARTICIPANTS: '1',
+    });
+    try {
+      const legacy = await RelayClient.connect(
+        server,
+        participantQuery('participant-alice', 'Alice'),
+      );
+      const rejected = await legacy.waitForType('participant-auth-rejected');
+      assert.match(rejected.message, /capability/i);
+      legacy.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
 });

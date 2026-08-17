@@ -370,7 +370,14 @@ export class RoomSongCommandSession {
     // Tested for `false` rather than "not true": a status that never carried
     // the field at all is not evidence of staleness, and must not open the
     // gate by omission.
-    if (roomStatus.connected === false && sameIdentity(statusLeader(roomStatus), identity)) {
+    // Staleness only relaxes the clock-position proof. Changing video,
+    // playback rate, or play/pause state is still room intent and must travel
+    // through the accepted command path even when the leader has gone stale.
+    if (
+      mutation === 'seek'
+      && roomStatus.connected === false
+      && sameIdentity(statusLeader(roomStatus), identity)
+    ) {
       return { ok: true };
     }
 

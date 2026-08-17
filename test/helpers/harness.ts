@@ -27,7 +27,13 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
     ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
     {
       cwd: root,
-      env: { ...process.env, PORT: '0', ...env },
+      env: {
+        ...process.env,
+        PORT: '0',
+        NODE_ENV: 'test',
+        RELAY_TEST_LEGACY_PARTICIPANTS: '1',
+        ...env,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );

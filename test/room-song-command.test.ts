@@ -290,9 +290,9 @@ describe('room song telemetry command gate', () => {
     // judged against a room clock that kept running it looks like a jump. A
     // refused report never reaches the timeline, so refusing it is what keeps
     // the clock stale, and the refusal would repeat forever.
-    const stale = room({ connected: false, serverTime: 40, youtubeTime: 40, ageMs: 30_000 });
+    const stale = room({ connected: false, serverTime: 40, youtubeTime: 10, ageMs: 30_000 });
     assert.deepEqual(
-      session.gateTelemetry(telemetry({ state: 1, currentTime: 11 }), A, stale, 0),
+      session.gateTelemetry(telemetry({ currentTime: 11 }), A, stale, 0),
       { ok: true },
     );
 
@@ -300,14 +300,26 @@ describe('room song telemetry command gate', () => {
     // needs an accepted command, or telemetry becomes a second way to take
     // the room.
     assert.deepEqual(
-      session.gateTelemetry(telemetry({ state: 1, currentTime: 11 }), B, stale, 0),
+      session.gateTelemetry(telemetry({ currentTime: 11 }), B, stale, 0),
       { ok: false, reason: 'command-required' },
     );
 
-    // And a clock with a fresh source is still protected from its own leader:
-    // that is the seek rule, which staleness must not weaken.
+    // Staleness is not semantic authority for the leader itself. Only the
+    // clock position can re-anchor; video, rate, and play/pause remain commands.
+    for (const attemptedMutation of [
+      telemetry({ videoId: OTHER_VIDEO, currentTime: 11 }),
+      telemetry({ playbackRate: 1.25, currentTime: 11 }),
+      telemetry({ state: 1, currentTime: 11 }),
+    ]) {
+      assert.deepEqual(
+        session.gateTelemetry(attemptedMutation, A, stale, 0),
+        { ok: false, reason: 'command-required' },
+      );
+    }
+
+    // And a clock with a fresh source is still protected from its own leader.
     assert.deepEqual(
-      session.gateTelemetry(telemetry({ videoId: OTHER_VIDEO }), A, room(), 0),
+      session.gateTelemetry(telemetry({ currentTime: 11 }), A, room(), 0),
       { ok: false, reason: 'command-required' },
     );
   });

@@ -1,4 +1,5 @@
 import type { RoomSongCommandBody, RoomSongCommandRequest } from './room-song-command.js';
+import { SERVER_INCARNATION } from './server-incarnation.js';
 import { LEGACY_PLAYBACK_PARTICIPANT_ID, type PlaybackIdentity } from './song-session.js';
 
 const COMMAND_TIMEOUT_MS = 4_000;
@@ -417,6 +418,7 @@ export class RoomSongCommandSession {
     this.expire(nowMs);
     return {
       type: 'room-song-command-status',
+      serverIncarnation: SERVER_INCARNATION,
       revision,
       pendingCommandId: this.pending?.commandId ?? null,
       pendingAction: this.pending?.body.action ?? null,

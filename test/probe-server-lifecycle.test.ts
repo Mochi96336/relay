@@ -112,7 +112,10 @@ test('probe acknowledgement retries stop at the configured limit and block Take 
 });
 
 test('a stale acknowledgement cannot cancel the newer Mic probe request', async () => {
-  const server = await startRelay(PROBE_FAST);
+  const server = await startRelay({
+    ...PROBE_FAST,
+    RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '3',
+  });
   const clients = await robotSession(server);
   try {
     const first = (await waitForProbeCount(clients.publisher, 'mic', 1))[0];
@@ -123,26 +126,29 @@ test('a stale acknowledgement cannot cancel the newer Mic probe request', async 
       type: 'calibration-probe-played',
       target: 'mic',
       requestId: first.requestId,
-      generation: clients.publisher.generationId,
+      generation: first.generation,
     });
     await sleep(20);
     clients.publisher.send({
       type: 'calibration-probe-played',
       target: 'mic',
       requestId: second.requestId,
-      generation: clients.publisher.generationId,
+      generation: second.generation,
     });
 
-    // Push the Mic frontier beyond the complete analysis window. A legal zero
-    // threshold keeps this integration test focused on request ownership; the
-    // detector's quality threshold has separate deterministic signal tests.
-    clients.publisher.sendPcm(Buffer.alloc(RATE * 2 * 2));
-
-    const backingProbe = (await waitForProbeCount(clients.robot, 'backing', 1, 3_000))[0];
-    assert.equal(backingProbe.target, 'backing');
-    assert.ok(
-      Number(backingProbe.requestId) > Number(second.requestId),
-      'the correct newer Mic acknowledgement should advance to the backing leg',
+    // Once the current request is acknowledged, Relay must enter analysis
+    // instead of treating the stale reply as ownership of that request. With
+    // a third attempt available, the old bug would visibly emit probe #3 after
+    // the 100 ms reply timeout. Stay below the 1.5 s analysis timeout so this
+    // assertion tests request identity only, not detector/timeline behavior.
+    await sleep(450);
+    const micProbes = clients.publisher.messages.filter(
+      (message) => message.type === 'play-calibration-probe' && message.target === 'mic',
+    );
+    assert.equal(
+      micProbes.length,
+      2,
+      'a stale acknowledgement must not clear the newer request and trigger another phone chime',
     );
   } finally {
     clients.close();

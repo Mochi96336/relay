@@ -1,0 +1,300 @@
+          if (activeRobotSource === socket) return;
+    
+          const previous = activeRobotSource;
+          if (previous && previous !== socket) {
+            previous.isRobotSource = false;
+            sendJson(previous, { type: 'robot-source-replaced' });
+            sourceGeneration += 1;
+            takeController.noteQualityEvent('robot-source-replaced');
+            abandonProbeRun();
+          } else if (!previous && session.active) {
+            takeController.noteQualityEvent('robot-source-connected');
+          }
+    
+          activeRobotSource = socket;
+          socket.isRobotSource = true;
+          robotPlayerOffsetMs = null;
+          robotPlayerOffsetAt = -Infinity;
+          dropLegacyCalibrationForRobot();
+          syncAppliedCalibration();
+          broadcastJson(sourceStatusPayload());
+          broadcastJson(timingCalibrationStatusPayload());
+          return;
+        }
+    
+        if (payload.type === 'robot-player-offset') {
+          const offsetMs = Number(payload.offsetMs);
+          if (socket === activeRobotSource && socket.isRobotSource === true && Number.isFinite(offsetMs)) {
+            robotPlayerOffsetMs = offsetMs;
+            robotPlayerOffsetAt = performance.now();
+          }
+          return;
+        }
+    
+        if (payload.type === 'set-mix') {
+          if (!requireMicOwnerCommand(socket, 'set-mix')) return;
+          const nextGain = Number(payload.micGainDb);
+          if (Number.isFinite(nextGain)) {
+            micGainDb = Math.max(0, Math.min(36, nextGain));
+            session.setMicGainDb(micGainDb);
+          }
+          const nextSongLevel = Number(payload.songLevel);
+          if (Number.isFinite(nextSongLevel)) {
+            songLevel = Math.max(0, Math.min(100, Math.round(nextSongLevel)));
+          }
+          broadcastJson(mixSettingsPayload());
+          return;
+        }
+      });
+    
+      socket.on('close', () => {
+        let micTransportChanged = false;
+    
+        const closingPlaybackIdentity = playbackIdentityForSocket(socket);
+        if (closingPlaybackIdentity) {
+          const pendingCommand = roomSongCommands.pendingForTarget(closingPlaybackIdentity, performance.now());
+          if (
+            pendingCommand
+            && roomSongCommands.fail(closingPlaybackIdentity, pendingCommand.commandId)
+          ) {
+            broadcastJson(roomSongCommandStatusPayload());
+          }
+        }
+    
+        if (
+          socket.playbackParticipantId
+          && socket.playbackTransportId
+          && socket.playbackGeneration !== undefined
+        ) {
+          const playbackChanged = youtubeTimeline.detach({
+            participantId: socket.playbackParticipantId,
+            transportId: socket.playbackTransportId,
+            generation: socket.playbackGeneration,
+          });
+          if (playbackChanged) {
+            broadcastJson(youtubeTimeline.statusPayload());
+            broadcastJson(youtubeTimeline.roomStatusPayload());
+          }
+        }
+    
+        if (!socket.replaced) {
+          if (socket === activeRobotSource) {
+            takeController.noteQualityEvent('robot-source-disconnected');
+            activeRobotSource = null;
+            socket.isRobotSource = false;
+            robotPlayerOffsetMs = null;
+            robotPlayerOffsetAt = -Infinity;
+            sourceGeneration += 1;
+            abandonProbeRun();
+            syncAppliedCalibration();
+            broadcastJson(sourceStatusPayload());
+            broadcastJson(timingCalibrationStatusPayload());
+          }
+    
+          if (socket === publisher) {
+            takeController.noteQualityEvent('mic-transport-disconnected');
+            const reconnectingOwnerId = socket.participantId
+              && participants.micOwnerId === socket.participantId
+              ? socket.participantId
+              : null;
+            publisher = null;
+            const directMediaStillLive = webTransportMicConnected();
+            if (!reconnectingOwnerId) {
+              clearMicMediaAuthority();
+            } else {
+              // The control plane may reconnect while an independent HTTP/3 media
+              // session is still carrying the same capture. Keep the capture and
+              // sample rate authoritative until the existing grace expires.
+              session.setMicExpected(directMediaStillLive);
+              scheduleMicTransportGrace(reconnectingOwnerId);
+            }
+            micTransportChanged = true;
+            if (!reconnectingOwnerId) maybeStopLiveSourceWhenUnarmed();
+            if (calibration.collecting) {
+              calibration.fail('Microphone disconnected during calibration.');
+            }
+            broadcastStatus();
+          }
+    
+          if (socket === backing) {
+            takeController.noteQualityEvent('backing-transport-disconnected');
+            backing = null;
+            backingSampleRate = null;
+            lastBackingFrameAt = -Infinity;
+            session.setBackingExpected(false);
+            if (calibration.collecting) {
+              calibration.fail('Desktop Source disconnected during calibration.');
+            }
+            cancelBackingGrace();
+            backingAbsenceTimer = setTimeout(expireBackingGrace, BACKING_GRACE_MS);
+            broadcastJson(sourceStatusPayload());
+            broadcastStatus();
+          }
+        }
+    
+        const presenceChanged = socket.participantConnectionId
+          ? participants.detach(socket.participantConnectionId, Date.now())
+          : false;
+        if (presenceChanged || micTransportChanged) broadcastSessionStatus();
+      });
+    });
+    
+    const heartbeat = setInterval(() => {
+      for (const client of wss.clients) {
+        const socket = client as RelaySocket;
+        if (!socket.isAlive) {
+          socket.terminate();
+          continue;
+        }
+        socket.isAlive = false;
+        socket.ping();
+      }
+    }, HEARTBEAT_MS);
+    
+    wss.on('close', () => {
+      cancelMicTransportGrace();
+      takeController.shutdown();
+      clearMicMediaAuthority();
+      void webTransportMedia?.stop();
+      clearInterval(heartbeat);
+      clearInterval(mixerTimer);
+      clearInterval(youtubeTimelineTimer);
+    });
+    
+    server.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${port} is already in use. Stop the other Relay instance or set PORT.`);
+        process.exit(1);
+      }
+      console.error('Relay server error', error);
+      process.exit(1);
+    });
+    
+    const directMediaConfig = webTransportMediaConfig();
+    if (directMediaConfig) {
+      try {
+        webTransportMedia = await startWebTransportMediaServer(directMediaConfig, {
+          authorize(ticket) {
+            return Boolean(
+              ticket
+              && ticket === micMediaTicket
+              && micAudioTransport?.packetVersion === 2,
+            );
+          },
+          onDatagram(ticket, packet, nowMs) {
+            if (ticket !== micMediaTicket || !micAudioTransport) return;
+            deliverMicPackets(micAudioTransport.receive(packet, nowMs));
+          },
+        });
+        console.log(
+          `Relay WebTransport media listening on udp://${directMediaConfig.bindHost}:${directMediaConfig.bindPort}`
+          + ` and advertised as ${directMediaConfig.publicUrl.toString()}`,
+        );
+      } catch (error) {
+        console.error('Failed to start Relay WebTransport media endpoint', error);
+        process.exit(1);
+      }
+    }
+    
+    server.listen(port, '0.0.0.0', () => {
+      const address = server.address();
+      const actualPort = typeof address === 'object' && address ? address.port : port;
+      console.log(`Relay listening on http://localhost:${actualPort}`);
+      console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');
+    });
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/home/runner/work/relay/relay/test/webtransport-media-server.test.ts:109:10)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:526:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:526:7)
+  ...
+# Subtest: YouTubeTimelineTracker
+    # Subtest: ignores telemetry without a valid video id
+    ok 1 - ignores telemetry without a valid video id
+      ---
+      duration_ms: 1.793066
+      ...
+    # Subtest: ignores a negative or non-finite media time
+    ok 2 - ignores a negative or non-finite media time
+      ---
+      duration_ms: 0.165104
+      ...
+    # Subtest: reports disconnected until the first sample
+    ok 3 - reports disconnected until the first sample
+      ---
+      duration_ms: 0.652515
+      ...
+    # Subtest: projects the media clock forward while playing
+    ok 4 - projects the media clock forward while playing
+      ---
+      duration_ms: 0.396213
+      ...
+    # Subtest: holds the clock still while paused
+    ok 5 - holds the clock still while paused
+      ---
+      duration_ms: 0.138752
+      ...
+    # Subtest: honours the playback rate
+    ok 6 - honours the playback rate
+      ---
+      duration_ms: 0.235498
+      ...
+    # Subtest: counts steady playback as neither a re-anchor nor a correction
+    ok 7 - counts steady playback as neither a re-anchor nor a correction
+      ---
+      duration_ms: 0.262487
+      ...
+    # Subtest: classifies a seek as a correction, not a re-anchor
+    ok 8 - classifies a seek as a correction, not a re-anchor
+      ---
+      duration_ms: 0.274458
+      ...
+    # Subtest: classifies a state change as a re-anchor
+    ok 9 - classifies a state change as a re-anchor
+      ---
+      duration_ms: 0.253427
+      ...
+    # Subtest: treats a new video as a re-anchor and adopts its id
+    ok 10 - treats a new video as a re-anchor and adopts its id
+      ---
+      duration_ms: 0.188708
+      ...
+    # Subtest: survives a seek that passes through buffering
+    ok 11 - survives a seek that passes through buffering
+      ---
+      duration_ms: 0.108116
+      ...
+    # Subtest: goes stale when telemetry stops
+    ok 12 - goes stale when telemetry stops
+      ---
+      duration_ms: 0.108174
+      ...
+    # Subtest: derives a one-way transport estimate from RTT
+    ok 13 - derives a one-way transport estimate from RTT
+      ---
+      duration_ms: 0.142934
+      ...
+    # Subtest: clamps an implausible playback rate
+    ok 14 - clamps an implausible playback rate
+      ---
+      duration_ms: 0.112127
+      ...
+    1..14
+ok 273 - YouTubeTimelineTracker
+  ---
+  duration_ms: 6.174407
+  type: 'suite'
+  ...
+1..273
+# tests 550
+# suites 56
+# pass 548
+# fail 1
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 44589.891264

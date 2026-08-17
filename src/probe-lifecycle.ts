@@ -111,6 +111,26 @@ export class ProbeLifecycle {
     return request;
   }
 
+  /**
+   * Browser acknowledgements also have to prove the capture generation for the
+   * phone-mic leg before they are allowed to consume the pending request.
+   *
+   * The backing probe is played by the robot page but captured by backing:stdin,
+   * so that page intentionally has no capture generation to report; the server
+   * validates its own backing generation separately.
+   */
+  acceptClientReply(requestId: unknown, generation: unknown) {
+    const request = this.request;
+    if (!request || Number(requestId) !== request.requestId) return null;
+    if (
+      request.target === 'mic'
+      && (Number(generation) >>> 0) !== (Number(request.generation) >>> 0)
+    ) {
+      return null;
+    }
+    return this.acceptReply(requestId);
+  }
+
   beginAnalysis(analysis: ProbeAnalysis) {
     if (this.failure || this.analysis) return false;
     this.analysis = analysis;

@@ -1,4 +1,5 @@
 name: One-shot Take graceful shutdown
+# retrigger after the stale i18n presence contract was repaired
 
 on:
   push:

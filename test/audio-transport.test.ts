@@ -38,24 +38,35 @@ describe('AudioTransport server boundary', () => {
       },
     });
 
-    const second = encodeAudioPacket({
-      source: 'mic',
-      generation: 9,
-      sequence: 1,
-      firstSampleIndex: 2,
-      pcm: pcm(30, 40),
-    });
-    const first = encodeAudioPacket({
+    // Establish an explicit fresh-capture origin before testing reordering.
+    // Receiver continuity is intentionally shared across short reconnects, so
+    // a test that reuses a generation must not inherit another test's snapshot.
+    const origin = encodeAudioPacket({
       source: 'mic',
       generation: 9,
       sequence: 0,
       firstSampleIndex: 0,
       pcm: pcm(10, 20),
     });
+    const second = encodeAudioPacket({
+      source: 'mic',
+      generation: 9,
+      sequence: 2,
+      firstSampleIndex: 4,
+      pcm: pcm(50, 60),
+    });
+    const first = encodeAudioPacket({
+      source: 'mic',
+      generation: 9,
+      sequence: 1,
+      firstSampleIndex: 2,
+      pcm: pcm(30, 40),
+    });
 
-    assert.deepEqual(transport.receive(second, 0), []);
-    const emitted = transport.receive(first, 1);
-    assert.deepEqual(emitted.map((frame) => frame.firstSampleIndex), [0, 2]);
+    assert.deepEqual(transport.receive(origin, 0).map((frame) => frame.firstSampleIndex), [0]);
+    assert.deepEqual(transport.receive(second, 1), []);
+    const emitted = transport.receive(first, 2);
+    assert.deepEqual(emitted.map((frame) => frame.firstSampleIndex), [2, 4]);
     assert.equal(transport.stats()?.reorderedPackets, 1);
   });
 });

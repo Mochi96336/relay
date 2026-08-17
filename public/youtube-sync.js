@@ -1,3 +1,4 @@
+await window.relayIdentityReady;
 import { resolvePlaybackRole } from './song-role.js';
 
 const STATE_NAMES = new Map([
@@ -100,8 +101,12 @@ function wsUrl() {
   const nickname = typeof window.relayNickname === 'string'
     ? window.relayNickname.trim()
     : '';
-  if (participantId && nickname) {
+  const participantCapability = typeof window.relayParticipantCapability === 'string'
+    ? window.relayParticipantCapability.trim()
+    : '';
+  if (participantId && nickname && participantCapability) {
     params.set('participant', participantId);
+    params.set('cap', participantCapability);
     params.set('name', nickname);
   }
 

@@ -26,6 +26,7 @@ import {
   normalizeNickname,
   normalizeParticipantId,
 } from './participant-session.js';
+import { participantCapabilityMatches } from './participant-capability.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import {
   RoomSongCommandSession,
@@ -452,13 +453,23 @@ function broadcastJson(payload: unknown) {
   }
 }
 
-function participantIdentity(request: IncomingMessage) {
+type ParticipantIdentityResult =
+  | { kind: 'none' }
+  | { kind: 'invalid' }
+  | { kind: 'valid'; participantId: string; nickname: string };
+
+function participantIdentity(request: IncomingMessage): ParticipantIdentityResult {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  const participantId = normalizeParticipantId(url.searchParams.get('participant'));
-  if (!participantId) return null;
+  const rawParticipantId = url.searchParams.get('participant');
+  if (rawParticipantId === null) return { kind: 'none' };
+
+  const participantId = normalizeParticipantId(rawParticipantId);
+  if (!participantId || !participantCapabilityMatches(participantId, url.searchParams.get('cap'))) {
+    return { kind: 'invalid' };
+  }
 
   const nickname = normalizeNickname(url.searchParams.get('name')) ?? 'Guest';
-  return { participantId, nickname };
+  return { kind: 'valid', participantId, nickname };
 }
 
 function sessionStatusPayload() {
@@ -1895,7 +1906,15 @@ wss.on('connection', (rawSocket, request) => {
   socket.legacyPlaybackGeneration = legacyPlaybackConnectionSequence;
 
   const identity = participantIdentity(request);
-  if (identity) {
+  if (identity.kind === 'invalid') {
+    sendJson(socket, {
+      type: 'participant-auth-rejected',
+      message: 'Participant identity did not match its private browser capability. Reload Relay.',
+    });
+    socket.close(1008, 'Participant capability mismatch.');
+    return;
+  }
+  if (identity.kind === 'valid') {
     participantConnectionSequence += 1;
     socket.participantId = identity.participantId;
     socket.participantConnectionId = `connection-${participantConnectionSequence}`;

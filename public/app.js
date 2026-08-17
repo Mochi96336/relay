@@ -1,3 +1,4 @@
+await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
@@ -346,8 +347,12 @@ function wsUrl() {
   const nickname = typeof window.relayNickname === 'string'
     ? window.relayNickname.trim()
     : '';
-  if (participantId && nickname) {
+  const participantCapability = typeof window.relayParticipantCapability === 'string'
+    ? window.relayParticipantCapability.trim()
+    : '';
+  if (participantId && nickname && participantCapability) {
     params.set('participant', participantId);
+    params.set('cap', participantCapability);
     params.set('name', nickname);
   }
 

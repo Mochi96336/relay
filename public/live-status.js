@@ -1,3 +1,4 @@
+await window.relayIdentityReady;
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const title = document.querySelector('#live-state-title');
 const detail = document.querySelector('#live-state-detail');
@@ -76,8 +77,12 @@ if (
     const nickname = typeof window.relayNickname === 'string'
       ? window.relayNickname.trim()
       : '';
-    if (participantId && nickname) {
+    const participantCapability = typeof window.relayParticipantCapability === 'string'
+      ? window.relayParticipantCapability.trim()
+      : '';
+    if (participantId && nickname && participantCapability) {
       params.set('participant', participantId);
+      params.set('cap', participantCapability);
       params.set('name', nickname);
     }
 

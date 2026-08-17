@@ -1,3 +1,4 @@
+await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -40,8 +41,12 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     const nickname = typeof window.relayNickname === 'string'
       ? window.relayNickname.trim()
       : '';
-    if (participantId && nickname) {
+    const participantCapability = typeof window.relayParticipantCapability === 'string'
+      ? window.relayParticipantCapability.trim()
+      : '';
+    if (participantId && nickname && participantCapability) {
       params.set('participant', participantId);
+      params.set('cap', participantCapability);
       params.set('name', nickname);
     }
 

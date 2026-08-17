@@ -1,4 +1,4 @@
-(() => {
+window.relayIdentityReady = (async () => {
   const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
   const participantCount = document.querySelector('#participant-count');
   const participantList = document.querySelector('#participant-list');
@@ -18,6 +18,7 @@
   ) return;
 
   const PARTICIPANT_ID_KEY = 'relay.participantId.v1';
+  const PARTICIPANT_CAPABILITY_KEY = 'relay.participantCapability.v1';
   const NICKNAME_KEY = 'relay.nickname.v1';
   const PENDING_NICKNAME_KEY = 'relay.pendingNickname.v1';
   const RECONNECT_MS = 1_000;
@@ -42,16 +43,31 @@
     return `${adjectives[random[0] % adjectives.length]} ${nouns[random[1] % nouns.length]} ${10 + (random[2] % 90)}`;
   }
 
-  function randomParticipantId() {
-    const random = new Uint32Array(4);
+  function randomParticipantCapability() {
+    const random = new Uint8Array(32);
     crypto.getRandomValues(random);
-    return `participant-${Array.from(random, (value) => value.toString(16).padStart(8, '0')).join('')}`;
+    return Array.from(random, (value) => value.toString(16).padStart(2, '0')).join('');
   }
 
-  function storedIdentity() {
-    let participantId = localStorage.getItem(PARTICIPANT_ID_KEY);
-    if (!participantId || !/^[A-Za-z0-9_-]{8,128}$/.test(participantId)) {
-      participantId = randomParticipantId();
+  async function participantIdForCapability(capability) {
+    const bytes = new TextEncoder().encode(capability);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    const publicId = Array.from(
+      digest.subarray(0, 16),
+      (value) => value.toString(16).padStart(2, '0'),
+    ).join('');
+    return `participant-${publicId}`;
+  }
+
+  async function storedIdentity() {
+    let participantCapability = localStorage.getItem(PARTICIPANT_CAPABILITY_KEY);
+    if (!participantCapability || !/^[0-9a-f]{64}$/.test(participantCapability)) {
+      participantCapability = randomParticipantCapability();
+      localStorage.setItem(PARTICIPANT_CAPABILITY_KEY, participantCapability);
+    }
+
+    const participantId = await participantIdForCapability(participantCapability);
+    if (localStorage.getItem(PARTICIPANT_ID_KEY) !== participantId) {
       localStorage.setItem(PARTICIPANT_ID_KEY, participantId);
     }
 
@@ -60,10 +76,10 @@
       nickname = randomNickname();
       localStorage.setItem(NICKNAME_KEY, nickname);
     }
-    return { participantId, nickname };
+    return { participantId, participantCapability, nickname };
   }
 
-  let { participantId, nickname } = storedIdentity();
+  let { participantId, participantCapability, nickname } = await storedIdentity();
   let pendingNickname = normalizeNickname(localStorage.getItem(PENDING_NICKNAME_KEY));
   if (pendingNickname) {
     nickname = pendingNickname;
@@ -82,6 +98,7 @@
   // cookie that could accidentally turn source.html or robot sockets into a
   // human participant.
   window.relayParticipantId = participantId;
+  window.relayParticipantCapability = participantCapability;
   window.relayNickname = nickname;
   identityButton.textContent = nickname;
 
@@ -92,6 +109,7 @@
     const key = source.get('key');
     if (key) params.set('key', key);
     params.set('participant', participantId);
+    params.set('cap', participantCapability);
     params.set('name', nickname);
     return `${protocol}//${location.host}/ws?${params.toString()}`;
   }

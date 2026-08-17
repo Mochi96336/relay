@@ -1,4 +1,6 @@
-import './playback-prewarm-trigger.js';
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  import('./playback-prewarm-trigger.js').catch(console.error);
+}
 
 function safeGeneration(value) {
   const generation = Number(value);

@@ -95,6 +95,50 @@ function statusHandoffTarget(status: RoomSongStatus): PlaybackIdentity | null {
   return { participantId, transportId, generation };
 }
 
+function safeTerminalReloadContinuation(
+  payload: Record<string, unknown>,
+  identity: PlaybackIdentity,
+  roomStatus: RoomSongStatus,
+) {
+  const leader = statusLeader(roomStatus);
+  if (
+    !leader
+    || leader.participantId !== identity.participantId
+    || leader.transportId !== identity.transportId
+    || identity.generation <= leader.generation
+  ) return false;
+
+  const roomState = Number(roomStatus.state);
+  const incomingState = Number(payload.state);
+  // A fresh iframe cannot be commanded into YouTube's terminal `ended` or
+  // `unstarted` states. Relay restores those states by seeking to the same
+  // terminal position and pausing. Treat only that representation change as
+  // equivalent proof from a newer incarnation of the same logical tab.
+  if (![0, -1].includes(roomState) || incomingState !== 2) return false;
+
+  const roomVideoId = typeof roomStatus.videoId === 'string' ? roomStatus.videoId : null;
+  const incomingVideoId = typeof payload.videoId === 'string' ? payload.videoId : null;
+  if (!roomVideoId || incomingVideoId !== roomVideoId) return false;
+
+  const roomRate = Number(roomStatus.playbackRate ?? 1);
+  const incomingRate = Number(payload.playbackRate ?? 1);
+  if (
+    !Number.isFinite(roomRate)
+    || !Number.isFinite(incomingRate)
+    || Math.abs(roomRate - incomingRate) > 0.0001
+  ) return false;
+
+  const roomPosition = Number(roomStatus.serverTime);
+  const incomingPosition = Number(payload.currentTime);
+  if (
+    !Number.isFinite(roomPosition)
+    || !Number.isFinite(incomingPosition)
+    || Math.abs(roomPosition - incomingPosition) > COMMAND_POSITION_TOLERANCE_SECONDS
+  ) return false;
+
+  return true;
+}
+
 function sameCommandBody(a: RoomSongCommandBody, b: RoomSongCommandBody) {
   if (a.action !== b.action) return false;
   if (a.action === 'load' && b.action === 'load') {
@@ -344,6 +388,16 @@ export class RoomSongCommandSession {
       roomStatus.handoffState === 'committing'
       && sameIdentity(statusHandoffTarget(roomStatus), identity)
     ) {
+      return { ok: true };
+    }
+
+    // Reloading an ended/unstarted YouTube iframe cannot reproduce state 0/-1
+    // directly. The browser restores the same media, rate and terminal position
+    // as paused, then uses that packet only to promote the newer generation.
+    // Keep this exception narrower than ordinary command authority: a different
+    // video, rate, position, tab, participant or non-terminal state still needs
+    // an accepted room command.
+    if (safeTerminalReloadContinuation(payload, identity, roomStatus)) {
       return { ok: true };
     }
 

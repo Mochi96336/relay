@@ -1,5 +1,6 @@
 import {
   micOwnerTransitionEffects,
+  type MicOwnerTransitionCause,
   type MicOwnerTransitionEffects,
 } from './mic-owner-transition.js';
 
@@ -206,7 +207,10 @@ export class ParticipantSession {
     };
   }
 
-  releaseMic(participantId: string): MicResult {
+  releaseMic(
+    participantId: string,
+    cause: Extract<MicOwnerTransitionCause, 'explicit-release' | 'transport-expired'> = 'explicit-release',
+  ): MicResult {
     if (this.micOwnerValue !== participantId) {
       return this.result(false, false, this.micOwnerValue, 'not-owner');
     }
@@ -221,7 +225,7 @@ export class ParticipantSession {
       effects: micOwnerTransitionEffects({
         previousOwnerId,
         ownerId: null,
-        cause: 'explicit-release',
+        cause,
       }),
     };
   }

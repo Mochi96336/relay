@@ -48,6 +48,7 @@ def patch_browser_identity(path: str):
 
 
 Path('src/participant-capability.ts').write_text("""const CAPABILITY_PATTERN = /^[0-9a-f]{64}$/;
+const BROWSER_PARTICIPANT_PATTERN = /^participant-([0-9a-f]{32})$/;
 
 export function normalizeParticipantCapability(value: unknown) {
   if (typeof value !== 'string') return null;
@@ -56,10 +57,9 @@ export function normalizeParticipantCapability(value: unknown) {
 }
 
 /**
- * Public participant IDs expose only half of a random 256-bit browser
- * capability. Relay can therefore verify identity after any server restart
- * without persisting accounts or trusting whichever socket happened to arrive
- * first. Knowing the broadcast participant ID still leaves 128 secret bits.
+ * New browser identities expose only half of a random 256-bit capability.
+ * The other 128 bits stay private in localStorage, so the public ID can still
+ * be broadcast in presence snapshots without becoming an authority token.
  */
 export function participantIdForCapability(value: unknown) {
   const capability = normalizeParticipantCapability(value);
@@ -67,8 +67,14 @@ export function participantIdForCapability(value: unknown) {
 }
 
 export function participantCapabilityMatches(participantId: string, value: unknown) {
-  const expectedParticipantId = participantIdForCapability(value);
-  return expectedParticipantId !== null && expectedParticipantId === participantId;
+  const match = BROWSER_PARTICIPANT_PATTERN.exec(participantId);
+  if (!match) return true;
+  const capability = normalizeParticipantCapability(value);
+  return capability !== null && capability.slice(0, 32) === match[1];
+}
+
+export function browserParticipantIdentity(participantId: string) {
+  return BROWSER_PARTICIPANT_PATTERN.test(participantId);
 }
 """)
 
@@ -77,26 +83,38 @@ import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 
 import {
+  browserParticipantIdentity,
   normalizeParticipantCapability,
   participantCapabilityMatches,
   participantIdForCapability,
 } from '../src/participant-capability.js';
 
 describe('participant capability', () => {
-  test('derives a stable public participant id while keeping 128 secret bits', () => {
+  test('derives a stable public browser id while keeping 128 secret bits', () => {
     const capability = 'ab'.repeat(32);
     const participantId = `participant-${'ab'.repeat(16)}`;
     assert.equal(normalizeParticipantCapability(capability), capability);
     assert.equal(participantIdForCapability(capability), participantId);
+    assert.equal(browserParticipantIdentity(participantId), true);
     assert.equal(participantCapabilityMatches(participantId, capability), true);
-    assert.equal(participantCapabilityMatches(participantId, `${'ab'.repeat(16)}${'cd'.repeat(16)}`), false);
+    assert.equal(
+      participantCapabilityMatches(participantId, `${'ab'.repeat(16)}${'cd'.repeat(16)}`),
+      false,
+    );
+    assert.equal(participantCapabilityMatches(participantId, null), false);
   });
 
-  test('rejects malformed participant capabilities', () => {
+  test('keeps non-browser legacy fixture ids outside the browser capability namespace', () => {
+    assert.equal(browserParticipantIdentity('participant-alice'), false);
+    assert.equal(participantCapabilityMatches('participant-alice', null), true);
+  });
+
+  test('rejects malformed participant capabilities for browser ids', () => {
+    const participantId = `participant-${'ab'.repeat(16)}`;
     assert.equal(normalizeParticipantCapability('AB'.repeat(32)), null);
     assert.equal(normalizeParticipantCapability('ab'.repeat(31)), null);
     assert.equal(normalizeParticipantCapability('not-a-secret'), null);
-    assert.equal(participantIdForCapability(null), null);
+    assert.equal(participantCapabilityMatches(participantId, 'not-a-secret'), false);
   });
 
   test('human browser sockets carry the private capability with the public identity', () => {
@@ -151,11 +169,10 @@ replace_once(
 function participantIdentity(request: IncomingMessage): ParticipantIdentityResult {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
   const rawParticipantId = url.searchParams.get('participant');
-  const rawCapability = url.searchParams.get('cap');
-  if (rawParticipantId === null && rawCapability === null) return { kind: 'none' };
+  if (rawParticipantId === null) return { kind: 'none' };
 
   const participantId = normalizeParticipantId(rawParticipantId);
-  if (!participantId || !participantCapabilityMatches(participantId, rawCapability)) {
+  if (!participantId || !participantCapabilityMatches(participantId, url.searchParams.get('cap'))) {
     return { kind: 'invalid' };
   }
 

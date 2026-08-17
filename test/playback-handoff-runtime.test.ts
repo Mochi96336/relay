@@ -77,6 +77,11 @@ async function flushMicrotasks() {
   await Promise.resolve();
 }
 
+function requirePlayer(value: FakePlayer | null): FakePlayer {
+  assert.ok(value, 'prewarm did not create the YouTube player');
+  return value;
+}
+
 test('runtime preserves prewarm mute provenance and requires PLAYING before handoff ready', async () => {
   const originalWindow = (globalThis as any).window;
   const originalDocument = (globalThis as any).document;
@@ -96,7 +101,7 @@ test('runtime preserves prewarm mute provenance and requires PLAYING before hand
     ['#youtube-timeline', new FakeElement()],
     ['#youtube-note', new FakeElement()],
   ]);
-  let player: FakePlayer | null = null;
+  const runtime = { player: null as FakePlayer | null };
   let timerSequence = 0;
 
   try {
@@ -111,8 +116,8 @@ test('runtime preserves prewarm mute provenance and requires PLAYING before hand
       dispatchEvent: bus.dispatchEvent.bind(bus),
       YT: {
         Player: function Player(_elementId: string, options: Record<string, any>) {
-          player = new FakePlayer(options, String(options.videoId ?? ''));
-          return player;
+          runtime.player = new FakePlayer(options, String(options.videoId ?? ''));
+          return runtime.player;
         },
       },
     };
@@ -140,7 +145,10 @@ test('runtime preserves prewarm mute provenance and requires PLAYING before hand
     }) as unknown) as typeof setInterval;
     globalThis.clearInterval = (() => {}) as typeof clearInterval;
 
-    await import('../public/youtube.js');
+    const runtimeImport = Function('specifier', 'return import(specifier)') as (
+      specifier: string,
+    ) => Promise<unknown>;
+    await runtimeImport(new URL('../public/youtube.js', import.meta.url).href);
 
     const VIDEO = 'dQw4w9WgXcQ';
     bus.dispatchEvent(new RuntimeEvent('relay:playback-view', {
@@ -165,7 +173,7 @@ test('runtime preserves prewarm mute provenance and requires PLAYING before hand
 
     bus.dispatchEvent(new RuntimeEvent('relay:playback-prewarm-intent'));
     await flushMicrotasks();
-    assert.ok(player, 'prewarm did not create the YouTube player');
+    const player = requirePlayer(runtime.player);
     player.options.events.onReady({ target: player });
     assert.equal(player.muted, true, 'first prewarm must mute the local media request');
 

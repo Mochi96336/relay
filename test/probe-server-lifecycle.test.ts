@@ -111,7 +111,7 @@ test('probe acknowledgement retries stop at the configured limit and block Take 
   }
 });
 
-test('a stale acknowledgement cannot cancel the newer Mic probe request', async () => {
+test('stale or wrong-generation acknowledgements cannot cancel the newer Mic probe request', async () => {
   const server = await startRelay({
     ...PROBE_FAST,
     RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '3',
@@ -121,26 +121,38 @@ test('a stale acknowledgement cannot cancel the newer Mic probe request', async 
     const first = (await waitForProbeCount(clients.publisher, 'mic', 1))[0];
     const probes = await waitForProbeCount(clients.publisher, 'mic', 2);
     const second = probes[1];
+    const generation = clients.publisher.generationId;
 
     clients.publisher.send({
       type: 'calibration-probe-played',
       target: 'mic',
       requestId: first.requestId,
-      generation: first.generation,
+      generation,
     });
     await sleep(20);
+
+    // Even with the current request id, a reply from a different capture must
+    // not consume the request. The real phone reports captureGeneration from
+    // its live AudioWorklet state rather than echoing the play request.
     clients.publisher.send({
       type: 'calibration-probe-played',
       target: 'mic',
       requestId: second.requestId,
-      generation: second.generation,
+      generation: generation + 1,
+    });
+    await sleep(20);
+
+    clients.publisher.send({
+      type: 'calibration-probe-played',
+      target: 'mic',
+      requestId: second.requestId,
+      generation,
     });
 
-    // Once the current request is acknowledged, Relay must enter analysis
-    // instead of treating the stale reply as ownership of that request. With
-    // a third attempt available, the old bug would visibly emit probe #3 after
-    // the 100 ms reply timeout. Stay below the 1.5 s analysis timeout so this
-    // assertion tests request identity only, not detector/timeline behavior.
+    // Once the real current request is acknowledged, Relay must enter analysis.
+    // With a third attempt available, either stale request ownership bug would
+    // visibly emit probe #3 after the 100 ms reply timeout. Stay well below the
+    // derived analysis timeout so detector/timeline behavior is out of scope.
     await sleep(450);
     const micProbes = clients.publisher.messages.filter(
       (message) => message.type === 'play-calibration-probe' && message.target === 'mic',
@@ -148,7 +160,7 @@ test('a stale acknowledgement cannot cancel the newer Mic probe request', async 
     assert.equal(
       micProbes.length,
       2,
-      'a stale acknowledgement must not clear the newer request and trigger another phone chime',
+      'stale acknowledgement identity must not trigger another phone chime',
     );
   } finally {
     clients.close();

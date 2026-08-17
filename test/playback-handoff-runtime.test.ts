@@ -110,11 +110,9 @@ test('runtime preserves prewarm mute provenance and requires PLAYING before hand
       addEventListener: bus.addEventListener.bind(bus),
       dispatchEvent: bus.dispatchEvent.bind(bus),
       YT: {
-        Player: class {
-          constructor(_elementId: string, options: Record<string, any>) {
-            player = new FakePlayer(options, String(options.videoId ?? ''));
-            return player;
-          }
+        Player: function Player(_elementId: string, options: Record<string, any>) {
+          player = new FakePlayer(options, String(options.videoId ?? ''));
+          return player;
         },
       },
     };
@@ -126,23 +124,23 @@ test('runtime preserves prewarm mute provenance and requires PLAYING before hand
     };
     (globalThis as any).location = { origin: 'https://relay.test' };
 
-    globalThis.setTimeout = ((handler: TimerHandler, _delay?: number) => {
+    globalThis.setTimeout = (((handler: (...args: any[]) => void, _delay?: number) => {
       timerSequence += 1;
       // Delayed readiness/watchdog work is deliberately not executed here. The
       // state-change callbacks below exercise the same runtime transition
       // synchronously without making this test sleep for production timers.
       void handler;
-      return timerSequence as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout;
+      return timerSequence;
+    }) as unknown) as typeof setTimeout;
     globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
-    globalThis.setInterval = ((handler: TimerHandler, _delay?: number) => {
+    globalThis.setInterval = (((handler: (...args: any[]) => void, _delay?: number) => {
       timerSequence += 1;
       void handler;
-      return timerSequence as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
+      return timerSequence;
+    }) as unknown) as typeof setInterval;
     globalThis.clearInterval = (() => {}) as typeof clearInterval;
 
-    await import(`../public/youtube.js?runtime=${Date.now()}`);
+    await import('../public/youtube.js');
 
     const VIDEO = 'dQw4w9WgXcQ';
     bus.dispatchEvent(new RuntimeEvent('relay:playback-view', {

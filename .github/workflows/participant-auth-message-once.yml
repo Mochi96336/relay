@@ -33,7 +33,22 @@ jobs:
         run: sudo ln -sf "$(command -v npm)" /usr/bin/npm
 
       - name: Apply participant auth message patch
-        run: python3 scripts/one-shot-participant-auth-message.py
+        run: |
+          python3 scripts/one-shot-participant-auth-message.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('test/take-client.test.ts')
+          text = path.read_text()
+          old = "  assert.match(source, /window\\.relayParticipantId/);\n"
+          new = """  assert.match(source, /sendParticipantAuthentication/);
+          assert.match(source, /participant-auth\\.js/);
+          assert.doesNotMatch(source, /params\\.set\\('cap',/);
+          """
+          if text.count(old) != 1:
+              raise SystemExit(f'{path}: expected exactly one stale participant-id contract')
+          path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Verify focused diff
         run: |
@@ -51,7 +66,8 @@ jobs:
             public/youtube-sync.js \
             src/server.ts \
             test/participant-capability.test.ts \
-            test/participant-server.test.ts | sort)"
+            test/participant-server.test.ts \
+            test/take-client.test.ts | sort)"
           test "$actual" = "$expected" || {
             printf 'Unexpected diff:\n%s\n' "$actual"
             exit 1
@@ -72,6 +88,7 @@ jobs:
             test/command-authority-server.test.ts \
             test/room-song-command-server.test.ts \
             test/song-authority-server.test.ts \
+            test/take-client.test.ts \
             test/take-server.test.ts
 
       - name: Run real HTTP/3 loopback
@@ -96,7 +113,8 @@ jobs:
             public/youtube-sync.js \
             src/server.ts \
             test/participant-capability.test.ts \
-            test/participant-server.test.ts
+            test/participant-server.test.ts \
+            test/take-client.test.ts
           git diff --cached --check
           git commit -m 'fix: keep participant capability out of websocket URLs'
 

@@ -25,6 +25,8 @@ const ERROR_NAMES = new Map([
   [153, 'missing Referer / client identity'],
 ]);
 
+const HANDOFF_COMMIT_TIMEOUT_MS = 5_000;
+
 let player = null;
 let playerReady = false;
 let loadedVideoId = null;
@@ -34,6 +36,7 @@ let apiPromise = null;
 let pendingHandoff = null;
 let handoffReadySent = false;
 let handoffReadyTimers = [];
+let handoffCommitTimer = null;
 let localCommandPending = null;
 let serverMutation = null;
 let playbackRole = 'connecting';
@@ -335,8 +338,9 @@ function renderSnapshot(snapshot) {
   // even before the next snapshot promotes the page from observer to holder.
   if (playbackRole === 'observer' && mutationContext?.source !== 'room-command') return;
 
-  // During preparation the target player is deliberately being cued before it
-  // owns the room clock. Do not turn that local preparation into product input.
+  // During preparation the target player is deliberately loading while muted
+  // before it owns the room clock. Do not turn that local preparation into
+  // product input.
   if (pendingHandoff?.phase === 'preparing') return;
 
   // Even after commit, the expected video id is not proof that the iframe has
@@ -401,12 +405,23 @@ function clearHandoffReadyTimers() {
   handoffReadyTimers = [];
 }
 
+function clearHandoffCommitTimer() {
+  if (handoffCommitTimer !== null) clearTimeout(handoffCommitTimer);
+  handoffCommitTimer = null;
+}
+
 function announceHandoffReady() {
   if (!pendingHandoff || pendingHandoff.phase !== 'preparing' || handoffReadySent) return false;
   if (!playerReady || !player || reportedVideoId() !== pendingHandoff.videoId) return false;
 
   const state = Number(player.getPlayerState());
-  if (![1, 2, 5].includes(state)) return false;
+  const bufferedFraction = Number(player.getVideoLoadedFraction());
+  // CUED (5) only proves that YouTube accepted the video identity. It does not
+  // prove that media has been requested/buffered. A real handoff may announce
+  // readiness only after the player has entered an active media state and the
+  // API reports a non-zero buffered fraction.
+  if (![1, 2, 3].includes(state)) return false;
+  if (!Number.isFinite(bufferedFraction) || bufferedFraction <= 0) return false;
 
   handoffReadySent = true;
   clearHandoffReadyTimers();
@@ -419,7 +434,10 @@ function announceHandoffReady() {
 
 function scheduleHandoffReadyChecks() {
   clearHandoffReadyTimers();
-  for (const delayMs of [80, 220, 500, 900, 1_500, 2_400]) {
+  // Buffered fraction can advance without another state-change callback. Keep
+  // polling beneath the server's 20 s prepare deadline so a slow phone can
+  // become ready without a reload or another user gesture.
+  for (const delayMs of [80, 220, 500, 900, 1_500, 2_400, 4_000, 7_000, 11_000, 16_000]) {
     handoffReadyTimers.push(setTimeout(announceHandoffReady, delayMs));
   }
 }
@@ -525,6 +543,11 @@ function cuePendingHandoff() {
     loadedVideoId = pendingHandoff.videoId;
     previousSnapshot = null;
 
+    if (pendingHandoff.prewarmWasMuted === null) {
+      try { pendingHandoff.prewarmWasMuted = Boolean(player.isMuted()); } catch {}
+    }
+    try { player.mute(); } catch {}
+
     const canReuse = pendingHandoff.reusePreparedPlayer === true
       && reportedVideoId() === pendingHandoff.videoId;
     if (canReuse) {
@@ -533,7 +556,10 @@ function cuePendingHandoff() {
         player.seekTo(pendingHandoff.targetTime, true);
       }
     } else {
-      player.cueVideoById({
+      // A cold formal handoff needs the same real-media preparation as the
+      // speculative path. `loadVideoById` starts the request/decode pipeline;
+      // muting above keeps it inaudible until the server commits authority.
+      player.loadVideoById({
         videoId: pendingHandoff.videoId,
         startSeconds: Math.max(0, pendingHandoff.targetTime),
       });
@@ -653,7 +679,13 @@ function handleStateChange(event) {
       try { player.pauseVideo(); } catch {}
     }
   }
-  if (pendingHandoff?.phase === 'preparing') announceHandoffReady();
+  if (pendingHandoff?.phase === 'preparing') {
+    try { player.setPlaybackRate(pendingHandoff.playbackRate); } catch {}
+    if (pendingHandoff.desiredState !== 1 && event.data === 1) {
+      try { player.pauseVideo(); } catch {}
+    }
+    announceHandoffReady();
+  }
 }
 
 function handlePlaybackRateChange(event) {
@@ -688,6 +720,35 @@ function handleError(event) {
   }
 }
 
+function rollbackCommittedHandoff(reason, { reprepare = false } = {}) {
+  if (!pendingHandoff || pendingHandoff.phase !== 'committing') return false;
+
+  const handoffId = pendingHandoff.handoffId;
+  clearHandoffCommitTimer();
+  pendingHandoff.phase = 'preparing';
+  handoffReadySent = false;
+  serverMutation = {
+    source: 'handoff-prepare',
+    action: 'load',
+    suppressTelemetry: true,
+    expiresAt: performance.now() + 3_000,
+  };
+
+  if (playerReady && player) {
+    try { player.pauseVideo(); } catch {}
+    try { player.mute(); } catch {}
+  }
+
+  window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+    detail: { handoffId, reason },
+  }));
+
+  if (reprepare && playerReady && player && pendingHandoff?.handoffId === handoffId) {
+    cuePendingHandoff();
+  }
+  return true;
+}
+
 function handleAutoplayBlocked() {
   if (speculativePrewarm && !pendingHandoff) return;
 
@@ -696,12 +757,7 @@ function handleAutoplayBlocked() {
     : 'Browser blocked scripted playback. Tap Play directly inside the visible YouTube player.';
 
   if (pendingHandoff?.phase === 'committing') {
-    const handoffId = pendingHandoff.handoffId;
-    pendingHandoff.phase = 'preparing';
-    handoffReadySent = false;
-    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
-      detail: { handoffId, reason: 'autoplay-blocked' },
-    }));
+    rollbackCommittedHandoff('autoplay-blocked');
     return;
   }
 
@@ -892,9 +948,10 @@ async function prepareRoomSong(message) {
 
   // A newer handoff can replace an older preparation on the same page, for
   // example when Mic ownership changes while a reload is still converging.
-  // Retire every delayed readiness callback before installing the new identity;
-  // otherwise an old timer can announce the new handoff ready prematurely.
+  // Retire every delayed readiness/commit callback before installing the new
+  // identity; otherwise old work can mutate the replacement handoff.
   clearHandoffReadyTimers();
+  clearHandoffCommitTimer();
   localCommandPending = null;
   pendingHandoff = {
     handoffId,
@@ -936,6 +993,7 @@ function commitRoomSong(message) {
   const desiredState = Number(message.state);
   if (!Number.isFinite(targetTime)) return;
 
+  clearHandoffCommitTimer();
   pendingHandoff.phase = 'committing';
   pendingHandoff.targetTime = Math.max(0, targetTime);
   pendingHandoff.desiredState = desiredState;
@@ -949,7 +1007,7 @@ function commitRoomSong(message) {
 
   try {
     if (reportedVideoId() !== pendingHandoff.videoId) {
-      player.cueVideoById({
+      player.loadVideoById({
         videoId: pendingHandoff.videoId,
         startSeconds: pendingHandoff.targetTime,
       });
@@ -961,20 +1019,25 @@ function commitRoomSong(message) {
     if (pendingHandoff.prewarmWasMuted === false) {
       try { player.unMute(); } catch {}
     }
-    pendingHandoff.prewarmWasMuted = null;
     if (desiredState === 1) player.playVideo();
     else player.pauseVideo();
+
+    const committingHandoffId = pendingHandoff.handoffId;
+    handoffCommitTimer = setTimeout(() => {
+      if (
+        pendingHandoff?.handoffId === committingHandoffId
+        && pendingHandoff.phase === 'committing'
+      ) {
+        rollbackCommittedHandoff('commit-timeout', { reprepare: true });
+      }
+    }, HANDOFF_COMMIT_TIMEOUT_MS);
+
     setTimeout(sampleNow, 80);
     setTimeout(sampleNow, 220);
     noteNode.textContent = t('song.switchingHere');
   } catch (error) {
     console.warn('Could not commit room song handoff', error);
-    const handoffId = pendingHandoff.handoffId;
-    pendingHandoff.phase = 'preparing';
-    handoffReadySent = false;
-    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
-      detail: { handoffId, reason: 'commit-failed' },
-    }));
+    rollbackCommittedHandoff('commit-failed');
   }
 }
 
@@ -1005,6 +1068,7 @@ function cancelRoomSongHandoff() {
   if (!pendingHandoff) return;
   const prewarmWasMuted = pendingHandoff.prewarmWasMuted;
   clearHandoffReadyTimers();
+  clearHandoffCommitTimer();
   pendingHandoff = null;
   handoffReadySent = false;
   if (playerReady && player) {
@@ -1019,6 +1083,7 @@ function cancelRoomSongHandoff() {
 function completeRoomSong(message) {
   if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
   clearHandoffReadyTimers();
+  clearHandoffCommitTimer();
   pendingHandoff = null;
   handoffReadySent = false;
   noteNode.textContent = t('song.handoffComplete');

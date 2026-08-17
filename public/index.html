@@ -182,6 +182,14 @@
                 <span id="timing-adjust-label" class="section-label" data-i18n="adjust.timing">Timing</span>
                 <span data-i18n="adjust.roomAlignment">Room alignment</span>
               </div>
+              <label class="adjust-control" for="vocal-fine-tune">
+                <div class="adjust-row-heading">
+                  <strong data-i18n="adjust.vocalFineTune">Vocal fine tune</strong>
+                  <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
+                </div>
+                <input id="vocal-fine-tune" class="adjust-range" type="range" min="-100" max="100" step="5" value="0" disabled aria-label="Vocal fine tune" data-i18n-aria-label="adjust.vocalFineTuneAria" />
+                <p class="adjust-helper" data-i18n="adjust.vocalFineTuneHelp">Negative moves voice earlier; positive moves it later.</p>
+              </label>
               <div class="timing-row">
                 <strong id="calibrate-status" data-i18n="adjust.waitingPlayback">Waiting for playback</strong>
                 <button id="calibrate-timing" class="text-action" type="button" data-i18n="adjust.recalibrate">Recalibrate</button>

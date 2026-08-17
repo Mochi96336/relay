@@ -19,6 +19,8 @@ const micGainRecommendationMarker = document.querySelector('#mic-gain-recommenda
 const useMicGainSuggestion = document.querySelector('#use-mic-gain-suggestion');
 const songLevel = document.querySelector('#song-level');
 const songLevelValue = document.querySelector('#song-level-value');
+const vocalFineTune = document.querySelector('#vocal-fine-tune');
+const vocalFineTuneValue = document.querySelector('#vocal-fine-tune-value');
 const calibrateButton = document.querySelector('#calibrate-timing');
 const calibrateStatus = document.querySelector('#calibrate-status');
 
@@ -246,6 +248,19 @@ function updateMixLabels() {
   renderGainAdvice();
 }
 
+function updateVocalFineTuneLabel() {
+  vocalFineTuneValue.value = signed(vocalFineTune.value, ' ms');
+}
+
+function sendVocalFineTune() {
+  updateVocalFineTuneLabel();
+  if (socket?.readyState !== WebSocket.OPEN || !publisherActive) return;
+  socket.send(JSON.stringify({
+    type: 'set-vocal-fine-tune',
+    valueMs: Number(vocalFineTune.value),
+  }));
+}
+
 function sendMixSettings() {
   updateMixLabels();
   if (socket?.readyState !== WebSocket.OPEN || !publisherActive) return;
@@ -262,6 +277,7 @@ function sendMixSettings() {
 function updateSingerControls() {
   micGain.disabled = !publisherActive;
   songLevel.disabled = !publisherActive;
+  vocalFineTune.disabled = !publisherActive;
   renderGainAdvice();
   updateCalibrateButton();
 }
@@ -519,6 +535,11 @@ function handleServerMessage(message) {
 
   if (message.type === 'source-status') {
     liveMixActive = Boolean(message.active);
+    const nextFineTune = Number(message.vocalFineTuneMs);
+    if (Number.isFinite(nextFineTune) && !sliderIsBusy(vocalFineTune)) {
+      vocalFineTune.value = String(nextFineTune);
+      updateVocalFineTuneLabel();
+    }
     updateCalibrateButton();
     return;
   }
@@ -967,6 +988,12 @@ for (const slider of [micGain, songLevel]) {
   });
   slider.addEventListener('change', () => markSliderTouched(slider));
 }
+
+vocalFineTune.addEventListener('input', () => {
+  markSliderTouched(vocalFineTune);
+  sendVocalFineTune();
+});
+vocalFineTune.addEventListener('change', () => markSliderTouched(vocalFineTune));
 
 useMicGainSuggestion.addEventListener('click', () => {
   const recommended = Number(latestMixHealth?.recommendedMicGainDb);

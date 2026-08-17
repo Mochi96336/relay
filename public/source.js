@@ -32,7 +32,6 @@ const ERROR_NAMES = new Map([
   [153, 'missing Referer / client identity'],
 ]);
 
-const SLIDER_HOLD_MS = 2000;
 const ROBOT_DELTA_SETTLE_MS = 1000;
 
 // The robot has no Chrome extension: `scripts/robot-source.sh` routes Chromium
@@ -52,22 +51,8 @@ let latestMixHealth = null;
 let loadedVideoId = null;
 let lastSeekAt = 0;
 let playerError = null;
-let vocalFineTuneTouchedAt = 0;
 let robotSuperseded = false;
 let robotDeltaSuppressedUntil = 0;
-const sliderTouchedAt = new Map();
-
-// The server echoes every source-status back to every client, which used to
-// snap this slider back to a stale value while the user was still dragging it.
-function fineTuneIsBusy() {
-  return document.activeElement === vocalFineTune
-    || performance.now() - vocalFineTuneTouchedAt < SLIDER_HOLD_MS;
-}
-
-function sliderIsBusy(slider) {
-  return document.activeElement === slider
-    || performance.now() - (sliderTouchedAt.get(slider) ?? -Infinity) < SLIDER_HOLD_MS;
-}
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -174,7 +159,7 @@ function parkSupersededRobot() {
   timingButton.disabled = true;
 }
 
-function applyBalance(sendToServer = true) {
+function applyBalance() {
   const songLevel = Math.max(0, Math.min(100, Number(sourceVolume.value) || 0));
   const micGainDb = Math.max(0, Math.min(36, Number(sourceMicGain.value) || 0));
 
@@ -189,19 +174,14 @@ function applyBalance(sendToServer = true) {
     } catch {}
   }
 
-  if (sendToServer && armed && !robotSuperseded) {
-    send({ type: 'set-mix', micGainDb, songLevel });
-  }
-
   // The verdict compares the slider against the measurement, so it has to move
   // with the slider and not just with a fresh calibration.
   renderGainAdvice();
 }
 
-function applyFineTune(sendToServer = true) {
+function applyFineTune() {
   const valueMs = Math.max(-100, Math.min(100, Number(vocalFineTune.value) || 0));
   vocalFineTuneValue.value = signed(valueMs, ' ms');
-  if (sendToServer) send({ type: 'set-vocal-fine-tune', valueMs });
 }
 
 // Must match src/calibration-probe.ts, which builds the reference the server
@@ -518,9 +498,9 @@ function renderSourceStatus(message) {
       : `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`;
   renderMixHealth();
 
-  if (Number.isFinite(Number(message.vocalFineTuneMs)) && !fineTuneIsBusy()) {
+  if (Number.isFinite(Number(message.vocalFineTuneMs))) {
     vocalFineTune.value = String(Number(message.vocalFineTuneMs));
-    applyFineTune(false);
+    applyFineTune();
   }
   renderCalibration();
 }
@@ -598,13 +578,13 @@ function connect() {
     }
 
     if (message.type === 'mix-settings') {
-      if (!sliderIsBusy(sourceMicGain) && Number.isFinite(Number(message.micGainDb))) {
+      if (Number.isFinite(Number(message.micGainDb))) {
         sourceMicGain.value = String(message.micGainDb);
       }
-      if (!sliderIsBusy(sourceVolume) && Number.isFinite(Number(message.songLevel))) {
+      if (Number.isFinite(Number(message.songLevel))) {
         sourceVolume.value = String(message.songLevel);
       }
-      applyBalance(false);
+      applyBalance();
       return;
     }
 
@@ -666,25 +646,6 @@ armButton.addEventListener('click', () => {
   } catch {}
   applyBalance();
   applyTimeline();
-});
-
-for (const slider of [sourceVolume, sourceMicGain]) {
-  slider.addEventListener('input', () => {
-    sliderTouchedAt.set(slider, performance.now());
-    applyBalance();
-  });
-}
-vocalFineTune.addEventListener('input', () => {
-  vocalFineTuneTouchedAt = performance.now();
-  applyFineTune(true);
-});
-vocalFineTune.addEventListener('change', () => {
-  vocalFineTuneTouchedAt = performance.now();
-});
-timingButton.addEventListener('click', () => {
-  if (!send({ type: 'start-timing-calibration' })) {
-    timingStatus.textContent = 'Server 尚未連線。';
-  }
 });
 
 window.onYouTubeIframeAPIReady = () => {
@@ -771,6 +732,6 @@ const apiRetryTimer = setInterval(() => {
 loadYouTubeApi();
 
 applyBalance();
-applyFineTune(false);
+applyFineTune();
 renderTimeline();
 connect();

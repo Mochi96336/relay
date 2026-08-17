@@ -24,7 +24,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply exact server fixes
+      - name: Apply exact server fix
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -38,13 +38,6 @@ jobs:
           if count != 2:
               raise SystemExit(f'expected exactly 2 probe reply consumers, found {count}')
           text = text.replace(old_reply, new_reply)
-
-          old_rate = 'if (!Number.isFinite(value) || sampleRate < 8_000 || sampleRate > 192_000) {'
-          new_rate = 'if (!Number.isFinite(sampleRate) || sampleRate < 8_000 || sampleRate > 192_000) {'
-          count = text.count(old_rate)
-          if count != 1:
-              raise SystemExit(f'expected exactly 1 sample-rate guard, found {count}')
-          text = text.replace(old_rate, new_rate)
 
           path.write_text(text)
           PY

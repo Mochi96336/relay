@@ -27,6 +27,10 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   let gainNode = null;
   let audioSetupPromise = null;
   let audioUnlockArmed = false;
+  // How many gestures have already asked this graph to start. The first is the
+  // one that builds it; a later one finding it still stopped means asking is
+  // not working and the context has to be replaced.
+  let audioResumeGestures = 0;
   let transportEnabled = false;
   let userMuted = false;
   let micForcedMuted = false;
@@ -482,10 +486,45 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     reconcile(t('listen.resumed'));
   }
 
+  /**
+   * Throws away a context that will not start, so the next one can.
+   *
+   * Safari can leave an AudioContext permanently unable to run: `resume()` is
+   * accepted inside a real gesture, its promise never settles, and `state`
+   * never leaves `suspended`. Observed on a phone as Listen reporting no mute
+   * of any kind while staying silent - `audioReady()` is false, so reconcile()
+   * never opens the monitor transport, and every further tap resumes the same
+   * dead context.
+   *
+   * Deliberately synchronous, and deliberately not awaiting `close()`: the
+   * replacement has to be constructed inside the same gesture task to have
+   * permission to start at all, and the stuck context is in no state to be
+   * waited on.
+   */
+  function discardStuckAudioGraph() {
+    closeTransport();
+    const stuck = audioContext;
+    audioContext = null;
+    playbackNode = null;
+    gainNode = null;
+    audioSetupPromise = null;
+    if (stuck) {
+      try { void stuck.close(); } catch {}
+    }
+  }
+
   async function activateFromGesture() {
     // A gesture primes the Listen graph and, while the browser still keeps the
     // context suspended, remains a retry opportunity. Only a real running
     // AudioContext lets reconcile() open the monitor transport.
+    //
+    // The first gesture builds the graph and asks it to start; a later one that
+    // still finds it stopped is evidence that asking is not going to work, and
+    // the replacement must be built before this handler yields.
+    if (audioResumeGestures > 0 && audioContext && !audioReady() && !effectiveMuted()) {
+      discardStuckAudioGraph();
+    }
+    audioResumeGestures += 1;
     try {
       await ensureAudioGraph();
       reconcile();

@@ -21,6 +21,8 @@ let roomCommandRevisionReady = false;
 let latestRoomCommandId = null;
 let latestRoomSongStatus = null;
 let latestTimelineStatus = null;
+let activeHandoffId = null;
+let activeHandoffPhase = 'idle';
 const pendingPings = new Map();
 // A plain running minimum never rose again, so one lucky early sample pinned the
 // estimate low for the rest of the session even after the link degraded. Keep a
@@ -396,11 +398,22 @@ function handleMessage(event) {
   }
 
   if (message.type === 'song-handoff-prepare') {
+    const handoffId = typeof message.handoffId === 'string' ? message.handoffId : null;
+    // playback-hello is replay-safe, so reconnecting the same page can receive
+    // the current plan again. Once this page has already accepted commit for
+    // that exact handoff, a replayed prepare is stale and must not rewind the
+    // visible player back into cue/preparing. A full page reload resets this
+    // adapter state and therefore still accepts the replacement-generation plan.
+    if (handoffId && activeHandoffId === handoffId && activeHandoffPhase === 'committing') return;
+    activeHandoffId = handoffId;
+    activeHandoffPhase = 'preparing';
     dispatchHandoff('relay:song-handoff-prepare', message);
     return;
   }
 
   if (message.type === 'song-handoff-commit') {
+    activeHandoffId = typeof message.handoffId === 'string' ? message.handoffId : null;
+    activeHandoffPhase = 'committing';
     dispatchHandoff('relay:song-handoff-commit', message);
     return;
   }
@@ -411,11 +424,17 @@ function handleMessage(event) {
   }
 
   if (message.type === 'song-handoff-complete') {
+    if (!message.handoffId || message.handoffId === activeHandoffId) {
+      activeHandoffId = null;
+      activeHandoffPhase = 'idle';
+    }
     dispatchHandoff('relay:song-handoff-complete', message);
     return;
   }
 
   if (message.type === 'song-handoff-cancelled') {
+    activeHandoffId = null;
+    activeHandoffPhase = 'idle';
     dispatchHandoff('relay:song-handoff-cancelled', message);
   }
 }
@@ -517,7 +536,6 @@ window.addEventListener('relay:room-song-command-intent', (event) => {
     });
   }
 });
-
 window.addEventListener('relay:room-song-command-failed', (event) => {
   const commandId = event.detail?.commandId;
   if (typeof commandId === 'string') {
@@ -537,6 +555,7 @@ window.addEventListener('relay:song-handoff-ready', (event) => {
 window.addEventListener('relay:song-handoff-failed', (event) => {
   const handoffId = event.detail?.handoffId;
   if (typeof handoffId === 'string') {
+    if (activeHandoffId === handoffId) activeHandoffPhase = 'preparing';
     send({ type: 'song-handoff-failed', handoffId, reason: event.detail?.reason ?? 'playback-failed' });
   }
 });

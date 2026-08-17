@@ -38,7 +38,11 @@ test('Release tears down local capture even if the Presence websocket cannot sen
 });
 
 test('failed Mic ownership attempts clean up before Listen is allowed to recover', () => {
-  assert.match(listen, /function restoreAfterMicBoundary\(copy[\s\S]*setTimeout\(\(\) => restoreAfterMic\(copy\), 0\)/);
+  assert.match(
+    listen,
+    /function restoreAfterMicBoundary\(copy[\s\S]*const restoreEpoch = micMuteEpoch[\s\S]*setTimeout\(\(\) => \{[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*restoreAfterMic\(copy\);[\s\S]*\}, 0\)/,
+    'a stale terminal restore must not unmute a replacement Mic session',
+  );
   assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMicBoundary/);
   assert.match(listen, /window\.addEventListener\('relay-microphone-start-failed',[\s\S]*restoreAfterMicBoundary/);
   assert.doesNotMatch(listen, /window\.addEventListener\('relay-mic-busy'/);
@@ -82,9 +86,11 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
 
 test('hardware input ending completes the same Mic lifecycle', () => {
   const trackStart = app.indexOf("track?.addEventListener('ended'");
-  const graphStart = app.indexOf('const source = audioContext.createMediaStreamSource', trackStart);
+  const graphStart = app.indexOf('const source = captureContext.createMediaStreamSource(captureStream)', trackStart);
   assert.ok(trackStart >= 0 && graphStart > trackStart);
   const handler = app.slice(trackStart, graphStart);
+  assert.match(handler, /if \(!captureIsCurrent\(\)\) return/,
+    'a stale track callback must not terminate a replacement capture');
   assert.match(handler, /stop\(false, \{ releaseMic: true \}\)/);
   assert.match(handler, /relay-microphone-ended'[\s\S]*reason: 'input-ended'/);
 });
@@ -111,8 +117,8 @@ test('Mic startup is single-flight, deadline-bound, and disposes late permission
 test('initial Relay connection failure remains cancellable instead of trapping an active Mic', () => {
   const activeAt = app.indexOf('setPublisherActive(true)');
   const disabledAt = app.indexOf('publisherButton.disabled = true', activeAt);
-  const connectAt = app.indexOf('await connectPublisherSocket()', disabledAt);
-  const retryAt = app.indexOf('schedulePublisherReconnect()', connectAt);
+  const connectAt = app.indexOf('await connectPublisherSocket(sessionEpoch)', disabledAt);
+  const retryAt = app.indexOf('schedulePublisherReconnect(sessionEpoch)', connectAt);
   assert.ok(activeAt >= 0 && disabledAt > activeAt && connectAt > disabledAt && retryAt > connectAt);
 
   // setPublisherActive(true) makes Release visible before the first control

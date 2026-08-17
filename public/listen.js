@@ -25,6 +25,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   let playbackNode = null;
   let gainNode = null;
   let audioSetupPromise = null;
+  let audioUnlockArmed = false;
   let transportEnabled = false;
   let userMuted = false;
   let micForcedMuted = false;
@@ -81,6 +82,15 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     return userMuted || micForcedMuted || roomMicForcedMuted || playbackForcedMuted;
   }
 
+  function audioReady() {
+    return Boolean(
+      audioContext
+      && playbackNode
+      && gainNode
+      && audioContext.state === 'running'
+    );
+  }
+
   function forcedMuteReason() {
     if (micForcedMuted || roomMicForcedMuted) return 'mic';
     if (playbackForcedMuted) return 'playback';
@@ -105,7 +115,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
         ? 'playback-muted'
         : userMuted
           ? 'muted'
-          : audioContext
+          : audioReady()
             ? 'audible'
             : 'ready';
     toggle.dataset.state = state;
@@ -127,8 +137,8 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       adjustState.textContent = t('listen.adjust.songMuted');
     } else if (userMuted) {
       adjustState.textContent = t('listen.adjust.userMuted');
-    } else if (!audioContext) {
-      adjustState.textContent = t('listen.adjust.ready');
+    } else if (!audioReady()) {
+      adjustState.textContent = copy || t('listen.adjust.ready');
     } else if (transportEnabled) {
       adjustState.textContent = t('listen.adjust.playing');
     } else {
@@ -160,11 +170,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   function scheduleReconnect() {
-    if (!transportEnabled || effectiveMuted() || reconnectTimer) return;
+    if (!transportEnabled || effectiveMuted() || !audioReady() || reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect().catch(() => {
-        if (!transportEnabled || effectiveMuted()) return;
+        if (!transportEnabled || effectiveMuted() || !audioReady()) return;
         render(t('listen.reconnecting'));
         scheduleReconnect();
       });
@@ -188,8 +198,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     if (
       !transportEnabled
       || effectiveMuted()
-      || !audioContext
-      || !playbackNode
+      || !audioReady()
       || pendingSocket
     ) return;
     const connectEpoch = transportEpoch;
@@ -209,7 +218,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       if (pendingSocket === next) pendingSocket = null;
     }
 
-    if (connectEpoch !== transportEpoch || !transportEnabled || effectiveMuted()) {
+    if (connectEpoch !== transportEpoch || !transportEnabled || effectiveMuted() || !audioReady()) {
       next.close();
       return;
     }
@@ -229,7 +238,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
         try { handleMessage(JSON.parse(event.data)); } catch {}
         return;
       }
-      if (!(event.data instanceof ArrayBuffer) || !audioContext || !playbackNode) return;
+      if (!(event.data instanceof ArrayBuffer) || !audioReady()) return;
       const pcm = int16ToFloat32(event.data);
       const samples = linearResample(pcm, sourceSampleRate, audioContext.sampleRate);
       playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
@@ -238,7 +247,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     next.addEventListener('close', () => {
       if (socket !== next || connectEpoch !== transportEpoch) return;
       socket = null;
-      if (!transportEnabled || effectiveMuted()) return;
+      if (!transportEnabled || effectiveMuted() || !audioReady()) return;
       render(t('listen.reconnecting'));
       scheduleReconnect();
     });
@@ -269,6 +278,20 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     startResume(audioContext);
   }
 
+  function armAudioUnlock() {
+    if (audioUnlockArmed || effectiveMuted() || audioReady()) return;
+    audioUnlockArmed = true;
+    window.addEventListener('pointerdown', activateFromGesture, { capture: true });
+    window.addEventListener('keydown', activateFromGesture, { capture: true });
+  }
+
+  function disarmAudioUnlock() {
+    if (!audioUnlockArmed) return;
+    audioUnlockArmed = false;
+    window.removeEventListener('pointerdown', activateFromGesture, true);
+    window.removeEventListener('keydown', activateFromGesture, true);
+  }
+
   function recoverAudioGraph() {
     if (effectiveMuted() || !audioContext) return;
     resumeAudioGraph();
@@ -286,8 +309,13 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       const context = new AudioContext({ latencyHint: 'interactive' });
       audioContext = context;
       context.addEventListener('statechange', () => {
-        if (audioContext !== context || context.state !== 'suspended' || effectiveMuted()) return;
-        void resumeAudioGraph();
+        if (audioContext !== context) return;
+        if (context.state === 'running') {
+          disarmAudioUnlock();
+        } else if (!effectiveMuted()) {
+          armAudioUnlock();
+        }
+        reconcile();
       });
       // Consume the user's first interaction immediately. Fetching the worklet
       // before resume can lose transient autoplay permission on mobile.
@@ -299,9 +327,9 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       // ran, every later press awaited the same dead promise. The button
       // stopped responding for the rest of the session.
       //
-      // The gesture is what authorises playback, and it has already happened.
-      // The `statechange` listener above resumes the context if iOS starts it
-      // later, so nothing is lost by carrying on without an answer.
+      // A resume request is not proof that playback started. If the context
+      // remains suspended, reconcile() keeps the transport closed and the
+      // gesture gate armed until a later real user interaction gets it running.
       startResume(context);
       await context.audioWorklet.addModule('/playback-worklet.js');
 
@@ -316,7 +344,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
         maxQueueMs: MAX_QUEUE_MS,
       });
       node.port.onmessage = (event) => {
-        if (!transportEnabled || effectiveMuted()) return;
+        if (!transportEnabled || effectiveMuted() || !audioReady()) return;
         if (event.data?.type === 'buffering') render(t('listen.buffering'));
         if (event.data?.type === 'playing') render('');
       };
@@ -345,15 +373,24 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   function reconcile(copy = '') {
     updateGain();
     if (effectiveMuted()) {
+      disarmAudioUnlock();
       closeTransport();
       render(copy);
       return;
     }
     if (!audioContext || !playbackNode || !gainNode) {
+      armAudioUnlock();
       render(copy || t('listen.firstInteraction'));
       return;
     }
-    if (audioContext.state === 'suspended') void resumeAudioGraph();
+    if (audioContext.state !== 'running') {
+      closeTransport();
+      armAudioUnlock();
+      render(t('listen.firstInteraction'));
+      return;
+    }
+
+    disarmAudioUnlock();
     if (transportEnabled) {
       render(copy);
       return;
@@ -362,7 +399,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     transportEnabled = true;
     render(copy || t('people.connecting'));
     connect().catch(() => {
-      if (!transportEnabled || effectiveMuted()) return;
+      if (!transportEnabled || effectiveMuted() || !audioReady()) return;
       render(t('listen.reconnecting'));
       scheduleReconnect();
     });
@@ -445,14 +482,15 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   async function activateFromGesture() {
-    // The first gesture exists only to prime the Listen graph. Mic mute state is
-    // owned by the actual click/request lifecycle below; mutating it on
-    // pointerdown can strand Listen if the gesture is cancelled before click.
+    // A gesture primes the Listen graph and, while the browser still keeps the
+    // context suspended, remains a retry opportunity. Only a real running
+    // AudioContext lets reconcile() open the monitor transport.
     try {
       await ensureAudioGraph();
       reconcile();
     } catch (error) {
       console.error(error);
+      armAudioUnlock();
       render(t('listen.retry'));
     }
   }
@@ -513,10 +551,9 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   });
 
   // Browsers do not generally allow a newly navigated page to speak before a
-  // user gesture. Prime the local graph on the first interaction, then the
-  // default-unmuted state and later forced-mute restore can run without another tap.
-  window.addEventListener('pointerdown', activateFromGesture, { capture: true, once: true });
-  window.addEventListener('keydown', activateFromGesture, { capture: true, once: true });
+  // user gesture. Keep the gate armed until AudioContext itself reports
+  // `running`; requesting resume is not enough evidence that sound can play.
+  armAudioUnlock();
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') recoverAudioGraph();
@@ -524,6 +561,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   window.addEventListener('pageshow', recoverAudioGraph);
 
   window.addEventListener('beforeunload', () => {
+    disarmAudioUnlock();
     closeTransport();
     if (audioContext) {
       try { audioContext.close(); } catch {}

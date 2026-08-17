@@ -94,8 +94,8 @@ export function normalizePlaybackTransportId(value: unknown) {
 
 export function normalizePlaybackGeneration(value: unknown) {
   const generation = Number(value);
-  return Number.isInteger(generation) && generation >= 0 && generation <= 0xffff_ffff
-    ? generation >>> 0
+  return Number.isSafeInteger(generation) && generation >= 0
+    ? generation
     : null;
 }
 

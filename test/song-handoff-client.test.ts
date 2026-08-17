@@ -2,20 +2,21 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+function topLevelFunctionSection(source: string, declaration: string) {
+  const start = source.indexOf(declaration);
+  assert.ok(start >= 0, `${declaration} is missing`);
+  const nextFunction = source.indexOf('\nfunction ', start + declaration.length);
+  return source.slice(start, nextFunction >= 0 ? nextFunction : source.length);
+}
+
 test('browser prepares playback without autoplay and starts only after server commit', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
-  const cueStart = source.indexOf('function cuePendingHandoff()');
-  const cueEnd = source.indexOf('function handleReady', cueStart);
-  assert.ok(cueStart >= 0 && cueEnd > cueStart, 'prepared handoff helper is missing');
-  const cueSection = source.slice(cueStart, cueEnd);
+  const cueSection = topLevelFunctionSection(source, 'function cuePendingHandoff()');
   assert.match(cueSection, /cueVideoById/);
   assert.doesNotMatch(cueSection, /playVideo\s*\(/, 'preparation must never autoplay the room song');
 
-  const commitStart = source.indexOf('function commitRoomSong');
-  const commitEnd = source.indexOf('function releaseRoomSong', commitStart);
-  assert.ok(commitStart >= 0 && commitEnd > commitStart, 'handoff commit helper is missing');
-  const commitSection = source.slice(commitStart, commitEnd);
+  const commitSection = topLevelFunctionSection(source, 'function commitRoomSong');
   assert.match(commitSection, /playVideo\s*\(/, 'playing room state starts only after the server commits');
   assert.match(commitSection, /seekTo\s*\(/, 'commit must refresh the projected room position before starting');
 });

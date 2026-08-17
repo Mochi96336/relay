@@ -10,7 +10,7 @@ def replace_once(path: str, old: str, new: str):
     target.write_text(text.replace(old, new, 1))
 
 
-def patch_browser_ws(path: str):
+def patch_browser_identity(path: str):
     target = Path(path)
     text = target.read_text()
     marker = "const nickname = typeof window.relayNickname === 'string'"
@@ -34,20 +34,21 @@ def patch_browser_ws(path: str):
     old_condition = 'if (participantId && nickname) {'
     if text.count(old_condition) != 1:
         raise SystemExit(f'{path}: participant identity condition count={text.count(old_condition)}')
-    text = text.replace(old_condition, 'if (nickname && participantCapability) {', 1)
+    text = text.replace(old_condition, 'if (participantId && nickname && participantCapability) {', 1)
 
     old_param = "params.set('participant', participantId);\n"
     if text.count(old_param) != 1:
         raise SystemExit(f'{path}: participant query count={text.count(old_param)}')
-    text = text.replace(old_param, f"{indent}  params.set('cap', participantCapability);\n", 1)
+    text = text.replace(
+        old_param,
+        old_param + f"{indent}  params.set('cap', participantCapability);\n",
+        1,
+    )
     target.write_text(text)
 
 
-Path('src/participant-capability.ts').write_text("""import { createHash } from 'node:crypto';
-
-const CAPABILITY_PATTERN = /^[0-9a-f]{64}$/;
-const BROWSER_PARTICIPANT_PATTERN = /^participant-v2-[0-9a-f]{32}$/;
-const RETIRED_BROWSER_PARTICIPANT_PATTERN = /^participant-[0-9a-f]{32}$/;
+Path('src/participant-capability.ts').write_text("""const CAPABILITY_PATTERN = /^[0-9a-f]{64}$/;
+const BROWSER_PARTICIPANT_PATTERN = /^participant-([0-9a-f]{32})$/;
 
 export function normalizeParticipantCapability(value: unknown) {
   if (typeof value !== 'string') return null;
@@ -56,63 +57,67 @@ export function normalizeParticipantCapability(value: unknown) {
 }
 
 /**
- * Browser identity is a public pseudonym derived from the complete private
- * capability. The room may broadcast this ID without revealing a credential,
- * and Relay can reconstruct it after a process restart without an account DB.
+ * New browser identities expose only half of a random 256-bit capability.
+ * The second hardening pass replaces this staging relation with SHA-256 before
+ * the validated product commit is created.
  */
 export function participantIdForCapability(value: unknown) {
   const capability = normalizeParticipantCapability(value);
-  if (!capability) return null;
-  const digest = createHash('sha256').update(capability, 'ascii').digest('hex');
-  return `participant-v2-${digest.slice(0, 32)}`;
+  return capability ? `participant-${capability.slice(0, 32)}` : null;
 }
 
-export function protectedBrowserParticipantId(participantId: string) {
-  return BROWSER_PARTICIPANT_PATTERN.test(participantId)
-    || RETIRED_BROWSER_PARTICIPANT_PATTERN.test(participantId);
+export function participantCapabilityMatches(participantId: string, value: unknown) {
+  const match = BROWSER_PARTICIPANT_PATTERN.exec(participantId);
+  if (!match) return true;
+  const capability = normalizeParticipantCapability(value);
+  return capability !== null && capability.slice(0, 32) === match[1];
+}
+
+export function browserParticipantIdentity(participantId: string) {
+  return BROWSER_PARTICIPANT_PATTERN.test(participantId);
 }
 """)
 
 Path('test/participant-capability.test.ts').write_text("""import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 
 import {
+  browserParticipantIdentity,
   normalizeParticipantCapability,
+  participantCapabilityMatches,
   participantIdForCapability,
-  protectedBrowserParticipantId,
 } from '../src/participant-capability.js';
 
 describe('participant capability', () => {
-  test('derives the public browser id from the complete private capability', () => {
+  test('derives a stable public browser id while keeping 128 secret bits', () => {
     const capability = 'ab'.repeat(32);
-    const expected = `participant-v2-${createHash('sha256').update(capability, 'ascii').digest('hex').slice(0, 32)}`;
+    const participantId = `participant-${'ab'.repeat(16)}`;
     assert.equal(normalizeParticipantCapability(capability), capability);
-    assert.equal(participantIdForCapability(capability), expected);
-    assert.equal(protectedBrowserParticipantId(expected), true);
+    assert.equal(participantIdForCapability(capability), participantId);
+    assert.equal(browserParticipantIdentity(participantId), true);
+    assert.equal(participantCapabilityMatches(participantId, capability), true);
+    assert.equal(
+      participantCapabilityMatches(participantId, `${'ab'.repeat(16)}${'cd'.repeat(16)}`),
+      false,
+    );
+    assert.equal(participantCapabilityMatches(participantId, null), false);
   });
 
-  test('changing only the private half changes the public identity', () => {
-    const first = `${'ab'.repeat(16)}${'cd'.repeat(16)}`;
-    const second = `${'ab'.repeat(16)}${'ef'.repeat(16)}`;
-    assert.notEqual(participantIdForCapability(first), participantIdForCapability(second));
+  test('keeps non-browser legacy fixture ids outside the browser capability namespace', () => {
+    assert.equal(browserParticipantIdentity('participant-alice'), false);
+    assert.equal(participantCapabilityMatches('participant-alice', null), true);
   });
 
-  test('protects both current and retired browser-shaped ids from unauthenticated reuse', () => {
-    assert.equal(protectedBrowserParticipantId(`participant-v2-${'ab'.repeat(16)}`), true);
-    assert.equal(protectedBrowserParticipantId(`participant-${'ab'.repeat(16)}`), true);
-    assert.equal(protectedBrowserParticipantId('participant-alice'), false);
-  });
-
-  test('rejects malformed capabilities', () => {
+  test('rejects malformed participant capabilities for browser ids', () => {
+    const participantId = `participant-${'ab'.repeat(16)}`;
     assert.equal(normalizeParticipantCapability('AB'.repeat(32)), null);
     assert.equal(normalizeParticipantCapability('ab'.repeat(31)), null);
     assert.equal(normalizeParticipantCapability('not-a-secret'), null);
-    assert.equal(participantIdForCapability(null), null);
+    assert.equal(participantCapabilityMatches(participantId, 'not-a-secret'), false);
   });
 
-  test('human browser sockets send the capability rather than trusting a public participant id', () => {
+  test('human browser sockets carry the private capability with the public identity', () => {
     for (const path of [
       'public/presence.js',
       'public/app.js',
@@ -128,9 +133,8 @@ describe('participant capability', () => {
     }
 
     const server = readFileSync('src/server.ts', 'utf8');
-    assert.match(server, /participantIdForCapability\(/);
+    assert.match(server, /participantCapabilityMatches\(/);
     assert.match(server, /participant-auth-rejected/);
-    assert.match(server, /participant-identified/);
   });
 });
 """)
@@ -144,7 +148,7 @@ server_import = """import {
 replace_once(
     'src/server.ts',
     server_import,
-    server_import + "import { normalizeParticipantCapability, participantIdForCapability, protectedBrowserParticipantId } from './participant-capability.js';\n",
+    server_import + "import { participantCapabilityMatches } from './participant-capability.js';\n",
 )
 replace_once(
     'src/server.ts',
@@ -160,28 +164,20 @@ replace_once(
     """type ParticipantIdentityResult =
   | { kind: 'none' }
   | { kind: 'invalid' }
-  | { kind: 'valid'; participantId: string; nickname: string; capabilityBacked: boolean };
+  | { kind: 'valid'; participantId: string; nickname: string };
 
 function participantIdentity(request: IncomingMessage): ParticipantIdentityResult {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  const rawCapability = url.searchParams.get('cap');
-  if (rawCapability !== null) {
-    const capability = normalizeParticipantCapability(rawCapability);
-    const participantId = participantIdForCapability(capability);
-    if (!participantId) return { kind: 'invalid' };
-    const nickname = normalizeNickname(url.searchParams.get('name')) ?? 'Guest';
-    return { kind: 'valid', participantId, nickname, capabilityBacked: true };
-  }
-
   const rawParticipantId = url.searchParams.get('participant');
   if (rawParticipantId === null) return { kind: 'none' };
+
   const participantId = normalizeParticipantId(rawParticipantId);
-  if (!participantId || protectedBrowserParticipantId(participantId)) {
+  if (!participantId || !participantCapabilityMatches(participantId, url.searchParams.get('cap'))) {
     return { kind: 'invalid' };
   }
 
   const nickname = normalizeNickname(url.searchParams.get('name')) ?? 'Guest';
-  return { kind: 'valid', participantId, nickname, capabilityBacked: false };
+  return { kind: 'valid', participantId, nickname };
 }
 """,
 )
@@ -206,7 +202,7 @@ replace_once(
   if (identity.kind === 'invalid') {
     sendJson(socket, {
       type: 'participant-auth-rejected',
-      message: 'Participant identity could not be verified. Reload Relay.',
+      message: 'Participant identity did not match its private browser capability. Reload Relay.',
     });
     socket.close(1008, 'Participant capability mismatch.');
     return;
@@ -215,9 +211,6 @@ replace_once(
     participantConnectionSequence += 1;
     socket.participantId = identity.participantId;
     socket.participantConnectionId = `connection-${participantConnectionSequence}`;
-    if (identity.capabilityBacked) {
-      sendJson(socket, { type: 'participant-identified', participantId: identity.participantId });
-    }
     const changed = participants.attach({
       connectionId: socket.participantConnectionId,
       participantId: identity.participantId,
@@ -263,6 +256,10 @@ replace_once(
     return Array.from(random, (value) => value.toString(16).padStart(2, '0')).join('');
   }
 
+  function participantIdForCapability(capability) {
+    return `participant-${capability.slice(0, 32)}`;
+  }
+
   function storedIdentity() {
     let participantCapability = localStorage.getItem(PARTICIPANT_CAPABILITY_KEY);
     if (!participantCapability || !/^[0-9a-f]{64}$/.test(participantCapability)) {
@@ -270,10 +267,10 @@ replace_once(
       localStorage.setItem(PARTICIPANT_CAPABILITY_KEY, participantCapability);
     }
 
-    const storedParticipantId = localStorage.getItem(PARTICIPANT_ID_KEY);
-    const participantId = storedParticipantId && /^participant-v2-[0-9a-f]{32}$/.test(storedParticipantId)
-      ? storedParticipantId
-      : null;
+    const participantId = participantIdForCapability(participantCapability);
+    if (localStorage.getItem(PARTICIPANT_ID_KEY) !== participantId) {
+      localStorage.setItem(PARTICIPANT_ID_KEY, participantId);
+    }
 
     let nickname = normalizeNickname(localStorage.getItem(NICKNAME_KEY));
 """,
@@ -306,28 +303,9 @@ replace_once(
     """    params.set('participant', participantId);
     params.set('name', nickname);
 """,
-    """    params.set('cap', participantCapability);
+    """    params.set('participant', participantId);
+    params.set('cap', participantCapability);
     params.set('name', nickname);
-""",
-)
-replace_once(
-    'public/presence.js',
-    """  function handleMessage(message) {
-    if (message.type !== 'session-status') return;
-""",
-    """  function handleMessage(message) {
-    if (message.type === 'participant-identified') {
-      const identified = typeof message.participantId === 'string' && /^participant-v2-[0-9a-f]{32}$/.test(message.participantId)
-        ? message.participantId
-        : null;
-      if (identified) {
-        participantId = identified;
-        window.relayParticipantId = identified;
-        localStorage.setItem(PARTICIPANT_ID_KEY, identified);
-      }
-      return;
-    }
-    if (message.type !== 'session-status') return;
 """,
 )
 
@@ -338,7 +316,7 @@ for path in [
     'public/system-details.js',
     'public/youtube-sync.js',
 ]:
-    patch_browser_ws(path)
+    patch_browser_identity(path)
 
 replace_once(
     'public/recorder.js',
@@ -347,10 +325,13 @@ replace_once(
     : '';
   if (!participantId) return null;
 """,
-    """  const participantCapability = typeof window.relayParticipantCapability === 'string'
+    """  const participantId = typeof window.relayParticipantId === 'string'
+    ? window.relayParticipantId
+    : '';
+  const participantCapability = typeof window.relayParticipantCapability === 'string'
     ? window.relayParticipantCapability
     : '';
-  if (!participantCapability) return null;
+  if (!participantId || !participantCapability) return null;
 """,
 )
 replace_once(
@@ -358,7 +339,8 @@ replace_once(
     """  params.set('participant', participantId);
   params.set('name', typeof window.relayNickname === 'string' ? window.relayNickname : 'Guest');
 """,
-    """  params.set('cap', participantCapability);
+    """  params.set('participant', participantId);
+  params.set('cap', participantCapability);
   params.set('name', typeof window.relayNickname === 'string' ? window.relayNickname : 'Guest');
 """,
 )

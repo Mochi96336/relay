@@ -1,4 +1,4 @@
-name: Diagnose playback reload command
+name: Fix playback reload command regression test
 
 on:
   push:
@@ -8,32 +8,53 @@ on:
       - .github/workflows/diagnose-reload-command-once.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  patch-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
           ref: agent/stabilize-room-kernel
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: '20.19'
           cache: npm
-      - run: npm ci
-      - name: Expose reload command rejection reason
+
+      - name: Give the post-reload command a genuinely new id
         run: |
           python3 - <<'PY'
           from pathlib import Path
           path = Path('test/playback-reload-continuation.test.ts')
           text = path.read_text()
-          old = """    const accepted = await reloaded.waitFor((message) => (\n      message.type === 'room-song-command-accepted' && message.commandId === nextId\n    ));\n    assert.equal(accepted.commandId, nextId);\n"""
-          new = """    const outcome = await reloaded.waitFor((message) => (\n      (message.type === 'room-song-command-accepted' || message.type === 'room-song-command-rejected')\n      && message.commandId === nextId\n    ));\n    console.log('RELOAD_COMMAND_OUTCOME', JSON.stringify(outcome));\n    assert.equal(outcome.type, 'room-song-command-accepted', JSON.stringify(outcome));\n"""
+          old = "    const nextId = 'reload-command-play';\n"
+          new = "    const nextId = 'reload-command-play-after-reload';\n"
           count = text.count(old)
           if count != 1:
-              raise SystemExit(f'expected one reload accepted block, found {count}')
+              raise SystemExit(f'expected one stale nextId, found {count}')
           path.write_text(text.replace(old, new, 1))
           PY
-      - run: node --import tsx --test --test-name-pattern='reload hello clears an old-generation command' test/playback-reload-continuation.test.ts
+
+      - run: npm ci
+      - run: npm run check
+      - name: Verify focused reload regression
+        run: node --import tsx --test --test-name-pattern='reload hello clears an old-generation command' test/playback-reload-continuation.test.ts
+      - name: Verify full suite
+        run: npm test
+
+      - name: Commit verified test correction and remove one-shot
+        env:
+          BRANCH: agent/stabilize-room-kernel
+        run: |
+          rm .github/workflows/diagnose-reload-command-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A -- test/playback-reload-continuation.test.ts .github/workflows/diagnose-reload-command-once.yml
+          git diff --cached --check
+          git commit -m 'test: use a fresh command id after playback reload'
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

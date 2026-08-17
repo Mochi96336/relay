@@ -209,7 +209,19 @@
 
   function handleMessage(message) {
     if (message.type !== 'session-status') return;
-    if (latestSession && Number(message.revision) < Number(latestSession.revision)) return;
+    const previousIncarnation = latestSession?.serverIncarnation;
+    const nextIncarnation = message.serverIncarnation;
+    const sameIncarnation = typeof previousIncarnation === 'string'
+      && typeof nextIncarnation === 'string'
+      && previousIncarnation === nextIncarnation;
+    if (sameIncarnation && Number(message.revision) < Number(latestSession.revision)) return;
+    if (
+      typeof previousIncarnation === 'string'
+      && typeof nextIncarnation === 'string'
+      && previousIncarnation !== nextIncarnation
+    ) {
+      hideTakeover();
+    }
     latestSession = message;
     renderParticipants();
   }

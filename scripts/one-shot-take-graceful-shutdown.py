@@ -57,7 +57,7 @@ replace_once(
 replace_once(
     'src/take-controller.ts',
     """  shutdown() {\n    const writer = this.writer;\n    this.writer = null;\n    this.quality = null;\n    if (writer) void writer.abort();\n  }\n\n  private failWriter(writer: WavTakeWriter, error: unknown) {\n""",
-    """  async shutdown(nowMs = Date.now()) {\n    const recordingTakeId = this.session.recordingTakeId;\n    if (recordingTakeId) {\n      this.quality?.noteEvent('server-shutdown');\n      this.stop(recordingTakeId, null, 'server-shutdown', nowMs);\n    }\n\n    const finalization = this.finalization;\n    if (finalization) await finalization;\n\n    // This only covers an impossible/failed lifecycle mismatch. A normal\n    // recording or finalizing Take has already been drained above.\n    const orphanWriter = this.writer;\n    this.writer = null;\n    this.quality = null;\n    if (orphanWriter) await orphanWriter.abort();\n    await this.pruneChain;\n  }\n\n  private async finalizeWriter(writer: WavTakeWriter, takeId: string) {\n    try {\n      const file = await writer.finalize();\n      const base = this.options.artifactBaseUrl ?? '/takes';\n      const completed = this.session.complete(takeId, {\n        fileName: file.fileName,\n        url: `${base}/${encodeURIComponent(takeId)}.wav`,\n        mimeType: 'audio/wav',\n        sizeBytes: file.sizeBytes,\n        sampleRate: file.sampleRate,\n        channels: 1,\n        bitsPerSample: 16,\n        sampleCount: file.sampleCount,\n        durationMs: file.durationMs,\n      });\n      if (completed) {\n        this.emitChange();\n        this.scheduleRetentionPrune();\n      } else {\n        // A finalized file without a matching ready Take is not a valid\n        // artifact and must not become an unreferenced disk leak.\n        await writer.discardFinalized();\n      }\n    } catch (error) {\n      if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();\n      await writer.abort();\n    }\n  }\n\n  private failWriter(writer: WavTakeWriter, error: unknown) {\n""",
+    """  async shutdown(nowMs = Date.now()) {\n    const recordingTakeId = this.session.recordingTakeId;\n    if (recordingTakeId) {\n      this.quality?.noteEvent('server-shutdown');\n      this.stop(recordingTakeId, null, 'server-shutdown', nowMs);\n    }\n\n    const finalization = this.finalization;\n    if (finalization) await finalization;\n\n    // This only covers an impossible/failed lifecycle mismatch. A normal\n    // recording or finalizing Take has already been drained above.\n    const orphanWriter = this.writer;\n    this.writer = null;\n    this.quality = null;\n    if (orphanWriter) await orphanWriter.abort();\n    await this.pruneChain;\n  }\n\n  private async finalizeWriter(writer: WavTakeWriter, takeId: string) {\n    try {\n      const file = await writer.finalize();\n      const base = this.options.artifactBaseUrl ?? '/takes';\n      const completed = this.session.complete(takeId, {\n        fileName: file.fileName,\n        url: `${base}/${encodeURIComponent(takeId)}.wav`,\n        mimeType: 'audio/wav',\n        sizeBytes: file.sizeBytes,\n        sampleRate: file.sampleRate,\n        channels: 1,\n        bitsPerSample: 16,\n        sampleCount: file.sampleCount,\n        durationMs: file.durationMs,\n      });\n      if (completed) {\n        this.emitChange();\n        this.scheduleRetentionPrune();\n      } else {\n        await writer.discardFinalized();\n      }\n    } catch (error) {\n      if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();\n      await writer.abort();\n    }\n  }\n\n  private failWriter(writer: WavTakeWriter, error: unknown) {\n""",
     'drain recording/finalizing Take before process shutdown',
 )
 
@@ -88,8 +88,8 @@ replace_once(
 )
 replace_once(
     'src/server.ts',
-    """server.listen(port, '0.0.0.0', () => {\n  const address = server.address();\n  const actualPort = typeof address === 'object' && address ? address.port : port;\n  console.log(`Relay listening on http://localhost:${actualPort}`);\n  console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');\n});\n""",
-    """server.listen(port, '0.0.0.0', () => {\n  const address = server.address();\n  const actualPort = typeof address === 'object' && address ? address.port : port;\n  console.log(`Relay listening on http://localhost:${actualPort}`);\n  console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');\n});\n\nlet shutdownPromise: Promise<void> | null = null;\n\nasync function gracefulShutdown(signal: NodeJS.Signals) {\n  if (shutdownPromise) return shutdownPromise;\n  shutdownPromise = (async () => {\n    console.log(`Relay received ${signal}; finalizing active work before shutdown.`);\n\n    // Stop producing new mixed frames before closing the WAV boundary. Signal\n    // callbacks run between JS turns, so no mixer callback can race this clear.\n    clearInterval(mixerTimer);\n    clearInterval(youtubeTimelineTimer);\n    clearInterval(heartbeat);\n    cancelMicTransportGrace();\n    cancelBackingGrace();\n\n    await takeController.shutdown(Date.now());\n    await webTransportMedia?.stop();\n\n    for (const client of wss.clients) client.terminate();\n    await new Promise<void>((resolve) => wss.close(() => resolve()));\n    if (server.listening) {\n      await new Promise<void>((resolve, reject) => {\n        server.close((error) => error ? reject(error) : resolve());\n      });\n    }\n  })().catch((error) => {\n    console.error('Relay graceful shutdown failed', error);\n    process.exitCode = 1;\n  });\n  return shutdownPromise;\n}\n\nfor (const signal of ['SIGTERM', 'SIGINT'] as const) {\n  process.once(signal, () => {\n    void gracefulShutdown(signal).finally(() => {\n      process.exit(process.exitCode ?? 0);\n    });\n  });\n}\n""",
+    """server.listen(port, '0.0.0.0', () => {\n  const address = server.address();\n  const actualPort = typeof address === 'object' && address ? address.port : port;\n  console.log(`Relay listening on http://localhost:${actualPort}`);\n  console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');\n});""",
+    """server.listen(port, '0.0.0.0', () => {\n  const address = server.address();\n  const actualPort = typeof address === 'object' && address ? address.port : port;\n  console.log(`Relay listening on http://localhost:${actualPort}`);\n  console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');\n});\n\nlet shutdownPromise: Promise<void> | null = null;\n\nasync function gracefulShutdown(signal: NodeJS.Signals) {\n  if (shutdownPromise) return shutdownPromise;\n  shutdownPromise = (async () => {\n    console.log(`Relay received ${signal}; finalizing active work before shutdown.`);\n    clearInterval(mixerTimer);\n    clearInterval(youtubeTimelineTimer);\n    clearInterval(heartbeat);\n    cancelMicTransportGrace();\n    cancelBackingGrace();\n\n    await takeController.shutdown(Date.now());\n    await webTransportMedia?.stop();\n\n    for (const client of wss.clients) client.terminate();\n    await new Promise<void>((resolve) => wss.close(() => resolve()));\n    if (server.listening) {\n      await new Promise<void>((resolve, reject) => {\n        server.close((error) => error ? reject(error) : resolve());\n      });\n    }\n  })().catch((error) => {\n    console.error('Relay graceful shutdown failed', error);\n    process.exitCode = 1;\n  });\n  return shutdownPromise;\n}\n\nfor (const signal of ['SIGTERM', 'SIGINT'] as const) {\n  process.once(signal, () => {\n    void gracefulShutdown(signal).finally(() => {\n      process.exit(process.exitCode ?? 0);\n    });\n  });\n}\n""",
     'install awaited controlled shutdown boundary',
 )
 
@@ -147,22 +147,22 @@ test('SIGTERM finalizes an active Take before Relay exits and preserves the WAV 
     first = null;
 
     assert.equal(exited.code, 0);
-    assert.equal(exited.signal, null, 'the server should consume SIGTERM and exit after its awaited drain');
+    assert.equal(exited.signal, null);
     assert.equal(ready.take.stopReason, 'server-shutdown');
     assert.equal(ready.take.quality?.verdict, 'review');
     assert.ok(ready.take.quality?.issues?.some((issue: any) => issue.code === 'recording-interrupted'));
 
     const files = await readdir(directory);
-    assert.ok(files.includes(`${takeId}.wav`), 'controlled restart must leave a finalized WAV');
-    assert.ok(!files.includes(`${takeId}.wav.part`), 'controlled restart must not leave a partial artifact');
+    assert.ok(files.includes(`${takeId}.wav`));
+    assert.ok(!files.includes(`${takeId}.wav.part`));
     const wav = await readFile(path.join(directory, `${takeId}.wav`));
-    assert.ok(wav.byteLength > 44, 'finalized shutdown artifact must contain recorded PCM');
+    assert.ok(wav.byteLength > 44);
     assert.equal(wav.subarray(0, 4).toString('ascii'), 'RIFF');
     assert.equal(wav.subarray(8, 12).toString('ascii'), 'WAVE');
 
     second = await startRelay(env);
     const response = await fetch(second.httpUrl(`/takes/${takeId}.wav`));
-    assert.equal(response.status, 200, 'the finalized artifact must survive startup cleanup');
+    assert.equal(response.status, 200);
     const restoredBytes = Buffer.from(await response.arrayBuffer());
     assert.equal(restoredBytes.byteLength, wav.byteLength);
   } finally {

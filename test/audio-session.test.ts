@@ -457,6 +457,50 @@ describe('AudioSession microphone limiter', () => {
     );
   });
 
+  /**
+   * The song gain and the summing headroom both follow whether a microphone is
+   * expected, so taking the mic mid-song moves the song by several dB. Switched
+   * in one sample that is a click - a worse fault than the level it corrects.
+   */
+  test('ducks the song for an arriving voice without a step', () => {
+    const session = makeSession({ backingGain: 0.65 });
+    session.setBackingExpected(true);
+    session.start(0);
+    // Three seconds, so the drains below never read past the audio.
+    session.ingestBacking(frame(0, pcmOf(new Array(RATE * 3).fill(20_000))), RATE, 0);
+
+    const before = drainAll(session, 100);
+    const unducked = before.readInt16LE(0);
+
+    // The room gains a microphone in the middle of the song.
+    session.setMicExpected(true);
+    const during = drainAll(session, 600);
+
+    // Across the join as well: a hard switch puts its whole step between the
+    // last unducked sample and the first ducked one.
+    const across = Buffer.concat([before, during]);
+    let worstStep = 0;
+    for (let i = 1; i < across.length / 2; i += 1) {
+      const step = Math.abs(across.readInt16LE(i * 2) - across.readInt16LE((i - 1) * 2));
+      if (step > worstStep) worstStep = step;
+    }
+    assert.ok(
+      worstStep <= unducked / 100,
+      `the duck must ramp, largest single-sample step was ${worstStep} of ${unducked}`,
+    );
+
+    const ducked = during.readInt16LE(during.length - 2);
+    assert.ok(ducked < unducked * 0.8, `the song must actually duck, got ${ducked} from ${unducked}`);
+
+    // And it comes back when the microphone leaves, equally smoothly.
+    session.setMicExpected(false);
+    const after = drainAll(session, 1_200);
+    assert.ok(
+      after.readInt16LE(after.length - 2) > unducked * 0.95,
+      'the song returns to its own level once no voice is expected',
+    );
+  });
+
   test('does not carry limiter gain reduction into the next session', () => {
     const session = makeSession();
     session.setMicGainDb(36);

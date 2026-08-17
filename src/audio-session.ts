@@ -130,6 +130,17 @@ function sumHeadroomGain(backingGain: number) {
 }
 
 /**
+ * How long the song takes to duck out of a singer's way, and to come back.
+ *
+ * The song gain and the summing headroom both exist to leave room for a voice,
+ * so both follow whether a microphone is expected. Switched instantly that is a
+ * step of several dB in the middle of a song - plainly audible, and a worse
+ * fault than the level it corrects. A microphone registers before any audio
+ * flows, so this ramp is finished long before the first note.
+ */
+const SONG_DUCK_RAMP_MS = 150;
+
+/**
  * How fast the raw microphone meter forgets. Long enough that a breath between
  * phrases does not read as a quiet microphone, short enough to follow a singer
  * moving nearer or further from the phone.
@@ -192,6 +203,9 @@ export class AudioSession {
 
   private readonly backingGain: number;
   private readonly backingSumHeadroomGain: number;
+  private readonly songDuckStep: number;
+  /** 0 while the song has the room to itself, 1 once it is out of a voice's way. */
+  private songDuck = 0;
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
@@ -239,6 +253,10 @@ export class AudioSession {
     this.prebufferMs = options.prebufferMs;
     this.backingGain = options.backingGain;
     this.backingSumHeadroomGain = sumHeadroomGain(options.backingGain);
+    this.songDuckStep = 1 / Math.max(
+      1,
+      Math.round((SONG_DUCK_RAMP_MS / 1000) * options.sampleRate),
+    );
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
     this.backingRetentionMs = options.backingRetentionMs ?? 1_000;
@@ -304,6 +322,9 @@ export class AudioSession {
     this.sessionGeneration += 1;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
+    // A new session starts from what the room currently is, not from wherever
+    // the previous one's ramp happened to stop.
+    this.songDuck = this.backingExpected && this.micExpected ? 1 : 0;
     this.resetHealth();
   }
 
@@ -772,14 +793,28 @@ export class AudioSession {
     // Do not attenuate voice-only rooms merely because a stale backing timeline
     // still exists from an earlier route, and do not quieten a song playing on
     // its own to leave room for a voice nobody is singing.
-    const mixHeadroomGain = this.backingExpected && this.micExpected
-      ? this.backingSumHeadroomGain
-      : 1;
+    // `backingExpected` and `micExpected` are the room's semantic signals for
+    // which sources this mix has. The song gain and the summing headroom both
+    // exist to leave space for a voice, so both are worth paying only when a
+    // voice can actually arrive: a song playing to a room where nobody has
+    // taken the microphone was being quietened for a singer who was not there,
+    // and the balance a real performance was tuned against is unchanged.
+    const duckTarget = this.backingExpected && this.micExpected ? 1 : 0;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
 
     for (let i = 0; i < this.frameSamples; i += 1) {
+      // Ramped per sample: the room can gain or lose a microphone mid-song, and
+      // several dB arriving in one sample is a click.
+      if (this.songDuck < duckTarget) {
+        this.songDuck = Math.min(duckTarget, this.songDuck + this.songDuckStep);
+      } else if (this.songDuck > duckTarget) {
+        this.songDuck = Math.max(duckTarget, this.songDuck - this.songDuckStep);
+      }
+      const songGain = 1 + this.songDuck * (this.backingGain - 1);
+      const mixHeadroomGain = 1 + this.songDuck * (this.backingSumHeadroomGain - 1);
+
       const voice = this.limit((mic[i] / 32768) * micGain, (mic[i + lookahead] / 32768) * micGain);
-      const summed = voice + (song[i] / 32768) * this.backingGain;
+      const summed = voice + (song[i] / 32768) * songGain;
       const value = summed * mixHeadroomGain;
       // Normal two-source peaks have already had deterministic summing headroom
       // reserved. Keep this clamp as an invariant/backstop for unexpected future

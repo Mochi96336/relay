@@ -263,10 +263,12 @@ function updateSingerControls() {
  */
 function updateCalibrateButton() {
   const collecting = latestCalibration?.state === 'collecting';
+  const probeActive = latestCalibration?.probeActive === true;
   calibrateButton.disabled = !publisherActive
     || !liveMixActive
     || roomSongAvailable !== true
-    || collecting;
+    || collecting
+    || probeActive;
 
   if (roomSongAvailable === false) {
     calibrateStatus.textContent = 'No song to align.';
@@ -280,6 +282,16 @@ function updateCalibrateButton() {
 
   if (!liveMixActive) {
     calibrateStatus.textContent = t('adjust.calibration.auto');
+    return;
+  }
+
+  if (probeActive) {
+    const phase = String(latestCalibration?.probePhase ?? '');
+    const attempts = latestCalibration?.probeAttempts ?? {};
+    const max = Number(latestCalibration?.probeMaxAttempts) || 1;
+    const target = phase.startsWith('backing') ? 'Song path' : 'Phone mic';
+    const attempt = Number(phase.startsWith('backing') ? attempts.backing : attempts.mic) || 1;
+    calibrateStatus.textContent = `Calibrating · ${target} ${Math.min(attempt, max)}/${max}`;
     return;
   }
 
@@ -308,9 +320,11 @@ function updateCalibrateButton() {
   }
 
   if (latestCalibration?.state === 'failed') {
-    calibrateStatus.textContent = latestCalibration.automatic
-      ? t('adjust.calibration.autoRetry')
-      : t('adjust.calibration.failed', { error: latestCalibration.error ?? t('adjust.calibration.noSignal') });
+    calibrateStatus.textContent = latestCalibration.probeError
+      ? t('adjust.calibration.failed', { error: latestCalibration.probeError })
+      : latestCalibration.automatic
+        ? t('adjust.calibration.autoRetry')
+        : t('adjust.calibration.failed', { error: latestCalibration.error ?? t('adjust.calibration.noSignal') });
     return;
   }
 
@@ -372,35 +386,57 @@ const PROBE_NOTE_SECONDS = 0.105;
  * not on the session's timeline and mapping it would be the very thing being
  * measured.
  */
-function playCalibrationProbe(requestId, leadMs) {
-  if (!audioContext || !publisherActive) return;
+async function playCalibrationProbe(requestId, leadMs) {
+  const context = audioContext;
+  if (!context || !publisherActive) return;
 
-  const startTime = audioContext.currentTime + leadMs / 1000;
-  for (const note of PROBE_NOTES) {
-    const at = startTime + note.offsetMs / 1000;
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    oscillator.frequency.value = note.frequencyHz;
-    // A slightly softened attack avoids a sharp test-beep edge. The decay is
-    // close to the reference envelope used by the server's correlation.
-    gain.gain.setValueAtTime(0.0001, at);
-    gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
-    gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
-    oscillator.connect(gain).connect(audioContext.destination);
-    oscillator.start(at);
-    oscillator.stop(at + PROBE_NOTE_SECONDS);
+  try {
+    // Mobile Safari may suspend/interupt WebAudio while the page backgrounds.
+    // Never tell the server a probe played until the actual capture context is
+    // back in the running state; a false acknowledgement only turns silence
+    // into a correlation failure and another audible retry.
+    await context.resume();
+    if (!publisherActive || audioContext !== context || context.state !== 'running') {
+      throw new Error(`Phone probe AudioContext is ${context.state}.`);
+    }
+
+    const startTime = context.currentTime + leadMs / 1000;
+    for (const note of PROBE_NOTES) {
+      const at = startTime + note.offsetMs / 1000;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = note.frequencyHz;
+      // A slightly softened attack avoids a sharp test-beep edge. The decay is
+      // close to the reference envelope used by the server's correlation.
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start(at);
+      oscillator.stop(at + PROBE_NOTE_SECONDS);
+    }
+
+    if (socket?.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({
+      type: 'calibration-probe-played',
+      target: 'mic',
+      requestId,
+      // The same truncation framePcm applies. The server compares this against
+      // the generation it read off a PCM frame header, which is a uint32, so
+      // sending the untruncated clock seed here never matches.
+      generation: captureGeneration >>> 0,
+    }));
+  } catch (error) {
+    console.warn('phone calibration probe failed', error);
+    if (socket?.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({
+      type: 'calibration-probe-failed',
+      target: 'mic',
+      requestId,
+      generation: captureGeneration >>> 0,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
   }
-
-  if (socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({
-    type: 'calibration-probe-played',
-    target: 'mic',
-    requestId,
-    // The same truncation framePcm applies. The server compares this against
-    // the generation it read off a PCM frame header, which is a uint32, so
-    // sending the untruncated clock seed here never matches.
-    generation: captureGeneration >>> 0,
-  }));
 }
 
 function dispatchRelayEvent(type, detail = {}) {
@@ -425,6 +461,13 @@ function handleServerMessage(message) {
         ? `${owner ? owner.nickname : 'Another participant'} has the mic and controls this.`
         : 'Join the room with a name before changing this.',
     );
+    return;
+  }
+
+  if (message.type === 'calibration-command-rejected') {
+    calibrateStatus.textContent = message.reason === 'take-active'
+      ? 'Finish the current Take before calibrating.'
+      : `Calibration unavailable: ${message.reason ?? 'unknown reason'}`;
     return;
   }
 
@@ -499,7 +542,7 @@ function handleServerMessage(message) {
     // publisher role. The phone must ignore that leg or its faster reply can
     // be mistaken for the robot probe that is still waiting to play.
     if (message.target === undefined || message.target === 'mic') {
-      playCalibrationProbe(message.requestId, Number(message.leadMs) || 200);
+      void playCalibrationProbe(message.requestId, Number(message.leadMs) || 200);
     }
     return;
   }

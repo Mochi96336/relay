@@ -8,6 +8,7 @@ on:
       - .github/workflows/mic-startup-deadline-once.yml
       - scripts/one-shot-mic-startup-deadline.py
       - scripts/one-shot-mic-startup-types.py
+      - scripts/one-shot-mic-startup-test-types.py
 
 permissions:
   contents: write
@@ -35,6 +36,7 @@ jobs:
         run: |
           python3 scripts/one-shot-mic-startup-deadline.py
           python3 scripts/one-shot-mic-startup-types.py
+          python3 scripts/one-shot-mic-startup-test-types.py
 
       - name: Verify focused diff
         run: |
@@ -73,7 +75,8 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/mic-startup-deadline-once.yml \
             scripts/one-shot-mic-startup-deadline.py \
-            scripts/one-shot-mic-startup-types.py
+            scripts/one-shot-mic-startup-types.py \
+            scripts/one-shot-mic-startup-test-types.py
           git add -- \
             public/app.js \
             public/mic-startup.d.ts \

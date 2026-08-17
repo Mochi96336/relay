@@ -1,3 +1,4 @@
+import './playback-transport-identity.js';
 import { leaderHolding } from './playback-policy.js';
 
 function samePlaybackTransport(status, participantId, transportId, keys) {

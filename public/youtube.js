@@ -1,3 +1,4 @@
+import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -25,7 +26,10 @@ const ERROR_NAMES = new Map([
   [153, 'missing Referer / client identity'],
 ]);
 
-const HANDOFF_COMMIT_TIMEOUT_MS = 5_000;
+// The server owns the 5 s proof deadline and sweeps every 250 ms. The browser
+// timer is only a late local safety net, so keep it comfortably behind the
+// authoritative deadline rather than racing the server at the same instant.
+const HANDOFF_COMMIT_TIMEOUT_MS = 6_500;
 
 let player = null;
 let playerReady = false;
@@ -416,11 +420,13 @@ function announceHandoffReady() {
 
   const state = Number(player.getPlayerState());
   const bufferedFraction = Number(player.getVideoLoadedFraction());
-  // CUED (5) only proves that YouTube accepted the video identity. It does not
-  // prove that media has been requested/buffered. A real handoff may announce
-  // readiness only after the player has entered an active media state and the
-  // API reports a non-zero buffered fraction.
-  if (![1, 2, 3].includes(state)) return false;
+  const desiredPlaying = pendingHandoff.desiredState === 1 || pendingHandoff.desiredState === 3;
+  // BUFFERING is progress, not readiness. `getVideoLoadedFraction()` is an
+  // overall-video fraction and cannot prove that the target timestamp is
+  // renderable. For a playing room, require the iframe to have actually reached
+  // PLAYING; for a paused/terminal room, require the prepared player to be
+  // PAUSED. The server applies its own proof gate again after commit.
+  if (desiredPlaying ? state !== 1 : state !== 2) return false;
   if (!Number.isFinite(bufferedFraction) || bufferedFraction <= 0) return false;
 
   handoffReadySent = true;
@@ -434,9 +440,9 @@ function announceHandoffReady() {
 
 function scheduleHandoffReadyChecks() {
   clearHandoffReadyTimers();
-  // Buffered fraction can advance without another state-change callback. Keep
-  // polling beneath the server's 20 s prepare deadline so a slow phone can
-  // become ready without a reload or another user gesture.
+  // Loaded fraction and state can advance without a useful state callback on
+  // every platform. Keep polling beneath the server's prepare deadline so a
+  // slow phone can become ready without a reload or another user gesture.
   for (const delayMs of [80, 220, 500, 900, 1_500, 2_400, 4_000, 7_000, 11_000, 16_000]) {
     handoffReadyTimers.push(setTimeout(announceHandoffReady, delayMs));
   }
@@ -495,6 +501,20 @@ async function startPlaybackPrewarm() {
 
   const desired = reloadDesiredFromRoom(latestPlaybackRoom);
   if (!desired?.videoId) return false;
+
+  // A second Mic tap while the same confirmation is open must not replace the
+  // object that remembers whether the player was audible before Relay muted it.
+  // Otherwise the second attempt observes Relay's own mute and loses the only
+  // provenance needed to restore the user's original state.
+  if (speculativePrewarm?.videoId === desired.videoId) {
+    speculativePrewarm.targetTime = Math.max(0, desired.positionSeconds);
+    speculativePrewarm.desiredState = desired.state;
+    speculativePrewarm.playbackRate = desired.playbackRate;
+    speculativePrewarm.startedAtPerformanceMs = performance.now();
+    if (playerReady) primeSpeculativePrewarm();
+    return true;
+  }
+  if (speculativePrewarm) cancelPlaybackPrewarm();
 
   const prewarm = {
     videoId: desired.videoId,
@@ -720,7 +740,7 @@ function handleError(event) {
   }
 }
 
-function rollbackCommittedHandoff(reason, { reprepare = false } = {}) {
+function rollbackCommittedHandoff(reason) {
   if (!pendingHandoff || pendingHandoff.phase !== 'committing') return false;
 
   const handoffId = pendingHandoff.handoffId;
@@ -742,10 +762,6 @@ function rollbackCommittedHandoff(reason, { reprepare = false } = {}) {
   window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
     detail: { handoffId, reason },
   }));
-
-  if (reprepare && playerReady && player && pendingHandoff?.handoffId === handoffId) {
-    cuePendingHandoff();
-  }
   return true;
 }
 
@@ -1018,7 +1034,7 @@ function commitRoomSong(message) {
     }
     // Commit starts the target media clock, but it is still not the audible
     // room source. Keep it muted until server proof promotes this exact
-    // transport and the handoff reaches idle.
+    // transport and sends the explicit completion packet.
     try { player.mute(); } catch {}
     if (desiredState === 1) player.playVideo();
     else player.pauseVideo();
@@ -1029,7 +1045,10 @@ function commitRoomSong(message) {
         pendingHandoff?.handoffId === committingHandoffId
         && pendingHandoff.phase === 'committing'
       ) {
-        rollbackCommittedHandoff('commit-timeout', { reprepare: true });
+        // The server should already have completed or cancelled by now. This is
+        // only local damage containment: park/mute and report failure. Do not
+        // reuse a 6.5 s-old targetTime to start another seek loop locally.
+        rollbackCommittedHandoff('commit-timeout');
       }
     }, HANDOFF_COMMIT_TIMEOUT_MS);
 
@@ -1084,14 +1103,27 @@ function cancelRoomSongHandoff() {
 function completeRoomSong(message) {
   if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
   const prewarmWasMuted = pendingHandoff.prewarmWasMuted;
+  const desiredState = pendingHandoff.desiredState;
   clearHandoffReadyTimers();
   clearHandoffCommitTimer();
   pendingHandoff = null;
   handoffReadySent = false;
-  // Only server-confirmed ownership makes the warmed target audible. Preserve a
-  // user who had intentionally muted the player before takeover.
+  // Only the explicit server completion packet restores audibility. A timeline
+  // status broadcast is intentionally insufficient because the server sends the
+  // promoted timeline before it sends the outgoing leader's release packet.
   if (playerReady && player && prewarmWasMuted === false) {
     try { player.unMute(); } catch {}
+    // WebKit may pause media when a muted autoplay is unmuted without a fresh
+    // user gesture. We cannot manufacture that gesture after an async server
+    // round-trip, so detect the failure and surface the real recovery instead
+    // of pretending the handoff stayed audible.
+    if (desiredState === 1) {
+      setTimeout(() => {
+        if (Number(player?.getPlayerState?.()) !== 1) {
+          noteNode.textContent = 'Playback moved here, but the browser paused audio. Tap Play once in the visible YouTube player.';
+        }
+      }, 300);
+    }
   }
   noteNode.textContent = t('song.handoffComplete');
 }
@@ -1145,20 +1177,6 @@ window.addEventListener('relay:playback-view', (event) => {
     && Number.isInteger(currentGeneration)
     && currentGeneration === leaderGeneration,
   );
-
-  // The direct completion packet is ordered and normally wins. This timeline
-  // proof is the reconnect-safe equivalent: if the socket dropped after the
-  // target telemetry was accepted, the authoritative status still lets the
-  // already-promoted transport restore its pre-handoff mute state.
-  if (
-    pendingHandoff?.phase === 'committing'
-    && nextRole === 'holder'
-    && timeline?.handoffState === 'idle'
-    && sameTransport
-    && leaderGeneration === currentGeneration
-  ) {
-    completeRoomSong({ handoffId: pendingHandoff.handoffId });
-  }
 
   if (continuingSameTransport) {
     const restoreKey = playbackContinuationDecision({

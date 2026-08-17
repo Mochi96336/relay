@@ -408,11 +408,10 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     reconcile(t('listen.resumed'));
   }
 
-  async function activateFromGesture(event) {
-    const target = event.target instanceof Element ? event.target : null;
-    const startsMic = target?.closest('#confirm-takeover')
-      || (target?.closest('#start-publisher') && publisherButton.dataset.presenceLabel !== 'takeover');
-    if (startsMic) micForcedMuted = true;
+  async function activateFromGesture() {
+    // The first gesture exists only to prime the Listen graph. Mic mute state is
+    // owned by the actual click/request lifecycle below; mutating it on
+    // pointerdown can strand Listen if the gesture is cancelled before click.
     try {
       await ensureAudioGraph();
       reconcile();

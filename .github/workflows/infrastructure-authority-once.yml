@@ -82,7 +82,8 @@ jobs:
             test/source-seek-authority.test.ts \
             test/source-control-authority.test.ts \
             test/backing-generation-recreation.test.ts \
-            test/robot-scripts.test.ts
+            test/robot-scripts.test.ts \
+            test/i18n-contract.test.ts
 
       - name: Verify systemd units
         run: |
@@ -100,6 +101,10 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
+            echo '=== locale contract diagnostics ==='
+            grep -n 'locale-control' public/index.html || true
+            git status --short
+            node --import tsx --test --test-concurrency=1 test/i18n-contract.test.ts || true
             python3 - <<'PY'
           from pathlib import Path
           lines = Path('/tmp/relay-full-suite.log').read_text(errors='replace').splitlines()

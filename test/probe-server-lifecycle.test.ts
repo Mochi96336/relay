@@ -115,6 +115,9 @@ test('stale or wrong-generation acknowledgements cannot cancel the newer Mic pro
   const server = await startRelay({
     ...PROBE_FAST,
     RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '3',
+    // This test isolates request ownership, so leave enough wall-clock room to
+    // observe an accidental re-arm without racing request #2's own deadline.
+    RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '500',
   });
   const clients = await robotSession(server);
   try {
@@ -140,7 +143,20 @@ test('stale or wrong-generation acknowledgements cannot cancel the newer Mic pro
       requestId: second.requestId,
       generation: generation + 1,
     });
-    await sleep(20);
+
+    // Both invalid acknowledgements must leave request #2 authoritative. With
+    // a third attempt available, consuming either one would make the scheduler
+    // emit #3 after the 100 ms retry. Stay inside #2's widened 500 ms deadline
+    // so detector/timeline analysis is completely out of scope here.
+    await sleep(150);
+    const probesAfterInvalidReplies = clients.publisher.messages.filter(
+      (message) => message.type === 'play-calibration-probe' && message.target === 'mic',
+    );
+    assert.equal(
+      probesAfterInvalidReplies.length,
+      2,
+      'stale or wrong-generation acknowledgement must not consume the current request',
+    );
 
     clients.publisher.send({
       type: 'calibration-probe-played',
@@ -148,20 +164,6 @@ test('stale or wrong-generation acknowledgements cannot cancel the newer Mic pro
       requestId: second.requestId,
       generation,
     });
-
-    // Once the real current request is acknowledged, Relay must enter analysis.
-    // With a third attempt available, either stale request ownership bug would
-    // visibly emit probe #3 after the 100 ms reply timeout. Stay well below the
-    // derived analysis timeout so detector/timeline behavior is out of scope.
-    await sleep(450);
-    const micProbes = clients.publisher.messages.filter(
-      (message) => message.type === 'play-calibration-probe' && message.target === 'mic',
-    );
-    assert.equal(
-      micProbes.length,
-      2,
-      'stale acknowledgement identity must not trigger another phone chime',
-    );
   } finally {
     clients.close();
     await server.stop();

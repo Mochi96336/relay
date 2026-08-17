@@ -16,6 +16,8 @@ jobs:
         with:
           node-version: '20.19'
           cache: npm
+      - name: Expose deployment npm path for systemd verifier
+        run: sudo ln -sf "$(command -v npm)" /usr/bin/npm
       - run: npm ci
       - run: npm run check
       - name: Check browser JavaScript syntax

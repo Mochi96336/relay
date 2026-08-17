@@ -25,6 +25,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   let transportEnabled = false;
   let userMuted = false;
   let micForcedMuted = false;
+  let roomMicForcedMuted = false;
   let playbackForcedMuted = false;
   let sourceSampleRate = MIX_SAMPLE_RATE;
 
@@ -88,11 +89,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   function effectiveMuted() {
-    return userMuted || micForcedMuted || playbackForcedMuted;
+    return userMuted || micForcedMuted || roomMicForcedMuted || playbackForcedMuted;
   }
 
   function forcedMuteReason() {
-    if (micForcedMuted) return 'mic';
+    if (micForcedMuted || roomMicForcedMuted) return 'mic';
     if (playbackForcedMuted) return 'playback';
     return null;
   }
@@ -326,6 +327,10 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
 
   function restoreAfterMic(copy = t('listen.resumed')) {
     micForcedMuted = false;
+    if (roomMicForcedMuted) {
+      reconcile(t('listen.micOwned'));
+      return;
+    }
     if (playbackForcedMuted) {
       reconcile(t('listen.songOwned'));
       return;
@@ -344,6 +349,28 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     setTimeout(() => restoreAfterMic(copy), 0);
   }
 
+  function setRoomMicForcedMute(forced) {
+    if (roomMicForcedMuted === forced) return;
+    roomMicForcedMuted = forced;
+    if (forced) {
+      reconcile(t('listen.micOwned'));
+      return;
+    }
+    if (micForcedMuted) {
+      reconcile(t('listen.micStarting'));
+      return;
+    }
+    if (playbackForcedMuted) {
+      reconcile(t('listen.songOwned'));
+      return;
+    }
+    if (userMuted) {
+      reconcile(t('listen.adjust.userMuted'));
+      return;
+    }
+    reconcile(t('listen.resumed'));
+  }
+
   function setPlaybackForcedMute(forced) {
     if (playbackForcedMuted === forced) return;
     playbackForcedMuted = forced;
@@ -351,7 +378,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       reconcile(t('listen.songOwned'));
       return;
     }
-    if (micForcedMuted) {
+    if (micForcedMuted || roomMicForcedMuted) {
       reconcile(t('listen.micOwned'));
       return;
     }
@@ -377,7 +404,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   toggle.addEventListener('click', async () => {
-    if (micForcedMuted || playbackForcedMuted) return;
+    if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted) return;
     userMuted = !userMuted;
     if (!userMuted) {
       try {
@@ -407,6 +434,23 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   window.addEventListener('relay-microphone-started', () => forceMicMute(t('listen.micOwned')));
   window.addEventListener('relay-microphone-ended', () => restoreAfterMicBoundary());
   window.addEventListener('relay-microphone-start-failed', () => restoreAfterMicBoundary(t('listen.micFailedResume')));
+
+  function applyRoomSessionStatus(status) {
+    const participantId = typeof window.relayParticipantId === 'string'
+      ? window.relayParticipantId
+      : null;
+    const ownerId = typeof status?.micOwnerId === 'string'
+      ? status.micOwnerId
+      : null;
+    setRoomMicForcedMute(Boolean(participantId && ownerId === participantId));
+  }
+
+  window.addEventListener('relay-session-status', (event) => applyRoomSessionStatus(event.detail));
+  // Presence may have received its first snapshot before this module loaded.
+  // Request an immediate replay so initial multi-tab ownership cannot race the
+  // listener registration above.
+  window.dispatchEvent(new Event('relay-request-session-status'));
+
   window.addEventListener('relay:playback-view', (event) => {
     setPlaybackForcedMute(shouldForceMuteListen({
       role: event.detail?.role,

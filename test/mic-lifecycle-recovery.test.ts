@@ -55,6 +55,31 @@ test('failed Mic ownership attempts clean up before Listen is allowed to recover
   assert.match(takeover, /stop\(false, \{ releaseMic: false \}\)[\s\S]*relay-microphone-ended'[\s\S]*reason: 'takeover-rejected'/);
 });
 
+test('room Mic ownership force-mutes Listen in sibling tabs that share the participant identity', () => {
+  const publishAt = presence.indexOf('function publishSessionStatus');
+  const handleAt = presence.indexOf('function handleMessage', publishAt);
+  assert.ok(publishAt >= 0 && handleAt > publishAt);
+  const presenceProjection = presence.slice(publishAt, handleAt);
+  assert.match(presenceProjection, /relay-session-status/,
+    'Presence must project authoritative room ownership to each tab');
+  assert.match(presenceProjection, /relay-request-session-status/,
+    'late module consumers must be able to replay the current ownership snapshot');
+
+  assert.match(listen, /let roomMicForcedMuted = false/);
+  assert.match(listen, /return userMuted \|\| micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted/);
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) return 'mic'/);
+  assert.match(listen, /function restoreAfterMic[\s\S]*if \(roomMicForcedMuted\)[\s\S]*listen\.micOwned/,
+    'a local terminal event must not unmute while another tab still owns the room Mic');
+  assert.match(listen, /setRoomMicForcedMute\(Boolean\(participantId && ownerId === participantId\)\)/,
+    'all tabs with the owner participant identity must follow server Mic ownership');
+  const sessionListenerAt = listen.indexOf("window.addEventListener('relay-session-status'");
+  const replayAt = listen.indexOf("window.dispatchEvent(new Event('relay-request-session-status'))", sessionListenerAt);
+  assert.ok(sessionListenerAt >= 0 && replayAt > sessionListenerAt,
+    'Listen must subscribe before requesting the initial authoritative replay');
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted\) return/,
+    'forced room ownership cannot be bypassed by the Listen toggle');
+});
+
 test('hardware input ending completes the same Mic lifecycle', () => {
   const trackStart = app.indexOf("track?.addEventListener('ended'");
   const graphStart = app.indexOf('const source = audioContext.createMediaStreamSource', trackStart);

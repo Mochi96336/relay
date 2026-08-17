@@ -225,6 +225,16 @@ window.relayIdentityReady = (async () => {
     }
   }
 
+  function publishSessionStatus() {
+    if (!latestSession) return;
+    window.dispatchEvent(new CustomEvent('relay-session-status', { detail: latestSession }));
+  }
+
+  // Module scripts such as Listen can start after the first Presence snapshot
+  // has already arrived. Let late consumers explicitly request a replay instead
+  // of relying on script/network timing.
+  window.addEventListener('relay-request-session-status', publishSessionStatus);
+
   function handleMessage(message) {
     if (message.type !== 'session-status') return;
     const previousIncarnation = latestSession?.serverIncarnation;
@@ -242,6 +252,11 @@ window.relayIdentityReady = (async () => {
     }
     latestSession = message;
     renderParticipants();
+    // Every tab has its own Presence socket but tabs from the same browser share
+    // one participant capability/ID. Project authoritative room ownership to
+    // local page consumers so sibling Listen tabs follow the server, not each
+    // other's process-local Mic events.
+    publishSessionStatus();
   }
 
   function scheduleReconnect() {

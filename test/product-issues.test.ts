@@ -91,11 +91,29 @@ describe('product issue contract', () => {
       code: 'robot-audio-unavailable',
       scope: 'robot',
       severity: 'critical',
-      cause: 'backing-disconnected',
+      cause: 'backing-unavailable',
       affects: ['song', 'recording'],
       recovery: 'host-service',
     });
-    assert.equal(issues[1].cause, 'robot-source-disconnected');
+    assert.equal(issues[1].cause, 'robot-source-unavailable');
+  });
+
+  test('a Song waiting for its first backing route is not mislabeled as a disconnect', () => {
+    const issues = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      routeMode: 'song',
+      backing: { connected: false, streaming: false, robot: false },
+      robotSourceConnected: false,
+    });
+
+    assert.deepEqual(issues, [{
+      code: 'audio-unavailable',
+      scope: 'audio',
+      severity: 'critical',
+      cause: 'backing-not-ready',
+      affects: ['song', 'recording'],
+      recovery: 'automatic',
+    }]);
   });
 
   test('describes cause, impact and recovery for concurrent user-visible warnings', () => {
@@ -118,7 +136,7 @@ describe('product issue contract', () => {
     assert.equal(issues[2].recovery, 'recalibrate');
   });
 
-  test('ProductStatus exposes all issues while attention remains the highest-priority compatibility item', () => {
+  test('ProductStatus exposes rich issues while attention preserves the legacy three-field shape', () => {
     const model = buildProductViewModel(productInput({
       ...READY,
       backingConnected: false,
@@ -128,8 +146,12 @@ describe('product issue contract', () => {
 
     assert.equal(model.health, 'blocked');
     assert.equal(model.issues.length, 2);
-    assert.equal(model.attention, model.issues[0]);
-    assert.equal(model.attention?.code, 'robot-audio-unavailable');
+    assert.deepEqual(model.attention, {
+      code: 'robot-audio-unavailable',
+      scope: 'robot',
+      severity: 'critical',
+    });
+    assert.equal(model.issues[0].cause, 'backing-unavailable');
     assert.equal(model.issues[1].code, 'robot-player-unavailable');
   });
 });

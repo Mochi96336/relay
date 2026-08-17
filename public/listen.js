@@ -1,3 +1,4 @@
+import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
@@ -263,7 +264,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
    * life of the page. Callers may only ever fire it and move on.
    */
   function startResume(context) {
-    if (!context || context.state !== 'suspended') return;
+    if (!context || !shouldRequestAudioResume(context.state)) return;
     try {
       const pending = context.resume();
       if (pending && typeof pending.catch === 'function') {
@@ -328,8 +329,8 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       // stopped responding for the rest of the session.
       //
       // A resume request is not proof that playback started. If the context
-      // remains suspended, reconcile() keeps the transport closed and the
-      // gesture gate armed until a later real user interaction gets it running.
+      // remains suspended or interrupted, reconcile() keeps the transport
+      // closed and the gesture gate armed until browser audio reports running.
       startResume(context);
       await context.audioWorklet.addModule('/playback-worklet.js');
 

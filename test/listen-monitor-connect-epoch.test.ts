@@ -13,7 +13,7 @@ test('Listen retires an opening monitor socket when transport authority changes'
   );
   assert.match(
     listenSource,
-    /async function connect\(\)[\s\S]*const connectEpoch = transportEpoch;[\s\S]*pendingSocket = next;[\s\S]*if \(pendingSocket === next\) pendingSocket = null;[\s\S]*if \(connectEpoch !== transportEpoch \|\| !transportEnabled \|\| effectiveMuted\(\)\) \{\s*next\.close\(\);/,
+    /async function connect\(\)[\s\S]*const connectEpoch = transportEpoch;[\s\S]*pendingSocket = next;[\s\S]*if \(pendingSocket === next\) pendingSocket = null;[\s\S]*if \(connectEpoch !== transportEpoch \|\| !transportEnabled \|\| effectiveMuted\(\) \|\| !audioReady\(\)\) \{\s*next\.close\(\);/,
   );
 });
 

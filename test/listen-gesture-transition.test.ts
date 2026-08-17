@@ -21,6 +21,8 @@ test('Listen gesture gate stays retryable until browser audio is actually runnin
   assert.match(source, /function disarmAudioUnlock\(\)[\s\S]*removeEventListener\('pointerdown', activateFromGesture, true\)/);
   assert.doesNotMatch(source, /addEventListener\('pointerdown', activateFromGesture, \{ capture: true, once: true \}\)/,
     'the first rejected resume must not consume the only unlock gesture');
+  assert.match(source, /if \(!context \|\| !shouldRequestAudioResume\(context\.state\)\) return;/,
+    'suspended and WebKit interrupted contexts share the same best-effort resume path');
 
   assert.match(source, /publisherButton\.addEventListener\('click'[\s\S]*forceMicMute\(t\('listen\.micStarting'\)\)/,
     'the actual Mic click remains the early mute boundary');
@@ -44,7 +46,7 @@ test('Listen transport cannot run ahead of AudioContext readiness', async () => 
   assert.ok(readinessGate >= 0 && enableTransport > readinessGate,
     'AudioContext readiness must be decided before transport is enabled');
   assert.match(reconcileSection, /audioContext\.state !== 'running'[\s\S]*closeTransport\(\);[\s\S]*armAudioUnlock\(\);[\s\S]*return;/,
-    'a suspended context keeps transport closed and the gesture gate armed');
+    'a non-running context keeps transport closed and the gesture gate armed');
 
   assert.match(source, /context\.addEventListener\('statechange'[\s\S]*context\.state === 'running'[\s\S]*disarmAudioUnlock\(\)[\s\S]*reconcile\(\)/,
     'AudioContext state changes, not resume requests, drive readiness reconciliation');

@@ -112,10 +112,14 @@ test('server cancels a stuck commit without depending on the target client watch
     assert.equal(status.playbackTransportId, 'playback-tab-a');
 
     // Failed-handoff holdover is deliberately narrow: A may keep the existing
-    // playing song continuous after Mic ownership already moved to B.
+    // playing song continuous after Mic ownership already moved to B. Fence the
+    // proof to messages received after this telemetry so waitFor() cannot reuse
+    // an earlier CUED/PLAYING status from its retained message history.
+    const continuationStart = aPlayback.messages.length;
     aPlayback.send(telemetry(Number(status.serverTime)));
     const continued = await aPlayback.waitFor((message) => (
-      message.type === 'youtube-timeline-status'
+      aPlayback.messages.indexOf(message) >= continuationStart
+      && message.type === 'youtube-timeline-status'
       && message.playbackLeaderParticipantId === 'participant-a'
       && message.handoffState === 'idle'
       && Number(message.ageMs) < 1_000

@@ -1,0 +1,83 @@
+name: One-shot calibration start authority wiring
+
+on:
+  push:
+    branches:
+      - agent/stabilize-room-kernel
+    paths:
+      - .github/workflows/calibration-start-authority-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-calibration-start-authority-once
+  cancel-in-progress: false
+
+jobs:
+  patch-test-rebase-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/stabilize-room-kernel
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Apply exact calibration start authority patch
+        run: python3 .github/calibration-start-authority-once.py
+
+      - name: Verify focused diff
+        run: |
+          git add -N -- src/calibration-start-policy.ts test/calibration-start-policy.test.ts
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            public/app.js \
+            src/calibration-start-policy.ts \
+            src/product-view-model.ts \
+            src/server.ts \
+            test/adjust-ui-contract.test.ts \
+            test/calibration-start-policy.test.ts \
+            test/product-actions.test.ts \
+            test/take-server.test.ts | sort)"
+          test "$actual" = "$expected" || {
+            printf 'Unexpected diff:\n%s\n' "$actual"
+            exit 1
+          }
+          git diff --stat
+
+      - run: npm ci
+      - run: npm run check
+      - name: Run focused calibration authority tests
+        run: node --import tsx --test --test-concurrency=1 test/calibration-start-policy.test.ts test/product-actions.test.ts test/product-view-model.test.ts test/adjust-ui-contract.test.ts test/take-server.test.ts test/server.test.ts test/timing-calibration.test.ts
+      - name: Run full suite
+        run: npm test
+
+      - name: Commit tested product diff
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            public/app.js \
+            src/calibration-start-policy.ts \
+            src/product-view-model.ts \
+            src/server.ts \
+            test/adjust-ui-contract.test.ts \
+            test/calibration-start-policy.test.ts \
+            test/product-actions.test.ts \
+            test/take-server.test.ts
+          git commit -m 'refactor: centralize calibration start authority'
+
+      - name: Rebase tested product commit onto latest branch and push
+        env:
+          BRANCH: agent/stabilize-room-kernel
+        run: |
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

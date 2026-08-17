@@ -1,3 +1,4 @@
+import { sendParticipantAuthentication } from './participant-auth.js';
 window.relayIdentityReady = (async () => {
   const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
   const participantCount = document.querySelector('#participant-count');
@@ -108,10 +109,8 @@ window.relayIdentityReady = (async () => {
     const params = new URLSearchParams();
     const key = source.get('key');
     if (key) params.set('key', key);
-    params.set('participant', participantId);
-    params.set('cap', participantCapability);
-    params.set('name', nickname);
-    return `${protocol}//${location.host}/ws?${params.toString()}`;
+    const query = params.toString();
+    return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
   }
 
   function participantById(id) {
@@ -299,6 +298,7 @@ window.relayIdentityReady = (async () => {
       try { next.close(); } catch {}
     });
 
+    sendParticipantAuthentication(next);
     next.send(JSON.stringify({ type: 'session-status-request' }));
     sendPendingRename();
   }

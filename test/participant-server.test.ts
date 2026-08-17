@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 
 import WebSocket from 'ws';
 
+import { participantIdForCapability } from '../src/participant-capability.js';
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
@@ -338,6 +339,47 @@ describe('participant presence and microphone ownership', () => {
       ));
       assert.equal(status.micOwnerId, null);
       alice.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('production browser identity authenticates in the first websocket message, not the request URL', async () => {
+    const server = await startRelay({
+      ...FAST,
+      NODE_ENV: 'production',
+      RELAY_TEST_LEGACY_PARTICIPANTS: '1',
+    });
+    try {
+      const capability = 'ab'.repeat(32);
+      const participantId = participantIdForCapability(capability);
+      assert.ok(participantId);
+
+      const browser = await RelayClient.connect(server);
+      browser.send({
+        type: 'participant-authenticate',
+        participantId,
+        capability,
+        nickname: 'Alice',
+      });
+      const authenticated = await browser.waitForType('participant-authenticated');
+      assert.equal(authenticated.participantId, participantId);
+      const status = await browser.waitFor((message) => (
+        message.type === 'session-status'
+        && message.participants?.some((participant: any) => participant.id === participantId)
+      ));
+      assert.equal(status.participants.find((participant: any) => participant.id === participantId)?.nickname, 'Alice');
+      browser.close();
+
+      const leakedQuery = new URLSearchParams({
+        participant: participantId,
+        cap: capability,
+        name: 'Alice',
+      });
+      const leaked = await RelayClient.connect(server, `?${leakedQuery.toString()}`);
+      const rejected = await leaked.waitForType('participant-auth-rejected');
+      assert.match(rejected.message, /capability/i);
+      leaked.close();
     } finally {
       await server.stop();
     }

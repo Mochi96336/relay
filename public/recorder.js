@@ -1,3 +1,4 @@
+import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const recordButton = document.querySelector('#start-recording');
@@ -22,23 +23,13 @@ let currentArtifactHref = null;
 let localMicActive = false;
 
 function wsUrl() {
-  const participantId = typeof window.relayParticipantId === 'string'
-    ? window.relayParticipantId
-    : '';
-  const participantCapability = typeof window.relayParticipantCapability === 'string'
-    ? window.relayParticipantCapability
-    : '';
-  if (!participantId || !participantCapability) return null;
-
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const source = new URLSearchParams(location.search);
   const params = new URLSearchParams();
   const key = source.get('key');
   if (key) params.set('key', key);
-  params.set('participant', participantId);
-  params.set('cap', participantCapability);
-  params.set('name', typeof window.relayNickname === 'string' ? window.relayNickname : 'Guest');
-  return `${protocol}//${location.host}/ws?${params.toString()}`;
+  const query = params.toString();
+  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
 
 function artifactUrl(relativeUrl) {
@@ -245,6 +236,7 @@ async function connect() {
     try { next.close(); } catch {}
   });
 
+  sendParticipantAuthentication(next);
   next.send(JSON.stringify({ type: 'take-status-request' }));
   render();
 }

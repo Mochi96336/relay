@@ -26,7 +26,7 @@ import {
   normalizeNickname,
   normalizeParticipantId,
 } from './participant-session.js';
-import { participantCapabilityMatches } from './participant-capability.js';
+import { browserParticipantIdentity, participantCapabilityMatches } from './participant-capability.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import {
   RoomSongCommandSession,
@@ -474,12 +474,51 @@ function participantIdentity(request: IncomingMessage): ParticipantIdentityResul
   if (rawParticipantId === null) return { kind: 'none' };
 
   const participantId = normalizeParticipantId(rawParticipantId);
-  if (!participantId || !participantCapabilityMatches(participantId, url.searchParams.get('cap'))) {
+  // Browser participant capabilities are bearer secrets and must never ride in
+  // the WebSocket request URL. Query identity remains only for explicit legacy
+  // test fixtures, which cannot be enabled in production.
+  if (
+    !participantId
+    || browserParticipantIdentity(participantId)
+    || !participantCapabilityMatches(participantId, null)
+  ) {
     return { kind: 'invalid' };
   }
 
   const nickname = normalizeNickname(url.searchParams.get('name')) ?? 'Guest';
   return { kind: 'valid', participantId, nickname };
+}
+
+function participantIdentityFromMessage(payload: Record<string, unknown>): ParticipantIdentityResult {
+  const participantId = normalizeParticipantId(payload.participantId);
+  if (
+    !participantId
+    || !browserParticipantIdentity(participantId)
+    || !participantCapabilityMatches(participantId, payload.capability)
+  ) {
+    return { kind: 'invalid' };
+  }
+  const nickname = normalizeNickname(payload.nickname) ?? 'Guest';
+  return { kind: 'valid', participantId, nickname };
+}
+
+function attachParticipantIdentity(
+  socket: RelaySocket,
+  identity: Extract<ParticipantIdentityResult, { kind: 'valid' }>,
+) {
+  if (socket.participantId) return socket.participantId === identity.participantId;
+  participantConnectionSequence += 1;
+  socket.participantId = identity.participantId;
+  socket.participantConnectionId = `connection-${participantConnectionSequence}`;
+  const changed = participants.attach({
+    connectionId: socket.participantConnectionId,
+    participantId: identity.participantId,
+    nickname: identity.nickname,
+    nowMs: Date.now(),
+  });
+  if (changed) broadcastSessionStatus();
+  else sendJson(socket, sessionStatusPayload());
+  return true;
 }
 
 function sessionStatusPayload() {
@@ -1928,19 +1967,7 @@ wss.on('connection', (rawSocket, request) => {
     socket.close(1008, 'Participant capability mismatch.');
     return;
   }
-  if (identity.kind === 'valid') {
-    participantConnectionSequence += 1;
-    socket.participantId = identity.participantId;
-    socket.participantConnectionId = `connection-${participantConnectionSequence}`;
-    const changed = participants.attach({
-      connectionId: socket.participantConnectionId,
-      participantId: identity.participantId,
-      nickname: identity.nickname,
-      nowMs: Date.now(),
-    });
-    if (changed) broadcastSessionStatus();
-    else sendJson(socket, sessionStatusPayload());
-  }
+  if (identity.kind === 'valid') attachParticipantIdentity(socket, identity);
 
   socket.on('pong', () => {
     socket.isAlive = true;
@@ -1991,6 +2018,27 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
+
+    if (payload.type === 'participant-authenticate') {
+      const authenticated = participantIdentityFromMessage(payload);
+      if (
+        authenticated.kind !== 'valid'
+        || (socket.participantId !== undefined && socket.participantId !== authenticated.participantId)
+      ) {
+        sendJson(socket, {
+          type: 'participant-auth-rejected',
+          message: 'Participant identity did not match its private browser capability. Reload Relay.',
+        });
+        socket.close(1008, 'Participant capability mismatch.');
+        return;
+      }
+      attachParticipantIdentity(socket, authenticated);
+      sendJson(socket, {
+        type: 'participant-authenticated',
+        participantId: authenticated.participantId,
+      });
+      return;
+    }
 
     if (payload.type === 'clock-ping') {
       const serverReceivedAtMs = Date.now();

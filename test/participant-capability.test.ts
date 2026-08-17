@@ -55,7 +55,11 @@ describe('participant capability', () => {
     assert.equal(participantCapabilityMatches(participantId, 'not-a-secret'), false);
   });
 
-  test('human browser sockets carry the private capability with the public identity', () => {
+  test('human browser sockets authenticate inside the upgraded channel, never in the URL', () => {
+    const helper = readFileSync('public/participant-auth.js', 'utf8');
+    assert.match(helper, /relayParticipantCapability/);
+    assert.match(helper, /participant-authenticate/);
+
     for (const path of [
       'public/presence.js',
       'public/app.js',
@@ -66,13 +70,14 @@ describe('participant capability', () => {
       'public/youtube-sync.js',
     ]) {
       const source = readFileSync(path, 'utf8');
-      assert.match(source, /relayParticipantCapability/);
       assert.match(source, /relayIdentityReady/);
-      assert.match(source, /params\.set\('cap',/);
+      assert.match(source, /sendParticipantAuthentication/);
+      assert.doesNotMatch(source, /params\.set\('cap',/);
     }
 
     const server = readFileSync('src/server.ts', 'utf8');
-    assert.match(server, /participantCapabilityMatches\(/);
+    assert.match(server, /payload\.type === 'participant-authenticate'/);
+    assert.match(server, /participantCapabilityMatches\(participantId, payload\.capability\)/);
     assert.match(server, /participant-auth-rejected/);
   });
 });

@@ -1,3 +1,4 @@
+import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const systemPanel = document.querySelector('#system-panel');
@@ -203,21 +204,6 @@ if (
     const key = source.get('key');
     if (key) params.set('key', key);
 
-    const participantId = typeof window.relayParticipantId === 'string'
-      ? window.relayParticipantId.trim()
-      : '';
-    const nickname = typeof window.relayNickname === 'string'
-      ? window.relayNickname.trim()
-      : '';
-    const participantCapability = typeof window.relayParticipantCapability === 'string'
-      ? window.relayParticipantCapability.trim()
-      : '';
-    if (participantId && nickname && participantCapability) {
-      params.set('participant', participantId);
-      params.set('cap', participantCapability);
-      params.set('name', nickname);
-    }
-
     const query = params.toString();
     return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
   }
@@ -268,6 +254,7 @@ if (
     socket.addEventListener('open', () => {
       if (diagnosticsSocket !== socket) return;
       diagnosticsState.textContent = 'Connected';
+      sendParticipantAuthentication(socket);
       requestDiagnostics(socket);
     });
 

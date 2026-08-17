@@ -1,3 +1,4 @@
+import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { resolvePlaybackRole } from './song-role.js';
 
@@ -97,20 +98,6 @@ function wsUrl() {
   // same explicit participant identity as the presence/publisher sockets so
   // the server can authorize telemetry without trusting a participant ID in
   // the telemetry payload itself.
-  const participantId = typeof window.relayParticipantId === 'string'
-    ? window.relayParticipantId.trim()
-    : '';
-  const nickname = typeof window.relayNickname === 'string'
-    ? window.relayNickname.trim()
-    : '';
-  const participantCapability = typeof window.relayParticipantCapability === 'string'
-    ? window.relayParticipantCapability.trim()
-    : '';
-  if (participantId && nickname && participantCapability) {
-    params.set('participant', participantId);
-    params.set('cap', participantCapability);
-    params.set('name', nickname);
-  }
 
   const query = params.toString();
   return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
@@ -446,6 +433,7 @@ function connect() {
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
+    sendParticipantAuthentication(next);
     recentRttMs.length = 0;
     pendingPings.clear();
     roomCommandRevisionReady = false;

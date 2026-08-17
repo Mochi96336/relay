@@ -9,7 +9,9 @@ test('browser Take controls no longer participate in the audio pipeline', async 
   assert.match(source, /type:\s*'start-take'/);
   assert.match(source, /type:\s*'stop-take'/);
   assert.match(source, /message\.type === 'take-status'/);
-  assert.match(source, /window\.relayParticipantId/);
+  assert.match(source, /sendParticipantAuthentication/);
+assert.match(source, /participant-auth\.js/);
+assert.doesNotMatch(source, /params\.set\('cap',/);
 
   assert.doesNotMatch(source, /MediaRecorder/);
   assert.doesNotMatch(source, /AudioContext|AudioWorkletNode|createMediaStreamDestination/);

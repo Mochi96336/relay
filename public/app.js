@@ -1,3 +1,4 @@
+import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
@@ -344,21 +345,6 @@ function wsUrl() {
   const key = source.get('key');
   if (key) params.set('key', key);
 
-  const participantId = typeof window.relayParticipantId === 'string'
-    ? window.relayParticipantId.trim()
-    : '';
-  const nickname = typeof window.relayNickname === 'string'
-    ? window.relayNickname.trim()
-    : '';
-  const participantCapability = typeof window.relayParticipantCapability === 'string'
-    ? window.relayParticipantCapability.trim()
-    : '';
-  if (participantId && nickname && participantCapability) {
-    params.set('participant', participantId);
-    params.set('cap', participantCapability);
-    params.set('name', nickname);
-  }
-
   const query = params.toString();
   return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
@@ -367,7 +353,10 @@ function connectSocket() {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl());
     ws.binaryType = 'arraybuffer';
-    ws.addEventListener('open', () => resolve(ws), { once: true });
+    ws.addEventListener('open', () => {
+      sendParticipantAuthentication(ws);
+      resolve(ws);
+    }, { once: true });
     ws.addEventListener('error', () => reject(new Error('WebSocket connection failed.')), { once: true });
   });
 }

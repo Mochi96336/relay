@@ -207,10 +207,33 @@ async function connect() {
   socket = next;
   render();
 
-  await new Promise((resolve, reject) => {
-    next.addEventListener('open', resolve, { once: true });
-    next.addEventListener('error', reject, { once: true });
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        next.removeEventListener('open', onOpen);
+        next.removeEventListener('error', onError);
+        next.removeEventListener('close', onClose);
+      };
+      const settle = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        callback(value);
+      };
+      const onOpen = () => settle(resolve);
+      const onError = () => settle(reject, new Error('Take WebSocket connection failed.'));
+      const onClose = () => settle(reject, new Error('Take WebSocket closed before opening.'));
+      next.addEventListener('open', onOpen);
+      next.addEventListener('error', onError);
+      next.addEventListener('close', onClose);
+    });
+  } catch (error) {
+    if (socket === next) socket = null;
+    try { next.close(); } catch {}
+    render();
+    throw error;
+  }
 
   if (socket !== next) {
     next.close();

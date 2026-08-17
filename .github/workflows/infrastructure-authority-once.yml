@@ -72,6 +72,16 @@ jobs:
           node --check chrome-tab-audio-probe/offscreen.js
           bash -n scripts/robot-source.sh
 
+      - name: Prove locale contract sees the checked-out UI
+        run: |
+          grep -n 'class="locale-control"' public/index.html
+          node --input-type=module - <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const html = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
+          if (!html.includes('class="locale-control"')) throw new Error('direct Node read cannot see locale-control');
+          NODE
+          node --import tsx --test --test-concurrency=1 test/i18n-contract.test.ts
+
       - name: Run focused authority contracts
         run: |
           node --import tsx --test --test-concurrency=1 \
@@ -82,8 +92,7 @@ jobs:
             test/source-seek-authority.test.ts \
             test/source-control-authority.test.ts \
             test/backing-generation-recreation.test.ts \
-            test/robot-scripts.test.ts \
-            test/i18n-contract.test.ts
+            test/robot-scripts.test.ts
 
       - name: Verify systemd units
         run: |

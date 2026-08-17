@@ -37,12 +37,10 @@ jobs:
           path = Path('src/server.ts')
           text = path.read_text()
 
-          old_reply = 'probeLifecycle.acceptReply(reply.requestId)'
-          new_reply = 'probeLifecycle.acceptClientReply(reply.requestId, reply.generation)'
-          count = text.count(old_reply)
+          client_reply = 'probeLifecycle.acceptClientReply(reply.requestId, reply.generation)'
+          count = text.count(client_reply)
           if count != 2:
-              raise SystemExit(f'expected exactly 2 probe reply consumers, found {count}')
-          text = text.replace(old_reply, new_reply)
+              raise SystemExit(f'expected exactly 2 atomic client probe consumers, found {count}')
 
           old_rate = 'return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000'
           new_rate = 'return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000'

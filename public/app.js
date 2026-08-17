@@ -271,7 +271,7 @@ function sendMixSettings() {
     micGainDb: Number(micGain.value),
     // The song is played by the machine hosting the mirrored player, which in
     // the finished topology is the robot - nobody is at its screen, so the
-    // value belongs to the server and arrives here as a message.
+    // value belongs to the server and the phone drives it from here.
     songLevel: Number(songLevel.value),
   }));
 }

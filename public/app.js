@@ -227,7 +227,6 @@ function setPublisherActive(active) {
   // the explicit local lifecycle event so Release never depends on a server
   // ownership snapshot arriving first.
   window.relayActiveRole = publisherActive ? 'publisher' : null;
-  releaseButton.hidden = !publisherActive;
   dispatchRelayEvent('relay-microphone-local-state', { active: publisherActive });
 }
 
@@ -393,10 +392,6 @@ function clearSocketReconnect() {
   socketReconnectTimer = null;
 }
 
-// Must match src/calibration-probe.ts, which builds the reference the server
-// correlates against. Irregular offsets are the point: no shift other than the
-// true one lines all three notes up at once, which is exactly the ambiguity
-// correlating against a song's own beat cannot escape.
 const PROBE_NOTES = [
   { offsetMs: 0, frequencyHz: 1046.5, gain: 0.24 },
   { offsetMs: 125, frequencyHz: 1318.5, gain: 0.27 },
@@ -404,13 +399,6 @@ const PROBE_NOTES = [
 ];
 const PROBE_NOTE_SECONDS = 0.105;
 
-/**
- * Plays the probe out of the phone speaker so the phone's own microphone hears
- * it. The reply says only that it played and for which request - the server
- * derives the timing from its own round trip, because the client's clock is
- * not on the session's timeline and mapping it would be the very thing being
- * measured.
- */
 async function playCalibrationProbe(requestId, leadMs) {
   const context = audioContext;
   if (
@@ -421,9 +409,6 @@ async function playCalibrationProbe(requestId, leadMs) {
   ) return;
 
   try {
-    // Mobile Safari may leave resume() pending while a page is suspended. The
-    // server can retire this request meanwhile, so every continuation has to
-    // re-prove request ownership before it is allowed to create audible nodes.
     await context.resume();
     if (activeCalibrationProbeRequestId !== requestId) return;
     if (
@@ -441,8 +426,6 @@ async function playCalibrationProbe(requestId, leadMs) {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
       oscillator.frequency.value = note.frequencyHz;
-      // A slightly softened attack avoids a sharp test-beep edge. The decay is
-      // close to the reference envelope used by the server's correlation.
       gain.gain.setValueAtTime(0.0001, at);
       gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
       gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
@@ -451,9 +434,6 @@ async function playCalibrationProbe(requestId, leadMs) {
       oscillator.stop(at + PROBE_NOTE_SECONDS);
     }
 
-    // Scheduling the nodes is the irreversible side effect. Retire the local
-    // request before acknowledging it so a later status/retry cannot revive the
-    // same identity on this page.
     if (activeCalibrationProbeRequestId !== requestId) return;
     activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
@@ -461,9 +441,6 @@ async function playCalibrationProbe(requestId, leadMs) {
       type: 'calibration-probe-played',
       target: 'mic',
       requestId,
-      // The same truncation framePcm applies. The server compares this against
-      // the generation it read off a PCM frame header, which is a uint32, so
-      // sending the untruncated clock seed here never matches.
       generation: captureGeneration >>> 0,
     }));
   } catch (error) {
@@ -488,14 +465,10 @@ function dispatchRelayEvent(type, detail = {}) {
 function handleServerMessage(message, sessionEpoch = publisherSessionEpoch) {
   if (message.type === 'error') {
     setStatus('Error', message.message);
-    // Protocol errors are not transport failures. Retrying the publisher after
-    // a semantic rejection used to make superseded tabs fight forever.
     return;
   }
 
   if (message.type === 'command-rejected') {
-    // Without this the control simply stops working: the slider moves, the
-    // server drops the command, and nothing on the page says why.
     const owner = message.owner ?? null;
     setStatus(
       COMMAND_LABELS[message.command] ?? 'Command refused',
@@ -601,9 +574,6 @@ function handleServerMessage(message, sessionEpoch = publisherSessionEpoch) {
   }
 
   if (message.type === 'play-calibration-probe') {
-    // Backing requests are broadcast because the robot source page has no PCM
-    // publisher role. The phone must ignore that leg or its faster reply can
-    // be mistaken for the robot probe that is still waiting to play.
     if (message.target === undefined || message.target === 'mic') {
       const requestId = Number(message.requestId);
       if (!Number.isSafeInteger(requestId) || requestId < 0) return;
@@ -615,8 +585,6 @@ function handleServerMessage(message, sessionEpoch = publisherSessionEpoch) {
 
   if (message.type === 'mix-health') {
     latestMixHealth = message;
-    // Mix health can update the gain recommendation, but the meter itself is
-    // intentionally driven only by local capture evidence.
     renderGainAdvice();
     return;
   }
@@ -630,16 +598,6 @@ function isCurrentPublisherSession(sessionEpoch) {
   return publisherSessionEpoch === sessionEpoch && canKeepPublishing();
 }
 
-/**
- * Asks the capture context to start again, and never waits on the answer.
- *
- * Safari suspends this context when the phone is backgrounded and reports
- * `interrupted` as well as `suspended` - the old check saw only the latter, so
- * the commonest case was skipped entirely. Its `resume()` can also be accepted
- * and then never settle, which is why nothing may await it: the singer came
- * back to a page still saying they were live while no audio was leaving the
- * phone, and the only way out was releasing and re-taking the microphone.
- */
 function resumePublisherAudioContext() {
   if (!publisherActive || !audioContext) return;
   if (!shouldRequestAudioResume(audioContext.state)) return;
@@ -738,8 +696,6 @@ async function connectPublisherSocket(sessionEpoch = publisherSessionEpoch) {
 }
 
 async function stop(setIdle = true, { releaseMic = true } = {}) {
-  // Revoke this session before any asynchronous close can yield. Everything
-  // after the first await is allowed to touch only captured old resources.
   const stoppedEpoch = ++publisherSessionEpoch;
   micStartup.cancel();
   publisherStarting = false;
@@ -821,9 +777,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   let preparedStream = null;
   let preparedContext = null;
   try {
-    // Browser permission promises are not abortable on every supported phone.
-    // The gate gives the UI a deadline and stops a stream that resolves after
-    // this attempt was cancelled or superseded.
     preparedStream = await micStartup.wait(
       startup,
       navigator.mediaDevices.getUserMedia({
@@ -869,9 +822,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     publisherStarting = false;
     micStartup.complete(startup);
 
-  // A new capture session. Reconnecting the websocket does not bump this: the
-  // capture keeps running and its sample cursor stays continuous, so the server
-  // can place the reconnected frames on the timeline they already belonged to.
   captureGeneration += 1;
   captureSampleCursor = 0;
   capturePacketSequence = 0;
@@ -925,8 +875,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   silent.gain.value = 0;
 
   capture.port.onmessage = (event) => {
-    // MessagePort delivery is asynchronous. A chunk queued by an old worklet
-    // must never be reframed with a replacement session's generation/cursor.
     if (!captureIsCurrent()) return;
     if (!(event.data instanceof ArrayBuffer)) {
       if (event.data?.type === 'input-level') {
@@ -963,9 +911,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       return;
     }
 
-    // Capture time advances once for the complete worklet chunk. Packetization
-    // may split the PCM to the live datagram budget, but each segment keeps its
-    // exact firstSampleIndex on the same capture timeline.
     const chunkFirstSampleIndex = captureSampleCursor;
     captureSampleCursor += event.data.byteLength / 2;
 

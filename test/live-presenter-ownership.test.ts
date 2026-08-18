@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const roomSoundUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
@@ -30,8 +31,9 @@ test('listen owns audio state while room-sound-ui owns visible room-sound presen
   assert.doesNotMatch(roomSoundUi, /MutationObserver/);
 });
 
-test('presence owns Mic authority while mic-actions owns the action surface', () => {
-  assert.match(liveIa, /'\.\/mic-actions\.js'/);
+test('presence owns Mic authority while required mic-actions owns the action surface', () => {
+  assert.match(html, /<script type="module" src="\/mic-actions\.js"><\/script>/);
+  assert.doesNotMatch(liveIa, /'\.\/mic-actions\.js'/);
   assert.match(presence, /relay-mic-action-state/);
   assert.doesNotMatch(presence, /takeoverCopy|takeoverPanel/);
   assert.doesNotMatch(presence, /publisherButton\.textContent\s*=/);
@@ -44,7 +46,9 @@ test('presence owns Mic authority while mic-actions owns the action surface', ()
   assert.match(micActions, /confirmTakeoverButton\.disabled\s*=/);
 });
 
-test('recorder owns commands and lifecycle while recording-ui owns visible recording state', () => {
+test('recorder owns commands while required recording-ui owns visible recording state', () => {
+  assert.match(html, /<script type="module" src="\/recording-ui\.js"><\/script>/);
+  assert.doesNotMatch(liveIa, /'\.\/recording-ui\.js'/);
   assert.match(recorder, /type: 'start-take'/);
   assert.match(recorder, /type: 'stop-take'/);
   assert.match(recorder, /relay-recording-state/);
@@ -54,4 +58,11 @@ test('recorder owns commands and lifecycle while recording-ui owns visible recor
   assert.match(recordingUi, /startButton\.disabled\s*=/);
   assert.match(recordingUi, /stopButton\.disabled\s*=/);
   assert.match(recordingUi, /status\.textContent\s*=/);
+});
+
+test('sole action presenters are required siblings rather than swallowed optional imports', () => {
+  for (const presenter of ['mic-actions', 'room-sound-ui', 'recording-ui']) {
+    assert.match(html, new RegExp(`<script type="module" src="\\/${presenter}\\.js"><\\/script>`));
+    assert.equal(liveIa.includes(`'./${presenter}.js'`), false);
+  }
 });

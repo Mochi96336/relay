@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const stateCss = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 const actionCss = readFileSync(new URL('../public/action-language.css', import.meta.url), 'utf8');
+const liveIaCss = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 test('formal Live loads a dedicated action-language layer', () => {
@@ -42,17 +43,20 @@ test('context and mode actions stay typographic instead of gaining hover capsule
 
 test('typographic actions enlarge touch affordance without enlarging their visible shape', () => {
   const haloStart = actionCss.indexOf('#change-youtube::before,');
-  const horizonStart = actionCss.indexOf('/* Listen and Adjust are the persistent thumb horizon');
-  assert.ok(haloStart >= 0 && horizonStart > haloStart);
-  const haloRules = actionCss.slice(haloStart, horizonStart);
+  const localStart = actionCss.indexOf('/* This-phone sound is the only persistent local control left on Live.');
+  assert.ok(haloStart >= 0 && localStart > haloStart);
+  const haloRules = actionCss.slice(haloStart, localStart);
   assert.equal(haloRules.includes('position: absolute;'), true);
   assert.equal(haloRules.includes('inset: -10px -4px;'), true);
   assert.equal(haloRules.includes('background:'), false,
     'transparent hit halos must never become visible button surfaces');
 });
 
-test('persistent thumb-horizon and primary commit actions carry real 44px touch rows', () => {
-  assert.equal(actionCss.includes('#listen-toggle,\n.adjust-panel > summary {\n  min-height: 44px;'), true);
+test('persistent local sound and secondary menu entries carry real 44px touch rows', () => {
+  assert.equal(actionCss.includes('#listen-toggle {\n  min-height: 44px;'), true);
+  assert.equal(liveIaCss.includes('.more-menu > summary {\n  min-width: 44px;\n  min-height: 44px;'), true);
+  assert.equal(liveIaCss.includes('.more-action {'), true);
+  assert.equal(liveIaCss.includes('min-height: 44px;'), true);
   assert.equal(actionCss.includes('#start-publisher,\n#confirm-takeover {\n  min-height: 44px;'), true);
   assert.equal(actionCss.includes('#load-youtube {\n  min-height: 44px;'), true);
 });

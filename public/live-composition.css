@@ -84,7 +84,7 @@
   letter-spacing: 0;
 }
 
-/* app.js drives --input-level from the server's measured micPeakDbfs. This is
+/* app.js drives --input-level from local AudioWorklet capture evidence. This is
    evidence, not decorative state animation. */
 .voice-input-meter {
   --input-level: 0%;
@@ -152,8 +152,8 @@
   text-align: left;
 }
 
-/* Listen and Adjust are the persistent local-control horizon. They follow the
-   performance task closely instead of floating at the bottom of a long page. */
+/* Live keeps one persistent local-control horizon: this phone's sound. Adjust
+   and System are secondary entry points owned by the IA layer. */
 .live-actions {
   margin-top: 28px;
   padding-top: 14px;

@@ -12,13 +12,17 @@ function position(fragment: string) {
   return index;
 }
 
-test('System stays a flat six-line equipment composition before Technical details', () => {
+test('System keeps compatibility equipment rows behind one product surface before Technical details', () => {
   assert.match(html, /href="\/system-details\.css"/);
   assert.match(html, /src="\/system-details\.js"/);
 
+  // The existing Live owner still writes these compatibility nodes in this focused PR.
   for (const scope of ['relay', 'phones', 'robot', 'audio', 'timing', 'recording']) {
     assert.match(html, new RegExp(`class="system-item" data-system-scope="${scope}"`));
   }
+
+  assert.match(system, /productSurface\.id = 'system-product'/);
+  assert.match(system, /systemSheet\.insertBefore\(productSurface, diagnosticsPanel\)/);
 
   const systemStart = position('id="system-panel"');
   const diagnosticsStart = position('id="diagnostics-panel"');
@@ -35,26 +39,32 @@ test('Technical details exposes Overview, Session, Audio, Timing, Robot, and Raw
   assert.match(html, /id="diagnostics-raw"/);
 });
 
-test('L2 consumes ProductStatus and keeps readiness fresh only while System is open', () => {
+test('ProductStatus stays live while readiness refresh belongs only to Technical details', () => {
   assert.match(system, /relay-product-status/);
   assert.match(system, /const READINESS_REFRESH_MS = 1_000/);
-  assert.match(system, /function startReadinessRefresh\(\)/);
-  assert.match(system, /if \(systemPanel\.open\) startReadinessRefresh\(\)/);
-  assert.match(system, /else stopReadinessRefresh\(\)/);
+  assert.match(system, /function startReadinessRefresh\(\) \{\s*if \(!diagnosticsPanel\.open\) return;/);
+  assert.doesNotMatch(system, /systemPanel\.addEventListener\(['"]toggle/);
+  assert.match(system, /diagnosticsPanel\.addEventListener\('toggle'/);
   assert.match(system, /setInterval\([\s\S]*?refreshReadiness\(\)[\s\S]*?READINESS_REFRESH_MS/);
   assert.match(system, /if \(readinessRefreshInFlight\) return latestReadiness/);
   assert.match(system, /fetch\(readyzUrl\(\), \{ cache: 'no-store' \}\)/);
-  assert.match(system, /components\?\.route\?\.mode|components\.route\?\.mode/);
-  assert.match(system, /t\('system\.robotIdleDetail'\)/);
-  assert.doesNotMatch(liveStatus, /robotProblem \? 'Needs attention' : 'Ready'/);
+
+  const eventStart = system.indexOf("window.addEventListener('relay-product-status'");
+  const eventEnd = system.indexOf("window.addEventListener('beforeunload'", eventStart);
+  assert.ok(eventStart >= 0 && eventEnd > eventStart);
+  const productEvent = system.slice(eventStart, eventEnd);
+  assert.match(productEvent, /latestProduct = event\.detail/);
+  assert.match(productEvent, /renderProductSystem\(\)/);
+  assert.doesNotMatch(productEvent, /startReadinessRefresh|connectDiagnostics|diagnosticsPanel\.open\s*=/);
 });
 
-test('legacy backing failure is Audio attention rather than a false Robot failure', () => {
+test('legacy backing attention remains a compatibility projection outside normal System', () => {
   assert.match(liveStatus, /'audio-unavailable': \(\) => t\('system\.attention\.audio-unavailable'\)/);
   assert.match(liveStatus, /const audioProblem = attention\?\.scope === 'audio' \|\| attention\?\.scope === 'song'/);
-  assert.match(system, /const audioAttention = product\.attention\?\.scope === 'audio'/);
-  assert.match(system, /t\('system\.audioUnavailableDetail'\)/);
-  assert.match(system, /audio:\s*'audio'/);
+
+  assert.doesNotMatch(system, /product\.attention/);
+  assert.match(system, /const titleKey = issueTitleKeys\[issue\?\.code\]/);
+  assert.match(system, /detail\.textContent = causeCopy\(issue\?\.cause\)/);
 });
 
 test('L3 opens an evidence socket only while Technical details is open', () => {
@@ -74,14 +84,19 @@ test('L3 opens an evidence socket only while Technical details is open', () => {
   }
 });
 
-test('product attention opens the matching L2 evidence line instead of jumping straight to Raw', () => {
-  assert.match(system, /audio:\s*'audio'/);
-  assert.match(system, /robot:\s*'robot'/);
-  assert.match(system, /song:\s*'audio'/);
-  assert.match(system, /mic:\s*'phones'/);
-  assert.match(system, /timing:\s*'timing'/);
-  assert.match(system, /take:\s*'recording'/);
-  assert.match(system, /item\.open = true/);
+test('product issues stay in System instead of auto-opening Technical details', () => {
+  const eventStart = system.indexOf("window.addEventListener('relay-product-status'");
+  const eventEnd = system.indexOf("window.addEventListener('beforeunload'", eventStart);
+  assert.ok(eventStart >= 0 && eventEnd > eventStart);
+  const productEvent = system.slice(eventStart, eventEnd);
+
+  assert.match(productEvent, /latestProduct = event\.detail/);
+  assert.match(productEvent, /renderProductSystem\(\)/);
+  assert.doesNotMatch(
+    productEvent,
+    /diagnosticsPanel\.open\s*=|startReadinessRefresh|connectDiagnostics|data-system-scope|item\.open/,
+  );
+  assert.doesNotMatch(system, /focusSystemScope|item\.open = true/);
 });
 
 test('Technical details ships diagnostics without retired development controls', () => {

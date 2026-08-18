@@ -977,7 +977,6 @@ async function restoreAuthoritativeRoom(room) {
   if (!room || typeof room !== 'object') return;
   localCommandPending = null;
   clearAutoplayRecovery();
-  retireOutgoingReleaseBarrier();
   cancelPlaybackPrewarm();
 
   const desired = reloadDesiredFromRoom(room);

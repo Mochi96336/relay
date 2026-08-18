@@ -7,6 +7,9 @@ const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
 const liveState = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
+const liveComposition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
+const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
+const micPresence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 const songSurface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
 const songCss = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
 
@@ -32,14 +35,19 @@ test('performance task contains measured input, Mic ownership and Take', () => {
   assert.match(app, /latestLocalMicLevel\?\.peakDbfs/);
   assert.match(app, /event\.data\?\.type === 'input-level'/);
   assert.doesNotMatch(app, /latestMixHealth\?\.micPeakDbfs/);
-  assert.match(app, /micInputMeter\.style\.setProperty\('--input-level'/);
+  assert.match(liveIa, /import '\.\/mic-presence\.js';/);
+  assert.match(micPresence, /relay-local-mic-level/);
+  assert.match(micPresence, /event\.detail\?\.rmsDbfs/);
 });
 
-test('input evidence follows actual self Mic state without decorative motion', () => {
+test('input presence follows actual self Mic state without fabricated animation', () => {
   assert.match(liveStatus, /document\.body\.dataset\.selfMic/);
   assert.match(liveState, /body\[data-self-mic="off"\] \.voice-input-evidence/);
-  assert.match(liveState, /body\[data-self-mic="live"\] \.voice-input-meter::before/);
+  assert.match(liveState, /body\[data-self-mic="live"\] \.voice-presence-bar/);
+  assert.match(liveComposition, /\.voice-presence-bar/);
+  assert.match(liveComposition, /recent time[\s\S]*No fabricated rhythm/);
   assert.doesNotMatch(liveState, /@keyframes|voice-breathe|preparing-pulse/);
+  assert.doesNotMatch(liveComposition, /@keyframes|voice-breathe|preparing-pulse/);
 });
 
 test('Song keeps exact playback authority and observer-only compact presentation', () => {

@@ -4,25 +4,23 @@
 /* Product-state presentation lives after the formal composition so legacy DOM
    control state cannot accidentally become a second lifecycle model. */
 
-/* The real input meter is only useful as confidence evidence for this phone's
-   live microphone. Other phones already get the singer identity from Voice. */
+/* The real input presence is only useful as confidence evidence for this
+   phone's live microphone. Other phones already get the singer identity from
+   Voice. */
 body[data-self-mic="off"] .voice-input-evidence {
   display: none;
 }
 
 /* Once this phone is the live Mic, tighten the handoff from media into the
-   performance task. The meter width itself is never animated here: app.js
-   owns it from measured micPeakDbfs. */
+   performance task. mic-presence.js owns the short local RMS history; product
+   CSS only decides how strongly that truthful evidence should read. */
 body[data-self-mic="live"] .performance-stage {
   padding-top: 26px;
 }
 body[data-self-mic="live"] #youtube-note {
   display: none;
 }
-body[data-self-mic="live"] .voice-input-meter {
-  background: #303239;
-}
-body[data-self-mic="live"] .voice-input-meter::before {
+body[data-self-mic="live"] .voice-presence-bar {
   background: #f0ede5;
 }
 body[data-self-mic="live"] .voice-copy strong {

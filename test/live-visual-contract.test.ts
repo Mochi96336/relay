@@ -5,6 +5,7 @@ import test from 'node:test';
 const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
 const song = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
 const state = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
+const presence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 
 test('holder YouTube keeps a usable embedded-player floor', () => {
   assert.match(composition, /\.youtube-player-shell \{[\s\S]*?min-height: 200px;/);
@@ -17,10 +18,14 @@ test('observer Song can be compact because it does not host the YouTube transpor
   assert.match(song, /data-playback-role="observer"[\s\S]*?\.youtube-player-shell/);
 });
 
-test('performance composition uses measured Mic evidence instead of a decorative ribbon', () => {
-  assert.match(composition, /\.voice-input-meter \{[\s\S]*?height: 6px;/);
-  assert.match(composition, /width: var\(--input-level\);/);
+test('performance composition turns measured local Mic evidence into a quiet presence shape', () => {
+  assert.match(composition, /\.voice-input-meter \{[\s\S]*?height: 42px;/);
+  assert.match(composition, /\.voice-presence-bar \{[\s\S]*?width: 8px;[\s\S]*?height: 5px;/);
+  assert.match(presence, /relay-local-mic-level/);
+  assert.match(presence, /event\.detail\?\.rmsDbfs/);
+  assert.doesNotMatch(composition, /width: var\(--input-level\);/);
   assert.doesNotMatch(state, /@keyframes|voice-ribbon|voice-breathe|preparing-pulse/);
+  assert.doesNotMatch(composition, /@keyframes|voice-ribbon|voice-breathe|preparing-pulse/);
 });
 
 test('Take and the local control horizon stay close to the performance task', () => {

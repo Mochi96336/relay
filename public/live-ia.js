@@ -1,3 +1,5 @@
+import './mic-presence.js';
+
 const peopleMenu = document.querySelector('.people-menu');
 const moreMenu = document.querySelector('#room-more');
 const adjustPanel = document.querySelector('.adjust-panel');

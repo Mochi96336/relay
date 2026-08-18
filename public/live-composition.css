@@ -59,50 +59,54 @@
   margin-bottom: 10px;
 }
 
+/* The microphone presence shape is deliberately not an engineering meter.
+   app.js still keeps the hidden dBFS output for gain advice, while
+   mic-presence.js turns the same local RMS evidence into five recent time
+   slices. No fabricated rhythm or server-mix animation belongs here. */
 .voice-input-evidence {
-  display: grid;
-  gap: 7px;
+  min-height: 42px;
   margin: 0 0 18px;
+  display: flex;
+  align-items: center;
 }
 
 .evidence-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  color: #767981;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: .08em;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-.evidence-heading output {
-  color: #a6a8ae;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-/* app.js drives --input-level from local AudioWorklet capture evidence. This is
-   evidence, not decorative state animation. */
 .voice-input-meter {
   --input-level: 0%;
-  position: relative;
-  height: 6px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #27292e;
+  width: 104px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  overflow: visible;
+  border-radius: 0;
+  background: transparent;
 }
 
-.voice-input-meter::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--input-level);
-  border-radius: inherit;
+.voice-presence-bar {
+  width: 8px;
+  height: 5px;
+  flex: 0 0 8px;
+  border-radius: 999px;
   background: #d8d6d1;
-  transition: width 90ms linear;
+  opacity: .52;
+  transition:
+    height 110ms cubic-bezier(.2, .75, .25, 1),
+    opacity 160ms ease;
+}
+
+.voice-input-meter[data-active="true"] .voice-presence-bar {
+  opacity: .86;
 }
 
 .voice-copy {

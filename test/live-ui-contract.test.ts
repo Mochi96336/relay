@@ -29,7 +29,9 @@ test('performance task contains measured input, Mic ownership and Take', () => {
   const footer = position('class="live-actions"');
   assert.ok(stage < meter && meter < mic && mic < take && take < footer);
   assert.doesNotMatch(html, /class="voice-ribbon"/);
-  assert.match(app, /latestMixHealth\?\.micPeakDbfs/);
+  assert.match(app, /latestLocalMicLevel\?\.peakDbfs/);
+  assert.match(app, /event\.data\?\.type === 'input-level'/);
+  assert.doesNotMatch(app, /latestMixHealth\?\.micPeakDbfs/);
   assert.match(app, /micInputMeter\.style\.setProperty\('--input-level'/);
 });
 

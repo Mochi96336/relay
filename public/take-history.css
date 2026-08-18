@@ -1,0 +1,166 @@
+.take-history {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+.take-history-heading,
+.take-history-group-heading,
+.take-history-selected,
+.take-history-review-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.take-history-heading {
+  margin-bottom: 14px;
+}
+
+.take-history-heading strong,
+.take-history-group-copy strong,
+.take-history-selected strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.take-history-heading span,
+.take-history-group-copy span,
+.take-history-selected span,
+.take-history-notice {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.take-history-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.take-history-group {
+  display: grid;
+  gap: 8px;
+}
+
+.take-history-group-heading {
+  justify-content: flex-start;
+  min-height: 34px;
+}
+
+.take-history-artwork {
+  width: 54px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 7px;
+  background: #111214;
+}
+
+.take-history-group-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.take-history-list {
+  display: grid;
+  border-top: 1px solid #202227;
+}
+
+.take-history-item {
+  appearance: none;
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-bottom: 1px solid #202227;
+  padding: 8px 0;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.take-history-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #bfc0c4;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.take-history-item span {
+  color: var(--dim);
+  font-size: 11px;
+  text-align: right;
+}
+
+.take-history-item:hover,
+.take-history-item.selected {
+  color: var(--text);
+}
+
+.take-history-item.selected strong {
+  color: var(--text);
+}
+
+.take-history-item.selected::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin-right: -7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.take-history-item.selected {
+  grid-template-columns: 5px minmax(0, 1fr) auto;
+}
+
+.take-history-review {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.take-history-selected {
+  margin-bottom: 10px;
+}
+
+.take-history-review audio {
+  width: 100%;
+  display: block;
+}
+
+.take-history-review-footer {
+  min-height: 44px;
+  margin-top: 6px;
+}
+
+.take-history-notice {
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.take-history-review-footer .take-download {
+  flex: 0 0 auto;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+@media (max-width: 420px) {
+  .take-history-artwork { width: 48px; }
+  .take-history-item { gap: 10px; }
+  .take-history-item span { font-size: 10px; }
+  .take-history-review-footer { align-items: flex-start; }
+}

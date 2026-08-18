@@ -7,6 +7,11 @@ import {
   type RoomSongFacts,
   type RoomSongState,
 } from './room-domain.js';
+import {
+  buildProductIssues,
+  type ProductAttention,
+  type ProductIssue,
+} from './product-issues.js';
 import type { TakeQualityVerdict } from './take-quality.js';
 import type { TakeLifecycle } from './take-session.js';
 import { decideTakeStart, type TakeStartBlockReason } from './take-start-policy.js';
@@ -16,26 +21,18 @@ import {
   type CalibrationStartMode,
 } from './calibration-start-policy.js';
 
+export type {
+  ProductAttention,
+  ProductAttentionCode,
+  ProductImpact,
+  ProductIssue,
+  ProductIssueCause,
+  ProductIssueCode,
+  ProductRecovery,
+} from './product-issues.js';
+
 export type ProductLifecycle = 'idle' | 'preparing' | 'ready' | 'live' | 'recording';
 export type ProductHealth = 'healthy' | 'degraded' | 'blocked';
-
-export type ProductAttentionCode =
-  | 'audio-unavailable'
-  | 'robot-audio-unavailable'
-  | 'robot-route-invalid'
-  | 'robot-player-unavailable'
-  | 'song-clock-unavailable'
-  | 'mic-reconnecting'
-  | 'mic-audio-stalled'
-  | 'timing-recovering'
-  | 'timing-clamped'
-  | 'take-failed';
-
-export type ProductAttention = {
-  code: ProductAttentionCode;
-  scope: 'audio' | 'robot' | 'song' | 'mic' | 'timing' | 'take';
-  severity: 'warning' | 'critical';
-};
 
 export type ProductRoomSongInput = RoomSongFacts;
 
@@ -77,6 +74,9 @@ export type ProductStatus = {
   type: 'product-status';
   lifecycle: ProductLifecycle;
   health: ProductHealth;
+  /** Ordered product-semantic issues. Normal UI must not need diagnostics to explain them. */
+  issues: ProductIssue[];
+  /** Exact legacy compatibility shape: the highest-priority issue projected to three fields. */
   attention: ProductAttention | null;
   room: {
     participantCount: number;
@@ -174,99 +174,14 @@ function timingState(
   return 'fallback';
 }
 
-function hostAttention(input: ProductViewModelInput): ProductAttention | null {
-  const reasons = new Set(input.readiness.reasons);
-  if (reasons.has('backing-not-connected') || reasons.has('backing-not-streaming')) {
-    if (input.readiness.components.route.mode === 'robot') {
-      return {
-        code: 'robot-audio-unavailable',
-        scope: 'robot',
-        severity: 'critical',
-      };
-    }
-    return {
-      code: 'audio-unavailable',
-      scope: 'audio',
-      severity: 'critical',
-    };
-  }
-  if (reasons.has('backing-not-robot')) {
-    return {
-      code: 'robot-route-invalid',
-      scope: 'robot',
-      severity: 'critical',
-    };
-  }
-  if (reasons.has('robot-source-not-connected')) {
-    return {
-      code: 'robot-player-unavailable',
-      scope: 'robot',
-      severity: 'critical',
-    };
-  }
-  return null;
-}
-
-function productAttention(
-  input: ProductViewModelInput,
-  lifecycle: ProductLifecycle,
-  timing: ProductStatus['timing']['state'],
-): ProductAttention | null {
-  const host = hostAttention(input);
-  if (host) return host;
-
-  const performanceActive = lifecycle === 'live' || lifecycle === 'recording';
-  const songClockSeverity = roomSongClockSeverity(input.roomSong, performanceActive);
-  if (songClockSeverity) {
-    return {
-      code: 'song-clock-unavailable',
-      scope: 'song',
-      severity: songClockSeverity,
-    };
-  }
-
-  const mic = micState(input);
-  if (input.micOwnerId !== null && mic === 'interrupted') {
-    return {
-      code: 'mic-audio-stalled',
-      scope: 'mic',
-      severity: 'warning',
-    };
-  }
-
-  if (input.micOwnerId !== null && mic === 'reconnecting') {
-    return {
-      code: 'mic-reconnecting',
-      scope: 'mic',
-      severity: 'warning',
-    };
-  }
-
-  if (input.take.lifecycle === 'failed') {
-    return {
-      code: 'take-failed',
-      scope: 'take',
-      severity: 'warning',
-    };
-  }
-
-  if (performanceActive && timing === 'clamped') {
-    return {
-      code: 'timing-clamped',
-      scope: 'timing',
-      severity: 'warning',
-    };
-  }
-
-  if (performanceActive && ['calibrating', 'fallback', 'stale'].includes(timing)) {
-    return {
-      code: 'timing-recovering',
-      scope: 'timing',
-      severity: 'warning',
-    };
-  }
-
-  return null;
+function primaryAttention(issues: ProductIssue[]): ProductAttention | null {
+  const issue = issues[0];
+  if (!issue) return null;
+  return {
+    code: issue.code,
+    scope: issue.scope,
+    severity: issue.severity,
+  };
 }
 
 /**
@@ -275,20 +190,40 @@ function productAttention(
  *
  * The important distinction is that technical session readiness is not product
  * health. `mic-not-connected`, `phone-not-playing`, and `calibration-missing`
- * are expected while an otherwise healthy room is idle. Host/robot failures
- * remain real health failures in every lifecycle, while Mic/timing failures are
- * surfaced only when that subsystem is actually in use.
+ * are expected while an otherwise healthy room is idle. Product issues are
+ * derived from semantic component facts and carry their own cause/impact/
+ * recovery contract, so normal UI never has to inspect readiness or diagnostics
+ * to explain what is wrong.
  */
 export function buildProductViewModel(input: ProductViewModelInput): ProductStatus {
   const lifecycle = productLifecycle(input);
   const timing = timingState(input, lifecycle);
-  const attention = productAttention(input, lifecycle, timing);
-  const health: ProductHealth = attention?.severity === 'critical'
+  const mic = micState(input);
+  const performanceActive = lifecycle === 'live' || lifecycle === 'recording';
+  const issues = buildProductIssues({
+    routeMode: input.readiness.components.route.mode,
+    backing: {
+      connected: input.readiness.components.backing.connected,
+      streaming: input.readiness.components.backing.streaming,
+      robot: input.readiness.components.backing.robot,
+    },
+    robotSourceConnected: input.readiness.components.robotSource.connected,
+    songClockSeverity: roomSongClockSeverity(input.roomSong, performanceActive),
+    mic: {
+      ownerId: input.micOwnerId,
+      state: mic,
+    },
+    takeLifecycle: input.take.lifecycle,
+    performanceActive,
+    timingState: timing,
+  });
+  const attention = primaryAttention(issues);
+  const health: ProductHealth = issues.some((issue) => issue.severity === 'critical')
     ? 'blocked'
-    : attention
+    : issues.length > 0
       ? 'degraded'
       : 'healthy';
-  const mic = micState(input);
+
   const startTake = decideTakeStart({
     sessionActive: input.readiness.components.session.active,
     timingCalibrationActive: calibrationActive(input),
@@ -314,6 +249,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     type: 'product-status',
     lifecycle,
     health,
+    issues,
     attention,
     room: {
       participantCount: input.participantCount,

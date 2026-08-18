@@ -42,23 +42,16 @@
   inset: -10px -4px;
 }
 
-/* Listen and Adjust are the persistent thumb horizon, so their actual rows -
-   not an invisible overlay - carry a full touch target. */
-#listen-toggle,
-.adjust-panel > summary {
+/* This-phone sound is the only persistent local control left on Live. Adjust
+   is secondary and receives its 44px entry target in live-ia.css. */
+#listen-toggle {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
-}
-#listen-toggle {
-  padding-top: 0;
-  padding-bottom: 0;
-}
-.adjust-panel > summary {
-  padding-top: 0;
-  padding-bottom: 0;
 }
 
 /* Primary commitment: taking room microphone ownership. */

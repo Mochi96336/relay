@@ -22,9 +22,24 @@ test('measured Mic input lives in the performance task while gain stays in Adjus
   const adjust = html.indexOf('class="adjust-panel"');
   const gain = html.indexOf('id="mic-gain"');
   assert.ok(performance >= 0 && performance < meter && meter < adjust && adjust < gain);
-  assert.equal(app.includes('micPeakDbfs'), true);
-  assert.equal(app.includes('recommendedMicGainDb'), true);
+  assert.equal(app.includes('latestLocalMicLevel?.peakDbfs'), true);
+  assert.equal(app.includes("event.data?.type === 'input-level'"), true);
+  assert.equal(app.includes('latestMixHealth?.recommendedMicGainDb'), true);
+  assert.equal(app.includes('latestMixHealth?.micPeakDbfs'), false);
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
+});
+
+test('Mic capture epochs cannot reuse a previous capture gain recommendation', () => {
+  const resets = app.match(/latestMixHealth = null;/g) ?? [];
+  assert.ok(resets.length >= 3, 'initial state, stop, and new capture must all clear mix-health authority');
+
+  const captureReset = app.indexOf('captureGeneration += 1;');
+  const nextHealthReset = app.indexOf('latestMixHealth = null;', captureReset);
+  const nextLocalReset = app.indexOf('latestLocalMicLevel = null;', captureReset);
+  const healthReporting = app.indexOf('startAudioUplinkHealthReporting();', captureReset);
+  assert.ok(captureReset >= 0);
+  assert.ok(nextHealthReset > captureReset && nextHealthReset < healthReporting);
+  assert.ok(nextLocalReset > nextHealthReset && nextLocalReset < healthReporting);
 });
 
 /**

@@ -84,6 +84,21 @@ if (
     recoverButton.textContent = recoveryButtonCopy();
   }
 
+  function renderDeviceNote(recoverable) {
+    // Playback location is implementation context, not a persistent task. Keep
+    // the heading quiet in the normal holder/observer/empty states and surface
+    // it only while the user needs to understand a transition or recovery.
+    const visible = recoverable || role === 'preparing' || role === 'connecting';
+    deviceNote.hidden = !visible;
+    if (!visible) {
+      deviceNote.textContent = '';
+      return;
+    }
+    deviceNote.textContent = recoverable
+      ? localCopy('Playback controller unavailable', '播放主控已失聯')
+      : roleCopy(role);
+  }
+
   function renderObserver(room, recoverable) {
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const state = Number(room.state);
@@ -129,12 +144,11 @@ if (
     role = nextRole;
     lastVideoId = videoId;
     stage.dataset.playbackRole = role;
+    stage.dataset.songEditing = editing ? 'true' : 'false';
     document.body.dataset.playbackRole = role;
     stage.dataset.playbackHealth = playbackLeaderHealth(room);
     document.body.dataset.playbackHealth = stage.dataset.playbackHealth;
-    deviceNote.textContent = recoverable
-      ? localCopy('Playback controller unavailable', '播放主控已失聯')
-      : roleCopy(role);
+    renderDeviceNote(recoverable);
 
     const holderWithSong = role === 'holder' && Boolean(videoId);
     form.hidden = role === 'preparing'
@@ -142,6 +156,7 @@ if (
       || (holderWithSong && !editing);
     changeButton.hidden = !holderWithSong;
     changeButton.textContent = editing ? t('song.done') : t('song.change');
+    changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
 
     const observerMode = role === 'observer';
     observer.hidden = !observerMode;
@@ -156,8 +171,10 @@ if (
   changeButton.addEventListener('click', () => {
     if (role !== 'holder') return;
     editing = !editing;
+    stage.dataset.songEditing = editing ? 'true' : 'false';
     form.hidden = !editing;
     changeButton.textContent = editing ? t('song.done') : t('song.change');
+    changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
     if (editing) input.focus();
   });
 
@@ -182,12 +199,11 @@ if (
   });
   window.addEventListener('relay-locale-changed', () => {
     const recoverable = canRecoverPlayback({ role, timeline: lastRoom });
-    deviceNote.textContent = recoverable
-      ? localCopy('Playback controller unavailable', '播放主控已失聯')
-      : roleCopy(role);
+    renderDeviceNote(recoverable);
     changeButton.textContent = editing ? t('song.done') : t('song.change');
     if (role === 'observer') renderObserver(lastRoom, recoverable);
   });
   stage.dataset.playbackRole = role;
+  stage.dataset.songEditing = 'false';
   document.body.dataset.playbackRole = role;
 }

@@ -237,6 +237,19 @@ export class SongSession {
     return true;
   }
 
+  /**
+   * A failed-handoff holdover belongs to exactly one Mic ownership epoch.
+   *
+   * Transport expiry deliberately does not cancel a live prepared handoff, so
+   * ownership cleanup needs a narrower operation: retire only historical
+   * holdover authority while leaving the still-recoverable handoff intact.
+   */
+  retireFailedHandoffHoldover() {
+    if (!this.failedHandoffHoldover) return false;
+    this.failedHandoffHoldover = null;
+    return true;
+  }
+
   /** The transport a live handoff is waiting for, so callers can check it still exists. */
   handoffTarget(): PlaybackIdentity | null {
     return this.handoff ? { ...this.handoff.target } : null;
@@ -252,12 +265,16 @@ export class SongSession {
    * target and broadcast the authoritative idle state. There is deliberately no
    * silent `committing -> preparing` transition here.
    */
-  sweepHandoff(targetPresent: boolean, nowMs = performance.now()) {
+  sweepHandoff(
+    targetPresent: boolean,
+    nowMs = performance.now(),
+    micOwnerId: string | null = this.handoff?.target.participantId ?? null,
+  ) {
     if (!this.handoff) return false;
-    if (!targetPresent) return this.cancelFailedHandoff();
+    if (!targetPresent) return this.cancelFailedHandoff(micOwnerId);
 
     if (nowMs - this.handoff.startedAtMs > HANDOFF_TOTAL_TIMEOUT_MS) {
-      return this.cancelFailedHandoff();
+      return this.cancelFailedHandoff(micOwnerId);
     }
 
     if (
@@ -265,14 +282,14 @@ export class SongSession {
       && this.handoff.commitStartedAtMs !== null
       && nowMs - this.handoff.commitStartedAtMs > HANDOFF_COMMIT_TIMEOUT_MS
     ) {
-      return this.cancelFailedHandoff();
+      return this.cancelFailedHandoff(micOwnerId);
     }
 
     if (
       !this.handoff.readyAcknowledged
       && nowMs - this.handoff.startedAtMs > HANDOFF_PREPARE_TIMEOUT_MS
     ) {
-      return this.cancelFailedHandoff();
+      return this.cancelFailedHandoff(micOwnerId);
     }
 
     return false;
@@ -614,12 +631,12 @@ export class SongSession {
     };
   }
 
-  private cancelFailedHandoff() {
+  private cancelFailedHandoff(micOwnerId: string | null) {
     if (!this.handoff) return false;
     const leader = this.leaderIdentity();
-    this.failedHandoffHoldover = leader ? {
+    this.failedHandoffHoldover = leader && micOwnerId === this.handoff.target.participantId ? {
       leader,
-      micOwnerId: this.handoff.target.participantId,
+      micOwnerId,
     } : null;
     this.handoff = null;
     this.bump();

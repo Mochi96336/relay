@@ -1,45 +1,74 @@
 .system-item {
-  border-bottom: 1px solid #1e2024;
+  display: none;
 }
-.system-item > summary {
-  min-height: 44px;
+
+.system-product {
   display: grid;
-  grid-template-columns: minmax(72px, 1fr) auto 14px;
-  gap: 12px;
-  align-items: center;
-  cursor: pointer;
-  font-size: 12px;
-  list-style: none;
+  gap: 0;
+  padding: 2px 0 4px;
 }
-.system-item > summary::-webkit-details-marker { display: none; }
-.system-item-name { color: #b9babe; }
-.system-item > summary strong {
-  color: #73767d;
-  font-weight: 540;
-  text-align: right;
+.system-healthy {
+  display: grid;
+  gap: 4px;
+  padding: 18px 0 20px;
+  border-bottom: 1px solid var(--line);
 }
-.system-chevron {
-  color: #44474e;
-  transform: rotate(0deg);
-  transition: transform 140ms ease;
+.system-healthy[hidden] { display: none; }
+.system-healthy strong {
+  color: #d4d5d8;
+  font-size: 14px;
+  font-weight: 620;
 }
-.system-item[open] .system-chevron { transform: rotate(90deg); }
-.system-item-detail {
-  margin: -2px 26px 14px 0;
+.system-healthy span {
   color: var(--dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.system-product-issues {
+  display: grid;
+}
+.system-issue {
+  display: grid;
+  gap: 7px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.system-issue > strong {
+  color: #d2d3d6;
+  font-size: 13px;
+  font-weight: 620;
+}
+.system-issue[data-severity="critical"] > strong {
+  color: #e0aaa5;
+}
+.system-issue p {
+  margin: 0;
+  color: #a6a8ad;
   font-size: 11px;
   line-height: 1.55;
 }
-.system-item[data-attention="true"] > summary strong,
-.system-item[data-attention="true"] .system-chevron {
-  color: #d99792;
+.system-issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 7px 14px;
+  color: #6f7279;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.system-issue-recovery {
+  color: #aaaeb5;
 }
 
 .diagnostics-panel { margin-top: 18px; }
 .diagnostics-panel > summary {
-  padding: 11px 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0;
   color: #85878d;
   font-size: 12px;
+  cursor: pointer;
 }
 .diagnostics-body {
   display: grid;
@@ -126,11 +155,10 @@
 }
 
 @media (max-width: 420px) {
-  .system-item > summary { grid-template-columns: 66px minmax(0, 1fr) 12px; }
+  .system-issue-meta {
+    display: grid;
+    justify-content: stretch;
+  }
   .diagnostic-pair { grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
   .diagnostics-tabs { gap: 14px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .system-chevron { transition: none; }
 }

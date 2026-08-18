@@ -1,37 +1,17 @@
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
+
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const systemPanel = document.querySelector('#system-panel');
+const systemSheet = systemPanel?.querySelector('.system-sheet');
 const diagnosticsPanel = document.querySelector('#diagnostics-panel');
-const attentionButton = document.querySelector('#attention-link');
-const attentionRegion = document.querySelector('#system-attention');
 const diagnosticsState = document.querySelector('#diagnostics-state');
 const copyButton = document.querySelector('#copy-diagnostics');
 const rawNode = document.querySelector('#diagnostics-raw');
 
-const systemValues = {
-  relay: document.querySelector('#system-relay'),
-  phones: document.querySelector('#system-phones'),
-  robot: document.querySelector('#system-robot'),
-  audio: document.querySelector('#system-audio'),
-  timing: document.querySelector('#system-timing'),
-  recording: document.querySelector('#system-recording'),
-};
-
-const systemDetails = {
-  relay: document.querySelector('#system-relay-detail'),
-  phones: document.querySelector('#system-phones-detail'),
-  robot: document.querySelector('#system-robot-detail'),
-  audio: document.querySelector('#system-audio-detail'),
-  timing: document.querySelector('#system-timing-detail'),
-  recording: document.querySelector('#system-recording-detail'),
-};
-
 if (
-  systemPanel && diagnosticsPanel && attentionButton && attentionRegion
+  systemPanel && systemSheet && diagnosticsPanel
   && diagnosticsState && copyButton && rawNode
-  && Object.values(systemValues).every(Boolean)
-  && Object.values(systemDetails).every(Boolean)
 ) {
   const READINESS_REFRESH_MS = 1_000;
   let latestProduct = null;
@@ -41,6 +21,135 @@ if (
   let diagnosticsSocket = null;
   let diagnosticsReconnect = null;
   const snapshots = new Map();
+
+  const issueTitleKeys = {
+    'audio-unavailable': 'system.attention.audio-unavailable',
+    'robot-audio-unavailable': 'system.attention.robot-audio-unavailable',
+    'robot-route-invalid': 'system.attention.robot-route-invalid',
+    'robot-player-unavailable': 'system.attention.robot-player-unavailable',
+    'song-clock-unavailable': 'system.attention.song-clock-unavailable',
+    'mic-reconnecting': 'system.attention.mic-reconnecting',
+    'mic-audio-stalled': 'system.attention.mic-audio-stalled',
+    'timing-recovering': 'system.attention.timing-recovering',
+    'timing-clamped': 'system.attention.timing-clamped',
+    'take-failed': 'system.attention.take-failed',
+  };
+
+  function localeIsChinese() {
+    return window.relayI18n?.getLocale?.() === 'zh-Hant';
+  }
+
+  function productCopy(english, traditionalChinese) {
+    return localeIsChinese() ? traditionalChinese : english;
+  }
+
+  function causeCopy(cause) {
+    const copy = {
+      'backing-not-ready': ['Song audio is still getting ready.', '伴奏正在準備中。'],
+      'backing-unavailable': ['Song audio is unavailable.', '伴奏目前無法使用。'],
+      'backing-stalled': ['Song audio stopped arriving.', '伴奏音訊已停止送達。'],
+      'backing-route-mismatch': ['The Robot backing route does not match the active mode.', 'Robot 伴奏路徑與目前模式不一致。'],
+      'robot-source-unavailable': ['The Robot playback source is unavailable.', 'Robot 播放來源目前無法使用。'],
+      'song-clock-unavailable': ['Shared song timing is unavailable.', '共用歌曲的時間資訊目前無法使用。'],
+      'mic-transport-disconnected': ['The Mic connection was interrupted.', 'Mic 連線已中斷。'],
+      'mic-audio-stalled': ['The Mic is connected, but audio stopped arriving.', 'Mic 仍連線，但音訊已停止送達。'],
+      'timing-calibrating': ['Relay is measuring timing.', 'Relay 正在量測 Timing。'],
+      'timing-fallback': ['Relay is using the network timing estimate for now.', '目前先使用網路 Timing 估計值。'],
+      'timing-stale': ['Timing settings changed and the alignment is stale.', 'Timing 設定已改變，原本的對齊已過期。'],
+      'timing-clamped': ['The required timing correction is outside the safe range.', '需要的 Timing 修正超出安全範圍。'],
+      'recording-failed': ['The last recording did not finish successfully.', '上一段錄音沒有成功完成。'],
+    }[cause];
+    return copy ? productCopy(copy[0], copy[1]) : '';
+  }
+
+  function recoveryCopy(recovery) {
+    const copy = {
+      automatic: ['Relay is recovering automatically.', 'Relay 正在自動恢復。'],
+      'retry-mic': ['Reconnect the Mic, then try again.', '重新連接 Mic 後再試一次。'],
+      'retry-recording': ['Start a new recording when you are ready.', '準備好後重新錄一次。'],
+      recalibrate: ['Run timing calibration again.', '重新校正 Timing。'],
+      'host-service': ['The host service needs attention.', '需要處理主機端服務。'],
+    }[recovery];
+    return copy ? productCopy(copy[0], copy[1]) : '';
+  }
+
+  function impactLabel(impact) {
+    if (impact === 'song') return t('song.label');
+    if (impact === 'voice') return t('voice.label');
+    if (impact === 'recording') return t('system.recording');
+    if (impact === 'timing') return t('system.timing');
+    return impact;
+  }
+
+  const productSurface = document.createElement('section');
+  productSurface.id = 'system-product';
+  productSurface.className = 'system-product';
+  productSurface.setAttribute('aria-live', 'polite');
+
+  const healthyNode = document.createElement('div');
+  healthyNode.className = 'system-healthy';
+  const healthyTitle = document.createElement('strong');
+  const healthyDetail = document.createElement('span');
+  healthyNode.append(healthyTitle, healthyDetail);
+
+  const issuesNode = document.createElement('div');
+  issuesNode.id = 'system-product-issues';
+  issuesNode.className = 'system-product-issues';
+  productSurface.append(healthyNode, issuesNode);
+  systemSheet.insertBefore(productSurface, diagnosticsPanel);
+
+  function issueCard(issue) {
+    const card = document.createElement('article');
+    card.className = 'system-issue';
+    card.dataset.severity = issue?.severity === 'critical' ? 'critical' : 'warning';
+
+    const heading = document.createElement('strong');
+    const titleKey = issueTitleKeys[issue?.code];
+    heading.textContent = titleKey ? t(titleKey) : t('system.attention');
+
+    const detail = document.createElement('p');
+    detail.textContent = causeCopy(issue?.cause);
+
+    const meta = document.createElement('div');
+    meta.className = 'system-issue-meta';
+    const affects = Array.isArray(issue?.affects)
+      ? issue.affects.map(impactLabel).filter(Boolean)
+      : [];
+    const affected = document.createElement('span');
+    affected.textContent = affects.length > 0
+      ? `${productCopy('Affects', '影響')}：${affects.join(' · ')}`
+      : '';
+    const recovery = document.createElement('span');
+    recovery.className = 'system-issue-recovery';
+    recovery.textContent = recoveryCopy(issue?.recovery);
+    meta.append(affected, recovery);
+
+    card.append(heading, detail, meta);
+    return card;
+  }
+
+  function renderProductSystem() {
+    const product = latestProduct;
+    if (!product) {
+      healthyNode.hidden = false;
+      healthyTitle.textContent = productCopy('Connecting…', '連線中…');
+      healthyDetail.textContent = '';
+      issuesNode.replaceChildren();
+      return;
+    }
+
+    const issues = Array.isArray(product.issues) ? product.issues : [];
+    if (issues.length === 0) {
+      healthyNode.hidden = false;
+      healthyTitle.textContent = productCopy('System normal', '系統正常');
+      healthyDetail.textContent = productCopy('No current problems need your attention.', '目前沒有需要處理的問題。');
+      issuesNode.replaceChildren();
+      return;
+    }
+
+    healthyNode.hidden = true;
+    issuesNode.replaceChildren(...issues.map(issueCard));
+  }
 
   function text(id, value) {
     const node = document.querySelector(`#${id}`);
@@ -90,65 +199,6 @@ if (
     return titleCase(song.state);
   }
 
-  function renderL2() {
-    const product = latestProduct;
-    if (!product) return;
-
-    systemDetails.relay.textContent = t('system.relayState', { health: titleCase(product.health), lifecycle: titleCase(product.lifecycle) });
-    const people = Number(product.room?.participantCount) || 0;
-    systemDetails.phones.textContent = t('system.phonesState', { count: people, label: t(people === 1 ? 'system.person' : 'system.peoplePlural'), mic: micSummary(product) });
-
-    const audioAttention = product.attention?.scope === 'audio';
-    const songAttention = product.attention?.scope === 'song';
-    if (audioAttention) {
-      systemValues.audio.textContent = t('system.needsAttention');
-      systemDetails.audio.textContent = t('system.audioUnavailableDetail');
-    } else if (songAttention) {
-      systemValues.audio.textContent = t('system.needsAttention');
-      systemDetails.audio.textContent = t('system.songUnavailableDetail');
-    } else {
-      systemDetails.audio.textContent = t('system.audioState', { song: songSummary(product), mic: micSummary(product) });
-    }
-
-    systemDetails.timing.textContent = product.timing?.state === 'idle'
-      ? t('system.timingIdleDetail')
-      : t('system.timingState', { state: titleCase(product.timing?.state) });
-
-    const take = product.take ?? {};
-    systemDetails.recording.textContent = take.lifecycle === 'ready'
-      ? t('system.lastTakeState', { verdict: take.verdict ? `· ${titleCase(take.verdict)}` : t('system.ready') })
-      : t('system.recordingState', { state: titleCase(take.lifecycle) });
-
-    const route = latestReadiness?.components?.route?.mode;
-    const robotAttention = product.attention?.scope === 'robot';
-    if (robotAttention) {
-      systemValues.robot.textContent = t('system.needsAttention');
-      systemDetails.robot.textContent = t('system.robotProblemDetail');
-    } else if (route === 'idle') {
-      systemValues.robot.textContent = t('system.idle');
-      systemDetails.robot.textContent = t('system.robotIdleDetail');
-    } else if (route === 'legacy') {
-      systemValues.robot.textContent = t('system.robotLegacy');
-      systemDetails.robot.textContent = t('system.robotLegacyDetail');
-    } else if (route === 'robot') {
-      systemValues.robot.textContent = t('system.ready');
-      systemDetails.robot.textContent = t('system.robotReadyDetail');
-    } else {
-      systemValues.robot.textContent = product.lifecycle === 'idle' ? t('system.idle') : t('system.ok');
-      systemDetails.robot.textContent = t('system.robotNoIssue');
-    }
-
-    document.querySelectorAll('.system-item').forEach((item) => {
-      const scope = item.dataset.systemScope;
-      const attention = product.attention?.scope;
-      const matches = scope === attention
-        || (scope === 'phones' && attention === 'mic')
-        || (scope === 'audio' && attention === 'song')
-        || (scope === 'recording' && attention === 'take');
-      item.dataset.attention = matches ? 'true' : 'false';
-    });
-  }
-
   function readyzUrl() {
     const source = new URLSearchParams(location.search);
     const params = new URLSearchParams();
@@ -166,12 +216,10 @@ if (
       const payload = await response.json();
       latestReadiness = payload;
       snapshots.set('readiness', payload);
-      renderL2();
       renderDiagnostics();
       return payload;
     } catch {
       latestReadiness = null;
-      renderL2();
       renderDiagnostics();
       return null;
     } finally {
@@ -185,11 +233,11 @@ if (
   }
 
   function startReadinessRefresh() {
-    if (!systemPanel.open) return;
+    if (!diagnosticsPanel.open) return;
     void refreshReadiness();
     if (readinessRefreshTimer) return;
     readinessRefreshTimer = setInterval(() => {
-      if (!systemPanel.open) {
+      if (!diagnosticsPanel.open) {
         stopReadinessRefresh();
         return;
       }
@@ -203,7 +251,6 @@ if (
     const params = new URLSearchParams();
     const key = source.get('key');
     if (key) params.set('key', key);
-
     const query = params.toString();
     return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
   }
@@ -264,7 +311,10 @@ if (
       try { message = JSON.parse(event.data); } catch { return; }
       if (!message?.type || typeof message.type !== 'string') return;
       snapshots.set(message.type, message);
-      if (message.type === 'product-status') latestProduct = message;
+      if (message.type === 'product-status') {
+        latestProduct = message;
+        renderProductSystem();
+      }
       renderDiagnostics();
     });
 
@@ -322,7 +372,7 @@ if (
       ? `${connection(components.player.timelineConnected)} · offset fresh ${yesNo(components.player.offsetFresh)}`
       : '—');
 
-    const raw = {
+    rawNode.textContent = JSON.stringify({
       product: product ?? null,
       readiness: readiness ?? null,
       session: session ?? null,
@@ -330,38 +380,15 @@ if (
       timing: timing ?? null,
       take: take ?? null,
       timeline: timeline ?? null,
-    };
-    rawNode.textContent = JSON.stringify(raw, null, 2);
+    }, null, 2);
   }
-
-  function focusSystemScope(scope) {
-    const map = {
-      audio: 'audio',
-      robot: 'robot',
-      song: 'audio',
-      mic: 'phones',
-      timing: 'timing',
-      take: 'recording',
-    };
-    const target = map[scope] ?? scope;
-    const item = document.querySelector(`.system-item[data-system-scope="${target}"]`);
-    if (item instanceof HTMLDetailsElement) item.open = true;
-  }
-
-  attentionButton.addEventListener('click', () => {
-    focusSystemScope(attentionRegion.dataset.scope || '');
-  });
-
-  systemPanel.addEventListener('toggle', () => {
-    if (systemPanel.open) startReadinessRefresh();
-    else stopReadinessRefresh();
-  });
 
   diagnosticsPanel.addEventListener('toggle', () => {
     if (diagnosticsPanel.open) {
-      void refreshReadiness();
+      startReadinessRefresh();
       connectDiagnostics();
     } else {
+      stopReadinessRefresh();
       closeDiagnosticsSocket();
     }
   });
@@ -388,12 +415,15 @@ if (
     setTimeout(() => { copyButton.textContent = 'Copy diagnostics'; }, 1_400);
   });
 
-  window.addEventListener('relay-locale-changed', renderL2);
+  window.addEventListener('relay-locale-changed', () => {
+    renderProductSystem();
+    renderDiagnostics();
+  });
 
   window.addEventListener('relay-product-status', (event) => {
     latestProduct = event.detail;
     snapshots.set('product-status', event.detail);
-    renderL2();
+    renderProductSystem();
     renderDiagnostics();
   });
 
@@ -402,5 +432,6 @@ if (
     closeDiagnosticsSocket();
   }, { once: true });
 
+  renderProductSystem();
   renderDiagnostics();
 }

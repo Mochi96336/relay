@@ -88,6 +88,7 @@ type JsonMessage = Record<string, any>;
 export class RelayClient {
   readonly messages: JsonMessage[] = [];
   readonly errors: string[] = [];
+  readonly binaryPayloads: Buffer[] = [];
   binaryFrames = 0;
   binarySamples = 0;
   private generation = 1;
@@ -98,6 +99,7 @@ export class RelayClient {
   private constructor(private readonly socket: WebSocket) {
     socket.on('message', (data: Buffer, isBinary: boolean) => {
       if (isBinary) {
+        this.binaryPayloads.push(Buffer.from(data));
         this.binaryFrames += 1;
         this.binarySamples += data.byteLength / 2;
         return;

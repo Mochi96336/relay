@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  MIC_PRESENCE_BAR_COUNT,
+  MIC_PRESENCE_BAND_COUNT,
+  MIC_PRESENCE_SLICE_COUNT,
+  createPresenceSlice,
   nextPresenceHistory,
-  presenceHeightPx,
+  normalizeSpectrumBands,
   rmsDbfsToPresence,
 } from '../public/mic-presence-model.js';
 
@@ -18,24 +20,33 @@ test('Mic presence maps local RMS monotonically without turning into a clipping 
   assert.equal(rmsDbfsToPresence(-3), 1);
 });
 
-test('Mic presence is a fixed short history of real local level samples', () => {
-  let history: number[] = [];
-  history = nextPresenceHistory(history, -58);
-  history = nextPresenceHistory(history, -42);
-  history = nextPresenceHistory(history, -30);
-  history = nextPresenceHistory(history, -24);
-  history = nextPresenceHistory(history, -36);
+test('spectrum shape stays five-band and normalizes frequency colour independently of RMS', () => {
+  assert.deepEqual(normalizeSpectrumBands(null), Array(MIC_PRESENCE_BAND_COUNT).fill(0));
+  assert.deepEqual(normalizeSpectrumBands([0, 0.5, 1, 0.25, 0]), [0, 0.5, 1, 0.25, 0]);
+  assert.deepEqual(normalizeSpectrumBands([0, 1, 2, 0.5, 0]), [0, 0.5, 1, 0.25, 0]);
 
-  assert.equal(history.length, MIC_PRESENCE_BAR_COUNT);
-  assert.equal(history[0], 0);
-  assert.ok(history[1] > history[0]);
-  assert.ok(history[2] > history[1]);
-  assert.ok(history[3] > history[2]);
-  assert.ok(history[4] < history[3]);
+  const low = createPresenceSlice(-28, [1, 0.4, 0.1, 0, 0]);
+  const high = createPresenceSlice(-28, [0, 0, 0.1, 0.5, 1]);
+  assert.equal(low.bands.length, MIC_PRESENCE_BAND_COUNT);
+  assert.equal(high.bands.length, MIC_PRESENCE_BAND_COUNT);
+  assert.ok(low.bands[0] > low.bands[4]);
+  assert.ok(high.bands[4] > high.bands[0]);
+  assert.equal(low.presence, high.presence, 'frequency shape must not manufacture extra loudness');
 });
 
-test('Presence bars retain a quiet physical baseline but grow with measured voice', () => {
-  assert.equal(presenceHeightPx(0), 5);
-  assert.ok(presenceHeightPx(0.5) > presenceHeightPx(0));
-  assert.equal(presenceHeightPx(1), 34);
+test('Mic ribbon keeps about 400 ms of truthful local evidence flowing left', () => {
+  let history = [];
+  for (let index = 0; index < MIC_PRESENCE_SLICE_COUNT; index += 1) {
+    const bands = index === MIC_PRESENCE_SLICE_COUNT - 1
+      ? [0, 0, 0, 0, 1]
+      : [1, 0, 0, 0, 0];
+    history = nextPresenceHistory(history, -30, bands);
+  }
+
+  assert.equal(history.length, MIC_PRESENCE_SLICE_COUNT);
+  assert.ok(history[0].bands[0] > history[0].bands[4], 'oldest evidence remains on the left');
+  assert.ok(
+    history[MIC_PRESENCE_SLICE_COUNT - 1].bands[4] > history[MIC_PRESENCE_SLICE_COUNT - 1].bands[0],
+    'newest evidence enters on the right',
+  );
 });

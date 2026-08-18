@@ -63,9 +63,22 @@ test('shared mix and timing commands belong to the current Mic owner, not an arb
     const settings = await waitForNewMessage(
       other,
       from,
-      (message) => message.type === 'mix-settings' && message.songLevel === 27,
+      (message) => message.type === 'mix-settings' && message.songLevel === 100,
     );
     assert.equal(settings.micGainDb, 17);
+    assert.equal(settings.songLevel, 100, 'legacy songLevel input must not mutate the fixed Song reference');
+
+    from = other.messages.length;
+    ownerControl.send({ type: 'set-mix', micGainDb: 99, songLevel: 0 });
+    const clamped = await waitForNewMessage(
+      other,
+      from,
+      (message) => message.type === 'mix-settings'
+        && message.micGainDb === 40
+        && message.songLevel === 100,
+    );
+    assert.equal(clamped.micGainDb, 40, 'manual Voice headroom should stop at +40 dB');
+    assert.equal(clamped.songLevel, 100);
 
     from = other.messages.length;
     other.send({ type: 'set-vocal-fine-tune', valueMs: 75 });
@@ -133,9 +146,10 @@ test('only the server-selected anonymous publisher keeps legacy command authorit
     const accepted = await waitForNewMessage(
       observer,
       from,
-      (message) => message.type === 'mix-settings' && message.songLevel === 33,
+      (message) => message.type === 'mix-settings' && message.songLevel === 100,
     );
     assert.equal(accepted.micGainDb, 12);
+    assert.equal(accepted.songLevel, 100);
 
     const robot = await RelayClient.connect(server);
     robot.send({ type: 'robot-source-hello' });
@@ -156,7 +170,7 @@ test('only the server-selected anonymous publisher keeps legacy command authorit
   }
 });
 
-test('an identified participant may adjust the mix while nobody holds the mic', async () => {
+test('an identified participant may adjust Voice while nobody holds the mic', async () => {
   const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
   try {
     const listener = await participant(server, 'participant-listener', 'Listener', 'monitor');
@@ -166,9 +180,10 @@ test('an identified participant may adjust the mix while nobody holds the mic', 
     const settings = await waitForNewMessage(
       listener,
       from,
-      (message) => message.type === 'mix-settings' && message.songLevel === 41,
+      (message) => message.type === 'mix-settings' && message.songLevel === 100,
     );
     assert.equal(settings.micGainDb, 9);
+    assert.equal(settings.songLevel, 100);
   } finally {
     await server.stop();
   }

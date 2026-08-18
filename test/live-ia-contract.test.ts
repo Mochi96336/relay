@@ -174,5 +174,5 @@ test('P0 Live states have one visible presenter each', () => {
   assert.match(css, /#start-publisher::after \{[\s\S]*?content: none;/);
   assert.match(css, /\.performance-stage:has\(#mic-takeover:not\(\[hidden\]\)\) \.mic-actions \{[\s\S]*?display: none;/);
   assert.match(css, /\.youtube-readout:has\(#server-timeline-state\)[\s\S]*?display: none;/);
-  assert.match(css, /body\[data-listen="muted"\] #listen-note,[\s\S]*?body\[data-listen="playback-muted"\] #listen-note \{[\s\S]*?display: none;/);
+  assert.match(css, /body\[data-listen="muted"\] #listen-note,[\s\S]*?body\[data-listen="playback-muted"\] #listen-note,[\s\S]*?body\[data-listen="review-muted"\] #listen-note \{[\s\S]*?display: none;/);
 });

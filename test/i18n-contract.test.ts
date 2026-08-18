@@ -13,7 +13,7 @@ test('locale stays local to this phone and switches without navigation', () => {
   assert.equal(i18n.includes('WebSocket'), false);
 });
 
-test('locale loads before product runtimes and the switch stays inside the people popover', () => {
+test('locale loads before product runtimes and remains a header secondary control', () => {
   const html = read('public/index.html');
   const locale = html.indexOf('<script src="/i18n.js"></script>');
   const presence = html.indexOf('src="/presence.js"');

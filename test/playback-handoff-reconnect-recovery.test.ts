@@ -108,11 +108,12 @@ test('the same still-active handoff is never inferred terminal from timeline sta
   assert.deepEqual(terminal, []);
 });
 
-test('the recovery adapter is installed before youtube-sync constructs its playback socket', async () => {
-  const trigger = await readFile(new URL('../public/playback-prewarm-trigger.js', import.meta.url), 'utf8');
+test('the recovery adapter is installed in youtube-sync dependency order', async () => {
+  const role = await readFile(new URL('../public/song-role.js', import.meta.url), 'utf8');
   const source = await readFile(new URL('../public/playback-handoff-reconnect-recovery.js', import.meta.url), 'utf8');
 
-  assert.match(trigger, /import '\.\/playback-handoff-reconnect-recovery\.js'/);
+  assert.match(role, /import '\.\/playback-handoff-reconnect-recovery\.js'/,
+    'youtube-sync imports song-role before constructing its playback socket');
   assert.match(source, /window\.WebSocket = new Proxy\(NativeWebSocket/);
   assert.match(source, /message\?\.type === 'playback-hello'/);
   assert.match(source, /playbackSocket\.dispatchEvent\(new MessageEvent\('message'/,

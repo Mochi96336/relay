@@ -31,8 +31,8 @@ class FakeTarget {
 
   focus() {}
   removeAttribute() {}
-  querySelector() { return null; }
-  querySelectorAll() { return []; }
+  querySelector(_selector: string) { return null; }
+  querySelectorAll(_selector: string) { return []; }
 }
 
 class FakeDocument extends FakeTarget {

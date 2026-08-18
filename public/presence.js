@@ -6,16 +6,13 @@ window.relayIdentityReady = (async () => {
   const identityButton = document.querySelector('#identity-name');
   const identityInput = document.querySelector('#identity-input');
   const releaseButton = document.querySelector('#release-mic');
-  const takeoverPanel = document.querySelector('#mic-takeover');
-  const takeoverCopy = document.querySelector('#mic-takeover-copy');
   const confirmTakeoverButton = document.querySelector('#confirm-takeover');
   const cancelTakeoverButton = document.querySelector('#cancel-takeover');
   const publisherButton = document.querySelector('#start-publisher');
 
   if (
     !participantCount || !participantList || !identityButton || !identityInput
-    || !releaseButton || !takeoverPanel || !takeoverCopy
-    || !confirmTakeoverButton || !cancelTakeoverButton || !publisherButton
+    || !releaseButton || !confirmTakeoverButton || !cancelTakeoverButton || !publisherButton
   ) return;
 
   const PARTICIPANT_ID_KEY = 'relay.participantId.v1';
@@ -92,6 +89,7 @@ window.relayIdentityReady = (async () => {
   let latestSession = null;
   let takeoverOwnerId = null;
   let startAfterTakeover = false;
+  let takeoverFailure = null;
   let localPublisherActive = window.relayActiveRole === 'publisher';
 
   // app.js reads these when it opens publisher / monitor transports. Identity
@@ -121,14 +119,41 @@ window.relayIdentityReady = (async () => {
     return participantById(latestSession?.micOwnerId ?? null);
   }
 
-  function updateReleaseVisibility() {
-    const serverOwnsMic = latestSession?.micOwnerId === participantId;
-    // Local capture starts before publisher registration is accepted. Keep a
-    // release path visible during that gap and during control-plane reconnects;
-    // server presence alone must not decide whether this phone can stop using
-    // its own microphone hardware.
-    releaseButton.hidden = !serverOwnsMic && !localPublisherActive;
+  function micActionState() {
+    const currentOwner = owner();
+    const mine = latestSession?.micOwnerId === participantId;
+    const takeoverOpen = Boolean(
+      takeoverOwnerId
+      && currentOwner
+      && currentOwner.id === takeoverOwnerId
+      && !mine,
+    );
+    return {
+      participantId,
+      owner: currentOwner ? {
+        id: currentOwner.id,
+        nickname: currentOwner.nickname,
+        connected: currentOwner.connected,
+      } : null,
+      mine,
+      localPublisherActive,
+      releaseVisible: Boolean(mine || localPublisherActive),
+      primaryMode: currentOwner && !mine ? 'takeover' : 'microphone',
+      takeoverOpen,
+      takeoverPending: takeoverOpen && startAfterTakeover,
+      failure: takeoverOpen ? takeoverFailure : null,
+    };
   }
+
+  // Presence owns room authority and takeover state. mic-actions.js is the sole
+  // presenter for the visible Mic action surface.
+  function publishMicActionState() {
+    const detail = micActionState();
+    window.relayMicActionState = detail;
+    window.dispatchEvent(new CustomEvent('relay-mic-action-state', { detail }));
+  }
+
+  window.addEventListener('relay-request-mic-action-state', publishMicActionState);
 
   function cancelSpeculativePlaybackPrewarm() {
     window.dispatchEvent(new CustomEvent('relay:playback-prewarm-cancel'));
@@ -138,16 +163,15 @@ window.relayIdentityReady = (async () => {
     if (cancelPrewarm) cancelSpeculativePlaybackPrewarm();
     takeoverOwnerId = null;
     startAfterTakeover = false;
-    confirmTakeoverButton.disabled = false;
-    takeoverPanel.hidden = true;
+    takeoverFailure = null;
+    publishMicActionState();
   }
 
   function showTakeover(currentOwner) {
     takeoverOwnerId = currentOwner.id;
     startAfterTakeover = false;
-    confirmTakeoverButton.disabled = false;
-    takeoverCopy.textContent = t('mic.takeoverPrompt', { name: currentOwner.nickname });
-    takeoverPanel.hidden = false;
+    takeoverFailure = null;
+    publishMicActionState();
   }
 
   function send(payload) {
@@ -163,7 +187,7 @@ window.relayIdentityReady = (async () => {
 
   function renderParticipants() {
     if (!latestSession) {
-      updateReleaseVisibility();
+      publishMicActionState();
       return;
     }
 
@@ -210,18 +234,7 @@ window.relayIdentityReady = (async () => {
     }
     if (document.activeElement !== identityInput) identityButton.textContent = nickname;
 
-    const currentOwner = owner();
     const mine = latestSession.micOwnerId === participantId;
-    updateReleaseVisibility();
-
-    if (currentOwner && !mine) {
-      publisherButton.dataset.presenceLabel = 'takeover';
-      if (!publisherButton.disabled) publisherButton.textContent = t('mic.takeover');
-    } else {
-      delete publisherButton.dataset.presenceLabel;
-      if (!publisherButton.disabled) publisherButton.textContent = t('mic.microphone');
-    }
-
     if (startAfterTakeover && mine && latestSession.micConnected === true) {
       // The Mic transition succeeded. Do not cancel here: a matching formal
       // song handoff may already be consuming the speculative preparation.
@@ -232,6 +245,8 @@ window.relayIdentityReady = (async () => {
       // mute state now instead of leaving a hidden muted player behind.
       hideTakeover({ cancelPrewarm: true });
     }
+
+    publishMicActionState();
   }
 
   function publishSessionStatus() {
@@ -304,6 +319,7 @@ window.relayIdentityReady = (async () => {
       if (socket !== next) return;
       socket = null;
       participantCount.textContent = t('people.reconnecting');
+      publishMicActionState();
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -333,8 +349,8 @@ window.relayIdentityReady = (async () => {
 
     takeoverOwnerId = currentOwner.id;
     startAfterTakeover = true;
-    takeoverCopy.textContent = t('mic.takeoverPreparing', { name: currentOwner.nickname });
-    confirmTakeoverButton.disabled = true;
+    takeoverFailure = null;
+    publishMicActionState();
     window.dispatchEvent(new CustomEvent('relay-request-microphone', {
       detail: { takeoverExpectedOwnerId: currentOwner.id },
     }));
@@ -383,30 +399,32 @@ window.relayIdentityReady = (async () => {
     sendPendingRename();
   }
 
-  function takeoverFailed(copy) {
+  function takeoverFailed(failure) {
     startAfterTakeover = false;
-    confirmTakeoverButton.disabled = false;
-    takeoverCopy.textContent = copy;
-    takeoverPanel.hidden = false;
+    takeoverFailure = failure;
+    publishMicActionState();
   }
 
   window.addEventListener('relay-microphone-local-state', (event) => {
     localPublisherActive = event.detail?.active === true;
-    updateReleaseVisibility();
+    publishMicActionState();
   });
 
   window.addEventListener('relay-microphone-start-failed', (event) => {
     if (!startAfterTakeover) return;
-    const message = event.detail?.message ?? t('mic.startFailed');
-    takeoverFailed(t('mic.takeoverKept', { message }));
+    takeoverFailed({
+      kind: 'start-failed',
+      message: typeof event.detail?.message === 'string' ? event.detail.message : null,
+    });
   });
 
   window.addEventListener('relay-mic-takeover-rejected', (event) => {
     const currentOwner = event.detail?.owner ?? owner();
     takeoverOwnerId = currentOwner?.id ?? null;
-    takeoverFailed(currentOwner
-      ? t('mic.takeoverChangedOwner', { name: currentOwner.nickname })
-      : t('mic.takeoverChanged'));
+    takeoverFailed({
+      kind: currentOwner ? 'owner-changed' : 'changed',
+      ownerNickname: currentOwner?.nickname ?? null,
+    });
   });
 
   window.addEventListener('relay-mic-busy', (event) => {
@@ -432,14 +450,8 @@ window.relayIdentityReady = (async () => {
 
   window.addEventListener('relay-locale-changed', () => {
     renderParticipants();
-    const currentOwner = owner();
-    if (!takeoverPanel.hidden && currentOwner && currentOwner.id !== participantId) {
-      takeoverCopy.textContent = startAfterTakeover
-        ? t('mic.takeoverPreparing', { name: currentOwner.nickname })
-        : t('mic.takeoverPrompt', { name: currentOwner.nickname });
-    }
   });
 
-  updateReleaseVisibility();
+  publishMicActionState();
   connect().catch(scheduleReconnect);
 })();

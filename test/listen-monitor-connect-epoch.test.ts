@@ -27,3 +27,14 @@ test('Listen cannot leave two accepted monitor sockets alive after overlapping c
     /next\.addEventListener\('message',[\s\S]*socket !== next \|\| connectEpoch !== transportEpoch/,
   );
 });
+
+test('Listen exposes local playback buffer health without adding product UI coupling', () => {
+  assert.match(
+    listenSource,
+    /function publishListenHealth\(health\)[\s\S]*window\.relayListenHealth = detail;[\s\S]*new CustomEvent\('relay-listen-health', \{ detail \}\)/,
+  );
+  assert.match(
+    listenSource,
+    /event\.data\?\.type === 'health'[\s\S]*publishListenHealth\(event\.data\);/,
+  );
+});

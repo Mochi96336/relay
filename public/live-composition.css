@@ -59,12 +59,13 @@
   margin-bottom: 10px;
 }
 
-/* The microphone presence shape is deliberately not an engineering meter.
-   app.js still keeps the hidden dBFS output for gain advice, while
-   mic-presence.js turns the same local RMS evidence into five recent time
-   slices. No fabricated rhythm or server-mix animation belongs here. */
+/* The Mic ribbon is truthful local evidence, not a decorative equalizer.
+   Horizontal position is time: old evidence leaves on the left while the
+   newest ~40 ms slice enters on the right. Each slice contains five broad
+   frequency bands, low at the bottom and high at the top. RMS still owns the
+   overall strength, so frequency colour never masquerades as extra loudness. */
 .voice-input-evidence {
-  min-height: 42px;
+  min-height: 54px;
   margin: 0 0 18px;
   display: flex;
   align-items: center;
@@ -82,31 +83,41 @@
 
 .voice-input-meter {
   --input-level: 0%;
-  width: 104px;
-  height: 42px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
+  width: 176px;
+  height: 50px;
+  display: grid;
+  grid-template-columns: repeat(10, 14px);
+  align-items: stretch;
+  gap: 4px;
   overflow: visible;
   border-radius: 0;
   background: transparent;
 }
 
-.voice-presence-bar {
-  width: 8px;
-  height: 5px;
-  flex: 0 0 8px;
-  border-radius: 999px;
-  background: #d8d6d1;
-  opacity: .52;
-  transition:
-    height 110ms cubic-bezier(.2, .75, .25, 1),
-    opacity 160ms ease;
+.voice-presence-slice {
+  --slice-age: 1;
+  min-width: 0;
+  height: 50px;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: center;
+  gap: 3px;
+  opacity: var(--slice-age);
 }
 
-.voice-input-meter[data-active="true"] .voice-presence-bar {
-  opacity: .86;
+.voice-presence-band {
+  --band-energy: 0;
+  width: 14px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 999px;
+  background: #d8d6d1;
+  opacity: clamp(.055, calc(.055 + var(--band-energy) * .88), .935);
+  transform: scaleX(clamp(.48, calc(.48 + var(--band-energy) * .52), 1));
+  transform-origin: center;
+  transition:
+    opacity 110ms linear,
+    transform 110ms cubic-bezier(.2, .75, .25, 1);
 }
 
 .voice-copy {
@@ -159,7 +170,7 @@
 }
 
 /* The only persistent control below the performance is local room playback.
-   Shared tuning and diagnostics are transient secondary sheets. */
+   Shared diagnostics stay secondary. */
 .live-actions {
   margin-top: 26px;
   padding-top: 14px;

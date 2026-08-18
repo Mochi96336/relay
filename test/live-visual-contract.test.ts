@@ -12,7 +12,7 @@ const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.
 
 test('holder YouTube stays real, compact and above a usable embedded-player floor', () => {
   assert.match(composition, /\.youtube-player-shell \{[\s\S]*?width: 100%;[\s\S]*?min-height: 200px;[\s\S]*?aspect-ratio: 16 \/ 9;/);
-  assert.match(composition, /\.youtube-player-shell iframe \{[\s\S]*?min-height: 200px;/);
+  assert.match(composition, /\.youtube-player-shell iframe \{[\s\S]*?width: 100%;[\s\S]*?height: 100%;[\s\S]*?min-height: 200px;/);
 });
 
 test('observer Song is a compact room snapshot because it does not host YouTube transport', () => {
@@ -23,13 +23,14 @@ test('observer Song is a compact room snapshot because it does not host YouTube 
 
 test('holder Change song is visible as a real phone touch target instead of tiny utility text', () => {
   assert.match(song, /#change-youtube \{[\s\S]*?min-height: 44px;[\s\S]*?padding: 0 12px;/);
+  assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('performance composition turns current Room Mic evidence into a wider time-frequency ribbon', () => {
-  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: 176px;[\s\S]*?height: 50px;/);
-  assert.match(composition, /grid-template-columns: repeat\(10, 14px\);/);
-  assert.match(composition, /\.voice-presence-slice \{[\s\S]*?flex-direction: column-reverse;/);
-  assert.match(composition, /\.voice-presence-band \{[\s\S]*?width: 14px;[\s\S]*?height: 6px;/);
+test('performance composition turns current Room Mic evidence into a wide joined time-frequency ribbon', () => {
+  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(70vw, 276px\);[\s\S]*?height: 58px;/);
+  assert.match(composition, /grid-template-columns: repeat\(10, minmax\(0, 1fr\)\);/);
+  assert.match(composition, /\.voice-presence-slice \{[\s\S]*?flex-direction: column-reverse;[\s\S]*?gap: 0;/);
+  assert.match(composition, /\.voice-presence-band \{[\s\S]*?width: 100%;[\s\S]*?height: 12px;[\s\S]*?margin-top: -4px;/);
   assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 10/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
   assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
@@ -70,13 +71,19 @@ test('new Mic evidence enters on the right while old evidence fades toward the l
 
 test('recording stays inside performance while local sound remains the one persistent lower horizon', () => {
   assert.match(composition, /\.take-strip \{[\s\S]*?margin-top: 14px;[\s\S]*?padding-top: 0;[\s\S]*?border-top: 0;/);
-  assert.match(composition, /\.live-actions \{[\s\S]*?margin-top: 26px;[\s\S]*?padding-top: 14px;/);
+  assert.match(composition, /\.live-actions \{[\s\S]*?margin-top: 24px;[\s\S]*?padding-top: 14px;/);
+  assert.match(composition, /data-take-state="recording"[\s\S]*?\.last-take[\s\S]*?display: none;/);
 });
 
 test('Room Mic presence is visible to listeners while local holder evidence stays strongest', () => {
   assert.match(state, /body\[data-self-mic="live"\] \.voice-copy strong/);
-  assert.match(state, /font-size: clamp\(38px, 10\.5vw, 52px\)/);
+  assert.match(state, /font-size: clamp\(27px, 7vw, 34px\)/);
   assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
   assert.match(presence, /if \(localActive\) return;/);
+});
+
+test('forced Room sound state removes the inert slider while preserving the short reason', () => {
+  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control \.adjust-control,[\s\S]*?display: none;/);
+  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control #listen-adjust-state,[\s\S]*?display: block;/);
 });

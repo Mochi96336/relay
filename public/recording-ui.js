@@ -1,12 +1,3 @@
-function ensureStyles() {
-  if (document.querySelector('link[data-relay-recording-ui]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = '/recording-ui.css';
-  link.dataset.relayRecordingUi = 'true';
-  document.head.append(link);
-}
-
 const strip = document.querySelector('.take-strip');
 const status = document.querySelector('#recording-status');
 
@@ -19,8 +10,6 @@ function finishedCopy() {
 }
 
 if (strip && status) {
-  ensureStyles();
-
   let lifecycle = 'idle';
   let previousLifecycle = 'idle';
   let finishFlash = false;

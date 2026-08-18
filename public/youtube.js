@@ -37,7 +37,6 @@ const SPECULATIVE_PREWARM_TIMEOUT_MS = 15_000;
 // WebSocket. This timer is only damage containment for a broken/disconnected
 // control path so an old page cannot remain audible forever.
 const OUTGOING_RELEASE_FALLBACK_MS = 2_000;
-const AUTOPLAY_RECOVERY_NOTE = 'Playback moved here, but the browser paused audio. Tap Play once in the visible YouTube player.';
 
 let player = null;
 let playerReady = false;
@@ -1214,7 +1213,7 @@ function completeRoomSong(message) {
         if (recoveryGeneration !== autoplayRecoveryGeneration) return;
         if (Number(player?.getPlayerState?.()) !== 1) {
           autoplayRecoveryRequired = true;
-          noteNode.textContent = AUTOPLAY_RECOVERY_NOTE;
+          noteNode.textContent = t('song.handoffAutoplayRecovery');
         }
       }, 300);
     }
@@ -1454,7 +1453,7 @@ function rerenderLocale() {
       : t('song.bufferUnknown');
     timelineNode.textContent = `${formatTime(previousSnapshot.currentTime)} / ${formatTime(previousSnapshot.duration)} · ${previousSnapshot.playbackRate || 1}× · ${buffered}`;
     if (autoplayRecoveryRequired) {
-      noteNode.textContent = AUTOPLAY_RECOVERY_NOTE;
+      noteNode.textContent = t('song.handoffAutoplayRecovery');
     } else {
       noteNode.textContent = previousSnapshot.state === 3
         ? t('song.bufferingIndependent')
@@ -1462,7 +1461,7 @@ function rerenderLocale() {
     }
   } else {
     timelineNode.textContent = '--:-- / --:--';
-    noteNode.textContent = autoplayRecoveryRequired ? AUTOPLAY_RECOVERY_NOTE : t('song.initialHelp');
+    noteNode.textContent = autoplayRecoveryRequired ? t('song.handoffAutoplayRecovery') : t('song.initialHelp');
   }
 }
 

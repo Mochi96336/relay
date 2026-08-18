@@ -10,6 +10,7 @@ import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
+import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
@@ -77,6 +78,8 @@ function envPositiveInt(name: string, fallback: number) {
 
 const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
+const MONITOR_BACKLOG_MS = envMs('RELAY_MONITOR_BACKLOG_MS', 200);
+const MONITOR_BACKLOG_BYTES = monitorBacklogBudgetBytes(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS);
 const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 400);
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
@@ -887,7 +890,15 @@ function broadcastToMonitors(payload: string | Buffer, binary = false) {
   for (const client of wss.clients) {
     const socket = client as RelaySocket;
     if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
-    if (binary && socket.bufferedAmount > 512 * 1024) {
+    if (
+      binary
+      && Buffer.isBuffer(payload)
+      && monitorFrameWouldExceedBacklog(
+        socket.bufferedAmount,
+        payload.byteLength,
+        MONITOR_BACKLOG_BYTES,
+      )
+    ) {
       monitorDroppedFrames += 1;
       continue;
     }

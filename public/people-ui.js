@@ -1,3 +1,12 @@
+function ensureStyles() {
+  if (document.querySelector('link[data-relay-people-ui]')) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/people-ui.css';
+  link.dataset.relayPeopleUi = 'true';
+  document.head.append(link);
+}
+
 const menu = document.querySelector('.people-menu');
 const summary = menu?.querySelector(':scope > summary');
 const participantCount = document.querySelector('#participant-count');
@@ -18,6 +27,8 @@ function initialFor(nickname) {
 }
 
 if (menu && summary && participantCount && participantList && identityEditor) {
+  ensureStyles();
+
   const ambient = document.createElement('span');
   ambient.className = 'participant-ambient';
   ambient.setAttribute('aria-hidden', 'true');

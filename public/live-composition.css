@@ -75,10 +75,10 @@
   margin-bottom: 10px;
 }
 
-/* The Room Mic presence is a small moving sound field, not an LED matrix.
-   Horizontal position is time: old evidence leaves on the left while the
-   newest slice enters on the right. Five real frequency bands still shape each
-   slice, but overlap into one contour instead of exposing fifty separate cells. */
+/* The Room Mic presence is one moving time-frequency field, not an LED matrix.
+   Horizontal position is time, vertical position is frequency, and luminance
+   is truthful band energy. Ten slices still carry the data, but zero horizontal
+   gaps plus a slight field blur make adjacent evidence read as one ribbon. */
 .voice-input-evidence {
   min-height: 62px;
   margin: 14px 0 2px;
@@ -103,10 +103,13 @@
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));
   align-items: stretch;
-  gap: 3px;
-  overflow: visible;
-  border-radius: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 7px;
   background: transparent;
+  filter: blur(1.1px);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%);
 }
 
 .voice-presence-slice {
@@ -116,29 +119,20 @@
   flex-direction: column-reverse;
   justify-content: center;
   gap: 0;
-  opacity: .34;
-  filter: blur(.15px);
+  opacity: .28;
 }
 
 .voice-presence-band {
   width: 100%;
   height: 12px;
   flex: 0 0 12px;
-  margin-top: -4px;
-  border-radius: 3px;
+  margin-top: -3px;
+  border-radius: 0;
   background: #d8d6d1;
-  opacity: .035;
-  transform: scaleX(.4);
-  transform-origin: center;
-  box-shadow: 0 0 5px rgba(240, 237, 229, .035);
-  transition:
-    opacity 95ms linear,
-    transform 105ms cubic-bezier(.2, .75, .25, 1);
-}
-
-.voice-presence-slice .voice-presence-band:first-child,
-.voice-presence-slice .voice-presence-band:last-child {
-  border-radius: 5px;
+  opacity: .025;
+  transform: none !important;
+  box-shadow: 0 0 7px rgba(240, 237, 229, .04);
+  transition: opacity 95ms linear;
 }
 
 .voice-copy {

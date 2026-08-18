@@ -124,9 +124,9 @@
   margin-bottom: 0;
 }
 
-/* Local sound is a Live control, not room tuning. The template owns the same
-   listen-gain/listen-toggle IDs that listen.js already controls, so product
-   placement changes without creating a second audio authority. */
+/* Local sound is a frequent Live control, not a second mixer. Keep its one
+   real slider and mute action directly reachable, but let the control read as
+   one quiet row plus one rail rather than a settings module. */
 .live-actions {
   display: block;
 }
@@ -134,66 +134,101 @@
 .local-sound-control {
   width: 100%;
   display: grid;
-  gap: 8px;
+  gap: 1px;
 }
 
 .local-sound-control .adjust-group-heading {
-  min-height: 32px;
+  min-height: 44px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .local-sound-control .adjust-group-heading .section-label {
   margin: 0;
   color: #c7c7ca;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
 }
 
+/* "Local only" is useful product semantics, but repeating it on every Live
+   frame makes the footer read like configuration. Keep the authority in the
+   DOM/i18n contract and let the placement itself communicate locality. */
 .local-sound-control .adjust-group-heading > span:nth-child(2) {
-  color: #6f7279;
-  font-size: 10px;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .local-sound-control .adjust-control {
-  gap: 5px;
+  position: relative;
+  gap: 0;
+  padding-right: 0;
 }
 
 .local-sound-control .adjust-row-heading {
-  min-height: 22px;
+  position: absolute;
+  right: 66px;
+  top: -39px;
+  min-height: 0;
+  pointer-events: none;
 }
 
 .local-sound-control .adjust-row-heading strong {
-  color: #8c8f95;
-  font-size: 10px;
-  font-weight: 560;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .local-sound-control .adjust-row-heading output {
   color: #aeb0b5;
-  font-size: 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .local-sound-control .adjust-range {
   height: 24px;
+  margin-top: -2px;
 }
 
 #listen-toggle {
   min-width: 54px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0;
   justify-content: flex-end;
   color: #c6c7ca;
   text-align: right;
 }
 
-#listen-adjust-state,
+/* Routine healthy copy should not occupy a permanent third row. It comes back
+   when local playback is actually muted, while concrete runtime notes remain
+   visible whenever listen.js has something actionable to say. */
+#listen-adjust-state {
+  display: none;
+  margin: 4px 0 0;
+  min-height: 14px;
+  color: #6f7279;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+body[data-listen="off"] #listen-adjust-state {
+  display: block;
+}
+
 #listen-note {
-  margin: 0;
+  margin: 4px 0 0;
   min-height: 14px;
   color: #6f7279;
   font-size: 10px;
@@ -313,13 +348,6 @@ body:has(.system-panel[open]) {
   .room-header-actions { gap: 8px; }
   .more-popover { right: -4px; }
   .voice-input-evidence { margin-top: 14px; }
-
-  .local-sound-control .adjust-group-heading {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .local-sound-control .adjust-group-heading > span:nth-child(2) {
-    display: none;
-  }
 
   .adjust-panel[open] .adjust-sheet,
   .system-panel[open] .system-sheet {

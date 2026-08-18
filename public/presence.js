@@ -130,7 +130,12 @@ window.relayIdentityReady = (async () => {
     releaseButton.hidden = !serverOwnsMic && !localPublisherActive;
   }
 
-  function hideTakeover() {
+  function cancelSpeculativePlaybackPrewarm() {
+    window.dispatchEvent(new CustomEvent('relay:playback-prewarm-cancel'));
+  }
+
+  function hideTakeover({ cancelPrewarm = false } = {}) {
+    if (cancelPrewarm) cancelSpeculativePlaybackPrewarm();
     takeoverOwnerId = null;
     startAfterTakeover = false;
     confirmTakeoverButton.disabled = false;
@@ -218,9 +223,14 @@ window.relayIdentityReady = (async () => {
     }
 
     if (startAfterTakeover && mine && latestSession.micConnected === true) {
+      // The Mic transition succeeded. Do not cancel here: a matching formal
+      // song handoff may already be consuming the speculative preparation.
       hideTakeover();
     } else if (!startAfterTakeover && takeoverOwnerId && latestSession.micOwnerId !== takeoverOwnerId) {
-      hideTakeover();
+      // The confirmation became stale before the user accepted it. No formal
+      // handoff will consume this speculative playback, so restore its local
+      // mute state now instead of leaving a hidden muted player behind.
+      hideTakeover({ cancelPrewarm: true });
     }
   }
 
@@ -247,7 +257,9 @@ window.relayIdentityReady = (async () => {
       && typeof nextIncarnation === 'string'
       && previousIncarnation !== nextIncarnation
     ) {
-      hideTakeover();
+      // A server restart invalidates any confirmation/handoff expectation that
+      // produced the speculative player state.
+      hideTakeover({ cancelPrewarm: true });
     }
     latestSession = message;
     renderParticipants();
@@ -314,7 +326,7 @@ window.relayIdentityReady = (async () => {
   confirmTakeoverButton.addEventListener('click', () => {
     const currentOwner = owner();
     if (!currentOwner || currentOwner.id === participantId) {
-      hideTakeover();
+      hideTakeover({ cancelPrewarm: true });
       if (!publisherButton.disabled) publisherButton.click();
       return;
     }
@@ -330,7 +342,7 @@ window.relayIdentityReady = (async () => {
 
   cancelTakeoverButton.addEventListener('click', () => {
     if (startAfterTakeover) return;
-    hideTakeover();
+    hideTakeover({ cancelPrewarm: true });
   });
 
   releaseButton.addEventListener('click', () => {

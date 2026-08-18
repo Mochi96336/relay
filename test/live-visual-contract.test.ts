@@ -37,6 +37,13 @@ test('performance composition turns current Room Mic evidence into a wider time-
   assert.match(presence, /event\.detail\?\.spectrumBands/);
 });
 
+test('listener Room Mic evidence expires when telemetry stops instead of freezing forever', () => {
+  assert.match(presence, /REMOTE_EVIDENCE_STALE_MS = 320/);
+  assert.match(presence, /remoteStaleTimer = setTimeout/);
+  assert.match(presence, /sourceKey !== expectedSourceKey/);
+  assert.match(presence, /reset\(\);[\s\S]*REMOTE_EVIDENCE_STALE_MS/);
+});
+
 test('frequency shape originates in the singer capture worklet rather than final room mix or fake animation', () => {
   assert.match(capture, /SPECTRUM_FFT_SIZE = 512/);
   assert.match(capture, /\[80, 250\]/);

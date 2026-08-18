@@ -77,9 +77,8 @@
 
 /* The Room Mic presence is a small moving sound field, not an LED matrix.
    Horizontal position is time: old evidence leaves on the left while the
-   newest slice enters on the right. The five real frequency bands stay inside
-   each vertical slice, but they visually join into one soft column so the user
-   reads a changing voice shape rather than fifty independent indicators. */
+   newest slice enters on the right. Five real frequency bands still shape each
+   slice, but overlap into one contour instead of exposing fifty separate cells. */
 .voice-input-evidence {
   min-height: 62px;
   margin: 14px 0 2px;
@@ -99,12 +98,12 @@
 
 .voice-input-meter {
   --input-level: 0%;
-  width: min(68vw, 268px);
+  width: min(70vw, 276px);
   height: 58px;
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));
   align-items: stretch;
-  gap: 5px;
+  gap: 3px;
   overflow: visible;
   border-radius: 0;
   background: transparent;
@@ -118,21 +117,28 @@
   justify-content: center;
   gap: 0;
   opacity: .34;
+  filter: blur(.15px);
 }
 
 .voice-presence-band {
   width: 100%;
-  height: 10px;
-  flex: 0 0 10px;
-  margin-top: -1px;
-  border-radius: 4px;
+  height: 12px;
+  flex: 0 0 12px;
+  margin-top: -4px;
+  border-radius: 3px;
   background: #d8d6d1;
-  opacity: .04;
+  opacity: .035;
   transform: scaleX(.4);
   transform-origin: center;
+  box-shadow: 0 0 5px rgba(240, 237, 229, .035);
   transition:
     opacity 95ms linear,
     transform 105ms cubic-bezier(.2, .75, .25, 1);
+}
+
+.voice-presence-slice .voice-presence-band:first-child,
+.voice-presence-slice .voice-presence-band:last-child {
+  border-radius: 5px;
 }
 
 .voice-copy {
@@ -186,6 +192,31 @@
 .take-strip .microcopy {
   min-height: 15px;
   text-align: left;
+}
+
+/* During recording the elapsed time and Stop are one lifecycle row. Previous
+   review history recedes until the active recording finishes. */
+.take-strip[data-take-state="recording"] {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto;
+  justify-content: start;
+  align-items: center;
+  column-gap: 14px;
+}
+.take-strip[data-take-state="recording"] .take-actions {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 44px;
+}
+.take-strip[data-take-state="recording"] #recording-status {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+}
+.take-strip[data-take-state="recording"] .last-take,
+.take-strip[data-take-state="finalizing"] .last-take {
+  display: none;
 }
 
 /* The only persistent control below the performance is this phone's copy of
@@ -261,10 +292,30 @@ body[data-listen="review-muted"] .local-sound-control .adjust-control {
   min-height: 14px;
 }
 
+/* live-ia.css intentionally hides routine healthy state copy. These states are
+   not routine: once the slider disappears, the short reason is the only useful
+   explanation for why Room sound cannot be adjusted right now. The extra state
+   selector wins over the generic later ID rule without adding another writer. */
+body[data-listen="muted"] .local-sound-control #listen-adjust-state,
+body[data-listen="mic-muted"] .local-sound-control #listen-adjust-state,
+body[data-listen="playback-muted"] .local-sound-control #listen-adjust-state,
+body[data-listen="review-muted"] .local-sound-control #listen-adjust-state {
+  display: block;
+}
+
+/* A flex item with width:min(100%,720px) can shrink to intrinsic content on
+   some mobile engines. Give the System sheet an explicit full-width flex basis;
+   the max-width still caps it on larger screens. */
+body[data-health] .system-panel[open] > .system-sheet {
+  width: 100%;
+  max-width: 720px;
+  flex: 0 0 auto;
+}
+
 @media (max-width: 420px) {
   .song-stage { padding-top: 16px; }
   .performance-stage { padding-top: 24px; }
-  .voice-input-meter { width: min(70vw, 258px); }
+  .voice-input-meter { width: min(72vw, 266px); }
 }
 
 @media (max-height: 760px) {

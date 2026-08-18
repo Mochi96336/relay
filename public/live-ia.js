@@ -1,8 +1,3 @@
-import './mic-presence.js';
-import './room-sound-ui.js';
-import './people-ui.js';
-import './recording-ui.js';
-
 const peopleMenu = document.querySelector('.people-menu');
 const moreMenu = document.querySelector('#room-more');
 const systemPanel = document.querySelector('#system-panel');
@@ -112,3 +107,19 @@ moreMenu?.querySelectorAll('[data-relay-locale]').forEach((button) => {
     moreMenu.open = false;
   });
 });
+
+// Secondary navigation is a P0 interaction path. Keep it outside the failure
+// domain of optional presentation modules: a syntax/runtime/load failure in a
+// Mic ribbon, Room sound wording, People projection, or recording projection
+// must never prevent System from opening. Dynamic import failures are contained
+// after all navigation handlers above have already been installed.
+for (const modulePath of [
+  './mic-presence.js',
+  './room-sound-ui.js',
+  './people-ui.js',
+  './recording-ui.js',
+]) {
+  import(modulePath).catch((error) => {
+    console.error(`Relay optional presenter failed: ${modulePath}`, error);
+  });
+}

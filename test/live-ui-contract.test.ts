@@ -10,6 +10,7 @@ const liveState = readFileSync(new URL('../public/live-state.css', import.meta.u
 const liveComposition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
 const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const micPresence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
+const capture = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
 const songSurface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
 const songCss = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
 
@@ -24,30 +25,39 @@ test('Live keeps real YouTube media before the performance task', () => {
   assert.ok(position('class="performance-stage"') < position('class="live-actions"'));
 });
 
-test('performance task contains measured input, Mic ownership and Take', () => {
+test('performance task contains local Mic evidence, ownership, Mic gain and recording', () => {
   const stage = position('class="performance-stage"');
   const meter = position('id="mic-input-meter"');
   const mic = position('id="start-publisher"');
+  const gain = position('id="mic-live-control"');
   const take = position('class="take-strip"');
   const footer = position('class="live-actions"');
-  assert.ok(stage < meter && meter < mic && mic < take && take < footer);
-  assert.doesNotMatch(html, /class="voice-ribbon"/);
+  assert.ok(stage < meter && meter < mic && mic < gain && gain < take && take < footer);
   assert.match(app, /latestLocalMicLevel\?\.peakDbfs/);
   assert.match(app, /event\.data\?\.type === 'input-level'/);
+  assert.match(app, /spectrumBands/);
   assert.doesNotMatch(app, /latestMixHealth\?\.micPeakDbfs/);
   assert.match(liveIa, /import '\.\/mic-presence\.js';/);
   assert.match(micPresence, /relay-local-mic-level/);
-  assert.match(micPresence, /event\.detail\?\.rmsDbfs/);
+  assert.match(micPresence, /event\.detail\?\.spectrumBands/);
 });
 
-test('input presence follows actual self Mic state without fabricated animation', () => {
+test('input ribbon follows actual self Mic state without fabricated animation', () => {
   assert.match(liveStatus, /document\.body\.dataset\.selfMic/);
   assert.match(liveState, /body\[data-self-mic="off"\] \.voice-input-evidence/);
-  assert.match(liveState, /body\[data-self-mic="live"\] \.voice-presence-bar/);
-  assert.match(liveComposition, /\.voice-presence-bar/);
-  assert.match(liveComposition, /recent time[\s\S]*No fabricated rhythm/);
+  assert.match(liveState, /body\[data-self-mic="live"\] \.voice-presence-band/);
+  assert.match(liveComposition, /\.voice-presence-slice/);
+  assert.match(liveComposition, /five broad[\s\S]*frequency bands/);
+  assert.match(capture, /spectrumBands: this\.measureSpectrumBands\(\)/);
   assert.doesNotMatch(liveState, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(liveComposition, /@keyframes|voice-breathe|preparing-pulse/);
+});
+
+test('Mic gain is contextual and generic Adjust no longer exists', () => {
+  assert.match(html, /id="mic-live-control"/);
+  assert.doesNotMatch(html, /class="adjust-panel"|id="open-adjust"/);
+  assert.match(liveIa, /micLiveLabel\.textContent = 'Mic'/);
+  assert.match(liveIa, /relay-microphone-local-state/);
 });
 
 test('Song keeps exact playback authority and observer-only compact presentation', () => {
@@ -68,10 +78,10 @@ test('formal Live still consumes server product state and one Listen transport',
   assert.doesNotMatch(html, /id="start-monitor"|id="monitor-gain"/);
 });
 
-test('product attention emits navigation intent while Live IA owns the System sheet', () => {
+test('product attention emits navigation intent while Live IA alone owns the System sheet', () => {
   assert.match(liveStatus, /window\.dispatchEvent\(new Event\('relay-open-system'\)\)/);
-  assert.doesNotMatch(liveStatus, /systemPanel\.open\s*=\s*true|scrollIntoView/,
-    'product-state rendering must not own secondary-surface navigation');
-  assert.match(liveIa, /window\.addEventListener\('relay-open-system', \(\) => revealPanel\(systemPanel, adjustPanel, closeSystem\)\)/);
+  assert.doesNotMatch(liveStatus, /systemPanel\.open\s*=\s*true|scrollIntoView/);
+  assert.match(liveIa, /window\.addEventListener\('relay-open-system', revealSystem\)/);
   assert.match(liveIa, /function closeTakeHistoryPanel\(\)/);
+  assert.doesNotMatch(liveIa, /adjustPanel|openAdjust|closeAdjust/);
 });

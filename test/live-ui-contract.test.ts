@@ -67,3 +67,11 @@ test('formal Live still consumes server product state and one Listen transport',
   assert.match(listen, /let micForcedMuted = false/);
   assert.doesNotMatch(html, /id="start-monitor"|id="monitor-gain"/);
 });
+
+test('product attention emits navigation intent while Live IA owns the System sheet', () => {
+  assert.match(liveStatus, /window\.dispatchEvent\(new Event\('relay-open-system'\)\)/);
+  assert.doesNotMatch(liveStatus, /systemPanel\.open\s*=\s*true|scrollIntoView/,
+    'product-state rendering must not own secondary-surface navigation');
+  assert.match(liveIa, /window\.addEventListener\('relay-open-system', \(\) => revealPanel\(systemPanel, adjustPanel, closeSystem\)\)/);
+  assert.match(liveIa, /function closeTakeHistoryPanel\(\)/);
+});

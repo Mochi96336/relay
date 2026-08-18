@@ -275,8 +275,7 @@ if (
   });
 
   attentionButton.addEventListener('click', () => {
-    systemPanel.open = true;
-    systemPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    window.dispatchEvent(new Event('relay-open-system'));
   });
 
   window.addEventListener('relay-locale-changed', () => {

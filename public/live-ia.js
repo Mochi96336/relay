@@ -52,15 +52,22 @@ moreMenu?.addEventListener('toggle', () => {
 });
 
 adjustPanel?.addEventListener('toggle', () => {
-  if (adjustPanel.open && systemPanel) systemPanel.open = false;
+  if (!adjustPanel.open) return;
+  if (systemPanel) systemPanel.open = false;
+  closeTakeHistoryPanel();
+  closeHeaderMenus();
 });
 
 systemPanel?.addEventListener('toggle', () => {
-  if (systemPanel.open && adjustPanel) adjustPanel.open = false;
+  if (!systemPanel.open) return;
+  if (adjustPanel) adjustPanel.open = false;
+  closeTakeHistoryPanel();
+  closeHeaderMenus();
 });
 
 openAdjust?.addEventListener('click', () => revealPanel(adjustPanel, systemPanel, closeAdjust));
 openSystem?.addEventListener('click', () => revealPanel(systemPanel, adjustPanel, closeSystem));
+window.addEventListener('relay-open-system', () => revealPanel(systemPanel, adjustPanel, closeSystem));
 
 closeAdjust?.addEventListener('click', () => closePanel(adjustPanel, openAdjust));
 closeSystem?.addEventListener('click', () => closePanel(systemPanel, openSystem));

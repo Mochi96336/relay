@@ -115,3 +115,20 @@ test('Take review feedback guard belongs to history and composes local Mic with 
   assert.doesNotMatch(recorder, /relay-session-status|relay-microphone-local-state/,
     'recorder lifecycle must no longer own review feedback state');
 });
+
+test('Take review playback isolates itself from live Room sound and stops with its sheet', async () => {
+  const history = await readFile(new URL('../public/take-history.js', import.meta.url), 'utf8');
+  const listen = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
+
+  assert.match(history, /new CustomEvent\('relay-take-review-playback'/);
+  assert.match(history, /recordingPlayer\.addEventListener\('play'[\s\S]*dispatchReviewPlayback\(true\)/);
+  assert.match(history, /recordingPlayer\.addEventListener\('pause', \(\) => dispatchReviewPlayback\(false\)\)/);
+  assert.match(history, /panel\.addEventListener\('toggle'[\s\S]*!panel\.open[\s\S]*recordingPlayer\.pause\(\)/,
+    'closing Take history, including when System replaces it, must stop review audio');
+  assert.match(listen, /let takeReviewForcedMuted = false/);
+  assert.match(listen, /effectiveMuted\(\)[\s\S]*takeReviewForcedMuted/);
+  assert.match(listen, /relay-take-review-playback/);
+  assert.match(listen, /setTakeReviewForcedMute\(event\.detail\?\.active === true\)/);
+  assert.doesNotMatch(history, /listen-toggle|listen-gain|userMuted/,
+    'Take history must request isolation without mutating the user\'s Room sound controls');
+});

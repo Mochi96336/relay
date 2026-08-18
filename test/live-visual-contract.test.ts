@@ -10,15 +10,19 @@ const model = readFileSync(new URL('../public/mic-presence-model.js', import.met
 const capture = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
 const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
 
-test('holder YouTube keeps a usable embedded-player floor', () => {
-  assert.match(composition, /\.youtube-player-shell \{[\s\S]*?min-height: 200px;/);
+test('holder YouTube stays real, compact and above a usable embedded-player floor', () => {
+  assert.match(composition, /\.youtube-player-shell \{[\s\S]*?width: 100%;[\s\S]*?min-height: 200px;[\s\S]*?aspect-ratio: 16 \/ 9;/);
   assert.match(composition, /\.youtube-player-shell iframe \{[\s\S]*?min-height: 200px;/);
 });
 
-test('observer Song can be compact because it does not host the YouTube transport', () => {
-  assert.match(song, /\.song-observer \{[\s\S]*?min-height: 104px;/);
-  assert.match(song, /grid-template-columns: minmax\(96px, 30%\) 1fr;/);
+test('observer Song is a compact room snapshot because it does not host YouTube transport', () => {
+  assert.match(song, /\.song-observer \{[\s\S]*?min-height: 92px;/);
+  assert.match(song, /grid-template-columns: 92px minmax\(0, 1fr\);/);
   assert.match(song, /data-playback-role="observer"[\s\S]*?\.youtube-player-shell/);
+});
+
+test('holder Change song is visible as a real phone touch target instead of tiny utility text', () => {
+  assert.match(song, /#change-youtube \{[\s\S]*?min-height: 44px;[\s\S]*?padding: 0 12px;/);
 });
 
 test('performance composition turns current Room Mic evidence into a wider time-frequency ribbon', () => {

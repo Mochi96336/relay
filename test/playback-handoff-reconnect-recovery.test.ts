@@ -108,14 +108,21 @@ test('the same still-active handoff is never inferred terminal from timeline sta
   assert.deepEqual(terminal, []);
 });
 
-test('the recovery adapter is installed in youtube-sync dependency order', async () => {
+test('youtube-sync owns reconnect recovery without global WebSocket interception', async () => {
+  const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
   const role = await readFile(new URL('../public/song-role.js', import.meta.url), 'utf8');
   const source = await readFile(new URL('../public/playback-handoff-reconnect-recovery.js', import.meta.url), 'utf8');
 
-  assert.match(role, /import '\.\/playback-handoff-reconnect-recovery\.js'/,
-    'youtube-sync imports song-role before constructing its playback socket');
-  assert.match(source, /window\.WebSocket = new Proxy\(NativeWebSocket/);
-  assert.match(source, /message\?\.type === 'playback-hello'/);
-  assert.match(source, /playbackSocket\.dispatchEvent\(new MessageEvent\('message'/,
-    'recovered terminals must pass through youtube-sync instead of bypassing its private handoff state');
+  assert.match(sync, /import \{ createPlaybackHandoffReconnectRecovery \} from '\.\/playback-handoff-reconnect-recovery\.js'/);
+  assert.match(sync, /reconnectRecovery\.notePrepare\(handoffId\)/);
+  assert.match(sync, /reconnectRecovery\.noteCommit\(activeHandoffId\)/);
+  assert.match(sync, /reconnectRecovery\.noteSocketClosed\(\)/);
+  assert.match(sync, /reconnectRecovery\.noteTimeline\(message, playbackIdentity\)/);
+  assert.match(sync, /createPlaybackHandoffReconnectRecovery\(\(message\) => \{[\s\S]*handleServerMessage\(message\)/,
+    'recovered terminals must re-enter youtube-sync through its normal parsed-message path');
+
+  assert.doesNotMatch(role, /playback-handoff-reconnect-recovery/,
+    'role resolution must stay pure and must not bootstrap transport side effects');
+  assert.doesNotMatch(source, /window\.WebSocket|new Proxy\(|MessageEvent|playback-hello/,
+    'the recovery state machine must not intercept page-global WebSocket construction or synthesize socket events');
 });

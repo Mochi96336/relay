@@ -20,13 +20,15 @@ export function rmsDbfsToPresence(rmsDbfs) {
 
 export function normalizeSpectrumBands(spectrumBands) {
   if (!Array.isArray(spectrumBands)) return Array(MIC_PRESENCE_BAND_COUNT).fill(0);
+  // Preserve the relative energy before normalization. Clamping each raw band
+  // to 1 first would flatten a real [1, 2] contrast into [1, 1].
   const safe = Array.from({ length: MIC_PRESENCE_BAND_COUNT }, (_, index) => {
     const value = Number(spectrumBands[index]);
-    return Number.isFinite(value) ? clamp(value, 0, 1) : 0;
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
   });
   const strongest = Math.max(...safe);
   if (strongest <= 0) return safe;
-  return safe.map((value) => value / strongest);
+  return safe.map((value) => clamp(value / strongest, 0, 1));
 }
 
 export function createPresenceSlice(rmsDbfs, spectrumBands) {

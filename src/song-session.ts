@@ -170,17 +170,22 @@ export class SongSession {
     if (this.sameIdentity(this.handoff.target, identity)) return this.handoffPlan(nowMs);
 
     // A page reload keeps the logical playback transport but creates a newer
-    // incarnation. If that exact tab was already the prepared handoff target,
-    // move the plan forward instead of leaving the room frozen behind an old
-    // generation that can never acknowledge it. A different tab is still a
-    // different transport and may not inherit the handoff by coincidence.
+    // incarnation. Move the target identity forward, but preserve the original
+    // handoff birth time: repeated reloads are recovery attempts inside one
+    // bounded handoff, not a way to mint a fresh 30 s authority freeze forever.
     if (
       this.handoff.target.participantId === identity.participantId
       && this.handoff.target.transportId === identity.transportId
       && identity.generation > this.handoff.target.generation
     ) {
+      const startedAtMs = this.handoff.startedAtMs;
       this.handoffSequence += 1;
-      this.handoff = this.newHandoff(`song-handoff-${this.handoffSequence}`, identity, nowMs);
+      this.handoff = this.newHandoff(
+        `song-handoff-${this.handoffSequence}`,
+        identity,
+        nowMs,
+        startedAtMs,
+      );
       this.bump();
       return this.handoffPlan(nowMs);
     }
@@ -512,15 +517,10 @@ export class SongSession {
    * How far a report may sit from where this player's own last accepted report
    * would be by now.
    *
-   * Not from `serverTime`. That is where the room clock predicts a player
-   * should be, and a player that rebuffers falls behind the prediction without
-   * anybody seeking - so judging against it made every packet after a stall
-   * look like a jump. A refused packet never reaches the timeline, so it could
-   * not correct the drift it was refused for, and the refusals repeated at the
-   * telemetry rate. The honest bound is that a player can only fall behind its
-   * own last report by the time that has actually passed; anything further, in
-   * either direction, is a real jump. The room-song command gate draws exactly
-   * this line, and a handoff must not draw a different one.
+   * This is intentionally used for continuity evidence, not as the final room
+   * authority gate. A buffering target may remain self-consistent while falling
+   * seconds behind the old leader, so final proof also has to be near the live
+   * authoritative room clock before promotion.
    */
   private withinOwnReport(
     room: Record<string, unknown>,
@@ -534,6 +534,17 @@ export class SongSession {
     const elapsedSeconds = Math.max(0, Number(room.ageMs) || 0) / 1000;
     const delta = incomingTime - reportedTime;
     return delta <= toleranceSeconds && delta >= -(elapsedSeconds + toleranceSeconds);
+  }
+
+  private nearAuthoritativeRoom(
+    room: Record<string, unknown>,
+    payload: Record<string, unknown>,
+    toleranceSeconds: number,
+  ) {
+    const authoritativeTime = Number(room.serverTime);
+    const incomingTime = Number(payload.currentTime);
+    if (!Number.isFinite(authoritativeTime) || !Number.isFinite(incomingTime)) return false;
+    return Math.abs(incomingTime - authoritativeTime) <= toleranceSeconds;
   }
 
   private safeHoldoverTelemetry(payload: Record<string, unknown>, nowMs: number) {
@@ -567,13 +578,23 @@ export class SongSession {
     const targetState = this.handoffTargetState(Number(room.state));
     const stateRelevant = incomingState === BUFFERING_STATE || incomingState === targetState;
 
-    return typeof room.videoId === 'string'
-      && payload.videoId === room.videoId
-      && stateRelevant
-      && Number.isFinite(roomRate)
-      && Number.isFinite(incomingRate)
-      && Math.abs(roomRate - incomingRate) < 0.0001
-      && this.withinOwnReport(reference, payload, HANDOFF_TIME_TOLERANCE_SECONDS);
+    if (
+      typeof room.videoId !== 'string'
+      || payload.videoId !== room.videoId
+      || !stateRelevant
+      || !Number.isFinite(roomRate)
+      || !Number.isFinite(incomingRate)
+      || Math.abs(roomRate - incomingRate) >= 0.0001
+    ) return false;
+
+    // BUFFERING remains candidate-only evidence and therefore has to be
+    // continuous with the target's own reports. A final renderable proof is
+    // different: after a long stall the client is expected to seek forward to
+    // the live room position, so that intentional realignment may jump relative
+    // to the frozen candidate clock, but it must be near authoritative serverTime.
+    return incomingState === BUFFERING_STATE
+      ? this.withinOwnReport(reference, payload, HANDOFF_TIME_TOLERANCE_SECONDS)
+      : this.nearAuthoritativeRoom(room, payload, HANDOFF_TIME_TOLERANCE_SECONDS);
   }
 
   private targetTelemetryCompletes(payload: Record<string, unknown>, nowMs: number) {
@@ -619,12 +640,17 @@ export class SongSession {
     };
   }
 
-  private newHandoff(id: string, target: PlaybackIdentity, nowMs: number): Handoff {
+  private newHandoff(
+    id: string,
+    target: PlaybackIdentity,
+    nowMs: number,
+    startedAtMs = nowMs,
+  ): Handoff {
     return {
       id,
       target,
       state: 'preparing',
-      startedAtMs: nowMs,
+      startedAtMs,
       commitStartedAtMs: null,
       readyAcknowledged: false,
       targetTimeline: new YouTubeTimelineTracker(),

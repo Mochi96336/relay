@@ -160,13 +160,12 @@ describe('prepared song handoff', () => {
   });
 
   /**
-   * The old deadlock was real: a buffering target was refused against a moving
-   * room serverTime and therefore never got a report accepted that could give a
-   * later proof a sensible target-local reference. Accept BUFFERING into a
-   * candidate-only clock instead. That preserves convergence evidence without
-   * publishing the target as room truth before it can actually play.
+   * BUFFERING is accepted only as private candidate evidence. The final proof
+   * must then realign to the still-live authoritative room clock; otherwise a
+   * long stall could promote a target several seconds behind and rewind the
+   * shared song.
    */
-  test('buffering target telemetry converges privately but cannot complete the handoff', () => {
+  test('buffering target telemetry converges privately but final proof must realign to the room', () => {
     const songs = new SongSession();
     songs.update(telemetry(10), A, A.participantId, 0);
     const prepared = songs.beginHandoff(B, B.participantId, 250);
@@ -183,12 +182,19 @@ describe('prepared song handoff', () => {
     assert.equal(waiting.playbackLeaderParticipantId, A.participantId);
     assert.equal(waiting.state, 1, 'candidate BUFFERING must not overwrite authoritative room state');
 
-    const completed = songs.update(
+    const stale = songs.update(
       telemetry(9.9, { state: 1 }), B, B.participantId, 1_800,
+    );
+    assert.equal(stale.accepted, false);
+    assert.equal(stale.reason, 'handoff-song-mismatch');
+    assert.equal((songs.statusPayload(1_800) as Record<string, any>).playbackLeaderParticipantId, A.participantId);
+
+    const completed = songs.update(
+      telemetry(11.81, { state: 1 }), B, B.participantId, 1_810,
     );
     assert.equal(completed.accepted, true);
     assert.equal(completed.handoffCompleted, true);
-    assert.equal((songs.statusPayload(1_800) as Record<string, any>).playbackLeaderParticipantId, B.participantId);
+    assert.equal((songs.statusPayload(1_810) as Record<string, any>).playbackLeaderParticipantId, B.participantId);
   });
 
   test('a real jump by the target is still refused', () => {

@@ -30,6 +30,10 @@ const ERROR_NAMES = new Map([
 // timer is only a late local safety net, so keep it comfortably behind the
 // authoritative deadline rather than racing the server at the same instant.
 const HANDOFF_COMMIT_TIMEOUT_MS = 6_500;
+// A committed target that wakes after buffering must still be near the live
+// authoritative room clock. Seek only for a meaningful phase error so normal
+// transport jitter does not cause a correction loop.
+const HANDOFF_REALIGN_THRESHOLD_SECONDS = 0.75;
 // Confirmation-time media work is speculative. It must eventually retire even
 // if Mic ownership succeeds but a formal playback handoff never arrives.
 const SPECULATIVE_PREWARM_TIMEOUT_MS = 15_000;
@@ -480,6 +484,46 @@ function armOutgoingReleaseFallback(handoffId) {
   }, OUTGOING_RELEASE_FALLBACK_MS);
 }
 
+function realignCommittingHandoff(timeline) {
+  if (!pendingHandoff || pendingHandoff.phase !== 'committing') return false;
+  if (!timeline || timeline.handoffState !== 'committing' || timeline.handoffId !== pendingHandoff.handoffId) return false;
+  if (!playerReady || !player || reportedVideoId() !== pendingHandoff.videoId) return false;
+
+  const authoritativeTime = Number(timeline.serverTime);
+  let currentTime;
+  let state;
+  try {
+    currentTime = Number(player.getCurrentTime());
+    state = Number(player.getPlayerState());
+  } catch {
+    return false;
+  }
+  if (!Number.isFinite(authoritativeTime) || !Number.isFinite(currentTime)) return false;
+
+  const expectedState = pendingHandoff.desiredState === 1 ? 1 : 2;
+  if (state !== expectedState) return false;
+  if (Math.abs(currentTime - authoritativeTime) <= HANDOFF_REALIGN_THRESHOLD_SECONDS) return false;
+
+  pendingHandoff.targetTime = Math.max(0, authoritativeTime);
+  previousSnapshot = null;
+  try {
+    // A long BUFFERING stall freezes the target's media clock while A keeps the
+    // authoritative room clock moving. Realign before offering final proof so
+    // promotion cannot rewind the room. Keep the target muted until completion.
+    player.mute();
+    player.seekTo(pendingHandoff.targetTime, true);
+    player.setPlaybackRate(pendingHandoff.playbackRate);
+    if (pendingHandoff.desiredState === 1) player.playVideo();
+    else player.pauseVideo();
+    setTimeout(sampleNow, 80);
+    setTimeout(sampleNow, 220);
+    return true;
+  } catch (error) {
+    console.warn('Could not realign committed handoff to authoritative room time', error);
+    return false;
+  }
+}
+
 function announceHandoffReady() {
   if (!pendingHandoff || pendingHandoff.phase !== 'preparing' || handoffReadySent) return false;
   if (!playerReady || !player || reportedVideoId() !== pendingHandoff.videoId) return false;
@@ -536,9 +580,18 @@ function primeSpeculativePrewarm() {
   const targetTime = projectedPrewarmPosition(prewarm);
   try {
     if (prewarm.wasMuted === null) {
-      try { prewarm.wasMuted = Boolean(player.isMuted()); } catch {}
+      try {
+        prewarm.wasMuted = Boolean(player.isMuted());
+      } catch (error) {
+        // Provenance is required before Relay changes audibility. If the player
+        // cannot tell us whether it was muted, fail closed and leave it alone.
+        console.warn('Could not read player mute state for speculative prewarm', error);
+        clearSpeculativePrewarmTimer();
+        if (speculativePrewarm === prewarm) speculativePrewarm = null;
+        return false;
+      }
     }
-    try { player.mute(); } catch {}
+    player.mute();
     loadedVideoId = prewarm.videoId;
     previousSnapshot = null;
     // cueVideoById only loads a thumbnail. A muted load is deliberate here: it
@@ -635,9 +688,11 @@ function cuePendingHandoff() {
     previousSnapshot = null;
 
     if (pendingHandoff.prewarmWasMuted === null) {
-      try { pendingHandoff.prewarmWasMuted = Boolean(player.isMuted()); } catch {}
+      // Do not change audibility unless we can later restore the exact original
+      // state on cancellation/failure.
+      pendingHandoff.prewarmWasMuted = Boolean(player.isMuted());
     }
-    try { player.mute(); } catch {}
+    player.mute();
 
     const canReuse = pendingHandoff.reusePreparedPlayer === true
       && reportedVideoId() === pendingHandoff.videoId;
@@ -1255,6 +1310,12 @@ window.addEventListener('relay:playback-view', (event) => {
   const timeline = detail.timeline && typeof detail.timeline === 'object'
     ? detail.timeline
     : null;
+
+  // This runs on every fresh authoritative timeline, not only role changes. A
+  // target that resumes several seconds behind after BUFFERING therefore gets a
+  // chance to seek forward before its next final proof can promote it.
+  realignCommittingHandoff(timeline);
+
   const leaderGeneration = Number(timeline?.playbackGeneration);
   const currentGeneration = Number(detail.playbackGeneration);
   const sameTransport = Boolean(

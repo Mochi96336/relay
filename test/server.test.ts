@@ -260,7 +260,7 @@ describe('live mix', () => {
         (m) => m.type === 'mix-health' && m.micStarvedFrames > 0,
         6_000,
       );
-      assert.ok(health.micHeadroomMs < 0, `headroom should be negative, got ${health.micHeadroomMs}`);
+      assert.ok(health.micHeadroomMs < 0, `headroom should be negative, got ${health.micHeadroomMs} ms`);
       assert.equal(health.backingStarvedFrames, 0, 'the song side was never short');
 
       backing.close();
@@ -422,7 +422,7 @@ describe('mix settings', () => {
     phone.send({ type: 'set-mix', micGainDb: 18, songLevel: 25 });
 
     const settings = await desktop.waitFor(
-      (m) => m.type === 'mix-settings' && m.songLevel === 100,
+      (m) => m.type === 'mix-settings' && m.micGainDb === 18 && m.songLevel === 100,
       3_000,
     );
     assert.equal(settings.micGainDb, 18);

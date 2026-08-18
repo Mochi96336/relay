@@ -439,3 +439,35 @@ body:has(.system-panel[open]) {
     border-radius: 22px;
   }
 }
+
+/* P0 correctness: Presence/i18n owns the Mic action label. Legacy generated
+   English must never become a second presenter beside the real localized text. */
+#start-publisher {
+  font-size: 13px;
+}
+
+#start-publisher::after {
+  content: none;
+}
+
+/* A takeover confirmation replaces the original action; it does not stack a
+   second choice underneath the same state. */
+.performance-stage:has(#mic-takeover:not([hidden])) .mic-actions {
+  display: none;
+}
+
+/* youtube-sync still maintains engineering clock telemetry, but Live must not
+   render it. Technical diagnostics remain available through System. */
+.song-stage .youtube-readout:has(#server-timeline-state),
+.song-stage #server-timeline-note {
+  display: none;
+}
+
+/* Stable Room-sound mute reasons have one presenter (#listen-adjust-state).
+   Suppress the transport note in those states so the same condition is not
+   narrated twice. */
+body[data-listen="muted"] #listen-note,
+body[data-listen="mic-muted"] #listen-note,
+body[data-listen="playback-muted"] #listen-note {
+  display: none;
+}

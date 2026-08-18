@@ -316,27 +316,25 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     if (restoreFocus && !root.hidden) recentButton.focus({ preventScroll: true });
   }
 
-  function openHistory() {
+  function requestOpenHistory() {
     const latest = historyEntries[0];
     if (!latest || takeBusy) return;
     selectedTakeId = latest.takeId;
     reviewNoticeKind = null;
-    document.querySelector('.adjust-panel')?.removeAttribute('open');
-    document.querySelector('#system-panel')?.removeAttribute('open');
-    document.querySelector('#room-more')?.removeAttribute('open');
     renderHistory();
-    panel.open = true;
-    recentButton.setAttribute('aria-expanded', 'true');
-    requestAnimationFrame(() => close.focus({ preventScroll: true }));
+    // This module owns recording/history state only. Live IA owns which
+    // secondary surface is visible and will close System/header menus before
+    // opening this dynamically-created panel.
+    window.dispatchEvent(new Event('relay-open-take-history'));
   }
 
-  recentButton.addEventListener('click', openHistory);
+  recentButton.addEventListener('click', requestOpenHistory);
   close.addEventListener('click', () => closeHistory());
   panel.addEventListener('click', (event) => {
     if (event.target === panel) closeHistory();
   });
   panel.addEventListener('toggle', () => {
-    if (!panel.open) recentButton.setAttribute('aria-expanded', 'false');
+    recentButton.setAttribute('aria-expanded', String(panel.open));
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && panel.open) closeHistory();

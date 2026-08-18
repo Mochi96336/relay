@@ -1,4 +1,8 @@
 import './playback-transport-identity.js';
+// youtube-sync imports this module before it constructs its private WebSocket.
+// Keep reconnect terminal recovery in that playback dependency graph so the
+// adapter can observe the exact socket without coupling it to prewarm/UI code.
+import './playback-handoff-reconnect-recovery.js';
 import { leaderHolding } from './playback-policy.js';
 
 function samePlaybackTransport(status, participantId, transportId, keys) {

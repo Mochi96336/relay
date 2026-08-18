@@ -8,6 +8,7 @@ const state = readFileSync(new URL('../public/live-state.css', import.meta.url),
 const presence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 const model = readFileSync(new URL('../public/mic-presence-model.js', import.meta.url), 'utf8');
 const capture = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
+const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
 
 test('holder YouTube keeps a usable embedded-player floor', () => {
   assert.match(composition, /\.youtube-player-shell \{[\s\S]*?min-height: 200px;/);
@@ -20,18 +21,19 @@ test('observer Song can be compact because it does not host the YouTube transpor
   assert.match(song, /data-playback-role="observer"[\s\S]*?\.youtube-player-shell/);
 });
 
-test('performance composition turns local Mic evidence into a wider time-frequency ribbon', () => {
+test('performance composition turns current Room Mic evidence into a wider time-frequency ribbon', () => {
   assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: 176px;[\s\S]*?height: 50px;/);
   assert.match(composition, /grid-template-columns: repeat\(10, 14px\);/);
   assert.match(composition, /\.voice-presence-slice \{[\s\S]*?flex-direction: column-reverse;/);
   assert.match(composition, /\.voice-presence-band \{[\s\S]*?width: 14px;[\s\S]*?height: 6px;/);
   assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 10/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
-  assert.match(presence, /SAMPLE_INTERVAL_MS = 40/);
+  assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
+  assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(presence, /event\.detail\?\.spectrumBands/);
 });
 
-test('frequency shape comes from the local capture worklet rather than server mix or fake animation', () => {
+test('frequency shape originates in the singer capture worklet rather than final room mix or fake animation', () => {
   assert.match(capture, /SPECTRUM_FFT_SIZE = 512/);
   assert.match(capture, /\[80, 250\]/);
   assert.match(capture, /\[2000, 4000\]/);
@@ -53,8 +55,10 @@ test('recording stays inside performance while local sound remains the one persi
   assert.match(composition, /\.live-actions \{[\s\S]*?margin-top: 26px;[\s\S]*?padding-top: 14px;/);
 });
 
-test('local live Mic gives the performance state weight without manufacturing audio motion', () => {
+test('Room Mic presence is visible to listeners while local holder evidence stays strongest', () => {
   assert.match(state, /body\[data-self-mic="live"\] \.voice-copy strong/);
   assert.match(state, /font-size: clamp\(38px, 10\.5vw, 52px\)/);
-  assert.match(state, /body\[data-self-mic="off"\] \.voice-input-evidence[\s\S]*?display: none;/);
+  assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
+  assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
+  assert.match(presence, /if \(localActive\) return;/);
 });

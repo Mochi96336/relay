@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
 import type { MixFrameEvidence } from './audio-session.js';
-import { TakeLibrary } from './take-library.js';
+import { TakeLibrary, type TakeLibraryEntry } from './take-library.js';
 import {
   TakeQualityTracker,
   type TakeQualityEventKind,
   type TakeQualityFrameState,
+  type TakeQualityVerdict,
 } from './take-quality.js';
 import {
   TakeSession,
@@ -28,8 +29,57 @@ export type StartTakeResult =
 
 export type StopTakeResult = StopTakeDecision;
 
+/**
+ * Product-facing recording history. Durable library metadata is intentionally
+ * richer than this browser contract: participant ids, stop reasons and full
+ * quality evidence remain server/storage concerns until a product surface
+ * explicitly needs them.
+ */
+export type TakeHistoryItem = {
+  takeId: string;
+  endedAtMs: number;
+  songVideoId: string | null;
+  artifact: {
+    url: string;
+    durationMs: number;
+  };
+  qualityVerdict: TakeQualityVerdict | null;
+  recovered: boolean;
+};
+
+export type TakeControllerStatusPayload = ReturnType<TakeSession['statusPayload']> & {
+  history: readonly TakeHistoryItem[];
+};
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function historyItem(entry: TakeLibraryEntry): TakeHistoryItem {
+  return {
+    takeId: entry.takeId,
+    endedAtMs: entry.endedAtMs,
+    songVideoId: entry.song?.videoId ?? null,
+    artifact: {
+      url: entry.artifact.url,
+      durationMs: entry.artifact.durationMs,
+    },
+    qualityVerdict: entry.quality?.verdict ?? null,
+    recovered: entry.recovered,
+  };
+}
+
+function sameHistoryItem(a: TakeHistoryItem | undefined, b: TakeHistoryItem) {
+  return Boolean(
+    a
+    && a.takeId === b.takeId
+    && a.endedAtMs === b.endedAtMs
+    && a.songVideoId === b.songVideoId
+    && a.artifact.url === b.artifact.url
+    && a.artifact.durationMs === b.artifact.durationMs
+    && a.qualityVerdict === b.qualityVerdict
+    && a.recovered === b.recovered,
+  );
 }
 
 /**
@@ -45,6 +95,7 @@ export class TakeController {
   private readonly session = new TakeSession();
   private readonly storagePolicy: TakeStoragePolicy;
   private readonly library: TakeLibrary;
+  private historyCache: readonly TakeHistoryItem[] = [];
   private writer: WavTakeWriter | null = null;
   private quality: TakeQualityTracker | null = null;
   private storagePrepared = false;
@@ -55,7 +106,7 @@ export class TakeController {
     sampleRate: number;
     artifactBaseUrl?: string;
     storagePolicy?: TakeStoragePolicy;
-    onChange?: (status: ReturnType<TakeSession['statusPayload']>) => void;
+    onChange?: (status: TakeControllerStatusPayload) => void;
     onStorageError?: (error: unknown) => void;
   }) {
     this.storagePolicy = options.storagePolicy ?? takeStoragePolicyFromEnv();
@@ -66,6 +117,7 @@ export class TakeController {
     try {
       prepareTakeStorage(this.options.directory, this.storagePolicy);
       this.library.prepare();
+      this.refreshHistoryCache();
       this.storagePrepared = true;
     } catch (error) {
       // Keep the server alive so diagnostics and existing non-Take features
@@ -83,12 +135,20 @@ export class TakeController {
     return this.session.recordingTakeId;
   }
 
-  statusPayload() {
-    return this.session.statusPayload();
+  statusPayload(): TakeControllerStatusPayload {
+    return {
+      ...this.session.statusPayload(),
+      // This is a product-shaped memory snapshot. Product status asks for Take
+      // state on normal Live updates, so status delivery must never rescan the
+      // SD card or expose durable-library internals by accident.
+      history: this.historyCache,
+    };
   }
 
   listHistory() {
-    return this.library.list();
+    const history = this.library.list();
+    this.replaceHistoryCache(history);
+    return history;
   }
 
   historyEntry(takeId: string) {
@@ -105,6 +165,7 @@ export class TakeController {
       if (!this.storagePrepared) {
         const prepared = prepareTakeStorage(this.options.directory, this.storagePolicy, nowMs);
         this.library.prepare();
+        this.refreshHistoryCache();
         this.storagePrepared = true;
         maxTakeDataBytes = prepared.maxTakeDataBytes;
       } else {
@@ -212,12 +273,18 @@ export class TakeController {
           const readyTake = this.session.currentTake();
           if (readyTake?.lifecycle === 'ready' && readyTake.artifact) {
             try {
-              this.library.record(readyTake);
+              const item = historyItem(this.library.record(readyTake));
+              this.historyCache = Object.freeze([
+                structuredClone(item),
+                ...this.historyCache
+                  .filter((candidate) => candidate.takeId !== item.takeId)
+                  .map((candidate) => structuredClone(candidate)),
+              ]);
             } catch (error) {
               // The finalized WAV remains authoritative and recoverable. A
               // metadata failure must not turn a successfully recorded Take
-              // into a failed one; the library can reconstruct the sidecar on
-              // the next scan or process restart.
+              // into a failed one; the browser receives the ready Take beside
+              // the last durable history snapshot and can review it now.
               this.reportStorageError(error);
             }
           }
@@ -289,10 +356,23 @@ export class TakeController {
           this.storagePolicy,
           preserveFileName,
         );
+        if (this.refreshHistoryCache()) this.emitChange();
       })
       .catch((error) => {
         this.reportStorageError(error);
       });
+  }
+
+  private refreshHistoryCache() {
+    const nextItems = this.library.list().map(historyItem);
+    const changed = nextItems.length !== this.historyCache.length
+      || nextItems.some((entry, index) => !sameHistoryItem(this.historyCache[index], entry));
+    this.historyCache = Object.freeze(nextItems.map((entry) => structuredClone(entry)));
+    return changed;
+  }
+
+  private replaceHistoryCache(history: readonly TakeLibraryEntry[]) {
+    this.historyCache = Object.freeze(history.map((entry) => structuredClone(historyItem(entry))));
   }
 
   private reportStorageError(error: unknown) {
@@ -304,7 +384,7 @@ export class TakeController {
   }
 
   private emitChange() {
-    this.options.onChange?.(this.session.statusPayload());
+    this.options.onChange?.(this.statusPayload());
   }
 }
 

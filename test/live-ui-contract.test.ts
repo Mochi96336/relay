@@ -64,12 +64,23 @@ test('Mic gain is contextual and generic Adjust no longer exists', () => {
   assert.match(liveIa, /relay-microphone-local-state/);
 });
 
-test('Song keeps exact playback authority and observer-only compact presentation', () => {
+test('Song composition follows playback authority instead of Mic or participant heuristics', () => {
   assert.match(songSurface, /t\('song\.role\.holder'\)/);
   assert.match(songSurface, /t\('song\.role\.observer'\)/);
   assert.match(songSurface, /relay:playback-view/);
+  assert.match(songSurface, /const holderWithSong = role === 'holder' && Boolean\(videoId\);/);
+  assert.match(songSurface, /changeButton\.hidden = !holderWithSong;/);
+  assert.match(songSurface, /playerShell\.hidden = observerMode;/);
+  assert.match(songSurface, /form\.hidden = role === 'preparing'/);
   assert.match(songCss, /data-playback-role="observer"/);
   assert.doesNotMatch(songSurface, /micOwnerId|participantCount/);
+});
+
+test('normal Song state stays quiet while transition and recovery context remains visible', () => {
+  assert.match(songSurface, /const visible = recoverable \|\| role === 'preparing' \|\| role === 'connecting';/);
+  assert.match(songSurface, /deviceNote\.hidden = !visible;/);
+  assert.match(songSurface, /stage\.dataset\.songEditing = editing \? 'true' : 'false';/);
+  assert.match(songSurface, /changeButton\.setAttribute\('aria-expanded', editing \? 'true' : 'false'\);/);
 });
 
 test('formal Live still consumes server product state and one Listen transport', () => {

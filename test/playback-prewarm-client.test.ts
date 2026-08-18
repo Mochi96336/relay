@@ -24,8 +24,8 @@ test('the first Mic click installs a local playback prewarm trigger deterministi
   assert.match(trigger, /document\.addEventListener\('click',[\s\S]*true\);/);
   assert.match(trigger, /#start-publisher/);
   assert.match(trigger, /relay:playback-prewarm-intent/);
-  assert.match(trigger, /#cancel-takeover/);
-  assert.match(trigger, /relay:playback-prewarm-cancel/);
+  assert.doesNotMatch(trigger, /#cancel-takeover/,
+    'capture phase may start the first prewarm but must not preempt Presence cancel semantics');
   assert.doesNotMatch(trigger, /playback-mic-intent|relay-request-microphone|release-mic/,
     'speculative warming must not cross the Mic or playback authority boundary');
 });
@@ -58,6 +58,7 @@ test('speculative preparation requests real media while staying muted and local'
 test('abandoned takeover paths cancel speculative playback and restore mute provenance', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const presence = await readFile(new URL('../public/presence.js', import.meta.url), 'utf8');
+  const trigger = await readFile(new URL('../public/playback-prewarm-trigger.js', import.meta.url), 'utf8');
   const cancelSection = topLevelFunctionSection(source, 'function cancelPlaybackPrewarm()');
   const restoreSection = topLevelFunctionSection(source, 'function restorePrewarmMute');
 
@@ -67,6 +68,10 @@ test('abandoned takeover paths cancel speculative playback and restore mute prov
   assert.match(restoreSection, /player\.unMute/);
   assert.match(presence, /hideTakeover\(\{ cancelPrewarm: true \}\)/,
     'owner changes/server restart must cancel a confirmation-time prewarm even without a Cancel click');
+  assert.match(presence, /cancelTakeoverButton\.addEventListener\('click',[\s\S]*if \(startAfterTakeover\) return;[\s\S]*hideTakeover\(\{ cancelPrewarm: true \}\)/,
+    'Presence must decide whether a Cancel click is still valid before retiring prewarm');
+  assert.doesNotMatch(trigger, /#cancel-takeover/,
+    'capture-phase prewarm must not cancel before Presence applies startAfterTakeover policy');
 });
 
 test('formal handoff consumes a matching warmed player and cold preparation still loads real media', async () => {

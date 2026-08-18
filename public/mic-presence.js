@@ -1,36 +1,53 @@
 import {
-  MIC_PRESENCE_BAR_COUNT,
+  MIC_PRESENCE_BAND_COUNT,
+  MIC_PRESENCE_SLICE_COUNT,
+  emptyPresenceSlice,
   nextPresenceHistory,
-  presenceHeightPx,
 } from './mic-presence-model.js';
 
 const meter = document.querySelector('#mic-input-meter');
 
 if (meter) {
-  const bars = Array.from({ length: MIC_PRESENCE_BAR_COUNT }, () => {
-    const bar = document.createElement('span');
-    bar.className = 'voice-presence-bar';
-    bar.setAttribute('aria-hidden', 'true');
-    return bar;
+  const slices = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, (_, sliceIndex) => {
+    const slice = document.createElement('span');
+    slice.className = 'voice-presence-slice';
+    slice.setAttribute('aria-hidden', 'true');
+    // Older evidence gently recedes to the left; newest is always the right edge.
+    const age = MIC_PRESENCE_SLICE_COUNT <= 1 ? 1 : sliceIndex / (MIC_PRESENCE_SLICE_COUNT - 1);
+    slice.style.setProperty('--slice-age', String(0.36 + age * 0.64));
+
+    const bands = Array.from({ length: MIC_PRESENCE_BAND_COUNT }, (_, bandIndex) => {
+      const band = document.createElement('span');
+      band.className = 'voice-presence-band';
+      band.dataset.band = String(bandIndex);
+      band.setAttribute('aria-hidden', 'true');
+      return band;
+    });
+    slice.replaceChildren(...bands);
+    return { slice, bands };
   });
 
   meter.classList.add('voice-presence');
   meter.setAttribute('aria-hidden', 'true');
-  meter.replaceChildren(...bars);
+  meter.replaceChildren(...slices.map(({ slice }) => slice));
 
-  let history = Array(MIC_PRESENCE_BAR_COUNT).fill(0);
+  let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
   let lastSampleAt = Number.NEGATIVE_INFINITY;
-  const SAMPLE_INTERVAL_MS = 34;
+  const SAMPLE_INTERVAL_MS = 40;
 
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
-    bars.forEach((bar, index) => {
-      bar.style.height = `${presenceHeightPx(history[index])}px`;
+    slices.forEach(({ bands }, sliceIndex) => {
+      const evidence = history[sliceIndex] ?? emptyPresenceSlice();
+      bands.forEach((band, bandIndex) => {
+        const level = Math.max(0, Math.min(1, Number(evidence.bands?.[bandIndex]) || 0));
+        band.style.setProperty('--band-energy', level.toFixed(4));
+      });
     });
   }
 
   function reset() {
-    history = Array(MIC_PRESENCE_BAR_COUNT).fill(0);
+    history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
     lastSampleAt = Number.NEGATIVE_INFINITY;
     render(false);
   }
@@ -47,7 +64,7 @@ if (meter) {
     const now = performance.now();
     if (now - lastSampleAt < SAMPLE_INTERVAL_MS) return;
     lastSampleAt = now;
-    history = nextPresenceHistory(history, rmsDbfs);
+    history = nextPresenceHistory(history, rmsDbfs, event.detail?.spectrumBands);
     render(true);
   });
 

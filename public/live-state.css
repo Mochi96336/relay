@@ -4,23 +4,26 @@
 /* Product-state presentation lives after the formal composition so legacy DOM
    control state cannot accidentally become a second lifecycle model. */
 
-/* The real input presence is only useful as confidence evidence for this
-   phone's live microphone. Other phones already get the singer identity from
-   Voice. */
-body[data-self-mic="off"] .voice-input-evidence {
+/* Mic presence belongs to the room's current singer, not to whichever phone is
+   rendering the page. It stays absent until ProductStatus says a Mic is truly
+   live; the holder renders local evidence and listeners render room telemetry. */
+.voice-input-evidence {
   display: none;
+}
+body[data-room-mic="live"] .voice-input-evidence {
+  display: flex;
 }
 
 /* Once this phone is the live Mic, tighten the handoff from media into the
-   performance task. mic-presence.js owns the local time/frequency ribbon;
-   product CSS only decides how strongly that truthful evidence should read. */
+   performance task. mic-presence.js keeps local evidence authoritative here;
+   listeners use the same visual with the server-relayed singer telemetry. */
 body[data-self-mic="live"] .performance-stage {
   padding-top: 26px;
 }
 body[data-self-mic="live"] #youtube-note {
   display: none;
 }
-body[data-self-mic="live"] .voice-presence-band {
+body[data-room-mic="live"] .voice-presence-band {
   background: #f0ede5;
 }
 body[data-self-mic="live"] .voice-copy strong {

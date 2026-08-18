@@ -37,7 +37,8 @@ test('performance task contains current Mic evidence, ownership, Mic gain and re
   assert.match(app, /event\.data\?\.type === 'input-level'/);
   assert.match(app, /spectrumBands/);
   assert.doesNotMatch(app, /latestMixHealth\?\.micPeakDbfs/);
-  assert.match(liveIa, /import '\.\/mic-presence\.js';/);
+  assert.equal(liveIa.includes("'./mic-presence.js'"), true);
+  assert.match(liveIa, /import\(modulePath\)\.catch/);
   assert.match(micPresence, /relay-local-mic-level/);
   assert.match(micPresence, /relay-room-mic-presence/);
   assert.match(micPresence, /event\.detail\?\.spectrumBands/);

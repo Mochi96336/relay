@@ -70,7 +70,10 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
     'late module consumers must be able to replay the current ownership snapshot');
 
   assert.match(listen, /let roomMicForcedMuted = false/);
-  assert.match(listen, /return userMuted \|\| micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted/);
+  assert.match(
+    listen,
+    /return userMuted\s*\|\| micForcedMuted\s*\|\| roomMicForcedMuted\s*\|\| playbackForcedMuted\s*\|\| takeReviewForcedMuted;/,
+  );
   assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) return 'mic'/);
   assert.match(listen, /function restoreAfterMic[\s\S]*if \(roomMicForcedMuted\)[\s\S]*listen\.micOwned/,
     'a local terminal event must not unmute while another tab still owns the room Mic');
@@ -80,8 +83,8 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
   const replayAt = listen.indexOf("window.dispatchEvent(new Event('relay-request-session-status'))", sessionListenerAt);
   assert.ok(sessionListenerAt >= 0 && replayAt > sessionListenerAt,
     'Listen must subscribe before requesting the initial authoritative replay');
-  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted\) return/,
-    'forced room ownership cannot be bypassed by the Listen toggle');
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted \|\| takeReviewForcedMuted\) return/,
+    'forced room ownership or local review cannot be bypassed by the Listen toggle');
 });
 
 test('hardware input ending completes the same Mic lifecycle', () => {

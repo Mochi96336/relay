@@ -14,7 +14,7 @@ if (meter) {
     slice.setAttribute('aria-hidden', 'true');
     // Older evidence gently recedes to the left; newest is always the right edge.
     const age = MIC_PRESENCE_SLICE_COUNT <= 1 ? 1 : sliceIndex / (MIC_PRESENCE_SLICE_COUNT - 1);
-    slice.style.opacity = String(0.36 + age * 0.64);
+    slice.style.opacity = String(0.28 + age * 0.72);
 
     const bands = Array.from({ length: MIC_PRESENCE_BAND_COUNT }, (_, bandIndex) => {
       const band = document.createElement('span');
@@ -47,11 +47,12 @@ if (meter) {
       const evidence = history[sliceIndex] ?? emptyPresenceSlice();
       bands.forEach((band, bandIndex) => {
         const level = Math.max(0, Math.min(1, Number(evidence.bands?.[bandIndex]) || 0));
-        // Compute the visual interpolation in JS instead of relying on CSS
-        // arithmetic involving custom properties; this keeps the ribbon stable
-        // on the older Safari/WebKit versions that phones may still run.
-        band.style.opacity = String(0.055 + level * 0.88);
-        band.style.transform = `scaleX(${0.48 + level * 0.52})`;
+        // Time already lives on the horizontal axis. Varying each cell's width
+        // made the truthful 10×5 evidence look like fifty independent LEDs.
+        // Keep geometry continuous and let luminance encode band energy instead:
+        // high/low frequency still maps vertically, while adjacent time slices
+        // visually blend into one moving voice field.
+        band.style.opacity = String(0.025 + level * 0.92);
       });
     });
   }
@@ -97,7 +98,7 @@ if (meter) {
       remoteStaleTimer = null;
       // Presence is evidence, not state. If several expected 80 ms telemetry
       // packets never arrive, stop displaying the last packet as if it were
-      // still live. The existing 110 ms band transitions soften the reset.
+      // still live. The existing short opacity transitions soften the reset.
       if (localActive || sourceKey !== expectedSourceKey) return;
       reset();
     }, REMOTE_EVIDENCE_STALE_MS);

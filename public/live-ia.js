@@ -24,9 +24,19 @@ function closeHeaderMenus(except = null) {
   }
 }
 
+function takeHistoryPanel() {
+  return document.querySelector('#take-history-panel');
+}
+
 function closeTakeHistoryPanel() {
-  const panel = document.querySelector('#take-history-panel');
+  const panel = takeHistoryPanel();
   if (panel?.open) panel.open = false;
+}
+
+function closeSystemPanel(restoreFocus = true) {
+  if (!systemPanel) return;
+  systemPanel.open = false;
+  if (restoreFocus) openSystem?.focus({ preventScroll: true });
 }
 
 function revealSystem() {
@@ -39,10 +49,15 @@ function revealSystem() {
   });
 }
 
-function closeSystemPanel(restoreFocus = true) {
-  if (!systemPanel) return;
-  systemPanel.open = false;
-  if (restoreFocus) openSystem?.focus({ preventScroll: true });
+function revealTakeHistory() {
+  const panel = takeHistoryPanel();
+  if (!panel) return;
+  closeSystemPanel(false);
+  closeHeaderMenus();
+  panel.open = true;
+  requestAnimationFrame(() => {
+    panel.querySelector('#close-take-history')?.focus({ preventScroll: true });
+  });
 }
 
 peopleMenu?.addEventListener('toggle', () => {
@@ -61,6 +76,7 @@ systemPanel?.addEventListener('toggle', () => {
 
 openSystem?.addEventListener('click', revealSystem);
 window.addEventListener('relay-open-system', revealSystem);
+window.addEventListener('relay-open-take-history', revealTakeHistory);
 closeSystem?.addEventListener('click', () => closeSystemPanel(true));
 
 systemPanel?.addEventListener('click', (event) => {
@@ -83,6 +99,11 @@ document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (systemPanel?.open) {
     closeSystemPanel(true);
+    return;
+  }
+  const history = takeHistoryPanel();
+  if (history?.open) {
+    history.open = false;
     return;
   }
   if (micLiveControl?.open) micLiveControl.open = false;

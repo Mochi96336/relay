@@ -33,6 +33,7 @@ const ERROR_NAMES = new Map([
 ]);
 
 const ROBOT_DELTA_SETTLE_MS = 1000;
+const MAX_MIC_GAIN_DB = 40;
 
 // The robot has no Chrome extension: `scripts/robot-source.sh` routes Chromium
 // through a PipeWire sink into backing:stdin. Advice that names the extension
@@ -164,7 +165,7 @@ function parkSupersededRobot() {
 
 function applyBalance() {
   const songLevel = Math.max(0, Math.min(100, Number(sourceVolume.value) || 0));
-  const micGainDb = Math.max(0, Math.min(36, Number(sourceMicGain.value) || 0));
+  const micGainDb = Math.max(0, Math.min(MAX_MIC_GAIN_DB, Number(sourceMicGain.value) || 0));
 
   sourceVolumeValue.value = `${Math.round(songLevel)}%`;
   sourceMicGainValue.value = `${micGainDb > 0 ? '+' : ''}${Math.round(micGainDb)} dB`;

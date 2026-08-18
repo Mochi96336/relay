@@ -10,6 +10,8 @@ const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const roomSound = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
+const people = readFileSync(new URL('../public/people-ui.js', import.meta.url), 'utf8');
+const recordingUi = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
 
 function between(start: string, end: string) {
   const from = html.indexOf(start);
@@ -19,12 +21,12 @@ function between(start: string, end: string) {
 }
 
 test('People owns identity and presence while secondary tasks live in More', () => {
-  const people = between('class="people-menu"', 'id="room-more"');
+  const peopleRegion = between('class="people-menu"', 'id="room-more"');
   const more = between('id="room-more"', '</header>');
 
-  assert.equal(people.includes('id="identity-name"'), true);
-  assert.equal(people.includes('id="participant-list"'), true);
-  assert.equal(people.includes('data-relay-locale'), false);
+  assert.equal(peopleRegion.includes('id="identity-name"'), true);
+  assert.equal(peopleRegion.includes('id="participant-list"'), true);
+  assert.equal(peopleRegion.includes('data-relay-locale'), false);
 
   assert.equal(more.includes('data-relay-locale="zh-Hant"'), true);
   assert.equal(more.includes('id="calibrate-timing"'), true);
@@ -107,6 +109,16 @@ test('primary Live presenter CSS is render-blocking instead of arriving after mo
   ]) {
     assert.equal(css.includes(`@import url('${stylesheet}');`), true,
       `${stylesheet} must be reachable through the head-loaded Live IA stylesheet`);
+  }
+
+  for (const [name, presenter] of [
+    ['People', people],
+    ['Room sound', roomSound],
+    ['Recording', recordingUi],
+    ['Take history', takeHistory],
+  ] as const) {
+    assert.doesNotMatch(presenter, /ensureStyles|document\.head\.append|createElement\('link'\)/,
+      `${name} must not inject a second stylesheet after module startup`);
   }
 });
 

@@ -1,3 +1,8 @@
+// youtube.js runs before youtube-sync.js. Install the reconnect receipt bridge
+// here so it can identify the playback WebSocket from its first hello without
+// coupling that recovery policy into speculative prewarm or player authority.
+import './playback-handoff-reconnect-recovery.js';
+
 function closestActionTarget(event, selector) {
   const target = event?.target;
   if (!target || typeof target.closest !== 'function') return null;

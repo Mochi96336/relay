@@ -1,6 +1,7 @@
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { resolvePlaybackRole } from './song-role.js';
+import { createPlaybackHandoffReconnectRecovery } from './playback-handoff-reconnect-recovery.js';
 
 const STATE_NAMES = new Map([
   [-1, 'unstarted'],
@@ -87,6 +88,22 @@ const transportId = playbackTransportId();
 // participant ID claimed inside a telemetry payload.
 window.relayPlaybackTransportId = transportId;
 window.relayPlaybackGeneration = playbackGeneration;
+
+const playbackIdentity = {
+  participantId: typeof window.relayParticipantId === 'string'
+    ? window.relayParticipantId.trim()
+    : '',
+  transportId,
+  generation: playbackGeneration,
+};
+
+// youtube-sync owns the playback socket, so reconnect recovery belongs here as
+// an ordinary adapter rather than a global WebSocket monkey-patch. Recovered
+// terminal packets go back through the same parsed-message path as real server
+// packets, keeping active handoff state and UI events in one place.
+const reconnectRecovery = createPlaybackHandoffReconnectRecovery((message) => {
+  handleServerMessage(message);
+});
 
 function networkRttMs() {
   return recentRttMs.length > 0 ? Math.min(...recentRttMs) : Number.POSITIVE_INFINITY;
@@ -340,6 +357,11 @@ function handleMessage(event) {
   } catch {
     return;
   }
+  handleServerMessage(message);
+}
+
+function handleServerMessage(message) {
+  if (!message || typeof message !== 'object') return;
 
   if (message.type === 'clock-pong') {
     handleRttPong(message);
@@ -352,6 +374,10 @@ function handleMessage(event) {
   }
 
   if (message.type === 'youtube-timeline-status') {
+    // Recovery may synchronously reconstruct a terminal packet here. Route it
+    // through handleServerMessage before publishing this fresh authoritative
+    // view so private handoff state and player events advance together.
+    reconnectRecovery.noteTimeline(message, playbackIdentity);
     latestTimelineStatus = message;
     renderTimeline(message);
     dispatchPlaybackView();
@@ -411,6 +437,7 @@ function handleMessage(event) {
 
   if (message.type === 'song-handoff-prepare') {
     const handoffId = typeof message.handoffId === 'string' ? message.handoffId : null;
+    reconnectRecovery.notePrepare(handoffId);
     // playback-hello is replay-safe, so reconnecting the same page can receive
     // the current plan again. Once this page has already accepted commit for
     // that exact handoff, a replayed prepare is stale and must not rewind the
@@ -426,6 +453,7 @@ function handleMessage(event) {
   if (message.type === 'song-handoff-commit') {
     activeHandoffId = typeof message.handoffId === 'string' ? message.handoffId : null;
     activeHandoffPhase = 'committing';
+    reconnectRecovery.noteCommit(activeHandoffId);
     dispatchHandoff('relay:song-handoff-commit', message);
     return;
   }
@@ -436,6 +464,7 @@ function handleMessage(event) {
   }
 
   if (message.type === 'song-handoff-complete') {
+    reconnectRecovery.noteComplete(message.handoffId);
     if (!message.handoffId || message.handoffId === activeHandoffId) {
       activeHandoffId = null;
       activeHandoffPhase = 'idle';
@@ -445,6 +474,7 @@ function handleMessage(event) {
   }
 
   if (message.type === 'song-handoff-cancelled') {
+    reconnectRecovery.noteCancelled();
     activeHandoffId = null;
     activeHandoffPhase = 'idle';
     dispatchHandoff('relay:song-handoff-cancelled', message);
@@ -480,6 +510,7 @@ function connect() {
   });
   next.addEventListener('close', () => {
     if (socket !== next) return;
+    reconnectRecovery.noteSocketClosed();
     socket = null;
     roomCommandRevisionReady = false;
     clearInterval(rttTimer);

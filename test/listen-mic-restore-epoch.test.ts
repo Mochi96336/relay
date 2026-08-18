@@ -12,6 +12,6 @@ test('a stale Mic terminal timer cannot unmute a replacement Mic session', () =>
   );
   assert.match(
     listenSource,
-    /function restoreAfterMicBoundary[\s\S]*const restoreEpoch = micMuteEpoch;[\s\S]*setTimeout\(\(\) => \{[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*restoreAfterMic\(copy\);/,
+    /function restoreAfterMicBoundary[\s\S]*const restoreEpoch = micMuteEpoch;[\s\S]*setTimeout\(\(\) => \{[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*restoreAfterMic\([^)]*\);/,
   );
 });

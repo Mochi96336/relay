@@ -8,10 +8,17 @@ export type MicPresenceSlice = {
   bands: number[];
 };
 
+export type MicPresenceGeometry = {
+  center: number;
+  height: number;
+  intensity: number;
+};
+
 export function rmsDbfsToPresence(rmsDbfs: number): number;
 export function normalizeSpectrumBands(spectrumBands: unknown): number[];
 export function createPresenceSlice(rmsDbfs: number, spectrumBands: unknown): MicPresenceSlice;
 export function emptyPresenceSlice(): MicPresenceSlice;
+export function presenceSliceGeometry(slice: MicPresenceSlice): MicPresenceGeometry;
 export function nextPresenceHistory(
   history: MicPresenceSlice[],
   rmsDbfs: number,

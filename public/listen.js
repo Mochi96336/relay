@@ -1,5 +1,9 @@
 import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import {
+  MONITOR_PCM_PACKET_VERSION,
+  createMonitorPcmReceiver,
+} from './monitor-pcm-continuity.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 
@@ -17,6 +21,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   const RECONNECT_MS = 1_000;
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
+  const monitorPcmReceiver = createMonitorPcmReceiver();
 
   let socket = null;
   let pendingSocket = null;
@@ -171,6 +176,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     if (closing) {
       try { closing.close(); } catch {}
     }
+    monitorPcmReceiver.reset();
     playbackNode?.port.postMessage({ type: 'reset' });
   }
 
@@ -233,9 +239,14 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     if (previous && previous !== next) {
       try { previous.close(); } catch {}
     }
+    monitorPcmReceiver.reset();
     playbackNode.port.postMessage({ type: 'reset' });
     sendParticipantAuthentication(next);
-    next.send(JSON.stringify({ type: 'register', role: 'monitor' }));
+    next.send(JSON.stringify({
+      type: 'register',
+      role: 'monitor',
+      monitorPacketVersion: MONITOR_PCM_PACKET_VERSION,
+    }));
 
     next.addEventListener('message', (event) => {
       if (socket !== next || connectEpoch !== transportEpoch) return;
@@ -244,7 +255,12 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
         return;
       }
       if (!(event.data instanceof ArrayBuffer) || !audioReady()) return;
-      const pcm = int16ToFloat32(event.data);
+
+      const received = monitorPcmReceiver.receive(event.data);
+      if (received.action !== 'accept') return;
+      if (received.reset) playbackNode.port.postMessage({ type: 'reset' });
+
+      const pcm = int16ToFloat32(received.frame.pcm);
       const samples = linearResample(pcm, sourceSampleRate, audioContext.sampleRate);
       playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
     });

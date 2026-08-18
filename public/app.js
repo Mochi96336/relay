@@ -783,7 +783,12 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   liveMixActive = false;
   latestMixHealth = null;
   latestLocalMicLevel = null;
-  dispatchRelayEvent('relay-local-mic-level', { active: false, peakDbfs: null, rmsDbfs: null });
+  dispatchRelayEvent('relay-local-mic-level', {
+    active: false,
+    peakDbfs: null,
+    rmsDbfs: null,
+    spectrumBands: null,
+  });
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
   captureInputGapSamples = 0;
@@ -927,12 +932,19 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       if (event.data?.type === 'input-level') {
         const peakDbfs = Number(event.data.peakDbfs);
         const rmsDbfs = Number(event.data.rmsDbfs);
+        const rawSpectrumBands = Array.isArray(event.data.spectrumBands)
+          ? event.data.spectrumBands.slice(0, 5).map(Number)
+          : [];
+        const spectrumBands = rawSpectrumBands.length === 5 && rawSpectrumBands.every(Number.isFinite)
+          ? rawSpectrumBands
+          : null;
         if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs)) {
-          latestLocalMicLevel = { peakDbfs, rmsDbfs };
+          latestLocalMicLevel = { peakDbfs, rmsDbfs, spectrumBands };
           dispatchRelayEvent('relay-local-mic-level', {
             active: true,
             peakDbfs,
             rmsDbfs,
+            spectrumBands,
           });
           renderGainAdvice();
         }

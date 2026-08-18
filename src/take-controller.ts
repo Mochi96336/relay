@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { MixFrameEvidence } from './audio-session.js';
+import { TakeLibrary } from './take-library.js';
 import {
   TakeQualityTracker,
   type TakeQualityEventKind,
@@ -33,7 +34,7 @@ function errorMessage(error: unknown) {
 
 /**
  * Binds the pure Take lifecycle to the server-side WAV artifact writer, storage
- * policy and one Take-scoped quality tracker.
+ * policy, durable recording library and one Take-scoped quality tracker.
  *
  * It deliberately knows nothing about Mic ownership, WebSockets, SongSession
  * authority or product UI. AudioSession supplies exact evidence beside each
@@ -43,6 +44,7 @@ function errorMessage(error: unknown) {
 export class TakeController {
   private readonly session = new TakeSession();
   private readonly storagePolicy: TakeStoragePolicy;
+  private readonly library: TakeLibrary;
   private writer: WavTakeWriter | null = null;
   private quality: TakeQualityTracker | null = null;
   private storagePrepared = false;
@@ -57,8 +59,13 @@ export class TakeController {
     onStorageError?: (error: unknown) => void;
   }) {
     this.storagePolicy = options.storagePolicy ?? takeStoragePolicyFromEnv();
+    this.library = new TakeLibrary({
+      directory: options.directory,
+      artifactBaseUrl: options.artifactBaseUrl,
+    });
     try {
       prepareTakeStorage(this.options.directory, this.storagePolicy);
+      this.library.prepare();
       this.storagePrepared = true;
     } catch (error) {
       // Keep the server alive so diagnostics and existing non-Take features
@@ -80,6 +87,14 @@ export class TakeController {
     return this.session.statusPayload();
   }
 
+  listHistory() {
+    return this.library.list();
+  }
+
+  historyEntry(takeId: string) {
+    return this.library.get(takeId);
+  }
+
   start(actorParticipantId: string, song: TakeSongSnapshot, nowMs = Date.now()): StartTakeResult {
     if (this.session.lifecycle === 'recording' || this.session.lifecycle === 'finalizing') {
       return { ok: false, reason: 'take-active' };
@@ -89,6 +104,7 @@ export class TakeController {
     try {
       if (!this.storagePrepared) {
         const prepared = prepareTakeStorage(this.options.directory, this.storagePolicy, nowMs);
+        this.library.prepare();
         this.storagePrepared = true;
         maxTakeDataBytes = prepared.maxTakeDataBytes;
       } else {
@@ -193,6 +209,18 @@ export class TakeController {
           durationMs: file.durationMs,
         });
         if (completed) {
+          const readyTake = this.session.currentTake();
+          if (readyTake?.lifecycle === 'ready' && readyTake.artifact) {
+            try {
+              this.library.record(readyTake);
+            } catch (error) {
+              // The finalized WAV remains authoritative and recoverable. A
+              // metadata failure must not turn a successfully recorded Take
+              // into a failed one; the library can reconstruct the sidecar on
+              // the next scan or process restart.
+              this.reportStorageError(error);
+            }
+          }
           this.emitChange();
           this.scheduleRetentionPrune();
         } else {

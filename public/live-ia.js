@@ -108,17 +108,13 @@ moreMenu?.querySelectorAll('[data-relay-locale]').forEach((button) => {
   });
 });
 
-// Secondary navigation is a P0 interaction path. Keep it outside the failure
-// domain of optional presentation modules: a syntax/runtime/load failure in a
-// Mic ribbon, Room sound wording, People projection, recording projection, or
-// Mic action presenter must never prevent System from opening. Dynamic import
-// failures are contained after all navigation handlers above are installed.
+// Only projections that can disappear without removing a product control stay
+// in this failure domain. Core Mic, Room sound, and Recording presenters are
+// parser-loaded modules in index.html because they are now the sole writers of
+// those action surfaces.
 for (const modulePath of [
   './mic-presence.js',
-  './room-sound-ui.js',
   './people-ui.js',
-  './recording-ui.js',
-  './mic-actions.js',
 ]) {
   import(modulePath).catch((error) => {
     console.error(`Relay optional presenter failed: ${modulePath}`, error);

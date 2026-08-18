@@ -39,8 +39,9 @@ test('dynamic product copy rerenders when locale changes', () => {
   for (const path of [
     'public/presence.js',
     'public/live-status.js',
-    'public/listen.js',
-    'public/recorder.js',
+    'public/mic-actions.js',
+    'public/room-sound-ui.js',
+    'public/recording-ui.js',
     'public/take-history.js',
     'public/song-surface.js',
     'public/youtube.js',
@@ -70,22 +71,26 @@ test('locale is not room authority or a protocol command', () => {
 test('release-era Mic, feedback, and Take history review stay inside the locale boundary', () => {
   const i18n = read('public/i18n.js');
   const live = read('public/live-status.js');
-  const listen = read('public/listen.js');
+  const roomSound = read('public/room-sound-ui.js');
   const history = read('public/take-history.js');
 
   assert.match(i18n, /'voice\.startingYours':/);
   assert.match(i18n, /'voice\.interruptedYours':/);
   assert.match(i18n, /'voice\.useHeadphones':/);
   assert.match(i18n, /'system\.attention\.mic-audio-stalled':/);
-  assert.match(i18n, /'listen\.mutedForSong':/);
-  assert.match(i18n, /'listen\.adjust\.songMuted':/);
   assert.match(i18n, /'take\.reviewReleaseMic':/);
   assert.match(i18n, /'take\.reviewPausedForMic':/);
   assert.match(live, /t\('voice\.startingYours'\)/);
   assert.match(live, /t\('voice\.interruptedYours'\)/);
   assert.match(live, /t\('voice\.useHeadphones'\)/);
-  assert.match(listen, /t\('listen\.mutedForSong'\)/);
-  assert.match(listen, /t\('listen\.adjust\.songMuted'\)/);
+  assert.match(roomSound, /state === 'mic-muted'/);
+  assert.match(roomSound, /localCopy\('Paused while you sing\.', '唱歌時暫停'\)/);
+  assert.match(roomSound, /state === 'playback-muted'/);
+  assert.match(roomSound, /This device is playing the backing track\./);
+  assert.match(roomSound, /這支裝置正在播放伴奏/);
+  assert.match(roomSound, /state === 'review-muted'/);
+  assert.match(roomSound, /Take playback is playing\./);
+  assert.match(roomSound, /正在播放錄音/);
   assert.match(history, /window\.addEventListener\('relay-locale-changed', renderHistory\)/);
   assert.match(history, /localCopy\('Release mic before reviewing a Take\.', '請先放開 Mic，再播放錄音。'\)/);
   assert.match(history, /'Take review paused while this phone has the mic\.'/);

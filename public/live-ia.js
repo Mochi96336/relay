@@ -15,9 +15,15 @@ function closeHeaderMenus(except = null) {
   }
 }
 
+function closeTakeHistoryPanel() {
+  const panel = document.querySelector('#take-history-panel');
+  if (panel?.open) panel.open = false;
+}
+
 function revealPanel(panel, otherPanel, focusTarget) {
   if (!panel) return;
   if (otherPanel) otherPanel.open = false;
+  closeTakeHistoryPanel();
   closeHeaderMenus();
   panel.open = true;
   requestAnimationFrame(() => {

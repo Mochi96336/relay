@@ -1,7 +1,7 @@
 import { groupHistory, historyFromStatus } from './take-history-model.js';
 
 const root = document.querySelector('#last-take');
-const legacyToggle = document.querySelector('#last-take-toggle');
+const recentButton = document.querySelector('#last-take-toggle');
 const review = document.querySelector('#last-take-review');
 const recordingPlayer = document.querySelector('#recording-player');
 const recordingDownload = document.querySelector('#download-recording');
@@ -67,23 +67,65 @@ function artifactUrl(relativeUrl) {
   return url.toString();
 }
 
-if (root && review && recordingPlayer && recordingDownload) {
+function createHistoryPanel(reviewNode) {
+  const panel = document.createElement('details');
+  panel.id = 'take-history-panel';
+  panel.className = 'take-history-panel';
+
+  const summary = document.createElement('summary');
+  summary.textContent = localCopy('Recordings', '錄音');
+
+  const sheet = document.createElement('div');
+  sheet.className = 'take-history-sheet';
+
+  const heading = document.createElement('div');
+  heading.className = 'take-history-panel-heading';
+  const headingCopy = document.createElement('div');
+  headingCopy.className = 'take-history-heading-copy';
+  const headingLabel = document.createElement('strong');
+  const headingCount = document.createElement('span');
+  headingCopy.append(headingLabel, headingCount);
+  const close = document.createElement('button');
+  close.id = 'close-take-history';
+  close.className = 'text-action panel-done';
+  close.type = 'button';
+  close.textContent = localCopy('Done', '完成');
+  heading.append(headingCopy, close);
+
+  const groups = document.createElement('div');
+  groups.className = 'take-history-groups';
+
+  sheet.append(heading, groups, reviewNode);
+  panel.append(summary, sheet);
+  document.querySelector('.live-shell')?.append(panel);
+
+  return {
+    panel,
+    summary,
+    sheet,
+    headingLabel,
+    headingCount,
+    close,
+    groups,
+  };
+}
+
+if (root && recentButton && review && recordingPlayer && recordingDownload) {
   ensureStyles();
 
-  legacyToggle?.remove();
   root.classList.remove('last-take');
-  root.classList.add('take-history');
+  root.classList.add('recent-take');
   review.classList.remove('take-review');
   review.classList.add('take-history-review');
 
-  const heading = document.createElement('div');
-  heading.className = 'take-history-heading';
-  const headingLabel = document.createElement('strong');
-  const headingCount = document.createElement('span');
-  heading.append(headingLabel, headingCount);
-
-  const groupsNode = document.createElement('div');
-  groupsNode.className = 'take-history-groups';
+  const {
+    panel,
+    summary,
+    headingLabel,
+    headingCount,
+    close,
+    groups: groupsNode,
+  } = createHistoryPanel(review);
 
   const selectedSummary = document.createElement('div');
   selectedSummary.className = 'take-history-selected';
@@ -99,7 +141,6 @@ if (root && review && recordingPlayer && recordingDownload) {
   reviewFooter.append(reviewNoticeNode, recordingDownload);
 
   review.replaceChildren(selectedSummary, recordingPlayer, reviewFooter);
-  root.replaceChildren(heading, groupsNode, review);
 
   let historyEntries = [];
   let selectedTakeId = null;
@@ -241,32 +282,65 @@ if (root && review && recordingPlayer && recordingDownload) {
     renderNotice();
   }
 
-  function renderHistory() {
-    headingLabel.textContent = localCopy('Takes', '錄音');
-    headingCount.textContent = takeCount(historyEntries.length);
-    root.setAttribute('aria-label', localCopy('Take history', '錄音紀錄'));
-
-    if (takeBusy) {
+  function renderRecent() {
+    if (takeBusy || historyEntries.length === 0) {
       root.hidden = true;
-      review.hidden = true;
       return;
     }
-
-    if (historyEntries.length === 0) {
-      root.hidden = true;
-      selectedTakeId = null;
-      groupsNode.replaceChildren();
-      renderSelection();
-      return;
-    }
-
+    const latest = historyEntries[0];
     root.hidden = false;
+    recentButton.textContent = localCopy(
+      `Last take · ${formatDuration(latest.artifact.durationMs)} · ${verdictLabel(latest.qualityVerdict)}`,
+      `上一段錄音 · ${formatDuration(latest.artifact.durationMs)} · ${verdictLabel(latest.qualityVerdict)}`,
+    );
+  }
+
+  function renderHistory() {
+    headingLabel.textContent = localCopy('Recordings', '錄音');
+    headingCount.textContent = takeCount(historyEntries.length);
+    summary.textContent = localCopy('Recordings', '錄音');
+    close.textContent = localCopy('Done', '完成');
+    panel.setAttribute('aria-label', localCopy('Take history', '錄音紀錄'));
+
     if (!historyEntries.some((entry) => entry.takeId === selectedTakeId)) {
-      selectedTakeId = historyEntries[0].takeId;
+      selectedTakeId = historyEntries[0]?.takeId ?? null;
     }
     groupsNode.replaceChildren(...groupHistory(historyEntries).map(createGroup));
     renderSelection();
+    renderRecent();
   }
+
+  function closeHistory({ restoreFocus = true } = {}) {
+    panel.open = false;
+    recentButton.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && !root.hidden) recentButton.focus({ preventScroll: true });
+  }
+
+  function openHistory() {
+    const latest = historyEntries[0];
+    if (!latest || takeBusy) return;
+    selectedTakeId = latest.takeId;
+    reviewNoticeKind = null;
+    document.querySelector('.adjust-panel')?.removeAttribute('open');
+    document.querySelector('#system-panel')?.removeAttribute('open');
+    document.querySelector('#room-more')?.removeAttribute('open');
+    renderHistory();
+    panel.open = true;
+    recentButton.setAttribute('aria-expanded', 'true');
+    requestAnimationFrame(() => close.focus({ preventScroll: true }));
+  }
+
+  recentButton.addEventListener('click', openHistory);
+  close.addEventListener('click', () => closeHistory());
+  panel.addEventListener('click', (event) => {
+    if (event.target === panel) closeHistory();
+  });
+  panel.addEventListener('toggle', () => {
+    if (!panel.open) recentButton.setAttribute('aria-expanded', 'false');
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && panel.open) closeHistory();
+  });
 
   recordingPlayer.addEventListener('play', () => {
     if (phoneOwnsMic()) {
@@ -280,7 +354,10 @@ if (root && review && recordingPlayer && recordingDownload) {
   window.addEventListener('relay-take-status', (event) => {
     const status = event.detail;
     takeBusy = status?.lifecycle === 'recording' || status?.lifecycle === 'finalizing';
-    if (takeBusy && !recordingPlayer.paused) recordingPlayer.pause();
+    if (takeBusy) {
+      if (!recordingPlayer.paused) recordingPlayer.pause();
+      if (panel.open) closeHistory({ restoreFocus: false });
+    }
     historyEntries = historyFromStatus(status, historyEntries);
     if (status?.lifecycle === 'ready' && typeof status.take?.takeId === 'string') {
       selectedTakeId = status.take.takeId;

@@ -59,6 +59,15 @@ function renderState() {
     return;
   }
 
+  if (state === 'review-muted') {
+    toggle.textContent = localCopy('Paused', '暫停中');
+    stateNote.textContent = localCopy(
+      'Take playback is playing.',
+      '正在播放錄音',
+    );
+    return;
+  }
+
   if (state === 'audible' || state === 'ready') {
     toggle.textContent = localCopy('Mute', '靜音');
   }

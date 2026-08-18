@@ -5,7 +5,7 @@ import test from 'node:test';
 import { shouldForceMuteListen } from '../public/playback-recovery.js';
 
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
-const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url), 'utf8');
+const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 
 function timeline(overrides: Record<string, unknown> = {}) {
@@ -55,25 +55,25 @@ test('playback forced mute composes with Mic mute and preserves the user prefere
     'automatic source changes must not overwrite an explicit user mute');
 });
 
-test('Last Take speaker playback cannot be fed back through the same participant phone Mic', () => {
-  assert.match(recorder, /let localMicActive = false/,
-    'Take review must keep the explicit local Mic lifecycle fact');
-  assert.match(recorder, /let roomMicActive = false/,
-    'Take review also needs same-participant room ownership for sibling tabs');
-  assert.match(recorder, /window\.addEventListener\('relay-microphone-local-state'[\s\S]*localMicActive = event\.detail\?\.active === true/,
-    'Take review must receive local Mic lifecycle through an explicit module boundary');
-  assert.match(recorder, /window\.addEventListener\('relay-session-status'/,
-    'Take review must receive canonical room Mic ownership for sibling-tab feedback protection');
-  assert.match(recorder, /ownerId === participantId/,
+test('Take review speaker playback cannot be fed back through the same participant phone Mic', () => {
+  assert.match(takeHistory, /let localMicActive = false/,
+    'Take history review must keep the explicit local Mic lifecycle fact');
+  assert.match(takeHistory, /let roomMicActive = false/,
+    'Take history review also needs same-participant room ownership for sibling tabs');
+  assert.match(takeHistory, /window\.addEventListener\('relay-microphone-local-state'[\s\S]*localMicActive = event\.detail\?\.active === true/,
+    'Take history review must receive local Mic lifecycle through an explicit module boundary');
+  assert.match(takeHistory, /window\.addEventListener\('relay-session-status'/,
+    'Take history review must receive canonical room Mic ownership for sibling-tab feedback protection');
+  assert.match(takeHistory, /ownerId === participantId/,
     'room ownership must be matched to this participant, not to an unrelated owner');
-  assert.match(recorder, /function phoneOwnsMic\(\)[\s\S]*return localMicActive \|\| roomMicActive/,
-    'Take review must compose local capture and same-participant room ownership');
-  assert.doesNotMatch(recorder, /relayActiveRole/,
-    'Take review must not recover the retired shared role global');
-  assert.match(recorder, /function stopReviewForMic\(copy\)[\s\S]*recordingPlayer\.pause\(\)[\s\S]*reviewNotice = copy/,
+  assert.match(takeHistory, /function phoneOwnsMic\(\)[\s\S]*return localMicActive \|\| roomMicActive/,
+    'Take history review must compose local capture and same-participant room ownership');
+  assert.doesNotMatch(takeHistory, /relayActiveRole/,
+    'Take history review must not recover the retired shared role global');
+  assert.match(takeHistory, /function stopReviewForMic\(kind\)[\s\S]*recordingPlayer\.pause\(\)[\s\S]*reviewNoticeKind = kind/,
     'the shared feedback guard must actually stop local speaker playback');
-  assert.match(recorder, /recordingPlayer\.addEventListener\('play'[\s\S]*phoneOwnsMic\(\)[\s\S]*stopReviewForMic\(t\('take\.reviewReleaseMic'\)\)/,
+  assert.match(takeHistory, /recordingPlayer\.addEventListener\('play'[\s\S]*phoneOwnsMic\(\)[\s\S]*stopReviewForMic\('release'\)/,
     'starting Take review while this participant owns Mic must invoke the feedback guard immediately');
-  assert.match(recorder, /window\.addEventListener\('relay-microphone-started'[\s\S]*recordingPlayer\.paused[\s\S]*stopReviewForMic\(t\('take\.reviewPausedForMic'\)\)/,
+  assert.match(takeHistory, /window\.addEventListener\('relay-microphone-started'[\s\S]*recordingPlayer\.paused[\s\S]*stopReviewForMic\('paused'\)/,
     'taking Mic while a Take is already playing must invoke the same feedback guard');
 });

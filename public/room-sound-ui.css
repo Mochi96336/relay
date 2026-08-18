@@ -2,16 +2,19 @@
    product explanation is useful enough to occupy space on Live. */
 body[data-listen="muted"] #listen-adjust-state,
 body[data-listen="mic-muted"] #listen-adjust-state,
-body[data-listen="playback-muted"] #listen-adjust-state {
+body[data-listen="playback-muted"] #listen-adjust-state,
+body[data-listen="review-muted"] #listen-adjust-state {
   display: block;
 }
 
 body[data-listen="mic-muted"] .local-sound-control,
-body[data-listen="playback-muted"] .local-sound-control {
+body[data-listen="playback-muted"] .local-sound-control,
+body[data-listen="review-muted"] .local-sound-control {
   opacity: .82;
 }
 
 body[data-listen="mic-muted"] #listen-gain,
-body[data-listen="playback-muted"] #listen-gain {
+body[data-listen="playback-muted"] #listen-gain,
+body[data-listen="review-muted"] #listen-gain {
   opacity: .46;
 }

@@ -2,12 +2,11 @@ import './mic-presence.js';
 
 const peopleMenu = document.querySelector('.people-menu');
 const moreMenu = document.querySelector('#room-more');
-const adjustPanel = document.querySelector('.adjust-panel');
 const systemPanel = document.querySelector('#system-panel');
-const openAdjust = document.querySelector('#open-adjust');
 const openSystem = document.querySelector('#open-system');
-const closeAdjust = document.querySelector('#close-adjust');
 const closeSystem = document.querySelector('#close-system');
+const calibrateTiming = document.querySelector('#calibrate-timing');
+const micLiveControl = document.querySelector('#mic-live-control');
 
 function closeHeaderMenus(except = null) {
   for (const menu of [peopleMenu, moreMenu]) {
@@ -20,27 +19,20 @@ function closeTakeHistoryPanel() {
   if (panel?.open) panel.open = false;
 }
 
-function revealPanel(panel, otherPanel, focusTarget) {
-  if (!panel) return;
-  if (otherPanel) otherPanel.open = false;
+function revealSystem() {
+  if (!systemPanel) return;
   closeTakeHistoryPanel();
   closeHeaderMenus();
-  panel.open = true;
+  systemPanel.open = true;
   requestAnimationFrame(() => {
-    focusTarget?.focus({ preventScroll: true });
+    closeSystem?.focus({ preventScroll: true });
   });
 }
 
-function closePanel(panel, restoreFocus) {
-  if (!panel) return;
-  panel.open = false;
-  restoreFocus?.focus({ preventScroll: true });
-}
-
-function closeOnBackdrop(panel, restoreFocus) {
-  panel?.addEventListener('click', (event) => {
-    if (event.target === panel) closePanel(panel, restoreFocus);
-  });
+function closeSystemPanel(restoreFocus = true) {
+  if (!systemPanel) return;
+  systemPanel.open = false;
+  if (restoreFocus) openSystem?.focus({ preventScroll: true });
 }
 
 peopleMenu?.addEventListener('toggle', () => {
@@ -51,37 +43,39 @@ moreMenu?.addEventListener('toggle', () => {
   if (moreMenu.open) closeHeaderMenus(moreMenu);
 });
 
-adjustPanel?.addEventListener('toggle', () => {
-  if (!adjustPanel.open) return;
-  if (systemPanel) systemPanel.open = false;
-  closeTakeHistoryPanel();
-  closeHeaderMenus();
-});
-
 systemPanel?.addEventListener('toggle', () => {
   if (!systemPanel.open) return;
-  if (adjustPanel) adjustPanel.open = false;
   closeTakeHistoryPanel();
   closeHeaderMenus();
 });
 
-openAdjust?.addEventListener('click', () => revealPanel(adjustPanel, systemPanel, closeAdjust));
-openSystem?.addEventListener('click', () => revealPanel(systemPanel, adjustPanel, closeSystem));
-window.addEventListener('relay-open-system', () => revealPanel(systemPanel, adjustPanel, closeSystem));
+openSystem?.addEventListener('click', revealSystem);
+window.addEventListener('relay-open-system', revealSystem);
+closeSystem?.addEventListener('click', () => closeSystemPanel(true));
 
-closeAdjust?.addEventListener('click', () => closePanel(adjustPanel, openAdjust));
-closeSystem?.addEventListener('click', () => closePanel(systemPanel, openSystem));
+systemPanel?.addEventListener('click', (event) => {
+  if (event.target === systemPanel) closeSystemPanel(true);
+});
 
-closeOnBackdrop(adjustPanel, openAdjust);
-closeOnBackdrop(systemPanel, openSystem);
+// Recalibration is a direct task in More, not a reason to navigate into a
+// generic Adjust surface. app.js still owns whether the action is allowed and
+// what command is sent; this layer only gets the popover out of the way.
+calibrateTiming?.addEventListener('click', () => {
+  if (moreMenu) moreMenu.open = false;
+});
+
+window.addEventListener('relay-microphone-local-state', (event) => {
+  if (event.detail?.active === true) return;
+  if (micLiveControl?.open) micLiveControl.open = false;
+});
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (systemPanel?.open) {
-    closePanel(systemPanel, openSystem);
+    closeSystemPanel(true);
     return;
   }
-  if (adjustPanel?.open) closePanel(adjustPanel, openAdjust);
+  if (micLiveControl?.open) micLiveControl.open = false;
 });
 
 moreMenu?.querySelectorAll('[data-relay-locale]').forEach((button) => {

@@ -24,6 +24,6 @@ test('monitor drops the frame that would push server-side stale PCM past the bud
 test('monitor backlog policy stays wired into the server instead of reverting to a byte magic number', async () => {
   const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
   assert.match(serverSource, /monitorBacklogBudgetBytes\(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS\)/);
-  assert.match(serverSource, /monitorFrameWouldExceedBacklog\([\s\S]*socket\.bufferedAmount[\s\S]*payload\.byteLength/);
+  assert.match(serverSource, /monitorFrameWouldExceedBacklog\([\s\S]*socket\.bufferedAmount[\s\S]*outbound\.byteLength/);
   assert.doesNotMatch(serverSource, /512\s*\*\s*1024/);
 });

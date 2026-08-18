@@ -1,0 +1,31 @@
+/* Recording is part of the performance, not a persistent two-button module. */
+.take-strip[data-take-state="recording"] #start-recording,
+.take-strip[data-take-state="finalizing"] #start-recording,
+.take-strip[data-take-state="finalizing"] #stop-recording {
+  display: none;
+}
+
+.take-strip[data-take-state="recording"] #stop-recording {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+}
+
+.take-strip:not([data-take-state="recording"]):not([data-take-state="finalizing"]) #start-recording {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.take-strip[data-take-state="recording"] #recording-status {
+  color: #d8b0ad;
+  font-variant-numeric: tabular-nums;
+}
+
+.take-strip[data-take-state="finalizing"] #recording-status {
+  color: #96999f;
+}
+
+.take-strip[data-take-state="ready"] #recording-status {
+  color: #b9bbb8;
+}

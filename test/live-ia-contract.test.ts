@@ -4,10 +4,12 @@ import test from 'node:test';
 
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
+const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
+const roomSound = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
 
 function between(start: string, end: string) {
   const from = html.indexOf(start);
@@ -43,12 +45,25 @@ test('Live keeps Song then performance state and contextual Mic gain', () => {
   assert.equal(script.includes("micLiveLabel.textContent = 'Mic';"), true);
 });
 
-test('persistent Live footer exposes only this-phone sound', () => {
+test('persistent Live footer exposes only this-phone Room sound', () => {
   const footer = between('<footer class="live-actions">', '</footer>');
   assert.equal(footer.includes('id="listen-toggle"'), true);
   assert.equal(footer.includes('id="listen-gain"'), true);
   assert.equal(footer.includes('id="system-panel"'), false);
   assert.equal(footer.includes('id="mic-gain"'), false);
+
+  assert.match(script, /import '\.\/room-sound-ui\.js';/);
+  assert.match(roomSound, /'房間聲音'/);
+  assert.match(roomSound, /'只影響這支裝置'/);
+  assert.match(roomSound, /'Room sound'/);
+  assert.match(composition, /#listen-toggle \{[\s\S]*?min-height: 44px;/);
+  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong \{[\s\S]*?clip-path: inset\(50%\);/);
+});
+
+test('Room sound presentation does not own Listen transport or mute authority', () => {
+  for (const forbidden of ['WebSocket', 'AudioContext', 'userMuted', 'micForcedMuted', 'playbackForcedMuted']) {
+    assert.equal(roomSound.includes(forbidden), false, `room-sound-ui.js must not own ${forbidden}`);
+  }
 });
 
 test('generic Adjust product layer is gone while System remains directly reachable', () => {

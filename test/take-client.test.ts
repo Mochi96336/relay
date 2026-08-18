@@ -5,13 +5,14 @@ import test from 'node:test';
 test('browser Take controls no longer participate in the audio pipeline', async () => {
   const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
 
+  assert.match(source, /import '\.\/take-history\.js'/);
   assert.match(source, /type:\s*'take-status-request'/);
   assert.match(source, /type:\s*'start-take'/);
   assert.match(source, /type:\s*'stop-take'/);
   assert.match(source, /message\.type === 'take-status'/);
   assert.match(source, /sendParticipantAuthentication/);
-assert.match(source, /participant-auth\.js/);
-assert.doesNotMatch(source, /params\.set\('cap',/);
+  assert.match(source, /participant-auth\.js/);
+  assert.doesNotMatch(source, /params\.set\('cap',/);
 
   assert.doesNotMatch(source, /MediaRecorder/);
   assert.doesNotMatch(source, /AudioContext|AudioWorkletNode|createMediaStreamDestination/);
@@ -45,38 +46,63 @@ test('Take control connection recovers when the socket closes before opening', a
     'a failed opening handshake must release the stranded socket so reconnect can create a replacement');
 });
 
-test('ready Take artifacts review inline instead of navigating away from Live', async () => {
-  const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+test('durable Take history uses one inline player and groups attempts without owning commands', async () => {
+  const recorder = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+  const history = await readFile(new URL('../public/take-history.js', import.meta.url), 'utf8');
+  const model = await readFile(new URL('../public/take-history-model.js', import.meta.url), 'utf8');
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 
-  assert.match(source, /function artifactUrl/);
-  assert.match(source, /url\.searchParams\.set\('key', key\)/);
-  assert.match(source, /recordingPlayer\.src = href/);
-  assert.match(source, /lastTakeToggle\.addEventListener\('click'/);
-  assert.match(source, /lastTakeReview\.hidden = !reviewOpen/);
-  assert.match(source, /recordingDownload\.href = href/);
-  assert.match(source, /recordingDownload\.download = `relay-take-/);
-  assert.doesNotMatch(source, /window\.open|location\.href\s*=|lastTakeToggle\.href/);
-
-  // Review is progressive disclosure inside Live; the artifact link is download-only.
-  assert.match(html, /id="last-take" class="last-take" hidden/);
-  assert.match(html, /id="last-take-toggle"[^>]*type="button"[^>]*aria-expanded="false"/);
-  assert.match(html, /id="last-take-review"[^>]*hidden/);
+  assert.match(recorder, /new CustomEvent\('relay-take-status', \{ detail: status \}\)/);
+  assert.match(history, /import \{ groupHistory, historyFromStatus \} from '\.\/take-history-model\.js'/);
+  assert.match(model, /Array\.isArray\(status\?\.history\)/);
+  assert.match(model, /export function groupHistory/);
+  assert.match(model, /`song:\$\{videoId\}`/);
+  assert.match(history, /i\.ytimg\.com\/vi/);
+  assert.match(history, /localCopy\('Voice only', '純人聲'\)/);
+  assert.match(history, /localCopy\('Recovered recordings', '舊錄音'\)/);
+  assert.match(history, /recordingPlayer\.src = href/);
+  assert.match(history, /recordingDownload\.href = href/);
+  assert.match(history, /recordingDownload\.download = `relay-take-/);
+  assert.match(history, /selectedTakeId = status\.take\.takeId/,
+    'a newly finalized Take becomes the comparison target immediately');
+  assert.match(history, /takeBusy = status\?\.lifecycle === 'recording' \|\| status\?\.lifecycle === 'finalizing'/);
+  assert.match(history, /if \(takeBusy && !recordingPlayer\.paused\) recordingPlayer\.pause\(\)/,
+    'history review must stop while a new Take is recording or finalizing');
+  assert.match(history, /legacyToggle\?\.remove\(\)/,
+    'the old Last Take disclosure is retired when history mounts');
+  assert.doesNotMatch(history, /createElement\('audio'\)/,
+    'history must reuse the one existing review player');
+  assert.equal((html.match(/<audio\b/g) ?? []).length, 1,
+    'Live must expose exactly one Take review player');
   assert.match(html, /id="recording-player" controls preload="metadata"/);
   assert.match(html, /id="download-recording"[^>]*download[^>]*data-i18n="take\.download"[^>]*>Download WAV<\/a>/);
-  assert.doesNotMatch(html, /id="download-recording"[^>]*target=/);
+  assert.doesNotMatch(`${history}\n${model}`, /new WebSocket|start-take|stop-take|product-status/,
+    'history review must not reconstruct Take or product authority');
+  assert.doesNotMatch(history, /window\.open|location\.href\s*=/);
 });
 
-test('Take review composes local Mic lifecycle with same-participant room ownership', async () => {
-  const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+test('Take history keeps English Take language and Traditional Chinese recording language', async () => {
+  const history = await readFile(new URL('../public/take-history.js', import.meta.url), 'utf8');
 
-  assert.match(source, /let localMicActive = false/);
-  assert.match(source, /let roomMicActive = false/);
-  assert.match(source, /relay-microphone-local-state/);
-  assert.match(source, /localMicActive = event\.detail\?\.active === true/);
-  assert.match(source, /relay-session-status/);
-  assert.match(source, /ownerId === participantId/);
-  assert.match(source, /relay-request-session-status/);
-  assert.match(source, /function phoneOwnsMic\(\) \{[\s\S]*return localMicActive \|\| roomMicActive;[\s\S]*\}/);
-  assert.doesNotMatch(source, /relayActiveRole/);
+  assert.match(history, /localCopy\('Takes', '錄音'\)/);
+  assert.match(history, /localCopy\('Take history', '錄音紀錄'\)/);
+  assert.match(history, /localCopy\('Selected Take playback', '所選錄音播放'\)/);
+  assert.match(history, /localCopy\('Release mic before reviewing a Take\.', '請先放開 Mic，再播放錄音。'\)/);
+});
+
+test('Take review feedback guard belongs to history and composes local Mic with room ownership', async () => {
+  const recorder = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+  const history = await readFile(new URL('../public/take-history.js', import.meta.url), 'utf8');
+
+  assert.match(history, /let localMicActive = false/);
+  assert.match(history, /let roomMicActive = false/);
+  assert.match(history, /relay-microphone-local-state/);
+  assert.match(history, /localMicActive = event\.detail\?\.active === true/);
+  assert.match(history, /relay-session-status/);
+  assert.match(history, /ownerId === participantId/);
+  assert.match(history, /relay-request-session-status/);
+  assert.match(history, /function phoneOwnsMic\(\) \{[\s\S]*return localMicActive \|\| roomMicActive;[\s\S]*\}/);
+  assert.doesNotMatch(history, /relayActiveRole/);
+  assert.doesNotMatch(recorder, /relay-session-status|relay-microphone-local-state/,
+    'recorder lifecycle must no longer own review feedback state');
 });

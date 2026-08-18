@@ -103,15 +103,14 @@ describe('late transition completions', () => {
     assert.deepEqual(replacement.writer.writes.map((value) => Array.from(value)), [[2]]);
   });
 
-  test('Last Take feedback guard includes sibling tabs owned by the same participant', async () => {
-    const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+  test('Take history feedback guard includes sibling tabs owned by the same participant', async () => {
+    const source = await readFile(new URL('../public/take-history.js', import.meta.url), 'utf8');
 
     assert.match(source, /let roomMicActive = false/);
     assert.match(source, /function phoneOwnsMic\(\)[\s\S]*return localMicActive \|\| roomMicActive/);
-    assert.match(source, /function applyRoomSessionStatus\(status\)/);
-    assert.match(source, /ownerId === participantId/);
     assert.match(source, /window\.addEventListener\('relay-session-status'/);
+    assert.match(source, /ownerId === participantId/);
     assert.match(source, /window\.dispatchEvent\(new Event\('relay-request-session-status'\)\)/);
-    assert.match(source, /applyRoomSessionStatus[\s\S]*reconcileMicFeedbackGuard\(\)/);
+    assert.match(source, /roomMicActive = nextRoomMicActive[\s\S]*reconcileMicFeedbackGuard\(\)/);
   });
 });

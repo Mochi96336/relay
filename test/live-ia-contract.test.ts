@@ -5,6 +5,7 @@ import test from 'node:test';
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
+const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
@@ -12,6 +13,9 @@ const takeHistory = readFileSync(new URL('../public/take-history.js', import.met
 const roomSound = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
 const people = readFileSync(new URL('../public/people-ui.js', import.meta.url), 'utf8');
 const recordingUi = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
+const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+const presence = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
+const micActions = readFileSync(new URL('../public/mic-actions.js', import.meta.url), 'utf8');
 
 function between(start: string, end: string) {
   const from = html.indexOf(start);
@@ -95,6 +99,7 @@ test('System navigation is installed before optional Live presenters can fail', 
     './room-sound-ui.js',
     './people-ui.js',
     './recording-ui.js',
+    './mic-actions.js',
   ]) {
     assert.equal(script.includes(`'${presenter}'`), true);
   }
@@ -170,9 +175,16 @@ test('header and performance controls retain real phone-sized touch targets', ()
   assert.equal(css.includes('.panel-done {'), true);
 });
 
-test('P0 Live states have one visible presenter each', () => {
-  assert.match(css, /#start-publisher::after \{[\s\S]*?content: none;/);
-  assert.match(css, /\.performance-stage:has\(#mic-takeover:not\(\[hidden\]\)\) \.mic-actions \{[\s\S]*?display: none;/);
-  assert.match(css, /\.youtube-readout:has\(#server-timeline-state\)[\s\S]*?display: none;/);
-  assert.match(css, /body\[data-listen="muted"\] #listen-note,[\s\S]*?body\[data-listen="playback-muted"\] #listen-note,[\s\S]*?body\[data-listen="review-muted"\] #listen-note \{[\s\S]*?display: none;/);
+test('P0 Live states remove retired presenters instead of masking them later', () => {
+  assert.doesNotMatch(style, /#start-publisher::after|Take over mic|content:\s*"Take mic"/);
+  assert.doesNotMatch(youtubeSync, /server-timeline-state|server-timeline-values|server-timeline-note|insertAdjacentElement/);
+  assert.match(youtubeSync, /relay:playback-diagnostics/);
+
+  assert.match(roomSound, /relay-listen-state/);
+  assert.doesNotMatch(roomSound, /MutationObserver/);
+
+  assert.match(presence, /relay-mic-action-state/);
+  assert.doesNotMatch(presence, /publisherButton\.textContent|takeoverPanel|takeoverCopy/);
+  assert.match(micActions, /publisherButton\.hidden = takeoverOpen/);
+  assert.match(micActions, /takeoverPanel\.hidden = !takeoverOpen/);
 });

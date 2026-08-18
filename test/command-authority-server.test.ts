@@ -180,7 +180,9 @@ test('an identified participant may adjust Voice while nobody holds the mic', as
     const settings = await waitForNewMessage(
       listener,
       from,
-      (message) => message.type === 'mix-settings' && message.songLevel === 100,
+      (message) => message.type === 'mix-settings'
+        && message.micGainDb === 9
+        && message.songLevel === 100,
     );
     assert.equal(settings.micGainDb, 9);
     assert.equal(settings.songLevel, 100);

@@ -5,16 +5,18 @@ const DEFAULT_RECOVERY_STEP_MS = 50;
 const DEFAULT_RECOVERY_WINDOW_MS = 1_000;
 const DEFAULT_STABLE_STEP_MS = 10;
 const DEFAULT_STABLE_WINDOW_MS = 30_000;
+const DEFAULT_JITTER_SAFETY_FACTOR = 4;
+const DEFAULT_JITTER_SPIKE_FACTOR = 1.5;
+const DEFAULT_JITTER_SPIKE_CAP_MS = 60;
 const DEFAULT_MAX_QUEUE_MS = 2_000;
 const REPORT_INTERVAL_MS = 500;
 
-// Listen needs two different behaviours from one small buffer policy:
-// start quickly on a healthy network, but become conservative after a real
-// jitter shortfall. A short underrun that receives audio again soon raises the
-// next fill target; a long period with no PCM is treated as stream idle/link
-// loss instead of something a sub-250 ms jitter buffer could repair. The target
-// only falls after sustained clean playback. Changing it never stretches,
-// pauses or skips audio already playing; it only changes future startup/rebuffer.
+// Listen starts with a small buffer and continuously measures PCM arrival
+// variation. The estimator is RTP-like: compare each observed inter-arrival
+// interval with the duration of the previous PCM chunk, then smooth the
+// absolute deviation. Persistent jitter raises the target before an underrun;
+// a shortfall remains a stronger fallback signal. Target reductions stay slow
+// and never undercut the currently measured jitter requirement.
 class PlaybackProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -30,6 +32,14 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
+
+    // AudioWorklet has a reliable render cadence even when message delivery is
+    // bursty. Count render samples locally so tests and browsers share one clock.
+    this.renderClockSamples = 0;
+    this.lastArrivalClockSamples = null;
+    this.lastArrivalChunkSamples = 0;
+    this.arrivalJitterSamples = 0;
+    this.lastArrivalDeviationSamples = 0;
 
     this.configure({});
 
@@ -53,9 +63,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
   }
 
   configure(options) {
-    // `prebufferMs` used to be one fixed target. Keep accepting it as the
-    // adaptive ceiling so existing listeners can opt into the new policy
-    // without a second coordinated client change.
     const configuredMaxMs = Number(options.maxPrebufferMs ?? options.prebufferMs);
     const maxPrebufferMs = Number.isFinite(configuredMaxMs)
       ? Math.max(1, configuredMaxMs)
@@ -80,6 +87,9 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     const configuredRecoveryWindowMs = Number(options.recoveryWindowMs);
     const configuredStableStepMs = Number(options.stableStepMs);
     const configuredStableWindowMs = Number(options.stableWindowMs);
+    const configuredJitterSafetyFactor = Number(options.jitterSafetyFactor);
+    const configuredJitterSpikeFactor = Number(options.jitterSpikeFactor);
+    const configuredJitterSpikeCapMs = Number(options.jitterSpikeCapMs);
     const maxQueueMs = Number(options.maxQueueMs);
 
     this.minPrebufferSamples = Math.round((sampleRate * minPrebufferMs) / 1000);
@@ -105,17 +115,34 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         ? Math.max(1, configuredStableWindowMs)
         : DEFAULT_STABLE_WINDOW_MS)) / 1000,
     ));
+    this.jitterSafetyFactor = Number.isFinite(configuredJitterSafetyFactor)
+      ? Math.max(1, configuredJitterSafetyFactor)
+      : DEFAULT_JITTER_SAFETY_FACTOR;
+    this.jitterSpikeFactor = Number.isFinite(configuredJitterSpikeFactor)
+      ? Math.max(1, configuredJitterSpikeFactor)
+      : DEFAULT_JITTER_SPIKE_FACTOR;
+    this.jitterSpikeCapSamples = Math.max(1, Math.round(
+      (sampleRate * (Number.isFinite(configuredJitterSpikeCapMs)
+        ? Math.max(1, configuredJitterSpikeCapMs)
+        : DEFAULT_JITTER_SPIKE_CAP_MS)) / 1000,
+    ));
 
     this.maxQueueSamples = Math.round(
       (sampleRate * (Number.isFinite(maxQueueMs) ? maxQueueMs : DEFAULT_MAX_QUEUE_MS)) / 1000,
     );
-    // The ceiling must stay above the largest adaptive fill target or playback
-    // could reach a state where it can never collect enough audio to restart.
     this.maxQueueSamples = Math.max(this.maxQueueSamples, this.maxPrebufferSamples * 2);
     this.reportEvery = Math.max(1, Math.round((sampleRate * REPORT_INTERVAL_MS) / (1000 * 128)));
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
+    this.resetArrivalObservation();
+  }
+
+  resetArrivalObservation() {
+    this.lastArrivalClockSamples = null;
+    this.lastArrivalChunkSamples = 0;
+    this.arrivalJitterSamples = 0;
+    this.lastArrivalDeviationSamples = 0;
   }
 
   reset() {
@@ -126,30 +153,73 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
-    // Deliberately keep the learned prebuffer target. A reconnect or Mic mute
-    // should not forget that this network already proved it needs more room.
+    this.resetArrivalObservation();
+    // Keep the learned target across a reconnect, but throw away raw timing
+    // anchors so the first packet on a new transport cannot look like a huge gap.
+  }
+
+  jitterTargetSamples() {
+    const smoothed = this.arrivalJitterSamples * this.jitterSafetyFactor;
+    const recentSpike = Math.min(
+      this.jitterSpikeCapSamples,
+      this.lastArrivalDeviationSamples * this.jitterSpikeFactor,
+    );
+    return Math.min(
+      this.maxPrebufferSamples,
+      Math.max(this.minPrebufferSamples, Math.round(this.minPrebufferSamples + Math.max(smoothed, recentSpike))),
+    );
+  }
+
+  observeArrival(samples) {
+    const arrivalClock = this.renderClockSamples;
+    if (this.lastArrivalClockSamples !== null && this.lastArrivalChunkSamples > 0) {
+      const interval = arrivalClock - this.lastArrivalClockSamples;
+      if (interval <= this.recoveryWindowSamples) {
+        const deviation = Math.abs(interval - this.lastArrivalChunkSamples);
+        this.lastArrivalDeviationSamples = deviation;
+        // RFC 3550-style inter-arrival jitter EWMA (1/16 gain).
+        this.arrivalJitterSamples += (deviation - this.arrivalJitterSamples) / 16;
+      } else {
+        // Long idle/link loss is not jitter evidence. Start a fresh arrival
+        // baseline while preserving the learned target from earlier traffic.
+        this.arrivalJitterSamples = 0;
+        this.lastArrivalDeviationSamples = 0;
+      }
+    }
+    this.lastArrivalClockSamples = arrivalClock;
+    this.lastArrivalChunkSamples = samples.length;
+    return this.jitterTargetSamples();
+  }
+
+  applyJitterTarget(targetSamples) {
+    if (targetSamples <= this.prebufferSamples) return;
+    this.prebufferSamples = targetSamples;
+    this.stablePlaybackSamples = 0;
   }
 
   push(samples) {
     if (samples.length === 0) return;
 
+    // Arrival jitter and underrun recovery are two observations about the same
+    // packet. Compute both against the pre-arrival target, then make exactly one
+    // adaptation decision; otherwise one late recovery packet can first raise
+    // the jitter target and then add another recovery step on top of it.
+    const jitterTarget = this.observeArrival(samples);
     if (this.pendingRecovery) {
-      // Only short gaps are jitter evidence. If no PCM has arrived for longer
-      // than the recovery window, this is more likely an intentional idle or a
-      // link outage; a 250 ms buffer cannot mask it anyway, so do not ratchet
-      // latency upward for the next healthy session.
       if (this.recoveryWaitSamples <= this.recoveryWindowSamples) {
-        this.raisePrebuffer();
+        this.raisePrebuffer(jitterTarget);
+      } else {
+        this.applyJitterTarget(jitterTarget);
       }
       this.pendingRecovery = false;
       this.recoveryWaitSamples = 0;
+    } else {
+      this.applyJitterTarget(jitterTarget);
     }
 
     this.queue.push(samples);
     this.queuedSamples += samples.length;
 
-    // Trim from the front: the newest audio is the one that keeps output in
-    // step with real time, so an overlong queue means latency, not content.
     while (this.queuedSamples > this.maxQueueSamples && this.queue.length > 1) {
       const oldest = this.queue[0];
       const usable = oldest.length - this.offset;
@@ -160,21 +230,24 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     }
   }
 
-  raisePrebuffer() {
-    this.prebufferSamples = Math.min(
+  raisePrebuffer(jitterTarget = this.jitterTargetSamples()) {
+    const target = Math.min(
       this.maxPrebufferSamples,
-      this.prebufferSamples + this.recoveryStepSamples,
+      Math.max(jitterTarget, this.prebufferSamples + this.recoveryStepSamples),
     );
+    if (target === this.prebufferSamples) return;
+    this.prebufferSamples = target;
     this.stablePlaybackSamples = 0;
   }
 
   noteStablePlayback(samples) {
-    if (this.prebufferSamples <= this.minPrebufferSamples) return;
+    const floor = this.jitterTargetSamples();
+    if (this.prebufferSamples <= floor) return;
     this.stablePlaybackSamples += samples;
     if (this.stablePlaybackSamples < this.stableWindowSamples) return;
 
     this.prebufferSamples = Math.max(
-      this.minPrebufferSamples,
+      floor,
       this.prebufferSamples - this.stableStepSamples,
     );
     this.stablePlaybackSamples = 0;
@@ -183,6 +256,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
   process(_inputs, outputs) {
     const output = outputs[0][0];
     output.fill(0);
+    this.renderClockSamples += output.length;
 
     if (!this.playing) {
       if (this.pendingRecovery) this.recoveryWaitSamples += output.length;
@@ -237,6 +311,9 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       type: 'health',
       queuedMs: (this.queuedSamples / sampleRate) * 1000,
       targetPrebufferMs: (this.prebufferSamples / sampleRate) * 1000,
+      jitterTargetMs: (this.jitterTargetSamples() / sampleRate) * 1000,
+      arrivalJitterMs: (this.arrivalJitterSamples / sampleRate) * 1000,
+      arrivalDeviationMs: (this.lastArrivalDeviationSamples / sampleRate) * 1000,
       underruns: this.underruns,
       droppedMs: (this.droppedSamples / sampleRate) * 1000,
       starvedMs: (this.starvedSamples / sampleRate) * 1000,

@@ -303,6 +303,15 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     reconcile();
   }
 
+  function publishListenHealth(health) {
+    const detail = {
+      ...health,
+      observedAt: performance.now(),
+    };
+    window.relayListenHealth = detail;
+    window.dispatchEvent(new CustomEvent('relay-listen-health', { detail }));
+  }
+
   async function ensureAudioGraph() {
     if (audioContext && playbackNode && gainNode) {
       resumeAudioGraph();
@@ -350,6 +359,10 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       });
       node.port.onmessage = (event) => {
         if (!transportEnabled || effectiveMuted() || !audioReady()) return;
+        if (event.data?.type === 'health') {
+          publishListenHealth(event.data);
+          return;
+        }
         if (event.data?.type === 'buffering') render(t('listen.buffering'));
         if (event.data?.type === 'playing') render('');
       };

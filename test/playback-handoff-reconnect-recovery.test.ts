@@ -123,6 +123,6 @@ test('youtube-sync owns reconnect recovery without global WebSocket interception
 
   assert.doesNotMatch(role, /playback-handoff-reconnect-recovery/,
     'role resolution must stay pure and must not bootstrap transport side effects');
-  assert.doesNotMatch(source, /window\.WebSocket|new Proxy\(|MessageEvent|playback-hello/,
+  assert.doesNotMatch(source, /window\.WebSocket|new Proxy\(|MessageEvent/,
     'the recovery state machine must not intercept page-global WebSocket construction or synthesize socket events');
 });

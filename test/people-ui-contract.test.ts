@@ -8,9 +8,11 @@ const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'u
 const presence = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
 
 test('Live loads a presentation-only People projection over existing Presence authority', () => {
-  assert.match(liveIa, /import '\.\/people-ui\.js';/);
+  assert.equal(liveIa.includes("'./people-ui.js'"), true);
+  assert.match(liveIa, /import\(modulePath\)\.catch/);
   assert.match(people, /relay-session-status/);
   assert.match(people, /latestSession = event\.detail \?\? null/);
+  assert.match(people, /relay-request-session-status/);
   assert.match(presence, /new WebSocket\(wsUrl\(\)\)/);
   assert.match(presence, /type: 'session-status-request'/);
 

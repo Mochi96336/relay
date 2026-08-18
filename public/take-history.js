@@ -14,15 +14,6 @@ function localCopy(english, traditionalChinese) {
   return localeIsChinese() ? traditionalChinese : english;
 }
 
-function ensureStyles() {
-  if (document.querySelector('link[data-relay-take-history]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = '/take-history.css';
-  link.dataset.relayTakeHistory = 'true';
-  document.head.append(link);
-}
-
 function formatDuration(durationMs) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -117,8 +108,6 @@ function createHistoryPanel(reviewNode) {
 }
 
 if (root && recentButton && review && recordingPlayer && recordingDownload) {
-  ensureStyles();
-
   root.classList.remove('last-take');
   root.classList.add('recent-take');
   review.classList.remove('take-review');

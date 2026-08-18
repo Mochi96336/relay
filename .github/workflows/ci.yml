@@ -48,12 +48,13 @@ jobs:
           node-version: '20.19'
       - name: Install screenshot browser
         run: npx -y playwright@1.55.0 install --with-deps chromium
-      - name: Serve deterministic Live fixture
+      - name: Serve deterministic Live fixture from Relay static root
         run: |
-          python3 -m http.server 4173 --bind 127.0.0.1 > /tmp/relay-visual-http.log 2>&1 &
+          cp test/fixtures/live-visual.html public/__live-visual.html
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory public > /tmp/relay-visual-http.log 2>&1 &
           echo $! > /tmp/relay-visual-http.pid
           for attempt in {1..20}; do
-            if curl --fail --silent http://127.0.0.1:4173/test/fixtures/live-visual.html > /dev/null; then
+            if curl --fail --silent http://127.0.0.1:4173/__live-visual.html > /dev/null; then
               exit 0
             fi
             sleep 0.25
@@ -69,7 +70,7 @@ jobs:
               --viewport-size="390,844" \
               --full-page \
               --wait-for-timeout=250 \
-              "http://127.0.0.1:4173/test/fixtures/live-visual.html?state=${state}" \
+              "http://127.0.0.1:4173/__live-visual.html?state=${state}" \
               "screenshots/${state}.png"
           done
       - name: Upload Live screenshots

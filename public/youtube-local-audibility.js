@@ -22,7 +22,10 @@ function armRemuteTimer() {
 }
 
 function attachPlayer(nextPlayer) {
-  if (!nextPlayer || player === nextPlayer) return;
+  if (!nextPlayer) return;
+  // YT can return the player object before every API method is usable. Re-run
+  // this attachment from onReady even for the same object so a late `unMute`
+  // method still receives the Take-review guard.
   player = nextPlayer;
 
   const originalUnMute = typeof nextPlayer.unMute === 'function'

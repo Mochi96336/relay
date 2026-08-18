@@ -1988,7 +1988,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
 function validSampleRate(value: unknown) {
   const sampleRate = Number(value);
-  return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000
+  return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000
     ? sampleRate
     : null;
 }

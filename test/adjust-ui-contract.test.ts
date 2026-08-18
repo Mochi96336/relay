@@ -47,6 +47,24 @@ test('Song is a fixed 100% reference while Adjust exposes only Voice', () => {
   );
 });
 
+test('Voice exposes +40 dB manual headroom without raising the automatic recommendation ceiling', () => {
+  assert.match(
+    html,
+    /id="mic-gain"[^>]*min="0"[^>]*max="40"[^>]*value="24"/,
+    'phone Voice control must expose the +40 dB manual ceiling',
+  );
+  assert.match(
+    source,
+    /id="source-mic-gain"[^>]*min="0"[^>]*max="40"[^>]*value="24"/,
+    'machine-side readout must represent the same Voice range',
+  );
+  assert.equal(app.includes('const MAX_MIC_GAIN_DB = 40;'), true);
+  assert.equal(app.includes('const MAX_RECOMMENDED_MIC_GAIN_DB = 36;'), true);
+  assert.equal(app.includes('const FIXED_SONG_LEVEL = 100;'), true);
+  assert.equal(app.includes('(suggested / MAX_MIC_GAIN_DB) * 100'), true,
+    'recommendation marker must be positioned against the full +40 dB rail');
+});
+
 test('measured Mic input lives in the performance task while gain stays in Adjust', () => {
   const performance = html.indexOf('class="performance-stage"');
   const meter = html.indexOf('id="mic-input-meter"');

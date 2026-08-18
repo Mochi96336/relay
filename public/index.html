@@ -173,7 +173,7 @@
 
               <div class="gain-control">
                 <div class="gain-rail">
-                  <input id="mic-gain" class="adjust-range" type="range" min="0" max="36" step="1" value="24" disabled aria-label="Voice gain" data-i18n-aria-label="adjust.voiceGainAria" />
+                  <input id="mic-gain" class="adjust-range" type="range" min="0" max="40" step="1" value="24" disabled aria-label="Voice gain" data-i18n-aria-label="adjust.voiceGainAria" />
                   <span id="mic-gain-recommendation-marker" class="recommendation-marker" hidden aria-hidden="true"></span>
                 </div>
                 <div class="recommendation-meta">
@@ -184,9 +184,7 @@
               </div>
             </div>
 
-            <!-- Legacy mix contract: the UI no longer exposes Song as a variable.
-                 Keeping this locked range lets the current app/source protocol converge on
-                 the fixed 100% reference without coupling the IA rewrite to a protocol break. -->
+            <!-- Compatibility field only: the server owns Song at a fixed 100% reference. -->
             <input id="song-level" type="range" min="100" max="100" step="1" value="100" disabled hidden aria-hidden="true" tabindex="-1" />
             <output id="song-level-value" for="song-level" hidden>100%</output>
           </section>

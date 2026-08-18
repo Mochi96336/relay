@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Relay Live visual fixture</title>
-  <link rel="stylesheet" href="/public/style.css" />
-  <link rel="stylesheet" href="/public/live-state.css" />
-  <link rel="stylesheet" href="/public/adjust.css" />
-  <link rel="stylesheet" href="/public/song-surface.css" />
-  <link rel="stylesheet" href="/public/system-details.css" />
-  <link rel="stylesheet" href="/public/live-ia.css" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/live-state.css" />
+  <link rel="stylesheet" href="/adjust.css" />
+  <link rel="stylesheet" href="/song-surface.css" />
+  <link rel="stylesheet" href="/system-details.css" />
+  <link rel="stylesheet" href="/live-ia.css" />
   <style>
     .fixture-player {
       position: absolute;
@@ -44,9 +44,7 @@
     .fixture-artwork {
       background: radial-gradient(circle at 38% 30%, #9e876c, #393138 44%, #15161a 78%);
     }
-    .fixture-artwork svg { width: 100%; height: 100%; display: block; }
     .fixture-note { color: #777a82; font-size: 10px; }
-    .fixture-hidden { display: none !important; }
   </style>
 </head>
 <body data-lifecycle="live" data-health="healthy" data-timing="aligned" data-self-mic="off" data-room-mic="live" data-playback-role="observer" data-listen="audible">
@@ -83,11 +81,12 @@
       </div>
 
       <div class="youtube-form" hidden>
-        <input type="text" value="https://youtu.be/example" />
+        <input type="text" placeholder="貼上 YouTube 連結" />
         <button type="button">載入</button>
       </div>
       <div class="youtube-player-shell" hidden><div class="fixture-player"></div></div>
       <div class="youtube-readout" hidden><strong>播放中</strong><span>1:42 / 5:11</span></div>
+      <p id="youtube-note" class="microcopy" hidden></p>
     </section>
 
     <section class="performance-stage">
@@ -121,7 +120,7 @@
       <section class="take-strip" data-take-state="idle">
         <div class="take-actions">
           <button id="start-recording" class="record-action" type="button">開始錄音</button>
-          <button id="stop-recording" class="record-action recording" type="button" hidden>停止</button>
+          <button id="stop-recording" class="record-action recording" type="button" disabled>停止</button>
         </div>
         <p id="recording-status" class="microcopy"></p>
         <div id="last-take" class="last-take"><button class="take-link text-action" type="button">上一段錄音</button></div>
@@ -217,6 +216,7 @@
     body.dataset.playbackRole = 'empty';
     stage.dataset.playbackRole = 'empty';
     observer.hidden = true;
+    document.querySelector('.youtube-form').hidden = false;
     title.textContent = 'Mic 空著';
     detail.textContent = '';
     document.querySelector('.voice-input-evidence').style.display = 'none';
@@ -230,8 +230,8 @@
   } else if (state === 'recording') {
     singer();
     take.dataset.takeState = 'recording';
-    start.hidden = true;
-    stop.hidden = false;
+    start.disabled = true;
+    stop.disabled = false;
     recordingStatus.textContent = '● 0:18';
   } else if (state === 'system') {
     system.open = true;

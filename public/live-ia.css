@@ -1,6 +1,5 @@
-/* Live IA layer: the performance surface stays primary. People and the local
-   sound control remain directly reachable; Adjust and System are temporary
-   secondary sheets that never become siblings in the page flow. */
+/* Live IA layer: the performance surface stays primary. People, Mic and local
+   sound stay close to the singing task; System is the only secondary sheet. */
 
 .room-header-actions {
   display: flex;
@@ -47,7 +46,7 @@
   z-index: 30;
   top: calc(100% + 8px);
   right: 0;
-  width: min(300px, calc(100vw - 32px));
+  width: min(310px, calc(100vw - 32px));
   padding: 8px 14px 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -96,6 +95,55 @@
   color: #fff;
 }
 
+.more-action:disabled {
+  color: #666970;
+  cursor: default;
+}
+
+.more-action-note {
+  margin: -2px 0 6px;
+  color: #74777e;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.more-timing {
+  border-bottom: 1px solid #202227;
+}
+
+.more-timing > summary {
+  min-height: 44px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #aeb0b5;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.more-timing > summary::-webkit-details-marker {
+  display: none;
+}
+
+.more-timing > summary output {
+  color: #85888f;
+  font-variant-numeric: tabular-nums;
+}
+
+.more-timing-control {
+  display: grid;
+  gap: 5px;
+  padding: 0 0 12px;
+}
+
+.more-timing-control > span {
+  color: #696c73;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 /* Voice is not navigation. The state headline already answers who has the Mic
    and whether this phone is live. */
 .performance-stage > .section-label {
@@ -117,11 +165,62 @@
 .performance-stage > .voice-input-evidence { order: 2; }
 .performance-stage > .mic-actions { order: 3; }
 .performance-stage > .takeover-row { order: 4; }
-.performance-stage > .take-strip { order: 5; }
+.performance-stage > .mic-live-control { order: 5; }
+.performance-stage > .take-strip { order: 6; }
 
 .voice-input-evidence {
   margin-top: 18px;
   margin-bottom: 0;
+}
+
+/* Mic gain is part of singing, not an Adjust destination. It appears only when
+   this phone really owns a live Mic. The collapsed row answers the normal
+   question; opening it reveals the existing slider and recommendation logic. */
+.mic-live-control {
+  display: none;
+  margin-top: 18px;
+  border-top: 1px solid #202227;
+  border-bottom: 1px solid #202227;
+}
+
+body[data-self-mic="live"] .mic-live-control {
+  display: block;
+}
+
+.mic-live-control > summary {
+  min-height: 48px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #cfd0d3;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mic-live-control > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mic-live-control > summary span {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.mic-live-control > summary output {
+  color: #b6b8bd;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mic-live-control-body {
+  padding: 0 0 14px;
+}
+
+.mic-live-control .gain-control {
+  gap: 8px;
 }
 
 /* Local sound is a frequent Live control, not a second mixer. Keep its one
@@ -239,30 +338,25 @@ body[data-listen="off"] #listen-adjust-state {
   display: none;
 }
 
-/* Adjust and System are transient bottom sheets. Opening either one freezes the
-   Live canvas rather than inserting another product level underneath it. */
-body:has(.adjust-panel[open]),
+/* System is the only transient product sheet. Opening it freezes Live instead
+   of inserting a second hierarchy under the performance. */
 body:has(.system-panel[open]) {
   overflow: hidden;
 }
 
-.adjust-panel,
 .system-panel {
   margin: 0;
   border: 0;
 }
 
-.adjust-panel > summary,
 .system-panel > summary {
   display: none;
 }
 
-.adjust-panel:not([open]),
 .system-panel:not([open]) {
   display: none;
 }
 
-.adjust-panel[open],
 .system-panel[open] {
   position: fixed;
   z-index: 50;
@@ -277,11 +371,11 @@ body:has(.system-panel[open]) {
   overscroll-behavior: contain;
 }
 
-.adjust-panel[open] .adjust-sheet,
 .system-panel[open] .system-sheet {
   width: min(100%, 720px);
   max-height: min(82dvh, 760px);
   margin: 0;
+  padding: 18px 22px max(26px, env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid #292b30;
@@ -291,30 +385,17 @@ body:has(.system-panel[open]) {
   box-shadow: 0 -24px 72px rgba(0, 0, 0, .42);
 }
 
-.adjust-panel[open] .adjust-sheet {
-  padding: 20px 22px max(28px, env(safe-area-inset-bottom));
-}
-
-.system-panel[open] .system-sheet {
-  padding: 18px 22px max(26px, env(safe-area-inset-bottom));
-}
-
-.adjust-heading,
 .system-panel-heading {
   position: sticky;
   z-index: 2;
   top: -1px;
-  background: #0d0e10;
-}
-
-.adjust-heading {
-  flex-wrap: wrap;
+  min-height: 44px;
+  margin-bottom: 10px;
+  display: flex;
   align-items: center;
-  padding-bottom: 8px;
-}
-
-.adjust-heading > span {
-  flex: 0 0 100%;
+  justify-content: space-between;
+  gap: 16px;
+  background: #0d0e10;
 }
 
 .panel-done {
@@ -324,15 +405,6 @@ body:has(.system-panel[open]) {
   margin-bottom: -10px;
   padding-left: 8px;
   padding-right: 0;
-}
-
-.system-panel-heading {
-  min-height: 44px;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
 }
 
 .system-panel-heading strong {
@@ -349,7 +421,6 @@ body:has(.system-panel[open]) {
   .more-popover { right: -4px; }
   .voice-input-evidence { margin-top: 14px; }
 
-  .adjust-panel[open] .adjust-sheet,
   .system-panel[open] .system-sheet {
     max-height: 86dvh;
     border-left: 0;
@@ -358,13 +429,11 @@ body:has(.system-panel[open]) {
 }
 
 @media (min-width: 760px) {
-  .adjust-panel[open],
   .system-panel[open] {
     align-items: center;
     padding: 28px;
   }
 
-  .adjust-panel[open] .adjust-sheet,
   .system-panel[open] .system-sheet {
     border-bottom: 1px solid #292b30;
     border-radius: 22px;

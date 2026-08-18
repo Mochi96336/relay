@@ -123,6 +123,12 @@
 .song-stage[data-song-editing="true"] .youtube-form {
   margin-bottom: 10px;
 }
+/* The normal holder state is player + direct Change song action. Keep the URL
+   editor structurally absent until that action explicitly enters editing; this
+   also prevents a first-paint flash before song-surface.js sets hidden. */
+.song-stage[data-playback-role="holder"][data-song-editing="false"] .youtube-form {
+  display: none;
+}
 .song-stage[data-playback-role="observer"] .youtube-form,
 .song-stage[data-playback-role="observer"] .youtube-player-shell,
 .song-stage[data-playback-role="observer"] .youtube-readout,

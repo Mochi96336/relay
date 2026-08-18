@@ -51,6 +51,8 @@ let handoffReadyTimers = [];
 let handoffCommitTimer = null;
 let speculativePrewarmTimer = null;
 let outgoingReleaseTimer = null;
+let autoplayRecoveryTimer = null;
+let autoplayRecoveryGeneration = 0;
 let localCommandPending = null;
 let serverMutation = null;
 let playbackRole = 'connecting';
@@ -411,7 +413,7 @@ function renderSnapshot(snapshot) {
 function sampleNow() {
   const snapshot = readSnapshot();
   if (!snapshot) return;
-  if (snapshot.state === 1 && autoplayRecoveryRequired) autoplayRecoveryRequired = false;
+  if (snapshot.state === 1 && autoplayRecoveryRequired) clearAutoplayRecovery();
   setPlayerState(snapshot.state);
   renderSnapshot(snapshot);
 }
@@ -442,6 +444,18 @@ function clearOutgoingReleaseTimer() {
   outgoingReleaseTimer = null;
 }
 
+function clearAutoplayRecovery() {
+  if (autoplayRecoveryTimer !== null) clearTimeout(autoplayRecoveryTimer);
+  autoplayRecoveryTimer = null;
+  autoplayRecoveryGeneration += 1;
+  autoplayRecoveryRequired = false;
+}
+
+function retireOutgoingReleaseBarrier() {
+  outgoingHandoffId = null;
+  clearOutgoingReleaseTimer();
+}
+
 function armSpeculativePrewarmTimeout(prewarm) {
   clearSpeculativePrewarmTimer();
   speculativePrewarmTimer = setTimeout(() => {
@@ -453,8 +467,8 @@ function armOutgoingReleaseFallback(handoffId) {
   clearOutgoingReleaseTimer();
   outgoingReleaseTimer = setTimeout(() => {
     if (!handoffId || outgoingHandoffId !== handoffId) return;
-    outgoingHandoffId = null;
-    outgoingReleaseTimer = null;
+    retireOutgoingReleaseBarrier();
+    clearAutoplayRecovery();
     if (!playerReady || !player) return;
     serverMutation = {
       source: 'handoff-release-fallback',
@@ -746,7 +760,7 @@ function handleReady(event) {
 }
 
 function handleStateChange(event) {
-  if (event.data === 1 && autoplayRecoveryRequired) autoplayRecoveryRequired = false;
+  if (event.data === 1 && autoplayRecoveryRequired) clearAutoplayRecovery();
   setPlayerState(event.data);
   sampleNow();
   if (speculativePrewarm && !pendingHandoff) {
@@ -773,7 +787,7 @@ function handlePlaybackRateChange(event) {
 }
 
 function handleError(event) {
-  autoplayRecoveryRequired = false;
+  clearAutoplayRecovery();
   const label = ERROR_NAMES.get(event.data) ?? `YouTube error ${event.data}`;
   setPlayerState(-1, label);
   noteNode.textContent = `Player error ${event.data}: ${label}.`;
@@ -783,7 +797,9 @@ function handleError(event) {
     speculativePrewarm = null;
     restorePrewarmMute(prewarm);
   }
-  if (pendingHandoff) {
+  if (pendingHandoff?.phase === 'committing') {
+    rollbackCommittedHandoff(`youtube-error-${event.data}`);
+  } else if (pendingHandoff) {
     window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
       detail: {
         handoffId: pendingHandoff.handoffId,
@@ -885,6 +901,8 @@ async function applyRoomSongCommand(message) {
     && serverMutation.revision > revision
   ) return;
 
+  clearAutoplayRecovery();
+  retireOutgoingReleaseBarrier();
   cancelPlaybackPrewarm();
   serverMutation = {
     source: 'room-command',
@@ -958,6 +976,8 @@ async function applyRoomSongCommand(message) {
 async function restoreAuthoritativeRoom(room) {
   if (!room || typeof room !== 'object') return;
   localCommandPending = null;
+  clearAutoplayRecovery();
+  retireOutgoingReleaseBarrier();
   cancelPlaybackPrewarm();
 
   const desired = reloadDesiredFromRoom(room);
@@ -1007,7 +1027,8 @@ async function prepareRoomSong(message) {
   const targetTime = Number(message.serverTime);
   if (!handoffId || !videoId || !Number.isFinite(targetTime)) return;
 
-  autoplayRecoveryRequired = false;
+  clearAutoplayRecovery();
+  retireOutgoingReleaseBarrier();
   const preparedPrewarm = speculativePrewarm;
   const reusePreparedPlayer = Boolean(
     preparedPrewarm
@@ -1131,9 +1152,8 @@ function releaseRoomSong(message) {
   if (!playerReady || !player) return;
   if (typeof message.videoId === 'string' && loadedVideoId !== message.videoId) return;
 
-  outgoingHandoffId = null;
-  clearOutgoingReleaseTimer();
-  autoplayRecoveryRequired = false;
+  retireOutgoingReleaseBarrier();
+  clearAutoplayRecovery();
   serverMutation = {
     source: 'handoff-release',
     action: 'pause',
@@ -1160,7 +1180,7 @@ function cancelRoomSongHandoff() {
   clearHandoffCommitTimer();
   pendingHandoff = null;
   handoffReadySent = false;
-  autoplayRecoveryRequired = false;
+  clearAutoplayRecovery();
   if (playerReady && player) {
     try { player.pauseVideo(); } catch {}
     if (prewarmWasMuted === false) {
@@ -1178,7 +1198,7 @@ function completeRoomSong(message) {
   clearHandoffCommitTimer();
   pendingHandoff = null;
   handoffReadySent = false;
-  autoplayRecoveryRequired = false;
+  clearAutoplayRecovery();
   // Only the explicit server completion packet restores audibility. A timeline
   // status broadcast is intentionally insufficient because the server sends the
   // promoted timeline before it sends the outgoing leader's release packet.
@@ -1189,7 +1209,10 @@ function completeRoomSong(message) {
     // round-trip, so detect the failure and persist the real recovery state
     // instead of letting ordinary telemetry overwrite it two seconds later.
     if (desiredState === 1) {
-      setTimeout(() => {
+      const recoveryGeneration = autoplayRecoveryGeneration;
+      autoplayRecoveryTimer = setTimeout(() => {
+        autoplayRecoveryTimer = null;
+        if (recoveryGeneration !== autoplayRecoveryGeneration) return;
         if (Number(player?.getPlayerState?.()) !== 1) {
           autoplayRecoveryRequired = true;
           noteNode.textContent = AUTOPLAY_RECOVERY_NOTE;
@@ -1258,8 +1281,7 @@ window.addEventListener('relay:playback-view', (event) => {
   } else if (nextRole === 'holder' && timeline?.handoffState === 'idle' && outgoingHandoffId) {
     // The handoff was cancelled while this page remained/returned holder. A
     // stale fallback must not pause the still-authoritative old player later.
-    outgoingHandoffId = null;
-    clearOutgoingReleaseTimer();
+    retireOutgoingReleaseBarrier();
   }
 
   const continuingSameTransport = Boolean(
@@ -1317,6 +1339,7 @@ window.addEventListener('relay:playback-view', (event) => {
       return;
     }
 
+    clearAutoplayRecovery();
     if (playerReady && player) {
       serverMutation = {
         source: 'observer-quiet',

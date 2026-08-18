@@ -46,6 +46,26 @@ class FakePlayer {
   }
 }
 
+class LateApiPlayer {
+  muted = false;
+  muteCalls = 0;
+  unMuteCalls = 0;
+  options: any;
+
+  constructor(_target: unknown, options: unknown) {
+    this.options = options;
+  }
+
+  mute() {
+    this.muted = true;
+    this.muteCalls += 1;
+  }
+
+  isMuted() {
+    return this.muted;
+  }
+}
+
 test('Take review keeps a holder player locally muted and restores prior audibility', async () => {
   const fakeWindow = new FakeWindow(FakePlayer);
   const globals = globalThis as any;
@@ -73,6 +93,42 @@ test('Take review keeps a holder player locally muted and restores prior audibil
     fakeWindow.dispatch('relay-take-review-playback', { active: false });
     assert.equal(player.muted, false);
     assert.equal(player.unMuteCalls, unmuteCallsDuringReview + 1);
+  } finally {
+    fakeWindow.dispatch('relay-take-review-playback', { active: false });
+    fakeWindow.dispatch('beforeunload');
+    globals.window = previousWindow;
+  }
+});
+
+test('Take review guard can attach when YT exposes unMute only at onReady', async () => {
+  const fakeWindow = new FakeWindow(LateApiPlayer);
+  const globals = globalThis as any;
+  const previousWindow = globals.window;
+  globals.window = fakeWindow;
+
+  try {
+    const moduleUrl = new URL('../public/youtube-local-audibility.js', import.meta.url);
+    moduleUrl.searchParams.set('runtime-test', `late-${Date.now()}-${Math.random()}`);
+    await import(moduleUrl.href);
+
+    const WrappedPlayer = fakeWindow.YT.Player;
+    const player = new WrappedPlayer('youtube-player', {}) as LateApiPlayer & { unMute?: () => void };
+    assert.equal(typeof player.unMute, 'undefined');
+
+    player.unMute = () => {
+      player.muted = false;
+      player.unMuteCalls += 1;
+    };
+    player.options.events.onReady({ target: player });
+
+    fakeWindow.dispatch('relay:playback-view', { role: 'holder' });
+    fakeWindow.dispatch('relay-take-review-playback', { active: true });
+    assert.equal(player.muted, true);
+
+    const calls = player.unMuteCalls;
+    player.unMute?.();
+    assert.equal(player.muted, true);
+    assert.equal(player.unMuteCalls, calls, 'late unMute must be guarded after onReady attachment');
   } finally {
     fakeWindow.dispatch('relay-take-review-playback', { active: false });
     fakeWindow.dispatch('beforeunload');

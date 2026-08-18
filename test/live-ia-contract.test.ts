@@ -49,10 +49,12 @@ test('persistent Live footer exposes only this-phone sound', () => {
 test('Adjust and System remain reachable, hidden by default, and mutually exclusive', () => {
   assert.equal(css.includes('.adjust-panel > summary,\n.system-panel > summary {\n  display: none;'), true);
   assert.equal(css.includes('.adjust-panel:not([open]),\n.system-panel:not([open]) {\n  display: none;'), true);
-  assert.equal(script.includes("openAdjust?.addEventListener('click', () => revealPanel(adjustPanel, systemPanel));"), true);
-  assert.equal(script.includes("openSystem?.addEventListener('click', () => revealPanel(systemPanel, adjustPanel));"), true);
-  assert.equal(script.includes('if (adjustPanel.open && systemPanel) systemPanel.open = false;'), true);
-  assert.equal(script.includes('if (systemPanel.open && adjustPanel) adjustPanel.open = false;'), true);
+  assert.equal(script.includes("openAdjust?.addEventListener('click', () => revealPanel(adjustPanel, systemPanel, closeAdjust));"), true);
+  assert.equal(script.includes("openSystem?.addEventListener('click', () => revealPanel(systemPanel, adjustPanel, closeSystem));"), true);
+  assert.equal(script.includes('if (!adjustPanel.open) return;'), true);
+  assert.equal(script.includes('if (systemPanel) systemPanel.open = false;'), true);
+  assert.equal(script.includes('if (!systemPanel.open) return;'), true);
+  assert.equal(script.includes('if (adjustPanel) adjustPanel.open = false;'), true);
   assert.equal(html.includes('id="close-adjust"'), true);
   assert.equal(html.includes('id="close-system"'), true);
 });

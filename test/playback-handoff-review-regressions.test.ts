@@ -68,8 +68,9 @@ test('speculative prewarm has an explicit bounded lifetime and formal handoff co
     'formal handoff consumption must retire the speculative expiry callback');
 });
 
-test('post-handoff autoplay recovery CTA persists until actual PLAYING is observed', async () => {
+test('post-handoff autoplay recovery CTA persists, localizes, and clears only after actual PLAYING', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const i18n = await readFile(new URL('../public/i18n.js', import.meta.url), 'utf8');
   const renderSection = topLevelFunctionSection(source, 'function renderSnapshot');
   const sampleSection = topLevelFunctionSection(source, 'function sampleNow()');
   const stateSection = topLevelFunctionSection(source, 'function handleStateChange');
@@ -77,15 +78,19 @@ test('post-handoff autoplay recovery CTA persists until actual PLAYING is observ
   const localeSection = topLevelFunctionSection(source, 'function rerenderLocale');
 
   assert.match(source, /let autoplayRecoveryRequired = false/);
-  assert.match(source, /const AUTOPLAY_RECOVERY_NOTE =/);
+  assert.doesNotMatch(source, /const AUTOPLAY_RECOVERY_NOTE =/,
+    'persistent recovery copy must not bypass the canonical locale table');
+  assert.match(i18n, /'song\.handoffAutoplayRecovery': 'Playback moved here, but the browser paused audio\./);
+  assert.match(i18n, /'song\.handoffAutoplayRecovery': '播放已移到這支手機，但瀏覽器暫停了音訊。/,
+    'the persistent recovery CTA needs a zh-Hant product translation');
   assert.match(renderSection, /if \(!autoplayRecoveryRequired\)/,
     'normal 250 ms telemetry must not overwrite the recovery CTA');
   assert.match(completeSection, /autoplayRecoveryRequired = true/);
-  assert.match(completeSection, /noteNode\.textContent = AUTOPLAY_RECOVERY_NOTE/);
+  assert.match(completeSection, /noteNode\.textContent = t\('song\.handoffAutoplayRecovery'\)/);
   assert.match(sampleSection, /snapshot\.state === 1 && autoplayRecoveryRequired/);
   assert.match(stateSection, /event\.data === 1 && autoplayRecoveryRequired/);
-  assert.match(localeSection, /autoplayRecoveryRequired/,
-    'locale rerender must preserve recovery state instead of replacing it with healthy timeline copy');
+  assert.match(localeSection, /autoplayRecoveryRequired[\s\S]*t\('song\.handoffAutoplayRecovery'\)/,
+    'locale rerender must preserve recovery state while rendering it in the active language');
 });
 
 test('outgoing leader waits for direct release instead of generic observer pause', async () => {

@@ -16,8 +16,12 @@ function samePlaybackIdentity(status, identity) {
  * Remembers only server-confirmed handoff phase plus whether its playback
  * WebSocket actually disconnected. A fresh timeline from the replacement
  * socket may then reconstruct a terminal direct packet that was lost with the
- * old TCP connection, without making ordinary status broadcasts an audibility
+ * old connection, without making ordinary status broadcasts an audibility
  * authority.
+ *
+ * Socket ownership deliberately stays outside this pure state machine. The
+ * playback transport owner (`youtube-sync.js`) feeds lifecycle events in and
+ * routes recovered terminals back through its normal message handler.
  */
 export function createPlaybackHandoffReconnectRecovery(emitTerminal) {
   let handoffId = null;
@@ -99,112 +103,3 @@ export function createPlaybackHandoffReconnectRecovery(emitTerminal) {
     },
   };
 }
-
-function parseJsonMessage(data) {
-  if (typeof data !== 'string') return null;
-  try {
-    const value = JSON.parse(data);
-    return value && typeof value === 'object' ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function installBrowserRecovery() {
-  if (
-    typeof window === 'undefined'
-    || typeof WebSocket === 'undefined'
-    || typeof MessageEvent === 'undefined'
-  ) return;
-
-  const NativeWebSocket = window.WebSocket;
-  if (NativeWebSocket.__relayHandoffReconnectRecoveryInstalled) return;
-
-  let playbackSocket = null;
-  let playbackIdentity = null;
-
-  const recovery = createPlaybackHandoffReconnectRecovery((payload) => {
-    if (!playbackSocket || playbackSocket.readyState !== NativeWebSocket.OPEN) return;
-    // Feed the reconstructed terminal through youtube-sync's normal message
-    // handler so its private adapter state and youtube.js advance together.
-    playbackSocket.dispatchEvent(new MessageEvent('message', {
-      data: JSON.stringify(payload),
-    }));
-  });
-
-  function trackPlaybackSocket(socket, hello) {
-    playbackSocket = socket;
-    playbackIdentity = {
-      participantId: typeof window.relayParticipantId === 'string'
-        ? window.relayParticipantId.trim()
-        : '',
-      transportId: typeof hello.playbackTransportId === 'string'
-        ? hello.playbackTransportId
-        : '',
-      generation: Number(hello.playbackGeneration),
-    };
-
-    socket.addEventListener('message', (event) => {
-      if (socket !== playbackSocket) return;
-      const message = parseJsonMessage(event.data);
-      if (!message) return;
-
-      if (message.type === 'song-handoff-prepare') {
-        recovery.notePrepare(message.handoffId);
-        return;
-      }
-      if (message.type === 'song-handoff-commit') {
-        recovery.noteCommit(message.handoffId);
-        return;
-      }
-      if (message.type === 'song-handoff-complete') {
-        recovery.noteComplete(message.handoffId);
-        return;
-      }
-      if (message.type === 'song-handoff-cancelled') {
-        recovery.noteCancelled();
-        return;
-      }
-      if (message.type === 'youtube-timeline-status') {
-        recovery.noteTimeline(message, playbackIdentity);
-      }
-    });
-
-    socket.addEventListener('close', () => {
-      if (socket !== playbackSocket) return;
-      recovery.noteSocketClosed();
-      playbackSocket = null;
-    });
-  }
-
-  Object.defineProperty(NativeWebSocket, '__relayHandoffReconnectRecoveryInstalled', {
-    value: true,
-    configurable: false,
-    enumerable: false,
-    writable: false,
-  });
-
-  window.WebSocket = new Proxy(NativeWebSocket, {
-    construct(target, args) {
-      const socket = Reflect.construct(target, args, target);
-      const nativeSend = socket.send.bind(socket);
-      socket.send = (data) => {
-        const message = parseJsonMessage(data);
-        if (message?.type === 'playback-hello') {
-          trackPlaybackSocket(socket, message);
-          // Once identified, inbound events are enough. Stop inspecting every
-          // subsequent telemetry/control send on this socket.
-          socket.send = nativeSend;
-        } else if (message && message.type !== 'participant-authenticate') {
-          // Non-playback participant sockets normally authenticate first and
-          // then identify their role. Retire the probe at that point.
-          socket.send = nativeSend;
-        }
-        return nativeSend(data);
-      };
-      return socket;
-    },
-  });
-}
-
-installBrowserRecovery();

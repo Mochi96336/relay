@@ -37,6 +37,13 @@ test('performance composition turns current Room Mic evidence into a wider time-
   assert.match(presence, /event\.detail\?\.spectrumBands/);
 });
 
+test('local Mic evidence expires if the capture worklet stops producing samples', () => {
+  assert.match(presence, /LOCAL_EVIDENCE_STALE_MS = 160/);
+  assert.match(presence, /localStaleTimer = setTimeout/);
+  assert.match(presence, /localActive = false;[\s\S]*sourceKey === 'local'[\s\S]*reset\(\)/);
+  assert.match(presence, /localActive = true;[\s\S]*armLocalStaleTimer\(\)/);
+});
+
 test('listener Room Mic evidence expires when telemetry stops instead of freezing forever', () => {
   assert.match(presence, /REMOTE_EVIDENCE_STALE_MS = 320/);
   assert.match(presence, /remoteStaleTimer = setTimeout/);

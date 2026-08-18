@@ -201,6 +201,7 @@ async function connect() {
 }
 
 window.addEventListener('relay-locale-changed', render);
+window.addEventListener('relay-request-take-status', () => publishTakeStatus(latestStatus));
 
 window.addEventListener('relay-product-status', (event) => {
   productCanStartTake = event.detail?.actions?.canStartTake === true;

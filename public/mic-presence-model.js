@@ -48,6 +48,48 @@ export function emptyPresenceSlice() {
 }
 
 /**
+ * Compress five real frequency bands into one continuous visual slice.
+ * `center` is a normalized vertical position (0=high/top, 1=low/bottom), while
+ * `height` preserves spectral spread. This keeps high/low information visible
+ * without drawing a 10×5 LED matrix. Loudness remains `intensity`, owned by RMS.
+ */
+export function presenceSliceGeometry(slice) {
+  const presence = clamp(Number(slice?.presence) || 0, 0, 1);
+  const bands = Array.from({ length: MIC_PRESENCE_BAND_COUNT }, (_, index) => (
+    clamp(Number(slice?.bands?.[index]) || 0, 0, 1)
+  ));
+  if (presence <= 0 || Math.max(...bands) <= 0) {
+    return { center: 0.5, height: 0.16, intensity: 0 };
+  }
+
+  // createPresenceSlice leaves a small floor in every band so quiet harmonics
+  // never vanish completely. Remove that common floor for centroid/spread so a
+  // genuinely low or bright voice still moves the ribbon vertically.
+  const floor = Math.min(...bands);
+  let weights = bands.map((band) => Math.max(0, band - floor));
+  let total = weights.reduce((sum, value) => sum + value, 0);
+  if (total <= 1e-6) {
+    weights = bands;
+    total = weights.reduce((sum, value) => sum + value, 0);
+  }
+
+  const maxBandIndex = Math.max(1, MIC_PRESENCE_BAND_COUNT - 1);
+  const centroid = weights.reduce((sum, value, index) => (
+    sum + value * (index / maxBandIndex)
+  ), 0) / total;
+  const variance = weights.reduce((sum, value, index) => {
+    const position = index / maxBandIndex;
+    return sum + value * ((position - centroid) ** 2);
+  }, 0) / total;
+  const spread = Math.sqrt(Math.max(0, variance));
+
+  // Band index rises with frequency, while screen Y rises downward.
+  const center = clamp(0.76 - centroid * 0.52, 0.2, 0.8);
+  const height = clamp(0.18 + spread * 1.05 + presence * 0.09, 0.18, 0.58);
+  return { center, height, intensity: presence };
+}
+
+/**
  * Oldest slice stays on the left; the newest local Mic evidence enters on the
  * right. Ten samples at the UI's 40 ms cadence retain about 400 ms of sound.
  */

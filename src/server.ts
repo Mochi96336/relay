@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
+import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './audio-session.js';
 import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
@@ -17,7 +17,7 @@ import { CalibrationSession, type CalibrationContext } from './calibration-sessi
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
-import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
+import { decodePcmFrame, encodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import { ProbeLifecycle, type ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
@@ -181,6 +181,7 @@ type RelaySocket = WebSocket & {
   sampleRate?: number;
   captureGeneration?: number;
   audioPacketVersion?: 1 | 2;
+  monitorPacketVersion?: 1;
   isAlive: boolean;
   replaced?: boolean;
   isRobotSource?: boolean;
@@ -891,23 +892,39 @@ function reportTelemetryRejected(socket: RelaySocket, reason: string) {
   });
 }
 
-function broadcastToMonitors(payload: string | Buffer, binary = false) {
+function broadcastToMonitors(
+  payload: string | Buffer,
+  binary = false,
+  position: MixFramePosition | null = null,
+) {
   for (const client of wss.clients) {
     const socket = client as RelaySocket;
     if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
+
+    // Once a monitor opts into positioned PCM, every binary packet must remain
+    // framed. Do not silently fall back to raw PCM on an unpositioned path.
+    if (binary && socket.monitorPacketVersion === 1 && position === null) continue;
+
+    const outbound = binary
+      && Buffer.isBuffer(payload)
+      && socket.monitorPacketVersion === 1
+      && position !== null
+      ? encodePcmFrame(position.generation, position.firstSampleIndex, payload)
+      : payload;
+
     if (
       binary
-      && Buffer.isBuffer(payload)
+      && Buffer.isBuffer(outbound)
       && monitorFrameWouldExceedBacklog(
         socket.bufferedAmount,
-        payload.byteLength,
+        outbound.byteLength,
         MONITOR_BACKLOG_BYTES,
       )
     ) {
       monitorDroppedFrames += 1;
       continue;
     }
-    socket.send(payload, { binary });
+    socket.send(outbound, { binary });
   }
 }
 
@@ -1565,10 +1582,10 @@ const mixerTimer = setInterval(() => {
     deliverMicPackets(micAudioTransport.flush(performance.now()));
   }
 
-  session.drain((frame, evidence) => {
+  session.drain((frame, evidence, position) => {
     const nowMs = performance.now();
     takeController.append(frame, takeQualityFrameState(nowMs), evidence);
-    broadcastToMonitors(frame, true);
+    broadcastToMonitors(frame, true, position);
   });
 }, 5);
 
@@ -2832,8 +2849,26 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
       if (!canClaimSocketRole(socket, 'monitor')) return;
+
+      const requestedMonitorPacketVersion = payload.monitorPacketVersion;
+      const monitorPacketVersion = requestedMonitorPacketVersion === undefined
+        || requestedMonitorPacketVersion === null
+        ? undefined
+        : Number(requestedMonitorPacketVersion) === 1
+          ? 1
+          : null;
+      if (monitorPacketVersion === null) {
+        sendJson(socket, { type: 'error', message: 'Unsupported monitor packet version.' });
+        return;
+      }
+
       commitSocketRole(socket, 'monitor');
-      sendJson(socket, { type: 'registered', role: 'monitor' });
+      socket.monitorPacketVersion = monitorPacketVersion;
+      sendJson(socket, {
+        type: 'registered',
+        role: 'monitor',
+        ...(monitorPacketVersion ? { monitorPacketVersion } : {}),
+      });
       sendJson(socket, publisherStatusPayload());
       sendJson(socket, sourceStatusPayload());
       sendJson(socket, timingCalibrationStatusPayload());

@@ -31,15 +31,15 @@ class FakeTarget {
 
   focus() {}
   removeAttribute() {}
-  querySelector(_selector: string) { return null; }
-  querySelectorAll(_selector: string) { return []; }
+  querySelector(_selector: string): FakeTarget | null { return null; }
+  querySelectorAll(_selector: string): FakeTarget[] { return []; }
 }
 
 class FakeDocument extends FakeTarget {
   body = { dataset: {} as Record<string, string> };
   nodes = new Map<string, FakeTarget>();
 
-  override querySelector(selector: string) {
+  override querySelector(selector: string): FakeTarget | null {
     return this.nodes.get(selector) ?? null;
   }
 }

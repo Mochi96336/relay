@@ -1,0 +1,37 @@
+name: Apply Room Mic server patch
+
+on:
+  push:
+    branches:
+      - agent/live-mic-presence
+    paths:
+      - .github/workflows/apply-room-mic-presence-patch.yml
+      - scripts/apply-room-mic-presence-patch.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20.19
+      - name: Apply precise server patch
+        run: node scripts/apply-room-mic-presence-patch.mjs
+      - name: Commit patched server
+        run: |
+          if git diff --quiet -- src/server.ts; then
+            echo "server.ts already patched"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server.ts
+          git commit -m "feat(server): relay room Mic presence"
+          git push origin HEAD:${{ github.ref_name }}

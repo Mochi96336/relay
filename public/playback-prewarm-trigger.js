@@ -10,9 +10,10 @@ function closestActionTarget(event, selector) {
  * idle time warming the local YouTube player without granting this page any
  * room authority.
  *
- * Presence owns the confirmation semantics and may stop propagation on the Mic
- * button itself. Listening on document capture runs before that target handler,
- * so the speculative hint is available even for the first "Take Mic" tap.
+ * Presence owns confirmation and cancellation semantics. This capture listener
+ * exists only so the first Mic click can start speculative media work before
+ * Presence stops/redirects the button event. Cancellation is dispatched by
+ * Presence after it has decided the Cancel action is actually valid.
  *
  * This module is also imported transitively by pure playback-continuation tests
  * in Node. Keep every DOM side effect behind a browser guard so importing those
@@ -22,11 +23,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   document.addEventListener('click', (event) => {
     if (closestActionTarget(event, '#start-publisher')) {
       window.dispatchEvent(new CustomEvent('relay:playback-prewarm-intent'));
-      return;
-    }
-
-    if (closestActionTarget(event, '#cancel-takeover')) {
-      window.dispatchEvent(new CustomEvent('relay:playback-prewarm-cancel'));
     }
   }, true);
 

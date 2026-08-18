@@ -173,11 +173,69 @@
   text-align: left;
 }
 
-/* The only persistent control below the performance is local room playback.
-   Shared diagnostics stay secondary. */
+/* The only persistent control below the performance is this phone's copy of
+   the room mix. Keep the transport engineering out of the label: the user is
+   deciding only whether/how loudly this device plays Room sound. */
 .live-actions {
   margin-top: 26px;
   padding-top: 14px;
+}
+
+.local-sound-control {
+  display: grid;
+  gap: 7px;
+}
+
+.local-sound-control .adjust-group-heading {
+  align-items: center;
+}
+
+.local-sound-control .adjust-group-heading .section-label {
+  font-size: 13px;
+  font-weight: 620;
+  letter-spacing: -.02em;
+}
+
+.local-sound-control .adjust-group-heading > span:not(.section-label) {
+  margin-left: auto;
+  color: #777a82;
+  font-size: 10px;
+}
+
+#listen-toggle {
+  min-height: 44px;
+  padding: 0 4px 0 10px;
+  color: #c8c9cc;
+  font-size: 12px;
+}
+
+.local-sound-control .adjust-control {
+  gap: 4px;
+}
+
+.local-sound-control .adjust-row-heading {
+  min-height: 14px;
+  justify-content: flex-end;
+}
+
+.local-sound-control .adjust-row-heading strong {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+#listen-gain-value {
+  color: #aeb0b5;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.local-sound-control #listen-adjust-state {
+  min-height: 14px;
 }
 
 @media (max-width: 420px) {

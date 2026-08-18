@@ -176,8 +176,9 @@
   justify-content: flex-start;
 }
 
-#start-recording:not(:disabled)::before,
-#stop-recording:not(:disabled)::before {
+/* Start gets the quiet recording dot. During recording the elapsed status owns
+   that semantic, so Stop remains plain text instead of showing a second dot. */
+#start-recording:not(:disabled)::before {
   content: "";
   display: inline-block;
   width: 6px;
@@ -294,8 +295,7 @@ body[data-listen="review-muted"] .local-sound-control .adjust-control {
 
 /* live-ia.css intentionally hides routine healthy state copy. These states are
    not routine: once the slider disappears, the short reason is the only useful
-   explanation for why Room sound cannot be adjusted right now. The extra state
-   selector wins over the generic later ID rule without adding another writer. */
+   explanation for why Room sound cannot be adjusted right now. */
 body[data-listen="muted"] .local-sound-control #listen-adjust-state,
 body[data-listen="mic-muted"] .local-sound-control #listen-adjust-state,
 body[data-listen="playback-muted"] .local-sound-control #listen-adjust-state,
@@ -303,19 +303,19 @@ body[data-listen="review-muted"] .local-sound-control #listen-adjust-state {
   display: block;
 }
 
-/* A flex item with width:min(100%,720px) can shrink to intrinsic content on
-   some mobile engines. Give the System sheet an explicit full-width flex basis;
-   the max-width still caps it on larger screens. */
-body[data-health] .system-panel[open] > .system-sheet {
-  width: 100%;
-  max-width: 720px;
-  flex: 0 0 auto;
-}
-
 @media (max-width: 420px) {
   .song-stage { padding-top: 16px; }
   .performance-stage { padding-top: 24px; }
   .voice-input-meter { width: min(72vw, 266px); }
+
+  /* A YouTube URL plus one commit action fits comfortably in a phone row. The
+     old prototype stacked Load underneath at <=420px, making the empty state
+     feel like a form page instead of a lightweight room action. */
+  .youtube-form {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .youtube-form button { justify-self: auto; }
 }
 
 @media (max-height: 760px) {

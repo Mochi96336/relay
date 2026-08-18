@@ -67,6 +67,12 @@ function artifactUrl(relativeUrl) {
   return url.toString();
 }
 
+function dispatchReviewPlayback(active) {
+  window.dispatchEvent(new CustomEvent('relay-take-review-playback', {
+    detail: { active: active === true },
+  }));
+}
+
 function createHistoryPanel(reviewNode) {
   const panel = document.createElement('details');
   panel.id = 'take-history-panel';
@@ -311,6 +317,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   }
 
   function closeHistory({ restoreFocus = true } = {}) {
+    if (!recordingPlayer.paused) recordingPlayer.pause();
     panel.open = false;
     recentButton.setAttribute('aria-expanded', 'false');
     if (restoreFocus && !root.hidden) recentButton.focus({ preventScroll: true });
@@ -335,6 +342,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   });
   panel.addEventListener('toggle', () => {
     recentButton.setAttribute('aria-expanded', String(panel.open));
+    if (!panel.open && !recordingPlayer.paused) recordingPlayer.pause();
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && panel.open) closeHistory();
@@ -347,7 +355,11 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     }
     reviewNoticeKind = null;
     renderNotice();
+    dispatchReviewPlayback(true);
   });
+  recordingPlayer.addEventListener('pause', () => dispatchReviewPlayback(false));
+  recordingPlayer.addEventListener('ended', () => dispatchReviewPlayback(false));
+  recordingPlayer.addEventListener('emptied', () => dispatchReviewPlayback(false));
 
   window.addEventListener('relay-take-status', (event) => {
     const status = event.detail;

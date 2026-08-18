@@ -6,10 +6,14 @@ const ui = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 
 const css = readFileSync(new URL('../public/room-sound-ui.css', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 
-test('Room sound translates existing Listen state without taking over transport', () => {
+test('Listen publishes room-sound truth while Room sound owns the visible projection', () => {
+  assert.match(listen, /relay-listen-state/);
+  assert.doesNotMatch(listen, /document\.body\.dataset\.listen/);
+  assert.doesNotMatch(listen, /listen-adjust-state|listen-note|listen-gain-value/);
+
+  assert.match(ui, /relay-listen-state/);
   assert.match(ui, /document\.body\.dataset\.listen/);
-  assert.match(ui, /MutationObserver/);
-  assert.match(listen, /document\.body\.dataset\.listen = state/);
+  assert.doesNotMatch(ui, /MutationObserver/);
 
   for (const forbidden of ['new WebSocket', 'new AudioContext', 'createGain', 'monitorPacketVersion']) {
     assert.equal(ui.includes(forbidden), false, `room-sound-ui.js must not own ${forbidden}`);
@@ -18,7 +22,7 @@ test('Room sound translates existing Listen state without taking over transport'
 
 test('user mute and forced pause reasons are human product language', () => {
   assert.match(ui, /'房間聲音已靜音'/);
-  assert.match(ui, /'唱歌時暫停房間聲音'/);
+  assert.match(ui, /'唱歌時暫停'/);
   assert.match(ui, /'這支裝置正在播放伴奏'/);
   assert.match(ui, /'正在播放錄音'/);
   assert.match(ui, /state === 'muted'/);

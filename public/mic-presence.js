@@ -14,7 +14,7 @@ if (meter) {
     slice.setAttribute('aria-hidden', 'true');
     // Older evidence gently recedes to the left; newest is always the right edge.
     const age = MIC_PRESENCE_SLICE_COUNT <= 1 ? 1 : sliceIndex / (MIC_PRESENCE_SLICE_COUNT - 1);
-    slice.style.setProperty('--slice-age', String(0.36 + age * 0.64));
+    slice.style.opacity = String(0.36 + age * 0.64);
 
     const bands = Array.from({ length: MIC_PRESENCE_BAND_COUNT }, (_, bandIndex) => {
       const band = document.createElement('span');
@@ -41,7 +41,11 @@ if (meter) {
       const evidence = history[sliceIndex] ?? emptyPresenceSlice();
       bands.forEach((band, bandIndex) => {
         const level = Math.max(0, Math.min(1, Number(evidence.bands?.[bandIndex]) || 0));
-        band.style.setProperty('--band-energy', level.toFixed(4));
+        // Compute the visual interpolation in JS instead of relying on CSS
+        // arithmetic involving custom properties; this keeps the ribbon stable
+        // on the older Safari/WebKit versions that phones may still run.
+        band.style.opacity = String(0.055 + level * 0.88);
+        band.style.transform = `scaleX(${0.48 + level * 0.52})`;
       });
     });
   }

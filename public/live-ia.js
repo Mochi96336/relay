@@ -101,11 +101,6 @@ document.addEventListener('keydown', (event) => {
     closeSystemPanel(true);
     return;
   }
-  const history = takeHistoryPanel();
-  if (history?.open) {
-    history.open = false;
-    return;
-  }
   if (micLiveControl?.open) micLiveControl.open = false;
 });
 

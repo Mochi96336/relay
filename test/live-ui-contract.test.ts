@@ -25,7 +25,7 @@ test('Live keeps real YouTube media before the performance task', () => {
   assert.ok(position('class="performance-stage"') < position('class="live-actions"'));
 });
 
-test('performance task contains local Mic evidence, ownership, Mic gain and recording', () => {
+test('performance task contains current Mic evidence, ownership, Mic gain and recording', () => {
   const stage = position('class="performance-stage"');
   const meter = position('id="mic-input-meter"');
   const mic = position('id="start-publisher"');
@@ -39,13 +39,17 @@ test('performance task contains local Mic evidence, ownership, Mic gain and reco
   assert.doesNotMatch(app, /latestMixHealth\?\.micPeakDbfs/);
   assert.match(liveIa, /import '\.\/mic-presence\.js';/);
   assert.match(micPresence, /relay-local-mic-level/);
+  assert.match(micPresence, /relay-room-mic-presence/);
   assert.match(micPresence, /event\.detail\?\.spectrumBands/);
 });
 
-test('input ribbon follows actual self Mic state without fabricated animation', () => {
+test('input ribbon follows the actual Room Mic without fabricated animation', () => {
   assert.match(liveStatus, /document\.body\.dataset\.selfMic/);
-  assert.match(liveState, /body\[data-self-mic="off"\] \.voice-input-evidence/);
-  assert.match(liveState, /body\[data-self-mic="live"\] \.voice-presence-band/);
+  assert.match(liveStatus, /document\.body\.dataset\.roomMic/);
+  assert.match(liveState, /\.voice-input-evidence \{[\s\S]*?display: none;/);
+  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
+  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-presence-band/);
+  assert.match(micPresence, /if \(localActive\) return;/);
   assert.match(liveComposition, /\.voice-presence-slice/);
   assert.match(liveComposition, /five broad[\s\S]*frequency bands/);
   assert.match(capture, /spectrumBands: this\.measureSpectrumBands\(\)/);

@@ -30,9 +30,9 @@ function errorCopy(reason) {
   const copy = {
     reconnecting: ['Reconnecting recording…', '錄音重新連線中…'],
     'participant-required': ['Recording needs a room identity.', '需要房間身分才能錄音'],
-    'mix-not-active': ['Start the room audio before recording.', '房間聲音開始後可以錄音'],
+    'mix-not-active': ['Start singing or playback before recording.', '開始唱歌或播放後可以錄音'],
     'product-blocked': ['Fix the room audio before recording.', '先處理房間音訊問題'],
-    'take-not-ready': ['Start the Mic before recording.', 'Mic 開始後可以錄音'],
+    'take-not-ready': ['Wait until the room is ready to record.', '房間準備完成後可以錄音'],
     'timing-calibration-active': ['Wait for timing calibration to finish.', '等待時間校準完成'],
     'take-active': ['A recording is already in progress.', '目前正在錄音'],
     'take-not-recording': ['There is no active recording.', '目前沒有錄音'],
@@ -99,6 +99,14 @@ if (strip && startButton && stopButton && status) {
         `Recording ${shortTakeId(take.takeId)} failed.`,
         `錄音 ${shortTakeId(take.takeId)} 失敗`,
       );
+      return;
+    }
+
+    // A disabled action without a reason is dead UI. ProductStatus already owns
+    // the room-level policy, so surface its reason before the user taps instead
+    // of waiting for a rejected command to explain the same state afterward.
+    if (detail.canStart !== true && detail.startBlockedReason) {
+      status.textContent = errorCopy(detail.startBlockedReason);
       return;
     }
 

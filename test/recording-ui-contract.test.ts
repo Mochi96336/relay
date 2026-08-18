@@ -8,7 +8,8 @@ const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url),
 const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 
 test('recording presentation consumes Take status without owning Take commands', () => {
-  assert.match(liveIa, /import '\.\/recording-ui\.js';/);
+  assert.equal(liveIa.includes("'./recording-ui.js'"), true);
+  assert.match(liveIa, /import\(modulePath\)\.catch/);
   assert.match(ui, /relay-take-status/);
   assert.match(recorder, /type: 'start-take'/);
   assert.match(recorder, /type: 'stop-take'/);

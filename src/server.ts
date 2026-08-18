@@ -10,6 +10,7 @@ import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './a
 import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
+import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
@@ -196,6 +197,7 @@ type RelaySocket = WebSocket & {
   playbackMicIntentAtMs?: number;
   legacyPlaybackGeneration?: number;
   telemetryRejectedReason?: string;
+  micPresenceTelemetryAt?: number;
   infrastructureAuthenticated?: boolean;
 };
 
@@ -2167,6 +2169,37 @@ wss.on('connection', (rawSocket, request) => {
       if (!health || socket.captureGeneration === undefined || health.captureGeneration !== socket.captureGeneration) return;
       micUplinkHealth = health;
       micUplinkHealthAt = performance.now();
+      return;
+    }
+
+    if (payload.type === 'mic-presence-telemetry') {
+      const presence = parseMicPresenceTelemetry(payload);
+      const nowMs = performance.now();
+      if (
+        !presence
+        || !socket.participantId
+        || socket.participantId !== participants.micOwnerId
+        || socket.participantId !== micMediaOwnerId
+        || micMediaGeneration === null
+        || !micStreaming(nowMs)
+      ) return;
+
+      // Presence is display telemetry, not media authority. Any authenticated
+      // socket for the current Mic owner may report it, but the server binds the
+      // packet to the canonical media generation and rate-limits broadcast.
+      if (
+        Number.isFinite(socket.micPresenceTelemetryAt)
+        && nowMs - socket.micPresenceTelemetryAt! < 60
+      ) return;
+      socket.micPresenceTelemetryAt = nowMs;
+      broadcastJson({
+        type: 'room-mic-presence',
+        version: 1,
+        ownerId: micMediaOwnerId,
+        captureGeneration: micMediaGeneration,
+        rmsDbfs: presence.rmsDbfs,
+        spectrumBands: presence.spectrumBands,
+      });
       return;
     }
 

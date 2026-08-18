@@ -145,5 +145,10 @@ if (menu && summary && participantCount && participantList && identityEditor) {
   // it remains the final visible People surface without taking over presence.
   window.addEventListener('relay-locale-changed', () => queueMicrotask(render));
 
+  // live-ia deliberately loads optional presenters outside its own failure
+  // domain. If Presence already published before this module finished loading,
+  // ask it to replay the latest authoritative room snapshot; if Presence has
+  // not started yet, its normal first snapshot will arrive afterward.
+  window.dispatchEvent(new Event('relay-request-session-status'));
   render();
 }

@@ -28,6 +28,9 @@ const calibrateStatus = document.querySelector('#calibrate-status');
 const SOCKET_RECONNECT_MS = 1000;
 const SLIDER_HOLD_MS = 2000;
 const AUDIO_UPLINK_HEALTH_INTERVAL_MS = 1000;
+const MAX_MIC_GAIN_DB = 40;
+const MAX_RECOMMENDED_MIC_GAIN_DB = 36;
+const FIXED_SONG_LEVEL = 100;
 
 let socket = null;
 let socketReconnectTimer = null;
@@ -86,8 +89,11 @@ function renderGainAdvice() {
     return;
   }
 
-  const suggested = Math.max(0, Math.min(36, Math.round(recommended)));
-  const markerPercent = (suggested / 36) * 100;
+  // Relay's automatic recommendation remains deliberately conservative. The
+  // last 4 dB of the rail is manual headroom, not a target the product should
+  // push a singer toward automatically.
+  const suggested = Math.max(0, Math.min(MAX_RECOMMENDED_MIC_GAIN_DB, Math.round(recommended)));
+  const markerPercent = (suggested / MAX_MIC_GAIN_DB) * 100;
   micGainRecommendationMarker.hidden = false;
   micGainRecommendationMarker.style.left = `${markerPercent}%`;
   micGainRecommendation.textContent = t('adjust.recommendedGain', { gain: suggested });
@@ -270,16 +276,17 @@ function sendMixSettings() {
   socket.send(JSON.stringify({
     type: 'set-mix',
     micGainDb: Number(micGain.value),
-    // The song is played by the machine hosting the mirrored player, which in
-    // the finished topology is the robot - nobody is at its screen, so the
-    // value belongs to the server and the phone drives it from here.
-    songLevel: Number(songLevel.value),
+    // Retain the old field on the wire while the server owns its only valid
+    // value. It is no longer a second product control.
+    songLevel: FIXED_SONG_LEVEL,
   }));
 }
 
 function updateSingerControls() {
   micGain.disabled = !publisherActive;
-  songLevel.disabled = !publisherActive;
+  // Compatibility only: Song is a fixed server-owned reference, never an
+  // interactive singer control even while this participant owns the Mic.
+  songLevel.disabled = true;
   vocalFineTune.disabled = !publisherActive;
   renderGainAdvice();
   updateCalibrateButton();
@@ -576,7 +583,7 @@ function handleServerMessage(message, sessionEpoch = publisherSessionEpoch) {
 
   if (message.type === 'mix-settings') {
     if (!sliderIsBusy(micGain)) micGain.value = String(message.micGainDb ?? 24);
-    if (!sliderIsBusy(songLevel)) songLevel.value = String(message.songLevel ?? 40);
+    songLevel.value = String(FIXED_SONG_LEVEL);
     updateMixLabels();
     return;
   }
@@ -1112,7 +1119,7 @@ vocalFineTune.addEventListener('change', () => markSliderTouched(vocalFineTune))
 useMicGainSuggestion.addEventListener('click', () => {
   const recommended = Number(latestMixHealth?.recommendedMicGainDb);
   if (!publisherActive || !Number.isFinite(recommended)) return;
-  micGain.value = String(Math.max(0, Math.min(36, Math.round(recommended))));
+  micGain.value = String(Math.max(0, Math.min(MAX_RECOMMENDED_MIC_GAIN_DB, Math.round(recommended))));
   markSliderTouched(micGain);
   sendMixSettings();
 });

@@ -7,6 +7,7 @@ import { shouldForceMuteListen } from '../public/playback-recovery.js';
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+const roomSoundUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
 
 function timeline(overrides: Record<string, unknown> = {}) {
   return {
@@ -23,7 +24,10 @@ function timeline(overrides: Record<string, unknown> = {}) {
 test('Listen follows server playback health and activity instead of holder identity alone', () => {
   assert.match(listen, /import \{ shouldForceMuteListen \} from '\.\/playback-recovery\.js'/);
   assert.match(listen, /let playbackForcedMuted = false;/);
-  assert.match(listen, /return userMuted \|\| micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted;/);
+  assert.match(
+    listen,
+    /return userMuted[\s\S]*\|\| micForcedMuted[\s\S]*\|\| roomMicForcedMuted[\s\S]*\|\| playbackForcedMuted[\s\S]*\|\| takeReviewForcedMuted;/,
+  );
   assert.match(listen, /window\.addEventListener\('relay:playback-view'/);
   assert.match(listen, /setPlaybackForcedMute\(shouldForceMuteListen\(\{/);
   assert.match(listen, /role: event\.detail\?\.role/);
@@ -44,15 +48,39 @@ test('healthy active local playback mutes Listen, but pause/end/staleness releas
   assert.equal(shouldForceMuteListen({ role: 'observer', timeline: timeline({ state: 1 }) }), false);
 });
 
-test('playback forced mute composes with Mic mute and preserves the user preference', () => {
-  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted\) return;/,
-    'forced source roles or same-participant Mic ownership must make the local Listen toggle non-actionable');
-  assert.match(listen, /if \(playbackForcedMuted\) \{[\s\S]*t\('listen\.songOwned'\)/,
-    'ending Mic ownership must not resume Listen while local playback is actually active');
-  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) \{[\s\S]*t\('listen\.micOwned'\)/,
-    'ending local playback must not resume Listen while this participant owns the Mic in any tab');
-  assert.match(listen, /if \(userMuted\) \{[\s\S]*t\('listen\.adjust\.userMuted'\)/,
-    'automatic source changes must not overwrite an explicit user mute');
+test('playback forced mute composes with Mic, review, and user mute without owning product copy', () => {
+  assert.match(
+    listen,
+    /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted \|\| takeReviewForcedMuted\) return;/,
+    'all forced local-audio overlays must make the Listen toggle non-actionable',
+  );
+  assert.match(
+    listen,
+    /function restoreAfterMic[\s\S]*if \(playbackForcedMuted\)[\s\S]*reconcile\('song-owned'\)/,
+    'ending Mic ownership must not resume Listen while local playback is actually active',
+  );
+  assert.match(
+    listen,
+    /function setPlaybackForcedMute[\s\S]*if \(micForcedMuted \|\| roomMicForcedMuted\)[\s\S]*reconcile\('mic-owned'\)/,
+    'ending local playback must not resume Listen while this participant owns the Mic in any tab',
+  );
+  assert.match(
+    listen,
+    /function setPlaybackForcedMute[\s\S]*if \(takeReviewForcedMuted\)[\s\S]*reconcile\('take-review'\)/,
+    'ending local playback must not resume Listen while Take review isolation is active',
+  );
+  assert.match(
+    listen,
+    /function setPlaybackForcedMute[\s\S]*if \(userMuted\)[\s\S]*reconcile\('user-muted'\)/,
+    'automatic source changes must not overwrite an explicit user mute',
+  );
+
+  assert.doesNotMatch(listen, /t\('listen\./,
+    'the audio engine must not regain Room sound product-copy ownership');
+  assert.match(roomSoundUi, /state === 'mic-muted'/);
+  assert.match(roomSoundUi, /state === 'playback-muted'/);
+  assert.match(roomSoundUi, /state === 'review-muted'/);
+  assert.match(roomSoundUi, /state === 'muted'/);
 });
 
 test('Take review speaker playback cannot be fed back through the same participant phone Mic', () => {

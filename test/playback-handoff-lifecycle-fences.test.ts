@@ -46,7 +46,7 @@ test('late autoplay recovery work cannot cross a newer playback lifecycle', asyn
   }
 });
 
-test('an old outgoing-release fallback is retired before this page becomes a new target', async () => {
+test('outgoing release barrier survives restore but is retired before this page gets new authority', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const retireSection = topLevelFunctionSection(source, 'function retireOutgoingReleaseBarrier');
   const prepareSection = topLevelFunctionSection(source, 'async function prepareRoomSong');
@@ -57,6 +57,8 @@ test('an old outgoing-release fallback is retired before this page becomes a new
   assert.match(retireSection, /clearOutgoingReleaseTimer\(\)/);
   assert.match(prepareSection, /retireOutgoingReleaseBarrier\(\)/,
     'a stale H1 fallback must not pause a replacement H2 target');
-  assert.match(commandSection, /retireOutgoingReleaseBarrier\(\)/);
-  assert.match(restoreSection, /retireOutgoingReleaseBarrier\(\)/);
+  assert.match(commandSection, /retireOutgoingReleaseBarrier\(\)/,
+    'an explicit server command gives this page a stronger playback lifecycle');
+  assert.doesNotMatch(restoreSection, /retireOutgoingReleaseBarrier\(\)/,
+    'a rejected outgoing-leader gesture may restore room state without discarding the direct-release cutover barrier');
 });

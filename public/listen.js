@@ -8,6 +8,9 @@ await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
+const localCopy = (english, traditionalChinese) => (
+  window.relayI18n?.getLocale?.() === 'zh-Hant' ? traditionalChinese : english
+);
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
 const gainValue = document.querySelector('#listen-gain-value');
@@ -42,6 +45,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   let micMuteEpoch = 0;
   let roomMicForcedMuted = false;
   let playbackForcedMuted = false;
+  let takeReviewForcedMuted = false;
   let sourceSampleRate = MIX_SAMPLE_RATE;
 
   function wsUrl() {
@@ -89,7 +93,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   function effectiveMuted() {
-    return userMuted || micForcedMuted || roomMicForcedMuted || playbackForcedMuted;
+    return userMuted
+      || micForcedMuted
+      || roomMicForcedMuted
+      || playbackForcedMuted
+      || takeReviewForcedMuted;
   }
 
   function audioReady() {
@@ -104,6 +112,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   function forcedMuteReason() {
     if (micForcedMuted || roomMicForcedMuted) return 'mic';
     if (playbackForcedMuted) return 'playback';
+    if (takeReviewForcedMuted) return 'review';
     return null;
   }
 
@@ -123,11 +132,13 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       ? 'mic-muted'
       : forcedReason === 'playback'
         ? 'playback-muted'
-        : userMuted
-          ? 'muted'
-          : audioReady()
-            ? 'audible'
-            : 'ready';
+        : forcedReason === 'review'
+          ? 'review-muted'
+          : userMuted
+            ? 'muted'
+            : audioReady()
+              ? 'audible'
+              : 'ready';
     toggle.dataset.state = state;
     toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
     toggle.disabled = Boolean(forcedReason);
@@ -135,16 +146,20 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       ? t('listen.mutedForMic')
       : forcedReason === 'playback'
         ? t('listen.mutedForSong')
-        : userMuted
-          ? t('listen.unmute')
-          : t('listen.mute');
-    note.textContent = copy;
+        : forcedReason === 'review'
+          ? localCopy('Paused', '暫停中')
+          : userMuted
+            ? t('listen.unmute')
+            : t('listen.mute');
+    note.textContent = forcedReason === 'review' ? '' : copy;
     document.body.dataset.listen = state;
 
     if (forcedReason === 'mic') {
       adjustState.textContent = t('listen.adjust.micMuted');
     } else if (forcedReason === 'playback') {
       adjustState.textContent = t('listen.adjust.songMuted');
+    } else if (forcedReason === 'review') {
+      adjustState.textContent = localCopy('Take playback is playing.', '正在播放錄音');
     } else if (userMuted) {
       adjustState.textContent = t('listen.adjust.userMuted');
     } else if (!audioReady()) {
@@ -515,6 +530,15 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     reconcile(t('listen.resumed'));
   }
 
+  function setTakeReviewForcedMute(forced) {
+    if (takeReviewForcedMuted === forced) return;
+    takeReviewForcedMuted = forced;
+    // Take review is a local overlay just like Mic/holder feedback protection.
+    // It must not rewrite the user's own mute preference; when review ends,
+    // reconcile() resumes only if no other forced/user mute reason remains.
+    reconcile();
+  }
+
   /**
    * Throws away a context that will not start, so the next one can.
    *
@@ -565,7 +589,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   toggle.addEventListener('click', async () => {
-    if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted) return;
+    if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted || takeReviewForcedMuted) return;
     userMuted = !userMuted;
     if (!userMuted) {
       try {
@@ -617,6 +641,9 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       role: event.detail?.role,
       timeline: event.detail?.timeline,
     }));
+  });
+  window.addEventListener('relay-take-review-playback', (event) => {
+    setTakeReviewForcedMute(event.detail?.active === true);
   });
 
   // Browsers do not generally allow a newly navigated page to speak before a

@@ -52,7 +52,8 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
   assert.equal(footer.includes('id="system-panel"'), false);
   assert.equal(footer.includes('id="mic-gain"'), false);
 
-  assert.match(script, /import '\.\/room-sound-ui\.js';/);
+  assert.equal(script.includes("'./room-sound-ui.js'"), true);
+  assert.match(script, /import\(modulePath\)\.catch/);
   assert.match(roomSound, /'房間聲音'/);
   assert.match(roomSound, /'只影響這支裝置'/);
   assert.match(roomSound, /'Room sound'/);
@@ -78,6 +79,23 @@ test('generic Adjust product layer is gone while System remains directly reachab
   assert.match(css, /\.system-panel\[open\] \{[\s\S]*?position: fixed;/);
   assert.match(script, /openSystem\?\.addEventListener\('click', revealSystem\)/);
   assert.match(script, /window\.addEventListener\('relay-open-system', revealSystem\)/);
+});
+
+test('System navigation is installed before optional Live presenters can fail', () => {
+  const systemBinding = script.indexOf("openSystem?.addEventListener('click', revealSystem)");
+  const optionalPresenterBoundary = script.indexOf('for (const modulePath of [');
+  assert.ok(systemBinding >= 0);
+  assert.ok(optionalPresenterBoundary > systemBinding);
+  assert.doesNotMatch(script, /^import\s/m);
+  assert.match(script, /import\(modulePath\)\.catch/);
+  for (const presenter of [
+    './mic-presence.js',
+    './room-sound-ui.js',
+    './people-ui.js',
+    './recording-ui.js',
+  ]) {
+    assert.equal(script.includes(`'${presenter}'`), true);
+  }
 });
 
 test('Live IA alone arbitrates System and Take history visibility', () => {
@@ -126,4 +144,11 @@ test('header and performance controls retain real phone-sized touch targets', ()
   assert.equal(css.includes('.more-popover .locale-option {\n  min-width: 44px;\n  min-height: 44px;'), true);
   assert.match(css, /\.mic-live-control > summary \{[\s\S]*?min-height: 48px;/);
   assert.equal(css.includes('.panel-done {'), true);
+});
+
+test('P0 Live states have one visible presenter each', () => {
+  assert.match(css, /#start-publisher::after \{[\s\S]*?content: none;/);
+  assert.match(css, /\.performance-stage:has\(#mic-takeover:not\(\[hidden\]\)\) \.mic-actions \{[\s\S]*?display: none;/);
+  assert.match(css, /\.youtube-readout:has\(#server-timeline-state\)[\s\S]*?display: none;/);
+  assert.match(css, /body\[data-listen="muted"\] #listen-note,[\s\S]*?body\[data-listen="playback-muted"\] #listen-note \{[\s\S]*?display: none;/);
 });

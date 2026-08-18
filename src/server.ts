@@ -790,7 +790,11 @@ function playbackTransportIsConnected(identity: PlaybackIdentity) {
 function sweepPreparedSongHandoff(nowMs: number) {
   const target = youtubeTimeline.handoffTarget();
   if (!target) return false;
-  if (!youtubeTimeline.sweepHandoff(playbackTransportIsConnected(target), nowMs)) return false;
+  if (!youtubeTimeline.sweepHandoff(
+    playbackTransportIsConnected(target),
+    nowMs,
+    participants.micOwnerId,
+  )) return false;
 
   sendToPlayback(target, { type: 'song-handoff-cancelled' });
   broadcastJson(youtubeTimeline.statusPayload(nowMs));
@@ -820,6 +824,7 @@ function applyMicOwnerEffects(
     prepareSongHandoff?: (participantId: string) => void;
   } = {},
 ) {
+  if (effects.changed) youtubeTimeline.retireFailedHandoffHoldover();
   return applyMicOwnerTransitionEffects(effects, {
     noteQualityEvent: (event) => {
       takeController.noteQualityEvent(event);

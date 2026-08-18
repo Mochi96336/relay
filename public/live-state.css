@@ -12,15 +12,15 @@ body[data-self-mic="off"] .voice-input-evidence {
 }
 
 /* Once this phone is the live Mic, tighten the handoff from media into the
-   performance task. mic-presence.js owns the short local RMS history; product
-   CSS only decides how strongly that truthful evidence should read. */
+   performance task. mic-presence.js owns the local time/frequency ribbon;
+   product CSS only decides how strongly that truthful evidence should read. */
 body[data-self-mic="live"] .performance-stage {
   padding-top: 26px;
 }
 body[data-self-mic="live"] #youtube-note {
   display: none;
 }
-body[data-self-mic="live"] .voice-presence-bar {
+body[data-self-mic="live"] .voice-presence-band {
   background: #f0ede5;
 }
 body[data-self-mic="live"] .voice-copy strong {

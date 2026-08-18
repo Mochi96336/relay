@@ -5,6 +5,7 @@ import test from 'node:test';
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
+const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 
 function between(start: string, end: string) {
@@ -14,7 +15,7 @@ function between(start: string, end: string) {
   return html.slice(from, to);
 }
 
-test('People owns identity and presence while language/secondary controls live in More', () => {
+test('People owns identity and presence while secondary tasks live in More', () => {
   const people = between('class="people-menu"', 'id="room-more"');
   const more = between('id="room-more"', '</header>');
 
@@ -23,55 +24,61 @@ test('People owns identity and presence while language/secondary controls live i
   assert.equal(people.includes('data-relay-locale'), false);
 
   assert.equal(more.includes('data-relay-locale="zh-Hant"'), true);
-  assert.equal(more.includes('id="open-adjust"'), true);
+  assert.equal(more.includes('id="calibrate-timing"'), true);
+  assert.equal(more.includes('id="vocal-fine-tune"'), true);
   assert.equal(more.includes('id="open-system"'), true);
+  assert.equal(more.includes('id="open-adjust"'), false);
 });
 
-test('Live keeps Song then performance state, with Voice label demoted from navigation', () => {
+test('Live keeps Song then performance state and contextual Mic gain', () => {
   const song = html.indexOf('class="song-stage"');
   const performance = html.indexOf('class="performance-stage"');
+  const gain = html.indexOf('id="mic-live-control"');
   const take = html.indexOf('class="take-strip"');
-  assert.ok(song >= 0 && song < performance && performance < take);
-  assert.equal(html.includes('id="youtube-player"'), true, 'real YouTube surface remains in the Live composition');
+  assert.ok(song >= 0 && song < performance && performance < gain && gain < take);
+  assert.equal(html.includes('id="youtube-player"'), true);
   assert.equal(css.includes('.performance-stage > .section-label'), true);
-  assert.equal(css.includes('clip-path: inset(50%);'), true,
-    'Voice remains accessible without acting as a visible backend-shaped section');
+  assert.equal(css.includes('body[data-self-mic="live"] .mic-live-control'), true);
+  assert.equal(script.includes("micLiveLabel.textContent = 'Mic';"), true);
 });
 
 test('persistent Live footer exposes only this-phone sound', () => {
   const footer = between('<footer class="live-actions">', '</footer>');
   assert.equal(footer.includes('id="listen-toggle"'), true);
-  assert.equal(footer.includes('data-i18n="adjust.thisPhone"'), true);
-  assert.equal(footer.includes('class="adjust-panel"'), false);
+  assert.equal(footer.includes('id="listen-gain"'), true);
   assert.equal(footer.includes('id="system-panel"'), false);
+  assert.equal(footer.includes('id="mic-gain"'), false);
 });
 
-test('Adjust and System remain reachable, hidden by default, and mutually exclusive', () => {
-  assert.equal(css.includes('.adjust-panel > summary,\n.system-panel > summary {\n  display: none;'), true);
-  assert.equal(css.includes('.adjust-panel:not([open]),\n.system-panel:not([open]) {\n  display: none;'), true);
-  assert.equal(script.includes("openAdjust?.addEventListener('click', () => revealPanel(adjustPanel, systemPanel, closeAdjust));"), true);
-  assert.equal(script.includes("openSystem?.addEventListener('click', () => revealPanel(systemPanel, adjustPanel, closeSystem));"), true);
-  assert.equal(script.includes('if (!adjustPanel.open) return;'), true);
-  assert.equal(script.includes('if (systemPanel) systemPanel.open = false;'), true);
-  assert.equal(script.includes('if (!systemPanel.open) return;'), true);
-  assert.equal(script.includes('if (adjustPanel) adjustPanel.open = false;'), true);
-  assert.equal(html.includes('id="close-adjust"'), true);
+test('generic Adjust product layer is gone while System remains directly reachable', () => {
+  assert.equal(html.includes('class="adjust-panel"'), false);
+  assert.equal(html.includes('id="open-adjust"'), false);
+  assert.equal(css.includes('.adjust-panel[open]'), false);
+  assert.equal(script.includes('adjustPanel'), false);
+
+  assert.equal(html.includes('id="open-system"'), true);
   assert.equal(html.includes('id="close-system"'), true);
+  assert.match(css, /\.system-panel:not\(\[open\]\)[\s\S]*?display: none;/);
+  assert.match(css, /\.system-panel\[open\] \{[\s\S]*?position: fixed;/);
+  assert.match(script, /openSystem\?\.addEventListener\('click', revealSystem\)/);
+  assert.match(script, /window\.addEventListener\('relay-open-system', revealSystem\)/);
 });
 
-test('English keeps Take while Traditional Chinese uses recording-oriented product copy', () => {
-  const englishStart = i18n.indexOf('en: {');
-  const chineseStart = i18n.indexOf("'zh-Hant': {");
-  assert.ok(englishStart >= 0 && chineseStart > englishStart);
-  const english = i18n.slice(englishStart, chineseStart);
-  const chinese = i18n.slice(chineseStart);
+test('recalibration is a direct task but app retains command authority', () => {
+  assert.match(script, /calibrateTiming\?\.addEventListener\('click'/);
+  assert.doesNotMatch(script, /start-timing-calibration|WebSocket/);
+  assert.match(app, /calibrateButton\.addEventListener\('click'/);
+  assert.match(app, /type: 'start-timing-calibration'/);
+});
 
-  assert.equal(english.includes("'take.record': 'Record take'"), true);
-  assert.equal(english.includes("'take.lastReady': 'Last take'"), true);
+test('Traditional Chinese remains recording-oriented while Mic stays a literal product term', () => {
+  const chineseStart = i18n.indexOf("'zh-Hant': {");
+  assert.ok(chineseStart >= 0);
+  const chinese = i18n.slice(chineseStart);
   assert.equal(chinese.includes("'take.record': '開始錄音'"), true);
   assert.equal(chinese.includes("'take.lastReady': '上一段錄音'"), true);
-  assert.equal(chinese.includes("'take.record': '錄製 Take'"), false);
-  assert.equal(chinese.includes("'system.attention.take-failed': '錄音失敗'"), true);
+  assert.equal(script.includes("removeAttribute('data-i18n')"), true);
+  assert.equal(script.includes("micLiveLabel.textContent = 'Mic'"), true);
 });
 
 test('Live IA does not reconstruct room or audio authority', () => {
@@ -88,10 +95,10 @@ test('Live IA does not reconstruct room or audio authority', () => {
   }
 });
 
-test('header and secondary controls retain real phone-sized touch targets', () => {
+test('header and performance controls retain real phone-sized touch targets', () => {
   assert.equal(css.includes('.people-menu > summary {\n  min-height: 44px;'), true);
   assert.equal(css.includes('.more-menu > summary {\n  min-width: 44px;\n  min-height: 44px;'), true);
   assert.equal(css.includes('.more-popover .locale-option {\n  min-width: 44px;\n  min-height: 44px;'), true);
-  assert.equal(css.includes('.more-action {'), true);
+  assert.match(css, /\.mic-live-control > summary \{[\s\S]*?min-height: 48px;/);
   assert.equal(css.includes('.panel-done {'), true);
 });

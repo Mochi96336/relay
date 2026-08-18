@@ -65,4 +65,9 @@ if (strip && status) {
   });
 
   strip.dataset.takeState = lifecycle;
+  // live-ia loads presenters dynamically after installing P0 navigation. If
+  // recorder.js already received the authoritative status before this module
+  // finished loading, ask it to replay the latest snapshot. If recorder.js has
+  // not started yet, its normal first server status will arrive afterward.
+  window.dispatchEvent(new Event('relay-request-take-status'));
 }

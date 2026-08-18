@@ -17,17 +17,19 @@
 }
 
 .song-stage {
-  padding-top: clamp(20px, 3.5vh, 32px);
+  padding-top: clamp(18px, 3vh, 28px);
 }
 
-/* The playback holder keeps a real YouTube surface. Never collapse the iframe
-   into a fake mini-player: the embedded player remains visible and usable. */
+/* The playback holder keeps the real YouTube surface because the iframe owns
+   the actual transport controls. Keep it compact, but never replace it with a
+   fake mini-player or shrink below a usable embedded-player floor. */
 .youtube-player-shell {
-  width: calc(100% + 12px);
-  margin-left: -6px;
+  width: 100%;
+  margin-left: 0;
   min-height: 200px;
+  aspect-ratio: 16 / 9;
   border-color: rgba(255, 255, 255, .07);
-  border-radius: 18px;
+  border-radius: 14px;
 }
 
 .youtube-player-shell > div,
@@ -36,7 +38,9 @@
 }
 
 .youtube-readout {
-  margin: 8px 2px 0;
+  margin: 7px 2px 0;
+  color: #8c8f95;
+  font-size: 11px;
 }
 
 /* Secondary song context must survive normal phone brightness without
@@ -46,7 +50,9 @@
 }
 
 #youtube-note {
+  max-width: 46ch;
   color: #7f8289;
+  font-size: 11px;
 }
 
 /* Performance is one stage: room Mic evidence, ownership, and recording all
@@ -175,13 +181,13 @@
 }
 
 @media (max-width: 420px) {
-  .song-stage { padding-top: 18px; }
+  .song-stage { padding-top: 16px; }
   .performance-stage { padding-top: 26px; }
 }
 
 @media (max-height: 760px) {
   .live-shell { padding-top: 14px; }
-  .song-stage { padding-top: 14px; }
+  .song-stage { padding-top: 12px; }
   .performance-stage { padding-top: 22px; }
   .voice-input-evidence { margin-bottom: 14px; }
   .mic-actions { margin-top: 14px; }

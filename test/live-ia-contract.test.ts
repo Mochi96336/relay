@@ -7,6 +7,7 @@ const css = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf
 const script = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
+const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 
 function between(start: string, end: string) {
   const from = html.indexOf(start);
@@ -62,6 +63,15 @@ test('generic Adjust product layer is gone while System remains directly reachab
   assert.match(css, /\.system-panel\[open\] \{[\s\S]*?position: fixed;/);
   assert.match(script, /openSystem\?\.addEventListener\('click', revealSystem\)/);
   assert.match(script, /window\.addEventListener\('relay-open-system', revealSystem\)/);
+});
+
+test('Live IA alone arbitrates System and Take history visibility', () => {
+  assert.match(script, /window\.addEventListener\('relay-open-take-history', revealTakeHistory\)/);
+  assert.match(script, /function revealTakeHistory\(\)[\s\S]*?closeSystemPanel\(false\);[\s\S]*?closeHeaderMenus\(\);[\s\S]*?panel\.open = true;/);
+  assert.match(script, /function revealSystem\(\)[\s\S]*?closeTakeHistoryPanel\(\);[\s\S]*?closeHeaderMenus\(\);[\s\S]*?systemPanel\.open = true;/);
+
+  assert.match(takeHistory, /window\.dispatchEvent\(new Event\('relay-open-take-history'\)\)/);
+  assert.doesNotMatch(takeHistory, /#system-panel|#room-more|\.adjust-panel/);
 });
 
 test('recalibration is a direct task but app retains command authority', () => {

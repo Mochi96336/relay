@@ -27,9 +27,6 @@ describe('prepared song handoff', () => {
     songs.update(telemetry(10), A, null, 0);
     assert.ok(songs.beginHandoff(B, B.participantId, 100));
 
-    // While the handoff stands, the old leader may only repeat itself and
-    // nobody else may touch the clock at all. That is the whole reason a
-    // handoff must not be able to outlive the tab it is waiting for.
     assert.equal(songs.update(telemetry(60), A, B.participantId, 200).accepted, false);
     assert.equal(songs.update(telemetry(60), B_OTHER, B.participantId, 200).reason, 'handoff-not-target');
 
@@ -37,11 +34,10 @@ describe('prepared song handoff', () => {
     assert.equal(songs.sweepHandoff(false, 200), true, 'a departed target ends the handoff');
     assert.equal(songs.statusPayload(200).handoffState, 'idle');
 
-    // And the room is usable again.
     assert.equal(songs.update(telemetry(60), A, null, 300).accepted, true);
   });
 
-  test('a target that never answers the plan cannot hold the room past the deadline', () => {
+  test('a target that never answers the plan cannot hold the room past the prepare deadline', () => {
     const songs = new SongSession();
     songs.update(telemetry(10), A, null, 0);
     assert.ok(songs.beginHandoff(B, B.participantId, 100));
@@ -51,21 +47,25 @@ describe('prepared song handoff', () => {
     assert.equal(songs.statusPayload(0).handoffState, 'idle');
   });
 
-  test('a target that answered may take as long as a blocked autoplay needs', () => {
+  test('an acknowledged target may retry briefly but cannot hold the room forever', () => {
     const songs = new SongSession();
     songs.update(telemetry(10), A, null, 0);
     const plan = songs.beginHandoff(B, B.participantId, 100);
     assert.ok(plan);
     assert.ok(songs.markHandoffReady(B, plan.handoffId, B.participantId, 150));
-    // The commit failed; the page is waiting for a real user gesture.
     assert.equal(songs.deferHandoff(B, plan.handoffId), true);
 
     assert.equal(
-      songs.sweepHandoff(true, 100 + 600_000),
+      songs.sweepHandoff(true, 100 + 29_000),
       false,
-      'a target that has acknowledged the plan is trusted to wait for its gesture',
+      'a short autoplay/user-gesture retry stays inside the total deadline',
     );
-    assert.equal(songs.sweepHandoff(false, 100 + 600_000), true, 'but not once it is gone');
+    assert.equal(
+      songs.sweepHandoff(true, 100 + 31_000),
+      true,
+      'ready once is not a permanent exemption from handoff expiry',
+    );
+    assert.equal((songs.statusPayload(100 + 31_000) as Record<string, any>).handoffState, 'idle');
   });
 
   test('does not create a handoff merely because another playback transport exists', () => {
@@ -160,30 +160,41 @@ describe('prepared song handoff', () => {
   });
 
   /**
-   * The deadlock this replaced was observed against a phone: 1858 refusals of
-   * the target's own commit report, and 822 of the outgoing leader's holdover,
-   * neither able to converge. Both rules judged a player against `serverTime` -
-   * where the room predicts it should be - so a player that had to buffer could
-   * never satisfy them, and a refused report never reaches the timeline to
-   * correct the gap it was refused for.
+   * BUFFERING is accepted only as private candidate evidence. The final proof
+   * must then realign to the still-live authoritative room clock; otherwise a
+   * long stall could promote a target several seconds behind and rewind the
+   * shared song.
    */
-  test('a target that is still buffering can complete its commit', () => {
+  test('buffering target telemetry converges privately but final proof must realign to the room', () => {
     const songs = new SongSession();
     songs.update(telemetry(10), A, A.participantId, 0);
     const prepared = songs.beginHandoff(B, B.participantId, 250);
     assert.ok(prepared);
     assert.ok(songs.markHandoffReady(B, prepared.handoffId, B.participantId, 300));
 
-    // A phone loading a video reports BUFFERING before it reports playing, and
-    // it lands a little behind the room clock that kept running without it.
-    // Demanding the finished state and the predicted position meant a handoff
-    // could only complete on a device that never had to buffer.
-    const completed = songs.update(
+    const buffering = songs.update(
       telemetry(9.6, { state: 3 }), B, B.participantId, 1_600,
+    );
+    assert.deepEqual(buffering, { accepted: true, leaderChanged: false });
+
+    const waiting = songs.statusPayload(1_600) as Record<string, any>;
+    assert.equal(waiting.handoffState, 'committing');
+    assert.equal(waiting.playbackLeaderParticipantId, A.participantId);
+    assert.equal(waiting.state, 1, 'candidate BUFFERING must not overwrite authoritative room state');
+
+    const stale = songs.update(
+      telemetry(9.9, { state: 1 }), B, B.participantId, 1_800,
+    );
+    assert.equal(stale.accepted, false);
+    assert.equal(stale.reason, 'handoff-song-mismatch');
+    assert.equal((songs.statusPayload(1_800) as Record<string, any>).playbackLeaderParticipantId, A.participantId);
+
+    const completed = songs.update(
+      telemetry(11.81, { state: 1 }), B, B.participantId, 1_810,
     );
     assert.equal(completed.accepted, true);
     assert.equal(completed.handoffCompleted, true);
-    assert.equal((songs.statusPayload(1_600) as Record<string, any>).handoffState, 'idle');
+    assert.equal((songs.statusPayload(1_810) as Record<string, any>).playbackLeaderParticipantId, B.participantId);
   });
 
   test('a real jump by the target is still refused', () => {
@@ -193,17 +204,29 @@ describe('prepared song handoff', () => {
     assert.ok(prepared);
     assert.ok(songs.markHandoffReady(B, prepared.handoffId, B.participantId, 300));
 
-    // Further ahead than its own last report allows is a seek, not a stall,
-    // and buffering does not excuse it.
     const jumped = songs.update(telemetry(90, { state: 3 }), B, B.participantId, 350);
     assert.equal(jumped.accepted, false);
     assert.equal(jumped.reason, 'handoff-song-mismatch');
 
-    // And a different song is still a different song.
     const other = songs.update(
       telemetry(10.2, { videoId: 'kJQP7kiw5Fk' }), B, B.participantId, 350,
     );
     assert.equal(other.accepted, false);
+  });
+
+  test('target proof must preserve the room playback rate', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10, { playbackRate: 1.25 }), A, A.participantId, 0);
+    const prepared = songs.beginHandoff(B, B.participantId, 250);
+    assert.ok(prepared);
+    assert.ok(songs.markHandoffReady(B, prepared.handoffId, B.participantId, 300));
+
+    const wrongRate = songs.update(
+      telemetry(10.3, { playbackRate: 1 }), B, B.participantId, 350,
+    );
+    assert.equal(wrongRate.accepted, false);
+    assert.equal(wrongRate.reason, 'handoff-song-mismatch');
+    assert.equal((songs.statusPayload(350) as Record<string, any>).playbackLeaderParticipantId, A.participantId);
   });
 
   test('ready plus matching target telemetry commits atomically and releases the handoff', () => {
@@ -254,7 +277,7 @@ describe('prepared song handoff', () => {
     assert.equal((songs.statusPayload(400) as Record<string, any>).playbackLeaderParticipantId, A.participantId);
   });
 
-  test('a failed commit returns to preparation without dropping the old leader', () => {
+  test('a client-reported failed commit returns to preparation without dropping the old leader', () => {
     const songs = new SongSession();
     songs.update(telemetry(10), A, A.participantId, 0);
     const prepared = songs.beginHandoff(B, B.participantId, 250);

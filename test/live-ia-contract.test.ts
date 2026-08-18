@@ -98,6 +98,18 @@ test('System navigation is installed before optional Live presenters can fail', 
   }
 });
 
+test('primary Live presenter CSS is render-blocking instead of arriving after module startup', () => {
+  for (const stylesheet of [
+    '/people-ui.css',
+    '/room-sound-ui.css',
+    '/recording-ui.css',
+    '/take-history.css',
+  ]) {
+    assert.equal(css.includes(`@import url('${stylesheet}');`), true,
+      `${stylesheet} must be reachable through the head-loaded Live IA stylesheet`);
+  }
+});
+
 test('Live IA alone arbitrates System and Take history visibility', () => {
   assert.match(script, /window\.addEventListener\('relay-open-take-history', revealTakeHistory\)/);
   assert.match(script, /function revealTakeHistory\(\)[\s\S]*?closeSystemPanel\(false\);[\s\S]*?closeHeaderMenus\(\);[\s\S]*?panel\.open = true;/);

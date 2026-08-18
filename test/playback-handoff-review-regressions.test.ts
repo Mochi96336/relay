@@ -108,8 +108,7 @@ test('outgoing leader waits for direct release instead of generic observer pause
   assert.ok(genericPauseIndex > releaseBarrierIndex,
     'promotion status must hit the outgoing release barrier before generic observer pause');
 
-  assert.match(releaseSection, /outgoingHandoffId = null/);
-  assert.match(releaseSection, /clearOutgoingReleaseTimer\(\)/);
+  assert.match(releaseSection, /retireOutgoingReleaseBarrier\(\)/);
   assert.match(releaseSection, /player\.pauseVideo\(\)/,
     'the direct release packet remains the normal audible cutover barrier for the old leader');
 });

@@ -20,9 +20,13 @@ if (
   && systemAudio && systemTiming && systemRecording
 ) {
   const RECONNECT_MS = 1_000;
+  const MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80;
   let socket = null;
   let reconnectTimer = null;
   let latestProductStatus = null;
+  let lastMicPresenceTelemetryAt = Number.NEGATIVE_INFINITY;
+  let roomMicOwnerId = null;
+  let roomMicLive = false;
 
   const attentionLabels = {
     'audio-unavailable': () => t('system.attention.audio-unavailable'),
@@ -82,6 +86,28 @@ if (
       && typeof window.relayParticipantId === 'string'
       && status.room.mic.ownerId === window.relayParticipantId,
     );
+  }
+
+  function dispatchRoomMicPresence(detail) {
+    window.dispatchEvent(new CustomEvent('relay-room-mic-presence', { detail }));
+  }
+
+  function renderRoomMicState(status) {
+    const mic = status?.room?.mic ?? {};
+    const ownerId = typeof mic.ownerId === 'string' ? mic.ownerId : null;
+    const live = mic.state === 'live' && ownerId !== null;
+    const ownerChanged = ownerId !== roomMicOwnerId;
+
+    document.body.dataset.roomMic = live ? 'live' : 'off';
+    if (!live || ownerChanged) {
+      dispatchRoomMicPresence({
+        active: false,
+        ownerId,
+      });
+    }
+
+    roomMicOwnerId = ownerId;
+    roomMicLive = live;
   }
 
   function liveCopy(status) {
@@ -204,6 +230,7 @@ if (
     document.body.dataset.health = status.health || 'healthy';
     document.body.dataset.timing = status.timing?.state || 'idle';
     document.body.dataset.selfMic = selfOwner && status.room?.mic?.state === 'live' ? 'live' : 'off';
+    renderRoomMicState(status);
 
     renderAttention(status);
     renderSystem(status);
@@ -222,6 +249,36 @@ if (
       reconnectTimer = null;
       connect().catch(scheduleReconnect);
     }, RECONNECT_MS);
+  }
+
+  function acceptRoomMicPresence(message) {
+    if (!message || message.type !== 'room-mic-presence' || message.version !== 1) return;
+    const ownerId = typeof message.ownerId === 'string' ? message.ownerId : null;
+    const captureGeneration = Number(message.captureGeneration);
+    const rmsDbfs = Number(message.rmsDbfs);
+    const spectrumBands = Array.isArray(message.spectrumBands)
+      ? message.spectrumBands.slice(0, 5).map(Number)
+      : [];
+    if (
+      !ownerId
+      || !Number.isInteger(captureGeneration)
+      || captureGeneration < 0
+      || captureGeneration > 0xffff_ffff
+      || !Number.isFinite(rmsDbfs)
+      || spectrumBands.length !== 5
+      || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
+    ) return;
+
+    roomMicOwnerId = ownerId;
+    roomMicLive = true;
+    document.body.dataset.roomMic = 'live';
+    dispatchRoomMicPresence({
+      active: true,
+      ownerId,
+      captureGeneration: captureGeneration >>> 0,
+      rmsDbfs,
+      spectrumBands,
+    });
   }
 
   async function connect() {
@@ -244,7 +301,11 @@ if (
       if (socket !== next || typeof event.data !== 'string') return;
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
-      if (message.type === 'product-status') render(message);
+      if (message.type === 'product-status') {
+        render(message);
+        return;
+      }
+      if (message.type === 'room-mic-presence') acceptRoomMicPresence(message);
     });
 
     next.addEventListener('close', () => {
@@ -258,6 +319,10 @@ if (
       // this page can no longer observe must not keep being reported.
       title.textContent = t('voice.connecting');
       detail.textContent = '';
+      roomMicLive = false;
+      roomMicOwnerId = null;
+      document.body.dataset.roomMic = 'off';
+      dispatchRoomMicPresence({ active: false, ownerId: null });
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -267,6 +332,36 @@ if (
     sendParticipantAuthentication(next);
     next.send(JSON.stringify({ type: 'product-status-request' }));
   }
+
+  window.addEventListener('relay-local-mic-level', (event) => {
+    if (
+      event.detail?.active !== true
+      || socket?.readyState !== WebSocket.OPEN
+      || !latestProductStatus
+      || !isSelfOwner(latestProductStatus)
+      || latestProductStatus.room?.mic?.state !== 'live'
+    ) return;
+
+    const rmsDbfs = Number(event.detail?.rmsDbfs);
+    const spectrumBands = Array.isArray(event.detail?.spectrumBands)
+      ? event.detail.spectrumBands.slice(0, 5).map(Number)
+      : [];
+    if (
+      !Number.isFinite(rmsDbfs)
+      || spectrumBands.length !== 5
+      || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
+    ) return;
+
+    const now = performance.now();
+    if (now - lastMicPresenceTelemetryAt < MIC_PRESENCE_TELEMETRY_INTERVAL_MS) return;
+    lastMicPresenceTelemetryAt = now;
+    socket.send(JSON.stringify({
+      type: 'mic-presence-telemetry',
+      version: 1,
+      rmsDbfs,
+      spectrumBands,
+    }));
+  });
 
   window.addEventListener('relay-microphone-start-failed', (event) => {
     title.textContent = t('voice.micUnavailable');

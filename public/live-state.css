@@ -15,10 +15,11 @@ body[data-room-mic="live"] .voice-input-evidence {
 }
 
 /* Once this phone is the live Mic, tighten the handoff from media into the
-   performance task. mic-presence.js keeps local evidence authoritative here;
-   listeners use the same visual with the server-relayed singer telemetry. */
+   performance task. The singer is important, but the moving Room Mic evidence
+   is the visual hero; the state headline should never turn into a landing-page
+   slogan that dwarfs the actual sound. */
 body[data-self-mic="live"] .performance-stage {
-  padding-top: 26px;
+  padding-top: 22px;
 }
 body[data-self-mic="live"] #youtube-note {
   display: none;
@@ -27,8 +28,8 @@ body[data-room-mic="live"] .voice-presence-band {
   background: #f0ede5;
 }
 body[data-self-mic="live"] .voice-copy strong {
-  font-size: clamp(38px, 10.5vw, 52px);
-  font-weight: 610;
+  font-size: clamp(27px, 7vw, 34px);
+  font-weight: 630;
 }
 
 body[data-health="degraded"] .attention-link {
@@ -43,9 +44,9 @@ body[data-health="blocked"] .attention-link {
 
 @media (max-height: 760px) {
   body[data-self-mic="live"] .performance-stage {
-    padding-top: 20px;
+    padding-top: 18px;
   }
   body[data-self-mic="live"] .voice-copy strong {
-    font-size: clamp(34px, 9.5vw, 46px);
+    font-size: clamp(25px, 6.6vw, 32px);
   }
 }

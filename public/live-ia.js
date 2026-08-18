@@ -1,4 +1,5 @@
 import './mic-presence.js';
+import './room-sound-ui.js';
 
 const peopleMenu = document.querySelector('.people-menu');
 const moreMenu = document.querySelector('#room-more');

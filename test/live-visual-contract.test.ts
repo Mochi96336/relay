@@ -26,11 +26,12 @@ test('holder Change song is visible as a real phone touch target instead of tiny
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('performance composition turns current Room Mic evidence into a wide joined time-frequency ribbon', () => {
+test('performance composition turns current Room Mic evidence into one continuous time-frequency field', () => {
   assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(70vw, 276px\);[\s\S]*?height: 58px;/);
-  assert.match(composition, /grid-template-columns: repeat\(10, minmax\(0, 1fr\)\);/);
+  assert.match(composition, /grid-template-columns: repeat\(10, minmax\(0, 1fr\)\);[\s\S]*?gap: 0;/);
+  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 12%, #000 100%\)/);
   assert.match(composition, /\.voice-presence-slice \{[\s\S]*?flex-direction: column-reverse;[\s\S]*?gap: 0;/);
-  assert.match(composition, /\.voice-presence-band \{[\s\S]*?width: 100%;[\s\S]*?height: 12px;[\s\S]*?margin-top: -4px;/);
+  assert.match(composition, /\.voice-presence-band \{[\s\S]*?width: 100%;[\s\S]*?height: 12px;[\s\S]*?margin-top: -3px;[\s\S]*?transform: none !important;/);
   assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 10/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
   assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
@@ -66,13 +67,14 @@ test('new Mic evidence enters on the right while old evidence fades toward the l
   assert.match(model, /Oldest slice stays on the left; the newest local Mic evidence enters on the[\s\S]*right/);
   assert.match(model, /const next = \[\.\.\.previous, createPresenceSlice/);
   assert.match(presence, /newest is always the right edge/);
-  assert.match(presence, /0\.36 \+ age \* 0\.64/);
+  assert.match(presence, /0\.28 \+ age \* 0\.72/);
 });
 
 test('recording stays inside performance while local sound remains the one persistent lower horizon', () => {
   assert.match(composition, /\.take-strip \{[\s\S]*?margin-top: 14px;[\s\S]*?padding-top: 0;[\s\S]*?border-top: 0;/);
   assert.match(composition, /\.live-actions \{[\s\S]*?margin-top: 24px;[\s\S]*?padding-top: 14px;/);
   assert.match(composition, /data-take-state="recording"[\s\S]*?\.last-take[\s\S]*?display: none;/);
+  assert.doesNotMatch(composition, /#stop-recording:not\(:disabled\)::before/);
 });
 
 test('Room Mic presence is visible to listeners while local holder evidence stays strongest', () => {

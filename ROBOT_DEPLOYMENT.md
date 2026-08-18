@@ -88,11 +88,13 @@ It:
 - creates the `relay_browser` null sink only when it does not already exist;
 - captures `relay_browser.monitor` as mono 16-bit little-endian PCM at 48 kHz by default;
 - pipes the capture into `backing:stdin`;
-- launches an isolated Chromium profile under Xvfb, routed with `PULSE_SINK=relay_browser`;
+- launches an isolated Chromium profile under Xvfb on a small screen, routed with `PULSE_SINK=relay_browser`;
 - always opens `http://localhost:$PORT/source.html?robot=1`; and
 - stops its child processes and unloads only a sink module it created itself.
 
 `PORT` defaults to `3000`. `CHROMIUM_BIN` can select a nonstandard Chromium executable, and `RELAY_BROWSER_SINK` can select an existing sink with another name. The backing bridge requires `RELAY_INFRA_KEY` and continues to accept `RELAY_URL`, `RELAY_KEY`, `RELAY_BACKING_SAMPLE_RATE`, and `RELAY_BACKING_FRAME_MS`; see `npm run backing:stdin -- --help`. The launcher applies `RELAY_BACKING_SAMPLE_RATE` to both `parec` and the bridge so the declared rate always matches the PCM; the validated default remains 48 kHz. `RELAY_BACKING_CAPTURE_LATENCY_MS` controls `parec --latency-msec` and defaults to 40 ms; setting it explicitly avoids the roughly two-second default capture buffer observed on the robot. When `RELAY_KEY` is set, the launcher also adds it to the local source page URL so both browser and backing bridge can authenticate, without writing the key into its log line.
+
+`RELAY_ROBOT_SCREEN` sizes the Xvfb screen and the Chromium window, and defaults to `480x360x24`. Nobody ever looks at this screen — only its audio leaves the machine — and a desktop-sized YouTube player rendered in software costs decode headroom on a Raspberry Pi that hosts neither WebGL nor Vulkan. That cost is not only power: it shows up as jitter in the player position the mixer aligns the microphone against. Raise it only if a site refuses to serve a real player at this size.
 
 Run the Relay server separately before starting the launcher. Robot mode automatically arms source audio, and Chromium is launched with the autoplay policy needed for that unattended local page; no source-page gesture or extension invocation is required.
 

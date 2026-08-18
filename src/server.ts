@@ -22,6 +22,7 @@ import { ProbeLifecycle, type ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
+import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
 import {
   ParticipantSession,
   normalizeNickname,
@@ -291,13 +292,16 @@ let lastProbeContext: {
   micGeneration: number | null;
   backingGeneration: number | null;
 } | null = null;
-let robotPlayerOffsetMs: number | null = null;
-let robotPlayerOffsetAt = -Infinity;
 let lastBootCalibration: BootCalibrationResult | null = null;
 let bootPathDifferenceMs: number | null = null;
 let bootConfidence: number | null = null;
 const BOOT_DELTA_REAPPLY_MS = envMs('RELAY_CALIBRATION_DELTA_REAPPLY_MS', 40);
 const ROBOT_OFFSET_FRESH_MS = 2_000;
+const ROBOT_OFFSET_WINDOW_MS = envMs('RELAY_ROBOT_OFFSET_WINDOW_MS', 2_000);
+const robotPlayerOffset = new RobotPlayerOffsetTracker({
+  freshForMs: ROBOT_OFFSET_FRESH_MS,
+  windowMs: ROBOT_OFFSET_WINDOW_MS,
+});
 
 const STREAM_LIVE_MS = 1_000;
 const COLLECTION_SILENCE_GRACE_MS = 1_500;
@@ -443,8 +447,8 @@ function robotProbeTimingActive() {
 
 function robotDeltaIsFresh(nowMs = performance.now()) {
   return activeRobotSource?.readyState === WebSocket.OPEN
-    && robotPlayerOffsetMs !== null
-    && nowMs - robotPlayerOffsetAt <= ROBOT_OFFSET_FRESH_MS;
+    && robotPlayerOffset.offsetMs(nowMs) !== null
+    && robotPlayerOffset.isFresh(nowMs);
 }
 
 const calibration = new CalibrationSession({
@@ -1291,7 +1295,7 @@ function timingCalibrationStatusPayload() {
     probeMaxAttempts: probe.maxAttempts,
     probeError: probe.error,
     bootCalibration: lastBootCalibration,
-    robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs : null,
+    robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs) : null,
     automatic: calibrationWasAutomatic,
     autoCalibrate: AUTO_CALIBRATE,
   };
@@ -1345,7 +1349,7 @@ function readinessPayload(nowMs = performance.now()) {
     sessionActive: session.active,
     timelineConnected: Boolean(timeline.connected && timeline.videoId),
     timelineState: Number.isFinite(timelineState) ? timelineState : null,
-    playerOffsetMs: robotPlayerOffsetMs,
+    playerOffsetMs: robotPlayerOffset.offsetMs(nowMs),
     playerOffsetFresh: robotDeltaIsFresh(nowMs),
     calibrationState: String(calibrationStatus.state ?? 'idle'),
     calibrationValid: calibrationCanApply() && session.alignment.calibratedMicLagMs !== null,
@@ -1499,8 +1503,7 @@ function stopLiveSource() {
   if (!session.active) return;
   takeController.endMix();
   clearBootCalibrationState();
-  robotPlayerOffsetMs = null;
-  robotPlayerOffsetAt = -Infinity;
+  robotPlayerOffset.reset();
   session.stop();
   calibration.reset();
   calibrationKind = 'none';
@@ -1900,7 +1903,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
 }
 
 function currentDeltaMs(nowMs: number) {
-  return robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs! : 0;
+  return robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs)! : 0;
 }
 
 function maybeReapplyBootCalibration(nowMs: number) {
@@ -1944,8 +1947,7 @@ function restartBootCalibration(nowMs: number, automatic: boolean) {
   calibrationKind = 'boot-probe';
   calibrationWasAutomatic = automatic;
   clearBootCalibrationState();
-  robotPlayerOffsetMs = null;
-  robotPlayerOffsetAt = -Infinity;
+  robotPlayerOffset.reset();
   syncAppliedCalibration();
   maybeStartProbeCalibration(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
@@ -2568,8 +2570,7 @@ wss.on('connection', (rawSocket, request) => {
       // false, but must not restore seek authority to that old socket.
       if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
       sourceGeneration += 1;
-      robotPlayerOffsetMs = null;
-      robotPlayerOffsetAt = -Infinity;
+      robotPlayerOffset.reset();
       if (calibration.collecting) {
         calibration.fail('The desktop player seeked during calibration. Start calibration again.');
       } else {
@@ -2919,8 +2920,7 @@ wss.on('connection', (rawSocket, request) => {
 
       activeRobotSource = socket;
       socket.isRobotSource = true;
-      robotPlayerOffsetMs = null;
-      robotPlayerOffsetAt = -Infinity;
+      robotPlayerOffset.reset();
       dropLegacyCalibrationForRobot();
       syncAppliedCalibration();
       broadcastJson(sourceStatusPayload());
@@ -2931,8 +2931,7 @@ wss.on('connection', (rawSocket, request) => {
     if (payload.type === 'robot-player-offset') {
       const offsetMs = Number(payload.offsetMs);
       if (socket === activeRobotSource && socket.isRobotSource === true && Number.isFinite(offsetMs)) {
-        robotPlayerOffsetMs = offsetMs;
-        robotPlayerOffsetAt = performance.now();
+        robotPlayerOffset.record(offsetMs, performance.now());
       }
       return;
     }
@@ -2988,8 +2987,7 @@ wss.on('connection', (rawSocket, request) => {
         takeController.noteQualityEvent('robot-source-disconnected');
         activeRobotSource = null;
         socket.isRobotSource = false;
-        robotPlayerOffsetMs = null;
-        robotPlayerOffsetAt = -Infinity;
+        robotPlayerOffset.reset();
         sourceGeneration += 1;
         abandonProbeRun();
         syncAppliedCalibration();

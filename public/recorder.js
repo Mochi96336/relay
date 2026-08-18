@@ -11,6 +11,7 @@ let reconnectTimer = null;
 let latestStatus = { lifecycle: 'idle', take: null, history: [] };
 let commandError = null;
 let productCanStartTake = false;
+let startTakeBlockedReason = 'mix-not-active';
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -31,15 +32,21 @@ function recordingState() {
   const lifecycle = String(latestStatus?.lifecycle ?? 'idle');
   const take = latestStatus?.take ?? null;
   const connected = socket?.readyState === WebSocket.OPEN;
+  const canStart = connected
+    && productCanStartTake
+    && lifecycle !== 'recording'
+    && lifecycle !== 'finalizing';
   return {
     lifecycle,
     take,
     connected,
     productCanStartTake,
-    canStart: connected
-      && productCanStartTake
-      && lifecycle !== 'recording'
-      && lifecycle !== 'finalizing',
+    canStart,
+    startBlockedReason: canStart
+      ? null
+      : !connected
+        ? 'reconnecting'
+        : startTakeBlockedReason,
     canStop: connected && lifecycle === 'recording' && Boolean(take?.takeId),
     commandError,
     observedAt: Date.now(),
@@ -170,6 +177,9 @@ async function connect() {
 
 window.addEventListener('relay-product-status', (event) => {
   productCanStartTake = event.detail?.actions?.canStartTake === true;
+  startTakeBlockedReason = typeof event.detail?.actions?.startTakeBlockedReason === 'string'
+    ? event.detail.actions.startTakeBlockedReason
+    : productCanStartTake ? null : 'mix-not-active';
   publishRecordingState();
 });
 

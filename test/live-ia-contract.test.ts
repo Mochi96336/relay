@@ -58,8 +58,8 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
   assert.equal(footer.includes('id="system-panel"'), false);
   assert.equal(footer.includes('id="mic-gain"'), false);
 
-  assert.equal(script.includes("'./room-sound-ui.js'"), true);
-  assert.match(script, /import\(modulePath\)\.catch/);
+  assert.match(html, /<script type="module" src="\/room-sound-ui\.js"><\/script>/);
+  assert.equal(script.includes("'./room-sound-ui.js'"), false);
   assert.match(roomSound, /'房間聲音'/);
   assert.match(roomSound, /'只影響這支裝置'/);
   assert.match(roomSound, /'Room sound'/);
@@ -87,21 +87,22 @@ test('generic Adjust product layer is gone while System remains directly reachab
   assert.match(script, /window\.addEventListener\('relay-open-system', revealSystem\)/);
 });
 
-test('System navigation is installed before optional Live presenters can fail', () => {
+test('System navigation is installed before degradable optional projections can fail', () => {
   const systemBinding = script.indexOf("openSystem?.addEventListener('click', revealSystem)");
   const optionalPresenterBoundary = script.indexOf('for (const modulePath of [');
   assert.ok(systemBinding >= 0);
   assert.ok(optionalPresenterBoundary > systemBinding);
   assert.doesNotMatch(script, /^import\s/m);
   assert.match(script, /import\(modulePath\)\.catch/);
-  for (const presenter of [
-    './mic-presence.js',
-    './room-sound-ui.js',
-    './people-ui.js',
-    './recording-ui.js',
-    './mic-actions.js',
-  ]) {
+
+  for (const presenter of ['./mic-presence.js', './people-ui.js']) {
     assert.equal(script.includes(`'${presenter}'`), true);
+  }
+
+  for (const presenter of ['mic-actions', 'room-sound-ui', 'recording-ui']) {
+    assert.match(html, new RegExp(`<script type="module" src="\\/${presenter}\\.js"><\\/script>`));
+    assert.equal(script.includes(`'./${presenter}.js'`), false,
+      `${presenter} is a sole action presenter and must not be optional`);
   }
 });
 

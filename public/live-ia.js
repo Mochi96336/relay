@@ -7,6 +7,16 @@ const openSystem = document.querySelector('#open-system');
 const closeSystem = document.querySelector('#close-system');
 const calibrateTiming = document.querySelector('#calibrate-timing');
 const micLiveControl = document.querySelector('#mic-live-control');
+const micLiveLabel = micLiveControl?.querySelector('summary span');
+
+// "Mic" is the product term in every locale: it is the same object the user
+// takes/releases, not a translated mixer channel named Voice/人聲. The template
+// still carries the historical i18n hook for compatibility; retire it here
+// before future locale changes can rewrite this row.
+if (micLiveLabel) {
+  micLiveLabel.removeAttribute('data-i18n');
+  micLiveLabel.textContent = 'Mic';
+}
 
 function closeHeaderMenus(except = null) {
   for (const menu of [peopleMenu, moreMenu]) {

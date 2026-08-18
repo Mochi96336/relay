@@ -35,7 +35,9 @@ if (meter) {
   let sourceKey = null;
   let localActive = false;
   let lastLocalSampleAt = Number.NEGATIVE_INFINITY;
+  let remoteStaleTimer = null;
   const LOCAL_SAMPLE_INTERVAL_MS = 40;
+  const REMOTE_EVIDENCE_STALE_MS = 320;
 
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
@@ -52,17 +54,37 @@ if (meter) {
     });
   }
 
+  function clearRemoteStaleTimer() {
+    if (remoteStaleTimer === null) return;
+    clearTimeout(remoteStaleTimer);
+    remoteStaleTimer = null;
+  }
+
   function reset(nextSourceKey = null) {
+    clearRemoteStaleTimer();
     history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
     sourceKey = nextSourceKey;
     lastLocalSampleAt = Number.NEGATIVE_INFINITY;
     render(false);
   }
 
+  function armRemoteStaleTimer(expectedSourceKey) {
+    clearRemoteStaleTimer();
+    remoteStaleTimer = setTimeout(() => {
+      remoteStaleTimer = null;
+      // Presence is evidence, not state. If several expected 80 ms telemetry
+      // packets never arrive, stop displaying the last packet as if it were
+      // still live. The existing 110 ms band transitions soften the reset.
+      if (localActive || sourceKey !== expectedSourceKey) return;
+      reset();
+    }, REMOTE_EVIDENCE_STALE_MS);
+  }
+
   function append(source, rmsDbfs, spectrumBands) {
     if (source !== sourceKey) reset(source);
     history = nextPresenceHistory(history, rmsDbfs, spectrumBands);
     render(true);
+    if (source.startsWith('room:')) armRemoteStaleTimer(source);
   }
 
   window.addEventListener('relay-local-mic-level', (event) => {

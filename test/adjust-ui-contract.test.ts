@@ -10,15 +10,17 @@ const css = readFileSync(new URL('../public/adjust.css', import.meta.url), 'utf8
 const ia = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const iaCss = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 
-test('local Listen is promoted to Live before the audio owner binds', () => {
-  assert.equal(html.includes('class="adjust-group local-listen"'), true,
-    'the legacy template still supplies the existing control IDs during the IA migration');
-  assert.equal(html.indexOf('/live-ia.js') < html.indexOf('/listen.js'), true,
-    'IA must settle the final DOM before listen.js queries its controls');
-  assert.match(ia, /localListen\.classList\.remove\('adjust-group'\)/);
-  assert.match(ia, /localListen\.classList\.add\('local-sound-control'\)/);
-  assert.match(ia, /liveActions\.prepend\(localListen\)/);
-  assert.match(ia, /listenAction\?\.remove\(\)/);
+test('local Listen belongs to Live while Adjust owns shared mix and Timing', () => {
+  const liveActions = html.indexOf('class="live-actions"');
+  const localListen = html.indexOf('class="local-listen local-sound-control"');
+  const adjust = html.indexOf('class="adjust-panel"');
+  const roomMix = html.indexOf('class="adjust-group room-mix"');
+  const timing = html.indexOf('class="adjust-group timing-adjust"');
+
+  assert.ok(liveActions >= 0 && liveActions < localListen && localListen < adjust);
+  assert.ok(adjust < roomMix && roomMix < timing);
+  assert.equal(html.slice(adjust, timing).includes('id="listen-gain"'), false,
+    'local playback volume must not remain inside Adjust');
   assert.equal(html.includes('>Room mix<'), true);
   assert.equal(html.includes('>Timing<'), true);
   assert.equal(html.includes('>Monitor<'), false);

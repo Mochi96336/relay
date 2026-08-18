@@ -8,31 +8,6 @@ const openAdjust = document.querySelector('#open-adjust');
 const openSystem = document.querySelector('#open-system');
 const closeAdjust = document.querySelector('#close-adjust');
 const closeSystem = document.querySelector('#close-system');
-const liveActions = document.querySelector('.live-actions');
-const localListen = document.querySelector('.local-listen');
-const listenAction = document.querySelector('.listen-action');
-
-function promoteLocalSoundControl() {
-  if (!liveActions || !localListen) return;
-
-  const heading = localListen.querySelector('.adjust-group-heading');
-  const toggle = listenAction?.querySelector('#listen-toggle');
-  const note = listenAction?.querySelector('#listen-note');
-
-  localListen.classList.remove('adjust-group');
-  localListen.classList.add('local-sound-control');
-
-  if (heading && toggle) heading.append(toggle);
-  if (note) localListen.append(note);
-
-  liveActions.prepend(localListen);
-  listenAction?.remove();
-}
-
-// live-ia.js loads before listen.js. Move the existing Listen controls first so
-// the audio owner binds to the final product-facing DOM instead of a settings
-// panel. No audio state or authority is duplicated here.
-promoteLocalSoundControl();
 
 function closeHeaderMenus(except = null) {
   for (const menu of [peopleMenu, moreMenu]) {

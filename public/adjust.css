@@ -1,5 +1,5 @@
-/* Adjust owns shared room mix and timing only. The local Listen control is
-   promoted to Live by the IA layer before listen.js binds to it. */
+/* Adjust owns shared room mix and timing only. Local Listen is part of the
+   persistent Live surface and keeps its existing single audio owner. */
 
 .adjust-sheet {
   display: grid;

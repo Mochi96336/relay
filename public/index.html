@@ -132,13 +132,22 @@
       </section>
 
       <footer class="live-actions">
-        <div class="listen-action">
-          <div class="listen-copy">
-            <strong data-i18n="adjust.thisPhone">This phone</strong>
-            <span id="listen-note" class="action-note" aria-live="polite"></span>
+        <section class="local-listen local-sound-control" aria-labelledby="local-listen-label">
+          <div class="adjust-group-heading">
+            <span id="local-listen-label" class="section-label" data-i18n="adjust.thisPhone">This phone</span>
+            <span data-i18n="adjust.localOnly">Local only</span>
+            <button id="listen-toggle" class="text-action" type="button" aria-pressed="false" data-i18n="listen.mute">Mute</button>
           </div>
-          <button id="listen-toggle" class="text-action" type="button" aria-pressed="false" data-i18n="listen.mute">Mute</button>
-        </div>
+          <label class="adjust-control" for="listen-gain">
+            <div class="adjust-row-heading">
+              <strong data-i18n="adjust.listenVolume">Listen volume</strong>
+              <output id="listen-gain-value" for="listen-gain">100%</output>
+            </div>
+            <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="100" />
+          </label>
+          <p id="listen-adjust-state" class="adjust-helper" data-i18n="listen.adjust.ready">Sound is on by default after your first interaction.</p>
+          <span id="listen-note" class="action-note" aria-live="polite"></span>
+        </section>
       </footer>
 
       <details class="adjust-panel">
@@ -182,21 +191,6 @@
               </div>
               <input id="song-level" class="adjust-range" type="range" min="0" max="100" step="1" value="40" disabled />
             </label>
-          </section>
-
-          <section class="adjust-group local-listen" aria-labelledby="local-listen-label">
-            <div class="adjust-group-heading">
-              <span id="local-listen-label" class="section-label" data-i18n="adjust.thisPhone">This phone</span>
-              <span data-i18n="adjust.localOnly">Local only</span>
-            </div>
-            <label class="adjust-control" for="listen-gain">
-              <div class="adjust-row-heading">
-                <strong data-i18n="adjust.listenVolume">Listen volume</strong>
-                <output id="listen-gain-value" for="listen-gain">100%</output>
-              </div>
-              <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="100" />
-            </label>
-            <p id="listen-adjust-state" class="adjust-helper" data-i18n="listen.adjust.ready">Sound is on by default after your first interaction.</p>
           </section>
 
           <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">

@@ -124,9 +124,9 @@
   margin-bottom: 0;
 }
 
-/* Local sound is a Live control, not room tuning. live-ia.js promotes the
-   existing range before listen.js binds to it, preserving a single owner for
-   audio state while moving the product control to the correct horizon. */
+/* Local sound is a Live control, not room tuning. The template owns the same
+   listen-gain/listen-toggle IDs that listen.js already controls, so product
+   placement changes without creating a second audio authority. */
 .live-actions {
   display: block;
 }

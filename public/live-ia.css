@@ -1,0 +1,228 @@
+/* Live IA layer: normal performance surface first; secondary controls stay
+   reachable without remaining permanently visible. Domain state still comes
+   from the existing product/audio owners. */
+
+.room-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.people-menu > summary {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.more-menu {
+  position: relative;
+}
+
+.more-menu > summary {
+  min-width: 44px;
+  min-height: 44px;
+  margin-right: -10px;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #8d9097;
+  cursor: pointer;
+  user-select: none;
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: .08em;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.more-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.more-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(300px, calc(100vw - 32px));
+  padding: 8px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(20, 21, 24, .98);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .42);
+  display: grid;
+  gap: 2px;
+}
+
+.more-popover .locale-control {
+  order: 2;
+  margin-top: 4px;
+}
+
+.more-popover .locale-option {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.more-actions {
+  display: grid;
+}
+
+.more-action {
+  appearance: none;
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-bottom: 1px solid #202227;
+  padding: 0;
+  background: transparent;
+  color: #d4d4d7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 620;
+  text-align: left;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.more-action:hover {
+  color: #fff;
+}
+
+/* Voice is not a navigation section. The state headline already answers the
+   useful question: who has Mic / am I live? */
+.performance-stage > .section-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.performance-stage {
+  display: flex;
+  flex-direction: column;
+}
+
+.performance-stage > .voice-copy { order: 1; }
+.performance-stage > .voice-input-evidence { order: 2; }
+.performance-stage > .mic-actions { order: 3; }
+.performance-stage > .takeover-row { order: 4; }
+.performance-stage > .take-strip { order: 5; }
+
+.voice-input-evidence {
+  margin-top: 18px;
+  margin-bottom: 0;
+}
+
+/* The persistent horizon now represents one local preference only. Adjust and
+   System move behind the header menu instead of pretending to be Live tasks. */
+.live-actions {
+  display: block;
+}
+
+.listen-action {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+}
+
+.listen-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.listen-copy strong {
+  color: #c7c7ca;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.listen-action .action-note {
+  max-width: none;
+}
+
+#listen-toggle {
+  min-width: 72px;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+/* Native details still own open/close state, but their old persistent summaries
+   are retired. Header menu buttons open these panels explicitly. */
+.adjust-panel,
+.system-panel {
+  margin-top: 0;
+}
+
+.adjust-panel > summary,
+.system-panel > summary {
+  display: none;
+}
+
+.adjust-panel:not([open]),
+.system-panel:not([open]) {
+  display: none;
+}
+
+.adjust-panel[open],
+.system-panel[open] {
+  display: block;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #202227;
+}
+
+.adjust-heading {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.adjust-heading > span {
+  flex: 0 0 100%;
+}
+
+.panel-done {
+  align-self: center;
+  min-height: 44px;
+  margin-top: -10px;
+  margin-bottom: -10px;
+  padding-left: 8px;
+  padding-right: 0;
+}
+
+.system-panel-heading {
+  min-height: 44px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.system-panel-heading strong {
+  font-size: 15px;
+  font-weight: 660;
+}
+
+.system-panel[open] .system-sheet {
+  margin-top: 0;
+}
+
+@media (max-width: 420px) {
+  .room-header-actions { gap: 8px; }
+  .more-popover { right: -4px; }
+  .voice-input-evidence { margin-top: 14px; }
+}

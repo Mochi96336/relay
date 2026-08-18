@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   rmSync,
@@ -11,8 +12,9 @@ import path from 'node:path';
 const GIB = 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WAV_HEADER_BYTES = 44;
-const TAKE_WAV_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.wav$/i;
-const TAKE_PART_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.wav\.part$/i;
+const TAKE_WAV_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.wav$/i;
+const TAKE_PART_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:wav|json)\.part$/i;
+const TAKE_METADATA_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/i;
 
 export type TakeStoragePolicy = {
   maxBytes: number;
@@ -23,10 +25,12 @@ export type TakeStoragePolicy = {
 export type TakeStoragePreparation = {
   removedPartialFiles: number;
   removedArtifactFiles: number;
+  removedMetadataFiles: number;
   maxTakeDataBytes: number;
 };
 
 type ArtifactRecord = {
+  takeId: string;
   fileName: string;
   sizeBytes: number;
   mtimeMs: number;
@@ -105,6 +109,22 @@ function currentTakeBudget(directory: string, policy: TakeStoragePolicy) {
   return writableBytes;
 }
 
+function pairedMetadataFileName(takeId: string) {
+  return `${takeId}.json`;
+}
+
+function removeMetadataOrphansSync(directory: string) {
+  const names = new Set(readdirSync(directory));
+  let removed = 0;
+  for (const name of names) {
+    const match = TAKE_METADATA_PATTERN.exec(name);
+    if (!match || names.has(`${match[1]}.wav`)) continue;
+    rmSync(path.join(directory, name), { force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
 /**
  * Runs only on the control-plane path before the first Take of this process.
  * This directory is single-writer storage owned by one Relay process.
@@ -125,17 +145,35 @@ export function prepareTakeStorage(
 
   const artifacts: ArtifactRecord[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !TAKE_WAV_PATTERN.test(entry.name)) continue;
+    if (!entry.isFile()) continue;
+    const match = TAKE_WAV_PATTERN.exec(entry.name);
+    if (!match) continue;
     const info = statSync(path.join(directory, entry.name));
-    artifacts.push({ fileName: entry.name, sizeBytes: info.size, mtimeMs: info.mtimeMs });
+    artifacts.push({
+      takeId: match[1],
+      fileName: entry.name,
+      sizeBytes: info.size,
+      mtimeMs: info.mtimeMs,
+    });
   }
 
   const removals = artifactNamesToRemove(artifacts, policy, null, nowMs);
-  for (const fileName of removals) rmSync(path.join(directory, fileName), { force: true });
+  let removedMetadataFiles = 0;
+  for (const record of artifacts) {
+    if (!removals.has(record.fileName)) continue;
+    rmSync(path.join(directory, record.fileName), { force: true });
+    const metadataPath = path.join(directory, pairedMetadataFileName(record.takeId));
+    if (existsSync(metadataPath)) {
+      rmSync(metadataPath, { force: true });
+      removedMetadataFiles += 1;
+    }
+  }
+  removedMetadataFiles += removeMetadataOrphansSync(directory);
 
   return {
     removedPartialFiles,
     removedArtifactFiles: removals.size,
+    removedMetadataFiles,
     maxTakeDataBytes: currentTakeBudget(directory, policy),
   };
 }
@@ -146,8 +184,9 @@ export function takeStorageBudget(directory: string, policy: TakeStoragePolicy) 
 }
 
 /**
- * Prunes only finalized WAVs. It deliberately ignores `.part` files so this
- * asynchronous maintenance can never race a newly started Take writer.
+ * Prunes only finalized WAVs and their finalized metadata sidecars. It
+ * deliberately ignores `.part` files so this asynchronous maintenance can
+ * never race a newly started Take writer or an atomic metadata write.
  */
 export async function pruneTakeArtifacts(
   directory: string,
@@ -159,10 +198,17 @@ export async function pruneTakeArtifacts(
   const artifacts: ArtifactRecord[] = [];
 
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !TAKE_WAV_PATTERN.test(entry.name)) continue;
+    if (!entry.isFile()) continue;
+    const match = TAKE_WAV_PATTERN.exec(entry.name);
+    if (!match) continue;
     try {
       const info = await stat(path.join(directory, entry.name));
-      artifacts.push({ fileName: entry.name, sizeBytes: info.size, mtimeMs: info.mtimeMs });
+      artifacts.push({
+        takeId: match[1],
+        fileName: entry.name,
+        sizeBytes: info.size,
+        mtimeMs: info.mtimeMs,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -170,11 +216,28 @@ export async function pruneTakeArtifacts(
 
   const removals = artifactNamesToRemove(artifacts, policy, preserveFileName, nowMs);
   let removedBytes = 0;
+  let removedMetadataFiles = 0;
   for (const record of artifacts) {
     if (!removals.has(record.fileName)) continue;
     await rm(path.join(directory, record.fileName), { force: true });
     removedBytes += record.sizeBytes;
+    const metadataPath = path.join(directory, pairedMetadataFileName(record.takeId));
+    try {
+      await stat(metadataPath);
+      await rm(metadataPath, { force: true });
+      removedMetadataFiles += 1;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 
-  return { removedFiles: removals.size, removedBytes };
+  const retainedNames = new Set(await readdir(directory));
+  for (const name of retainedNames) {
+    const match = TAKE_METADATA_PATTERN.exec(name);
+    if (!match || retainedNames.has(`${match[1]}.wav`)) continue;
+    await rm(path.join(directory, name), { force: true });
+    removedMetadataFiles += 1;
+  }
+
+  return { removedFiles: removals.size, removedBytes, removedMetadataFiles };
 }

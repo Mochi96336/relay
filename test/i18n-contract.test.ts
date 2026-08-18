@@ -13,7 +13,7 @@ test('locale stays local to this phone and switches without navigation', () => {
   assert.equal(i18n.includes('WebSocket'), false);
 });
 
-test('locale loads before product runtimes and the switch stays inside the people popover', () => {
+test('locale loads before product runtimes and remains a header secondary control', () => {
   const html = read('public/index.html');
   const locale = html.indexOf('<script src="/i18n.js"></script>');
   const presence = html.indexOf('src="/presence.js"');
@@ -41,6 +41,7 @@ test('dynamic product copy rerenders when locale changes', () => {
     'public/live-status.js',
     'public/listen.js',
     'public/recorder.js',
+    'public/take-history.js',
     'public/song-surface.js',
     'public/youtube.js',
     'public/app.js',
@@ -66,11 +67,11 @@ test('locale is not room authority or a protocol command', () => {
     'locale rerender must not synthesize room song commands');
 });
 
-test('release-era Mic, feedback, and Take review states stay inside the locale boundary', () => {
-  const i18n = readFileSync('public/i18n.js', 'utf8');
-  const live = readFileSync('public/live-status.js', 'utf8');
-  const listen = readFileSync('public/listen.js', 'utf8');
-  const recorder = readFileSync('public/recorder.js', 'utf8');
+test('release-era Mic, feedback, and Take history review stay inside the locale boundary', () => {
+  const i18n = read('public/i18n.js');
+  const live = read('public/live-status.js');
+  const listen = read('public/listen.js');
+  const history = read('public/take-history.js');
 
   assert.match(i18n, /'voice\.startingYours':/);
   assert.match(i18n, /'voice\.interruptedYours':/);
@@ -85,6 +86,10 @@ test('release-era Mic, feedback, and Take review states stay inside the locale b
   assert.match(live, /t\('voice\.useHeadphones'\)/);
   assert.match(listen, /t\('listen\.mutedForSong'\)/);
   assert.match(listen, /t\('listen\.adjust\.songMuted'\)/);
-  assert.match(recorder, /t\('take\.reviewReleaseMic'\)/);
-  assert.match(recorder, /t\('take\.reviewPausedForMic'\)/);
+  assert.match(history, /window\.addEventListener\('relay-locale-changed', renderHistory\)/);
+  assert.match(history, /localCopy\('Release mic before reviewing a Take\.', '請先放開 Mic，再播放錄音。'\)/);
+  assert.match(history, /'Take review paused while this phone has the mic\.'/);
+  assert.match(history, /'這支手機拿到 Mic，錄音回放已暫停。'/);
+  assert.doesNotMatch(read('public/recorder.js'), /take\.reviewReleaseMic|take\.reviewPausedForMic/,
+    'recording lifecycle must not regain Take review copy ownership');
 });

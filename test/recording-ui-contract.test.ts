@@ -19,6 +19,14 @@ test('recording presentation consumes Take status without owning Take commands',
   }
 });
 
+test('late recording presenter requests the current authoritative Take snapshot', () => {
+  assert.match(ui, /window\.dispatchEvent\(new Event\('relay-request-take-status'\)\)/);
+  assert.match(
+    recorder,
+    /window\.addEventListener\('relay-request-take-status', \(\) => publishTakeStatus\(latestStatus\)\)/,
+  );
+});
+
 test('recording is one lifecycle action rather than persistent Start and Stop buttons', () => {
   assert.match(ui, /strip\.dataset\.takeState = lifecycle/);
   assert.match(css, /data-take-state="recording"[^\n]*#start-recording/);

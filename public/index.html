@@ -165,13 +165,13 @@
       <footer class="live-actions">
         <section class="local-listen local-sound-control" aria-labelledby="local-listen-label">
           <div class="adjust-group-heading">
-            <span id="local-listen-label" class="section-label" data-i18n="adjust.thisPhone">This phone</span>
-            <span data-i18n="adjust.localOnly">Local only</span>
+            <span id="local-listen-label" class="section-label">Room sound</span>
+            <span>This device only</span>
             <button id="listen-toggle" class="text-action" type="button" aria-pressed="false" data-i18n="listen.mute">Mute</button>
           </div>
           <label class="adjust-control" for="listen-gain">
             <div class="adjust-row-heading">
-              <strong data-i18n="adjust.listenVolume">Listen volume</strong>
+              <strong>Volume</strong>
               <output id="listen-gain-value" for="listen-gain">100%</output>
             </div>
             <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="100" />
@@ -309,6 +309,7 @@
     <script type="module" src="/listen.js"></script>
     <script type="module" src="/recorder.js"></script>
     <script type="module" src="/song-surface.js"></script>
+    <script type="module" src="/youtube-local-audibility.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>
   </body>

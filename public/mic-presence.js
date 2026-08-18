@@ -35,8 +35,10 @@ if (meter) {
   let sourceKey = null;
   let localActive = false;
   let lastLocalSampleAt = Number.NEGATIVE_INFINITY;
+  let localStaleTimer = null;
   let remoteStaleTimer = null;
   const LOCAL_SAMPLE_INTERVAL_MS = 40;
+  const LOCAL_EVIDENCE_STALE_MS = 160;
   const REMOTE_EVIDENCE_STALE_MS = 320;
 
   function render(active) {
@@ -54,6 +56,12 @@ if (meter) {
     });
   }
 
+  function clearLocalStaleTimer() {
+    if (localStaleTimer === null) return;
+    clearTimeout(localStaleTimer);
+    localStaleTimer = null;
+  }
+
   function clearRemoteStaleTimer() {
     if (remoteStaleTimer === null) return;
     clearTimeout(remoteStaleTimer);
@@ -61,11 +69,26 @@ if (meter) {
   }
 
   function reset(nextSourceKey = null) {
+    clearLocalStaleTimer();
     clearRemoteStaleTimer();
     history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
     sourceKey = nextSourceKey;
     lastLocalSampleAt = Number.NEGATIVE_INFINITY;
     render(false);
+  }
+
+  function armLocalStaleTimer() {
+    clearLocalStaleTimer();
+    localStaleTimer = setTimeout(() => {
+      localStaleTimer = null;
+      // A stopped/suspended AudioWorklet may never deliver the explicit
+      // active:false boundary. Local capture is evidence too: once several
+      // expected 40 ms UI samples are missing, stop preferring a frozen local
+      // tail over newer authoritative room telemetry.
+      if (!localActive) return;
+      localActive = false;
+      if (sourceKey === 'local') reset();
+    }, LOCAL_EVIDENCE_STALE_MS);
   }
 
   function armRemoteStaleTimer(expectedSourceKey) {
@@ -90,6 +113,7 @@ if (meter) {
   window.addEventListener('relay-local-mic-level', (event) => {
     if (event.detail?.active !== true) {
       localActive = false;
+      clearLocalStaleTimer();
       if (sourceKey === 'local') reset();
       return;
     }
@@ -98,6 +122,7 @@ if (meter) {
     if (!Number.isFinite(rmsDbfs)) return;
 
     localActive = true;
+    armLocalStaleTimer();
     const now = performance.now();
     if (now - lastLocalSampleAt < LOCAL_SAMPLE_INTERVAL_MS) return;
     lastLocalSampleAt = now;
@@ -106,7 +131,7 @@ if (meter) {
 
   window.addEventListener('relay-room-mic-presence', (event) => {
     // The singer keeps the zero-network-latency local evidence. Room telemetry
-    // is for everyone else and must never replace the singer's own capture.
+    // is for everyone else and must never replace fresh singer capture.
     if (localActive) return;
 
     if (event.detail?.active !== true) {

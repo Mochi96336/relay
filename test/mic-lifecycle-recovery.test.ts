@@ -19,6 +19,7 @@ test('local Mic capture publishes an explicit lifecycle independent of server pr
   assert.match(presence, /releaseVisible: Boolean\(mine \|\| localPublisherActive\)/);
   assert.match(presence, /relay-mic-action-state/);
   assert.doesNotMatch(presence, /releaseButton\.hidden\s*=/);
+  assert.doesNotMatch(app, /releaseButton\.hidden\s*=/);
   assert.match(micActions, /releaseButton\.hidden = state\.releaseVisible !== true/);
 });
 
@@ -125,7 +126,8 @@ test('initial Relay connection failure remains cancellable instead of trapping a
   const retryAt = app.indexOf('schedulePublisherReconnect(sessionEpoch)', connectAt);
   assert.ok(activeAt >= 0 && disabledAt > activeAt && connectAt > disabledAt && retryAt > connectAt);
 
-  assert.match(app, /releaseButton\.hidden = !publisherActive/);
+  assert.match(presence, /releaseVisible: Boolean\(mine \|\| localPublisherActive\)/);
+  assert.match(micActions, /releaseButton\.hidden = state\.releaseVisible !== true/);
 });
 
 test('timeline diagnostics stay data-only and never attach to the Live Song stage', () => {

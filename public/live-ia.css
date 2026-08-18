@@ -473,6 +473,7 @@ body:has(.system-panel[open]) {
    narrated twice. */
 body[data-listen="muted"] #listen-note,
 body[data-listen="mic-muted"] #listen-note,
-body[data-listen="playback-muted"] #listen-note {
+body[data-listen="playback-muted"] #listen-note,
+body[data-listen="review-muted"] #listen-note {
   display: none;
 }

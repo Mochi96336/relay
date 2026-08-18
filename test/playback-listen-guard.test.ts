@@ -23,7 +23,10 @@ function timeline(overrides: Record<string, unknown> = {}) {
 test('Listen follows server playback health and activity instead of holder identity alone', () => {
   assert.match(listen, /import \{ shouldForceMuteListen \} from '\.\/playback-recovery\.js'/);
   assert.match(listen, /let playbackForcedMuted = false;/);
-  assert.match(listen, /return userMuted \|\| micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted;/);
+  assert.match(
+    listen,
+    /return userMuted\s*\|\| micForcedMuted\s*\|\| roomMicForcedMuted\s*\|\| playbackForcedMuted\s*\|\| takeReviewForcedMuted;/,
+  );
   assert.match(listen, /window\.addEventListener\('relay:playback-view'/);
   assert.match(listen, /setPlaybackForcedMute\(shouldForceMuteListen\(\{/);
   assert.match(listen, /role: event\.detail\?\.role/);
@@ -45,8 +48,8 @@ test('healthy active local playback mutes Listen, but pause/end/staleness releas
 });
 
 test('playback forced mute composes with Mic mute and preserves the user preference', () => {
-  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted\) return;/,
-    'forced source roles or same-participant Mic ownership must make the local Listen toggle non-actionable');
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted \|\| takeReviewForcedMuted\) return;/,
+    'forced source roles, same-participant Mic ownership, or Take review must make the local Listen toggle non-actionable');
   assert.match(listen, /if \(playbackForcedMuted\) \{[\s\S]*t\('listen\.songOwned'\)/,
     'ending Mic ownership must not resume Listen while local playback is actually active');
   assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) \{[\s\S]*t\('listen\.micOwned'\)/,

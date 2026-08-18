@@ -32,8 +32,10 @@ if (meter) {
   meter.replaceChildren(...slices.map(({ slice }) => slice));
 
   let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
-  let lastSampleAt = Number.NEGATIVE_INFINITY;
-  const SAMPLE_INTERVAL_MS = 40;
+  let sourceKey = null;
+  let localActive = false;
+  let lastLocalSampleAt = Number.NEGATIVE_INFINITY;
+  const LOCAL_SAMPLE_INTERVAL_MS = 40;
 
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
@@ -50,26 +52,66 @@ if (meter) {
     });
   }
 
-  function reset() {
+  function reset(nextSourceKey = null) {
     history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
-    lastSampleAt = Number.NEGATIVE_INFINITY;
+    sourceKey = nextSourceKey;
+    lastLocalSampleAt = Number.NEGATIVE_INFINITY;
     render(false);
+  }
+
+  function append(source, rmsDbfs, spectrumBands) {
+    if (source !== sourceKey) reset(source);
+    history = nextPresenceHistory(history, rmsDbfs, spectrumBands);
+    render(true);
   }
 
   window.addEventListener('relay-local-mic-level', (event) => {
     if (event.detail?.active !== true) {
-      reset();
+      localActive = false;
+      if (sourceKey === 'local') reset();
       return;
     }
 
     const rmsDbfs = Number(event.detail?.rmsDbfs);
     if (!Number.isFinite(rmsDbfs)) return;
 
+    localActive = true;
     const now = performance.now();
-    if (now - lastSampleAt < SAMPLE_INTERVAL_MS) return;
-    lastSampleAt = now;
-    history = nextPresenceHistory(history, rmsDbfs, event.detail?.spectrumBands);
-    render(true);
+    if (now - lastLocalSampleAt < LOCAL_SAMPLE_INTERVAL_MS) return;
+    lastLocalSampleAt = now;
+    append('local', rmsDbfs, event.detail?.spectrumBands);
+  });
+
+  window.addEventListener('relay-room-mic-presence', (event) => {
+    // The singer keeps the zero-network-latency local evidence. Room telemetry
+    // is for everyone else and must never replace the singer's own capture.
+    if (localActive) return;
+
+    if (event.detail?.active !== true) {
+      if (typeof sourceKey === 'string' && sourceKey.startsWith('room:')) reset();
+      return;
+    }
+
+    const ownerId = typeof event.detail?.ownerId === 'string' ? event.detail.ownerId : '';
+    const generation = Number(event.detail?.captureGeneration);
+    const rmsDbfs = Number(event.detail?.rmsDbfs);
+    const spectrumBands = Array.isArray(event.detail?.spectrumBands)
+      ? event.detail.spectrumBands.slice(0, MIC_PRESENCE_BAND_COUNT).map(Number)
+      : [];
+    if (
+      !ownerId
+      || !Number.isInteger(generation)
+      || generation < 0
+      || generation > 0xffff_ffff
+      || !Number.isFinite(rmsDbfs)
+      || spectrumBands.length !== MIC_PRESENCE_BAND_COUNT
+      || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
+    ) return;
+
+    // Owner + generation is the identity of this visible sound. A Mic handoff
+    // or new capture resets the tail instead of visually welding two people
+    // together for the next few hundred milliseconds.
+    append(`room:${ownerId}:${generation >>> 0}`, rmsDbfs, spectrumBands);
   });
 
   reset();

@@ -1,3 +1,4 @@
+import './youtube-song-metadata.js';
 import { canRecoverPlayback, playbackLeaderHealth } from './playback-recovery.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -37,6 +38,11 @@ function localCopy(english, traditionalChinese) {
   return window.relayI18n?.getLocale?.() === 'zh-Hant' ? traditionalChinese : english;
 }
 
+function cleanMetadata(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim();
+}
+
 if (
   stage && form && input && playerShell && localReadout && localNote
   && deviceNote && changeButton && observer && observerArtwork
@@ -47,6 +53,16 @@ if (
   let lastVideoId = null;
   let lastRoom = {};
   let recoveryPending = false;
+
+  const observerAuthor = document.createElement('span');
+  observerAuthor.className = 'song-observer-author';
+  observerAuthor.hidden = true;
+  observerTimeline.insertAdjacentElement('beforebegin', observerAuthor);
+
+  const observerPlaybackState = document.createElement('span');
+  observerPlaybackState.className = 'song-observer-status';
+  observerPlaybackState.hidden = true;
+  observerTimeline.insertAdjacentElement('afterend', observerPlaybackState);
 
   const recoveryActions = document.createElement('div');
   recoveryActions.className = 'inline-actions playback-recovery-actions';
@@ -102,14 +118,22 @@ if (
   function renderObserver(room, recoverable) {
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const state = Number(room.state);
+    const titleCopy = cleanMetadata(room.videoTitle) || t('song.roomSong');
+    const authorCopy = cleanMetadata(room.videoAuthor);
     const stateLabel = recoverable
       ? localCopy('Playback interrupted', '播放已中斷')
       : STATE_LABELS.has(state)
         ? t(STATE_LABELS.get(state))
         : t('song.roomSong');
 
-    observerState.textContent = stateLabel;
+    // The song identity is the primary observer information. Playback state is
+    // secondary and stays quiet while ordinary playback is healthy.
+    observerState.textContent = titleCopy;
+    observerAuthor.textContent = authorCopy;
+    observerAuthor.hidden = !authorCopy;
     observerTimeline.textContent = `${formatTime(room.serverTime)} / ${formatTime(room.duration)}`;
+    observerPlaybackState.textContent = stateLabel;
+    observerPlaybackState.hidden = !recoverable && state === 1;
     renderRecovery(recoverable);
 
     if (videoId) {

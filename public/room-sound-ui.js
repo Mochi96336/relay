@@ -1,12 +1,3 @@
-function ensureStyles() {
-  if (document.querySelector('link[data-relay-room-sound-ui]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = '/room-sound-ui.css';
-  link.dataset.relayRoomSoundUi = 'true';
-  document.head.append(link);
-}
-
 const root = document.querySelector('.local-sound-control');
 const title = document.querySelector('#local-listen-label');
 const scope = root?.querySelector('.adjust-group-heading > span:not(#local-listen-label)');
@@ -83,7 +74,6 @@ for (const node of [title, scope, volumeLabel]) {
 }
 
 if (root) {
-  ensureStyles();
   const listenStateObserver = new MutationObserver(() => renderState());
   listenStateObserver.observe(document.body, {
     attributes: true,

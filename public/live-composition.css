@@ -49,8 +49,8 @@
   color: #7f8289;
 }
 
-/* Performance is one stage: room Mic evidence, ownership, and Take all belong
-   to the same task instead of reading as separate product sections. */
+/* Performance is one stage: room Mic evidence, ownership, and recording all
+   belong to the same task instead of reading as separate product sections. */
 .performance-stage {
   padding-top: clamp(28px, 4.5vh, 44px);
 }
@@ -126,10 +126,12 @@
   margin-top: 18px;
 }
 
+/* Recording is an action inside the performance stage. It must not read as a
+   second module separated by its own card or divider. */
 .take-strip {
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid #202227;
+  margin-top: 14px;
+  padding-top: 0;
+  border-top: 0;
   text-align: left;
 }
 
@@ -156,24 +158,11 @@
   text-align: left;
 }
 
-/* Live keeps one persistent local-control horizon: this phone's sound. Adjust
-   and System are secondary entry points owned by the IA layer. */
+/* The only persistent control below the performance is local room playback.
+   Shared tuning and diagnostics are transient secondary sheets. */
 .live-actions {
-  margin-top: 28px;
+  margin-top: 26px;
   padding-top: 14px;
-}
-
-.system-panel {
-  margin-top: 4px;
-}
-
-.system-panel > summary {
-  padding: 12px 0 2px;
-  color: #60636a;
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: .08em;
-  text-transform: uppercase;
 }
 
 @media (max-width: 420px) {
@@ -187,6 +176,6 @@
   .performance-stage { padding-top: 22px; }
   .voice-input-evidence { margin-bottom: 14px; }
   .mic-actions { margin-top: 14px; }
-  .take-strip { margin-top: 14px; padding-top: 13px; }
-  .live-actions { margin-top: 24px; padding-top: 12px; }
+  .take-strip { margin-top: 12px; }
+  .live-actions { margin-top: 22px; padding-top: 12px; }
 }

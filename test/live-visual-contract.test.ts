@@ -28,9 +28,9 @@ test('performance composition turns measured local Mic evidence into a quiet pre
   assert.doesNotMatch(composition, /@keyframes|voice-ribbon|voice-breathe|preparing-pulse/);
 });
 
-test('Take and the local control horizon stay close to the performance task', () => {
-  assert.match(composition, /\.take-strip \{[\s\S]*?margin-top: 18px;[\s\S]*?padding-top: 16px;/);
-  assert.match(composition, /\.live-actions \{[\s\S]*?margin-top: 28px;[\s\S]*?padding-top: 14px;/);
+test('recording stays inside performance while local sound remains the one persistent lower horizon', () => {
+  assert.match(composition, /\.take-strip \{[\s\S]*?margin-top: 14px;[\s\S]*?padding-top: 0;[\s\S]*?border-top: 0;/);
+  assert.match(composition, /\.live-actions \{[\s\S]*?margin-top: 26px;[\s\S]*?padding-top: 14px;/);
 });
 
 test('local live Mic gives Voice weight without manufacturing audio motion', () => {

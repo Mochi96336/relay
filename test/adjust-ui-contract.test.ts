@@ -7,11 +7,19 @@ const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/adjust.css', import.meta.url), 'utf8');
+const ia = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
+const iaCss = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 
-test('Adjust still separates shared room mix from local Listen and Timing', () => {
+test('local Listen is promoted to Live before the audio owner binds', () => {
+  assert.equal(html.includes('class="adjust-group local-listen"'), true,
+    'the legacy template still supplies the existing control IDs during the IA migration');
+  assert.equal(html.indexOf('/live-ia.js') < html.indexOf('/listen.js'), true,
+    'IA must settle the final DOM before listen.js queries its controls');
+  assert.match(ia, /localListen\.classList\.remove\('adjust-group'\)/);
+  assert.match(ia, /localListen\.classList\.add\('local-sound-control'\)/);
+  assert.match(ia, /liveActions\.prepend\(localListen\)/);
+  assert.match(ia, /listenAction\?\.remove\(\)/);
   assert.equal(html.includes('>Room mix<'), true);
-  assert.equal(html.includes('>This phone<'), true);
-  assert.equal(html.includes('>Listen volume<'), true);
   assert.equal(html.includes('>Timing<'), true);
   assert.equal(html.includes('>Monitor<'), false);
 });
@@ -57,18 +65,15 @@ test('Listen defaults at unity and exposes mute rather than enable', () => {
   assert.equal(listen.includes('let micForcedMuted = false;'), true);
 });
 
-test('Adjust extends the page instead of replacing Voice and Take', () => {
-  assert.equal(css.includes('body:has(.adjust-panel[open]) .performance-stage'), false);
-  assert.equal(css.includes('body:has(.adjust-panel[open]) .take-strip'), false);
-  assert.equal(css.includes('.adjust-panel[open]'), true);
-  assert.equal(css.includes('position: static;'), true);
-
-  const sheetBlock = css.match(/\.adjust-sheet\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
-  assert.notEqual(sheetBlock, '', 'Adjust sheet styling must remain explicit');
-  assert.equal(sheetBlock.includes('max-height:'), false,
-    'normal page scroll owns Adjust instead of a nested viewport');
-  assert.equal(sheetBlock.includes('overflow: auto'), false,
-    'Adjust must not introduce a nested scrolling viewport');
+test('Adjust and System are transient sheets rather than extra Live page levels', () => {
+  assert.match(iaCss, /\.adjust-panel\[open\],[\s\S]*?\.system-panel\[open\][\s\S]*?position: fixed;/);
+  assert.match(iaCss, /max-height: min\(82dvh, 760px\);/);
+  assert.match(iaCss, /overflow-y: auto;/);
+  assert.match(iaCss, /body:has\(\.adjust-panel\[open\]\),[\s\S]*?overflow: hidden;/);
+  assert.equal(css.includes('body:has(.adjust-panel[open]) .live-actions'), false,
+    'opening Adjust must not recompose the Live page underneath');
+  assert.match(ia, /if \(event\.target === panel\) closePanel\(panel, restoreFocus\);/);
+  assert.match(ia, /if \(event\.key !== 'Escape'\) return;/);
 
   assert.equal(css.includes('content: "Done";'), false,
     'open/closed labels must come from the locale runtime rather than CSS-generated English');
@@ -81,8 +86,6 @@ test('gain controls remain thin rails with explicit recommendation action', () =
   assert.equal(css.includes('height: 2px;'), true);
   assert.equal(css.includes('.recommendation-marker'), true);
 });
-
-
 
 test('Calibration enablement follows ProductStatus action authority', () => {
   assert.equal(app.includes('let roomCanStartCalibration = null;'), true);

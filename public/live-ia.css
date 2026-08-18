@@ -1,6 +1,6 @@
-/* Live IA layer: normal performance surface first; secondary controls stay
-   reachable without remaining permanently visible. Domain state still comes
-   from the existing product/audio owners. */
+/* Live IA layer: the performance surface stays primary. People and the local
+   sound control remain directly reachable; Adjust and System are temporary
+   secondary sheets that never become siblings in the page flow. */
 
 .room-header-actions {
   display: flex;
@@ -44,6 +44,7 @@
 
 .more-popover {
   position: absolute;
+  z-index: 30;
   top: calc(100% + 8px);
   right: 0;
   width: min(300px, calc(100vw - 32px));
@@ -95,8 +96,8 @@
   color: #fff;
 }
 
-/* Voice is not a navigation section. The state headline already answers the
-   useful question: who has Mic / am I live? */
+/* Voice is not navigation. The state headline already answers who has the Mic
+   and whether this phone is live. */
 .performance-stage > .section-label {
   position: absolute;
   width: 1px;
@@ -123,48 +124,97 @@
   margin-bottom: 0;
 }
 
-/* The persistent horizon now represents one local preference only. Adjust and
-   System move behind the header menu instead of pretending to be Live tasks. */
+/* Local sound is a Live control, not room tuning. live-ia.js promotes the
+   existing range before listen.js binds to it, preserving a single owner for
+   audio state while moving the product control to the correct horizon. */
 .live-actions {
   display: block;
 }
 
-.listen-action {
+.local-sound-control {
   width: 100%;
-  min-height: 52px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.local-sound-control .adjust-group-heading {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 18px;
+  gap: 10px;
 }
 
-.listen-copy {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.listen-copy strong {
+.local-sound-control .adjust-group-heading .section-label {
+  margin: 0;
   color: #c7c7ca;
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
-.listen-action .action-note {
-  max-width: none;
+.local-sound-control .adjust-group-heading > span:nth-child(2) {
+  color: #6f7279;
+  font-size: 10px;
+}
+
+.local-sound-control .adjust-control {
+  gap: 5px;
+}
+
+.local-sound-control .adjust-row-heading {
+  min-height: 22px;
+}
+
+.local-sound-control .adjust-row-heading strong {
+  color: #8c8f95;
+  font-size: 10px;
+  font-weight: 560;
+}
+
+.local-sound-control .adjust-row-heading output {
+  color: #aeb0b5;
+  font-size: 10px;
+}
+
+.local-sound-control .adjust-range {
+  height: 24px;
 }
 
 #listen-toggle {
-  min-width: 72px;
+  min-width: 54px;
+  min-height: 40px;
+  padding: 0;
   justify-content: flex-end;
+  color: #c6c7ca;
   text-align: right;
 }
 
-/* Native details still own open/close state, but their old persistent summaries
-   are retired. Header menu buttons open these panels explicitly. */
+#listen-adjust-state,
+#listen-note {
+  margin: 0;
+  min-height: 14px;
+  color: #6f7279;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+#listen-note:empty {
+  display: none;
+}
+
+/* Adjust and System are transient bottom sheets. Opening either one freezes the
+   Live canvas rather than inserting another product level underneath it. */
+body:has(.adjust-panel[open]),
+body:has(.system-panel[open]) {
+  overflow: hidden;
+}
+
 .adjust-panel,
 .system-panel {
-  margin-top: 0;
+  margin: 0;
+  border: 0;
 }
 
 .adjust-panel > summary,
@@ -179,15 +229,53 @@
 
 .adjust-panel[open],
 .system-panel[open] {
-  display: block;
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid #202227;
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  margin: 0;
+  padding: max(24px, env(safe-area-inset-top)) 0 0;
+  border: 0;
+  background: rgba(3, 4, 6, .62);
+  overscroll-behavior: contain;
+}
+
+.adjust-panel[open] .adjust-sheet,
+.system-panel[open] .system-sheet {
+  width: min(100%, 720px);
+  max-height: min(82dvh, 760px);
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #292b30;
+  border-bottom: 0;
+  border-radius: 22px 22px 0 0;
+  background: #0d0e10;
+  box-shadow: 0 -24px 72px rgba(0, 0, 0, .42);
+}
+
+.adjust-panel[open] .adjust-sheet {
+  padding: 20px 22px max(28px, env(safe-area-inset-bottom));
+}
+
+.system-panel[open] .system-sheet {
+  padding: 18px 22px max(26px, env(safe-area-inset-bottom));
+}
+
+.adjust-heading,
+.system-panel-heading {
+  position: sticky;
+  z-index: 2;
+  top: -1px;
+  background: #0d0e10;
 }
 
 .adjust-heading {
   flex-wrap: wrap;
   align-items: center;
+  padding-bottom: 8px;
 }
 
 .adjust-heading > span {
@@ -225,4 +313,32 @@
   .room-header-actions { gap: 8px; }
   .more-popover { right: -4px; }
   .voice-input-evidence { margin-top: 14px; }
+
+  .local-sound-control .adjust-group-heading {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .local-sound-control .adjust-group-heading > span:nth-child(2) {
+    display: none;
+  }
+
+  .adjust-panel[open] .adjust-sheet,
+  .system-panel[open] .system-sheet {
+    max-height: 86dvh;
+    border-left: 0;
+    border-right: 0;
+  }
+}
+
+@media (min-width: 760px) {
+  .adjust-panel[open],
+  .system-panel[open] {
+    align-items: center;
+    padding: 28px;
+  }
+
+  .adjust-panel[open] .adjust-sheet,
+  .system-panel[open] .system-sheet {
+    border-bottom: 1px solid #292b30;
+    border-radius: 22px;
+  }
 }

@@ -58,6 +58,12 @@ export type MixFrameEvidence = {
   unheaderedSamples: number;
 };
 
+/** Authoritative position of one emitted frame on the shared mix timeline. */
+export type MixFramePosition = {
+  generation: number;
+  firstSampleIndex: number;
+};
+
 export type MixHealth = {
   micStarvedFrames: number;
   backingStarvedFrames: number;
@@ -417,7 +423,7 @@ export class AudioSession {
 
   /** Emits every frame whose time has come. Returns how many were produced. */
   drain(
-    emit: (frame: Buffer, evidence: MixFrameEvidence) => void,
+    emit: (frame: Buffer, evidence: MixFrameEvidence, position: MixFramePosition) => void,
     nowMs = performance.now(),
     maxFrames = 5,
   ) {
@@ -432,7 +438,10 @@ export class AudioSession {
 
     while (remaining > 0) {
       const mixed = this.mixFrame(this.frameIndex);
-      emit(mixed.frame, mixed.evidence);
+      emit(mixed.frame, mixed.evidence, {
+        generation: this.sessionGeneration,
+        firstSampleIndex: this.frameIndex * this.frameSamples,
+      });
       this.frameIndex += 1;
       remaining -= 1;
       sent += 1;

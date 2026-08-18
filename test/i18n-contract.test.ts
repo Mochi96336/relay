@@ -72,6 +72,7 @@ test('release-era Mic, feedback, and Take history review stay inside the locale 
   const i18n = read('public/i18n.js');
   const live = read('public/live-status.js');
   const roomSound = read('public/room-sound-ui.js');
+  const roomSoundPresentation = read('public/room-sound-presentation.js');
   const history = read('public/take-history.js');
 
   assert.match(i18n, /'voice\.startingYours':/);
@@ -83,14 +84,15 @@ test('release-era Mic, feedback, and Take history review stay inside the locale 
   assert.match(live, /t\('voice\.startingYours'\)/);
   assert.match(live, /t\('voice\.interruptedYours'\)/);
   assert.match(live, /t\('voice\.useHeadphones'\)/);
-  assert.match(roomSound, /state === 'mic-muted'/);
-  assert.match(roomSound, /localCopy\('Paused while you sing\.', '唱歌時暫停'\)/);
-  assert.match(roomSound, /state === 'playback-muted'/);
-  assert.match(roomSound, /This device is playing the backing track\./);
-  assert.match(roomSound, /這支裝置正在播放伴奏/);
-  assert.match(roomSound, /state === 'review-muted'/);
-  assert.match(roomSound, /Take playback is playing\./);
-  assert.match(roomSound, /正在播放錄音/);
+  assert.match(roomSound, /roomSoundPresentation/);
+  assert.match(roomSoundPresentation, /state === 'mic-muted'/);
+  assert.match(roomSoundPresentation, /'Paused while you sing\.', '唱歌時暫停'/);
+  assert.match(roomSoundPresentation, /state === 'playback-muted'/);
+  assert.match(roomSoundPresentation, /This device is playing the backing track\./);
+  assert.match(roomSoundPresentation, /這支裝置正在播放伴奏/);
+  assert.match(roomSoundPresentation, /state === 'review-muted'/);
+  assert.match(roomSoundPresentation, /Take playback is playing\./);
+  assert.match(roomSoundPresentation, /正在播放錄音/);
   assert.match(history, /window\.addEventListener\('relay-locale-changed', renderHistory\)/);
   assert.match(history, /localCopy\('Release mic before reviewing a Take\.', '請先放開 Mic，再播放錄音。'\)/);
   assert.match(history, /'Take review paused while this phone has the mic\.'/);

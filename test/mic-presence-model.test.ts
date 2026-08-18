@@ -9,6 +9,7 @@ import {
   normalizeSpectrumBands,
   rmsDbfsToPresence,
 } from '../public/mic-presence-model.js';
+import type { MicPresenceSlice } from '../public/mic-presence-model.js';
 
 test('Mic presence maps local RMS monotonically without turning into a clipping meter', () => {
   assert.equal(rmsDbfsToPresence(Number.NaN), 0);
@@ -35,7 +36,7 @@ test('spectrum shape stays five-band and normalizes frequency colour independent
 });
 
 test('Mic ribbon keeps about 400 ms of truthful local evidence flowing left', () => {
-  let history = [];
+  let history: MicPresenceSlice[] = [];
   for (let index = 0; index < MIC_PRESENCE_SLICE_COUNT; index += 1) {
     const bands = index === MIC_PRESENCE_SLICE_COUNT - 1
       ? [0, 0, 0, 0, 1]

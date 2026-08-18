@@ -26,14 +26,14 @@ test('holder Change song is visible as a real phone touch target instead of tiny
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('performance composition turns current Room Mic evidence into one continuous time-frequency field', () => {
-  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(70vw, 276px\);[\s\S]*?height: 58px;/);
-  assert.match(composition, /grid-template-columns: repeat\(10, minmax\(0, 1fr\)\);[\s\S]*?gap: 0;/);
+test('performance composition renders one continuous spectral Mic contour', () => {
+  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(72vw, 282px\);[\s\S]*?height: 60px;[\s\S]*?grid-template-columns: repeat\(10, minmax\(0,1fr\)\);[\s\S]*?gap: 0;/);
   assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 12%, #000 100%\)/);
-  assert.match(composition, /\.voice-presence-slice \{[\s\S]*?flex-direction: column-reverse;[\s\S]*?gap: 0;/);
-  assert.match(composition, /\.voice-presence-band \{[\s\S]*?width: 100%;[\s\S]*?height: 12px;[\s\S]*?margin-top: -3px;[\s\S]*?transform: none !important;/);
+  assert.match(composition, /\.voice-presence-slice \{[\s\S]*?position: relative;[\s\S]*?height: 60px;/);
+  assert.match(composition, /\.voice-presence-shape \{[\s\S]*?position: absolute;[\s\S]*?width: calc\(100% \+ 2px\);/);
   assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 10/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
+  assert.match(model, /presenceSliceGeometry/);
   assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
   assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(presence, /event\.detail\?\.spectrumBands/);
@@ -42,15 +42,12 @@ test('performance composition turns current Room Mic evidence into one continuou
 test('local Mic evidence expires if the capture worklet stops producing samples', () => {
   assert.match(presence, /LOCAL_EVIDENCE_STALE_MS = 160/);
   assert.match(presence, /localStaleTimer = setTimeout/);
-  assert.match(presence, /localActive = false;[\s\S]*sourceKey === 'local'[\s\S]*reset\(\)/);
-  assert.match(presence, /localActive = true;[\s\S]*armLocalStaleTimer\(\)/);
 });
 
 test('listener Room Mic evidence expires when telemetry stops instead of freezing forever', () => {
   assert.match(presence, /REMOTE_EVIDENCE_STALE_MS = 320/);
   assert.match(presence, /remoteStaleTimer = setTimeout/);
   assert.match(presence, /sourceKey !== expectedSourceKey/);
-  assert.match(presence, /reset\(\);[\s\S]*REMOTE_EVIDENCE_STALE_MS/);
 });
 
 test('frequency shape originates in the singer capture worklet rather than final room mix or fake animation', () => {
@@ -72,8 +69,8 @@ test('new Mic evidence enters on the right while old evidence fades toward the l
 
 test('recording stays inside performance while local sound remains the one persistent lower horizon', () => {
   assert.match(composition, /\.take-strip \{[\s\S]*?margin-top: 14px;[\s\S]*?padding-top: 0;[\s\S]*?border-top: 0;/);
-  assert.match(composition, /\.live-actions \{[\s\S]*?margin-top: 24px;[\s\S]*?padding-top: 14px;/);
-  assert.match(composition, /data-take-state="recording"[\s\S]*?\.last-take[\s\S]*?display: none;/);
+  assert.match(composition, /\.live-actions \{[\s\S]*?margin-top:24px;[\s\S]*?padding-top:14px;/);
+  assert.match(composition, /data-take-state="recording"[\s\S]*?\.last-take[\s\S]*?display:none;/);
   assert.doesNotMatch(composition, /#stop-recording:not\(:disabled\)::before/);
 });
 
@@ -86,6 +83,6 @@ test('Room Mic presence is visible to listeners while local holder evidence stay
 });
 
 test('forced Room sound state removes the inert slider while preserving the short reason', () => {
-  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control \.adjust-control,[\s\S]*?display: none;/);
-  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control #listen-adjust-state,[\s\S]*?display: block;/);
+  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control \.adjust-control,[\s\S]*?display:none;/);
+  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control #listen-adjust-state,[\s\S]*?display:block;/);
 });

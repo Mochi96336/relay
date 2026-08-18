@@ -5,8 +5,12 @@ import test from 'node:test';
 function topLevelFunctionSection(source: string, declaration: string) {
   const start = source.indexOf(declaration);
   assert.ok(start >= 0, `${declaration} is missing`);
-  const nextFunction = source.indexOf('\nfunction ', start + declaration.length);
-  return source.slice(start, nextFunction >= 0 ? nextFunction : source.length);
+  const rest = source.slice(start + declaration.length);
+  const nextFunctionMatch = /\n(?:async )?function /.exec(rest);
+  const end = nextFunctionMatch
+    ? start + declaration.length + nextFunctionMatch.index
+    : source.length;
+  return source.slice(start, end);
 }
 
 test('a YouTube error during commit rolls the local target back with the server', async () => {

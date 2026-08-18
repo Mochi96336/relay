@@ -42,15 +42,15 @@
         <div class="test-heading">
           <div>
             <strong>Live mix balance</strong>
-            <span>由拿著 Mic 的手機控制；這頁只顯示並套用 Relay 的共享設定。</span>
+            <span>Song 固定作為 100% reference；拿著 Mic 的手機只調整人聲。</span>
           </div>
         </div>
 
-        <label class="gain-control" for="source-volume">
-          <span>Song level</span>
-          <input id="source-volume" type="range" min="0" max="100" step="1" value="40" disabled />
-          <output id="source-volume-value" for="source-volume">40%</output>
-        </label>
+        <div class="gain-control">
+          <span>Song reference</span>
+          <output id="source-volume-value" for="source-volume">100%</output>
+          <input id="source-volume" type="range" min="100" max="100" step="1" value="100" disabled hidden aria-hidden="true" tabindex="-1" />
+        </div>
 
         <label class="gain-control" for="source-mic-gain">
           <span>Mic gain</span>

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../public/source.html', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
@@ -24,6 +25,26 @@ test('local Listen belongs to Live while Adjust owns shared mix and Timing', () 
   assert.equal(html.includes('>Room mix<'), true);
   assert.equal(html.includes('>Timing<'), true);
   assert.equal(html.includes('>Monitor<'), false);
+});
+
+test('Song is a fixed 100% reference while Adjust exposes only Voice', () => {
+  const roomMix = html.indexOf('class="adjust-group room-mix"');
+  const timing = html.indexOf('class="adjust-group timing-adjust"');
+  const mix = html.slice(roomMix, timing);
+
+  assert.equal(mix.includes('data-i18n="adjust.song"'), false,
+    'Song must not remain a product-facing gain control');
+  assert.match(
+    mix,
+    /id="song-level"[^>]*type="range"[^>]*min="100"[^>]*max="100"[^>]*value="100"[^>]*hidden/,
+    'legacy songLevel compatibility input must be locked to the 100% reference',
+  );
+  assert.match(source, /Song reference/);
+  assert.match(
+    source,
+    /id="source-volume"[^>]*type="range"[^>]*min="100"[^>]*max="100"[^>]*value="100"[^>]*hidden/,
+    'the machine-side player must also clamp the legacy songLevel contract to 100%',
+  );
 });
 
 test('measured Mic input lives in the performance task while gain stays in Adjust', () => {

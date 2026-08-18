@@ -184,13 +184,11 @@
               </div>
             </div>
 
-            <label class="adjust-control" for="song-level">
-              <div class="adjust-row-heading">
-                <strong data-i18n="adjust.song">Song</strong>
-                <output id="song-level-value" for="song-level">40%</output>
-              </div>
-              <input id="song-level" class="adjust-range" type="range" min="0" max="100" step="1" value="40" disabled />
-            </label>
+            <!-- Legacy mix contract: the UI no longer exposes Song as a variable.
+                 Keeping this locked range lets the current app/source protocol converge on
+                 the fixed 100% reference without coupling the IA rewrite to a protocol break. -->
+            <input id="song-level" type="range" min="100" max="100" step="1" value="100" disabled hidden aria-hidden="true" tabindex="-1" />
+            <output id="song-level-value" for="song-level" hidden>100%</output>
           </section>
 
           <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">

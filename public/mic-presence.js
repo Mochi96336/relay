@@ -3,6 +3,7 @@ import {
   MIC_PRESENCE_SLICE_COUNT,
   emptyPresenceSlice,
   nextPresenceHistory,
+  presenceSliceGeometry,
 } from './mic-presence-model.js';
 
 const meter = document.querySelector('#mic-input-meter');
@@ -16,15 +17,11 @@ if (meter) {
     const age = MIC_PRESENCE_SLICE_COUNT <= 1 ? 1 : sliceIndex / (MIC_PRESENCE_SLICE_COUNT - 1);
     slice.style.opacity = String(0.28 + age * 0.72);
 
-    const bands = Array.from({ length: MIC_PRESENCE_BAND_COUNT }, (_, bandIndex) => {
-      const band = document.createElement('span');
-      band.className = 'voice-presence-band';
-      band.dataset.band = String(bandIndex);
-      band.setAttribute('aria-hidden', 'true');
-      return band;
-    });
-    slice.replaceChildren(...bands);
-    return { slice, bands };
+    const shape = document.createElement('span');
+    shape.className = 'voice-presence-shape';
+    shape.setAttribute('aria-hidden', 'true');
+    slice.replaceChildren(shape);
+    return { slice, shape };
   });
 
   meter.classList.add('voice-presence');
@@ -43,17 +40,14 @@ if (meter) {
 
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
-    slices.forEach(({ bands }, sliceIndex) => {
+    slices.forEach(({ shape }, sliceIndex) => {
       const evidence = history[sliceIndex] ?? emptyPresenceSlice();
-      bands.forEach((band, bandIndex) => {
-        const level = Math.max(0, Math.min(1, Number(evidence.bands?.[bandIndex]) || 0));
-        // Time already lives on the horizontal axis. Varying each cell's width
-        // made the truthful 10×5 evidence look like fifty independent LEDs.
-        // Keep geometry continuous and let luminance encode band energy instead:
-        // high/low frequency still maps vertically, while adjacent time slices
-        // visually blend into one moving voice field.
-        band.style.opacity = String(0.025 + level * 0.92);
-      });
+      const geometry = presenceSliceGeometry(evidence);
+      const heightPercent = geometry.height * 100;
+      const topPercent = Math.max(0, Math.min(100 - heightPercent, (geometry.center * 100) - (heightPercent / 2)));
+      shape.style.top = `${topPercent.toFixed(2)}%`;
+      shape.style.height = `${heightPercent.toFixed(2)}%`;
+      shape.style.opacity = String(0.035 + geometry.intensity * 0.93);
     });
   }
 
@@ -82,10 +76,6 @@ if (meter) {
     clearLocalStaleTimer();
     localStaleTimer = setTimeout(() => {
       localStaleTimer = null;
-      // A stopped/suspended AudioWorklet may never deliver the explicit
-      // active:false boundary. Local capture is evidence too: once several
-      // expected 40 ms UI samples are missing, stop preferring a frozen local
-      // tail over newer authoritative room telemetry.
       if (!localActive) return;
       localActive = false;
       if (sourceKey === 'local') reset();
@@ -96,9 +86,6 @@ if (meter) {
     clearRemoteStaleTimer();
     remoteStaleTimer = setTimeout(() => {
       remoteStaleTimer = null;
-      // Presence is evidence, not state. If several expected 80 ms telemetry
-      // packets never arrive, stop displaying the last packet as if it were
-      // still live. The existing short opacity transitions soften the reset.
       if (localActive || sourceKey !== expectedSourceKey) return;
       reset();
     }, REMOTE_EVIDENCE_STALE_MS);
@@ -131,8 +118,6 @@ if (meter) {
   });
 
   window.addEventListener('relay-room-mic-presence', (event) => {
-    // The singer keeps the zero-network-latency local evidence. Room telemetry
-    // is for everyone else and must never replace fresh singer capture.
     if (localActive) return;
 
     if (event.detail?.active !== true) {
@@ -156,9 +141,6 @@ if (meter) {
       || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
     ) return;
 
-    // Owner + generation is the identity of this visible sound. A Mic handoff
-    // or new capture resets the tail instead of visually welding two people
-    // together for the next few hundred milliseconds.
     append(`room:${ownerId}:${generation >>> 0}`, rmsDbfs, spectrumBands);
   });
 

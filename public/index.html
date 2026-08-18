@@ -33,9 +33,20 @@
             <summary aria-label="Menu / 選項"><span aria-hidden="true">•••</span></summary>
             <div class="more-popover">
               <div class="more-actions">
-                <button id="open-adjust" class="more-action" type="button">
-                  <span data-i18n="adjust.summary">Adjust</span><span aria-hidden="true">›</span>
-                </button>
+                <button id="calibrate-timing" class="more-action" type="button" data-i18n="adjust.recalibrate">Recalibrate</button>
+                <span id="calibrate-status" class="more-action-note" aria-live="polite"></span>
+
+                <details class="more-timing">
+                  <summary>
+                    <span data-i18n="adjust.vocalFineTune">Vocal fine tune</span>
+                    <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
+                  </summary>
+                  <label class="more-timing-control" for="vocal-fine-tune">
+                    <input id="vocal-fine-tune" class="adjust-range" type="range" min="-100" max="100" step="5" value="0" disabled aria-label="Vocal fine tune" data-i18n-aria-label="adjust.vocalFineTuneAria" />
+                    <span data-i18n="adjust.vocalFineTuneHelp">Negative moves voice earlier; positive moves it later.</span>
+                  </label>
+                </details>
+
                 <button id="open-system" class="more-action" type="button">
                   <span data-i18n="system.summary">System</span><span aria-hidden="true">›</span>
                 </button>
@@ -115,6 +126,26 @@
           </div>
         </div>
 
+        <details id="mic-live-control" class="mic-live-control">
+          <summary>
+            <span data-i18n="adjust.voice">Mic</span>
+            <output id="mic-gain-value" for="mic-gain">+24 dB</output>
+          </summary>
+          <div class="mic-live-control-body">
+            <div class="gain-control">
+              <div class="gain-rail">
+                <input id="mic-gain" class="adjust-range" type="range" min="0" max="40" step="1" value="24" disabled aria-label="Mic gain" data-i18n-aria-label="adjust.voiceGainAria" />
+                <span id="mic-gain-recommendation-marker" class="recommendation-marker" hidden aria-hidden="true"></span>
+              </div>
+              <div class="recommendation-meta">
+                <span id="mic-gain-recommendation" data-i18n="adjust.singNormally">Sing normally for a moment.</span>
+                <button id="use-mic-gain-suggestion" class="text-action recommendation-action" type="button" hidden data-i18n="adjust.useSuggestion">Use suggestion</button>
+              </div>
+              <p id="mic-gain-advice" class="adjust-helper" data-i18n="adjust.suggestionHelp">Relay will suggest a stable gain after it has enough voice.</p>
+            </div>
+          </div>
+        </details>
+
         <section class="take-strip" aria-label="Take recording" data-i18n-aria-label="take.aria">
           <div class="take-actions">
             <button id="start-recording" class="record-action" type="button" data-i18n="take.record">Record take</button>
@@ -150,65 +181,10 @@
         </section>
       </footer>
 
-      <details class="adjust-panel">
-        <summary>Adjust</summary>
-        <div class="adjust-sheet">
-          <div class="adjust-heading">
-            <strong data-i18n="adjust.heading">Adjust</strong>
-            <button id="close-adjust" class="text-action panel-done" type="button" data-i18n="adjust.done">Done</button>
-            <span data-i18n="adjust.subtitle">Performance tuning</span>
-          </div>
-
-          <section class="adjust-group room-mix" aria-labelledby="room-mix-label">
-            <div class="adjust-group-heading">
-              <span id="room-mix-label" class="section-label" data-i18n="adjust.roomMix">Room mix</span>
-              <span data-i18n="adjust.shared">Shared</span>
-            </div>
-
-            <div class="adjust-control voice-adjust">
-              <div class="adjust-row-heading">
-                <strong data-i18n="adjust.voice">Voice</strong>
-                <output id="mic-gain-value" for="mic-gain">+24 dB</output>
-              </div>
-
-              <div class="gain-control">
-                <div class="gain-rail">
-                  <input id="mic-gain" class="adjust-range" type="range" min="0" max="40" step="1" value="24" disabled aria-label="Voice gain" data-i18n-aria-label="adjust.voiceGainAria" />
-                  <span id="mic-gain-recommendation-marker" class="recommendation-marker" hidden aria-hidden="true"></span>
-                </div>
-                <div class="recommendation-meta">
-                  <span id="mic-gain-recommendation" data-i18n="adjust.singNormally">Sing normally for a moment.</span>
-                  <button id="use-mic-gain-suggestion" class="text-action recommendation-action" type="button" hidden data-i18n="adjust.useSuggestion">Use suggestion</button>
-                </div>
-                <p id="mic-gain-advice" class="adjust-helper" data-i18n="adjust.suggestionHelp">Relay will suggest a stable gain after it has enough voice.</p>
-              </div>
-            </div>
-
-            <!-- Compatibility field only: the server owns Song at a fixed 100% reference. -->
-            <input id="song-level" type="range" min="100" max="100" step="1" value="100" disabled hidden aria-hidden="true" tabindex="-1" />
-            <output id="song-level-value" for="song-level" hidden>100%</output>
-          </section>
-
-          <section class="adjust-group timing-adjust" aria-labelledby="timing-adjust-label">
-            <div class="adjust-group-heading">
-              <span id="timing-adjust-label" class="section-label" data-i18n="adjust.timing">Timing</span>
-              <span data-i18n="adjust.roomAlignment">Room alignment</span>
-            </div>
-            <label class="adjust-control" for="vocal-fine-tune">
-              <div class="adjust-row-heading">
-                <strong data-i18n="adjust.vocalFineTune">Vocal fine tune</strong>
-                <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
-              </div>
-              <input id="vocal-fine-tune" class="adjust-range" type="range" min="-100" max="100" step="5" value="0" disabled aria-label="Vocal fine tune" data-i18n-aria-label="adjust.vocalFineTuneAria" />
-              <p class="adjust-helper" data-i18n="adjust.vocalFineTuneHelp">Negative moves voice earlier; positive moves it later.</p>
-            </label>
-            <div class="timing-row">
-              <strong id="calibrate-status" data-i18n="adjust.waitingPlayback">Waiting for playback</strong>
-              <button id="calibrate-timing" class="text-action" type="button" data-i18n="adjust.recalibrate">Recalibrate</button>
-            </div>
-          </section>
-        </div>
-      </details>
+      <div class="legacy-mix-compat" hidden aria-hidden="true">
+        <input id="song-level" type="range" min="100" max="100" step="1" value="100" disabled tabindex="-1" />
+        <output id="song-level-value" for="song-level">100%</output>
+      </div>
 
       <section id="system-attention" class="attention-region" aria-live="polite" hidden>
         <button id="attention-link" type="button" class="attention-link">

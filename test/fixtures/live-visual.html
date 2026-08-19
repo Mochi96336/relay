@@ -97,7 +97,12 @@
       </div>
 
       <div class="voice-input-evidence">
-        <div id="mic-input-meter" class="voice-input-meter voice-presence" aria-hidden="true"></div>
+        <div id="mic-input-meter" class="voice-input-meter voice-presence" data-active="true" aria-hidden="true">
+          <svg class="voice-presence-svg" viewBox="0 0 320 68" preserveAspectRatio="none" aria-hidden="true">
+            <path class="voice-presence-baseline" d="M 0 34 L 320 34"></path>
+            <path class="voice-presence-wave" d="M 0 31 C 18 31, 20 26, 36 26 C 52 26, 54 17, 71 17 C 90 17, 91 23, 107 23 C 124 23, 126 10, 142 10 C 159 10, 161 20, 178 20 C 194 20, 196 14, 213 14 C 230 14, 232 25, 249 25 C 266 25, 267 18, 284 18 C 301 18, 303 23, 320 23 L 320 45 C 303 45, 301 50, 284 50 C 267 50, 266 43, 249 43 C 232 43, 230 54, 213 54 C 196 54, 194 48, 178 48 C 161 48, 159 58, 142 58 C 126 58, 124 45, 107 45 C 91 45, 90 51, 71 51 C 54 51, 52 42, 36 42 C 20 42, 18 37, 0 37 Z"></path>
+          </svg>
+        </div>
       </div>
 
       <div class="mic-actions">
@@ -113,18 +118,19 @@
         </div>
       </div>
 
-      <details id="mic-live-control" class="mic-live-control">
-        <summary><span>Mic</span><output>+24 dB</output></summary>
-      </details>
-
       <section class="take-strip" data-take-state="idle">
         <div class="take-actions">
           <button id="start-recording" class="record-action" type="button">開始錄音</button>
           <button id="stop-recording" class="record-action recording" type="button" disabled>停止</button>
         </div>
         <p id="recording-status" class="microcopy"></p>
-        <div id="last-take" class="last-take"><button class="take-link text-action" type="button">上一段錄音</button></div>
       </section>
+
+      <details id="mic-live-control" class="mic-live-control">
+        <summary><span>Mic</span><output>+24 dB</output></summary>
+      </details>
+
+      <div id="last-take" class="recent-take"><button class="take-link text-action" type="button">▶ 上一段錄音 · 2:35</button></div>
     </section>
 
     <footer class="live-actions">
@@ -170,27 +176,8 @@
   const release = document.querySelector('#release-mic');
   const takeover = document.querySelector('#mic-takeover');
   const micControl = document.querySelector('#mic-live-control');
+  const recentTake = document.querySelector('#last-take');
   const system = document.querySelector('#system-panel');
-
-  const levels = [
-    [0.15,.32,.72,.55,.18], [.1,.38,.88,.62,.22], [.14,.5,.94,.75,.28],
-    [.1,.44,.8,.72,.33], [.18,.6,1,.66,.24], [.12,.48,.82,.58,.18],
-    [.2,.66,.96,.54,.15], [.12,.54,.78,.46,.11], [.16,.7,.9,.48,.12], [.1,.42,.62,.36,.08]
-  ];
-  const meter = document.querySelector('#mic-input-meter');
-  levels.forEach((sliceLevels, i) => {
-    const slice = document.createElement('span');
-    slice.className = 'voice-presence-slice';
-    slice.style.opacity = String(.34 + i / 9 * .66);
-    sliceLevels.forEach(level => {
-      const band = document.createElement('span');
-      band.className = 'voice-presence-band';
-      band.style.opacity = String(.04 + level * .88);
-      band.style.transform = `scaleX(${.4 + level * .6})`;
-      slice.append(band);
-    });
-    meter.append(slice);
-  });
 
   function singer() {
     body.dataset.selfMic = 'live';
@@ -233,6 +220,7 @@
     start.disabled = true;
     stop.disabled = false;
     recordingStatus.textContent = '● 0:18';
+    recentTake.hidden = true;
   } else if (state === 'system') {
     system.open = true;
   }

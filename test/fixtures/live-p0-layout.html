@@ -324,13 +324,18 @@
       }
 
       if (state.startsWith('take-history-')) {
-        const sheet = box(document.querySelector('.take-history-sheet'));
+        const sheetNode = document.querySelector('.take-history-sheet');
+        const sheet = box(sheetNode);
         const audio = box(recordingPlayer);
         if (viewportWidth < 760) {
+          const sheetStyle = sheetNode ? getComputedStyle(sheetNode) : null;
+          const contentWidth = sheetNode && sheetStyle
+            ? sheetNode.clientWidth - parseFloat(sheetStyle.paddingLeft) - parseFloat(sheetStyle.paddingRight)
+            : -999;
           checks.push(['take-x', closeEnough(sheet?.left ?? -999, 0), sheet?.left]);
           checks.push(['take-width', closeEnough(sheet?.width ?? -999, viewportWidth), sheet?.width]);
           checks.push(['take-right', closeEnough(sheet?.right ?? -999, viewportWidth), sheet?.right]);
-          checks.push(['audio-width', closeEnough(audio?.width ?? -999, viewportWidth - 40), audio?.width]);
+          checks.push(['audio-content-width', closeEnough(audio?.width ?? -999, contentWidth), `${audio?.width}/${contentWidth}`]);
         } else {
           checks.push(['take-desktop-width', (sheet?.width ?? 9999) <= 720.5, sheet?.width]);
           checks.push(['take-desktop-center', closeEnough(sheet?.left ?? -999, (viewportWidth - (sheet?.width ?? 0)) / 2), sheet?.left]);

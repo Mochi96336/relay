@@ -1,5 +1,3 @@
-import './calibration-ui.js';
-
 const peopleMenu = document.querySelector('.people-menu');
 const moreMenu = document.querySelector('#room-more');
 const systemPanel = document.querySelector('#system-panel');
@@ -91,6 +89,14 @@ closeSystem?.addEventListener('click', () => closeSystemPanel(true));
 
 systemPanel?.addEventListener('click', (event) => {
   if (event.target === systemPanel) closeSystemPanel(true);
+});
+
+// Product action presenters must not be static dependencies of the IA bootstrap:
+// System/Take navigation is a core recovery path and must already be installed if
+// a semantic presenter fails to evaluate. Calibration still owns its own module;
+// this file only schedules it after the core navigation bindings exist.
+import('./calibration-ui.js').catch((error) => {
+  console.error('Relay calibration presenter failed', error);
 });
 
 // Realignment is a direct recovery task in More, not a reason to navigate into

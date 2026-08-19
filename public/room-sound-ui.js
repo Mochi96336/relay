@@ -34,6 +34,17 @@ function roomSoundToggleLabel(muted) {
     : localCopy('Mute room sound', '靜音房間聲音');
 }
 
+/* Keep this control visually product-shaped instead of delegating it to the
+   platform emoji font. The icon is deliberately quiet: one speaker body plus
+   two sound arcs, or a compact mute cross. currentColor lets #66/#68 own state
+   emphasis without the presenter owning visual colors. */
+function roomSoundIcon(muted) {
+  const signal = muted
+    ? '<path d="M15.5 9.5l4 5m0-5l-4 5" />'
+    : '<path d="M15 9.5c1.4 1.4 1.4 3.6 0 5" /><path d="M17.7 7.4c2.6 2.6 2.6 6.6 0 9.2" />';
+  return `<svg class="room-sound-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10h3l4-3v10l-4-3H5z" />${signal}</svg>`;
+}
+
 function renderLabels() {
   if (!root || !title || !scope || !volumeLabel) return;
   const label = roomSoundLabel();
@@ -72,6 +83,7 @@ function renderState(detail = latestState) {
   const volumePercent = Math.max(0, Math.min(100, Math.round(Number(detail.volumePercent) || 0)));
   const presentation = roomSoundPresentation(detail, chinese());
   const compactNote = compactStatus(state, phase);
+  const visuallyMuted = muted || forced;
 
   root.dataset.listenState = state;
   root.dataset.listenPhase = phase;
@@ -79,12 +91,13 @@ function renderState(detail = latestState) {
   root.dataset.roomSoundState = compactNote ? 'visible' : 'quiet';
   document.body.dataset.listen = state;
   toggle.dataset.state = state;
+  toggle.dataset.icon = visuallyMuted ? 'muted' : 'audible';
   toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
-  toggle.setAttribute('aria-label', roomSoundToggleLabel(muted || forced));
+  toggle.setAttribute('aria-label', roomSoundToggleLabel(visuallyMuted));
   toggle.disabled = forced;
   gain.disabled = forced;
   gainValue.value = `${volumePercent}%`;
-  toggle.textContent = muted || forced ? '🔇' : '🔊';
+  toggle.innerHTML = roomSoundIcon(visuallyMuted);
   stateNote.textContent = compactNote;
   if (legacyNote) legacyNote.textContent = '';
 }

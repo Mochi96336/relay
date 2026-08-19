@@ -51,8 +51,10 @@ test('input ribbon follows the actual Room Mic without fabricated animation', ()
   assert.match(liveState, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
   assert.match(liveState, /body\[data-room-mic="live"\] \.voice-presence-band/);
   assert.match(micPresence, /if \(localActive\) return;/);
+  assert.match(micPresence, /presenceSliceGeometry\(evidence\)/);
   assert.match(liveComposition, /\.voice-presence-slice/);
-  assert.match(liveComposition, /five broad[\s\S]*frequency bands/);
+  assert.match(liveComposition, /\.voice-presence-shape/);
+  assert.doesNotMatch(liveComposition, /\.voice-presence-band/);
   assert.match(capture, /spectrumBands: this\.measureSpectrumBands\(\)/);
   assert.doesNotMatch(liveState, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(liveComposition, /@keyframes|voice-breathe|preparing-pulse/);

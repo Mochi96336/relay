@@ -12,25 +12,42 @@
     { rmsDbfs: -33, spectrumBands: [0.10, .42, .62, .36, .08] },
   ];
 
-  // The production holder reuses the compact room-song metadata above the
-  // real YouTube control surface. The deterministic fixture mirrors that
-  // product state before screenshots are captured.
-  if (document.body.dataset.playbackRole === 'holder') {
-    const observer = document.querySelector('#song-observer');
-    if (observer) observer.hidden = false;
+  function syncFixturePresentation() {
+    // The production holder reuses compact room-song metadata above the real
+    // YouTube controls. Keep the fixture in that product state as well.
+    if (document.body.dataset.playbackRole === 'holder') {
+      document.querySelector('#song-observer')?.removeAttribute('hidden');
+    }
+
+    // Normal listener intent is "take the Mic". Takeover wording belongs to
+    // the confirmation state after that action is invoked.
+    const publisher = document.querySelector('#start-publisher');
+    if (publisher) publisher.textContent = '拿 Mic';
   }
 
+  syncFixturePresentation();
+
   import('/mic-presence.js').then(() => {
-    for (const sample of samples) {
-      window.dispatchEvent(new CustomEvent('relay-room-mic-presence', {
-        detail: {
-          active: true,
-          ownerId: 'visual-fixture',
-          captureGeneration: 1,
-          rmsDbfs: sample.rmsDbfs,
-          spectrumBands: sample.spectrumBands,
-        },
-      }));
-    }
+    const publishEvidence = () => {
+      for (const sample of samples) {
+        window.dispatchEvent(new CustomEvent('relay-room-mic-presence', {
+          detail: {
+            active: true,
+            ownerId: 'visual-fixture',
+            captureGeneration: 1,
+            rmsDbfs: sample.rmsDbfs,
+            spectrumBands: sample.spectrumBands,
+          },
+        }));
+      }
+    };
+
+    // Remote production evidence deliberately expires after 320 ms. Keep the
+    // deterministic fixture publishing the exact same measured sequence while
+    // Playwright waits, so screenshots exercise the real renderer without
+    // accidentally capturing its stale state.
+    publishEvidence();
+    setInterval(publishEvidence, 120);
+    syncFixturePresentation();
   });
 })();

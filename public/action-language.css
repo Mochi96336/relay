@@ -93,11 +93,6 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-#start-recording::after {
-  content: "";
-  position: absolute;
-  inset: -4px -6px;
-}
 #start-recording:hover:not(:disabled) {
   background: transparent;
   color: #fff;

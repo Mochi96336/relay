@@ -69,7 +69,9 @@ function levelDbfs(samples: Int16Array) {
 function median(values: number[]) {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  return sorted.length % 2 === 1
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function normalizedChannelCorrelation(
@@ -115,7 +117,9 @@ function bandScoresAtLag(
   const scores = new Array<number>(activeBands.length);
   for (let index = 0; index < activeBands.length; index += 1) {
     const band = activeBands[index];
-    const energyCorrelation = normalizedChannelCorrelation(backing, mic, band, start, length, lagFrames);
+    const energyCorrelation = normalizedChannelCorrelation(
+      backing, mic, band, start, length, lagFrames,
+    );
     const fluxCorrelation = normalizedChannelCorrelation(
       backing, mic, backing.bandCount + band, start, length, lagFrames,
     );
@@ -147,7 +151,9 @@ function scoreLagDetailed(
   return {
     score: median(bandScores),
     bandScores,
-    supportingBands: activeBands.filter((_band, index) => bandScores[index] >= MIN_SUPPORTING_BAND_SCORE),
+    supportingBands: activeBands.filter(
+      (_band, index) => bandScores[index] >= MIN_SUPPORTING_BAND_SCORE,
+    ),
   };
 }
 
@@ -172,7 +178,10 @@ function globalLagScan(
   const candidates: LagCandidate[] = [];
   for (let lagFrames = -maxLagFrames; lagFrames <= maxLagFrames; lagFrames += 1) {
     const start = Math.max(0, -lagFrames);
-    const length = Math.min(backing.frameCount - start, mic.frameCount - (start + lagFrames));
+    const length = Math.min(
+      backing.frameCount - start,
+      mic.frameCount - (start + lagFrames),
+    );
     if (length < minimumOverlapFrames) continue;
     candidates.push({
       lagFrames,
@@ -189,7 +198,9 @@ function globalLagScan(
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     const left = index > 0 ? candidates[index - 1].score : Number.NEGATIVE_INFINITY;
-    const right = index + 1 < candidates.length ? candidates[index + 1].score : Number.NEGATIVE_INFINITY;
+    const right = index + 1 < candidates.length
+      ? candidates[index + 1].score
+      : Number.NEGATIVE_INFINITY;
     if (candidate.score >= left && candidate.score >= right) peaks.push(candidate);
   }
   peaks.sort((a, b) => b.score - a.score);
@@ -237,7 +248,10 @@ function validationStarts(
   hopMs: number,
 ) {
   let first = Math.max(0, -minLagFrames);
-  let last = Math.min(frameCount - segmentLength, frameCount - segmentLength - maxLagFrames);
+  let last = Math.min(
+    frameCount - segmentLength,
+    frameCount - segmentLength - maxLagFrames,
+  );
   const margin = Math.round(SEGMENT_EDGE_MARGIN_MS / hopMs);
   if (last - first > margin * 2) {
     first += margin;
@@ -285,24 +299,41 @@ export function analyzeTimingCalibration(
   }
 
   const maxLagFrames = Math.max(1, Math.round(maxLagMs / backing.hopMs));
-  const { best: globalBest, runnerUp, preferred } = globalLagScan(backing, mic, activeBands, maxLagFrames);
+  const { best: globalBest, runnerUp, preferred } = globalLagScan(
+    backing, mic, activeBands, maxLagFrames,
+  );
   if (!globalBest || globalBest.score < MIN_GLOBAL_SCORE) {
     throw new Error(
       'Calibration signal is weak or does not match the backing track. ' +
       'Use a louder section with clear drums or attacks and try again.',
     );
   }
+  const peakMargin = runnerUp === null ? null : globalBest.score - runnerUp.score;
+  if (peakMargin !== null && peakMargin < MIN_DISTINCT_PEAK_MARGIN) {
+    throw new Error(
+      'Calibration music is too repetitive to identify timing reliably. ' +
+      'Keep playback running and try another section.',
+    );
+  }
+
   const best = preferred !== null
     && preferred.score >= globalBest.score - PREFERRED_LAG_CORRELATION_MARGIN
     ? preferred
     : globalBest;
-  const peakMargin = runnerUp === null ? null : globalBest.score - runnerUp.score;
   const globalStart = Math.max(0, -best.lagFrames);
   const globalLength = Math.min(
     backing.frameCount - globalStart,
     mic.frameCount - (globalStart + best.lagFrames),
   );
-  const globalDetail = scoreLagDetailed(backing, mic, activeBands, globalStart, globalLength, best.lagFrames);
+  const globalDetail = scoreLagDetailed(
+    backing, mic, activeBands, globalStart, globalLength, best.lagFrames,
+  );
+  if (globalDetail.supportingBands.length < MIN_SUPPORTING_BANDS) {
+    throw new Error(
+      'Calibration does not have enough independent frequency-band support. ' +
+      'Try another section with richer musical content.',
+    );
+  }
 
   const localRadiusFrames = Math.round(LOCAL_SEARCH_RADIUS_MS / backing.hopMs);
   const supportRadiusFrames = Math.round(LOCAL_SUPPORT_RADIUS_MS / backing.hopMs);
@@ -346,10 +377,14 @@ export function analyzeTimingCalibration(
   const bandSupportScore = globalDetail.supportingBands.length / activeBands.length;
   const consistencyScore = clamp(1 - spreadMs / 140, 0, 1);
   const confidence = clamp(
-    strengthScore * 0.30 + uniquenessScore * 0.30 + bandSupportScore * 0.20 + consistencyScore * 0.20,
+    strengthScore * 0.30
+    + uniquenessScore * 0.30
+    + bandSupportScore * 0.20
+    + consistencyScore * 0.20,
     0,
     1,
   );
+
   return {
     micLagMs,
     confidence,

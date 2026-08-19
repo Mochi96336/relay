@@ -13,7 +13,6 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ !contains(github.event.pull_request.head.sha || github.sha, '') && !contains(github.event.head_commit.message || github.event.pull_request.title, '[pitch-ribbon-patched]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,9 +29,12 @@ jobs:
               p = Path(path)
               text = p.read_text()
               count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one patch target, found {count}')
-              p.write_text(text.replace(old, new))
+              if count == 1:
+                  p.write_text(text.replace(old, new))
+                  return
+              if new in text:
+                  return
+              raise SystemExit(f'{path}: expected one patch target, found {count}')
 
           replace_once('public/app.js', """  dispatchRelayEvent('relay-local-mic-level', {
             active: false,
@@ -153,6 +155,10 @@ jobs:
       - name: Commit production patches
         shell: bash
         run: |
+          if git diff --quiet; then
+            echo 'production files already patched'
+            exit 0
+          fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add public/app.js public/live-status.js src/server.ts

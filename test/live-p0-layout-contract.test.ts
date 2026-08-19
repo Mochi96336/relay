@@ -55,7 +55,7 @@ test('Room sound projection is localized, concise, forced-disabled, and presenta
   }
 });
 
-test('P0 visual fixture uses production Take and Room sound presenters and reports browser geometry', () => {
+test('P0 visual fixture uses production presenters, action containment, and browser geometry', () => {
   for (const state of [
     'empty',
     'listener',
@@ -69,6 +69,7 @@ test('P0 visual fixture uses production Take and Room sound presenters and repor
   ]) {
     assert.equal(fixture.includes(state), true, `missing P0 visual state: ${state}`);
   }
+  assert.match(fixture, /id="change-youtube" class="text-action"/);
   assert.match(fixture, /await import\('\/room-sound-ui\.js'\)/);
   assert.match(fixture, /await import\('\/take-history\.js'\)/);
   assert.match(fixture, /dispatchEvent\(new CustomEvent\('relay-take-status'/);

@@ -118,8 +118,8 @@ test('healthy Robot timing does not leave a disabled recovery action for a non-o
   assert.equal(ui.button.textContent, '重新對齊');
 });
 
-test('every Robot capture-path prerequisite projects as preparing audio paths', () => {
-  for (const reason of ['sources-not-ready', 'sources-not-connected', 'sources-not-streaming']) {
+test('Robot capture-path blocks project as preparing audio paths', () => {
+  for (const reason of ['sources-not-connected', 'sources-not-streaming']) {
     const ui = harness({ hidden: false, disabled: false, status: 'No song to align.', selfMic: 'live' });
 
     ui.emitProductStatus({

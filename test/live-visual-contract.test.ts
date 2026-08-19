@@ -36,8 +36,12 @@ test('holder Change song is visible as a real phone touch target instead of tiny
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('Room Mic is one centered envelope backed by one 20-sample measured history', () => {
-  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(100%, 320px\);[\s\S]*?height: 56px;/);
+test('Room Mic is one centered full-bleed envelope backed by one 20-sample measured history', () => {
+  assert.match(composition, /\.voice-input-evidence \{[\s\S]*?width: 100vw;[\s\S]*?margin: 10px calc\(50% - 50vw\) 2px;/);
+  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: 100%;[\s\S]*?max-width: none;[\s\S]*?height: 56px;/);
+  assert.match(composition, /-webkit-mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
+  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
+  assert.doesNotMatch(composition, /\.voice-input-meter\s*\{[\s\S]{0,180}?width:\s*min\(100%,\s*(?:320|310)px\)/);
   assert.match(composition, /\.voice-presence-baseline/);
   assert.match(composition, /\.voice-presence-wave/);
   assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 20/);

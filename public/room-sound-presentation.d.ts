@@ -8,6 +8,16 @@ export interface RoomSoundPresentationCopy {
   note: string;
 }
 
+export function roomSoundStableNote(
+  detail?: RoomSoundPresentationState,
+  isChinese?: boolean,
+): string;
+
+export function roomSoundActionNote(
+  detail?: RoomSoundPresentationState,
+  isChinese?: boolean,
+): string;
+
 export function roomSoundPresentation(
   detail?: RoomSoundPresentationState,
   isChinese?: boolean,

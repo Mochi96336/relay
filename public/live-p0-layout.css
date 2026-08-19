@@ -1,0 +1,213 @@
+/* P0 mobile density repair.
+   One shared inline track owns Live alignment; Take review spends phone width on
+   time, and Room sound is one 44px local-control row. */
+
+:root {
+  --live-inline: 20px;
+}
+
+/* Shared Live horizontal grid. Do not repair children with independent left
+   offsets: every top-level Live surface occupies the same named track. */
+html body .live-shell {
+  display: grid;
+  grid-template-columns: [live-left] minmax(0, 1fr) [live-right];
+  padding-inline: var(--live-inline);
+}
+
+html body .live-shell > .room-header,
+html body .live-shell > .song-stage,
+html body .live-shell > .performance-stage,
+html body .live-shell > .live-actions {
+  grid-column: live-left / live-right;
+  width: 100%;
+  min-width: 0;
+}
+
+html body .song-heading-row,
+html body .song-heading-row > *,
+html body .song-observer,
+html body .youtube-player-shell,
+html body .performance-stage > *,
+html body .mic-live-control > summary,
+html body .live-actions > * {
+  min-width: 0;
+}
+
+/* Take History is a phone review surface, not a narrow popover. The sheet owns
+   the viewport width on phones; content gets a quiet 20px working inset. */
+.take-history-panel[open] > .take-history-sheet {
+  width: 100vw;
+  max-width: none;
+  margin-inline: 0;
+  padding-left: var(--live-inline);
+  padding-right: var(--live-inline);
+}
+
+/* Each Take gets enough height to read as a timing row. Its neutral rail is the
+   duration axis; the selected native audio transport below remains the truthful
+   playback-progress / seeking control. */
+.take-history-panel[open] .take-history-item {
+  position: relative;
+  min-height: 64px;
+  padding-top: 9px;
+  padding-bottom: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 14px;
+  column-gap: 16px;
+  row-gap: 5px;
+}
+
+.take-history-panel[open] .take-history-item::after {
+  content: '';
+  grid-column: 1 / -1;
+  grid-row: 2;
+  align-self: center;
+  width: 100%;
+  height: 2px;
+  border-radius: 999px;
+  background: #34363b;
+}
+
+.take-history-panel[open] .take-history-item.selected {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.take-history-panel[open] .take-history-item.selected::before {
+  position: absolute;
+  left: -11px;
+  top: 18px;
+  margin: 0;
+}
+
+.take-history-panel[open] .take-history-review,
+.take-history-panel[open] .take-history-review #recording-player {
+  width: 100%;
+  min-width: 0;
+}
+
+.take-history-panel[open] .take-history-review #recording-player {
+  min-height: 44px;
+  margin-top: 8px;
+}
+
+/* Room sound stays structurally compatible with the existing presenter DOM, but
+   display:contents flattens the old headings into one real row. No visible
+   section label, helper paragraph, or second volume row consumes Live height. */
+html body .live-actions {
+  padding-top: 0;
+}
+
+html body .live-actions .local-sound-control {
+  width: 100%;
+  height: 44px;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 0;
+}
+
+html body .live-actions .local-sound-control .adjust-group-heading,
+html body .live-actions .local-sound-control .adjust-control,
+html body .live-actions .local-sound-control .adjust-row-heading {
+  display: contents;
+}
+
+html body .live-actions .local-sound-control #local-listen-label,
+html body .live-actions .local-sound-control .adjust-group-heading > span:not(#local-listen-label),
+html body .live-actions .local-sound-control .adjust-row-heading strong,
+html body .live-actions .local-sound-control #listen-note {
+  display: none;
+}
+
+html body .live-actions .local-sound-control #listen-toggle {
+  grid-column: 1;
+  grid-row: 1;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #e6e2db;
+  font-size: 17px;
+  line-height: 1;
+}
+
+html body .live-actions .local-sound-control #listen-gain {
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+html body .live-actions .local-sound-control #listen-gain::-webkit-slider-runnable-track {
+  height: 2px;
+}
+
+html body .live-actions .local-sound-control #listen-gain::-moz-range-track {
+  height: 2px;
+}
+
+html body .live-actions .local-sound-control #listen-gain-value,
+html body .live-actions .local-sound-control #listen-adjust-state {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  margin: 0;
+  min-height: 0;
+  max-width: 92px;
+  overflow: hidden;
+  color: #9da0a7;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+html body .live-actions .local-sound-control #listen-gain-value,
+html body .live-actions .local-sound-control #listen-adjust-state {
+  display: none;
+}
+
+html body .live-actions .local-sound-control[data-room-sound-value="visible"]:not([data-room-sound-state="visible"]) #listen-gain-value,
+html body .live-actions .local-sound-control:focus-within:not([data-room-sound-state="visible"]) #listen-gain-value {
+  display: block;
+}
+
+html body .live-actions .local-sound-control[data-room-sound-state="visible"] #listen-adjust-state {
+  display: block;
+}
+
+body[data-listen="mic-muted"] .live-actions .local-sound-control #listen-gain,
+body[data-listen="playback-muted"] .live-actions .local-sound-control #listen-gain,
+body[data-listen="review-muted"] .live-actions .local-sound-control #listen-gain {
+  display: block;
+  opacity: .34;
+  pointer-events: none;
+}
+
+body[data-listen="muted"] .live-actions .local-sound-control #listen-gain {
+  opacity: .52;
+}
+
+@media (min-width: 760px) {
+  :root {
+    --live-inline: 22px;
+  }
+
+  .take-history-panel[open] > .take-history-sheet {
+    width: min(720px, calc(100vw - 48px));
+    max-width: 720px;
+    margin-inline: auto;
+  }
+}

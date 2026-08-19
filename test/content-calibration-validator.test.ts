@@ -255,6 +255,22 @@ describe('ContentCalibrationValidator authority boundaries', () => {
     assert.equal(status.baselineLagMs, null);
   });
 
+  test('structural invalidation clears stale validation diagnostics', () => {
+    const harness = makeHarness({ results: [analysis(325)] });
+    startDue(harness, 30_000);
+    fullWindow(harness, 0);
+    assert.equal(harness.validator.status().lastOutcome, 'stable');
+
+    harness.context.sourceGeneration = 1;
+    harness.setNow(60_000);
+    assert.equal(harness.validator.maybeStart(), false);
+    const status = harness.validator.status();
+    assert.equal(status.baselineLagMs, null);
+    assert.equal(status.lastMeasuredLagMs, null);
+    assert.equal(status.lastDeltaMs, null);
+    assert.equal(status.lastOutcome, null);
+  });
+
   test('a context change during collection cannot be promoted', () => {
     const harness = makeHarness({ results: [analysis(370)] });
     startDue(harness, 30_000);

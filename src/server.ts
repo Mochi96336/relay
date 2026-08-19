@@ -15,6 +15,7 @@ import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './mon
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
+import { ContentCalibrationValidator } from './content-calibration-validator.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
@@ -254,6 +255,25 @@ const takeController = new TakeController({
 let sourceGeneration = 0;
 const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
 const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATION_RETRY_MS', 15_000);
+const CALIBRATION_AGREEMENT = Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3);
+const CALIBRATION_TOLERANCE_MS = envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25);
+const CALIBRATION_PROVISIONAL_CONFIDENCE = Number(
+  process.env.RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE ?? 0.55,
+);
+const CALIBRATION_MAX_LAG_MS = envMs('RELAY_CALIBRATION_MAX_LAG_MS', 2_500);
+const CONTENT_VALIDATION_ENABLED = process.env.RELAY_CALIBRATION_VALIDATION !== '0';
+const CONTENT_VALIDATION_INTERVAL_MS = envMs(
+  'RELAY_CALIBRATION_VALIDATION_INTERVAL_MS',
+  30_000,
+);
+const CONTENT_VALIDATION_RETRY_MS = envMs(
+  'RELAY_CALIBRATION_VALIDATION_RETRY_MS',
+  10_000,
+);
+const CONTENT_VALIDATION_DEVIATION_MS = envMs(
+  'RELAY_CALIBRATION_VALIDATION_DEVIATION_MS',
+  30,
+);
 let lastAutoCalibrationAt = -Infinity;
 let calibrationWasAutomatic = false;
 let calibrationKind: CalibrationKind = 'none';
@@ -457,16 +477,75 @@ const calibration = new CalibrationSession({
   durationMs: TIMING_CALIBRATION_MS,
   timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
   context: calibrationContext,
-  agreementWindows: Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3),
-  agreementToleranceMs: envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25),
-  provisionalConfidence: Number(process.env.RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE ?? 0.55),
-  maxLagMs: envMs('RELAY_CALIBRATION_MAX_LAG_MS', 2_500),
+  agreementWindows: CALIBRATION_AGREEMENT,
+  agreementToleranceMs: CALIBRATION_TOLERANCE_MS,
+  provisionalConfidence: CALIBRATION_PROVISIONAL_CONFIDENCE,
+  maxLagMs: CALIBRATION_MAX_LAG_MS,
   onSettled: () => {
     syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());
     broadcastJson(sourceStatusPayload());
   },
 });
+
+let contentValidationBaselineRevision = -1;
+const contentCalibrationValidator = new ContentCalibrationValidator({
+  sampleRate: MIX_SAMPLE_RATE,
+  durationMs: TIMING_CALIBRATION_MS,
+  timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
+  intervalMs: CONTENT_VALIDATION_INTERVAL_MS,
+  retryMs: CONTENT_VALIDATION_RETRY_MS,
+  deviationThresholdMs: CONTENT_VALIDATION_DEVIATION_MS,
+  agreementToleranceMs: CALIBRATION_TOLERANCE_MS,
+  context: calibrationContext,
+  enabled: CONTENT_VALIDATION_ENABLED,
+  maxLagMs: CALIBRATION_MAX_LAG_MS,
+  onDriftConfirmed: (result) => {
+    calibrationKind = 'content';
+    calibration.applyValidatedResult(result);
+    // applyValidatedResult increments synchronously. Keep the validator's
+    // own drift-confirmed state rather than immediately reseeding it.
+    contentValidationBaselineRevision = calibration.confirmedRevision;
+  },
+});
+
+function clearContentValidationBaseline() {
+  contentValidationBaselineRevision = -1;
+  contentCalibrationValidator.clearBaseline();
+}
+
+function syncContentValidationBaseline(nowMs: number) {
+  const confirmed = calibration.confirmedResult;
+  if (
+    calibrationKind !== 'content'
+    || confirmed === null
+    || calibrationIsStale()
+  ) {
+    if (contentCalibrationValidator.hasBaseline) clearContentValidationBaseline();
+    return false;
+  }
+
+  if (
+    contentValidationBaselineRevision === calibration.confirmedRevision
+    && contentCalibrationValidator.hasBaseline
+  ) return false;
+
+  contentCalibrationValidator.setBaseline({
+    micLagMs: confirmed.micLagMs,
+    confidence: confirmed.confidence,
+    segmentLagsMs: confirmed.segmentLagsMs,
+    context: calibrationContext(),
+  }, nowMs);
+  contentValidationBaselineRevision = calibration.confirmedRevision;
+  return true;
+}
+
+function cancelActiveContentValidation(nowMs = performance.now()) {
+  const state = contentCalibrationValidator.status(nowMs).state;
+  if (!contentCalibrationValidator.collecting && state !== 'suspect') return false;
+  contentCalibrationValidator.cancel(nowMs);
+  return true;
+}
 
 function sendJson(socket: WebSocket, payload: unknown) {
   if (socket.readyState === WebSocket.OPEN) {
@@ -1299,6 +1378,7 @@ function timingCalibrationStatusPayload() {
     robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffsetMs : null,
     automatic: calibrationWasAutomatic,
     autoCalibrate: AUTO_CALIBRATE,
+    validation: contentCalibrationValidator.status(nowMs),
   };
 }
 
@@ -1439,6 +1519,7 @@ function revokePublisherTransport(message: string) {
 
 function invalidateMicTiming(message: string) {
   clearBootCalibrationState();
+  clearContentValidationBaseline();
   if (calibration.collecting) calibration.fail(message);
   else calibration.reset();
   calibrationKind = 'none';
@@ -1481,6 +1562,7 @@ function restartLiveSourceAfterMicReconnect() {
   if (calibration.collecting) {
     calibration.fail('Microphone reconnected during calibration. Start calibration again.');
   }
+  if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
 }
 
@@ -1504,6 +1586,7 @@ function stopLiveSource() {
   if (!session.active) return;
   takeController.endMix();
   clearBootCalibrationState();
+  clearContentValidationBaseline();
   robotPlayerOffsetMs = null;
   robotPlayerOffsetAt = -Infinity;
   session.stop();
@@ -1561,6 +1644,7 @@ function processPublisherFrame(frame: PcmFrame) {
       if (micRestarted) {
         takeController.noteQualityEvent('mic-capture-restarted');
         abandonProbeRun();
+        clearContentValidationBaseline();
         if (calibration.collecting) {
           calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
         } else {
@@ -1572,6 +1656,7 @@ function processPublisherFrame(frame: PcmFrame) {
         }
       }
       calibration.observeMic(samples, start);
+      contentCalibrationValidator.observeMic(samples, start);
     }
   } else {
     broadcastToMonitors(frame.pcm, true);
@@ -1598,7 +1683,7 @@ function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
   if (robotProbeTimingActive()) return;
   if (!session.active || calibration.collecting) return;
-  if (calibration.result !== null && !calibrationIsStale()) return;
+  if (calibration.confirmedResult !== null && !calibrationIsStale()) return;
   if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
 
   if (backing?.readyState !== WebSocket.OPEN || publisher?.readyState !== WebSocket.OPEN) return;
@@ -1611,6 +1696,42 @@ function maybeAutoCalibrate(nowMs: number) {
   calibrationKind = 'content';
   calibration.start(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
+}
+
+function contentValidationPathReady(nowMs: number) {
+  if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
+  if (robotProbeTimingActive()) return false;
+  if (!session.active || calibration.collecting) return false;
+  if (
+    calibrationKind !== 'content'
+    || calibration.confirmedResult === null
+    || calibrationIsStale()
+  ) return false;
+  if (backing?.readyState !== WebSocket.OPEN || publisher?.readyState !== WebSocket.OPEN) return false;
+  if (!bothStreamsFlowing(nowMs)) return false;
+  const timeline = currentTimelineStatus(nowMs);
+  return Boolean(timeline.connected) && Number(timeline.state) === 1;
+}
+
+function maybeValidateContentCalibration(nowMs: number) {
+  syncContentValidationBaseline(nowMs);
+  if (!contentCalibrationValidator.hasBaseline) return;
+
+  const state = contentCalibrationValidator.status(nowMs).state;
+  if (!contentValidationPathReady(nowMs)) {
+    if (contentCalibrationValidator.collecting || state === 'suspect') {
+      contentCalibrationValidator.cancel(nowMs);
+      broadcastJson(timingCalibrationStatusPayload());
+    }
+    return;
+  }
+
+  if (contentCalibrationValidator.tick(nowMs)) {
+    broadcastJson(timingCalibrationStatusPayload());
+  }
+  if (contentCalibrationValidator.maybeStart(nowMs)) {
+    broadcastJson(timingCalibrationStatusPayload());
+  }
 }
 
 function probeGeneration(target: ProbeTarget) {
@@ -1938,6 +2059,7 @@ function maybeReapplyBootCalibration(nowMs: number) {
 
 function dropLegacyCalibrationForRobot() {
   if (!robotProbeTimingActive() || calibrationKind !== 'content') return;
+  clearContentValidationBaseline();
   calibration.reset();
   calibrationKind = 'none';
   lastAutoCalibrationAt = -Infinity;
@@ -1945,6 +2067,7 @@ function dropLegacyCalibrationForRobot() {
 }
 
 function restartBootCalibration(nowMs: number, automatic: boolean) {
+  clearContentValidationBaseline();
   calibration.reset();
   calibrationKind = 'boot-probe';
   calibrationWasAutomatic = automatic;
@@ -2001,6 +2124,7 @@ const youtubeTimelineTimer = setInterval(() => {
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
   maybeAutoCalibrate(nowMs);
+  maybeValidateContentCalibration(nowMs);
 
   sweepPreparedSongHandoff(nowMs);
 
@@ -2083,6 +2207,7 @@ wss.on('connection', (rawSocket, request) => {
         ) {
           takeController.noteQualityEvent('backing-capture-restarted');
           abandonProbeRun();
+          clearContentValidationBaseline();
           if (calibration.collecting) {
             calibration.fail('Backing capture restarted during calibration. Start calibration again.');
           } else {
@@ -2092,6 +2217,7 @@ wss.on('connection', (rawSocket, request) => {
           }
         }
         calibration.observeBacking(samples, start);
+        contentCalibrationValidator.observeBacking(samples, start);
       }
       return;
     }
@@ -2233,6 +2359,9 @@ wss.on('connection', (rawSocket, request) => {
       }
       const song = takeSongSnapshot(nowMs);
 
+      if (cancelActiveContentValidation(nowMs)) {
+        broadcastJson(timingCalibrationStatusPayload());
+      }
       const result = takeController.start(socket.participantId, song);
       if (!result.ok) {
         rejectTakeCommand(socket, 'start', result.reason);
@@ -2502,6 +2631,9 @@ wss.on('connection', (rawSocket, request) => {
         socket.playbackGeneration = playbackGeneration;
         socket.telemetryRejectedReason = undefined;
         const timelineStatus = youtubeTimeline.statusPayload(nowMs);
+        if (Number(timelineStatus.state) !== 1 && cancelActiveContentValidation(nowMs)) {
+          broadcastJson(timingCalibrationStatusPayload());
+        }
         broadcastJson(timelineStatus);
         broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
 
@@ -2589,6 +2721,7 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
+      cancelActiveContentValidation(nowMs);
       calibrationWasAutomatic = false;
       calibrationKind = 'content';
       calibration.start(nowMs);
@@ -2607,6 +2740,7 @@ wss.on('connection', (rawSocket, request) => {
       // false, but must not restore seek authority to that old socket.
       if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
       sourceGeneration += 1;
+      clearContentValidationBaseline();
       robotPlayerOffsetMs = null;
       robotPlayerOffsetAt = -Infinity;
       if (calibration.collecting) {
@@ -3057,6 +3191,7 @@ wss.on('connection', (rawSocket, request) => {
         if (calibration.collecting) {
           calibration.fail('Microphone disconnected during calibration.');
         }
+        if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
         broadcastStatus();
       }
 
@@ -3069,6 +3204,7 @@ wss.on('connection', (rawSocket, request) => {
         if (calibration.collecting) {
           calibration.fail('Desktop Source disconnected during calibration.');
         }
+        if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
         cancelBackingGrace();
         backingAbsenceTimer = setTimeout(expireBackingGrace, BACKING_GRACE_MS);
         broadcastJson(sourceStatusPayload());

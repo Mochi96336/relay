@@ -175,6 +175,10 @@ export class ContentCalibrationValidator {
     this.collector.reset();
     this.state = 'inactive';
     this.nextValidationAt = Number.POSITIVE_INFINITY;
+    this.lastMeasuredLagMs = null;
+    this.lastDeltaMs = null;
+    this.lastOutcome = null;
+    this.lastValidationAt = Number.NEGATIVE_INFINITY;
   }
 
   /**

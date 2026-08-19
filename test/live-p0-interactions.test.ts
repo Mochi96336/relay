@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
@@ -14,6 +15,18 @@ const FAST = {
 function silentPcm(ms: number) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
+
+test('recorder readiness uses one replayable ProductStatus source', async () => {
+  const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+
+  assert.match(source, /type: 'product-status-request'/);
+  assert.match(source, /message\.type === 'product-status'/);
+  assert.doesNotMatch(
+    source,
+    /addEventListener\(['"]relay-product-status['"]/,
+    'a second window ProductStatus source can overwrite a newer recorder-socket snapshot',
+  );
+});
 
 test('silent first Mic PCM arms authoritative Record state within the P0 latency budget', async (t) => {
   const server = await startRelay(FAST);

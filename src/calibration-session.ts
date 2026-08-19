@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { analyzeTimingCalibration, type TimingCalibrationAnalysis } from './timing-calibration.js';
+import { TimingWindowCollector, type TimingWindow } from './timing-window-collector.js';
 
 /**
  * Owns the lifecycle of one acoustic timing measurement: collecting six seconds
@@ -24,12 +25,7 @@ export type CalibrationStatus = {
   micLagMs: number | null;
   confidence: number | null;
   segmentLagsMs: number[];
-  /**
-   * RMS of the raw microphone over the measured window, before any mix gain.
-   * The analyser computes this to reject a dead microphone; it is also the only
-   * measurement of what the phone actually sends, which is what a sensible mic
-   * gain has to be derived from.
-   */
+  /** RMS of the raw microphone over the measured window, before any mix gain. */
   micLevelDbfs: number | null;
   backingLevelDbfs: number | null;
   /** Windows that have agreed so far, and how many are needed to apply. */
@@ -41,23 +37,13 @@ export type CalibrationStatus = {
 };
 
 /**
- * Identifies the setup a measurement describes. A measurement is only valid
- * for the arrangement it was taken against, and every field here is something
- * that moves one stream relative to the other.
+ * Identifies the setup a measurement describes. Every field here is something
+ * that can move one stream relative to the other.
  */
 export type CalibrationContext = {
   sessionGeneration: number;
   micGeneration: number | null;
-  /**
-   * The capture behind the song. A new one can be a different tab, device or
-   * output path, so it carries its own delay - a socket reconnect does not.
-   */
   backingGeneration: number | null;
-  /**
-   * Bumped whenever the desktop player is seeked. The follower leaves it alone
-   * inside a 450 ms dead band, so where it lands after a seek is arbitrary
-   * within that band - which is exactly the offset a calibration measures.
-   */
   sourceGeneration: number;
 };
 
@@ -65,47 +51,22 @@ export type CalibrationSessionOptions = {
   sampleRate: number;
   durationMs: number;
   timeoutMs: number;
-  /**
-   * Read when an answer lands, not when collection starts: the microphone
-   * capture that produced the samples is only known once they have arrived.
-   */
+  /** Read when an answer lands, not when collection starts. */
   context: () => CalibrationContext;
-  /** Injectable so lifecycle tests do not have to synthesise six real seconds. */
+  /** Injectable so lifecycle tests do not have to synthesize six real seconds. */
   analyze?: (
     mic: Int16Array,
     backing: Int16Array,
     sampleRate: number,
     maxLagMs?: number,
   ) => TimingCalibrationAnalysis;
-  /** Fired when the phase settles on complete or failed. */
+  /** Fired whenever a window changes applied/settled state. */
   onSettled?: () => void;
-  /**
-   * How many separately collected windows must agree before an answer is
-   * applied. One keeps the old single-shot behaviour.
-   *
-   * The analyser accepts unrelated audio at around half the confidence of a
-   * true match, which a person re-running the measurement catches and an
-   * unattended server does not. What separates the two is not confidence but
-   * repeatability: a false positive lands on a different lag every time, so
-   * requiring independent windows to agree rejects it on the second try,
-   * whatever it scored on the first.
-   */
+  /** How many separately collected windows must agree before confirmation. */
   agreementWindows?: number;
   /** How close windows must land to count as agreeing. */
   agreementToleranceMs?: number;
-  /**
-   * Confidence a single window must clear to be applied immediately, before
-   * agreement confirms it - undefined disables this and restores the old
-   * silent-until-confirmed behaviour.
-   *
-   * The wait for full agreement is a floor of `agreementWindows *
-   * durationMs` even in the best case, and a singer hearing nothing corrected
-   * for that whole stretch is its own cost. A confident-enough single window
-   * is a better bet than the network-estimate fallback it would otherwise
-   * apply meanwhile, and applying it does not end collection - agreement
-   * still runs in the background and can replace it with a better answer, or
-   * (via the normal disagreement path) leave it as the best guess so far.
-   */
+  /** Confidence required for a first-window provisional application. */
   provisionalConfidence?: number;
   /** Read when a window ends, so the next one gets its own timeout budget. */
   now?: () => number;
@@ -113,52 +74,11 @@ export type CalibrationSessionOptions = {
   maxLagMs?: number;
 };
 
-/**
- * Six seconds of one side, kept at the positions the samples actually occupied
- * rather than in the order they turned up.
- *
- * Concatenating on arrival was the old behaviour and it corrupted the
- * measurement two ways, both silent. A dropped frame shortened this side's
- * timeline by its length and a burst delivered together compressed several
- * frames of time into one instant, each shifting the answer by however far it
- * displaced. Worse, starting each side at its own first sample discarded the
- * offset between where the mixer had *anchored* the two timelines - which is
- * part of what the mixer has to correct, so a confident measurement could still
- * leave the mix misaligned.
- */
-type Capture = {
-  chunks: { start: number; samples: Int16Array }[];
-  /** Session sample index this side first covered, or null before anything landed. */
-  firstStart: number | null;
-  /** One past the last index covered. */
-  lastEnd: number;
+export type ConfirmedCalibrationResult = {
+  micLagMs: number;
+  confidence: number | null;
+  segmentLagsMs: number[];
 };
-
-function emptyCapture(): Capture {
-  return { chunks: [], firstStart: null, lastEnd: 0 };
-}
-
-/**
- * Renders a side onto `origin`, the session index shared by both. Anything the
- * transport never delivered stays zero, so a hole costs the measurement a
- * little correlation instead of shifting everything after it.
- */
-function render(capture: Capture, origin: number, total: number) {
-  const output = new Int16Array(total);
-  let covered = 0;
-
-  for (const { start, samples } of capture.chunks) {
-    const offset = start - origin;
-    const from = Math.max(0, -offset);
-    const at = Math.max(0, offset);
-    const length = Math.min(samples.length - from, total - at);
-    if (length <= 0) continue;
-    output.set(samples.subarray(from, from + length), at);
-    covered += length;
-  }
-
-  return { samples: output, gapSamples: total - covered };
-}
 
 export class CalibrationSession {
   readonly durationMs: number;
@@ -174,6 +94,7 @@ export class CalibrationSession {
   private readonly provisionalConfidence: number | undefined;
   private readonly now: () => number;
   private readonly maxLagMs: number | undefined;
+  private readonly collector: TimingWindowCollector;
 
   /** Lags from recent windows, kept only as far back as agreement needs. */
   private candidates: number[] = [];
@@ -187,9 +108,6 @@ export class CalibrationSession {
   private backingLevelDbfs: number | null = null;
   /** True while `micLagMs` is a first-window guess agreement has not confirmed yet. */
   private provisional = false;
-
-  private mic = emptyCapture();
-  private backing = emptyCapture();
   private startedAt = 0;
 
   // The measurement describes one pairing of transports. Remembering which lets
@@ -205,6 +123,7 @@ export class CalibrationSession {
     this.analyze = options.analyze ?? analyzeTimingCalibration;
     this.context = options.context;
     this.onSettled = options.onSettled ?? (() => {});
+
     const agreementWindows = options.agreementWindows ?? 1;
     if (!Number.isSafeInteger(agreementWindows) || agreementWindows < 1) {
       throw new Error('agreementWindows must be a positive integer.');
@@ -214,6 +133,13 @@ export class CalibrationSession {
     this.provisionalConfidence = options.provisionalConfidence;
     this.now = options.now ?? (() => performance.now());
     this.maxLagMs = options.maxLagMs;
+
+    // Preserve the old bounded-buffer rule exactly: enough slack for every
+    // agreement window plus one window of start skew.
+    this.collector = new TimingWindowCollector(
+      this.requiredSamples,
+      this.requiredSamples * (this.agreementWindows + 1),
+    );
   }
 
   get collecting() {
@@ -226,17 +152,37 @@ export class CalibrationSession {
       : { micLagMs: this.micLagMs, confidence: this.confidence, segmentLagsMs: this.segmentLagsMs };
   }
 
+  /**
+   * The last confirmed measurement, independent of the current phase.
+   *
+   * A fresh retry deliberately keeps an older confirmed answer applied while
+   * collecting, and a failed retry keeps it as history. Conversely a surviving
+   * provisional guess is not a confirmed baseline merely because collection
+   * stopped. Callers that need long-lived timing authority should use this
+   * instead of inferring confirmation from `state === complete` or `result`.
+   */
+  get confirmedResult(): ConfirmedCalibrationResult | null {
+    if (this.micLagMs === null || this.provisional) return null;
+    return {
+      micLagMs: this.micLagMs,
+      confidence: this.confidence,
+      segmentLagsMs: [...this.segmentLagsMs],
+    };
+  }
+
   start(nowMs = performance.now()) {
     this.phase = 'collecting';
     this.startedAt = nowMs;
     // A fresh run, so nothing an earlier one measured counts towards agreement.
+    // Do not reset `provisional`: an old provisional answer must stay replaceable
+    // by a new confident window, while an old confirmed answer stays protected.
     this.candidates = [];
     this.error = null;
     this.confidence = null;
     this.segmentLagsMs = [];
     this.micLevelDbfs = null;
     this.backingLevelDbfs = null;
-    this.clearCapture();
+    this.collector.reset();
   }
 
   fail(message: string) {
@@ -246,17 +192,14 @@ export class CalibrationSession {
     this.segmentLagsMs = [];
     this.micLevelDbfs = null;
     this.backingLevelDbfs = null;
-    this.clearCapture();
+    this.collector.reset();
     this.onSettled();
   }
 
   /**
-   * Applies a result measured outside the normal collect/analyze flow - a
-   * probe played on cue and matched against a known reference, rather than
-   * correlated against the song. Settles straight to 'complete': agreement
-   * across windows exists to catch a false positive that lands somewhere
-   * different each time, which a probe measurement, being unambiguous by
-   * construction, does not produce.
+   * Applies a result measured outside normal content collection, used by the
+   * known robot probe path. Probe evidence is unambiguous by construction and
+   * therefore settles directly to complete.
    */
   applyExternalResult(result: { micLagMs: number; confidence: number }) {
     this.phase = 'complete';
@@ -269,7 +212,27 @@ export class CalibrationSession {
     this.error = null;
     this.provisional = false;
     this.candidates = [result.micLagMs];
-    this.clearCapture();
+    this.collector.reset();
+    this.onSettled();
+  }
+
+  /**
+   * Promotes content evidence that has already been independently validated.
+   * This is intentionally separate from the robot probe API so the two timing
+   * authorities do not share semantics accidentally.
+   */
+  applyValidatedResult(result: TimingCalibrationAnalysis) {
+    this.phase = 'complete';
+    this.micLagMs = result.micLagMs;
+    this.measuredContext = this.context();
+    this.confidence = result.confidence;
+    this.segmentLagsMs = [...result.segmentLagsMs];
+    this.micLevelDbfs = result.micLevelDbfs;
+    this.backingLevelDbfs = result.backingLevelDbfs;
+    this.error = null;
+    this.provisional = false;
+    this.candidates = [result.micLagMs];
+    this.collector.reset();
     this.onSettled();
   }
 
@@ -283,24 +246,28 @@ export class CalibrationSession {
     this.segmentLagsMs = [];
     this.measuredContext = null;
     this.provisional = false;
-    this.clearCapture();
+    this.collector.reset();
   }
 
   /** `startSample` is where `AudioSession` placed these samples on its timeline. */
   observeMic(samples: Int16Array, startSample: number) {
-    this.observe(this.mic, samples, startSample);
+    if (!this.collecting || samples.length === 0) return;
+    this.collector.observeMic(samples, startSample);
+    this.drainReadyWindows();
   }
 
   observeBacking(samples: Int16Array, startSample: number) {
-    this.observe(this.backing, samples, startSample);
+    if (!this.collecting || samples.length === 0) return;
+    this.collector.observeBacking(samples, startSample);
+    this.drainReadyWindows();
   }
 
   /** Gives up on a collection that stopped making progress. */
   tick(nowMs = performance.now()) {
-    if (this.phase !== 'collecting' || nowMs - this.startedAt <= this.timeoutMs) return false;
+    if (!this.collecting || nowMs - this.startedAt <= this.timeoutMs) return false;
 
-    const micMs = this.spanMs(this.mic);
-    const backingMs = this.spanMs(this.backing);
+    const micMs = Math.round((this.collector.micSpanSamples / this.sampleRate) * 1000);
+    const backingMs = Math.round((this.collector.backingSpanSamples / this.sampleRate) * 1000);
     this.fail(
       `Calibration timed out (mic ${micMs} ms, source ${backingMs} ms of ${this.durationMs} ms). ` +
       'Check that both the phone microphone and the desktop capture are still streaming.',
@@ -318,8 +285,8 @@ export class CalibrationSession {
   }
 
   status(): CalibrationStatus {
-    const progress = this.phase === 'collecting'
-      ? Math.max(0, Math.min(1, this.captured / this.requiredSamples))
+    const progress = this.collecting
+      ? this.collector.progress
       : this.phase === 'complete'
         ? 1
         : 0;
@@ -344,62 +311,12 @@ export class CalibrationSession {
 
   // ---------------------------------------------------------------- internals
 
-  private clearCapture() {
-    this.mic = emptyCapture();
-    this.backing = emptyCapture();
-  }
-
-  /**
-   * Consumes one completed window without throwing away audio that already
-   * arrived after it. One websocket can run ahead of the other by seconds
-   * during a transport burst; clearing both captures here made the faster
-   * side's next agreement window disappear before the slower side caught up.
-   */
-  private retainCaptureAfter(capture: Capture, beforeSample: number) {
-    const retained = emptyCapture();
-
-    for (const chunk of capture.chunks) {
-      const chunkEnd = chunk.start + chunk.samples.length;
-      if (chunkEnd <= beforeSample) continue;
-
-      const offset = Math.max(0, beforeSample - chunk.start);
-      const start = chunk.start + offset;
-      const samples = chunk.samples.subarray(offset);
-      if (samples.length === 0) continue;
-
-      if (retained.firstStart === null) retained.firstStart = start;
-      retained.chunks.push({ start, samples });
-      retained.lastEnd = Math.max(retained.lastEnd, start + samples.length);
+  private drainReadyWindows() {
+    while (this.collecting) {
+      const window = this.collector.takeReadyWindow();
+      if (window === null) break;
+      this.finish(window);
     }
-
-    return retained;
-  }
-
-  private advancePast(windowEnd: number) {
-    this.mic = this.retainCaptureAfter(this.mic, windowEnd);
-    this.backing = this.retainCaptureAfter(this.backing, windowEnd);
-  }
-
-  /**
-   * The session index both sides are rendered from: the later of the two
-   * starts, because that is where both actually have audio.
-   *
-   * Taking the earlier one instead gives the late side a run of silence it was
-   * simply not observed for, which reads as an outage and biases the
-   * correlation with content that never existed. It does not buy anything
-   * either - the offset between the two streams is carried by their session
-   * indices, so any shared origin measures the same lag.
-   */
-  private get origin() {
-    if (this.mic.firstStart === null || this.backing.firstStart === null) return null;
-    return Math.max(this.mic.firstStart, this.backing.firstStart);
-  }
-
-  /** How much of the window both sides now reach. */
-  private get captured() {
-    const origin = this.origin;
-    if (origin === null) return 0;
-    return Math.max(0, Math.min(this.mic.lastEnd, this.backing.lastEnd) - origin);
   }
 
   private candidatesAgree() {
@@ -422,42 +339,12 @@ export class CalibrationSession {
     return run;
   }
 
-  private spanMs(capture: Capture) {
-    if (capture.firstStart === null) return 0;
-    return Math.round(((capture.lastEnd - capture.firstStart) / this.sampleRate) * 1000);
-  }
-
-  private observe(capture: Capture, samples: Int16Array, startSample: number) {
-    if (this.phase !== 'collecting' || samples.length === 0) return;
-
-    // Enough slack for every agreement window plus one window of start skew,
-    // without letting one live stream grow without bound while the other is
-    // stalled. The old fixed 2x ceiling could not even hold production's three
-    // agreement windows, and rejected the fast websocket's tail before the
-    // slower side reached it.
-    const captureLimit = this.requiredSamples * (this.agreementWindows + 1);
-    if (capture.firstStart !== null && startSample - capture.firstStart >= captureLimit) return;
-
-    if (capture.firstStart === null) capture.firstStart = startSample;
-    capture.chunks.push({ start: startSample, samples });
-    capture.lastEnd = Math.max(capture.lastEnd, startSample + samples.length);
-
-    // A burst may already contain several complete windows. Drain each one in
-    // turn while `finish` keeps the suffix for the next agreement round.
-    while (this.phase === 'collecting' && this.captured >= this.requiredSamples) this.finish();
-  }
-
-  private finish() {
-    const origin = this.origin ?? 0;
-    const windowEnd = origin + this.requiredSamples;
-    const mic = render(this.mic, origin, this.requiredSamples);
-    const backing = render(this.backing, origin, this.requiredSamples);
-
+  private finish(window: TimingWindow) {
     try {
-      // Holes displace nothing now, but they still remove the evidence the
-      // correlation runs on. Past a few percent the answer is not worth trusting.
+      // Holes displace nothing, but they remove evidence. Past a few percent the
+      // answer is not worth trusting.
       const gapMs = Math.round(
-        (Math.max(mic.gapSamples, backing.gapSamples) / this.sampleRate) * 1000,
+        (Math.max(window.micGapSamples, window.backingGapSamples) / this.sampleRate) * 1000,
       );
       if (gapMs > MAX_CAPTURE_GAP_MS) {
         throw new Error(
@@ -467,27 +354,22 @@ export class CalibrationSession {
       }
 
       const result = this.maxLagMs === undefined
-        ? this.analyze(mic.samples, backing.samples, this.sampleRate)
-        : this.analyze(mic.samples, backing.samples, this.sampleRate, this.maxLagMs);
+        ? this.analyze(window.mic, window.backing, this.sampleRate)
+        : this.analyze(window.mic, window.backing, this.sampleRate, this.maxLagMs);
 
       this.candidates.push(result.micLagMs);
       if (this.candidates.length > this.agreementWindows) this.candidates.shift();
 
       if (!this.candidatesAgree()) {
-        // Not an error: one window measured something, and the next has to say
-        // the same thing before it is worth believing. Collect another.
         this.confidence = result.confidence;
         this.segmentLagsMs = result.segmentLagsMs;
         this.micLevelDbfs = result.micLevelDbfs;
         this.backingLevelDbfs = result.backingLevelDbfs;
         this.error = null;
 
-        // Full agreement is a floor of agreementWindows * durationMs even in
-        // the best case, and nothing corrected at all for that whole stretch
-        // has its own cost. A confident single window beats the fallback
-        // network estimate it would otherwise run on meanwhile - collection
-        // keeps going regardless, and a confirmed answer still replaces this
-        // one the moment agreement lands, same as if it had never applied.
+        // A confident single window may beat the network fallback while full
+        // agreement continues in the background. A confirmed answer from an
+        // earlier run remains protected from a new provisional guess.
         if (
           this.provisionalConfidence !== undefined
           && result.confidence >= this.provisionalConfidence
@@ -498,7 +380,6 @@ export class CalibrationSession {
           this.provisional = true;
         }
 
-        this.advancePast(windowEnd);
         this.startedAt = this.now();
         this.onSettled();
         return;
@@ -519,11 +400,9 @@ export class CalibrationSession {
       this.confidence = null;
       this.segmentLagsMs = [];
     } finally {
-      // A non-agreeing but valid window deliberately stays collecting and has
-      // already retained its overrun for the next round. `finally` also runs
-      // before that branch's `return`, so clearing unconditionally here erased
-      // the suffix we had just preserved.
-      if (this.phase !== 'collecting') this.clearCapture();
+      // A valid non-agreeing window stays collecting; the collector already
+      // retained its suffix. Settled/failed runs discard any leftover capture.
+      if (!this.collecting) this.collector.reset();
     }
 
     this.onSettled();

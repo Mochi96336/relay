@@ -8,6 +8,7 @@ const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'ut
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 const roomSoundUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
+const roomSoundPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 
 function timeline(overrides: Record<string, unknown> = {}) {
   return {
@@ -77,10 +78,15 @@ test('playback forced mute composes with Mic, review, and user mute without owni
 
   assert.doesNotMatch(listen, /t\('listen\./,
     'the audio engine must not regain Room sound product-copy ownership');
-  assert.match(roomSoundUi, /state === 'mic-muted'/);
-  assert.match(roomSoundUi, /state === 'playback-muted'/);
-  assert.match(roomSoundUi, /state === 'review-muted'/);
-  assert.match(roomSoundUi, /state === 'muted'/);
+  assert.match(
+    roomSoundUi,
+    /import \{ roomSoundPresentation \} from '\.\/room-sound-presentation\.js'/,
+    'Room sound UI must delegate product copy to its presentation layer',
+  );
+  assert.match(roomSoundPresentation, /state === 'mic-muted'/);
+  assert.match(roomSoundPresentation, /state === 'playback-muted'/);
+  assert.match(roomSoundPresentation, /state === 'review-muted'/);
+  assert.match(roomSoundPresentation, /state === 'muted'/);
 });
 
 test('Take review speaker playback cannot be fed back through the same participant phone Mic', () => {

@@ -109,6 +109,8 @@ export class CalibrationSession {
   /** True while `micLagMs` is a first-window guess agreement has not confirmed yet. */
   private provisional = false;
   private startedAt = 0;
+  /** Monotonic identity for newly confirmed timing authority. Retries do not change it. */
+  private confirmedRevisionValue = 0;
 
   // The measurement describes one pairing of transports. Remembering which lets
   // the server say the answer is stale instead of applying it to a setup it was
@@ -170,6 +172,11 @@ export class CalibrationSession {
     };
   }
 
+  /** Changes only when a new result becomes confirmed; start/fail retries leave it alone. */
+  get confirmedRevision() {
+    return this.confirmedRevisionValue;
+  }
+
   start(nowMs = performance.now()) {
     this.phase = 'collecting';
     this.startedAt = nowMs;
@@ -212,6 +219,7 @@ export class CalibrationSession {
     this.error = null;
     this.provisional = false;
     this.candidates = [result.micLagMs];
+    this.confirmedRevisionValue += 1;
     this.collector.reset();
     this.onSettled();
   }
@@ -232,6 +240,7 @@ export class CalibrationSession {
     this.error = null;
     this.provisional = false;
     this.candidates = [result.micLagMs];
+    this.confirmedRevisionValue += 1;
     this.collector.reset();
     this.onSettled();
   }
@@ -394,6 +403,7 @@ export class CalibrationSession {
       this.error = null;
       this.provisional = false;
       this.phase = 'complete';
+      this.confirmedRevisionValue += 1;
     } catch (error) {
       this.phase = 'failed';
       this.error = error instanceof Error ? error.message : String(error);

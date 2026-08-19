@@ -1,3 +1,4 @@
+// One-shot branch repair; removed after the targeted patch lands.
 import { readFileSync, writeFileSync } from 'node:fs';
 
 function replaceOnce(path, before, after) {

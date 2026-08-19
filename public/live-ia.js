@@ -4,6 +4,7 @@ const systemPanel = document.querySelector('#system-panel');
 const openSystem = document.querySelector('#open-system');
 const closeSystem = document.querySelector('#close-system');
 const calibrateTiming = document.querySelector('#calibrate-timing');
+const calibrateStatus = document.querySelector('#calibrate-status');
 const micLiveControl = document.querySelector('#mic-live-control');
 const micLiveLabel = micLiveControl?.querySelector('summary span');
 const performanceStage = document.querySelector('.performance-stage');
@@ -91,9 +92,109 @@ systemPanel?.addEventListener('click', (event) => {
   if (event.target === systemPanel) closeSystemPanel(true);
 });
 
-// Recalibration is a direct task in More, not a reason to navigate into a
-// generic Adjust surface. app.js still owns whether the action is allowed and
-// what command is sent; this layer only gets the popover out of the way.
+function calibrationCopy(key) {
+  const zh = window.relayI18n?.getLocale?.() === 'zh-Hant';
+  if (key === 'realign') return zh ? '重新對齊' : 'Realign';
+  if (key === 'aligning') return zh ? '對齊中…' : 'Aligning…';
+  if (key === 'preparing-paths') return zh ? '正在準備聲音路徑…' : 'Preparing audio paths…';
+  return '';
+}
+
+let latestCalibrationAction = null;
+let calibrationRenderQueued = false;
+
+function setElementText(element, value) {
+  if (element && element.textContent !== value) element.textContent = value;
+}
+
+/**
+ * ProductStatus is the semantic authority for calibration prerequisites.
+ * app.js still owns the command socket and content-correlation progress UI;
+ * this presenter prevents its historical `roomSongAvailable` projection from
+ * leaking Song/timeline prerequisites into the Robot boot-probe route.
+ */
+function renderCalibrationAction() {
+  calibrationRenderQueued = false;
+  if (!calibrateTiming) return;
+
+  calibrateTiming.removeAttribute('data-i18n');
+  const action = latestCalibrationAction;
+  const mode = action?.startCalibrationMode ?? null;
+  const reason = action?.startCalibrationBlockedReason ?? null;
+  const bootProbe = mode === 'boot-probe';
+  const bootProbeRunning = bootProbe && reason === 'calibration-active';
+  const bootProbePreparing = bootProbe
+    && (reason === 'sources-not-connected' || reason === 'sources-not-streaming');
+
+  if (!bootProbe) {
+    setElementText(calibrateTiming, calibrationCopy('realign'));
+    if (calibrateTiming.hidden) calibrateTiming.hidden = false;
+    return;
+  }
+
+  if (bootProbeRunning) {
+    if (calibrateTiming.hidden) calibrateTiming.hidden = false;
+    if (!calibrateTiming.disabled) calibrateTiming.disabled = true;
+    setElementText(calibrateTiming, calibrationCopy('aligning'));
+    setElementText(calibrateStatus, calibrationCopy('aligning'));
+    return;
+  }
+
+  setElementText(calibrateTiming, calibrationCopy('realign'));
+
+  if (bootProbePreparing) {
+    // A disabled recovery action is noise while the PCM capture timelines are
+    // still becoming fresh. Keep the preparation state, not a fake Song error.
+    if (!calibrateTiming.hidden) calibrateTiming.hidden = true;
+    setElementText(calibrateStatus, calibrationCopy('preparing-paths'));
+    return;
+  }
+
+  if (calibrateTiming.hidden) calibrateTiming.hidden = false;
+  const localMicOwner = document.body.dataset.selfMic === 'live';
+  const shouldDisable = action?.canStartCalibration !== true || !localMicOwner;
+  if (calibrateTiming.disabled !== shouldDisable) calibrateTiming.disabled = shouldDisable;
+
+  // A ready boot probe does not need Song or phone-timeline helper copy. Leave
+  // the action itself as the recovery affordance.
+  if (action?.canStartCalibration === true) setElementText(calibrateStatus, '');
+}
+
+function queueCalibrationRender() {
+  if (calibrationRenderQueued) return;
+  calibrationRenderQueued = true;
+  queueMicrotask(renderCalibrationAction);
+}
+
+window.addEventListener('relay-product-status', (event) => {
+  latestCalibrationAction = event.detail?.actions ?? null;
+  // app.js subscribes to the same event later in the module graph. Render in a
+  // microtask so ProductStatus semantics win after that legacy projection.
+  queueCalibrationRender();
+});
+window.addEventListener('relay-microphone-local-state', queueCalibrationRender);
+window.addEventListener('relay-locale-changed', queueCalibrationRender);
+
+// app.js also updates calibration status when raw calibration messages arrive.
+// In boot-probe mode ProductStatus remains the semantic source; re-project it
+// after those DOM writes so `No song to align` can never reappear.
+if (calibrateTiming && calibrateStatus) {
+  const calibrationObserver = new MutationObserver(queueCalibrationRender);
+  calibrationObserver.observe(calibrateTiming, {
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
+  calibrationObserver.observe(calibrateStatus, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+}
+
+// Realignment is a direct recovery task in More, not a reason to navigate into
+// a generic Adjust surface. app.js still owns whether the command is sent; this
+// layer only gets the popover out of the way.
 calibrateTiming?.addEventListener('click', () => {
   if (moreMenu) moreMenu.open = false;
 });

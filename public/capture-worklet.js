@@ -301,17 +301,12 @@ class CaptureProcessor extends AudioWorkletProcessor {
     const rms = this.levelSampleCount > 0
       ? Math.sqrt(this.levelSquareSum / this.levelSampleCount)
       : 0;
-    this.measureF0(rms);
-    this.port.postMessage({
-      type: 'input-level',
-      peakDbfs: amplitudeToDbfs(this.levelPeak),
-      rmsDbfs: amplitudeToDbfs(rms),
-      spectrumBands: this.measureSpectrumBands(),
-      f0Hz: this.f0Hz,
-      pitchConfidence: this.pitchConfidence,
-      samples: this.levelSampleCount,
-    });
+    const peakDbfs = amplitudeToDbfs(this.levelPeak);
+    const rmsDbfs = amplitudeToDbfs(rms);
+    const samples = this.levelSampleCount;
 
+    // PCM delivery is the critical path. Transfer the completed chunk before
+    // any visual-only FFT/F0 work so pitch analysis cannot delay this uplink.
     const buffer = this.chunk.buffer;
     this.port.postMessage(buffer, [buffer]);
     this.chunk = new Int16Array(this.chunkSize);
@@ -319,6 +314,17 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.levelPeak = 0;
     this.levelSquareSum = 0;
     this.levelSampleCount = 0;
+
+    this.measureF0(rms);
+    this.port.postMessage({
+      type: 'input-level',
+      peakDbfs,
+      rmsDbfs,
+      spectrumBands: this.measureSpectrumBands(),
+      f0Hz: this.f0Hz,
+      pitchConfidence: this.pitchConfidence,
+      samples,
+    });
   }
 
   process(inputs) {

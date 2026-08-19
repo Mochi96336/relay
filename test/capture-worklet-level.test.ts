@@ -7,6 +7,7 @@ import vm from 'node:vm';
 type CapturedProcessor = {
   process(inputs: unknown[]): boolean;
   port: { messages: unknown[] };
+  measureF0(rms: number): void;
 };
 
 type InputLevel = {
@@ -66,7 +67,8 @@ test('capture worklet publishes local RMS, five-band spectrum and F0 evidence be
   const input = new Float32Array(960).fill(0.5);
   assert.equal(processor.process([[input]]), true);
   assert.equal(processor.port.messages.length, 2);
-  const level = processor.port.messages[0] as InputLevel;
+  assert.equal(Object.prototype.toString.call(processor.port.messages[0]), '[object ArrayBuffer]');
+  const level = processor.port.messages[1] as InputLevel;
   assert.equal(level.type, 'input-level');
   assert.equal(level.samples, 960);
   assert.ok(Math.abs(level.peakDbfs - (-6.020599913279624)) < 0.0001);
@@ -74,7 +76,23 @@ test('capture worklet publishes local RMS, five-band spectrum and F0 evidence be
   assert.equal(level.spectrumBands.length, 5);
   assert.equal(level.f0Hz, null, 'DC must not be guessed as a pitch');
   assert.equal(level.pitchConfidence, 0);
-  assert.equal(Object.prototype.toString.call(processor.port.messages[1]), '[object ArrayBuffer]');
+});
+
+test('capture worklet transfers each PCM chunk before entering F0 visual analysis', async () => {
+  const processor = await loadCaptureProcessor();
+  const originalMeasureF0 = processor.measureF0.bind(processor);
+  processor.measureF0 = (rms) => {
+    processor.port.messages.push('f0-analysis');
+    originalMeasureF0(rms);
+  };
+
+  processor.process([[sine(220, 40)]]);
+  assert.equal(Object.prototype.toString.call(processor.port.messages[0]), '[object ArrayBuffer]');
+  assert.equal(processor.port.messages[1], 'f0-analysis');
+  assert.equal((processor.port.messages[2] as InputLevel).type, 'input-level');
+  assert.equal(Object.prototype.toString.call(processor.port.messages[3]), '[object ArrayBuffer]');
+  assert.equal(processor.port.messages[4], 'f0-analysis');
+  assert.equal((processor.port.messages[5] as InputLevel).type, 'input-level');
 });
 
 test('capture spectrum remains frequency-shape evidence, separate from pitch', async () => {

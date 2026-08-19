@@ -40,12 +40,17 @@ test('Room sound is one 44px local control row with a 2px visual rail', () => {
   assert.match(layoutCss, /data-room-sound-value="visible"[\s\S]*?#listen-gain-value/);
 });
 
-test('Room sound projection is localized, concise, forced-disabled, and presentation-only', () => {
+test('Room sound projection preserves recovery semantics, localized control names, and local-only ownership', () => {
   assert.match(roomUi, /function roomSoundLabel\(\)[\s\S]*?localCopy\('Room sound', '房間聲音'\)/);
-  assert.match(roomUi, /setAttribute\('aria-label', label\)/);
+  assert.match(roomUi, /function roomSoundVolumeLabel\(\)[\s\S]*?localCopy\('Room sound volume', '房間聲音音量'\)/);
+  assert.match(roomUi, /function roomSoundToggleLabel\(muted\)[\s\S]*?'Turn on room sound'[\s\S]*?'開啟房間聲音'[\s\S]*?'Mute room sound'[\s\S]*?'靜音房間聲音'/);
+  assert.ok(
+    roomUi.indexOf("phase === 'retry' || phase === 'start-failed'") < roomUi.indexOf("state === 'muted' || state === 'off'"),
+    'retry/start-failed must outrank generic muted copy',
+  );
   assert.match(roomUi, /gain\.disabled = forced/);
   assert.match(roomUi, /\? '🔇' : '🔊'/);
-  for (const copy of ['唱歌中', '伴奏', '已靜音']) {
+  for (const copy of ['唱歌中', '伴奏', '已靜音', '重試']) {
     assert.equal(roomUi.includes(copy), true, `missing compact Room sound state: ${copy}`);
   }
   assert.match(roomUi, /root\.dataset\.listenNote = presentation\.note \? 'visible' : 'quiet'/);
@@ -55,7 +60,7 @@ test('Room sound projection is localized, concise, forced-disabled, and presenta
   }
 });
 
-test('P0 visual fixture uses production presenters, action containment, and browser geometry', () => {
+test('P0 visual fixture uses production presenters, production-shaped Live DOM, real Take media, and browser geometry', () => {
   for (const state of [
     'empty',
     'listener',
@@ -66,15 +71,29 @@ test('P0 visual fixture uses production presenters, action containment, and brow
     'room-sound-normal',
     'room-sound-muted',
     'room-sound-forced',
+    'room-sound-retry',
   ]) {
     assert.equal(fixture.includes(state), true, `missing P0 visual state: ${state}`);
   }
+  assert.match(fixture, /class="song-heading-actions"/);
+  assert.match(fixture, /class="song-observer-meta"/);
+  assert.match(fixture, /id="release-mic" class="text-action"/);
+  assert.match(fixture, /id="stop-recording" class="record-action recording"/);
   assert.match(fixture, /id="change-youtube" class="text-action"/);
   assert.match(fixture, /await import\('\/room-sound-ui\.js'\)/);
   assert.match(fixture, /await import\('\/take-history\.js'\)/);
   assert.match(fixture, /dispatchEvent\(new CustomEvent\('relay-take-status'/);
   assert.doesNotMatch(fixture, /<details class="take-history-panel"/);
+  assert.match(fixture, /createSilentWavUrl/);
+  assert.match(fixture, /recordingPlayer\.currentTime = 1/);
+  assert.match(fixture, /take-many-groups/);
+  assert.match(fixture, /take-many-artworks/);
+  assert.match(fixture, /audio-duration/);
+  assert.match(fixture, /audio-seek/);
   assert.match(fixture, /document\.documentElement\.scrollWidth/);
+  assert.match(fixture, /shared-left-song-performance/);
   assert.match(fixture, /__geometry-\$\{result\}/);
   assert.match(fixture, /forced-gain-disabled/);
+  assert.match(fixture, /retry-status/);
+  assert.match(fixture, /gain-aria/);
 });

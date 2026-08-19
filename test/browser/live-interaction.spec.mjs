@@ -358,6 +358,16 @@ test('production DOM: Mic readiness arms Record, Record morphs to Stop in the sa
   for (let index = 1; index <= 11; index += 1) {
     expect(timing[`T${index}`]).toBeGreaterThanOrEqual(timing[`T${index - 1}`]);
   }
+  const relativeTiming = Object.fromEntries(
+    Array.from({ length: 12 }, (_, index) => {
+      const point = `T${index}`;
+      return [point, Number((timing[point] - timing.T0).toFixed(1))];
+    }),
+  );
+  console.log(
+    `[relay-p0-timing] ${JSON.stringify(relativeTiming)} `
+    + `firstPcmReceivedToRecordMs=${(timing.T11 - timing.T6).toFixed(1)}`,
+  );
   expect(timing.T11 - timing.T6).toBeLessThan(300);
 
   const record = page.locator('#start-recording');

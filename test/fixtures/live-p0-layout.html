@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Relay Live P0 layout fixture</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/live-state.css">
+  <link rel="stylesheet" href="/adjust.css">
+  <link rel="stylesheet" href="/song-surface.css">
+  <link rel="stylesheet" href="/live-ia.css">
+  <style>
+    /* Fixture-only deterministic content. Product geometry remains owned by the
+       production stylesheets above. */
+    body { min-height: 100dvh; }
+    .fixture-player {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      min-height: 200px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #292b30;
+      border-radius: 12px;
+      background: #0b0c0e;
+      color: #70737a;
+      font-size: 12px;
+    }
+    .fixture-player button { min-width:44px; min-height:44px; }
+    .fixture-hidden { display:none !important; }
+    .fixture-take-audio { width:100%; min-height:44px; }
+  </style>
+</head>
+<body data-health="healthy" data-room-mic="live" data-self-mic="off" data-listen="audible">
+  <main class="live-shell">
+    <header class="room-header">
+      <strong>Relay</strong>
+      <div class="room-header-actions"><button type="button">2 人</button><button type="button" aria-label="更多">•••</button></div>
+    </header>
+
+    <section class="song-stage">
+      <div class="song-heading-row"><span>歌曲</span><button id="change-youtube" type="button">換歌</button></div>
+      <div class="song-observer"><strong>林俊傑－偉大的渺小</strong><span>偉大的渺小</span></div>
+      <div class="youtube-player-shell fixture-player" id="fixture-player"><button type="button" aria-label="播放">▶</button></div>
+    </section>
+
+    <section class="performance-stage">
+      <span class="section-label">Mic</span>
+      <div class="voice-copy"><strong id="fixture-voice-title">浚翔正在唱</strong><span>Room Mic</span></div>
+      <div class="voice-input-evidence"><div class="voice-input-meter" aria-hidden="true">▁▂▅▇▆▃▂</div></div>
+      <div class="mic-actions"><button id="start-publisher" type="button">拿 Mic</button></div>
+      <div class="take-strip" data-take-state="ready"><button id="start-recording" type="button">● 開始錄音</button><span id="recording-status"></span></div>
+      <details class="mic-live-control" id="mic-live-control"><summary><span>Mic</span><output>+24 dB</output></summary></details>
+      <button class="recent-take" id="last-take" type="button">▶ 上一段錄音 · 2:35</button>
+    </section>
+
+    <footer class="live-actions">
+      <section class="local-listen local-sound-control" aria-label="房間聲音" data-room-sound-state="quiet" data-room-sound-value="quiet">
+        <div class="adjust-group-heading">
+          <span id="local-listen-label" class="section-label">房間聲音</span>
+          <span>只影響這支裝置</span>
+          <button id="listen-toggle" type="button" aria-label="房間聲音" aria-pressed="false">🔊</button>
+        </div>
+        <label class="adjust-control" for="listen-gain">
+          <div class="adjust-row-heading"><strong>音量</strong><output id="listen-gain-value">30%</output></div>
+          <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" value="30" aria-label="房間聲音">
+        </label>
+        <p id="listen-adjust-state"></p>
+        <span id="listen-note"></span>
+      </section>
+    </footer>
+  </main>
+
+  <details class="take-history-panel" id="take-history-panel">
+    <div class="take-history-sheet">
+      <div class="take-history-heading"><strong>錄音</strong><button class="panel-done" type="button">完成</button></div>
+      <div class="take-history-groups" id="fixture-takes"></div>
+      <div class="take-history-review" id="fixture-review">
+        <strong>選取的錄音</strong>
+        <audio class="fixture-take-audio" id="recording-player" controls aria-label="Selected Take playback"></audio>
+        <a href="#" download>下載</a>
+      </div>
+    </div>
+  </details>
+
+  <template id="fixture-take-template">
+    <button class="take-history-item" type="button"><span class="take-time"></span><span class="take-duration"></span></button>
+  </template>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const state = params.get('state') || 'listener';
+    document.body.dataset.fixtureState = state;
+
+    const panel = document.querySelector('#take-history-panel');
+    const takes = document.querySelector('#fixture-takes');
+    const template = document.querySelector('#fixture-take-template');
+    const voiceTitle = document.querySelector('#fixture-voice-title');
+    const micAction = document.querySelector('#start-publisher');
+    const recordStrip = document.querySelector('.take-strip');
+    const recordButton = document.querySelector('#start-recording');
+    const roomRoot = document.querySelector('.local-sound-control');
+    const roomToggle = document.querySelector('#listen-toggle');
+    const roomState = document.querySelector('#listen-adjust-state');
+    const roomGain = document.querySelector('#listen-gain');
+    const songStage = document.querySelector('.song-stage');
+    const performance = document.querySelector('.performance-stage');
+
+    function setRoomSound(kind) {
+      roomRoot.dataset.roomSoundValue = 'quiet';
+      roomToggle.disabled = false;
+      roomGain.disabled = false;
+      if (kind === 'normal') {
+        document.body.dataset.listen = 'audible';
+        roomRoot.dataset.roomSoundState = 'quiet';
+        roomToggle.textContent = '🔊';
+        roomToggle.setAttribute('aria-pressed', 'false');
+        roomState.textContent = '';
+      } else if (kind === 'muted') {
+        document.body.dataset.listen = 'muted';
+        roomRoot.dataset.roomSoundState = 'visible';
+        roomToggle.textContent = '🔇';
+        roomToggle.setAttribute('aria-pressed', 'true');
+        roomState.textContent = '已靜音';
+      } else {
+        document.body.dataset.listen = 'mic-muted';
+        roomRoot.dataset.roomSoundState = 'visible';
+        roomToggle.textContent = '🔇';
+        roomToggle.disabled = true;
+        roomGain.disabled = true;
+        roomState.textContent = '唱歌中';
+      }
+    }
+
+    function singer(recording = false) {
+      document.body.dataset.selfMic = 'live';
+      document.body.dataset.roomMic = 'live';
+      voiceTitle.textContent = '你正在唱';
+      micAction.textContent = '放開 Mic';
+      document.querySelector('#mic-live-control').style.display = 'block';
+      if (recording) {
+        recordStrip.dataset.takeState = 'recording';
+        recordButton.textContent = '● 錄音中 0:18';
+      }
+    }
+
+    function addTake(time, duration, selected = false) {
+      const item = template.content.firstElementChild.cloneNode(true);
+      item.querySelector('.take-time').textContent = time;
+      item.querySelector('.take-duration').textContent = duration;
+      if (selected) item.classList.add('selected');
+      takes.append(item);
+    }
+
+    function takeHistory(many) {
+      panel.open = true;
+      const group = document.createElement('section');
+      group.className = 'take-history-group';
+      group.innerHTML = `<div class="take-history-group-heading"><strong>偉大的渺小</strong><span>${many ? '3 段' : '1 段'}</span></div>`;
+      takes.append(group);
+      addTake('21:03', '2:35', true);
+      if (many) {
+        addTake('20:56', '2:31');
+        addTake('20:42', '2:29');
+      }
+    }
+
+    setRoomSound('normal');
+
+    if (state === 'empty') {
+      document.body.dataset.roomMic = 'off';
+      songStage.querySelector('.song-observer').innerHTML = '<strong>尚未選歌</strong><span>等待房間選擇歌曲</span>';
+      document.querySelector('#fixture-player').classList.add('fixture-hidden');
+      performance.classList.add('fixture-hidden');
+    } else if (state === 'singer') {
+      singer(false);
+      setRoomSound('forced');
+    } else if (state === 'recording') {
+      singer(true);
+      setRoomSound('forced');
+    } else if (state === 'take-history-one') {
+      takeHistory(false);
+    } else if (state === 'take-history-many') {
+      takeHistory(true);
+    } else if (state === 'room-sound-muted') {
+      setRoomSound('muted');
+    } else if (state === 'room-sound-forced') {
+      setRoomSound('forced');
+    }
+
+    if (state.startsWith('room-sound-')) {
+      requestAnimationFrame(() => document.querySelector('.live-actions').scrollIntoView({ block: 'end' }));
+    }
+  </script>
+</body>
+</html>

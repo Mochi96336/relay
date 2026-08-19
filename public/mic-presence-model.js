@@ -49,7 +49,7 @@ export function normalizePitchConfidence(pitchConfidence) {
 export function pitchLobeCount(f0Hz) {
   const frequency = normalizeF0Hz(f0Hz);
   if (frequency === null) return 0;
-  return clamp(1.5 + 1.35 * Math.log2(frequency / 80), 1.5, 6.5);
+  return clamp(1.25 + 2.05 * Math.log2(frequency / 80), 1.25, 8);
 }
 
 export function pitchTextureStrength(f0Hz, pitchConfidence) {

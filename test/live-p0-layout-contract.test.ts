@@ -11,12 +11,15 @@ test('P0 layout repair is render-blocking and owns one shared Live inline track'
   assert.match(stateCss, /@import url\('\/live-p0-layout\.css'\);/);
   assert.match(layoutCss, /--live-inline:\s*20px/);
   assert.match(layoutCss, /grid-template-columns:\s*\[live-left\]\s*minmax\(0, 1fr\)\s*\[live-right\]/);
+  assert.match(layoutCss, /grid-auto-rows:\s*max-content/);
+  assert.match(layoutCss, /align-content:\s*start/);
   assert.match(layoutCss, /\.live-shell\s*\{[\s\S]*?padding-inline:\s*var\(--live-inline\)/);
   assert.match(layoutCss, /\.live-shell > \.song-stage,[\s\S]*?\.live-shell > \.live-actions[\s\S]*?grid-column:\s*live-left \/ live-right/);
   assert.match(layoutCss, /\.youtube-player-shell,[\s\S]*?min-width:\s*0/);
 });
 
-test('Take History spends phone width on time and only constrains itself on desktop', () => {
+test('Take History spends phone width on time and is pinned to the viewport', () => {
+  assert.match(layoutCss, /\.take-history-panel\[open\] > \.take-history-sheet \{[\s\S]*?position:\s*fixed;[\s\S]*?inset-inline-start:\s*0;[\s\S]*?bottom:\s*0;/);
   assert.match(layoutCss, /\.take-history-panel\[open\] > \.take-history-sheet \{[\s\S]*?width:\s*100vw;[\s\S]*?max-width:\s*none;[\s\S]*?margin-inline:\s*0;/);
   assert.match(layoutCss, /padding-left:\s*var\(--live-inline\);[\s\S]*?padding-right:\s*var\(--live-inline\)/);
   assert.match(layoutCss, /\.take-history-item \{[\s\S]*?min-height:\s*64px/);

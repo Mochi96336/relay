@@ -63,6 +63,15 @@ function publishRecordingState() {
 
 window.addEventListener('relay-request-recording-state', publishRecordingState);
 
+function acceptProductStatus(status) {
+  if (!status || status.type !== 'product-status') return;
+  productCanStartTake = status.actions?.canStartTake === true;
+  startTakeBlockedReason = typeof status.actions?.startTakeBlockedReason === 'string'
+    ? status.actions.startTakeBlockedReason
+    : productCanStartTake ? null : 'mix-not-active';
+  publishRecordingState();
+}
+
 function send(payload) {
   if (socket?.readyState !== WebSocket.OPEN) {
     commandError = { reason: 'reconnecting' };
@@ -144,6 +153,15 @@ async function connect() {
       return;
     }
 
+    // ProductStatus is the only authority for Record readiness. Requesting and
+    // consuming it on recorder's own socket makes readiness replayable: a late
+    // recorder module cannot miss the one transition that made canStartTake
+    // true and then wait for an unrelated future ProductStatus change.
+    if (message.type === 'product-status') {
+      acceptProductStatus(message);
+      return;
+    }
+
     if (message.type === 'take-status') {
       latestStatus = message;
       commandError = null;
@@ -172,24 +190,25 @@ async function connect() {
 
   sendParticipantAuthentication(next);
   next.send(JSON.stringify({ type: 'take-status-request' }));
+  next.send(JSON.stringify({ type: 'product-status-request' }));
   publishRecordingState();
 }
 
+// Keep the shared Live projection as the fastest path when it is already
+// present, but never depend on event ordering: connect() always asks the server
+// for the current authoritative snapshot as well.
 window.addEventListener('relay-product-status', (event) => {
-  productCanStartTake = event.detail?.actions?.canStartTake === true;
-  startTakeBlockedReason = typeof event.detail?.actions?.startTakeBlockedReason === 'string'
-    ? event.detail.actions.startTakeBlockedReason
-    : productCanStartTake ? null : 'mix-not-active';
-  publishRecordingState();
+  acceptProductStatus(event.detail);
 });
 
 recordButton?.addEventListener('click', () => {
+  if (!recordingState().canStart) return;
   send({ type: 'start-take' });
 });
 
 stopButton?.addEventListener('click', () => {
   const takeId = latestStatus?.take?.takeId;
-  if (!takeId) return;
+  if (!recordingState().canStop || !takeId) return;
   send({ type: 'stop-take', takeId });
 });
 

@@ -80,6 +80,13 @@ async function primeStreams(backing: RelayClient, publisher: RelayClient) {
   ]);
 }
 
+function refreshLivePath(backing: RelayClient, publisher: RelayClient) {
+  publisher.send(playingTelemetry);
+  const silence = Buffer.alloc(960 * 2);
+  backing.sendPcm(silence);
+  publisher.sendPcm(silence);
+}
+
 async function establishBaseline(
   backing: RelayClient,
   publisher: RelayClient,
@@ -135,6 +142,7 @@ describe('continuous content calibration validation server policy', () => {
       assert.ok(Math.abs(Number(seeded.validation.baselineLagMs) - baselineLag) < 1);
 
       const collectingFrom = monitor.messages.length;
+      refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, collectingFrom);
       const stableFrom = monitor.messages.length;
       const stablePair = laggedPair(8, RATE, baselineLag, 17);
@@ -168,6 +176,7 @@ describe('continuous content calibration validation server policy', () => {
       const baseline = await establishBaseline(backing, publisher, monitor);
       const baselineLag = Number(baseline.micLagMs);
       const collectingFrom = monitor.messages.length;
+      refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, collectingFrom);
 
       const invalidFrom = monitor.messages.length;
@@ -202,6 +211,7 @@ describe('continuous content calibration validation server policy', () => {
       const baseline = await establishBaseline(backing, publisher, monitor);
       const baselineLag = Number(baseline.micLagMs);
       const firstStart = monitor.messages.length;
+      refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, firstStart);
 
       const firstDrift = laggedPair(8, RATE, 360, 61);
@@ -210,10 +220,6 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
-      // A real phone keeps sending YouTube telemetry while PCM validation runs.
-      // Refresh the fixture before asking the server to schedule confirmation so
-      // the 1.5 s timeline freshness policy is not what this test is exercising.
-      publisher.send(playingTelemetry);
       await waitForNewMessage(
         monitor,
         suspectFrom,
@@ -222,8 +228,11 @@ describe('continuous content calibration validation server policy', () => {
         4_000,
       );
 
-      publisher.send(playingTelemetry);
+      // A real Live path keeps both PCM flow evidence and YouTube leadership
+      // fresh while the synchronous analyser finishes. Refresh both before the
+      // retry scheduler decides whether a second validation window may start.
       const confirmStart = monitor.messages.length;
+      refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, confirmStart);
       const secondDrift = laggedPair(8, RATE, 420, 79);
       const inconclusiveFrom = monitor.messages.length;
@@ -259,6 +268,7 @@ describe('continuous content calibration validation server policy', () => {
       assert.ok(Number.isFinite(baselineLag));
 
       const firstStart = monitor.messages.length;
+      refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, firstStart);
 
       const firstDrift = laggedPair(8, RATE, 360, 31);
@@ -267,7 +277,6 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
-      publisher.send(playingTelemetry);
 
       const suspect = await waitForNewMessage(
         monitor,
@@ -290,8 +299,8 @@ describe('continuous content calibration validation server policy', () => {
         'one deviating window must not change mixer alignment',
       );
 
-      publisher.send(playingTelemetry);
       const confirmFrom = monitor.messages.length;
+      refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, confirmFrom);
 
       const secondDrift = laggedPair(8, RATE, 355, 47);

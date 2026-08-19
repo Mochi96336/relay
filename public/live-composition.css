@@ -29,6 +29,15 @@
 .voice-copy strong { max-width: 22ch; font-size: clamp(24px, 6.3vw, 32px); line-height: 1.04; letter-spacing: -.035em; font-weight: 640; }
 .voice-copy span { margin-top: 5px; }
 .mic-actions { min-height: 38px; margin-top: 10px; }
+
+/* The live task has one stable reading order: state -> sound -> Mic action ->
+   recording -> Mic adjustment -> previous Take. live-ia.css loads later for IA
+   concerns, so these explicit order declarations are the composition authority. */
+.performance-stage > .take-strip { order: 5 !important; }
+.performance-stage > .mic-live-control { order: 6 !important; }
+.performance-stage > #last-take,
+.performance-stage > .recent-take { order: 7 !important; }
+
 .take-strip { margin-top: 8px; padding-top: 0; border-top: 0; text-align: left; }
 .take-actions { min-height: 40px; justify-content: flex-start; }
 #start-recording:not(:disabled)::before { content:""; display:inline-block; width:6px; height:6px; margin-right:8px; border-radius:999px; background:#d8a5a1; vertical-align:1px; opacity:.9; }
@@ -36,9 +45,11 @@
 .take-strip[data-take-state="recording"] { display:grid; grid-template-columns:auto auto; justify-content:start; align-items:center; column-gap:14px; }
 .take-strip[data-take-state="recording"] .take-actions { grid-column:2; grid-row:1; min-height:44px; }
 .take-strip[data-take-state="recording"] #recording-status { grid-column:1; grid-row:1; margin:0; }
-.take-strip[data-take-state="recording"] .last-take, .take-strip[data-take-state="finalizing"] .last-take { display:none; }
+.performance-stage:has(.take-strip[data-take-state="recording"]) > .recent-take,
+.performance-stage:has(.take-strip[data-take-state="finalizing"]) > .recent-take { display:none; }
 .performance-stage > #last-take,
 .performance-stage > .recent-take { margin-top: 8px; }
+body[data-self-mic="live"] .mic-live-control { margin-top: 8px; }
 .live-actions { margin-top:22px; padding-top:14px; }
 .local-sound-control { display:grid; gap:7px; }
 .local-sound-control .adjust-group-heading { align-items:center; }

@@ -62,6 +62,16 @@ test('relay config validates content calibration runtime validation policy', () 
   );
 });
 
+test('content validation remains independently enabled when auto calibration is off', () => {
+  const config = loadRelayConfig({
+    RELAY_AUTO_CALIBRATE: '0',
+    RELAY_CALIBRATION_VALIDATION: '1',
+  });
+
+  assert.equal(config.autoCalibrate, false);
+  assert.equal(config.contentValidation, true);
+});
+
 test('real server entry fails closed on malformed deployment config', async () => {
   await assert.rejects(
     startRelay({ RELAY_CALIBRATION_PROBE_MIN_CORRELATION: 'oops' }),

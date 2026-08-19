@@ -24,6 +24,16 @@ function roomSoundLabel() {
   return localCopy('Room sound', '房間聲音');
 }
 
+function roomSoundVolumeLabel() {
+  return localCopy('Room sound volume', '房間聲音音量');
+}
+
+function roomSoundToggleLabel(muted) {
+  return muted
+    ? localCopy('Turn on room sound', '開啟房間聲音')
+    : localCopy('Mute room sound', '靜音房間聲音');
+}
+
 function renderLabels() {
   if (!root || !title || !scope || !volumeLabel) return;
   const label = roomSoundLabel();
@@ -31,20 +41,21 @@ function renderLabels() {
   scope.textContent = localCopy('This device only', '只影響這支裝置');
   volumeLabel.textContent = localCopy('Volume', '音量');
   root.setAttribute('aria-label', label);
-  toggle?.setAttribute('aria-label', label);
-  gain?.setAttribute('aria-label', label);
+  gain?.setAttribute('aria-label', roomSoundVolumeLabel());
 }
 
 function compactStatus(state, phase) {
+  // Recovery phases are actionable product state. Do not let generic muted
+  // copy hide a failed AudioContext start that needs another user gesture.
+  if (phase === 'retry' || phase === 'start-failed') return localCopy('Retry', '重試');
   if (state === 'mic-muted') return localCopy('Singing', '唱歌中');
   if (state === 'playback-muted') return localCopy('Backing', '伴奏');
   if (state === 'review-muted') return localCopy('Take', '錄音');
-  if (state === 'muted' || state === 'off') return localCopy('Muted', '已靜音');
   if (phase === 'reconnecting') return localCopy('Reconnecting', '重連中');
   if (phase === 'connecting') return localCopy('Connecting', '連線中');
   if (phase === 'buffering') return localCopy('Buffering', '緩衝中');
-  if (phase === 'retry' || phase === 'start-failed') return localCopy('Retry', '重試');
   if (phase === 'first-interaction') return localCopy('Enable', '啟用');
+  if (state === 'muted' || state === 'off') return localCopy('Muted', '已靜音');
   return '';
 }
 
@@ -69,6 +80,7 @@ function renderState(detail = latestState) {
   document.body.dataset.listen = state;
   toggle.dataset.state = state;
   toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
+  toggle.setAttribute('aria-label', roomSoundToggleLabel(muted || forced));
   toggle.disabled = forced;
   gain.disabled = forced;
   gainValue.value = `${volumePercent}%`;

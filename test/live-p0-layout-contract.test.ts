@@ -41,7 +41,7 @@ test('Room sound is one 44px local control row with a 2px visual rail', () => {
   assert.match(layoutCss, /data-room-sound-value="visible"[\s\S]*?#listen-gain-value/);
 });
 
-test('Room sound projection preserves recovery semantics, localized control names, and local-only ownership', () => {
+test('Room sound projection preserves recovery semantics, localized control names, local-only ownership, and product vector iconography', () => {
   assert.match(roomUi, /roomSoundControlPresentation/,
     'the DOM adapter must delegate compact labels and state wording to the presenter');
   assert.doesNotMatch(roomUi, /function compactStatus|state === '(?:mic-muted|playback-muted|review-muted|muted)'/,
@@ -59,7 +59,12 @@ test('Room sound projection preserves recovery semantics, localized control name
   }
 
   assert.match(roomUi, /gain\.disabled = forced/);
-  assert.match(roomUi, /\? '🔇' : '🔊'/);
+  assert.match(roomUi, /function roomSoundIcon\(muted\)/);
+  assert.match(roomUi, /class="room-sound-icon"/);
+  assert.match(roomUi, /stroke="currentColor"/);
+  assert.match(roomUi, /toggle\.dataset\.icon = visuallyMuted \? 'muted' : 'audible'/);
+  assert.match(roomUi, /toggle\.innerHTML = roomSoundIcon\(visuallyMuted\)/);
+  assert.doesNotMatch(roomUi, /🔊|🔇/);
   assert.match(roomUi, /root\.dataset\.listenNote = presentation\.note \? 'visible' : 'quiet'/);
   assert.match(roomUi, /root\.dataset\.roomSoundState = controlPresentation\.compact \? 'visible' : 'quiet'/);
   for (const forbidden of ['new WebSocket', 'new AudioContext', 'createGain', 'monitorPacketVersion']) {

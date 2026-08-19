@@ -40,11 +40,7 @@ function render() {
   const bootProbe = mode === 'boot-probe';
   const bootProbeRunning = bootProbe && reason === 'calibration-active';
   const bootProbePreparing = bootProbe
-    && (
-      reason === 'sources-not-ready'
-      || reason === 'sources-not-connected'
-      || reason === 'sources-not-streaming'
-    );
+    && (reason === 'sources-not-connected' || reason === 'sources-not-streaming');
 
   // Content correlation keeps its existing visibility/eligibility projection.
   // This module only replaces the retired Recalibrate label for that mode; it

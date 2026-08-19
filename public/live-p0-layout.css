@@ -11,6 +11,8 @@
 html body .live-shell {
   display: grid;
   grid-template-columns: [live-left] minmax(0, 1fr) [live-right];
+  grid-auto-rows: max-content;
+  align-content: start;
   padding-inline: var(--live-inline);
 }
 

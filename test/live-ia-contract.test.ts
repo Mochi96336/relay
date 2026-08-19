@@ -63,8 +63,8 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
   assert.match(roomSound, /'房間聲音'/);
   assert.match(roomSound, /'只影響這支裝置'/);
   assert.match(roomSound, /'Room sound'/);
-  assert.match(composition, /#listen-toggle \{[\s\S]*?min-height: 44px;/);
-  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong \{[\s\S]*?clip-path: inset\(50%\);/);
+  assert.match(composition, /#listen-toggle\s*\{[\s\S]*?min-height:\s*44px;/);
+  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong\s*\{[\s\S]*?clip-path:\s*inset\(50%\);/);
 });
 
 test('Room sound presentation does not own Listen transport or mute authority', () => {

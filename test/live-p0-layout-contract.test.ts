@@ -18,14 +18,17 @@ test('P0 layout repair is render-blocking and owns one shared Live inline track'
   assert.match(layoutCss, /\.youtube-player-shell,[\s\S]*?min-width:\s*0/);
 });
 
-test('Take History spends phone width on time and is pinned to the viewport', () => {
-  assert.match(layoutCss, /\.take-history-panel\[open\] > \.take-history-sheet \{[\s\S]*?position:\s*fixed;[\s\S]*?inset-inline-start:\s*0;[\s\S]*?bottom:\s*0;/);
-  assert.match(layoutCss, /\.take-history-panel\[open\] > \.take-history-sheet \{[\s\S]*?width:\s*100vw;[\s\S]*?max-width:\s*none;[\s\S]*?margin-inline:\s*0;/);
-  assert.match(layoutCss, /padding-left:\s*var\(--live-inline\);[\s\S]*?padding-right:\s*var\(--live-inline\)/);
+test('Take History pins only the phone sheet and preserves desktop overlay centering', () => {
+  const phoneMedia = layoutCss.match(/@media \(max-width:\s*759px\) \{([\s\S]*?)\n\}/)?.[1] ?? '';
+  const desktopMedia = layoutCss.match(/@media \(min-width:\s*760px\) \{([\s\S]*)\n\}/)?.[1] ?? '';
+  assert.match(phoneMedia, /\.take-history-panel\[open\] > \.take-history-sheet \{[\s\S]*?position:\s*fixed;[\s\S]*?inset-inline-start:\s*0;[\s\S]*?bottom:\s*0;/);
+  assert.match(phoneMedia, /width:\s*100vw;[\s\S]*?max-width:\s*none;[\s\S]*?margin-inline:\s*0;/);
+  assert.match(phoneMedia, /padding-left:\s*var\(--live-inline\);[\s\S]*?padding-right:\s*var\(--live-inline\)/);
+  assert.match(desktopMedia, /width:\s*min\(720px, calc\(100vw - 48px\)\)/);
+  assert.doesNotMatch(desktopMedia, /position:\s*fixed|bottom:\s*0|transform:\s*translateX/);
   assert.match(layoutCss, /\.take-history-item \{[\s\S]*?min-height:\s*64px/);
   assert.match(layoutCss, /\.take-history-item::after \{[\s\S]*?height:\s*2px/);
   assert.match(layoutCss, /#recording-player \{[\s\S]*?min-height:\s*44px/);
-  assert.match(layoutCss, /@media \(min-width:\s*760px\)[\s\S]*?width:\s*min\(720px, calc\(100vw - 48px\)\)/);
 });
 
 test('Room sound is one 44px local control row with a 2px visual rail', () => {
@@ -37,8 +40,10 @@ test('Room sound is one 44px local control row with a 2px visual rail', () => {
   assert.match(layoutCss, /data-room-sound-value="visible"[\s\S]*?#listen-gain-value/);
 });
 
-test('Room sound projection is icon-first, accessible, concise, and remains presentation-only', () => {
-  assert.match(roomUi, /setAttribute\('aria-label', '房間聲音'\)/);
+test('Room sound projection is localized, concise, forced-disabled, and presentation-only', () => {
+  assert.match(roomUi, /function roomSoundLabel\(\)[\s\S]*?localCopy\('Room sound', '房間聲音'\)/);
+  assert.match(roomUi, /setAttribute\('aria-label', label\)/);
+  assert.match(roomUi, /gain\.disabled = forced/);
   assert.match(roomUi, /\? '🔇' : '🔊'/);
   for (const copy of ['唱歌中', '伴奏', '已靜音']) {
     assert.equal(roomUi.includes(copy), true, `missing compact Room sound state: ${copy}`);
@@ -50,7 +55,7 @@ test('Room sound projection is icon-first, accessible, concise, and remains pres
   }
 });
 
-test('390x844 visual fixture names all required repair states', () => {
+test('P0 visual fixture uses production Take and Room sound presenters and reports browser geometry', () => {
   for (const state of [
     'empty',
     'listener',
@@ -64,7 +69,11 @@ test('390x844 visual fixture names all required repair states', () => {
   ]) {
     assert.equal(fixture.includes(state), true, `missing P0 visual state: ${state}`);
   }
-  assert.match(fixture, /aria-label="房間聲音"/);
-  assert.match(fixture, /Selected Take playback/);
-  assert.match(fixture, /min-width:44px; min-height:44px/);
+  assert.match(fixture, /await import\('\/room-sound-ui\.js'\)/);
+  assert.match(fixture, /await import\('\/take-history\.js'\)/);
+  assert.match(fixture, /dispatchEvent\(new CustomEvent\('relay-take-status'/);
+  assert.doesNotMatch(fixture, /<details class="take-history-panel"/);
+  assert.match(fixture, /document\.documentElement\.scrollWidth/);
+  assert.match(fixture, /__geometry-\$\{result\}/);
+  assert.match(fixture, /forced-gain-disabled/);
 });

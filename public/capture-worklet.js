@@ -9,6 +9,14 @@ const SPECTRUM_BANDS_HZ = [
   [1000, 2000],
   [2000, 4000],
 ];
+const F0_MIN_HZ = 80;
+const F0_MAX_HZ = 1000;
+const F0_DOWNSAMPLE_TARGET_HZ = 12_000;
+const F0_RING_SIZE = 1024;
+const F0_YIN_THRESHOLD = 0.18;
+const F0_MIN_CONFIDENCE = 0.6;
+const F0_ANALYSIS_CHUNKS = 2;
+const F0_SILENCE_RMS = 1e-4;
 
 function amplitudeToDbfs(amplitude) {
   return amplitude > 0 ? 20 * Math.log10(amplitude) : SILENCE_DBFS;
@@ -45,6 +53,22 @@ class CaptureProcessor extends AudioWorkletProcessor {
     for (let i = 0; i < SPECTRUM_FFT_SIZE; i += 1) {
       this.fftWindow[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (SPECTRUM_FFT_SIZE - 1));
     }
+
+    // F0 is a visual side-channel only. Downsample the source into a separate
+    // ring and run a normalized YIN-style difference detector every 40 ms.
+    // Nothing here changes the PCM chunk, its framing, or its sample cursor.
+    this.f0DownsampleFactor = Math.max(1, Math.round(sampleRate / F0_DOWNSAMPLE_TARGET_HZ));
+    this.f0SampleRate = sampleRate / this.f0DownsampleFactor;
+    this.f0Ring = new Float32Array(F0_RING_SIZE);
+    this.f0Write = 0;
+    this.f0Samples = 0;
+    this.f0DecimationSum = 0;
+    this.f0DecimationCount = 0;
+    this.f0Scratch = new Float32Array(F0_RING_SIZE);
+    this.f0Cmnd = new Float32Array(Math.ceil(this.f0SampleRate / F0_MIN_HZ) + 2);
+    this.f0ChunksSinceEstimate = 0;
+    this.f0Hz = null;
+    this.pitchConfidence = 0;
   }
 
   reportInputGap(recovered) {
@@ -66,13 +90,28 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.spectrumSamples = Math.min(SPECTRUM_FFT_SIZE, this.spectrumSamples + 1);
   }
 
+  pushF0Sample(sample) {
+    this.f0DecimationSum += sample;
+    this.f0DecimationCount += 1;
+    if (this.f0DecimationCount < this.f0DownsampleFactor) return;
+
+    this.f0Ring[this.f0Write] = this.f0DecimationSum / this.f0DecimationCount;
+    this.f0Write = (this.f0Write + 1) % F0_RING_SIZE;
+    this.f0Samples = Math.min(F0_RING_SIZE, this.f0Samples + 1);
+    this.f0DecimationSum = 0;
+    this.f0DecimationCount = 0;
+  }
+
   writeSilence(count) {
     let remaining = count;
     while (remaining > 0) {
       const room = this.chunkSize - this.offset;
       const step = Math.min(room, remaining);
       this.chunk.fill(0, this.offset, this.offset + step);
-      for (let i = 0; i < step; i += 1) this.pushSpectrumSample(0);
+      for (let i = 0; i < step; i += 1) {
+        this.pushSpectrumSample(0);
+        this.pushF0Sample(0);
+      }
       this.offset += step;
       this.levelSampleCount += step;
       remaining -= step;
@@ -172,16 +211,104 @@ class CaptureProcessor extends AudioWorkletProcessor {
     });
   }
 
+  measureF0(rms) {
+    if (rms < F0_SILENCE_RMS) {
+      this.f0ChunksSinceEstimate = 0;
+      this.f0Hz = null;
+      this.pitchConfidence = 0;
+      return;
+    }
+
+    this.f0ChunksSinceEstimate += 1;
+    if (this.f0ChunksSinceEstimate < F0_ANALYSIS_CHUNKS) return;
+    this.f0ChunksSinceEstimate = 0;
+
+    const count = Math.min(this.f0Samples, F0_RING_SIZE);
+    const minLag = Math.max(2, Math.floor(this.f0SampleRate / F0_MAX_HZ));
+    const maxLag = Math.min(
+      this.f0Cmnd.length - 2,
+      Math.ceil(this.f0SampleRate / F0_MIN_HZ),
+    );
+    if (count < maxLag + minLag + 8) {
+      this.f0Hz = null;
+      this.pitchConfidence = 0;
+      return;
+    }
+
+    const oldest = this.f0Samples === F0_RING_SIZE ? this.f0Write : 0;
+    for (let i = 0; i < count; i += 1) {
+      this.f0Scratch[i] = this.f0Ring[(oldest + i) % F0_RING_SIZE];
+    }
+
+    const compareLength = count - maxLag;
+    this.f0Cmnd[0] = 1;
+    let runningDifference = 0;
+    for (let lag = 1; lag <= maxLag; lag += 1) {
+      let difference = 0;
+      for (let i = 0; i < compareLength; i += 1) {
+        const delta = this.f0Scratch[i] - this.f0Scratch[i + lag];
+        difference += delta * delta;
+      }
+      runningDifference += difference;
+      this.f0Cmnd[lag] = runningDifference > 1e-18
+        ? (difference * lag) / runningDifference
+        : 1;
+    }
+
+    let candidate = -1;
+    for (let lag = minLag; lag <= maxLag; lag += 1) {
+      if (this.f0Cmnd[lag] >= F0_YIN_THRESHOLD) continue;
+      candidate = lag;
+      while (candidate < maxLag && this.f0Cmnd[candidate + 1] < this.f0Cmnd[candidate]) {
+        candidate += 1;
+      }
+      break;
+    }
+
+    if (candidate < 0) {
+      candidate = minLag;
+      for (let lag = minLag + 1; lag <= maxLag; lag += 1) {
+        if (this.f0Cmnd[lag] < this.f0Cmnd[candidate]) candidate = lag;
+      }
+    }
+
+    const confidence = clamp(1 - this.f0Cmnd[candidate], 0, 1);
+    this.pitchConfidence = confidence;
+    if (confidence < F0_MIN_CONFIDENCE) {
+      this.f0Hz = null;
+      return;
+    }
+
+    let refinedLag = candidate;
+    if (candidate > minLag && candidate < maxLag) {
+      const before = this.f0Cmnd[candidate - 1];
+      const center = this.f0Cmnd[candidate];
+      const after = this.f0Cmnd[candidate + 1];
+      const denominator = before - 2 * center + after;
+      if (Math.abs(denominator) > 1e-12) {
+        refinedLag += 0.5 * (before - after) / denominator;
+      }
+    }
+
+    const frequency = this.f0SampleRate / refinedLag;
+    this.f0Hz = Number.isFinite(frequency) && frequency >= F0_MIN_HZ && frequency <= F0_MAX_HZ
+      ? frequency
+      : null;
+  }
+
   flushIfFull() {
     if (this.offset !== this.chunkSize) return;
     const rms = this.levelSampleCount > 0
       ? Math.sqrt(this.levelSquareSum / this.levelSampleCount)
       : 0;
+    this.measureF0(rms);
     this.port.postMessage({
       type: 'input-level',
       peakDbfs: amplitudeToDbfs(this.levelPeak),
       rmsDbfs: amplitudeToDbfs(rms),
       spectrumBands: this.measureSpectrumBands(),
+      f0Hz: this.f0Hz,
+      pitchConfidence: this.pitchConfidence,
       samples: this.levelSampleCount,
     });
 
@@ -230,6 +357,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
         this.levelSquareSum += sample * sample;
         this.levelSampleCount += 1;
         this.pushSpectrumSample(sample);
+        this.pushF0Sample(sample);
         this.chunk[this.offset + i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
       }
 

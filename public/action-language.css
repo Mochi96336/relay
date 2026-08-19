@@ -28,6 +28,13 @@
   background: transparent;
 }
 
+/* index.html still carries the legacy localization hook as its no-JS fallback.
+   Keep that retired word out of the painted product; calibration-ui removes
+   the attribute synchronously when it installs the Realign presenter. */
+#calibrate-timing[data-i18n="adjust.recalibrate"] {
+  visibility: hidden;
+}
+
 /* Inline typography keeps its visual rhythm while the transparent hit halo
    gives a finger more room. Keep the halo narrow enough that neighboring
    actions do not compete for the same tap. */

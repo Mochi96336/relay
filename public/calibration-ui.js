@@ -16,6 +16,14 @@ function setText(element, value) {
   if (element && element.textContent !== value) element.textContent = value;
 }
 
+function setHidden(value) {
+  if (calibrateButton && calibrateButton.hidden !== value) calibrateButton.hidden = value;
+}
+
+function setDisabled(value) {
+  if (calibrateButton && calibrateButton.disabled !== value) calibrateButton.disabled = value;
+}
+
 /**
  * ProductStatus owns calibration prerequisites. app.js still owns the command
  * socket and content-correlation progress, while this presenter prevents its
@@ -32,17 +40,23 @@ function render() {
   const bootProbe = mode === 'boot-probe';
   const bootProbeRunning = bootProbe && reason === 'calibration-active';
   const bootProbePreparing = bootProbe
-    && (reason === 'sources-not-connected' || reason === 'sources-not-streaming');
+    && (
+      reason === 'sources-not-ready'
+      || reason === 'sources-not-connected'
+      || reason === 'sources-not-streaming'
+    );
 
+  // Content correlation keeps its existing visibility/eligibility projection.
+  // This module only replaces the retired Recalibrate label for that mode; it
+  // must not make a content action visible or executable by itself.
   if (!bootProbe) {
     setText(calibrateButton, copy('realign'));
-    if (calibrateButton.hidden) calibrateButton.hidden = false;
     return;
   }
 
   if (bootProbeRunning) {
-    if (calibrateButton.hidden) calibrateButton.hidden = false;
-    calibrateButton.disabled = true;
+    setHidden(false);
+    setDisabled(true);
     setText(calibrateButton, copy('aligning'));
     setText(calibrateStatus, copy('aligning'));
     return;
@@ -53,17 +67,33 @@ function render() {
   if (bootProbePreparing) {
     // A disabled recovery action is noise while the PCM capture timelines are
     // still becoming fresh. Show the path preparation state instead.
-    calibrateButton.hidden = true;
+    setHidden(true);
+    setDisabled(true);
     setText(calibrateStatus, copy('preparing-paths'));
     return;
   }
 
-  if (calibrateButton.hidden) calibrateButton.hidden = false;
-  const localMicOwner = document.body.dataset.selfMic === 'live';
-  calibrateButton.disabled = latestAction?.canStartCalibration !== true || !localMicOwner;
+  if (latestAction?.canStartCalibration === true) {
+    // Robot semantics deliberately bypass Song/timeline state. ProductStatus
+    // says the capture paths are ready; local ownership is the remaining UI
+    // execution gate because only the phone publishing the Mic can run it.
+    const localMicOwner = document.body.dataset.selfMic === 'live';
+    if (!localMicOwner) {
+      // Healthy timing should not leave a permanent disabled recovery action.
+      setHidden(true);
+      setDisabled(true);
+      return;
+    }
 
-  // A ready Robot probe needs neither Song nor phone-timeline helper copy.
-  if (latestAction?.canStartCalibration === true) setText(calibrateStatus, '');
+    setHidden(false);
+    setDisabled(false);
+    setText(calibrateStatus, '');
+    return;
+  }
+
+  // Unknown/future Robot blocks belong to the centralized policy owner. Do not
+  // invent presentation semantics here or accidentally unhide an action that
+  // another projection intentionally hid.
 }
 
 function queueRender() {

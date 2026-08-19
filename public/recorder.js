@@ -194,12 +194,11 @@ async function connect() {
   publishRecordingState();
 }
 
-// Keep the shared Live projection as the fastest path when it is already
-// present, but never depend on event ordering: connect() always asks the server
-// for the current authoritative snapshot as well.
-window.addEventListener('relay-product-status', (event) => {
-  acceptProductStatus(event.detail);
-});
+// ProductStatus readiness intentionally has one source: recorder's own socket.
+// live-status.js projects the same server snapshots through a separate socket,
+// but those snapshots carry no revision. Consuming both channels here would let
+// a delayed shared projection overwrite a newer recorder snapshot. The direct
+// request above provides replay without introducing that cross-socket race.
 
 recordButton?.addEventListener('click', () => {
   if (!recordingState().canStart) return;

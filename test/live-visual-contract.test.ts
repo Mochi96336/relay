@@ -9,6 +9,8 @@ const presence = readFileSync(new URL('../public/mic-presence.js', import.meta.u
 const model = readFileSync(new URL('../public/mic-presence-model.js', import.meta.url), 'utf8');
 const capture = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
 const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
+const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
+const actions = readFileSync(new URL('../public/action-language.css', import.meta.url), 'utf8');
 
 test('holder YouTube stays real, compact and above a usable embedded-player floor', () => {
   assert.match(composition, /\.youtube-player-shell \{[\s\S]*?width: 100%;[\s\S]*?min-height: 200px;[\s\S]*?aspect-ratio: 16 \/ 9;/);
@@ -26,17 +28,22 @@ test('holder Change song is visible as a real phone touch target instead of tiny
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('performance composition renders one continuous spectral Mic contour', () => {
-  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(72vw, 282px\);[\s\S]*?height: 60px;[\s\S]*?grid-template-columns: repeat\(10, minmax\(0,1fr\)\);[\s\S]*?gap: 0;/);
+test('Room Mic is one centered envelope while ten measured samples stay hidden in the model', () => {
+  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(100%, 320px\);[\s\S]*?height: 68px;/);
   assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 12%, #000 100%\)/);
-  assert.match(composition, /\.voice-presence-slice \{[\s\S]*?position: relative;[\s\S]*?height: 60px;/);
-  assert.match(composition, /\.voice-presence-shape \{[\s\S]*?position: absolute;[\s\S]*?width: calc\(100% \+ 2px\);/);
+  assert.match(composition, /\.voice-presence-baseline/);
+  assert.match(composition, /\.voice-presence-wave/);
   assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 10/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
-  assert.match(model, /presenceSliceGeometry/);
+  assert.match(presence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
+  assert.match(presence, /Math\.pow\(presence, 0\.9\) \* MAX_AMPLITUDE/);
+  assert.match(presence, /envelopePath\(\)/);
+  assert.match(presence, /smoothPath\(upper\)/);
   assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
   assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(presence, /event\.detail\?\.spectrumBands/);
+  assert.doesNotMatch(composition, /grid-template-columns: repeat\(10/);
+  assert.doesNotMatch(presence, /voice-presence-slice|voice-presence-shape|voice-presence-band/);
 });
 
 test('local Mic evidence expires if the capture worklet stops producing samples', () => {
@@ -50,11 +57,12 @@ test('listener Room Mic evidence expires when telemetry stops instead of freezin
   assert.match(presence, /sourceKey !== expectedSourceKey/);
 });
 
-test('frequency shape originates in the singer capture worklet rather than final room mix or fake animation', () => {
+test('frequency evidence remains truthful timbre data and is not painted as fake pitch', () => {
   assert.match(capture, /SPECTRUM_FFT_SIZE = 512/);
   assert.match(capture, /\[80, 250\]/);
   assert.match(capture, /\[2000, 4000\]/);
   assert.match(capture, /spectrumBands: this\.measureSpectrumBands\(\)/);
+  assert.match(composition, /not[\s\S]*presented as musical pitch until a real F0 estimate exists/);
   assert.doesNotMatch(presence, /WebSocket|mix-health|requestAnimationFrame/);
   assert.doesNotMatch(state, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(composition, /@keyframes|voice-breathe|preparing-pulse/);
@@ -63,14 +71,22 @@ test('frequency shape originates in the singer capture worklet rather than final
 test('new Mic evidence enters on the right while old evidence fades toward the left', () => {
   assert.match(model, /Oldest slice stays on the left; the newest local Mic evidence enters on the[\s\S]*right/);
   assert.match(model, /const next = \[\.\.\.previous, createPresenceSlice/);
-  assert.match(presence, /newest is always the right edge/);
-  assert.match(presence, /0\.28 \+ age \* 0\.72/);
+  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 12%, #000 100%\)/);
 });
 
-test('recording stays inside performance while local sound remains the one persistent lower horizon', () => {
-  assert.match(composition, /\.take-strip \{[\s\S]*?margin-top: 14px;[\s\S]*?padding-top: 0;[\s\S]*?border-top: 0;/);
-  assert.match(composition, /\.live-actions \{[\s\S]*?margin-top:24px;[\s\S]*?padding-top:14px;/);
-  assert.match(composition, /data-take-state="recording"[\s\S]*?\.last-take[\s\S]*?display:none;/);
+test('performance actions stay in Sing -> Record -> Adjust -> Review order', () => {
+  assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
+  assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
+  assert.match(composition, /\.performance-stage > #last-take,[\s\S]*?\.recent-take \{ order: 7 !important; \}/);
+  assert.match(liveIa, /performanceStage\.insertBefore\(lastTake, micLiveControl\.nextSibling\)/);
+  assert.match(actions, /#start-recording \{[\s\S]*?border: 0;[\s\S]*?background: transparent;/);
+  assert.match(composition, /#start-recording:not\(:disabled\)::before[\s\S]*?background:#d8a5a1/);
+});
+
+test('recording morphs in place and hides the previous Take until the current Take ends', () => {
+  assert.match(composition, /\.take-strip\[data-take-state="recording"\][\s\S]*?grid-template-columns:auto auto/);
+  assert.match(composition, /data-take-state="recording"[\s\S]*?#recording-status[\s\S]*?grid-column:1/);
+  assert.match(composition, /:has\(\.take-strip\[data-take-state="recording"\]\)[\s\S]*?\.recent-take[\s\S]*?display:none/);
   assert.doesNotMatch(composition, /#stop-recording:not\(:disabled\)::before/);
 });
 

@@ -10,9 +10,9 @@ const meter = document.querySelector('#mic-input-meter');
 if (meter) {
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const VIEWBOX_WIDTH = 320;
-  const VIEWBOX_HEIGHT = 68;
+  const VIEWBOX_HEIGHT = 56;
   const CENTER_Y = VIEWBOX_HEIGHT / 2;
-  const MAX_AMPLITUDE = 27;
+  const MAX_AMPLITUDE = 18;
 
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.classList.add('voice-presence-svg');
@@ -70,7 +70,7 @@ if (meter) {
     const divisor = Math.max(1, MIC_PRESENCE_SLICE_COUNT - 1);
     const upper = history.map((slice, index) => {
       const presence = clamp(Number(slice?.presence) || 0, 0, 1);
-      const amplitude = Math.pow(presence, 0.9) * MAX_AMPLITUDE;
+      const amplitude = Math.pow(presence, 1.35) * MAX_AMPLITUDE;
       return {
         x: (index / divisor) * VIEWBOX_WIDTH,
         y: CENTER_Y - amplitude,
@@ -78,7 +78,7 @@ if (meter) {
     });
     const lower = history.map((slice, index) => {
       const presence = clamp(Number(slice?.presence) || 0, 0, 1);
-      const amplitude = Math.pow(presence, 0.9) * MAX_AMPLITUDE;
+      const amplitude = Math.pow(presence, 1.35) * MAX_AMPLITUDE;
       return {
         x: (index / divisor) * VIEWBOX_WIDTH,
         y: CENTER_Y + amplitude,

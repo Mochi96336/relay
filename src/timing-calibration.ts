@@ -36,6 +36,12 @@ type LocalLagResult = {
   score: number;
 };
 
+type FeatureMoments = {
+  stride: number;
+  sums: Float64Array;
+  squareSums: Float64Array;
+};
+
 const MAX_LAG_MS = 2_000;
 const MINIMUM_GLOBAL_OVERLAP_MS = 3_000;
 const LOCAL_SEARCH_RADIUS_MS = 150;
@@ -56,6 +62,7 @@ const DISTINCT_PEAK_RADIUS_MS = 100;
 
 const ENERGY_WEIGHT = 0.4;
 const FLUX_WEIGHT = 0.6;
+const featureMomentsCache = new WeakMap<MusicTimingFeatures, FeatureMoments>();
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -80,6 +87,46 @@ function median(values: number[]) {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+function featureMoments(features: MusicTimingFeatures) {
+  const cached = featureMomentsCache.get(features);
+  if (cached) return cached;
+
+  const channelCount = features.bandCount * 2;
+  const stride = features.frameCount + 1;
+  const sums = new Float64Array(channelCount * stride);
+  const squareSums = new Float64Array(channelCount * stride);
+
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    const valueOffset = channel * features.frameCount;
+    const momentOffset = channel * stride;
+    for (let frame = 0; frame < features.frameCount; frame += 1) {
+      const value = features.values[valueOffset + frame];
+      sums[momentOffset + frame + 1] = sums[momentOffset + frame] + value;
+      squareSums[momentOffset + frame + 1] = (
+        squareSums[momentOffset + frame] + value * value
+      );
+    }
+  }
+
+  const moments = { stride, sums, squareSums };
+  featureMomentsCache.set(features, moments);
+  return moments;
+}
+
+function momentRange(
+  moments: FeatureMoments,
+  channel: number,
+  start: number,
+  length: number,
+) {
+  const from = channel * moments.stride + start;
+  const to = from + length;
+  return {
+    sum: moments.sums[to] - moments.sums[from],
+    squareSum: moments.squareSums[to] - moments.squareSums[from],
+  };
+}
+
 function normalizedChannelCorrelation(
   backing: MusicTimingFeatures,
   mic: MusicTimingFeatures,
@@ -90,25 +137,21 @@ function normalizedChannelCorrelation(
 ) {
   const backingOffset = channel * backing.frameCount;
   const micOffset = channel * mic.frameCount;
-  let sumBacking = 0;
-  let sumMic = 0;
-  let sumBackingSquares = 0;
-  let sumMicSquares = 0;
+  const backingRange = momentRange(featureMoments(backing), channel, start, length);
+  const micRange = momentRange(featureMoments(mic), channel, start + lagFrames, length);
   let sumProducts = 0;
 
   for (let i = 0; i < length; i += 1) {
     const backingValue = backing.values[backingOffset + start + i];
     const micValue = mic.values[micOffset + start + i + lagFrames];
-    sumBacking += backingValue;
-    sumMic += micValue;
-    sumBackingSquares += backingValue * backingValue;
-    sumMicSquares += micValue * micValue;
     sumProducts += backingValue * micValue;
   }
 
-  const covariance = sumProducts - (sumBacking * sumMic) / length;
-  const backingVariance = sumBackingSquares - (sumBacking * sumBacking) / length;
-  const micVariance = sumMicSquares - (sumMic * sumMic) / length;
+  const covariance = sumProducts - (backingRange.sum * micRange.sum) / length;
+  const backingVariance = (
+    backingRange.squareSum - (backingRange.sum * backingRange.sum) / length
+  );
+  const micVariance = micRange.squareSum - (micRange.sum * micRange.sum) / length;
   const denominator = Math.sqrt(Math.max(0, backingVariance) * Math.max(0, micVariance));
   return denominator > 1e-10 ? covariance / denominator : -1;
 }

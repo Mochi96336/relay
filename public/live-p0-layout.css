@@ -35,22 +35,6 @@ html body .live-actions > * {
   min-width: 0;
 }
 
-/* Take History is a phone review surface, not a narrow popover. The sheet owns
-   the viewport width on phones; content gets a quiet 20px working inset. Keep
-   the sheet itself fixed to the viewport because <details> has an internal
-   content wrapper in Chromium that can otherwise offset a 100vw child. */
-.take-history-panel[open] > .take-history-sheet {
-  position: fixed;
-  inset-inline-start: 0;
-  bottom: 0;
-  box-sizing: border-box;
-  width: 100vw;
-  max-width: none;
-  margin-inline: 0;
-  padding-left: var(--live-inline);
-  padding-right: var(--live-inline);
-}
-
 /* Each Take gets enough height to read as a timing row. Its neutral rail is the
    duration axis; the selected native audio transport below remains the truthful
    playback-progress / seeking control. */
@@ -208,16 +192,31 @@ body[data-listen="muted"] .live-actions .local-sound-control #listen-gain {
   opacity: .52;
 }
 
+/* Chromium can offset a 100vw child inside an open <details> wrapper. Pin only
+   the phone sheet itself to the viewport; desktop keeps the existing overlay's
+   centered flex layout rather than inheriting bottom-sheet positioning. */
+@media (max-width: 759px) {
+  .take-history-panel[open] > .take-history-sheet {
+    position: fixed;
+    inset-inline-start: 0;
+    bottom: 0;
+    box-sizing: border-box;
+    width: 100vw;
+    max-width: none;
+    margin-inline: 0;
+    padding-left: var(--live-inline);
+    padding-right: var(--live-inline);
+  }
+}
+
 @media (min-width: 760px) {
   :root {
     --live-inline: 22px;
   }
 
   .take-history-panel[open] > .take-history-sheet {
-    inset-inline-start: 50%;
     width: min(720px, calc(100vw - 48px));
     max-width: 720px;
     margin-inline: 0;
-    transform: translateX(-50%);
   }
 }

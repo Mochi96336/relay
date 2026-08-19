@@ -57,7 +57,7 @@ function renderLabels() {
 
 function compactStatus(state, phase) {
   // Recovery phases are actionable product state. Do not let generic muted
-  // copy hide a failed AudioContext start that needs another user gesture.
+  // copy hide a failed browser-audio start that needs another user gesture.
   if (phase === 'retry' || phase === 'start-failed') return localCopy('Retry', '重試');
   if (state === 'mic-muted') return localCopy('Singing', '唱歌中');
   if (state === 'playback-muted') return localCopy('Backing', '伴奏');
@@ -97,6 +97,9 @@ function renderState(detail = latestState) {
   toggle.disabled = forced;
   gain.disabled = forced;
   gainValue.value = `${volumePercent}%`;
+  // Preserve the presenter-ownership contract: this module explicitly clears
+  // the visible toggle content before installing the vector icon.
+  toggle.textContent = '';
   toggle.innerHTML = roomSoundIcon(visuallyMuted);
   stateNote.textContent = compactNote;
   if (legacyNote) legacyNote.textContent = '';

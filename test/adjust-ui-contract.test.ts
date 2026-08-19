@@ -57,7 +57,7 @@ test('Mic exposes +40 dB manual headroom without raising automatic recommendatio
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
 });
 
-test('recalibration is a direct More task while fine tune survives as advanced detail', () => {
+test('realignment is a direct More task while fine tune survives as advanced detail', () => {
   const more = html.indexOf('id="room-more"');
   const calibrate = html.indexOf('id="calibrate-timing"');
   const fineTune = html.indexOf('id="vocal-fine-tune"');
@@ -68,23 +68,29 @@ test('recalibration is a direct More task while fine tune survives as advanced d
   assert.equal(ia.includes('adjustPanel'), false);
 });
 
-test('Calibration enablement still follows ProductStatus action authority', () => {
-  assert.equal(app.includes('let roomCanStartCalibration = null;'), true);
-  assert.equal(
-    app.includes('roomCanStartCalibration = event.detail?.actions?.canStartCalibration === true;'),
-    true,
-  );
+test('Robot calibration UI follows ProductStatus mode instead of Song availability', () => {
+  assert.match(ia, /event\.detail\?\.actions/);
+  assert.match(ia, /startCalibrationMode/);
+  assert.match(ia, /mode === 'boot-probe'/);
+  assert.match(ia, /reason === 'sources-not-connected'/);
+  assert.match(ia, /reason === 'sources-not-streaming'/);
+  assert.match(ia, /reason === 'calibration-active'/);
+  assert.match(ia, /'重新對齊'/);
+  assert.match(ia, /'對齊中…'/);
+  assert.match(ia, /'正在準備聲音路徑…'/);
+  assert.match(ia, /MutationObserver\(queueCalibrationRender\)/);
 
-  const updateStart = app.indexOf('function updateCalibrateButton() {');
-  const updateEnd = app.indexOf('function wsUrl()', updateStart);
-  assert.ok(updateStart >= 0 && updateEnd > updateStart);
-  const updateBlock = app.slice(updateStart, updateEnd);
-  const disabledStart = updateBlock.indexOf('calibrateButton.disabled = ');
-  const disabledEnd = updateBlock.indexOf(';', disabledStart);
-  const disabled = updateBlock.slice(disabledStart, disabledEnd);
-  assert.equal(disabled.includes('publisherActive'), true);
-  assert.equal(disabled.includes('roomSongAvailable'), true);
-  assert.equal(disabled.includes('roomCanStartCalibration'), true);
+  const presenterStart = ia.indexOf('function renderCalibrationAction() {');
+  const presenterEnd = ia.indexOf('function queueCalibrationRender()', presenterStart);
+  assert.ok(presenterStart >= 0 && presenterEnd > presenterStart);
+  const presenter = ia.slice(presenterStart, presenterEnd);
+  assert.equal(presenter.includes('roomSongAvailable'), false,
+    'Robot realignment presenter must not infer prerequisites from Song state');
+});
+
+test('app command path stays start-timing-calibration while presenter owns Robot semantics', () => {
+  assert.match(app, /type: 'start-timing-calibration'/);
+  assert.match(ia, /ProductStatus is the semantic authority for calibration prerequisites/);
 });
 
 test('Listen defaults at unity and exposes mute rather than enable', () => {

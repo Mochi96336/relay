@@ -210,6 +210,10 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
+      // A real phone keeps sending YouTube telemetry while PCM validation runs.
+      // Refresh the fixture before asking the server to schedule confirmation so
+      // the 1.5 s timeline freshness policy is not what this test is exercising.
+      publisher.send(playingTelemetry);
       await waitForNewMessage(
         monitor,
         suspectFrom,
@@ -218,6 +222,7 @@ describe('continuous content calibration validation server policy', () => {
         4_000,
       );
 
+      publisher.send(playingTelemetry);
       const confirmStart = monitor.messages.length;
       await waitForValidationCollection(monitor, confirmStart);
       const secondDrift = laggedPair(8, RATE, 420, 79);
@@ -262,6 +267,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
+      publisher.send(playingTelemetry);
 
       const suspect = await waitForNewMessage(
         monitor,
@@ -284,6 +290,7 @@ describe('continuous content calibration validation server policy', () => {
         'one deviating window must not change mixer alignment',
       );
 
+      publisher.send(playingTelemetry);
       const confirmFrom = monitor.messages.length;
       await waitForValidationCollection(monitor, confirmFrom);
 

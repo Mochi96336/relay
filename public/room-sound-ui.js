@@ -20,14 +20,19 @@ function localCopy(english, traditionalChinese) {
   return chinese() ? traditionalChinese : english;
 }
 
+function roomSoundLabel() {
+  return localCopy('Room sound', '房間聲音');
+}
+
 function renderLabels() {
   if (!root || !title || !scope || !volumeLabel) return;
-  title.textContent = localCopy('Room sound', '房間聲音');
+  const label = roomSoundLabel();
+  title.textContent = label;
   scope.textContent = localCopy('This device only', '只影響這支裝置');
   volumeLabel.textContent = localCopy('Volume', '音量');
-  root.setAttribute('aria-label', '房間聲音');
-  toggle?.setAttribute('aria-label', '房間聲音');
-  gain?.setAttribute('aria-label', '房間聲音');
+  root.setAttribute('aria-label', label);
+  toggle?.setAttribute('aria-label', label);
+  gain?.setAttribute('aria-label', label);
 }
 
 function compactStatus(state, phase) {
@@ -44,13 +49,14 @@ function compactStatus(state, phase) {
 }
 
 function renderState(detail = latestState) {
-  if (!root || !toggle || !gainValue || !stateNote) return;
+  if (!root || !toggle || !gain || !gainValue || !stateNote) return;
   if (!detail || typeof detail !== 'object') return;
   latestState = detail;
 
   const state = String(detail.state ?? 'ready');
   const phase = String(detail.phase ?? '');
   const forcedReason = detail.forcedReason ?? null;
+  const forced = Boolean(forcedReason);
   const muted = detail.muted === true;
   const volumePercent = Math.max(0, Math.min(100, Math.round(Number(detail.volumePercent) || 0)));
   const presentation = roomSoundPresentation(detail, chinese());
@@ -63,9 +69,10 @@ function renderState(detail = latestState) {
   document.body.dataset.listen = state;
   toggle.dataset.state = state;
   toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
-  toggle.disabled = Boolean(forcedReason);
+  toggle.disabled = forced;
+  gain.disabled = forced;
   gainValue.value = `${volumePercent}%`;
-  toggle.textContent = muted || Boolean(forcedReason) ? '🔇' : '🔊';
+  toggle.textContent = muted || forced ? '🔇' : '🔊';
   stateNote.textContent = compactNote;
   if (legacyNote) legacyNote.textContent = '';
 }
@@ -75,13 +82,11 @@ function setGainInteraction(visible) {
   root.dataset.roomSoundValue = visible ? 'visible' : 'quiet';
 }
 
-for (const node of [gain]) {
-  node?.addEventListener('pointerdown', () => setGainInteraction(true));
-  node?.addEventListener('input', () => setGainInteraction(true));
-  node?.addEventListener('pointerup', () => setGainInteraction(false));
-  node?.addEventListener('change', () => setGainInteraction(false));
-  node?.addEventListener('blur', () => setGainInteraction(false));
-}
+gain?.addEventListener('pointerdown', () => setGainInteraction(true));
+gain?.addEventListener('input', () => setGainInteraction(true));
+gain?.addEventListener('pointerup', () => setGainInteraction(false));
+gain?.addEventListener('change', () => setGainInteraction(false));
+gain?.addEventListener('blur', () => setGainInteraction(false));
 
 function render() {
   renderLabels();

@@ -1,8 +1,12 @@
 import {
   MIC_PRESENCE_BAND_COUNT,
+  MIC_PRESENCE_MAX_F0_HZ,
+  MIC_PRESENCE_MIN_F0_HZ,
   MIC_PRESENCE_SLICE_COUNT,
+  centerOriginX,
   emptyPresenceSlice,
   nextPresenceHistory,
+  presenceSliceGeometry,
 } from './mic-presence-model.js';
 
 const meter = document.querySelector('#mic-input-meter');
@@ -13,6 +17,7 @@ if (meter) {
   const VIEWBOX_HEIGHT = 56;
   const CENTER_Y = VIEWBOX_HEIGHT / 2;
   const MAX_AMPLITUDE = 18;
+  const PITCH_MODULATION_DEPTH = 0.18;
 
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.classList.add('voice-presence-svg');
@@ -66,24 +71,31 @@ if (meter) {
     return path;
   }
 
+  function visualPoint(slice, index, side) {
+    const geometry = presenceSliceGeometry(slice);
+    const positions = centerOriginX(index, history.length, VIEWBOX_WIDTH);
+    const x = side === 'left' ? positions.left : positions.right;
+    const distance = Math.abs(x - VIEWBOX_WIDTH / 2) / (VIEWBOX_WIDTH / 2);
+    const pitchTexture = geometry.pitchStrength > 0
+      ? Math.sin(2 * Math.PI * geometry.density * distance) * geometry.pitchStrength * PITCH_MODULATION_DEPTH
+      : 0;
+    const amplitude = clamp(
+      geometry.amplitude * MAX_AMPLITUDE * (1 + pitchTexture),
+      0,
+      MAX_AMPLITUDE,
+    );
+    return { x, amplitude };
+  }
+
   function envelopePath() {
-    const divisor = Math.max(1, MIC_PRESENCE_SLICE_COUNT - 1);
-    const upper = history.map((slice, index) => {
-      const presence = clamp(Number(slice?.presence) || 0, 0, 1);
-      const amplitude = Math.pow(presence, 1.35) * MAX_AMPLITUDE;
-      return {
-        x: (index / divisor) * VIEWBOX_WIDTH,
-        y: CENTER_Y - amplitude,
-      };
-    });
-    const lower = history.map((slice, index) => {
-      const presence = clamp(Number(slice?.presence) || 0, 0, 1);
-      const amplitude = Math.pow(presence, 1.35) * MAX_AMPLITUDE;
-      return {
-        x: (index / divisor) * VIEWBOX_WIDTH,
-        y: CENTER_Y + amplitude,
-      };
-    }).reverse();
+    const left = history.map((slice, index) => visualPoint(slice, index, 'left'));
+    const right = history
+      .slice(0, -1)
+      .map((slice, index) => visualPoint(slice, index, 'right'))
+      .reverse();
+    const samples = [...left, ...right];
+    const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.amplitude }));
+    const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y + point.amplitude })).reverse();
 
     const upperPath = smoothPath(upper);
     const lowerPath = smoothPath(lower);
@@ -94,8 +106,7 @@ if (meter) {
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
     wave.setAttribute('d', envelopePath());
-    const strongest = history.reduce((max, slice) => Math.max(max, Number(slice?.presence) || 0), 0);
-    wave.style.opacity = active ? String(0.08 + clamp(strongest, 0, 1) * 0.86) : '0';
+    wave.style.opacity = active ? '0.9' : '0';
   }
 
   function clearLocalStaleTimer() {
@@ -125,7 +136,7 @@ if (meter) {
       localStaleTimer = null;
       if (!localActive) return;
       localActive = false;
-      if (sourceKey === 'local') reset();
+      if (typeof sourceKey === 'string' && sourceKey.startsWith('local:')) reset();
     }, LOCAL_EVIDENCE_STALE_MS);
   }
 
@@ -138,30 +149,60 @@ if (meter) {
     }, REMOTE_EVIDENCE_STALE_MS);
   }
 
-  function append(source, rmsDbfs, spectrumBands) {
+  function append(source, rmsDbfs, spectrumBands, f0Hz, pitchConfidence) {
     if (source !== sourceKey) reset(source);
-    history = nextPresenceHistory(history, rmsDbfs, spectrumBands);
+    history = nextPresenceHistory(history, rmsDbfs, spectrumBands, f0Hz, pitchConfidence);
     render(true);
     if (source.startsWith('room:')) armRemoteStaleTimer(source);
+  }
+
+  function validGeneration(value) {
+    const generation = Number(value);
+    return Number.isInteger(generation) && generation >= 0 && generation <= 0xffff_ffff
+      ? generation >>> 0
+      : null;
+  }
+
+  function validPitch(f0Value, confidenceValue) {
+    const confidence = Number(confidenceValue);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
+    if (f0Value === null || f0Value === undefined) {
+      return { f0Hz: null, pitchConfidence: confidence };
+    }
+    const f0Hz = Number(f0Value);
+    if (
+      !Number.isFinite(f0Hz)
+      || f0Hz < MIC_PRESENCE_MIN_F0_HZ
+      || f0Hz > MIC_PRESENCE_MAX_F0_HZ
+    ) return null;
+    return { f0Hz, pitchConfidence: confidence };
   }
 
   window.addEventListener('relay-local-mic-level', (event) => {
     if (event.detail?.active !== true) {
       localActive = false;
       clearLocalStaleTimer();
-      if (sourceKey === 'local') reset();
+      if (typeof sourceKey === 'string' && sourceKey.startsWith('local:')) reset();
       return;
     }
 
     const rmsDbfs = Number(event.detail?.rmsDbfs);
-    if (!Number.isFinite(rmsDbfs)) return;
+    const generation = validGeneration(event.detail?.captureGeneration);
+    const pitch = validPitch(event.detail?.f0Hz, event.detail?.pitchConfidence);
+    if (!Number.isFinite(rmsDbfs) || generation === null || !pitch) return;
 
     localActive = true;
     armLocalStaleTimer();
     const now = performance.now();
     if (now - lastLocalSampleAt < LOCAL_SAMPLE_INTERVAL_MS) return;
     lastLocalSampleAt = now;
-    append('local', rmsDbfs, event.detail?.spectrumBands);
+    append(
+      `local:${generation}`,
+      rmsDbfs,
+      event.detail?.spectrumBands,
+      pitch.f0Hz,
+      pitch.pitchConfidence,
+    );
   });
 
   window.addEventListener('relay-room-mic-presence', (event) => {
@@ -173,22 +214,28 @@ if (meter) {
     }
 
     const ownerId = typeof event.detail?.ownerId === 'string' ? event.detail.ownerId : '';
-    const generation = Number(event.detail?.captureGeneration);
+    const generation = validGeneration(event.detail?.captureGeneration);
     const rmsDbfs = Number(event.detail?.rmsDbfs);
     const spectrumBands = Array.isArray(event.detail?.spectrumBands)
       ? event.detail.spectrumBands.slice(0, MIC_PRESENCE_BAND_COUNT).map(Number)
       : [];
+    const pitch = validPitch(event.detail?.f0Hz, event.detail?.pitchConfidence);
     if (
       !ownerId
-      || !Number.isInteger(generation)
-      || generation < 0
-      || generation > 0xffff_ffff
+      || generation === null
       || !Number.isFinite(rmsDbfs)
       || spectrumBands.length !== MIC_PRESENCE_BAND_COUNT
       || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
+      || !pitch
     ) return;
 
-    append(`room:${ownerId}:${generation >>> 0}`, rmsDbfs, spectrumBands);
+    append(
+      `room:${ownerId}:${generation}`,
+      rmsDbfs,
+      spectrumBands,
+      pitch.f0Hz,
+      pitch.pitchConfidence,
+    );
   });
 
   reset();

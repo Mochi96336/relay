@@ -1,9 +1,10 @@
 name: One-shot content calibration validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/content-calibration-drift-validation
+      - agent/content-calibration-multiband
+    types: [opened, synchronize, reopened]
     paths:
       - .github/workflows/content-calibration-validation-once.yml
       - scripts/one-shot-content-calibration-validation.py
@@ -17,6 +18,7 @@ concurrency:
 
 jobs:
   patch-test-push:
+    if: github.head_ref == 'agent/content-calibration-drift-validation'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -72,7 +74,7 @@ jobs:
       - name: Commit tested product diff and remove gate
         run: |
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898236+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/content-calibration-validation-once.yml \
             scripts/one-shot-content-calibration-validation.py
           git add -- \

@@ -81,11 +81,13 @@ jobs:
               "http://127.0.0.1:4173/__live-visual.html?state=${state}" \
               "screenshots/${state}.png"
           done
+          # P0 density screenshots deliberately capture the exact phone viewport.
+          # Geometry/overflow remains covered by the layout contract rather than
+          # allowing Playwright --full-page to silently enlarge the artifact.
           for state in take-history-one take-history-many room-sound-normal room-sound-muted room-sound-forced; do
             npx -y playwright@1.55.0 screenshot \
               --browser chromium \
               --viewport-size="390,844" \
-              --full-page \
               --wait-for-timeout=250 \
               "http://127.0.0.1:4173/__live-p0-layout.html?state=${state}" \
               "screenshots/${state}.png"

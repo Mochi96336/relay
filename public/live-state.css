@@ -24,8 +24,9 @@ body[data-self-mic="live"] .performance-stage {
 body[data-self-mic="live"] #youtube-note {
   display: none;
 }
-body[data-room-mic="live"] .voice-presence-wave {
-  fill: rgba(240, 237, 229, .88);
+body[data-self-mic="live"] .voice-presence-wave {
+  fill: rgba(240, 237, 229, .24);
+  stroke: rgba(247, 244, 237, .82);
 }
 body[data-self-mic="live"] .voice-copy strong {
   font-size: clamp(27px, 7vw, 34px);

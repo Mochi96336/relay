@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
 const song = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
+const songSurface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
 const state = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 const presence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 const model = readFileSync(new URL('../public/mic-presence-model.js', import.meta.url), 'utf8');
@@ -23,20 +24,27 @@ test('observer Song is a compact room snapshot because it does not host YouTube 
   assert.match(song, /data-playback-role="observer"[\s\S]*?\.youtube-player-shell/);
 });
 
+test('playback holder keeps song identity above the real YouTube controls', () => {
+  assert.match(song, /data-playback-role="holder"[\s\S]*?\.song-observer/);
+  assert.match(song, /data-playback-role="holder"[\s\S]*?\.song-observer > :first-child[\s\S]*?display: none;/);
+  assert.match(songSurface, /const metadataMode = observerMode \|\| holderWithSong;/);
+  assert.match(songSurface, /observer\.hidden = !metadataMode;/);
+});
+
 test('holder Change song is visible as a real phone touch target instead of tiny utility text', () => {
   assert.match(song, /#change-youtube \{[\s\S]*?min-height: 44px;[\s\S]*?padding: 0 12px;/);
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
 test('Room Mic is one centered envelope while ten measured samples stay hidden in the model', () => {
-  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(100%, 320px\);[\s\S]*?height: 68px;/);
+  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(100%, 320px\);[\s\S]*?height: 56px;/);
   assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 12%, #000 100%\)/);
   assert.match(composition, /\.voice-presence-baseline/);
   assert.match(composition, /\.voice-presence-wave/);
   assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 10/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
   assert.match(presence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
-  assert.match(presence, /Math\.pow\(presence, 0\.9\) \* MAX_AMPLITUDE/);
+  assert.match(presence, /Math\.pow\(presence, 1\.35\) \* MAX_AMPLITUDE/);
   assert.match(presence, /envelopePath\(\)/);
   assert.match(presence, /smoothPath\(upper\)/);
   assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
@@ -95,6 +103,7 @@ test('Room Mic presence is visible to listeners while local holder evidence stay
   assert.match(state, /font-size: clamp\(27px, 7vw, 34px\)/);
   assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
+  assert.match(state, /body\[data-self-mic="live"\] \.voice-presence-wave[\s\S]*?stroke: rgba\(247, 244, 237, \.82\);/);
   assert.match(presence, /if \(localActive\) return;/);
 });
 

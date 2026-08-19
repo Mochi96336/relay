@@ -52,15 +52,17 @@ jobs:
         # --with-deps here: it invokes apt and can spend the entire job timeout
         # waiting on an Ubuntu mirror even though Relay itself is healthy.
         run: npx -y playwright@1.55.0 install chromium
-      - name: Serve deterministic Live fixture from Relay static root
+      - name: Serve deterministic Live fixtures from Relay static root
         run: |
           cp test/fixtures/live-visual.html public/__live-visual.html
           cp test/fixtures/live-visual-ribbon.js public/__live-visual-ribbon.js
           sed -i 's#</body>#<script src="/__live-visual-ribbon.js"></script></body>#' public/__live-visual.html
+          cp test/fixtures/live-p0-layout.html public/__live-p0-layout.html
           python3 -m http.server 4173 --bind 127.0.0.1 --directory public > /tmp/relay-visual-http.log 2>&1 &
           echo $! > /tmp/relay-visual-http.pid
           for attempt in {1..20}; do
-            if curl --fail --silent http://127.0.0.1:4173/__live-visual.html > /dev/null; then
+            if curl --fail --silent http://127.0.0.1:4173/__live-visual.html > /dev/null \
+              && curl --fail --silent http://127.0.0.1:4173/__live-p0-layout.html > /dev/null; then
               exit 0
             fi
             sleep 0.25
@@ -77,6 +79,15 @@ jobs:
               --full-page \
               --wait-for-timeout=250 \
               "http://127.0.0.1:4173/__live-visual.html?state=${state}" \
+              "screenshots/${state}.png"
+          done
+          for state in take-history-one take-history-many room-sound-normal room-sound-muted room-sound-forced; do
+            npx -y playwright@1.55.0 screenshot \
+              --browser chromium \
+              --viewport-size="390,844" \
+              --full-page \
+              --wait-for-timeout=250 \
+              "http://127.0.0.1:4173/__live-p0-layout.html?state=${state}" \
               "screenshots/${state}.png"
           done
       - name: Upload Live screenshots

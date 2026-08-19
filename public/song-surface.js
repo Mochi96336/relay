@@ -126,8 +126,9 @@ if (
         ? t(STATE_LABELS.get(state))
         : t('song.roomSong');
 
-    // The song identity is the primary observer information. Playback state is
-    // secondary and stays quiet while ordinary playback is healthy.
+    // Song identity is primary in every populated room. Observers get the full
+    // compact snapshot; playback holders reuse the same metadata above the real
+    // YouTube controls so control authority never erases "what are we singing?".
     observerState.textContent = titleCopy;
     observerAuthor.textContent = authorCopy;
     observerAuthor.hidden = !authorCopy;
@@ -183,12 +184,13 @@ if (
     changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
 
     const observerMode = role === 'observer';
-    observer.hidden = !observerMode;
+    const metadataMode = observerMode || holderWithSong;
+    observer.hidden = !metadataMode;
     playerShell.hidden = observerMode;
     localReadout.hidden = observerMode;
     localNote.hidden = observerMode;
 
-    if (observerMode) renderObserver(room, recoverable);
+    if (metadataMode) renderObserver(room, recoverable);
     else renderRecovery(false);
   }
 
@@ -225,7 +227,9 @@ if (
     const recoverable = canRecoverPlayback({ role, timeline: lastRoom });
     renderDeviceNote(recoverable);
     changeButton.textContent = editing ? t('song.done') : t('song.change');
-    if (role === 'observer') renderObserver(lastRoom, recoverable);
+    if (role === 'observer' || (role === 'holder' && Boolean(lastVideoId))) {
+      renderObserver(lastRoom, recoverable);
+    }
   });
   stage.dataset.playbackRole = role;
   stage.dataset.songEditing = 'false';

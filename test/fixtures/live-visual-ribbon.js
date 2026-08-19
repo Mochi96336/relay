@@ -12,6 +12,14 @@
     { rmsDbfs: -33, spectrumBands: [0.10, .42, .62, .36, .08] },
   ];
 
+  // The production holder reuses the compact room-song metadata above the
+  // real YouTube control surface. The deterministic fixture mirrors that
+  // product state before screenshots are captured.
+  if (document.body.dataset.playbackRole === 'holder') {
+    const observer = document.querySelector('#song-observer');
+    if (observer) observer.hidden = false;
+  }
+
   import('/mic-presence.js').then(() => {
     for (const sample of samples) {
       window.dispatchEvent(new CustomEvent('relay-room-mic-presence', {

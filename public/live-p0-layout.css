@@ -192,10 +192,187 @@ body[data-listen="muted"] .live-actions .local-sound-control #listen-gain {
   opacity: .52;
 }
 
+/* Floor-control follow-up.
+   Keep the performance evidence where it is, but spend any remaining phone
+   height below it. Recording/history, Mic gain, then Room sound form one quiet
+   control stack at the bottom of Live instead of floating through the middle. */
+html body .live-shell {
+  min-height: 100dvh;
+  grid-template-rows: max-content max-content minmax(max-content, 1fr) max-content;
+  align-content: stretch;
+}
+
+html body .live-shell > .room-header { grid-row: 1; }
+html body .live-shell > .song-stage { grid-row: 2; }
+html body .live-shell > .performance-stage { grid-row: 3; }
+html body .live-shell > .live-actions { grid-row: 4; }
+
+html body .performance-stage {
+  min-height: 0;
+}
+
+/* Idle/ready: Record lives on the left and the existing Take-history entry on
+   the right. When #65 hides Record because server readiness is false, a real
+   history entry may still keep this row alive; history must never disappear
+   just because a new Take cannot start yet. */
+html body .performance-stage > .take-strip {
+  width: 100%;
+  min-height: 44px;
+  margin-top: auto !important;
+  margin-bottom: 0;
+  border-top: 1px solid #202227;
+  border-bottom: 1px solid #202227;
+  align-items: center;
+}
+
+html body .performance-stage > .take-strip:not([hidden]),
+html body .performance-stage > .take-strip[hidden]:has(.recent-take:not([hidden])) {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-rows: minmax(44px, auto) !important;
+  column-gap: 16px;
+}
+
+html body .performance-stage > .take-strip:not([data-take-state="recording"]):not([data-take-state="finalizing"]) > .take-actions {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  justify-self: start;
+  min-width: 0;
+}
+
+html body .performance-stage > .take-strip[data-take-state="recording"] > .take-actions {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  justify-self: end;
+}
+
+html body .performance-stage > .take-strip > .recent-take {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  align-self: stretch;
+  justify-self: end;
+  min-height: 44px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+}
+
+html body .performance-stage > .take-strip > .recent-take[hidden] {
+  display: none;
+}
+
+html body .performance-stage > .take-strip > .recent-take #last-take-toggle {
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  border: 0;
+  color: #c7c8cc;
+  font-size: 0;
+  line-height: 1;
+  text-decoration: none;
+}
+
+html[lang="en"] body .performance-stage > .take-strip > .recent-take #last-take-toggle::after {
+  content: 'Recordings';
+  font-size: 13px;
+  font-weight: 620;
+}
+
+html[lang="zh-Hant"] body .performance-stage > .take-strip > .recent-take #last-take-toggle::after {
+  content: '錄音庫';
+  font-size: 13px;
+  font-weight: 620;
+}
+
+/* Mic gain becomes the first of the two bottom rails. Keep the existing input,
+   authority and recommendation model; only flatten the closed <details> shell
+   into a 44px rail. Recommendations remain available as data but do not consume
+   permanent Live height. */
+html body[data-self-mic="live"] .performance-stage > .mic-live-control {
+  width: 100%;
+  height: 44px;
+  min-height: 44px;
+  margin: 0 !important;
+  display: grid !important;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  border-top: 0;
+  border-bottom: 1px solid #202227;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary {
+  display: contents !important;
+  pointer-events: none;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary > span {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  color: #cfd0d3;
+  font-size: 13px;
+  font-weight: 620;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary > output {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  color: #b6b8bd;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control > .mic-live-control-body,
+html body[data-self-mic="live"] .performance-stage > .mic-live-control .gain-control {
+  display: contents !important;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control .gain-rail {
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain::-webkit-slider-runnable-track,
+html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain::-moz-range-track {
+  height: 2px;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain-recommendation-marker,
+html body[data-self-mic="live"] .performance-stage > .mic-live-control .recommendation-meta,
+html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain-advice {
+  display: none !important;
+}
+
+html body .live-actions {
+  margin-top: 0 !important;
+  padding-top: 0;
+}
+
 /* Chromium can offset a 100vw child inside an open <details> wrapper. Pin only
    the phone sheet itself to the viewport; desktop keeps the existing overlay's
    centered flex layout rather than inheriting bottom-sheet positioning. */
 @media (max-width: 759px) {
+  html body .live-shell {
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
   .take-history-panel[open] > .take-history-sheet {
     position: fixed;
     inset-inline-start: 0;

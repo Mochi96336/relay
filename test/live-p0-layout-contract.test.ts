@@ -5,6 +5,7 @@ import test from 'node:test';
 const stateCss = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 const layoutCss = readFileSync(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8');
 const roomUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
+const roomPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 const fixture = readFileSync(new URL('./fixtures/live-p0-layout.html', import.meta.url), 'utf8');
 
 test('P0 layout repair is render-blocking and owns one shared Live inline track', () => {
@@ -40,21 +41,32 @@ test('Room sound is one 44px local control row with a 2px visual rail', () => {
   assert.match(layoutCss, /data-room-sound-value="visible"[\s\S]*?#listen-gain-value/);
 });
 
-test('Room sound projection preserves recovery semantics, localized control names, and local-only ownership', () => {
-  assert.match(roomUi, /function roomSoundLabel\(\)[\s\S]*?localCopy\('Room sound', '房間聲音'\)/);
-  assert.match(roomUi, /function roomSoundVolumeLabel\(\)[\s\S]*?localCopy\('Room sound volume', '房間聲音音量'\)/);
-  assert.match(roomUi, /function roomSoundToggleLabel\(muted\)[\s\S]*?'Turn on room sound'[\s\S]*?'開啟房間聲音'[\s\S]*?'Mute room sound'[\s\S]*?'靜音房間聲音'/);
+test('Room sound projection preserves recovery semantics, localized control names, local-only ownership, and product vector iconography', () => {
+  assert.match(roomUi, /roomSoundControlPresentation/,
+    'the DOM adapter must delegate compact labels and state wording to the presenter');
+  assert.doesNotMatch(roomUi, /function compactStatus|state === '(?:mic-muted|playback-muted|review-muted|muted)'/,
+    'the DOM adapter must not reconstruct Room sound product state');
+
+  assert.match(roomPresentation, /label:\s*copy\('Room sound', '房間聲音'/);
+  assert.match(roomPresentation, /volumeAriaLabel:\s*copy\('Room sound volume', '房間聲音音量'/);
+  assert.match(roomPresentation, /toggleAriaLabel:[\s\S]*?'Turn on room sound'[\s\S]*?'開啟房間聲音'[\s\S]*?'Mute room sound'[\s\S]*?'靜音房間聲音'/);
   assert.ok(
-    roomUi.indexOf("phase === 'retry' || phase === 'start-failed'") < roomUi.indexOf("state === 'muted' || state === 'off'"),
+    roomPresentation.indexOf("phase === 'retry' || phase === 'start-failed'") < roomPresentation.indexOf("state === 'muted' || state === 'off'"),
     'retry/start-failed must outrank generic muted copy',
   );
-  assert.match(roomUi, /gain\.disabled = forced/);
-  assert.match(roomUi, /\? '🔇' : '🔊'/);
   for (const copy of ['唱歌中', '伴奏', '已靜音', '重試']) {
-    assert.equal(roomUi.includes(copy), true, `missing compact Room sound state: ${copy}`);
+    assert.equal(roomPresentation.includes(copy), true, `missing compact Room sound state: ${copy}`);
   }
+
+  assert.match(roomUi, /gain\.disabled = forced/);
+  assert.match(roomUi, /function roomSoundIcon\(muted\)/);
+  assert.match(roomUi, /class="room-sound-icon"/);
+  assert.match(roomUi, /stroke="currentColor"/);
+  assert.match(roomUi, /toggle\.dataset\.icon = visuallyMuted \? 'muted' : 'audible'/);
+  assert.match(roomUi, /toggle\.innerHTML = roomSoundIcon\(visuallyMuted\)/);
+  assert.doesNotMatch(roomUi, /🔊|🔇/);
   assert.match(roomUi, /root\.dataset\.listenNote = presentation\.note \? 'visible' : 'quiet'/);
-  assert.match(roomUi, /root\.dataset\.roomSoundState = compactNote \? 'visible' : 'quiet'/);
+  assert.match(roomUi, /root\.dataset\.roomSoundState = controlPresentation\.compact \? 'visible' : 'quiet'/);
   for (const forbidden of ['new WebSocket', 'new AudioContext', 'createGain', 'monitorPacketVersion']) {
     assert.equal(roomUi.includes(forbidden), false, `Room sound presenter must not own ${forbidden}`);
   }

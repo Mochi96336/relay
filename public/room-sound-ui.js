@@ -1,5 +1,4 @@
-import { roomSoundPresentation } from './room-sound-presentation.js';
-import { roomSoundControlPresentation } from './room-sound-presentation.js';
+import { roomSoundPresentation, roomSoundControlPresentation } from './room-sound-presentation.js';
 
 const root = document.querySelector('.local-sound-control');
 const title = document.querySelector('#local-listen-label');
@@ -15,6 +14,15 @@ let latestState = window.relayListenState ?? null;
 
 function chinese() {
   return window.relayI18n?.getLocale?.() === 'zh-Hant';
+}
+
+/* Keep this control visually product-shaped instead of delegating it to the
+   platform emoji font. State wording still belongs to the presenter module. */
+function roomSoundIcon(muted) {
+  const signal = muted
+    ? '<path d="M15.5 9.5l4 5m0-5l-4 5" />'
+    : '<path d="M15 9.5c1.4 1.4 1.4 3.6 0 5" /><path d="M17.7 7.4c2.6 2.6 2.6 6.6 0 9.2" />';
+  return `<svg class="room-sound-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10h3l4-3v10l-4-3H5z" />${signal}</svg>`;
 }
 
 function renderLabels(detail = latestState) {
@@ -36,6 +44,7 @@ function renderState(detail = latestState) {
   const phase = String(detail.phase ?? '');
   const forced = Boolean(detail.forcedReason);
   const muted = detail.muted === true;
+  const visuallyMuted = muted || forced;
   const volumePercent = Math.max(0, Math.min(100, Math.round(Number(detail.volumePercent) || 0)));
   const presentation = roomSoundPresentation(detail, chinese());
   const controlPresentation = roomSoundControlPresentation(detail, chinese());
@@ -46,12 +55,14 @@ function renderState(detail = latestState) {
   root.dataset.roomSoundState = controlPresentation.compact ? 'visible' : 'quiet';
   document.body.dataset.listen = state;
   toggle.dataset.state = state;
+  toggle.dataset.icon = visuallyMuted ? 'muted' : 'audible';
   toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
   toggle.setAttribute('aria-label', controlPresentation.toggleAriaLabel);
   toggle.disabled = forced;
   gain.disabled = forced;
   gainValue.value = `${volumePercent}%`;
-  toggle.textContent = muted || forced ? '🔇' : '🔊';
+  toggle.textContent = '';
+  toggle.innerHTML = roomSoundIcon(visuallyMuted);
   stateNote.textContent = controlPresentation.compact;
   if (legacyNote) legacyNote.textContent = '';
 }

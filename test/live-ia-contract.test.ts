@@ -11,6 +11,7 @@ const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const roomSound = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
+const roomSoundPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 const people = readFileSync(new URL('../public/people-ui.js', import.meta.url), 'utf8');
 const recordingUi = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
@@ -64,9 +65,12 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
 
   assert.match(html, /<script type="module" src="\/room-sound-ui\.js"><\/script>/);
   assert.equal(script.includes("'./room-sound-ui.js'"), false);
-  assert.match(roomSound, /'房間聲音'/);
-  assert.match(roomSound, /'只影響這支裝置'/);
-  assert.match(roomSound, /'Room sound'/);
+  assert.match(roomSound, /roomSoundControlPresentation/);
+  assert.doesNotMatch(roomSound, /'房間聲音'|'只影響這支裝置'/,
+    'the DOM adapter must not regain Room sound product-copy ownership');
+  assert.match(roomSoundPresentation, /'房間聲音'/);
+  assert.match(roomSoundPresentation, /'只影響這支裝置'/);
+  assert.match(roomSoundPresentation, /'Room sound'/);
   assert.match(composition, /#listen-toggle\s*\{[\s\S]*?min-height:\s*44px;/);
   assert.match(composition, /\.local-sound-control \.adjust-row-heading strong\s*\{[\s\S]*?clip-path:\s*inset\(50%\);/);
 });

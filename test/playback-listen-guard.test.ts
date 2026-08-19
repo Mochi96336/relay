@@ -80,8 +80,8 @@ test('playback forced mute composes with Mic, review, and user mute without owni
     'the audio engine must not regain Room sound product-copy ownership');
   assert.match(
     roomSoundUi,
-    /import \{ roomSoundPresentation \} from '\.\/room-sound-presentation\.js'/,
-    'the DOM adapter must delegate Room sound product copy to the presenter',
+    /import \{[^}]*roomSoundPresentation[^}]*\} from '\.\/room-sound-presentation\.js'/,
+    'the DOM adapter must delegate Room sound product copy to the presenter module',
   );
   assert.doesNotMatch(
     roomSoundUi,

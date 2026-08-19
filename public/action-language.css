@@ -42,6 +42,12 @@
   inset: -10px -4px;
 }
 
+/* Recalibrate is a .more-action, not a .text-action. Anchor its absolute hit
+   halo to the real button so it cannot cover later More rows such as System. */
+#calibrate-timing {
+  position: relative;
+}
+
 /* This-phone sound is the only persistent local control left on Live. */
 #listen-toggle {
   min-height: 44px;

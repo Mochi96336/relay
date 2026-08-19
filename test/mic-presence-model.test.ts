@@ -33,15 +33,17 @@ test('five-band spectrum remains normalized evidence but does not own pitch', ()
   assert.equal(lowBands.density, highBands.density);
 });
 
-test('same RMS with low/high F0 keeps amplitude while changing contour density', () => {
+test('same RMS with low/high F0 keeps amplitude while making high pitch visibly denser', () => {
   const low = presenceSliceGeometry(createPresenceSlice(-28, [1, 0, 0, 0, 0], 100, 0.95));
   const high = presenceSliceGeometry(createPresenceSlice(-28, [1, 0, 0, 0, 0], 600, 0.95));
   assert.equal(low.amplitude, high.amplitude);
-  assert.ok(high.density > low.density);
-  assert.ok(Math.abs(pitchLobeCount(80) - 1.5) < 0.01);
-  assert.ok(pitchLobeCount(150) > 2.4 && pitchLobeCount(150) < 3);
-  assert.ok(pitchLobeCount(300) > 3.7 && pitchLobeCount(300) < 4.4);
-  assert.ok(pitchLobeCount(600) > 5 && pitchLobeCount(600) < 5.9);
+  assert.ok(high.density > low.density * 3.5);
+  assert.ok(Math.abs(pitchLobeCount(80) - 1.25) < 0.01);
+  assert.ok(pitchLobeCount(100) > 1.8 && pitchLobeCount(100) < 2.0);
+  assert.ok(pitchLobeCount(150) > 3 && pitchLobeCount(150) < 3.2);
+  assert.ok(pitchLobeCount(300) > 5 && pitchLobeCount(300) < 5.3);
+  assert.ok(pitchLobeCount(600) > 7 && pitchLobeCount(600) < 7.4);
+  assert.equal(pitchLobeCount(1000), 8);
 });
 
 test('same F0 with different RMS keeps density while changing amplitude', () => {

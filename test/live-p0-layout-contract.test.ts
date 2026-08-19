@@ -40,7 +40,7 @@ test('Room sound is one 44px local control row with a 2px visual rail', () => {
   assert.match(layoutCss, /data-room-sound-value="visible"[\s\S]*?#listen-gain-value/);
 });
 
-test('Room sound projection preserves recovery semantics, localized control names, and local-only ownership', () => {
+test('Room sound projection preserves recovery semantics, localized control names, local-only ownership, and product vector iconography', () => {
   assert.match(roomUi, /function roomSoundLabel\(\)[\s\S]*?localCopy\('Room sound', '房間聲音'\)/);
   assert.match(roomUi, /function roomSoundVolumeLabel\(\)[\s\S]*?localCopy\('Room sound volume', '房間聲音音量'\)/);
   assert.match(roomUi, /function roomSoundToggleLabel\(muted\)[\s\S]*?'Turn on room sound'[\s\S]*?'開啟房間聲音'[\s\S]*?'Mute room sound'[\s\S]*?'靜音房間聲音'/);
@@ -49,7 +49,12 @@ test('Room sound projection preserves recovery semantics, localized control name
     'retry/start-failed must outrank generic muted copy',
   );
   assert.match(roomUi, /gain\.disabled = forced/);
-  assert.match(roomUi, /\? '🔇' : '🔊'/);
+  assert.match(roomUi, /function roomSoundIcon\(muted\)/);
+  assert.match(roomUi, /class="room-sound-icon"/);
+  assert.match(roomUi, /stroke="currentColor"/);
+  assert.match(roomUi, /toggle\.dataset\.icon = visuallyMuted \? 'muted' : 'audible'/);
+  assert.match(roomUi, /toggle\.innerHTML = roomSoundIcon\(visuallyMuted\)/);
+  assert.doesNotMatch(roomUi, /🔊|🔇/);
   for (const copy of ['唱歌中', '伴奏', '已靜音', '重試']) {
     assert.equal(roomUi.includes(copy), true, `missing compact Room sound state: ${copy}`);
   }

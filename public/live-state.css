@@ -26,6 +26,26 @@ body[data-self-mic="live"] .voice-presence-wave {
   stroke: rgba(247, 244, 237, .82);
 }
 
+/* On listener phones, the singer name and state are one room sentence rather
+   than a profile headline plus caption. Keep enough wrapping room for long
+   nicknames without promoting the person above the song and sound evidence. */
+body[data-room-mic="live"][data-self-mic="off"] .voice-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
+  row-gap: 3px;
+}
+body[data-room-mic="live"][data-self-mic="off"] .voice-copy strong {
+  font-size: clamp(20px, 5.3vw, 25px);
+  line-height: 1.12;
+  font-weight: 630;
+}
+body[data-room-mic="live"][data-self-mic="off"] .voice-copy span {
+  margin-top: 0;
+  font-size: 12px;
+}
+
 /* Once this phone is the live Mic, tighten the handoff from media into the
    performance task. The singer is important, but the moving Room Mic evidence
    is the visual hero; the state headline should never turn into a landing-page

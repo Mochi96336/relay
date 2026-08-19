@@ -1,5 +1,4 @@
-import { roomSoundPresentation } from './room-sound-presentation.js';
-import { roomSoundControlPresentation } from './room-sound-presentation.js';
+import { roomSoundPresentation, roomSoundControlPresentation } from './room-sound-presentation.js';
 
 const root = document.querySelector('.local-sound-control');
 const title = document.querySelector('#local-listen-label');

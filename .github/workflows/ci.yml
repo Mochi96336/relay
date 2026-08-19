@@ -69,7 +69,7 @@ jobs:
           done
           cat /tmp/relay-visual-http.log
           exit 1
-      - name: Capture phone states
+      - name: Capture phone states and assert browser geometry
         run: |
           mkdir -p screenshots
           for state in empty listener singer takeover recording system; do
@@ -81,16 +81,47 @@ jobs:
               "http://127.0.0.1:4173/__live-visual.html?state=${state}" \
               "screenshots/${state}.png"
           done
-          # P0 density screenshots deliberately capture the exact phone viewport.
-          # Geometry/overflow remains covered by the layout contract rather than
-          # allowing Playwright --full-page to silently enlarge the artifact.
+
+          # These states run the production Take History / Room sound presenters.
+          # Keep the artifact itself at the exact phone viewport; the page reports
+          # its post-layout Chromium geometry back through the fixture HTTP log.
           for state in take-history-one take-history-many room-sound-normal room-sound-muted room-sound-forced; do
             npx -y playwright@1.55.0 screenshot \
               --browser chromium \
               --viewport-size="390,844" \
-              --wait-for-timeout=250 \
+              --wait-for-timeout=400 \
               "http://127.0.0.1:4173/__live-p0-layout.html?state=${state}" \
               "screenshots/${state}.png"
+          done
+
+          # Desktop regression probe: Take must remain centered by the existing
+          # overlay instead of inheriting the mobile bottom-sheet pinning.
+          npx -y playwright@1.55.0 screenshot \
+            --browser chromium \
+            --viewport-size="1024,768" \
+            --wait-for-timeout=400 \
+            "http://127.0.0.1:4173/__live-p0-layout.html?state=take-history-one" \
+            "/tmp/take-history-desktop.png"
+
+          sleep 0.25
+          if grep -q '/__geometry-fail' /tmp/relay-visual-http.log; then
+            echo 'Chromium layout geometry failed:'
+            grep '/__geometry-' /tmp/relay-visual-http.log || true
+            exit 1
+          fi
+
+          for marker in \
+            'state=take-history-one&vw=390' \
+            'state=take-history-many&vw=390' \
+            'state=room-sound-normal&vw=390' \
+            'state=room-sound-muted&vw=390' \
+            'state=room-sound-forced&vw=390' \
+            'state=take-history-one&vw=1024'; do
+            if ! grep -q "/__geometry-pass?${marker}" /tmp/relay-visual-http.log; then
+              echo "Missing Chromium geometry pass marker: ${marker}"
+              grep '/__geometry-' /tmp/relay-visual-http.log || true
+              exit 1
+            fi
           done
       - name: Upload Live screenshots
         if: always()

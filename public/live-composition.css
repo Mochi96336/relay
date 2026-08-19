@@ -13,26 +13,33 @@
 .performance-stage { padding-top: clamp(24px, 4vh, 36px); }
 .performance-stage > .section-label { margin-bottom: 10px; }
 
-/* Ten truthful time slices become one soft contour. Vertical position comes
-   from the five-band spectral centroid/spread; opacity remains RMS-owned. */
-.voice-input-evidence { min-height: 64px; margin: 14px 0 2px; display: flex; align-items: center; }
+/* Room Mic presence is one continuous truth surface, not ten visible widgets.
+   The history still contains ten measured slices; the renderer joins their RMS
+   envelope around one center line so loudness reads as distance from center.
+   Five-band evidence stays in the data path for timbre, but is deliberately not
+   presented as musical pitch until a real F0 estimate exists. */
+.voice-input-evidence { width: 100%; min-height: 72px; margin: 12px 0 2px; display: flex; align-items: center; }
 .evidence-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
-.voice-input-meter { width: min(72vw, 282px); height: 60px; display: grid; grid-template-columns: repeat(10, minmax(0,1fr)); gap: 0; overflow: hidden; border-radius: 8px; filter: blur(.8px); -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%); mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%); }
-.voice-presence-slice { position: relative; min-width: 0; height: 60px; opacity: .28; }
-.voice-presence-shape { position: absolute; left: -1px; width: calc(100% + 2px); border-radius: 6px; background: #eeeae2; box-shadow: 0 0 9px rgba(240,237,229,.10); transition: top 100ms linear, height 100ms linear, opacity 90ms linear; }
+.voice-input-meter { position: relative; width: min(100%, 320px); height: 68px; overflow: hidden; border-radius: 8px; -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%); mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%); }
+.voice-presence-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.voice-presence-baseline { fill: none; stroke: rgba(238,234,226,.16); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.voice-presence-wave { fill: rgba(238,234,226,.86); stroke: rgba(247,244,237,.42); stroke-width: .7; stroke-linejoin: round; filter: drop-shadow(0 0 8px rgba(240,237,229,.08)); opacity: .94; transition: opacity 100ms linear; }
+.voice-input-meter[data-active="false"] .voice-presence-wave { opacity: 0; }
 .voice-copy { min-height: 0; }
 .voice-copy strong { max-width: 22ch; font-size: clamp(24px, 6.3vw, 32px); line-height: 1.04; letter-spacing: -.035em; font-weight: 640; }
 .voice-copy span { margin-top: 5px; }
-.mic-actions { min-height: 38px; margin-top: 12px; }
-.take-strip { margin-top: 14px; padding-top: 0; border-top: 0; text-align: left; }
-.take-actions { min-height: 34px; justify-content: flex-start; }
-#start-recording:not(:disabled)::before { content:""; display:inline-block; width:6px; height:6px; margin-right:8px; border-radius:999px; background:currentColor; vertical-align:1px; opacity:.72; }
-.take-strip .microcopy { min-height: 15px; text-align: left; }
+.mic-actions { min-height: 38px; margin-top: 10px; }
+.take-strip { margin-top: 8px; padding-top: 0; border-top: 0; text-align: left; }
+.take-actions { min-height: 40px; justify-content: flex-start; }
+#start-recording:not(:disabled)::before { content:""; display:inline-block; width:6px; height:6px; margin-right:8px; border-radius:999px; background:#d8a5a1; vertical-align:1px; opacity:.9; }
+.take-strip .microcopy { min-height: 14px; text-align: left; }
 .take-strip[data-take-state="recording"] { display:grid; grid-template-columns:auto auto; justify-content:start; align-items:center; column-gap:14px; }
 .take-strip[data-take-state="recording"] .take-actions { grid-column:2; grid-row:1; min-height:44px; }
 .take-strip[data-take-state="recording"] #recording-status { grid-column:1; grid-row:1; margin:0; }
 .take-strip[data-take-state="recording"] .last-take, .take-strip[data-take-state="finalizing"] .last-take { display:none; }
-.live-actions { margin-top:24px; padding-top:14px; }
+.performance-stage > #last-take,
+.performance-stage > .recent-take { margin-top: 8px; }
+.live-actions { margin-top:22px; padding-top:14px; }
 .local-sound-control { display:grid; gap:7px; }
 .local-sound-control .adjust-group-heading { align-items:center; }
 .local-sound-control .adjust-group-heading .section-label { font-size:13px; font-weight:620; letter-spacing:-.02em; }
@@ -45,5 +52,5 @@ body[data-listen="mic-muted"] .local-sound-control .adjust-control, body[data-li
 #listen-gain-value { color:#aeb0b5; font-size:11px; font-variant-numeric:tabular-nums; }
 .local-sound-control #listen-adjust-state { min-height:14px; }
 body[data-listen="muted"] .local-sound-control #listen-adjust-state, body[data-listen="mic-muted"] .local-sound-control #listen-adjust-state, body[data-listen="playback-muted"] .local-sound-control #listen-adjust-state, body[data-listen="review-muted"] .local-sound-control #listen-adjust-state { display:block; }
-@media (max-width:420px) { .song-stage{padding-top:16px;} .performance-stage{padding-top:24px;} .voice-input-meter{width:min(74vw,270px);} .youtube-form{grid-template-columns:minmax(0,1fr) auto;align-items:center;} .youtube-form button{justify-self:auto;} }
-@media (max-height:760px) { .live-shell{padding-top:14px;} .song-stage{padding-top:12px;} .performance-stage{padding-top:20px;} .voice-input-evidence{margin-top:12px;} .mic-actions{margin-top:10px;} .take-strip{margin-top:12px;} .live-actions{margin-top:20px;padding-top:12px;} }
+@media (max-width:420px) { .song-stage{padding-top:16px;} .performance-stage{padding-top:22px;} .voice-input-meter{width:min(100%,310px);} .youtube-form{grid-template-columns:minmax(0,1fr) auto;align-items:center;} .youtube-form button{justify-self:auto;} }
+@media (max-height:760px) { .live-shell{padding-top:14px;} .song-stage{padding-top:12px;} .performance-stage{padding-top:18px;} .voice-input-evidence{margin-top:10px;} .mic-actions{margin-top:8px;} .take-strip{margin-top:6px;} .live-actions{margin-top:18px;padding-top:12px;} }

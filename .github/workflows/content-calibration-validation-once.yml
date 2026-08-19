@@ -1,0 +1,92 @@
+name: One-shot content calibration validation
+
+on:
+  push:
+    branches:
+      - agent/content-calibration-drift-validation
+    paths:
+      - .github/workflows/content-calibration-validation-once.yml
+      - scripts/one-shot-content-calibration-validation.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-content-calibration-validation-once
+  cancel-in-progress: false
+
+jobs:
+  patch-test-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/content-calibration-drift-validation
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Apply exact runtime wiring
+        run: python3 scripts/one-shot-content-calibration-validation.py
+
+      - name: Verify focused product diff
+        run: |
+          git diff --check
+          git add -N test/content-calibration-validation-server.test.ts
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            src/content-calibration-validator.ts \
+            src/server.ts \
+            test/content-calibration-validation-server.test.ts \
+            test/content-calibration-validator.test.ts | sort)"
+          test "$actual" = "$expected" || {
+            printf 'Unexpected diff:\n%s\n' "$actual"
+            exit 1
+          }
+          git diff --stat
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Run focused calibration contracts
+        run: |
+          node --import tsx --test --test-concurrency=1 \
+            test/timing-window-collector.test.ts \
+            test/content-calibration-validator.test.ts \
+            test/calibration-confirmed-result.test.ts \
+            test/content-calibration-validation-server.test.ts \
+            test/calibration-session.test.ts \
+            test/config.test.ts \
+            test/timing-validity.test.ts
+
+      - name: Run full suite
+        run: npm test
+
+      - name: Run WebTransport loopback
+        run: npm run test:webtransport-loopback
+
+      - name: Commit tested product diff and remove gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/content-calibration-validation-once.yml \
+            scripts/one-shot-content-calibration-validation.py
+          git add -- \
+            src/content-calibration-validator.ts \
+            src/server.ts \
+            test/content-calibration-validation-server.test.ts \
+            test/content-calibration-validator.test.ts
+          git diff --cached --check
+          git commit -m 'feat(audio): validate calibrated content drift'
+
+      - name: Rebase tested product commit onto latest branch and push
+        env:
+          BRANCH: agent/content-calibration-drift-validation
+        run: |
+          git fetch origin "$BRANCH"
+          git rebase "origin/$BRANCH"
+          git push origin HEAD:"$BRANCH"

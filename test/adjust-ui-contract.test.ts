@@ -66,8 +66,16 @@ test('realignment is a direct More task while fine tune survives as advanced det
   assert.ok(more >= 0 && more < calibrate && calibrate < fineTune && fineTune < system);
   assert.match(html, /class="more-timing"/);
   assert.match(ia, /calibrateTiming\?\.addEventListener\('click'/);
-  assert.match(ia, /import '\.\/calibration-ui\.js'/);
+  assert.match(ia, /import\('\.\/calibration-ui\.js'\)/);
   assert.equal(ia.includes('adjustPanel'), false);
+});
+
+test('calibration presenter loads only after core System navigation is installed', () => {
+  const systemBinding = ia.indexOf("openSystem?.addEventListener('click', revealSystem)");
+  const calibrationLoader = ia.indexOf("import('./calibration-ui.js')");
+  assert.ok(systemBinding >= 0);
+  assert.ok(calibrationLoader > systemBinding);
+  assert.doesNotMatch(ia, /^import\s/m);
 });
 
 test('Robot calibration UI follows ProductStatus mode instead of Song availability', () => {

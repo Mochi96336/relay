@@ -12,6 +12,8 @@
   <style>
     /* Fixture-only deterministic content. Product geometry remains owned by the
        production stylesheets above. */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; max-width: 100%; }
     body { min-height: 100dvh; }
     .fixture-player {
       width: 100%;

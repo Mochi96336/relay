@@ -46,8 +46,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '20.19'
+      - run: npm ci
       - name: Install screenshot browser
-        run: npx -y playwright@1.55.0 install --with-deps chromium
+        # Runner images already carry Chromium's system libraries. Avoid
+        # --with-deps here: it invokes apt and can spend the entire job timeout
+        # waiting on an Ubuntu mirror even though Relay itself is healthy.
+        run: npx -y playwright@1.55.0 install chromium
       - name: Serve deterministic Live fixture from Relay static root
         run: |
           cp test/fixtures/live-visual.html public/__live-visual.html
@@ -81,7 +85,9 @@ jobs:
         with:
           name: live-phone-screenshots
           path: screenshots/*.png
-          if-no-files-found: error
+          # Capture/installation failures already fail their own step. Do not
+          # turn a missing artifact into a second, misleading root-cause error.
+          if-no-files-found: warn
           retention-days: 7
 
   webtransport-loopback:

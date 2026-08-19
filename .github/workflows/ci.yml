@@ -83,23 +83,35 @@ jobs:
           done
 
           # These states run the production Take History / Room sound presenters.
-          # Keep the artifact itself at the exact phone viewport; the page reports
-          # its post-layout Chromium geometry back through the fixture HTTP log.
-          for state in take-history-one take-history-many room-sound-normal room-sound-muted room-sound-forced; do
+          # The Take fixture also loads a real in-memory WAV so native duration
+          # and seeking are exercised instead of only measuring an empty control.
+          for state in take-history-one take-history-many room-sound-normal room-sound-muted room-sound-forced room-sound-retry; do
             npx -y playwright@1.55.0 screenshot \
               --browser chromium \
               --viewport-size="390,844" \
-              --wait-for-timeout=400 \
+              --wait-for-timeout=700 \
               "http://127.0.0.1:4173/__live-p0-layout.html?state=${state}" \
               "screenshots/${state}.png"
           done
 
-          # Desktop regression probe: Take must remain centered by the existing
-          # overlay instead of inheriting the mobile bottom-sheet pinning.
+          # Breakpoint probes: 759 is the last viewport-width phone sheet; 760
+          # switches back to the existing centered desktop overlay. 768 catches
+          # the common tablet-width edge immediately above that boundary.
+          for width in 759 760 768; do
+            npx -y playwright@1.55.0 screenshot \
+              --browser chromium \
+              --viewport-size="${width},844" \
+              --wait-for-timeout=700 \
+              "http://127.0.0.1:4173/__live-p0-layout.html?state=take-history-one" \
+              "/tmp/take-history-${width}.png"
+          done
+
+          # Wider desktop regression probe: Take must remain centered by the
+          # existing overlay instead of inheriting the mobile bottom-sheet pinning.
           npx -y playwright@1.55.0 screenshot \
             --browser chromium \
             --viewport-size="1024,768" \
-            --wait-for-timeout=400 \
+            --wait-for-timeout=700 \
             "http://127.0.0.1:4173/__live-p0-layout.html?state=take-history-one" \
             "/tmp/take-history-desktop.png"
 
@@ -116,6 +128,10 @@ jobs:
             'state=room-sound-normal&vw=390' \
             'state=room-sound-muted&vw=390' \
             'state=room-sound-forced&vw=390' \
+            'state=room-sound-retry&vw=390' \
+            'state=take-history-one&vw=759' \
+            'state=take-history-one&vw=760' \
+            'state=take-history-one&vw=768' \
             'state=take-history-one&vw=1024'; do
             if ! grep -q "/__geometry-pass?${marker}" /tmp/relay-visual-http.log; then
               echo "Missing Chromium geometry pass marker: ${marker}"

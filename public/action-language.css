@@ -42,8 +42,7 @@
   inset: -10px -4px;
 }
 
-/* This-phone sound is the only persistent local control left on Live. Adjust
-   is secondary and receives its 44px entry target in live-ia.css. */
+/* This-phone sound is the only persistent local control left on Live. */
 #listen-toggle {
   min-height: 44px;
   display: inline-flex;
@@ -80,28 +79,32 @@
   background: #f5f2ea;
 }
 
-/* Recording starts a lifecycle, but is deliberately quieter than taking Mic.
-   Its visible surface stays compact; a transparent after-layer completes the
-   touch target without making Record look like a second primary action. */
+/* Recording is a persistent performance action, not a second commit card.
+   The small red evidence dot carries the recording language; the label itself
+   stays typographic so Take can morph in place to elapsed time + Stop. */
 #start-recording {
   position: relative;
-  min-height: 38px;
-  border: 1px solid #34363c;
-  border-radius: 9px;
-  padding: 8px 14px;
-  background: #16171a;
-  color: #d9d8d4;
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: #d7d6d2;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 #start-recording::after {
   content: "";
   position: absolute;
-  inset: -3px -6px;
+  inset: -4px -6px;
 }
 #start-recording:hover:not(:disabled) {
-  border-color: #464950;
-  background: #1c1e22;
+  background: transparent;
+  color: #fff;
+}
+#start-recording:disabled {
+  background: transparent;
+  border-color: transparent;
 }
 
 /* Once recording is underway, elapsed time is the state surface; Stop is text. */
@@ -130,7 +133,6 @@
 
 @media (max-width: 360px) {
   #start-publisher { min-width: 116px; }
-  #start-recording { padding-left: 12px; padding-right: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -105,8 +105,147 @@ async function establishBaseline(
   );
 }
 
+async function waitForValidationCollection(monitor: RelayClient, fromIndex: number) {
+  return waitForNewMessage(
+    monitor,
+    fromIndex,
+    (m) => m.type === 'timing-calibration-status'
+      && m.validation?.state === 'collecting',
+    4_000,
+  );
+}
+
 describe('continuous content calibration validation server policy', () => {
-  test('single drift evidence cannot move alignment; a second agreeing window can', async () => {
+  test('baseline seed and stable completion are published without a status request', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      const baseline = await establishBaseline(backing, publisher, monitor);
+      const baselineLag = Number(baseline.micLagMs);
+      const afterCalibration = monitor.messages.length;
+
+      const seeded = await waitForNewMessage(
+        monitor,
+        afterCalibration,
+        (m) => m.type === 'timing-calibration-status'
+          && m.validation?.state === 'waiting'
+          && Number.isFinite(Number(m.validation?.baselineLagMs)),
+        4_000,
+      );
+      assert.ok(Math.abs(Number(seeded.validation.baselineLagMs) - baselineLag) < 1);
+
+      const collectingFrom = monitor.messages.length;
+      await waitForValidationCollection(monitor, collectingFrom);
+      const stableFrom = monitor.messages.length;
+      const stablePair = laggedPair(8, RATE, baselineLag, 17);
+      await Promise.all([
+        sendPcmInChunks(backing, stablePair.backing),
+        sendPcmInChunks(publisher, stablePair.mic),
+      ]);
+
+      const stable = await waitForNewMessage(
+        monitor,
+        stableFrom,
+        (m) => m.type === 'timing-calibration-status'
+          && m.validation?.state === 'waiting'
+          && m.validation?.lastOutcome === 'stable',
+        4_000,
+      );
+      assert.ok(Math.abs(Number(stable.validation.lastMeasuredLagMs) - baselineLag) <= 30);
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('analyser rejection publishes invalid immediately and preserves the baseline', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      const baseline = await establishBaseline(backing, publisher, monitor);
+      const baselineLag = Number(baseline.micLagMs);
+      const collectingFrom = monitor.messages.length;
+      await waitForValidationCollection(monitor, collectingFrom);
+
+      const invalidFrom = monitor.messages.length;
+      const silence = Buffer.alloc(RATE * 7 * 2);
+      await Promise.all([
+        sendPcmInChunks(backing, silence),
+        sendPcmInChunks(publisher, silence),
+      ]);
+
+      const invalid = await waitForNewMessage(
+        monitor,
+        invalidFrom,
+        (m) => m.type === 'timing-calibration-status'
+          && m.validation?.state === 'waiting'
+          && m.validation?.lastOutcome === 'invalid',
+        4_000,
+      );
+      assert.ok(Math.abs(Number(invalid.validation.baselineLagMs) - baselineLag) < 1);
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('inconclusive second evidence is published immediately and never changes authority', async () => {
+    const server = await startRelay(FAST);
+    try {
+      const { backing, publisher, monitor } = await liveSession(server);
+      const baseline = await establishBaseline(backing, publisher, monitor);
+      const baselineLag = Number(baseline.micLagMs);
+      const firstStart = monitor.messages.length;
+      await waitForValidationCollection(monitor, firstStart);
+
+      const firstDrift = laggedPair(8, RATE, 360, 61);
+      const suspectFrom = monitor.messages.length;
+      await Promise.all([
+        sendPcmInChunks(backing, firstDrift.backing),
+        sendPcmInChunks(publisher, firstDrift.mic),
+      ]);
+      await waitForNewMessage(
+        monitor,
+        suspectFrom,
+        (m) => m.type === 'timing-calibration-status'
+          && m.validation?.lastOutcome === 'suspect',
+        4_000,
+      );
+
+      const confirmStart = monitor.messages.length;
+      await waitForValidationCollection(monitor, confirmStart);
+      const secondDrift = laggedPair(8, RATE, 420, 79);
+      const inconclusiveFrom = monitor.messages.length;
+      await Promise.all([
+        sendPcmInChunks(backing, secondDrift.backing),
+        sendPcmInChunks(publisher, secondDrift.mic),
+      ]);
+      const inconclusive = await waitForNewMessage(
+        monitor,
+        inconclusiveFrom,
+        (m) => m.type === 'timing-calibration-status'
+          && m.validation?.lastOutcome === 'inconclusive'
+          && m.validation?.state === 'waiting',
+        4_000,
+      );
+      assert.ok(Math.abs(Number(inconclusive.validation.baselineLagMs) - baselineLag) < 1);
+      assert.ok(Math.abs(Number(inconclusive.activeMicLagMs) - baselineLag) < 1);
+
+      backing.close();
+      publisher.close();
+      monitor.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('single drift evidence cannot move alignment; a second agreeing window slews toward it', async () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
@@ -115,24 +254,18 @@ describe('continuous content calibration validation server policy', () => {
       assert.ok(Number.isFinite(baselineLag));
 
       const firstStart = monitor.messages.length;
-      await waitForNewMessage(
-        monitor,
-        firstStart,
-        (m) => m.type === 'timing-calibration-status'
-          && m.validation?.state === 'collecting',
-        4_000,
-      );
+      await waitForValidationCollection(monitor, firstStart);
 
       const firstDrift = laggedPair(8, RATE, 360, 31);
+      const suspectFrom = monitor.messages.length;
       await Promise.all([
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
 
-      const suspectFrom = monitor.messages.length;
       const suspect = await waitForNewMessage(
         monitor,
-        Math.max(firstStart, suspectFrom - 4),
+        suspectFrom,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.lastOutcome === 'suspect'
           && m.validation?.suspectLagMs !== null,
@@ -152,15 +285,7 @@ describe('continuous content calibration validation server policy', () => {
       );
 
       const confirmFrom = monitor.messages.length;
-      monitor.send({ type: 'timing-calibration-status-request' });
-      await waitForNewMessage(
-        monitor,
-        confirmFrom,
-        (m) => m.type === 'timing-calibration-status'
-          && m.validation?.state === 'collecting'
-          && m.validation?.suspectLagMs !== null,
-        4_000,
-      );
+      await waitForValidationCollection(monitor, confirmFrom);
 
       const secondDrift = laggedPair(8, RATE, 355, 47);
       await Promise.all([
@@ -175,20 +300,40 @@ describe('continuous content calibration validation server policy', () => {
           && m.validation?.lastOutcome === 'drift-confirmed',
         8_000,
       );
-      assert.ok(Math.abs(Number(promoted.micLagMs) - baselineLag) > 30);
+      const promotedLag = Number(promoted.micLagMs);
+      assert.ok(Math.abs(promotedLag - baselineLag) > 30);
 
-      const source = await waitForNewMessage(
+      const promotionSource = await waitForNewMessage(
         monitor,
         confirmFrom,
         (m) => m.type === 'source-status'
           && m.timingMode === 'acoustic-calibration'
-          && Math.abs(Number(m.activeCalibratedMicLagMs) - Number(promoted.micLagMs)) < 1,
+          && Math.abs(Number(m.calibratedMicLagMs) - promotedLag) < 1,
         4_000,
       );
-      assert.equal(
-        Math.round(Number(source.activeCalibratedMicLagMs)),
-        Math.round(Number(promoted.validation.lastMeasuredLagMs)),
-        'confirmed drift promotes the newest agreeing measurement',
+      const activeAtPromotion = Number(promotionSource.activeCalibratedMicLagMs);
+      assert.ok(
+        Math.abs(activeAtPromotion - baselineLag) < Math.abs(promotedLag - baselineLag),
+        'validated drift must target the new lag without jumping the applied read head there',
+      );
+      assert.ok(
+        Math.abs(activeAtPromotion - promotedLag) > 5,
+        'promotion source status should expose target and still-applied lag separately',
+      );
+
+      await sleep(300);
+      const progressFrom = monitor.messages.length;
+      monitor.send({ type: 'source-status-request' });
+      const progress = await waitForNewMessage(
+        monitor,
+        progressFrom,
+        (m) => m.type === 'source-status',
+        2_000,
+      );
+      const activeAfter = Number(progress.activeCalibratedMicLagMs);
+      assert.ok(
+        Math.abs(promotedLag - activeAfter) < Math.abs(promotedLag - activeAtPromotion),
+        'live read head should move toward the validated target over subsequent mix frames',
       );
 
       backing.close();

@@ -109,6 +109,8 @@ export class CalibrationSession {
   /** True while `micLagMs` is a first-window guess agreement has not confirmed yet. */
   private provisional = false;
   private startedAt = 0;
+  /** Immutable authority snapshot; working retry diagnostics never mutate it. */
+  private confirmedResultValue: ConfirmedCalibrationResult | null = null;
   /** Monotonic identity for newly confirmed timing authority. Retries do not change it. */
   private confirmedRevisionValue = 0;
 
@@ -158,17 +160,16 @@ export class CalibrationSession {
    * The last confirmed measurement, independent of the current phase.
    *
    * A fresh retry deliberately keeps an older confirmed answer applied while
-   * collecting, and a failed retry keeps it as history. Conversely a surviving
-   * provisional guess is not a confirmed baseline merely because collection
-   * stopped. Callers that need long-lived timing authority should use this
-   * instead of inferring confirmation from `state === complete` or `result`.
+   * collecting, and a failed retry keeps it as history. Working confidence and
+   * segment diagnostics belong to the retry and therefore cannot leak into this
+   * snapshot until that retry itself earns confirmation.
    */
   get confirmedResult(): ConfirmedCalibrationResult | null {
-    if (this.micLagMs === null || this.provisional) return null;
+    if (this.confirmedResultValue === null) return null;
     return {
-      micLagMs: this.micLagMs,
-      confidence: this.confidence,
-      segmentLagsMs: [...this.segmentLagsMs],
+      micLagMs: this.confirmedResultValue.micLagMs,
+      confidence: this.confirmedResultValue.confidence,
+      segmentLagsMs: [...this.confirmedResultValue.segmentLagsMs],
     };
   }
 
@@ -219,7 +220,7 @@ export class CalibrationSession {
     this.error = null;
     this.provisional = false;
     this.candidates = [result.micLagMs];
-    this.confirmedRevisionValue += 1;
+    this.confirm({ micLagMs: result.micLagMs, confidence: result.confidence, segmentLagsMs: [] });
     this.collector.reset();
     this.onSettled();
   }
@@ -240,7 +241,11 @@ export class CalibrationSession {
     this.error = null;
     this.provisional = false;
     this.candidates = [result.micLagMs];
-    this.confirmedRevisionValue += 1;
+    this.confirm({
+      micLagMs: result.micLagMs,
+      confidence: result.confidence,
+      segmentLagsMs: result.segmentLagsMs,
+    });
     this.collector.reset();
     this.onSettled();
   }
@@ -255,6 +260,7 @@ export class CalibrationSession {
     this.segmentLagsMs = [];
     this.measuredContext = null;
     this.provisional = false;
+    this.confirmedResultValue = null;
     this.collector.reset();
   }
 
@@ -319,6 +325,15 @@ export class CalibrationSession {
   }
 
   // ---------------------------------------------------------------- internals
+
+  private confirm(result: ConfirmedCalibrationResult) {
+    this.confirmedResultValue = {
+      micLagMs: result.micLagMs,
+      confidence: result.confidence,
+      segmentLagsMs: [...result.segmentLagsMs],
+    };
+    this.confirmedRevisionValue += 1;
+  }
 
   private drainReadyWindows() {
     while (this.collecting) {
@@ -403,7 +418,11 @@ export class CalibrationSession {
       this.error = null;
       this.provisional = false;
       this.phase = 'complete';
-      this.confirmedRevisionValue += 1;
+      this.confirm({
+        micLagMs: result.micLagMs,
+        confidence: result.confidence,
+        segmentLagsMs: result.segmentLagsMs,
+      });
     } catch (error) {
       this.phase = 'failed';
       this.error = error instanceof Error ? error.message : String(error);

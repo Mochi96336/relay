@@ -489,6 +489,8 @@ const calibration = new CalibrationSession({
 });
 
 let contentValidationBaselineRevision = -1;
+/** The one confirmed revision whose live read head must approach, not jump to. */
+let contentValidationSlewRevision: number | null = null;
 const contentCalibrationValidator = new ContentCalibrationValidator({
   sampleRate: MIX_SAMPLE_RATE,
   durationMs: TIMING_CALIBRATION_MS,
@@ -500,8 +502,14 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
   context: calibrationContext,
   enabled: CONTENT_VALIDATION_ENABLED,
   maxLagMs: CALIBRATION_MAX_LAG_MS,
+  onChange: () => {
+    broadcastJson(timingCalibrationStatusPayload());
+  },
   onDriftConfirmed: (result) => {
     calibrationKind = 'content';
+    // applyValidatedResult synchronously calls onSettled -> syncAppliedCalibration.
+    // Mark that revision first so only this runtime promotion takes the slew path.
+    contentValidationSlewRevision = calibration.confirmedRevision + 1;
     calibration.applyValidatedResult(result);
     // applyValidatedResult increments synchronously. Keep the validator's
     // own drift-confirmed state rather than immediately reseeding it.
@@ -511,6 +519,7 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
 
 function clearContentValidationBaseline() {
   contentValidationBaselineRevision = -1;
+  contentValidationSlewRevision = null;
   contentCalibrationValidator.clearBaseline();
 }
 
@@ -522,13 +531,13 @@ function syncContentValidationBaseline(nowMs: number) {
     || calibrationIsStale()
   ) {
     if (contentCalibrationValidator.hasBaseline) clearContentValidationBaseline();
-    return false;
+    return;
   }
 
   if (
     contentValidationBaselineRevision === calibration.confirmedRevision
     && contentCalibrationValidator.hasBaseline
-  ) return false;
+  ) return;
 
   contentCalibrationValidator.setBaseline({
     micLagMs: confirmed.micLagMs,
@@ -537,7 +546,6 @@ function syncContentValidationBaseline(nowMs: number) {
     context: calibrationContext(),
   }, nowMs);
   contentValidationBaselineRevision = calibration.confirmedRevision;
-  return true;
 }
 
 function cancelActiveContentValidation(nowMs = performance.now()) {
@@ -1108,7 +1116,29 @@ function syncAppliedCalibration() {
   }
 
   const nextMicLagMs = calibrationCanApply() ? calibration.result!.micLagMs : null;
-  if (active === nextMicLagMs) return false;
+  if (active === nextMicLagMs) {
+    if (contentValidationSlewRevision === calibration.confirmedRevision) {
+      contentValidationSlewRevision = null;
+    }
+    return false;
+  }
+
+  if (
+    calibrationKind === 'content'
+    && active !== null
+    && nextMicLagMs !== null
+    && contentValidationSlewRevision === calibration.confirmedRevision
+  ) {
+    contentValidationSlewRevision = null;
+    return session.slewCalibratedMicLagTo(nextMicLagMs);
+  }
+
+  // The periodic synchronizer runs while a live validation slew is still in
+  // progress. Seeing a different applied value is expected; do not snap it to
+  // the already-known target on the next 250 ms tick.
+  if (nextMicLagMs !== null && session.calibratedMicLagTarget === nextMicLagMs) return false;
+
+  contentValidationSlewRevision = null;
   session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
   return true;
 }
@@ -1721,17 +1751,14 @@ function maybeValidateContentCalibration(nowMs: number) {
   if (!contentValidationPathReady(nowMs)) {
     if (contentCalibrationValidator.collecting || state === 'suspect') {
       contentCalibrationValidator.cancel(nowMs);
-      broadcastJson(timingCalibrationStatusPayload());
     }
     return;
   }
 
-  if (contentCalibrationValidator.tick(nowMs)) {
-    broadcastJson(timingCalibrationStatusPayload());
-  }
-  if (contentCalibrationValidator.maybeStart(nowMs)) {
-    broadcastJson(timingCalibrationStatusPayload());
-  }
+  // Every state transition publishes through validator.onChange. Return values
+  // remain useful to domain tests but are no longer a second telemetry channel.
+  contentCalibrationValidator.tick(nowMs);
+  contentCalibrationValidator.maybeStart(nowMs);
 }
 
 function probeGeneration(target: ProbeTarget) {

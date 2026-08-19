@@ -32,6 +32,7 @@ function makeHarness(options: {
 } = {}) {
   let now = 0;
   let resultIndex = 0;
+  let changeCount = 0;
   const results = options.results ?? [analysis(310)];
   const promotions: Array<{ result: TimingCalibrationAnalysis; context: CalibrationContext }> = [];
   const context: CalibrationContext = {
@@ -57,6 +58,7 @@ function makeHarness(options: {
       if (scripted instanceof Error) throw scripted;
       return scripted;
     },
+    onChange: () => { changeCount += 1; },
     onDriftConfirmed: (result, promotedContext) => {
       promotions.push({ result, context: promotedContext });
     },
@@ -76,6 +78,7 @@ function makeHarness(options: {
     context,
     setNow(value: number) { now = value; },
     get now() { return now; },
+    get changeCount() { return changeCount; },
   };
 }
 
@@ -122,6 +125,56 @@ describe('ContentCalibrationValidator scheduling', () => {
     assert.equal(status.lastOutcome, 'invalid');
     assert.equal(status.baselineLagMs, 310);
     assert.equal(status.nextValidationInMs, 10_000);
+  });
+});
+
+describe('ContentCalibrationValidator truthful change notifications', () => {
+  test('baseline seed and collection start both notify immediately', () => {
+    const harness = makeHarness();
+    assert.equal(harness.changeCount, 1, 'setBaseline must publish waiting baseline truth');
+
+    startDue(harness, 30_000);
+    assert.equal(harness.changeCount, 2, 'starting collection must publish collecting truth');
+  });
+
+  test('stable analysis notifies without waiting for the next schedule tick', () => {
+    const harness = makeHarness({ results: [analysis(325)] });
+    startDue(harness, 30_000);
+    const before = harness.changeCount;
+    fullWindow(harness, 0);
+
+    assert.equal(harness.validator.status().lastOutcome, 'stable');
+    assert.equal(harness.changeCount, before + 1);
+  });
+
+  test('suspect then inconclusive each notify at the evidence boundary', () => {
+    const harness = makeHarness({ results: [analysis(370), analysis(410)] });
+    startDue(harness, 30_000);
+    const beforeSuspect = harness.changeCount;
+    fullWindow(harness, 0);
+    assert.equal(harness.validator.status().lastOutcome, 'suspect');
+    assert.equal(harness.changeCount, beforeSuspect + 1);
+
+    assert.equal(harness.validator.maybeStart(), true);
+    const beforeInconclusive = harness.changeCount;
+    fullWindow(harness, 1);
+    assert.equal(harness.validator.status().lastOutcome, 'inconclusive');
+    assert.equal(harness.changeCount, beforeInconclusive + 1);
+  });
+
+  test('invalid analysis and cancel notify immediately', () => {
+    const harness = makeHarness({ results: [new Error('ambiguous peak')] });
+    startDue(harness, 30_000);
+    const beforeInvalid = harness.changeCount;
+    fullWindow(harness, 0);
+    assert.equal(harness.validator.status().lastOutcome, 'invalid');
+    assert.equal(harness.changeCount, beforeInvalid + 1);
+
+    harness.setNow(40_000);
+    assert.equal(harness.validator.maybeStart(), true);
+    const beforeCancel = harness.changeCount;
+    harness.validator.cancel(40_001);
+    assert.equal(harness.changeCount, beforeCancel + 1);
   });
 });
 

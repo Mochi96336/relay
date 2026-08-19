@@ -93,6 +93,14 @@ export type MixHealth = {
 const ADVANCE_SAFETY_MS = 200;
 
 /**
+ * Runtime validation corrects an already-live read head. Moving it in one frame
+ * skips or repeats the whole delta, so validated drift is allowed to change the
+ * read rate by at most one percent until the new target is reached. Initial,
+ * manual and robot calibrations still use the existing immediate setAlignment.
+ */
+const RUNTIME_CALIBRATION_SLEW_FRACTION = 0.01;
+
+/**
  * Peak limiter on the microphone, between its gain and the sum.
  *
  * One static gain cannot serve both ends of a voice: peaks run some 16 dB above
@@ -232,6 +240,8 @@ export class AudioSession {
     calibratedMicLagMs: null,
     fineTuneMs: 0,
   };
+  /** Desired live drift correction while the currently applied lag slews there. */
+  private calibratedMicLagTargetMs: number | null = null;
 
   private micStarvedFrames = 0;
   private backingStarvedFrames = 0;
@@ -313,6 +323,7 @@ export class AudioSession {
   stop() {
     this.running = false;
     this.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
+    this.calibratedMicLagTargetMs = null;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     this.resetHealth();
@@ -328,6 +339,9 @@ export class AudioSession {
     this.sessionGeneration += 1;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
+    // A pending correction belongs to the old mix epoch. Preserve the value
+    // already being applied but do not continue walking an old target forward.
+    this.calibratedMicLagTargetMs = this.alignmentState.calibratedMicLagMs;
     // A new session starts from what the room currently is, not from wherever
     // the previous one's ramp happened to stop.
     this.songDuck = this.backingExpected && this.micExpected ? 1 : 0;
@@ -354,8 +368,34 @@ export class AudioSession {
     return { ...this.alignmentState };
   }
 
+  /** Current target, equal to the applied lag when no runtime slew is pending. */
+  get calibratedMicLagTarget() {
+    return this.calibratedMicLagTargetMs;
+  }
+
+  /** Immediate authority change used by existing initial/manual/robot semantics. */
   setAlignment(patch: Partial<AlignmentState>) {
     this.alignmentState = { ...this.alignmentState, ...patch };
+    if (Object.prototype.hasOwnProperty.call(patch, 'calibratedMicLagMs')) {
+      this.calibratedMicLagTargetMs = patch.calibratedMicLagMs ?? null;
+    }
+  }
+
+  /**
+   * Changes only the target. `mixFrame` advances the applied read head gradually
+   * so live validation cannot skip/repeat the full correction in one frame.
+   */
+  slewCalibratedMicLagTo(targetMs: number) {
+    if (!Number.isFinite(targetMs)) return false;
+    const current = this.alignmentState.calibratedMicLagMs;
+    if (current === null || !this.running) {
+      const changed = current !== targetMs || this.calibratedMicLagTargetMs !== targetMs;
+      this.setAlignment({ calibratedMicLagMs: targetMs });
+      return changed;
+    }
+    if (this.calibratedMicLagTargetMs === targetMs) return false;
+    this.calibratedMicLagTargetMs = targetMs;
+    return true;
   }
 
   /** What the alignment asks for, before the buffer's limits are applied. */
@@ -767,7 +807,20 @@ export class AudioSession {
     return value * this.limiterGain;
   }
 
+  private advanceCalibrationSlew() {
+    const target = this.calibratedMicLagTargetMs;
+    const current = this.alignmentState.calibratedMicLagMs;
+    if (target === null || current === null || current === target) return;
+
+    const maximumStepMs = this.frameMs * RUNTIME_CALIBRATION_SLEW_FRACTION;
+    const deltaMs = target - current;
+    this.alignmentState.calibratedMicLagMs = Math.abs(deltaMs) <= maximumStepMs
+      ? target
+      : current + Math.sign(deltaMs) * maximumStepMs;
+  }
+
   private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
+    this.advanceCalibrationSlew();
     const startSample = frameIndex * this.frameSamples;
     const advanceSamples = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
     const micReadStart = startSample + advanceSamples;

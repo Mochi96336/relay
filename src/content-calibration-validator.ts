@@ -50,6 +50,8 @@ export type ContentCalibrationValidatorOptions = {
     sampleRate: number,
     maxLagMs?: number,
   ) => TimingCalibrationAnalysis;
+  /** Fired after every externally visible validator state/status transition. */
+  onChange?: () => void;
   onDriftConfirmed?: (
     result: TimingCalibrationAnalysis,
     context: CalibrationContext,
@@ -103,6 +105,7 @@ export class ContentCalibrationValidator {
   private readonly maxLagMs: number | undefined;
   private readonly now: () => number;
   private readonly analyze: NonNullable<ContentCalibrationValidatorOptions['analyze']>;
+  private readonly onChange: NonNullable<ContentCalibrationValidatorOptions['onChange']>;
   private readonly onDriftConfirmed: NonNullable<ContentCalibrationValidatorOptions['onDriftConfirmed']>;
   private readonly collector: TimingWindowCollector;
 
@@ -140,6 +143,7 @@ export class ContentCalibrationValidator {
     this.maxLagMs = options.maxLagMs;
     this.now = options.now ?? (() => performance.now());
     this.analyze = options.analyze ?? analyzeTimingCalibration;
+    this.onChange = options.onChange ?? (() => {});
     this.onDriftConfirmed = options.onDriftConfirmed ?? (() => {});
     this.requiredSamples = Math.round((options.sampleRate * options.durationMs) / 1_000);
     this.collector = new TimingWindowCollector(this.requiredSamples, this.requiredSamples * 2);
@@ -167,6 +171,7 @@ export class ContentCalibrationValidator {
     this.lastValidationAt = Number.NEGATIVE_INFINITY;
     this.nextValidationAt = nowMs + this.intervalMs;
     this.state = this.enabled ? 'waiting' : 'inactive';
+    this.onChange();
   }
 
   clearBaseline() {
@@ -179,6 +184,7 @@ export class ContentCalibrationValidator {
     this.lastDeltaMs = null;
     this.lastOutcome = null;
     this.lastValidationAt = Number.NEGATIVE_INFINITY;
+    this.onChange();
   }
 
   /**
@@ -195,6 +201,7 @@ export class ContentCalibrationValidator {
     this.suspect = null;
     this.state = this.enabled ? 'waiting' : 'inactive';
     this.nextValidationAt = nowMs + this.retryMs;
+    this.onChange();
   }
 
   /** Starts one validation window when its schedule is due. */
@@ -209,6 +216,7 @@ export class ContentCalibrationValidator {
     this.collector.reset();
     this.startedAt = nowMs;
     this.state = 'collecting';
+    this.onChange();
     return true;
   }
 
@@ -290,6 +298,7 @@ export class ContentCalibrationValidator {
       this.lastOutcome = 'stable';
       this.state = 'waiting';
       this.nextValidationAt = nowMs + this.intervalMs;
+      this.onChange();
       return;
     }
 
@@ -300,6 +309,7 @@ export class ContentCalibrationValidator {
       // Confirmation is a fresh, non-overlapping six-second window as soon as
       // the server says the content path is ready again.
       this.nextValidationAt = nowMs;
+      this.onChange();
       return;
     }
 
@@ -319,7 +329,10 @@ export class ContentCalibrationValidator {
       };
       this.state = 'waiting';
       this.nextValidationAt = nowMs + this.intervalMs;
+      // Promotion may synchronously publish calibration/source status; set all
+      // validator truth first so that publication already carries the new state.
       this.onDriftConfirmed(result, promotedContext);
+      this.onChange();
       return;
     }
 
@@ -330,6 +343,7 @@ export class ContentCalibrationValidator {
     this.lastOutcome = 'inconclusive';
     this.state = 'waiting';
     this.nextValidationAt = nowMs + this.intervalMs;
+    this.onChange();
   }
 
   private finishInvalid(nowMs: number) {
@@ -341,5 +355,6 @@ export class ContentCalibrationValidator {
     this.nextValidationAt = this.state === 'waiting'
       ? nowMs + this.retryMs
       : Number.POSITIVE_INFINITY;
+    this.onChange();
   }
 }

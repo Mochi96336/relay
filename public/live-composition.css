@@ -8,6 +8,9 @@
 .youtube-player-shell { position: relative; width: 100%; margin-left: 0; min-height: 200px; aspect-ratio: 16 / 9; overflow: hidden; border-color: rgba(255,255,255,.07); border-radius: 14px; }
 .youtube-player-shell > div, .youtube-player-shell iframe { position: absolute; inset: 0; display: block; width: 100%; height: 100%; min-height: 200px; aspect-ratio: auto; border: 0; }
 .youtube-readout { margin: 7px 2px 0; color: #8c8f95; font-size: 11px; }
+/* Holder already has the real YouTube controls plus song identity above them.
+   Repeating Playing + time underneath only lengthens the singing surface. */
+.song-stage[data-playback-role="holder"] .youtube-readout { display: none; }
 .song-device-note { color: #85888f; }
 #youtube-note { max-width: 46ch; color: #7f8289; font-size: 11px; }
 .performance-stage { padding-top: clamp(24px, 4vh, 36px); }
@@ -49,6 +52,8 @@
 .performance-stage:has(.take-strip[data-take-state="finalizing"]) > .recent-take { display:none; }
 .performance-stage > #last-take,
 .performance-stage > .recent-take { margin-top: 8px; }
+/* Previous Take is a review row, not a tab or file-manager underline. */
+.performance-stage .take-link { min-height: 44px; margin-top: 0; border-bottom: 0; display: inline-flex; align-items: center; }
 body[data-self-mic="live"] .mic-live-control { margin-top: 8px; }
 .live-actions { margin-top:22px; padding-top:14px; }
 .local-sound-control { display:grid; gap:7px; }

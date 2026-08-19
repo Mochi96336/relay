@@ -8,6 +8,7 @@ const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/adjust.css', import.meta.url), 'utf8');
 const ia = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
+const calibrationUi = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8');
 const iaCss = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 
 test('local room sound stays on Live while generic Adjust disappears', () => {
@@ -65,32 +66,34 @@ test('realignment is a direct More task while fine tune survives as advanced det
   assert.ok(more >= 0 && more < calibrate && calibrate < fineTune && fineTune < system);
   assert.match(html, /class="more-timing"/);
   assert.match(ia, /calibrateTiming\?\.addEventListener\('click'/);
+  assert.match(ia, /import '\.\/calibration-ui\.js'/);
   assert.equal(ia.includes('adjustPanel'), false);
 });
 
 test('Robot calibration UI follows ProductStatus mode instead of Song availability', () => {
-  assert.match(ia, /event\.detail\?\.actions/);
-  assert.match(ia, /startCalibrationMode/);
-  assert.match(ia, /mode === 'boot-probe'/);
-  assert.match(ia, /reason === 'sources-not-connected'/);
-  assert.match(ia, /reason === 'sources-not-streaming'/);
-  assert.match(ia, /reason === 'calibration-active'/);
-  assert.match(ia, /'重新對齊'/);
-  assert.match(ia, /'對齊中…'/);
-  assert.match(ia, /'正在準備聲音路徑…'/);
-  assert.match(ia, /MutationObserver\(queueCalibrationRender\)/);
+  assert.match(calibrationUi, /event\.detail\?\.actions/);
+  assert.match(calibrationUi, /startCalibrationMode/);
+  assert.match(calibrationUi, /mode === 'boot-probe'/);
+  assert.match(calibrationUi, /reason === 'sources-not-connected'/);
+  assert.match(calibrationUi, /reason === 'sources-not-streaming'/);
+  assert.match(calibrationUi, /reason === 'calibration-active'/);
+  assert.match(calibrationUi, /'重新對齊'/);
+  assert.match(calibrationUi, /'對齊中…'/);
+  assert.match(calibrationUi, /'正在準備聲音路徑…'/);
+  assert.match(calibrationUi, /new MutationObserver\(queueRender\)/);
 
-  const presenterStart = ia.indexOf('function renderCalibrationAction() {');
-  const presenterEnd = ia.indexOf('function queueCalibrationRender()', presenterStart);
+  const presenterStart = calibrationUi.indexOf('function render() {');
+  const presenterEnd = calibrationUi.indexOf('function queueRender()', presenterStart);
   assert.ok(presenterStart >= 0 && presenterEnd > presenterStart);
-  const presenter = ia.slice(presenterStart, presenterEnd);
+  const presenter = calibrationUi.slice(presenterStart, presenterEnd);
   assert.equal(presenter.includes('roomSongAvailable'), false,
     'Robot realignment presenter must not infer prerequisites from Song state');
 });
 
 test('app command path stays start-timing-calibration while presenter owns Robot semantics', () => {
   assert.match(app, /type: 'start-timing-calibration'/);
-  assert.match(ia, /ProductStatus is the semantic authority for calibration prerequisites/);
+  assert.match(calibrationUi, /ProductStatus owns calibration prerequisites/);
+  assert.doesNotMatch(ia, /product-status/);
 });
 
 test('Listen defaults at unity and exposes mute rather than enable', () => {

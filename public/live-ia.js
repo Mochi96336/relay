@@ -91,9 +91,24 @@ systemPanel?.addEventListener('click', (event) => {
   if (event.target === systemPanel) closeSystemPanel(true);
 });
 
-// Recalibration is a direct task in More, not a reason to navigate into a
-// generic Adjust surface. app.js still owns whether the action is allowed and
-// what command is sent; this layer only gets the popover out of the way.
+// Core System/Take navigation must exist even if a semantic presenter fails.
+// Calibration is installed only after deferred module evaluation completes so
+// app.js has already captured its compatibility command node. calibration-ui
+// then replaces the painted nodes and becomes their sole visible presenter.
+function installCalibrationPresenter() {
+  import('./calibration-ui.js').catch((error) => {
+    console.error('Relay calibration presenter failed', error);
+  });
+}
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', installCalibrationPresenter, { once: true });
+} else {
+  installCalibrationPresenter();
+}
+
+// Realignment is a direct recovery task in More, not a reason to navigate into
+// a generic Adjust surface. app.js owns the authenticated command transport;
+// calibration-ui forwards a real user click to this captured compatibility node.
 calibrateTiming?.addEventListener('click', () => {
   if (moreMenu) moreMenu.open = false;
 });
@@ -119,9 +134,8 @@ moreMenu?.querySelectorAll('[data-relay-locale]').forEach((button) => {
 });
 
 // Only projections that can disappear without removing a product control stay
-// in this failure domain. Core Mic, Room sound, and Recording presenters are
-// parser-loaded modules in index.html because they are now the sole writers of
-// those action surfaces.
+// in this failure domain. Core Mic, Room sound, Recording, and calibration
+// semantics have dedicated presenters because they own product actions.
 for (const modulePath of [
   './mic-presence.js',
   './people-ui.js',

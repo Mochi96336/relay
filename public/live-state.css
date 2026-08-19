@@ -14,6 +14,18 @@ body[data-room-mic="live"] .voice-input-evidence {
   display: flex;
 }
 
+/* Every participant sees the same Room Mic evidence. The holder gets a slightly
+   stronger local treatment because its evidence is direct capture rather than
+   relayed telemetry, but the renderer and underlying room meaning stay shared. */
+body[data-room-mic="live"] .voice-presence-wave {
+  fill: rgba(240, 237, 229, .15);
+  stroke: rgba(247, 244, 237, .58);
+}
+body[data-self-mic="live"] .voice-presence-wave {
+  fill: rgba(240, 237, 229, .24);
+  stroke: rgba(247, 244, 237, .82);
+}
+
 /* Once this phone is the live Mic, tighten the handoff from media into the
    performance task. The singer is important, but the moving Room Mic evidence
    is the visual hero; the state headline should never turn into a landing-page
@@ -23,10 +35,6 @@ body[data-self-mic="live"] .performance-stage {
 }
 body[data-self-mic="live"] #youtube-note {
   display: none;
-}
-body[data-room-mic="live"] .voice-presence-wave {
-  fill: rgba(240, 237, 229, .24);
-  stroke: rgba(247, 244, 237, .82);
 }
 body[data-self-mic="live"] .voice-copy strong {
   font-size: clamp(27px, 7vw, 34px);

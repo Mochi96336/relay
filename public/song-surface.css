@@ -114,6 +114,35 @@
   min-height: 40px;
 }
 
+/* Playback authority does not replace song identity. Reuse the same metadata
+   above the real holder player, but strip the observer card chrome/artwork so
+   the song name reads first and YouTube remains a subordinate control tool. */
+.song-stage[data-playback-role="holder"] .song-observer {
+  min-height: 0;
+  margin: 0 0 10px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  grid-template-columns: minmax(0, 1fr);
+}
+.song-stage[data-playback-role="holder"] .song-observer > :first-child {
+  display: none;
+}
+.song-stage[data-playback-role="holder"] .song-observer-meta {
+  padding: 0 2px 2px;
+  gap: 3px;
+}
+.song-stage[data-playback-role="holder"] .song-observer-meta strong {
+  -webkit-line-clamp: 1;
+  font-size: 18px;
+}
+.song-stage[data-playback-role="holder"] .song-observer-meta #room-song-timeline,
+.song-stage[data-playback-role="holder"] .song-observer-meta .song-observer-status,
+.song-stage[data-playback-role="holder"] .song-observer-meta .playback-recovery-actions {
+  display: none;
+}
+
 .song-stage[data-playback-role="preparing"] .youtube-player-shell {
   border-color: #3d4047;
 }
@@ -168,5 +197,11 @@
   }
   .song-observer-meta {
     padding: 10px 12px;
+  }
+  .song-stage[data-playback-role="holder"] .song-observer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .song-stage[data-playback-role="holder"] .song-observer-meta {
+    padding: 0 2px 2px;
   }
 }

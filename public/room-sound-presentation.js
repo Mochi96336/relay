@@ -27,6 +27,39 @@ function operationalNote(phase, isChinese) {
   return '';
 }
 
+function compactStatus(state, phase, isChinese) {
+  // Keep the mobile one-line status truthful without giving the DOM adapter
+  // a second copy/state machine. Product-state wording belongs here.
+  if (phase === 'retry' || phase === 'start-failed') return copy('Retry', '重試', isChinese);
+  if (state === 'mic-muted') return copy('Singing', '唱歌中', isChinese);
+  if (state === 'playback-muted') return copy('Backing', '伴奏', isChinese);
+  if (state === 'review-muted') return copy('Take', '錄音', isChinese);
+  if (phase === 'reconnecting') return copy('Reconnecting', '重連中', isChinese);
+  if (phase === 'connecting') return copy('Connecting', '連線中', isChinese);
+  if (phase === 'buffering') return copy('Buffering', '緩衝中', isChinese);
+  if (phase === 'first-interaction') return copy('Enable', '啟用', isChinese);
+  if (state === 'muted' || state === 'off') return copy('Muted', '已靜音', isChinese);
+  return '';
+}
+
+export function roomSoundControlPresentation(detail = {}, isChinese = false) {
+  const state = String(detail.state ?? 'ready');
+  const phase = String(detail.phase ?? '');
+  const forced = Boolean(detail.forcedReason);
+  const muted = detail.muted === true;
+
+  return {
+    label: copy('Room sound', '房間聲音', isChinese),
+    scope: copy('This device only', '只影響這支裝置', isChinese),
+    volumeLabel: copy('Volume', '音量', isChinese),
+    volumeAriaLabel: copy('Room sound volume', '房間聲音音量', isChinese),
+    toggleAriaLabel: muted || forced
+      ? copy('Turn on room sound', '開啟房間聲音', isChinese)
+      : copy('Mute room sound', '靜音房間聲音', isChinese),
+    compact: compactStatus(state, phase, isChinese),
+  };
+}
+
 export function roomSoundPresentation(detail = {}, isChinese = false) {
   const state = String(detail.state ?? 'ready');
   const phase = String(detail.phase ?? '');

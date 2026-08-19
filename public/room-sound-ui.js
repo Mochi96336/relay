@@ -1,4 +1,8 @@
-import { roomSoundPresentation } from './room-sound-presentation.js';
+import {
+  roomSoundActionNote,
+  roomSoundPresentation,
+  roomSoundStableNote,
+} from './room-sound-presentation.js';
 
 const root = document.querySelector('.local-sound-control');
 const title = document.querySelector('#local-listen-label');
@@ -7,7 +11,7 @@ const volumeLabel = root?.querySelector('.adjust-row-heading strong');
 const toggle = document.querySelector('#listen-toggle');
 const gainValue = document.querySelector('#listen-gain-value');
 const stateNote = document.querySelector('#listen-adjust-state');
-const legacyNote = document.querySelector('#listen-note');
+const actionNote = document.querySelector('#listen-note');
 
 let latestState = window.relayListenState ?? null;
 
@@ -27,7 +31,7 @@ function renderLabels() {
 }
 
 function renderState(detail = latestState) {
-  if (!root || !toggle || !gainValue || !stateNote) return;
+  if (!root || !toggle || !gainValue || !stateNote || !actionNote) return;
   if (!detail || typeof detail !== 'object') return;
   latestState = detail;
 
@@ -36,19 +40,22 @@ function renderState(detail = latestState) {
   const forcedReason = detail.forcedReason ?? null;
   const muted = detail.muted === true;
   const volumePercent = Math.max(0, Math.min(100, Math.round(Number(detail.volumePercent) || 0)));
-  const presentation = roomSoundPresentation(detail, chinese());
+  const isChinese = chinese();
+  const presentation = roomSoundPresentation(detail, isChinese);
+  const stableNote = roomSoundStableNote(detail, isChinese);
+  const transientNote = roomSoundActionNote(detail, isChinese);
 
   root.dataset.listenState = state;
   root.dataset.listenPhase = phase;
-  root.dataset.listenNote = presentation.note ? 'visible' : 'quiet';
+  root.dataset.listenNote = stableNote ? 'visible' : 'quiet';
   document.body.dataset.listen = state;
   toggle.dataset.state = state;
   toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
   toggle.disabled = Boolean(forcedReason);
   gainValue.value = `${volumePercent}%`;
   toggle.textContent = presentation.toggle;
-  stateNote.textContent = presentation.note;
-  if (legacyNote) legacyNote.textContent = '';
+  stateNote.textContent = stableNote;
+  actionNote.textContent = transientNote;
 }
 
 function render() {
@@ -56,7 +63,7 @@ function render() {
   renderState(latestState);
 }
 
-for (const node of [title, scope, volumeLabel, toggle, stateNote, legacyNote]) {
+for (const node of [title, scope, volumeLabel, toggle, stateNote, actionNote]) {
   node?.removeAttribute('data-i18n');
 }
 

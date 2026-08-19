@@ -98,6 +98,11 @@ html body .live-actions .local-sound-control {
   align-items: center;
   column-gap: 8px;
   row-gap: 0;
+  /* Chromium's range shadow tree contributes a few pixels of scrollable ink
+     outside the input box. Contain that ink at the row that owns the rail rather
+     than hiding overflow on the page; the 12px thumb still has room inside the
+     44px control row. */
+  overflow: clip;
 }
 
 html body .live-actions .local-sound-control .adjust-group-heading,

@@ -52,6 +52,8 @@ jobs:
         # --with-deps here: it invokes apt and can spend the entire job timeout
         # waiting on an Ubuntu mirror even though Relay itself is healthy.
         run: npx -y playwright@1.55.0 install chromium
+      - name: Install production DOM interaction runner
+        run: npm install --no-save --package-lock=false @playwright/test@1.55.0
       - name: Serve deterministic Live fixture from Relay static root
         run: |
           cp test/fixtures/live-visual.html public/__live-visual.html
@@ -67,6 +69,10 @@ jobs:
           done
           cat /tmp/relay-visual-http.log
           exit 1
+      - name: Run production DOM interaction tests
+        env:
+          RELAY_INTERACTION_URL: http://127.0.0.1:4173/
+        run: npx playwright test test/browser/live-interaction.spec.mjs --workers=1 --reporter=line
       - name: Capture phone states
         run: |
           mkdir -p screenshots

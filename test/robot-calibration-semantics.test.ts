@@ -56,9 +56,10 @@ test('Robot manual realignment starts boot-probe from fresh silent capture witho
 
     // Silence is intentional. "Streaming" here means both PCM sample timelines
     // are advancing with fresh frames, not that Song content is audible.
+    const silentHalfSecond = Buffer.alloc(Math.round(RATE * 0.5) * 2);
     await Promise.all([
-      sendPcmInChunks(backing, new Int16Array(Math.round(RATE * 0.5))),
-      sendPcmInChunks(publisher, new Int16Array(Math.round(RATE * 0.5))),
+      sendPcmInChunks(backing, silentHalfSecond),
+      sendPcmInChunks(publisher, silentHalfSecond),
     ]);
 
     const from = publisher.messages.length;

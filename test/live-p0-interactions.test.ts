@@ -16,7 +16,7 @@ function silentPcm(ms: number) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
 
-test('recorder readiness uses one replayable ProductStatus source', async () => {
+test('recorder readiness uses one replayable fresh ProductStatus authority source', async () => {
   const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
 
   assert.match(source, /type: 'product-status-request'/);
@@ -25,6 +25,35 @@ test('recorder readiness uses one replayable ProductStatus source', async () => 
     source,
     /addEventListener\(['"]relay-product-status['"]/,
     'a second window ProductStatus source can overwrite a newer recorder-socket snapshot',
+  );
+  assert.match(source, /let productStatusFresh = false/);
+  assert.match(source, /let takeStatusFresh = false/);
+  assert.match(source, /const authorityFresh = productStatusFresh && takeStatusFresh/);
+  assert.match(source, /function resetSocketAuthority\(\)/);
+});
+
+test('recorder serializes Start while the first command is awaiting server state', async () => {
+  const source = await readFile(new URL('../public/recorder.js', import.meta.url), 'utf8');
+
+  assert.match(source, /let startCommandPending = false/);
+  assert.match(
+    source,
+    /if \(startCommandPending \|\| !recordingState\(\)\.canStart\) return;/,
+  );
+  assert.match(source, /startCommandPending = true;/);
+  assert.match(source, /if \(message\.command === 'start'\) startCommandPending = false;/);
+});
+
+test('recording presentation keeps hidden controls authoritative and Stop on the action edge', async () => {
+  const css = await readFile(new URL('../public/recording-ui.css', import.meta.url), 'utf8');
+  const liveStatus = await readFile(new URL('../public/live-status.js', import.meta.url), 'utf8');
+
+  assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\) auto/);
+  assert.match(css, /#stop-recording\[hidden\][\s\S]*display:\s*none !important/);
+  assert.match(css, /#stop-recording:not\(\[hidden\]\)/);
+  assert.match(
+    liveStatus,
+    /status\.lifecycle === 'preparing'[\s\S]*selfOwner && mic\.state === 'starting'[\s\S]*voice\.startingYours/,
   );
 });
 

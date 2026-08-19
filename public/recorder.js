@@ -11,6 +11,9 @@ let reconnectTimer = null;
 let latestStatus = { lifecycle: 'idle', take: null, history: [] };
 let commandError = null;
 let productCanStartTake = false;
+let productStatusFresh = false;
+let takeStatusFresh = false;
+let startCommandPending = false;
 let startTakeBlockedReason = 'mix-not-active';
 
 function wsUrl() {
@@ -32,7 +35,9 @@ function recordingState() {
   const lifecycle = String(latestStatus?.lifecycle ?? 'idle');
   const take = latestStatus?.take ?? null;
   const connected = socket?.readyState === WebSocket.OPEN;
+  const authorityFresh = productStatusFresh && takeStatusFresh;
   const canStart = connected
+    && authorityFresh
     && productCanStartTake
     && lifecycle !== 'recording'
     && lifecycle !== 'finalizing';
@@ -41,13 +46,18 @@ function recordingState() {
     take,
     connected,
     productCanStartTake,
+    productStatusFresh,
+    takeStatusFresh,
     canStart,
     startBlockedReason: canStart
       ? null
-      : !connected
+      : !connected || !authorityFresh
         ? 'reconnecting'
         : startTakeBlockedReason,
-    canStop: connected && lifecycle === 'recording' && Boolean(take?.takeId),
+    canStop: connected
+      && takeStatusFresh
+      && lifecycle === 'recording'
+      && Boolean(take?.takeId),
     commandError,
     observedAt: Date.now(),
   };
@@ -69,6 +79,7 @@ function acceptProductStatus(status) {
   startTakeBlockedReason = typeof status.actions?.startTakeBlockedReason === 'string'
     ? status.actions.startTakeBlockedReason
     : productCanStartTake ? null : 'mix-not-active';
+  productStatusFresh = true;
   publishRecordingState();
 }
 
@@ -90,6 +101,12 @@ function clearReconnect() {
   reconnectTimer = null;
 }
 
+function resetSocketAuthority() {
+  productStatusFresh = false;
+  takeStatusFresh = false;
+  startCommandPending = false;
+}
+
 function scheduleReconnect() {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
@@ -107,6 +124,7 @@ async function connect() {
   }
 
   clearReconnect();
+  resetSocketAuthority();
   const next = new WebSocket(url);
   socket = next;
   publishRecordingState();
@@ -134,6 +152,7 @@ async function connect() {
     });
   } catch (error) {
     if (socket === next) socket = null;
+    resetSocketAuthority();
     try { next.close(); } catch {}
     publishRecordingState();
     throw error;
@@ -164,6 +183,14 @@ async function connect() {
 
     if (message.type === 'take-status') {
       latestStatus = message;
+      takeStatusFresh = true;
+      if (
+        message.lifecycle === 'recording'
+        || message.lifecycle === 'finalizing'
+        || message.lifecycle === 'failed'
+      ) {
+        startCommandPending = false;
+      }
       commandError = null;
       publishTakeStatus(message);
       publishRecordingState();
@@ -171,6 +198,7 @@ async function connect() {
     }
 
     if (message.type === 'take-command-rejected') {
+      if (message.command === 'start') startCommandPending = false;
       commandError = {
         reason: typeof message.reason === 'string' ? message.reason : 'unknown',
       };
@@ -181,6 +209,7 @@ async function connect() {
   next.addEventListener('close', () => {
     if (socket !== next) return;
     socket = null;
+    resetSocketAuthority();
     publishRecordingState();
     scheduleReconnect();
   });
@@ -201,8 +230,12 @@ async function connect() {
 // request above provides replay without introducing that cross-socket race.
 
 recordButton?.addEventListener('click', () => {
-  if (!recordingState().canStart) return;
-  send({ type: 'start-take' });
+  if (startCommandPending || !recordingState().canStart) return;
+  startCommandPending = true;
+  if (!send({ type: 'start-take' })) {
+    startCommandPending = false;
+    publishRecordingState();
+  }
 });
 
 stopButton?.addEventListener('click', () => {

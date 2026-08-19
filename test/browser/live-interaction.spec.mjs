@@ -10,6 +10,8 @@ async function installProductionDomHarness(page) {
     const commands = [];
     const sockets = [];
     let captureNode = null;
+    let recorderReplayDelayMs = 0;
+    let startResponseDelayMs = 20;
     let currentTake = {
       type: 'take-status',
       lifecycle: 'idle',
@@ -91,6 +93,14 @@ async function installProductionDomHarness(page) {
       socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(payload) }));
     }
 
+    function deliverAfter(socket, payload, delayMs) {
+      if (delayMs > 0) {
+        setTimeout(() => deliver(socket, payload), delayMs);
+        return;
+      }
+      queueMicrotask(() => deliver(socket, payload));
+    }
+
     function broadcast(payload) {
       for (const socket of sockets) deliver(socket, payload);
     }
@@ -163,12 +173,12 @@ async function installProductionDomHarness(page) {
 
         if (message.type === 'take-status-request') {
           this.kind = 'recorder';
-          queueMicrotask(() => deliver(this, currentTake));
+          deliverAfter(this, currentTake, recorderReplayDelayMs);
           return;
         }
 
         if (message.type === 'product-status-request') {
-          queueMicrotask(() => deliver(this, currentProduct));
+          deliverAfter(this, currentProduct, recorderReplayDelayMs);
           return;
         }
 
@@ -196,6 +206,14 @@ async function installProductionDomHarness(page) {
         }
 
         if (message.type === 'start-take') {
+          if (currentTake.lifecycle === 'recording' || currentTake.lifecycle === 'finalizing') {
+            deliverAfter(this, {
+              type: 'take-command-rejected',
+              command: 'start',
+              reason: 'take-active',
+            }, startResponseDelayMs);
+            return;
+          }
           currentTake = {
             type: 'take-status',
             lifecycle: 'recording',
@@ -205,7 +223,7 @@ async function installProductionDomHarness(page) {
             },
             history: [],
           };
-          queueMicrotask(() => deliver(this, currentTake));
+          deliverAfter(this, currentTake, startResponseDelayMs);
           return;
         }
 
@@ -328,8 +346,31 @@ async function installProductionDomHarness(page) {
         if (!captureNode?.port?.onmessage) throw new Error('capture worklet is not ready');
         captureNode.port.onmessage({ data: new ArrayBuffer(1_920) });
       },
+      setStartResponseDelay(ms) {
+        startResponseDelayMs = Math.max(0, Number(ms) || 0);
+      },
+      disconnectRecorder({ mic = 'free', canStartTake = false, replayDelayMs = 160 } = {}) {
+        const recorder = [...sockets].reverse().find(
+          (candidate) => candidate.kind === 'recorder' && candidate.readyState === FakeWebSocket.OPEN,
+        );
+        if (!recorder) throw new Error('recorder socket is not connected');
+        recorderReplayDelayMs = Math.max(0, Number(replayDelayMs) || 0);
+        recorder.close();
+        currentProduct = productStatus({ mic, canStartTake });
+      },
     };
   });
+}
+
+async function prepareReadyMic(page) {
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true);
+  await page.locator('#start-publisher').click();
+  await page.waitForFunction(() => Number.isFinite(window.__relayInteractionHarness.timeline.T4));
+  await expect(page.locator('#live-state-title')).toHaveText('Starting your mic…');
+  await expect(page.locator('#live-state-detail')).toHaveText('Waiting for the first audio frame from this phone.');
+  await page.evaluate(() => window.__relayInteractionHarness.emitSilentPcm());
+  await page.waitForFunction(() => window.relayRecordingState?.canStart === true);
+  await expect(page.locator('#live-state-title')).toHaveText('You’re live');
 }
 
 test('production DOM: Mic readiness arms Record, Record morphs to Stop in the same slot', async ({ page }) => {
@@ -346,10 +387,13 @@ test('production DOM: Mic readiness arms Record, Record morphs to Stop in the sa
 
   // Publisher ownership alone is not recording readiness. Until a real PCM
   // frame reaches the server model, there is no disabled placeholder action.
+  await expect(page.locator('#live-state-title')).toHaveText('Starting your mic…');
+  await expect(page.locator('#live-state-detail')).toHaveText('Waiting for the first audio frame from this phone.');
   await expect(page.locator('.take-strip')).toBeHidden();
 
   await page.evaluate(() => window.__relayInteractionHarness.emitSilentPcm());
   await page.waitForFunction(() => Number.isFinite(window.__relayInteractionHarness.timeline.T11));
+  await expect(page.locator('#live-state-title')).toHaveText('You’re live');
 
   const timing = await page.evaluate(() => ({ ...window.__relayInteractionHarness.timeline }));
   for (const point of ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11']) {
@@ -370,24 +414,98 @@ test('production DOM: Mic readiness arms Record, Record morphs to Stop in the sa
   );
   expect(timing.T11 - timing.T6).toBeLessThan(300);
 
+  const strip = page.locator('.take-strip');
   const record = page.locator('#start-recording');
+  const stop = page.locator('#stop-recording');
   await expect(record).toBeVisible();
   await expect(record).toBeEnabled();
-  const slotBefore = await page.locator('.take-strip').boundingBox();
+  const slotBefore = await strip.boundingBox();
   expect(slotBefore).not.toBeNull();
 
   await record.click();
   await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
     (command) => command.type === 'start-take' && command.socketKind === 'recorder',
   ));
-  await expect(page.locator('#stop-recording')).toBeVisible();
-  await expect(page.locator('#stop-recording')).toBeEnabled();
+  await expect(stop).toBeVisible();
+  await expect(stop).toBeEnabled();
   await expect(page.locator('#recording-status')).toContainText('●');
 
-  const slotAfter = await page.locator('.take-strip').boundingBox();
+  const slotAfter = await strip.boundingBox();
+  const stopBox = await stop.boundingBox();
   expect(slotAfter).not.toBeNull();
+  expect(stopBox).not.toBeNull();
   expect(Math.abs(slotAfter.y - slotBefore.y)).toBeLessThan(1);
   expect(Math.abs(slotAfter.height - slotBefore.height)).toBeLessThan(1);
+  expect(Math.abs((stopBox.x + stopBox.width) - (slotAfter.x + slotAfter.width))).toBeLessThan(2);
+
+  // Disconnecting the recorder must immediately remove Stop; the recording
+  // lifecycle may remain visible, but stale socket state cannot leave an action
+  // clickable. A fresh TakeStatus replay restores Stop after reconnect.
+  await page.evaluate(() => window.__relayInteractionHarness.disconnectRecorder({
+    mic: 'live',
+    canStartTake: false,
+    replayDelayMs: 160,
+  }));
+  await page.waitForFunction(() => window.relayRecordingState?.connected === false);
+  await expect(stop).toBeHidden();
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true
+    && window.relayRecordingState?.takeStatusFresh === false);
+  await expect(stop).toBeHidden();
+  await page.waitForFunction(() => window.relayRecordingState?.takeStatusFresh === true);
+  await expect(stop).toBeVisible();
+});
+
+test('production DOM: recorder reconnect cannot replay stale Record authority', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  const record = page.locator('#start-recording');
+  await expect(record).toBeVisible();
+  await expect(record).toBeEnabled();
+
+  await page.evaluate(() => window.__relayInteractionHarness.disconnectRecorder({
+    mic: 'free',
+    canStartTake: false,
+    replayDelayMs: 180,
+  }));
+  await page.waitForFunction(() => window.relayRecordingState?.connected === false);
+  await expect(record).toBeHidden();
+
+  // This is the old bug window: the new socket is OPEN, but its authoritative
+  // replays have intentionally not arrived yet. Record must stay absent instead
+  // of reusing canStartTake=true from the previous socket generation.
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true
+    && window.relayRecordingState?.productStatusFresh === false
+    && window.relayRecordingState?.takeStatusFresh === false);
+  await expect(record).toBeHidden();
+
+  await page.waitForFunction(() => window.relayRecordingState?.productStatusFresh === true
+    && window.relayRecordingState?.takeStatusFresh === true);
+  await expect(record).toBeHidden();
+});
+
+test('production DOM: rapid Record taps emit exactly one Start command', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  await page.evaluate(() => window.__relayInteractionHarness.setStartResponseDelay(160));
+  const record = page.locator('#start-recording');
+  await record.dblclick({ delay: 10 });
+  await page.waitForTimeout(220);
+
+  await expect(page.locator('#stop-recording')).toBeVisible();
+  await expect(page.locator('#recording-status')).toContainText('●');
+  const state = await page.evaluate(() => window.relayRecordingState);
+  expect(state?.commandError ?? null).toBeNull();
+
+  const startCommands = await page.evaluate(() => window.__relayInteractionHarness.commands.filter(
+    (command) => command.type === 'start-take' && command.socketKind === 'recorder',
+  ).length);
+  expect(startCommands).toBe(1);
 });
 
 test('production DOM: More and System are reachable only through real clicks', async ({ page }) => {

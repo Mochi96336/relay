@@ -7,10 +7,11 @@
    line becomes the left side of that same row while Stop occupies the action
    edge; transitioning into recording never inserts a second vertical module. */
 .take-strip:not([hidden]) {
+  width: 100%;
   min-height: 44px;
   display: grid;
-  grid-template-columns: minmax(0, auto) auto;
-  justify-content: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  justify-content: stretch;
   align-items: center;
   column-gap: 14px;
 }
@@ -33,10 +34,10 @@
 .take-strip[data-take-state="finalizing"] #stop-recording,
 .take-strip #start-recording[hidden],
 .take-strip #stop-recording[hidden] {
-  display: none;
+  display: none !important;
 }
 
-.take-strip[data-take-state="recording"] #stop-recording,
+.take-strip[data-take-state="recording"] #stop-recording:not([hidden]),
 .take-strip:not([data-take-state="recording"]):not([data-take-state="finalizing"]) #start-recording:not([hidden]) {
   display: inline-flex;
   min-height: 44px;
@@ -46,6 +47,7 @@
 .take-strip[data-take-state="recording"] .take-actions {
   grid-column: 2;
   grid-row: 1;
+  justify-self: end;
 }
 
 .take-strip[data-take-state="recording"] #recording-status {

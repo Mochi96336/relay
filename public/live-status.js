@@ -128,6 +128,9 @@ if (
           detail: selfOwner ? t('voice.playbackMovingHere') : t('voice.playbackChangingPhones'),
         };
       }
+      if (selfOwner && mic.state === 'starting') {
+        return { title: t('voice.startingYours'), detail: t('voice.waitingFirstAudio') };
+      }
       return { title: t('voice.gettingReady'), detail: '' };
     }
 

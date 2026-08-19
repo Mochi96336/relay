@@ -58,14 +58,14 @@ jobs:
           cp test/fixtures/live-visual-ribbon.js public/__live-visual-ribbon.js
           sed -i 's#</body>#<script src="/__live-visual-ribbon.js"></script></body>#' public/__live-visual.html
           cp test/fixtures/live-p0-layout.html public/__live-p0-layout.html
-          # Keep overflow diagnostics in CI only. When the geometry gate fails,
-          # report the concrete DOM boxes crossing the viewport so the test names
-          # the root element instead of only saying scrollWidth changed.
+          # CI-only diagnostics. If the geometry gate fails, report both ordinary
+          # boxes and root/pseudo geometry so invisible scrollable overflow has a
+          # concrete source instead of being papered over with overflow-x:hidden.
           python3 - <<'PY'
           from pathlib import Path
           path = Path('public/__live-p0-layout.html')
           text = path.read_text()
-          probe = '''<script>setTimeout(()=>{const vw=innerWidth;const offenders=[...document.querySelectorAll('body *')].map(e=>{const r=e.getBoundingClientRect();return {tag:e.tagName,id:e.id,cls:typeof e.className==='string'?e.className:'',left:Math.round(r.left*10)/10,right:Math.round(r.right*10)/10,width:Math.round(r.width*10)/10}}).filter(x=>x.right>vw+.5||x.left<-.5).slice(0,12);fetch('/__geometry-overflow?state='+encodeURIComponent(document.body.dataset.fixtureState||'unknown')+'&vw='+vw+'&detail='+encodeURIComponent(JSON.stringify(offenders))).catch(()=>{})},180)</script>'''
+          probe = '''<script>setTimeout(()=>{const state=document.body.dataset.fixtureState||'unknown';const vw=innerWidth;const round=n=>Math.round(n*10)/10;const offenders=[...document.querySelectorAll('body *')].map(e=>{const r=e.getBoundingClientRect();return {tag:e.tagName,id:e.id,cls:typeof e.className==='string'?e.className:'',left:round(r.left),right:round(r.right),width:round(r.width)}}).filter(x=>x.right>vw+.5||x.left<-.5).slice(0,12);fetch('/__geometry-overflow?state='+encodeURIComponent(state)+'&vw='+vw+'&detail='+encodeURIComponent(JSON.stringify(offenders))).catch(()=>{});const style=(e,pseudo)=>{const s=getComputedStyle(e,pseudo);return {content:s.content,display:s.display,position:s.position,width:s.width,minWidth:s.minWidth,maxWidth:s.maxWidth,marginLeft:s.marginLeft,marginRight:s.marginRight,paddingLeft:s.paddingLeft,paddingRight:s.paddingRight,borderLeft:s.borderLeftWidth,borderRight:s.borderRightWidth,left:s.left,right:s.right,overflowX:s.overflowX,transform:s.transform,outlineWidth:s.outlineWidth,outlineOffset:s.outlineOffset}};const snap=e=>{const r=e.getBoundingClientRect();return {tag:e.tagName,clientWidth:e.clientWidth,offsetWidth:e.offsetWidth,scrollWidth:e.scrollWidth,rect:{left:round(r.left),right:round(r.right),width:round(r.width)},style:style(e),before:style(e,'::before'),after:style(e,'::after')}};const detail={innerWidth,outerWidth,visualViewport:visualViewport?.width,devicePixelRatio,scrollingElement:document.scrollingElement?.tagName,html:snap(document.documentElement),body:snap(document.body),shell:snap(document.querySelector('.live-shell'))};fetch('/__geometry-root?state='+encodeURIComponent(state)+'&vw='+vw+'&detail='+encodeURIComponent(JSON.stringify(detail))).catch(()=>{})},180)</script>'''
           path.write_text(text.replace('</body>', probe + '</body>'))
           PY
           python3 -m http.server 4173 --bind 127.0.0.1 --directory public > /tmp/relay-visual-http.log 2>&1 &

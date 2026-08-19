@@ -11,9 +11,8 @@
   <link rel="stylesheet" href="/song-surface.css">
   <link rel="stylesheet" href="/live-ia.css">
   <style>
-    /* Fixture-only deterministic content. Product geometry remains owned by the
-       production stylesheets above. */
-    *, *::before, *::after { box-sizing: border-box; }
+    /* Fixture-only deterministic media. Product Take / Room sound DOM and
+       presentation are owned by their production modules below. */
     .fixture-player {
       width: 100%;
       aspect-ratio: 16 / 9;
@@ -26,9 +25,8 @@
       color: #70737a;
       font-size: 12px;
     }
-    .fixture-player button { min-width:44px; min-height:44px; }
-    .fixture-hidden { display:none !important; }
-    .fixture-take-audio { width:100%; min-height:44px; }
+    .fixture-player button { min-width: 44px; min-height: 44px; }
+    .fixture-hidden { display: none !important; }
   </style>
 </head>
 <body data-health="healthy" data-room-mic="live" data-self-mic="off" data-listen="audible">
@@ -49,45 +47,40 @@
       <div class="voice-copy"><strong id="fixture-voice-title">浚翔正在唱</strong><span>Room Mic</span></div>
       <div class="voice-input-evidence"><div class="voice-input-meter" aria-hidden="true">▁▂▅▇▆▃▂</div></div>
       <div class="mic-actions"><button id="start-publisher" type="button">拿 Mic</button></div>
-      <div class="take-strip" data-take-state="ready"><button id="start-recording" type="button">● 開始錄音</button><span id="recording-status"></span></div>
+
+      <section class="take-strip" aria-label="Take recording" data-take-state="ready">
+        <div class="take-actions"><button id="start-recording" type="button">● 開始錄音</button></div>
+        <p id="recording-status" class="microcopy"></p>
+        <div id="last-take" class="last-take" hidden>
+          <button id="last-take-toggle" class="take-link text-action" type="button" aria-expanded="false">上一段錄音</button>
+          <div id="last-take-review" class="take-review" hidden>
+            <audio id="recording-player" controls preload="metadata"></audio>
+            <a id="download-recording" class="take-download text-action" download>下載 WAV</a>
+          </div>
+        </div>
+      </section>
+
       <details class="mic-live-control" id="mic-live-control"><summary><span>Mic</span><output>+24 dB</output></summary></details>
-      <button class="recent-take" id="last-take" type="button">▶ 上一段錄音 · 2:35</button>
     </section>
 
     <footer class="live-actions">
-      <section class="local-listen local-sound-control" aria-label="房間聲音" data-room-sound-state="quiet" data-room-sound-value="quiet">
+      <section class="local-listen local-sound-control" aria-labelledby="local-listen-label">
         <div class="adjust-group-heading">
-          <span id="local-listen-label" class="section-label">房間聲音</span>
-          <span>只影響這支裝置</span>
-          <button id="listen-toggle" type="button" aria-label="房間聲音" aria-pressed="false">🔊</button>
+          <span id="local-listen-label" class="section-label">Room sound</span>
+          <span>This device only</span>
+          <button id="listen-toggle" class="text-action" type="button" aria-pressed="false">Mute</button>
         </div>
         <label class="adjust-control" for="listen-gain">
-          <div class="adjust-row-heading"><strong>音量</strong><output id="listen-gain-value">30%</output></div>
-          <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" value="30" aria-label="房間聲音">
+          <div class="adjust-row-heading"><strong>Volume</strong><output id="listen-gain-value" for="listen-gain">30%</output></div>
+          <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="30">
         </label>
-        <p id="listen-adjust-state"></p>
-        <span id="listen-note"></span>
+        <p id="listen-adjust-state" class="adjust-helper">Sound is on by default after your first interaction.</p>
+        <span id="listen-note" class="action-note" aria-live="polite"></span>
       </section>
     </footer>
   </main>
 
-  <details class="take-history-panel" id="take-history-panel">
-    <div class="take-history-sheet">
-      <div class="take-history-heading"><strong>錄音</strong><button class="panel-done" type="button">完成</button></div>
-      <div class="take-history-groups" id="fixture-takes"></div>
-      <div class="take-history-review" id="fixture-review">
-        <strong>選取的錄音</strong>
-        <audio class="fixture-take-audio" id="recording-player" controls aria-label="Selected Take playback"></audio>
-        <a href="#" download>下載</a>
-      </div>
-    </div>
-  </details>
-
-  <template id="fixture-take-template">
-    <button class="take-history-item" type="button"><span class="take-time"></span><span class="take-duration"></span></button>
-  </template>
-
-  <script>
+  <script type="module">
     const visualStates = [
       'empty',
       'listener',
@@ -104,45 +97,29 @@
     const state = visualStates.includes(requestedState) ? requestedState : 'listener';
     document.body.dataset.fixtureState = state;
 
-    const panel = document.querySelector('#take-history-panel');
-    const takes = document.querySelector('#fixture-takes');
-    const template = document.querySelector('#fixture-take-template');
+    window.relayI18n = { getLocale: () => 'zh-Hant' };
+    window.relayIdentityReady = Promise.resolve();
+    window.relayParticipantId = 'fixture-phone';
+
+    const roomDetails = {
+      normal: { state: 'audible', phase: 'playing', muted: false, forcedReason: null, volumePercent: 30 },
+      muted: { state: 'muted', phase: 'user-muted', muted: true, forcedReason: null, volumePercent: 30 },
+      forced: { state: 'mic-muted', phase: 'mic-owned', muted: true, forcedReason: 'mic', volumePercent: 30 },
+    };
+
+    const roomKind = state === 'room-sound-muted'
+      ? 'muted'
+      : state === 'room-sound-forced' || state === 'singer' || state === 'recording'
+        ? 'forced'
+        : 'normal';
+    window.relayListenState = roomDetails[roomKind];
+
     const voiceTitle = document.querySelector('#fixture-voice-title');
     const micAction = document.querySelector('#start-publisher');
     const recordStrip = document.querySelector('.take-strip');
     const recordButton = document.querySelector('#start-recording');
-    const roomRoot = document.querySelector('.local-sound-control');
-    const roomToggle = document.querySelector('#listen-toggle');
-    const roomState = document.querySelector('#listen-adjust-state');
-    const roomGain = document.querySelector('#listen-gain');
     const songStage = document.querySelector('.song-stage');
     const performance = document.querySelector('.performance-stage');
-
-    function setRoomSound(kind) {
-      roomRoot.dataset.roomSoundValue = 'quiet';
-      roomToggle.disabled = false;
-      roomGain.disabled = false;
-      if (kind === 'normal') {
-        document.body.dataset.listen = 'audible';
-        roomRoot.dataset.roomSoundState = 'quiet';
-        roomToggle.textContent = '🔊';
-        roomToggle.setAttribute('aria-pressed', 'false');
-        roomState.textContent = '';
-      } else if (kind === 'muted') {
-        document.body.dataset.listen = 'muted';
-        roomRoot.dataset.roomSoundState = 'visible';
-        roomToggle.textContent = '🔇';
-        roomToggle.setAttribute('aria-pressed', 'true');
-        roomState.textContent = '已靜音';
-      } else {
-        document.body.dataset.listen = 'mic-muted';
-        roomRoot.dataset.roomSoundState = 'visible';
-        roomToggle.textContent = '🔇';
-        roomToggle.disabled = true;
-        roomGain.disabled = true;
-        roomState.textContent = '唱歌中';
-      }
-    }
 
     function singer(recording = false) {
       document.body.dataset.selfMic = 'live';
@@ -156,28 +133,23 @@
       }
     }
 
-    function addTake(target, time, duration, selected = false) {
-      const item = template.content.firstElementChild.cloneNode(true);
-      item.querySelector('.take-time').textContent = time;
-      item.querySelector('.take-duration').textContent = duration;
-      if (selected) item.classList.add('selected');
-      target.append(item);
-    }
-
-    function takeHistory(many) {
-      panel.open = true;
-      const group = document.createElement('section');
-      group.className = 'take-history-group';
-      group.innerHTML = `<div class="take-history-group-heading"><strong>偉大的渺小</strong><span>${many ? '3 段' : '1 段'}</span></div>`;
-      takes.append(group);
-      addTake(group, '21:03', '2:35', true);
+    function historyEntries(many) {
+      const base = {
+        songVideoId: null,
+        qualityVerdict: 'clean',
+        recovered: false,
+      };
+      const entries = [
+        { ...base, takeId: 'take-2103', endedAtMs: 1787158980000, artifact: { url: '/fixture-take-2103.wav', durationMs: 155000 } },
+      ];
       if (many) {
-        addTake(group, '20:56', '2:31');
-        addTake(group, '20:42', '2:29');
+        entries.push(
+          { ...base, takeId: 'take-2056', endedAtMs: 1787158560000, artifact: { url: '/fixture-take-2056.wav', durationMs: 151000 } },
+          { ...base, takeId: 'take-2042', endedAtMs: 1787157720000, artifact: { url: '/fixture-take-2042.wav', durationMs: 149000 } },
+        );
       }
+      return entries;
     }
-
-    setRoomSound('normal');
 
     if (state === 'empty') {
       document.body.dataset.roomMic = 'off';
@@ -186,23 +158,83 @@
       performance.classList.add('fixture-hidden');
     } else if (state === 'singer') {
       singer(false);
-      setRoomSound('forced');
     } else if (state === 'recording') {
       singer(true);
-      setRoomSound('forced');
-    } else if (state === 'take-history-one') {
-      takeHistory(false);
-    } else if (state === 'take-history-many') {
-      takeHistory(true);
-    } else if (state === 'room-sound-muted') {
-      setRoomSound('muted');
-    } else if (state === 'room-sound-forced') {
-      setRoomSound('forced');
+    }
+
+    await import('/room-sound-ui.js');
+    await import('/take-history.js');
+
+    if (state === 'take-history-one' || state === 'take-history-many') {
+      window.dispatchEvent(new CustomEvent('relay-take-status', {
+        detail: {
+          lifecycle: 'idle',
+          history: historyEntries(state === 'take-history-many'),
+        },
+      }));
+      const panel = document.querySelector('#take-history-panel');
+      if (panel) panel.open = true;
     }
 
     if (state.startsWith('room-sound-')) {
-      requestAnimationFrame(() => document.querySelector('.live-actions').scrollIntoView({ block: 'end' }));
+      document.querySelector('.live-actions')?.scrollIntoView({ block: 'end' });
     }
+
+    const closeEnough = (actual, expected, tolerance = 1) => Math.abs(actual - expected) <= tolerance;
+    const box = (node) => node?.getBoundingClientRect?.() ?? null;
+
+    async function reportGeometry() {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const checks = [];
+      const viewportWidth = window.innerWidth;
+      const scrollWidth = document.documentElement.scrollWidth;
+      checks.push(['scrollWidth', scrollWidth === viewportWidth, scrollWidth]);
+
+      const youtube = box(document.querySelector('.youtube-player-shell'));
+      if (youtube && !document.querySelector('#fixture-player')?.classList.contains('fixture-hidden')) {
+        checks.push(['youtube-left', youtube.left >= 0, youtube.left]);
+        checks.push(['youtube-right', youtube.right <= viewportWidth + 0.5, youtube.right]);
+      }
+
+      if (state.startsWith('take-history-')) {
+        const sheet = box(document.querySelector('.take-history-sheet'));
+        const audio = box(document.querySelector('#recording-player'));
+        if (viewportWidth < 760) {
+          checks.push(['take-x', closeEnough(sheet?.left ?? -999, 0), sheet?.left]);
+          checks.push(['take-width', closeEnough(sheet?.width ?? -999, viewportWidth), sheet?.width]);
+          checks.push(['take-right', closeEnough(sheet?.right ?? -999, viewportWidth), sheet?.right]);
+          checks.push(['audio-width', closeEnough(audio?.width ?? -999, viewportWidth - 40), audio?.width]);
+        } else {
+          checks.push(['take-desktop-width', (sheet?.width ?? 9999) <= 720.5, sheet?.width]);
+          checks.push(['take-desktop-center', closeEnough(sheet?.left ?? -999, (viewportWidth - (sheet?.width ?? 0)) / 2), sheet?.left]);
+          checks.push(['take-desktop-not-bottom', (sheet?.bottom ?? viewportWidth) < window.innerHeight - 1, sheet?.bottom]);
+        }
+      }
+
+      if (state.startsWith('room-sound-')) {
+        const row = box(document.querySelector('.local-sound-control'));
+        const toggle = box(document.querySelector('#listen-toggle'));
+        const gain = box(document.querySelector('#listen-gain'));
+        checks.push(['room-height', closeEnough(row?.height ?? -999, 44), row?.height]);
+        checks.push(['toggle-width', closeEnough(toggle?.width ?? -999, 44), toggle?.width]);
+        checks.push(['toggle-height', closeEnough(toggle?.height ?? -999, 44), toggle?.height]);
+        checks.push(['gain-height', closeEnough(gain?.height ?? -999, 44), gain?.height]);
+        if (state === 'room-sound-forced') {
+          checks.push(['forced-gain-disabled', document.querySelector('#listen-gain')?.disabled === true, document.querySelector('#listen-gain')?.disabled]);
+        }
+      }
+
+      const failed = checks.filter(([, ok]) => !ok);
+      const result = failed.length === 0 ? 'pass' : 'fail';
+      document.documentElement.dataset.geometry = result;
+      const detail = failed.length
+        ? failed.map(([name, , value]) => `${name}:${String(value)}`).join(',')
+        : 'ok';
+      const url = `/__geometry-${result}?state=${encodeURIComponent(state)}&vw=${viewportWidth}&detail=${encodeURIComponent(detail)}`;
+      fetch(url).catch(() => {});
+    }
+
+    reportGeometry();
   </script>
 </body>
 </html>

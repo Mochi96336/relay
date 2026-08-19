@@ -39,16 +39,20 @@ test('People owns identity and presence while secondary tasks live in More', () 
   assert.equal(more.includes('id="open-adjust"'), false);
 });
 
-test('Live keeps Song then performance state and contextual Mic gain', () => {
+test('Live keeps Song then one performance task with Record before Mic adjustment', () => {
   const song = html.indexOf('class="song-stage"');
   const performance = html.indexOf('class="performance-stage"');
   const gain = html.indexOf('id="mic-live-control"');
   const take = html.indexOf('class="take-strip"');
-  assert.ok(song >= 0 && song < performance && performance < gain && gain < take);
+  assert.ok(song >= 0 && song < performance && gain > performance && take > performance);
   assert.equal(html.includes('id="youtube-player"'), true);
   assert.equal(css.includes('.performance-stage > .section-label'), true);
   assert.equal(css.includes('body[data-self-mic="live"] .mic-live-control'), true);
   assert.equal(script.includes("micLiveLabel.textContent = 'Mic';"), true);
+  assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
+  assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
+  assert.match(composition, /\.performance-stage > #last-take,[\s\S]*?\.recent-take \{ order: 7 !important; \}/);
+  assert.match(script, /performanceStage\.insertBefore\(lastTake, micLiveControl\.nextSibling\)/);
 });
 
 test('persistent Live footer exposes only this-phone Room sound', () => {

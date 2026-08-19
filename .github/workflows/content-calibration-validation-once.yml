@@ -33,7 +33,18 @@ jobs:
           cache: npm
 
       - name: Apply exact runtime wiring
-        run: python3 scripts/one-shot-content-calibration-validation.py
+        run: |
+          python3 scripts/one-shot-content-calibration-validation.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('test/content-calibration-validation-server.test.ts')
+          text = path.read_text()
+          needle = 'laggedPair(8, RATE'
+          count = text.count(needle)
+          if count != 3:
+              raise SystemExit(f'expected three 8-second integration fixtures, found {count}')
+          path.write_text(text.replace(needle, 'laggedPair(6, RATE'))
+          PY
 
       - name: Verify focused product diff
         run: |
@@ -74,7 +85,7 @@ jobs:
       - name: Commit tested product diff and remove gate
         run: |
           git config user.name 'github-actions[bot]'
-          git config user.email '41898236+github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/content-calibration-validation-once.yml \
             scripts/one-shot-content-calibration-validation.py
           git add -- \

@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - agent/live-p0-pitch-ribbon
+  pull_request:
+    branches:
+      - agent/live-product-repair
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: ${{ !contains(github.event.head_commit.message, '[pitch-ribbon-patched]') }}
+    if: ${{ !contains(github.event.pull_request.head.sha || github.sha, '') && !contains(github.event.head_commit.message || github.event.pull_request.title, '[pitch-ribbon-patched]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

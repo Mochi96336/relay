@@ -39,11 +39,15 @@ jobs:
           from pathlib import Path
           path = Path('test/content-calibration-validation-server.test.ts')
           text = path.read_text()
-          needle = 'laggedPair(8, RATE'
-          count = text.count(needle)
-          if count != 3:
-              raise SystemExit(f'expected three 8-second integration fixtures, found {count}')
-          path.write_text(text.replace(needle, 'laggedPair(6, RATE'))
+          old = "      const confirmFrom = monitor.messages.length;\n      await waitForNewMessage(\n"
+          new = (
+              "      const confirmFrom = monitor.messages.length;\n"
+              "      monitor.send({ type: 'timing-calibration-status-request' });\n"
+              "      await waitForNewMessage(\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f'confirmation status anchor count was {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
           PY
 
       - name: Verify focused product diff

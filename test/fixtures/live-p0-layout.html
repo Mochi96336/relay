@@ -87,8 +87,20 @@
   </template>
 
   <script>
+    const visualStates = [
+      'empty',
+      'listener',
+      'singer',
+      'recording',
+      'take-history-one',
+      'take-history-many',
+      'room-sound-normal',
+      'room-sound-muted',
+      'room-sound-forced',
+    ];
     const params = new URLSearchParams(location.search);
-    const state = params.get('state') || 'listener';
+    const requestedState = params.get('state') || 'listener';
+    const state = visualStates.includes(requestedState) ? requestedState : 'listener';
     document.body.dataset.fixtureState = state;
 
     const panel = document.querySelector('#take-history-panel');
@@ -143,12 +155,12 @@
       }
     }
 
-    function addTake(time, duration, selected = false) {
+    function addTake(target, time, duration, selected = false) {
       const item = template.content.firstElementChild.cloneNode(true);
       item.querySelector('.take-time').textContent = time;
       item.querySelector('.take-duration').textContent = duration;
       if (selected) item.classList.add('selected');
-      takes.append(item);
+      target.append(item);
     }
 
     function takeHistory(many) {
@@ -157,10 +169,10 @@
       group.className = 'take-history-group';
       group.innerHTML = `<div class="take-history-group-heading"><strong>偉大的渺小</strong><span>${many ? '3 段' : '1 段'}</span></div>`;
       takes.append(group);
-      addTake('21:03', '2:35', true);
+      addTake(group, '21:03', '2:35', true);
       if (many) {
-        addTake('20:56', '2:31');
-        addTake('20:42', '2:29');
+        addTake(group, '20:56', '2:31');
+        addTake(group, '20:42', '2:29');
       }
     }
 

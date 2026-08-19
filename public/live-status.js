@@ -256,6 +256,9 @@ if (
     const ownerId = typeof message.ownerId === 'string' ? message.ownerId : null;
     const captureGeneration = Number(message.captureGeneration);
     const rmsDbfs = Number(message.rmsDbfs);
+    const rawF0Hz = message.f0Hz;
+    const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
+    const pitchConfidence = Number(message.pitchConfidence);
     const spectrumBands = Array.isArray(message.spectrumBands)
       ? message.spectrumBands.slice(0, 5).map(Number)
       : [];
@@ -265,6 +268,10 @@ if (
       || captureGeneration < 0
       || captureGeneration > 0xffff_ffff
       || !Number.isFinite(rmsDbfs)
+      || (f0Hz !== null && (!Number.isFinite(f0Hz) || f0Hz < 80 || f0Hz > 1000))
+      || !Number.isFinite(pitchConfidence)
+      || pitchConfidence < 0
+      || pitchConfidence > 1
       || spectrumBands.length !== 5
       || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
     ) return;
@@ -278,6 +285,8 @@ if (
       captureGeneration: captureGeneration >>> 0,
       rmsDbfs,
       spectrumBands,
+      f0Hz,
+      pitchConfidence,
     });
   }
 
@@ -342,12 +351,23 @@ if (
       || latestProductStatus.room?.mic?.state !== 'live'
     ) return;
 
+    const captureGeneration = Number(event.detail?.captureGeneration);
     const rmsDbfs = Number(event.detail?.rmsDbfs);
+    const rawF0Hz = event.detail?.f0Hz;
+    const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
+    const pitchConfidence = Number(event.detail?.pitchConfidence);
     const spectrumBands = Array.isArray(event.detail?.spectrumBands)
       ? event.detail.spectrumBands.slice(0, 5).map(Number)
       : [];
     if (
-      !Number.isFinite(rmsDbfs)
+      !Number.isInteger(captureGeneration)
+      || captureGeneration < 0
+      || captureGeneration > 0xffff_ffff
+      || !Number.isFinite(rmsDbfs)
+      || (f0Hz !== null && (!Number.isFinite(f0Hz) || f0Hz < 80 || f0Hz > 1000))
+      || !Number.isFinite(pitchConfidence)
+      || pitchConfidence < 0
+      || pitchConfidence > 1
       || spectrumBands.length !== 5
       || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
     ) return;
@@ -358,8 +378,11 @@ if (
     socket.send(JSON.stringify({
       type: 'mic-presence-telemetry',
       version: 1,
+      captureGeneration: captureGeneration >>> 0,
       rmsDbfs,
       spectrumBands,
+      f0Hz,
+      pitchConfidence,
     }));
   });
 

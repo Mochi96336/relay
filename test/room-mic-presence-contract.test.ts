@@ -66,7 +66,7 @@ test('handoff, capture generation change and stale remote evidence clear the old
 
 test('center-origin production renderer mirrors one history and never uses five bands as pitch', () => {
   assert.match(presence, /centerOriginX/);
-  assert.match(presence, /history\.slice\(0, -1\)/);
+  assert.match(presence, /const right = history\s*\.slice\(0, -1\)\s*\.reverse\(\)/);
   assert.match(presence, /presenceSliceGeometry/);
   assert.doesNotMatch(presence, /centroid/);
 });

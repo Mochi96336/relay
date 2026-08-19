@@ -11,19 +11,17 @@
   <link rel="stylesheet" href="/song-surface.css">
   <link rel="stylesheet" href="/live-ia.css">
   <style>
-    /* Fixture-only deterministic media. Product Take / Room sound DOM and
-       presentation are owned by their production modules below. */
+    /* Fixture-only deterministic media. The surrounding Live structure mirrors
+       production, while Take History / Room sound DOM is still owned by the
+       production presenter modules below. */
     .fixture-player {
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      min-height: 200px;
-      display: grid;
-      place-items: center;
-      border: 1px solid #292b30;
-      border-radius: 12px;
       background: #0b0c0e;
       color: #70737a;
       font-size: 12px;
+    }
+    .fixture-player #youtube-player {
+      display: grid;
+      place-items: center;
     }
     .fixture-player button { min-width: 44px; min-height: 44px; }
     .fixture-hidden { display: none !important; }
@@ -32,24 +30,73 @@
 <body data-health="healthy" data-room-mic="live" data-self-mic="off" data-listen="audible">
   <main class="live-shell">
     <header class="room-header">
-      <strong>Relay</strong>
-      <div class="room-header-actions"><button type="button">2 人</button><button type="button" aria-label="更多">•••</button></div>
+      <div class="room-mark" aria-label="Relay">Relay</div>
+      <div class="room-header-actions">
+        <details class="people-menu">
+          <summary><strong id="participant-count">2 人</strong></summary>
+        </details>
+        <details id="room-more" class="more-menu">
+          <summary aria-label="Menu / 選項"><span aria-hidden="true">•••</span></summary>
+        </details>
+      </div>
     </header>
 
-    <section class="song-stage">
-      <div class="song-heading-row"><span>歌曲</span><button id="change-youtube" class="text-action" type="button">換歌</button></div>
-      <div class="song-observer"><strong>林俊傑－偉大的渺小</strong><span>偉大的渺小</span></div>
-      <div class="youtube-player-shell fixture-player" id="fixture-player"><button type="button" aria-label="播放">▶</button></div>
+    <section class="song-stage" data-playback-role="holder" aria-label="Room song">
+      <div class="song-heading-row">
+        <div class="section-label">歌曲</div>
+        <div class="song-heading-actions">
+          <span id="song-device-note" class="song-device-note">這支手機</span>
+          <button id="change-youtube" class="text-action" type="button">換歌</button>
+        </div>
+      </div>
+
+      <div id="song-observer" class="song-observer">
+        <img id="room-song-artwork" alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+        <div class="song-observer-meta">
+          <strong id="room-song-state">林俊傑－偉大的渺小</strong>
+          <span id="room-song-timeline">2:11 / 4:01</span>
+        </div>
+      </div>
+
+      <div class="youtube-form" hidden>
+        <input id="youtube-url" type="text" inputmode="url" autocomplete="off" aria-label="YouTube URL or video ID">
+        <button id="load-youtube" type="button">載入</button>
+      </div>
+
+      <div class="youtube-player-shell fixture-player" id="fixture-player">
+        <div id="youtube-player"><button type="button" aria-label="播放">▶</button></div>
+      </div>
+
+      <div class="youtube-readout" aria-live="polite">
+        <strong id="youtube-state">playing</strong>
+        <span id="youtube-timeline">2:11 / 4:01</span>
+      </div>
+      <p id="youtube-note" class="microcopy">這支手機控制房間歌曲。</p>
     </section>
 
     <section class="performance-stage">
-      <span class="section-label">Mic</span>
-      <div class="voice-copy"><strong id="fixture-voice-title">浚翔正在唱</strong><span>Room Mic</span></div>
-      <div class="voice-input-evidence"><div class="voice-input-meter" aria-hidden="true">▁▂▅▇▆▃▂</div></div>
-      <div class="mic-actions"><button id="start-publisher" type="button">拿 Mic</button></div>
+      <div class="section-label">Voice</div>
+
+      <div class="voice-input-evidence" aria-live="off">
+        <div class="evidence-heading"><span>Input</span><output id="mic-input-value">-18.2 dBFS</output></div>
+        <div id="mic-input-meter" class="voice-input-meter" aria-hidden="true">▁▂▅▇▆▃▂</div>
+      </div>
+
+      <div class="voice-copy" aria-live="polite">
+        <strong id="live-state-title">浚翔正在唱</strong>
+        <span id="live-state-detail">Room Mic</span>
+      </div>
+
+      <div class="mic-actions">
+        <button id="start-publisher" class="mic-primary" type="button">拿 Mic</button>
+        <button id="release-mic" class="text-action" type="button" hidden>放開 Mic</button>
+      </div>
 
       <section class="take-strip" aria-label="Take recording" data-take-state="ready">
-        <div class="take-actions"><button id="start-recording" type="button">● 開始錄音</button></div>
+        <div class="take-actions">
+          <button id="start-recording" class="record-action" type="button">● 開始錄音</button>
+          <button id="stop-recording" class="record-action recording" type="button" disabled>停止</button>
+        </div>
         <p id="recording-status" class="microcopy"></p>
         <div id="last-take" class="last-take" hidden>
           <button id="last-take-toggle" class="take-link text-action" type="button" aria-expanded="false">上一段錄音</button>
@@ -60,7 +107,10 @@
         </div>
       </section>
 
-      <details class="mic-live-control" id="mic-live-control"><summary><span>Mic</span><output>+24 dB</output></summary></details>
+      <details class="mic-live-control" id="mic-live-control">
+        <summary><span>Mic</span><output>+24 dB</output></summary>
+        <div class="mic-live-control-body"></div>
+      </details>
     </section>
 
     <footer class="live-actions">
@@ -71,7 +121,10 @@
           <button id="listen-toggle" class="text-action" type="button" aria-pressed="false">Mute</button>
         </div>
         <label class="adjust-control" for="listen-gain">
-          <div class="adjust-row-heading"><strong>Volume</strong><output id="listen-gain-value" for="listen-gain">30%</output></div>
+          <div class="adjust-row-heading">
+            <strong>Volume</strong>
+            <output id="listen-gain-value" for="listen-gain">30%</output>
+          </div>
           <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="30">
         </label>
         <p id="listen-adjust-state" class="adjust-helper">Sound is on by default after your first interaction.</p>
@@ -91,6 +144,7 @@
       'room-sound-normal',
       'room-sound-muted',
       'room-sound-forced',
+      'room-sound-retry',
     ];
     const params = new URLSearchParams(location.search);
     const requestedState = params.get('state') || 'listener';
@@ -105,55 +159,116 @@
       normal: { state: 'audible', phase: 'playing', muted: false, forcedReason: null, volumePercent: 30 },
       muted: { state: 'muted', phase: 'user-muted', muted: true, forcedReason: null, volumePercent: 30 },
       forced: { state: 'mic-muted', phase: 'mic-owned', muted: true, forcedReason: 'mic', volumePercent: 30 },
+      retry: { state: 'muted', phase: 'start-failed', muted: true, forcedReason: null, volumePercent: 30 },
     };
 
     const roomKind = state === 'room-sound-muted'
       ? 'muted'
-      : state === 'room-sound-forced' || state === 'singer' || state === 'recording'
-        ? 'forced'
-        : 'normal';
+      : state === 'room-sound-retry'
+        ? 'retry'
+        : state === 'room-sound-forced' || state === 'singer' || state === 'recording'
+          ? 'forced'
+          : 'normal';
     window.relayListenState = roomDetails[roomKind];
 
-    const voiceTitle = document.querySelector('#fixture-voice-title');
+    const voiceTitle = document.querySelector('#live-state-title');
     const micAction = document.querySelector('#start-publisher');
+    const releaseAction = document.querySelector('#release-mic');
     const recordStrip = document.querySelector('.take-strip');
     const recordButton = document.querySelector('#start-recording');
+    const stopRecordButton = document.querySelector('#stop-recording');
     const songStage = document.querySelector('.song-stage');
     const performance = document.querySelector('.performance-stage');
+    const recordingPlayer = document.querySelector('#recording-player');
+
+    function createSilentWavUrl(durationSeconds = 155, sampleRate = 8000) {
+      const sampleCount = Math.round(durationSeconds * sampleRate);
+      const dataBytes = sampleCount * 2;
+      const buffer = new ArrayBuffer(44 + dataBytes);
+      const view = new DataView(buffer);
+      const ascii = (offset, text) => {
+        for (let index = 0; index < text.length; index += 1) {
+          view.setUint8(offset + index, text.charCodeAt(index));
+        }
+      };
+      ascii(0, 'RIFF');
+      view.setUint32(4, 36 + dataBytes, true);
+      ascii(8, 'WAVE');
+      ascii(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      ascii(36, 'data');
+      view.setUint32(40, dataBytes, true);
+      return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+    }
+
+    const fixtureAudioUrl = createSilentWavUrl();
 
     function singer(recording = false) {
       document.body.dataset.selfMic = 'live';
       document.body.dataset.roomMic = 'live';
       voiceTitle.textContent = '你正在唱';
-      micAction.textContent = '放開 Mic';
-      document.querySelector('#mic-live-control').style.display = 'block';
+      micAction.hidden = true;
+      releaseAction.hidden = false;
+      document.querySelector('#mic-live-control').open = true;
       if (recording) {
         recordStrip.dataset.takeState = 'recording';
-        recordButton.textContent = '● 錄音中 0:18';
+        recordButton.hidden = true;
+        stopRecordButton.hidden = false;
+        stopRecordButton.disabled = false;
+        document.querySelector('#recording-status').textContent = '錄音中 0:18';
       }
     }
 
     function historyEntries(many) {
-      const base = {
-        songVideoId: null,
+      const entry = (takeId, endedAtMs, durationMs, songVideoId, recovered = false) => ({
+        takeId,
+        endedAtMs,
+        songVideoId,
         qualityVerdict: 'clean',
-        recovered: false,
-      };
+        recovered,
+        artifact: { url: fixtureAudioUrl, durationMs },
+      });
       const entries = [
-        { ...base, takeId: 'take-2103', endedAtMs: 1787158980000, artifact: { url: '/fixture-take-2103.wav', durationMs: 155000 } },
+        entry('take-2103', 1787158980000, 155000, 'PZGwZwGQTlk'),
       ];
       if (many) {
         entries.push(
-          { ...base, takeId: 'take-2056', endedAtMs: 1787158560000, artifact: { url: '/fixture-take-2056.wav', durationMs: 151000 } },
-          { ...base, takeId: 'take-2042', endedAtMs: 1787157720000, artifact: { url: '/fixture-take-2042.wav', durationMs: 149000 } },
+          entry('take-2056', 1787158560000, 151000, 'PZGwZwGQTlk'),
+          entry('take-2042', 1787157720000, 149000, 'dQw4w9WgXcQ'),
+          entry('take-1930', 1787157000000, 143000, null),
+          entry('take-1844', 1787156400000, 138000, null, true),
         );
       }
       return entries;
     }
 
+    async function primeSelectedAudio() {
+      if (!recordingPlayer) return;
+      if (!(Number.isFinite(recordingPlayer.duration) && recordingPlayer.duration > 0)) {
+        await Promise.race([
+          new Promise((resolve) => recordingPlayer.addEventListener('loadedmetadata', resolve, { once: true })),
+          new Promise((resolve) => setTimeout(resolve, 300)),
+        ]);
+      }
+      if (Number.isFinite(recordingPlayer.duration) && recordingPlayer.duration > 2) {
+        recordingPlayer.currentTime = 1;
+        await Promise.race([
+          new Promise((resolve) => recordingPlayer.addEventListener('seeked', resolve, { once: true })),
+          new Promise((resolve) => setTimeout(resolve, 150)),
+        ]);
+      }
+    }
+
     if (state === 'empty') {
       document.body.dataset.roomMic = 'off';
-      songStage.querySelector('.song-observer').innerHTML = '<strong>尚未選歌</strong><span>等待房間選擇歌曲</span>';
+      document.querySelector('#room-song-state').textContent = '尚未選歌';
+      document.querySelector('#room-song-timeline').textContent = '等待房間選擇歌曲';
       document.querySelector('#fixture-player').classList.add('fixture-hidden');
       performance.classList.add('fixture-hidden');
     } else if (state === 'singer') {
@@ -172,8 +287,12 @@
           history: historyEntries(state === 'take-history-many'),
         },
       }));
+      for (const artwork of document.querySelectorAll('.take-history-artwork')) {
+        artwork.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+      }
       const panel = document.querySelector('#take-history-panel');
       if (panel) panel.open = true;
+      await primeSelectedAudio();
     }
 
     if (state.startsWith('room-sound-')) {
@@ -190,15 +309,23 @@
       const scrollWidth = document.documentElement.scrollWidth;
       checks.push(['scrollWidth', scrollWidth === viewportWidth, scrollWidth]);
 
+      const roomHeader = box(document.querySelector('.room-header'));
+      const song = box(document.querySelector('.song-stage'));
+      const performanceBox = box(document.querySelector('.performance-stage'));
+      const footer = box(document.querySelector('.live-actions'));
       const youtube = box(document.querySelector('.youtube-player-shell'));
+      checks.push(['shared-left-song-performance', closeEnough(song?.left ?? -999, performanceBox?.left ?? 999), `${song?.left}/${performanceBox?.left}`]);
+      checks.push(['shared-left-song-footer', closeEnough(song?.left ?? -999, footer?.left ?? 999), `${song?.left}/${footer?.left}`]);
+      checks.push(['shared-left-header-song', closeEnough(roomHeader?.left ?? -999, song?.left ?? 999), `${roomHeader?.left}/${song?.left}`]);
       if (youtube && !document.querySelector('#fixture-player')?.classList.contains('fixture-hidden')) {
-        checks.push(['youtube-left', youtube.left >= 0, youtube.left]);
+        checks.push(['youtube-left', closeEnough(youtube.left, song?.left ?? -999), youtube.left]);
         checks.push(['youtube-right', youtube.right <= viewportWidth + 0.5, youtube.right]);
+        checks.push(['youtube-song-right', closeEnough(youtube.right, song?.right ?? -999), `${youtube.right}/${song?.right}`]);
       }
 
       if (state.startsWith('take-history-')) {
         const sheet = box(document.querySelector('.take-history-sheet'));
-        const audio = box(document.querySelector('#recording-player'));
+        const audio = box(recordingPlayer);
         if (viewportWidth < 760) {
           checks.push(['take-x', closeEnough(sheet?.left ?? -999, 0), sheet?.left]);
           checks.push(['take-width', closeEnough(sheet?.width ?? -999, viewportWidth), sheet?.width]);
@@ -207,7 +334,16 @@
         } else {
           checks.push(['take-desktop-width', (sheet?.width ?? 9999) <= 720.5, sheet?.width]);
           checks.push(['take-desktop-center', closeEnough(sheet?.left ?? -999, (viewportWidth - (sheet?.width ?? 0)) / 2), sheet?.left]);
+          checks.push(['take-desktop-clearance', (sheet?.left ?? -999) >= 24 && (sheet?.right ?? 9999) <= viewportWidth - 24, `${sheet?.left}/${sheet?.right}`]);
           checks.push(['take-desktop-not-bottom', (sheet?.bottom ?? viewportWidth) < window.innerHeight - 1, sheet?.bottom]);
+        }
+        checks.push(['audio-duration', Number.isFinite(recordingPlayer?.duration) && recordingPlayer.duration > 150, recordingPlayer?.duration]);
+        checks.push(['audio-seek', (recordingPlayer?.currentTime ?? 0) >= 0.9, recordingPlayer?.currentTime]);
+        if (state === 'take-history-many') {
+          const groups = document.querySelectorAll('.take-history-group').length;
+          const artworks = document.querySelectorAll('.take-history-artwork').length;
+          checks.push(['take-many-groups', groups >= 4, groups]);
+          checks.push(['take-many-artworks', artworks >= 2, artworks]);
         }
       }
 
@@ -215,12 +351,31 @@
         const row = box(document.querySelector('.local-sound-control'));
         const toggle = box(document.querySelector('#listen-toggle'));
         const gain = box(document.querySelector('#listen-gain'));
+        const toggleNode = document.querySelector('#listen-toggle');
+        const gainNode = document.querySelector('#listen-gain');
+        const stateNode = document.querySelector('#listen-adjust-state');
         checks.push(['room-height', closeEnough(row?.height ?? -999, 44), row?.height]);
         checks.push(['toggle-width', closeEnough(toggle?.width ?? -999, 44), toggle?.width]);
         checks.push(['toggle-height', closeEnough(toggle?.height ?? -999, 44), toggle?.height]);
         checks.push(['gain-height', closeEnough(gain?.height ?? -999, 44), gain?.height]);
+        checks.push(['gain-aria', gainNode?.getAttribute('aria-label') === '房間聲音音量', gainNode?.getAttribute('aria-label')]);
+        if (state === 'room-sound-normal') {
+          checks.push(['toggle-aria-normal', toggleNode?.getAttribute('aria-label') === '靜音房間聲音', toggleNode?.getAttribute('aria-label')]);
+        } else {
+          checks.push(['toggle-aria-muted', toggleNode?.getAttribute('aria-label') === '開啟房間聲音', toggleNode?.getAttribute('aria-label')]);
+        }
         if (state === 'room-sound-forced') {
-          checks.push(['forced-gain-disabled', document.querySelector('#listen-gain')?.disabled === true, document.querySelector('#listen-gain')?.disabled]);
+          checks.push(['forced-gain-disabled', gainNode?.disabled === true, gainNode?.disabled]);
+          checks.push(['forced-toggle-disabled', toggleNode?.disabled === true, toggleNode?.disabled]);
+          checks.push(['forced-status', stateNode?.textContent === '唱歌中', stateNode?.textContent]);
+        }
+        if (state === 'room-sound-muted') {
+          checks.push(['muted-status', stateNode?.textContent === '已靜音', stateNode?.textContent]);
+        }
+        if (state === 'room-sound-retry') {
+          checks.push(['retry-status', stateNode?.textContent === '重試', stateNode?.textContent]);
+          checks.push(['retry-gain-enabled', gainNode?.disabled === false, gainNode?.disabled]);
+          checks.push(['retry-toggle-enabled', toggleNode?.disabled === false, toggleNode?.disabled]);
         }
       }
 

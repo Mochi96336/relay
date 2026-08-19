@@ -15,7 +15,7 @@ function silentPcm(ms: number) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
 
-test('silent first Mic PCM arms authoritative Record state within the P0 latency budget', async () => {
+test('silent first Mic PCM arms authoritative Record state within the P0 latency budget', async (t) => {
   const server = await startRelay(FAST);
   try {
     const singer = await RelayClient.connect(
@@ -50,6 +50,7 @@ test('silent first Mic PCM arms authoritative Record state within the P0 latency
       1_000,
     );
     const firstPcmToArmedMs = performance.now() - beforeFirstPcm;
+    t.diagnostic(`first PCM send -> authoritative canStartTake: ${firstPcmToArmedMs.toFixed(1)} ms`);
 
     assert.equal(armed.lifecycle, 'live');
     assert.equal(armed.actions.startTakeBlockedReason, null);

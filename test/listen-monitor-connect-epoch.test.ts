@@ -9,11 +9,16 @@ test('Listen retires an opening monitor socket when transport authority changes'
   assert.match(listenSource, /let transportEpoch = 0;/);
   assert.match(
     listenSource,
-    /function closeTransport\(\)[\s\S]*transportEpoch \+= 1;[\s\S]*const opening = pendingSocket;[\s\S]*pendingSocket = null;[\s\S]*opening\.close\(\)/,
+    /function abandonTransportConnection\(\)[\s\S]*transportEpoch \+= 1;[\s\S]*const opening = pendingSocket;[\s\S]*pendingSocket = null;[\s\S]*opening\.close\(\)/,
   );
   assert.match(
     listenSource,
-    /async function connect\(\)[\s\S]*const connectEpoch = transportEpoch;[\s\S]*pendingSocket = next;[\s\S]*if \(pendingSocket === next\) pendingSocket = null;[\s\S]*if \(connectEpoch !== transportEpoch \|\| !transportEnabled \|\| effectiveMuted\(\) \|\| !audioReady\(\)\) \{\s*next\.close\(\);/,
+    /function closeTransport\(\)[\s\S]*transportEnabled = false;[\s\S]*abandonTransportConnection\(\)/,
+    'explicit shutdown must revoke transport intent and abandon any opening or active connection',
+  );
+  assert.match(
+    listenSource,
+    /async function connect\(\)[\s\S]*const connectEpoch = transportEpoch;[\s\S]*pendingSocket = next;[\s\S]*if \(pendingSocket === next\) pendingSocket = null;[\s\S]*if \(connectEpoch !== transportEpoch \|\| !transportEnabled \|\| !monitorTransportWanted\(\)\) \{\s*next\.close\(\);/,
   );
 });
 

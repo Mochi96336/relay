@@ -1,6 +1,7 @@
 import type { RoomSongCommandBody, RoomSongCommandRequest } from './room-song-command.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import { LEGACY_PLAYBACK_PARTICIPANT_ID, type PlaybackIdentity } from './song-session.js';
+import { LEADER_HOLD_GRACE_MS } from '../public/playback-policy.js';
 
 const COMMAND_TIMEOUT_MS = 4_000;
 const SEEK_MUTATION_THRESHOLD_SECONDS = 0.75;
@@ -83,6 +84,15 @@ function statusLeader(status: RoomSongStatus): PlaybackIdentity | null {
   const generation = Number(status.playbackGeneration);
   if (!participantId || !transportId || !Number.isInteger(generation) || generation < 0) return null;
   return { participantId, transportId, generation };
+}
+
+function statusLeaderHolding(status: RoomSongStatus, leader: PlaybackIdentity | null) {
+  if (!leader || status.leaderConnected !== true) return false;
+  if (status.leaderFresh === true) return true;
+  const ageMs = Number(status.ageMs);
+  return Number.isFinite(ageMs)
+    ? ageMs <= LEADER_HOLD_GRACE_MS
+    : status.connected !== false;
 }
 
 function statusHandoffTarget(status: RoomSongStatus): PlaybackIdentity | null {
@@ -218,7 +228,7 @@ export class RoomSongCommandSession {
   begin(
     request: RoomSongCommandRequest,
     actorParticipantIdInput: string,
-    target: PlaybackIdentity,
+    requesterPlayback: PlaybackIdentity,
     micOwnerId: string | null,
     roomStatus: RoomSongStatus,
     currentRevision: number,
@@ -228,9 +238,24 @@ export class RoomSongCommandSession {
     this.expire(nowMs);
 
     const actorParticipantId = normalizeParticipantId(actorParticipantIdInput);
-    if (!actorParticipantId || target.participantId !== actorParticipantId) {
+    if (!actorParticipantId || requesterPlayback.participantId !== actorParticipantId) {
       return { ok: false, reason: 'invalid-identity' };
     }
+
+    const leader = statusLeader(roomStatus);
+    const leaderConnected = roomStatus.leaderConnected === true;
+    const leaderFresh = roomStatus.leaderFresh === true;
+    const healthyLeader = Boolean(leader && leaderConnected && leaderFresh);
+    const heldLeader = statusLeaderHolding(roomStatus, leader);
+    // A Mic-free room has shared Song selection, but it still has exactly one
+    // playback authority. Delegate another participant's load to the healthy
+    // leader instead of moving audio to the participant who chose the Song.
+    const target = micOwnerId === null
+      && request.body.action === 'load'
+      && heldLeader
+      && leader
+      ? leader
+      : requesterPlayback;
 
     const prior = this.recent.get(request.commandId);
     if (prior) {
@@ -248,11 +273,6 @@ export class RoomSongCommandSession {
     if (roomStatus.handoffState && roomStatus.handoffState !== 'idle') {
       return { ok: false, reason: 'handoff-active' };
     }
-
-    const leader = statusLeader(roomStatus);
-    const leaderConnected = roomStatus.leaderConnected === true;
-    const leaderFresh = roomStatus.leaderFresh === true;
-    const healthyLeader = Boolean(leader && leaderConnected && leaderFresh);
 
     if (micOwnerId !== null) {
       if (actorParticipantId !== micOwnerId) {
@@ -485,9 +505,9 @@ export class RoomSongCommandSession {
   }
 
   sweep(nowMs: number) {
-    const hadPending = this.pending !== null;
+    const pending = this.pending ? this.publicCommand(this.pending) : null;
     this.expire(nowMs);
-    return hadPending && this.pending === null;
+    return pending && this.pending === null ? pending : null;
   }
 
   statusPayload(revision: number, nowMs: number) {

@@ -2,6 +2,7 @@ import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { resolvePlaybackRole } from './song-role.js';
 import { createPlaybackHandoffReconnectRecovery } from './playback-handoff-reconnect-recovery.js';
+import { reduceSessionOwnership } from './session-status-projection.js';
 
 let socket = null;
 let reconnectTimer = null;
@@ -14,6 +15,9 @@ let roomCommandRevisionReady = false;
 let latestRoomCommandId = null;
 let latestRoomSongStatus = null;
 let latestTimelineStatus = null;
+let latestMicOwnerId = null;
+let latestMicOwnerKnown = false;
+let latestSessionOwnership = null;
 let activeHandoffId = null;
 let activeHandoffPhase = 'idle';
 const pendingPings = new Map();
@@ -258,8 +262,20 @@ function dispatchPlaybackView() {
       timeline: latestTimelineStatus,
       transportId,
       playbackGeneration,
+      isMicOwner: Boolean(participantId && latestMicOwnerId === participantId),
+      isMicFree: Boolean(participantId && latestMicOwnerKnown && latestMicOwnerId === null),
     },
   }));
+}
+
+function adoptSessionStatus(message) {
+  const next = reduceSessionOwnership(latestSessionOwnership, message);
+  if (!next) return false;
+  latestSessionOwnership = next;
+  latestMicOwnerKnown = true;
+  latestMicOwnerId = next.micOwnerId;
+  dispatchPlaybackView();
+  return true;
 }
 
 function handleMessage(event) {
@@ -279,6 +295,11 @@ function handleServerMessage(message) {
 
   if (message.type === 'clock-pong') {
     handleRttPong(message);
+    return;
+  }
+
+  if (message.type === 'session-status') {
+    adoptSessionStatus(message);
     return;
   }
 
@@ -408,6 +429,7 @@ function connect() {
     roomCommandRevisionReady = false;
     sendPlaybackHello();
     replayRecentMicIntent();
+    send({ type: 'session-status-request' });
     send({ type: 'youtube-timeline-request' });
     send({ type: 'room-song-status-request' });
     send({ type: 'room-song-command-status-request' });
@@ -524,5 +546,9 @@ window.addEventListener('relay:song-handoff-failed', (event) => {
 // new intent, so they cannot accidentally move playback between tabs.
 document.querySelector('#start-publisher')?.addEventListener('click', noteMicIntent);
 window.addEventListener('relay-request-microphone', noteMicIntent);
+window.addEventListener('relay-session-status', (event) => {
+  adoptSessionStatus(event.detail);
+});
+window.dispatchEvent(new Event('relay-request-session-status'));
 
 connect();

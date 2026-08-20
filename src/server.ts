@@ -783,16 +783,24 @@ function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: 
   });
 }
 
-function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now()) {
-  const cancelled = roomSongCommands.cancelPending();
-  if (!cancelled) return false;
-  sendToPlayback(cancelled.target, {
+function broadcastRoomSongCommandFailure(
+  commandId: string,
+  reason: string,
+  nowMs = performance.now(),
+) {
+  broadcastJson({
     type: 'room-song-command-failed-ack',
-    commandId: cancelled.commandId,
+    commandId,
     revision: roomSongCommandRevision,
     reason,
     room: youtubeTimeline.roomStatusPayload(nowMs),
   });
+}
+
+function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now()) {
+  const cancelled = roomSongCommands.cancelPending();
+  if (!cancelled) return false;
+  broadcastRoomSongCommandFailure(cancelled.commandId, reason, nowMs);
   broadcastJson(roomSongCommandStatusPayload(nowMs));
   return true;
 }
@@ -2120,7 +2128,9 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
   }
 
-  if (roomSongCommands.sweep(nowMs)) {
+  const expiredRoomSongCommand = roomSongCommands.sweep(nowMs);
+  if (expiredRoomSongCommand) {
+    broadcastRoomSongCommandFailure(expiredRoomSongCommand.commandId, 'command-timeout', nowMs);
     broadcastJson(roomSongCommandStatusPayload(nowMs));
   }
 
@@ -2567,9 +2577,10 @@ wss.on('connection', (rawSocket, request) => {
         duplicate: decision.duplicate,
       });
 
-      const stillPending = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
+      const commandTarget = decision.command.target;
+      const stillPending = roomSongCommands.pendingForTarget(commandTarget, nowMs);
       if (stillPending?.commandId === decision.command.commandId) {
-        sendToPlayback(playbackIdentity, roomSongCommandApplyPayload(decision.command));
+        sendToPlayback(commandTarget, roomSongCommandApplyPayload(decision.command));
       }
       broadcastJson(roomSongCommandStatusPayload(nowMs));
       return;
@@ -2578,13 +2589,15 @@ wss.on('connection', (rawSocket, request) => {
     if (payload.type === 'room-song-command-failed') {
       const playbackIdentity = playbackIdentityForSocket(socket);
       if (!playbackIdentity) return;
-      if (roomSongCommands.fail(playbackIdentity, payload.commandId)) {
-        sendJson(socket, {
-          type: 'room-song-command-failed-ack',
-          commandId: payload.commandId,
-          revision: roomSongCommandRevision,
-        });
-        broadcastJson(roomSongCommandStatusPayload());
+      const nowMs = performance.now();
+      const pendingCommand = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
+      if (
+        pendingCommand
+        && payload.commandId === pendingCommand.commandId
+        && roomSongCommands.fail(playbackIdentity, pendingCommand.commandId)
+      ) {
+        broadcastRoomSongCommandFailure(pendingCommand.commandId, 'playback-failed', nowMs);
+        broadcastJson(roomSongCommandStatusPayload(nowMs));
       }
       return;
     }
@@ -2673,7 +2686,7 @@ wss.on('connection', (rawSocket, request) => {
           commandGate.completesCommandId
           && roomSongCommands.complete(commandGate.completesCommandId)
         ) {
-          sendToPlayback(acceptedIdentity, {
+          broadcastJson({
             type: 'room-song-command-complete',
             commandId: commandGate.completesCommandId,
             revision: roomSongCommandRevision,
@@ -3159,12 +3172,14 @@ wss.on('connection', (rawSocket, request) => {
 
     const closingPlaybackIdentity = playbackIdentityForSocket(socket);
     if (closingPlaybackIdentity) {
-      const pendingCommand = roomSongCommands.pendingForTarget(closingPlaybackIdentity, performance.now());
+      const nowMs = performance.now();
+      const pendingCommand = roomSongCommands.pendingForTarget(closingPlaybackIdentity, nowMs);
       if (
         pendingCommand
         && roomSongCommands.fail(closingPlaybackIdentity, pendingCommand.commandId)
       ) {
-        broadcastJson(roomSongCommandStatusPayload());
+        broadcastRoomSongCommandFailure(pendingCommand.commandId, 'playback-disconnected', nowMs);
+        broadcastJson(roomSongCommandStatusPayload(nowMs));
       }
     }
 

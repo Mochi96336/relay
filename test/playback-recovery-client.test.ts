@@ -26,17 +26,26 @@ test('server-authorized recovery target may publish command proof before its rol
   assert.match(render, /relay:youtube-telemetry/);
 });
 
-test('stale observer gets the replace-song form without an inline takeover action', () => {
-  assert.match(surface, /canRecoverPlayback/);
-  assert.match(surface, /role === 'observer' && !recoverable/,
-    'only a healthy observer should have the song form hidden by DOM state');
+test('Song surface uses canonical Mic state to decide shared replace-song access', () => {
+  assert.match(surface, /canChangeRoomSong/);
+  assert.match(surface, /isMicOwner: detail\.isMicOwner === true/);
+  assert.match(surface, /isMicFree: detail\.isMicFree === true/);
+  assert.match(surface, /changeButton\.hidden = !canChange \|\| !videoId/);
   assert.match(surface, /播放主控已失聯/);
   assert.doesNotMatch(surface, /recover-youtube|playback-recovery-actions|在這支手機繼續播放/);
 
-  assert.match(surfaceCss, /data-playback-health="disconnected"[^\n]*\.youtube-form/);
-  assert.match(surfaceCss, /data-playback-health="stale"[^\n]*\.youtube-form/);
-  assert.match(surfaceCss, /display: grid;/,
-    'CSS must not keep the recovery form hidden after JS makes it available');
+  assert.match(surfaceCss, /data-playback-role="observer"\]\[data-song-editing="true"\][^\n]*\.youtube-form/);
+  assert.doesNotMatch(surfaceCss, /data-playback-role="observer"\]\[data-playback-health=/,
+    'leader health alone must not expose the form to a non-owner observer');
+});
+
+test('the exact playback holder does not lose Change Song while Mic state reconnects', () => {
+  assert.match(surface, /canChangeRoomSong/);
+  const policy = readFileSync(new URL('../public/playback-policy.js', import.meta.url), 'utf8');
+  assert.ok(
+    policy.indexOf("hasSong && role === 'holder'") < policy.indexOf('if (isMicFree)'),
+    'exact playback authority must be evaluated before the secondary Mic projection',
+  );
 });
 
 test('server-authorized room recovery requests use the normal playback command path', () => {

@@ -140,6 +140,18 @@ describe('room song command authority and serialization', () => {
     );
     assert.deepEqual(other, { ok: false, reason: 'mic-owner-required' });
 
+    const otherLoad = session.begin(
+      command('command-load-2', 0, 'load', { videoId: OTHER_VIDEO }),
+      B.participantId,
+      B,
+      A.participantId,
+      room(),
+      0,
+      1,
+      0,
+    );
+    assert.deepEqual(otherLoad, { ok: false, reason: 'mic-owner-required' });
+
     const sibling = session.begin(
       command('command-play-2', 0, 'play'),
       A.participantId,
@@ -166,6 +178,90 @@ describe('room song command authority and serialization', () => {
       0,
     );
     assert.deepEqual(result, { ok: false, reason: 'playback-handoff-required' });
+  });
+
+  test('delegates a shared Mic-free load to the healthy playback leader', () => {
+    const session = new RoomSongCommandSession();
+    const result = session.begin(
+      command('command-shared-load-1', 0, 'load', { videoId: OTHER_VIDEO }),
+      B.participantId,
+      B,
+      null,
+      room(),
+      0,
+      1,
+      0,
+    );
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.command.issuedByParticipantId, B.participantId);
+    assert.deepEqual(result.command.target, A);
+    assert.equal(result.command.body.action, 'load');
+    assert.equal(result.command.body.videoId, OTHER_VIDEO);
+  });
+
+  test('keeps a briefly stale but product-held leader as the shared load target', () => {
+    const heldSession = new RoomSongCommandSession();
+    const held = heldSession.begin(
+      command('command-held-load-1', 0, 'load', { videoId: OTHER_VIDEO }),
+      B.participantId,
+      B,
+      null,
+      room({ leaderFresh: false, connected: false, ageMs: 2_000 }),
+      0,
+      1,
+      2_000,
+    );
+    assert.equal(held.ok, true);
+    if (held.ok) assert.deepEqual(held.command.target, A);
+
+    const expiredSession = new RoomSongCommandSession();
+    const expired = expiredSession.begin(
+      command('command-expired-load-1', 0, 'load', { videoId: OTHER_VIDEO }),
+      B.participantId,
+      B,
+      null,
+      room({ leaderFresh: false, connected: false, ageMs: 6_001 }),
+      0,
+      1,
+      6_001,
+    );
+    assert.equal(expired.ok, true);
+    if (expired.ok) assert.deepEqual(expired.command.target, B);
+  });
+
+  test('timeout sweep returns the terminal command exactly once', () => {
+    const session = new RoomSongCommandSession();
+    const begun = session.begin(
+      command('command-timeout-1', 0, 'load', { videoId: OTHER_VIDEO }),
+      A.participantId,
+      A,
+      null,
+      room(),
+      0,
+      1,
+      0,
+    );
+    assert.equal(begun.ok, true);
+    assert.equal(session.sweep(4_001)?.commandId, 'command-timeout-1');
+    assert.equal(session.sweep(4_002), null);
+  });
+
+  test('does not delegate transport controls from a Mic-free observer', () => {
+    const session = new RoomSongCommandSession();
+    const result = session.begin(
+      command('command-shared-play-1', 0, 'play'),
+      B.participantId,
+      B,
+      null,
+      room(),
+      0,
+      1,
+      0,
+    );
+
+    assert.deepEqual(result, { ok: false, reason: 'playback-leader-required' });
   });
 
   test('uses expectedRevision as a compare-and-swap boundary', () => {

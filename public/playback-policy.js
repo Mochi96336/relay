@@ -53,6 +53,32 @@ export function canRecoverPlayback({ role, timeline }) {
   return health === 'missing' || health === 'disconnected' || health === 'stale';
 }
 
+/**
+ * When the Mic is free, changing the room Song is a shared action. The server
+ * still routes that load through the one healthy playback leader, so shared
+ * control never implies that every participant becomes an audio source.
+ *
+ * While somebody owns the Mic, that singer remains the product-level Song
+ * controller even when the exact iframe that supplied the media clock has
+ * disappeared. The next command still goes through server authority.
+ */
+export function canChangeRoomSong({ role, timeline, isMicOwner, isMicFree }) {
+  if (!timeline || typeof timeline !== 'object') return false;
+  if (timeline.handoffState && timeline.handoffState !== 'idle') return false;
+
+  const hasSong = typeof timeline.videoId === 'string' && timeline.videoId.length > 0;
+  // Exact playback authority is sufficient UI evidence on its own. Mic state
+  // arrives on a separate canonical snapshot and must not make the real holder
+  // lose its control while those snapshots reconnect or cross in flight.
+  if (hasSong && role === 'holder') return true;
+  if (isMicFree) return true;
+  if (!isMicOwner) return false;
+  if (!hasSong) return true;
+
+  const health = playbackLeaderHealth(timeline);
+  return health === 'missing' || health === 'disconnected' || health === 'stale';
+}
+
 export function shouldForceMuteListen({ role, timeline }) {
   if (role !== 'holder' && role !== 'preparing') return false;
   if (!timeline || typeof timeline !== 'object') return false;

@@ -98,3 +98,23 @@ test('a transient attention row cannot take the floor from Room sound', async ()
     'the shell grid has to declare the attention row it places',
   );
 });
+
+test('the floor stack stays anchored when its optional rows are not rendered', async () => {
+  const css = await readFile(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8');
+
+  // The stack is built from rows that each disappear on their own terms: the
+  // take strip is removed entirely when Record is unavailable and no history
+  // exists, and the Mic rail only exists while this phone holds a live mic. A
+  // display:none row carries no margin, so anchoring must not live on one of
+  // them - that left the Mic rail floating mid-screen with an empty floor.
+  assert.match(
+    css,
+    /> \.mic-actions,\s*\n[^\n]*> #mic-takeover \{\s*\n\s*margin-bottom:\s*auto !important;/,
+    'the always-rendered action row above the stack has to claim the free space',
+  );
+  assert.match(
+    css,
+    /> \.take-strip[\s\S]*margin-top:\s*auto !important/,
+    'the take strip keeps its own anchor for the case where it is rendered',
+  );
+});

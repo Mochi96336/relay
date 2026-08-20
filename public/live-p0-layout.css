@@ -216,6 +216,19 @@ html body .performance-stage {
   min-height: 0;
 }
 
+/* What actually holds the floor stack down.
+   Anchoring used to live only on .take-strip's `margin-top: auto`, which fails
+   the moment that row is not rendered at all - Record unavailable and no
+   history - because a display:none element carries no margin. The Mic rail then
+   floated up under the Mic action with the floor left empty beneath it.
+   The action row above the stack is always rendered in one of these two forms
+   (they are mutually exclusive: a visible takeover hides .mic-actions), so the
+   free space is claimed there instead, whatever optional rows follow. */
+html body .performance-stage > .mic-actions,
+html body .performance-stage > #mic-takeover {
+  margin-bottom: auto !important;
+}
+
 /* Idle/ready: Record lives on the left and the existing Take-history entry on
    the right. When #65 hides Record because server readiness is false, a real
    history entry may still keep this row alive; history must never disappear

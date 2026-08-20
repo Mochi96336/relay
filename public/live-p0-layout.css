@@ -198,14 +198,19 @@ body[data-listen="muted"] .live-actions .local-sound-control #listen-gain {
    control stack at the bottom of Live instead of floating through the middle. */
 html body .live-shell {
   min-height: 100dvh;
-  grid-template-rows: max-content max-content minmax(max-content, 1fr) max-content;
+  grid-template-rows: max-content max-content minmax(max-content, 1fr) max-content max-content;
   align-content: stretch;
 }
 
 html body .live-shell > .room-header { grid-row: 1; }
 html body .live-shell > .song-stage { grid-row: 2; }
 html body .live-shell > .performance-stage { grid-row: 3; }
-html body .live-shell > .live-actions { grid-row: 4; }
+/* Attention needs a row of its own. Left unplaced it is auto-placed into an
+   implicit row *below* the floor control stack, so every appearance of a
+   transient issue steals the floor and lifts Room sound off it. Its row is
+   0-height while the region is hidden, so this reserves nothing. */
+html body .live-shell > #system-attention { grid-column: live-left / live-right; grid-row: 4; }
+html body .live-shell > .live-actions { grid-row: 5; }
 
 html body .performance-stage {
   min-height: 0;

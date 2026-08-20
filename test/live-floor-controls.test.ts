@@ -71,3 +71,30 @@ test('Mic gain is the rail immediately above Room sound', async () => {
   const roomRule = css.lastIndexOf('.live-actions');
   assert.ok(micRule >= 0 && roomRule > micRule, 'Mic rail should be authored before the bottom Room sound row');
 });
+
+test('a transient attention row cannot take the floor from Room sound', async () => {
+  const [css, index] = await Promise.all([
+    readFile(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8'),
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+  ]);
+
+  // #system-attention is authored after .live-actions, so without an explicit
+  // row it is auto-placed *below* the floor stack and pushes Room sound up
+  // every time an issue appears and clears.
+  assert.match(index, /<footer class="live-actions"[\s\S]*<section id="system-attention"/);
+  assert.match(
+    css,
+    /> #system-attention[^}]*grid-row:\s*4/,
+    'attention needs its own row above the floor control stack',
+  );
+  assert.match(
+    css,
+    /> \.live-actions \{ grid-row:\s*5; \}/,
+    'Room sound stays the last row so it keeps the floor',
+  );
+  assert.match(
+    css,
+    /grid-template-rows:\s*max-content max-content minmax\(max-content, 1fr\) max-content max-content;/,
+    'the shell grid has to declare the attention row it places',
+  );
+});

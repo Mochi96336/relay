@@ -198,8 +198,17 @@ Defaults currently worth remembering:
 | `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` | 3000 | probe path search range |
 | `RELAY_CALIBRATION_PROBE_MIN_CORRELATION` | 0.5 | minimum accepted probe match |
 | `RELAY_CALIBRATION_DELTA_REAPPLY_MS` | 40 | delta movement before changing applied total |
+| `RELAY_ROBOT_OFFSET_WINDOW_MS` | 2000 | history the reported player offset is taken as a median over |
+| `RELAY_ROBOT_SCREEN` | 480x360x24 | Xvfb screen and Chromium window for the unwatched robot player |
 | robot delta freshness | 2000 ms | age after which the last player offset loses authority |
 | robot seek settle | 1000 ms | client-side interval before delta resumes after a seek |
+
+The player offset is a median over `RELAY_ROBOT_OFFSET_WINDOW_MS`, not the last
+report. The raw IFrame value carries about 19 ms of peak-to-peak noise on the
+deployed Pi while the position it describes drifts by well under 1 ms/s, and
+feeding that noise to a 40 ms re-apply threshold re-anchored the microphone
+timeline several times a minute. Freshness stays a property of arrival: a robot
+that stops reporting loses timing authority exactly when it always did.
 
 ## Next real-hardware validation
 

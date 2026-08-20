@@ -59,6 +59,12 @@ for _attempt in {1..100}; do
   [[ -f "$TEST_STATE/npm-ready" ]] && break
   sleep 0.01
 done
+# Ending the capture ends the whole route, so hold on until the browser has
+# actually been launched. Otherwise what the launcher passed to Xvfb is a race.
+for _attempt in {1..100}; do
+  [[ -f "$TEST_STATE/browser-arguments" ]] && break
+  sleep 0.01
+done
 printf '\\0\\0'
 `);
 
@@ -168,6 +174,48 @@ describe('robot-source launcher', () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /RELAY_BACKING_CAPTURE_LATENCY_MS must be an integer/);
+  });
+
+  /**
+   * Nobody watches this screen; only its audio leaves the machine. Rendering a
+   * desktop-sized player in software costs decode headroom the player position
+   * is measured against, and that measurement is what the mixer aligns the
+   * microphone to.
+   */
+  test('renders the unseen player on a small screen by default', () => {
+    const { env, state } = mockedEnvironment();
+    const result = run('robot-source.sh', { ...env, RELAY_INFRA_KEY: 'ab'.repeat(32) });
+
+    assert.ifError(result.error);
+    const browserArguments = readFileSync(path.join(state, 'browser-arguments'), 'utf8');
+    assert.match(browserArguments, /-screen 0 480x360x24/);
+    assert.match(browserArguments, /--window-size=480,360/);
+  });
+
+  test('an operator can choose the screen, and the window follows it', () => {
+    const { env, state } = mockedEnvironment();
+    const result = run('robot-source.sh', {
+      ...env,
+      RELAY_INFRA_KEY: 'ab'.repeat(32),
+      RELAY_ROBOT_SCREEN: '640x480x24',
+    });
+
+    assert.ifError(result.error);
+    const browserArguments = readFileSync(path.join(state, 'browser-arguments'), 'utf8');
+    assert.match(browserArguments, /-screen 0 640x480x24/);
+    assert.match(browserArguments, /--window-size=640,480/);
+  });
+
+  test('rejects a screen geometry Xvfb would not understand', () => {
+    const { env } = mockedEnvironment();
+    const result = run('robot-source.sh', {
+      ...env,
+      RELAY_INFRA_KEY: 'ab'.repeat(32),
+      RELAY_ROBOT_SCREEN: '480x360',
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /RELAY_ROBOT_SCREEN must look like WIDTHxHEIGHTxDEPTH/);
   });
 });
 

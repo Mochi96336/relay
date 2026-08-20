@@ -14,6 +14,12 @@ CAPTURE_RATE="${RELAY_BACKING_SAMPLE_RATE:-48000}"
 # boot calibration measured as 2110 ms of backing latency and the mixer then
 # had to correct for. It is buffering, not load: the Pi sat at 0.9 with four cores.
 CAPTURE_LATENCY_MS="${RELAY_BACKING_CAPTURE_LATENCY_MS:-40}"
+# Nothing ever looks at this screen; only its audio leaves the machine. Left at
+# the xvfb-run default the robot renders a desktop-sized YouTube player entirely
+# in software - this host blocklists WebGL and has no working Vulkan - and the
+# decode load shows up as jitter in the player position the mixer aligns to.
+# Small enough to be cheap, large enough that YouTube still serves a real player.
+SCREEN_GEOMETRY="${RELAY_ROBOT_SCREEN:-480x360x24}"
 created_module=""
 parec_pid=""
 backing_pid=""
@@ -90,6 +96,12 @@ fi
   || die "RELAY_BACKING_SAMPLE_RATE must be an integer from 8000 to 192000"
 [[ "$CAPTURE_LATENCY_MS" =~ ^[0-9]+$ ]] && ((10#$CAPTURE_LATENCY_MS >= 5 && 10#$CAPTURE_LATENCY_MS <= 2000)) \
   || die "RELAY_BACKING_CAPTURE_LATENCY_MS must be an integer from 5 to 2000"
+[[ "$SCREEN_GEOMETRY" =~ ^[0-9]+x[0-9]+x[0-9]+$ ]] \
+  || die "RELAY_ROBOT_SCREEN must look like WIDTHxHEIGHTxDEPTH, for example 480x360x24"
+# Chromium wants WIDTH,HEIGHT; without it the window keeps its own default size
+# and renders a viewport larger than the screen it was given.
+WINDOW_SIZE="${SCREEN_GEOMETRY%x*}"
+WINDOW_SIZE="${WINDOW_SIZE/x/,}"
 [[ "${RELAY_INFRA_KEY:-}" =~ ^[0-9a-f]{64}$ ]] \
   || die "RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret"
 
@@ -136,10 +148,11 @@ if [[ -n "${RELAY_KEY:-}" ]]; then
 fi
 encoded_infra_key="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$RELAY_INFRA_KEY")"
 source_url+="#infra=$encoded_infra_key"
-log "opening http://localhost:${PORT}/source.html?robot=1 with audio routed to $SINK_NAME at $CAPTURE_RATE Hz / ${CAPTURE_LATENCY_MS} ms${RELAY_KEY:+ (authenticated)}"
-PULSE_SINK="$SINK_NAME" xvfb-run -a "$CHROMIUM_BIN" \
+log "opening http://localhost:${PORT}/source.html?robot=1 with audio routed to $SINK_NAME at $CAPTURE_RATE Hz / ${CAPTURE_LATENCY_MS} ms on a ${SCREEN_GEOMETRY} screen${RELAY_KEY:+ (authenticated)}"
+PULSE_SINK="$SINK_NAME" xvfb-run -a -s "-screen 0 $SCREEN_GEOMETRY" "$CHROMIUM_BIN" \
   --user-data-dir="$profile_dir" \
   --autoplay-policy=no-user-gesture-required \
+  --window-size="$WINDOW_SIZE" \
   "$source_url" &
 browser_pid=$!
 

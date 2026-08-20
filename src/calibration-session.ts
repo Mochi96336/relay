@@ -76,7 +76,8 @@ export type CalibrationSessionOptions = {
     backing: Int16Array,
     sampleRate: number,
     maxLagMs?: number,
-  ) => TimingCalibrationAnalysis;
+    signal?: AbortSignal,
+  ) => TimingCalibrationAnalysis | PromiseLike<TimingCalibrationAnalysis>;
   /** Fired when the phase settles on complete or failed. */
   onSettled?: () => void;
   /**
@@ -138,6 +139,12 @@ function emptyCapture(): Capture {
   return { chunks: [], firstStart: null, lastEnd: 0 };
 }
 
+function isPromiseLikeAnalysis(
+  value: TimingCalibrationAnalysis | PromiseLike<TimingCalibrationAnalysis>,
+): value is PromiseLike<TimingCalibrationAnalysis> {
+  return 'then' in value && typeof value.then === 'function';
+}
+
 /**
  * Renders a side onto `origin`, the session index shared by both. Anything the
  * transport never delivered stays zero, so a hole costs the measurement a
@@ -191,6 +198,10 @@ export class CalibrationSession {
   private mic = emptyCapture();
   private backing = emptyCapture();
   private startedAt = 0;
+  private analysisPending = false;
+  private analysisAbortController: AbortController | null = null;
+  /** Invalidates an answer when its collection is restarted or cancelled. */
+  private analysisRevision = 0;
 
   // The measurement describes one pairing of transports. Remembering which lets
   // the server say the answer is stale instead of applying it to a setup it was
@@ -227,6 +238,7 @@ export class CalibrationSession {
   }
 
   start(nowMs = performance.now()) {
+    this.invalidatePendingAnalysis();
     this.phase = 'collecting';
     this.startedAt = nowMs;
     // A fresh run, so nothing an earlier one measured counts towards agreement.
@@ -240,6 +252,7 @@ export class CalibrationSession {
   }
 
   fail(message: string) {
+    this.invalidatePendingAnalysis();
     this.phase = 'failed';
     this.error = message;
     this.confidence = null;
@@ -259,6 +272,7 @@ export class CalibrationSession {
    * construction, does not produce.
    */
   applyExternalResult(result: { micLagMs: number; confidence: number }) {
+    this.invalidatePendingAnalysis();
     this.phase = 'complete';
     this.micLagMs = result.micLagMs;
     this.measuredContext = this.context();
@@ -275,6 +289,7 @@ export class CalibrationSession {
 
   /** Drops any measurement, for when the thing it described is gone. */
   reset() {
+    this.invalidatePendingAnalysis();
     this.phase = 'idle';
     this.error = null;
     this.candidates = [];
@@ -297,7 +312,11 @@ export class CalibrationSession {
 
   /** Gives up on a collection that stopped making progress. */
   tick(nowMs = performance.now()) {
-    if (this.phase !== 'collecting' || nowMs - this.startedAt <= this.timeoutMs) return false;
+    if (
+      this.phase !== 'collecting'
+      || this.analysisPending
+      || nowMs - this.startedAt <= this.timeoutMs
+    ) return false;
 
     const micMs = this.spanMs(this.mic);
     const backingMs = this.spanMs(this.backing);
@@ -347,6 +366,13 @@ export class CalibrationSession {
   private clearCapture() {
     this.mic = emptyCapture();
     this.backing = emptyCapture();
+  }
+
+  private invalidatePendingAnalysis() {
+    this.analysisAbortController?.abort();
+    this.analysisAbortController = null;
+    this.analysisRevision += 1;
+    this.analysisPending = false;
   }
 
   /**
@@ -444,7 +470,11 @@ export class CalibrationSession {
 
     // A burst may already contain several complete windows. Drain each one in
     // turn while `finish` keeps the suffix for the next agreement round.
-    while (this.phase === 'collecting' && this.captured >= this.requiredSamples) this.finish();
+    while (
+      this.phase === 'collecting'
+      && !this.analysisPending
+      && this.captured >= this.requiredSamples
+    ) this.finish();
   }
 
   private finish() {
@@ -466,66 +496,113 @@ export class CalibrationSession {
         );
       }
 
-      const result = this.maxLagMs === undefined
-        ? this.analyze(mic.samples, backing.samples, this.sampleRate)
-        : this.analyze(mic.samples, backing.samples, this.sampleRate, this.maxLagMs);
+      const abortController = new AbortController();
+      this.analysisAbortController = abortController;
+      const result = this.analyze(
+        mic.samples,
+        backing.samples,
+        this.sampleRate,
+        this.maxLagMs,
+        abortController.signal,
+      );
 
-      this.candidates.push(result.micLagMs);
-      if (this.candidates.length > this.agreementWindows) this.candidates.shift();
-
-      if (!this.candidatesAgree()) {
-        // Not an error: one window measured something, and the next has to say
-        // the same thing before it is worth believing. Collect another.
-        this.confidence = result.confidence;
-        this.segmentLagsMs = result.segmentLagsMs;
-        this.micLevelDbfs = result.micLevelDbfs;
-        this.backingLevelDbfs = result.backingLevelDbfs;
-        this.error = null;
-
-        // Full agreement is a floor of agreementWindows * durationMs even in
-        // the best case, and nothing corrected at all for that whole stretch
-        // has its own cost. A confident single window beats the fallback
-        // network estimate it would otherwise run on meanwhile - collection
-        // keeps going regardless, and a confirmed answer still replaces this
-        // one the moment agreement lands, same as if it had never applied.
-        if (
-          this.provisionalConfidence !== undefined
-          && result.confidence >= this.provisionalConfidence
-          && (this.micLagMs === null || this.provisional)
-        ) {
-          this.micLagMs = result.micLagMs;
-          this.measuredContext = this.context();
-          this.provisional = true;
-        }
-
-        this.advancePast(windowEnd);
-        this.startedAt = this.now();
-        this.onSettled();
+      if (isPromiseLikeAnalysis(result)) {
+        const revision = ++this.analysisRevision;
+        this.analysisPending = true;
+        void Promise.resolve(result).then(
+          (analysis) => this.settlePendingAnalysis(revision, windowEnd, analysis),
+          (error: unknown) => this.rejectPendingAnalysis(revision, error),
+        );
         return;
       }
 
-      this.micLagMs = result.micLagMs;
-      this.measuredContext = this.context();
+      this.analysisAbortController = null;
+      this.applyAnalysis(result, windowEnd);
+    } catch (error) {
+      this.analysisAbortController = null;
+      this.rejectAnalysis(error);
+    }
+  }
+
+  private settlePendingAnalysis(
+    revision: number,
+    windowEnd: number,
+    result: TimingCalibrationAnalysis,
+  ) {
+    if (revision !== this.analysisRevision || !this.analysisPending) return;
+    this.analysisPending = false;
+    this.analysisAbortController = null;
+    this.applyAnalysis(result, windowEnd);
+
+    while (
+      this.phase === 'collecting'
+      && !this.analysisPending
+      && this.captured >= this.requiredSamples
+    ) this.finish();
+  }
+
+  private rejectPendingAnalysis(revision: number, error: unknown) {
+    if (revision !== this.analysisRevision || !this.analysisPending) return;
+    this.analysisPending = false;
+    this.analysisAbortController = null;
+    this.rejectAnalysis(error);
+  }
+
+  private applyAnalysis(result: TimingCalibrationAnalysis, windowEnd: number) {
+    this.candidates.push(result.micLagMs);
+    if (this.candidates.length > this.agreementWindows) this.candidates.shift();
+
+    if (!this.candidatesAgree()) {
+      // Not an error: one window measured something, and the next has to say
+      // the same thing before it is worth believing. Collect another.
       this.confidence = result.confidence;
       this.segmentLagsMs = result.segmentLagsMs;
       this.micLevelDbfs = result.micLevelDbfs;
       this.backingLevelDbfs = result.backingLevelDbfs;
       this.error = null;
-      this.provisional = false;
-      this.phase = 'complete';
-    } catch (error) {
-      this.phase = 'failed';
-      this.error = error instanceof Error ? error.message : String(error);
-      this.confidence = null;
-      this.segmentLagsMs = [];
-    } finally {
-      // A non-agreeing but valid window deliberately stays collecting and has
-      // already retained its overrun for the next round. `finally` also runs
-      // before that branch's `return`, so clearing unconditionally here erased
-      // the suffix we had just preserved.
-      if (this.phase !== 'collecting') this.clearCapture();
+
+      // Full agreement is a floor of agreementWindows * durationMs even in
+      // the best case, and nothing corrected at all for that whole stretch
+      // has its own cost. A confident single window beats the fallback
+      // network estimate it would otherwise run on meanwhile - collection
+      // keeps going regardless, and a confirmed answer still replaces this
+      // one the moment agreement lands, same as if it had never applied.
+      if (
+        this.provisionalConfidence !== undefined
+        && result.confidence >= this.provisionalConfidence
+        && (this.micLagMs === null || this.provisional)
+      ) {
+        this.micLagMs = result.micLagMs;
+        this.measuredContext = this.context();
+        this.provisional = true;
+      }
+
+      this.advancePast(windowEnd);
+      this.startedAt = this.now();
+      this.onSettled();
+      return;
     }
 
+    this.micLagMs = result.micLagMs;
+    this.measuredContext = this.context();
+    this.confidence = result.confidence;
+    this.segmentLagsMs = result.segmentLagsMs;
+    this.micLevelDbfs = result.micLevelDbfs;
+    this.backingLevelDbfs = result.backingLevelDbfs;
+    this.error = null;
+    this.provisional = false;
+    this.phase = 'complete';
+    this.clearCapture();
+
+    this.onSettled();
+  }
+
+  private rejectAnalysis(error: unknown) {
+    this.phase = 'failed';
+    this.error = error instanceof Error ? error.message : String(error);
+    this.confidence = null;
+    this.segmentLagsMs = [];
+    this.clearCapture();
     this.onSettled();
   }
 }

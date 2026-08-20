@@ -15,6 +15,7 @@ import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './mon
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
+import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
@@ -461,6 +462,7 @@ const calibration = new CalibrationSession({
   agreementToleranceMs: envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25),
   provisionalConfidence: Number(process.env.RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE ?? 0.55),
   maxLagMs: envMs('RELAY_CALIBRATION_MAX_LAG_MS', 2_500),
+  analyze: analyzeTimingCalibrationInWorker,
   onSettled: () => {
     syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());

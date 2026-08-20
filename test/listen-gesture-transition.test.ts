@@ -54,6 +54,26 @@ test('Listen gates first transport start on a running AudioContext while preserv
   assert.doesNotMatch(reconcileSection, /liveEdgeRecoveryRequired\s*=\s*true/,
     'resume trouble alone must not be equivalent to a stale realtime timeline');
 
-  assert.match(source, /context\.addEventListener\('statechange'[\s\S]*context\.state === 'running'[\s\S]*audioInterruption\.finish\(\)[\s\S]*recovery\.requiresLiveEdge[\s\S]*liveEdgeRecoveryRequired = true[\s\S]*audioEverRunning = true[\s\S]*stalledResumeGestures = 0[\s\S]*disarmAudioUnlock\(\)[\s\S]*reconcile\(/,
-    'AudioContext state changes finish interruption evidence before deciding whether live-edge recovery is needed');
+  assert.match(
+    source,
+    /function finishAudioInterruptionEvidence\(\) \{[\s\S]*const recovery = audioInterruption\.finish\(\);[\s\S]*if \(recovery\.requiresLiveEdge\) liveEdgeRecoveryRequired = true;[\s\S]*return recovery\.requiresLiveEdge;/,
+    'the interruption helper turns completed evidence into live-edge recovery state',
+  );
+
+  const stateChangeStart = source.indexOf("context.addEventListener('statechange'");
+  const stateChangeEnd = source.indexOf("      // Consume the user's first interaction", stateChangeStart);
+  assert.ok(stateChangeStart >= 0 && stateChangeEnd > stateChangeStart);
+  const stateChangeSection = source.slice(stateChangeStart, stateChangeEnd);
+  const finishEvidenceAt = stateChangeSection.indexOf('finishAudioInterruptionEvidence()');
+  const markRunningAt = stateChangeSection.indexOf('audioEverRunning = true');
+  assert.ok(
+    finishEvidenceAt >= 0 && markRunningAt > finishEvidenceAt,
+    'AudioContext state changes finish interruption evidence before marking the graph running again',
+  );
+  assert.ok(
+    stateChangeSection.indexOf('stalledResumeGestures = 0') > markRunningAt
+      && stateChangeSection.indexOf('disarmAudioUnlock()') > markRunningAt
+      && stateChangeSection.indexOf('reconcile(') > markRunningAt,
+    'running-state bookkeeping and reconciliation happen after interruption evidence is finalized',
+  );
 });

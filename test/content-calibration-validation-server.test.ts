@@ -96,7 +96,10 @@ async function establishBaseline(
   publisher.send(playingTelemetry);
   await primeStreams(backing, publisher);
   publisher.send({ type: 'start-timing-calibration' });
-  await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+  await monitor.waitFor(
+    (m) => m.type === 'timing-calibration-status' && m.state === 'collecting',
+    8_000,
+  );
 
   const pair = laggedPair(8, RATE, lagMs, 7);
   await Promise.all([

@@ -95,6 +95,8 @@ describe('room song latest-intent convergence', () => {
       positionSeconds: 40,
       state: 1,
       playbackRate: 1,
+      // A seek moved off any ending, so Play here is a resume, not a replay.
+      ended: false,
     });
   });
 
@@ -146,6 +148,7 @@ describe('room song latest-intent convergence', () => {
       positionSeconds: 40.1,
       state: 2,
       playbackRate: 1.25,
+      ended: false,
     });
   });
 

@@ -2,6 +2,7 @@ import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
 import { handoffPreparationPosition } from './playback-handoff-timing.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
+import { isNewPlayIntent, settledPlaybackState } from './song-playback-intent.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const input = document.querySelector('#youtube-url');
@@ -212,6 +213,9 @@ function readSnapshot() {
     timelineDeltaSeconds,
     previousVideoId: previous?.videoId ?? null,
     previousState: previous?.state ?? null,
+    // What the player was doing before it started buffering, so a stall cannot
+    // erase the state a classification is meant to compare against.
+    previousSettledState: settledPlaybackState(previous),
     previousPlaybackRate: previous?.playbackRate ?? null,
   };
 
@@ -315,7 +319,10 @@ function localMutationForSnapshot(snapshot) {
   }
 
   if (snapshot.state !== snapshot.previousState) {
-    if (snapshot.state === 1 && ![1, 3].includes(snapshot.previousState)) {
+    // Rebuffering re-enters PLAYING without anyone asking for it; restarting a
+    // finished song also passes through BUFFERING. song-playback-intent.js owns
+    // the distinction.
+    if (isNewPlayIntent(snapshot)) {
       return { action: 'play' };
     }
     if (snapshot.state === 2 && snapshot.previousState !== 2) {

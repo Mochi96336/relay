@@ -15,6 +15,15 @@ export type RoomSongDesiredState = {
   positionSeconds: number;
   state: DesiredPlaybackState;
   playbackRate: number;
+  /**
+   * The room reached the end of the song rather than being parked there.
+   *
+   * `state` stays a state a player can actually be *put into*, so a finished
+   * song still desires `2`. What it cannot express is that the position is an
+   * ending rather than a chosen pause point, and that is exactly what decides
+   * what Play means next: resume, or start over.
+   */
+  ended: boolean;
 };
 
 export type AppliedRoomSongCommandBody = RoomSongCommandBody & {
@@ -159,10 +168,13 @@ function sameCommandBody(a: RoomSongCommandBody, b: RoomSongCommandBody) {
   return true;
 }
 
+/** YouTube's ENDED. Distinct from PAUSED (2), which this file used to fold it into. */
+const ENDED = 0;
+
 function desiredPlaybackState(value: unknown): DesiredPlaybackState {
   const state = Number(value);
   if (state === 1 || state === 3) return 1;
-  if (state === 0 || state === 2) return 2;
+  if (state === ENDED || state === 2) return 2;
   return 5;
 }
 
@@ -176,6 +188,7 @@ function desiredFromRoom(status: RoomSongStatus): RoomSongDesiredState | null {
     positionSeconds,
     state: desiredPlaybackState(status.state),
     playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
+    ended: Number(status.state) === ENDED,
   };
 }
 
@@ -200,12 +213,23 @@ function foldDesired(
       positionSeconds: body.positionSeconds,
       state: 5,
       playbackRate: base?.playbackRate ?? 1,
+      ended: false,
     };
   }
   if (!base) return null;
-  if (body.action === 'play') return { ...base, state: 1 };
+  if (body.action === 'play') {
+    // Play against a finished song is a replay, not a resume. Folding it as a
+    // resume kept the room's authoritative position at the ending, so the
+    // command played the last fraction of a second, ended again, and the room
+    // answered every further attempt by seeking back to the end.
+    return base.ended
+      ? { ...base, state: 1, positionSeconds: 0, ended: false }
+      : { ...base, state: 1 };
+  }
   if (body.action === 'pause') return { ...base, state: 2 };
-  if (body.action === 'seek') return { ...base, positionSeconds: body.positionSeconds };
+  // Moving the position off the ending means the room is no longer finished,
+  // whatever the player reports on the way there.
+  if (body.action === 'seek') return { ...base, positionSeconds: body.positionSeconds, ended: false };
   return { ...base, playbackRate: body.playbackRate };
 }
 

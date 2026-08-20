@@ -120,6 +120,7 @@ describe('timing validity boundary', () => {
       restarted.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await restarted.waitForType('registered');
       await sendPcmInChunks(restarted, tone(0.5, 0.4));
+
       const stale = await monitor.waitFor(
         (m) => m.type === 'source-status'
           && m.calibrationStale === true

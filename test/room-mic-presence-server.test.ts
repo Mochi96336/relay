@@ -14,14 +14,19 @@ function pcm(ms = 40) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
 
-const evidence = {
-  type: 'mic-presence-telemetry',
-  version: 1,
-  rmsDbfs: -31.5,
-  spectrumBands: [0.12, 0.48, 1, 0.37, 0.08],
-};
+function evidence(captureGeneration: number) {
+  return {
+    type: 'mic-presence-telemetry',
+    version: 1,
+    captureGeneration,
+    rmsDbfs: -31.5,
+    spectrumBands: [0.12, 0.48, 1, 0.37, 0.08],
+    f0Hz: 220.4,
+    pitchConfidence: 0.91,
+  };
+}
 
-test('current singer status socket can relay Mic presence while listeners cannot forge it', async () => {
+test('only the authoritative singer and current capture generation can relay truthful Mic F0 evidence', async () => {
   const server = await startRelay(FAST);
   try {
     const observer = await RelayClient.connect(server, '?participant=presence-observer&name=Observer');
@@ -41,7 +46,7 @@ test('current singer status socket can relay Mic presence while listeners cannot
     await sleep(60);
 
     const beforeForgery = observer.messages.length;
-    observer.send(evidence);
+    observer.send(evidence(singerMedia.generationId));
     await sleep(120);
     assert.equal(
       observer.messages.slice(beforeForgery).some((message) => message.type === 'room-mic-presence'),
@@ -49,17 +54,28 @@ test('current singer status socket can relay Mic presence while listeners cannot
       'a listener must not be able to manufacture room Mic evidence',
     );
 
-    singerStatus.send(evidence);
+    const beforeWrongGeneration = observer.messages.length;
+    singerStatus.send(evidence((singerMedia.generationId + 1) >>> 0));
+    await sleep(120);
+    assert.equal(
+      observer.messages.slice(beforeWrongGeneration).some((message) => message.type === 'room-mic-presence'),
+      false,
+      'stale/wrong capture generations must not survive a capture restart',
+    );
+
+    const currentEvidence = evidence(singerMedia.generationId);
+    singerStatus.send(currentEvidence);
     const relayed = await observer.waitFor((message) => (
       message.type === 'room-mic-presence'
       && message.ownerId === 'presence-singer'
     ));
 
     assert.equal(relayed.version, 1);
-    assert.equal(relayed.captureGeneration, singerMedia.generationId,
-      'server must bind display evidence to the active media generation');
-    assert.equal(relayed.rmsDbfs, evidence.rmsDbfs);
-    assert.deepEqual(relayed.spectrumBands, evidence.spectrumBands);
+    assert.equal(relayed.captureGeneration, singerMedia.generationId);
+    assert.equal(relayed.rmsDbfs, currentEvidence.rmsDbfs);
+    assert.deepEqual(relayed.spectrumBands, currentEvidence.spectrumBands);
+    assert.equal(relayed.f0Hz, currentEvidence.f0Hz);
+    assert.equal(relayed.pitchConfidence, currentEvidence.pitchConfidence);
 
     singerStatus.close();
     singerMedia.close();

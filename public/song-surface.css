@@ -3,10 +3,29 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
 }
-.song-heading-row .section-label { margin: 0; }
+.song-heading-row .section-label {
+  flex: none;
+  margin: 0 4px 0 0;
+}
+.song-heading-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b9bbc0;
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 550;
+  letter-spacing: -.01em;
+  text-align: left;
+}
+.song-heading-title[hidden] { display: none; }
+.youtube-form[hidden] { display: none; }
 .song-heading-actions {
+  flex: none;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -73,6 +92,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
+  text-align: left;
   gap: 4px;
   font-variant-numeric: tabular-nums;
 }
@@ -105,41 +125,6 @@
 }
 .song-observer-meta .song-observer-author[hidden],
 .song-observer-meta .song-observer-status[hidden] {
-  display: none;
-}
-.playback-recovery-actions {
-  margin-top: 3px;
-}
-.playback-recovery-actions button {
-  min-height: 40px;
-}
-
-/* Playback authority does not replace song identity. Reuse the same metadata
-   above the real holder player, but strip the observer card chrome/artwork so
-   the song name reads first and YouTube remains a subordinate control tool. */
-.song-stage[data-playback-role="holder"] .song-observer {
-  min-height: 0;
-  margin: 0 0 10px;
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  grid-template-columns: minmax(0, 1fr);
-}
-.song-stage[data-playback-role="holder"] .song-observer > :first-child {
-  display: none;
-}
-.song-stage[data-playback-role="holder"] .song-observer-meta {
-  padding: 0 2px 2px;
-  gap: 3px;
-}
-.song-stage[data-playback-role="holder"] .song-observer-meta strong {
-  -webkit-line-clamp: 1;
-  font-size: 18px;
-}
-.song-stage[data-playback-role="holder"] .song-observer-meta #room-song-timeline,
-.song-stage[data-playback-role="holder"] .song-observer-meta .song-observer-status,
-.song-stage[data-playback-role="holder"] .song-observer-meta .playback-recovery-actions {
   display: none;
 }
 
@@ -197,11 +182,5 @@
   }
   .song-observer-meta {
     padding: 10px 12px;
-  }
-  .song-stage[data-playback-role="holder"] .song-observer {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .song-stage[data-playback-role="holder"] .song-observer-meta {
-    padding: 0 2px 2px;
   }
 }

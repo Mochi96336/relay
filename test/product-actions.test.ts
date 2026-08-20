@@ -29,6 +29,7 @@ function model(
   readinessInput: ReadinessInput,
   takeLifecycle: 'idle' | 'recording' = 'idle',
   calibrationActive = false,
+  robotProbeTimingActive = true,
 ) {
   return buildProductViewModel({
     readiness: buildReadiness(readinessInput),
@@ -40,7 +41,7 @@ function model(
       videoId: 'abcdefghijk',
       connected: true,
       clockAgeMs: 0,
-      state: 1,
+      state: readinessInput.timelineState ?? null,
       handoffState: 'idle',
     },
     take: {
@@ -54,8 +55,8 @@ function model(
       calibrationActive,
       calibrationStale: false,
       alignmentClamped: false,
-      requiresRobotPlayerDelta: true,
-      robotProbeTimingActive: true,
+      requiresRobotPlayerDelta: robotProbeTimingActive,
+      robotProbeTimingActive,
       robotDeltaFresh: true,
     },
   });
@@ -86,6 +87,7 @@ test('active calibration disables Start Take even though calibration is normal p
   assert.equal(status.actions.startTakeBlockedReason, 'timing-calibration-active');
   assert.equal(status.actions.canStartCalibration, false);
   assert.equal(status.actions.startCalibrationBlockedReason, 'calibration-active');
+  assert.equal(status.actions.startCalibrationMode, 'boot-probe');
 });
 
 test('an active Take remains stoppable even if Robot health becomes blocked', () => {
@@ -97,12 +99,46 @@ test('an active Take remains stoppable even if Robot health becomes blocked', ()
   assert.equal(status.actions.canStopTake, true);
   assert.equal(status.actions.canStartCalibration, false);
   assert.equal(status.actions.startCalibrationBlockedReason, 'take-active');
+  assert.equal(status.actions.startCalibrationMode, 'boot-probe');
 });
 
-test('healthy Robot room exposes boot-probe calibration as the canonical action mode', () => {
-  const status = model(READY);
+test('Robot boot-probe stays startable with fresh capture when YouTube is not playing', () => {
+  const status = model({ ...READY, timelineState: 2 });
 
   assert.equal(status.actions.canStartCalibration, true);
   assert.equal(status.actions.startCalibrationBlockedReason, null);
   assert.equal(status.actions.startCalibrationMode, 'boot-probe');
+});
+
+test('Robot boot-probe stays startable when the phone timeline is disconnected', () => {
+  const status = model({
+    ...READY,
+    timelineConnected: false,
+    timelineState: null,
+  });
+
+  assert.equal(status.actions.canStartCalibration, true);
+  assert.equal(status.actions.startCalibrationBlockedReason, null);
+  assert.equal(status.actions.startCalibrationMode, 'boot-probe');
+});
+
+test('Robot capture freshness blocks without becoming phone-not-playing', () => {
+  for (const input of [
+    { ...READY, micStreaming: false },
+    { ...READY, backingStreaming: false },
+  ]) {
+    const status = model(input);
+    assert.equal(status.actions.canStartCalibration, false);
+    assert.equal(status.actions.startCalibrationBlockedReason, 'sources-not-streaming');
+    assert.notEqual(status.actions.startCalibrationBlockedReason, 'phone-not-playing');
+    assert.equal(status.actions.startCalibrationMode, 'boot-probe');
+  }
+});
+
+test('content mode alone maps non-playing timeline to phone-not-playing', () => {
+  const status = model({ ...READY, timelineState: 2 }, 'idle', false, false);
+
+  assert.equal(status.actions.canStartCalibration, false);
+  assert.equal(status.actions.startCalibrationBlockedReason, 'phone-not-playing');
+  assert.equal(status.actions.startCalibrationMode, 'content');
 });

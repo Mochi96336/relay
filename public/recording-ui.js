@@ -53,10 +53,40 @@ if (strip && startButton && stopButton && status) {
   let finishFlash = false;
   let finishTimer = null;
 
+  // Recording is not a permanently disabled control. It starts absent and only
+  // enters the product surface when authoritative state says there is a real
+  // action (or an active/finishing/error Take that must remain visible).
+  strip.hidden = true;
+  startButton.hidden = true;
+  stopButton.hidden = true;
+  startButton.disabled = true;
+  stopButton.disabled = true;
+
   function setLifecycle(next) {
     previousLifecycle = lifecycle;
     lifecycle = typeof next === 'string' ? next : 'idle';
     strip.dataset.takeState = lifecycle;
+  }
+
+  function renderVisibility(detail) {
+    const canStart = detail.canStart === true
+      && lifecycle !== 'recording'
+      && lifecycle !== 'finalizing';
+    const canStop = detail.canStop === true && lifecycle === 'recording';
+    const lifecycleVisible = lifecycle === 'recording'
+      || lifecycle === 'finalizing'
+      || lifecycle === 'failed';
+    const errorVisible = Boolean(detail.commandError?.reason);
+
+    startButton.hidden = !canStart;
+    stopButton.hidden = !canStop;
+    strip.hidden = !(canStart || lifecycleVisible || finishFlash || errorVisible);
+
+    // Disabled controls are never used as readiness copy. If the server says
+    // the action is unavailable it is absent; server authority still decides
+    // when the real action enters the slot.
+    startButton.disabled = !canStart;
+    stopButton.disabled = !canStop;
   }
 
   function renderState(detail = latestState) {
@@ -67,8 +97,7 @@ if (strip && startButton && stopButton && status) {
       strip.dataset.takeState = lifecycle;
     }
 
-    startButton.disabled = detail.canStart !== true;
-    stopButton.disabled = detail.canStop !== true;
+    renderVisibility(detail);
 
     if (finishFlash && lifecycle === 'ready') {
       status.textContent = finishedCopy();
@@ -99,14 +128,6 @@ if (strip && startButton && stopButton && status) {
         `Recording ${shortTakeId(take.takeId)} failed.`,
         `錄音 ${shortTakeId(take.takeId)} 失敗`,
       );
-      return;
-    }
-
-    // A disabled action without a reason is dead UI. ProductStatus already owns
-    // the room-level policy, so surface its reason before the user taps instead
-    // of waiting for a rejected command to explain the same state afterward.
-    if (detail.canStart !== true && detail.startBlockedReason) {
-      status.textContent = errorCopy(detail.startBlockedReason);
       return;
     }
 

@@ -24,27 +24,33 @@ test('observer Song is a compact room snapshot because it does not host YouTube 
   assert.match(song, /data-playback-role="observer"[\s\S]*?\.youtube-player-shell/);
 });
 
-test('playback holder keeps song identity above the real YouTube controls', () => {
-  assert.match(song, /data-playback-role="holder"[\s\S]*?\.song-observer/);
-  assert.match(song, /data-playback-role="holder"[\s\S]*?\.song-observer > :first-child[\s\S]*?display: none;/);
+test('playback holder compresses song identity into the heading row above the real YouTube controls', () => {
+  assert.match(song, /\.song-heading-title \{[\s\S]*?flex: 1;[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;[\s\S]*?font-size: 12px;/);
   assert.match(songSurface, /const metadataMode = observerMode \|\| holderWithSong;/);
-  assert.match(songSurface, /observer\.hidden = !metadataMode;/);
+  assert.match(songSurface, /headingTitle\.hidden = !holderWithSong;/);
+  assert.match(songSurface, /observer\.hidden = !observerMode;/);
+  assert.doesNotMatch(song, /data-playback-role="holder"\] \.song-observer/);
 });
 
 test('holder Change song is visible as a real phone touch target instead of tiny utility text', () => {
   assert.match(song, /#change-youtube \{[\s\S]*?min-height: 44px;[\s\S]*?padding: 0 12px;/);
+  assert.match(song, /\.youtube-form\[hidden\] \{ display: none; \}/);
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('Room Mic is one centered envelope while ten measured samples stay hidden in the model', () => {
-  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: min\(100%, 320px\);[\s\S]*?height: 56px;/);
-  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 12%, #000 100%\)/);
+test('Room Mic is one centered full-bleed envelope backed by one 20-sample measured history', () => {
+  assert.match(composition, /\.voice-input-evidence \{[\s\S]*?width: 100vw;[\s\S]*?margin: 10px calc\(50% - 50vw\) 2px;/);
+  assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: 100%;[\s\S]*?max-width: none;[\s\S]*?height: 56px;/);
+  assert.match(composition, /-webkit-mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
+  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
+  assert.doesNotMatch(composition, /\.voice-input-meter\s*\{[\s\S]{0,180}?width:\s*min\(100%,\s*(?:320|310)px\)/);
   assert.match(composition, /\.voice-presence-baseline/);
   assert.match(composition, /\.voice-presence-wave/);
-  assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 10/);
+  assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 20/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
+  assert.match(model, /export function centerOriginX/);
   assert.match(presence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
-  assert.match(presence, /Math\.pow\(presence, 1\.35\) \* MAX_AMPLITUDE/);
+  assert.match(presence, /presenceSliceGeometry/);
   assert.match(presence, /envelopePath\(\)/);
   assert.match(presence, /smoothPath\(upper\)/);
   assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
@@ -76,17 +82,18 @@ test('frequency evidence remains truthful timbre data and is not painted as fake
   assert.doesNotMatch(composition, /@keyframes|voice-breathe|preparing-pulse/);
 });
 
-test('new Mic evidence enters on the right while old evidence fades toward the left', () => {
-  assert.match(model, /Oldest slice stays on the left; the newest local Mic evidence enters on the[\s\S]*right/);
+test('new Mic evidence stays at exact center while one stored history mirrors outward', () => {
+  assert.match(model, /const newestIndex = safeCount - 1/);
+  assert.match(model, /left: safeWidth \/ 2 - distance/);
+  assert.match(model, /right: safeWidth \/ 2 \+ distance/);
   assert.match(model, /const next = \[\.\.\.previous, createPresenceSlice/);
-  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 12%, #000 100%\)/);
+  assert.match(presence, /const right = history[\s\S]*?\.slice\(0, -1\)[\s\S]*?\.reverse\(\)/);
 });
 
 test('performance actions stay in Sing -> Record -> Adjust -> Review order', () => {
   assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
   assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
-  assert.match(composition, /\.performance-stage > #last-take,[\s\S]*?\.recent-take \{ order: 7 !important; \}/);
-  assert.match(liveIa, /performanceStage\.insertBefore\(lastTake, micLiveControl\.nextSibling\)/);
+  assert.doesNotMatch(liveIa, /performanceStage\.insertBefore\(lastTake|append(?:Child)?\(lastTake/);
   assert.match(actions, /#start-recording \{[\s\S]*?border: 0;[\s\S]*?background: transparent;/);
   assert.match(composition, /#start-recording:not\(:disabled\)::before[\s\S]*?background:#d8a5a1/);
 });

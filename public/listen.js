@@ -177,6 +177,13 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     reconnectTimer = null;
   }
 
+  function finishAudioInterruptionEvidence() {
+    if (!audioEverRunning) return false;
+    const recovery = audioInterruption.finish();
+    if (recovery.requiresLiveEdge) liveEdgeRecoveryRequired = true;
+    return recovery.requiresLiveEdge;
+  }
+
   function resetPlaybackTemporalState() {
     monitorPcmReceiver.reset();
     playbackNode?.port.postMessage({ type: 'reset' });
@@ -294,6 +301,14 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
         }
         return;
       }
+
+      // WebKit can expose `state === running` before delivering statechange.
+      // Finish interruption evidence before any recovered PCM reaches the
+      // worklet, otherwise one stale frame can slip through that event-order gap.
+      if (finishAudioInterruptionEvidence()) {
+        restartMonitorAtLiveEdge();
+        return;
+      }
       if (liveEdgeRecoveryRequired) return;
 
       if (received.reset) playbackNode.port.postMessage({ type: 'reset' });
@@ -405,10 +420,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       context.addEventListener('statechange', () => {
         if (audioContext !== context) return;
         if (context.state === 'running') {
-          if (audioEverRunning) {
-            const recovery = audioInterruption.finish();
-            if (recovery.requiresLiveEdge) liveEdgeRecoveryRequired = true;
-          }
+          if (audioEverRunning) finishAudioInterruptionEvidence();
           audioEverRunning = true;
           stalledResumeGestures = 0;
           disarmAudioUnlock();
@@ -501,6 +513,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       return;
     }
 
+    if (audioEverRunning) finishAudioInterruptionEvidence();
     audioEverRunning = true;
     stalledResumeGestures = 0;
     disarmAudioUnlock();

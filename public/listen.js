@@ -40,6 +40,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let playbackForcedMuted = false;
   let takeReviewForcedMuted = false;
   let sourceSampleRate = MIX_SAMPLE_RATE;
+  let micPrimaryMode = window.relayMicActionState?.primaryMode === 'takeover'
+    ? 'takeover'
+    : 'microphone';
 
   function wsUrl() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -605,11 +608,18 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     render('volume-change');
   });
 
+  // Presence owns whether the primary Mic action is an ordinary request or a
+  // takeover. Listen consumes that state directly rather than reading a DOM
+  // label written by the Mic presenter.
+  window.addEventListener('relay-mic-action-state', (event) => {
+    micPrimaryMode = event.detail?.primaryMode === 'takeover' ? 'takeover' : 'microphone';
+  });
+
   // Product semantics are negative: room audio is wanted by default, while
   // local source roles temporarily overlay forced mute reasons. Do not rewrite
   // the user's own mute preference when Mic or Song ownership comes and goes.
   publisherButton.addEventListener('click', () => {
-    if (publisherButton.dataset.presenceLabel !== 'takeover') {
+    if (micPrimaryMode !== 'takeover') {
       forceMicMute('mic-starting');
     }
   }, { capture: true });

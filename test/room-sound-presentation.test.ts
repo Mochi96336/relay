@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { roomSoundPresentation } from '../public/room-sound-presentation.js';
+import {
+  roomSoundActionNote,
+  roomSoundPresentation,
+  roomSoundStableNote,
+} from '../public/room-sound-presentation.js';
 
 test('Room sound preserves start failure instead of collapsing it into user mute', () => {
   assert.deepEqual(
@@ -54,4 +58,31 @@ test('ready Room sound still asks for the browser interaction needed to start au
     roomSoundPresentation({ state: 'ready', phase: 'first-interaction' }, true),
     { toggle: '靜音', note: '點一下以啟用房間聲音' },
   );
+});
+
+test('stable Room sound reason and transient action feedback stay separate', () => {
+  assert.equal(
+    roomSoundStableNote({ state: 'muted', phase: 'start-failed' }),
+    'Room sound is muted.',
+  );
+  assert.equal(
+    roomSoundActionNote({ state: 'muted', phase: 'start-failed' }),
+    'Could not start room sound. Tap again to retry.',
+  );
+
+  assert.equal(
+    roomSoundStableNote({ state: 'mic-muted', phase: 'handoff-starting' }, true),
+    '唱歌時暫停',
+  );
+  assert.equal(
+    roomSoundActionNote({ state: 'mic-muted', phase: 'handoff-starting' }, true),
+    '正在接手 Mic…',
+  );
+
+  assert.equal(roomSoundStableNote({ state: 'audible', phase: 'buffering' }), '');
+  assert.equal(
+    roomSoundActionNote({ state: 'audible', phase: 'buffering' }),
+    'Buffering room sound…',
+  );
+  assert.equal(roomSoundActionNote({ state: 'audible', phase: 'playing' }), '');
 });

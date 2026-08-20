@@ -3,12 +3,13 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { shouldForceMuteListen } from '../public/playback-recovery.js';
+import { roomSoundPresentation } from '../public/room-sound-presentation.js';
 
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 const roomSoundUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
-const roomSoundPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
+const roomSoundPresentationSource = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 
 function timeline(overrides: Record<string, unknown> = {}) {
   return {
@@ -88,10 +89,16 @@ test('playback forced mute composes with Mic, review, and user mute without owni
     /state === '(?:mic-muted|playback-muted|review-muted|muted)'/,
     'the DOM adapter must not duplicate Room sound product-state copy branches',
   );
-  assert.match(roomSoundPresentation, /state === 'mic-muted'/);
-  assert.match(roomSoundPresentation, /state === 'playback-muted'/);
-  assert.match(roomSoundPresentation, /state === 'review-muted'/);
-  assert.match(roomSoundPresentation, /state === 'muted'/);
+  assert.match(roomSoundPresentationSource, /state === 'mic-muted'/);
+  assert.match(roomSoundPresentationSource, /state === 'playback-muted'/);
+  assert.match(roomSoundPresentationSource, /state === 'review-muted'/);
+  assert.match(roomSoundPresentationSource, /state === 'muted'/);
+
+  for (const state of ['mic-muted', 'playback-muted', 'review-muted', 'muted']) {
+    const presentation = roomSoundPresentation({ state });
+    assert.notEqual(presentation.toggle, '', `${state} must have a visible Room sound action`);
+    assert.notEqual(presentation.note, '', `${state} must have a visible Room sound explanation`);
+  }
 });
 
 test('Take review speaker playback cannot be fed back through the same participant phone Mic', () => {

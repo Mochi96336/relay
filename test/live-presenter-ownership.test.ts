@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+const systemDetails = readFileSync(new URL('../public/system-details.js', import.meta.url), 'utf8');
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const roomSoundUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
 const presence = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
@@ -17,16 +18,24 @@ test('playback transport publishes diagnostics without rendering Live debug DOM'
   assert.doesNotMatch(youtubeSync, /server-timeline-state|server-timeline-values|server-timeline-note/);
   assert.doesNotMatch(youtubeSync, /Server timeline|Drift collecting|one-way≈/);
   assert.doesNotMatch(youtubeSync, /insertAdjacentElement/);
+
+  assert.match(systemDetails, /relay:playback-diagnostics/);
+  assert.match(systemDetails, /playbackClientLastRejection/);
+  assert.match(systemDetails, /playback-client-last-rejection/);
 });
 
 test('listen owns audio state while room-sound-ui owns visible room-sound presentation', () => {
   assert.match(listen, /relay-listen-state/);
   assert.doesNotMatch(listen, /listen-note|listen-adjust-state|listen-gain-value/);
   assert.doesNotMatch(listen, /\.textContent\s*=|document\.body\.dataset\.listen|toggle\.disabled\s*=/);
+  assert.doesNotMatch(listen, /dataset\.presenceLabel/,
+    'Listen must consume Presence state directly instead of reading presenter DOM semantics');
+  assert.match(listen, /relay-mic-action-state/);
 
   assert.match(roomSoundUi, /relay-listen-state/);
   assert.match(roomSoundUi, /toggle\.textContent\s*=/);
   assert.match(roomSoundUi, /stateNote\.textContent\s*=/);
+  assert.match(roomSoundUi, /actionNote\.textContent\s*=/);
   assert.match(roomSoundUi, /document\.body\.dataset\.listen\s*=/);
   assert.doesNotMatch(roomSoundUi, /MutationObserver/);
 });

@@ -16,6 +16,26 @@ function int16View(buffer: Buffer) {
   return new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 2);
 }
 
+/** A close phone singer: voiced harmonics with syllable attacks locked to 120 BPM. */
+function addVoiceDominantOnBeatSinger(mic: Buffer, gain: number) {
+  const output = Buffer.from(mic);
+  const samples = output.byteLength / 2;
+  for (let i = 0; i < samples; i += 1) {
+    const seconds = i / RATE;
+    const fundamental = 205 + 35 * Math.sin(2 * Math.PI * 0.28 * seconds);
+    let voiced = 0;
+    for (let harmonic = 1; harmonic <= 5; harmonic += 1) {
+      voiced += Math.sin(2 * Math.PI * fundamental * harmonic * seconds) / (harmonic * 1.35);
+    }
+    const beatPhase = seconds % 0.5;
+    const syllable = 0.16 + 0.84 * Math.exp(-beatPhase * 11);
+    const base = output.readInt16LE(i * 2) / 32768;
+    const mixed = Math.max(-1, Math.min(1, base + voiced * syllable * gain));
+    output.writeInt16LE(Math.round(mixed < 0 ? mixed * 32768 : mixed * 32767), i * 2);
+  }
+  return output;
+}
+
 describe('analyzeTimingCalibration', () => {
   for (const lagMs of [0, 120, 340, 900, -180]) {
     test(`recovers a ${lagMs} ms microphone lag`, () => {
@@ -130,6 +150,25 @@ describe('analyzeTimingCalibration', () => {
     assert.ok(Math.abs(result.micLagMs - 285) <= 25, `got ${result.micLagMs} ms`);
     assert.ok(result.confidence >= 0.55, `confidence ${result.confidence}`);
   });
+
+  for (const singerGain of [0.25, 0.45, 0.7]) {
+    test(`voice-dominant on-beat singer ${singerGain}x is accurate or safely rejected`, () => {
+      const { mic, backing } = laggedMultibandMusicPair(6, RATE, 285);
+      const interferedMic = addVoiceDominantOnBeatSinger(mic, singerGain);
+      let result;
+      try {
+        result = analyzeTimingCalibration(int16View(interferedMic), int16View(backing), RATE, 2_500);
+      } catch {
+        // Rejection is the safe runtime outcome: rejected evidence cannot become
+        // either half of a drift-confirmation pair.
+        return;
+      }
+      assert.ok(
+        Math.abs(result.micLagMs - 285) <= 25,
+        `voice-dominant interference produced a wrong authoritative lag ${result.micLagMs} ms`,
+      );
+    });
+  }
 
   test('survives slow AGC changes over the six-second window', () => {
     const { mic, backing } = laggedMultibandMusicPair(6, RATE, 285, { agc: true });

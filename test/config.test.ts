@@ -34,6 +34,44 @@ test('relay config owns the participant and mic transport grace windows', () => 
   assert.equal(config.micTransportGraceMs, 2_500);
 });
 
+test('relay config validates content calibration runtime validation policy', () => {
+  const defaults = loadRelayConfig({});
+  assert.equal(defaults.contentValidation, true);
+  assert.equal(defaults.contentValidationIntervalMs, 30_000);
+  assert.equal(defaults.contentValidationRetryMs, 10_000);
+  assert.equal(defaults.contentValidationDeviationMs, 30);
+
+  const configured = loadRelayConfig({
+    RELAY_CALIBRATION_VALIDATION: '0',
+    RELAY_CALIBRATION_VALIDATION_INTERVAL_MS: '12000',
+    RELAY_CALIBRATION_VALIDATION_RETRY_MS: '3000',
+    RELAY_CALIBRATION_VALIDATION_DEVIATION_MS: '45',
+  });
+  assert.equal(configured.contentValidation, false);
+  assert.equal(configured.contentValidationIntervalMs, 12_000);
+  assert.equal(configured.contentValidationRetryMs, 3_000);
+  assert.equal(configured.contentValidationDeviationMs, 45);
+
+  assert.throws(
+    () => loadRelayConfig({ RELAY_CALIBRATION_VALIDATION: 'sometimes' }),
+    /must be one of: 1, 0, true, false/,
+  );
+  assert.throws(
+    () => loadRelayConfig({ RELAY_CALIBRATION_VALIDATION_DEVIATION_MS: '0' }),
+    />= 1/,
+  );
+});
+
+test('content validation remains independently enabled when auto calibration is off', () => {
+  const config = loadRelayConfig({
+    RELAY_AUTO_CALIBRATE: '0',
+    RELAY_CALIBRATION_VALIDATION: '1',
+  });
+
+  assert.equal(config.autoCalibrate, false);
+  assert.equal(config.contentValidation, true);
+});
+
 test('real server entry fails closed on malformed deployment config', async () => {
   await assert.rejects(
     startRelay({ RELAY_CALIBRATION_PROBE_MIN_CORRELATION: 'oops' }),

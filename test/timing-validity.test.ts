@@ -69,7 +69,10 @@ async function calibrate(
   publisher.send(playingTelemetry);
   await primeStreams(backing, publisher);
   publisher.send({ type: 'start-timing-calibration' });
-  await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+  await monitor.waitFor(
+    (m) => m.type === 'timing-calibration-status' && m.state === 'collecting',
+    8_000,
+  );
 
   const { mic, backing: song } = laggedPair(8, RATE, lagMs);
   await Promise.all([
@@ -117,7 +120,6 @@ describe('timing validity boundary', () => {
       restarted.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await restarted.waitForType('registered');
       await sendPcmInChunks(restarted, tone(0.5, 0.4));
-
       const stale = await monitor.waitFor(
         (m) => m.type === 'source-status'
           && m.calibrationStale === true

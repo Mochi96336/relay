@@ -5,6 +5,7 @@ import test from 'node:test';
 import { AudioPacketReceiver } from '../src/audio-packet-receiver.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import { parseAudioUplinkHealth } from '../src/audio-uplink-health.js';
+import { AudioSessionPolicy, resolveAudioSessionType } from '../public/audio-session-policy.js';
 import { RelayClient, startRelay } from './helpers/harness.js';
 
 const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
@@ -77,6 +78,60 @@ test('Listen consumes mix rate, stays at unity or below, and recovers suspended 
   assert.match(listenSource, /addEventListener\('statechange'/);
   assert.match(listenSource, /document\.addEventListener\('visibilitychange'/);
   assert.match(listenSource, /window\.addEventListener\('pageshow', recoverAudioGraph\)/);
+});
+
+test('page audio session arbitration prefers microphone capture over playback', () => {
+  assert.equal(resolveAudioSessionType(), 'auto');
+  assert.equal(resolveAudioSessionType({ playback: true }), 'playback');
+  assert.equal(resolveAudioSessionType({ microphone: true }), 'play-and-record');
+  assert.equal(resolveAudioSessionType({ playback: true, microphone: true }), 'play-and-record');
+
+  const session = { type: 'auto' };
+  const policy = new AudioSessionPolicy(() => ({ audioSession: session }));
+  assert.equal(policy.claimPlayback(true), 'playback');
+  assert.equal(session.type, 'playback');
+  assert.equal(policy.claimMicrophone(true), 'play-and-record');
+  assert.equal(session.type, 'play-and-record');
+  assert.equal(policy.claimMicrophone(false), 'playback');
+  assert.equal(session.type, 'playback');
+  assert.equal(policy.claimPlayback(false), 'auto');
+  assert.equal(session.type, 'auto');
+});
+
+test('Listen treats OS interruption as recovery, not a user transport teardown', () => {
+  assert.match(listenSource, /function audioGraphReady\(\)/);
+  assert.match(listenSource, /function audioRendering\(\)/);
+  assert.match(listenSource, /function monitorTransportWanted\(\)[\s\S]*audioEverRunning/);
+  assert.match(listenSource, /function restartMonitorAtLiveEdge\(\)[\s\S]*abandonTransportConnection\(\)[\s\S]*ensureTransport\('reconnecting'\)/);
+
+  const reconcile = listenSource.match(/function reconcile\(phase = ''\) \{[\s\S]*?\n  \}\n\n  function forceMicMute/)?.[0] ?? '';
+  assert.notEqual(reconcile, '', 'Listen must expose a readable reconciliation boundary');
+  const interruptionBranch = reconcile.match(/if \(!audioRendering\(\)\) \{[\s\S]*?\n    \}/)?.[0] ?? '';
+  assert.notEqual(interruptionBranch, '', 'Listen must handle a non-rendering graph explicitly');
+  assert.doesNotMatch(interruptionBranch, /closeTransport\(\)/);
+  assert.match(interruptionBranch, /needsLiveEdgeRecovery = true/);
+  assert.match(interruptionBranch, /ensureTransport\('interrupted'\)/);
+
+  assert.match(listenSource, /if \(!audioRendering\(\) \|\| needsLiveEdgeRecovery\) \{[\s\S]*return;/);
+  assert.match(listenSource, /resetPlaybackTemporalState\(\)/);
+  assert.match(listenSource, /monitorPcmReceiver\.reset\(\)/);
+  assert.match(listenSource, /playbackNode\?\.port\.postMessage\(\{ type: 'reset' \}\)/);
+});
+
+test('Listen uses playback and play-and-record AudioSession claims at user intent boundaries', () => {
+  assert.match(listenSource, /claimPlaybackAudio\(true\);\n      const context = new AudioContext/);
+  assert.match(listenSource, /userMuted = !userMuted;\n    claimPlaybackAudio\(!userMuted\);/);
+  assert.match(listenSource, /publisherButton\.addEventListener\('click',[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
+  assert.match(listenSource, /relay-request-microphone'[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
+  assert.match(listenSource, /relay-microphone-ended'[\s\S]*claimMicrophoneAudio\(false\)/);
+  assert.match(listenSource, /relay-microphone-start-failed'[\s\S]*claimMicrophoneAudio\(false\)/);
+});
+
+test('Listen gives every recovered running context a fresh stuck-resume budget', () => {
+  assert.match(listenSource, /let stalledResumeGestures = 0;/);
+  assert.match(listenSource, /context\.state === 'running'[\s\S]*stalledResumeGestures = 0/);
+  assert.match(listenSource, /if \(stalledResumeGestures >= 1\) \{\n        discardStuckAudioGraph\(\);/);
+  assert.doesNotMatch(listenSource, /audioResumeGestures/);
 });
 
 test('Mic recovery exposes OS input mute to server liveness', () => {

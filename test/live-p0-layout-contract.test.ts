@@ -65,7 +65,7 @@ test('Room sound projection preserves recovery semantics, localized control name
   assert.match(roomUi, /toggle\.dataset\.icon = visuallyMuted \? 'muted' : 'audible'/);
   assert.match(roomUi, /toggle\.innerHTML = roomSoundIcon\(visuallyMuted\)/);
   assert.doesNotMatch(roomUi, /🔊|🔇/);
-  assert.match(roomUi, /root\.dataset\.listenNote = presentation\.note \? 'visible' : 'quiet'/);
+  assert.match(roomUi, /root\.dataset\.listenNote = stableNote \? 'visible' : 'quiet'/);
   assert.match(roomUi, /root\.dataset\.roomSoundState = controlPresentation\.compact \? 'visible' : 'quiet'/);
   for (const forbidden of ['new WebSocket', 'new AudioContext', 'createGain', 'monitorPacketVersion']) {
     assert.equal(roomUi.includes(forbidden), false, `Room sound presenter must not own ${forbidden}`);

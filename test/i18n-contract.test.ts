@@ -77,13 +77,25 @@ test('release-era Mic, feedback, and Take history review stay inside the locale 
 
   assert.match(i18n, /'voice\.startingYours':/);
   assert.match(i18n, /'voice\.interruptedYours':/);
-  assert.match(i18n, /'voice\.useHeadphones':/);
+  assert.match(
+    i18n,
+    /'voice\.useSpeaker': 'Keep the sound playing aloud so Relay can hear the playback correctly\.'/,
+  );
+  assert.match(
+    i18n,
+    /'voice\.useSpeaker': '保持外放，Relay 才能正確聽到播放內容。'/,
+  );
+  assert.match(i18n, /'voice\.keepSpeakerAudible': '請讓喇叭保持有聲。'/);
   assert.match(i18n, /'system\.attention\.mic-audio-stalled':/);
   assert.match(i18n, /'take\.reviewReleaseMic':/);
   assert.match(i18n, /'take\.reviewPausedForMic':/);
   assert.match(live, /t\('voice\.startingYours'\)/);
   assert.match(live, /t\('voice\.interruptedYours'\)/);
-  assert.match(live, /t\('voice\.useHeadphones'\)/);
+  assert.match(live, /t\('voice\.useSpeaker'\)/);
+  assert.doesNotMatch(i18n, /headphones|耳機/i);
+  const sourceHtml = read('public/source.html');
+  assert.match(sourceHtml, /校準和唱歌時請保持外放，Relay 才能正確聽到播放內容。/);
+  assert.doesNotMatch(sourceHtml, /耳機/);
   assert.match(roomSound, /roomSoundPresentation/);
   assert.match(roomSoundPresentation, /state === 'mic-muted'/);
   assert.match(roomSoundPresentation, /'Paused while you sing\.', '唱歌時暫停'/);

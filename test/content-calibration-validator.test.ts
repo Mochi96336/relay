@@ -4,6 +4,7 @@ import { describe, test } from 'node:test';
 import {
   ContentCalibrationValidator,
   type ConfirmedContentCalibration,
+  type ContentCalibrationValidatorOptions,
 } from '../src/content-calibration-validator.js';
 import type { CalibrationContext } from '../src/calibration-session.js';
 import type { TimingCalibrationAnalysis } from '../src/timing-calibration.js';
@@ -29,6 +30,7 @@ type Harness = ReturnType<typeof makeHarness>;
 function makeHarness(options: {
   results?: Array<TimingCalibrationAnalysis | Error>;
   enabled?: boolean;
+  analyze?: ContentCalibrationValidatorOptions['analyze'];
 } = {}) {
   let now = 0;
   let resultIndex = 0;
@@ -53,11 +55,11 @@ function makeHarness(options: {
     context: () => context,
     enabled: options.enabled,
     now: () => now,
-    analyze: () => {
-      const scripted = results[Math.min(resultIndex++, results.length - 1)];
-      if (scripted instanceof Error) throw scripted;
-      return scripted;
-    },
+    analyze: options.analyze ?? (() => {
+        const scripted = results[Math.min(resultIndex++, results.length - 1)];
+        if (scripted instanceof Error) throw scripted;
+        return scripted;
+      }),
     onChange: () => { changeCount += 1; },
     onDriftConfirmed: (result, promotedContext) => {
       promotions.push({ result, context: promotedContext });
@@ -80,6 +82,20 @@ function makeHarness(options: {
     get now() { return now; },
     get changeCount() { return changeCount; },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function nextTurn() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function fullWindow(harness: Harness, index: number) {
@@ -125,6 +141,82 @@ describe('ContentCalibrationValidator scheduling', () => {
     assert.equal(status.lastOutcome, 'invalid');
     assert.equal(status.baselineLagMs, 310);
     assert.equal(status.nextValidationInMs, 10_000);
+  });
+});
+
+describe('ContentCalibrationValidator asynchronous analysis', () => {
+  test('keeps a complete window alive while Worker analysis is pending', async () => {
+    const pending = deferred<TimingCalibrationAnalysis>();
+    const harness = makeHarness({ analyze: () => pending.promise });
+    startDue(harness, 30_000);
+    fullWindow(harness, 0);
+
+    assert.equal(harness.validator.status().state, 'collecting');
+    harness.setNow(60_001);
+    assert.equal(harness.validator.tick(), false, 'analysis time is not a capture timeout');
+
+    pending.resolve(analysis(325));
+    await nextTurn();
+    const status = harness.validator.status();
+    assert.equal(status.state, 'waiting');
+    assert.equal(status.lastOutcome, 'stable');
+    assert.equal(status.lastMeasuredLagMs, 325);
+  });
+
+  test('cancel aborts Worker analysis and ignores its late answer', async () => {
+    const pending = deferred<TimingCalibrationAnalysis>();
+    let signal: AbortSignal | undefined;
+    const harness = makeHarness({
+      analyze: (_mic, _backing, _sampleRate, _maxLagMs, receivedSignal) => {
+        signal = receivedSignal;
+        return pending.promise;
+      },
+    });
+    startDue(harness, 30_000);
+    fullWindow(harness, 0);
+    assert.equal(signal?.aborted, false);
+
+    harness.validator.cancel(31_000);
+    assert.equal(signal?.aborted, true);
+    pending.resolve(analysis(370));
+    await nextTurn();
+
+    const status = harness.validator.status(31_000);
+    assert.equal(status.state, 'waiting');
+    assert.equal(status.baselineLagMs, 310);
+    assert.equal(status.lastOutcome, null);
+    assert.equal(harness.promotions.length, 0);
+  });
+
+  test('a context change while Worker analysis runs clears stale authority', async () => {
+    const pending = deferred<TimingCalibrationAnalysis>();
+    const harness = makeHarness({ analyze: () => pending.promise });
+    startDue(harness, 30_000);
+    fullWindow(harness, 0);
+
+    harness.context.sourceGeneration += 1;
+    pending.resolve(analysis(370));
+    await nextTurn();
+
+    const status = harness.validator.status();
+    assert.equal(status.state, 'inactive');
+    assert.equal(status.baselineLagMs, null);
+    assert.equal(harness.promotions.length, 0);
+  });
+
+  test('a Worker rejection is invalid evidence and preserves the baseline', async () => {
+    const pending = deferred<TimingCalibrationAnalysis>();
+    const harness = makeHarness({ analyze: () => pending.promise });
+    startDue(harness, 30_000);
+    fullWindow(harness, 0);
+
+    pending.reject(new Error('worker unavailable'));
+    await nextTurn();
+
+    const status = harness.validator.status();
+    assert.equal(status.state, 'waiting');
+    assert.equal(status.lastOutcome, 'invalid');
+    assert.equal(status.baselineLagMs, 310);
   });
 });
 

@@ -16,6 +16,7 @@ import { combineBootCalibration, type BootCalibrationResult } from './boot-calib
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
+import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
@@ -481,6 +482,7 @@ const calibration = new CalibrationSession({
   agreementToleranceMs: CALIBRATION_TOLERANCE_MS,
   provisionalConfidence: CALIBRATION_PROVISIONAL_CONFIDENCE,
   maxLagMs: CALIBRATION_MAX_LAG_MS,
+  analyze: analyzeTimingCalibrationInWorker,
   onSettled: () => {
     syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());
@@ -502,6 +504,7 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
   context: calibrationContext,
   enabled: CONTENT_VALIDATION_ENABLED,
   maxLagMs: CALIBRATION_MAX_LAG_MS,
+  analyze: analyzeTimingCalibrationInWorker,
   onChange: () => {
     broadcastJson(timingCalibrationStatusPayload());
   },

@@ -2,7 +2,12 @@ import { expect, test } from '@playwright/test';
 
 const LIVE_URL = process.env.RELAY_INTERACTION_URL ?? 'http://127.0.0.1:4173/';
 
-test.use({ viewport: { width: 390, height: 844 } });
+test.use({
+  viewport: { width: 390, height: 844 },
+  launchOptions: process.env.RELAY_CHROMIUM_PATH
+    ? { executablePath: process.env.RELAY_CHROMIUM_PATH }
+    : {},
+});
 
 async function installProductionDomHarness(page) {
   await page.addInitScript(() => {
@@ -358,6 +363,23 @@ async function installProductionDomHarness(page) {
         recorder.close();
         currentProduct = productStatus({ mic, canStartTake });
       },
+      publishRecordingHistory() {
+        currentTake = {
+          ...currentTake,
+          history: [{
+            takeId: 'interaction-history-1',
+            endedAtMs: Date.now() - 1_000,
+            songVideoId: null,
+            artifact: {
+              url: '/takes/11111111-1111-4111-8111-111111111111.wav',
+              durationMs: 12_000,
+            },
+            qualityVerdict: 'clean',
+            recovered: false,
+          }],
+        };
+        broadcast(currentTake);
+      },
     };
   });
 }
@@ -453,6 +475,120 @@ test('production DOM: Mic readiness arms Record, Record morphs to Stop in the sa
   await expect(stop).toBeHidden();
   await page.waitForFunction(() => window.relayRecordingState?.takeStatusFresh === true);
   await expect(stop).toBeVisible();
+});
+
+test('production DOM: Record and Recordings share a row above Mic and Room sound', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  await page.evaluate(() => window.__relayInteractionHarness.publishRecordingHistory());
+
+  const strip = page.locator('.take-strip');
+  const record = page.locator('#start-recording');
+  const recordings = page.locator('#last-take');
+  const mic = page.locator('#mic-live-control');
+  const roomSound = page.locator('.local-sound-control');
+
+  await expect(record).toBeVisible();
+  await expect(recordings).toBeVisible();
+  await expect(mic).toBeVisible();
+  await expect(recordings).toHaveClass(/recent-take/);
+  await expect(page.locator('#last-take-toggle')).toContainText('Last take');
+  expect(await recordings.evaluate((node) => node.parentElement?.matches('.take-strip'))).toBe(true);
+
+  const [recordBox, recordingsBox, micBox, roomSoundBox] = await Promise.all([
+    record.boundingBox(),
+    recordings.boundingBox(),
+    mic.boundingBox(),
+    roomSound.boundingBox(),
+  ]);
+  expect(recordBox).not.toBeNull();
+  expect(recordingsBox).not.toBeNull();
+  expect(micBox).not.toBeNull();
+  expect(roomSoundBox).not.toBeNull();
+  expect(Math.abs((recordBox.y + recordBox.height / 2) - (recordingsBox.y + recordingsBox.height / 2))).toBeLessThan(2);
+  expect(recordBox.x).toBeLessThan(recordingsBox.x);
+  expect(recordBox.y + recordBox.height).toBeLessThanOrEqual(micBox.y + 1);
+  expect(micBox.y + micBox.height).toBeLessThanOrEqual(roomSoundBox.y + 1);
+});
+
+test('production DOM: the local Mic owner can change Mic gain', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  const micControl = page.locator('#mic-live-control');
+  const micGain = page.locator('#mic-gain');
+  await expect(micControl).toHaveAttribute('open', '');
+  await expect(micGain).toBeVisible();
+  await expect(micGain).toBeEnabled();
+  await micGain.focus();
+  await micGain.press('Home');
+
+  await expect(micGain).toHaveValue('0');
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'set-mix' && command.micGainDb === 0,
+  ));
+
+  await page.keyboard.press('Escape');
+  await expect(micControl).toHaveAttribute('open', '');
+  await expect(micGain).toBeVisible();
+});
+
+test('production DOM: one desktop Change song click survives a transient playback-role refresh', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+
+  const publishPlayback = (role, videoId, handoffState = 'idle') => page.evaluate(
+    ({ nextRole, nextVideoId, nextHandoffState }) => {
+      window.dispatchEvent(new CustomEvent('relay:playback-view', {
+        detail: {
+          role: nextRole,
+          room: {
+            videoId: nextVideoId,
+            videoTitle: 'Interaction song',
+            handoffState: nextHandoffState,
+          },
+          timeline: {
+            videoId: nextVideoId,
+            state: 1,
+            handoffState: nextHandoffState,
+            serverTime: 10,
+            duration: 120,
+          },
+        },
+      }));
+    },
+    { nextRole: role, nextVideoId: videoId, nextHandoffState: handoffState },
+  );
+
+  await publishPlayback('holder', 'abcdefghijk');
+  const change = page.locator('#change-youtube');
+  const form = page.locator('.youtube-form');
+
+  await expect(change).toHaveText('Change song');
+  await change.click();
+  await expect(form).toBeVisible();
+  await expect(change).toHaveText('Done');
+  await expect(page.locator('#youtube-url')).toBeFocused();
+
+  // Desktop playback handoff snapshots can briefly leave holder while the
+  // same song remains authoritative. That refresh must not consume a click.
+  await publishPlayback('preparing', 'abcdefghijk', 'preparing');
+  await expect(form).toBeHidden();
+  await publishPlayback('holder', 'abcdefghijk');
+  await expect(form).toBeVisible();
+  await expect(change).toHaveText('Done');
+
+  // A genuinely different song ends the local edit session.
+  await publishPlayback('holder', 'lmnopqrstuv');
+  await expect(form).toBeHidden();
+  await expect(change).toHaveText('Change song');
 });
 
 test('production DOM: recorder reconnect cannot replay stale Record authority', async ({ page }) => {

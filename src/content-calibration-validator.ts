@@ -49,7 +49,8 @@ export type ContentCalibrationValidatorOptions = {
     backing: Int16Array,
     sampleRate: number,
     maxLagMs?: number,
-  ) => TimingCalibrationAnalysis;
+    signal?: AbortSignal,
+  ) => TimingCalibrationAnalysis | PromiseLike<TimingCalibrationAnalysis>;
   /** Fired after every externally visible validator state/status transition. */
   onChange?: () => void;
   onDriftConfirmed?: (
@@ -74,6 +75,12 @@ function sameContext(a: CalibrationContext, b: CalibrationContext) {
 
 function finitePositive(name: string, value: number) {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive.`);
+}
+
+function isPromiseLikeAnalysis(
+  value: TimingCalibrationAnalysis | PromiseLike<TimingCalibrationAnalysis>,
+): value is PromiseLike<TimingCalibrationAnalysis> {
+  return 'then' in value && typeof value.then === 'function';
 }
 
 /**
@@ -118,6 +125,9 @@ export class ContentCalibrationValidator {
   private lastMeasuredLagMs: number | null = null;
   private lastDeltaMs: number | null = null;
   private lastOutcome: ContentValidationOutcome | null = null;
+  private analysisPending = false;
+  private analysisAbortController: AbortController | null = null;
+  private analysisRevision = 0;
 
   constructor(options: ContentCalibrationValidatorOptions) {
     finitePositive('sampleRate', options.sampleRate);
@@ -158,6 +168,7 @@ export class ContentCalibrationValidator {
   }
 
   setBaseline(baseline: ConfirmedContentCalibration, nowMs = this.now()) {
+    this.invalidatePendingAnalysis();
     this.baseline = {
       ...baseline,
       segmentLagsMs: [...baseline.segmentLagsMs],
@@ -175,6 +186,7 @@ export class ContentCalibrationValidator {
   }
 
   clearBaseline() {
+    this.invalidatePendingAnalysis();
     this.baseline = null;
     this.suspect = null;
     this.collector.reset();
@@ -197,6 +209,7 @@ export class ContentCalibrationValidator {
       this.clearBaseline();
       return;
     }
+    this.invalidatePendingAnalysis();
     this.collector.reset();
     this.suspect = null;
     this.state = this.enabled ? 'waiting' : 'inactive';
@@ -221,20 +234,22 @@ export class ContentCalibrationValidator {
   }
 
   observeMic(samples: Int16Array, startSample: number) {
-    if (!this.collecting) return;
+    if (!this.collecting || this.analysisPending) return;
     this.collector.observeMic(samples, startSample);
     this.finishReadyWindow();
   }
 
   observeBacking(samples: Int16Array, startSample: number) {
-    if (!this.collecting) return;
+    if (!this.collecting || this.analysisPending) return;
     this.collector.observeBacking(samples, startSample);
     this.finishReadyWindow();
   }
 
   /** Invalidates a stalled observation but leaves the known-good baseline active. */
   tick(nowMs = this.now()) {
-    if (!this.collecting || nowMs - this.startedAt <= this.timeoutMs) return false;
+    if (!this.collecting || this.analysisPending || nowMs - this.startedAt <= this.timeoutMs) {
+      return false;
+    }
     this.finishInvalid(nowMs);
     return true;
   }
@@ -260,7 +275,6 @@ export class ContentCalibrationValidator {
   private finishReadyWindow() {
     const window = this.collector.takeReadyWindow();
     if (!window || this.baseline === null) return;
-    const nowMs = this.now();
 
     // The window belongs to the baseline context that existed when it started.
     // A capture restart or seek must never be promoted as runtime drift.
@@ -274,17 +288,75 @@ export class ContentCalibrationValidator {
       window.micGapSamples > this.maxGapSamples
       || window.backingGapSamples > this.maxGapSamples
     ) {
-      this.finishInvalid(nowMs);
+      this.finishInvalid(this.now());
       return;
     }
 
-    let result: TimingCalibrationAnalysis;
     try {
-      result = this.maxLagMs === undefined
-        ? this.analyze(window.mic, window.backing, this.sampleRate)
-        : this.analyze(window.mic, window.backing, this.sampleRate, this.maxLagMs);
+      const abortController = new AbortController();
+      this.analysisAbortController = abortController;
+      const result = this.analyze(
+        window.mic,
+        window.backing,
+        this.sampleRate,
+        this.maxLagMs,
+        abortController.signal,
+      );
+
+      if (isPromiseLikeAnalysis(result)) {
+        const revision = ++this.analysisRevision;
+        this.analysisPending = true;
+        void Promise.resolve(result).then(
+          (analysis) => this.settlePendingAnalysis(revision, currentContext, analysis),
+          () => this.rejectPendingAnalysis(revision),
+        );
+        return;
+      }
+
+      this.analysisAbortController = null;
+      this.applyAnalysis(result, currentContext, this.now());
     } catch {
-      this.finishInvalid(nowMs);
+      this.analysisAbortController = null;
+      this.finishInvalid(this.now());
+    }
+  }
+
+  private invalidatePendingAnalysis() {
+    this.analysisAbortController?.abort();
+    this.analysisAbortController = null;
+    this.analysisRevision += 1;
+    this.analysisPending = false;
+  }
+
+  private settlePendingAnalysis(
+    revision: number,
+    context: CalibrationContext,
+    result: TimingCalibrationAnalysis,
+  ) {
+    if (revision !== this.analysisRevision || !this.analysisPending) return;
+    this.analysisPending = false;
+    this.analysisAbortController = null;
+    this.applyAnalysis(result, context, this.now());
+  }
+
+  private rejectPendingAnalysis(revision: number) {
+    if (revision !== this.analysisRevision || !this.analysisPending) return;
+    this.analysisPending = false;
+    this.analysisAbortController = null;
+    this.finishInvalid(this.now());
+  }
+
+  private applyAnalysis(
+    result: TimingCalibrationAnalysis,
+    measuredContext: CalibrationContext,
+    nowMs: number,
+  ) {
+    if (
+      this.baseline === null
+      || !sameContext(this.baseline.context, measuredContext)
+      || !sameContext(measuredContext, this.context())
+    ) {
+      this.clearBaseline();
       return;
     }
 
@@ -320,7 +392,7 @@ export class ContentCalibrationValidator {
     if (sameDirection && candidatesAgree) {
       this.suspect = null;
       this.lastOutcome = 'drift-confirmed';
-      const promotedContext = { ...currentContext };
+      const promotedContext = { ...measuredContext };
       this.baseline = {
         micLagMs: result.micLagMs,
         confidence: result.confidence,

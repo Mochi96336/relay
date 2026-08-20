@@ -60,6 +60,46 @@ export function roomSoundControlPresentation(detail = {}, isChinese = false) {
   };
 }
 
+export function roomSoundStableNote(detail = {}, isChinese = false) {
+  const state = String(detail.state ?? 'ready');
+
+  if (state === 'mic-muted') {
+    return copy('Paused while you sing.', '唱歌時暫停', isChinese);
+  }
+  if (state === 'playback-muted') {
+    return copy('This device is playing the backing track.', '這支裝置正在播放伴奏', isChinese);
+  }
+  if (state === 'review-muted') {
+    return copy('Take playback is playing.', '正在播放錄音', isChinese);
+  }
+  if (state === 'muted') {
+    return copy('Room sound is muted.', '房間聲音已靜音', isChinese);
+  }
+  if (state === 'ready') {
+    return copy('Tap once to enable room sound.', '點一下以啟用房間聲音', isChinese);
+  }
+  return '';
+}
+
+export function roomSoundActionNote(detail = {}, isChinese = false) {
+  const state = String(detail.state ?? 'ready');
+  const phase = String(detail.phase ?? '');
+
+  if (state === 'mic-muted') {
+    if (phase === 'mic-starting') {
+      return copy('Starting Mic…', 'Mic 啟動中…', isChinese);
+    }
+    if (phase === 'handoff-starting') {
+      return copy('Taking over Mic…', '正在接手 Mic…', isChinese);
+    }
+    return '';
+  }
+
+  if (state === 'playback-muted' || state === 'review-muted') return '';
+  if (phase === 'first-interaction') return '';
+  return operationalNote(phase, isChinese);
+}
+
 export function roomSoundPresentation(detail = {}, isChinese = false) {
   const state = String(detail.state ?? 'ready');
   const phase = String(detail.phase ?? '');

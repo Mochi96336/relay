@@ -27,8 +27,15 @@ type Harness = {
 };
 
 function makeSession(options: {
-  analyze?: (mic: Int16Array, backing: Int16Array, rate: number) => TimingCalibrationAnalysis;
+  analyze?: (
+    mic: Int16Array,
+    backing: Int16Array,
+    rate: number,
+    maxLagMs?: number,
+    signal?: AbortSignal,
+  ) => TimingCalibrationAnalysis | PromiseLike<TimingCalibrationAnalysis>;
   timeoutMs?: number;
+  agreementWindows?: number;
 } = {}) {
   const harness: Harness = {
     settled: 0,
@@ -42,11 +49,24 @@ function makeSession(options: {
     timeoutMs: options.timeoutMs ?? 20_000,
     context: () => harness.context,
     analyze: options.analyze ?? (() => analysis(240)),
+    agreementWindows: options.agreementWindows,
     onSettled: () => { harness.settled += 1; },
   });
 
   return harness;
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 const chunk = (samples: number) => new Int16Array(samples);
 
@@ -166,6 +186,86 @@ describe('CalibrationSession lifecycle', () => {
     assert.equal(calibration.result, null);
     assert.equal(calibration.status().state, 'idle');
     assert.equal(calibration.status().micLagMs, null);
+  });
+});
+
+describe('CalibrationSession asynchronous analysis', () => {
+  test('keeps collecting until a worker result settles', async () => {
+    const result = deferred<TimingCalibrationAnalysis>();
+    const harness = makeSession({ analyze: () => result.promise });
+    harness.calibration.start(0);
+
+    fill(harness.calibration, REQUIRED, REQUIRED);
+    assert.equal(harness.calibration.status().state, 'collecting');
+    assert.equal(harness.settled, 0);
+    assert.equal(harness.calibration.tick(999_999), false, 'worker time is not capture timeout');
+
+    result.resolve(analysis(240));
+    await nextTurn();
+
+    assert.equal(harness.calibration.status().state, 'complete');
+    assert.equal(harness.calibration.result?.micLagMs, 240);
+    assert.equal(harness.settled, 1);
+  });
+
+  test('ignores a worker answer after the collection is reset', async () => {
+    const result = deferred<TimingCalibrationAnalysis>();
+    let workerSignal: AbortSignal | undefined;
+    const harness = makeSession({
+      analyze: (_mic, _backing, _rate, _maxLagMs, signal) => {
+        workerSignal = signal;
+        return result.promise;
+      },
+    });
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED, REQUIRED);
+
+    assert.equal(workerSignal?.aborted, false);
+    harness.calibration.reset();
+    assert.equal(workerSignal?.aborted, true, 'reset cancels work the answer can no longer update');
+    result.resolve(analysis(999));
+    await nextTurn();
+
+    assert.equal(harness.calibration.status().state, 'idle');
+    assert.equal(harness.calibration.result, null);
+    assert.equal(harness.settled, 0);
+  });
+
+  test('retains the next agreement window while the first is being analyzed', async () => {
+    const first = deferred<TimingCalibrationAnalysis>();
+    const second = deferred<TimingCalibrationAnalysis>();
+    let calls = 0;
+    const harness = makeSession({
+      agreementWindows: 2,
+      analyze: () => (calls++ === 0 ? first.promise : second.promise),
+    });
+    harness.calibration.start(0);
+
+    fill(harness.calibration, REQUIRED * 2, REQUIRED * 2);
+    assert.equal(calls, 1, 'only one worker runs at a time');
+
+    first.resolve(analysis(240));
+    await nextTurn();
+    assert.equal(calls, 2, 'the buffered second window starts after the first settles');
+
+    second.resolve(analysis(245));
+    await nextTurn();
+    assert.equal(harness.calibration.status().state, 'complete');
+    assert.equal(harness.calibration.result?.micLagMs, 245);
+  });
+
+  test('surfaces an asynchronous analyzer rejection', async () => {
+    const result = deferred<TimingCalibrationAnalysis>();
+    const harness = makeSession({ analyze: () => result.promise });
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED, REQUIRED);
+
+    result.reject(new Error('worker failed safely'));
+    await nextTurn();
+
+    assert.equal(harness.calibration.status().state, 'failed');
+    assert.match(harness.calibration.status().error ?? '', /worker failed safely/);
+    assert.equal(harness.settled, 1);
   });
 });
 

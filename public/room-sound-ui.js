@@ -1,4 +1,9 @@
-import { roomSoundPresentation, roomSoundControlPresentation } from './room-sound-presentation.js';
+import {
+  roomSoundActionNote,
+  roomSoundControlPresentation,
+  roomSoundPresentation,
+  roomSoundStableNote,
+} from './room-sound-presentation.js';
 
 const root = document.querySelector('.local-sound-control');
 const title = document.querySelector('#local-listen-label');
@@ -8,7 +13,7 @@ const toggle = document.querySelector('#listen-toggle');
 const gain = document.querySelector('#listen-gain');
 const gainValue = document.querySelector('#listen-gain-value');
 const stateNote = document.querySelector('#listen-adjust-state');
-const legacyNote = document.querySelector('#listen-note');
+const actionNote = document.querySelector('#listen-note');
 
 let latestState = window.relayListenState ?? null;
 
@@ -46,12 +51,17 @@ function renderState(detail = latestState) {
   const muted = detail.muted === true;
   const visuallyMuted = muted || forced;
   const volumePercent = Math.max(0, Math.min(100, Math.round(Number(detail.volumePercent) || 0)));
-  const presentation = roomSoundPresentation(detail, chinese());
-  const controlPresentation = roomSoundControlPresentation(detail, chinese());
+  const isChinese = chinese();
+  const presentation = roomSoundPresentation(detail, isChinese);
+  const controlPresentation = roomSoundControlPresentation(detail, isChinese);
+  const stableNote = controlPresentation.compact
+    || roomSoundStableNote(detail, isChinese)
+    || presentation.note;
+  const transientNote = roomSoundActionNote(detail, isChinese);
 
   root.dataset.listenState = state;
   root.dataset.listenPhase = phase;
-  root.dataset.listenNote = presentation.note ? 'visible' : 'quiet';
+  root.dataset.listenNote = stableNote ? 'visible' : 'quiet';
   root.dataset.roomSoundState = controlPresentation.compact ? 'visible' : 'quiet';
   document.body.dataset.listen = state;
   toggle.dataset.state = state;
@@ -63,8 +73,8 @@ function renderState(detail = latestState) {
   gainValue.value = `${volumePercent}%`;
   toggle.textContent = '';
   toggle.innerHTML = roomSoundIcon(visuallyMuted);
-  stateNote.textContent = controlPresentation.compact;
-  if (legacyNote) legacyNote.textContent = '';
+  stateNote.textContent = stableNote;
+  if (actionNote) actionNote.textContent = transientNote;
 }
 
 function setGainInteraction(visible) {
@@ -83,7 +93,7 @@ function render() {
   renderState(latestState);
 }
 
-for (const node of [title, scope, volumeLabel, toggle, stateNote, legacyNote]) {
+for (const node of [title, scope, volumeLabel, toggle, stateNote, actionNote]) {
   node?.removeAttribute('data-i18n');
 }
 

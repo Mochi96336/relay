@@ -20,9 +20,13 @@ if (
   && systemAudio && systemTiming && systemRecording
 ) {
   const RECONNECT_MS = 1_000;
+  const MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80;
   let socket = null;
   let reconnectTimer = null;
   let latestProductStatus = null;
+  let lastMicPresenceTelemetryAt = Number.NEGATIVE_INFINITY;
+  let roomMicOwnerId = null;
+  let roomMicLive = false;
 
   const attentionLabels = {
     'audio-unavailable': () => t('system.attention.audio-unavailable'),
@@ -84,6 +88,28 @@ if (
     );
   }
 
+  function dispatchRoomMicPresence(detail) {
+    window.dispatchEvent(new CustomEvent('relay-room-mic-presence', { detail }));
+  }
+
+  function renderRoomMicState(status) {
+    const mic = status?.room?.mic ?? {};
+    const ownerId = typeof mic.ownerId === 'string' ? mic.ownerId : null;
+    const live = mic.state === 'live' && ownerId !== null;
+    const ownerChanged = ownerId !== roomMicOwnerId;
+
+    document.body.dataset.roomMic = live ? 'live' : 'off';
+    if (!live || ownerChanged) {
+      dispatchRoomMicPresence({
+        active: false,
+        ownerId,
+      });
+    }
+
+    roomMicOwnerId = ownerId;
+    roomMicLive = live;
+  }
+
   function liveCopy(status) {
     const mic = status.room?.mic ?? {};
     const song = status.room?.song ?? {};
@@ -101,6 +127,9 @@ if (
           title: t('voice.songPreparing'),
           detail: selfOwner ? t('voice.playbackMovingHere') : t('voice.playbackChangingPhones'),
         };
+      }
+      if (selfOwner && mic.state === 'starting') {
+        return { title: t('voice.startingYours'), detail: t('voice.waitingFirstAudio') };
       }
       return { title: t('voice.gettingReady'), detail: '' };
     }
@@ -129,7 +158,7 @@ if (
         return { title: t('voice.live'), detail: t('voice.timingRecovering') };
       }
       if (song.state === 'playing') {
-        return { title: t('voice.live'), detail: t('voice.useHeadphones') };
+        return { title: t('voice.live'), detail: t('voice.useSpeaker') };
       }
       return { title: t('voice.live'), detail: t('voice.toRoom') };
     }
@@ -204,6 +233,7 @@ if (
     document.body.dataset.health = status.health || 'healthy';
     document.body.dataset.timing = status.timing?.state || 'idle';
     document.body.dataset.selfMic = selfOwner && status.room?.mic?.state === 'live' ? 'live' : 'off';
+    renderRoomMicState(status);
 
     renderAttention(status);
     renderSystem(status);
@@ -222,6 +252,45 @@ if (
       reconnectTimer = null;
       connect().catch(scheduleReconnect);
     }, RECONNECT_MS);
+  }
+
+  function acceptRoomMicPresence(message) {
+    if (!message || message.type !== 'room-mic-presence' || message.version !== 1) return;
+    const ownerId = typeof message.ownerId === 'string' ? message.ownerId : null;
+    const captureGeneration = Number(message.captureGeneration);
+    const rmsDbfs = Number(message.rmsDbfs);
+    const rawF0Hz = message.f0Hz;
+    const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
+    const pitchConfidence = Number(message.pitchConfidence);
+    const spectrumBands = Array.isArray(message.spectrumBands)
+      ? message.spectrumBands.slice(0, 5).map(Number)
+      : [];
+    if (
+      !ownerId
+      || !Number.isInteger(captureGeneration)
+      || captureGeneration < 0
+      || captureGeneration > 0xffff_ffff
+      || !Number.isFinite(rmsDbfs)
+      || (f0Hz !== null && (!Number.isFinite(f0Hz) || f0Hz < 80 || f0Hz > 1000))
+      || !Number.isFinite(pitchConfidence)
+      || pitchConfidence < 0
+      || pitchConfidence > 1
+      || spectrumBands.length !== 5
+      || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
+    ) return;
+
+    roomMicOwnerId = ownerId;
+    roomMicLive = true;
+    document.body.dataset.roomMic = 'live';
+    dispatchRoomMicPresence({
+      active: true,
+      ownerId,
+      captureGeneration: captureGeneration >>> 0,
+      rmsDbfs,
+      spectrumBands,
+      f0Hz,
+      pitchConfidence,
+    });
   }
 
   async function connect() {
@@ -244,7 +313,11 @@ if (
       if (socket !== next || typeof event.data !== 'string') return;
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
-      if (message.type === 'product-status') render(message);
+      if (message.type === 'product-status') {
+        render(message);
+        return;
+      }
+      if (message.type === 'room-mic-presence') acceptRoomMicPresence(message);
     });
 
     next.addEventListener('close', () => {
@@ -258,6 +331,10 @@ if (
       // this page can no longer observe must not keep being reported.
       title.textContent = t('voice.connecting');
       detail.textContent = '';
+      roomMicLive = false;
+      roomMicOwnerId = null;
+      document.body.dataset.roomMic = 'off';
+      dispatchRoomMicPresence({ active: false, ownerId: null });
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -268,6 +345,50 @@ if (
     next.send(JSON.stringify({ type: 'product-status-request' }));
   }
 
+  window.addEventListener('relay-local-mic-level', (event) => {
+    if (
+      event.detail?.active !== true
+      || socket?.readyState !== WebSocket.OPEN
+      || !latestProductStatus
+      || !isSelfOwner(latestProductStatus)
+      || latestProductStatus.room?.mic?.state !== 'live'
+    ) return;
+
+    const captureGeneration = Number(event.detail?.captureGeneration);
+    const rmsDbfs = Number(event.detail?.rmsDbfs);
+    const rawF0Hz = event.detail?.f0Hz;
+    const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
+    const pitchConfidence = Number(event.detail?.pitchConfidence);
+    const spectrumBands = Array.isArray(event.detail?.spectrumBands)
+      ? event.detail.spectrumBands.slice(0, 5).map(Number)
+      : [];
+    if (
+      !Number.isInteger(captureGeneration)
+      || captureGeneration < 0
+      || captureGeneration > 0xffff_ffff
+      || !Number.isFinite(rmsDbfs)
+      || (f0Hz !== null && (!Number.isFinite(f0Hz) || f0Hz < 80 || f0Hz > 1000))
+      || !Number.isFinite(pitchConfidence)
+      || pitchConfidence < 0
+      || pitchConfidence > 1
+      || spectrumBands.length !== 5
+      || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
+    ) return;
+
+    const now = performance.now();
+    if (now - lastMicPresenceTelemetryAt < MIC_PRESENCE_TELEMETRY_INTERVAL_MS) return;
+    lastMicPresenceTelemetryAt = now;
+    socket.send(JSON.stringify({
+      type: 'mic-presence-telemetry',
+      version: 1,
+      captureGeneration: captureGeneration >>> 0,
+      rmsDbfs,
+      spectrumBands,
+      f0Hz,
+      pitchConfidence,
+    }));
+  });
+
   window.addEventListener('relay-microphone-start-failed', (event) => {
     title.textContent = t('voice.micUnavailable');
     detail.textContent = microphoneFailureCopy(event.detail?.message);
@@ -275,8 +396,7 @@ if (
   });
 
   attentionButton.addEventListener('click', () => {
-    systemPanel.open = true;
-    systemPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    window.dispatchEvent(new Event('relay-open-system'));
   });
 
   window.addEventListener('relay-locale-changed', () => {

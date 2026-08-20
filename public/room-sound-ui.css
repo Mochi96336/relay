@@ -1,0 +1,21 @@
+/* room-sound-ui.js decides when a state/phase deserves persistent explanation.
+   Normal audible playback stays quiet; recovery and forced-pause reasons remain visible. */
+.local-sound-control #listen-adjust-state {
+  display: none;
+}
+
+.local-sound-control[data-listen-note="visible"] #listen-adjust-state {
+  display: block;
+}
+
+body[data-listen="mic-muted"] .local-sound-control,
+body[data-listen="playback-muted"] .local-sound-control,
+body[data-listen="review-muted"] .local-sound-control {
+  opacity: .82;
+}
+
+body[data-listen="mic-muted"] #listen-gain,
+body[data-listen="playback-muted"] #listen-gain,
+body[data-listen="review-muted"] #listen-gain {
+  opacity: .46;
+}

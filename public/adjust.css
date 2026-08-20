@@ -1,37 +1,7 @@
-/* Adjust extends the live performance task; it is not a replacement screen. */
+/* Adjust owns shared room mix and timing only. Local Listen is part of the
+   persistent Live surface and keeps its existing single audio owner. */
 
-body:has(.adjust-panel[open]) .live-actions {
-  margin-top: 28px;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  row-gap: 8px;
-}
-
-.adjust-panel > summary {
-  font-size: 13px;
-}
-.adjust-panel[open] {
-  flex: 0 0 100%;
-  width: 100%;
-  order: 3;
-}
-.adjust-panel[open] > summary {
-  width: max-content;
-  margin-left: auto;
-}
-
-/* Keep the YouTube and Voice/Take context in normal page flow while tuning.
-   The page owns scrolling; Adjust does not create a second viewport. */
 .adjust-sheet {
-  position: static;
-  width: calc(100% + 44px);
-  margin: 8px -22px 0;
-  padding: 22px 22px 28px;
-  border: 0;
-  border-top: 1px solid #2a2c31;
-  border-radius: 0;
-  background: #0d0e10;
-  box-shadow: none;
   display: grid;
   gap: 26px;
 }
@@ -146,7 +116,6 @@ body:has(.adjust-panel[open]) .live-actions {
   line-height: 1.45;
 }
 
-.local-listen .adjust-row-heading strong { font-weight: 560; }
 body[data-listen="off"] .local-listen .adjust-range { opacity: .6; }
 
 .timing-row { align-items: center; }
@@ -164,13 +133,7 @@ body[data-listen="off"] .local-listen .adjust-range { opacity: .6; }
 }
 
 @media (max-height: 760px) {
-  body:has(.adjust-panel[open]) .live-actions {
-    margin-top: 24px;
-  }
-  .adjust-sheet {
-    gap: 20px;
-    padding-top: 18px;
-  }
+  .adjust-sheet { gap: 20px; }
   .adjust-group { gap: 13px; }
   .adjust-group + .adjust-group { padding-top: 17px; }
 }

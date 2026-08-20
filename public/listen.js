@@ -7,16 +7,12 @@ import {
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 
-const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
-const gainValue = document.querySelector('#listen-gain-value');
-const note = document.querySelector('#listen-note');
-const adjustState = document.querySelector('#listen-adjust-state');
 const publisherButton = document.querySelector('#start-publisher');
 const takeoverButton = document.querySelector('#confirm-takeover');
 
-if (toggle && gainControl && gainValue && note && adjustState && publisherButton && takeoverButton) {
+if (toggle && gainControl && publisherButton && takeoverButton) {
   const MIX_SAMPLE_RATE = 48_000;
   const RECONNECT_MS = 1_000;
   const PREBUFFER_MS = 250;
@@ -42,7 +38,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   let micMuteEpoch = 0;
   let roomMicForcedMuted = false;
   let playbackForcedMuted = false;
+  let takeReviewForcedMuted = false;
   let sourceSampleRate = MIX_SAMPLE_RATE;
+  let micPrimaryMode = window.relayMicActionState?.primaryMode === 'takeover'
+    ? 'takeover'
+    : 'microphone';
 
   function wsUrl() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -80,8 +80,12 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     return output;
   }
 
+  function volumePercent() {
+    return Math.max(0, Math.min(100, Math.round(Number(gainControl.value) || 0)));
+  }
+
   function listenGain() {
-    const percent = Math.max(0, Math.min(100, Number(gainControl.value) || 0));
+    const percent = volumePercent();
     if (percent === 0) return 0;
     // Keep local playback at or below unity. The server mix is already
     // full-scale limited; multiplying it again here would create phone-only clipping.
@@ -89,7 +93,11 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   }
 
   function effectiveMuted() {
-    return userMuted || micForcedMuted || roomMicForcedMuted || playbackForcedMuted;
+    return userMuted
+      || micForcedMuted
+      || roomMicForcedMuted
+      || playbackForcedMuted
+      || takeReviewForcedMuted;
   }
 
   function audioReady() {
@@ -104,55 +112,49 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
   function forcedMuteReason() {
     if (micForcedMuted || roomMicForcedMuted) return 'mic';
     if (playbackForcedMuted) return 'playback';
+    if (takeReviewForcedMuted) return 'review';
     return null;
   }
 
-  function updateGain() {
-    const percent = Math.round(Number(gainControl.value) || 0);
-    gainValue.value = `${percent}%`;
-    if (gainNode && audioContext) {
-      const target = effectiveMuted() ? 0 : listenGain();
-      gainNode.gain.setTargetAtTime(target, audioContext.currentTime, 0.01);
-    }
-  }
-
-  function render(copy = '') {
-    const muted = effectiveMuted();
+  function listenState(phase = '') {
     const forcedReason = forcedMuteReason();
     const state = forcedReason === 'mic'
       ? 'mic-muted'
       : forcedReason === 'playback'
         ? 'playback-muted'
-        : userMuted
-          ? 'muted'
-          : audioReady()
-            ? 'audible'
-            : 'ready';
-    toggle.dataset.state = state;
-    toggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
-    toggle.disabled = Boolean(forcedReason);
-    toggle.textContent = forcedReason === 'mic'
-      ? t('listen.mutedForMic')
-      : forcedReason === 'playback'
-        ? t('listen.mutedForSong')
-        : userMuted
-          ? t('listen.unmute')
-          : t('listen.mute');
-    note.textContent = copy;
-    document.body.dataset.listen = state;
+        : forcedReason === 'review'
+          ? 'review-muted'
+          : userMuted
+            ? 'muted'
+            : audioReady()
+              ? 'audible'
+              : 'ready';
+    return {
+      state,
+      phase,
+      muted: effectiveMuted(),
+      forcedReason,
+      userMuted,
+      volumePercent: volumePercent(),
+      audioReady: audioReady(),
+      transportEnabled,
+    };
+  }
 
-    if (forcedReason === 'mic') {
-      adjustState.textContent = t('listen.adjust.micMuted');
-    } else if (forcedReason === 'playback') {
-      adjustState.textContent = t('listen.adjust.songMuted');
-    } else if (userMuted) {
-      adjustState.textContent = t('listen.adjust.userMuted');
-    } else if (!audioReady()) {
-      adjustState.textContent = copy || t('listen.adjust.ready');
-    } else if (transportEnabled) {
-      adjustState.textContent = t('listen.adjust.playing');
-    } else {
-      adjustState.textContent = copy || t('listen.connectingAudio');
+  // Listen owns WebAudio and mute truth. It deliberately does not own product
+  // copy or visible control state: room-sound-ui.js is the single presenter.
+  function render(phase = '') {
+    const detail = listenState(phase);
+    window.relayListenState = detail;
+    window.dispatchEvent(new CustomEvent('relay-listen-state', { detail }));
+  }
+
+  window.addEventListener('relay-request-listen-state', () => render());
+
+  function updateGain() {
+    if (gainNode && audioContext) {
+      const target = effectiveMuted() ? 0 : listenGain();
+      gainNode.gain.setTargetAtTime(target, audioContext.currentTime, 0.01);
     }
   }
 
@@ -186,7 +188,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       reconnectTimer = null;
       connect().catch(() => {
         if (!transportEnabled || effectiveMuted() || !audioReady()) return;
-        render(t('listen.reconnecting'));
+        render('reconnecting');
         scheduleReconnect();
       });
     }, RECONNECT_MS);
@@ -269,7 +271,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       if (socket !== next || connectEpoch !== transportEpoch) return;
       socket = null;
       if (!transportEnabled || effectiveMuted() || !audioReady()) return;
-      render(t('listen.reconnecting'));
+      render('reconnecting');
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -379,8 +381,8 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
           publishListenHealth(event.data);
           return;
         }
-        if (event.data?.type === 'buffering') render(t('listen.buffering'));
-        if (event.data?.type === 'playing') render('');
+        if (event.data?.type === 'buffering') render('buffering');
+        if (event.data?.type === 'playing') render('playing');
       };
 
       const localGain = context.createGain();
@@ -404,65 +406,69 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     }
   }
 
-  function reconcile(copy = '') {
+  function reconcile(phase = '') {
     updateGain();
     if (effectiveMuted()) {
       disarmAudioUnlock();
       closeTransport();
-      render(copy);
+      render(phase);
       return;
     }
     if (!audioContext || !playbackNode || !gainNode) {
       armAudioUnlock();
-      render(copy || t('listen.firstInteraction'));
+      render(phase || 'first-interaction');
       return;
     }
     if (audioContext.state !== 'running') {
       closeTransport();
       armAudioUnlock();
-      render(t('listen.firstInteraction'));
+      render('first-interaction');
       return;
     }
 
     disarmAudioUnlock();
     if (transportEnabled) {
-      render(copy);
+      render(phase);
       return;
     }
 
     transportEnabled = true;
-    render(copy || t('people.connecting'));
+    render(phase || 'connecting');
     connect().catch(() => {
       if (!transportEnabled || effectiveMuted() || !audioReady()) return;
-      render(t('listen.reconnecting'));
+      render('reconnecting');
       scheduleReconnect();
     });
   }
 
-  function forceMicMute(copy = t('listen.micActive')) {
+  function forceMicMute(phase = 'mic-active') {
     micMuteEpoch += 1;
     micForcedMuted = true;
-    reconcile(copy);
+    reconcile(phase);
   }
 
-  function restoreAfterMic(copy = t('listen.resumed')) {
+  function restoreAfterMic(phase = 'resumed') {
     micForcedMuted = false;
     if (roomMicForcedMuted) {
-      reconcile(t('listen.micOwned'));
+      reconcile('mic-owned');
       return;
     }
     if (playbackForcedMuted) {
-      reconcile(t('listen.songOwned'));
+      reconcile('song-owned');
+      return;
+    }
+    if (takeReviewForcedMuted) {
+      reconcile('take-review');
       return;
     }
     if (userMuted) {
-      reconcile(t('listen.adjust.userMuted'));
+      reconcile('user-muted');
       return;
     }
-    reconcile(copy);
+    reconcile(phase);
   }
 
-  function restoreAfterMicBoundary(copy = t('listen.resumed')) {
+  function restoreAfterMicBoundary(phase = 'resumed') {
     // Legacy terminal notifications can be dispatched immediately before
     // app.js enters stop(). Defer one task so stop() has synchronously stopped
     // MediaStream tracks before room audio can become audible again. Fence the
@@ -471,7 +477,7 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     const restoreEpoch = micMuteEpoch;
     setTimeout(() => {
       if (micMuteEpoch !== restoreEpoch) return;
-      restoreAfterMic(copy);
+      restoreAfterMic(phase);
     }, 0);
   }
 
@@ -479,40 +485,57 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     if (roomMicForcedMuted === forced) return;
     roomMicForcedMuted = forced;
     if (forced) {
-      reconcile(t('listen.micOwned'));
+      reconcile('mic-owned');
       return;
     }
     if (micForcedMuted) {
-      reconcile(t('listen.micStarting'));
+      reconcile('mic-starting');
       return;
     }
     if (playbackForcedMuted) {
-      reconcile(t('listen.songOwned'));
+      reconcile('song-owned');
+      return;
+    }
+    if (takeReviewForcedMuted) {
+      reconcile('take-review');
       return;
     }
     if (userMuted) {
-      reconcile(t('listen.adjust.userMuted'));
+      reconcile('user-muted');
       return;
     }
-    reconcile(t('listen.resumed'));
+    reconcile('resumed');
   }
 
   function setPlaybackForcedMute(forced) {
     if (playbackForcedMuted === forced) return;
     playbackForcedMuted = forced;
     if (forced) {
-      reconcile(t('listen.songOwned'));
+      reconcile('song-owned');
       return;
     }
     if (micForcedMuted || roomMicForcedMuted) {
-      reconcile(t('listen.micOwned'));
+      reconcile('mic-owned');
+      return;
+    }
+    if (takeReviewForcedMuted) {
+      reconcile('take-review');
       return;
     }
     if (userMuted) {
-      reconcile(t('listen.adjust.userMuted'));
+      reconcile('user-muted');
       return;
     }
-    reconcile(t('listen.resumed'));
+    reconcile('resumed');
+  }
+
+  function setTakeReviewForcedMute(forced) {
+    if (takeReviewForcedMuted === forced) return;
+    takeReviewForcedMuted = forced;
+    // Take review is a local overlay just like Mic/holder feedback protection.
+    // It must not rewrite the user's own mute preference; when review ends,
+    // reconcile() resumes only if no other forced/user mute reason remains.
+    reconcile(forced ? 'take-review' : 'resumed');
   }
 
   /**
@@ -560,12 +583,12 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     } catch (error) {
       console.error(error);
       armAudioUnlock();
-      render(t('listen.retry'));
+      render('retry');
     }
   }
 
   toggle.addEventListener('click', async () => {
-    if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted) return;
+    if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted || takeReviewForcedMuted) return;
     userMuted = !userMuted;
     if (!userMuted) {
       try {
@@ -573,28 +596,38 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       } catch (error) {
         console.error(error);
         userMuted = true;
-        render(t('listen.startFailed'));
+        render('start-failed');
         return;
       }
     }
     reconcile();
   });
 
-  gainControl.addEventListener('input', updateGain);
+  gainControl.addEventListener('input', () => {
+    updateGain();
+    render('volume-change');
+  });
+
+  // Presence owns whether the primary Mic action is an ordinary request or a
+  // takeover. Listen consumes that state directly rather than reading a DOM
+  // label written by the Mic presenter.
+  window.addEventListener('relay-mic-action-state', (event) => {
+    micPrimaryMode = event.detail?.primaryMode === 'takeover' ? 'takeover' : 'microphone';
+  });
 
   // Product semantics are negative: room audio is wanted by default, while
   // local source roles temporarily overlay forced mute reasons. Do not rewrite
   // the user's own mute preference when Mic or Song ownership comes and goes.
   publisherButton.addEventListener('click', () => {
-    if (publisherButton.dataset.presenceLabel !== 'takeover') {
-      forceMicMute(t('listen.micStarting'));
+    if (micPrimaryMode !== 'takeover') {
+      forceMicMute('mic-starting');
     }
   }, { capture: true });
-  takeoverButton.addEventListener('click', () => forceMicMute(t('listen.handoffStarting')), { capture: true });
-  window.addEventListener('relay-request-microphone', () => forceMicMute(t('listen.handoffStarting')));
-  window.addEventListener('relay-microphone-started', () => forceMicMute(t('listen.micOwned')));
+  takeoverButton.addEventListener('click', () => forceMicMute('handoff-starting'), { capture: true });
+  window.addEventListener('relay-request-microphone', () => forceMicMute('handoff-starting'));
+  window.addEventListener('relay-microphone-started', () => forceMicMute('mic-owned'));
   window.addEventListener('relay-microphone-ended', () => restoreAfterMicBoundary());
-  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMicBoundary(t('listen.micFailedResume')));
+  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMicBoundary('mic-failed-resume'));
 
   function applyRoomSessionStatus(status) {
     const participantId = typeof window.relayParticipantId === 'string'
@@ -618,6 +651,9 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
       timeline: event.detail?.timeline,
     }));
   });
+  window.addEventListener('relay-take-review-playback', (event) => {
+    setTakeReviewForcedMute(event.detail?.active === true);
+  });
 
   // Browsers do not generally allow a newly navigated page to speak before a
   // user gesture. Keep the gate armed until AudioContext itself reports
@@ -637,8 +673,6 @@ if (toggle && gainControl && gainValue && note && adjustState && publisherButton
     }
   }, { once: true });
 
-  window.addEventListener('relay-locale-changed', () => render());
-
   updateGain();
-  render(t('listen.firstInteraction'));
+  render('first-interaction');
 }

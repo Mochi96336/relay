@@ -7,15 +7,20 @@ const presence = readFileSync(new URL('../public/presence.js', import.meta.url),
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
 const actionCss = readFileSync(new URL('../public/action-language.css', import.meta.url), 'utf8');
+const styleCss = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+const micActions = readFileSync(new URL('../public/mic-actions.js', import.meta.url), 'utf8');
 
 test('local Mic capture publishes an explicit lifecycle independent of server presence', () => {
   assert.match(app, /function setPublisherActive\(active\)[\s\S]*relayActiveRole = publisherActive \? 'publisher' : null/);
-  assert.match(app, /releaseButton\.hidden = !publisherActive/);
   assert.match(app, /dispatchRelayEvent\('relay-microphone-local-state', \{ active: publisherActive \}\)/);
 
   assert.match(presence, /let localPublisherActive = window\.relayActiveRole === 'publisher'/);
-  assert.match(presence, /releaseButton\.hidden = !serverOwnsMic && !localPublisherActive/);
   assert.match(presence, /relay-microphone-local-state/);
+  assert.match(presence, /releaseVisible: Boolean\(mine \|\| localPublisherActive\)/);
+  assert.match(presence, /relay-mic-action-state/);
+  assert.doesNotMatch(presence, /releaseButton\.hidden\s*=/);
+  assert.doesNotMatch(app, /releaseButton\.hidden\s*=/);
+  assert.match(micActions, /releaseButton\.hidden = state\.releaseVisible !== true/);
 });
 
 test('Release tears down local capture even if the Presence websocket cannot send', () => {
@@ -40,7 +45,7 @@ test('Release tears down local capture even if the Presence websocket cannot sen
 test('failed Mic ownership attempts clean up before Listen is allowed to recover', () => {
   assert.match(
     listen,
-    /function restoreAfterMicBoundary\(copy[\s\S]*const restoreEpoch = micMuteEpoch[\s\S]*setTimeout\(\(\) => \{[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*restoreAfterMic\(copy\);[\s\S]*\}, 0\)/,
+    /function restoreAfterMicBoundary\(phase[\s\S]*const restoreEpoch = micMuteEpoch[\s\S]*setTimeout\(\(\) => \{[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*restoreAfterMic\(phase\);[\s\S]*\}, 0\)/,
     'a stale terminal restore must not unmute a replacement Mic session',
   );
   assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMicBoundary/);
@@ -70,9 +75,9 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
     'late module consumers must be able to replay the current ownership snapshot');
 
   assert.match(listen, /let roomMicForcedMuted = false/);
-  assert.match(listen, /return userMuted \|\| micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted/);
+  assert.match(listen, /userMuted[\s\S]*micForcedMuted[\s\S]*roomMicForcedMuted[\s\S]*playbackForcedMuted[\s\S]*takeReviewForcedMuted/);
   assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) return 'mic'/);
-  assert.match(listen, /function restoreAfterMic[\s\S]*if \(roomMicForcedMuted\)[\s\S]*listen\.micOwned/,
+  assert.match(listen, /function restoreAfterMic[\s\S]*if \(roomMicForcedMuted\)[\s\S]*reconcile\('mic-owned'\)/,
     'a local terminal event must not unmute while another tab still owns the room Mic');
   assert.match(listen, /setRoomMicForcedMute\(Boolean\(participantId && ownerId === participantId\)\)/,
     'all tabs with the owner participant identity must follow server Mic ownership');
@@ -80,7 +85,7 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
   const replayAt = listen.indexOf("window.dispatchEvent(new Event('relay-request-session-status'))", sessionListenerAt);
   assert.ok(sessionListenerAt >= 0 && replayAt > sessionListenerAt,
     'Listen must subscribe before requesting the initial authoritative replay');
-  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted\) return/,
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted \|\| takeReviewForcedMuted\) return/,
     'forced room ownership cannot be bypassed by the Listen toggle');
 });
 
@@ -121,22 +126,24 @@ test('initial Relay connection failure remains cancellable instead of trapping a
   const retryAt = app.indexOf('schedulePublisherReconnect(sessionEpoch)', connectAt);
   assert.ok(activeAt >= 0 && disabledAt > activeAt && connectAt > disabledAt && retryAt > connectAt);
 
-  // setPublisherActive(true) makes Release visible before the first control
-  // connection succeeds, so the retry loop can always be cancelled locally.
-  assert.match(app, /releaseButton\.hidden = !publisherActive/);
+  assert.match(presence, /releaseVisible: Boolean\(mine \|\| localPublisherActive\)/);
+  assert.match(micActions, /releaseButton\.hidden = state\.releaseVisible !== true/);
 });
 
-test('timeline diagnostics attach to the current Song stage instead of retired markup', () => {
-  assert.match(youtubeSync, /document\.querySelector\('\.song-stage'\)/);
-  assert.doesNotMatch(youtubeSync, /document\.querySelector\('\.youtube-panel'\)/);
-  assert.match(youtubeSync, /panel\?\.querySelector\('\.youtube-readout'\)/);
+test('timeline diagnostics stay data-only and never attach to the Live Song stage', () => {
+  assert.match(youtubeSync, /relay:playback-diagnostics/);
+  assert.doesNotMatch(youtubeSync, /document\.querySelector\('\.song-stage'\)/);
+  assert.doesNotMatch(youtubeSync, /server-timeline-state|insertAdjacentElement/);
 });
 
-test('localized Mic labels are not replaced by the retired English pseudo-label', () => {
+test('localized Mic labels come only from the Mic action presenter', () => {
   const micStart = actionCss.indexOf('#start-publisher {');
   const confirmStart = actionCss.indexOf('#confirm-takeover {', micStart);
   assert.ok(micStart >= 0 && confirmStart > micStart);
   const micRules = actionCss.slice(micStart, confirmStart);
   assert.match(micRules, /font-size:\s*13px/);
-  assert.match(micRules, /#start-publisher::after\s*\{[\s\S]*content:\s*none/);
+  assert.doesNotMatch(actionCss, /#start-publisher::after/);
+  assert.doesNotMatch(styleCss, /#start-publisher::after|Take over mic|content:\s*"Take mic"/);
+  assert.match(micActions, /publisherButton\.textContent = t\('mic\.takeover'\)/);
+  assert.match(micActions, /publisherButton\.textContent = t\('mic\.microphone'\)/);
 });

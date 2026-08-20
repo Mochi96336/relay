@@ -10,6 +10,7 @@ import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './a
 import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
+import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
@@ -108,6 +109,9 @@ const BACKING_RETENTION_MS = PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 2_000
 const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_000);
 const MAX_VOCAL_FINE_TUNE_MS = 100;
+const MAX_MIC_GAIN_DB = 40;
+const MAX_RECOMMENDED_MIC_GAIN_DB = 36;
+const FIXED_SONG_LEVEL = 100;
 const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
 const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
@@ -193,6 +197,7 @@ type RelaySocket = WebSocket & {
   playbackMicIntentAtMs?: number;
   legacyPlaybackGeneration?: number;
   telemetryRejectedReason?: string;
+  micPresenceTelemetryAt?: number;
   infrastructureAuthenticated?: boolean;
 };
 
@@ -219,7 +224,7 @@ let backingSampleRate: number | null = null;
 let backingIsRobot = false;
 let activeRobotSource: RelaySocket | null = null;
 let micGainDb = 24;
-let songLevel = 40;
+const songLevel = FIXED_SONG_LEVEL;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
@@ -1244,7 +1249,7 @@ function observationStatusV1Payload() {
 
 function recommendedMicGainDb(micPeakDbfs: number | null) {
   if (micPeakDbfs === null || !Number.isFinite(micPeakDbfs)) return null;
-  return Math.max(0, Math.min(36, Math.round(LIMITER_THRESHOLD_DBFS - micPeakDbfs)));
+  return Math.max(0, Math.min(MAX_RECOMMENDED_MIC_GAIN_DB, Math.round(LIMITER_THRESHOLD_DBFS - micPeakDbfs)));
 }
 
 function probeStatus(nowMs = performance.now()) {
@@ -2167,6 +2172,40 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
+    if (payload.type === 'mic-presence-telemetry') {
+      const presence = parseMicPresenceTelemetry(payload);
+      const nowMs = performance.now();
+      if (
+        !presence
+        || !socket.participantId
+        || socket.participantId !== participants.micOwnerId
+        || socket.participantId !== micMediaOwnerId
+        || micMediaGeneration === null
+        || presence.captureGeneration !== micMediaGeneration
+        || !micStreaming(nowMs)
+      ) return;
+
+      // Presence is display telemetry, not media authority. Any authenticated
+      // socket for the current Mic owner may report it, but the server binds the
+      // packet to the canonical media generation and rate-limits broadcast.
+      if (
+        Number.isFinite(socket.micPresenceTelemetryAt)
+        && nowMs - socket.micPresenceTelemetryAt! < 60
+      ) return;
+      socket.micPresenceTelemetryAt = nowMs;
+      broadcastJson({
+        type: 'room-mic-presence',
+        version: 1,
+        ownerId: micMediaOwnerId,
+        captureGeneration: micMediaGeneration,
+        rmsDbfs: presence.rmsDbfs,
+        spectrumBands: presence.spectrumBands,
+        f0Hz: presence.f0Hz,
+        pitchConfidence: presence.pitchConfidence,
+      });
+      return;
+    }
+
     if (payload.type === 'product-status-request') {
       sendJson(socket, productStatusPayload());
       return;
@@ -2941,13 +2980,12 @@ wss.on('connection', (rawSocket, request) => {
       if (!requireMicOwnerCommand(socket, 'set-mix')) return;
       const nextGain = Number(payload.micGainDb);
       if (Number.isFinite(nextGain)) {
-        micGainDb = Math.max(0, Math.min(36, nextGain));
+        micGainDb = Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain));
         session.setMicGainDb(micGainDb);
       }
-      const nextSongLevel = Number(payload.songLevel);
-      if (Number.isFinite(nextSongLevel)) {
-        songLevel = Math.max(0, Math.min(100, Math.round(nextSongLevel)));
-      }
+      // `songLevel` remains accepted on the old wire shape for compatibility,
+      // but Song is now a server-owned 100% reference and cannot be mutated by
+      // any client authority.
       broadcastJson(mixSettingsPayload());
       return;
     }

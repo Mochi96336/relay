@@ -1,3 +1,4 @@
+import './youtube-song-metadata.js';
 import { canRecoverPlayback, playbackLeaderHealth } from './playback-recovery.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -9,11 +10,11 @@ const localReadout = document.querySelector('.youtube-readout');
 const localNote = document.querySelector('#youtube-note');
 const deviceNote = document.querySelector('#song-device-note');
 const changeButton = document.querySelector('#change-youtube');
+const headingTitle = document.querySelector('#song-heading-title');
 const observer = document.querySelector('#song-observer');
 const observerArtwork = document.querySelector('#room-song-artwork');
 const observerState = document.querySelector('#room-song-state');
 const observerTimeline = document.querySelector('#room-song-timeline');
-const observerMeta = observer?.querySelector('.song-observer-meta');
 
 const ROLES = new Set(['empty', 'holder', 'preparing', 'observer']);
 const STATE_LABELS = new Map([
@@ -37,26 +38,31 @@ function localCopy(english, traditionalChinese) {
   return window.relayI18n?.getLocale?.() === 'zh-Hant' ? traditionalChinese : english;
 }
 
+function cleanMetadata(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim();
+}
+
 if (
   stage && form && input && playerShell && localReadout && localNote
-  && deviceNote && changeButton && observer && observerArtwork
-  && observerState && observerTimeline && observerMeta
+  && deviceNote && changeButton && headingTitle && observer && observerArtwork
+  && observerState && observerTimeline
 ) {
   let role = 'connecting';
   let editing = false;
+  let editingVideoId = null;
   let lastVideoId = null;
   let lastRoom = {};
-  let recoveryPending = false;
 
-  const recoveryActions = document.createElement('div');
-  recoveryActions.className = 'inline-actions playback-recovery-actions';
-  recoveryActions.hidden = true;
+  const observerAuthor = document.createElement('span');
+  observerAuthor.className = 'song-observer-author';
+  observerAuthor.hidden = true;
+  observerTimeline.insertAdjacentElement('beforebegin', observerAuthor);
 
-  const recoverButton = document.createElement('button');
-  recoverButton.id = 'recover-youtube';
-  recoverButton.type = 'button';
-  recoveryActions.append(recoverButton);
-  observerMeta.append(recoveryActions);
+  const observerPlaybackState = document.createElement('span');
+  observerPlaybackState.className = 'song-observer-status';
+  observerPlaybackState.hidden = true;
+  observerTimeline.insertAdjacentElement('afterend', observerPlaybackState);
 
   function roomSnapshot(detail) {
     const timeline = detail?.timeline && typeof detail.timeline === 'object' ? detail.timeline : {};
@@ -72,30 +78,41 @@ if (
     return t('people.connecting');
   }
 
-  function recoveryButtonCopy() {
-    return recoveryPending
-      ? localCopy('Taking over…', '正在接手…')
-      : localCopy('Continue on this phone', '在這支手機繼續播放');
-  }
-
-  function renderRecovery(recoverable) {
-    recoveryActions.hidden = !recoverable;
-    recoverButton.disabled = !recoverable || recoveryPending;
-    recoverButton.textContent = recoveryButtonCopy();
+  function renderDeviceNote(recoverable) {
+    // Playback location is implementation context, not a persistent task. Keep
+    // the heading quiet in the normal holder/observer/empty states and surface
+    // it only while the user needs to understand a transition or recovery.
+    const visible = recoverable || role === 'preparing' || role === 'connecting';
+    deviceNote.hidden = !visible;
+    if (!visible) {
+      deviceNote.textContent = '';
+      return;
+    }
+    deviceNote.textContent = recoverable
+      ? localCopy('Playback controller unavailable', '播放主控已失聯')
+      : roleCopy(role);
   }
 
   function renderObserver(room, recoverable) {
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const state = Number(room.state);
+    const titleCopy = cleanMetadata(room.videoTitle) || t('song.roomSong');
+    const authorCopy = cleanMetadata(room.videoAuthor);
     const stateLabel = recoverable
       ? localCopy('Playback interrupted', '播放已中斷')
       : STATE_LABELS.has(state)
         ? t(STATE_LABELS.get(state))
         : t('song.roomSong');
 
-    observerState.textContent = stateLabel;
+    // Observers get the full compact snapshot. Playback holders project only
+    // the title into the heading row above the real YouTube controls.
+    headingTitle.textContent = titleCopy;
+    observerState.textContent = titleCopy;
+    observerAuthor.textContent = authorCopy;
+    observerAuthor.hidden = !authorCopy;
     observerTimeline.textContent = `${formatTime(room.serverTime)} / ${formatTime(room.duration)}`;
-    renderRecovery(recoverable);
+    observerPlaybackState.textContent = stateLabel;
+    observerPlaybackState.hidden = !recoverable && state === 1;
 
     if (videoId) {
       const nextSrc = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
@@ -112,82 +129,75 @@ if (
     const nextRole = ROLES.has(detail.role) ? detail.role : 'empty';
     const room = roomSnapshot(detail);
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
-    const previousRole = role;
     const recoverable = canRecoverPlayback({ role: nextRole, timeline: room });
     lastRoom = room;
 
     if (nextRole === 'empty') {
       editing = true;
-    } else if (nextRole !== 'holder') {
+      editingVideoId = null;
+    } else if (editing && editingVideoId !== videoId) {
       editing = false;
-    } else if (previousRole !== 'holder' || (lastVideoId && videoId && videoId !== lastVideoId)) {
+      editingVideoId = null;
+    } else if (
+      nextRole === 'observer'
+      && room.handoffState === 'idle'
+      && !recoverable
+    ) {
       editing = false;
+      editingVideoId = null;
     }
-
-    if (!recoverable) recoveryPending = false;
 
     role = nextRole;
     lastVideoId = videoId;
     stage.dataset.playbackRole = role;
+    stage.dataset.songEditing = editing ? 'true' : 'false';
     document.body.dataset.playbackRole = role;
     stage.dataset.playbackHealth = playbackLeaderHealth(room);
     document.body.dataset.playbackHealth = stage.dataset.playbackHealth;
-    deviceNote.textContent = recoverable
-      ? localCopy('Playback controller unavailable', '播放主控已失聯')
-      : roleCopy(role);
+    renderDeviceNote(recoverable);
 
     const holderWithSong = role === 'holder' && Boolean(videoId);
+    headingTitle.hidden = !holderWithSong;
     form.hidden = role === 'preparing'
       || (role === 'observer' && !recoverable)
       || (holderWithSong && !editing);
     changeButton.hidden = !holderWithSong;
     changeButton.textContent = editing ? t('song.done') : t('song.change');
+    changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
 
     const observerMode = role === 'observer';
+    const metadataMode = observerMode || holderWithSong;
     observer.hidden = !observerMode;
     playerShell.hidden = observerMode;
     localReadout.hidden = observerMode;
     localNote.hidden = observerMode;
 
-    if (observerMode) renderObserver(room, recoverable);
-    else renderRecovery(false);
+    if (metadataMode) renderObserver(room, recoverable);
   }
 
   changeButton.addEventListener('click', () => {
     if (role !== 'holder') return;
-    editing = !editing;
+    // Opening is derived from the painted state so an authoritative playback
+    // refresh cannot leave the local boolean one click ahead of the form.
+    editing = form.hidden || stage.dataset.songEditing !== 'true';
+    editingVideoId = editing ? lastVideoId : null;
+    stage.dataset.songEditing = editing ? 'true' : 'false';
     form.hidden = !editing;
     changeButton.textContent = editing ? t('song.done') : t('song.change');
+    changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
     if (editing) input.focus();
   });
 
-  recoverButton.addEventListener('click', () => {
-    if (recoveryPending || !canRecoverPlayback({ role, timeline: lastRoom })) return;
-    recoveryPending = true;
-    renderRecovery(true);
-    window.dispatchEvent(new CustomEvent('relay:recover-room-song'));
-  });
-
-  function releaseRecoveryPending() {
-    if (!recoveryPending) return;
-    recoveryPending = false;
-    renderRecovery(canRecoverPlayback({ role, timeline: lastRoom }));
-  }
-
   window.addEventListener('relay:playback-view', render);
-  window.addEventListener('relay:room-song-command-rejected', releaseRecoveryPending);
-  window.addEventListener('relay:room-song-command-failed-ack', releaseRecoveryPending);
-  window.addEventListener('relay:room-song-command-status', (event) => {
-    if (event.detail?.pendingCommandId === null) releaseRecoveryPending();
-  });
   window.addEventListener('relay-locale-changed', () => {
     const recoverable = canRecoverPlayback({ role, timeline: lastRoom });
-    deviceNote.textContent = recoverable
-      ? localCopy('Playback controller unavailable', '播放主控已失聯')
-      : roleCopy(role);
+    renderDeviceNote(recoverable);
     changeButton.textContent = editing ? t('song.done') : t('song.change');
-    if (role === 'observer') renderObserver(lastRoom, recoverable);
+    if (role === 'observer' || (role === 'holder' && Boolean(lastVideoId))) {
+      renderObserver(lastRoom, recoverable);
+    }
   });
   stage.dataset.playbackRole = role;
+  stage.dataset.songEditing = 'false';
   document.body.dataset.playbackRole = role;
 }

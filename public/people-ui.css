@@ -1,0 +1,159 @@
+/* People is ambient room awareness in the header, then a truthful list when
+   opened. Presence/ownership itself remains owned by presence.js + the server. */
+.people-menu > summary {
+  gap: 0;
+}
+
+.people-menu > summary #participant-count {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.participant-ambient {
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding-left: 5px;
+}
+
+.participant-avatar {
+  width: 26px;
+  height: 26px;
+  margin-left: -5px;
+  border: 1px solid #3a3c42;
+  border-radius: 999px;
+  background: #191b1f;
+  color: #b7b9be;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 680;
+  line-height: 1;
+  box-shadow: 0 0 0 2px #0d0e10;
+}
+
+.participant-avatar.mic-owner {
+  border-color: #a3a5aa;
+  background: #282a2f;
+  color: #f0ede5;
+}
+
+.participant-avatar.overflow {
+  width: 29px;
+  color: #8f9299;
+  font-size: 9px;
+}
+
+.participant-avatar.placeholder {
+  width: 8px;
+  height: 8px;
+  margin-left: 0;
+  border-color: #555860;
+  background: transparent;
+  box-shadow: none;
+}
+
+.people-popover {
+  gap: 0;
+  padding: 15px 14px 12px;
+}
+
+.people-popover-title {
+  margin: 1px 2px 10px;
+  color: #85888f;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .01em;
+}
+
+.participant-list {
+  min-height: 0;
+  display: grid;
+  gap: 0;
+}
+
+.participant-row {
+  min-width: 0;
+  min-height: 48px;
+  padding: 7px 2px;
+  border-bottom: 1px solid #202227;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.participant-row-avatar {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #34363b;
+  border-radius: 999px;
+  background: #191b1f;
+  color: #aeb0b5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.participant-row.mic-owner .participant-row-avatar {
+  border-color: #9a9da3;
+  color: #f0ede5;
+  background: #27292e;
+}
+
+.participant-row.reconnecting {
+  opacity: .52;
+}
+
+.participant-row-copy {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.participant-row-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d5d5d8;
+  font-size: 13px;
+  font-weight: 610;
+}
+
+.participant-row-copy > span {
+  flex: 0 0 auto;
+  color: #777a82;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.participant-row.mic-owner .participant-row-copy > span {
+  color: #b7b9be;
+}
+
+.people-popover .identity-editor {
+  min-height: 48px;
+  margin-top: 5px;
+  padding: 4px 2px 0;
+}
+
+@media (max-width: 360px) {
+  .people-popover {
+    right: -42px;
+  }
+
+  .participant-row-copy {
+    gap: 8px;
+  }
+}

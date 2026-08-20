@@ -260,7 +260,7 @@ describe('live mix', () => {
         (m) => m.type === 'mix-health' && m.micStarvedFrames > 0,
         6_000,
       );
-      assert.ok(health.micHeadroomMs < 0, `headroom should be negative, got ${health.micHeadroomMs}`);
+      assert.ok(health.micHeadroomMs < 0, `headroom should be negative, got ${health.micHeadroomMs} ms`);
       assert.equal(health.backingStarvedFrames, 0, 'the song side was never short');
 
       backing.close();
@@ -410,7 +410,7 @@ describe('mix settings', () => {
   before(async () => { server = await startRelay(FAST); });
   after(async () => { await server.stop(); });
 
-  test('carries song level so the phone can drive the machine playing the song', async () => {
+  test('keeps Song at the server-owned 100% reference while Voice changes', async () => {
     const phone = await RelayClient.connect(server);
     phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await phone.waitForType('registered');
@@ -422,26 +422,29 @@ describe('mix settings', () => {
     phone.send({ type: 'set-mix', micGainDb: 18, songLevel: 25 });
 
     const settings = await desktop.waitFor(
-      (m) => m.type === 'mix-settings' && m.songLevel === 25,
+      (m) => m.type === 'mix-settings' && m.micGainDb === 18 && m.songLevel === 100,
       3_000,
     );
     assert.equal(settings.micGainDb, 18);
+    assert.equal(settings.songLevel, 100);
 
     phone.close();
     desktop.close();
     await sleep(100);
   });
 
-  test('clamps a song level outside the slider range', async () => {
+  test('ignores legacy Song mutations and clamps Voice to +40 dB', async () => {
     const phone = await RelayClient.connect(server);
     phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await phone.waitForType('registered');
 
-    phone.send({ type: 'set-mix', songLevel: 900 });
-    await phone.waitFor((m) => m.type === 'mix-settings' && m.songLevel === 100, 3_000);
-
-    phone.send({ type: 'set-mix', songLevel: -40 });
-    await phone.waitFor((m) => m.type === 'mix-settings' && m.songLevel === 0, 3_000);
+    phone.send({ type: 'set-mix', micGainDb: 900, songLevel: -40 });
+    const settings = await phone.waitFor(
+      (m) => m.type === 'mix-settings' && m.micGainDb === 40 && m.songLevel === 100,
+      3_000,
+    );
+    assert.equal(settings.micGainDb, 40);
+    assert.equal(settings.songLevel, 100);
 
     phone.close();
     await sleep(100);

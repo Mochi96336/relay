@@ -2241,8 +2241,14 @@ wss.on('connection', (rawSocket, request) => {
       if (socket === backing && socket.role === 'backing' && session.active) {
         const frame = decodePcmFrame(data as Buffer);
         const previousGeneration = session.backingGeneration;
-        lastBackingFrameAt = performance.now();
-        const { samples, start } = session.ingestBacking(frame, backingSampleRate);
+        const nowMs = performance.now();
+        lastBackingFrameAt = nowMs;
+        const { samples, start } = session.ingestBacking(
+          frame,
+          backingSampleRate,
+          nowMs,
+          backingIsRobot,
+        );
         if (
           previousGeneration !== null
           && session.backingGeneration !== previousGeneration

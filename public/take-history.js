@@ -35,13 +35,6 @@ function formatRecordedAt(endedAtMs) {
     : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
-function verdictLabel(verdict) {
-  if (verdict === 'clean') return localCopy('Clean', '乾淨');
-  if (verdict === 'review') return localCopy('Review', '需檢查');
-  if (verdict === 'degraded') return localCopy('Degraded', '品質下降');
-  return localCopy('Ready', '完成');
-}
-
 function takeCount(count) {
   if (localeIsChinese()) return `${count} 段`;
   return `${count} ${count === 1 ? 'take' : 'takes'}`;
@@ -226,7 +219,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       const when = document.createElement('strong');
       when.textContent = formatRecordedAt(entry.endedAtMs);
       const meta = document.createElement('span');
-      meta.textContent = `${formatDuration(entry.artifact.durationMs)} · ${verdictLabel(entry.qualityVerdict)}`;
+      meta.textContent = formatDuration(entry.artifact.durationMs);
       button.append(when, meta);
       button.addEventListener('click', () => {
         selectedTakeId = entry.takeId;
@@ -261,7 +254,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
 
     review.hidden = false;
     selectedWhen.textContent = formatRecordedAt(selected.endedAtMs);
-    selectedMeta.textContent = `${formatDuration(selected.artifact.durationMs)} · ${verdictLabel(selected.qualityVerdict)}`;
+    selectedMeta.textContent = formatDuration(selected.artifact.durationMs);
 
     const href = artifactUrl(selected.artifact.url);
     if (currentArtifactHref !== href) {
@@ -285,8 +278,8 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     const latest = historyEntries[0];
     root.hidden = false;
     recentButton.textContent = localCopy(
-      `Last take · ${formatDuration(latest.artifact.durationMs)} · ${verdictLabel(latest.qualityVerdict)}`,
-      `上一段錄音 · ${formatDuration(latest.artifact.durationMs)} · ${verdictLabel(latest.qualityVerdict)}`,
+      `Last take · ${formatDuration(latest.artifact.durationMs)}`,
+      `上一段錄音 · ${formatDuration(latest.artifact.durationMs)}`,
     );
   }
 

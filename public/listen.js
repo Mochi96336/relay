@@ -1,4 +1,7 @@
-import { shouldRequestAudioResume } from './audio-context-recovery.js';
+import {
+  createAudioInterruptionTracker,
+  shouldRequestAudioResume,
+} from './audio-context-recovery.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import {
   claimMicrophoneAudio,
@@ -22,6 +25,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
   const monitorPcmReceiver = createMonitorPcmReceiver();
+  const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
 
   let socket = null;
   let pendingSocket = null;
@@ -37,7 +41,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   // interruption instead of being destroyed on the first post-background tap.
   let stalledResumeGestures = 0;
   let audioEverRunning = false;
-  let needsLiveEdgeRecovery = false;
+  let liveEdgeRecoveryRequired = false;
   let transportEnabled = false;
   let userMuted = false;
   let micForcedMuted = false;
@@ -196,6 +200,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
   function closeTransport() {
     transportEnabled = false;
+    liveEdgeRecoveryRequired = false;
+    audioInterruption.reset();
     abandonTransportConnection();
   }
 
@@ -279,11 +285,16 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
       // Keep framing continuity if Safari leaves this page running in the
       // background, but never build a playback backlog while WebAudio is not
-      // rendering. Recovery deliberately re-enters at the current live edge.
-      if (!audioRendering() || needsLiveEdgeRecovery) {
-        if (audioEverRunning) needsLiveEdgeRecovery = true;
+      // rendering. A dropped accepted frame is concrete evidence that playback
+      // fell behind; a brief resume with no dropped frame can continue in place.
+      if (!audioRendering()) {
+        if (audioEverRunning) {
+          audioInterruption.begin();
+          audioInterruption.noteDroppedPlayback();
+        }
         return;
       }
+      if (liveEdgeRecoveryRequired) return;
 
       if (received.reset) playbackNode.port.postMessage({ type: 'reset' });
       const pcm = int16ToFloat32(received.frame.pcm);
@@ -319,7 +330,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   function restartMonitorAtLiveEdge() {
-    needsLiveEdgeRecovery = false;
+    liveEdgeRecoveryRequired = false;
+    audioInterruption.reset();
     abandonTransportConnection();
     if (!monitorTransportWanted()) return;
     transportEnabled = true;
@@ -393,11 +405,15 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       context.addEventListener('statechange', () => {
         if (audioContext !== context) return;
         if (context.state === 'running') {
+          if (audioEverRunning) {
+            const recovery = audioInterruption.finish();
+            if (recovery.requiresLiveEdge) liveEdgeRecoveryRequired = true;
+          }
           audioEverRunning = true;
           stalledResumeGestures = 0;
           disarmAudioUnlock();
         } else if (!effectiveMuted()) {
-          if (audioEverRunning) needsLiveEdgeRecovery = true;
+          if (audioEverRunning) audioInterruption.begin();
           startResume(context);
           armAudioUnlock();
         }
@@ -450,7 +466,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       playbackNode = null;
       gainNode = null;
       audioEverRunning = false;
-      needsLiveEdgeRecovery = false;
+      liveEdgeRecoveryRequired = false;
+      audioInterruption.reset();
       claimPlaybackAudio(false);
       try { await failed?.close(); } catch {}
       throw error;
@@ -476,7 +493,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       startResume(audioContext);
       armAudioUnlock();
       if (audioEverRunning) {
-        needsLiveEdgeRecovery = true;
+        audioInterruption.begin();
         ensureTransport('interrupted');
         return;
       }
@@ -487,7 +504,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     audioEverRunning = true;
     stalledResumeGestures = 0;
     disarmAudioUnlock();
-    if (needsLiveEdgeRecovery) {
+    if (liveEdgeRecoveryRequired) {
       restartMonitorAtLiveEdge();
       return;
     }
@@ -530,6 +547,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     const restoreEpoch = micMuteEpoch;
     setTimeout(() => {
       if (micMuteEpoch !== restoreEpoch) return;
+      claimMicrophoneAudio(false);
       restoreAfterMic(phase);
     }, 0);
   }
@@ -608,7 +626,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     gainNode = null;
     audioSetupPromise = null;
     audioEverRunning = false;
-    needsLiveEdgeRecovery = false;
+    liveEdgeRecoveryRequired = false;
+    audioInterruption.reset();
     stalledResumeGestures = 0;
     if (stuck) {
       try { void stuck.close(); } catch {}
@@ -691,11 +710,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     forceMicMute('mic-owned');
   });
   window.addEventListener('relay-microphone-ended', () => {
-    claimMicrophoneAudio(false);
     restoreAfterMicBoundary();
   });
   window.addEventListener('relay-microphone-start-failed', () => {
-    claimMicrophoneAudio(false);
     restoreAfterMicBoundary('mic-failed-resume');
   });
 

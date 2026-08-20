@@ -102,6 +102,7 @@ test('Listen treats OS interruption as recovery, not a user transport teardown',
   assert.match(listenSource, /function audioGraphReady\(\)/);
   assert.match(listenSource, /function audioRendering\(\)/);
   assert.match(listenSource, /function monitorTransportWanted\(\)[\s\S]*audioEverRunning/);
+  assert.match(listenSource, /createAudioInterruptionTracker\(\{ staleAfterMs: PREBUFFER_MS \}\)/);
   assert.match(listenSource, /function restartMonitorAtLiveEdge\(\)[\s\S]*abandonTransportConnection\(\)[\s\S]*ensureTransport\('reconnecting'\)/);
 
   const reconcile = listenSource.match(/function reconcile\(phase = ''\) \{[\s\S]*?\n  \}\n\n  function forceMicMute/)?.[0] ?? '';
@@ -109,10 +110,12 @@ test('Listen treats OS interruption as recovery, not a user transport teardown',
   const interruptionBranch = reconcile.match(/if \(!audioRendering\(\)\) \{[\s\S]*?\n    \}/)?.[0] ?? '';
   assert.notEqual(interruptionBranch, '', 'Listen must handle a non-rendering graph explicitly');
   assert.doesNotMatch(interruptionBranch, /closeTransport\(\)/);
-  assert.match(interruptionBranch, /needsLiveEdgeRecovery = true/);
+  assert.doesNotMatch(interruptionBranch, /liveEdgeRecoveryRequired = true/);
+  assert.match(interruptionBranch, /audioInterruption\.begin\(\)/);
   assert.match(interruptionBranch, /ensureTransport\('interrupted'\)/);
 
-  assert.match(listenSource, /if \(!audioRendering\(\) \|\| needsLiveEdgeRecovery\) \{[\s\S]*return;/);
+  assert.match(listenSource, /if \(!audioRendering\(\)\) \{[\s\S]*audioInterruption\.noteDroppedPlayback\(\)[\s\S]*return;/);
+  assert.match(listenSource, /audioInterruption\.finish\(\)[\s\S]*recovery\.requiresLiveEdge[\s\S]*liveEdgeRecoveryRequired = true/);
   assert.match(listenSource, /resetPlaybackTemporalState\(\)/);
   assert.match(listenSource, /monitorPcmReceiver\.reset\(\)/);
   assert.match(listenSource, /playbackNode\?\.port\.postMessage\(\{ type: 'reset' \}\)/);
@@ -123,8 +126,10 @@ test('Listen uses playback and play-and-record AudioSession claims at user inten
   assert.match(listenSource, /userMuted = !userMuted;\n    claimPlaybackAudio\(!userMuted\);/);
   assert.match(listenSource, /publisherButton\.addEventListener\('click',[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
   assert.match(listenSource, /relay-request-microphone'[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
-  assert.match(listenSource, /relay-microphone-ended'[\s\S]*claimMicrophoneAudio\(false\)/);
-  assert.match(listenSource, /relay-microphone-start-failed'[\s\S]*claimMicrophoneAudio\(false\)/);
+  assert.match(listenSource, /function restoreAfterMicBoundary[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*claimMicrophoneAudio\(false\)[\s\S]*restoreAfterMic\(phase\)/,
+    'Mic AudioSession release must share the deferred epoch fence with local Listen restore');
+  assert.match(listenSource, /relay-microphone-ended'[\s\S]*restoreAfterMicBoundary\(\)/);
+  assert.match(listenSource, /relay-microphone-start-failed'[\s\S]*restoreAfterMicBoundary\('mic-failed-resume'\)/);
 });
 
 test('Listen gives every recovered running context a fresh stuck-resume budget', () => {

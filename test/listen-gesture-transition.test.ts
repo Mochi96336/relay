@@ -49,9 +49,11 @@ test('Listen gates first transport start on a running AudioContext while preserv
 
   assert.match(reconcileSection, /if \(!audioGraphReady\(\)\) \{[\s\S]*armAudioUnlock\(\);[\s\S]*render\(phase \|\| 'first-interaction'\);[\s\S]*return;/,
     'a graph that has not been built yet must stay behind the user gesture gate');
-  assert.match(reconcileSection, /if \(!audioRendering\(\)\) \{[\s\S]*startResume\(audioContext\);[\s\S]*armAudioUnlock\(\);[\s\S]*if \(audioEverRunning\) \{[\s\S]*needsLiveEdgeRecovery = true;[\s\S]*ensureTransport\('interrupted'\);[\s\S]*return;[\s\S]*render\('first-interaction'\);[\s\S]*return;/,
-    'a later OS interruption may preserve transport intent but must mark live-edge recovery and keep playback gated');
+  assert.match(reconcileSection, /if \(!audioRendering\(\)\) \{[\s\S]*startResume\(audioContext\);[\s\S]*armAudioUnlock\(\);[\s\S]*if \(audioEverRunning\) \{[\s\S]*audioInterruption\.begin\(\);[\s\S]*ensureTransport\('interrupted'\);[\s\S]*return;[\s\S]*render\('first-interaction'\);[\s\S]*return;/,
+    'a later OS interruption preserves transport intent without declaring timeline staleness by itself');
+  assert.doesNotMatch(reconcileSection, /liveEdgeRecoveryRequired\s*=\s*true/,
+    'resume trouble alone must not be equivalent to a stale realtime timeline');
 
-  assert.match(source, /context\.addEventListener\('statechange'[\s\S]*context\.state === 'running'[\s\S]*audioEverRunning = true;[\s\S]*stalledResumeGestures = 0;[\s\S]*disarmAudioUnlock\(\)[\s\S]*reconcile\(/,
-    'AudioContext state changes, not resume requests, drive first readiness and recovery reconciliation');
+  assert.match(source, /context\.addEventListener\('statechange'[\s\S]*context\.state === 'running'[\s\S]*audioInterruption\.finish\(\)[\s\S]*recovery\.requiresLiveEdge[\s\S]*liveEdgeRecoveryRequired = true[\s\S]*audioEverRunning = true[\s\S]*stalledResumeGestures = 0[\s\S]*disarmAudioUnlock\(\)[\s\S]*reconcile\(/,
+    'AudioContext state changes finish interruption evidence before deciding whether live-edge recovery is needed');
 });

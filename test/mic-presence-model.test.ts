@@ -41,9 +41,10 @@ test('same RMS with low/high F0 keeps amplitude while making high pitch visibly 
   assert.ok(Math.abs(pitchLobeCount(80) - 1.25) < 0.01);
   assert.ok(pitchLobeCount(100) > 1.8 && pitchLobeCount(100) < 2.0);
   assert.ok(pitchLobeCount(150) > 3 && pitchLobeCount(150) < 3.2);
-  assert.ok(pitchLobeCount(300) > 5 && pitchLobeCount(300) < 5.3);
-  assert.ok(pitchLobeCount(600) > 7 && pitchLobeCount(600) < 7.4);
-  assert.equal(pitchLobeCount(1000), 8);
+  assert.ok(pitchLobeCount(300) > 5.7 && pitchLobeCount(300) < 5.9);
+  assert.ok(pitchLobeCount(440) > 7.2 && pitchLobeCount(440) < 7.4);
+  assert.equal(pitchLobeCount(600), 8.5);
+  assert.equal(pitchLobeCount(1000), 8.5);
 });
 
 test('same F0 with different RMS keeps density while changing amplitude', () => {

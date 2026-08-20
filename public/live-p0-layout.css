@@ -270,21 +270,8 @@ html body .performance-stage > .take-strip > .recent-take #last-take-toggle {
   justify-content: flex-end;
   border: 0;
   color: #c7c8cc;
-  font-size: 0;
   line-height: 1;
   text-decoration: none;
-}
-
-html[lang="en"] body .performance-stage > .take-strip > .recent-take #last-take-toggle::after {
-  content: 'Recordings';
-  font-size: 13px;
-  font-weight: 620;
-}
-
-html[lang="zh-Hant"] body .performance-stage > .take-strip > .recent-take #last-take-toggle::after {
-  content: '錄音庫';
-  font-size: 13px;
-  font-weight: 620;
 }
 
 /* Mic gain becomes the first of the two bottom rails. Keep the existing input,

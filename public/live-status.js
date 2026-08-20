@@ -158,7 +158,7 @@ if (
         return { title: t('voice.live'), detail: t('voice.timingRecovering') };
       }
       if (song.state === 'playing') {
-        return { title: t('voice.live'), detail: t('voice.useHeadphones') };
+        return { title: t('voice.live'), detail: t('voice.useSpeaker') };
       }
       return { title: t('voice.live'), detail: t('voice.toRoom') };
     }

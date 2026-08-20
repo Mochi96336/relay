@@ -52,8 +52,7 @@ test('Live keeps Song then one performance task with Record before Mic adjustmen
   assert.equal(script.includes("micLiveLabel.textContent = 'Mic';"), true);
   assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
   assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
-  assert.match(composition, /\.performance-stage > #last-take,[\s\S]*?\.recent-take \{ order: 7 !important; \}/);
-  assert.match(script, /performanceStage\.insertBefore\(lastTake, micLiveControl\.nextSibling\)/);
+  assert.doesNotMatch(script, /performanceStage\.insertBefore\(lastTake|append(?:Child)?\(lastTake/);
 });
 
 test('persistent Live footer exposes only this-phone Room sound', () => {

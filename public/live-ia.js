@@ -6,8 +6,6 @@ const closeSystem = document.querySelector('#close-system');
 const calibrateTiming = document.querySelector('#calibrate-timing');
 const micLiveControl = document.querySelector('#mic-live-control');
 const micLiveLabel = micLiveControl?.querySelector('summary span');
-const performanceStage = document.querySelector('.performance-stage');
-const lastTake = document.querySelector('#last-take');
 
 // "Mic" is the product term in every locale: it is the same object the user
 // takes/releases, not a translated mixer channel named Voice/人聲. The template
@@ -16,14 +14,6 @@ const lastTake = document.querySelector('#last-take');
 if (micLiveLabel) {
   micLiveLabel.removeAttribute('data-i18n');
   micLiveLabel.textContent = 'Mic';
-}
-
-// The rehearsal loop is Sing -> Record -> Adjust -> Review. The historical
-// template nested the recent Take inside the recording section, which made Mic
-// gain split the action flow or forced the recent Take above gain. Move only the
-// preview node; Take history keeps its own global IDs and authority unchanged.
-if (performanceStage && micLiveControl && lastTake) {
-  performanceStage.insertBefore(lastTake, micLiveControl.nextSibling);
 }
 
 function closeHeaderMenus(except = null) {
@@ -114,17 +104,15 @@ calibrateTiming?.addEventListener('click', () => {
 });
 
 window.addEventListener('relay-microphone-local-state', (event) => {
-  if (event.detail?.active === true) return;
-  if (micLiveControl?.open) micLiveControl.open = false;
+  if (!micLiveControl) return;
+  micLiveControl.open = event.detail?.active === true;
 });
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (systemPanel?.open) {
     closeSystemPanel(true);
-    return;
   }
-  if (micLiveControl?.open) micLiveControl.open = false;
 });
 
 moreMenu?.querySelectorAll('[data-relay-locale]').forEach((button) => {

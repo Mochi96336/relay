@@ -24,15 +24,17 @@ test('observer Song is a compact room snapshot because it does not host YouTube 
   assert.match(song, /data-playback-role="observer"[\s\S]*?\.youtube-player-shell/);
 });
 
-test('playback holder keeps song identity above the real YouTube controls', () => {
-  assert.match(song, /data-playback-role="holder"[\s\S]*?\.song-observer/);
-  assert.match(song, /data-playback-role="holder"[\s\S]*?\.song-observer > :first-child[\s\S]*?display: none;/);
+test('playback holder compresses song identity into the heading row above the real YouTube controls', () => {
+  assert.match(song, /\.song-heading-title \{[\s\S]*?flex: 1;[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;[\s\S]*?font-size: 12px;/);
   assert.match(songSurface, /const metadataMode = observerMode \|\| holderWithSong;/);
-  assert.match(songSurface, /observer\.hidden = !metadataMode;/);
+  assert.match(songSurface, /headingTitle\.hidden = !holderWithSong;/);
+  assert.match(songSurface, /observer\.hidden = !observerMode;/);
+  assert.doesNotMatch(song, /data-playback-role="holder"\] \.song-observer/);
 });
 
 test('holder Change song is visible as a real phone touch target instead of tiny utility text', () => {
   assert.match(song, /#change-youtube \{[\s\S]*?min-height: 44px;[\s\S]*?padding: 0 12px;/);
+  assert.match(song, /\.youtube-form\[hidden\] \{ display: none; \}/);
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
@@ -91,8 +93,7 @@ test('new Mic evidence stays at exact center while one stored history mirrors ou
 test('performance actions stay in Sing -> Record -> Adjust -> Review order', () => {
   assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
   assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
-  assert.match(composition, /\.performance-stage > #last-take,[\s\S]*?\.recent-take \{ order: 7 !important; \}/);
-  assert.match(liveIa, /performanceStage\.insertBefore\(lastTake, micLiveControl\.nextSibling\)/);
+  assert.doesNotMatch(liveIa, /performanceStage\.insertBefore\(lastTake|append(?:Child)?\(lastTake/);
   assert.match(actions, /#start-recording \{[\s\S]*?border: 0;[\s\S]*?background: transparent;/);
   assert.match(composition, /#start-recording:not\(:disabled\)::before[\s\S]*?background:#d8a5a1/);
 });

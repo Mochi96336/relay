@@ -49,7 +49,11 @@ export function normalizePitchConfidence(pitchConfidence) {
 export function pitchLobeCount(f0Hz) {
   const frequency = normalizeF0Hz(f0Hz);
   if (frequency === null) return 0;
-  return clamp(1.25 + 2.05 * Math.log2(frequency / 80), 1.25, 8);
+  const baseDensity = 1.25 + 2.05 * Math.log2(frequency / 80);
+  // Preserve the existing low register, then make real high-note evidence
+  // progressively denser without changing amplitude or animation cadence.
+  const highPitchBoost = 0.65 * Math.max(0, Math.log2(frequency / 150));
+  return clamp(baseDensity + highPitchBoost, 1.25, 8.5);
 }
 
 export function pitchTextureStrength(f0Hz, pitchConfidence) {

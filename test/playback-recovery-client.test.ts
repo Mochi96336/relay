@@ -26,14 +26,12 @@ test('server-authorized recovery target may publish command proof before its rol
   assert.match(render, /relay:youtube-telemetry/);
 });
 
-test('stale observer gets both resume and replace-song recovery affordances', () => {
+test('stale observer gets the replace-song form without an inline takeover action', () => {
   assert.match(surface, /canRecoverPlayback/);
-  assert.match(surface, /id = 'recover-youtube'/);
-  assert.match(surface, /relay:recover-room-song/);
   assert.match(surface, /role === 'observer' && !recoverable/,
     'only a healthy observer should have the song form hidden by DOM state');
-  assert.match(surface, /在這支手機繼續播放/);
   assert.match(surface, /播放主控已失聯/);
+  assert.doesNotMatch(surface, /recover-youtube|playback-recovery-actions|在這支手機繼續播放/);
 
   assert.match(surfaceCss, /data-playback-health="disconnected"[^\n]*\.youtube-form/);
   assert.match(surfaceCss, /data-playback-health="stale"[^\n]*\.youtube-form/);
@@ -41,7 +39,7 @@ test('stale observer gets both resume and replace-song recovery affordances', ()
     'CSS must not keep the recovery form hidden after JS makes it available');
 });
 
-test('recovery button uses the same server-authorized room command path as normal playback actions', () => {
+test('server-authorized room recovery requests use the normal playback command path', () => {
   const recoveryStart = youtube.indexOf("window.addEventListener('relay:recover-room-song'");
   const sentStart = youtube.indexOf("window.addEventListener('relay:room-song-command-sent'", recoveryStart);
   assert.ok(recoveryStart >= 0 && sentStart > recoveryStart);

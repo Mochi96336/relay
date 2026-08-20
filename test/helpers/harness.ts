@@ -239,6 +239,57 @@ export class RelayClient {
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
+/**
+ * Asks for content calibration and resolves once the room is really collecting.
+ *
+ * A refused start is not a slow start. `decideCalibrationStart` blocks on room
+ * facts - most relevantly whether both capture timelines are still *streaming*
+ * - and the server answers a refusal with a failed calibration status, never
+ * with a later `collecting`. Waiting longer therefore cannot rescue a start the
+ * room declined, which is exactly what a plain `waitFor(collecting)` turns into
+ * an opaque timeout: on a loaded CI runner the primed frames can age past the
+ * streaming window before the command is handled.
+ *
+ * So re-prime the timelines and ask again instead of waiting harder, and if the
+ * room still will not admit the start, fail with the server's own reason rather
+ * than with a list of message types.
+ */
+export async function startCalibrationCollecting(
+  publisher: RelayClient,
+  monitor: RelayClient,
+  reprime: () => Promise<void>,
+  { attempts = 3, timeoutMs = 5_000 }: { attempts?: number; timeoutMs?: number } = {},
+): Promise<JsonMessage> {
+  let refusal = 'no answer from the room';
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    // Only messages that arrive after this request can answer it; an earlier
+    // calibration in the same session leaves its own settled status behind.
+    const from = monitor.messages.length;
+    publisher.send({ type: 'start-timing-calibration' });
+
+    const deadline = Date.now() + timeoutMs;
+    let answer: JsonMessage | undefined;
+    while (!answer && Date.now() < deadline) {
+      answer = monitor.messages.slice(from).find((message) => (
+        (message.type === 'timing-calibration-status'
+          && (message.state === 'collecting' || message.state === 'failed'))
+        || message.type === 'calibration-command-rejected'
+      ));
+      if (!answer) await sleep(20);
+    }
+
+    if (answer?.type === 'timing-calibration-status' && answer.state === 'collecting') return answer;
+    refusal = answer
+      ? String(answer.error ?? answer.reason ?? answer.state ?? answer.type)
+      : `no answer within ${timeoutMs} ms (saw: ${monitor.messages.slice(from).map((m) => m.type).join(', ')})`;
+
+    if (attempt < attempts) await reprime();
+  }
+
+  throw new Error(`Calibration never reached collecting after ${attempts} attempts: ${refusal}`);
+}
+
 /** Deterministic PRNG so a failing calibration assertion is reproducible. */
 function lcg(seed: number) {
   let state = seed >>> 0;

@@ -8,6 +8,7 @@ import {
   pulseTrain,
   sendPcmInChunks,
   sleep,
+  startCalibrationCollecting,
   startRelay,
   toInt16,
   type RelayServer,
@@ -68,11 +69,10 @@ async function calibrate(
 ) {
   publisher.send(playingTelemetry);
   await primeStreams(backing, publisher);
-  publisher.send({ type: 'start-timing-calibration' });
-  await monitor.waitFor(
-    (m) => m.type === 'timing-calibration-status' && m.state === 'collecting',
-    8_000,
-  );
+  await startCalibrationCollecting(publisher, monitor, async () => {
+    publisher.send(playingTelemetry);
+    await primeStreams(backing, publisher);
+  });
 
   const { mic, backing: song } = laggedPair(8, RATE, lagMs);
   await Promise.all([

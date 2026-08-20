@@ -495,7 +495,10 @@ test('production DOM: Record and Recordings share a row above Mic and Room sound
   await expect(recordings).toBeVisible();
   await expect(mic).toBeVisible();
   await expect(recordings).toHaveClass(/recent-take/);
-  await expect(page.locator('#last-take-toggle')).toContainText('Last take');
+  await expect(page.locator('#last-take-toggle')).toHaveText('Last take · 0:12');
+  await expect(page.locator('.take-history-item span')).toHaveText('0:12');
+  await expect(page.locator('.take-history-selected span')).toHaveText('0:12');
+  await expect(page.locator('#take-history-panel')).not.toContainText('Clean');
   expect(await recordings.evaluate((node) => node.parentElement?.matches('.take-strip'))).toBe(true);
 
   const [recordBox, recordingsBox, micBox, roomSoundBox] = await Promise.all([

@@ -1,5 +1,7 @@
 import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
+import { handoffPreparationPosition } from './playback-handoff-timing.js';
+import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const input = document.querySelector('#youtube-url');
@@ -694,12 +696,22 @@ function cuePendingHandoff() {
     }
     player.mute();
 
+    const preparationTime = handoffPreparationPosition(
+      pendingHandoff.targetTime,
+      pendingHandoff.desiredState,
+    );
+
     const canReuse = pendingHandoff.reusePreparedPlayer === true
       && reportedVideoId() === pendingHandoff.videoId;
     if (canReuse) {
       const currentTime = Number(player.getCurrentTime());
-      if (!Number.isFinite(currentTime) || Math.abs(currentTime - pendingHandoff.targetTime) > 0.75) {
-        player.seekTo(pendingHandoff.targetTime, true);
+      const currentState = Number(player.getPlayerState());
+      if (
+        !Number.isFinite(currentTime)
+        || Math.abs(currentTime - preparationTime) > 0.75
+        || (currentState === 0 && preparationTime < pendingHandoff.targetTime)
+      ) {
+        player.seekTo(preparationTime, true);
       }
     } else {
       // A cold formal handoff needs the same real-media preparation as the
@@ -707,7 +719,7 @@ function cuePendingHandoff() {
       // muting above keeps it inaudible until the server commits authority.
       player.loadVideoById({
         videoId: pendingHandoff.videoId,
-        startSeconds: Math.max(0, pendingHandoff.targetTime),
+        startSeconds: preparationTime,
       });
     }
     try { player.setPlaybackRate(pendingHandoff.playbackRate); } catch {}
@@ -1292,6 +1304,16 @@ function trackedRoomCommandId() {
     ?? (serverMutation?.source === 'room-command' ? serverMutation.commandId : null);
 }
 
+function restoreRoomAfterCommandTerminal(room, trackedCommandId, appliedCommandId = null) {
+  if (!shouldRestoreRoomAfterCommandTerminal({
+    role: playbackRole,
+    trackedCommandId,
+    appliedCommandId,
+  })) return false;
+  restoreAuthoritativeRoom(room).catch(console.error);
+  return true;
+}
+
 window.addEventListener('relay:playback-view', (event) => {
   const detail = event.detail ?? {};
   latestPlaybackRoom = detail.room && typeof detail.room === 'object'
@@ -1446,12 +1468,12 @@ window.addEventListener('relay:room-song-command-rejected', (event) => {
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
   noteNode.textContent = `Room song command rejected: ${detail.reason ?? 'not allowed'}.`;
-  restoreAuthoritativeRoom(detail.room).catch(console.error);
+  restoreRoomAfterCommandTerminal(detail.room, trackedCommandId);
 });
 window.addEventListener('relay:room-song-command-complete', (event) => {
   const commandId = event.detail?.commandId;
   const trackedCommandId = trackedRoomCommandId();
-  if (trackedCommandId && commandId && trackedCommandId !== commandId) return;
+  if (!trackedCommandId || !commandId || trackedCommandId !== commandId) return;
   if (serverMutation?.commandId === commandId) serverMutation = null;
   if (localCommandPending?.commandId === commandId) localCommandPending = null;
   noteNode.textContent = 'Latest room song intent applied.';
@@ -1460,11 +1482,14 @@ window.addEventListener('relay:room-song-command-failed-ack', (event) => {
   const detail = event.detail ?? {};
   const commandId = detail.commandId;
   const trackedCommandId = trackedRoomCommandId();
-  if (trackedCommandId && commandId && trackedCommandId !== commandId) return;
+  if (!trackedCommandId || !commandId || trackedCommandId !== commandId) return;
+  const appliedCommandId = serverMutation?.source === 'room-command'
+    ? serverMutation.commandId
+    : null;
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
   noteNode.textContent = 'Playback could not apply the latest room intent. Restoring the authoritative room song.';
-  restoreAuthoritativeRoom(detail.room).catch(console.error);
+  restoreRoomAfterCommandTerminal(detail.room, trackedCommandId, appliedCommandId);
 });
 window.addEventListener('relay:room-song-command-status', (event) => {
   const detail = event.detail ?? {};
@@ -1472,13 +1497,17 @@ window.addEventListener('relay:room-song-command-status', (event) => {
   const trackedCommandId = trackedRoomCommandId();
   if (!trackedCommandId || pendingCommandId !== null) return;
 
+  const appliedCommandId = serverMutation?.source === 'room-command'
+    ? serverMutation.commandId
+    : null;
+
   // Completion is delivered before the terminal pending=null status on the
   // same WebSocket. Reaching this branch therefore means timeout, disconnect,
   // or another terminal cleanup for the latest command this page still tracks.
   localCommandPending = null;
   if (serverMutation?.source === 'room-command') serverMutation = null;
   noteNode.textContent = 'Latest room song intent ended without playback confirmation. Restoring the authoritative room song.';
-  restoreAuthoritativeRoom(detail.room).catch(console.error);
+  restoreRoomAfterCommandTerminal(detail.room, trackedCommandId, appliedCommandId);
 });
 
 window.addEventListener('relay:song-handoff-prepare', (event) => {

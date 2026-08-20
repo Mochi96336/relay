@@ -1,4 +1,5 @@
 export {
+  canChangeRoomSong,
   canRecoverPlayback,
   playbackLeaderHealth,
   shouldForceMuteListen,

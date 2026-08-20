@@ -183,6 +183,108 @@ test('Mic owner authority and exact playback target both apply to room song comm
   }
 });
 
+test('a Mic-free participant can change the Song through the current playback leader', async () => {
+  const server = await startRelay();
+  try {
+    const leader = await RelayClient.connect(server, '?participant=participant-leader&name=Leader');
+    const chooser = await RelayClient.connect(server, '?participant=participant-chooser&name=Chooser');
+    const leaderTransport = 'playback-shared-leader';
+    const chooserTransport = 'playback-shared-chooser';
+    await registerPlayback(leader, leaderTransport);
+    await registerPlayback(chooser, chooserTransport);
+
+    const revision1 = await loadRoomSong(leader, leaderTransport, 0, 'command-shared-initial');
+    chooser.send({
+      type: 'room-song-command',
+      commandId: 'command-shared-replace',
+      expectedRevision: revision1,
+      action: 'load',
+      videoId: '9bZkp7q19f0',
+      positionSeconds: 0,
+    });
+
+    const accepted = await chooser.waitFor((message) => (
+      message.type === 'room-song-command-accepted'
+      && message.commandId === 'command-shared-replace'
+    ));
+    assert.equal(accepted.revision, 2);
+    const apply = await leader.waitFor((message) => (
+      message.type === 'room-song-command-apply'
+      && message.commandId === 'command-shared-replace'
+    ));
+    assert.equal(apply.targetPlaybackTransportId, leaderTransport);
+    assert.equal(apply.issuedByParticipantId, 'participant-chooser');
+    assert.equal(apply.videoId, '9bZkp7q19f0');
+
+    leader.send(telemetry(0, 5, leaderTransport, 1, { videoId: '9bZkp7q19f0' }));
+    const completedOnLeader = await leader.waitFor((message) => (
+      message.type === 'room-song-command-complete'
+      && message.commandId === 'command-shared-replace'
+    ));
+    const completedForChooser = await chooser.waitFor((message) => (
+      message.type === 'room-song-command-complete'
+      && message.commandId === 'command-shared-replace'
+    ));
+    assert.equal(completedForChooser.revision, completedOnLeader.revision);
+    assert.equal(chooser.messages.some((message) => (
+      message.type === 'room-song-command-apply'
+      && message.commandId === 'command-shared-replace'
+    )), false, 'the chooser must receive the outcome without becoming a playback target');
+    const cleared = await chooser.waitFor((message) => (
+      message.type === 'room-song-command-status'
+      && message.revision === 2
+      && message.pendingCommandId === null
+    ));
+    assert.equal(cleared.pendingAction, null);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a delegated playback failure returns to both target and chooser', async () => {
+  const server = await startRelay();
+  try {
+    const leader = await RelayClient.connect(server, '?participant=participant-leader&name=Leader');
+    const chooser = await RelayClient.connect(server, '?participant=participant-chooser&name=Chooser');
+    const leaderTransport = 'playback-failure-leader';
+    await registerPlayback(leader, leaderTransport);
+    await registerPlayback(chooser, 'playback-failure-chooser');
+    const revision1 = await loadRoomSong(leader, leaderTransport, 0, 'command-failure-initial');
+
+    chooser.send({
+      type: 'room-song-command',
+      commandId: 'command-delegated-failure',
+      expectedRevision: revision1,
+      action: 'load',
+      videoId: '9bZkp7q19f0',
+      positionSeconds: 0,
+    });
+    await leader.waitFor((message) => (
+      message.type === 'room-song-command-apply'
+      && message.commandId === 'command-delegated-failure'
+    ));
+    leader.send({
+      type: 'room-song-command-failed',
+      commandId: 'command-delegated-failure',
+      reason: 'fixture-failure',
+    });
+
+    const targetFailure = await leader.waitFor((message) => (
+      message.type === 'room-song-command-failed-ack'
+      && message.commandId === 'command-delegated-failure'
+    ));
+    const chooserFailure = await chooser.waitFor((message) => (
+      message.type === 'room-song-command-failed-ack'
+      && message.commandId === 'command-delegated-failure'
+    ));
+    assert.equal(targetFailure.reason, 'playback-failed');
+    assert.equal(chooserFailure.reason, 'playback-failed');
+    assert.equal(chooserFailure.room?.videoId, VIDEO);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('stale revisions and concurrent pending intents are rejected without replacing 1A intent', async () => {
   const server = await startRelay();
   try {

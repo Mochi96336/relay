@@ -1,5 +1,9 @@
 import './youtube-song-metadata.js';
-import { canRecoverPlayback, playbackLeaderHealth } from './playback-recovery.js';
+import {
+  canChangeRoomSong,
+  canRecoverPlayback,
+  playbackLeaderHealth,
+} from './playback-recovery.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const stage = document.querySelector('.song-stage');
@@ -53,6 +57,7 @@ if (
   let editingVideoId = null;
   let lastVideoId = null;
   let lastRoom = {};
+  let canEditCurrentSong = false;
 
   const observerAuthor = document.createElement('span');
   observerAuthor.className = 'song-observer-author';
@@ -130,25 +135,30 @@ if (
     const room = roomSnapshot(detail);
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
     const recoverable = canRecoverPlayback({ role: nextRole, timeline: room });
+    const canChange = canChangeRoomSong({
+      role: nextRole,
+      timeline: room,
+      isMicOwner: detail.isMicOwner === true,
+      isMicFree: detail.isMicFree === true,
+    });
+    const handoffInProgress = nextRole === 'preparing'
+      || (typeof room.handoffState === 'string' && room.handoffState !== 'idle');
     lastRoom = room;
 
-    if (nextRole === 'empty') {
+    if (nextRole === 'empty' && !videoId && canChange) {
       editing = true;
       editingVideoId = null;
     } else if (editing && editingVideoId !== videoId) {
       editing = false;
       editingVideoId = null;
-    } else if (
-      nextRole === 'observer'
-      && room.handoffState === 'idle'
-      && !recoverable
-    ) {
+    } else if (!canChange && !handoffInProgress) {
       editing = false;
       editingVideoId = null;
     }
 
     role = nextRole;
     lastVideoId = videoId;
+    canEditCurrentSong = canChange;
     stage.dataset.playbackRole = role;
     stage.dataset.songEditing = editing ? 'true' : 'false';
     document.body.dataset.playbackRole = role;
@@ -158,14 +168,16 @@ if (
 
     const holderWithSong = role === 'holder' && Boolean(videoId);
     headingTitle.hidden = !holderWithSong;
-    form.hidden = role === 'preparing'
-      || (role === 'observer' && !recoverable)
-      || (holderWithSong && !editing);
-    changeButton.hidden = !holderWithSong;
+    form.hidden = role === 'preparing' || !canChange || (Boolean(videoId) && !editing);
+    changeButton.hidden = !canChange || !videoId;
     changeButton.textContent = editing ? t('song.done') : t('song.change');
     changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
 
-    const observerMode = role === 'observer';
+    // Once the old playback transport disappears, resolvePlaybackRole returns
+    // `empty` so a new controller may recover the room. A Song still exists,
+    // though: keep showing its compact music surface instead of replacing it
+    // with an empty iframe/form. Mic state decides who receives the edit action.
+    const observerMode = role === 'observer' || (role === 'empty' && Boolean(videoId));
     const metadataMode = observerMode || holderWithSong;
     observer.hidden = !observerMode;
     playerShell.hidden = observerMode;
@@ -176,7 +188,7 @@ if (
   }
 
   changeButton.addEventListener('click', () => {
-    if (role !== 'holder') return;
+    if (!canEditCurrentSong) return;
     // Opening is derived from the painted state so an authoritative playback
     // refresh cannot leave the local boolean one click ahead of the form.
     editing = form.hidden || stage.dataset.songEditing !== 'true';
@@ -193,7 +205,10 @@ if (
     const recoverable = canRecoverPlayback({ role, timeline: lastRoom });
     renderDeviceNote(recoverable);
     changeButton.textContent = editing ? t('song.done') : t('song.change');
-    if (role === 'observer' || (role === 'holder' && Boolean(lastVideoId))) {
+    if (
+      role === 'observer'
+      || (Boolean(lastVideoId) && (role === 'holder' || role === 'empty'))
+    ) {
       renderObserver(lastRoom, recoverable);
     }
   });

@@ -44,8 +44,8 @@
 .song-device-note[hidden] { display: none; }
 
 /* Changing the room song is a primary action for the current playback holder,
-   so its touch target must not collapse into tiny utility text. The button is
-   absent for observers; authority still comes from song-surface.js/server. */
+   anyone in a Mic-free room, or the Mic owner recovering a lost player. Keep
+   its touch target substantial; authority still comes from JS/server. */
 #change-youtube {
   min-height: 44px;
   padding: 0 12px;
@@ -150,14 +150,10 @@
   display: none;
 }
 
-/* A dead remembered leader is still an observer identity, but it is no longer
-   a read-only product state. The server already allows a replacement transport
-   when the leader is disconnected or stale, so reveal the normal song command
-   form alongside the explicit resume action. The embedded player stays hidden
-   until the server actually grants this transport playback authority. */
-.song-stage[data-playback-role="observer"][data-playback-health="missing"] .youtube-form,
-.song-stage[data-playback-role="observer"][data-playback-health="disconnected"] .youtube-form,
-.song-stage[data-playback-role="observer"][data-playback-health="stale"] .youtube-form {
+/* Keep the observer player hidden, but let an explicitly authorized Change
+   Song action reveal the form. Mic state and server authority decide which
+   observers receive that action. */
+.song-stage[data-playback-role="observer"][data-song-editing="true"] .youtube-form {
   display: grid;
 }
 

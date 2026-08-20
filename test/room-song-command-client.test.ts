@@ -101,9 +101,20 @@ test('terminal command status carries the latest room snapshot for local recover
   const handoffStart = source.indexOf("window.addEventListener('relay:song-handoff-prepare'", statusStart);
   assert.ok(failedStart >= 0 && statusStart > failedStart && handoffStart > statusStart);
   const terminalSection = source.slice(failedStart, handoffStart);
-  assert.match(terminalSection, /restoreAuthoritativeRoom\(detail\.room\)/);
+  assert.match(terminalSection, /restoreRoomAfterCommandTerminal\(detail\.room/);
   assert.match(terminalSection, /pendingCommandId !== null/);
   assert.match(terminalSection, /trackedCommandId/);
+});
+
+test('terminal handlers ignore unrelated broadcasts and do not restore a chooser observer', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const completeStart = source.indexOf("window.addEventListener('relay:room-song-command-complete'");
+  const handoffStart = source.indexOf("window.addEventListener('relay:song-handoff-prepare'", completeStart);
+  assert.ok(completeStart >= 0 && handoffStart > completeStart);
+  const terminalSection = source.slice(completeStart, handoffStart);
+
+  assert.match(terminalSection, /!trackedCommandId \|\| !commandId \|\| trackedCommandId !== commandId/);
+  assert.match(terminalSection, /restoreRoomAfterCommandTerminal/);
 });
 
 test('room status observation alone never starts playback', async () => {

@@ -69,20 +69,23 @@ test('Mic gain is contextual and generic Adjust no longer exists', () => {
   assert.match(liveIa, /relay-microphone-local-state/);
 });
 
-test('Song composition follows playback authority instead of Mic or participant heuristics', () => {
+test('Song composition preserves playback authority while Mic owner recovers lost controls', () => {
   assert.ok(position('class="section-label" data-i18n="song.label"') < position('id="song-heading-title"'));
   assert.ok(position('id="song-heading-title"') < position('id="change-youtube"'));
   assert.match(songSurface, /t\('song\.role\.holder'\)/);
   assert.match(songSurface, /t\('song\.role\.observer'\)/);
   assert.match(songSurface, /relay:playback-view/);
   assert.match(songSurface, /const holderWithSong = role === 'holder' && Boolean\(videoId\);/);
-  assert.match(songSurface, /changeButton\.hidden = !holderWithSong;/);
+  assert.match(songSurface, /canChangeRoomSong/);
+  assert.match(songSurface, /isMicOwner: detail\.isMicOwner === true/);
+  assert.match(songSurface, /isMicFree: detail\.isMicFree === true/);
+  assert.match(songSurface, /changeButton\.hidden = !canChange \|\| !videoId;/);
   assert.match(songSurface, /headingTitle\.hidden = !holderWithSong;/);
   assert.match(songSurface, /observer\.hidden = !observerMode;/);
   assert.match(songSurface, /playerShell\.hidden = observerMode;/);
   assert.match(songSurface, /form\.hidden = role === 'preparing'/);
   assert.match(songCss, /data-playback-role="observer"/);
-  assert.doesNotMatch(songSurface, /micOwnerId|participantCount/);
+  assert.doesNotMatch(songSurface, /participantCount/);
 });
 
 test('normal Song state stays quiet while transition and recovery context remains visible', () => {

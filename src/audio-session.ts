@@ -29,6 +29,12 @@ type PcmTimeline = {
   /** Samples the timeline is missing: drops, congestion, transport outages. */
   gapSamples: number;
   unheadered: boolean;
+  /** Smoothed difference between this source clock and the mix clock. */
+  clockErrorSamples: number;
+  /** Raw source frontier used to distinguish clock drift from real packet gaps. */
+  sourceFrontier: number | null;
+  /** Samples inserted to keep a slower continuous local source on time. */
+  clockCorrectionSamples: number;
 };
 
 export type AlignmentState = {
@@ -71,6 +77,7 @@ export type MixHealth = {
   backingHeadroomMs: number;
   micGapMs: number;
   backingGapMs: number;
+  backingClockCorrectionSamples: number;
   /** Samples the summing stage had to clamp, i.e. audible distortion. */
   clippedSamples: number;
   /** Samples the microphone limiter held down. Working, not failing. */
@@ -91,6 +98,18 @@ export type MixHealth = {
  * fit between them however large a lag the calibration reports.
  */
 const ADVANCE_SAFETY_MS = 200;
+
+/**
+ * A sound device and `performance.now()` are independent clocks. Even a tiny
+ * parts-per-million difference eventually consumes the whole live buffer when
+ * a Robot source runs for hours. Smooth arrival phase over roughly ten seconds
+ * and correct a source deficit only beyond a two-millisecond deadband, at no
+ * more than one sample per input frame. A source legitimately buffered ahead
+ * is left untouched. This is an inaudible sample-rate trim, not a jump in the
+ * Song timeline.
+ */
+const BACKING_CLOCK_ERROR_ALPHA = 0.002;
+const BACKING_CLOCK_DEADBAND_MS = 2;
 
 /**
  * Runtime validation corrects an already-live read head. Moving it in one frame
@@ -204,6 +223,9 @@ function emptyTimeline(): PcmTimeline {
     originOffset: 0,
     gapSamples: 0,
     unheadered: false,
+    clockErrorSamples: 0,
+    sourceFrontier: null,
+    clockCorrectionSamples: 0,
   };
 }
 
@@ -427,8 +449,13 @@ export class AudioSession {
     return result;
   }
 
-  ingestBacking(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
-    return this.ingest(this.backing, frame, sourceRate, nowMs);
+  ingestBacking(
+    frame: PcmFrame,
+    sourceRate: number | null,
+    nowMs = performance.now(),
+    trackSourceClock = false,
+  ) {
+    return this.ingest(this.backing, frame, sourceRate, nowMs, trackSourceClock);
   }
 
   /** Exposed for the click diagnostic, which mixes against the microphone. */
@@ -498,6 +525,7 @@ export class AudioSession {
       backingHeadroomMs: Math.round(this.backingHeadroomMs),
       micGapMs: Math.round((this.mic.gapSamples / this.sampleRate) * 1000),
       backingGapMs: Math.round((this.backing.gapSamples / this.sampleRate) * 1000),
+      backingClockCorrectionSamples: this.backing.clockCorrectionSamples,
       clippedSamples: this.clippedSamples,
       limitedSamples: this.limitedSamples,
       micPeakDbfs: this.micMeterPeak > 0 ? 20 * Math.log10(this.micMeterPeak) : null,
@@ -536,6 +564,9 @@ export class AudioSession {
     timeline.originOffset = 0;
     timeline.gapSamples = 0;
     timeline.unheadered = false;
+    timeline.clockErrorSamples = 0;
+    timeline.sourceFrontier = null;
+    timeline.clockCorrectionSamples = 0;
   }
 
   /** Where the session clock is now, in session samples since the epoch. */
@@ -543,7 +574,13 @@ export class AudioSession {
     return Math.round(((nowMs - this.startedAt) * this.sampleRate) / 1000);
   }
 
-  private ingest(timeline: PcmTimeline, frame: PcmFrame, sourceRate: number | null, nowMs: number): IngestResult {
+  private ingest(
+    timeline: PcmTimeline,
+    frame: PcmFrame,
+    sourceRate: number | null,
+    nowMs: number,
+    trackSourceClock = false,
+  ): IngestResult {
     if (!sourceRate) return { samples: new Int16Array(0), start: timeline.totalSamples };
     let samples = this.resample(frame.pcm, sourceRate);
     if (samples.length === 0) return { samples, start: timeline.totalSamples };
@@ -563,14 +600,45 @@ export class AudioSession {
       // pulling everything after it earlier.
       const streamStart = Math.round((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
 
-      if (timeline.generation !== frame.generation) {
+      const generationChanged = timeline.generation !== frame.generation;
+      if (generationChanged) {
         // A fresh capture session. Anchor it to the session clock; the previous
         // session's samples keep their own place and simply age out.
         timeline.generation = frame.generation;
         timeline.originOffset = Math.max(0, this.currentSessionSample(nowMs) - samples.length) - streamStart;
+        timeline.clockErrorSamples = 0;
+        timeline.sourceFrontier = null;
       }
 
       start = streamStart + timeline.originOffset;
+
+      const sourceSampleCount = Math.floor(frame.pcm.byteLength / 2);
+      const sourceContinuous = !generationChanged
+        && timeline.sourceFrontier === frame.firstSampleIndex;
+      if (trackSourceClock && sourceContinuous && start === timeline.totalSamples) {
+        const predictedEnd = start + samples.length;
+        const rawError = Math.max(0, this.currentSessionSample(nowMs) - predictedEnd);
+        timeline.clockErrorSamples += BACKING_CLOCK_ERROR_ALPHA
+          * (rawError - timeline.clockErrorSamples);
+
+        const deadbandSamples = Math.max(
+          1,
+          Math.round((BACKING_CLOCK_DEADBAND_MS * this.sampleRate) / 1000),
+        );
+        const correction = timeline.clockErrorSamples > deadbandSamples ? 1 : 0;
+
+        if (correction > 0 && samples.length > 0) {
+          const stretched = new Int16Array(samples.length + 1);
+          stretched.set(samples);
+          stretched[stretched.length - 1] = samples[samples.length - 1];
+          samples = stretched;
+          timeline.originOffset += 1;
+          timeline.clockErrorSamples -= 1;
+          timeline.clockCorrectionSamples += 1;
+          start = timeline.totalSamples;
+        }
+      }
+      timeline.sourceFrontier = frame.firstSampleIndex! + sourceSampleCount;
     }
 
     if (start < timeline.totalSamples) {

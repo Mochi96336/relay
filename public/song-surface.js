@@ -141,6 +141,8 @@ if (
       isMicOwner: detail.isMicOwner === true,
       isMicFree: detail.isMicFree === true,
     });
+    const handoffInProgress = nextRole === 'preparing'
+      || (typeof room.handoffState === 'string' && room.handoffState !== 'idle');
     lastRoom = room;
 
     if (nextRole === 'empty' && !videoId && canChange) {
@@ -149,7 +151,7 @@ if (
     } else if (editing && editingVideoId !== videoId) {
       editing = false;
       editingVideoId = null;
-    } else if (!canChange) {
+    } else if (!canChange && !handoffInProgress) {
       editing = false;
       editingVideoId = null;
     }

@@ -99,6 +99,8 @@ test('Take history keeps English Take language and Traditional Chinese recording
   assert.match(history, /localCopy\('Release mic before reviewing a Take\.', '請先放開 Mic，再播放錄音。'\)/);
   assert.match(history, /`Last take · \$\{formatDuration/);
   assert.match(history, /`上一段錄音 · \$\{formatDuration/);
+  assert.doesNotMatch(history, /verdictLabel|qualityVerdict\)/,
+    'recording history must not present technical capture quality as a user rating');
 });
 
 test('Take review feedback guard belongs to history and composes local Mic with room ownership', async () => {

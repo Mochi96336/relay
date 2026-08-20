@@ -34,6 +34,8 @@ test('a recoverable Mic owner keeps the music snapshot and Change Song action', 
     'first Song selection must use the same canonical Mic permission');
   assert.match(source, /form\.hidden = role === 'preparing' \|\| !canChange/,
     'a non-owner must not see an actionable empty-room Song form');
+  assert.match(source, /!canChange && !handoffInProgress/,
+    'a transient playback handoff must hide, but not consume, a desktop Change Song click');
   assert.match(styles, /data-playback-role="observer"\]\[data-song-editing="true"\]/,
     'only the explicit authorized editing state may reopen an observer form');
   assert.doesNotMatch(styles, /data-playback-role="observer"\]\[data-playback-health=/,

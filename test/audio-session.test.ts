@@ -300,6 +300,53 @@ describe('AudioSession health', () => {
     assert.ok(health.micHeadroomMs > 1_000, `headroom ${health.micHeadroomMs} ms`);
     assert.ok(health.backingHeadroomMs > 1_000);
   });
+
+  test('tracks a slower backing device clock without consuming the live buffer', () => {
+    const session = makeSession({ prebufferMs: 100 });
+    session.setBackingExpected(true);
+    session.start(0);
+
+    const sourceFrame = pcmOf(new Array(960).fill(1_000));
+    // 20.02 ms per 20 ms of samples is a deliberately large 1,000 ppm clock
+    // mismatch. Without correction it consumes this whole buffer in 100 s.
+    for (let index = 0; index < 6_000; index += 1) {
+      const nowMs = (index + 1) * 20.02;
+      session.ingestBacking(frame(index * 960, sourceFrame), RATE, nowMs, true);
+      while (session.drain(() => {}, nowMs) > 0) { /* drain due frames */ }
+    }
+
+    const health = session.health();
+    assert.equal(health.backingStarvedFrames, 0);
+    assert.equal(health.backingGapMs, 0, 'clock trimming is not a transport gap');
+    assert.ok(health.backingHeadroomMs > 50, `headroom ${health.backingHeadroomMs} ms`);
+    assert.ok(health.backingClockCorrectionSamples > 0, 'the slower source must be stretched');
+  });
+
+  test('Robot clock tracking preserves a real missing backing frame as a gap', () => {
+    const session = makeSession({ prebufferMs: 100 });
+    session.start(0);
+    const sourceFrame = pcmOf(new Array(960).fill(1_000));
+
+    session.ingestBacking(frame(0, sourceFrame), RATE, 20, true);
+    session.ingestBacking(frame(1_920, sourceFrame), RATE, 60, true);
+
+    assert.equal(session.health().backingGapMs, 20);
+  });
+
+  test('Robot clock tracking leaves deliberately prebuffered backing untouched', () => {
+    const session = makeSession({ prebufferMs: 100 });
+    session.start(0);
+    const sourceFrame = pcmOf(new Array(960).fill(1_000));
+
+    // Calibration and recovery tests may enqueue a complete future window in
+    // one burst. Being ahead is legal buffering, not negative clock drift.
+    for (let index = 0; index < 300; index += 1) {
+      session.ingestBacking(frame(index * 960, sourceFrame), RATE, 20, true);
+    }
+
+    assert.equal(session.health().backingClockCorrectionSamples, 0);
+    assert.equal(session.health().backingGapMs, 0);
+  });
 });
 
 describe('AudioSession microphone limiter', () => {

@@ -51,10 +51,17 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
 
 test('transport boundaries reset both positioned continuity and the AudioWorklet queue', async () => {
   const source = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
+  const resetSection = section(source, 'function resetPlaybackTemporalState()', 'function abandonTransportConnection()');
+  const abandonSection = section(source, 'function abandonTransportConnection()', 'function closeTransport()');
   const closeSection = section(source, 'function closeTransport()', 'function scheduleReconnect()');
   const connectSection = section(source, 'async function connect()', '/**\n   * Requests a resume');
 
-  assert.match(closeSection, /monitorPcmReceiver\.reset\(\)[\s\S]*type: 'reset'/);
-  assert.match(connectSection, /monitorPcmReceiver\.reset\(\)[\s\S]*type: 'reset'[\s\S]*sendParticipantAuthentication\(next\)/,
+  assert.match(resetSection, /monitorPcmReceiver\.reset\(\)[\s\S]*type: 'reset'/,
+    'one helper must clear positioned continuity and queued worklet audio together');
+  assert.match(abandonSection, /transportEpoch \+= 1;[\s\S]*resetPlaybackTemporalState\(\)/,
+    'abandoning a transport connection must invalidate its epoch and temporal state');
+  assert.match(closeSection, /transportEnabled = false;[\s\S]*abandonTransportConnection\(\)/,
+    'an explicit transport close must revoke transport intent before abandoning the connection');
+  assert.match(connectSection, /resetPlaybackTemporalState\(\)[\s\S]*sendParticipantAuthentication\(next\)/,
     'a reconnect may join mid-generation and therefore needs a fresh continuity anchor before registration');
 });

@@ -11,6 +11,10 @@ let reconnectTimer = null;
 let latestStatus = { lifecycle: 'idle', take: null, history: [] };
 let commandError = null;
 let productCanStartTake = false;
+let productStatusFresh = false;
+let takeStatusFresh = false;
+let startCommandPending = false;
+let startTakeBlockedReason = 'mix-not-active';
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -31,16 +35,29 @@ function recordingState() {
   const lifecycle = String(latestStatus?.lifecycle ?? 'idle');
   const take = latestStatus?.take ?? null;
   const connected = socket?.readyState === WebSocket.OPEN;
+  const authorityFresh = productStatusFresh && takeStatusFresh;
+  const canStart = connected
+    && authorityFresh
+    && productCanStartTake
+    && lifecycle !== 'recording'
+    && lifecycle !== 'finalizing';
   return {
     lifecycle,
     take,
     connected,
     productCanStartTake,
-    canStart: connected
-      && productCanStartTake
-      && lifecycle !== 'recording'
-      && lifecycle !== 'finalizing',
-    canStop: connected && lifecycle === 'recording' && Boolean(take?.takeId),
+    productStatusFresh,
+    takeStatusFresh,
+    canStart,
+    startBlockedReason: canStart
+      ? null
+      : !connected || !authorityFresh
+        ? 'reconnecting'
+        : startTakeBlockedReason,
+    canStop: connected
+      && takeStatusFresh
+      && lifecycle === 'recording'
+      && Boolean(take?.takeId),
     commandError,
     observedAt: Date.now(),
   };
@@ -55,6 +72,16 @@ function publishRecordingState() {
 }
 
 window.addEventListener('relay-request-recording-state', publishRecordingState);
+
+function acceptProductStatus(status) {
+  if (!status || status.type !== 'product-status') return;
+  productCanStartTake = status.actions?.canStartTake === true;
+  startTakeBlockedReason = typeof status.actions?.startTakeBlockedReason === 'string'
+    ? status.actions.startTakeBlockedReason
+    : productCanStartTake ? null : 'mix-not-active';
+  productStatusFresh = true;
+  publishRecordingState();
+}
 
 function send(payload) {
   if (socket?.readyState !== WebSocket.OPEN) {
@@ -74,6 +101,12 @@ function clearReconnect() {
   reconnectTimer = null;
 }
 
+function resetSocketAuthority() {
+  productStatusFresh = false;
+  takeStatusFresh = false;
+  startCommandPending = false;
+}
+
 function scheduleReconnect() {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
@@ -91,6 +124,7 @@ async function connect() {
   }
 
   clearReconnect();
+  resetSocketAuthority();
   const next = new WebSocket(url);
   socket = next;
   publishRecordingState();
@@ -118,6 +152,7 @@ async function connect() {
     });
   } catch (error) {
     if (socket === next) socket = null;
+    resetSocketAuthority();
     try { next.close(); } catch {}
     publishRecordingState();
     throw error;
@@ -137,8 +172,25 @@ async function connect() {
       return;
     }
 
+    // ProductStatus is the only authority for Record readiness. Requesting and
+    // consuming it on recorder's own socket makes readiness replayable: a late
+    // recorder module cannot miss the one transition that made canStartTake
+    // true and then wait for an unrelated future ProductStatus change.
+    if (message.type === 'product-status') {
+      acceptProductStatus(message);
+      return;
+    }
+
     if (message.type === 'take-status') {
       latestStatus = message;
+      takeStatusFresh = true;
+      if (
+        message.lifecycle === 'recording'
+        || message.lifecycle === 'finalizing'
+        || message.lifecycle === 'failed'
+      ) {
+        startCommandPending = false;
+      }
       commandError = null;
       publishTakeStatus(message);
       publishRecordingState();
@@ -146,6 +198,7 @@ async function connect() {
     }
 
     if (message.type === 'take-command-rejected') {
+      if (message.command === 'start') startCommandPending = false;
       commandError = {
         reason: typeof message.reason === 'string' ? message.reason : 'unknown',
       };
@@ -156,6 +209,7 @@ async function connect() {
   next.addEventListener('close', () => {
     if (socket !== next) return;
     socket = null;
+    resetSocketAuthority();
     publishRecordingState();
     scheduleReconnect();
   });
@@ -165,21 +219,28 @@ async function connect() {
 
   sendParticipantAuthentication(next);
   next.send(JSON.stringify({ type: 'take-status-request' }));
+  next.send(JSON.stringify({ type: 'product-status-request' }));
   publishRecordingState();
 }
 
-window.addEventListener('relay-product-status', (event) => {
-  productCanStartTake = event.detail?.actions?.canStartTake === true;
-  publishRecordingState();
-});
+// ProductStatus readiness intentionally has one source: recorder's own socket.
+// live-status.js projects the same server snapshots through a separate socket,
+// but those snapshots carry no revision. Consuming both channels here would let
+// a delayed shared projection overwrite a newer recorder snapshot. The direct
+// request above provides replay without introducing that cross-socket race.
 
 recordButton?.addEventListener('click', () => {
-  send({ type: 'start-take' });
+  if (startCommandPending || !recordingState().canStart) return;
+  startCommandPending = true;
+  if (!send({ type: 'start-take' })) {
+    startCommandPending = false;
+    publishRecordingState();
+  }
 });
 
 stopButton?.addEventListener('click', () => {
   const takeId = latestStatus?.take?.takeId;
-  if (!takeId) return;
+  if (!recordingState().canStop || !takeId) return;
   send({ type: 'stop-take', takeId });
 });
 

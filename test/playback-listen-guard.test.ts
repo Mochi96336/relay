@@ -8,6 +8,8 @@ import { roomSoundPresentation } from '../public/room-sound-presentation.js';
 const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+const roomSoundUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
+const roomSoundPresentationSource = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 
 function timeline(overrides: Record<string, unknown> = {}) {
   return {
@@ -77,6 +79,20 @@ test('playback forced mute composes with Mic, review, and user mute without owni
 
   assert.doesNotMatch(listen, /t\('listen\./,
     'the audio engine must not regain Room sound product-copy ownership');
+  assert.match(
+    roomSoundUi,
+    /import \{[^}]*roomSoundPresentation[^}]*\} from '\.\/room-sound-presentation\.js'/,
+    'the DOM adapter must delegate Room sound product copy to the presenter module',
+  );
+  assert.doesNotMatch(
+    roomSoundUi,
+    /state === '(?:mic-muted|playback-muted|review-muted|muted)'/,
+    'the DOM adapter must not duplicate Room sound product-state copy branches',
+  );
+  assert.match(roomSoundPresentationSource, /state === 'mic-muted'/);
+  assert.match(roomSoundPresentationSource, /state === 'playback-muted'/);
+  assert.match(roomSoundPresentationSource, /state === 'review-muted'/);
+  assert.match(roomSoundPresentationSource, /state === 'muted'/);
 
   for (const state of ['mic-muted', 'playback-muted', 'review-muted', 'muted']) {
     const presentation = roomSoundPresentation({ state });

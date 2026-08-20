@@ -1,5 +1,6 @@
 @import url('/live-composition.css');
 @import url('/action-language.css');
+@import url('/live-p0-layout.css');
 
 /* Product-state presentation lives after the formal composition so legacy DOM
    control state cannot accidentally become a second lifecycle model. */
@@ -14,21 +15,51 @@ body[data-room-mic="live"] .voice-input-evidence {
   display: flex;
 }
 
+/* Every participant sees the same Room Mic evidence. The holder gets a slightly
+   stronger local treatment because its evidence is direct capture rather than
+   relayed telemetry, but the renderer and underlying room meaning stay shared. */
+body[data-room-mic="live"] .voice-presence-wave {
+  fill: rgba(240, 237, 229, .15);
+  stroke: rgba(247, 244, 237, .58);
+}
+body[data-self-mic="live"] .voice-presence-wave {
+  fill: rgba(240, 237, 229, .24);
+  stroke: rgba(247, 244, 237, .82);
+}
+
+/* On listener phones, the singer name and state are one room sentence rather
+   than a profile headline plus caption. Keep enough wrapping room for long
+   nicknames without promoting the person above the song and sound evidence. */
+body[data-room-mic="live"][data-self-mic="off"] .voice-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
+  row-gap: 3px;
+}
+body[data-room-mic="live"][data-self-mic="off"] .voice-copy strong {
+  font-size: clamp(20px, 5.3vw, 25px);
+  line-height: 1.12;
+  font-weight: 630;
+}
+body[data-room-mic="live"][data-self-mic="off"] .voice-copy span {
+  margin-top: 0;
+  font-size: 12px;
+}
+
 /* Once this phone is the live Mic, tighten the handoff from media into the
-   performance task. mic-presence.js keeps local evidence authoritative here;
-   listeners use the same visual with the server-relayed singer telemetry. */
+   performance task. The singer is important, but the moving Room Mic evidence
+   is the visual hero; the state headline should never turn into a landing-page
+   slogan that dwarfs the actual sound. */
 body[data-self-mic="live"] .performance-stage {
-  padding-top: 26px;
+  padding-top: 22px;
 }
 body[data-self-mic="live"] #youtube-note {
   display: none;
 }
-body[data-room-mic="live"] .voice-presence-band {
-  background: #f0ede5;
-}
 body[data-self-mic="live"] .voice-copy strong {
-  font-size: clamp(38px, 10.5vw, 52px);
-  font-weight: 610;
+  font-size: clamp(27px, 7vw, 34px);
+  font-weight: 630;
 }
 
 body[data-health="degraded"] .attention-link {
@@ -43,9 +74,9 @@ body[data-health="blocked"] .attention-link {
 
 @media (max-height: 760px) {
   body[data-self-mic="live"] .performance-stage {
-    padding-top: 20px;
+    padding-top: 18px;
   }
   body[data-self-mic="live"] .voice-copy strong {
-    font-size: clamp(34px, 9.5vw, 46px);
+    font-size: clamp(25px, 6.6vw, 32px);
   }
 }

@@ -16,6 +16,13 @@ const VOICE_ONLY_SONG = {
   playbackRate: null,
 } as const;
 
+async function settleStorageMaintenance(controller: TakeController) {
+  // Finalization intentionally schedules retention after publishing the ready
+  // lifecycle. Tests that delete their temporary Take directory must wait for
+  // that maintenance chain rather than racing it during teardown.
+  await (controller as unknown as { pruneChain: Promise<void> }).pruneChain;
+}
+
 test('TakeController prepares storage at startup and removes an orphan partial', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-controller-boot-'));
   try {
@@ -90,6 +97,7 @@ test('TakeController publishes product-shaped finalized history beside lifecycle
     const stopped = controller.stop(started.takeId, 'participant-a', 'user', 1_100);
     assert.equal(stopped.ok, true);
     await ready;
+    await settleStorageMaintenance(controller);
 
     assert.deepEqual(readyHistory.map((entry) => entry.takeId), [started.takeId]);
     const productEntry = controller.statusPayload().history[0];
@@ -141,6 +149,7 @@ test('current Take lifecycle can advance while durable history retains prior Tak
       assert.equal(controller.stop(started.takeId, actor, 'user', endedAtMs).ok, true);
       await ready;
       resolveReady = null;
+      await settleStorageMaintenance(controller);
       return started.takeId;
     }
 

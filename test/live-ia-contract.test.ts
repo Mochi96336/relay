@@ -11,6 +11,7 @@ const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const roomSound = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
+const roomSoundPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 const people = readFileSync(new URL('../public/people-ui.js', import.meta.url), 'utf8');
 const recordingUi = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
 const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
@@ -39,16 +40,19 @@ test('People owns identity and presence while secondary tasks live in More', () 
   assert.equal(more.includes('id="open-adjust"'), false);
 });
 
-test('Live keeps Song then performance state and contextual Mic gain', () => {
+test('Live keeps Song then one performance task with Record before Mic adjustment', () => {
   const song = html.indexOf('class="song-stage"');
   const performance = html.indexOf('class="performance-stage"');
   const gain = html.indexOf('id="mic-live-control"');
   const take = html.indexOf('class="take-strip"');
-  assert.ok(song >= 0 && song < performance && performance < gain && gain < take);
+  assert.ok(song >= 0 && song < performance && gain > performance && take > performance);
   assert.equal(html.includes('id="youtube-player"'), true);
   assert.equal(css.includes('.performance-stage > .section-label'), true);
   assert.equal(css.includes('body[data-self-mic="live"] .mic-live-control'), true);
   assert.equal(script.includes("micLiveLabel.textContent = 'Mic';"), true);
+  assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
+  assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
+  assert.doesNotMatch(script, /performanceStage\.insertBefore\(lastTake|append(?:Child)?\(lastTake/);
 });
 
 test('persistent Live footer exposes only this-phone Room sound', () => {
@@ -60,11 +64,14 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
 
   assert.match(html, /<script type="module" src="\/room-sound-ui\.js"><\/script>/);
   assert.equal(script.includes("'./room-sound-ui.js'"), false);
-  assert.match(roomSound, /'房間聲音'/);
-  assert.match(roomSound, /'只影響這支裝置'/);
-  assert.match(roomSound, /'Room sound'/);
-  assert.match(composition, /#listen-toggle \{[\s\S]*?min-height: 44px;/);
-  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong \{[\s\S]*?clip-path: inset\(50%\);/);
+  assert.match(roomSound, /roomSoundControlPresentation/);
+  assert.doesNotMatch(roomSound, /'房間聲音'|'只影響這支裝置'/,
+    'the DOM adapter must not regain Room sound product-copy ownership');
+  assert.match(roomSoundPresentation, /'房間聲音'/);
+  assert.match(roomSoundPresentation, /'只影響這支裝置'/);
+  assert.match(roomSoundPresentation, /'Room sound'/);
+  assert.match(composition, /#listen-toggle\s*\{[\s\S]*?min-height:\s*44px;/);
+  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong\s*\{[\s\S]*?clip-path:\s*inset\(50%\);/);
 });
 
 test('Room sound presentation does not own Listen transport or mute authority', () => {

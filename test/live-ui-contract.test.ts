@@ -49,11 +49,15 @@ test('input ribbon follows the actual Room Mic without fabricated animation', ()
   assert.match(liveStatus, /document\.body\.dataset\.roomMic/);
   assert.match(liveState, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(liveState, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
-  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-presence-band/);
+  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-presence-wave/);
   assert.match(micPresence, /if \(localActive\) return;/);
-  assert.match(liveComposition, /\.voice-presence-slice/);
-  assert.match(liveComposition, /five broad[\s\S]*frequency bands/);
+  assert.match(liveComposition, /\.voice-presence-svg/);
+  assert.match(liveComposition, /\.voice-presence-baseline/);
+  assert.match(liveComposition, /\.voice-presence-wave/);
+  assert.match(micPresence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
+  assert.match(micPresence, /envelopePath\(\)/);
   assert.match(capture, /spectrumBands: this\.measureSpectrumBands\(\)/);
+  assert.doesNotMatch(micPresence, /voice-presence-slice|voice-presence-shape|voice-presence-band/);
   assert.doesNotMatch(liveState, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(liveComposition, /@keyframes|voice-breathe|preparing-pulse/);
 });
@@ -66,11 +70,15 @@ test('Mic gain is contextual and generic Adjust no longer exists', () => {
 });
 
 test('Song composition follows playback authority instead of Mic or participant heuristics', () => {
+  assert.ok(position('class="section-label" data-i18n="song.label"') < position('id="song-heading-title"'));
+  assert.ok(position('id="song-heading-title"') < position('id="change-youtube"'));
   assert.match(songSurface, /t\('song\.role\.holder'\)/);
   assert.match(songSurface, /t\('song\.role\.observer'\)/);
   assert.match(songSurface, /relay:playback-view/);
   assert.match(songSurface, /const holderWithSong = role === 'holder' && Boolean\(videoId\);/);
   assert.match(songSurface, /changeButton\.hidden = !holderWithSong;/);
+  assert.match(songSurface, /headingTitle\.hidden = !holderWithSong;/);
+  assert.match(songSurface, /observer\.hidden = !observerMode;/);
   assert.match(songSurface, /playerShell\.hidden = observerMode;/);
   assert.match(songSurface, /form\.hidden = role === 'preparing'/);
   assert.match(songCss, /data-playback-role="observer"/);

@@ -23,31 +23,40 @@ export type CalibrationStartFacts = {
 
 export type CalibrationStartDecision =
   | { ok: true; mode: CalibrationStartMode }
-  | { ok: false; reason: CalibrationStartBlockReason };
+  | { ok: false; mode: CalibrationStartMode; reason: CalibrationStartBlockReason };
 
 /**
  * Owns the room-level prerequisites for starting timing calibration.
  *
  * Mic-owner authorization remains an actor boundary in the server/browser.
- * This policy owns only room facts. Robot probe calibration intentionally does
- * not require a playing phone timeline; content correlation does.
+ * This policy owns only room facts.
+ *
+ * `streaming` means the capture PCM timeline is fresh and still advancing. It
+ * does not mean that song content is audible. Robot boot-probe calibration can
+ * therefore run while YouTube is paused/disconnected as long as Mic + backing
+ * capture keep delivering fresh PCM frames; content correlation still needs a
+ * playing phone timeline.
  */
 export function decideCalibrationStart(
   facts: CalibrationStartFacts,
 ): CalibrationStartDecision {
+  const mode: CalibrationStartMode = facts.robotProbeTimingActive ? 'boot-probe' : 'content';
+
   if (facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing') {
-    return { ok: false, reason: 'take-active' };
+    return { ok: false, mode, reason: 'take-active' };
   }
-  if (facts.calibrationActive) return { ok: false, reason: 'calibration-active' };
+  if (facts.calibrationActive) return { ok: false, mode, reason: 'calibration-active' };
   if (!facts.sessionActive || !facts.backingConnected || !facts.publisherControlConnected) {
-    return { ok: false, reason: 'sources-not-connected' };
+    return { ok: false, mode, reason: 'sources-not-connected' };
   }
   if (!facts.backingStreaming || !facts.micStreaming) {
-    return { ok: false, reason: 'sources-not-streaming' };
+    return { ok: false, mode, reason: 'sources-not-streaming' };
   }
-  if (facts.robotProbeTimingActive) return { ok: true, mode: 'boot-probe' };
+
+  if (mode === 'boot-probe') return { ok: true, mode };
+
   if (!facts.timelineConnected || facts.timelineState !== 1) {
-    return { ok: false, reason: 'phone-not-playing' };
+    return { ok: false, mode, reason: 'phone-not-playing' };
   }
-  return { ok: true, mode: 'content' };
+  return { ok: true, mode };
 }

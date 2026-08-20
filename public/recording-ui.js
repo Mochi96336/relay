@@ -30,9 +30,9 @@ function errorCopy(reason) {
   const copy = {
     reconnecting: ['Reconnecting recording…', '錄音重新連線中…'],
     'participant-required': ['Recording needs a room identity.', '需要房間身分才能錄音'],
-    'mix-not-active': ['Start the room audio before recording.', '房間聲音開始後可以錄音'],
+    'mix-not-active': ['Start singing or playback before recording.', '開始唱歌或播放後可以錄音'],
     'product-blocked': ['Fix the room audio before recording.', '先處理房間音訊問題'],
-    'take-not-ready': ['Start the Mic before recording.', 'Mic 開始後可以錄音'],
+    'take-not-ready': ['Wait until the room is ready to record.', '房間準備完成後可以錄音'],
     'timing-calibration-active': ['Wait for timing calibration to finish.', '等待時間校準完成'],
     'take-active': ['A recording is already in progress.', '目前正在錄音'],
     'take-not-recording': ['There is no active recording.', '目前沒有錄音'],
@@ -53,10 +53,40 @@ if (strip && startButton && stopButton && status) {
   let finishFlash = false;
   let finishTimer = null;
 
+  // Recording is not a permanently disabled control. It starts absent and only
+  // enters the product surface when authoritative state says there is a real
+  // action (or an active/finishing/error Take that must remain visible).
+  strip.hidden = true;
+  startButton.hidden = true;
+  stopButton.hidden = true;
+  startButton.disabled = true;
+  stopButton.disabled = true;
+
   function setLifecycle(next) {
     previousLifecycle = lifecycle;
     lifecycle = typeof next === 'string' ? next : 'idle';
     strip.dataset.takeState = lifecycle;
+  }
+
+  function renderVisibility(detail) {
+    const canStart = detail.canStart === true
+      && lifecycle !== 'recording'
+      && lifecycle !== 'finalizing';
+    const canStop = detail.canStop === true && lifecycle === 'recording';
+    const lifecycleVisible = lifecycle === 'recording'
+      || lifecycle === 'finalizing'
+      || lifecycle === 'failed';
+    const errorVisible = Boolean(detail.commandError?.reason);
+
+    startButton.hidden = !canStart;
+    stopButton.hidden = !canStop;
+    strip.hidden = !(canStart || lifecycleVisible || finishFlash || errorVisible);
+
+    // Disabled controls are never used as readiness copy. If the server says
+    // the action is unavailable it is absent; server authority still decides
+    // when the real action enters the slot.
+    startButton.disabled = !canStart;
+    stopButton.disabled = !canStop;
   }
 
   function renderState(detail = latestState) {
@@ -67,8 +97,7 @@ if (strip && startButton && stopButton && status) {
       strip.dataset.takeState = lifecycle;
     }
 
-    startButton.disabled = detail.canStart !== true;
-    stopButton.disabled = detail.canStop !== true;
+    renderVisibility(detail);
 
     if (finishFlash && lifecycle === 'ready') {
       status.textContent = finishedCopy();

@@ -344,7 +344,9 @@ body[data-listen="off"] #listen-adjust-state {
 }
 
 /* System is the only transient product sheet. Opening it freezes Live instead
-   of inserting a second hierarchy under the performance. */
+   of inserting a second hierarchy under the performance. On phones the sheet
+   is explicitly edge-to-edge; intrinsic content must never shrink it into a
+   narrow dialog. */
 body:has(.system-panel[open]) {
   overflow: hidden;
 }
@@ -366,9 +368,7 @@ body:has(.system-panel[open]) {
   position: fixed;
   z-index: 50;
   inset: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
+  display: block;
   margin: 0;
   padding: max(24px, env(safe-area-inset-top)) 0 0;
   border: 0;
@@ -377,8 +377,13 @@ body:has(.system-panel[open]) {
 }
 
 .system-panel[open] .system-sheet {
-  width: min(100%, 720px);
-  max-height: min(82dvh, 760px);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  max-width: none;
+  max-height: min(86dvh, 760px);
   margin: 0;
   padding: 18px 22px max(26px, env(safe-area-inset-bottom));
   overflow-y: auto;
@@ -417,17 +422,12 @@ body:has(.system-panel[open]) {
   font-weight: 660;
 }
 
-.system-panel[open] .system-sheet {
-  margin-top: 0;
-}
-
 @media (max-width: 420px) {
   .room-header-actions { gap: 8px; }
   .more-popover { right: -4px; }
   .voice-input-evidence { margin-top: 14px; }
 
   .system-panel[open] .system-sheet {
-    max-height: 86dvh;
     border-left: 0;
     border-right: 0;
   }
@@ -435,11 +435,17 @@ body:has(.system-panel[open]) {
 
 @media (min-width: 760px) {
   .system-panel[open] {
+    display: flex;
     align-items: center;
+    justify-content: center;
     padding: 28px;
   }
 
   .system-panel[open] .system-sheet {
+    position: static;
+    width: min(100%, 720px);
+    max-width: 720px;
+    max-height: min(82dvh, 760px);
     border-bottom: 1px solid #292b30;
     border-radius: 22px;
   }

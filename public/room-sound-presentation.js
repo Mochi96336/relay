@@ -3,6 +3,9 @@ function copy(english, traditionalChinese, isChinese) {
 }
 
 function operationalNote(phase, isChinese) {
+  if (phase === 'interrupted') {
+    return copy('Recovering room sound…', '正在恢復房間聲音…', isChinese);
+  }
   if (phase === 'reconnecting') {
     return copy('Reconnecting room sound…', '房間聲音重新連線中…', isChinese);
   }
@@ -34,6 +37,7 @@ function compactStatus(state, phase, isChinese) {
   if (state === 'mic-muted') return copy('Singing', '唱歌中', isChinese);
   if (state === 'playback-muted') return copy('Backing', '伴奏', isChinese);
   if (state === 'review-muted') return copy('Take', '錄音', isChinese);
+  if (phase === 'interrupted') return copy('Recovering', '恢復中', isChinese);
   if (phase === 'reconnecting') return copy('Reconnecting', '重連中', isChinese);
   if (phase === 'connecting') return copy('Connecting', '連線中', isChinese);
   if (phase === 'buffering') return copy('Buffering', '緩衝中', isChinese);

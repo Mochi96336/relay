@@ -32,24 +32,48 @@ test('Listen gesture gate stays retryable until browser audio is actually runnin
     'Listen gesture recovery must remain independent from Room sound wording');
 });
 
-test('Listen transport cannot run ahead of AudioContext readiness', async () => {
+test('Listen gates first transport start on a running AudioContext while preserving recovery transport', async () => {
   const source = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
 
-  assert.match(source, /function audioReady\(\)[\s\S]*audioContext\.state === 'running'/);
-  assert.match(source, /async function connect\(\)[\s\S]*!audioReady\(\)/,
-    'the monitor socket must reject a non-running local audio engine');
+  assert.match(source, /function audioGraphReady\(\)[\s\S]*Boolean\(audioContext && playbackNode && gainNode\)/);
+  assert.match(source, /function audioRendering\(\)[\s\S]*audioContext\.state === 'running'/);
+  assert.match(source, /function monitorTransportWanted\(\)[\s\S]*audioGraphReady\(\)[\s\S]*audioEverRunning/,
+    'transport intent requires a built graph that has rendered successfully at least once');
+  assert.match(source, /async function connect\(\)[\s\S]*!monitorTransportWanted\(\)/,
+    'the monitor socket must not start before first successful audio rendering');
 
   const start = source.indexOf("  function reconcile(phase = '') {");
   const end = source.indexOf('  function forceMicMute(', start);
   assert.ok(start >= 0 && end > start);
   const reconcileSection = source.slice(start, end);
-  const readinessGate = reconcileSection.indexOf("audioContext.state !== 'running'");
-  const enableTransport = reconcileSection.indexOf('transportEnabled = true');
-  assert.ok(readinessGate >= 0 && enableTransport > readinessGate,
-    'AudioContext readiness must be decided before transport is enabled');
-  assert.match(reconcileSection, /audioContext\.state !== 'running'[\s\S]*closeTransport\(\);[\s\S]*armAudioUnlock\(\);[\s\S]*render\('first-interaction'\);[\s\S]*return;/,
-    'a non-running context keeps transport closed, publishes its phase, and leaves the gesture gate armed');
 
-  assert.match(source, /context\.addEventListener\('statechange'[\s\S]*context\.state === 'running'[\s\S]*disarmAudioUnlock\(\)[\s\S]*reconcile\(\)/,
-    'AudioContext state changes, not resume requests, drive readiness reconciliation');
+  assert.match(reconcileSection, /if \(!audioGraphReady\(\)\) \{[\s\S]*armAudioUnlock\(\);[\s\S]*render\(phase \|\| 'first-interaction'\);[\s\S]*return;/,
+    'a graph that has not been built yet must stay behind the user gesture gate');
+  assert.match(reconcileSection, /if \(!audioRendering\(\)\) \{[\s\S]*startResume\(audioContext\);[\s\S]*armAudioUnlock\(\);[\s\S]*if \(audioEverRunning\) \{[\s\S]*audioInterruption\.begin\(\);[\s\S]*ensureTransport\('interrupted'\);[\s\S]*return;[\s\S]*render\('first-interaction'\);[\s\S]*return;/,
+    'a later OS interruption preserves transport intent without declaring timeline staleness by itself');
+  assert.doesNotMatch(reconcileSection, /liveEdgeRecoveryRequired\s*=\s*true/,
+    'resume trouble alone must not be equivalent to a stale realtime timeline');
+
+  assert.match(
+    source,
+    /function finishAudioInterruptionEvidence\(\) \{[\s\S]*const recovery = audioInterruption\.finish\(\);[\s\S]*if \(recovery\.requiresLiveEdge\) liveEdgeRecoveryRequired = true;[\s\S]*return recovery\.requiresLiveEdge;/,
+    'the interruption helper turns completed evidence into live-edge recovery state',
+  );
+
+  const stateChangeStart = source.indexOf("context.addEventListener('statechange'");
+  const stateChangeEnd = source.indexOf("      // Consume the user's first interaction", stateChangeStart);
+  assert.ok(stateChangeStart >= 0 && stateChangeEnd > stateChangeStart);
+  const stateChangeSection = source.slice(stateChangeStart, stateChangeEnd);
+  const finishEvidenceAt = stateChangeSection.indexOf('finishAudioInterruptionEvidence()');
+  const markRunningAt = stateChangeSection.indexOf('audioEverRunning = true');
+  assert.ok(
+    finishEvidenceAt >= 0 && markRunningAt > finishEvidenceAt,
+    'AudioContext state changes finish interruption evidence before marking the graph running again',
+  );
+  assert.ok(
+    stateChangeSection.indexOf('stalledResumeGestures = 0') > markRunningAt
+      && stateChangeSection.indexOf('disarmAudioUnlock()') > markRunningAt
+      && stateChangeSection.indexOf('reconcile(') > markRunningAt,
+    'running-state bookkeeping and reconciliation happen after interruption evidence is finalized',
+  );
 });

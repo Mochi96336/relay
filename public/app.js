@@ -1072,11 +1072,11 @@ async function requestPublisherStart(takeoverExpectedOwnerId = null) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
       setStatus('Could not start microphone', message);
+      await stop(false, { releaseMic: false });
       dispatchRelayEvent('relay-microphone-start-failed', {
         message,
         takeoverExpectedOwnerId,
       });
-      await stop(false, { releaseMic: false });
     }
   })();
 

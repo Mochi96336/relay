@@ -2181,6 +2181,7 @@ wss.on('connection', (rawSocket, request) => {
         || socket.participantId !== participants.micOwnerId
         || socket.participantId !== micMediaOwnerId
         || micMediaGeneration === null
+        || presence.captureGeneration !== micMediaGeneration
         || !micStreaming(nowMs)
       ) return;
 
@@ -2199,6 +2200,8 @@ wss.on('connection', (rawSocket, request) => {
         captureGeneration: micMediaGeneration,
         rmsDbfs: presence.rmsDbfs,
         spectrumBands: presence.spectrumBands,
+        f0Hz: presence.f0Hz,
+        pitchConfidence: presence.pitchConfidence,
       });
       return;
     }

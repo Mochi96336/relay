@@ -1,35 +1,42 @@
 import {
   MIC_PRESENCE_BAND_COUNT,
+  MIC_PRESENCE_MAX_F0_HZ,
+  MIC_PRESENCE_MIN_F0_HZ,
   MIC_PRESENCE_SLICE_COUNT,
+  centerOriginX,
   emptyPresenceSlice,
   nextPresenceHistory,
+  presenceSliceGeometry,
 } from './mic-presence-model.js';
 
 const meter = document.querySelector('#mic-input-meter');
 
 if (meter) {
-  const slices = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, (_, sliceIndex) => {
-    const slice = document.createElement('span');
-    slice.className = 'voice-presence-slice';
-    slice.setAttribute('aria-hidden', 'true');
-    // Older evidence gently recedes to the left; newest is always the right edge.
-    const age = MIC_PRESENCE_SLICE_COUNT <= 1 ? 1 : sliceIndex / (MIC_PRESENCE_SLICE_COUNT - 1);
-    slice.style.opacity = String(0.36 + age * 0.64);
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const VIEWBOX_WIDTH = 320;
+  const VIEWBOX_HEIGHT = 56;
+  const CENTER_Y = VIEWBOX_HEIGHT / 2;
+  const MAX_AMPLITUDE = 18;
+  const PITCH_MODULATION_DEPTH = 0.18;
 
-    const bands = Array.from({ length: MIC_PRESENCE_BAND_COUNT }, (_, bandIndex) => {
-      const band = document.createElement('span');
-      band.className = 'voice-presence-band';
-      band.dataset.band = String(bandIndex);
-      band.setAttribute('aria-hidden', 'true');
-      return band;
-    });
-    slice.replaceChildren(...bands);
-    return { slice, bands };
-  });
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.classList.add('voice-presence-svg');
+  svg.setAttribute('viewBox', `0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true');
 
+  const baseline = document.createElementNS(SVG_NS, 'path');
+  baseline.classList.add('voice-presence-baseline');
+  baseline.setAttribute('d', `M 0 ${CENTER_Y} L ${VIEWBOX_WIDTH} ${CENTER_Y}`);
+
+  const wave = document.createElementNS(SVG_NS, 'path');
+  wave.classList.add('voice-presence-wave');
+  wave.setAttribute('aria-hidden', 'true');
+
+  svg.append(baseline, wave);
   meter.classList.add('voice-presence');
   meter.setAttribute('aria-hidden', 'true');
-  meter.replaceChildren(...slices.map(({ slice }) => slice));
+  meter.replaceChildren(svg);
 
   let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
   let sourceKey = null;
@@ -41,19 +48,65 @@ if (meter) {
   const LOCAL_EVIDENCE_STALE_MS = 160;
   const REMOTE_EVIDENCE_STALE_MS = 320;
 
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function smoothPath(points) {
+    if (!points.length) return '';
+    if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+
+    let path = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const p0 = points[index - 1] ?? points[index];
+      const p1 = points[index];
+      const p2 = points[index + 1];
+      const p3 = points[index + 2] ?? p2;
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      path += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+    }
+    return path;
+  }
+
+  function visualPoint(slice, index, side) {
+    const geometry = presenceSliceGeometry(slice);
+    const positions = centerOriginX(index, history.length, VIEWBOX_WIDTH);
+    const x = side === 'left' ? positions.left : positions.right;
+    const distance = Math.abs(x - VIEWBOX_WIDTH / 2) / (VIEWBOX_WIDTH / 2);
+    const pitchTexture = geometry.pitchStrength > 0
+      ? Math.sin(2 * Math.PI * geometry.density * distance) * geometry.pitchStrength * PITCH_MODULATION_DEPTH
+      : 0;
+    const amplitude = clamp(
+      geometry.amplitude * MAX_AMPLITUDE * (1 + pitchTexture),
+      0,
+      MAX_AMPLITUDE,
+    );
+    return { x, amplitude };
+  }
+
+  function envelopePath() {
+    const left = history.map((slice, index) => visualPoint(slice, index, 'left'));
+    const right = history
+      .slice(0, -1)
+      .map((slice, index) => visualPoint(slice, index, 'right'))
+      .reverse();
+    const samples = [...left, ...right];
+    const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.amplitude }));
+    const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y + point.amplitude })).reverse();
+
+    const upperPath = smoothPath(upper);
+    const lowerPath = smoothPath(lower);
+    if (!upperPath || !lowerPath) return '';
+    return `${upperPath} L ${lower[0].x.toFixed(2)} ${lower[0].y.toFixed(2)} ${lowerPath.replace(/^M [^C]+/, '')} Z`;
+  }
+
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
-    slices.forEach(({ bands }, sliceIndex) => {
-      const evidence = history[sliceIndex] ?? emptyPresenceSlice();
-      bands.forEach((band, bandIndex) => {
-        const level = Math.max(0, Math.min(1, Number(evidence.bands?.[bandIndex]) || 0));
-        // Compute the visual interpolation in JS instead of relying on CSS
-        // arithmetic involving custom properties; this keeps the ribbon stable
-        // on the older Safari/WebKit versions that phones may still run.
-        band.style.opacity = String(0.055 + level * 0.88);
-        band.style.transform = `scaleX(${0.48 + level * 0.52})`;
-      });
-    });
+    wave.setAttribute('d', envelopePath());
+    wave.style.opacity = active ? '0.9' : '0';
   }
 
   function clearLocalStaleTimer() {
@@ -81,13 +134,9 @@ if (meter) {
     clearLocalStaleTimer();
     localStaleTimer = setTimeout(() => {
       localStaleTimer = null;
-      // A stopped/suspended AudioWorklet may never deliver the explicit
-      // active:false boundary. Local capture is evidence too: once several
-      // expected 40 ms UI samples are missing, stop preferring a frozen local
-      // tail over newer authoritative room telemetry.
       if (!localActive) return;
       localActive = false;
-      if (sourceKey === 'local') reset();
+      if (typeof sourceKey === 'string' && sourceKey.startsWith('local:')) reset();
     }, LOCAL_EVIDENCE_STALE_MS);
   }
 
@@ -95,43 +144,68 @@ if (meter) {
     clearRemoteStaleTimer();
     remoteStaleTimer = setTimeout(() => {
       remoteStaleTimer = null;
-      // Presence is evidence, not state. If several expected 80 ms telemetry
-      // packets never arrive, stop displaying the last packet as if it were
-      // still live. The existing 110 ms band transitions soften the reset.
       if (localActive || sourceKey !== expectedSourceKey) return;
       reset();
     }, REMOTE_EVIDENCE_STALE_MS);
   }
 
-  function append(source, rmsDbfs, spectrumBands) {
+  function append(source, rmsDbfs, spectrumBands, f0Hz, pitchConfidence) {
     if (source !== sourceKey) reset(source);
-    history = nextPresenceHistory(history, rmsDbfs, spectrumBands);
+    history = nextPresenceHistory(history, rmsDbfs, spectrumBands, f0Hz, pitchConfidence);
     render(true);
     if (source.startsWith('room:')) armRemoteStaleTimer(source);
+  }
+
+  function validGeneration(value) {
+    const generation = Number(value);
+    return Number.isInteger(generation) && generation >= 0 && generation <= 0xffff_ffff
+      ? generation >>> 0
+      : null;
+  }
+
+  function validPitch(f0Value, confidenceValue) {
+    const confidence = Number(confidenceValue);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
+    if (f0Value === null || f0Value === undefined) {
+      return { f0Hz: null, pitchConfidence: confidence };
+    }
+    const f0Hz = Number(f0Value);
+    if (
+      !Number.isFinite(f0Hz)
+      || f0Hz < MIC_PRESENCE_MIN_F0_HZ
+      || f0Hz > MIC_PRESENCE_MAX_F0_HZ
+    ) return null;
+    return { f0Hz, pitchConfidence: confidence };
   }
 
   window.addEventListener('relay-local-mic-level', (event) => {
     if (event.detail?.active !== true) {
       localActive = false;
       clearLocalStaleTimer();
-      if (sourceKey === 'local') reset();
+      if (typeof sourceKey === 'string' && sourceKey.startsWith('local:')) reset();
       return;
     }
 
     const rmsDbfs = Number(event.detail?.rmsDbfs);
-    if (!Number.isFinite(rmsDbfs)) return;
+    const generation = validGeneration(event.detail?.captureGeneration);
+    const pitch = validPitch(event.detail?.f0Hz, event.detail?.pitchConfidence);
+    if (!Number.isFinite(rmsDbfs) || generation === null || !pitch) return;
 
     localActive = true;
     armLocalStaleTimer();
     const now = performance.now();
     if (now - lastLocalSampleAt < LOCAL_SAMPLE_INTERVAL_MS) return;
     lastLocalSampleAt = now;
-    append('local', rmsDbfs, event.detail?.spectrumBands);
+    append(
+      `local:${generation}`,
+      rmsDbfs,
+      event.detail?.spectrumBands,
+      pitch.f0Hz,
+      pitch.pitchConfidence,
+    );
   });
 
   window.addEventListener('relay-room-mic-presence', (event) => {
-    // The singer keeps the zero-network-latency local evidence. Room telemetry
-    // is for everyone else and must never replace fresh singer capture.
     if (localActive) return;
 
     if (event.detail?.active !== true) {
@@ -140,25 +214,28 @@ if (meter) {
     }
 
     const ownerId = typeof event.detail?.ownerId === 'string' ? event.detail.ownerId : '';
-    const generation = Number(event.detail?.captureGeneration);
+    const generation = validGeneration(event.detail?.captureGeneration);
     const rmsDbfs = Number(event.detail?.rmsDbfs);
     const spectrumBands = Array.isArray(event.detail?.spectrumBands)
       ? event.detail.spectrumBands.slice(0, MIC_PRESENCE_BAND_COUNT).map(Number)
       : [];
+    const pitch = validPitch(event.detail?.f0Hz, event.detail?.pitchConfidence);
     if (
       !ownerId
-      || !Number.isInteger(generation)
-      || generation < 0
-      || generation > 0xffff_ffff
+      || generation === null
       || !Number.isFinite(rmsDbfs)
       || spectrumBands.length !== MIC_PRESENCE_BAND_COUNT
       || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
+      || !pitch
     ) return;
 
-    // Owner + generation is the identity of this visible sound. A Mic handoff
-    // or new capture resets the tail instead of visually welding two people
-    // together for the next few hundred milliseconds.
-    append(`room:${ownerId}:${generation >>> 0}`, rmsDbfs, spectrumBands);
+    append(
+      `room:${ownerId}:${generation}`,
+      rmsDbfs,
+      spectrumBands,
+      pitch.f0Hz,
+      pitch.pitchConfidence,
+    );
   });
 
   reset();

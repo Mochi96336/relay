@@ -1,9 +1,10 @@
-/* listen.js owns these states; this stylesheet only decides when their existing
-   product explanation is useful enough to occupy space on Live. */
-body[data-listen="muted"] #listen-adjust-state,
-body[data-listen="mic-muted"] #listen-adjust-state,
-body[data-listen="playback-muted"] #listen-adjust-state,
-body[data-listen="review-muted"] #listen-adjust-state {
+/* room-sound-ui.js decides when a state/phase deserves persistent explanation.
+   Normal audible playback stays quiet; recovery and forced-pause reasons remain visible. */
+.local-sound-control #listen-adjust-state {
+  display: none;
+}
+
+.local-sound-control[data-listen-note="visible"] #listen-adjust-state {
   display: block;
 }
 

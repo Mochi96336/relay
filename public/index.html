@@ -67,6 +67,7 @@
       <section class="song-stage" data-playback-role="connecting" aria-label="Room song" data-i18n-aria-label="song.roomSong">
         <div class="song-heading-row">
           <div class="section-label" data-i18n="song.label">Song</div>
+          <span id="song-heading-title" class="song-heading-title" hidden></span>
           <div class="song-heading-actions">
             <span id="song-device-note" class="song-device-note" aria-live="polite">Connecting…</span>
             <button id="change-youtube" class="text-action" type="button" hidden data-i18n="song.change">Change song</button>
@@ -302,6 +303,9 @@
 
     <script src="/i18n.js"></script>
     <script type="module" src="/live-ia.js"></script>
+    <script type="module" src="/mic-actions.js"></script>
+    <script type="module" src="/room-sound-ui.js"></script>
+    <script type="module" src="/recording-ui.js"></script>
     <script type="module" src="/presence.js"></script>
     <script type="module" src="/live-status.js"></script>
     <script type="module" src="/system-details.js"></script>

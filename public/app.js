@@ -227,7 +227,6 @@ function setPublisherActive(active) {
   // the explicit local lifecycle event so Release never depends on a server
   // ownership snapshot arriving first.
   window.relayActiveRole = publisherActive ? 'publisher' : null;
-  releaseButton.hidden = !publisherActive;
   dispatchRelayEvent('relay-microphone-local-state', { active: publisherActive });
 }
 
@@ -785,9 +784,12 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   latestLocalMicLevel = null;
   dispatchRelayEvent('relay-local-mic-level', {
     active: false,
+    captureGeneration: captureGeneration >>> 0,
     peakDbfs: null,
     rmsDbfs: null,
     spectrumBands: null,
+    f0Hz: null,
+    pitchConfidence: 0,
   });
   uplinkDroppedSamples = 0;
   uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
@@ -938,13 +940,23 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         const spectrumBands = rawSpectrumBands.length === 5 && rawSpectrumBands.every(Number.isFinite)
           ? rawSpectrumBands
           : null;
-        if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs)) {
-          latestLocalMicLevel = { peakDbfs, rmsDbfs, spectrumBands };
+        const rawF0Hz = event.data.f0Hz;
+        const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
+        const pitchConfidence = Number(event.data.pitchConfidence);
+        const pitchValid = (f0Hz === null || Number.isFinite(f0Hz))
+          && Number.isFinite(pitchConfidence)
+          && pitchConfidence >= 0
+          && pitchConfidence <= 1;
+        if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs) && pitchValid) {
+          latestLocalMicLevel = { peakDbfs, rmsDbfs, spectrumBands, f0Hz, pitchConfidence };
           dispatchRelayEvent('relay-local-mic-level', {
             active: true,
+            captureGeneration: captureGeneration >>> 0,
             peakDbfs,
             rmsDbfs,
             spectrumBands,
+            f0Hz,
+            pitchConfidence,
           });
           renderGainAdvice();
         }

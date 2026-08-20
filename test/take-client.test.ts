@@ -27,8 +27,10 @@ test('browser reconnects to TakeSession state instead of coupling recording life
   assert.match(source, /function scheduleReconnect/);
   assert.match(source, /next\.send\(JSON\.stringify\(\{ type: 'take-status-request' \}\)\)/);
 
-  const closeStart = source.indexOf("next.addEventListener('close'");
-  const buttonStart = source.indexOf("recordButton.addEventListener('click'", closeStart);
+  // Target the established-socket close handler, not the pre-open close listener
+  // that rejects a failed opening handshake.
+  const closeStart = source.indexOf("next.addEventListener('close', () => {");
+  const buttonStart = source.indexOf("recordButton?.addEventListener('click'", closeStart);
   assert.ok(closeStart >= 0 && buttonStart > closeStart);
   const closeSection = source.slice(closeStart, buttonStart);
   assert.match(closeSection, /scheduleReconnect\(\)/);

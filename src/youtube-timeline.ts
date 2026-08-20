@@ -16,6 +16,8 @@ type TimelineAnchor = {
 
 type LatestTelemetry = {
   videoId: string;
+  videoTitle: string | null;
+  videoAuthor: string | null;
   state: number;
   currentTime: number;
   duration: number;
@@ -44,6 +46,13 @@ function finiteNumber(value: unknown, fallback: number) {
 
 function boundedNumber(value: unknown, min: number, max: number, fallback: number) {
   return Math.max(min, Math.min(max, finiteNumber(value, fallback)));
+}
+
+function metadataText(value: unknown, maxLength: number) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  return Array.from(normalized).slice(0, maxLength).join('');
 }
 
 export class YouTubeTimelineTracker {
@@ -79,6 +88,8 @@ export class YouTubeTimelineTracker {
 
     this.latest = {
       videoId,
+      videoTitle: metadataText(payload.videoTitle, 180) ?? previous?.videoTitle ?? null,
+      videoAuthor: metadataText(payload.videoAuthor, 96) ?? previous?.videoAuthor ?? null,
       state,
       currentTime,
       duration,
@@ -89,6 +100,13 @@ export class YouTubeTimelineTracker {
       timelineDeltaSeconds,
       networkRttMs,
     };
+
+    // Metadata belongs to the current video only. A new media identity must not
+    // inherit the old title/author while getVideoData() is still catching up.
+    if (previous?.videoId !== videoId) {
+      this.latest.videoTitle = metadataText(payload.videoTitle, 180);
+      this.latest.videoAuthor = metadataText(payload.videoAuthor, 96);
+    }
 
     const before = this.project(nowMs);
     const reportedNow = this.projectTelemetry(this.latest, nowMs);
@@ -174,6 +192,8 @@ export class YouTubeTimelineTracker {
       connected: ageMs <= STALE_AFTER_MS,
       measurementMode: 'media-vs-server-monotonic',
       videoId: this.latest.videoId,
+      videoTitle: this.latest.videoTitle,
+      videoAuthor: this.latest.videoAuthor,
       state: this.latest.state,
       duration: this.latest.duration,
       playbackRate: this.latest.playbackRate,

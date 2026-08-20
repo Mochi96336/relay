@@ -5,13 +5,18 @@ import test from 'node:test';
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
+const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const roomSound = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
+const roomSoundPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 const people = readFileSync(new URL('../public/people-ui.js', import.meta.url), 'utf8');
 const recordingUi = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
+const youtubeSync = readFileSync(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+const presence = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
+const micActions = readFileSync(new URL('../public/mic-actions.js', import.meta.url), 'utf8');
 
 function between(start: string, end: string) {
   const from = html.indexOf(start);
@@ -35,16 +40,19 @@ test('People owns identity and presence while secondary tasks live in More', () 
   assert.equal(more.includes('id="open-adjust"'), false);
 });
 
-test('Live keeps Song then performance state and contextual Mic gain', () => {
+test('Live keeps Song then one performance task with Record before Mic adjustment', () => {
   const song = html.indexOf('class="song-stage"');
   const performance = html.indexOf('class="performance-stage"');
   const gain = html.indexOf('id="mic-live-control"');
   const take = html.indexOf('class="take-strip"');
-  assert.ok(song >= 0 && song < performance && performance < gain && gain < take);
+  assert.ok(song >= 0 && song < performance && gain > performance && take > performance);
   assert.equal(html.includes('id="youtube-player"'), true);
   assert.equal(css.includes('.performance-stage > .section-label'), true);
   assert.equal(css.includes('body[data-self-mic="live"] .mic-live-control'), true);
   assert.equal(script.includes("micLiveLabel.textContent = 'Mic';"), true);
+  assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
+  assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
+  assert.doesNotMatch(script, /performanceStage\.insertBefore\(lastTake|append(?:Child)?\(lastTake/);
 });
 
 test('persistent Live footer exposes only this-phone Room sound', () => {
@@ -54,13 +62,16 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
   assert.equal(footer.includes('id="system-panel"'), false);
   assert.equal(footer.includes('id="mic-gain"'), false);
 
-  assert.equal(script.includes("'./room-sound-ui.js'"), true);
-  assert.match(script, /import\(modulePath\)\.catch/);
-  assert.match(roomSound, /'房間聲音'/);
-  assert.match(roomSound, /'只影響這支裝置'/);
-  assert.match(roomSound, /'Room sound'/);
-  assert.match(composition, /#listen-toggle \{[\s\S]*?min-height: 44px;/);
-  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong \{[\s\S]*?clip-path: inset\(50%\);/);
+  assert.match(html, /<script type="module" src="\/room-sound-ui\.js"><\/script>/);
+  assert.equal(script.includes("'./room-sound-ui.js'"), false);
+  assert.match(roomSound, /roomSoundControlPresentation/);
+  assert.doesNotMatch(roomSound, /'房間聲音'|'只影響這支裝置'/,
+    'the DOM adapter must not regain Room sound product-copy ownership');
+  assert.match(roomSoundPresentation, /'房間聲音'/);
+  assert.match(roomSoundPresentation, /'只影響這支裝置'/);
+  assert.match(roomSoundPresentation, /'Room sound'/);
+  assert.match(composition, /#listen-toggle\s*\{[\s\S]*?min-height:\s*44px;/);
+  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong\s*\{[\s\S]*?clip-path:\s*inset\(50%\);/);
 });
 
 test('Room sound presentation does not own Listen transport or mute authority', () => {
@@ -83,20 +94,22 @@ test('generic Adjust product layer is gone while System remains directly reachab
   assert.match(script, /window\.addEventListener\('relay-open-system', revealSystem\)/);
 });
 
-test('System navigation is installed before optional Live presenters can fail', () => {
+test('System navigation is installed before degradable optional projections can fail', () => {
   const systemBinding = script.indexOf("openSystem?.addEventListener('click', revealSystem)");
   const optionalPresenterBoundary = script.indexOf('for (const modulePath of [');
   assert.ok(systemBinding >= 0);
   assert.ok(optionalPresenterBoundary > systemBinding);
   assert.doesNotMatch(script, /^import\s/m);
   assert.match(script, /import\(modulePath\)\.catch/);
-  for (const presenter of [
-    './mic-presence.js',
-    './room-sound-ui.js',
-    './people-ui.js',
-    './recording-ui.js',
-  ]) {
+
+  for (const presenter of ['./mic-presence.js', './people-ui.js']) {
     assert.equal(script.includes(`'${presenter}'`), true);
+  }
+
+  for (const presenter of ['mic-actions', 'room-sound-ui', 'recording-ui']) {
+    assert.match(html, new RegExp(`<script type="module" src="\\/${presenter}\\.js"><\\/script>`));
+    assert.equal(script.includes(`'./${presenter}.js'`), false,
+      `${presenter} is a sole action presenter and must not be optional`);
   }
 });
 
@@ -170,9 +183,16 @@ test('header and performance controls retain real phone-sized touch targets', ()
   assert.equal(css.includes('.panel-done {'), true);
 });
 
-test('P0 Live states have one visible presenter each', () => {
-  assert.match(css, /#start-publisher::after \{[\s\S]*?content: none;/);
-  assert.match(css, /\.performance-stage:has\(#mic-takeover:not\(\[hidden\]\)\) \.mic-actions \{[\s\S]*?display: none;/);
-  assert.match(css, /\.youtube-readout:has\(#server-timeline-state\)[\s\S]*?display: none;/);
-  assert.match(css, /body\[data-listen="muted"\] #listen-note,[\s\S]*?body\[data-listen="playback-muted"\] #listen-note,[\s\S]*?body\[data-listen="review-muted"\] #listen-note \{[\s\S]*?display: none;/);
+test('P0 Live states remove retired presenters instead of masking them later', () => {
+  assert.doesNotMatch(style, /#start-publisher::after|Take over mic|content:\s*"Take mic"/);
+  assert.doesNotMatch(youtubeSync, /server-timeline-state|server-timeline-values|server-timeline-note|insertAdjacentElement/);
+  assert.match(youtubeSync, /relay:playback-diagnostics/);
+
+  assert.match(roomSound, /relay-listen-state/);
+  assert.doesNotMatch(roomSound, /MutationObserver/);
+
+  assert.match(presence, /relay-mic-action-state/);
+  assert.doesNotMatch(presence, /publisherButton\.textContent|takeoverPanel|takeoverCopy/);
+  assert.match(micActions, /publisherButton\.hidden = takeoverOpen/);
+  assert.match(micActions, /takeoverPanel\.hidden = !takeoverOpen/);
 });

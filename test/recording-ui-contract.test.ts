@@ -2,14 +2,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const ui = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/recording-ui.css', import.meta.url), 'utf8');
 const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url), 'utf8');
 const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 
-test('recording presentation consumes Take status without owning Take commands', () => {
-  assert.equal(liveIa.includes("'./recording-ui.js'"), true);
-  assert.match(liveIa, /import\(modulePath\)\.catch/);
+test('required recording presentation consumes state without owning Take commands', () => {
+  assert.match(html, /<script type="module" src="\/recording-ui\.js"><\/script>/);
+  assert.equal(liveIa.includes("'./recording-ui.js'"), false);
+  assert.match(ui, /relay-recording-state/);
   assert.match(ui, /relay-take-status/);
   assert.match(recorder, /type: 'start-take'/);
   assert.match(recorder, /type: 'stop-take'/);
@@ -19,12 +21,13 @@ test('recording presentation consumes Take status without owning Take commands',
   }
 });
 
-test('late recording presenter requests the current authoritative Take snapshot', () => {
-  assert.match(ui, /window\.dispatchEvent\(new Event\('relay-request-take-status'\)\)/);
+test('recording presenter requests the current normalized recording state', () => {
+  assert.match(ui, /window\.dispatchEvent\(new Event\('relay-request-recording-state'\)\)/);
   assert.match(
     recorder,
-    /window\.addEventListener\('relay-request-take-status', \(\) => publishTakeStatus\(latestStatus\)\)/,
+    /window\.addEventListener\('relay-request-recording-state', publishRecordingState\)/,
   );
+  assert.match(recorder, /window\.relayRecordingState = detail/);
 });
 
 test('recording is one lifecycle action rather than persistent Start and Stop buttons', () => {

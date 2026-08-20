@@ -1,264 +1,72 @@
 /* Formal phone composition.
    This layer owns spatial hierarchy only. Product-state emphasis stays in
    live-state.css and playback-role behavior stays in song-surface.css. */
+.live-shell { padding-top: 18px; padding-bottom: max(22px, env(safe-area-inset-bottom)); }
+.room-header { min-height: 38px; }
+.room-mark { font-size: 15px; letter-spacing: -.04em; }
+.song-stage { padding-top: clamp(18px, 3vh, 28px); }
+.youtube-player-shell { position: relative; width: 100%; margin-left: 0; min-height: 200px; aspect-ratio: 16 / 9; overflow: hidden; border-color: rgba(255,255,255,.07); border-radius: 14px; }
+.youtube-player-shell > div, .youtube-player-shell iframe { position: absolute; inset: 0; display: block; width: 100%; height: 100%; min-height: 200px; aspect-ratio: auto; border: 0; }
+.youtube-readout { margin: 7px 2px 0; color: #8c8f95; font-size: 11px; }
+/* Holder already has the real YouTube controls plus song identity above them.
+   Repeating Playing + time underneath only lengthens the singing surface. */
+.song-stage[data-playback-role="holder"] .youtube-readout { display: none; }
+.song-device-note { color: #85888f; }
+#youtube-note { max-width: 46ch; color: #7f8289; font-size: 11px; }
+.performance-stage { padding-top: clamp(24px, 4vh, 36px); }
+.performance-stage > .section-label { margin-bottom: 10px; }
 
-.live-shell {
-  padding-top: 18px;
-  padding-bottom: max(22px, env(safe-area-inset-bottom));
-}
+/* Room Mic presence is one continuous truth surface, not ten visible widgets.
+   The history still contains ten measured slices; the renderer joins their RMS
+   envelope around one center line so loudness reads as distance from center.
+   Five-band evidence stays in the data path for timbre, but is deliberately not
+   presented as musical pitch until a real F0 estimate exists. */
+.voice-input-evidence { width: 100vw; min-height: 60px; margin: 10px calc(50% - 50vw) 2px; display: flex; align-items: center; }
+.evidence-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.voice-input-meter { position: relative; width: 100%; max-width: none; height: 56px; overflow: hidden; border-radius: 0; -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 6%, #000 94%, transparent 100%); mask-image: linear-gradient(to right, transparent 0%, #000 6%, #000 94%, transparent 100%); }
+.voice-presence-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.voice-presence-baseline { fill: none; stroke: rgba(238,234,226,.14); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.voice-presence-wave { fill: rgba(238,234,226,.18); stroke: rgba(247,244,237,.68); stroke-width: 1.1; stroke-linejoin: round; filter: drop-shadow(0 0 6px rgba(240,237,229,.06)); opacity: .96; transition: opacity 100ms linear; }
+.voice-input-meter[data-active="false"] .voice-presence-wave { opacity: 0; }
+.voice-copy { min-height: 0; }
+.voice-copy strong { max-width: 22ch; font-size: clamp(24px, 6.3vw, 32px); line-height: 1.04; letter-spacing: -.035em; font-weight: 640; }
+.voice-copy span { margin-top: 5px; }
+.mic-actions { min-height: 38px; margin-top: 10px; }
 
-.room-header {
-  min-height: 38px;
-}
+/* The live task has one stable reading order: state -> sound -> Mic action ->
+   recording -> Mic adjustment -> previous Take. live-ia.css loads later for IA
+   concerns, so these explicit order declarations are the composition authority. */
+.performance-stage > .take-strip { order: 5 !important; }
+.performance-stage > .mic-live-control { order: 6 !important; }
+.performance-stage > #last-take,
+.performance-stage > .recent-take { order: 7 !important; }
 
-.room-mark {
-  font-size: 15px;
-  letter-spacing: -.04em;
-}
-
-.song-stage {
-  padding-top: clamp(18px, 3vh, 28px);
-}
-
-/* The playback holder keeps the real YouTube surface because the iframe owns
-   the actual transport controls. The shell is the layout authority: the YT
-   iframe fills exactly the box we expose on Live instead of keeping its API
-   bootstrap height and getting clipped by overflow on narrow phones. */
-.youtube-player-shell {
-  position: relative;
-  width: 100%;
-  margin-left: 0;
-  min-height: 200px;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  border-color: rgba(255, 255, 255, .07);
-  border-radius: 14px;
-}
-
-.youtube-player-shell > div,
-.youtube-player-shell iframe {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-height: 200px;
-  aspect-ratio: auto;
-  border: 0;
-}
-
-.youtube-readout {
-  margin: 7px 2px 0;
-  color: #8c8f95;
-  font-size: 11px;
-}
-
-/* Secondary song context must survive normal phone brightness without
-   competing with the media field itself. */
-.song-device-note {
-  color: #85888f;
-}
-
-#youtube-note {
-  max-width: 46ch;
-  color: #7f8289;
-  font-size: 11px;
-}
-
-/* Performance is one stage: room Mic evidence, ownership, and recording all
-   belong to the same task instead of reading as separate product sections. */
-.performance-stage {
-  padding-top: clamp(28px, 4.5vh, 44px);
-}
-
-.performance-stage > .section-label {
-  margin-bottom: 10px;
-}
-
-/* The Mic ribbon is truthful local evidence, not a decorative equalizer.
-   Horizontal position is time: old evidence leaves on the left while the
-   newest ~40 ms slice enters on the right. Each slice contains five broad
-   frequency bands, low at the bottom and high at the top. RMS still owns the
-   overall strength, so frequency colour never masquerades as extra loudness. */
-.voice-input-evidence {
-  min-height: 54px;
-  margin: 0 0 18px;
-  display: flex;
-  align-items: center;
-}
-
-.evidence-heading {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.voice-input-meter {
-  --input-level: 0%;
-  width: 176px;
-  height: 50px;
-  display: grid;
-  grid-template-columns: repeat(10, 14px);
-  align-items: stretch;
-  gap: 4px;
-  overflow: visible;
-  border-radius: 0;
-  background: transparent;
-}
-
-.voice-presence-slice {
-  min-width: 0;
-  height: 50px;
-  display: flex;
-  flex-direction: column-reverse;
-  justify-content: center;
-  gap: 3px;
-  opacity: .36;
-}
-
-.voice-presence-band {
-  width: 14px;
-  height: 6px;
-  flex: 0 0 6px;
-  border-radius: 999px;
-  background: #d8d6d1;
-  opacity: .055;
-  transform: scaleX(.48);
-  transform-origin: center;
-  transition:
-    opacity 110ms linear,
-    transform 110ms cubic-bezier(.2, .75, .25, 1);
-}
-
-.voice-copy {
-  min-height: 0;
-}
-
-.voice-copy strong {
-  max-width: 18ch;
-  font-size: clamp(30px, 8vw, 42px);
-  line-height: .98;
-  letter-spacing: -.045em;
-  font-weight: 640;
-}
-
-.mic-actions {
-  min-height: 38px;
-  margin-top: 18px;
-}
-
-/* Recording is an action inside the performance stage. It must not read as a
-   second module separated by its own card or divider. */
-.take-strip {
-  margin-top: 14px;
-  padding-top: 0;
-  border-top: 0;
-  text-align: left;
-}
-
-.take-actions {
-  min-height: 34px;
-  justify-content: flex-start;
-}
-
-#start-recording:not(:disabled)::before,
-#stop-recording:not(:disabled)::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 8px;
-  border-radius: 999px;
-  background: currentColor;
-  vertical-align: 1px;
-  opacity: .72;
-}
-
-.take-strip .microcopy {
-  min-height: 15px;
-  text-align: left;
-}
-
-/* The only persistent control below the performance is this phone's copy of
-   the room mix. Keep the transport engineering out of the label: the user is
-   deciding only whether/how loudly this device plays Room sound. */
-.live-actions {
-  margin-top: 26px;
-  padding-top: 14px;
-}
-
-.local-sound-control {
-  display: grid;
-  gap: 7px;
-}
-
-.local-sound-control .adjust-group-heading {
-  align-items: center;
-}
-
-.local-sound-control .adjust-group-heading .section-label {
-  font-size: 13px;
-  font-weight: 620;
-  letter-spacing: -.02em;
-}
-
-.local-sound-control .adjust-group-heading > span:not(.section-label) {
-  margin-left: auto;
-  color: #777a82;
-  font-size: 10px;
-}
-
-#listen-toggle {
-  min-height: 44px;
-  padding: 0 4px 0 10px;
-  color: #c8c9cc;
-  font-size: 12px;
-}
-
-.local-sound-control .adjust-control {
-  gap: 4px;
-}
-
-.local-sound-control .adjust-row-heading {
-  min-height: 14px;
-  justify-content: flex-end;
-}
-
-.local-sound-control .adjust-row-heading strong {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-#listen-gain-value {
-  color: #aeb0b5;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.local-sound-control #listen-adjust-state {
-  min-height: 14px;
-}
-
-@media (max-width: 420px) {
-  .song-stage { padding-top: 16px; }
-  .performance-stage { padding-top: 26px; }
-}
-
-@media (max-height: 760px) {
-  .live-shell { padding-top: 14px; }
-  .song-stage { padding-top: 12px; }
-  .performance-stage { padding-top: 22px; }
-  .voice-input-evidence { margin-bottom: 14px; }
-  .mic-actions { margin-top: 14px; }
-  .take-strip { margin-top: 12px; }
-  .live-actions { margin-top: 22px; padding-top: 12px; }
-}
+.take-strip { margin-top: 8px; padding-top: 0; border-top: 0; text-align: left; }
+.take-actions { min-height: 40px; justify-content: flex-start; }
+#start-recording:not(:disabled)::before { content:""; display:inline-block; width:6px; height:6px; margin-right:8px; border-radius:999px; background:#d8a5a1; vertical-align:1px; opacity:.9; }
+.take-strip .microcopy { min-height: 14px; text-align: left; }
+.take-strip[data-take-state="recording"] { display:grid; grid-template-columns:auto auto; justify-content:start; align-items:center; column-gap:14px; }
+.take-strip[data-take-state="recording"] .take-actions { grid-column:2; grid-row:1; min-height:44px; }
+.take-strip[data-take-state="recording"] #recording-status { grid-column:1; grid-row:1; margin:0; }
+.performance-stage:has(.take-strip[data-take-state="recording"]) > .recent-take,
+.performance-stage:has(.take-strip[data-take-state="finalizing"]) > .recent-take { display:none; }
+.performance-stage > #last-take,
+.performance-stage > .recent-take { margin-top: 8px; }
+/* Previous Take is a review row, not a tab or file-manager underline. */
+.performance-stage .take-link { min-height: 44px; margin-top: 0; border-bottom: 0; display: inline-flex; align-items: center; }
+body[data-self-mic="live"] .mic-live-control { margin-top: 8px; }
+.live-actions { margin-top:22px; padding-top:14px; }
+.local-sound-control { display:grid; gap:7px; }
+.local-sound-control .adjust-group-heading { align-items:center; }
+.local-sound-control .adjust-group-heading .section-label { font-size:13px; font-weight:620; letter-spacing:-.02em; }
+.local-sound-control .adjust-group-heading > span:not(.section-label) { margin-left:auto; color:#777a82; font-size:10px; }
+#listen-toggle { min-height:44px; padding:0 4px 0 10px; color:#c8c9cc; font-size:12px; }
+.local-sound-control .adjust-control { gap:4px; }
+body[data-listen="mic-muted"] .local-sound-control .adjust-control, body[data-listen="playback-muted"] .local-sound-control .adjust-control, body[data-listen="review-muted"] .local-sound-control .adjust-control { display:none; }
+.local-sound-control .adjust-row-heading { min-height:14px; justify-content:flex-end; }
+.local-sound-control .adjust-row-heading strong { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; }
+#listen-gain-value { color:#aeb0b5; font-size:11px; font-variant-numeric:tabular-nums; }
+.local-sound-control #listen-adjust-state { min-height:14px; }
+body[data-listen="muted"] .local-sound-control #listen-adjust-state, body[data-listen="mic-muted"] .local-sound-control #listen-adjust-state, body[data-listen="playback-muted"] .local-sound-control #listen-adjust-state, body[data-listen="review-muted"] .local-sound-control #listen-adjust-state { display:block; }
+@media (max-width:420px) { .song-stage{padding-top:16px;} .performance-stage{padding-top:22px;} .voice-input-meter{width:100%;} .youtube-form{grid-template-columns:minmax(0,1fr) auto;align-items:center;} .youtube-form button{justify-self:auto;} }
+@media (max-height:760px) { .live-shell{padding-top:14px;} .song-stage{padding-top:12px;} .performance-stage{padding-top:18px;} .voice-input-evidence{margin-top:8px;} .mic-actions{margin-top:8px;} .take-strip{margin-top:6px;} .live-actions{margin-top:18px;padding-top:12px;} }

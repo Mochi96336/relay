@@ -143,13 +143,21 @@ if (
     });
     lastRoom = room;
 
+    const handoffPreservesEditing = Boolean(
+      editing
+      && editingVideoId === videoId
+      && nextRole === 'preparing'
+      && room.handoffState
+      && room.handoffState !== 'idle'
+    );
+
     if (nextRole === 'empty' && !videoId && canChange) {
       editing = true;
       editingVideoId = null;
     } else if (editing && editingVideoId !== videoId) {
       editing = false;
       editingVideoId = null;
-    } else if (!canChange) {
+    } else if (!canChange && !handoffPreservesEditing) {
       editing = false;
       editingVideoId = null;
     }

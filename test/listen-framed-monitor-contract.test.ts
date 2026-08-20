@@ -35,6 +35,11 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
   assert.match(messageSection, /monitorPcmReceiver\.receive\(event\.data\)/);
   assert.match(messageSection, /if \(received\.action !== 'accept'\) return/,
     'stale or malformed negotiated packets must never reach playback');
+  assert.match(
+    messageSection,
+    /if \(finishAudioInterruptionEvidence\(\)\) \{[\s\S]*restartMonitorAtLiveEdge\(\);[\s\S]*return;/,
+    'a recovered PCM frame must settle interruption evidence before it can reach the AudioWorklet',
+  );
   assert.match(messageSection, /if \(received\.reset\) playbackNode\.port\.postMessage\(\{ type: 'reset' \}\)/,
     'a forward gap or generation boundary must discard queued stale audio');
   assert.match(messageSection, /int16ToFloat32\(received\.frame\.pcm\)/,
@@ -42,19 +47,29 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
   assert.doesNotMatch(messageSection, /int16ToFloat32\(event\.data\)/,
     'framed bytes must never fall back to raw PCM');
 
+  const recoveryIndex = messageSection.indexOf('if (finishAudioInterruptionEvidence())');
   const resetIndex = messageSection.indexOf("if (received.reset) playbackNode.port.postMessage({ type: 'reset' });");
   const pcmIndex = messageSection.indexOf('int16ToFloat32(received.frame.pcm)');
   const pushIndex = messageSection.indexOf('playbackNode.port.postMessage(samples.buffer');
-  assert.ok(resetIndex >= 0 && pcmIndex > resetIndex && pushIndex > pcmIndex,
-    'catch-up must clear the stale queue before the newest positioned audio is converted and pushed');
+  assert.ok(
+    recoveryIndex >= 0 && resetIndex > recoveryIndex && pcmIndex > resetIndex && pushIndex > pcmIndex,
+    'interruption evidence and catch-up must settle before the recovered frame is converted and pushed',
+  );
 });
 
 test('transport boundaries reset both positioned continuity and the AudioWorklet queue', async () => {
   const source = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
+  const resetSection = section(source, 'function resetPlaybackTemporalState()', 'function abandonTransportConnection()');
+  const abandonSection = section(source, 'function abandonTransportConnection()', 'function closeTransport()');
   const closeSection = section(source, 'function closeTransport()', 'function scheduleReconnect()');
   const connectSection = section(source, 'async function connect()', '/**\n   * Requests a resume');
 
-  assert.match(closeSection, /monitorPcmReceiver\.reset\(\)[\s\S]*type: 'reset'/);
-  assert.match(connectSection, /monitorPcmReceiver\.reset\(\)[\s\S]*type: 'reset'[\s\S]*sendParticipantAuthentication\(next\)/,
+  assert.match(resetSection, /monitorPcmReceiver\.reset\(\)[\s\S]*type: 'reset'/,
+    'one helper must clear positioned continuity and queued worklet audio together');
+  assert.match(abandonSection, /transportEpoch \+= 1;[\s\S]*resetPlaybackTemporalState\(\)/,
+    'abandoning a transport connection must invalidate its epoch and temporal state');
+  assert.match(closeSection, /transportEnabled = false;[\s\S]*abandonTransportConnection\(\)/,
+    'an explicit transport close must revoke transport intent before abandoning the connection');
+  assert.match(connectSection, /resetPlaybackTemporalState\(\)[\s\S]*sendParticipantAuthentication\(next\)/,
     'a reconnect may join mid-generation and therefore needs a fresh continuity anchor before registration');
 });

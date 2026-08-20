@@ -1,5 +1,12 @@
-import { shouldRequestAudioResume } from './audio-context-recovery.js';
+import {
+  createAudioInterruptionTracker,
+  shouldRequestAudioResume,
+} from './audio-context-recovery.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import {
+  claimMicrophoneAudio,
+  claimPlaybackAudio,
+} from './audio-session-policy.js';
 import {
   MONITOR_PCM_PACKET_VERSION,
   createMonitorPcmReceiver,
@@ -18,6 +25,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
   const monitorPcmReceiver = createMonitorPcmReceiver();
+  const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
 
   let socket = null;
   let pendingSocket = null;
@@ -28,10 +36,12 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let gainNode = null;
   let audioSetupPromise = null;
   let audioUnlockArmed = false;
-  // How many gestures have already asked this graph to start. The first is the
-  // one that builds it; a later one finding it still stopped means asking is
-  // not working and the context has to be replaced.
-  let audioResumeGestures = 0;
+  // This is a consecutive recovery counter, not a page-lifetime gesture count.
+  // A context that has run successfully gets a fresh retry budget after every
+  // interruption instead of being destroyed on the first post-background tap.
+  let stalledResumeGestures = 0;
+  let audioEverRunning = false;
+  let liveEdgeRecoveryRequired = false;
   let transportEnabled = false;
   let userMuted = false;
   let micForcedMuted = false;
@@ -100,13 +110,16 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       || takeReviewForcedMuted;
   }
 
-  function audioReady() {
-    return Boolean(
-      audioContext
-      && playbackNode
-      && gainNode
-      && audioContext.state === 'running'
-    );
+  function audioGraphReady() {
+    return Boolean(audioContext && playbackNode && gainNode);
+  }
+
+  function audioRendering() {
+    return audioGraphReady() && audioContext.state === 'running';
+  }
+
+  function monitorTransportWanted() {
+    return !effectiveMuted() && audioGraphReady() && audioEverRunning;
   }
 
   function forcedMuteReason() {
@@ -126,7 +139,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
           ? 'review-muted'
           : userMuted
             ? 'muted'
-            : audioReady()
+            : audioRendering()
               ? 'audible'
               : 'ready';
     return {
@@ -136,7 +149,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       forcedReason,
       userMuted,
       volumePercent: volumePercent(),
-      audioReady: audioReady(),
+      audioReady: audioRendering(),
       transportEnabled,
     };
   }
@@ -164,8 +177,19 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     reconnectTimer = null;
   }
 
-  function closeTransport() {
-    transportEnabled = false;
+  function finishAudioInterruptionEvidence() {
+    if (!audioEverRunning) return false;
+    const recovery = audioInterruption.finish();
+    if (recovery.requiresLiveEdge) liveEdgeRecoveryRequired = true;
+    return recovery.requiresLiveEdge;
+  }
+
+  function resetPlaybackTemporalState() {
+    monitorPcmReceiver.reset();
+    playbackNode?.port.postMessage({ type: 'reset' });
+  }
+
+  function abandonTransportConnection() {
     transportEpoch += 1;
     clearReconnect();
     const opening = pendingSocket;
@@ -178,16 +202,22 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     if (closing) {
       try { closing.close(); } catch {}
     }
-    monitorPcmReceiver.reset();
-    playbackNode?.port.postMessage({ type: 'reset' });
+    resetPlaybackTemporalState();
+  }
+
+  function closeTransport() {
+    transportEnabled = false;
+    liveEdgeRecoveryRequired = false;
+    audioInterruption.reset();
+    abandonTransportConnection();
   }
 
   function scheduleReconnect() {
-    if (!transportEnabled || effectiveMuted() || !audioReady() || reconnectTimer) return;
+    if (!transportEnabled || !monitorTransportWanted() || reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect().catch(() => {
-        if (!transportEnabled || effectiveMuted() || !audioReady()) return;
+        if (!transportEnabled || !monitorTransportWanted()) return;
         render('reconnecting');
         scheduleReconnect();
       });
@@ -210,9 +240,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   async function connect() {
     if (
       !transportEnabled
-      || effectiveMuted()
-      || !audioReady()
+      || !monitorTransportWanted()
       || pendingSocket
+      || socket
     ) return;
     const connectEpoch = transportEpoch;
     const next = new WebSocket(wsUrl());
@@ -231,7 +261,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       if (pendingSocket === next) pendingSocket = null;
     }
 
-    if (connectEpoch !== transportEpoch || !transportEnabled || effectiveMuted() || !audioReady()) {
+    if (connectEpoch !== transportEpoch || !transportEnabled || !monitorTransportWanted()) {
       next.close();
       return;
     }
@@ -241,8 +271,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     if (previous && previous !== next) {
       try { previous.close(); } catch {}
     }
-    monitorPcmReceiver.reset();
-    playbackNode.port.postMessage({ type: 'reset' });
+    resetPlaybackTemporalState();
     sendParticipantAuthentication(next);
     next.send(JSON.stringify({
       type: 'register',
@@ -256,12 +285,33 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
         try { handleMessage(JSON.parse(event.data)); } catch {}
         return;
       }
-      if (!(event.data instanceof ArrayBuffer) || !audioReady()) return;
+      if (!(event.data instanceof ArrayBuffer) || !audioGraphReady()) return;
 
       const received = monitorPcmReceiver.receive(event.data);
       if (received.action !== 'accept') return;
-      if (received.reset) playbackNode.port.postMessage({ type: 'reset' });
 
+      // Keep framing continuity if Safari leaves this page running in the
+      // background, but never build a playback backlog while WebAudio is not
+      // rendering. A dropped accepted frame is concrete evidence that playback
+      // fell behind; a brief resume with no dropped frame can continue in place.
+      if (!audioRendering()) {
+        if (audioEverRunning) {
+          audioInterruption.begin();
+          audioInterruption.noteDroppedPlayback();
+        }
+        return;
+      }
+
+      // WebKit can expose `state === running` before delivering statechange.
+      // Finish interruption evidence before any recovered PCM reaches the
+      // worklet, otherwise one stale frame can slip through that event-order gap.
+      if (finishAudioInterruptionEvidence()) {
+        restartMonitorAtLiveEdge();
+        return;
+      }
+      if (liveEdgeRecoveryRequired) return;
+
+      if (received.reset) playbackNode.port.postMessage({ type: 'reset' });
       const pcm = int16ToFloat32(received.frame.pcm);
       const samples = linearResample(pcm, sourceSampleRate, audioContext.sampleRate);
       playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
@@ -270,13 +320,37 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     next.addEventListener('close', () => {
       if (socket !== next || connectEpoch !== transportEpoch) return;
       socket = null;
-      if (!transportEnabled || effectiveMuted() || !audioReady()) return;
+      if (!transportEnabled || !monitorTransportWanted()) return;
       render('reconnecting');
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
       try { next.close(); } catch {}
     });
+  }
+
+  function ensureTransport(phase = 'connecting') {
+    if (!monitorTransportWanted()) return;
+    transportEnabled = true;
+    if (socket || pendingSocket || reconnectTimer) {
+      render(phase);
+      return;
+    }
+    render(phase);
+    connect().catch(() => {
+      if (!transportEnabled || !monitorTransportWanted()) return;
+      render('reconnecting');
+      scheduleReconnect();
+    });
+  }
+
+  function restartMonitorAtLiveEdge() {
+    liveEdgeRecoveryRequired = false;
+    audioInterruption.reset();
+    abandonTransportConnection();
+    if (!monitorTransportWanted()) return;
+    transportEnabled = true;
+    ensureTransport('reconnecting');
   }
 
   /**
@@ -302,7 +376,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   function armAudioUnlock() {
-    if (audioUnlockArmed || effectiveMuted() || audioReady()) return;
+    if (audioUnlockArmed || effectiveMuted() || audioRendering()) return;
     audioUnlockArmed = true;
     window.addEventListener('pointerdown', activateFromGesture, { capture: true });
     window.addEventListener('keydown', activateFromGesture, { capture: true });
@@ -318,7 +392,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   function recoverAudioGraph() {
     if (effectiveMuted() || !audioContext) return;
     resumeAudioGraph();
-    reconcile();
+    reconcile('resumed');
   }
 
   function publishListenHealth(health) {
@@ -331,23 +405,31 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   async function ensureAudioGraph() {
-    if (audioContext && playbackNode && gainNode) {
+    if (audioGraphReady()) {
       resumeAudioGraph();
       return;
     }
     if (audioSetupPromise) return audioSetupPromise;
 
     audioSetupPromise = (async () => {
+      // Tell iOS this document intends durable media playback before creating
+      // the WebAudio graph. Unsupported browsers simply ignore the policy.
+      claimPlaybackAudio(true);
       const context = new AudioContext({ latencyHint: 'interactive' });
       audioContext = context;
       context.addEventListener('statechange', () => {
         if (audioContext !== context) return;
         if (context.state === 'running') {
+          if (audioEverRunning) finishAudioInterruptionEvidence();
+          audioEverRunning = true;
+          stalledResumeGestures = 0;
           disarmAudioUnlock();
         } else if (!effectiveMuted()) {
+          if (audioEverRunning) audioInterruption.begin();
+          startResume(context);
           armAudioUnlock();
         }
-        reconcile();
+        reconcile(context.state === 'running' ? 'resumed' : 'interrupted');
       });
       // Consume the user's first interaction immediately. Fetching the worklet
       // before resume can lose transient autoplay permission on mobile.
@@ -358,10 +440,6 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       // `audioSetupPromise` is only cleared in a `finally` that also never
       // ran, every later press awaited the same dead promise. The button
       // stopped responding for the rest of the session.
-      //
-      // A resume request is not proof that playback started. If the context
-      // remains suspended or interrupted, reconcile() keeps the transport
-      // closed and the gesture gate armed until browser audio reports running.
       startResume(context);
       await context.audioWorklet.addModule('/playback-worklet.js');
 
@@ -376,7 +454,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
         maxQueueMs: MAX_QUEUE_MS,
       });
       node.port.onmessage = (event) => {
-        if (!transportEnabled || effectiveMuted() || !audioReady()) return;
+        if (!transportEnabled || effectiveMuted() || !audioRendering()) return;
         if (event.data?.type === 'health') {
           publishListenHealth(event.data);
           return;
@@ -399,6 +477,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       audioContext = null;
       playbackNode = null;
       gainNode = null;
+      audioEverRunning = false;
+      liveEdgeRecoveryRequired = false;
+      audioInterruption.reset();
+      claimPlaybackAudio(false);
       try { await failed?.close(); } catch {}
       throw error;
     } finally {
@@ -414,31 +496,32 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       render(phase);
       return;
     }
-    if (!audioContext || !playbackNode || !gainNode) {
+    if (!audioGraphReady()) {
       armAudioUnlock();
       render(phase || 'first-interaction');
       return;
     }
-    if (audioContext.state !== 'running') {
-      closeTransport();
+    if (!audioRendering()) {
+      startResume(audioContext);
       armAudioUnlock();
+      if (audioEverRunning) {
+        audioInterruption.begin();
+        ensureTransport('interrupted');
+        return;
+      }
       render('first-interaction');
       return;
     }
 
+    if (audioEverRunning) finishAudioInterruptionEvidence();
+    audioEverRunning = true;
+    stalledResumeGestures = 0;
     disarmAudioUnlock();
-    if (transportEnabled) {
-      render(phase);
+    if (liveEdgeRecoveryRequired) {
+      restartMonitorAtLiveEdge();
       return;
     }
-
-    transportEnabled = true;
-    render(phase || 'connecting');
-    connect().catch(() => {
-      if (!transportEnabled || effectiveMuted() || !audioReady()) return;
-      render('reconnecting');
-      scheduleReconnect();
-    });
+    ensureTransport(phase || 'connecting');
   }
 
   function forceMicMute(phase = 'mic-active') {
@@ -477,6 +560,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     const restoreEpoch = micMuteEpoch;
     setTimeout(() => {
       if (micMuteEpoch !== restoreEpoch) return;
+      claimMicrophoneAudio(false);
       restoreAfterMic(phase);
     }, 0);
   }
@@ -543,15 +627,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
    *
    * Safari can leave an AudioContext permanently unable to run: `resume()` is
    * accepted inside a real gesture, its promise never settles, and `state`
-   * never leaves `suspended`. Observed on a phone as Listen reporting no mute
-   * of any kind while staying silent - `audioReady()` is false, so reconcile()
-   * never opens the monitor transport, and every further tap resumes the same
-   * dead context.
-   *
-   * Deliberately synchronous, and deliberately not awaiting `close()`: the
-   * replacement has to be constructed inside the same gesture task to have
-   * permission to start at all, and the stuck context is in no state to be
-   * waited on.
+   * never leaves `suspended`. A successful running state resets the retry
+   * budget, so a later OS interruption gets one real resume gesture before the
+   * graph is replaced.
    */
   function discardStuckAudioGraph() {
     closeTransport();
@@ -560,26 +638,30 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     playbackNode = null;
     gainNode = null;
     audioSetupPromise = null;
+    audioEverRunning = false;
+    liveEdgeRecoveryRequired = false;
+    audioInterruption.reset();
+    stalledResumeGestures = 0;
     if (stuck) {
       try { void stuck.close(); } catch {}
     }
   }
 
   async function activateFromGesture() {
-    // A gesture primes the Listen graph and, while the browser still keeps the
-    // context suspended, remains a retry opportunity. Only a real running
-    // AudioContext lets reconcile() open the monitor transport.
-    //
-    // The first gesture builds the graph and asks it to start; a later one that
-    // still finds it stopped is evidence that asking is not going to work, and
-    // the replacement must be built before this handler yields.
-    if (audioResumeGestures > 0 && audioContext && !audioReady() && !effectiveMuted()) {
-      discardStuckAudioGraph();
+    if (audioContext && !audioRendering() && !effectiveMuted()) {
+      if (stalledResumeGestures >= 1) {
+        discardStuckAudioGraph();
+      } else {
+        stalledResumeGestures = 1;
+        resumeAudioGraph();
+      }
     }
-    audioResumeGestures += 1;
     try {
       await ensureAudioGraph();
       reconcile();
+      if (audioContext && !audioRendering() && !effectiveMuted()) {
+        stalledResumeGestures = Math.max(1, stalledResumeGestures);
+      }
     } catch (error) {
       console.error(error);
       armAudioUnlock();
@@ -590,12 +672,14 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   toggle.addEventListener('click', async () => {
     if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted || takeReviewForcedMuted) return;
     userMuted = !userMuted;
+    claimPlaybackAudio(!userMuted);
     if (!userMuted) {
       try {
         await ensureAudioGraph();
       } catch (error) {
         console.error(error);
         userMuted = true;
+        claimPlaybackAudio(false);
         render('start-failed');
         return;
       }
@@ -618,16 +702,32 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   // Product semantics are negative: room audio is wanted by default, while
   // local source roles temporarily overlay forced mute reasons. Do not rewrite
   // the user's own mute preference when Mic or Song ownership comes and goes.
+  // The capture-phase AudioSession claim happens before app.js starts
+  // getUserMedia(), so iOS enters play-and-record before opening the input.
   publisherButton.addEventListener('click', () => {
     if (micPrimaryMode !== 'takeover') {
+      claimMicrophoneAudio(true);
       forceMicMute('mic-starting');
     }
   }, { capture: true });
-  takeoverButton.addEventListener('click', () => forceMicMute('handoff-starting'), { capture: true });
-  window.addEventListener('relay-request-microphone', () => forceMicMute('handoff-starting'));
-  window.addEventListener('relay-microphone-started', () => forceMicMute('mic-owned'));
-  window.addEventListener('relay-microphone-ended', () => restoreAfterMicBoundary());
-  window.addEventListener('relay-microphone-start-failed', () => restoreAfterMicBoundary('mic-failed-resume'));
+  takeoverButton.addEventListener('click', () => {
+    claimMicrophoneAudio(true);
+    forceMicMute('handoff-starting');
+  }, { capture: true });
+  window.addEventListener('relay-request-microphone', () => {
+    claimMicrophoneAudio(true);
+    forceMicMute('handoff-starting');
+  }, { capture: true });
+  window.addEventListener('relay-microphone-started', () => {
+    claimMicrophoneAudio(true);
+    forceMicMute('mic-owned');
+  });
+  window.addEventListener('relay-microphone-ended', () => {
+    restoreAfterMicBoundary();
+  });
+  window.addEventListener('relay-microphone-start-failed', () => {
+    restoreAfterMicBoundary('mic-failed-resume');
+  });
 
   function applyRoomSessionStatus(status) {
     const participantId = typeof window.relayParticipantId === 'string'
@@ -668,6 +768,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   window.addEventListener('beforeunload', () => {
     disarmAudioUnlock();
     closeTransport();
+    claimPlaybackAudio(false);
+    claimMicrophoneAudio(false);
     if (audioContext) {
       try { audioContext.close(); } catch {}
     }

@@ -32,6 +32,7 @@ test('user mute, recovery, and forced pause reasons are product presentation dat
     '房間聲音已靜音',
     '無法啟動房間聲音，再點一下重試',
     '房間聲音重新連線中…',
+    '正在恢復房間聲音…',
     '房間聲音緩衝中…',
     '唱歌時暫停',
     '正在接手 Mic…',
@@ -57,4 +58,20 @@ test('Room sound keeps stable reasons separate from aria-live action feedback', 
   assert.match(ui, /stateNote\.textContent = stableNote/);
   assert.match(ui, /actionNote\.textContent = transientNote/);
   assert.match(html, /id="listen-note"[^>]*aria-live="polite"/);
+});
+
+
+test('interrupted Room sound is recovery, not first-time enablement', async () => {
+  const {
+    roomSoundActionNote,
+    roomSoundControlPresentation,
+    roomSoundPresentation,
+  } = await import(new URL('../public/room-sound-presentation.js', import.meta.url).href);
+  const detail = { state: 'ready', phase: 'interrupted', muted: false, forcedReason: null };
+
+  assert.equal(roomSoundControlPresentation(detail, false).compact, 'Recovering');
+  assert.equal(roomSoundControlPresentation(detail, true).compact, '恢復中');
+  assert.equal(roomSoundPresentation(detail, false).note, 'Recovering room sound…');
+  assert.equal(roomSoundActionNote(detail, true), '正在恢復房間聲音…');
+  assert.notEqual(roomSoundPresentation(detail, false).note, 'Tap once to enable room sound.');
 });

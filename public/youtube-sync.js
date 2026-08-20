@@ -3,15 +3,6 @@ await window.relayIdentityReady;
 import { resolvePlaybackRole } from './song-role.js';
 import { createPlaybackHandoffReconnectRecovery } from './playback-handoff-reconnect-recovery.js';
 
-const STATE_NAMES = new Map([
-  [-1, 'unstarted'],
-  [0, 'ended'],
-  [1, 'playing'],
-  [2, 'paused'],
-  [3, 'buffering'],
-  [5, 'cued'],
-]);
-
 let socket = null;
 let reconnectTimer = null;
 let rttTimer = null;
@@ -109,25 +100,15 @@ function networkRttMs() {
   return recentRttMs.length > 0 ? Math.min(...recentRttMs) : Number.POSITIVE_INFINITY;
 }
 
-const panel = document.querySelector('.song-stage');
-const localReadout = panel?.querySelector('.youtube-readout');
-
-const serverReadout = document.createElement('div');
-serverReadout.className = 'youtube-readout';
-serverReadout.innerHTML = '<strong id="server-timeline-state">Server timeline · connecting…</strong><span id="server-timeline-values">YT -- · Server --</span>';
-
-const serverNote = document.createElement('p');
-serverNote.id = 'server-timeline-note';
-serverNote.className = 'hint';
-serverNote.textContent = 'Server media-clock tracking is starting.';
-
-if (localReadout) {
-  localReadout.insertAdjacentElement('afterend', serverReadout);
-  serverReadout.insertAdjacentElement('afterend', serverNote);
+function publishPlaybackDiagnostics(kind, message = {}) {
+  const detail = {
+    kind,
+    ...message,
+    observedAt: performance.now(),
+  };
+  window.relayPlaybackDiagnostics = detail;
+  window.dispatchEvent(new CustomEvent('relay:playback-diagnostics', { detail }));
 }
-
-const serverState = document.querySelector('#server-timeline-state');
-const serverValues = document.querySelector('#server-timeline-values');
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -149,11 +130,6 @@ function optionalNumber(value) {
   if (value === null || value === undefined) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
-}
-
-function signed(value, digits = 0) {
-  if (!Number.isFinite(value)) return '--';
-  return `${value > 0 ? '+' : ''}${value.toFixed(digits)}`;
 }
 
 function send(payload) {
@@ -259,68 +235,6 @@ function handleRttPong(message) {
   while (recentRttMs.length > RTT_WINDOW) recentRttMs.shift();
 }
 
-const REJECTION_NOTES = {
-  'leader-busy': 'Another tab or device already drives this room’s song. Close it, or take the microphone here.',
-  'mic-owner-required': 'Whoever holds the microphone controls the room song.',
-  'not-publisher': 'This page is not the room’s microphone device, so its player does not drive the song.',
-  'invalid-identity': 'This page could not identify its player to Relay. Reload it.',
-  'invalid-telemetry': 'Relay could not read this player’s position.',
-  // Room-command gate refusals.
-  'command-required': 'This player moved the song without a room command, so Relay is ignoring it. Use the room controls.',
-  'command-target-mismatch': 'A room command is being applied by another player. This one is not driving the song right now.',
-  'command-mismatch': 'This player did not end up where the room command asked it to go.',
-};
-
-/**
- * Explains why this page's player is not driving the room timeline.
- *
- * Otherwise the readout sits on "waiting for YouTube" forever while the page
- * is in fact sending telemetry several times a second and having every packet
- * refused, which is indistinguishable from a dead connection.
- */
-function renderRejection(message) {
-  if (!serverState || !serverValues) return;
-  serverState.textContent = 'Server timeline · not driven by this page';
-  serverNote.textContent = REJECTION_NOTES[message.reason]
-    ?? `Relay refused this player's telemetry (${message.reason}).`;
-}
-
-function renderTimeline(message) {
-  if (!serverState || !serverValues) return;
-
-  if (!message.videoId) {
-    serverState.textContent = 'Server timeline · waiting for YouTube';
-    serverValues.textContent = 'YT -- · Server --';
-    serverNote.textContent = 'Load and play YouTube on the phone to establish the Server media timeline.';
-    return;
-  }
-
-  const state = STATE_NAMES.get(Number(message.state)) ?? `state ${message.state}`;
-  const connected = Boolean(message.connected);
-  const differenceMs = optionalNumber(message.differenceMs);
-  const drift = optionalNumber(message.driftMsPerMinute);
-  const jitter = optionalNumber(message.measurementJitterMs);
-  const rtt = optionalNumber(message.networkRttMs ?? message.clockRttMs);
-  const transport = optionalNumber(message.transportEstimateMs);
-  const age = optionalNumber(message.ageMs);
-  const youtubeTime = optionalNumber(message.youtubeTime);
-  const serverTime = optionalNumber(message.serverTime);
-  const reanchors = Number(message.reanchors) || 0;
-  const corrections = Number(message.corrections ?? message.hardResyncs) || 0;
-
-  serverState.textContent = `Server timeline · ${connected ? state : 'stale'} · ${message.lastReason ?? 'tracking'}`;
-  serverValues.textContent = youtubeTime !== null && serverTime !== null
-    ? `YT ${youtubeTime.toFixed(3)} s · Server ${serverTime.toFixed(3)} s · phase Δ ${signed(differenceMs)} ms`
-    : 'YT -- · Server --';
-
-  const driftText = drift !== null ? `${signed(drift, 1)} ms/min` : 'collecting';
-  const jitterText = jitter !== null ? `${jitter.toFixed(0)} ms jitter` : 'jitter --';
-  const rttText = rtt !== null ? `${rtt.toFixed(0)} ms RTT` : 'RTT…';
-  const transportText = transport !== null ? `one-way≈${transport.toFixed(0)} ms` : 'one-way --';
-  const ageText = age !== null ? `${age.toFixed(0)} ms old` : 'age --';
-  serverNote.textContent = `Drift ${driftText} · ${jitterText} · ${rttText} · ${transportText} · ${ageText} · reanchors ${reanchors} · corrections ${corrections}`;
-}
-
 function dispatchHandoff(type, message) {
   window.dispatchEvent(new CustomEvent(type, { detail: message }));
 }
@@ -369,7 +283,7 @@ function handleServerMessage(message) {
   }
 
   if (message.type === 'youtube-telemetry-rejected' || message.type === 'room-song-telemetry-rejected') {
-    renderRejection(message);
+    publishPlaybackDiagnostics('telemetry-rejected', message);
     return;
   }
 
@@ -379,7 +293,7 @@ function handleServerMessage(message) {
     // view so private handoff state and player events advance together.
     reconnectRecovery.noteTimeline(message, playbackIdentity);
     latestTimelineStatus = message;
-    renderTimeline(message);
+    publishPlaybackDiagnostics('timeline', message);
     dispatchPlaybackView();
     return;
   }
@@ -514,7 +428,7 @@ function connect() {
     socket = null;
     roomCommandRevisionReady = false;
     clearInterval(rttTimer);
-    if (serverState) serverState.textContent = 'Server timeline · disconnected';
+    publishPlaybackDiagnostics('disconnected');
     reconnectTimer = setTimeout(connect, 1_000);
   });
 

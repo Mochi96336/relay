@@ -1,6 +1,10 @@
-/* Live IA layer: normal performance surface first; secondary controls stay
-   reachable without remaining permanently visible. Domain state still comes
-   from the existing product/audio owners. */
+@import url('/people-ui.css');
+@import url('/room-sound-ui.css');
+@import url('/recording-ui.css');
+@import url('/take-history.css');
+
+/* Live IA layer: the performance surface stays primary. People, Mic and local
+   sound stay close to the singing task; System is the only secondary sheet. */
 
 .room-header-actions {
   display: flex;
@@ -44,9 +48,10 @@
 
 .more-popover {
   position: absolute;
+  z-index: 30;
   top: calc(100% + 8px);
   right: 0;
-  width: min(300px, calc(100vw - 32px));
+  width: min(310px, calc(100vw - 32px));
   padding: 8px 14px 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -95,8 +100,57 @@
   color: #fff;
 }
 
-/* Voice is not a navigation section. The state headline already answers the
-   useful question: who has Mic / am I live? */
+.more-action:disabled {
+  color: #666970;
+  cursor: default;
+}
+
+.more-action-note {
+  margin: -2px 0 6px;
+  color: #74777e;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.more-timing {
+  border-bottom: 1px solid #202227;
+}
+
+.more-timing > summary {
+  min-height: 44px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #aeb0b5;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.more-timing > summary::-webkit-details-marker {
+  display: none;
+}
+
+.more-timing > summary output {
+  color: #85888f;
+  font-variant-numeric: tabular-nums;
+}
+
+.more-timing-control {
+  display: grid;
+  gap: 5px;
+  padding: 0 0 12px;
+}
+
+.more-timing-control > span {
+  color: #696c73;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+/* Voice is not navigation. The state headline already answers who has the Mic
+   and whether this phone is live. */
 .performance-stage > .section-label {
   position: absolute;
   width: 1px;
@@ -116,82 +170,242 @@
 .performance-stage > .voice-input-evidence { order: 2; }
 .performance-stage > .mic-actions { order: 3; }
 .performance-stage > .takeover-row { order: 4; }
-.performance-stage > .take-strip { order: 5; }
+.performance-stage > .mic-live-control { order: 5; }
+.performance-stage > .take-strip { order: 6; }
 
 .voice-input-evidence {
   margin-top: 18px;
   margin-bottom: 0;
 }
 
-/* The persistent horizon now represents one local preference only. Adjust and
-   System move behind the header menu instead of pretending to be Live tasks. */
+/* Mic gain is part of singing, not an Adjust destination. It appears only when
+   this phone really owns a live Mic. The collapsed row answers the normal
+   question; opening it reveals the existing slider and recommendation logic. */
+.mic-live-control {
+  display: none;
+  margin-top: 18px;
+  border-top: 1px solid #202227;
+  border-bottom: 1px solid #202227;
+}
+
+body[data-self-mic="live"] .mic-live-control {
+  display: block;
+}
+
+.mic-live-control > summary {
+  min-height: 48px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #cfd0d3;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mic-live-control > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mic-live-control > summary span {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.mic-live-control > summary output {
+  color: #b6b8bd;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mic-live-control-body {
+  padding: 0 0 14px;
+}
+
+.mic-live-control .gain-control {
+  gap: 8px;
+}
+
+/* Local sound is a frequent Live control, not a second mixer. Keep its one
+   real slider and mute action directly reachable, but let the control read as
+   one quiet row plus one rail rather than a settings module. */
 .live-actions {
   display: block;
 }
 
-.listen-action {
+.local-sound-control {
   width: 100%;
-  min-height: 52px;
+  display: grid;
+  gap: 1px;
+}
+
+.local-sound-control .adjust-group-heading {
+  min-height: 44px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
 }
 
-.listen-copy {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.listen-copy strong {
+.local-sound-control .adjust-group-heading .section-label {
+  margin: 0;
   color: #c7c7ca;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
-.listen-action .action-note {
-  max-width: none;
+/* "Local only" is useful product semantics, but repeating it on every Live
+   frame makes the footer read like configuration. Keep the authority in the
+   DOM/i18n contract and let the placement itself communicate locality. */
+.local-sound-control .adjust-group-heading > span:nth-child(2) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.local-sound-control .adjust-control {
+  position: relative;
+  gap: 0;
+  padding-right: 0;
+}
+
+.local-sound-control .adjust-row-heading {
+  position: absolute;
+  right: 66px;
+  top: -39px;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.local-sound-control .adjust-row-heading strong {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.local-sound-control .adjust-row-heading output {
+  color: #aeb0b5;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.local-sound-control .adjust-range {
+  height: 24px;
+  margin-top: -2px;
 }
 
 #listen-toggle {
-  min-width: 72px;
+  min-width: 54px;
+  min-height: 44px;
+  padding: 0;
   justify-content: flex-end;
+  color: #c6c7ca;
   text-align: right;
 }
 
-/* Native details still own open/close state, but their old persistent summaries
-   are retired. Header menu buttons open these panels explicitly. */
-.adjust-panel,
-.system-panel {
-  margin-top: 0;
+/* Routine healthy copy should not occupy a permanent third row. It comes back
+   when local playback is actually muted, while concrete runtime notes remain
+   visible whenever listen.js has something actionable to say. */
+#listen-adjust-state {
+  display: none;
+  margin: 4px 0 0;
+  min-height: 14px;
+  color: #6f7279;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
-.adjust-panel > summary,
+body[data-listen="off"] #listen-adjust-state {
+  display: block;
+}
+
+#listen-note {
+  margin: 4px 0 0;
+  min-height: 14px;
+  color: #6f7279;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+#listen-note:empty {
+  display: none;
+}
+
+/* System is the only transient product sheet. Opening it freezes Live instead
+   of inserting a second hierarchy under the performance. On phones the sheet
+   is explicitly edge-to-edge; intrinsic content must never shrink it into a
+   narrow dialog. */
+body:has(.system-panel[open]) {
+  overflow: hidden;
+}
+
+.system-panel {
+  margin: 0;
+  border: 0;
+}
+
 .system-panel > summary {
   display: none;
 }
 
-.adjust-panel:not([open]),
 .system-panel:not([open]) {
   display: none;
 }
 
-.adjust-panel[open],
 .system-panel[open] {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
   display: block;
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid #202227;
+  margin: 0;
+  padding: max(24px, env(safe-area-inset-top)) 0 0;
+  border: 0;
+  background: rgba(3, 4, 6, .62);
+  overscroll-behavior: contain;
 }
 
-.adjust-heading {
-  flex-wrap: wrap;
+.system-panel[open] .system-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  max-width: none;
+  max-height: min(86dvh, 760px);
+  margin: 0;
+  padding: 18px 22px max(26px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #292b30;
+  border-bottom: 0;
+  border-radius: 22px 22px 0 0;
+  background: #0d0e10;
+  box-shadow: 0 -24px 72px rgba(0, 0, 0, .42);
+}
+
+.system-panel-heading {
+  position: sticky;
+  z-index: 2;
+  top: -1px;
+  min-height: 44px;
+  margin-bottom: 10px;
+  display: flex;
   align-items: center;
-}
-
-.adjust-heading > span {
-  flex: 0 0 100%;
+  justify-content: space-between;
+  gap: 16px;
+  background: #0d0e10;
 }
 
 .panel-done {
@@ -203,26 +417,69 @@
   padding-right: 0;
 }
 
-.system-panel-heading {
-  min-height: 44px;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
 .system-panel-heading strong {
   font-size: 15px;
   font-weight: 660;
-}
-
-.system-panel[open] .system-sheet {
-  margin-top: 0;
 }
 
 @media (max-width: 420px) {
   .room-header-actions { gap: 8px; }
   .more-popover { right: -4px; }
   .voice-input-evidence { margin-top: 14px; }
+
+  .system-panel[open] .system-sheet {
+    border-left: 0;
+    border-right: 0;
+  }
+}
+
+@media (min-width: 760px) {
+  .system-panel[open] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+  }
+
+  .system-panel[open] .system-sheet {
+    position: static;
+    width: min(100%, 720px);
+    max-width: 720px;
+    max-height: min(82dvh, 760px);
+    border-bottom: 1px solid #292b30;
+    border-radius: 22px;
+  }
+}
+
+/* P0 correctness: Presence/i18n owns the Mic action label. Legacy generated
+   English must never become a second presenter beside the real localized text. */
+#start-publisher {
+  font-size: 13px;
+}
+
+#start-publisher::after {
+  content: none;
+}
+
+/* A takeover confirmation replaces the original action; it does not stack a
+   second choice underneath the same state. */
+.performance-stage:has(#mic-takeover:not([hidden])) .mic-actions {
+  display: none;
+}
+
+/* youtube-sync still maintains engineering clock telemetry, but Live must not
+   render it. Technical diagnostics remain available through System. */
+.song-stage .youtube-readout:has(#server-timeline-state),
+.song-stage #server-timeline-note {
+  display: none;
+}
+
+/* Stable Room-sound mute reasons have one presenter (#listen-adjust-state).
+   Suppress the transport note in those states so the same condition is not
+   narrated twice. */
+body[data-listen="muted"] #listen-note,
+body[data-listen="mic-muted"] #listen-note,
+body[data-listen="playback-muted"] #listen-note,
+body[data-listen="review-muted"] #listen-note {
+  display: none;
 }

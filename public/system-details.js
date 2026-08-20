@@ -22,6 +22,16 @@ if (
   let diagnosticsReconnect = null;
   const snapshots = new Map();
 
+  function rememberPlaybackDiagnostics(detail) {
+    if (!detail || typeof detail !== 'object') return;
+    snapshots.set('playback-client', detail);
+    if (detail.kind === 'telemetry-rejected') {
+      snapshots.set('playback-client-last-rejection', detail);
+    }
+  }
+
+  rememberPlaybackDiagnostics(window.relayPlaybackDiagnostics);
+
   const issueTitleKeys = {
     'audio-unavailable': 'system.attention.audio-unavailable',
     'robot-audio-unavailable': 'system.attention.robot-audio-unavailable',
@@ -337,6 +347,8 @@ if (
     const timing = snapshots.get('timing-calibration-status');
     const take = snapshots.get('take-status');
     const timeline = snapshots.get('youtube-timeline-status');
+    const playbackClient = snapshots.get('playback-client');
+    const playbackClientLastRejection = snapshots.get('playback-client-last-rejection');
     const components = readiness?.components ?? {};
 
     text('diag-overview-health', product ? titleCase(product.health) : '—');
@@ -380,6 +392,8 @@ if (
       timing: timing ?? null,
       take: take ?? null,
       timeline: timeline ?? null,
+      playbackClient: playbackClient ?? null,
+      playbackClientLastRejection: playbackClientLastRejection ?? null,
     }, null, 2);
   }
 
@@ -424,6 +438,11 @@ if (
     latestProduct = event.detail;
     snapshots.set('product-status', event.detail);
     renderProductSystem();
+    renderDiagnostics();
+  });
+
+  window.addEventListener('relay:playback-diagnostics', (event) => {
+    rememberPlaybackDiagnostics(event.detail);
     renderDiagnostics();
   });
 

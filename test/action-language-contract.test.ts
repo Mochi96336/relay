@@ -61,14 +61,17 @@ test('persistent local sound and secondary menu entries carry real 44px touch ro
   assert.equal(actionCss.includes('#load-youtube {\n  min-height: 44px;'), true);
 });
 
-test('Record stays visually quieter while its transparent halo reaches the touch target', () => {
+test('Record stays visually quiet while start and Stop share a stable 44px row', () => {
   const recordStart = actionCss.indexOf('#start-recording {');
   const stopComment = actionCss.indexOf('/* Once recording is underway');
   assert.ok(recordStart >= 0 && stopComment > recordStart);
   const recordRules = actionCss.slice(recordStart, stopComment);
-  assert.equal(recordRules.includes('min-height: 38px;'), true);
-  assert.equal(recordRules.includes('#start-recording::after'), true);
-  assert.equal(recordRules.includes('inset: -3px -6px;'), true);
+  assert.equal(recordRules.includes('min-height: 44px;'), true);
+  assert.equal(recordRules.includes('border: 0;'), true);
+  assert.equal(recordRules.includes('border-radius: 0;'), true);
+  assert.equal(recordRules.includes('background: transparent;'), true);
+  assert.equal(recordRules.includes('#start-recording::after'), false,
+    'Record already owns a 44px row and must not overlap neighboring actions with an invisible halo');
 });
 
 test('recording Stop becomes a text action once elapsed-time state exists', () => {

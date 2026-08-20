@@ -105,6 +105,7 @@ export type ProductStatus = {
     canStopTake: boolean;
     canStartCalibration: boolean;
     startCalibrationBlockedReason: CalibrationStartBlockReason | null;
+    /** Candidate mode is projected even while blocked so UI never guesses prerequisites from Song state. */
     startCalibrationMode: CalibrationStartMode | null;
   };
 };
@@ -276,7 +277,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       canStopTake: input.take.lifecycle === 'recording',
       canStartCalibration: startCalibration.ok,
       startCalibrationBlockedReason: startCalibration.ok ? null : startCalibration.reason,
-      startCalibrationMode: startCalibration.ok ? startCalibration.mode : null,
+      startCalibrationMode: startCalibration.mode,
     },
   };
 }

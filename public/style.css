@@ -309,11 +309,9 @@ body:has(#start-publisher:disabled) .voice-ribbon span:nth-child(6) { animation-
   background: var(--accent);
   color: #111214;
   cursor: pointer;
-  font-size: 0;
+  font-size: 13px;
   font-weight: 720;
 }
-#start-publisher::after { content: "Take mic"; font-size: 13px; }
-#start-publisher[data-presence-label="takeover"]::after { content: "Take over mic"; }
 #start-publisher:disabled { display: none; }
 #release-mic {
   padding-left: 0;

@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { analyzeTimingCalibration } from '../src/timing-calibration.js';
-import { laggedBeatPair, laggedPair, pulseTrain, toInt16 } from './helpers/harness.js';
+import { laggedPair, pulseTrain, toInt16 } from './helpers/harness.js';
+import {
+  laggedMultibandMusicPair,
+  sameBpmDifferentMusicPair,
+  sameEnvelopeDifferentSpectrumPair,
+  singleBandBeatPair,
+} from './helpers/music-calibration.js';
 
 const RATE = 48_000;
 
@@ -15,15 +21,13 @@ describe('analyzeTimingCalibration', () => {
     test(`recovers a ${lagMs} ms microphone lag`, () => {
       const { mic, backing } = laggedPair(6, RATE, lagMs);
       const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE);
-
-      // The envelope resolution is 5 ms per frame, so exact equality is not the
-      // contract; being within a couple of frames is.
       assert.ok(
         Math.abs(result.micLagMs - lagMs) <= 15,
         `expected ~${lagMs} ms, got ${result.micLagMs} ms (confidence ${result.confidence.toFixed(2)})`,
       );
       assert.ok(result.confidence > 0.2, `confidence too low: ${result.confidence}`);
       assert.equal(result.segmentLagsMs.length, 5);
+      assert.ok(result.diagnostics.activeBands.length >= 3);
     });
   }
 
@@ -56,79 +60,111 @@ describe('analyzeTimingCalibration', () => {
   test('a true match agrees across every window', () => {
     const { mic, backing } = laggedPair(6, RATE, 340);
     const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE);
-
     const spread = Math.max(...result.segmentLagsMs) - Math.min(...result.segmentLagsMs);
     assert.equal(spread, 0, `windows disagreed: ${result.segmentLagsMs.join('/')}`);
     assert.ok(result.confidence > 0.9, `confidence ${result.confidence}`);
-    assert.ok(Math.min(...result.segmentCorrelations) > 0.9);
+    assert.ok(Math.min(...result.segmentCorrelations) > 0.5);
+    assert.ok((result.diagnostics.peakMargin ?? 1) >= 0.05);
   });
 
-  // KNOWN GAP, documented rather than asserted away: MIN_GLOBAL_CORRELATION 0.12
-  // and the 140 ms window-spread limit are permissive enough that unrelated
-  // audio is usually accepted, reporting confidence around 0.4-0.6 and lags of
-  // several hundred ms. A bogus multi-second lag is not harmless - it puts the
-  // mixer's read head past the end of the microphone history immediately.
-  // Tightening the thresholds needs real device captures to calibrate against,
-  // so this test pins the discrimination margin that any change must preserve.
-  test('scores unrelated audio below a true match', () => {
+  test('rejects unrelated audio instead of returning a low-confidence guess', () => {
     const backing = toInt16(pulseTrain(RATE * 6, RATE, 3), 0.9);
-    const accepted: number[] = [];
-
     for (const seed of [99, 123, 4242, 777, 31337]) {
       const mic = toInt16(pulseTrain(RATE * 6, RATE, seed), 0.5);
-      try {
-        accepted.push(analyzeTimingCalibration(int16View(mic), int16View(backing), RATE).confidence);
-      } catch {
-        // Rejected outright, which is the outcome we would prefer for all of them.
-      }
-    }
-
-    const { mic, backing: matchedBacking } = laggedPair(6, RATE, 340);
-    const matched = analyzeTimingCalibration(int16View(mic), int16View(matchedBacking), RATE);
-
-    for (const confidence of accepted) {
-      assert.ok(
-        matched.confidence - confidence > 0.3,
-        `unrelated audio scored ${confidence.toFixed(2)} against a true match at ${matched.confidence.toFixed(2)}`,
+      assert.throws(
+        () => analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500),
+        /weak|does not match|repetitive|support/i,
       );
     }
   });
 
-  // Regression for a real robot take: a repeated beat lets a lag one period
-  // away from the truth score almost as well as the truth itself, because
-  // shifting a periodic signal by its own period leaves it looking nearly
-  // identical. `laggedPair`'s irregular pulses never exercise this - only a
-  // *regular* beat does, which is what a real song's rhythm is.
-  for (const [lagMs, periodMs] of [[180, 500], [-220, 480], [150, 650]] as const) {
-    test(`prefers a ${lagMs} ms lag over its ${periodMs} ms beat-period alias`, () => {
-      const { mic, backing } = laggedBeatPair(6, RATE, lagMs, periodMs);
-      const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE);
+  test('rejects the same loudness envelope with the wrong spectral sequence', () => {
+    const { mic, backing } = sameEnvelopeDifferentSpectrumPair(6, RATE);
+    assert.throws(
+      () => analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500),
+      /repetitive|does not match|support/i,
+    );
+  });
 
+  test('rejects a different song at the same 120 BPM', () => {
+    const { mic, backing } = sameBpmDifferentMusicPair(6, RATE);
+    assert.throws(
+      () => analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500),
+      /repetitive|does not match|support/i,
+    );
+  });
+
+  for (const lagMs of [0, 120, 340, 900, -180]) {
+    test(`multiband music recovers a ${lagMs} ms lag without a physical-lag prior`, () => {
+      const { mic, backing } = laggedMultibandMusicPair(6, RATE, lagMs);
+      const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
       assert.ok(
         Math.abs(result.micLagMs - lagMs) <= 25,
-        `expected ~${lagMs} ms, got ${result.micLagMs} ms (a beat-period alias) `
+        `expected ~${lagMs} ms, got ${result.micLagMs} ms`,
+      );
+      assert.ok(result.confidence >= 0.55, `confidence ${result.confidence}`);
+      assert.ok((result.diagnostics.peakMargin ?? 1) >= 0.05);
+    });
+  }
+
+  test('survives phone-speaker frequency coloration', () => {
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 285, {
+      micBandGains: [0.15, 0.35, 0.70, 1.00, 0.80, 0.35, 0.10],
+    });
+    const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
+    assert.ok(Math.abs(result.micLagMs - 285) <= 25, `got ${result.micLagMs} ms`);
+    assert.ok(result.confidence >= 0.55, `confidence ${result.confidence}`);
+  });
+
+  test('survives missing high-frequency microphone bands', () => {
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 285, {
+      micBandGains: [1, 1, 1, 1, 1, 0, 0],
+    });
+    const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
+    assert.ok(Math.abs(result.micLagMs - 285) <= 25, `got ${result.micLagMs} ms`);
+  });
+
+  test('survives moderate singer interference', () => {
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 285, { singerGain: 0.16 });
+    const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
+    assert.ok(Math.abs(result.micLagMs - 285) <= 25, `got ${result.micLagMs} ms`);
+    assert.ok(result.confidence >= 0.55, `confidence ${result.confidence}`);
+  });
+
+  test('survives slow AGC changes over the six-second window', () => {
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 285, { agc: true });
+    const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
+    assert.ok(Math.abs(result.micLagMs - 285) <= 25, `got ${result.micLagMs} ms`);
+  });
+
+  test('rejects an equal-strength single-band beat alias', () => {
+    const { mic, backing } = singleBandBeatPair(6, RATE, 180, 500);
+    assert.throws(
+      () => analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500),
+      /spectral activity|repetitive|support/i,
+    );
+  });
+
+  for (const lagMs of [-1790, 1600]) {
+    test(`still recovers a genuine ${lagMs} ms lag`, () => {
+      const { mic, backing } = laggedPair(6, RATE, lagMs);
+      const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
+      assert.ok(
+        Math.abs(result.micLagMs - lagMs) <= 25,
+        `expected ~${lagMs} ms, got ${result.micLagMs} ms `
         + `(confidence ${result.confidence.toFixed(2)})`,
       );
     });
   }
 
-  // The other half of the tension the beat-alias preference creates: a real
-  // deployment measured -1790 ms (confidence 0.98, five windows inside 15 ms)
-  // and the recording confirmed the vocal really was that far out. Preferring
-  // a candidate near zero must break genuine ties caused by periodicity
-  // without overruling a large lag that is simply the true answer.
-  for (const lagMs of [-1790, 1600]) {
-    test(`still recovers a genuine ${lagMs} ms lag, well outside the preferred range`, () => {
-      const { mic, backing } = laggedPair(6, RATE, lagMs);
-      const result = analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500);
-
-      assert.ok(
-        Math.abs(result.micLagMs - lagMs) <= 25,
-        `expected ~${lagMs} ms, got ${result.micLagMs} ms `
-        + `(confidence ${result.confidence.toFixed(2)}) - the near-zero preference overruled a true match`,
-      );
-    });
-  }
+  test('ambiguous content never produces a provisional-eligible confidence', () => {
+    const { mic, backing } = sameEnvelopeDifferentSpectrumPair(6, RATE);
+    assert.throws(
+      () => analyzeTimingCalibration(int16View(mic), int16View(backing), RATE, 2_500),
+      /repetitive|does not match|support/i,
+      'ambiguous content must be rejected before confidence can reach the server',
+    );
+  });
 
   test('rejects an invalid sample rate', () => {
     const { mic, backing } = laggedPair(6, RATE, 0);

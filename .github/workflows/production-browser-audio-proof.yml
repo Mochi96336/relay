@@ -1,0 +1,25 @@
+name: Production browser audio proof
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  production-browser-audio-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx -y playwright@1.55.0 install chromium
+      - name: Install Playwright test runner
+        run: npm install --no-save --package-lock=false @playwright/test@1.55.0
+      - name: Prove production browser audio path
+        run: npx playwright test test/browser/production-audio-proof.spec.mjs --workers=1 --reporter=line

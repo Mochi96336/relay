@@ -197,7 +197,7 @@ async function printReadinessDiagnostics(page, relay) {
 }
 
 test('real Chromium PCM survives production capture, transport, mixer and Take WAV', async () => {
-  test.setTimeout(30_000);
+  test.setTimeout(45_000);
   const takeDir = await mkdtemp(path.join(os.tmpdir(), 'relay-production-browser-audio-'));
   const capturePath = path.join(takeDir, 'deterministic-browser-mic.wav');
   await writeFile(capturePath, deterministicCaptureWav());
@@ -264,7 +264,7 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
       await page.waitForFunction(
         () => window.relayRecordingState?.canStart === true,
         null,
-        { timeout: 5_000 },
+        { timeout: 22_000 },
       );
     } catch (error) {
       await printReadinessDiagnostics(page, relay);

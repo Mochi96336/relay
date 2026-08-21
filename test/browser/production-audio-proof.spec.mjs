@@ -187,7 +187,6 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
     channel: 'chromium',
     args: [
       '--autoplay-policy=no-user-gesture-required',
-      '--disable-audio-output',
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
       `--use-file-for-fake-audio-capture=${capturePath}`,

@@ -16,6 +16,7 @@ const LEAD_MS = 4_000;
 const SEGMENT_MS = 350;
 const TRAIL_MS = 1_000;
 const MIN_PLATEAU_SAMPLES = 256;
+const MIXED_SAMPLE_TOLERANCE = Math.ceil(10 ** (DEFAULT_MIC_GAIN_DB / 20)) + 2;
 
 function startRelay(takeDir) {
   const child = spawn(
@@ -155,8 +156,13 @@ function findPlateau(samples, target, startAt) {
   let runStart = -1;
   let runLength = 0;
 
+  // Chromium's native media pipeline may quantize the WAV-backed fake device
+  // by one input PCM16 LSB before WebAudio sees it. The production +24 dB mic
+  // gain magnifies that one input LSB to about 16 Take-sample LSBs. Permit only
+  // that bounded native-capture quantization plus output rounding; do not learn
+  // a runner-specific scale from the produced WAV.
   for (let index = startAt; index < samples.length; index += 1) {
-    if (Math.abs(samples[index] - target) <= 2) {
+    if (Math.abs(samples[index] - target) <= MIXED_SAMPLE_TOLERANCE) {
       if (runLength === 0) runStart = index;
       runLength += 1;
       if (runLength >= MIN_PLATEAU_SAMPLES) {
@@ -169,8 +175,8 @@ function findPlateau(samples, target, startAt) {
   }
 
   throw new Error(
-    `Expected at least ${MIN_PLATEAU_SAMPLES} consecutive samples near ${target}; `
-    + `searched ${samples.length - startAt} samples from offset ${startAt}.`,
+    `Expected at least ${MIN_PLATEAU_SAMPLES} consecutive samples near ${target} `
+    + `(±${MIXED_SAMPLE_TOLERANCE}); searched ${samples.length - startAt} samples from offset ${startAt}.`,
   );
 }
 
@@ -322,6 +328,7 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
       takeId,
       inputSamples: INPUT_LEVELS,
       expected,
+      tolerance: MIXED_SAMPLE_TOLERANCE,
       wavSamples: samples.length,
       sampleSummary,
     })}`);
@@ -340,6 +347,7 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
       inputSamples: INPUT_LEVELS,
       wavSamples: samples.length,
       expected,
+      tolerance: MIXED_SAMPLE_TOLERANCE,
       plateaus,
     })}`);
   } finally {

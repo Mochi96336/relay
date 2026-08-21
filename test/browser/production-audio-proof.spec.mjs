@@ -174,6 +174,25 @@ function findPlateau(samples, target, startAt) {
   );
 }
 
+function summarizeSamples(samples) {
+  const counts = new Map();
+  let min = 32767;
+  let max = -32768;
+  let nonZero = 0;
+  for (const sample of samples) {
+    min = Math.min(min, sample);
+    max = Math.max(max, sample);
+    if (sample !== 0) nonZero += 1;
+    counts.set(sample, (counts.get(sample) ?? 0) + 1);
+  }
+  const common = [...counts.entries()]
+    .filter(([sample]) => sample !== 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 16)
+    .map(([sample, count]) => ({ sample, count }));
+  return { min, max, nonZero, common };
+}
+
 async function printReadinessDiagnostics(page, relay) {
   const browserState = await page.evaluate(() => ({
     recording: window.relayRecordingState ?? null,
@@ -298,6 +317,15 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
     assert.ok(samples.length > 0, 'Take WAV must contain PCM samples');
 
     const expected = INPUT_LEVELS.map(expectedMixedSample);
+    const sampleSummary = summarizeSamples(samples);
+    console.log(`[relay-production-audio-samples] ${JSON.stringify({
+      takeId,
+      inputSamples: INPUT_LEVELS,
+      expected,
+      wavSamples: samples.length,
+      sampleSummary,
+    })}`);
+
     const plateaus = [];
     let cursor = 0;
     for (const target of expected) {

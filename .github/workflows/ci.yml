@@ -38,6 +38,49 @@ jobs:
           fi
           exit "$status"
 
+  browser-audio-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx -y playwright@1.55.0 install chromium
+      - name: Install browser proof runner
+        run: npm install --no-save --package-lock=false @playwright/test@1.55.0
+      - name: Start production Relay
+        env:
+          PORT: '4174'
+          RELAY_TAKE_DIR: /tmp/relay-browser-audio-proof
+          RELAY_TAKE_MIN_FREE_GIB: '0'
+          RELAY_AUTO_CALIBRATE: '0'
+          RELAY_CALIBRATION_VALIDATION: '0'
+          RELAY_CALIBRATION_PROBE: '0'
+        run: |
+          rm -rf "$RELAY_TAKE_DIR"
+          mkdir -p "$RELAY_TAKE_DIR"
+          npm start > /tmp/relay-browser-audio-proof.log 2>&1 &
+          echo $! > /tmp/relay-browser-audio-proof.pid
+          for attempt in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:4174/healthz > /dev/null; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+          cat /tmp/relay-browser-audio-proof.log
+          exit 1
+      - name: Prove production browser audio reaches Take WAV
+        env:
+          RELAY_AUDIO_PROOF_URL: http://127.0.0.1:4174/
+        run: npx playwright test test/browser/audio-critical-path.spec.mjs --workers=1 --reporter=line
+      - name: Show Relay log on failure
+        if: failure()
+        run: cat /tmp/relay-browser-audio-proof.log || true
+
   visual-screenshots:
     runs-on: ubuntu-latest
     timeout-minutes: 10

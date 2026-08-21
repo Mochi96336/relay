@@ -174,6 +174,28 @@ function findPlateau(samples, target, startAt) {
   );
 }
 
+async function printReadinessDiagnostics(page, relay) {
+  const browserState = await page.evaluate(() => ({
+    recording: window.relayRecordingState ?? null,
+    take: window.relayTakeStatus ?? null,
+    micAction: window.relayMicActionState ?? null,
+    activeRole: window.relayActiveRole ?? null,
+    proof: window.__relayAudioProofDiagnostics ?? null,
+    status: document.querySelector('#status')?.textContent ?? null,
+    details: document.querySelector('#details')?.textContent ?? null,
+    publisherDisabled: document.querySelector('#start-publisher')?.disabled ?? null,
+    recordDisabled: document.querySelector('#start-recording')?.disabled ?? null,
+  }));
+  let readyz;
+  try {
+    const response = await fetch(relay.httpUrl('/readyz'));
+    readyz = { status: response.status, body: await response.json() };
+  } catch (error) {
+    readyz = { error: error instanceof Error ? error.message : String(error) };
+  }
+  console.log(`[relay-production-audio-readiness] ${JSON.stringify({ browserState, readyz })}`);
+}
+
 test('real Chromium PCM survives production capture, transport, mixer and Take WAV', async () => {
   test.setTimeout(30_000);
   const takeDir = await mkdtemp(path.join(os.tmpdir(), 'relay-production-browser-audio-'));
@@ -207,8 +229,47 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
     await page.goto(relay.httpUrl('/'), { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.relayRecordingState?.connected === true);
 
+    const browserPrimitives = await page.evaluate(() => ({
+      audioContext: Function.prototype.toString.call(window.AudioContext),
+      audioWorkletNode: Function.prototype.toString.call(window.AudioWorkletNode),
+      getUserMedia: Function.prototype.toString.call(navigator.mediaDevices.getUserMedia),
+      webSocket: Function.prototype.toString.call(window.WebSocket),
+    }));
+    for (const [name, source] of Object.entries(browserPrimitives)) {
+      expect(source, `${name} must remain Chromium-native`).toContain('[native code]');
+    }
+
+    await page.evaluate(() => {
+      window.__relayAudioProofDiagnostics = {
+        microphoneStarted: 0,
+        microphoneFailed: null,
+        localMicLevelEvents: 0,
+        lastLocalMicLevel: null,
+      };
+      window.addEventListener('relay-microphone-started', () => {
+        window.__relayAudioProofDiagnostics.microphoneStarted += 1;
+      });
+      window.addEventListener('relay-microphone-start-failed', (event) => {
+        window.__relayAudioProofDiagnostics.microphoneFailed = event.detail ?? true;
+      });
+      window.addEventListener('relay-local-mic-level', (event) => {
+        if (event.detail?.active !== true) return;
+        window.__relayAudioProofDiagnostics.localMicLevelEvents += 1;
+        window.__relayAudioProofDiagnostics.lastLocalMicLevel = event.detail;
+      });
+    });
+
     await page.locator('#start-publisher').click();
-    await page.waitForFunction(() => window.relayRecordingState?.canStart === true, null, { timeout: 5_000 });
+    try {
+      await page.waitForFunction(
+        () => window.relayRecordingState?.canStart === true,
+        null,
+        { timeout: 5_000 },
+      );
+    } catch (error) {
+      await printReadinessDiagnostics(page, relay);
+      throw error;
+    }
     await expect(page.locator('#start-recording')).toBeEnabled();
 
     await page.locator('#start-recording').click();

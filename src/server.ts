@@ -247,6 +247,7 @@ const session = new AudioSession({
   backingRetentionMs: BACKING_RETENTION_MS,
 });
 session.setMicGainDb(micGainDb);
+
 const takeController = new TakeController({
   directory: takeDir,
   sampleRate: MIX_SAMPLE_RATE,
@@ -255,7 +256,7 @@ const takeController = new TakeController({
 
 let sourceGeneration = 0;
 const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
-const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATE_RETRY_MS', 15_000);
+const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATION_RETRY_MS', 15_000);
 const CALIBRATION_AGREEMENT = Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3);
 const CALIBRATION_TOLERANCE_MS = envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25);
 const CALIBRATION_PROVISIONAL_CONFIDENCE = Number(
@@ -438,6 +439,9 @@ function scheduleMicTransportGrace(ownerId: string) {
       && webTransportMicConnected()
       && micStreaming(performance.now());
     if (directMediaStillFlowing) {
+      // Control-plane loss must not revoke a Mic whose independent media plane
+      // is still carrying the same capture. Keep checking until control returns
+      // or the direct media path actually stops carrying fresh PCM.
       scheduleMicTransportGrace(expectedOwnerId);
       return;
     }
@@ -510,8 +514,12 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
   },
   onDriftConfirmed: (result) => {
     calibrationKind = 'content';
+    // applyValidatedResult synchronously calls onSettled -> syncAppliedCalibration.
+    // Mark that revision first so only this runtime promotion takes the slew path.
     contentValidationSlewRevision = calibration.confirmedRevision + 1;
     calibration.applyValidatedResult(result);
+    // applyValidatedResult increments synchronously. Keep the validator's
+    // own drift-confirmed state rather than immediately reseeding it.
     contentValidationBaselineRevision = calibration.confirmedRevision;
   },
 });
@@ -576,6 +584,14 @@ function rejectInfrastructure(socket: RelaySocket, message: string) {
 
 type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
 
+/**
+ * A physical media/monitor WebSocket may bind exactly one transport role.
+ * Authentication says who may use it; playback identity remains orthogonal
+ * because a participant's playback-control capability can intentionally live
+ * on the same socket as its publisher transport. Reconnects get a new socket
+ * instead of morphing publisher/backing/monitor while authority pointers still
+ * reference the old transport.
+ */
 function canClaimSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
   if (socket.role === 'unknown' || socket.role === requestedRole) return true;
   sendJson(socket, {
@@ -612,6 +628,9 @@ function participantIdentity(request: IncomingMessage): ParticipantIdentityResul
   if (rawParticipantId === null) return { kind: 'none' };
 
   const participantId = normalizeParticipantId(rawParticipantId);
+  // Browser participant capabilities are bearer secrets and must never ride in
+  // the WebSocket request URL. Query identity remains only for explicit legacy
+  // test fixtures, which cannot be enabled in production.
   if (
     !participantId
     || browserParticipantIdentity(participantId)
@@ -663,6 +682,8 @@ function sessionStatusPayload() {
   return {
     type: 'session-status',
     ...snapshot,
+    // Presence reports whether the owner's Mic media is available. The control
+    // WebSocket can reconnect independently while WebTransport keeps PCM live.
     micConnected: ownerId !== null
       && micMediaOwnerId === ownerId
       && micMediaConnected(),
@@ -852,6 +873,9 @@ function selectPlaybackHandoffTarget(participantId: string, nowMs: number) {
     .sort((a, b) => b.intentAtMs - a.intentAtMs);
   if (intended.length > 0) return intended[0].identity;
 
+  // Presence alone must never move the song. This fallback is used only after
+  // a microphone ownership action, and only when one playback transport exists
+  // so there is no multi-tab choice to guess.
   return candidates.length === 1 ? candidates[0].identity : null;
 }
 
@@ -865,6 +889,15 @@ function playbackTransportIsConnected(identity: PlaybackIdentity) {
   return false;
 }
 
+/**
+ * Ends a handoff that has stopped being able to complete.
+ *
+ * A live handoff intentionally holds the room song still, so it must not be
+ * able to outlive the transport it is waiting for. A page reload also lands
+ * here rather than resuming: the playback generation changes on load, so the
+ * reloaded tab is a different transport and the prepared target is genuinely
+ * gone.
+ */
 function sweepPreparedSongHandoff(nowMs: number) {
   const target = youtubeTimeline.handoffTarget();
   if (!target) return false;
@@ -928,6 +961,22 @@ function applyMicOwnerEffects(
   });
 }
 
+/**
+ * Tells a playback page why its telemetry is being ignored.
+ *
+ * Rejection used to be a bare `return`, which is indistinguishable from a lost
+ * connection: the page keeps sending several times a second and its server
+ * timeline readout simply never advances. Telemetry is far too frequent to
+ * answer every time, so only a *change* of reason is reported, and an accepted
+ * packet clears the memory so the next problem is reported again.
+ */
+/**
+ * The same discipline for the room-command gate's refusals.
+ *
+ * Shares `telemetryRejectedReason` with the authority refusals above so that
+ * switching between the two kinds still notifies, and one accepted packet
+ * clears both.
+ */
 function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
   const key = `room-song:${reason}`;
   if (socket.telemetryRejectedReason === key) return;
@@ -959,6 +1008,8 @@ function broadcastToMonitors(
     const socket = client as RelaySocket;
     if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
 
+    // Once a monitor opts into positioned PCM, every binary packet must remain
+    // framed. Do not silently fall back to raw PCM on an unpositioned path.
     if (binary && socket.monitorPacketVersion === 1 && position === null) continue;
 
     const outbound = binary
@@ -1030,10 +1081,28 @@ function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
   if (robotProbeTimingActive() && calibrationKind !== 'boot-probe') return false;
+  // Boot calibration is a three-term equation. The two probe legs may be
+  // measured ahead of playback, but an unknown player delta is not zero. Keep
+  // the path result as evidence and stay on the network fallback until the
+  // active robot has published a fresh, settled delta.
   if (robotProbeTimingActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   return true;
 }
 
+/**
+ * Synchronizes measurement validity into the mixer's active alignment.
+ *
+ * A boot result needs special treatment: once freshness/connection withdraws
+ * its authority, a later delta must not resurrect the historical total before
+ * `maybeReapplyBootCalibration()` has folded in the *current* delta. While a
+ * boot alignment is already active, small (< threshold) delta movements are
+ * intentionally left alone. While it is inactive, it may only be restored
+ * directly when the stored boot result already describes exactly the current
+ * reported delta; otherwise reapply owns the reactivation.
+ *
+ * Returns whether the mixer alignment changed so the periodic freshness check
+ * can publish the transition immediately.
+ */
 function syncAppliedCalibration() {
   if (takeBlocksCalibration()) return false;
   const active = session.alignment.calibratedMicLagMs;
@@ -1079,6 +1148,9 @@ function syncAppliedCalibration() {
     return session.slewCalibratedMicLagTo(nextMicLagMs);
   }
 
+  // The periodic synchronizer runs while a live validation slew is still in
+  // progress. Seeing a different applied value is expected; do not snap it to
+  // the already-known target on the next 250 ms tick.
   if (nextMicLagMs !== null && session.calibratedMicLagTarget === nextMicLagMs) return false;
 
   contentValidationSlewRevision = null;
@@ -1159,6 +1231,22 @@ function frameAgeMs(atMs: number, nowMs: number) {
   return Number.isFinite(atMs) ? Math.round(nowMs - atMs) : null;
 }
 
+/**
+ * The status another machine can poll.
+ *
+ * `/healthz` answers "is the Relay process up", which stays `true` through
+ * every failure an unattended robot actually has: the browser died, the sink
+ * vanished, the backing bridge stopped. This reports on the *route* instead.
+ *
+ * It reduces that to `ok` plus named faults so the poller does not have to
+ * model Relay's internals. A fault is something that is definitely broken - a
+ * connected client that stopped sending audio, or a robot route missing a
+ * component - never merely "nobody is singing", which is what `idle` is for.
+ * Warnings degrade quality without stopping audio, so they do not clear `ok`.
+ *
+ * Deliberately carries no nicknames or keys: it is unauthenticated on the LAN
+ * like `/healthz`, so it reports counts and states only.
+ */
 function remoteStatusPayload() {
   const nowMs = performance.now();
   const alignment = session.alignment;
@@ -1351,9 +1439,19 @@ function currentTimelineStatus(nowMs = performance.now()) {
   return youtubeTimeline.statusPayload(nowMs) as TimelineStatus & Record<string, unknown>;
 }
 
+/**
+ * One runtime readiness collector shared by diagnostics and product UI.
+ *
+ * Keep transport facts here rather than reconstructing them in /readyz, the
+ * browser, or ProductViewModel independently. The pure readiness model decides
+ * what those facts mean; this function only samples the live server once.
+ */
 function readinessRouteMode(nowMs = performance.now()) {
   if (backingIsRobot || activeRobotSource?.readyState === WebSocket.OPEN) return 'robot' as const;
   if (backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null) return 'legacy' as const;
+  // Voice-only is valid only while the room truly has no Song. Once a Song
+  // exists, backing is an expected dependency even before a concrete route
+  // has announced itself.
   if (roomHasSong(nowMs)) return 'song' as const;
   return 'idle' as const;
 }
@@ -1396,6 +1494,10 @@ function productStatusPayload(nowMs = performance.now()) {
     : null;
   const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
   const roomState = Number(room.state);
+  // `connected` answers "is the clock authoritative right now", on a window
+  // tight enough for alignment. Telling a singer their playback is unavailable
+  // is a different question with a different answer, so the product view gets
+  // the raw age and draws its own, slower line.
   const timelineAgeMs = Number(
     (youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>).ageMs,
   );
@@ -1569,6 +1671,10 @@ function expireBackingGrace() {
 }
 
 function processPublisherFrame(frame: PcmFrame) {
+  // Physical media can outlive the control WebSocket during its reconnect
+  // grace. Authorization already happened at the WS publisher boundary or the
+  // short-lived WebTransport media ticket boundary, so the mixer must not make
+  // a control socket pointer into a second source of truth.
   if (!micAudioTransport || publisherSampleRate === null) return;
   if (!session.active) startLiveSource();
 
@@ -1587,6 +1693,8 @@ function processPublisherFrame(frame: PcmFrame) {
           calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
         } else {
           syncAppliedCalibration();
+          // Publish invalidated timing before the source summary
+          // so consumers never observe stale timing for a new capture.
           broadcastJson(timingCalibrationStatusPayload());
           broadcastJson(sourceStatusPayload());
         }
@@ -1610,7 +1718,7 @@ const mixerTimer = setInterval(() => {
 
   session.drain((frame, evidence, position) => {
     const nowMs = performance.now();
-    takeController.append(frame, takeQualityFrameState(nowMs), evidence, position);
+    takeController.append(frame, takeQualityFrameState(nowMs), evidence);
     broadcastToMonitors(frame, true, position);
   });
 }, 5);
@@ -1661,6 +1769,8 @@ function maybeValidateContentCalibration(nowMs: number) {
     return;
   }
 
+  // Every state transition publishes through validator.onChange. Return values
+  // remain useful to domain tests but are no longer a second telemetry channel.
   contentCalibrationValidator.tick(nowMs);
   contentCalibrationValidator.maybeStart(nowMs);
 }
@@ -2249,6 +2359,9 @@ wss.on('connection', (rawSocket, request) => {
         || !micStreaming(nowMs)
       ) return;
 
+      // Presence is display telemetry, not media authority. Any authenticated
+      // socket for the current Mic owner may report it, but the server binds the
+      // packet to the canonical media generation and rate-limits broadcast.
       if (
         Number.isFinite(socket.micPresenceTelemetryAt)
         && nowMs - socket.micPresenceTelemetryAt! < 60
@@ -2372,6 +2485,9 @@ wss.on('connection', (rawSocket, request) => {
         afterQualityEvent: () => cancelMicTransportGrace(),
         beforeTimingInvalidation: cleanReleasedMicTransport,
       });
+      // A successful explicit release always invalidates timing today. Keep this
+      // fallback so transport cleanup remains adapter-owned even if that domain
+      // effect is deliberately changed later.
       cleanReleasedMicTransport();
       broadcastSessionStatus();
       sendJson(socket, { type: 'mic-released' });
@@ -2669,6 +2785,10 @@ wss.on('connection', (rawSocket, request) => {
         rejectInfrastructure(socket, 'Authenticate the active Source before reporting a seek.');
         return;
       }
+      // `isRobotSource` is intentionally tri-state here: undefined means this
+      // socket was never a Robot source, while true/false means it has entered
+      // the Robot source lifecycle. Replacement clears the active flag to
+      // false, but must not restore seek authority to that old socket.
       if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
       sourceGeneration += 1;
       clearContentValidationBaseline();
@@ -2698,6 +2818,9 @@ wss.on('connection', (rawSocket, request) => {
 
     if (payload.type === 'register' && payload.role === 'publisher') {
       if (!canClaimSocketRole(socket, 'publisher')) return;
+      // A publisher is the microphone media authority. Browser clients must
+      // authenticate that authority before registration; anonymous publishers
+      // remain available only to the explicitly enabled legacy test harness.
       if (!socket.participantId && !legacyTestParticipantIdentityEnabled()) {
         sendJson(socket, {
           type: 'participant-auth-rejected',
@@ -3042,6 +3165,9 @@ wss.on('connection', (rawSocket, request) => {
         micGainDb = Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain));
         session.setMicGainDb(micGainDb);
       }
+      // `songLevel` remains accepted on the old wire shape for compatibility,
+      // but Song is now a server-owned 100% reference and cannot be mutated by
+      // any client authority.
       broadcastJson(mixSettingsPayload());
       return;
     }
@@ -3103,6 +3229,9 @@ wss.on('connection', (rawSocket, request) => {
         if (!reconnectingOwnerId) {
           clearMicMediaAuthority();
         } else {
+          // The control plane may reconnect while an independent HTTP/3 media
+          // session is still carrying the same capture. Keep the capture and
+          // sample rate authoritative until the existing grace expires.
           session.setMicExpected(directMediaStillLive);
           scheduleMicTransportGrace(reconnectingOwnerId);
         }

@@ -28,7 +28,9 @@ function startRelay(takeDir) {
         PORT: '0',
         NODE_ENV: 'test',
         RELAY_TAKE_DIR: takeDir,
+        RELAY_TAKE_MIN_FREE_GIB: '0',
         RELAY_AUTO_CALIBRATE: '0',
+        RELAY_CALIBRATION_VALIDATION: '0',
         RELAY_CALIBRATION_PROBE: '0',
         RELAY_HEARTBEAT_MS: '60000',
         RELAY_LIVE_PREBUFFER_MS: '40',
@@ -179,6 +181,10 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
   await writeFile(capturePath, deterministicCaptureWav());
   const relay = await startRelay(takeDir);
   const browser = await chromium.launch({
+    // Playwright's default headless executable is chromium-headless-shell.
+    // The production proof intentionally uses full Chromium's new headless mode
+    // so Web Audio/media-device behaviour matches a real browser process.
+    channel: 'chromium',
     args: [
       '--autoplay-policy=no-user-gesture-required',
       '--use-fake-ui-for-media-stream',

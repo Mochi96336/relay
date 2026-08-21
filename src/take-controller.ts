@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { MixFrameEvidence } from './audio-session.js';
+import type { MixFrameEvidence, MixFramePosition } from './audio-session.js';
 import { TakeLibrary, type TakeLibraryEntry } from './take-library.js';
 import {
   TakeQualityTracker,
@@ -87,9 +87,9 @@ function sameHistoryItem(a: TakeHistoryItem | undefined, b: TakeHistoryItem) {
  * policy, durable recording library and one Take-scoped quality tracker.
  *
  * It deliberately knows nothing about Mic ownership, WebSockets, SongSession
- * authority or product UI. AudioSession supplies exact evidence beside each
- * mixed PCM frame; this controller guarantees that evidence reaches the Take
- * only after the same frame is accepted by the WAV writer.
+ * authority or product UI. AudioSession supplies exact evidence and position
+ * beside each mixed PCM frame; this controller commits both only after the same
+ * frame is accepted by the WAV writer.
  */
 export class TakeController {
   private readonly session = new TakeSession();
@@ -257,6 +257,18 @@ export class TakeController {
 
     void writer.finalize()
       .then((file) => {
+        const pendingTake = this.session.currentTake();
+        const recordedSampleCount = pendingTake?.mixSampleRange?.sampleCount ?? 0;
+        if (recordedSampleCount !== file.sampleCount) {
+          if (this.session.fail(
+            takeId,
+            `Take sample metadata recorded ${recordedSampleCount} samples but WAV contains ${file.sampleCount}.`,
+            Date.now(),
+          )) this.emitChange();
+          void writer.discardFinalized();
+          return;
+        }
+
         const base = this.options.artifactBaseUrl ?? '/takes';
         const completed = this.session.complete(takeId, {
           fileName: file.fileName,
@@ -311,12 +323,21 @@ export class TakeController {
     return result.ok;
   }
 
-  append(frame: Buffer, state: TakeQualityFrameState, evidence: MixFrameEvidence) {
+  append(
+    frame: Buffer,
+    state: TakeQualityFrameState,
+    evidence: MixFrameEvidence,
+    position: MixFramePosition,
+  ) {
     const writer = this.writer;
     if (!writer || this.session.recordingTakeId !== writer.takeId) return false;
     try {
       writer.append(frame);
-      this.quality?.observeFrame(Math.floor(frame.byteLength / 2), state, evidence);
+      const sampleCount = Math.floor(frame.byteLength / 2);
+      if (!this.session.appendMixFrame(position, sampleCount)) {
+        throw new Error('Take lifecycle rejected an accepted mix frame.');
+      }
+      this.quality?.observeFrame(sampleCount, state, evidence);
       return true;
     } catch (error) {
       this.failWriter(writer, error);

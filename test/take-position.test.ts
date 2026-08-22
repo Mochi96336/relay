@@ -12,6 +12,7 @@ import {
 import type { PcmFrame } from '../src/pcm-frame.js';
 import { TakeController } from '../src/take-controller.js';
 import type { TakeQualityFrameState } from '../src/take-quality.js';
+import { TakeSession } from '../src/take-session.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -182,4 +183,54 @@ test('a positioned capture packet gap does not compress the Take sample timeline
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('Take sample identity rejects a mix-generation change without mutating the accepted range', () => {
+  const session = new TakeSession();
+  const started = session.start({
+    takeId: 'take-generation-boundary',
+    startedByParticipantId: 'participant-a',
+    song: VOICE_ONLY_SONG,
+    startedAtMs: 1_000,
+  });
+  assert.equal(started.ok, true);
+
+  assert.equal(session.appendMixFrame({ generation: 4, firstSampleIndex: 0 }, FRAME_SAMPLES), true);
+  assert.throws(
+    () => session.appendMixFrame({ generation: 5, firstSampleIndex: FRAME_SAMPLES }, FRAME_SAMPLES),
+    /generation changed while recording/,
+  );
+  assert.deepEqual(session.currentTake()?.mixSampleRange, {
+    generation: 4,
+    startSampleIndex: 0,
+    endSampleIndex: FRAME_SAMPLES,
+    sampleCount: FRAME_SAMPLES,
+  });
+});
+
+test('Take sample identity rejects overlap or reordering and preserves explicit forward holes', () => {
+  const session = new TakeSession();
+  const started = session.start({
+    takeId: 'take-position-ordering',
+    startedByParticipantId: 'participant-a',
+    song: VOICE_ONLY_SONG,
+    startedAtMs: 1_000,
+  });
+  assert.equal(started.ok, true);
+
+  assert.equal(session.appendMixFrame({ generation: 7, firstSampleIndex: 0 }, FRAME_SAMPLES), true);
+  assert.throws(
+    () => session.appendMixFrame({ generation: 7, firstSampleIndex: FRAME_SAMPLES / 2 }, FRAME_SAMPLES),
+    /overlapped or moved backwards/,
+  );
+  assert.equal(
+    session.appendMixFrame({ generation: 7, firstSampleIndex: FRAME_SAMPLES * 2 }, FRAME_SAMPLES),
+    true,
+  );
+  assert.deepEqual(session.currentTake()?.mixSampleRange, {
+    generation: 7,
+    startSampleIndex: 0,
+    endSampleIndex: FRAME_SAMPLES * 3,
+    sampleCount: FRAME_SAMPLES * 2,
+  });
 });

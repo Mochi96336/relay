@@ -81,8 +81,9 @@ test('calibration presenter loads after core navigation and deferred command lis
 });
 
 test('calibration visible presenter follows ProductStatus and has one painted owner', () => {
-  assert.match(calibrationUi, /event\.detail\?\.actions/);
-  assert.match(calibrationUi, /event\.detail\?\.timing/);
+  assert.match(calibrationUi, /latestProductStatus = event\.detail \?\? null/);
+  assert.match(calibrationUi, /latestAction = latestProductStatus\?\.actions/);
+  assert.match(calibrationUi, /latestTiming = latestProductStatus\?\.timing/);
   assert.match(calibrationUi, /startCalibrationMode/);
   assert.match(calibrationUi, /mode === 'boot-probe'/);
   assert.match(calibrationUi, /reason === 'sources-not-connected'/);

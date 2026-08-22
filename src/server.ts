@@ -50,7 +50,9 @@ import {
   type PlaybackIdentity,
   type SongHandoffPlan,
 } from './song-session.js';
+import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
+import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import {
   createWebTransportMediaTicket,
@@ -806,29 +808,19 @@ function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now())
 }
 
 function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
-  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
-  const videoId = typeof room.videoId === 'string' && room.videoId ? room.videoId : null;
-  if (videoId === null) {
-    return {
-      videoId: null,
-      revision: null,
-      state: null,
-      serverTime: null,
-      playbackRate: null,
-    };
-  }
+  return takeSongSnapshotFromRoom(
+    youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
+  );
+}
 
-  const revision = Number(room.revision);
-  const state = Number(room.state);
-  const serverTime = Number(room.serverTime);
-  const playbackRate = Number(room.playbackRate);
-  return {
-    videoId,
-    revision: Number.isInteger(revision) ? revision : null,
-    state: Number.isFinite(state) ? state : null,
-    serverTime: Number.isFinite(serverTime) ? serverTime : null,
-    playbackRate: Number.isFinite(playbackRate) ? playbackRate : null,
-  };
+function takeFrameBoundary(nowMs = performance.now()) {
+  return takeFrameBoundaryAtOrAfter({
+    generation: session.generation,
+    sessionSampleIndex: session.sessionSampleAt(nowMs),
+    frameSamples: session.frameSamples,
+    sampleRate: session.sampleRate,
+    nowMs,
+  });
 }
 
 function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
@@ -2406,6 +2398,7 @@ wss.on('connection', (rawSocket, request) => {
         rejectTakeCommand(socket, 'start', 'participant-required');
         return;
       }
+      const commandWallClockMs = Date.now();
       const nowMs = performance.now();
       const productStatus = productStatusPayload(nowMs);
       if (!productStatus.actions.canStartTake) {
@@ -2416,12 +2409,18 @@ wss.on('connection', (rawSocket, request) => {
         );
         return;
       }
-      const song = takeSongSnapshot(nowMs);
+      const boundary = takeFrameBoundary(nowMs);
+      const song = takeSongSnapshot(boundary.atMs);
 
       if (cancelActiveContentValidation(nowMs)) {
         broadcastJson(timingCalibrationStatusPayload());
       }
-      const result = takeController.start(socket.participantId, song);
+      const result = takeController.start(
+      socket.participantId,
+      song,
+      boundary.position,
+      commandWallClockMs + (boundary.atMs - nowMs),
+    );
       if (!result.ok) {
         rejectTakeCommand(socket, 'start', result.reason);
         return;
@@ -2445,7 +2444,16 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      const result = takeController.stop(takeId, socket.participantId);
+      const commandWallClockMs = Date.now();
+    const nowMs = performance.now();
+    const boundary = takeFrameBoundary(nowMs);
+    const result = takeController.stop(
+      takeId,
+      socket.participantId,
+      boundary.position,
+      'user',
+      commandWallClockMs + (boundary.atMs - nowMs),
+    );
       if (!result.ok) {
         rejectTakeCommand(socket, 'stop', result.reason);
         return;

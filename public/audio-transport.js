@@ -145,6 +145,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.minimumPacketBytes = minimumPacketBytes;
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.datagramQueuePackets = datagramQueuePackets;
+    this.appliedDatagramQueuePackets = null;
     this.WebTransportClass = WebTransportClass;
     this.webTransport = null;
     this.datagramWriter = null;
@@ -205,6 +206,7 @@ export class PreferredAudioTransport extends AudioTransport {
       minWebTransportMaxPacketBytes: this.minWebTransportMaxPacketBytes,
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
+      datagramQueuePackets: this.appliedDatagramQueuePackets,
       ...this.telemetry,
     };
   }
@@ -318,9 +320,18 @@ export class PreferredAudioTransport extends AudioTransport {
       // Queue depth is latency for realtime audio, so keep it just past one
       // chunk's burst rather than generous: still shallow enough that a truly
       // backpressured path drops promptly instead of buffering stale voice.
+      // Read the depth back rather than assuming the write landed. The attribute
+      // is readonly in some implementations, and in a module (always strict) that
+      // assignment throws, which a bare catch would turn into a silent 1-deep
+      // queue that looks exactly like real congestion in the telemetry.
       try {
         transport.datagrams.outgoingHighWaterMark = this.datagramQueuePackets;
       } catch {}
+      const appliedQueuePackets = Number(transport.datagrams?.outgoingHighWaterMark);
+      this.appliedDatagramQueuePackets = Number.isInteger(appliedQueuePackets)
+        && appliedQueuePackets > 0
+        ? appliedQueuePackets
+        : null;
 
       const writable = transport.datagrams.writable ?? transport.datagrams.createWritable();
       const writer = writable.getWriter();
@@ -350,6 +361,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
+    this.appliedDatagramQueuePackets = null;
     if (wasActive) this.telemetry.webTransportDemotions += 1;
     if (writer) {
       try { writer.releaseLock(); } catch {}

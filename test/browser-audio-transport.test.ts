@@ -115,6 +115,29 @@ class QueueingWebTransport {
   close() {}
 }
 
+/** An implementation whose outgoing depth cannot be raised from the page. */
+class ReadonlyQueueWebTransport {
+  static instances: ReadonlyQueueWebTransport[] = [];
+  readonly writer = new QueueingDatagramWriter(() => 1);
+  readonly ready = Promise.resolve();
+  readonly datagrams = Object.defineProperty(
+    {
+      maxDatagramSize: 65_535,
+      writable: { getWriter: () => this.writer },
+    },
+    'outgoingHighWaterMark',
+    { get: () => 1, configurable: false },
+  ) as { maxDatagramSize: number; outgoingHighWaterMark: number; writable: { getWriter: () => QueueingDatagramWriter } };
+
+  readonly closed = new Promise<void>(() => {});
+
+  constructor(readonly url: string, readonly options: Record<string, unknown>) {
+    ReadonlyQueueWebTransport.instances.push(this);
+  }
+
+  close() {}
+}
+
 class TooSmallWebTransport {
   readonly writer = new FakeDatagramWriter();
   readonly ready = Promise.resolve();
@@ -292,6 +315,7 @@ describe('browser AudioTransport', () => {
 
     const instance = QueueingWebTransport.instances.at(-1)!;
     assert.equal(instance.datagrams.outgoingHighWaterMark, 4, 'the platform default of 1 fits one datagram');
+    assert.equal(transport.stats().datagramQueuePackets, 4, 'the depth is read back, not assumed');
 
     // The two datagrams one 20 ms chunk becomes, written back to back with no
     // chance for the queue to drain in between.
@@ -336,6 +360,28 @@ describe('browser AudioTransport', () => {
     await Promise.resolve();
     assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
     assert.equal(transport.stats().webTransportDemotions, 0);
+  });
+
+  it('reports the depth the platform kept when the outgoing queue cannot be raised', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    ReadonlyQueueWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      WebTransportClass: ReadonlyQueueWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=readonly',
+    });
+
+    // Assigning to a readonly accessor throws in a module, and swallowing that
+    // would leave a 1-deep queue reported as the 4 that was asked for - which
+    // reads in telemetry as genuine congestion rather than a rejected setting.
+    assert.equal(transport.stats().datagramQueuePackets, 1);
+    assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
+    assert.equal(transport.send(new Uint8Array(100).buffer).sent, false, 'the shallow queue is still real');
   });
 
   it('refuses a preferred path whose datagram budget cannot hold one application packet', async () => {

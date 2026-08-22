@@ -5,6 +5,8 @@ export type AudioUplinkTransportHealth = {
   maxWebTransportMaxPacketBytes: number | null;
   /** What the page packetized to, which is the browser's claim after clamping. */
   datagramPacketBytesCeiling: number | null;
+  /** Outgoing queue depth the platform actually accepted, not the one asked for. */
+  datagramQueuePackets: number | null;
   webTransportAttempts: number;
   webTransportConnections: number;
   webTransportDemotions: number;
@@ -101,11 +103,15 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const datagramPacketBytesCeiling = transport.datagramPacketBytesCeiling === undefined
     ? null
     : positiveSafeIntegerOrNull(transport.datagramPacketBytesCeiling);
+  const datagramQueuePackets = transport.datagramQueuePackets === undefined
+    ? null
+    : positiveSafeIntegerOrNull(transport.datagramQueuePackets);
   if (
     maxPacketBytes === undefined
     || minWebTransportMaxPacketBytes === undefined
     || maxWebTransportMaxPacketBytes === undefined
     || datagramPacketBytesCeiling === undefined
+    || datagramQueuePackets === undefined
   ) return null;
   if (
     minWebTransportMaxPacketBytes !== null
@@ -145,6 +151,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       minWebTransportMaxPacketBytes,
       maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling,
+      datagramQueuePackets,
       ...counters as Record<(typeof counterNames)[number], number>,
     },
   };

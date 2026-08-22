@@ -286,9 +286,14 @@ test('content calibration takes over once the probe has spent its attempts', asy
       sendPcmInChunks(clients.publisher, pair.mic),
     ]);
 
+    // Three 20 ms frames per 50 ms tick keeps the session timeline slightly
+    // ahead of the wall clock, so the wait below buys a comparable amount of
+    // collected audio rather than a fraction of it.
     const keepEligible = setInterval(() => {
-      clients.backing.sendPcm(FRAME);
-      clients.publisher.sendPcm(FRAME);
+      for (let i = 0; i < 3; i += 1) {
+        clients.backing.sendPcm(FRAME);
+        clients.publisher.sendPcm(FRAME);
+      }
       clients.publisher.send(playingTelemetry);
     }, 50);
 
@@ -304,6 +309,26 @@ test('content calibration takes over once the probe has spent its attempts', asy
         started.calibrationKind,
         'content',
         'a spent probe must hand the room to song-content timing, not to nothing',
+      );
+
+      // Starting is not enough. The teardown that enforces probe supersession
+      // has to stand down as well, or the run is reset under itself every tick
+      // and no window ever completes however clean the audio is.
+      await sleep(1_200);
+      const from = clients.monitor.messages.length;
+      clients.monitor.send({ type: 'timing-calibration-status-request' });
+      const still = await clients.monitor.waitFor(
+        (message) => clients.monitor.messages.indexOf(message) >= from
+          && message.type === 'timing-calibration-status',
+        3_000,
+      );
+      assert.equal(still.calibrationKind, 'content', 'the content run must survive the next tick');
+      // Instantaneous state cannot tell a surviving run from one restarted every
+      // tick: the teardown and the next auto-start both leave kind at 'content'
+      // and state at 'collecting'. Accumulated progress is what separates them.
+      assert.ok(
+        still.progress > 0.15,
+        `collection must accumulate across ticks, saw ${(still.progress * 100).toFixed(1)}%`,
       );
     } finally {
       clearInterval(keepEligible);

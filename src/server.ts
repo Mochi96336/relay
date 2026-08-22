@@ -560,6 +560,34 @@ function noteFollowerCorrection(nowMs: number) {
   followerCorrectionWindowStartMs = null;
 }
 
+/**
+ * Counted rather than deduplicated. A repeated start leaves state, kind, error
+ * and confidence all unchanged, so transition logging hides the one thing that
+ * distinguishes a run collecting slowly from a run being restarted under itself.
+ */
+const calibrationStarts = new Map<string, number>();
+let calibrationStartWindowMs: number | null = null;
+let lastCalibrationStartLogMs = -Infinity;
+const CALIBRATION_START_LOG_MS = 5_000;
+
+function noteCalibrationStart(reason: string, nowMs: number) {
+  if (calibrationStartWindowMs === null) calibrationStartWindowMs = nowMs;
+  calibrationStarts.set(reason, (calibrationStarts.get(reason) ?? 0) + 1);
+  if (nowMs - lastCalibrationStartLogMs < CALIBRATION_START_LOG_MS) return;
+
+  const spanMs = Math.max(1, nowMs - calibrationStartWindowMs);
+  const breakdown = [...calibrationStarts.entries()]
+    .map(([name, count]) => `${name}=${count}`)
+    .join(' ');
+  const total = [...calibrationStarts.values()].reduce((sum, count) => sum + count, 0);
+  console.log(
+    `[calibration] ${total} start(s) in ${(spanMs / 1000).toFixed(1)}s -> ${breakdown}`,
+  );
+  lastCalibrationStartLogMs = nowMs;
+  calibrationStarts.clear();
+  calibrationStartWindowMs = null;
+}
+
 let lastCalibrationLogKey: string | null = null;
 function logCalibrationTransition(reason: string) {
   const status = calibration.status();
@@ -1841,6 +1869,7 @@ function maybeAutoCalibrate(nowMs: number) {
   calibrationWasAutomatic = true;
   calibrationKind = 'content';
   calibration.start(nowMs);
+  noteCalibrationStart('auto', nowMs);
   logCalibrationTransition('auto-start');
   broadcastJson(timingCalibrationStatusPayload());
 }
@@ -2238,8 +2267,20 @@ function maybeReapplyBootCalibration(nowMs: number) {
   calibration.applyExternalResult({ micLagMs: advanceMs, confidence: bootConfidence ?? 0 });
 }
 
+/**
+ * Tears down a content calibration that the Robot's probe supersedes.
+ *
+ * The same rule the three calibration gates use has to hold here too, and for
+ * the same reason: the probe only supersedes content while it can still produce
+ * a result. Without this condition the two fought every tick - auto-calibration
+ * started a content run, this dropped it and cleared the retry floor, and the
+ * next tick started another. Collection reached a quarter second before being
+ * reset, twenty times every five seconds, so content calibration could never
+ * complete a window on a Robot route no matter how clean the audio was.
+ */
 function dropLegacyCalibrationForRobot() {
   if (!robotProbeTimingActive() || calibrationKind !== 'content') return;
+  if (probeCalibrationExhausted()) return;
   clearContentValidationBaseline();
   calibration.reset();
   calibrationKind = 'none';
@@ -2916,6 +2957,7 @@ wss.on('connection', (rawSocket, request) => {
       calibrationWasAutomatic = false;
       calibrationKind = 'content';
       calibration.start(nowMs);
+      noteCalibrationStart('participant', nowMs);
       logCalibrationTransition('requested by a participant');
       broadcastJson(timingCalibrationStatusPayload());
       return;
@@ -2945,6 +2987,7 @@ wss.on('connection', (rawSocket, request) => {
       robotPlayerOffset.reset();
       if (calibration.collecting && followerCorrection) {
         calibration.start(performance.now());
+        noteCalibrationStart('follower-correction', performance.now());
         logCalibrationTransition('restarted by a follower correction');
         broadcastJson(timingCalibrationStatusPayload());
       } else if (calibration.collecting) {

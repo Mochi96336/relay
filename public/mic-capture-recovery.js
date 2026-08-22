@@ -85,8 +85,14 @@ export class MicCaptureRecoveryWatchdog {
     let discontinuity = false;
     if (hidden) {
       const hiddenForMs = Math.max(0, current.nowMs - hidden.nowMs);
-      const sampleAdvanced = current.sampleCursor > hidden.sampleCursor;
-      discontinuity = hiddenForMs >= this.hiddenDiscontinuityMs && !sampleAdvanced;
+      // Hidden capture can advance briefly and then stall for seconds. Comparing
+      // only the hide/foreground cursors would treat that as continuous and
+      // splice later PCM onto the old sample generation. `observe()` records
+      // every real sample advance (including while hidden), so freshness of the
+      // last progress is the continuity evidence we actually need here.
+      const stalledForMs = Math.max(0, current.nowMs - this.lastSampleProgressAtMs);
+      discontinuity = hiddenForMs >= this.hiddenDiscontinuityMs
+        && stalledForMs >= this.hiddenDiscontinuityMs;
     }
 
     this.beginRecovery(current, 'foreground');

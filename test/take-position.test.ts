@@ -31,11 +31,11 @@ const VOICE_ONLY_SONG = {
   playbackRate: null,
 } as const;
 
-function makeSession() {
+function makeSession(prebufferMs = 0) {
   return new AudioSession({
     sampleRate: RATE,
     frameMs: 20,
-    prebufferMs: 0,
+    prebufferMs,
     backingGain: 1,
     retentionMs: 5_000,
   });
@@ -65,7 +65,7 @@ async function recordDrainedFrames(input: {
     assert.equal(
       input.controller.append(frame, QUALITY_STATE, frameEvidence, position),
       true,
-      'every drained frame must cross the same recorder boundary with its position',
+      'every addressed frame in this fixture must cross the recorder boundary',
     );
   }, input.nowMs, input.maxFrames);
   return { emitted, positions, evidence };
@@ -86,7 +86,7 @@ function waitForReady(directory: string) {
   return { controller, ready };
 }
 
-test('Take persists the first and last authoritative output positions and mix generation', async () => {
+test('Take records exactly the addressed first and final full mix frames', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-position-'));
   try {
     const session = makeSession();
@@ -95,7 +95,11 @@ test('Take persists the first and last authoritative output positions and mix ge
     assert.equal(session.drain(() => {}, 20, 2), 2, 'advance the mix before recording starts');
 
     const { controller, ready } = waitForReady(directory);
-    const started = controller.start('participant-a', VOICE_ONLY_SONG, 1_000);
+    const startPosition = {
+      generation: session.generation,
+      firstSampleIndex: FRAME_SAMPLES * 2,
+    };
+    const started = controller.start('participant-a', VOICE_ONLY_SONG, startPosition, 1_000);
     assert.equal(started.ok, true);
     if (!started.ok) return;
 
@@ -106,16 +110,20 @@ test('Take persists the first and last authoritative output positions and mix ge
       maxFrames: 3,
     });
     assert.equal(drained.emitted, 3);
-    assert.deepEqual(drained.positions[0], {
-      generation: session.generation,
-      firstSampleIndex: FRAME_SAMPLES * 2,
-    });
+    assert.deepEqual(drained.positions[0], startPosition);
     assert.deepEqual(drained.positions.at(-1), {
       generation: session.generation,
       firstSampleIndex: FRAME_SAMPLES * 4,
     });
 
-    assert.equal(controller.stop(started.takeId, 'participant-a', 'user', 1_100).ok, true);
+    const stopPosition = {
+      generation: session.generation,
+      firstSampleIndex: FRAME_SAMPLES * 5,
+    };
+    assert.equal(
+      controller.stop(started.takeId, 'participant-a', stopPosition, 'user', 1_100).ok,
+      true,
+    );
     await ready;
 
     const entry = controller.historyEntry(started.takeId);
@@ -148,7 +156,12 @@ test('a positioned capture packet gap does not compress the Take sample timeline
     session.ingestMic(positionedFrame(FRAME_SAMPLES * 2, 2_000), RATE, 0);
 
     const { controller, ready } = waitForReady(directory);
-    const started = controller.start('participant-a', VOICE_ONLY_SONG, 1_000);
+    const started = controller.start(
+      'participant-a',
+      VOICE_ONLY_SONG,
+      { generation: session.generation, firstSampleIndex: 0 },
+      1_000,
+    );
     assert.equal(started.ok, true);
     if (!started.ok) return;
 
@@ -167,7 +180,16 @@ test('a positioned capture packet gap does not compress the Take sample timeline
       'the authoritative mix clock continues across the source packet gap',
     );
 
-    assert.equal(controller.stop(started.takeId, 'participant-a', 'user', 1_100).ok, true);
+    assert.equal(
+      controller.stop(
+        started.takeId,
+        'participant-a',
+        { generation: session.generation, firstSampleIndex: FRAME_SAMPLES * 3 },
+        'user',
+        1_100,
+      ).ok,
+      true,
+    );
     await ready;
 
     const entry = controller.historyEntry(started.takeId);
@@ -185,12 +207,40 @@ test('a positioned capture packet gap does not compress the Take sample timeline
   }
 });
 
+test('rapid Start/Stop on the same full-frame boundary finalizes a zero-sample Take', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-position-rapid-'));
+  try {
+    const { controller, ready } = waitForReady(directory);
+    const boundary = { generation: 7, firstSampleIndex: FRAME_SAMPLES * 20 };
+    const started = controller.start('participant-a', VOICE_ONLY_SONG, boundary, 1_000);
+    assert.equal(started.ok, true);
+    if (!started.ok) return;
+
+    const stopped = controller.stop(started.takeId, 'participant-a', boundary, 'user', 1_001);
+    assert.equal(stopped.ok, true);
+    await ready;
+
+    const entry = controller.historyEntry(started.takeId);
+    assert.ok(entry);
+    assert.deepEqual(entry.mixSampleRange, {
+      generation: 7,
+      startSampleIndex: boundary.firstSampleIndex,
+      endSampleIndex: boundary.firstSampleIndex,
+      sampleCount: 0,
+    });
+    assert.equal(entry.artifact.sampleCount, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('Take sample identity rejects a mix-generation change without mutating the accepted range', () => {
   const session = new TakeSession();
   const started = session.start({
     takeId: 'take-generation-boundary',
     startedByParticipantId: 'participant-a',
     song: VOICE_ONLY_SONG,
+    startPosition: { generation: 4, firstSampleIndex: 0 },
     startedAtMs: 1_000,
   });
   assert.equal(started.ok, true);
@@ -214,6 +264,7 @@ test('Take sample identity rejects overlap or reordering and preserves explicit 
     takeId: 'take-position-ordering',
     startedByParticipantId: 'participant-a',
     song: VOICE_ONLY_SONG,
+    startPosition: { generation: 7, firstSampleIndex: 0 },
     startedAtMs: 1_000,
   });
   assert.equal(started.ok, true);

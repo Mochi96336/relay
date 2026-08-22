@@ -68,8 +68,11 @@ test('abandoned takeover paths cancel speculative playback and restore mute prov
   assert.match(restoreSection, /player\.unMute/);
   assert.match(presence, /hideTakeover\(\{ cancelPrewarm: true \}\)/,
     'owner changes/server restart must cancel a confirmation-time prewarm even without a Cancel click');
-  assert.match(presence, /cancelTakeoverButton\.addEventListener\('click',[\s\S]*if \(startAfterTakeover\) return;[\s\S]*hideTakeover\(\{ cancelPrewarm: true \}\)/,
-    'Presence must decide whether a Cancel click is still valid before retiring prewarm');
+  assert.match(
+    presence,
+    /cancelTakeoverButton\.addEventListener\('click',[\s\S]*if \(!micActionState\(\)\.takeoverCancelActionable\) return;[\s\S]*hideTakeover\(\{ cancelPrewarm: true \}\)/,
+    'Presence must prove shared takeover authority before a Cancel click can retire prewarm',
+  );
   assert.doesNotMatch(trigger, /#cancel-takeover/,
     'capture-phase prewarm must not cancel before Presence applies startAfterTakeover policy');
 });

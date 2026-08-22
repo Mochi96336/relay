@@ -473,23 +473,21 @@ test('Take commands require participant identity, recordable room audio, and the
     assert.equal(noSong.reason, 'take-not-ready');
 
     await establishRoomSong(control, 'reject-playback-a');
-    control.send({ type: 'start-take' });
-    const noLiveMic = await control.waitFor((message) => (
-      message.type === 'take-command-rejected'
-      && message.command === 'start'
-      && message.reason === 'take-not-ready'
-    ));
-    assert.equal(noLiveMic.reason, 'take-not-ready');
+    feedBacking(backing, 8);
+    await sleep(60);
 
+    // A loaded Song preserves the existing backing-only start path. Correctness
+    // repair must not silently require a Mic for a mode the product already had.
+    control.send({ type: 'start-take' });
+    const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
+    const takeId = String(start.takeId);
+
+    // Mic may join later without changing the room-owned Take identity.
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     feedMic(control, 8);
     feedBacking(backing, 8);
     await sleep(60);
-
-    control.send({ type: 'start-take' });
-    const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
-    const takeId = String(start.takeId);
 
     control.send({ type: 'product-status-request' });
     const recordingProduct = await control.waitFor((message) => (

@@ -1,0 +1,181 @@
+name: E integration repair
+
+on:
+  push:
+    branches:
+      - agent/correctness-take-boundaries-rebased
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore: prepare E integration repair'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Rebuild E on latest umbrella
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin \
+            +refs/heads/agent/correctness-take-boundaries:refs/remotes/origin/agent/correctness-take-boundaries
+
+          cp test/take-position.test.ts /tmp/take-position-d.ts
+
+          git checkout origin/agent/correctness-take-boundaries -- \
+            src/take-boundary.ts \
+            src/take-controller.ts \
+            src/take-session.ts \
+            src/take-song-snapshot.ts \
+            src/take-start-policy.ts \
+            test/take-boundaries.test.ts \
+            test/take-controller-storage.test.ts \
+            test/take-owner-release-evidence-server.test.ts \
+            test/take-position.test.ts \
+            test/take-server.test.ts \
+            test/take-session.test.ts \
+            test/take-start-policy.test.ts \
+            test/voice-only-room.test.ts
+
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          # Keep F's server implementation as authority and replay only E's four
+          # integration seams: imports, frame boundary projection, Start, Stop.
+          p = Path('src/server.ts')
+          s = p.read_text()
+
+          anchor = "import { TakeController, type TakeSongSnapshot } from './take-controller.js';"
+          replacement = "import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';\n" \
+                        + anchor + "\n" \
+                        + "import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';"
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, replacement, 1)
+
+          pattern = re.compile(
+              r"function takeSongSnapshot\(nowMs = performance\.now\(\)\): TakeSongSnapshot \{.*?\n\}\n\nfunction rejectTakeCommand",
+              re.S,
+          )
+          replacement = """function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
+            return takeSongSnapshotFromRoom(
+              youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
+            );
+          }
+
+          function takeFrameBoundary(nowMs = performance.now()) {
+            return takeFrameBoundaryAtOrAfter({
+              generation: session.generation,
+              sessionSampleIndex: session.sessionSampleAt(nowMs),
+              frameSamples: session.frameSamples,
+              sampleRate: session.sampleRate,
+              nowMs,
+            });
+          }
+
+          function rejectTakeCommand"""
+          s, count = pattern.subn(replacement, s, count=1)
+          assert count == 1, 'takeSongSnapshot replacement failed'
+
+          old = "      const nowMs = performance.now();\n      const productStatus = productStatusPayload(nowMs);"
+          new = "      const commandWallClockMs = Date.now();\n      const nowMs = performance.now();\n      const productStatus = productStatusPayload(nowMs);"
+          assert s.count(old) == 1, 'Start clock anchor changed'
+          s = s.replace(old, new, 1)
+
+          old = "      const song = takeSongSnapshot(nowMs);"
+          new = "      const boundary = takeFrameBoundary(nowMs);\n      const song = takeSongSnapshot(boundary.atMs);"
+          assert s.count(old) == 1, 'Start song snapshot anchor changed'
+          s = s.replace(old, new, 1)
+
+          old = "      const result = takeController.start(socket.participantId, song);"
+          new = """      const result = takeController.start(
+                socket.participantId,
+                song,
+                boundary.position,
+                commandWallClockMs + (boundary.atMs - nowMs),
+              );"""
+          assert s.count(old) == 1, 'Start controller anchor changed'
+          s = s.replace(old, new, 1)
+
+          old = "      const result = takeController.stop(takeId, socket.participantId);"
+          new = """      const commandWallClockMs = Date.now();
+              const nowMs = performance.now();
+              const boundary = takeFrameBoundary(nowMs);
+              const result = takeController.stop(
+                takeId,
+                socket.participantId,
+                boundary.position,
+                'user',
+                commandWallClockMs + (boundary.atMs - nowMs),
+              );"""
+          assert s.count(old) == 1, 'Stop controller anchor changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # #80 predates the two D integration regression tests. Use its
+          # E-adjusted TakeController signatures, then restore those D tests.
+          p = Path('test/take-position.test.ts')
+          e = p.read_text()
+          d = Path('/tmp/take-position-d.ts').read_text()
+          import_line = "import { TakeSession } from '../src/take-session.js';\n"
+          if import_line not in e:
+              marker = "import type { TakeQualityFrameState } from '../src/take-quality.js';\n"
+              assert marker in e
+              e = e.replace(marker, marker + import_line, 1)
+
+          def extract_test(source: str, title: str) -> str:
+              start = source.index("test('" + title + "'")
+              body = source.index('=> {', start)
+              brace = source.index('{', body)
+              depth = 0
+              i = brace
+              while i < len(source):
+                  if source[i] == '{':
+                      depth += 1
+                  elif source[i] == '}':
+                      depth -= 1
+                      if depth == 0:
+                          end = source.index(');', i) + 2
+                          return source[start:end]
+                  i += 1
+              raise AssertionError(title)
+
+          titles = [
+              'Take sample identity rejects a mix-generation change without mutating the accepted range',
+              'Take sample identity rejects overlap or reordering and preserves explicit forward holes',
+          ]
+          for title in titles:
+              if title not in e:
+                  e = e.rstrip() + '\n\n' + extract_test(d, title) + '\n'
+          p.write_text(e)
+          PY
+
+          rm .github/workflows/e-integration-repair.yml
+
+          git diff --check
+          git status --short
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: Validate repaired E branch
+        run: |
+          npm ci
+          npm test
+
+      - name: Commit repaired E branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git commit -m 'fix(takes): rebase recording boundaries on current authority'
+          git push origin HEAD:agent/correctness-take-boundaries-rebased

@@ -1,5 +1,6 @@
 import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
+import { shouldSeekForRoomCommand } from './room-song-seek-policy.js';
 import { handoffPreparationPosition } from './playback-handoff-timing.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
 import { isNewPlayIntent, settledPlaybackState } from './song-playback-intent.js';
@@ -1013,13 +1014,24 @@ async function applyRoomSongCommand(message) {
         startSeconds: Math.max(0, desired.positionSeconds),
       });
     } else {
-      if (reportedVideoId() !== desired.videoId) {
+      const videoChanged = reportedVideoId() !== desired.videoId;
+      if (videoChanged) {
         player.cueVideoById({
           videoId: desired.videoId,
           startSeconds: Math.max(0, desired.positionSeconds),
         });
       }
-      player.seekTo(Math.max(0, desired.positionSeconds), true);
+      // Seeking is not free: the IFrame re-buffers visibly whether or not the
+      // target differs from where it already is, so an unconditional seek made
+      // every play press jump by a fixed amount.
+      if (shouldSeekForRoomCommand({
+        action,
+        videoChanged,
+        currentSeconds: Number(player.getCurrentTime()),
+        desiredSeconds: desired.positionSeconds,
+      })) {
+        player.seekTo(Math.max(0, desired.positionSeconds), true);
+      }
       player.setPlaybackRate(desired.playbackRate);
       if (desired.state === 1) player.playVideo();
       else player.pauseVideo();

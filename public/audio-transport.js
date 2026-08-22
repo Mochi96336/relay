@@ -1,5 +1,16 @@
 const WEB_SOCKET_OPEN = 1;
 
+/**
+ * Ceiling for one QUIC datagram, in bytes.
+ *
+ * Deliberately below a 1200-byte QUIC packet rather than at it: the datagram
+ * frame rides inside that packet, after UDP/IP and QUIC headers, so a budget
+ * equal to the observed packet size still does not fit. 1000 leaves room for
+ * those headers on any path that carries a conventional 1200-byte QUIC packet,
+ * and splits one 20 ms 48 kHz mono chunk into two datagrams rather than many.
+ */
+export const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
+
 function base64Bytes(value) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -103,14 +114,22 @@ export class PreferredAudioTransport extends AudioTransport {
   constructor({
     maxBufferedBytes = 256 * 1024,
     minimumPacketBytes = 1,
+    datagramPacketBytesCeiling = DEFAULT_DATAGRAM_PACKET_BYTES_CEILING,
     WebTransportClass = globalThis.WebTransport,
   } = {}) {
     super();
     if (!Number.isInteger(minimumPacketBytes) || minimumPacketBytes < 1) {
       throw new RangeError('minimumPacketBytes must be a positive integer');
     }
+    if (
+      !Number.isInteger(datagramPacketBytesCeiling)
+      || datagramPacketBytesCeiling < minimumPacketBytes
+    ) {
+      throw new RangeError('datagramPacketBytesCeiling must be an integer at least minimumPacketBytes');
+    }
     this.fallback = new WebSocketAudioTransport({ maxBufferedBytes });
     this.minimumPacketBytes = minimumPacketBytes;
+    this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.WebTransportClass = WebTransportClass;
     this.webTransport = null;
     this.datagramWriter = null;
@@ -166,8 +185,11 @@ export class PreferredAudioTransport extends AudioTransport {
     return {
       path,
       maxPacketBytes: Number.isFinite(maxPacketBytes) ? maxPacketBytes : null,
+      // The browser-reported min/max stay raw so a clamped run still shows what
+      // the path claimed, next to the ceiling that was actually packetized to.
       minWebTransportMaxPacketBytes: this.minWebTransportMaxPacketBytes,
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
+      datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
       ...this.telemetry,
     };
   }
@@ -180,14 +202,29 @@ export class PreferredAudioTransport extends AudioTransport {
     this.fallback.unbind(socket);
   }
 
+  /**
+   * The datagram budget this transport will actually packetize to.
+   *
+   * `maxDatagramSize` is what the browser is willing to accept from the page,
+   * not what the QUIC path can carry: Chrome reports 65535 on a path whose
+   * packets are ~1200 bytes. Believing it means a 20 ms PCM chunk goes out as
+   * one ~1944-byte datagram, `writer.write()` rejects asynchronously, and the
+   * generic write-failure handler demotes to WebSocket for the rest of the
+   * capture. The rejection never reaches the `packet-too-large` path that
+   * would have re-split it, because the synchronous size guard compared
+   * against 65535 and let it through.
+   *
+   * So cap the budget at something a path MTU can hold. The raw browser value
+   * is still recorded for diagnostics; only what we packetize to is clamped.
+   */
   currentWebTransportMaxPacketBytes() {
     const live = Number(this.webTransport?.datagrams?.maxDatagramSize);
     if (Number.isInteger(live) && live > 0) {
       this.lastWebTransportMaxPacketBytes = live;
       this.observeWebTransportPacketBudget(live);
-      return live;
+      return Math.min(live, this.datagramPacketBytesCeiling);
     }
-    return this.lastWebTransportMaxPacketBytes;
+    return Math.min(this.lastWebTransportMaxPacketBytes, this.datagramPacketBytesCeiling);
   }
 
   maxPacketBytes() {
@@ -279,6 +316,7 @@ export class PreferredAudioTransport extends AudioTransport {
   demoteWebTransport(transport = this.webTransport) {
     if (transport && this.webTransport && transport !== this.webTransport) return;
     const writer = this.datagramWriter;
+    const demoted = this.webTransport;
     const wasActive = Boolean(this.webTransport || this.datagramWriter);
     this.webTransport = null;
     this.datagramWriter = null;
@@ -287,6 +325,13 @@ export class PreferredAudioTransport extends AudioTransport {
     if (wasActive) this.telemetry.webTransportDemotions += 1;
     if (writer) {
       try { writer.releaseLock(); } catch {}
+    }
+    // Releasing the writer stops this page sending datagrams, but it leaves the
+    // session open, and the server reads liveness from the session rather than
+    // from traffic. Without this close, micMediaPath() keeps answering
+    // 'webtransport' for a capture whose PCM has entirely moved to the socket.
+    if (demoted) {
+      try { demoted.close(); } catch {}
     }
   }
 

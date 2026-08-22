@@ -55,6 +55,17 @@ class FakeWebTransport {
   }
 }
 
+/**
+ * Reports the budget Chrome reported on the path that failed in production:
+ * 65535, on a link whose QUIC packets were ~1200 bytes.
+ */
+class OverstatedBudgetWebTransport extends FakeWebTransport {
+  readonly datagrams = {
+    maxDatagramSize: 65_535,
+    writable: { getWriter: () => this.writer },
+  };
+}
+
 class TooSmallWebTransport {
   readonly writer = new FakeDatagramWriter();
   readonly ready = Promise.resolve();
@@ -105,6 +116,9 @@ describe('browser AudioTransport', () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({
       minimumPacketBytes: 26,
+      // Above the fake's reported 1200 so this stays a test of the browser's
+      // budget rather than of the ceiling, which has its own test below.
+      datagramPacketBytesCeiling: 1500,
       WebTransportClass: FakeWebTransport,
     });
     const socket = new FakeSocket();
@@ -137,6 +151,7 @@ describe('browser AudioTransport', () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({
       minimumPacketBytes: 26,
+      datagramPacketBytesCeiling: 1500,
       WebTransportClass: FakeWebTransport,
     });
     const socket = new FakeSocket();
@@ -153,6 +168,63 @@ describe('browser AudioTransport', () => {
     assert.equal(result.maxPacketBytes, 1200);
     assert.deepEqual(instance.writer.writes, []);
     assert.deepEqual(socket.sent, []);
+  });
+
+  it('clamps a datagram budget the QUIC path cannot carry instead of writing an oversized datagram', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      WebTransportClass: OverstatedBudgetWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=overstated',
+    });
+
+    // What the page packetizes to is the ceiling, not the browser's claim.
+    assert.equal(transport.maxPacketBytes(), 1000);
+    assert.equal(transport.stats().maxWebTransportMaxPacketBytes, 65_535);
+    assert.equal(transport.stats().datagramPacketBytesCeiling, 1000);
+
+    // One 20 ms 48 kHz mono chunk plus an AudioPacket v2 header. Believing the
+    // browser sent this as a single datagram, whose asynchronous write
+    // rejection then demoted the whole capture to WebSocket.
+    const instance = OverstatedBudgetWebTransport.instances.at(-1)!;
+    const result = transport.send(new Uint8Array(1944).buffer);
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'packet-too-large');
+    assert.equal(result.maxPacketBytes, 1000);
+    assert.deepEqual(instance.writer.writes, [], 'an oversized datagram must never reach the writer');
+    assert.deepEqual(socket.sent, [], 'and must not be silently duplicated onto the socket');
+    assert.equal(transport.stats().webTransportDemotions, 0, 'a refused packet is not a broken path');
+  });
+
+  it('closes a demoted session so the server stops reporting the datagram path', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      WebTransportClass: FakeWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=demote',
+    });
+
+    const instance = FakeWebTransport.instances.at(-1)!;
+    let sessionClosed = false;
+    void instance.closed.then(() => { sessionClosed = true; });
+
+    transport.demoteWebTransport();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(sessionClosed, true, 'a released writer alone leaves the session alive on the server');
+    assert.equal(transport.stats().path, 'websocket');
+    assert.equal(transport.stats().webTransportDemotions, 1);
   });
 
   it('refuses a preferred path whose datagram budget cannot hold one application packet', async () => {

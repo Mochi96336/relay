@@ -7,6 +7,7 @@ import {
 const HALF_SEQUENCE_SPACE = 0x8000_0000;
 const CONTINUITY_TTL_MS = 15_000;
 const MAX_CONTINUITY_SNAPSHOTS = 8;
+const RESYNC_FORWARD_WINDOW_MULTIPLIER = 32;
 
 export type AudioPacketReceiverOptions = {
   source: AudioPacketSource;
@@ -98,6 +99,12 @@ function pruneContinuitySnapshots(wallNowMs = Date.now()) {
  * sequence 0 / sample 0 always resets the snapshot, so a coincidental generation
  * reuse cannot silently inherit another capture's frontier.
  *
+ * A same-generation sender can legitimately advance farther than the ordinary
+ * forward-jump guard after transport loss. One far-future packet is never
+ * enough to move the frontier: resync requires two consecutive packets with a
+ * non-decreasing sample timeline, and the candidate still has a finite second
+ * forward bound. Replay and absurd sequence jumps remain rejected.
+ *
  * If no in-process continuity snapshot exists and the caller did not provide an
  * explicit initial sequence, the first valid packet establishes the frontier.
  * That is the only sequence authority available after a Relay process restart:
@@ -135,6 +142,7 @@ export class AudioPacketReceiver {
   };
   private continuityCandidate: ContinuitySnapshot | null = null;
   private continuityResolved = false;
+  private resyncCandidate: PendingPacket | null = null;
 
   constructor(options: AudioPacketReceiverOptions) {
     if (!nonNegativeInteger(options.reorderWindowPackets)) {
@@ -203,6 +211,7 @@ export class AudioPacketReceiver {
     if (expectedSequence === null) throw new Error('receiver sequence origin is unavailable');
     const distance = sequenceDistance(expectedSequence, packet.sequence);
     if (distance === 0) {
+      this.resyncCandidate = null;
       const output: AudioPacket[] = [];
       this.emitExpected(packet, output);
       this.drainPending(output);
@@ -221,10 +230,12 @@ export class AudioPacketReceiver {
 
     if (distance > this.maxForwardJumpPackets) {
       this.counters.futurePackets += 1;
+      const output = this.tryResync(packet, nowMs, distance);
       this.rememberContinuity();
-      return [];
+      return output;
     }
 
+    this.resyncCandidate = null;
     this.counters.reorderedPackets += 1;
     this.pending.set(packet.sequence, { packet, receivedAtMs: nowMs });
 
@@ -299,6 +310,43 @@ export class AudioPacketReceiver {
     }
 
     this.rememberContinuity();
+  }
+
+  private tryResync(packet: AudioPacket, nowMs: number, distance: number): AudioPacket[] {
+    const maxResyncDistance = Math.min(
+      HALF_SEQUENCE_SPACE - 1,
+      this.maxForwardJumpPackets * RESYNC_FORWARD_WINDOW_MULTIPLIER,
+    );
+    if (distance > maxResyncDistance) {
+      this.resyncCandidate = null;
+      return [];
+    }
+
+    if (
+      this.lastEmittedEndSampleIndex !== null
+      && packet.firstSampleIndex < this.lastEmittedEndSampleIndex
+    ) {
+      this.resyncCandidate = null;
+      return [];
+    }
+
+    const candidate = this.resyncCandidate;
+    if (
+      candidate
+      && packet.sequence === nextSequence(candidate.packet.sequence)
+      && packet.firstSampleIndex >= candidate.packet.firstSampleIndex + candidate.packet.sampleCount
+    ) {
+      const output: AudioPacket[] = [];
+      this.pending.clear();
+      this.expectedSequence = candidate.packet.sequence;
+      this.resyncCandidate = null;
+      this.emitExpected(candidate.packet, output);
+      this.emitExpected(packet, output);
+      return output;
+    }
+
+    this.resyncCandidate = { packet, receivedAtMs: nowMs };
+    return [];
   }
 
   private rememberContinuity() {

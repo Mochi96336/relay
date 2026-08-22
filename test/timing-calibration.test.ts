@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
-import { analyzeTimingCalibration } from '../src/timing-calibration.js';
+import { analyzeTimingCalibration, resolveCalibrationLevelFloors } from '../src/timing-calibration.js';
 import { laggedPair, pulseTrain, toInt16 } from './helpers/harness.js';
 import {
   laggedMultibandMusicPair,
@@ -209,4 +209,26 @@ describe('analyzeTimingCalibration', () => {
     const { mic, backing } = laggedPair(6, RATE, 0);
     assert.throws(() => analyzeTimingCalibration(int16View(mic), int16View(backing), 0), /sample rate/);
   });
+});
+
+test('calibration level floors default conservatively and accept a tuned override', () => {
+  assert.deepEqual(
+    resolveCalibrationLevelFloors({}),
+    { micDbfs: -60, backingDbfs: -50 },
+  );
+  assert.deepEqual(
+    resolveCalibrationLevelFloors({
+      RELAY_CALIBRATION_MIN_MIC_LEVEL_DBFS: '-66',
+      RELAY_CALIBRATION_MIN_BACKING_LEVEL_DBFS: '-56',
+    }),
+    { micDbfs: -66, backingDbfs: -56 },
+  );
+});
+
+test('a level floor at or above full scale would reject every window, so it is refused', () => {
+  const floors = resolveCalibrationLevelFloors({
+    RELAY_CALIBRATION_MIN_MIC_LEVEL_DBFS: '0',
+    RELAY_CALIBRATION_MIN_BACKING_LEVEL_DBFS: 'loud',
+  });
+  assert.deepEqual(floors, { micDbfs: -60, backingDbfs: -50 });
 });

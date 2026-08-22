@@ -54,6 +54,36 @@ const MIN_SUPPORTING_BAND_SCORE = 0.12;
 const MIN_LOCAL_SCORE = 0.04;
 const DISTINCT_PEAK_RADIUS_MS = 100;
 
+/**
+ * Level floors, in dBFS RMS over the whole window.
+ *
+ * A fast reject before feature extraction, not a quality gate: everything that
+ * decides whether a result is trustworthy - band activity, global score, peak
+ * margin, band support, segment agreement, and then agreement across separate
+ * windows - runs after this and still applies. Lowering a floor lets more
+ * windows reach those gates; it does not weaken them.
+ *
+ * Tunable because the workable floor depends on the room and the phone. On the
+ * validated Robot deployment the microphone side measured -54 to -59 dBFS
+ * against a -60 default, so ordinary loud/quiet variation within one song
+ * crossed it repeatedly.
+ */
+export function resolveCalibrationLevelFloors(env: NodeJS.ProcessEnv = process.env) {
+  const floor = (name: string, fallback: number) => {
+    const raw = env[name];
+    if (raw === undefined || raw.trim() === '') return fallback;
+    const value = Number(raw);
+    // A floor at or above 0 dBFS would reject every real window.
+    return Number.isFinite(value) && value < 0 ? value : fallback;
+  };
+  return {
+    micDbfs: floor('RELAY_CALIBRATION_MIN_MIC_LEVEL_DBFS', -60),
+    backingDbfs: floor('RELAY_CALIBRATION_MIN_BACKING_LEVEL_DBFS', -50),
+  };
+}
+
+const LEVEL_FLOORS = resolveCalibrationLevelFloors();
+
 const ENERGY_WEIGHT = 0.4;
 const FLUX_WEIGHT = 0.6;
 
@@ -347,16 +377,16 @@ export function analyzeTimingCalibration(
   // Carry the measurement into the refusal. "Too quiet" alone cannot separate a
   // window that missed by a decibel from one that was never going to pass, and
   // the analyser throws before it can report the level any other way.
-  if (backingLevelDbfs < -50) {
+  if (backingLevelDbfs < LEVEL_FLOORS.backingDbfs) {
     throw new Error(
       `Desktop source is too quiet for timing calibration `
-      + `(${backingLevelDbfs.toFixed(1)} dBFS, needs -50).`,
+      + `(${backingLevelDbfs.toFixed(1)} dBFS, needs ${LEVEL_FLOORS.backingDbfs}).`,
     );
   }
-  if (micLevelDbfs < -60) {
+  if (micLevelDbfs < LEVEL_FLOORS.micDbfs) {
     throw new Error(
-      `Phone speaker bleed is too quiet (${micLevelDbfs.toFixed(1)} dBFS, needs -60). `
-      + 'Raise phone volume and try again.',
+      `Phone speaker bleed is too quiet (${micLevelDbfs.toFixed(1)} dBFS, `
+      + `needs ${LEVEL_FLOORS.micDbfs}). Raise phone volume and try again.`,
     );
   }
 

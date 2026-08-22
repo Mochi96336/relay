@@ -519,11 +519,44 @@ const calibration = new CalibrationSession({
   maxLagMs: CALIBRATION_MAX_LAG_MS,
   analyze: analyzeTimingCalibrationInWorker,
   onSettled: () => {
+    logCalibrationTransition('settled');
     syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());
     broadcastJson(sourceStatusPayload());
   },
 });
+
+/**
+ * Content calibration had no trace of its own, so a run that never produced an
+ * answer could not be told from one that produced answers and rejected them.
+ * Logged on transition rather than per tick: the session settles on real events
+ * only, and the key below keeps a repeated identical state quiet.
+ */
+let lastCalibrationLogKey: string | null = null;
+function logCalibrationTransition(reason: string) {
+  const status = calibration.status();
+  const key = [
+    status.state,
+    calibrationKind,
+    status.error ?? '',
+    status.confidence ?? '',
+    status.windowsAgreed,
+  ].join('|');
+  if (key === lastCalibrationLogKey) return;
+  lastCalibrationLogKey = key;
+
+  const seconds = (samples: number) => (samples / MIX_SAMPLE_RATE).toFixed(2);
+  console.log(
+    `[calibration] ${status.state} kind=${calibrationKind} (${reason})`
+    + ` progress=${Math.round(status.progress * 100)}%`
+    + ` micSpan=${seconds(status.micSpanSamples)}s`
+    + ` backingSpan=${seconds(status.backingSpanSamples)}s`
+    + ` windows=${status.windowsAgreed}/${status.windowsNeeded}`
+    + (status.confidence !== null ? ` confidence=${status.confidence.toFixed(3)}` : '')
+    + (status.micLagMs !== null ? ` lagMs=${status.micLagMs.toFixed(0)}` : '')
+    + (status.error ? ` error=${status.error}` : ''),
+  );
+}
 
 let contentValidationBaselineRevision = -1;
 /** The one confirmed revision whose live read head must approach, not jump to. */
@@ -1780,6 +1813,7 @@ function maybeAutoCalibrate(nowMs: number) {
   calibrationWasAutomatic = true;
   calibrationKind = 'content';
   calibration.start(nowMs);
+  logCalibrationTransition('auto-start');
   broadcastJson(timingCalibrationStatusPayload());
 }
 
@@ -2854,6 +2888,7 @@ wss.on('connection', (rawSocket, request) => {
       calibrationWasAutomatic = false;
       calibrationKind = 'content';
       calibration.start(nowMs);
+      logCalibrationTransition('requested by a participant');
       broadcastJson(timingCalibrationStatusPayload());
       return;
     }

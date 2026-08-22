@@ -10,7 +10,7 @@ const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 
 test('an unarmed Source preview cannot announce or chase authoritative seek discontinuities', () => {
   assert.match(
     source,
-    /loadedVideoId !== timeline\.videoId[\s\S]{0,500}if \(armed\) send\(\{ type: 'source-seeked' \}\)/,
+    /loadedVideoId !== timeline\.videoId[\s\S]{0,500}if \(armed\) send\(\{ type: 'source-seeked', reason: 'load' \}\)/,
     'initial preview cue may position YouTube but must not invalidate active calibration',
   );
   assert.match(
@@ -23,7 +23,7 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
 test('server fences source-seeked from any no-longer-active Robot source', () => {
   assert.match(
     serverSource,
-    /if \(payload\.type === 'source-seeked'\) \{[\s\S]{0,700}if \(socket\.isRobotSource !== undefined && socket !== activeRobotSource\) return;[\s\S]{0,200}sourceGeneration \+= 1/,
+    /if \(payload\.type === 'source-seeked'\) \{[\s\S]{0,700}if \(socket\.isRobotSource !== undefined && socket !== activeRobotSource\) return;[\s\S]{0,900}sourceGeneration \+= 1/,
   );
 });
 
@@ -79,6 +79,78 @@ test('superseded Robot seek cannot erase the active Robot delta', async () => {
     first.close();
     second.close();
   } finally {
+    await relay.stop();
+  }
+});
+
+test('a follower correction restarts the calibration window without ending the run', async () => {
+  const relay = await startRelay({
+    RELAY_AUTO_CALIBRATE: '0',
+    RELAY_CALIBRATION_PROBE: '0',
+    RELAY_HEARTBEAT_MS: '60000',
+  });
+  const RATE = 48_000;
+  const FRAME = Buffer.alloc(Math.round(RATE * 0.02) * 2);
+  let flowing: NodeJS.Timeout | null = null;
+  try {
+    const backing = await RelayClient.connect(relay);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
+    await backing.waitForType('registered');
+
+    const publisher = await RelayClient.connect(relay);
+    publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    await publisher.waitForType('registered');
+
+    const robot = await RelayClient.connect(relay);
+    robot.send({ type: 'robot-source-hello' });
+
+    const observer = await RelayClient.connect(relay);
+    observer.send({ type: 'register', role: 'monitor' });
+    await observer.waitForType('registered');
+
+    flowing = setInterval(() => {
+      backing.sendPcm(FRAME);
+      publisher.sendPcm(FRAME);
+      publisher.send({
+        type: 'youtube-telemetry',
+        videoId: 'dQw4w9WgXcQ',
+        state: 1,
+        currentTime: 42,
+        duration: 200,
+        playbackRate: 1,
+      });
+    }, 40);
+    await sleep(200);
+
+    publisher.send({ type: 'start-timing-calibration' });
+    await observer.waitFor(
+      (message) => message.type === 'timing-calibration-status' && message.state === 'collecting',
+      4_000,
+    );
+
+    // The Robot keeping step with the phone past its dead band. It breaks the
+    // window in flight, because content correlation measures a sum that just
+    // moved, but the run must keep going rather than waiting out the
+    // auto-calibration floor before it may try again.
+    robot.send({ type: 'source-seeked', reason: 'follower-correction' });
+    await sleep(120);
+    const afterCorrection = await freshCalibrationStatus(observer);
+    assert.equal(afterCorrection.state, 'collecting', 'a follower correction must not end the run');
+    assert.equal(afterCorrection.error, null);
+
+    // A discontinuity that is not the follower keeping step still ends it.
+    robot.send({ type: 'source-seeked' });
+    await sleep(120);
+    const afterSeek = await freshCalibrationStatus(observer);
+    assert.equal(afterSeek.state, 'failed');
+    assert.match(String(afterSeek.error), /seeked during calibration/);
+
+    observer.close();
+    robot.close();
+    publisher.close();
+    backing.close();
+  } finally {
+    if (flowing) clearInterval(flowing);
     await relay.stop();
   }
 });

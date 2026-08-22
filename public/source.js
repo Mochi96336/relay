@@ -444,7 +444,7 @@ function applyTimeline() {
       // Loading a preview while Source is unarmed is not an authoritative
       // playback discontinuity. Only the player actually feeding Relay may
       // invalidate timing calibration.
-      if (armed) send({ type: 'source-seeked' });
+      if (armed) send({ type: 'source-seeked', reason: 'load' });
       renderTimeline();
       return;
     }
@@ -465,7 +465,11 @@ function applyTimeline() {
       player.seekTo(Math.max(0, target), true);
       lastSeekAt = now;
       robotDeltaSuppressedUntil = now + ROBOT_DELTA_SETTLE_MS;
-      send({ type: 'source-seeked' });
+      // Say which kind of discontinuity this is. Following the phone past the
+      // dead band is ordinary operation that happens as often as every 700 ms;
+      // a person moving the song is a different event, and the server cannot
+      // tell them apart from the seek alone.
+      send({ type: 'source-seeked', reason: 'follower-correction' });
     } else if (
       ROBOT_MODE
       && armed

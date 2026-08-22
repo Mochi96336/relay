@@ -532,6 +532,34 @@ const calibration = new CalibrationSession({
  * Logged on transition rather than per tick: the session settles on real events
  * only, and the key below keeps a repeated identical state quiet.
  */
+/**
+ * Follower corrections are the thing content calibration has to fit between, so
+ * their rate decides whether restarting a window is enough on its own or the
+ * dead band also has to widen while measuring. Summarised rather than logged
+ * per event: they can arrive every 700 ms, and one line per correction would
+ * bury everything else.
+ */
+let followerCorrections = 0;
+let followerCorrectionWindowStartMs: number | null = null;
+let lastFollowerCorrectionLogMs = -Infinity;
+const FOLLOWER_CORRECTION_LOG_MS = 10_000;
+
+function noteFollowerCorrection(nowMs: number) {
+  if (followerCorrectionWindowStartMs === null) followerCorrectionWindowStartMs = nowMs;
+  followerCorrections += 1;
+  if (nowMs - lastFollowerCorrectionLogMs < FOLLOWER_CORRECTION_LOG_MS) return;
+
+  const spanMs = Math.max(1, nowMs - followerCorrectionWindowStartMs);
+  console.log(
+    `[source] ${followerCorrections} follower correction(s) in ${(spanMs / 1000).toFixed(1)}s`
+    + ` (one per ${(spanMs / followerCorrections / 1000).toFixed(1)}s;`
+    + ` content calibration needs ${(TIMING_CALIBRATION_MS / 1000).toFixed(0)}s uninterrupted)`,
+  );
+  lastFollowerCorrectionLogMs = nowMs;
+  followerCorrections = 0;
+  followerCorrectionWindowStartMs = null;
+}
+
 let lastCalibrationLogKey: string | null = null;
 function logCalibrationTransition(reason: string) {
   const status = calibration.status();
@@ -2903,10 +2931,23 @@ wss.on('connection', (rawSocket, request) => {
       // the Robot source lifecycle. Replacement clears the active flag to
       // false, but must not restore seek authority to that old socket.
       if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
+      // A follower correction is the Robot keeping step with the phone past the
+      // 450 ms dead band, which can recur as often as every 700 ms. It breaks
+      // the window being collected, because content correlation measures the
+      // whole sum at once and that sum just moved - but it is not a reason to
+      // end the run. Failing the session made every content calibration on a
+      // Robot route unreachable: collection restarts, is cut short, fails, and
+      // waits out the auto-calibration floor before trying again.
+      const followerCorrection = payload.reason === 'follower-correction';
+      if (followerCorrection) noteFollowerCorrection(performance.now());
       sourceGeneration += 1;
       clearContentValidationBaseline();
       robotPlayerOffset.reset();
-      if (calibration.collecting) {
+      if (calibration.collecting && followerCorrection) {
+        calibration.start(performance.now());
+        logCalibrationTransition('restarted by a follower correction');
+        broadcastJson(timingCalibrationStatusPayload());
+      } else if (calibration.collecting) {
         calibration.fail('The desktop player seeked during calibration. Start calibration again.');
       } else {
         syncAppliedCalibration();

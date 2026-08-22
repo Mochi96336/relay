@@ -145,7 +145,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.minimumPacketBytes = minimumPacketBytes;
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.datagramQueuePackets = datagramQueuePackets;
-    this.appliedDatagramQueuePackets = null;
+    this.outstandingDatagramWrites = 0;
     this.WebTransportClass = WebTransportClass;
     this.webTransport = null;
     this.datagramWriter = null;
@@ -206,7 +206,7 @@ export class PreferredAudioTransport extends AudioTransport {
       minWebTransportMaxPacketBytes: this.minWebTransportMaxPacketBytes,
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
-      datagramQueuePackets: this.appliedDatagramQueuePackets,
+      datagramQueuePackets: this.datagramQueuePackets,
       ...this.telemetry,
     };
   }
@@ -256,12 +256,12 @@ export class PreferredAudioTransport extends AudioTransport {
 
   state() {
     if (this.datagramWriter) {
-      const desiredSize = Number(this.datagramWriter.desiredSize);
       const maxPacketBytes = this.maxPacketBytes();
       if (!this.datagramWriter) return this.fallback.state();
+      const ready = this.outstandingDatagramWrites < this.datagramQueuePackets;
       return {
-        ready: Number.isNaN(desiredSize) || desiredSize > 0,
-        reason: Number.isNaN(desiredSize) || desiredSize > 0 ? null : 'congested',
+        ready,
+        reason: ready ? null : 'congested',
         bufferedAmount: 0,
         maxPacketBytes,
         path: 'webtransport',
@@ -320,23 +320,21 @@ export class PreferredAudioTransport extends AudioTransport {
       // Queue depth is latency for realtime audio, so keep it just past one
       // chunk's burst rather than generous: still shallow enough that a truly
       // backpressured path drops promptly instead of buffering stale voice.
-      // Read the depth back rather than assuming the write landed. The attribute
-      // is readonly in some implementations, and in a module (always strict) that
-      // assignment throws, which a bare catch would turn into a silent 1-deep
-      // queue that looks exactly like real congestion in the telemetry.
+      // Best effort only, and deliberately not depended on. outgoingHighWaterMark
+      // sizes the user agent's own datagram buffer; the writable stream's
+      // queuing strategy stays at one, so writer.desiredSize reports whether a
+      // write is in flight rather than whether the path is congested. Raising
+      // this was accepted by the browser and changed nothing, which is why
+      // backpressure is now counted here instead of read from the stream.
       try {
         transport.datagrams.outgoingHighWaterMark = this.datagramQueuePackets;
       } catch {}
-      const appliedQueuePackets = Number(transport.datagrams?.outgoingHighWaterMark);
-      this.appliedDatagramQueuePackets = Number.isInteger(appliedQueuePackets)
-        && appliedQueuePackets > 0
-        ? appliedQueuePackets
-        : null;
 
       const writable = transport.datagrams.writable ?? transport.datagrams.createWritable();
       const writer = writable.getWriter();
       this.webTransport = transport;
       this.datagramWriter = writer;
+      this.outstandingDatagramWrites = 0;
       this.preferredUrl = offer.url;
       this.lastWebTransportMaxPacketBytes = maxPacketBytes;
       this.observeWebTransportPacketBudget(maxPacketBytes);
@@ -361,7 +359,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
-    this.appliedDatagramQueuePackets = null;
+    this.outstandingDatagramWrites = 0;
     if (wasActive) this.telemetry.webTransportDemotions += 1;
     if (writer) {
       try { writer.releaseLock(); } catch {}
@@ -431,8 +429,7 @@ export class PreferredAudioTransport extends AudioTransport {
       };
     }
 
-    const desiredSize = Number(writer.desiredSize);
-    if (!Number.isNaN(desiredSize) && desiredSize <= 0) {
+    if (this.outstandingDatagramWrites >= this.datagramQueuePackets) {
       this.telemetry.webTransportCongestedRejects += 1;
       return {
         ready: false,
@@ -449,16 +446,22 @@ export class PreferredAudioTransport extends AudioTransport {
       const transport = this.webTransport;
       const generation = this.preferenceGeneration;
       this.telemetry.webTransportPacketsSubmitted += 1;
-      Promise.resolve(writer.write(bytes)).catch(() => {
-        // A write belongs to the transport generation that submitted it. The
-        // promise may reject after Mic teardown/restart has already installed a
-        // newer WebTransport; that stale completion must not demote the new
-        // capture or contaminate its transport-health evidence.
-        if (
-          generation !== this.preferenceGeneration
-          || writer !== this.datagramWriter
-          || transport !== this.webTransport
-        ) return;
+      this.outstandingDatagramWrites += 1;
+      // A write belongs to the transport generation that submitted it. The
+      // promise may settle after Mic teardown/restart has already installed a
+      // newer WebTransport; that stale completion must not demote the new
+      // capture, contaminate its transport-health evidence, or decrement an
+      // in-flight count that now belongs to a different session.
+      const ownsCapture = () => generation === this.preferenceGeneration
+        && writer === this.datagramWriter
+        && transport === this.webTransport;
+      const settle = () => {
+        if (!ownsCapture()) return;
+        this.outstandingDatagramWrites = Math.max(0, this.outstandingDatagramWrites - 1);
+      };
+      Promise.resolve(writer.write(bytes)).then(settle, () => {
+        if (!ownsCapture()) return;
+        settle();
         this.telemetry.webTransportSendFailures += 1;
         this.demoteWebTransport(transport);
       });

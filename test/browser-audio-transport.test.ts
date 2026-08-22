@@ -314,8 +314,7 @@ describe('browser AudioTransport', () => {
     });
 
     const instance = QueueingWebTransport.instances.at(-1)!;
-    assert.equal(instance.datagrams.outgoingHighWaterMark, 4, 'the platform default of 1 fits one datagram');
-    assert.equal(transport.stats().datagramQueuePackets, 4, 'the depth is read back, not assumed');
+    assert.equal(transport.stats().datagramQueuePackets, 4);
 
     // The two datagrams one 20 ms chunk becomes, written back to back with no
     // chance for the queue to drain in between.
@@ -362,7 +361,7 @@ describe('browser AudioTransport', () => {
     assert.equal(transport.stats().webTransportDemotions, 0);
   });
 
-  it('reports the depth the platform kept when the outgoing queue cannot be raised', async () => {
+  it('bounds datagrams locally even when the platform refuses a deeper queue', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     ReadonlyQueueWebTransport.instances.length = 0;
     const transport = new PreferredAudioTransport({
@@ -376,12 +375,15 @@ describe('browser AudioTransport', () => {
       url: 'https://media.example.test:4433/media?ticket=readonly',
     });
 
-    // Assigning to a readonly accessor throws in a module, and swallowing that
-    // would leave a 1-deep queue reported as the 4 that was asked for - which
-    // reads in telemetry as genuine congestion rather than a rejected setting.
-    assert.equal(transport.stats().datagramQueuePackets, 1);
+    // This transport keeps outgoingHighWaterMark at 1 and its writer reports
+    // desiredSize accordingly. Reading backpressure off the stream would drop
+    // every datagram after the first of each chunk; the local bound does not.
+    const instance = ReadonlyQueueWebTransport.instances.at(-1)!;
+    assert.equal(instance.datagrams.outgoingHighWaterMark, 1);
     assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
-    assert.equal(transport.send(new Uint8Array(100).buffer).sent, false, 'the shallow queue is still real');
+    assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
+    assert.equal(instance.writer.writes.length, 2);
+    assert.equal(transport.stats().webTransportCongestedRejects, 0);
   });
 
   it('refuses a preferred path whose datagram budget cannot hold one application packet', async () => {
@@ -404,7 +406,12 @@ describe('browser AudioTransport', () => {
 
   it('drops a backpressured datagram instead of duplicating the same packet over WebSocket', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
-    const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+    // Backpressure is the count of datagrams still in flight, not the writable
+    // stream's desiredSize, so fill the bound rather than poking the writer.
+    const transport = new PreferredAudioTransport({
+      datagramQueuePackets: 1,
+      WebTransportClass: FakeWebTransport,
+    });
     const socket = new FakeSocket();
     transport.bind(socket);
     await transport.prefer({
@@ -412,13 +419,12 @@ describe('browser AudioTransport', () => {
       url: 'https://media.example.test:4433/media?ticket=pressure',
     });
 
-    const instance = FakeWebTransport.instances.at(-1)!;
-    instance.writer.desiredSize = 0;
-    const result = transport.send(new Uint8Array([1]).buffer);
+    assert.equal(transport.send(new Uint8Array([1]).buffer).sent, true);
+    const result = transport.send(new Uint8Array([2]).buffer);
     assert.equal(result.sent, false);
     assert.equal(result.reason, 'congested');
     assert.equal(result.path, 'webtransport');
-    assert.deepEqual(socket.sent, []);
+    assert.deepEqual(socket.sent, [], 'a dropped datagram is never duplicated onto the socket');
   });
 
   it('falls back on the next packet after the preferred transport closes', async () => {

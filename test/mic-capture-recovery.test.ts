@@ -38,6 +38,30 @@ test('background foreground without sample progress becomes a capture discontinu
   assert.equal(watchdog.observe(snap(520, 1.12, 384), { freshPcm: true }).recovered, true);
 });
 
+test('background partial progress followed by a long stall becomes a capture discontinuity', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
+  watchdog.start(snap(0, 1, 128));
+  watchdog.noteHidden(snap(100, 1.1, 128, 'running', false));
+
+  // WebKit may deliver a little more PCM after the page hides and only then
+  // suspend the graph. That brief progress must not bless the whole hidden
+  // interval as one continuous sample clock.
+  watchdog.observe(snap(200, 1.2, 256, 'running', false), { freshPcm: true });
+  const foreground = watchdog.noteForeground(snap(1_000, 1.2, 256, 'running', true));
+  assert.equal(foreground.discontinuity, true);
+});
+
+test('background capture that keeps producing fresh PCM stays on the same generation', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
+  watchdog.start(snap(0, 1, 128));
+  watchdog.noteHidden(snap(100, 1.1, 128, 'running', false));
+  watchdog.observe(snap(700, 1.7, 256, 'running', false), { freshPcm: true });
+  watchdog.observe(snap(900, 1.9, 384, 'running', false), { freshPcm: true });
+
+  const foreground = watchdog.noteForeground(snap(1_000, 2.0, 384, 'running', true));
+  assert.equal(foreground.discontinuity, false);
+});
+
 test('running AudioContext without PCM requests one graph rebuild', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   watchdog.start(snap(0, 1, 0));

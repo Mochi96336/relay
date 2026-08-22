@@ -90,4 +90,29 @@ describe('audio uplink health', () => {
 
     assert.equal(parseAudioUplinkHealth(payload), null);
   });
+
+  it('carries the capture settings the phone actually applied', () => {
+    const payload = validHealth();
+    (payload as Record<string, unknown>).capture = {
+      echoCancellation: true,
+      noiseSuppression: false,
+      autoGainControl: false,
+      audioSessionType: 'play-and-record',
+    };
+
+    const parsed = parseAudioUplinkHealth(payload);
+    assert.notEqual(parsed, null);
+    assert.equal(parsed!.capture!.echoCancellation, true, 'a refused constraint must survive to the server');
+    assert.equal(parsed!.capture!.audioSessionType, 'play-and-record');
+  });
+
+  it('treats an absent capture block as unknown and a malformed one as invalid', () => {
+    const without = validHealth();
+    delete (without as Record<string, unknown>).capture;
+    assert.equal(parseAudioUplinkHealth(without)!.capture, null);
+
+    const broken = validHealth();
+    (broken as Record<string, unknown>).capture = 'play-and-record';
+    assert.equal(parseAudioUplinkHealth(broken), null);
+  });
 });

@@ -177,6 +177,27 @@ function recordUplinkDrop(sampleCount, reason) {
   );
 }
 
+let captureAppliedSettings = null;
+
+function readCaptureSettings(stream) {
+  try {
+    const track = stream?.getAudioTracks?.()[0];
+    const settings = track?.getSettings?.() ?? null;
+    if (!settings) return null;
+    const flag = (value) => (typeof value === 'boolean' ? value : null);
+    return {
+      echoCancellation: flag(settings.echoCancellation),
+      noiseSuppression: flag(settings.noiseSuppression),
+      autoGainControl: flag(settings.autoGainControl),
+      audioSessionType: typeof globalThis.navigator?.audioSession?.type === 'string'
+        ? globalThis.navigator.audioSession.type
+        : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function audioUplinkHealthPayload() {
   return {
     type: 'audio-uplink-health',
@@ -187,6 +208,7 @@ function audioUplinkHealthPayload() {
     inputMuted: captureInputMuted,
     droppedSamples: { total: uplinkDroppedSamples, ...uplinkDroppedSamplesByReason },
     controlReconnects: Math.max(0, publisherControlConnections - 1),
+    capture: captureAppliedSettings,
     transport: audioTransport.stats(),
   };
 }
@@ -842,6 +864,14 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         dispose: (stream) => stream.getTracks().forEach((track) => track.stop()),
       },
     );
+
+    // Constraints are a request, not a guarantee. A phone may keep echo
+    // cancellation on - and iOS engages voice processing for a play-and-record
+    // session regardless - which removes exactly the signal both calibration
+    // methods depend on: this device's own speaker, heard by its own mic.
+    // Record what was actually applied so a failed calibration can be told
+    // apart from a refused constraint without a phone in hand.
+    captureAppliedSettings = readCaptureSettings(preparedStream);
 
     preparedContext = new AudioContext({ latencyHint: 'interactive' });
     const captureContext = preparedContext;

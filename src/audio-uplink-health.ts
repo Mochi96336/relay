@@ -20,6 +20,18 @@ export type AudioUplinkTransportHealth = {
   webSocketSendFailures: number;
 };
 
+/**
+ * What the phone's capture actually applied, which can differ from what was
+ * requested. Echo cancellation removes this device's own speaker from its own
+ * microphone, and that is precisely the path both calibration methods measure.
+ */
+export type AudioUplinkCaptureSettings = {
+  echoCancellation: boolean | null;
+  noiseSuppression: boolean | null;
+  autoGainControl: boolean | null;
+  audioSessionType: string | null;
+};
+
 export type AudioUplinkHealth = {
   version: 1;
   captureGeneration: number;
@@ -33,6 +45,7 @@ export type AudioUplinkHealth = {
     packetTooLarge: number;
   };
   controlReconnects: number;
+  capture: AudioUplinkCaptureSettings | null;
   transport: AudioUplinkTransportHealth;
 };
 
@@ -91,6 +104,26 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     || total !== disconnected + congested + packetTooLarge
   ) return null;
 
+  // Absent means an older page or a browser that reports nothing, not a broken
+  // payload; a present but non-object value is a real malformation.
+  const rawCapture = payload.capture;
+  let capture: AudioUplinkCaptureSettings | null = null;
+  if (rawCapture !== undefined && rawCapture !== null) {
+    const settings = record(rawCapture);
+    if (settings === null) return null;
+    const flag = (value: unknown) => (typeof value === 'boolean' ? value : null);
+    const sessionType = settings.audioSessionType;
+    if (sessionType !== undefined && sessionType !== null && typeof sessionType !== 'string') {
+      return null;
+    }
+    capture = {
+      echoCancellation: flag(settings.echoCancellation),
+      noiseSuppression: flag(settings.noiseSuppression),
+      autoGainControl: flag(settings.autoGainControl),
+      audioSessionType: typeof sessionType === 'string' ? sessionType : null,
+    };
+  }
+
   const path = transport.path;
   if (path !== 'websocket' && path !== 'webtransport') return null;
 
@@ -145,6 +178,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     inputMuted: payload.inputMuted === true,
     droppedSamples: { total, disconnected, congested, packetTooLarge },
     controlReconnects,
+    capture,
     transport: {
       path,
       maxPacketBytes,

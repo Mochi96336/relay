@@ -1,22 +1,23 @@
 name: E integration repair
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/correctness-take-boundaries-rebased
+      - agent/correctness-repair
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: github.event.head_commit.message == 'chore: prepare E integration repair'
+    if: github.head_ref == 'agent/correctness-take-boundaries-rebased'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: agent/correctness-take-boundaries-rebased
 
       - name: Rebuild E on latest umbrella
         shell: bash
@@ -48,15 +49,11 @@ jobs:
           from pathlib import Path
           import re
 
-          # Keep F's server implementation as authority and replay only E's four
-          # integration seams: imports, frame boundary projection, Start, Stop.
           p = Path('src/server.ts')
           s = p.read_text()
 
           anchor = "import { TakeController, type TakeSongSnapshot } from './take-controller.js';"
-          replacement = "import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';\n" \
-                        + anchor + "\n" \
-                        + "import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';"
+          replacement = "import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';\n" + anchor + "\n" + "import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';"
           assert s.count(anchor) == 1
           s = s.replace(anchor, replacement, 1)
 
@@ -119,8 +116,6 @@ jobs:
           s = s.replace(old, new, 1)
           p.write_text(s)
 
-          # #80 predates the two D integration regression tests. Use its
-          # E-adjusted TakeController signatures, then restore those D tests.
           p = Path('test/take-position.test.ts')
           e = p.read_text()
           d = Path('/tmp/take-position-d.ts').read_text()
@@ -147,18 +142,16 @@ jobs:
                   i += 1
               raise AssertionError(title)
 
-          titles = [
+          for title in [
               'Take sample identity rejects a mix-generation change without mutating the accepted range',
               'Take sample identity rejects overlap or reordering and preserves explicit forward holes',
-          ]
-          for title in titles:
+          ]:
               if title not in e:
                   e = e.rstrip() + '\n\n' + extract_test(d, title) + '\n'
           p.write_text(e)
           PY
 
           rm .github/workflows/e-integration-repair.yml
-
           git diff --check
           git status --short
 

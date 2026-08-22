@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
-const source = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8');
+import { authorityState } from '../public/authority-freshness.js';
+
+const source = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8')
+  .replace("import { authorityState } from './authority-freshness.js';\n\n", '');
 
 type Listener = (event: { detail?: any }) => void;
 
@@ -78,6 +81,9 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
 
   const window = {
     relayI18n: { getLocale: () => 'zh-Hant' },
+    relayParticipantId: 'self',
+    relayProductAuthority: null as any,
+    relayCommandAuthority: null as any,
     addEventListener(type: string, listener: Listener) {
       const current = windowListeners.get(type) ?? [];
       current.push(listener);
@@ -90,14 +96,43 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     constructor(type: string) { this.type = type; }
   }
 
-  runInNewContext(source, { window, document, Event });
+  runInNewContext(source, { window, document, Event, authorityState });
 
   function emit(type: string, detail: any) {
     for (const listener of windowListeners.get(type) ?? []) listener({ detail });
   }
 
-  function emitProductStatus(actions: Record<string, unknown>, timing: Record<string, unknown> = { state: 'idle' }) {
-    emit('relay-product-status', { actions, timing });
+  function emitCommandAuthority(fresh: boolean) {
+    emit('relay-command-authority', authorityState({
+      authorityFresh: fresh,
+      lastKnownSnapshot: { registered: true },
+      commandChannelFresh: fresh,
+      authorized: true,
+      serverAllowed: true,
+    }));
+  }
+
+  function emitProductAuthority(fresh: boolean, snapshot: any) {
+    emit('relay-product-authority', authorityState({
+      authorityFresh: fresh,
+      lastKnownSnapshot: snapshot,
+    }));
+  }
+
+  function emitProductStatus(
+    actions: Record<string, unknown>,
+    timing: Record<string, unknown> = { state: 'idle' },
+    ownerId: string | null = options.selfMic === 'live' ? 'self' : 'other',
+  ) {
+    const detail = {
+      type: 'product-status',
+      actions,
+      timing,
+      room: { mic: { ownerId, state: ownerId ? 'live' : 'free' } },
+    };
+    emitCommandAuthority(true);
+    emit('relay-product-status', detail);
+    return detail;
   }
 
   return {
@@ -107,6 +142,8 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     get status() { return visibleStatus; },
     body,
     emit,
+    emitCommandAuthority,
+    emitProductAuthority,
     emitProductStatus,
     commandCount: () => commandCount,
   };
@@ -125,7 +162,7 @@ test('calibration presenter replaces painted legacy nodes instead of racing them
   assert.doesNotMatch(source, /MutationObserver/);
 });
 
-test('content calibration availability comes from ProductStatus, not Song DOM inference', () => {
+test('content calibration availability comes from fresh ProductStatus authority', () => {
   const ui = harness({ selfMic: 'live' });
 
   ui.emitProductStatus({
@@ -147,7 +184,19 @@ test('content calibration availability comes from ProductStatus, not Song DOM in
   assert.equal(ui.button.disabled, false);
 });
 
-test('Robot ready ignores Song-era state when this phone owns the Mic', () => {
+test('local Mic state cannot impersonate server ownership', () => {
+  const ui = harness({ selfMic: 'live' });
+  ui.emitProductStatus({
+    canStartCalibration: true,
+    startCalibrationBlockedReason: null,
+    startCalibrationMode: 'boot-probe',
+  }, { state: 'idle' }, 'another-participant');
+
+  assert.equal(ui.button.hidden, true);
+  assert.equal(ui.button.disabled, true);
+});
+
+test('Robot ready ignores Song-era state when fresh server authority owns the Mic', () => {
   const ui = harness({ selfMic: 'live' });
 
   ui.emitProductStatus({
@@ -173,7 +222,7 @@ test('healthy calibration does not leave a disabled recovery action for a non-ow
   assert.equal(ui.button.disabled, true);
 });
 
-test('Robot capture-path blocks project as preparing audio paths only for the singer', () => {
+test('Robot capture-path blocks project as preparing audio paths only for the server owner', () => {
   for (const reason of ['sources-not-connected', 'sources-not-streaming']) {
     const ui = harness({ selfMic: 'live' });
     ui.emitProductStatus({
@@ -200,6 +249,39 @@ test('active calibration is visible as aligning and cannot be started twice', ()
   assert.equal(ui.status.textContent, '對齊中…');
 });
 
+test('last-known calibration stays visible but not actionable while authority is stale', () => {
+  const ui = harness({ selfMic: 'live' });
+  const snapshot = ui.emitProductStatus({
+    canStartCalibration: true,
+    startCalibrationBlockedReason: null,
+    startCalibrationMode: 'boot-probe',
+  });
+  assert.equal(ui.button.disabled, false);
+
+  ui.emitProductAuthority(false, snapshot);
+  assert.equal(ui.button.hidden, false);
+  assert.equal(ui.button.disabled, true);
+  assert.equal(ui.status.textContent, '重新連線中…');
+
+  ui.button.click();
+  assert.equal(ui.commandCount(), 0);
+});
+
+test('open command transport without fresh registration is still non-actionable', () => {
+  const ui = harness({ selfMic: 'live' });
+  ui.emitProductStatus({
+    canStartCalibration: true,
+    startCalibrationBlockedReason: null,
+    startCalibrationMode: 'boot-probe',
+  });
+  ui.emitCommandAuthority(false);
+
+  assert.equal(ui.button.disabled, true);
+  assert.equal(ui.status.textContent, '重新連線中…');
+  ui.button.click();
+  assert.equal(ui.commandCount(), 0);
+});
+
 test('a real visible click reaches the installed command transport and waits for server state', () => {
   const ui = harness({ selfMic: 'live' });
   ui.emitProductStatus({
@@ -221,4 +303,17 @@ test('a real visible click reaches the installed command transport and waits for
   }, { state: 'calibrating' });
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.button.textContent, '對齊中…');
+});
+
+test('calibration command rejection is visible on the ProductStatus-owned presenter', () => {
+  const ui = harness({ selfMic: 'live' });
+  ui.emitProductStatus({
+    canStartCalibration: true,
+    startCalibrationBlockedReason: null,
+    startCalibrationMode: 'boot-probe',
+  });
+  ui.emit('relay-calibration-command-rejected', { reason: 'take-active' });
+
+  assert.equal(ui.button.disabled, true);
+  assert.equal(ui.status.textContent, '請先完成目前的錄音');
 });

@@ -21,6 +21,14 @@ export type CalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
 export type CalibrationStatus = {
   state: CalibrationPhase;
   progress: number;
+  /**
+   * How far each side has come from the shared origin, in samples.
+   *
+   * Progress is the overlap of the two, so a window that never fills cannot be
+   * told from one filling slowly without seeing which side is short.
+   */
+  micSpanSamples: number;
+  backingSpanSamples: number;
   durationMs: number;
   micLagMs: number | null;
   confidence: number | null;
@@ -327,6 +335,8 @@ export class CalibrationSession {
     return {
       state: this.phase,
       progress,
+      micSpanSamples: this.collector.micSpanSamples,
+      backingSpanSamples: this.collector.backingSpanSamples,
       durationMs: this.durationMs,
       micLagMs: this.micLagMs,
       confidence: this.confidence,

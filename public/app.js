@@ -209,6 +209,16 @@ function audioUplinkHealthPayload() {
     droppedSamples: { total: uplinkDroppedSamples, ...uplinkDroppedSamplesByReason },
     controlReconnects: Math.max(0, publisherControlConnections - 1),
     capture: captureAppliedSettings,
+    // The worklet's own view of the input, before packetization or transport.
+    // Compared against the level the analyser measures on the server timeline,
+    // this separates a microphone that genuinely hears very little from a
+    // signal losing amplitude somewhere between capture and the mix.
+    captureLevel: latestLocalMicLevel && Number.isFinite(latestLocalMicLevel.rmsDbfs)
+      ? {
+        peakDbfs: Number(latestLocalMicLevel.peakDbfs),
+        rmsDbfs: Number(latestLocalMicLevel.rmsDbfs),
+      }
+      : null,
     transport: audioTransport.stats(),
   };
 }

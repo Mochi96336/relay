@@ -115,4 +115,29 @@ describe('audio uplink health', () => {
     (broken as Record<string, unknown>).capture = 'play-and-record';
     assert.equal(parseAudioUplinkHealth(broken), null);
   });
+
+  it('carries the capture worklet level so it can be compared with the analysed one', () => {
+    const payload = validHealth();
+    (payload as Record<string, unknown>).captureLevel = { peakDbfs: -18.5, rmsDbfs: -31.2 };
+
+    const parsed = parseAudioUplinkHealth(payload);
+    assert.notEqual(parsed, null);
+    assert.deepEqual(parsed!.captureLevel, { peakDbfs: -18.5, rmsDbfs: -31.2 });
+  });
+
+  it('rejects a capture level that is not a level', () => {
+    const absent = validHealth();
+    assert.equal(parseAudioUplinkHealth(absent)!.captureLevel, null);
+
+    for (const bad of [
+      { peakDbfs: 3, rmsDbfs: -31 },
+      { peakDbfs: -31, rmsDbfs: -18 },
+      { peakDbfs: -18, rmsDbfs: Number.NEGATIVE_INFINITY },
+      'quiet',
+    ]) {
+      const payload = validHealth();
+      (payload as Record<string, unknown>).captureLevel = bad;
+      assert.equal(parseAudioUplinkHealth(payload), null, `expected ${JSON.stringify(bad)} to be refused`);
+    }
+  });
 });

@@ -32,6 +32,12 @@ export type AudioUplinkCaptureSettings = {
   audioSessionType: string | null;
 };
 
+/** The capture worklet's own level, measured before packetization. */
+export type AudioUplinkCaptureLevel = {
+  peakDbfs: number;
+  rmsDbfs: number;
+};
+
 export type AudioUplinkHealth = {
   version: 1;
   captureGeneration: number;
@@ -46,6 +52,7 @@ export type AudioUplinkHealth = {
   };
   controlReconnects: number;
   capture: AudioUplinkCaptureSettings | null;
+  captureLevel: AudioUplinkCaptureLevel | null;
   transport: AudioUplinkTransportHealth;
 };
 
@@ -124,6 +131,22 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     };
   }
 
+  const rawLevel = payload.captureLevel;
+  let captureLevel: AudioUplinkCaptureLevel | null = null;
+  if (rawLevel !== undefined && rawLevel !== null) {
+    const level = record(rawLevel);
+    if (level === null) return null;
+    const peakDbfs = Number(level.peakDbfs);
+    const rmsDbfs = Number(level.rmsDbfs);
+    // dBFS is at or below zero, and silence reports as a large negative rather
+    // than as -Infinity, so anything outside that is a malformed report.
+    if (
+      !Number.isFinite(peakDbfs) || !Number.isFinite(rmsDbfs)
+      || peakDbfs > 0 || rmsDbfs > 0 || rmsDbfs > peakDbfs
+    ) return null;
+    captureLevel = { peakDbfs, rmsDbfs };
+  }
+
   const path = transport.path;
   if (path !== 'websocket' && path !== 'webtransport') return null;
 
@@ -179,6 +202,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     droppedSamples: { total, disconnected, congested, packetTooLarge },
     controlReconnects,
     capture,
+    captureLevel,
     transport: {
       path,
       maxPacketBytes,

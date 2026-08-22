@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import type {
   TakeArtifact,
+  TakeMixSampleRange,
   TakeRecord,
   TakeSongSnapshot,
   TakeStopReason,
@@ -34,6 +35,7 @@ export type TakeLibraryEntry = {
   stopReason: TakeStopReason | null;
   song: TakeSongSnapshot | null;
   artifact: TakeArtifact;
+  mixSampleRange: TakeMixSampleRange | null;
   quality: TakeQualityAssessment | null;
   recovered: boolean;
 };
@@ -59,6 +61,18 @@ function finiteNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isTakeMixSampleRange(value: unknown): value is TakeMixSampleRange {
+  if (!value || typeof value !== 'object') return false;
+  const range = value as Partial<TakeMixSampleRange>;
+  if (!Number.isSafeInteger(range.generation) || Number(range.generation) < 0) return false;
+  if (!Number.isSafeInteger(range.startSampleIndex) || Number(range.startSampleIndex) < 0) return false;
+  if (!Number.isSafeInteger(range.endSampleIndex) || Number(range.endSampleIndex) < Number(range.startSampleIndex)) {
+    return false;
+  }
+  if (!Number.isSafeInteger(range.sampleCount) || Number(range.sampleCount) < 0) return false;
+  return Number(range.sampleCount) <= Number(range.endSampleIndex) - Number(range.startSampleIndex);
+}
+
 function isTakeLibraryEntry(value: unknown): value is TakeLibraryEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Partial<TakeLibraryEntry>;
@@ -77,7 +91,14 @@ function isTakeLibraryEntry(value: unknown): value is TakeLibraryEntry {
 function parseMetadata(bytes: Buffer, expectedTakeId: string) {
   const decoded = JSON.parse(bytes.toString('utf8')) as Partial<TakeMetadataV1>;
   if (decoded.version !== 1 || !isTakeLibraryEntry(decoded.take)) return null;
-  return decoded.take.takeId === expectedTakeId ? decoded.take : null;
+  if (decoded.take.takeId !== expectedTakeId) return null;
+
+  const rawRange = (decoded.take as TakeLibraryEntry & { mixSampleRange?: unknown }).mixSampleRange;
+  if (rawRange !== undefined && rawRange !== null && !isTakeMixSampleRange(rawRange)) return null;
+  return {
+    ...decoded.take,
+    mixSampleRange: rawRange && isTakeMixSampleRange(rawRange) ? { ...rawRange } : null,
+  } satisfies TakeLibraryEntry;
 }
 
 function readWavArtifact(filePath: string, takeId: string, baseUrl: string): TakeArtifact {
@@ -127,6 +148,7 @@ function cloneEntry(entry: TakeLibraryEntry): TakeLibraryEntry {
     ...entry,
     song: entry.song ? { ...entry.song } : null,
     artifact: { ...entry.artifact },
+    mixSampleRange: entry.mixSampleRange ? { ...entry.mixSampleRange } : null,
     quality: entry.quality ? structuredClone(entry.quality) : null,
   };
 }
@@ -173,6 +195,7 @@ export class TakeLibrary {
       stopReason: take.stopReason,
       song: { ...take.song },
       artifact: { ...take.artifact },
+      mixSampleRange: take.mixSampleRange ? { ...take.mixSampleRange } : null,
       quality: take.quality ? structuredClone(take.quality) : null,
       recovered: false,
     };
@@ -266,6 +289,7 @@ export class TakeLibrary {
           stopReason: null,
           song: null,
           artifact,
+          mixSampleRange: null,
           quality: null,
           recovered: true,
         };

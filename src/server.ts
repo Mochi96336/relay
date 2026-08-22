@@ -1718,7 +1718,7 @@ const mixerTimer = setInterval(() => {
 
   session.drain((frame, evidence, position) => {
     const nowMs = performance.now();
-    takeController.append(frame, takeQualityFrameState(nowMs), evidence);
+    takeController.append(frame, takeQualityFrameState(nowMs), evidence, position);
     broadcastToMonitors(frame, true, position);
   });
 }, 5);

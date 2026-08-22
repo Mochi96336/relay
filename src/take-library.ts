@@ -143,6 +143,28 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
   };
 }
 
+function readValidatedMetadata(
+  metadataPath: string,
+  wavPath: string,
+  takeId: string,
+  baseUrl: string,
+) {
+  const metadata = parseMetadata(readFileSync(metadataPath), takeId);
+  if (!metadata) return null;
+
+  const artifact = readWavArtifact(wavPath, takeId, baseUrl);
+  if (
+    metadata.artifact.sampleCount !== artifact.sampleCount
+    || metadata.artifact.sampleRate !== artifact.sampleRate
+    || metadata.artifact.sizeBytes !== artifact.sizeBytes
+  ) return null;
+  if (
+    metadata.mixSampleRange !== null
+    && metadata.mixSampleRange.sampleCount !== artifact.sampleCount
+  ) return null;
+  return metadata;
+}
+
 function cloneEntry(entry: TakeLibraryEntry): TakeLibraryEntry {
   return {
     ...entry,
@@ -216,14 +238,15 @@ export class TakeLibrary {
       const takeId = match[1];
       if (!names.has(`${takeId}.wav`)) continue;
       try {
-        const metadata = parseMetadata(
-          readFileSync(path.join(this.options.directory, item.name)),
+        const metadata = readValidatedMetadata(
+          path.join(this.options.directory, item.name),
+          path.join(this.options.directory, `${takeId}.wav`),
           takeId,
+          this.artifactBaseUrl,
         );
         if (metadata) entries.push(metadata);
       } catch {
-        // A malformed sidecar must not hide a valid WAV. Recovery below rewrites
-        // it on the next pass after this invalid metadata is removed.
+        // Recovery already repaired malformed/mismatched sidecars where possible.
       }
     }
 
@@ -237,8 +260,9 @@ export class TakeLibrary {
     mkdirSync(this.options.directory, { recursive: true });
     this.recoverLegacyArtifacts();
     const metadataPath = path.join(this.options.directory, metadataFileName(takeId));
+    const wavPath = path.join(this.options.directory, `${takeId}.wav`);
     try {
-      const entry = parseMetadata(readFileSync(metadataPath), takeId);
+      const entry = readValidatedMetadata(metadataPath, wavPath, takeId, this.artifactBaseUrl);
       return entry ? cloneEntry(entry) : null;
     } catch {
       return null;
@@ -269,15 +293,20 @@ export class TakeLibrary {
       if (!match) continue;
       const takeId = match[1];
       const metadataName = metadataFileName(takeId);
+      const wavPath = path.join(this.options.directory, name);
       if (names.has(metadataName)) {
         try {
-          if (parseMetadata(readFileSync(path.join(this.options.directory, metadataName)), takeId)) continue;
+          if (readValidatedMetadata(
+            path.join(this.options.directory, metadataName),
+            wavPath,
+            takeId,
+            this.artifactBaseUrl,
+          )) continue;
         } catch {}
         rmSync(path.join(this.options.directory, metadataName), { force: true });
       }
 
       try {
-        const wavPath = path.join(this.options.directory, name);
         const artifact = readWavArtifact(wavPath, takeId, this.artifactBaseUrl);
         const endedAtMs = statSync(wavPath).mtimeMs;
         const entry: TakeLibraryEntry = {

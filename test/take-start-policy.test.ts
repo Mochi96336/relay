@@ -7,7 +7,7 @@ const READY: TakeStartFacts = {
   sessionActive: true,
   timingCalibrationActive: false,
   songLoaded: true,
-  voiceOnlyMicReady: true,
+  voiceOnlyMicReady: false,
   roomBlocked: false,
   takeLifecycle: 'idle',
 };
@@ -18,7 +18,6 @@ test('Take start policy preserves server rejection precedence', () => {
       ...READY,
       sessionActive: false,
       timingCalibrationActive: true,
-      voiceOnlyMicReady: false,
       roomBlocked: true,
       takeLifecycle: 'recording',
     }),
@@ -28,7 +27,6 @@ test('Take start policy preserves server rejection precedence', () => {
     decideTakeStart({
       ...READY,
       timingCalibrationActive: true,
-      voiceOnlyMicReady: false,
       roomBlocked: true,
     }),
     { ok: false, reason: 'timing-calibration-active' },
@@ -46,10 +44,10 @@ test('a voice-only Take requires a live Mic but ignores unused Robot health', ()
   );
 });
 
-test('a Song Take also requires current live Mic media', () => {
+test('a Song Take preserves the existing backing-only recording path', () => {
   assert.deepEqual(
     decideTakeStart({ ...READY, songLoaded: true, voiceOnlyMicReady: false }),
-    { ok: false, reason: 'take-not-ready' },
+    { ok: true },
   );
   assert.deepEqual(
     decideTakeStart({ ...READY, songLoaded: true, voiceOnlyMicReady: true }),

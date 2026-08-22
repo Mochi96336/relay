@@ -155,3 +155,58 @@ test('TakeLibrary reads v1 sidecars written before mix sample positions existed'
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('TakeLibrary revokes authoritative sample metadata when the WAV no longer matches it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-library-mismatch-'));
+  try {
+    const wavPath = path.join(directory, `${TAKE_2}.wav`);
+    await writeFile(wavPath, wav());
+    const take: TakeRecord = {
+      takeId: TAKE_2,
+      lifecycle: 'ready',
+      startedAtMs: 1_000,
+      endedAtMs: 1_100,
+      startedByParticipantId: 'participant-a',
+      stoppedByParticipantId: 'participant-a',
+      stopReason: 'user',
+      song: {
+        videoId: 'video-a',
+        revision: 3,
+        state: 1,
+        serverTime: 12,
+        playbackRate: 1,
+      },
+      artifact: {
+        fileName: `${TAKE_2}.wav`,
+        url: `/takes/${TAKE_2}.wav`,
+        mimeType: 'audio/wav',
+        sizeBytes: wav().byteLength,
+        sampleRate: 48_000,
+        channels: 1,
+        bitsPerSample: 16,
+        sampleCount: 4_800,
+        durationMs: 100,
+      },
+      mixSampleRange: {
+        generation: 7,
+        startSampleIndex: 9_600,
+        endSampleIndex: 14_400,
+        sampleCount: 4_800,
+      },
+      quality: null,
+      error: null,
+    };
+    new TakeLibrary({ directory }).record(take);
+
+    await writeFile(wavPath, wav(48_000, 2_400));
+    const entry = new TakeLibrary({ directory }).get(TAKE_2);
+
+    assert.ok(entry, 'the valid WAV remains recoverable after sidecar/WAV divergence');
+    assert.equal(entry.recovered, true, 'mismatched authoritative metadata must be replaced by WAV recovery');
+    assert.equal(entry.artifact.sampleCount, 2_400);
+    assert.equal(entry.mixSampleRange, null, 'recovery cannot invent the lost authoritative mix range');
+    assert.equal(entry.startedByParticipantId, null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

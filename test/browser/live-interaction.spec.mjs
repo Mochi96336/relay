@@ -200,6 +200,13 @@ async function installProductionDomHarness(page) {
               role: 'publisher',
               mediaTransport: null,
             });
+            // Production registration replays these as separate authoritative
+            // messages after `registered`. Registration opens the command
+            // channel, but controls remain stale until both snapshots arrive.
+            queueMicrotask(() => {
+              deliver(this, { type: 'mix-settings', micGainDb: 24, songLevel: 100 });
+              deliver(this, { type: 'source-status', active: true, vocalFineTuneMs: 0 });
+            });
           });
           return;
         }

@@ -6,6 +6,7 @@ import {
   laggedPair,
   sendPcmInChunks,
   sleep,
+  startCalibrationCollecting,
   startRelay,
   toInt16,
   pulseTrain,
@@ -524,8 +525,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       await sendPcmInChunks(backing, silence(2));
 
@@ -550,8 +553,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       const lagMs = 260;
       const { mic, backing: song } = laggedPair(8, RATE, lagMs);
@@ -606,8 +611,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
       await sendPcmInChunks(backing, song);
@@ -645,8 +652,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
       await sendPcmInChunks(backing, song);
@@ -727,8 +736,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       const { mic, backing: song } = laggedPair(16, RATE, 260);
       await Promise.all([
@@ -818,8 +829,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       const { mic, backing: song } = laggedPair(8, RATE, 260);
       await Promise.all([
@@ -855,8 +868,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       const { mic, backing: song } = laggedPair(8, RATE, 200);
       await Promise.all([
@@ -922,8 +937,10 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      publisher.send({ type: 'start-timing-calibration' });
-      await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'collecting');
+      await startCalibrationCollecting(publisher, monitor, async () => {
+        publisher.send(playingTelemetry);
+        await primeStreams(backing, publisher);
+      });
 
       const { mic, backing: song } = laggedPair(8, RATE, 200);
       await Promise.all([

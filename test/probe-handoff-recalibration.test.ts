@@ -245,20 +245,20 @@ test('a Mic handoff discards the previous acoustic calibration', async () => {
 });
 
 /**
- * Documents the current robot-route calibration gap.
+ * The robot route prefers its two-leg probe because that probe is unambiguous
+ * by construction. That preference is only meaningful while the probe can still
+ * deliver: once it has spent its attempts, holding the gate shut means choosing
+ * nothing over an ambiguous-but-real content correlation.
  *
- * `maybeAutoCalibrate` refuses whenever `robotProbeTimingActive()` is true, and
- * that predicate only asks whether a robot route exists - never whether the
- * probe actually produced a result. Once the probe exhausts its attempts, the
- * intended trade of "unambiguous probe over ambiguous content correlation"
- * has already collapsed into "nothing over ambiguous content correlation",
- * and the room stays on the network estimate for the rest of the capture
- * generation with correlatable audio flowing the whole time.
+ * Re-arming the probe was the other candidate and was rejected on product
+ * grounds - its chime plays from the singer's own phone, so a mid-session retry
+ * presents an internal recovery as an audible fault. Song content is already
+ * playing and costs nobody a sound.
  *
- * If content calibration is ever allowed to take over after a terminal probe
- * failure, this test is the one that should change.
+ * Content calibration needs a playing song, which is exactly when alignment
+ * matters: with no song, `delta` and `Lbacking` do not reach the mix at all.
  */
-test('a terminal probe failure leaves the room on the network estimate with no content fallback', async () => {
+test('content calibration takes over once the probe has spent its attempts', async () => {
   const server = await startRelay({
     ...PROBE_FAST,
     RELAY_AUTO_CALIBRATE: '1',
@@ -278,8 +278,6 @@ test('a terminal probe failure leaves the room on the network estimate with no c
     assert.equal(failed.probeAttempts.mic, 2);
     assert.equal(failed.timingMode, 'network-estimate');
 
-    // Content calibration would have everything it needs from here: a playing
-    // timeline, both streams live, and a correlatable lag between them.
     clients.stopFlowing();
     clients.publisher.send(playingTelemetry);
     const pair = laggedPair(8, RATE, 260, 7);
@@ -288,10 +286,6 @@ test('a terminal probe failure leaves the room on the network estimate with no c
       sendPcmInChunks(clients.publisher, pair.mic),
     ]);
 
-    // `maybeAutoCalibrate` also requires both streams live and a connected
-    // playing timeline, so keep feeding both for the whole observation window.
-    // Without this the assertion below would pass on a starved stream instead
-    // of on the gate under test.
     const keepEligible = setInterval(() => {
       clients.backing.sendPcm(FRAME);
       clients.publisher.sendPcm(FRAME);
@@ -301,19 +295,19 @@ test('a terminal probe failure leaves the room on the network estimate with no c
     try {
       await assertTimelinePlaying(clients.monitor);
 
-      const from = clients.monitor.messages.length;
-      await sleep(600);
-      await assertNoContentCalibration(clients.monitor, from);
+      const started = await clients.monitor.waitFor(
+        (message) => message.type === 'timing-calibration-status'
+          && message.calibrationKind === 'content',
+        6_000,
+      );
+      assert.equal(
+        started.calibrationKind,
+        'content',
+        'a spent probe must hand the room to song-content timing, not to nothing',
+      );
     } finally {
       clearInterval(keepEligible);
     }
-
-    clients.monitor.send({ type: 'source-status-request' });
-    const source = await clients.monitor.waitFor(
-      (message) => message.type === 'source-status',
-      3_000,
-    );
-    assert.equal(source.timingMode, 'network-estimate');
   } finally {
     clients.close();
     await server.stop();

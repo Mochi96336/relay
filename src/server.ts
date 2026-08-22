@@ -482,6 +482,26 @@ function robotProbeTimingActive() {
   );
 }
 
+/**
+ * Whether the two-leg probe can still produce a result for this capture.
+ *
+ * The probe is preferred because it is unambiguous by construction, but that
+ * preference only means anything while it can still deliver. Once it has spent
+ * its attempts the choice is no longer "unambiguous probe over ambiguous
+ * content correlation" - it is "nothing over ambiguous content correlation",
+ * and nothing is the worse answer.
+ *
+ * Re-arming the probe instead was rejected deliberately: its chime plays out of
+ * the singer's own phone, so retrying mid-session presents an internal recovery
+ * as an audible fault. Song content is already there and costs nobody a sound.
+ *
+ * Clears itself when the capture generation changes, which resets the lifecycle
+ * and hands authority back to the probe.
+ */
+function probeCalibrationExhausted(nowMs = performance.now()) {
+  return robotProbeTimingActive() && probeStatus(nowMs).error !== null;
+}
+
 function robotDeltaIsFresh(nowMs = performance.now()) {
   return activeRobotSource?.readyState === WebSocket.OPEN
     && robotPlayerOffset.offsetMs(nowMs) !== null
@@ -1091,7 +1111,11 @@ function calibrationIsStale() {
 function calibrationCanApply() {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
-  if (robotProbeTimingActive() && calibrationKind !== 'boot-probe') return false;
+  if (
+    robotProbeTimingActive()
+    && calibrationKind !== 'boot-probe'
+    && !probeCalibrationExhausted()
+  ) return false;
   // Boot calibration is a three-term equation. The two probe legs may be
   // measured ahead of playback, but an unknown player delta is not zero. Keep
   // the path result as evidence and stay on the network fallback until the
@@ -1742,7 +1766,7 @@ const mixerTimer = setInterval(() => {
 
 function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
-  if (robotProbeTimingActive()) return;
+  if (robotProbeTimingActive() && !probeCalibrationExhausted(nowMs)) return;
   if (!session.active || calibration.collecting) return;
   if (calibration.confirmedResult !== null && !calibrationIsStale()) return;
   if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
@@ -1761,7 +1785,7 @@ function maybeAutoCalibrate(nowMs: number) {
 
 function contentValidationPathReady(nowMs: number) {
   if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
-  if (robotProbeTimingActive()) return false;
+  if (robotProbeTimingActive() && !probeCalibrationExhausted(nowMs)) return false;
   if (!session.active || calibration.collecting) return false;
   if (
     calibrationKind !== 'content'

@@ -1114,9 +1114,15 @@ function syncAppliedCalibration() {
       return true;
     }
 
-    if (active !== null) return false;
-
     const result = calibration.result;
+    if (active !== null) {
+      if (result !== null && active !== result.micLagMs) {
+        session.setAlignment({ calibratedMicLagMs: result.micLagMs });
+        return true;
+      }
+      return false;
+    }
+
     const storedDeltaMs = lastBootCalibration?.deltaMs;
     const currentDelta = currentDeltaMs(performance.now());
     if (
@@ -1382,7 +1388,7 @@ function probeStatus(nowMs = performance.now()) {
 
 function bootProbeInProgress(nowMs = performance.now()) {
   return calibrationKind === 'boot-probe'
-    && calibration.result === null
+    && (calibration.result === null || calibration.transactionActive)
     && probeStatus(nowMs).active;
 }
 
@@ -1848,12 +1854,14 @@ function maybeStartProbeCalibration(nowMs: number) {
     calibrationKind === 'boot-probe'
     && calibration.result !== null
     && !calibrationIsStale()
+    && !calibration.transactionActive
   ) return;
   if (probeLifecycle.pendingRequest !== null || probeLifecycle.pendingAnalysis !== null) return;
   if (probeStatus(nowMs).error !== null) return;
 
   if (
-    measuredMicLeg === null
+    !calibration.transactionActive
+    && measuredMicLeg === null
     && lastProbeContext !== null
     && lastProbeContext.sessionGeneration === session.generation
     && lastProbeContext.micGeneration === session.micGeneration
@@ -2073,7 +2081,7 @@ function currentDeltaMs(nowMs: number) {
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
   if (!robotProbeTimingActive() || calibrationKind !== 'boot-probe') return;
-  if (bootPathDifferenceMs === null || calibration.collecting) return;
+  if (bootPathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
   if (!robotDeltaIsFresh(nowMs)) return;
   if (lastProbeContext === null) return;
   if (
@@ -2109,11 +2117,14 @@ function dropLegacyCalibrationForRobot() {
 
 function restartBootCalibration(nowMs: number, automatic: boolean) {
   clearContentValidationBaseline();
-  calibration.reset();
+  // Manual/automatic Robot recalibration is a candidate transaction. Keep the
+  // previous confirmed alignment and the player delta it was measured with
+  // authoritative until a replacement probe earns promotion.
+  calibration.beginExternalRecalibration();
   calibrationKind = 'boot-probe';
   calibrationWasAutomatic = automatic;
-  clearBootCalibrationState();
-  robotPlayerOffset.reset();
+  abandonProbeRun();
+  lastProbeCorrelation = { mic: null, backing: null };
   syncAppliedCalibration();
   maybeStartProbeCalibration(nowMs);
   broadcastJson(timingCalibrationStatusPayload());

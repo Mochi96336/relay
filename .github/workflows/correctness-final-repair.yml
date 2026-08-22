@@ -1,0 +1,210 @@
+name: Final correctness repair
+
+on:
+  push:
+    branches:
+      - agent/correctness-repair
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/correctness-repair
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Fence publisher controls on replayed snapshots
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          app_path = Path('public/app.js')
+          app = app_path.read_text()
+
+          old = "let publisherAuthorityFresh = false;\n"
+          new = (
+              "let publisherAuthorityFresh = false;\n"
+              "let publisherMixSettingsFresh = false;\n"
+              "let publisherSourceStatusFresh = false;\n"
+          )
+          if app.count(old) != 1:
+              raise SystemExit(f'expected one publisher authority declaration, got {app.count(old)}')
+          app = app.replace(old, new, 1)
+
+          app = app.replace(
+              "    authorityFresh: publisherAuthorityFresh,\n",
+              "    authorityFresh: publisherAuthorityFresh\n"
+              "      && publisherMixSettingsFresh\n"
+              "      && publisherSourceStatusFresh,\n",
+              1,
+          )
+
+          app = app.replace(
+              "  if (!publisherActive) publisherAuthorityFresh = false;\n",
+              "  if (!publisherActive) resetPublisherCommandFreshness();\n",
+              1,
+          )
+
+          # Every transport/authorization invalidation must also revoke both
+          # replayed control snapshots. Do this before inserting the helper so
+          # the helper's own assignment is not rewritten recursively.
+          app, stale_count = re.subn(
+              r'(?m)^(\s*)publisherAuthorityFresh = false;$',
+              r'\1resetPublisherCommandFreshness();',
+              app,
+          )
+          if stale_count < 5:
+              raise SystemExit(f'expected publisher stale sites, replaced only {stale_count}')
+
+          marker = "function markPublisherAuthorityStale() {\n"
+          helper = (
+              "function resetPublisherCommandFreshness() {\n"
+              "  publisherAuthorityFresh = false;\n"
+              "  publisherMixSettingsFresh = false;\n"
+              "  publisherSourceStatusFresh = false;\n"
+              "}\n\n"
+          )
+          if marker not in app:
+              raise SystemExit('publisher stale helper insertion point missing')
+          app = app.replace(marker, helper + marker, 1)
+
+          source_old = """  if (message.type === 'source-status') {
+    liveMixActive = Boolean(message.active);
+    const nextFineTune = Number(message.vocalFineTuneMs);
+    if (Number.isFinite(nextFineTune)) {
+      lastKnownControlSnapshot = {
+        ...lastKnownControlSnapshot,
+        vocalFineTuneMs: nextFineTune,
+      };
+      if (!sliderIsBusy(vocalFineTune)) {
+        vocalFineTune.value = String(nextFineTune);
+        updateVocalFineTuneLabel();
+      }
+    }
+    updateCalibrateButton();
+    return;
+  }
+"""
+          source_new = """  if (message.type === 'source-status') {
+    liveMixActive = Boolean(message.active);
+    const nextFineTune = Number(message.vocalFineTuneMs);
+    if (Number.isFinite(nextFineTune)) {
+      lastKnownControlSnapshot = {
+        ...lastKnownControlSnapshot,
+        vocalFineTuneMs: nextFineTune,
+      };
+      publisherSourceStatusFresh = true;
+      if (!sliderIsBusy(vocalFineTune)) {
+        vocalFineTune.value = String(nextFineTune);
+        updateVocalFineTuneLabel();
+      }
+    }
+    publishPublisherCommandAuthority();
+    updateSingerControls();
+    return;
+  }
+"""
+          if source_old not in app:
+              raise SystemExit('source-status block changed unexpectedly')
+          app = app.replace(source_old, source_new, 1)
+
+          mix_old = """  if (message.type === 'mix-settings') {
+    const nextGain = Number(message.micGainDb ?? 24);
+    if (Number.isFinite(nextGain)) {
+      lastKnownControlSnapshot = {
+        ...lastKnownControlSnapshot,
+        micGainDb: nextGain,
+      };
+      if (!sliderIsBusy(micGain)) micGain.value = String(nextGain);
+    }
+    songLevel.value = String(FIXED_SONG_LEVEL);
+    updateMixLabels();
+    return;
+  }
+"""
+          mix_new = """  if (message.type === 'mix-settings') {
+    const nextGain = Number(message.micGainDb ?? 24);
+    if (Number.isFinite(nextGain)) {
+      lastKnownControlSnapshot = {
+        ...lastKnownControlSnapshot,
+        micGainDb: nextGain,
+      };
+      publisherMixSettingsFresh = true;
+      if (!sliderIsBusy(micGain)) micGain.value = String(nextGain);
+    }
+    songLevel.value = String(FIXED_SONG_LEVEL);
+    updateMixLabels();
+    publishPublisherCommandAuthority();
+    updateSingerControls();
+    return;
+  }
+"""
+          if mix_old not in app:
+              raise SystemExit('mix-settings block changed unexpectedly')
+          app = app.replace(mix_old, mix_new, 1)
+
+          app_path.write_text(app)
+
+          test_path = Path('test/ui-authority-freshness.test.ts')
+          tests = test_path.read_text()
+          pattern = re.compile(
+              r"test\('publisher command socket remains stale until publisher registration replays authority', \(\) => \{.*?\n\}\);",
+              re.S,
+          )
+          replacement = r"""test('publisher command authority waits for registration and replayed control snapshots', () => {
+  assert.match(publisherSource, /let publisherMixSettingsFresh = false/);
+  assert.match(publisherSource, /let publisherSourceStatusFresh = false/);
+  assert.match(
+    publisherSource,
+    /authorityFresh: publisherAuthorityFresh\s*&& publisherMixSettingsFresh\s*&& publisherSourceStatusFresh/,
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'registered'[\s\S]*publisherAuthorityFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'source-status'[\s\S]*publisherSourceStatusFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'mix-settings'[\s\S]*publisherMixSettingsFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
+  );
+  assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*resetPublisherCommandFreshness\(\)/);
+  assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*resetPublisherCommandFreshness\(\)/);
+  assert.match(publisherSource, /function sendMixSettings\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-mix'\)/);
+  assert.match(publisherSource, /function sendVocalFineTune\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-vocal-fine-tune'\)/);
+  assert.match(publisherSource, /message\.type === 'command-rejected'[\s\S]*restoreLastKnownControl\(message\.command\)[\s\S]*resetPublisherCommandFreshness\(\)/);
+});"""
+          tests, replaced = pattern.subn(replacement, tests, count=1)
+          if replaced != 1:
+              raise SystemExit(f'publisher freshness test block replacement count={replaced}')
+          test_path.write_text(tests)
+          PY
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: git diff --check
+
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add public/app.js test/ui-authority-freshness.test.ts
+          git diff --cached --exit-code && exit 1 || true
+          git commit -m "fix(ui): require replayed publisher control snapshots"
+          git push origin HEAD:agent/correctness-repair

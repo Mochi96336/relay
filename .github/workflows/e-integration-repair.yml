@@ -1,0 +1,75 @@
+name: E integration formatting cleanup
+
+on:
+  pull_request:
+    branches:
+      - agent/correctness-repair
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.head_ref == 'agent/correctness-take-boundaries-rebased'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: agent/correctness-take-boundaries-rebased
+
+      - name: Normalize E server integration formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          python <<'PY'
+          from pathlib import Path
+          p = Path('src/server.ts')
+          s = p.read_text()
+          old = """      const result = takeController.start(
+          socket.participantId,
+          song,
+          boundary.position,
+          commandWallClockMs + (boundary.atMs - nowMs),
+        );"""
+          new = """      const result = takeController.start(
+            socket.participantId,
+            song,
+            boundary.position,
+            commandWallClockMs + (boundary.atMs - nowMs),
+          );"""
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+
+          old = """      const commandWallClockMs = Date.now();
+        const nowMs = performance.now();
+        const boundary = takeFrameBoundary(nowMs);
+        const result = takeController.stop(
+          takeId,
+          socket.participantId,
+          boundary.position,
+          'user',
+          commandWallClockMs + (boundary.atMs - nowMs),
+        );"""
+          new = """      const commandWallClockMs = Date.now();
+      const nowMs = performance.now();
+      const boundary = takeFrameBoundary(nowMs);
+      const result = takeController.stop(
+        takeId,
+        socket.participantId,
+        boundary.position,
+        'user',
+        commandWallClockMs + (boundary.atMs - nowMs),
+      );"""
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          rm .github/workflows/e-integration-repair.yml
+          git diff --check
+          git add -A
+          git commit -m 'style(takes): normalize boundary integration formatting'
+          git push origin HEAD:agent/correctness-take-boundaries-rebased

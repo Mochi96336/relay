@@ -73,4 +73,21 @@ describe('audio uplink health', () => {
     assert.ok(health);
     assert.equal(health.transport.maxPacketBytes, null);
   });
+
+  it('accepts a capture that predates the datagram ceiling field as unknown, not malformed', () => {
+    const payload = validHealth();
+    delete (payload.transport as Record<string, unknown>).datagramPacketBytesCeiling;
+
+    const parsed = parseAudioUplinkHealth(payload);
+    assert.notEqual(parsed, null, 'an older page must keep delivering its uplink evidence');
+    assert.equal(parsed!.transport.datagramPacketBytesCeiling, null);
+    assert.equal(parsed!.transport.webSocketPacketsSent, 20, 'the rest of the report survives');
+  });
+
+  it('still rejects a report whose datagram ceiling is present but nonsensical', () => {
+    const payload = validHealth();
+    (payload.transport as Record<string, unknown>).datagramPacketBytesCeiling = -1;
+
+    assert.equal(parseAudioUplinkHealth(payload), null);
+  });
 });

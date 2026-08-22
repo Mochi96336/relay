@@ -66,6 +66,55 @@ class OverstatedBudgetWebTransport extends FakeWebTransport {
   };
 }
 
+/**
+ * Models the writer behaviour that produced the 50% congested-drop rate: the
+ * outgoing queue holds `outgoingHighWaterMark` datagrams, each write occupies a
+ * slot until its promise settles on a later microtask, and desiredSize is what
+ * remains. Writing a whole chunk's datagrams in one synchronous pass therefore
+ * sees the queue drain only between chunks, never within one.
+ */
+class QueueingDatagramWriter {
+  readonly writes: Uint8Array[] = [];
+  queued = 0;
+  released = false;
+
+  constructor(private readonly highWaterMark: () => number) {}
+
+  get desiredSize() {
+    return this.highWaterMark() - this.queued;
+  }
+
+  async write(value: Uint8Array) {
+    this.queued += 1;
+    this.writes.push(new Uint8Array(value));
+    await Promise.resolve();
+    this.queued -= 1;
+  }
+
+  releaseLock() {
+    this.released = true;
+  }
+}
+
+class QueueingWebTransport {
+  static instances: QueueingWebTransport[] = [];
+  readonly writer = new QueueingDatagramWriter(() => this.datagrams.outgoingHighWaterMark);
+  readonly ready = Promise.resolve();
+  // Default 1, as the platform does before anyone raises it.
+  readonly datagrams = {
+    maxDatagramSize: 65_535,
+    outgoingHighWaterMark: 1,
+    writable: { getWriter: () => this.writer },
+  };
+  readonly closed = new Promise<void>(() => {});
+
+  constructor(readonly url: string, readonly options: Record<string, unknown>) {
+    QueueingWebTransport.instances.push(this);
+  }
+
+  close() {}
+}
+
 class TooSmallWebTransport {
   readonly writer = new FakeDatagramWriter();
   readonly ready = Promise.resolve();
@@ -225,6 +274,68 @@ describe('browser AudioTransport', () => {
     assert.equal(sessionClosed, true, 'a released writer alone leaves the session alive on the server');
     assert.equal(transport.stats().path, 'websocket');
     assert.equal(transport.stats().webTransportDemotions, 1);
+  });
+
+  it('queues a whole chunk of datagrams instead of dropping all but the first as congested', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    QueueingWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      WebTransportClass: QueueingWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=queue',
+    });
+
+    const instance = QueueingWebTransport.instances.at(-1)!;
+    assert.equal(instance.datagrams.outgoingHighWaterMark, 4, 'the platform default of 1 fits one datagram');
+
+    // The two datagrams one 20 ms chunk becomes, written back to back with no
+    // chance for the queue to drain in between.
+    const first = transport.send(new Uint8Array(976).buffer);
+    const second = transport.send(new Uint8Array(968).buffer);
+
+    assert.equal(first.sent, true);
+    assert.equal(second.sent, true, 'the second datagram of a chunk is not congestion');
+    assert.equal(instance.writer.writes.length, 2);
+    assert.equal(transport.stats().webTransportCongestedRejects, 0);
+    assert.deepEqual(socket.sent, [], 'and nothing is duplicated onto the socket');
+  });
+
+  it('still reports congestion once the outgoing datagram queue is genuinely full', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    QueueingWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      datagramQueuePackets: 2,
+      WebTransportClass: QueueingWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=full',
+    });
+
+    const instance = QueueingWebTransport.instances.at(-1)!;
+    assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
+    assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
+
+    // Depth 2 is now occupied and nothing has settled yet.
+    const overflow = transport.send(new Uint8Array(100).buffer);
+    assert.equal(overflow.sent, false);
+    assert.equal(overflow.reason, 'congested');
+    assert.equal(instance.writer.writes.length, 2, 'an overflowing datagram is dropped, not buffered');
+    assert.equal(transport.stats().webTransportCongestedRejects, 1);
+
+    // Once the queue drains the path accepts again rather than staying demoted.
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
+    assert.equal(transport.stats().webTransportDemotions, 0);
   });
 
   it('refuses a preferred path whose datagram budget cannot hold one application packet', async () => {

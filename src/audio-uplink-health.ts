@@ -3,6 +3,8 @@ export type AudioUplinkTransportHealth = {
   maxPacketBytes: number | null;
   minWebTransportMaxPacketBytes: number | null;
   maxWebTransportMaxPacketBytes: number | null;
+  /** What the page packetized to, which is the browser's claim after clamping. */
+  datagramPacketBytesCeiling: number | null;
   webTransportAttempts: number;
   webTransportConnections: number;
   webTransportDemotions: number;
@@ -93,10 +95,17 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const maxPacketBytes = positiveSafeIntegerOrNull(transport.maxPacketBytes);
   const minWebTransportMaxPacketBytes = positiveSafeIntegerOrNull(transport.minWebTransportMaxPacketBytes);
   const maxWebTransportMaxPacketBytes = positiveSafeIntegerOrNull(transport.maxWebTransportMaxPacketBytes);
+  // A capture that predates this field is not a malformed report. Absent means
+  // unknown, so an older page keeps delivering the rest of its uplink evidence;
+  // a present but nonsensical value is still rejected with the whole payload.
+  const datagramPacketBytesCeiling = transport.datagramPacketBytesCeiling === undefined
+    ? null
+    : positiveSafeIntegerOrNull(transport.datagramPacketBytesCeiling);
   if (
     maxPacketBytes === undefined
     || minWebTransportMaxPacketBytes === undefined
     || maxWebTransportMaxPacketBytes === undefined
+    || datagramPacketBytesCeiling === undefined
   ) return null;
   if (
     minWebTransportMaxPacketBytes !== null
@@ -135,6 +144,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       maxPacketBytes,
       minWebTransportMaxPacketBytes,
       maxWebTransportMaxPacketBytes,
+      datagramPacketBytesCeiling,
       ...counters as Record<(typeof counterNames)[number], number>,
     },
   };

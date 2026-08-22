@@ -11,6 +11,16 @@ const WEB_SOCKET_OPEN = 1;
  */
 export const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
 
+/**
+ * Outgoing datagrams that may sit queued, in packets.
+ *
+ * Covers one 20 ms chunk's burst at the ceiling above with room to spare, and
+ * no more: every queued datagram is delay on a live voice path, so a genuinely
+ * backpressured link should still start dropping quickly rather than building
+ * a backlog of audio that is already too late to be worth sending.
+ */
+export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
+
 function base64Bytes(value) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -115,6 +125,7 @@ export class PreferredAudioTransport extends AudioTransport {
     maxBufferedBytes = 256 * 1024,
     minimumPacketBytes = 1,
     datagramPacketBytesCeiling = DEFAULT_DATAGRAM_PACKET_BYTES_CEILING,
+    datagramQueuePackets = DEFAULT_DATAGRAM_QUEUE_PACKETS,
     WebTransportClass = globalThis.WebTransport,
   } = {}) {
     super();
@@ -127,9 +138,13 @@ export class PreferredAudioTransport extends AudioTransport {
     ) {
       throw new RangeError('datagramPacketBytesCeiling must be an integer at least minimumPacketBytes');
     }
+    if (!Number.isInteger(datagramQueuePackets) || datagramQueuePackets < 1) {
+      throw new RangeError('datagramQueuePackets must be a positive integer');
+    }
     this.fallback = new WebSocketAudioTransport({ maxBufferedBytes });
     this.minimumPacketBytes = minimumPacketBytes;
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
+    this.datagramQueuePackets = datagramQueuePackets;
     this.WebTransportClass = WebTransportClass;
     this.webTransport = null;
     this.datagramWriter = null;
@@ -293,6 +308,19 @@ export class PreferredAudioTransport extends AudioTransport {
         try { transport.close(); } catch {}
         return false;
       }
+
+      // One 20 ms chunk is packetized to several datagrams and written in one
+      // synchronous pass. The default outgoing high-water mark is 1, so the
+      // first write takes the only slot and every later datagram of the same
+      // chunk sees desiredSize 0 and is dropped as congested - exactly half the
+      // capture at two datagrams per chunk, with nothing actually congested.
+      //
+      // Queue depth is latency for realtime audio, so keep it just past one
+      // chunk's burst rather than generous: still shallow enough that a truly
+      // backpressured path drops promptly instead of buffering stale voice.
+      try {
+        transport.datagrams.outgoingHighWaterMark = this.datagramQueuePackets;
+      } catch {}
 
       const writable = transport.datagrams.writable ?? transport.datagrams.createWritable();
       const writer = writable.getWriter();

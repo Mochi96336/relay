@@ -1,3 +1,4 @@
+import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 window.relayIdentityReady = (async () => {
   const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -87,6 +88,7 @@ window.relayIdentityReady = (async () => {
   let socket = null;
   let reconnectTimer = null;
   let latestSession = null;
+  let sessionAuthorityFresh = false;
   let takeoverOwnerId = null;
   let startAfterTakeover = false;
   let takeoverFailure = null;
@@ -122,14 +124,40 @@ window.relayIdentityReady = (async () => {
   function micActionState() {
     const currentOwner = owner();
     const mine = latestSession?.micOwnerId === participantId;
+    const commandChannelFresh = socket?.readyState === WebSocket.OPEN;
     const takeoverOpen = Boolean(
       takeoverOwnerId
       && currentOwner
       && currentOwner.id === takeoverOwnerId
       && !mine,
     );
+    const baseAuthority = authorityState({
+      authorityFresh: sessionAuthorityFresh,
+      lastKnownSnapshot: latestSession,
+      commandChannelFresh,
+      authorized: true,
+      serverAllowed: true,
+    });
+    const primaryAuthority = authorityState({
+      authorityFresh: sessionAuthorityFresh,
+      lastKnownSnapshot: latestSession,
+      commandChannelFresh,
+      authorized: !mine,
+      serverAllowed: !localPublisherActive,
+    });
+    const takeoverAuthority = authorityState({
+      authorityFresh: sessionAuthorityFresh,
+      lastKnownSnapshot: latestSession,
+      commandChannelFresh,
+      authorized: Boolean(currentOwner && currentOwner.id !== participantId),
+      serverAllowed: takeoverOpen && !startAfterTakeover,
+    });
+
     return {
       participantId,
+      authorityFresh: baseAuthority.authorityFresh,
+      lastKnownSnapshot: baseAuthority.lastKnownSnapshot,
+      commandChannelFresh: baseAuthority.commandChannelFresh,
       owner: currentOwner ? {
         id: currentOwner.id,
         nickname: currentOwner.nickname,
@@ -139,8 +167,11 @@ window.relayIdentityReady = (async () => {
       localPublisherActive,
       releaseVisible: Boolean(mine || localPublisherActive),
       primaryMode: currentOwner && !mine ? 'takeover' : 'microphone',
+      primaryActionable: primaryAuthority.actionable,
       takeoverOpen,
       takeoverPending: takeoverOpen && startAfterTakeover,
+      takeoverConfirmActionable: takeoverAuthority.actionable,
+      takeoverCancelActionable: takeoverOpen && !startAfterTakeover,
       failure: takeoverOpen ? takeoverFailure : null,
     };
   }
@@ -277,6 +308,7 @@ window.relayIdentityReady = (async () => {
       hideTakeover({ cancelPrewarm: true });
     }
     latestSession = message;
+    sessionAuthorityFresh = true;
     renderParticipants();
     // Every tab has its own Presence socket but tabs from the same browser share
     // one participant capability/ID. Project authoritative room ownership to
@@ -296,6 +328,8 @@ window.relayIdentityReady = (async () => {
   async function connect() {
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
     participantCount.textContent = latestSession ? participantCount.textContent : t('people.connecting');
+    sessionAuthorityFresh = false;
+    publishMicActionState();
 
     const next = new WebSocket(wsUrl());
     socket = next;
@@ -309,6 +343,10 @@ window.relayIdentityReady = (async () => {
       return;
     }
 
+    // Open transport is not current room truth. Wait for session-status replay.
+    sessionAuthorityFresh = false;
+    publishMicActionState();
+
     next.addEventListener('message', (event) => {
       if (socket !== next || typeof event.data !== 'string') return;
       try {
@@ -318,6 +356,7 @@ window.relayIdentityReady = (async () => {
     next.addEventListener('close', () => {
       if (socket !== next) return;
       socket = null;
+      sessionAuthorityFresh = false;
       participantCount.textContent = t('people.reconnecting');
       publishMicActionState();
       scheduleReconnect();
@@ -332,6 +371,12 @@ window.relayIdentityReady = (async () => {
   }
 
   publisherButton.addEventListener('click', (event) => {
+    const state = micActionState();
+    if (!state.primaryActionable) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     const currentOwner = owner();
     if (!currentOwner || currentOwner.id === participantId) return;
     event.preventDefault();
@@ -340,6 +385,7 @@ window.relayIdentityReady = (async () => {
   }, true);
 
   confirmTakeoverButton.addEventListener('click', () => {
+    if (!micActionState().takeoverConfirmActionable) return;
     const currentOwner = owner();
     if (!currentOwner || currentOwner.id === participantId) {
       hideTakeover({ cancelPrewarm: true });
@@ -357,7 +403,7 @@ window.relayIdentityReady = (async () => {
   });
 
   cancelTakeoverButton.addEventListener('click', () => {
-    if (startAfterTakeover) return;
+    if (!micActionState().takeoverCancelActionable) return;
     hideTakeover({ cancelPrewarm: true });
   });
 

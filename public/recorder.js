@@ -1,4 +1,5 @@
 import './take-history.js';
+import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 const recordButton = document.querySelector('#start-recording');
@@ -9,6 +10,8 @@ const RECONNECT_MS = 1_000;
 let socket = null;
 let reconnectTimer = null;
 let latestStatus = { lifecycle: 'idle', take: null, history: [] };
+let latestProductStatus = null;
+let takeStatusObservedAt = null;
 let commandError = null;
 let productCanStartTake = false;
 let productStatusFresh = false;
@@ -34,31 +37,56 @@ function publishTakeStatus(status) {
 function recordingState() {
   const lifecycle = String(latestStatus?.lifecycle ?? 'idle');
   const take = latestStatus?.take ?? null;
-  const connected = socket?.readyState === WebSocket.OPEN;
+  const commandChannelFresh = socket?.readyState === WebSocket.OPEN;
   const authorityFresh = productStatusFresh && takeStatusFresh;
-  const canStart = connected
-    && authorityFresh
-    && productCanStartTake
-    && lifecycle !== 'recording'
-    && lifecycle !== 'finalizing';
+  const lastKnownSnapshot = {
+    productStatus: latestProductStatus,
+    takeStatus: latestStatus,
+    takeStatusObservedAt,
+  };
+  const baseAuthority = authorityState({
+    authorityFresh,
+    lastKnownSnapshot,
+    commandChannelFresh,
+    authorized: true,
+    serverAllowed: true,
+  });
+  const startAuthority = authorityState({
+    authorityFresh,
+    lastKnownSnapshot,
+    commandChannelFresh,
+    authorized: true,
+    serverAllowed: productCanStartTake
+      && lifecycle !== 'recording'
+      && lifecycle !== 'finalizing',
+  });
+  const stopAuthority = authorityState({
+    authorityFresh: takeStatusFresh,
+    lastKnownSnapshot: latestStatus,
+    commandChannelFresh,
+    authorized: true,
+    serverAllowed: lifecycle === 'recording' && Boolean(take?.takeId),
+  });
+
   return {
     lifecycle,
     take,
-    connected,
+    connected: commandChannelFresh,
+    authorityFresh: baseAuthority.authorityFresh,
+    lastKnownSnapshot: baseAuthority.lastKnownSnapshot,
+    commandChannelFresh: baseAuthority.commandChannelFresh,
     productCanStartTake,
     productStatusFresh,
     takeStatusFresh,
-    canStart,
-    startBlockedReason: canStart
+    canStart: startAuthority.actionable,
+    startBlockedReason: startAuthority.actionable
       ? null
-      : !connected || !authorityFresh
+      : !baseAuthority.commandChannelFresh || !baseAuthority.authorityFresh
         ? 'reconnecting'
         : startTakeBlockedReason,
-    canStop: connected
-      && takeStatusFresh
-      && lifecycle === 'recording'
-      && Boolean(take?.takeId),
+    canStop: stopAuthority.actionable,
     commandError,
+    snapshotObservedAt: takeStatusObservedAt,
     observedAt: Date.now(),
   };
 }
@@ -75,6 +103,7 @@ window.addEventListener('relay-request-recording-state', publishRecordingState);
 
 function acceptProductStatus(status) {
   if (!status || status.type !== 'product-status') return;
+  latestProductStatus = status;
   productCanStartTake = status.actions?.canStartTake === true;
   startTakeBlockedReason = typeof status.actions?.startTakeBlockedReason === 'string'
     ? status.actions.startTakeBlockedReason
@@ -183,6 +212,7 @@ async function connect() {
 
     if (message.type === 'take-status') {
       latestStatus = message;
+      takeStatusObservedAt = Date.now();
       takeStatusFresh = true;
       if (
         message.lifecycle === 'recording'
@@ -245,7 +275,7 @@ stopButton?.addEventListener('click', () => {
 });
 
 setInterval(() => {
-  if (latestStatus?.lifecycle === 'recording') publishRecordingState();
+  if (latestStatus?.lifecycle === 'recording' && takeStatusFresh) publishRecordingState();
 }, 1_000);
 
 publishRecordingState();

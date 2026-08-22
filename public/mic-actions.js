@@ -35,6 +35,7 @@ function render(state = latestState) {
   const takeoverOpen = state.takeoverOpen === true;
   const takeoverPending = state.takeoverPending === true;
   const takeoverMode = state.primaryMode === 'takeover';
+  const authorityFresh = state.authorityFresh === true && state.commandChannelFresh === true;
 
   releaseButton.hidden = state.releaseVisible !== true;
   releaseButton.textContent = t('mic.release');
@@ -47,11 +48,14 @@ function render(state = latestState) {
     publisherButton.textContent = t('mic.microphone');
   }
 
+  publisherButton.disabled = state.primaryActionable !== true;
+
   // Confirmation replaces the entry action instead of stacking below it.
   publisherButton.hidden = takeoverOpen;
   takeoverPanel.hidden = !takeoverOpen;
-  confirmTakeoverButton.disabled = takeoverPending;
+  confirmTakeoverButton.disabled = state.takeoverConfirmActionable !== true;
   confirmTakeoverButton.textContent = t('mic.take');
+  cancelTakeoverButton.disabled = state.takeoverCancelActionable !== true;
   cancelTakeoverButton.textContent = t('mic.cancel');
 
   if (!takeoverOpen) {
@@ -62,6 +66,11 @@ function render(state = latestState) {
   const failure = failureCopy(state.failure, owner);
   if (failure) {
     takeoverCopy.textContent = failure;
+    return;
+  }
+
+  if (!authorityFresh) {
+    takeoverCopy.textContent = t('people.reconnecting');
     return;
   }
 

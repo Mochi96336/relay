@@ -1,3 +1,5 @@
+import { authorityState } from './authority-freshness.js';
+
 const legacyCalibrateButton = document.querySelector('#calibrate-timing');
 const legacyCalibrateStatus = document.querySelector('#calibrate-status');
 
@@ -6,6 +8,9 @@ function copy(key) {
   if (key === 'realign') return zh ? '重新對齊' : 'Realign';
   if (key === 'aligning') return zh ? '對齊中…' : 'Aligning…';
   if (key === 'preparing-paths') return zh ? '正在準備聲音路徑…' : 'Preparing audio paths…';
+  if (key === 'reconnecting') return zh ? '重新連線中…' : 'Reconnecting…';
+  if (key === 'finish-take') return zh ? '請先完成目前的錄音' : 'Finish the current Take before calibrating.';
+  if (key === 'unavailable') return zh ? '目前無法校準' : 'Calibration is unavailable.';
   return '';
 }
 
@@ -51,9 +56,14 @@ const calibrateButton = ownership.button;
 const calibrateStatus = ownership.status;
 const commandTarget = ownership.commandTarget;
 
-let latestAction = null;
-let latestTiming = null;
-let localMicOwner = document.body?.dataset?.selfMic === 'live';
+let latestProductStatus = window.relayProductAuthority?.lastKnownSnapshot ?? null;
+let latestAction = latestProductStatus?.actions ?? null;
+let latestTiming = latestProductStatus?.timing ?? null;
+let productAuthority = window.relayProductAuthority ?? authorityState({
+  lastKnownSnapshot: latestProductStatus,
+});
+let commandAuthority = window.relayCommandAuthority ?? authorityState();
+let commandError = null;
 
 function setText(element, value) {
   if (element && element.textContent !== value) element.textContent = value;
@@ -67,10 +77,29 @@ function setDisabled(value) {
   if (calibrateButton && calibrateButton.disabled !== value) calibrateButton.disabled = value;
 }
 
+function selfOwnsServerMic(status = latestProductStatus) {
+  return Boolean(
+    status?.room?.mic?.ownerId
+    && typeof window.relayParticipantId === 'string'
+    && status.room.mic.ownerId === window.relayParticipantId,
+  );
+}
+
+function calibrationAuthority() {
+  return authorityState({
+    authorityFresh: productAuthority?.authorityFresh === true,
+    lastKnownSnapshot: latestProductStatus,
+    commandChannelFresh: commandAuthority?.commandChannelFresh === true,
+    authorized: selfOwnsServerMic(),
+    serverAllowed: latestAction?.canStartCalibration === true,
+  });
+}
+
 /**
  * ProductStatus owns all visible calibration prerequisites in both modes.
  * Content correlation may require Song playback; Robot boot-probe deliberately
- * does not. The UI never reconstructs those rules from Song/timeline DOM state.
+ * does not. Local capture state is not server authorization: the last server
+ * snapshot may stay visible while stale, but it never makes this action live.
  */
 function render() {
   if (!calibrateButton) return;
@@ -78,29 +107,45 @@ function render() {
   calibrateButton.removeAttribute?.('data-i18n');
   setText(calibrateButton, copy('realign'));
 
+  const authority = calibrationAuthority();
   const mode = latestAction?.startCalibrationMode ?? null;
   const reason = latestAction?.startCalibrationBlockedReason ?? null;
   const running = reason === 'calibration-active' || latestTiming?.state === 'calibrating';
   const bootProbePreparing = mode === 'boot-probe'
     && (reason === 'sources-not-connected' || reason === 'sources-not-streaming');
+  const owner = selfOwnsServerMic();
+
+  if (commandError) {
+    setHidden(!owner);
+    setDisabled(true);
+    setText(calibrateStatus, commandError);
+    return;
+  }
+
+  if (latestProductStatus && (!authority.authorityFresh || !authority.commandChannelFresh)) {
+    const relevant = owner || latestAction?.canStartCalibration === true || running;
+    setHidden(!relevant);
+    setDisabled(true);
+    setText(calibrateStatus, relevant ? copy('reconnecting') : '');
+    return;
+  }
 
   if (running) {
-    const show = localMicOwner;
-    setHidden(!show);
+    setHidden(!owner);
     setDisabled(true);
     setText(calibrateButton, copy('aligning'));
-    setText(calibrateStatus, show ? copy('aligning') : '');
+    setText(calibrateStatus, owner ? copy('aligning') : '');
     return;
   }
 
   if (bootProbePreparing) {
     setHidden(true);
     setDisabled(true);
-    setText(calibrateStatus, localMicOwner ? copy('preparing-paths') : '');
+    setText(calibrateStatus, owner ? copy('preparing-paths') : '');
     return;
   }
 
-  if (latestAction?.canStartCalibration === true && localMicOwner) {
+  if (authority.actionable) {
     setHidden(false);
     setDisabled(false);
     setText(calibrateStatus, '');
@@ -109,20 +154,44 @@ function render() {
 
   // Unavailable recovery actions do not occupy a disabled row. ProductStatus
   // already owns the blocked reason; normal UI does not revive Song-era guesses
-  // such as "No song to align" or "Waiting for room state".
+  // such as "No song to align" or local Mic ownership as server truth.
   setHidden(true);
   setDisabled(true);
   setText(calibrateStatus, '');
 }
 
 window.addEventListener('relay-product-status', (event) => {
-  latestAction = event.detail?.actions ?? null;
-  latestTiming = event.detail?.timing ?? null;
+  latestProductStatus = event.detail ?? null;
+  latestAction = latestProductStatus?.actions ?? null;
+  latestTiming = latestProductStatus?.timing ?? null;
+  productAuthority = authorityState({
+    authorityFresh: true,
+    lastKnownSnapshot: latestProductStatus,
+  });
+  commandError = null;
   render();
 });
 
-window.addEventListener('relay-microphone-local-state', (event) => {
-  localMicOwner = event.detail?.active === true;
+window.addEventListener('relay-product-authority', (event) => {
+  productAuthority = event.detail ?? authorityState({ lastKnownSnapshot: latestProductStatus });
+  if (productAuthority.lastKnownSnapshot) {
+    latestProductStatus = productAuthority.lastKnownSnapshot;
+    latestAction = latestProductStatus?.actions ?? null;
+    latestTiming = latestProductStatus?.timing ?? null;
+  }
+  render();
+});
+
+window.addEventListener('relay-command-authority', (event) => {
+  commandAuthority = event.detail ?? authorityState();
+  render();
+});
+
+window.addEventListener('relay-calibration-command-rejected', (event) => {
+  const reason = event.detail?.reason;
+  commandError = reason === 'take-active'
+    ? copy('finish-take')
+    : `${copy('unavailable')} ${reason ?? ''}`.trim();
   render();
 });
 
@@ -133,7 +202,7 @@ window.addEventListener('relay-locale-changed', render);
 // app.js still sends start-timing-calibration through its authenticated socket,
 // and the next server ProductStatus determines the rendered result.
 calibrateButton?.addEventListener?.('click', () => {
-  if (!commandTarget || calibrateButton.disabled) return;
+  if (!commandTarget || !calibrationAuthority().actionable) return;
   commandTarget.dispatchEvent(new Event('click', { cancelable: true }));
 });
 

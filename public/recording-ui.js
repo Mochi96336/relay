@@ -15,6 +15,10 @@ function finishedCopy() {
   return localCopy('✓ Recording ready', '✓ 錄好了');
 }
 
+function reconnectingSuffix() {
+  return localCopy('Reconnecting…', '重新連線中…');
+}
+
 function formatDuration(durationMs) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -111,15 +115,27 @@ if (strip && startButton && stopButton && status) {
     }
 
     const take = detail.take ?? null;
+    const authorityFresh = detail.authorityFresh === true
+      && detail.commandChannelFresh === true;
     if (lifecycle === 'recording' && take) {
       const startedAtMs = Number(take.startedAtMs);
-      const elapsed = Number.isFinite(startedAtMs) ? Date.now() - startedAtMs : 0;
-      status.textContent = `● ${formatDuration(elapsed)}`;
+      const snapshotObservedAt = Number(detail.snapshotObservedAt);
+      const clockNow = authorityFresh
+        ? Date.now()
+        : Number.isFinite(snapshotObservedAt) ? snapshotObservedAt : startedAtMs;
+      const elapsed = Number.isFinite(startedAtMs) && Number.isFinite(clockNow)
+        ? clockNow - startedAtMs
+        : 0;
+      status.textContent = authorityFresh
+        ? `● ${formatDuration(elapsed)}`
+        : `● ${formatDuration(elapsed)} · ${reconnectingSuffix()}`;
       return;
     }
 
     if (lifecycle === 'finalizing') {
-      status.textContent = localCopy('Finishing…', '正在完成錄音…');
+      status.textContent = authorityFresh
+        ? localCopy('Finishing…', '正在完成錄音…')
+        : `${localCopy('Finishing…', '正在完成錄音…')} · ${reconnectingSuffix()}`;
       return;
     }
 

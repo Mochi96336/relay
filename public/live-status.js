@@ -1,3 +1,4 @@
+import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -24,6 +25,7 @@ if (
   let socket = null;
   let reconnectTimer = null;
   let latestProductStatus = null;
+  let productAuthorityFresh = false;
   let lastMicPresenceTelemetryAt = Number.NEGATIVE_INFINITY;
   let roomMicOwnerId = null;
   let roomMicLive = false;
@@ -86,6 +88,36 @@ if (
       && typeof window.relayParticipantId === 'string'
       && status.room.mic.ownerId === window.relayParticipantId,
     );
+  }
+
+  function productAuthorityState() {
+    return authorityState({
+      authorityFresh: productAuthorityFresh,
+      lastKnownSnapshot: latestProductStatus,
+      commandChannelFresh: false,
+      authorized: true,
+      serverAllowed: true,
+    });
+  }
+
+  function publishProductAuthority() {
+    const state = productAuthorityState();
+    window.relayProductAuthority = state;
+    window.dispatchEvent(new CustomEvent('relay-product-authority', { detail: state }));
+  }
+
+  function renderStaleSystem() {
+    systemPanel.dataset.authorityFresh = 'false';
+    systemRelay.textContent = t('system.reconnecting');
+    for (const node of [systemPhones, systemRobot, systemAudio, systemTiming, systemRecording]) {
+      node.textContent = t('system.unknown');
+    }
+  }
+
+  function markProductAuthorityStale() {
+    productAuthorityFresh = false;
+    renderStaleSystem();
+    publishProductAuthority();
   }
 
   function dispatchRoomMicPresence(detail) {
@@ -183,6 +215,7 @@ if (
     const songState = status.room?.song?.state;
     const micState = status.room?.mic?.state;
 
+    systemPanel.dataset.authorityFresh = 'true';
     systemRelay.textContent = socket?.readyState === WebSocket.OPEN ? t('system.connected') : t('system.reconnecting');
     const people = Number(status.room?.participantCount) || 0;
     systemPhones.textContent = t('system.people', { count: people, label: t(people === 1 ? 'system.person' : 'system.peoplePlural') });
@@ -224,6 +257,7 @@ if (
   function render(status) {
     if (!status || status.type !== 'product-status') return;
     latestProductStatus = status;
+    productAuthorityFresh = true;
     const copy = liveCopy(status);
     title.textContent = copy.title;
     detail.textContent = copy.detail;
@@ -237,6 +271,7 @@ if (
 
     renderAttention(status);
     renderSystem(status);
+    publishProductAuthority();
     window.dispatchEvent(new CustomEvent('relay-product-status', { detail: status }));
   }
 
@@ -296,6 +331,7 @@ if (
   async function connect() {
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
     clearReconnect();
+    markProductAuthorityStale();
     const next = new WebSocket(wsUrl());
     socket = next;
 
@@ -308,6 +344,10 @@ if (
       next.close();
       return;
     }
+
+    // An open status socket is not enough to revive last-known truth. Keep
+    // ProductStatus stale until this connection replays a fresh snapshot.
+    markProductAuthorityStale();
 
     next.addEventListener('message', (event) => {
       if (socket !== next || typeof event.data !== 'string') return;
@@ -323,7 +363,7 @@ if (
     next.addEventListener('close', () => {
       if (socket !== next) return;
       socket = null;
-      systemRelay.textContent = t('system.reconnecting');
+      markProductAuthorityStale();
       // Stop asserting what the room was doing when the connection went away.
       // "You're live" is the most consequential line on this page - it is the
       // singer's only evidence that anyone can hear them - and a backgrounded
@@ -334,6 +374,7 @@ if (
       roomMicLive = false;
       roomMicOwnerId = null;
       document.body.dataset.roomMic = 'off';
+      document.body.dataset.selfMic = 'off';
       dispatchRoomMicPresence({ active: false, ownerId: null });
       scheduleReconnect();
     });
@@ -349,6 +390,7 @@ if (
     if (
       event.detail?.active !== true
       || socket?.readyState !== WebSocket.OPEN
+      || !productAuthorityFresh
       || !latestProductStatus
       || !isSelfOwner(latestProductStatus)
       || latestProductStatus.room?.mic?.state !== 'live'
@@ -400,8 +442,10 @@ if (
   });
 
   window.addEventListener('relay-locale-changed', () => {
-    if (latestProductStatus) render(latestProductStatus);
+    if (productAuthorityFresh && latestProductStatus) render(latestProductStatus);
+    else renderStaleSystem();
   });
 
+  publishProductAuthority();
   connect().catch(scheduleReconnect);
 }

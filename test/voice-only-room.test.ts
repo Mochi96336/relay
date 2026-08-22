@@ -96,6 +96,7 @@ test('voice-only Take snapshot explicitly records that there was no Song', () =>
     takeId: 'voice-only',
     startedByParticipantId: 'participant-a',
     song: { videoId: null, revision: null, state: null, serverTime: null, playbackRate: null },
+    startPosition: { generation: 1, firstSampleIndex: 0 },
     startedAtMs: 1_000,
   });
   assert.equal(started.ok, true);

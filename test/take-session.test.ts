@@ -26,6 +26,10 @@ const ARTIFACT: TakeArtifact = {
   durationMs: 1_000,
 };
 
+function position(firstSampleIndex = 0, generation = 1) {
+  return { generation, firstSampleIndex };
+}
+
 function cleanQuality() {
   const evidence: TakeQualityEvidence = {
     sampleRate: RATE,
@@ -84,11 +88,18 @@ test('TakeSession owns one room recording lifecycle without owning the microphon
     takeId: 'take-1',
     startedByParticipantId: 'participant-a',
     song: SONG,
+    startPosition: position(9_600),
     startedAtMs: 1_000,
   });
   assert.equal(started.ok, true);
   assert.equal(takes.lifecycle, 'recording');
   assert.equal(takes.recordingTakeId, 'take-1');
+  assert.deepEqual(takes.currentTake()?.mixSampleRange, {
+    generation: 1,
+    startSampleIndex: 9_600,
+    endSampleIndex: 9_600,
+    sampleCount: 0,
+  });
 
   // A different participant may be holding the Mic by the time the room stops
   // the Take. The Take remains the same room-owned recording.
@@ -97,6 +108,7 @@ test('TakeSession owns one room recording lifecycle without owning the microphon
     takeId: 'take-1',
     stoppedByParticipantId: 'participant-b',
     stopReason: 'user',
+    stopPosition: position(9_600),
     endedAtMs: 2_000,
     quality,
   });
@@ -115,13 +127,50 @@ test('TakeSession owns one room recording lifecycle without owning the microphon
   assert.deepEqual(takes.currentTake()?.quality, quality);
 });
 
+test('TakeSession preserves explicit Start and exclusive Stop positions around accepted frames', () => {
+  const takes = new TakeSession();
+  takes.start({
+    takeId: 'take-1',
+    startedByParticipantId: 'participant-a',
+    song: SONG,
+    startPosition: position(9_600, 4),
+    startedAtMs: 1_000,
+  });
+
+  assert.equal(takes.appendMixFrame(position(9_600, 4), 960), true);
+  assert.equal(takes.appendMixFrame(position(10_560, 4), 960), true);
+  const stopped = takes.beginFinalizing({
+    takeId: 'take-1',
+    stoppedByParticipantId: 'participant-a',
+    stopReason: 'user',
+    stopPosition: position(11_520, 4),
+    endedAtMs: 2_000,
+    quality: cleanQuality(),
+  });
+  assert.equal(stopped.ok, true);
+  if (!stopped.ok) return;
+  assert.deepEqual(stopped.take.mixSampleRange, {
+    generation: 4,
+    startSampleIndex: 9_600,
+    endSampleIndex: 11_520,
+    sampleCount: 1_920,
+  });
+});
+
 test('TakeSession prevents stale Stop from touching a newer Take', () => {
   const takes = new TakeSession();
-  takes.start({ takeId: 'take-1', startedByParticipantId: 'participant-a', song: SONG, startedAtMs: 1_000 });
+  takes.start({
+    takeId: 'take-1',
+    startedByParticipantId: 'participant-a',
+    song: SONG,
+    startPosition: position(),
+    startedAtMs: 1_000,
+  });
   takes.beginFinalizing({
     takeId: 'take-1',
     stoppedByParticipantId: 'participant-a',
     stopReason: 'user',
+    stopPosition: position(),
     endedAtMs: 2_000,
     quality: cleanQuality(),
   });
@@ -131,6 +180,7 @@ test('TakeSession prevents stale Stop from touching a newer Take', () => {
     takeId: 'take-2',
     startedByParticipantId: 'participant-b',
     song: { ...SONG, revision: 13 },
+    startPosition: position(96_000, 2),
     startedAtMs: 3_000,
   });
   assert.equal(second.ok, true);
@@ -140,6 +190,7 @@ test('TakeSession prevents stale Stop from touching a newer Take', () => {
       takeId: 'take-1',
       stoppedByParticipantId: 'participant-a',
       stopReason: 'user',
+      stopPosition: position(96_000, 2),
       endedAtMs: 3_100,
       quality: cleanQuality(),
     }),
@@ -150,13 +201,20 @@ test('TakeSession prevents stale Stop from touching a newer Take', () => {
 
 test('TakeSession makes repeated Stop idempotent during and after finalization', () => {
   const takes = new TakeSession();
-  takes.start({ takeId: 'take-1', startedByParticipantId: 'participant-a', song: SONG, startedAtMs: 1_000 });
+  takes.start({
+    takeId: 'take-1',
+    startedByParticipantId: 'participant-a',
+    song: SONG,
+    startPosition: position(),
+    startedAtMs: 1_000,
+  });
 
   const firstQuality = cleanQuality();
   const first = takes.beginFinalizing({
     takeId: 'take-1',
     stoppedByParticipantId: 'participant-a',
     stopReason: 'user',
+    stopPosition: position(),
     endedAtMs: 2_000,
     quality: firstQuality,
   });
@@ -166,6 +224,7 @@ test('TakeSession makes repeated Stop idempotent during and after finalization',
     takeId: 'take-1',
     stoppedByParticipantId: 'participant-b',
     stopReason: 'user',
+    stopPosition: position(),
     endedAtMs: 2_100,
     quality: assessTakeQuality({
       ...firstQuality.evidence,
@@ -182,6 +241,7 @@ test('TakeSession makes repeated Stop idempotent during and after finalization',
     takeId: 'take-1',
     stoppedByParticipantId: 'participant-b',
     stopReason: 'user',
+    stopPosition: position(),
     endedAtMs: 2_200,
     quality: cleanQuality(),
   });
@@ -191,7 +251,13 @@ test('TakeSession makes repeated Stop idempotent during and after finalization',
 
 test('TakeSession exposes writer failure as a terminal failed Take', () => {
   const takes = new TakeSession();
-  takes.start({ takeId: 'take-1', startedByParticipantId: 'participant-a', song: SONG, startedAtMs: 1_000 });
+  takes.start({
+    takeId: 'take-1',
+    startedByParticipantId: 'participant-a',
+    song: SONG,
+    startPosition: position(),
+    startedAtMs: 1_000,
+  });
   const quality = cleanQuality();
   assert.equal(takes.fail('take-1', 'disk full', 1_500, quality), true);
   assert.equal(takes.lifecycle, 'failed');

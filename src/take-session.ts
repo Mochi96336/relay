@@ -27,14 +27,13 @@ export type TakeArtifact = {
 };
 
 /**
- * Authoritative address of the mixed PCM written into one Take.
+ * Authoritative recording window on the mixed PCM timeline.
  *
- * `endSampleIndex` is exclusive. `sampleCount` is the number of PCM samples
- * actually accepted by the WAV writer; it can be smaller than
- * `endSampleIndex - startSampleIndex` if an upstream caller ever presents a
- * positioned hole. Keeping both prevents durable metadata from compressing a
- * real timeline gap while still allowing the artifact sample count to be
- * checked exactly.
+ * Both ends are full-frame boundaries and `endSampleIndex` is exclusive.
+ * `sampleCount` remains the number of PCM samples actually accepted by the WAV
+ * writer. Keeping those separate preserves a real positioned hole instead of
+ * compressing it, and also lets a rapid Start/Stop produce a legitimate
+ * zero-length window without inventing an audio frame.
  */
 export type TakeMixSampleRange = {
   generation: number;
@@ -100,17 +99,22 @@ function cloneTake(take: TakeRecord): TakeRecord {
   };
 }
 
-function assertFrameAddress(position: MixFramePosition, sampleCount: number) {
+function assertMixPosition(position: MixFramePosition) {
   if (!Number.isSafeInteger(position.generation) || position.generation < 0) {
     throw new Error('Take mix generation is invalid.');
   }
   if (!Number.isSafeInteger(position.firstSampleIndex) || position.firstSampleIndex < 0) {
     throw new Error('Take mix sample position is invalid.');
   }
+  return position.firstSampleIndex;
+}
+
+function assertFrameAddress(position: MixFramePosition, sampleCount: number) {
+  const firstSampleIndex = assertMixPosition(position);
   if (!Number.isSafeInteger(sampleCount) || sampleCount <= 0) {
     throw new Error('Take mix frame sample count is invalid.');
   }
-  const endSampleIndex = position.firstSampleIndex + sampleCount;
+  const endSampleIndex = firstSampleIndex + sampleCount;
   if (!Number.isSafeInteger(endSampleIndex)) {
     throw new Error('Take mix sample range exceeds the safe integer range.');
   }
@@ -148,12 +152,14 @@ export class TakeSession {
     takeId: string;
     startedByParticipantId: string;
     song: TakeSongSnapshot;
+    startPosition: MixFramePosition;
     startedAtMs: number;
   }): StartTakeDecision {
     if (this.current?.lifecycle === 'recording' || this.current?.lifecycle === 'finalizing') {
       return { ok: false, reason: 'take-active' };
     }
 
+    const startSampleIndex = assertMixPosition(input.startPosition);
     this.current = {
       takeId: input.takeId,
       lifecycle: 'recording',
@@ -164,7 +170,12 @@ export class TakeSession {
       stopReason: null,
       song: cloneSong(input.song),
       artifact: null,
-      mixSampleRange: null,
+      mixSampleRange: {
+        generation: input.startPosition.generation,
+        startSampleIndex,
+        endSampleIndex: startSampleIndex,
+        sampleCount: 0,
+      },
       quality: null,
       error: null,
     };
@@ -183,13 +194,7 @@ export class TakeSession {
     const endSampleIndex = assertFrameAddress(position, sampleCount);
     const currentRange = take.mixSampleRange;
     if (!currentRange) {
-      take.mixSampleRange = {
-        generation: position.generation,
-        startSampleIndex: position.firstSampleIndex,
-        endSampleIndex,
-        sampleCount,
-      };
-      return true;
+      throw new Error('Take recording window did not have an authoritative Start boundary.');
     }
 
     if (currentRange.generation !== position.generation) {
@@ -212,6 +217,7 @@ export class TakeSession {
     takeId: string;
     stoppedByParticipantId: string | null;
     stopReason: TakeStopReason;
+    stopPosition: MixFramePosition;
     endedAtMs: number;
     quality: TakeQualityAssessment;
   }): StopTakeDecision {
@@ -224,6 +230,21 @@ export class TakeSession {
     }
     if (take.lifecycle !== 'recording') return { ok: false, reason: 'take-not-recording' };
 
+    const stopSampleIndex = assertMixPosition(input.stopPosition);
+    const currentRange = take.mixSampleRange;
+    if (!currentRange) {
+      throw new Error('Take recording window did not have an authoritative Start boundary.');
+    }
+    if (currentRange.generation !== input.stopPosition.generation) {
+      throw new Error('Take Stop boundary belongs to a different mix generation.');
+    }
+    if (stopSampleIndex < currentRange.endSampleIndex) {
+      throw new Error('Take Stop boundary would cut an already accepted full frame.');
+    }
+
+    // The command boundary is authoritative even when a positioned hole means
+    // the WAV contains fewer samples than the window spans.
+    currentRange.endSampleIndex = stopSampleIndex;
     take.lifecycle = 'finalizing';
     take.endedAtMs = input.endedAtMs;
     take.stoppedByParticipantId = input.stoppedByParticipantId;

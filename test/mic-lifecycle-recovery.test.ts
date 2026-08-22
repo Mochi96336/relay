@@ -91,11 +91,11 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
 
 test('hardware input ending completes the same Mic lifecycle', () => {
   const trackStart = app.indexOf("track?.addEventListener('ended'");
-  const graphStart = app.indexOf('const source = captureContext.createMediaStreamSource(captureStream)', trackStart);
-  assert.ok(trackStart >= 0 && graphStart > trackStart);
-  const handler = app.slice(trackStart, graphStart);
+  const watchdogStart = app.indexOf("micCaptureRecovery.start(captureSnapshot(), 'startup')", trackStart);
+  assert.ok(trackStart >= 0 && watchdogStart > trackStart);
+  const handler = app.slice(trackStart, watchdogStart);
   assert.match(handler, /if \(!captureIsCurrent\(\)\) return/,
-    'a stale track callback must not terminate a replacement capture');
+    'a stale track callback must not terminate a replacement Mic session');
   assert.match(handler, /stop\(false, \{ releaseMic: true \}\)/);
   assert.match(handler, /relay-microphone-ended'[\s\S]*reason: 'input-ended'/);
 });
@@ -122,8 +122,8 @@ test('Mic startup is single-flight, deadline-bound, and disposes late permission
 test('initial Relay connection failure remains cancellable instead of trapping an active Mic', () => {
   const activeAt = app.indexOf('setPublisherActive(true)');
   const disabledAt = app.indexOf('publisherButton.disabled = true', activeAt);
-  const connectAt = app.indexOf('await connectPublisherSocket(sessionEpoch)', disabledAt);
-  const retryAt = app.indexOf('schedulePublisherReconnect(sessionEpoch)', connectAt);
+  const connectAt = app.indexOf('await connectPublisherSocket(sessionEpoch, generation)', disabledAt);
+  const retryAt = app.indexOf('schedulePublisherReconnect(sessionEpoch, generation)', connectAt);
   assert.ok(activeAt >= 0 && disabledAt > activeAt && connectAt > disabledAt && retryAt > connectAt);
 
   assert.match(presence, /releaseVisible: Boolean\(mine \|\| localPublisherActive\)/);

@@ -23,7 +23,7 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
 test('server fences source-seeked from any no-longer-active Robot source', () => {
   assert.match(
     serverSource,
-    /if \(payload\.type === 'source-seeked'\) \{[\s\S]{0,700}if \(socket\.isRobotSource !== undefined && socket !== activeRobotSource\) return;[\s\S]{0,900}sourceGeneration \+= 1/,
+    /if \(payload\.type === 'source-seeked'\) \{[\s\S]{0,700}if \(socket\.isRobotSource !== undefined && socket !== activeRobotSource\) return;[\s\S]{0,2000}sourceGeneration \+= 1/,
   );
 });
 
@@ -153,4 +153,16 @@ test('a follower correction restarts the calibration window without ending the r
     if (flowing) clearInterval(flowing);
     await relay.stop();
   }
+});
+
+test('a follower correction is fenced out of probe staleness at the source', () => {
+  // The boot probe half cannot be driven end to end yet: completing a two-leg
+  // run needs the probe chime rendered into synthetic capture at the sample
+  // position the detector expects, and no helper does that. Assert the fence
+  // itself until one exists.
+  assert.match(
+    serverSource,
+    /sourceGeneration exists only to make calibration stale[\s\S]{0,900}if \(!followerCorrection \|\| calibrationKind === 'content'\) \{\s*sourceGeneration \+= 1;/,
+    'a follower correction must not age a probe result whose legs it cannot change',
+  );
 });

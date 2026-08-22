@@ -2984,7 +2984,23 @@ wss.on('connection', (rawSocket, request) => {
       // waits out the auto-calibration floor before trying again.
       const followerCorrection = payload.reason === 'follower-correction';
       if (followerCorrection) noteFollowerCorrection(performance.now());
-      sourceGeneration += 1;
+
+      // sourceGeneration exists only to make calibration stale, so bump it only
+      // when this seek actually invalidates the result being held.
+      //
+      // A follower correction moves the player, which is `delta` and nothing
+      // else. The boot probe measures the two capture paths separately and
+      // reads delta live, so its legs outlive any number of corrections; a
+      // content correlation folds all three terms into one number and does not.
+      //
+      // Treating them alike cost a full two-leg re-probe on every correction:
+      // seven seconds back on the network estimate, and the applied advance
+      // stepping by however far delta happened to sit inside the follower's
+      // 450 ms dead band - a jump the singer hears, for a measurement that had
+      // not stopped being true.
+      if (!followerCorrection || calibrationKind === 'content') {
+        sourceGeneration += 1;
+      }
       clearContentValidationBaseline();
       robotPlayerOffset.reset();
       if (calibration.collecting && followerCorrection) {

@@ -203,13 +203,30 @@ test('status socket reconnect keeps System unknown until ProductStatus replay', 
   assert.match(liveStatusSource, /next\.addEventListener\('close'[\s\S]*markProductAuthorityStale\(\)/);
 });
 
-test('publisher command socket remains stale until publisher registration replays authority', () => {
-  assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*publisherAuthorityFresh = false/);
-  assert.match(publisherSource, /message\.type === 'registered'[\s\S]*publisherAuthorityFresh = true/);
-  assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*publisherAuthorityFresh = false/);
+test('publisher command authority waits for registration and replayed control snapshots', () => {
+  assert.match(publisherSource, /let publisherMixSettingsFresh = false/);
+  assert.match(publisherSource, /let publisherSourceStatusFresh = false/);
+  assert.match(
+    publisherSource,
+    /authorityFresh: publisherAuthorityFresh\s*&& publisherMixSettingsFresh\s*&& publisherSourceStatusFresh/,
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'registered'[\s\S]*publisherAuthorityFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'source-status'[\s\S]*publisherSourceStatusFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'mix-settings'[\s\S]*publisherMixSettingsFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
+  );
+  assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*resetPublisherCommandFreshness\(\)/);
+  assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /function sendMixSettings\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-mix'\)/);
   assert.match(publisherSource, /function sendVocalFineTune\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-vocal-fine-tune'\)/);
-  assert.match(publisherSource, /message\.type === 'command-rejected'[\s\S]*restoreLastKnownControl\(message\.command\)[\s\S]*setStatus/);
+  assert.match(publisherSource, /message\.type === 'command-rejected'[\s\S]*restoreLastKnownControl\(message\.command\)[\s\S]*resetPublisherCommandFreshness\(\)/);
 });
 
 test('presence invalidates session authority through disconnect, open-without-replay, and server incarnation change', () => {

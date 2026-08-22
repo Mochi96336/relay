@@ -311,6 +311,17 @@ type MeasuredMicLeg = {
 
 const probeLifecycle = new ProbeLifecycle(PROBE_MAX_ATTEMPTS, PROBE_RETRY_MS);
 let probeRequestId = 0;
+/**
+ * Edge-triggered probe-stall reporting.
+ *
+ * `maybeStartProbeCalibration` runs on the 5 ms mixer tick, so its early
+ * returns must never log per call. These hold the last reported reason so a
+ * standing condition prints once and prints again only when it changes, which
+ * is what separates "the probe never started" from "the probe started and said
+ * nothing" when reading a session afterwards.
+ */
+let reportedProbeStall: string | null = null;
+let reportedProbeWait: string | null = null;
 let measuredMicLeg: MeasuredMicLeg | null = null;
 let lastProbeCorrelation: { mic: number | null; backing: number | null } = { mic: null, backing: null };
 let lastProbeContext: {
@@ -1563,6 +1574,12 @@ function revokePublisherTransport(message: string) {
 }
 
 function invalidateMicTiming(message: string) {
+  // The reason already travels with the call; without printing it there is no
+  // way afterwards to tell a Mic handoff from a capture restart as the thing
+  // that discarded a good measurement.
+  if (calibrationKind !== 'none') {
+    console.log(`[calibration] discarded ${calibrationKind} calibration: ${message}`);
+  }
   clearBootCalibrationState();
   clearContentValidationBaseline();
   if (calibration.collecting) calibration.fail(message);
@@ -1795,11 +1812,22 @@ function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
   }
 
   const failure = probeLifecycle.failAttempt(target, reason, nowMs);
+  const attempts = probeLifecycle.status(nowMs).attempts[target];
   if (failure) {
     calibrationKind = 'boot-probe';
+    // Unconditional: giving up is the moment alignment silently falls back to
+    // the network estimate for the rest of this mic generation, and it is rare
+    // enough (at most once per target per generation) to always be worth a line.
+    console.log(
+      `[probe] gave up on ${target} after ${attempts}/${PROBE_MAX_ATTEMPTS} attempts: ${reason}`,
+    );
     calibration.fail(failure.message);
     return;
   }
+  console.log(
+    `[probe] ${target} attempt ${attempts}/${PROBE_MAX_ATTEMPTS} failed: ${reason}`
+    + ` (retrying in ${PROBE_RETRY_MS} ms)`,
+  );
   broadcastJson(timingCalibrationStatusPayload());
 }
 
@@ -1850,7 +1878,18 @@ function maybeStartProbeCalibration(nowMs: number) {
     && !calibrationIsStale()
   ) return;
   if (probeLifecycle.pendingRequest !== null || probeLifecycle.pendingAnalysis !== null) return;
-  if (probeStatus(nowMs).error !== null) return;
+  const stallError = probeStatus(nowMs).error;
+  if (stallError !== null) {
+    if (reportedProbeStall !== stallError) {
+      reportedProbeStall = stallError;
+      console.log(
+        `[probe] not retrying; timing stays on the network estimate until the`
+        + ` capture generation changes: ${stallError}`,
+      );
+    }
+    return;
+  }
+  reportedProbeStall = null;
 
   if (
     measuredMicLeg === null
@@ -1862,7 +1901,22 @@ function maybeStartProbeCalibration(nowMs: number) {
 
   const target: ProbeTarget = measuredMicLeg === null ? 'mic' : 'backing';
   if (!probeLifecycle.canStart(target, nowMs)) return;
-  if (!probePathReady(target, nowMs)) return;
+  if (!probePathReady(target, nowMs)) {
+    // Re-reads the same conditions probePathReady decided on, so the line names
+    // the missing piece without becoming a second definition of readiness.
+    const detail = target === 'mic'
+      ? `publisher=${publisher?.readyState === WebSocket.OPEN}`
+        + ` micStreaming=${micStreaming(nowMs)}`
+      : `backing=${backing?.readyState === WebSocket.OPEN}`
+        + ` backingFresh=${nowMs - lastBackingFrameAt < STREAM_LIVE_MS}`
+        + ` robotSource=${activeRobotSource?.readyState === WebSocket.OPEN}`;
+    if (reportedProbeWait !== detail) {
+      reportedProbeWait = detail;
+      console.log(`[probe] ${target} leg waiting for its path: ${detail}`);
+    }
+    return;
+  }
+  reportedProbeWait = null;
   sendProbeRequest(target, nowMs);
 }
 

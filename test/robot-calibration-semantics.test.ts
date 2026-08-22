@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -81,4 +82,35 @@ test('Robot manual realignment starts boot-probe from fresh silent capture witho
   } finally {
     await server.stop();
   }
+});
+
+test('Robot recalibration adapter preserves old authority until candidate promotion', async () => {
+  const source = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
+  const restart = source.match(/function restartBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(restart, /calibration\.beginExternalRecalibration\(\)/);
+  assert.doesNotMatch(restart, /calibration\.reset\(\)/, 'manual retry must not erase known-good calibration first');
+  assert.doesNotMatch(restart, /clearBootCalibrationState\(\)/, 'old confirmed boot evidence remains rollback authority');
+  assert.doesNotMatch(restart, /robotPlayerOffset\.reset\(\)/, 'old confirmed Robot total still depends on its live player delta');
+
+  const startProbe = source.match(/function maybeStartProbeCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(
+    startProbe,
+    /!calibration\.transactionActive/,
+    'an old confirmed result must not suppress the replacement probe while a transaction is open',
+  );
+
+  const reapply = source.match(/function maybeReapplyBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(
+    reapply,
+    /calibration\.transactionActive/,
+    'delta reapply must not accidentally promote old probe evidence through a new candidate transaction',
+  );
+
+  const sync = source.match(/function syncAppliedCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.doesNotMatch(sync, /if \(active !== null\) return false;/, 'an old active Robot lag must not block promotion');
+  assert.match(
+    sync,
+    /active !== result\.micLagMs/,
+    'successful Robot promotion must atomically replace the previously active lag',
+  );
 });

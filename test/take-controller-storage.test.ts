@@ -7,6 +7,7 @@ import test from 'node:test';
 import { TakeController } from '../src/take-controller.js';
 
 const ORPHAN_TAKE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const BOUNDARY = { generation: 1, firstSampleIndex: 0 } as const;
 
 const VOICE_ONLY_SONG = {
   videoId: null,
@@ -61,7 +62,7 @@ test('TakeController rejects Start without entering a failed Take when storage r
       state: 1,
       serverTime: 10,
       playbackRate: 1,
-    }, 100);
+    }, BOUNDARY, 100);
 
     assert.deepEqual(result, { ok: false, reason: 'storage-unavailable' });
     assert.equal(controller.lifecycle, 'idle');
@@ -90,11 +91,11 @@ test('TakeController publishes product-shaped finalized history beside lifecycle
       },
     });
 
-    const started = controller.start('participant-a', VOICE_ONLY_SONG, 1_000);
+    const started = controller.start('participant-a', VOICE_ONLY_SONG, BOUNDARY, 1_000);
     assert.equal(started.ok, true);
     if (!started.ok) return;
 
-    const stopped = controller.stop(started.takeId, 'participant-a', 'user', 1_100);
+    const stopped = controller.stop(started.takeId, 'participant-a', BOUNDARY, 'user', 1_100);
     assert.equal(stopped.ok, true);
     await ready;
     await settleStorageMaintenance(controller);
@@ -141,22 +142,23 @@ test('current Take lifecycle can advance while durable history retains prior Tak
       },
     });
 
-    async function finalize(actor: string, startedAtMs: number, endedAtMs: number) {
+    async function finalize(actor: string, startedAtMs: number, endedAtMs: number, generation: number) {
       const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
-      const started = controller.start(actor, VOICE_ONLY_SONG, startedAtMs);
+      const boundary = { generation, firstSampleIndex: 0 };
+      const started = controller.start(actor, VOICE_ONLY_SONG, boundary, startedAtMs);
       assert.equal(started.ok, true);
       if (!started.ok) throw new Error('Take unexpectedly failed to start.');
-      assert.equal(controller.stop(started.takeId, actor, 'user', endedAtMs).ok, true);
+      assert.equal(controller.stop(started.takeId, actor, boundary, 'user', endedAtMs).ok, true);
       await ready;
       resolveReady = null;
       await settleStorageMaintenance(controller);
       return started.takeId;
     }
 
-    const firstTakeId = await finalize('participant-a', 1_000, 1_100);
+    const firstTakeId = await finalize('participant-a', 1_000, 1_100, 1);
     assert.equal(controller.statusPayload().take?.takeId, firstTakeId);
 
-    const secondTakeId = await finalize('participant-b', 2_000, 2_100);
+    const secondTakeId = await finalize('participant-b', 2_000, 2_100, 2);
     const current = controller.statusPayload();
     assert.equal(current.take?.takeId, secondTakeId,
       'TakeSession remains the single current lifecycle authority');

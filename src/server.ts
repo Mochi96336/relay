@@ -50,7 +50,9 @@ import {
   type PlaybackIdentity,
   type SongHandoffPlan,
 } from './song-session.js';
+import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
+import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import {
   createWebTransportMediaTicket,
@@ -806,29 +808,19 @@ function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now())
 }
 
 function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
-  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
-  const videoId = typeof room.videoId === 'string' && room.videoId ? room.videoId : null;
-  if (videoId === null) {
-    return {
-      videoId: null,
-      revision: null,
-      state: null,
-      serverTime: null,
-      playbackRate: null,
-    };
-  }
+  return takeSongSnapshotFromRoom(
+    youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
+  );
+}
 
-  const revision = Number(room.revision);
-  const state = Number(room.state);
-  const serverTime = Number(room.serverTime);
-  const playbackRate = Number(room.playbackRate);
-  return {
-    videoId,
-    revision: Number.isInteger(revision) ? revision : null,
-    state: Number.isFinite(state) ? state : null,
-    serverTime: Number.isFinite(serverTime) ? serverTime : null,
-    playbackRate: Number.isFinite(playbackRate) ? playbackRate : null,
-  };
+function takeFrameBoundary(nowMs = performance.now()) {
+  return takeFrameBoundaryAtOrAfter({
+    generation: session.generation,
+    sessionSampleIndex: session.sessionSampleAt(nowMs),
+    frameSamples: session.frameSamples,
+    sampleRate: session.sampleRate,
+    nowMs,
+  });
 }
 
 function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
@@ -1114,9 +1106,15 @@ function syncAppliedCalibration() {
       return true;
     }
 
-    if (active !== null) return false;
-
     const result = calibration.result;
+    if (active !== null) {
+      if (result !== null && active !== result.micLagMs) {
+        session.setAlignment({ calibratedMicLagMs: result.micLagMs });
+        return true;
+      }
+      return false;
+    }
+
     const storedDeltaMs = lastBootCalibration?.deltaMs;
     const currentDelta = currentDeltaMs(performance.now());
     if (
@@ -1382,7 +1380,7 @@ function probeStatus(nowMs = performance.now()) {
 
 function bootProbeInProgress(nowMs = performance.now()) {
   return calibrationKind === 'boot-probe'
-    && calibration.result === null
+    && (calibration.result === null || calibration.transactionActive)
     && probeStatus(nowMs).active;
 }
 
@@ -1718,7 +1716,7 @@ const mixerTimer = setInterval(() => {
 
   session.drain((frame, evidence, position) => {
     const nowMs = performance.now();
-    takeController.append(frame, takeQualityFrameState(nowMs), evidence);
+    takeController.append(frame, takeQualityFrameState(nowMs), evidence, position);
     broadcastToMonitors(frame, true, position);
   });
 }, 5);
@@ -1848,12 +1846,14 @@ function maybeStartProbeCalibration(nowMs: number) {
     calibrationKind === 'boot-probe'
     && calibration.result !== null
     && !calibrationIsStale()
+    && !calibration.transactionActive
   ) return;
   if (probeLifecycle.pendingRequest !== null || probeLifecycle.pendingAnalysis !== null) return;
   if (probeStatus(nowMs).error !== null) return;
 
   if (
-    measuredMicLeg === null
+    !calibration.transactionActive
+    && measuredMicLeg === null
     && lastProbeContext !== null
     && lastProbeContext.sessionGeneration === session.generation
     && lastProbeContext.micGeneration === session.micGeneration
@@ -2073,7 +2073,7 @@ function currentDeltaMs(nowMs: number) {
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
   if (!robotProbeTimingActive() || calibrationKind !== 'boot-probe') return;
-  if (bootPathDifferenceMs === null || calibration.collecting) return;
+  if (bootPathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
   if (!robotDeltaIsFresh(nowMs)) return;
   if (lastProbeContext === null) return;
   if (
@@ -2109,11 +2109,14 @@ function dropLegacyCalibrationForRobot() {
 
 function restartBootCalibration(nowMs: number, automatic: boolean) {
   clearContentValidationBaseline();
-  calibration.reset();
+  // Manual/automatic Robot recalibration is a candidate transaction. Keep the
+  // previous confirmed alignment and the player delta it was measured with
+  // authoritative until a replacement probe earns promotion.
+  calibration.beginExternalRecalibration();
   calibrationKind = 'boot-probe';
   calibrationWasAutomatic = automatic;
-  clearBootCalibrationState();
-  robotPlayerOffset.reset();
+  abandonProbeRun();
+  lastProbeCorrelation = { mic: null, backing: null };
   syncAppliedCalibration();
   maybeStartProbeCalibration(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
@@ -2395,6 +2398,7 @@ wss.on('connection', (rawSocket, request) => {
         rejectTakeCommand(socket, 'start', 'participant-required');
         return;
       }
+      const commandWallClockMs = Date.now();
       const nowMs = performance.now();
       const productStatus = productStatusPayload(nowMs);
       if (!productStatus.actions.canStartTake) {
@@ -2405,12 +2409,18 @@ wss.on('connection', (rawSocket, request) => {
         );
         return;
       }
-      const song = takeSongSnapshot(nowMs);
+      const boundary = takeFrameBoundary(nowMs);
+      const song = takeSongSnapshot(boundary.atMs);
 
       if (cancelActiveContentValidation(nowMs)) {
         broadcastJson(timingCalibrationStatusPayload());
       }
-      const result = takeController.start(socket.participantId, song);
+      const result = takeController.start(
+        socket.participantId,
+        song,
+        boundary.position,
+        commandWallClockMs + (boundary.atMs - nowMs),
+      );
       if (!result.ok) {
         rejectTakeCommand(socket, 'start', result.reason);
         return;
@@ -2434,7 +2444,16 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      const result = takeController.stop(takeId, socket.participantId);
+      const commandWallClockMs = Date.now();
+      const nowMs = performance.now();
+      const boundary = takeFrameBoundary(nowMs);
+      const result = takeController.stop(
+        takeId,
+        socket.participantId,
+        boundary.position,
+        'user',
+        commandWallClockMs + (boundary.atMs - nowMs),
+      );
       if (!result.ok) {
         rejectTakeCommand(socket, 'stop', result.reason);
         return;

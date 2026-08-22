@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { MixFrameEvidence } from './audio-session.js';
+import type { MixFrameEvidence, MixFramePosition } from './audio-session.js';
 import { TakeLibrary, type TakeLibraryEntry } from './take-library.js';
 import {
   TakeQualityTracker,
@@ -25,9 +25,12 @@ import { WavTakeWriter } from './wav-take-writer.js';
 
 export type StartTakeResult =
   | { ok: true; takeId: string }
-  | { ok: false; reason: 'take-active' | 'writer-failed' | 'storage-unavailable' };
+  | {
+    ok: false;
+    reason: 'take-active' | 'writer-failed' | 'storage-unavailable' | 'mix-boundary-invalid';
+  };
 
-export type StopTakeResult = StopTakeDecision;
+export type StopTakeResult = StopTakeDecision | { ok: false; reason: 'mix-boundary-invalid' };
 
 /**
  * Product-facing recording history. Durable library metadata is intentionally
@@ -51,8 +54,23 @@ export type TakeControllerStatusPayload = ReturnType<TakeSession['statusPayload'
   history: readonly TakeHistoryItem[];
 };
 
+type PendingStop = {
+  takeId: string;
+  actorParticipantId: string | null;
+  stopReason: TakeStopReason;
+  stopPosition: MixFramePosition;
+  endedAtMs: number;
+};
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function validMixPosition(position: MixFramePosition) {
+  return Number.isSafeInteger(position.generation)
+    && position.generation >= 0
+    && Number.isSafeInteger(position.firstSampleIndex)
+    && position.firstSampleIndex >= 0;
 }
 
 function historyItem(entry: TakeLibraryEntry): TakeHistoryItem {
@@ -87,9 +105,16 @@ function sameHistoryItem(a: TakeHistoryItem | undefined, b: TakeHistoryItem) {
  * policy, durable recording library and one Take-scoped quality tracker.
  *
  * It deliberately knows nothing about Mic ownership, WebSockets, SongSession
- * authority or product UI. AudioSession supplies exact evidence beside each
- * mixed PCM frame; this controller guarantees that evidence reaches the Take
- * only after the same frame is accepted by the WAV writer.
+ * authority or product UI. AudioSession supplies exact evidence and position
+ * beside each mixed PCM frame; this controller commits both only after the same
+ * frame is accepted by the WAV writer.
+ *
+ * Start and Stop are armed against full-frame MixFramePositions. Because the
+ * live mixer intentionally emits prebuffered audio, a command may arrive
+ * hundreds of milliseconds before its addressed frame reaches this boundary.
+ * Frames before Start are ignored and a Stop remains pending until the final
+ * included frame has crossed the writer, so command scheduling never changes
+ * which authoritative samples land in the WAV.
  */
 export class TakeController {
   private readonly session = new TakeSession();
@@ -98,6 +123,7 @@ export class TakeController {
   private historyCache: readonly TakeHistoryItem[] = [];
   private writer: WavTakeWriter | null = null;
   private quality: TakeQualityTracker | null = null;
+  private pendingStop: PendingStop | null = null;
   private storagePrepared = false;
   private pruneChain: Promise<void> = Promise.resolve();
 
@@ -155,9 +181,17 @@ export class TakeController {
     return this.library.get(takeId);
   }
 
-  start(actorParticipantId: string, song: TakeSongSnapshot, nowMs = Date.now()): StartTakeResult {
+  start(
+    actorParticipantId: string,
+    song: TakeSongSnapshot,
+    startPosition: MixFramePosition,
+    nowMs = Date.now(),
+  ): StartTakeResult {
     if (this.session.lifecycle === 'recording' || this.session.lifecycle === 'finalizing') {
       return { ok: false, reason: 'take-active' };
+    }
+    if (!validMixPosition(startPosition)) {
+      return { ok: false, reason: 'mix-boundary-invalid' };
     }
 
     let maxTakeDataBytes: number;
@@ -181,6 +215,7 @@ export class TakeController {
       takeId,
       startedByParticipantId: actorParticipantId,
       song,
+      startPosition,
       startedAtMs: nowMs,
     });
     if (!started.ok) return started;
@@ -191,6 +226,7 @@ export class TakeController {
       backingExpected,
       timingExpected: backingExpected,
     });
+    this.pendingStop = null;
 
     let writer: WavTakeWriter | null = null;
     try {
@@ -224,43 +260,218 @@ export class TakeController {
   stop(
     takeId: string,
     actorParticipantId: string | null,
+    stopPosition: MixFramePosition,
     stopReason: TakeStopReason = 'user',
     nowMs = Date.now(),
   ): StopTakeResult {
     const current = this.session.currentTake();
+    if (!current) return { ok: false, reason: 'take-not-recording' };
+    if (current.takeId !== takeId) return { ok: false, reason: 'stale-take' };
+
+    if (current.lifecycle !== 'recording') {
+      return { ok: true, take: current, duplicate: true };
+    }
+    if (this.pendingStop?.takeId === takeId) {
+      return { ok: true, take: current, duplicate: true };
+    }
+
+    const range = current.mixSampleRange;
+    if (
+      !range
+      || !validMixPosition(stopPosition)
+      || stopPosition.generation !== range.generation
+      || stopPosition.firstSampleIndex < range.endSampleIndex
+    ) {
+      return { ok: false, reason: 'mix-boundary-invalid' };
+    }
+
+    const request: PendingStop = {
+      takeId,
+      actorParticipantId,
+      stopReason,
+      stopPosition: { ...stopPosition },
+      endedAtMs: nowMs,
+    };
+    this.pendingStop = request;
+
+    // Rapid Start/Stop (or a command exactly at the already-written frontier)
+    // needs no future audio to resolve. Finalize the zero/full-frame window now.
+    if (stopPosition.firstSampleIndex === range.endSampleIndex) {
+      return this.finalizeStop(request);
+    }
+
+    // The Stop command is accepted now, but the prebuffered mixer has not
+    // reached its addressed boundary yet. Keep the recording lifecycle active
+    // until every frame strictly before the exclusive boundary is committed.
+    return { ok: true, take: current, duplicate: false };
+  }
+
+  endMix(nowMs = Date.now()) {
+    const current = this.session.currentTake();
+    if (!current || current.lifecycle !== 'recording' || !current.mixSampleRange) return false;
+
+    // A source shutdown means no later frame can ever reach an already-armed
+    // Stop. Close at the actual writer frontier rather than inventing silence up
+    // to a command boundary the mixer will never emit.
+    const request: PendingStop = {
+      takeId: current.takeId,
+      actorParticipantId: null,
+      stopReason: 'mix-ended',
+      stopPosition: {
+        generation: current.mixSampleRange.generation,
+        firstSampleIndex: current.mixSampleRange.endSampleIndex,
+      },
+      endedAtMs: nowMs,
+    };
+    this.pendingStop = request;
+    return this.finalizeStop(request).ok;
+  }
+
+  append(
+    frame: Buffer,
+    state: TakeQualityFrameState,
+    evidence: MixFrameEvidence,
+    position: MixFramePosition,
+  ) {
+    const writer = this.writer;
+    const current = this.session.currentTake();
+    if (!writer || !current || current.lifecycle !== 'recording' || current.takeId !== writer.takeId) {
+      return false;
+    }
+
+    const range = current.mixSampleRange;
+    if (!range) {
+      this.failWriter(writer, new Error('Take recording window is missing its Start boundary.'));
+      return false;
+    }
+    if (position.generation !== range.generation) {
+      this.failWriter(writer, new Error('Take mix generation changed before the recording boundary completed.'));
+      return false;
+    }
+
+    // The mixer emits prebuffered audio. A successful Start addresses a frame
+    // on the live session clock, so older frames can continue to drain for a
+    // while and must not leak into the WAV.
+    if (position.firstSampleIndex < range.startSampleIndex) return false;
+
+    const pendingStop = this.pendingStop;
+    if (
+      pendingStop
+      && position.firstSampleIndex >= pendingStop.stopPosition.firstSampleIndex
+    ) {
+      this.finalizeStop(pendingStop);
+      return false;
+    }
+
+    try {
+      writer.append(frame);
+      const sampleCount = Math.floor(frame.byteLength / 2);
+      if (!this.session.appendMixFrame(position, sampleCount)) {
+        throw new Error('Take lifecycle rejected an accepted mix frame.');
+      }
+      this.quality?.observeFrame(sampleCount, state, evidence);
+
+      if (pendingStop) {
+        const frameEndSampleIndex = position.firstSampleIndex + sampleCount;
+        if (frameEndSampleIndex > pendingStop.stopPosition.firstSampleIndex) {
+          throw new Error('Take Stop boundary would require cutting a mixed frame.');
+        }
+        if (frameEndSampleIndex === pendingStop.stopPosition.firstSampleIndex) {
+          this.finalizeStop(pendingStop);
+        }
+      }
+      return true;
+    } catch (error) {
+      this.failWriter(writer, error);
+      return false;
+    }
+  }
+
+  noteQualityEvent(kind: TakeQualityEventKind) {
+    if (!this.session.recordingTakeId) return false;
+    this.quality?.noteEvent(kind);
+    return true;
+  }
+
+  shutdown() {
+    const writer = this.writer;
+    this.writer = null;
+    this.quality = null;
+    this.pendingStop = null;
+    if (writer) void writer.abort();
+  }
+
+  private finalizeStop(request: PendingStop): StopTakeResult {
+    if (this.pendingStop !== request) {
+      const current = this.session.currentTake();
+      if (current?.takeId === request.takeId) {
+        return { ok: true, take: current, duplicate: true };
+      }
+      return { ok: false, reason: current ? 'stale-take' : 'take-not-recording' };
+    }
+
+    const current = this.session.currentTake();
     const quality = this.quality?.assessment() ?? current?.quality;
     if (!quality) {
-      return current?.takeId === takeId
+      return current?.takeId === request.takeId
         ? { ok: false, reason: 'take-not-recording' }
         : { ok: false, reason: current ? 'stale-take' : 'take-not-recording' };
     }
 
-    const decision = this.session.beginFinalizing({
-      takeId,
-      stoppedByParticipantId: actorParticipantId,
-      stopReason,
-      endedAtMs: nowMs,
-      quality,
-    });
-    if (!decision.ok || decision.duplicate) return decision;
+    let decision: StopTakeDecision;
+    try {
+      decision = this.session.beginFinalizing({
+        takeId: request.takeId,
+        stoppedByParticipantId: request.actorParticipantId,
+        stopReason: request.stopReason,
+        stopPosition: request.stopPosition,
+        endedAtMs: request.endedAtMs,
+        quality,
+      });
+    } catch (error) {
+      const writer = this.writer;
+      if (writer) this.failWriter(writer, error);
+      return { ok: false, reason: 'mix-boundary-invalid' };
+    }
+    if (!decision.ok || decision.duplicate) {
+      this.pendingStop = null;
+      return decision;
+    }
 
     const writer = this.writer;
     this.writer = null;
     this.quality = null;
+    this.pendingStop = null;
     this.emitChange();
 
-    if (!writer || writer.takeId !== takeId) {
-      this.session.fail(takeId, 'Take WAV writer was not available during finalization.', Date.now());
+    if (!writer || writer.takeId !== request.takeId) {
+      this.session.fail(
+        request.takeId,
+        'Take WAV writer was not available during finalization.',
+        Date.now(),
+      );
       this.emitChange();
       return decision;
     }
 
     void writer.finalize()
       .then((file) => {
+        const pendingTake = this.session.currentTake();
+        const recordedSampleCount = pendingTake?.mixSampleRange?.sampleCount ?? 0;
+        if (recordedSampleCount !== file.sampleCount) {
+          if (this.session.fail(
+            request.takeId,
+            `Take sample metadata recorded ${recordedSampleCount} samples but WAV contains ${file.sampleCount}.`,
+            Date.now(),
+          )) this.emitChange();
+          void writer.discardFinalized();
+          return;
+        }
+
         const base = this.options.artifactBaseUrl ?? '/takes';
-        const completed = this.session.complete(takeId, {
+        const completed = this.session.complete(request.takeId, {
           fileName: file.fileName,
-          url: `${base}/${encodeURIComponent(takeId)}.wav`,
+          url: `${base}/${encodeURIComponent(request.takeId)}.wav`,
           mimeType: 'audio/wav',
           sizeBytes: file.sizeBytes,
           sampleRate: file.sampleRate,
@@ -297,49 +508,17 @@ export class TakeController {
         }
       })
       .catch((error) => {
-        if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();
+        if (this.session.fail(request.takeId, errorMessage(error), Date.now())) this.emitChange();
         void writer.abort();
       });
 
     return decision;
   }
 
-  endMix(nowMs = Date.now()) {
-    const takeId = this.session.recordingTakeId;
-    if (!takeId) return false;
-    const result = this.stop(takeId, null, 'mix-ended', nowMs);
-    return result.ok;
-  }
-
-  append(frame: Buffer, state: TakeQualityFrameState, evidence: MixFrameEvidence) {
-    const writer = this.writer;
-    if (!writer || this.session.recordingTakeId !== writer.takeId) return false;
-    try {
-      writer.append(frame);
-      this.quality?.observeFrame(Math.floor(frame.byteLength / 2), state, evidence);
-      return true;
-    } catch (error) {
-      this.failWriter(writer, error);
-      return false;
-    }
-  }
-
-  noteQualityEvent(kind: TakeQualityEventKind) {
-    if (!this.session.recordingTakeId) return false;
-    this.quality?.noteEvent(kind);
-    return true;
-  }
-
-  shutdown() {
-    const writer = this.writer;
-    this.writer = null;
-    this.quality = null;
-    if (writer) void writer.abort();
-  }
-
   private failWriter(writer: WavTakeWriter, error: unknown) {
     if (this.writer !== writer) return;
     this.writer = null;
+    this.pendingStop = null;
     const quality = this.quality?.assessment();
     this.quality = null;
     if (this.session.fail(writer.takeId, errorMessage(error), Date.now(), quality)) this.emitChange();

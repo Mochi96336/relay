@@ -610,6 +610,8 @@ function logCalibrationTransition(reason: string) {
     + ` windows=${status.windowsAgreed}/${status.windowsNeeded}`
     + (status.confidence !== null ? ` confidence=${status.confidence.toFixed(3)}` : '')
     + (status.micLagMs !== null ? ` lagMs=${status.micLagMs.toFixed(0)}` : '')
+    + (status.micLevelDbfs !== null ? ` micLevel=${status.micLevelDbfs.toFixed(1)}dBFS` : '')
+    + (status.backingLevelDbfs !== null ? ` backingLevel=${status.backingLevelDbfs.toFixed(1)}dBFS` : '')
     + (status.error ? ` error=${status.error}` : ''),
   );
 }

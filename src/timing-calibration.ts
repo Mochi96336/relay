@@ -344,11 +344,20 @@ export function analyzeTimingCalibration(
   const micLevelDbfs = levelDbfs(micPcm);
   const backingLevelDbfs = levelDbfs(backingPcm);
 
+  // Carry the measurement into the refusal. "Too quiet" alone cannot separate a
+  // window that missed by a decibel from one that was never going to pass, and
+  // the analyser throws before it can report the level any other way.
   if (backingLevelDbfs < -50) {
-    throw new Error('Desktop source is too quiet for timing calibration.');
+    throw new Error(
+      `Desktop source is too quiet for timing calibration `
+      + `(${backingLevelDbfs.toFixed(1)} dBFS, needs -50).`,
+    );
   }
   if (micLevelDbfs < -60) {
-    throw new Error('Phone speaker bleed is too quiet. Raise phone volume and try again.');
+    throw new Error(
+      `Phone speaker bleed is too quiet (${micLevelDbfs.toFixed(1)} dBFS, needs -60). `
+      + 'Raise phone volume and try again.',
+    );
   }
 
   const mic = extractMusicTimingFeatures(micPcm, sampleRate);

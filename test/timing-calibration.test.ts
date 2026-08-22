@@ -64,7 +64,7 @@ describe('analyzeTimingCalibration', () => {
     const silence = Buffer.alloc(RATE * 6 * 2);
     assert.throws(
       () => analyzeTimingCalibration(int16View(mic), int16View(silence), RATE),
-      /too quiet/,
+      /too quiet.*dBFS, needs -\d+/,
     );
   });
 
@@ -73,7 +73,7 @@ describe('analyzeTimingCalibration', () => {
     const silence = Buffer.alloc(RATE * 6 * 2);
     assert.throws(
       () => analyzeTimingCalibration(int16View(silence), int16View(backing), RATE),
-      /too quiet/,
+      /too quiet.*dBFS, needs -\d+/,
     );
   });
 

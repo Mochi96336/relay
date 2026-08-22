@@ -1,3 +1,4 @@
+import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
@@ -44,6 +45,7 @@ let captureGraphEpoch = 0;
 let captureGraphRebuildPromise = null;
 let captureWatchdogTimer = null;
 let publisherActive = false;
+let publisherAuthorityFresh = false;
 let publisherStarting = false;
 let publisherStartRequest = null;
 const micStartup = new MicStartupGate();
@@ -57,6 +59,10 @@ let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
 let activeCalibrationProbeRequestId = null;
 let publisherSessionEpoch = 0;
+let lastKnownControlSnapshot = {
+  micGainDb: Number(micGain.value) || 24,
+  vocalFineTuneMs: Number(vocalFineTune.value) || 0,
+};
 
 /**
  * The local capture owns the live meter; server mix health owns slower gain
@@ -112,9 +118,9 @@ function renderGainAdvice() {
       ? t('adjust.aboveSuggestion', { amount: -off })
       : t('adjust.belowSuggestion', { amount: off });
 
-  const canApply = publisherActive && Math.abs(off) > 3;
+  const canApply = publisherCommandAuthority().actionable && Math.abs(off) > 3;
   useMicGainSuggestion.hidden = !canApply;
-  useMicGainSuggestion.disabled = !publisherActive;
+  useMicGainSuggestion.disabled = !publisherCommandAuthority().actionable;
   useMicGainSuggestion.textContent = t('adjust.useGain', { gain: suggested });
 }
 let uplinkDroppedSamples = 0;
@@ -448,13 +454,49 @@ const COMMAND_LABELS = {
   'start-timing-calibration': 'Calibration is controlled by the singer',
 };
 
+function publisherCommandAuthority(serverAllowed = true) {
+  return authorityState({
+    authorityFresh: publisherAuthorityFresh,
+    lastKnownSnapshot: lastKnownControlSnapshot,
+    commandChannelFresh: socket?.readyState === WebSocket.OPEN,
+    authorized: publisherActive,
+    serverAllowed,
+  });
+}
+
+function publishPublisherCommandAuthority() {
+  const detail = publisherCommandAuthority();
+  window.relayCommandAuthority = detail;
+  dispatchRelayEvent('relay-command-authority', detail);
+  return detail;
+}
+
+function restoreLastKnownControl(command = null) {
+  if (command === null || command === 'set-mix') {
+    micGain.value = String(lastKnownControlSnapshot.micGainDb);
+    updateMixLabels();
+  }
+  if (command === null || command === 'set-vocal-fine-tune') {
+    vocalFineTune.value = String(lastKnownControlSnapshot.vocalFineTuneMs);
+    updateVocalFineTuneLabel();
+  }
+}
+
+function markPublisherAuthorityStale() {
+  publisherAuthorityFresh = false;
+  publishPublisherCommandAuthority();
+  updateSingerControls();
+}
+
 function setPublisherActive(active) {
   publisherActive = Boolean(active);
+  if (!publisherActive) publisherAuthorityFresh = false;
   // listen.js / recorder.js consume the legacy role, while Presence consumes
   // the explicit local lifecycle event so Release never depends on a server
   // ownership snapshot arriving first.
   window.relayActiveRole = publisherActive ? 'publisher' : null;
   dispatchRelayEvent('relay-microphone-local-state', { active: publisherActive });
+  publishPublisherCommandAuthority();
 }
 
 function signed(value, suffix) {
@@ -488,32 +530,53 @@ function updateVocalFineTuneLabel() {
 }
 
 function sendVocalFineTune() {
+  if (!publisherCommandAuthority().actionable) {
+    restoreLastKnownControl('set-vocal-fine-tune');
+    return false;
+  }
+  try {
+    socket.send(JSON.stringify({
+      type: 'set-vocal-fine-tune',
+      valueMs: Number(vocalFineTune.value),
+    }));
+  } catch {
+    restoreLastKnownControl('set-vocal-fine-tune');
+    markPublisherAuthorityStale();
+    return false;
+  }
   updateVocalFineTuneLabel();
-  if (socket?.readyState !== WebSocket.OPEN || !publisherActive) return;
-  socket.send(JSON.stringify({
-    type: 'set-vocal-fine-tune',
-    valueMs: Number(vocalFineTune.value),
-  }));
+  return true;
 }
 
 function sendMixSettings() {
+  if (!publisherCommandAuthority().actionable) {
+    restoreLastKnownControl('set-mix');
+    return false;
+  }
+  try {
+    socket.send(JSON.stringify({
+      type: 'set-mix',
+      micGainDb: Number(micGain.value),
+      // Retain the old field on the wire while the server owns its only valid
+      // value. It is no longer a second product control.
+      songLevel: FIXED_SONG_LEVEL,
+    }));
+  } catch {
+    restoreLastKnownControl('set-mix');
+    markPublisherAuthorityStale();
+    return false;
+  }
   updateMixLabels();
-  if (socket?.readyState !== WebSocket.OPEN || !publisherActive) return;
-  socket.send(JSON.stringify({
-    type: 'set-mix',
-    micGainDb: Number(micGain.value),
-    // Retain the old field on the wire while the server owns its only valid
-    // value. It is no longer a second product control.
-    songLevel: FIXED_SONG_LEVEL,
-  }));
+  return true;
 }
 
 function updateSingerControls() {
-  micGain.disabled = !publisherActive;
+  const actionable = publisherCommandAuthority().actionable;
+  micGain.disabled = !actionable;
   // Compatibility only: Song is a fixed server-owned reference, never an
   // interactive singer control even while this participant owns the Mic.
   songLevel.disabled = true;
-  vocalFineTune.disabled = !publisherActive;
+  vocalFineTune.disabled = !actionable;
   renderGainAdvice();
   updateCalibrateButton();
 }
@@ -525,9 +588,9 @@ function updateSingerControls() {
 function updateCalibrateButton() {
   const collecting = latestCalibration?.state === 'collecting';
   const probeActive = latestCalibration?.probeActive === true;
-  calibrateButton.disabled = !publisherActive
-    || roomSongAvailable !== true
-    || roomCanStartCalibration !== true;
+  calibrateButton.disabled = !publisherCommandAuthority(
+    roomSongAvailable === true && roomCanStartCalibration === true,
+  ).actionable;
 
   if (roomSongAvailable === false) {
     calibrateStatus.textContent = 'No song to align.';
@@ -724,9 +787,13 @@ function handleServerMessage(
   }
 
   if (message.type === 'command-rejected') {
-    // Without this the control simply stops working: the slider moves, the
-    // server drops the command, and nothing on the page says why.
+    // The rejection is visible, and it also invalidates the local claim that
+    // this socket is currently authorized to mutate server-owned controls.
     const owner = message.owner ?? null;
+    restoreLastKnownControl(message.command);
+    publisherAuthorityFresh = false;
+    publishPublisherCommandAuthority();
+    updateSingerControls();
     setStatus(
       COMMAND_LABELS[message.command] ?? 'Command refused',
       message.reason === 'not-mic-owner'
@@ -740,6 +807,9 @@ function handleServerMessage(
     calibrateStatus.textContent = message.reason === 'take-active'
       ? 'Finish the current Take before calibrating.'
       : `Calibration unavailable: ${message.reason ?? 'unknown reason'}`;
+    dispatchRelayEvent('relay-calibration-command-rejected', {
+      reason: message.reason ?? 'unknown',
+    });
     return;
   }
 
@@ -789,6 +859,9 @@ function handleServerMessage(
     && isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
   ) {
     pendingPublisherTakeoverOwnerId = null;
+    publisherAuthorityFresh = true;
+    publishPublisherCommandAuthority();
+    updateSingerControls();
     void audioTransport.prefer(message.mediaTransport ?? null).then((preferred) => {
       if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
       const path = preferred ? 'WebTransport datagrams' : 'WebSocket fallback';
@@ -810,16 +883,29 @@ function handleServerMessage(
   if (message.type === 'source-status') {
     liveMixActive = Boolean(message.active);
     const nextFineTune = Number(message.vocalFineTuneMs);
-    if (Number.isFinite(nextFineTune) && !sliderIsBusy(vocalFineTune)) {
-      vocalFineTune.value = String(nextFineTune);
-      updateVocalFineTuneLabel();
+    if (Number.isFinite(nextFineTune)) {
+      lastKnownControlSnapshot = {
+        ...lastKnownControlSnapshot,
+        vocalFineTuneMs: nextFineTune,
+      };
+      if (!sliderIsBusy(vocalFineTune)) {
+        vocalFineTune.value = String(nextFineTune);
+        updateVocalFineTuneLabel();
+      }
     }
     updateCalibrateButton();
     return;
   }
 
   if (message.type === 'mix-settings') {
-    if (!sliderIsBusy(micGain)) micGain.value = String(message.micGainDb ?? 24);
+    const nextGain = Number(message.micGainDb ?? 24);
+    if (Number.isFinite(nextGain)) {
+      lastKnownControlSnapshot = {
+        ...lastKnownControlSnapshot,
+        micGainDb: nextGain,
+      };
+      if (!sliderIsBusy(micGain)) micGain.value = String(nextGain);
+    }
     songLevel.value = String(FIXED_SONG_LEVEL);
     updateMixLabels();
     return;
@@ -938,6 +1024,9 @@ function schedulePublisherReconnect(
 function adoptSocket(ws) {
   const previous = socket;
   socket = ws;
+  publisherAuthorityFresh = false;
+  publishPublisherCommandAuthority();
+  updateSingerControls();
   if (previous && previous !== ws) {
     try {
       previous.close();
@@ -989,6 +1078,9 @@ async function connectPublisherSocket(
     activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
+    publisherAuthorityFresh = false;
+    publishPublisherCommandAuthority();
+    updateSingerControls();
     if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
     setStatus('Reconnecting microphone…', 'Relay connection closed; microphone capture stays active.');
     schedulePublisherReconnect(sessionEpoch, expectedGeneration);
@@ -1008,6 +1100,9 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   if (previous) {
     audioTransport.unbind(previous);
     socket = null;
+    publisherAuthorityFresh = false;
+    publishPublisherCommandAuthority();
+    updateSingerControls();
     try {
       previous.close();
     } catch {}
@@ -1089,6 +1184,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   const wasPublisherActive = publisherActive;
 
   socket = null;
+  publisherAuthorityFresh = false;
   mediaStream = null;
   activeCaptureGraph = null;
   activeNode = null;
@@ -1361,7 +1457,7 @@ vocalFineTune.addEventListener('change', () => markSliderTouched(vocalFineTune))
 
 useMicGainSuggestion.addEventListener('click', () => {
   const recommended = Number(latestMixHealth?.recommendedMicGainDb);
-  if (!publisherActive || !Number.isFinite(recommended)) return;
+  if (!publisherCommandAuthority().actionable || !Number.isFinite(recommended)) return;
   micGain.value = String(Math.max(0, Math.min(MAX_RECOMMENDED_MIC_GAIN_DB, Math.round(recommended))));
   markSliderTouched(micGain);
   sendMixSettings();
@@ -1373,11 +1469,14 @@ window.addEventListener('relay-locale-changed', () => {
 });
 
 calibrateButton.addEventListener('click', () => {
-  if (socket?.readyState !== WebSocket.OPEN) return;
+  if (!publisherCommandAuthority(
+    roomSongAvailable === true && roomCanStartCalibration === true,
+  ).actionable) return;
   socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
 });
 
 updateMixLabels();
 updateCalibrateButton();
 updateSingerControls();
+publishPublisherCommandAuthority();
 setStatus('Idle', 'Take the mic when you are ready.');

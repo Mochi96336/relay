@@ -76,6 +76,63 @@ describe('AudioPacketReceiver', () => {
     assert.equal(r.stats().lostPackets, 1);
   });
 
+  test('keeps the configured forward threshold in normal loss/reorder semantics', () => {
+    const atThreshold = receiver({
+      generation: 201,
+      initialSequence: 10,
+      maxForwardJumpPackets: 8,
+      reorderWindowPackets: 4,
+    });
+    atThreshold.receive(packet(10, 0, { generation: 201 }), 0);
+    assert.deepEqual(atThreshold.receive(packet(19, 18, { generation: 201 }), 1), []);
+    assert.equal(atThreshold.stats().futurePackets, 0);
+    assert.equal(atThreshold.stats().bufferedPackets, 1);
+
+    const pastThreshold = receiver({
+      generation: 202,
+      initialSequence: 10,
+      maxForwardJumpPackets: 8,
+      reorderWindowPackets: 4,
+    });
+    pastThreshold.receive(packet(10, 0, { generation: 202 }), 0);
+    assert.deepEqual(pastThreshold.receive(packet(20, 20, { generation: 202 }), 1), []);
+    assert.equal(pastThreshold.stats().futurePackets, 1);
+    assert.equal(pastThreshold.stats().bufferedPackets, 0);
+  });
+
+  test('resyncs a legitimate large forward discontinuity after consecutive timeline evidence', () => {
+    const generation = 203;
+    const r = receiver({
+      generation,
+      initialSequence: 10,
+      maxForwardJumpPackets: 8,
+      reorderWindowPackets: 4,
+    });
+    assert.deepEqual(r.receive(packet(10, 0, { generation }), 0).map((p) => p.sequence), [10]);
+    assert.deepEqual(r.receive(packet(40, 100, { generation }), 1), []);
+    assert.deepEqual(
+      r.receive(packet(41, 102, { generation }), 2).map((p) => p.sequence),
+      [40, 41],
+    );
+    assert.deepEqual(r.receive(packet(42, 104, { generation }), 3).map((p) => p.sequence), [42]);
+    assert.equal(r.stats().futurePackets, 2);
+    assert.equal(r.stats().lostPackets, 0, 'large discontinuity is not expanded into invented packet loss');
+  });
+
+  test('a single bounded future packet cannot move the sequence frontier', () => {
+    const generation = 204;
+    const r = receiver({
+      generation,
+      initialSequence: 10,
+      maxForwardJumpPackets: 8,
+      reorderWindowPackets: 4,
+    });
+    r.receive(packet(10, 0, { generation }), 0);
+    assert.deepEqual(r.receive(packet(40, 100, { generation }), 1), []);
+    assert.deepEqual(r.receive(packet(11, 2, { generation }), 2).map((p) => p.sequence), [11]);
+    assert.equal(r.stats().futurePackets, 1);
+  });
+
   test('distinguishes duplicate, late and replayed packets', () => {
     const r = receiver({ initialSequence: 20, reorderDeadlineMs: 5 });
     r.receive(packet(20, 0), 0);
@@ -115,12 +172,19 @@ describe('AudioPacketReceiver', () => {
     assert.equal(r.stats().wrongSourcePackets, 1);
   });
 
-  test('rejects wildly future sequence numbers without growing memory', () => {
-    const r = receiver({ initialSequence: 10, maxForwardJumpPackets: 8, reorderWindowPackets: 4 });
-    r.receive(packet(10, 0), 0);
-    assert.deepEqual(r.receive(packet(100, 2), 1), []);
+  test('rejects an absurd future jump and still accepts the real frontier afterward', () => {
+    const generation = 205;
+    const r = receiver({
+      generation,
+      initialSequence: 10,
+      maxForwardJumpPackets: 8,
+      reorderWindowPackets: 4,
+    });
+    r.receive(packet(10, 0, { generation }), 0);
+    assert.deepEqual(r.receive(packet(10_000, 100, { generation }), 1), []);
     assert.equal(r.stats().futurePackets, 1);
     assert.equal(r.stats().bufferedPackets, 0);
+    assert.deepEqual(r.receive(packet(11, 2, { generation }), 2).map((p) => p.sequence), [11]);
   });
 
   test('rejects a sample range that moves backward even when sequence is valid', () => {
@@ -162,6 +226,51 @@ describe('AudioPacketReceiver', () => {
     );
     assert.equal(replacement.stats().lostPackets, 0);
     assert.equal(replacement.stats().replayPackets, 0);
+  });
+
+  test('same-generation reconnect can explicitly re-anchor after a large gap', () => {
+    const generation = 206;
+    const first = receiver({
+      generation,
+      initialSequence: 0,
+      maxForwardJumpPackets: 8,
+      reorderWindowPackets: 4,
+    });
+    first.receive(packet(0, 0, { generation }), 3_000);
+    first.receive(packet(1, 2, { generation }), 3_001);
+
+    const replacement = receiver({
+      generation,
+      initialSequence: 40,
+      maxForwardJumpPackets: 8,
+      reorderWindowPackets: 4,
+    });
+    assert.deepEqual(
+      replacement.receive(packet(40, 100, { generation }), 3_010).map((p) => p.sequence),
+      [40],
+    );
+    assert.deepEqual(
+      replacement.receive(packet(41, 102, { generation }), 3_011).map((p) => p.sequence),
+      [41],
+    );
+    assert.equal(replacement.stats().futurePackets, 0);
+    assert.equal(replacement.stats().replayPackets, 0);
+  });
+
+  test('a new generation starts from its own frontier and rejects the old generation', () => {
+    const oldGeneration = 207;
+    const newGeneration = 208;
+    const old = receiver({ generation: oldGeneration });
+    old.receive(packet(0, 0, { generation: oldGeneration }), 4_000);
+    old.receive(packet(1, 2, { generation: oldGeneration }), 4_001);
+
+    const fresh = receiver({ generation: newGeneration, initialSequence: 0 });
+    assert.deepEqual(fresh.receive(packet(2, 4, { generation: oldGeneration }), 4_010), []);
+    assert.equal(fresh.stats().wrongGenerationPackets, 1);
+    assert.deepEqual(
+      fresh.receive(packet(0, 0, { generation: newGeneration }), 4_011).map((p) => p.sequence),
+      [0],
+    );
   });
 
   test('fresh sequence zero resets a coincidentally reused generation instead of inheriting history', () => {

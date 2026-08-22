@@ -11,8 +11,9 @@ export type TakeFrameBoundary = {
  * after that instant on AudioSession's authoritative sample clock.
  *
  * The mixer may be emitting `prebufferMs` behind real time; that delay is
- * deliberately irrelevant here. `sessionSampleIndex` is the live session clock,
- * while the returned MixFramePosition is what will reach the recorder later.
+ * deliberately irrelevant here. `sessionSampleIndex` may be fractional because
+ * command time must not be rounded backward before frame quantization. The
+ * returned MixFramePosition is still an exact integer frame address.
  */
 export function takeFrameBoundaryAtOrAfter(input: {
   generation: number;
@@ -24,7 +25,7 @@ export function takeFrameBoundaryAtOrAfter(input: {
   if (!Number.isSafeInteger(input.generation) || input.generation < 0) {
     throw new Error('Take boundary mix generation is invalid.');
   }
-  if (!Number.isSafeInteger(input.sessionSampleIndex)) {
+  if (!Number.isFinite(input.sessionSampleIndex)) {
     throw new Error('Take boundary session sample is invalid.');
   }
   if (!Number.isSafeInteger(input.frameSamples) || input.frameSamples <= 0) {
@@ -44,7 +45,7 @@ export function takeFrameBoundaryAtOrAfter(input: {
     throw new Error('Take boundary sample position exceeds the safe integer range.');
   }
 
-  const deltaSamples = firstSampleIndex - input.sessionSampleIndex;
+  const deltaSamples = firstSampleIndex - commandSampleIndex;
   return {
     position: {
       generation: input.generation,

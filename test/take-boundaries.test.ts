@@ -55,6 +55,38 @@ function waitForReady(directory: string) {
   return { controller, ready };
 }
 
+test('fractional command time cannot round backward across a full-frame boundary', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: PREBUFFER_MS,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+  session.start(0);
+
+  const exact = boundaryFor(session, 420);
+  assert.equal(exact.position.firstSampleIndex, FRAME_SAMPLES * 21);
+  assert.equal(exact.atMs, 420, 'an exact frame-boundary command keeps that boundary');
+
+  const justAfter = boundaryFor(session, 420.001);
+  assert.ok(
+    session.sessionSampleAt(420.001) > FRAME_SAMPLES * 21
+      && session.sessionSampleAt(420.001) < FRAME_SAMPLES * 21 + 1,
+    'the public session clock must preserve sub-sample command position',
+  );
+  assert.equal(
+    justAfter.position.firstSampleIndex,
+    FRAME_SAMPLES * 22,
+    'a command even one microsecond after the boundary must not include the already-started frame',
+  );
+  assert.ok(Math.abs(justAfter.atMs - 440) < 1e-9);
+
+  const justBefore = boundaryFor(session, 419.999);
+  assert.equal(justBefore.position.firstSampleIndex, FRAME_SAMPLES * 21);
+  assert.ok(Math.abs(justBefore.atMs - 420) < 1e-9);
+});
+
 test('prebuffer does not move the WAV Start boundary before the Start command', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-prebuffer-boundary-'));
   try {

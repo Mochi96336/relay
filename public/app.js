@@ -46,6 +46,8 @@ let captureGraphRebuildPromise = null;
 let captureWatchdogTimer = null;
 let publisherActive = false;
 let publisherAuthorityFresh = false;
+let publisherMixSettingsFresh = false;
+let publisherSourceStatusFresh = false;
 let publisherStarting = false;
 let publisherStartRequest = null;
 const micStartup = new MicStartupGate();
@@ -456,7 +458,9 @@ const COMMAND_LABELS = {
 
 function publisherCommandAuthority(serverAllowed = true) {
   return authorityState({
-    authorityFresh: publisherAuthorityFresh,
+    authorityFresh: publisherAuthorityFresh
+      && publisherMixSettingsFresh
+      && publisherSourceStatusFresh,
     lastKnownSnapshot: lastKnownControlSnapshot,
     commandChannelFresh: socket?.readyState === WebSocket.OPEN,
     authorized: publisherActive,
@@ -482,15 +486,21 @@ function restoreLastKnownControl(command = null) {
   }
 }
 
-function markPublisherAuthorityStale() {
+function resetPublisherCommandFreshness() {
   publisherAuthorityFresh = false;
+  publisherMixSettingsFresh = false;
+  publisherSourceStatusFresh = false;
+}
+
+function markPublisherAuthorityStale() {
+  resetPublisherCommandFreshness();
   publishPublisherCommandAuthority();
   updateSingerControls();
 }
 
 function setPublisherActive(active) {
   publisherActive = Boolean(active);
-  if (!publisherActive) publisherAuthorityFresh = false;
+  if (!publisherActive) resetPublisherCommandFreshness();
   // listen.js / recorder.js consume the legacy role, while Presence consumes
   // the explicit local lifecycle event so Release never depends on a server
   // ownership snapshot arriving first.
@@ -791,7 +801,7 @@ function handleServerMessage(
     // this socket is currently authorized to mutate server-owned controls.
     const owner = message.owner ?? null;
     restoreLastKnownControl(message.command);
-    publisherAuthorityFresh = false;
+    resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
     setStatus(
@@ -888,12 +898,14 @@ function handleServerMessage(
         ...lastKnownControlSnapshot,
         vocalFineTuneMs: nextFineTune,
       };
+      publisherSourceStatusFresh = true;
       if (!sliderIsBusy(vocalFineTune)) {
         vocalFineTune.value = String(nextFineTune);
         updateVocalFineTuneLabel();
       }
     }
-    updateCalibrateButton();
+    publishPublisherCommandAuthority();
+    updateSingerControls();
     return;
   }
 
@@ -904,10 +916,13 @@ function handleServerMessage(
         ...lastKnownControlSnapshot,
         micGainDb: nextGain,
       };
+      publisherMixSettingsFresh = true;
       if (!sliderIsBusy(micGain)) micGain.value = String(nextGain);
     }
     songLevel.value = String(FIXED_SONG_LEVEL);
     updateMixLabels();
+    publishPublisherCommandAuthority();
+    updateSingerControls();
     return;
   }
 
@@ -1024,7 +1039,7 @@ function schedulePublisherReconnect(
 function adoptSocket(ws) {
   const previous = socket;
   socket = ws;
-  publisherAuthorityFresh = false;
+  resetPublisherCommandFreshness();
   publishPublisherCommandAuthority();
   updateSingerControls();
   if (previous && previous !== ws) {
@@ -1078,7 +1093,7 @@ async function connectPublisherSocket(
     activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
-    publisherAuthorityFresh = false;
+    resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
     if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
@@ -1100,7 +1115,7 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   if (previous) {
     audioTransport.unbind(previous);
     socket = null;
-    publisherAuthorityFresh = false;
+    resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
     try {
@@ -1184,7 +1199,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   const wasPublisherActive = publisherActive;
 
   socket = null;
-  publisherAuthorityFresh = false;
+  resetPublisherCommandFreshness();
   mediaStream = null;
   activeCaptureGraph = null;
   activeNode = null;

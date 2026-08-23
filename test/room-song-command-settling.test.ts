@@ -61,8 +61,8 @@ test('state-only Play stays pending across the observed +813ms / -833ms iframe c
   );
   assert.equal(begun.ok, true);
 
-  // The first PLAYING report is a real state proof, but its +813 ms local jump
-  // says the iframe clock is still settling. Do not retire command provenance.
+  // PAUSED -> PLAYING does not project natural motion from the previous sample,
+  // so the observed 97.386 -> 98.199 edge reaches the wire as +813 ms.
   assert.deepEqual(
     session.gateTelemetry(
       telemetry({ state: 1, currentTime: 98.199, timelineDeltaSeconds: 0.813 }),
@@ -73,11 +73,11 @@ test('state-only Play stays pending across the observed +813ms / -833ms iframe c
     { ok: true },
   );
 
-  // One stable sample is only a candidate because the iframe can still correct
-  // itself on the next sample.
+  // Once PLAYING, readSnapshot subtracts natural media-clock advance. A raw
+  // +305 ms step over roughly 300 ms is therefore essentially stable residual.
   assert.deepEqual(
     session.gateTelemetry(
-      telemetry({ state: 1, currentTime: 98.504, timelineDeltaSeconds: 0.305 }),
+      telemetry({ state: 1, currentTime: 98.504, timelineDeltaSeconds: 0.005 }),
       A,
       room({ state: 1, serverTime: 98.449, youtubeTime: 98.199, ageMs: 250 }),
       550,
@@ -85,12 +85,13 @@ test('state-only Play stays pending across the observed +813ms / -833ms iframe c
     { ok: true },
   );
 
-  // This is the failure signature from the Pi trace. It remains authorized
-  // progress of the same Play and resets the stable-completion candidate rather
-  // than becoming a new Seek after an early terminal packet.
+  // The raw 98.504 -> 97.671 correction is -833 ms. After subtracting the
+  // roughly 300 ms the playing clock should have advanced, the actual wire
+  // residual is about -1.13 s: still inside the client's causal correction
+  // envelope, but intentionally too unstable to retire command provenance.
   assert.deepEqual(
     session.gateTelemetry(
-      telemetry({ state: 1, currentTime: 97.671, timelineDeltaSeconds: -0.833 }),
+      telemetry({ state: 1, currentTime: 97.671, timelineDeltaSeconds: -1.133 }),
       A,
       room({ state: 1, serverTime: 98.804, youtubeTime: 98.504, ageMs: 300 }),
       850,
@@ -99,11 +100,11 @@ test('state-only Play stays pending across the observed +813ms / -833ms iframe c
   );
   assert.equal(session.statusPayload(1, 850).pendingCommandId, 'command-play-settle');
 
-  // Only after the local media clock demonstrates stable continuity twice does
-  // the state-only command become terminal.
+  // Only after the media clock demonstrates stable continuity twice does the
+  // state-only command become terminal.
   assert.deepEqual(
     session.gateTelemetry(
-      telemetry({ state: 1, currentTime: 97.921, timelineDeltaSeconds: 0.25 }),
+      telemetry({ state: 1, currentTime: 97.921, timelineDeltaSeconds: 0 }),
       A,
       room({ state: 1, serverTime: 97.921, youtubeTime: 97.671, ageMs: 250 }),
       1_100,
@@ -112,7 +113,7 @@ test('state-only Play stays pending across the observed +813ms / -833ms iframe c
   );
   assert.deepEqual(
     session.gateTelemetry(
-      telemetry({ state: 1, currentTime: 98.171, timelineDeltaSeconds: 0.25 }),
+      telemetry({ state: 1, currentTime: 98.171, timelineDeltaSeconds: 0 }),
       A,
       room({ state: 1, serverTime: 98.171, youtubeTime: 97.921, ageMs: 250 }),
       1_350,

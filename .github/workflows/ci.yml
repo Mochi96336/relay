@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: '20.19'
@@ -19,30 +21,60 @@ jobs:
       - name: Expose deployment npm path for systemd verifier
         run: sudo ln -sf "$(command -v npm)" /usr/bin/npm
       - run: npm ci
-      - run: npm run check
+      - name: Check CI summary runner syntax
+        run: bash -n scripts/ci-run.sh
+      - name: Run npm check
+        id: npm-check
+        run: bash scripts/ci-run.sh test check "npm run check" -- npm run check
+      - name: Upload npm check failure summary
+        if: failure() && steps.npm-check.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-check
+          path: ci-summary/check-failure.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Check browser JavaScript syntax
-        run: find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check
+        id: browser-js
+        run: bash scripts/ci-run.sh test browser-js "browser JavaScript syntax" -- bash -o pipefail -c "find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check"
+      - name: Upload browser JavaScript failure summary
+        if: failure() && steps.browser-js.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-browser-js
+          path: ci-summary/browser-js-failure.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Check launcher shell syntax
-        run: bash -n scripts/*.sh
+        id: shell-syntax
+        run: bash scripts/ci-run.sh test shell-syntax "launcher shell syntax" -- bash -c 'bash -n scripts/*.sh'
+      - name: Upload launcher shell failure summary
+        if: failure() && steps.shell-syntax.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-shell-syntax
+          path: ci-summary/shell-syntax-failure.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Run npm test
-        shell: bash
-        run: |
-          set +e
-          set -o pipefail
-          npm test 2>&1 | tee test-output.log
-          status=${PIPESTATUS[0]}
-          set -e
-          if (( status != 0 )); then
-            message="$(tail -n 120 test-output.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}')"
-            echo "::error title=npm test failed::$message"
-          fi
-          exit "$status"
+        id: npm-test
+        run: bash scripts/ci-run.sh test test "npm test" -- npm test
+      - name: Upload npm test failure summary
+        if: failure() && steps.npm-test.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-test
+          path: ci-summary/test-failure.txt
+          if-no-files-found: error
+          retention-days: 7
 
   visual-screenshots:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: '20.19'
@@ -69,71 +101,29 @@ jobs:
           cat /tmp/relay-visual-http.log
           exit 1
       - name: Run production DOM interaction tests
+        id: browser-interaction
         env:
           RELAY_INTERACTION_URL: http://127.0.0.1:4173/
-        run: npx playwright test test/browser/live-interaction.spec.mjs --workers=1 --reporter=line
+        run: bash scripts/ci-run.sh visual-screenshots browser-interaction "production DOM interaction tests" -- npx playwright test test/browser/live-interaction.spec.mjs --workers=1 --reporter=line
+      - name: Upload browser interaction failure summary
+        if: failure() && steps.browser-interaction.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-browser-interaction
+          path: ci-summary/browser-interaction-failure.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Capture phone states and assert browser geometry
-        run: |
-          mkdir -p screenshots
-          for state in empty listener singer takeover recording system; do
-            npx -y playwright@1.55.0 screenshot \
-              --browser chromium \
-              --viewport-size="390,844" \
-              --full-page \
-              --wait-for-timeout=250 \
-              "http://127.0.0.1:4173/__live-visual.html?state=${state}" \
-              "screenshots/${state}.png"
-          done
-
-          for state in take-history-one take-history-many room-sound-normal room-sound-muted room-sound-forced room-sound-retry; do
-            npx -y playwright@1.55.0 screenshot \
-              --browser chromium \
-              --viewport-size="390,844" \
-              --wait-for-timeout=700 \
-              "http://127.0.0.1:4173/__live-p0-layout.html?state=${state}" \
-              "screenshots/${state}.png"
-          done
-
-          for width in 759 760 768; do
-            npx -y playwright@1.55.0 screenshot \
-              --browser chromium \
-              --viewport-size="${width},844" \
-              --wait-for-timeout=700 \
-              "http://127.0.0.1:4173/__live-p0-layout.html?state=take-history-one" \
-              "/tmp/take-history-${width}.png"
-          done
-
-          npx -y playwright@1.55.0 screenshot \
-            --browser chromium \
-            --viewport-size="1024,768" \
-            --wait-for-timeout=700 \
-            "http://127.0.0.1:4173/__live-p0-layout.html?state=take-history-one" \
-            "/tmp/take-history-desktop.png"
-
-          sleep 0.25
-          if grep -q '/__geometry-fail' /tmp/relay-visual-http.log; then
-            echo 'Chromium layout geometry failed:'
-            grep '/__geometry-' /tmp/relay-visual-http.log || true
-            exit 1
-          fi
-
-          for marker in \
-            'state=take-history-one&vw=390' \
-            'state=take-history-many&vw=390' \
-            'state=room-sound-normal&vw=390' \
-            'state=room-sound-muted&vw=390' \
-            'state=room-sound-forced&vw=390' \
-            'state=room-sound-retry&vw=390' \
-            'state=take-history-one&vw=759' \
-            'state=take-history-one&vw=760' \
-            'state=take-history-one&vw=768' \
-            'state=take-history-one&vw=1024'; do
-            if ! grep -q "/__geometry-pass?${marker}" /tmp/relay-visual-http.log; then
-              echo "Missing Chromium geometry pass marker: ${marker}"
-              grep '/__geometry-' /tmp/relay-visual-http.log || true
-              exit 1
-            fi
-          done
+        id: browser-geometry
+        run: bash scripts/ci-run.sh visual-screenshots browser-geometry "browser geometry" -- bash scripts/ci-visual-geometry.sh
+      - name: Upload browser geometry failure summary
+        if: failure() && steps.browser-geometry.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-browser-geometry
+          path: ci-summary/browser-geometry-failure.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Live screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -148,10 +138,21 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: '20.19'
           cache: npm
       - run: npm ci
       - name: Real HTTP/3 + 1200-byte WebTransport datagram loopback
-        run: npm run test:webtransport-loopback
+        id: webtransport
+        run: bash scripts/ci-run.sh webtransport-loopback webtransport "WebTransport loopback" -- npm run test:webtransport-loopback
+      - name: Upload WebTransport failure summary
+        if: failure() && steps.webtransport.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-webtransport
+          path: ci-summary/webtransport-failure.txt
+          if-no-files-found: error
+          retention-days: 7

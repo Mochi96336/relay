@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: '20.19'
@@ -28,4 +30,13 @@ jobs:
       - name: Install Playwright test runner
         run: npm install --no-save --package-lock=false @playwright/test@1.56.0
       - name: Prove production browser audio path
-        run: npx playwright test test/browser/production-audio-proof.spec.mjs --workers=1 --reporter=line
+        id: production-browser-audio
+        run: bash scripts/ci-run.sh production-browser-audio-proof production-browser-audio "production browser audio path" -- npx playwright test test/browser/production-audio-proof.spec.mjs --workers=1 --reporter=line
+      - name: Upload production browser audio failure summary
+        if: failure() && steps.production-browser-audio.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-production-browser-audio
+          path: ci-summary/production-browser-audio-failure.txt
+          if-no-files-found: error
+          retention-days: 7

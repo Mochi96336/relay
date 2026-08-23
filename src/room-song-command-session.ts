@@ -5,6 +5,7 @@ import { LEADER_HOLD_GRACE_MS } from '../public/playback-policy.js';
 import {
   ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
   ROOM_SONG_POSITION_TOLERANCE_SECONDS,
+  ROOM_SONG_TERMINAL_RELOAD_TOLERANCE_SECONDS,
   roomSongCommandConvergence,
   type RoomSongConvergenceStage,
 } from '../public/room-song-command-convergence.js';
@@ -149,7 +150,7 @@ function safeTerminalReloadContinuation(
   if (
     !Number.isFinite(roomPosition)
     || !Number.isFinite(incomingPosition)
-    || Math.abs(roomPosition - incomingPosition) > ROOM_SONG_POSITION_TOLERANCE_SECONDS
+    || Math.abs(roomPosition - incomingPosition) > ROOM_SONG_TERMINAL_RELOAD_TOLERANCE_SECONDS
   ) return false;
 
   return true;
@@ -190,7 +191,12 @@ function desiredFromRoom(status: RoomSongStatus): RoomSongDesiredState | null {
 
 function projectDesired(command: PendingRoomSongCommand, nowMs: number): RoomSongDesiredState {
   const desired = command.body.desired;
-  const elapsedSeconds = desired.state === 1
+  // Position-bearing commands use action semantics: the position is the exact
+  // target to apply when the browser receives the command. Delivery/queue age
+  // before apply must never advance Seek/Load/Replay (or an inherited Seek).
+  // State/rate-only commands may still project their descriptive position so
+  // the mutation gate can bound causal clock motion while they are pending.
+  const elapsedSeconds = desired.state === 1 && desired.mustApplyPosition === false
     ? Math.max(0, nowMs - command.issuedAtMs) / 1000
     : 0;
   return {

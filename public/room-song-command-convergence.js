@@ -1,13 +1,23 @@
-export const ROOM_SONG_POSITION_TOLERANCE_SECONDS = 1.5;
 export const ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS = 0.75;
+/** Landing slack for an explicit position mutation. Command delivery age is not part of this proof. */
+export const ROOM_SONG_POSITION_TOLERANCE_SECONDS = ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS;
+/**
+ * Backward/forward iframe correction envelope used only to classify causal
+ * effects of state-only commands. This never authorizes a media reposition.
+ */
+export const ROOM_SONG_CAUSAL_CORRECTION_TOLERANCE_SECONDS = 1.5;
 
 /**
  * Classify how far an observed player has progressed toward a room command.
  *
- * This deliberately separates the room's descriptive position from a command's
- * mutation dimensions. Ordinary play/pause/rate commands carry a projected
- * room position for context, but they do not require the player to seek to it.
- * Load, explicit seek and replay do.
+ * Position-bearing commands use action semantics: Seek(80) means the browser
+ * applies 80 when it receives the command. Network/queue age before browser
+ * apply is therefore not projected into the positional proof. Ordinary
+ * play/pause/rate commands carry room position only as descriptive context and
+ * do not require positional convergence at all.
+ *
+ * `projectedPositionSeconds` remains accepted for wire/source compatibility,
+ * but is deliberately not position authority.
  *
  * BUFFERING is progress toward PLAYING, never proof that Play completed.
  * Likewise UNSTARTED is only an intermediate while a cued player is coming up.
@@ -15,7 +25,7 @@ export const ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS = 0.75;
 export function roomSongCommandConvergence({
   desired,
   observed,
-  projectedPositionSeconds = desired?.positionSeconds,
+  projectedPositionSeconds: _projectedPositionSeconds = desired?.positionSeconds,
   requirePosition = desired?.mustApplyPosition !== false,
   positionToleranceSeconds = ROOM_SONG_POSITION_TOLERANCE_SECONDS,
 }) {
@@ -33,7 +43,7 @@ export function roomSongCommandConvergence({
 
   if (requirePosition) {
     const currentTime = Number(observed.currentTime);
-    const targetTime = Number(projectedPositionSeconds);
+    const targetTime = Number(desired.positionSeconds);
     if (
       !Number.isFinite(currentTime)
       || !Number.isFinite(targetTime)
@@ -62,11 +72,10 @@ export function roomSongCommandConvergence({
  * the player's own immediately preceding sample, not the room projection.
  *
  * Forward motion is bounded by elapsed command time plus the local jump guard.
- * Backward correction uses the same positional proof envelope as server-side
- * command convergence: YouTube can first report the advancing edge and then
- * correct its clock on the next sample without that correction becoming a new
- * user Seek. This tolerance is evidence classification only; it never causes a
- * media reposition.
+ * Backward correction has its own causal envelope because YouTube can first
+ * report the advancing edge and then correct its clock on the next sample.
+ * This is evidence classification only: it never changes an explicit position
+ * target and never causes seekTo().
  */
 export function roomSongCommandExplainsLocalDelta({
   desired,
@@ -89,6 +98,6 @@ export function roomSongCommandExplainsLocalDelta({
 
   return (
     delta <= forwardAllowance
-    && delta >= -ROOM_SONG_POSITION_TOLERANCE_SECONDS
+    && delta >= -ROOM_SONG_CAUSAL_CORRECTION_TOLERANCE_SECONDS
   );
 }

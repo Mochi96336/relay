@@ -23,18 +23,12 @@ function room(overrides: Record<string, unknown> = {}) {
     videoId: VIDEO,
     state: 2,
     serverTime: 10,
-    // What the player itself last reported, projected to now, and how long ago
-    // that was. The real status payload always carries both; a seek is judged
-    // against them rather than against the room's prediction.
     youtubeTime: 10,
     ageMs: 0,
     playbackRate: 1,
     playbackLeaderParticipantId: A.participantId,
     playbackTransportId: A.transportId,
     playbackGeneration: A.generation,
-    // The room clock has a fresh source. The real status payload always
-    // carries this, and the gate only guards a song something is still
-    // reporting on.
     connected: true,
     leaderConnected: true,
     leaderFresh: true,
@@ -260,7 +254,6 @@ describe('room song command authority and serialization', () => {
       1,
       0,
     );
-
     assert.deepEqual(result, { ok: false, reason: 'playback-leader-required' });
   });
 
@@ -339,8 +332,6 @@ describe('room song position provenance', () => {
     const session = new RoomSongCommandSession();
     const desired = desiredOf(session, begin(session, command('command-play-prov', 0, 'play'), room({ state: 2 }), 0));
     assert.equal(desired.state, 1);
-    // The room's position is a projection the player falls behind by buffering
-    // alone. Applying it as a seek is what made an ordinary play snap back.
     assert.equal(desired.mustApplyPosition, false);
   });
 
@@ -381,7 +372,6 @@ describe('room song position provenance', () => {
     const desired = desiredOf(session, begin(session, command('command-replay-prov', 0, 'play'), ended, 0));
     assert.equal(desired.state, 1);
     assert.equal(desired.positionSeconds, 0);
-    // Replay names its own position; that is what replay means.
     assert.equal(desired.mustApplyPosition, true);
   });
 
@@ -402,11 +392,7 @@ describe('room song position provenance', () => {
     );
     const desired = desiredOf(session, play);
     assert.equal(desired.state, 1);
-    assert.equal(
-      desired.mustApplyPosition,
-      true,
-      'the position the seek asked for has still never reached the player',
-    );
+    assert.equal(desired.mustApplyPosition, true);
     assert.ok(Math.abs(desired.positionSeconds - 120) < 0.01);
   });
 });
@@ -428,7 +414,7 @@ describe('room song telemetry command gate', () => {
     });
   });
 
-  test('a play command absorbs the buffering report its own start produces', () => {
+  test('a play command keeps BUFFERING intermediate and completes only on PLAYING', () => {
     const session = new RoomSongCommandSession();
     const accepted = session.begin(
       command('command-play-buffer', 0, 'play'),
@@ -442,19 +428,70 @@ describe('room song telemetry command gate', () => {
     );
     assert.equal(accepted.ok, true);
 
-    // A player never arrives at PLAYING directly: it reports BUFFERING on the
-    // way, at wherever the command asked it to start. Rejecting that report
-    // sent it to the seek classifier, which read the position the command had
-    // just asked for as an unrequested jump and chased it back - seen live as
-    // the video stepping forward on play and snapping back a third of a second
-    // later, with two extra revisions per press.
-    const gate = session.gateTelemetry(
+    const buffering = session.gateTelemetry(
       telemetry({ state: 3, currentTime: 10.8 }),
       A,
       room({ state: 2, youtubeTime: 10, ageMs: 800 }),
       800,
     );
-    assert.deepEqual(gate, { ok: true, completesCommandId: 'command-play-buffer' });
+    assert.deepEqual(buffering, { ok: true });
+
+    const playing = session.gateTelemetry(
+      telemetry({ state: 1, currentTime: 10.9 }),
+      A,
+      room({ state: 2, youtubeTime: 10, ageMs: 900 }),
+      900,
+    );
+    assert.deepEqual(playing, { ok: true, completesCommandId: 'command-play-buffer' });
+  });
+
+  test('ordinary Play can complete behind the room projection without becoming Seek', () => {
+    const session = new RoomSongCommandSession();
+    const accepted = session.begin(
+      command('command-play-gap', 0, 'play'),
+      A.participantId,
+      A,
+      null,
+      room({ state: 2, serverTime: 98.199, youtubeTime: 97.386 }),
+      0,
+      1,
+      0,
+    );
+    assert.equal(accepted.ok, true);
+
+    assert.deepEqual(
+      session.gateTelemetry(
+        telemetry({ state: 1, currentTime: 97.7 }),
+        A,
+        room({ state: 2, serverTime: 98.199, youtubeTime: 97.386, ageMs: 300 }),
+        300,
+      ),
+      { ok: true, completesCommandId: 'command-play-gap' },
+    );
+  });
+
+  test('a simultaneous Play plus unrelated scrub cannot hide behind the Play command', () => {
+    const session = new RoomSongCommandSession();
+    session.begin(
+      command('command-play-plus-seek', 0, 'play'),
+      A.participantId,
+      A,
+      null,
+      room({ state: 2 }),
+      0,
+      1,
+      0,
+    );
+
+    assert.deepEqual(
+      session.gateTelemetry(
+        telemetry({ state: 1, currentTime: 50 }),
+        A,
+        room({ state: 2, youtubeTime: 10, ageMs: 100 }),
+        100,
+      ),
+      { ok: false, reason: 'command-mismatch' },
+    );
   });
 
   test('buffering does not absorb a report meant for a pause or a load', () => {
@@ -482,12 +519,6 @@ describe('room song telemetry command gate', () => {
 
   test('lets a committing handoff target report after its command expired', () => {
     const session = new RoomSongCommandSession();
-
-    // The server named B as the target while applying a command, told it to
-    // commit, and is waiting for the report that says where it landed. On a
-    // phone that means cueing a video and buffering it, which routinely takes
-    // longer than COMMAND_TIMEOUT_MS - so by the time the report arrives the
-    // command is gone and only the handoff state remains.
     const committing = room({
       handoffState: 'committing',
       handoffTargetParticipantId: B.participantId,
@@ -499,16 +530,11 @@ describe('room song telemetry command gate', () => {
       session.gateTelemetry(telemetry({ videoId: OTHER_VIDEO, state: 2 }), B, committing, 0),
       { ok: true },
     );
-
-    // Only the named target. A commit does not open the room to everyone
-    // watching it happen.
     assert.deepEqual(
       session.gateTelemetry(telemetry({ videoId: OTHER_VIDEO, state: 2 }), A, committing, 0),
       { ok: false, reason: 'command-required' },
     );
 
-    // And it is the commit that authorizes, not the mere existence of a
-    // handoff: while one is still preparing, the target has nothing to report.
     const preparing = room({
       handoffState: 'preparing',
       handoffTargetParticipantId: B.participantId,
@@ -523,29 +549,17 @@ describe('room song telemetry command gate', () => {
 
   test('lets the leader re-anchor its own clock once its reports have gone stale', () => {
     const session = new RoomSongCommandSession();
-
-    // A is the room's leader, but nothing has reported for long enough that
-    // the clock it feeds is stale: a long rebuffer, a backgrounded tab, a
-    // network hole. Locally A's baseline never moved, so it raises no command;
-    // judged against a room clock that kept running it looks like a jump. A
-    // refused report never reaches the timeline, so refusing it is what keeps
-    // the clock stale, and the refusal would repeat forever.
     const stale = room({ connected: false, serverTime: 40, youtubeTime: 10, ageMs: 30_000 });
     assert.deepEqual(
       session.gateTelemetry(telemetry({ currentTime: 11 }), A, stale, 0),
       { ok: true },
     );
 
-    // Staleness is not a general bypass. Someone who is not leading still
-    // needs an accepted command, or telemetry becomes a second way to take
-    // the room.
     assert.deepEqual(
       session.gateTelemetry(telemetry({ currentTime: 11 }), B, stale, 0),
       { ok: false, reason: 'command-required' },
     );
 
-    // Staleness is not semantic authority for the leader itself. Only the
-    // clock position can re-anchor; video, rate, and play/pause remain commands.
     for (const attemptedMutation of [
       telemetry({ videoId: OTHER_VIDEO, currentTime: 11 }),
       telemetry({ playbackRate: 1.25, currentTime: 11 }),
@@ -557,7 +571,6 @@ describe('room song telemetry command gate', () => {
       );
     }
 
-    // And a clock with a fresh source is still protected from its own leader.
     assert.deepEqual(
       session.gateTelemetry(telemetry({ currentTime: 11 }), A, room(), 0),
       { ok: false, reason: 'command-required' },
@@ -566,23 +579,15 @@ describe('room song telemetry command gate', () => {
 
   test('does not read a stalled player as an unrequested seek', () => {
     const session = new RoomSongCommandSession();
-
-    // Two seconds of rebuffering: the room predicts 12, the player is honestly
-    // still at 10. It can only fall behind its own last report by the time that
-    // actually passed, so this is a stall, not a jump.
     const stalled = room({ state: 1, serverTime: 12, youtubeTime: 12, ageMs: 2_000 });
     assert.deepEqual(
       session.gateTelemetry(telemetry({ state: 1, currentTime: 10 }), A, stalled, 0),
       { ok: true },
     );
-
-    // Falling further behind than the elapsed time is a real backward seek.
     assert.deepEqual(
       session.gateTelemetry(telemetry({ state: 1, currentTime: 5 }), A, stalled, 0),
       { ok: false, reason: 'command-required' },
     );
-
-    // And jumping ahead of its own last report is a real forward seek.
     assert.deepEqual(
       session.gateTelemetry(telemetry({ state: 1, currentTime: 20 }), A, stalled, 0),
       { ok: false, reason: 'command-required' },

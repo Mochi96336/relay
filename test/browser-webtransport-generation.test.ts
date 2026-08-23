@@ -34,6 +34,7 @@ class DeferredWebTransport {
     writable: { getWriter: () => this.writer },
   };
   readonly closed: Promise<void>;
+  closeCalls = 0;
   private resolveClosed!: () => void;
   private isClosed = false;
 
@@ -45,8 +46,37 @@ class DeferredWebTransport {
   }
 
   close() {
+    this.closeCalls += 1;
     if (this.isClosed) return;
     this.isClosed = true;
+    this.resolveClosed();
+  }
+}
+
+class WriterSetupFailureWebTransport {
+  static instances: WriterSetupFailureWebTransport[] = [];
+  readonly ready = Promise.resolve();
+  readonly datagrams = {
+    maxDatagramSize: 1200,
+    writable: {
+      getWriter() {
+        throw new Error('writer setup failed');
+      },
+    },
+  };
+  readonly closed: Promise<void>;
+  closeCalls = 0;
+  private resolveClosed!: () => void;
+
+  constructor() {
+    this.closed = new Promise((resolve) => {
+      this.resolveClosed = resolve;
+    });
+    WriterSetupFailureWebTransport.instances.push(this);
+  }
+
+  close() {
+    this.closeCalls += 1;
     this.resolveClosed();
   }
 }
@@ -120,5 +150,21 @@ describe('WebTransport write generation ownership', () => {
     await Promise.resolve();
     await Promise.resolve();
     assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
+  });
+
+  it('closes a ready candidate when datagram writer setup fails before it becomes active', async () => {
+    WriterSetupFailureWebTransport.instances.length = 0;
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({
+      WebTransportClass: WriterSetupFailureWebTransport,
+    });
+
+    assert.equal(await transport.prefer(offer('writer-setup-failure')), false);
+    const candidate = WriterSetupFailureWebTransport.instances.at(-1)!;
+    assert.equal(candidate.closeCalls, 1, 'a ready but uninstalled session must not survive fallback');
+    assert.equal(transport.stats().path, 'websocket');
+    assert.equal(transport.stats().webTransportAttempts, 1);
+    assert.equal(transport.stats().webTransportConnections, 0);
+    assert.equal(transport.stats().webTransportDemotions, 0);
   });
 });

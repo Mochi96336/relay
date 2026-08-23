@@ -61,18 +61,20 @@ tr '\r' '\n' < "$log_file" \
   > "$normalized_file"
 
 # A final tail alone can lose an early test failure when a large suite keeps
-# running. Preserve bounded windows around the first few likely failure markers,
-# then append the final output so aggregate test counts remain visible.
+# running. Scan all likely causal markers, then preserve the first four
+# non-overlapping context windows. This avoids a noisy cluster of markers near
+# one failure consuming a fixed marker pre-limit before a later independent
+# assertion is even considered.
 failure_pattern='(^|[[:space:]])(not ok|FAIL|FAILED|AssertionError|SyntaxError:|Error:|ERR_[[:alnum:]_]+|error TS[0-9]+|syntax error)|^✖[[:space:]]'
-grep -nE "$failure_pattern" "$normalized_file" | sed -n '1,8p' > "$markers_file" || true
+grep -nE "$failure_pattern" "$normalized_file" > "$markers_file" || true
 : > "$marker_excerpt_file"
 last_window_end=0
 marker_windows=0
 while IFS=: read -r marker_line _; do
   [[ "$marker_line" =~ ^[0-9]+$ ]] || continue
-  (( marker_line <= last_window_end )) && continue
   start=$(( marker_line > 8 ? marker_line - 8 : 1 ))
   end=$(( marker_line + 24 ))
+  (( start <= last_window_end )) && continue
   printf '\n--- lines %d-%d around failure marker at line %d ---\n' \
     "$start" "$end" "$marker_line" >> "$marker_excerpt_file"
   sed -n "${start},${end}p" "$normalized_file" >> "$marker_excerpt_file"

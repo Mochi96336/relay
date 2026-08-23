@@ -224,6 +224,35 @@ function readSnapshot() {
   return snapshot;
 }
 
+/**
+ * The command the server has just declared complete, kept for a moment longer.
+ *
+ * Completion means the server saw what it needed, not that this page's player
+ * has finished arriving. The transition into the commanded state can be
+ * sampled here afterwards, with the mutation already cleared, and there is
+ * nothing left in the snapshot that says the room asked for it - so it reads as
+ * somebody using YouTube's own controls, and becomes another command.
+ *
+ * Only snapshots that match what the command asked for are suppressed, so a
+ * real gesture inside the window still reports.
+ */
+const SETTLED_ROOM_COMMAND_MS = 2_000;
+let settledRoomCommand = null;
+
+function rememberSettledRoomCommand(mutation) {
+  if (!mutation?.desired) return;
+  settledRoomCommand = { ...mutation, until: performance.now() + SETTLED_ROOM_COMMAND_MS };
+}
+
+function activeSettledRoomCommand() {
+  if (!settledRoomCommand) return null;
+  if (performance.now() > settledRoomCommand.until) {
+    settledRoomCommand = null;
+    return null;
+  }
+  return settledRoomCommand;
+}
+
 function activeServerMutation() {
   if (!serverMutation) return null;
   // Room commands and same-tab reload restoration stay authoritative until the
@@ -306,6 +335,9 @@ function localMutationForSnapshot(snapshot) {
   if (mutationContext?.source === 'room-command' && snapshotMatchesDesired(snapshot, mutationContext)) {
     return null;
   }
+
+  const settled = activeSettledRoomCommand();
+  if (settled && snapshotMatchesDesired(snapshot, settled)) return null;
 
   if (snapshot.videoId !== snapshot.previousVideoId) {
     return { action: 'load', videoId: snapshot.videoId, positionSeconds: Math.max(0, snapshot.currentTime) };
@@ -1020,6 +1052,7 @@ async function applyRoomSongCommand(message) {
   clearAutoplayRecovery();
   retireOutgoingReleaseBarrier();
   cancelPlaybackPrewarm();
+  settledRoomCommand = null;
   serverMutation = {
     source: 'room-command',
     commandId,
@@ -1537,7 +1570,10 @@ window.addEventListener('relay:room-song-command-complete', (event) => {
   const commandId = event.detail?.commandId;
   const trackedCommandId = trackedRoomCommandId();
   if (!trackedCommandId || !commandId || trackedCommandId !== commandId) return;
-  if (serverMutation?.commandId === commandId) serverMutation = null;
+  if (serverMutation?.commandId === commandId) {
+    rememberSettledRoomCommand(serverMutation);
+    serverMutation = null;
+  }
   if (localCommandPending?.commandId === commandId) localCommandPending = null;
   noteNode.textContent = 'Latest room song intent applied.';
 });

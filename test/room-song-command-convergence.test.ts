@@ -46,7 +46,7 @@ test('a position-bearing command still requires position convergence', () => {
       observed: observed(),
     }),
     'complete',
-    'the live 813 ms gap stays inside the existing positional proof tolerance',
+    'the live 813 ms gap stays inside the positional proof tolerance',
   );
 
   assert.equal(
@@ -58,12 +58,20 @@ test('a position-bearing command still requires position convergence', () => {
   );
 });
 
-test('a Play-caused local clock advance is not reclassified as Seek', () => {
+test('Play-caused forward motion and the following 833 ms clock correction stay causal', () => {
   assert.equal(
     roomSongCommandExplainsLocalDelta({
       desired,
       timelineDeltaSeconds: 0.813,
       elapsedSinceApplySeconds: 0.3,
+    }),
+    true,
+  );
+  assert.equal(
+    roomSongCommandExplainsLocalDelta({
+      desired,
+      timelineDeltaSeconds: -0.833,
+      elapsedSinceApplySeconds: 0.6,
     }),
     true,
   );
@@ -73,6 +81,14 @@ test('a Play-caused local clock advance is not reclassified as Seek', () => {
       desired,
       timelineDeltaSeconds: 4,
       elapsedSinceApplySeconds: 0.3,
+    }),
+    false,
+  );
+  assert.equal(
+    roomSongCommandExplainsLocalDelta({
+      desired,
+      timelineDeltaSeconds: -2,
+      elapsedSinceApplySeconds: 0.6,
     }),
     false,
   );

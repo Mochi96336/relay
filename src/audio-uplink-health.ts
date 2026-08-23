@@ -110,10 +110,12 @@ function parseCaptureLevel(value: unknown): AudioCaptureLevel | null | undefined
   const level = record(value);
   if (!level) return undefined;
 
-  const peakDbfs = Number(level.peakDbfs);
-  const rmsDbfs = Number(level.rmsDbfs);
+  const peakDbfs = level.peakDbfs;
+  const rmsDbfs = level.rmsDbfs;
   if (
-    !Number.isFinite(peakDbfs)
+    typeof peakDbfs !== 'number'
+    || typeof rmsDbfs !== 'number'
+    || !Number.isFinite(peakDbfs)
     || !Number.isFinite(rmsDbfs)
     || peakDbfs > 0
     || rmsDbfs > peakDbfs

@@ -2,10 +2,15 @@ import type { RoomSongCommandBody, RoomSongCommandRequest } from './room-song-co
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import { LEGACY_PLAYBACK_PARTICIPANT_ID, type PlaybackIdentity } from './song-session.js';
 import { LEADER_HOLD_GRACE_MS } from '../public/playback-policy.js';
+import {
+  ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
+  ROOM_SONG_POSITION_TOLERANCE_SECONDS,
+  roomSongCommandConvergence,
+  type RoomSongConvergenceStage,
+} from '../public/room-song-command-convergence.js';
 
 const COMMAND_TIMEOUT_MS = 4_000;
 const SEEK_MUTATION_THRESHOLD_SECONDS = 0.75;
-const COMMAND_POSITION_TOLERANCE_SECONDS = 1.5;
 const MAX_RECENT_COMMANDS = 64;
 
 type DesiredPlaybackState = 1 | 2 | 5;
@@ -172,7 +177,7 @@ function safeTerminalReloadContinuation(
   if (
     !Number.isFinite(roomPosition)
     || !Number.isFinite(incomingPosition)
-    || Math.abs(roomPosition - incomingPosition) > COMMAND_POSITION_TOLERANCE_SECONDS
+    || Math.abs(roomPosition - incomingPosition) > ROOM_SONG_POSITION_TOLERANCE_SECONDS
   ) return false;
 
   return true;
@@ -190,8 +195,6 @@ function sameCommandBody(a: RoomSongCommandBody, b: RoomSongCommandBody) {
 
 /** YouTube's ENDED. Distinct from PAUSED (2), which this file used to fold it into. */
 const ENDED = 0;
-/** YouTube's BUFFERING, which every start passes through on its way to PLAYING. */
-const BUFFERING = 3;
 
 function desiredPlaybackState(value: unknown): DesiredPlaybackState {
   const state = Number(value);
@@ -434,8 +437,18 @@ export class RoomSongCommandSession {
         return { ok: false, reason: 'command-target-mismatch' };
       }
 
-      if (this.matchesPending(payload, this.pending, nowMs)) {
-        return { ok: true, completesCommandId: this.pending.commandId };
+      const convergence = this.pendingConvergence(payload, this.pending, nowMs);
+      if (convergence !== 'none') {
+        if (
+          mutation !== null
+          && !this.pendingOwnsMutation(mutation, payload, this.pending, nowMs)
+        ) {
+          return { ok: false, reason: 'command-mismatch' };
+        }
+        if (convergence === 'complete') {
+          return { ok: true, completesCommandId: this.pending.commandId };
+        }
+        return { ok: true };
       }
 
       if (mutation !== null) return { ok: false, reason: 'command-mismatch' };
@@ -642,34 +655,50 @@ export class RoomSongCommandSession {
     return null;
   }
 
-  private matchesPending(
+  private pendingConvergence(
+    payload: Record<string, unknown>,
+    command: PendingRoomSongCommand,
+    nowMs: number,
+  ): RoomSongConvergenceStage {
+    const desired = projectDesired(command, nowMs);
+    return roomSongCommandConvergence({
+      desired,
+      observed: {
+        videoId: typeof payload.videoId === 'string' ? payload.videoId : null,
+        currentTime: Number(payload.currentTime),
+        state: Number(payload.state),
+        playbackRate: Number(payload.playbackRate ?? 1),
+      },
+      projectedPositionSeconds: desired.positionSeconds,
+      requirePosition: desired.mustApplyPosition,
+    });
+  }
+
+  private pendingOwnsMutation(
+    mutation: Exclude<CommandMutation, null>,
     payload: Record<string, unknown>,
     command: PendingRoomSongCommand,
     nowMs: number,
   ) {
-    const desired = projectDesired(command, nowMs);
-    const videoId = typeof payload.videoId === 'string' ? payload.videoId : null;
-    const currentTime = Number(payload.currentTime);
-    const state = Number(payload.state);
-    const rate = Number(payload.playbackRate ?? 1);
+    if (mutation === command.body.action) return true;
+    if (mutation !== 'seek') return false;
 
-    if (videoId !== desired.videoId) return false;
-    if (!Number.isFinite(rate) || Math.abs(rate - desired.playbackRate) > 0.0001) return false;
-    if (
-      !Number.isFinite(currentTime)
-      || Math.abs(currentTime - desired.positionSeconds) > COMMAND_POSITION_TOLERANCE_SECONDS
-    ) return false;
-    // A player on its way to playing reports BUFFERING first - it never arrives
-    // at PLAYING directly. Requiring an exact match meant the report that lands
-    // while a play command is still pending could not be recognised as that
-    // command's own effect, so it fell through to the seek classifier, which
-    // read the position the command had just asked for as an unrequested jump
-    // and issued a second command chasing it back.
-    //
-    // This is the same rule song-playback-intent.js already applies on the
-    // client: buffering is a transport hiccup, never a playback intent.
-    if (desired.state === 1) return state === 1 || state === BUFFERING;
-    if (desired.state === 2) return state === 2;
-    return state === 2 || state === 5;
+    const desired = command.body.desired;
+    if (desired.mustApplyPosition) return true;
+
+    const currentTime = Number(payload.currentTime);
+    if (!Number.isFinite(currentTime)) return false;
+
+    // State/rate commands do not own a seek, but they can legitimately change
+    // the media clock while the server is still looking at a pre-command room
+    // snapshot. Bound that causal movement between the position carried at
+    // acceptance and the command's own projection. Anything beyond this
+    // envelope is a real native scrub and must supersede through a new command.
+    const projected = projectDesired(command, nowMs).positionSeconds;
+    const lower = Math.min(desired.positionSeconds, projected)
+      - ROOM_SONG_POSITION_TOLERANCE_SECONDS;
+    const upper = Math.max(desired.positionSeconds, projected)
+      + ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS;
+    return currentTime >= lower && currentTime <= upper;
   }
 }

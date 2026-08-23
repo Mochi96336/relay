@@ -141,7 +141,7 @@ jobs:
       - run: npm ci
       - name: Real HTTP/3 + 1200-byte WebTransport datagram loopback
         id: webtransport
-        run: bash scripts/ci-run.sh webtransport-loopback webtransport "WebTransport loopback" -- npm run test:webtransport-loopback
+        run: bash scripts/ci-run.sh webtransport-loopback webtransport "WebTransport loopback" -- bash -c 'npm run test:webtransport-loopback; status=$?; if (( status == 0 )); then echo "intentional WebTransport failure summary probe"; exit 29; fi; exit "$status"'
       - name: Upload WebTransport failure summary
         if: failure() && steps.webtransport.outcome == 'failure'
         uses: actions/upload-artifact@v4

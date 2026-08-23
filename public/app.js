@@ -5,6 +5,7 @@ import { PreferredAudioTransport } from './audio-transport.js';
 import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
+import { captureLevelSnapshot, readCaptureSettings } from './capture-observability.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
@@ -55,6 +56,7 @@ const micCaptureRecovery = new MicCaptureRecoveryWatchdog();
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestLocalMicLevel = null;
+let captureAppliedSettings = null;
 let latestCalibration = null;
 let roomSongAvailable = null;
 let roomCanStartCalibration = null;
@@ -200,6 +202,9 @@ function audioUplinkHealthPayload() {
     capturedSamples: captureSampleCursor,
     inputGapSamples: captureInputGapSamples,
     inputMuted: captureInputMuted,
+    // Browser/worklet observations only; neither field is a calibration gate.
+    capture: captureAppliedSettings,
+    captureLevel: captureLevelSnapshot(latestLocalMicLevel),
     droppedSamples: { total: uplinkDroppedSamples, ...uplinkDroppedSamplesByReason },
     controlReconnects: Math.max(0, publisherControlConnections - 1),
     transport: audioTransport.stats(),
@@ -1233,6 +1238,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   liveMixActive = false;
   latestMixHealth = null;
   latestLocalMicLevel = null;
+  captureAppliedSettings = null;
   dispatchRelayEvent('relay-local-mic-level', {
     active: false,
     captureGeneration: captureGeneration >>> 0,
@@ -1320,6 +1326,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     preparedContext = null;
     const sessionEpoch = ++publisherSessionEpoch;
     const captureStream = mediaStream;
+    captureAppliedSettings = readCaptureSettings(captureStream);
     setPublisherActive(true);
     publisherStarting = false;
     micStartup.complete(startup);

@@ -3,6 +3,7 @@ import { SERVER_INCARNATION } from './server-incarnation.js';
 import { LEGACY_PLAYBACK_PARTICIPANT_ID, type PlaybackIdentity } from './song-session.js';
 import { LEADER_HOLD_GRACE_MS } from '../public/playback-policy.js';
 import {
+  ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
   ROOM_SONG_POSITION_TOLERANCE_SECONDS,
   roomSongCommandConvergence,
   type RoomSongConvergenceStage,
@@ -233,6 +234,13 @@ function foldDesired(
  */
 export class RoomSongCommandSession {
   private pending: PendingRoomSongCommand | null = null;
+  // State/rate-only commands deliberately do not own position. Their first
+  // PLAYING/PAUSED/rate match is not enough to retire command provenance because
+  // the YouTube iframe may still issue a late media-clock correction. Require
+  // two consecutive complete observations whose *local* timeline deltas are
+  // below the same jump boundary used to infer a native Seek. Any jump resets
+  // the candidate instead of turning the command terminal too early.
+  private stableCompleteProofCommandId: string | null = null;
   private readonly recent = new Map<string, AcceptedRoomSongCommand>();
 
   begin(
@@ -357,6 +365,7 @@ export class RoomSongCommandSession {
     };
 
     this.pending = command;
+    this.stableCompleteProofCommandId = null;
     const accepted = this.publicCommand(command);
     this.recent.set(command.commandId, accepted);
     while (this.recent.size > MAX_RECENT_COMMANDS) {
@@ -392,14 +401,35 @@ export class RoomSongCommandSession {
           currentTime: Number(payload.currentTime),
           projectedPositionSeconds: projected.positionSeconds,
         })) {
+          this.stableCompleteProofCommandId = null;
           return { ok: false, reason: 'command-mismatch' };
         }
       }
 
       const convergence = this.pendingConvergence(payload, this.pending, nowMs);
       if (convergence === 'complete') {
-        return { ok: true, completesCommandId: this.pending.commandId };
+        // Position-bearing commands already prove the full mutation state in one
+        // observation. State/rate-only commands need stable local-clock proof so
+        // a delayed iframe correction cannot race terminal completion.
+        if (this.pending.body.desired.mustApplyPosition) {
+          return { ok: true, completesCommandId: this.pending.commandId };
+        }
+
+        const localDeltaSeconds = Number(payload.timelineDeltaSeconds);
+        const stableLocalClock = Number.isFinite(localDeltaSeconds)
+          && Math.abs(localDeltaSeconds) <= ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS;
+        if (!stableLocalClock) {
+          this.stableCompleteProofCommandId = null;
+          return { ok: true };
+        }
+        if (this.stableCompleteProofCommandId === this.pending.commandId) {
+          return { ok: true, completesCommandId: this.pending.commandId };
+        }
+        this.stableCompleteProofCommandId = this.pending.commandId;
+        return { ok: true };
       }
+
+      this.stableCompleteProofCommandId = null;
       if (convergence === 'intermediate') {
         return { ok: true };
       }
@@ -444,6 +474,7 @@ export class RoomSongCommandSession {
   complete(commandId: string) {
     if (!this.pending || this.pending.commandId !== commandId) return false;
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return true;
   }
 
@@ -454,6 +485,7 @@ export class RoomSongCommandSession {
       || !sameIdentity(this.pending.target, identity)
     ) return false;
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return true;
   }
 
@@ -461,6 +493,7 @@ export class RoomSongCommandSession {
     if (!this.pending) return null;
     const cancelled = this.publicCommand(this.pending);
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return cancelled;
   }
 
@@ -475,6 +508,7 @@ export class RoomSongCommandSession {
 
     const cancelled = this.publicCommand(this.pending);
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return cancelled;
   }
 
@@ -506,6 +540,7 @@ export class RoomSongCommandSession {
   private expire(nowMs: number) {
     if (this.pending && nowMs - this.pending.issuedAtMs > COMMAND_TIMEOUT_MS) {
       this.pending = null;
+      this.stableCompleteProofCommandId = null;
     }
   }
 

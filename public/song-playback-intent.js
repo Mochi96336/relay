@@ -39,6 +39,15 @@ export function settledPlaybackState(previous) {
 export function isNewPlayIntent({ state, previousState, previousSettledState }) {
   if (Number(state) !== PLAYING) return false;
   if (previousState === PLAYING) return false;
+
+  // Buffering is exactly the state that hides what the player was doing, so
+  // falling back to it as the settled state answers the question with the one
+  // value that cannot answer it - and "not playing" is what that fallback then
+  // concludes. An unbroken history is available whenever there is one to have;
+  // when there is not, an ordinary rebuffer was being read as somebody pressing
+  // play, which put a command on the room and moved the player for it.
   const settled = previousSettledState ?? previousState;
-  return settled !== PLAYING;
+  if (settled === null || settled === undefined || Number(settled) === BUFFERING) return false;
+
+  return Number(settled) !== PLAYING;
 }

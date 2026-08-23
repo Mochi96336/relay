@@ -121,6 +121,28 @@ describe('classifying a replay the player reports through BUFFERING', () => {
     assert.equal(isNewPlayIntent({ state: PLAYING, previousState: PLAYING, previousSettledState: PLAYING }), false);
   });
 
+  test('an unknown history does not manufacture a play out of a rebuffer', () => {
+    // The chain starts empty on a fresh sampler and is reset whenever a command
+    // apply re-primes it, so a rebuffer can land with nothing settled behind it.
+    // Falling back to the buffering state itself answered "was it already
+    // playing?" with the one value that cannot say, and concluded no - putting a
+    // play command on the room and moving the player for a stall nobody asked
+    // for.
+    assert.equal(
+      isNewPlayIntent({ state: PLAYING, previousState: BUFFERING, previousSettledState: null }),
+      false,
+    );
+    assert.equal(
+      isNewPlayIntent({ state: PLAYING, previousState: BUFFERING, previousSettledState: undefined }),
+      false,
+    );
+    assert.equal(
+      isNewPlayIntent({ state: PLAYING, previousState: BUFFERING, previousSettledState: BUFFERING }),
+      false,
+      'buffering behind buffering is still no evidence',
+    );
+  });
+
   test('the settled state survives consecutive buffering samples', () => {
     let previous: { state: number; previousSettledState: number | null } | null = null;
     const sample = (state: number) => {

@@ -15,6 +15,17 @@ function uplinkHealth(generation: number) {
     captureGeneration: generation,
     capturedSamples: 96_000,
     inputGapSamples: 128,
+    inputMuted: false,
+    capture: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      audioSessionType: 'play-and-record',
+    },
+    captureLevel: {
+      peakDbfs: -18,
+      rmsDbfs: -31,
+    },
     droppedSamples: {
       total: 960,
       disconnected: 480,
@@ -71,9 +82,35 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     assert.equal(status.audio.captureAndSender.inputGapSamples, 128);
     assert.equal(status.audio.captureAndSender.droppedSamples.disconnected, 480);
     assert.equal(status.audio.captureAndSender.transport.webSocketPacketsSent, 100);
+    assert.deepEqual(status.audio.captureAndSender.capture, {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      audioSessionType: 'play-and-record',
+    });
+    assert.deepEqual(status.audio.captureAndSender.captureLevel, {
+      peakDbfs: -18,
+      rmsDbfs: -31,
+    });
     assert.ok(status.audio.captureAndSender.reportAgeMs >= 0);
     assert.equal(typeof status.audio.receiverTransport.receivedPackets, 'number');
     assert.equal(typeof status.audio.timeline.micGapMs, 'number');
+
+    const malformed: any = uplinkHealth(7);
+    malformed.capturedSamples = 999_999;
+    malformed.captureLevel = { peakDbfs: -40, rmsDbfs: -20 };
+    publisher.send(malformed);
+    await sleep(20);
+    const afterMalformed = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    assert.equal(
+      afterMalformed.audio.captureAndSender.capturedSamples,
+      96_000,
+      'malformed diagnostic telemetry must not replace the last valid capture state',
+    );
+    assert.deepEqual(afterMalformed.audio.captureAndSender.captureLevel, {
+      peakDbfs: -18,
+      rmsDbfs: -31,
+    });
 
     publisher.send(uplinkHealth(6));
     await sleep(20);

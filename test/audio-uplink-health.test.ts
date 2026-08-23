@@ -112,6 +112,10 @@ describe('audio uplink health', () => {
     const infinite: any = validHealth();
     infinite.captureLevel = { peakDbfs: -20, rmsDbfs: Number.NEGATIVE_INFINITY };
     assert.equal(parseAudioUplinkHealth(infinite), null);
+
+    const coerced: any = validHealth();
+    coerced.captureLevel = { peakDbfs: '-18', rmsDbfs: '-31' };
+    assert.equal(parseAudioUplinkHealth(coerced), null);
   });
 
   it('rejects inconsistent local drop accounting', () => {

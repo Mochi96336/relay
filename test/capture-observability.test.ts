@@ -61,5 +61,6 @@ describe('capture observability', () => {
     assert.equal(captureLevelSnapshot({ peakDbfs: 1, rmsDbfs: -20 }), null);
     assert.equal(captureLevelSnapshot({ peakDbfs: -30, rmsDbfs: -20 }), null);
     assert.equal(captureLevelSnapshot({ peakDbfs: Number.NEGATIVE_INFINITY, rmsDbfs: -50 }), null);
+    assert.equal(captureLevelSnapshot({ peakDbfs: '-18', rmsDbfs: '-31' }), null);
   });
 });

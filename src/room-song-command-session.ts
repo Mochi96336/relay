@@ -2,27 +2,32 @@ import type { RoomSongCommandBody, RoomSongCommandRequest } from './room-song-co
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import { LEGACY_PLAYBACK_PARTICIPANT_ID, type PlaybackIdentity } from './song-session.js';
 import { LEADER_HOLD_GRACE_MS } from '../public/playback-policy.js';
+import {
+  ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
+  ROOM_SONG_POSITION_TOLERANCE_SECONDS,
+  roomSongCommandConvergence,
+  type RoomSongConvergenceStage,
+} from '../public/room-song-command-convergence.js';
+import {
+  roomSongObservedMutations,
+  roomSongPendingOwnsMutation,
+} from '../public/room-song-command-mutations.js';
 
 const COMMAND_TIMEOUT_MS = 4_000;
-const SEEK_MUTATION_THRESHOLD_SECONDS = 0.75;
-const COMMAND_POSITION_TOLERANCE_SECONDS = 1.5;
 const MAX_RECENT_COMMANDS = 64;
+const ENDED = 0;
 
 type DesiredPlaybackState = 1 | 2 | 5;
+type RoomSongStatus = Record<string, unknown>;
 
 export type RoomSongDesiredState = {
   videoId: string;
   positionSeconds: number;
   state: DesiredPlaybackState;
   playbackRate: number;
-  /**
-   * The room reached the end of the song rather than being parked there.
-   *
-   * `state` stays a state a player can actually be *put into*, so a finished
-   * song still desires `2`. What it cannot express is that the position is an
-   * ending rather than a chosen pause point, and that is exactly what decides
-   * what Play means next: resume, or start over.
-   */
+  /** True only when this command semantically asks the player to reposition. */
+  mustApplyPosition: boolean;
+  /** The authoritative room reached YouTube ENDED rather than pausing there. */
   ended: boolean;
 };
 
@@ -67,10 +72,6 @@ export type RoomSongTelemetryGate =
     ok: false;
     reason: 'command-required' | 'command-target-mismatch' | 'command-mismatch';
   };
-
-type RoomSongStatus = Record<string, unknown>;
-
-type CommandMutation = RoomSongCommandBody['action'] | null;
 
 function sameIdentity(a: PlaybackIdentity | null, b: PlaybackIdentity) {
   return Boolean(
@@ -129,10 +130,6 @@ function safeTerminalReloadContinuation(
 
   const roomState = Number(roomStatus.state);
   const incomingState = Number(payload.state);
-  // A fresh iframe cannot be commanded into YouTube's terminal `ended` or
-  // `unstarted` states. Relay restores those states by seeking to the same
-  // terminal position and pausing. Treat only that representation change as
-  // equivalent proof from a newer incarnation of the same logical tab.
   if (![0, -1].includes(roomState) || incomingState !== 2) return false;
 
   const roomVideoId = typeof roomStatus.videoId === 'string' ? roomStatus.videoId : null;
@@ -152,7 +149,7 @@ function safeTerminalReloadContinuation(
   if (
     !Number.isFinite(roomPosition)
     || !Number.isFinite(incomingPosition)
-    || Math.abs(roomPosition - incomingPosition) > COMMAND_POSITION_TOLERANCE_SECONDS
+    || Math.abs(roomPosition - incomingPosition) > ROOM_SONG_POSITION_TOLERANCE_SECONDS
   ) return false;
 
   return true;
@@ -167,9 +164,6 @@ function sameCommandBody(a: RoomSongCommandBody, b: RoomSongCommandBody) {
   if (a.action === 'rate' && b.action === 'rate') return a.playbackRate === b.playbackRate;
   return true;
 }
-
-/** YouTube's ENDED. Distinct from PAUSED (2), which this file used to fold it into. */
-const ENDED = 0;
 
 function desiredPlaybackState(value: unknown): DesiredPlaybackState {
   const state = Number(value);
@@ -188,6 +182,8 @@ function desiredFromRoom(status: RoomSongStatus): RoomSongDesiredState | null {
     positionSeconds,
     state: desiredPlaybackState(status.state),
     playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
+    // Describing the room position is not authority to move the player there.
+    mustApplyPosition: false,
     ended: Number(status.state) === ENDED,
   };
 }
@@ -213,40 +209,38 @@ function foldDesired(
       positionSeconds: body.positionSeconds,
       state: 5,
       playbackRate: base?.playbackRate ?? 1,
+      mustApplyPosition: true,
       ended: false,
     };
   }
   if (!base) return null;
+
   if (body.action === 'play') {
-    // Play against a finished song is a replay, not a resume. Folding it as a
-    // resume kept the room's authoritative position at the ending, so the
-    // command played the last fraction of a second, ended again, and the room
-    // answered every further attempt by seeking back to the end.
+    // Replay is the one Play whose position is part of the command itself.
     return base.ended
-      ? { ...base, state: 1, positionSeconds: 0, ended: false }
+      ? { ...base, state: 1, positionSeconds: 0, ended: false, mustApplyPosition: true }
       : { ...base, state: 1 };
   }
   if (body.action === 'pause') return { ...base, state: 2 };
-  // Moving the position off the ending means the room is no longer finished,
-  // whatever the player reports on the way there.
-  if (body.action === 'seek') return { ...base, positionSeconds: body.positionSeconds, ended: false };
+  if (body.action === 'seek') {
+    return { ...base, positionSeconds: body.positionSeconds, ended: false, mustApplyPosition: true };
+  }
   return { ...base, playbackRate: body.playbackRate };
 }
 
 /**
- * Room-song command/intent gate.
- *
- * Phase 1A established the one server-authoritative mutation path. Phase 1B
- * lets the same exact actor/target advance that path while an earlier command
- * is still pending. Each successor names its causal predecessor and is folded
- * into a complete desired playback state, so the latest accepted intent can be
- * applied on its own even when older applies/telemetry arrive late.
- *
- * SongSession still owns playback-leader/media-clock authority. This class
- * owns only product intent ordering, command revisions and semantic proof.
+ * Owns room-song intent ordering and semantic proof. SongSession remains the
+ * playback-leader/media-clock authority.
  */
 export class RoomSongCommandSession {
   private pending: PendingRoomSongCommand | null = null;
+  // State/rate-only commands deliberately do not own position. Their first
+  // PLAYING/PAUSED/rate match is not enough to retire command provenance because
+  // the YouTube iframe may still issue a late media-clock correction. Require
+  // two consecutive complete observations whose *local* timeline deltas are
+  // below the same jump boundary used to infer a native Seek. Any jump resets
+  // the candidate instead of turning the command terminal too early.
+  private stableCompleteProofCommandId: string | null = null;
   private readonly recent = new Map<string, AcceptedRoomSongCommand>();
 
   begin(
@@ -267,13 +261,12 @@ export class RoomSongCommandSession {
     }
 
     const leader = statusLeader(roomStatus);
-    const leaderConnected = roomStatus.leaderConnected === true;
-    const leaderFresh = roomStatus.leaderFresh === true;
-    const healthyLeader = Boolean(leader && leaderConnected && leaderFresh);
+    const healthyLeader = Boolean(
+      leader
+      && roomStatus.leaderConnected === true
+      && roomStatus.leaderFresh === true,
+    );
     const heldLeader = statusLeaderHolding(roomStatus, leader);
-    // A Mic-free room has shared Song selection, but it still has exactly one
-    // playback authority. Delegate another participant's load to the healthy
-    // leader instead of moving audio to the participant who chose the Song.
     const target = micOwnerId === null
       && request.body.action === 'load'
       && heldLeader
@@ -302,7 +295,6 @@ export class RoomSongCommandSession {
       if (actorParticipantId !== micOwnerId) {
         return { ok: false, reason: 'mic-owner-required' };
       }
-
       if (healthyLeader && leader && !sameIdentity(leader, target)) {
         if (leader.participantId !== micOwnerId) {
           return { ok: false, reason: 'playback-handoff-required' };
@@ -368,14 +360,12 @@ export class RoomSongCommandSession {
       revision: nextRevision,
       issuedByParticipantId: actorParticipantId,
       target: { ...target },
-      body: {
-        ...request.body,
-        desired,
-      } as AppliedRoomSongCommandBody,
+      body: { ...request.body, desired } as AppliedRoomSongCommandBody,
       issuedAtMs: nowMs,
     };
 
     this.pending = command;
+    this.stableCompleteProofCommandId = null;
     const accepted = this.publicCommand(command);
     this.recent.set(command.commandId, accepted);
     while (this.recent.size > MAX_RECENT_COMMANDS) {
@@ -394,40 +384,72 @@ export class RoomSongCommandSession {
   ): RoomSongTelemetryGate {
     this.expire(nowMs);
 
-    // The narrow pre-participant compatibility publisher predates room song
-    // commands. It remains a compatibility boundary, not a production bypass
-    // for identified participants.
     if (identity.participantId === LEGACY_PLAYBACK_PARTICIPANT_ID) return { ok: true };
 
-    const mutation = this.detectMutation(payload, roomStatus);
+    const mutations = roomSongObservedMutations({ observed: payload, room: roomStatus });
     if (this.pending) {
       if (!sameIdentity(this.pending.target, identity)) {
         return { ok: false, reason: 'command-target-mismatch' };
       }
 
-      if (this.matchesPending(payload, this.pending, nowMs)) {
-        return { ok: true, completesCommandId: this.pending.commandId };
+      const projected = projectDesired(this.pending, nowMs);
+      for (const mutation of mutations) {
+        if (!roomSongPendingOwnsMutation({
+          mutation,
+          commandAction: this.pending.body.action,
+          desired: this.pending.body.desired,
+          currentTime: Number(payload.currentTime),
+          projectedPositionSeconds: projected.positionSeconds,
+        })) {
+          this.stableCompleteProofCommandId = null;
+          return { ok: false, reason: 'command-mismatch' };
+        }
       }
 
-      if (mutation !== null) return { ok: false, reason: 'command-mismatch' };
-      return { ok: true };
+      const convergence = this.pendingConvergence(payload, this.pending, nowMs);
+      if (convergence === 'complete') {
+        // Position-bearing commands already prove the full mutation state in one
+        // observation. State/rate-only commands need stable local-clock proof so
+        // a delayed iframe correction cannot race terminal completion.
+        if (this.pending.body.desired.mustApplyPosition) {
+          return { ok: true, completesCommandId: this.pending.commandId };
+        }
+
+        // The current production client always supplies its local timeline delta.
+        // Keep one-shot completion for an older envelope that genuinely lacks the
+        // field; malformed present data never counts as stable proof.
+        if (payload.timelineDeltaSeconds === undefined) {
+          return { ok: true, completesCommandId: this.pending.commandId };
+        }
+        const localDeltaSeconds = Number(payload.timelineDeltaSeconds);
+        const stableLocalClock = Number.isFinite(localDeltaSeconds)
+          && Math.abs(localDeltaSeconds) <= ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS;
+        if (!stableLocalClock) {
+          this.stableCompleteProofCommandId = null;
+          return { ok: true };
+        }
+        if (this.stableCompleteProofCommandId === this.pending.commandId) {
+          return { ok: true, completesCommandId: this.pending.commandId };
+        }
+        this.stableCompleteProofCommandId = this.pending.commandId;
+        return { ok: true };
+      }
+
+      this.stableCompleteProofCommandId = null;
+      if (convergence === 'intermediate') {
+        return { ok: true };
+      }
+      // A `none` observation is only safe while the player is still showing the
+      // stable pre-command state. If it contains any semantic mutation, it is
+      // evidence for some other (or superseded) intent and must not pass as
+      // progress toward the latest pending command.
+      return mutations.size === 0
+        ? { ok: true }
+        : { ok: false, reason: 'command-mismatch' };
     }
 
-    // A commit is its own authorization, and it outlives the command that
-    // started it.
-    //
-    // Commands expire after COMMAND_TIMEOUT_MS; a handoff has no such bound.
-    // The report that completes a commit is the target loading the song and
-    // saying where it landed, which on a phone means cueing a video and
-    // buffering it - routinely longer than the command lives. Once the command
-    // expired, this gate could no longer see that a handoff was in flight, so
-    // it read the report it had been waiting for as an unauthorized mutation
-    // and refused it. Nothing then completed the handoff, the room stayed in
-    // `committing` forever, and every later song load was refused behind it.
-    //
-    // The target is not a stranger here: the server named it while applying a
-    // command that already passed the mic-owner and leader checks, and it is
-    // the only identity this state will accept.
+    // A handoff commit is an independent authorization that can outlive the
+    // command which started it.
     if (
       roomStatus.handoffState === 'committing'
       && sameIdentity(statusHandoffTarget(roomStatus), identity)
@@ -435,51 +457,22 @@ export class RoomSongCommandSession {
       return { ok: true };
     }
 
-    // Reloading an ended/unstarted YouTube iframe cannot reproduce state 0/-1
-    // directly. The browser restores the same media, rate and terminal position
-    // as paused, then uses that packet only to promote the newer generation.
-    // Keep this exception narrower than ordinary command authority: a different
-    // video, rate, position, tab, participant or non-terminal state still needs
-    // an accepted room command.
     if (safeTerminalReloadContinuation(payload, identity, roomStatus)) {
       return { ok: true };
     }
 
-    // A leader whose own clock went stale re-anchors it rather than being
-    // locked out of it.
-    //
-    // The two sides judge a mutation against different baselines. The player
-    // compares a snapshot against its own previous one, so a gap it sat
-    // through - a long rebuffer, a backgrounded tab, a network hole - reads as
-    // "nothing changed" locally and never raises a command. The room compares
-    // that same snapshot against a clock that kept running without it, sees a
-    // jump, and refuses it. But a refused report never reaches the timeline,
-    // so it cannot correct the very drift it is being refused for. The
-    // refusals then repeat at the telemetry rate and this player can never
-    // drive the room again without reloading the page.
-    //
-    // Only the established leader gets this, and only once its own reports
-    // have gone stale. Its reports are what the room clock is made of, so
-    // there is nothing here to take from anyone else. A player that is not
-    // leading still needs an accepted command to put a song in the room:
-    // reporting telemetry at an idle room must never become a second,
-    // unauthorized way to set one.
-    //
-    // Tested for `false` rather than "not true": a status that never carried
-    // the field at all is not evidence of staleness, and must not open the
-    // gate by omission.
-    // Staleness only relaxes the clock-position proof. Changing video,
-    // playback rate, or play/pause state is still room intent and must travel
-    // through the accepted command path even when the leader has gone stale.
+    // Once the established leader's own reports are stale, allow only its clock
+    // position to re-anchor. Video/rate/state still require an explicit command.
     if (
-      mutation === 'seek'
+      mutations.size === 1
+      && mutations.has('seek')
       && roomStatus.connected === false
       && sameIdentity(statusLeader(roomStatus), identity)
     ) {
       return { ok: true };
     }
 
-    return mutation === null
+    return mutations.size === 0
       ? { ok: true }
       : { ok: false, reason: 'command-required' };
   }
@@ -487,6 +480,7 @@ export class RoomSongCommandSession {
   complete(commandId: string) {
     if (!this.pending || this.pending.commandId !== commandId) return false;
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return true;
   }
 
@@ -497,6 +491,7 @@ export class RoomSongCommandSession {
       || !sameIdentity(this.pending.target, identity)
     ) return false;
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return true;
   }
 
@@ -504,6 +499,7 @@ export class RoomSongCommandSession {
     if (!this.pending) return null;
     const cancelled = this.publicCommand(this.pending);
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return cancelled;
   }
 
@@ -518,6 +514,7 @@ export class RoomSongCommandSession {
 
     const cancelled = this.publicCommand(this.pending);
     this.pending = null;
+    this.stableCompleteProofCommandId = null;
     return cancelled;
   }
 
@@ -549,6 +546,7 @@ export class RoomSongCommandSession {
   private expire(nowMs: number) {
     if (this.pending && nowMs - this.pending.issuedAtMs > COMMAND_TIMEOUT_MS) {
       this.pending = null;
+      this.stableCompleteProofCommandId = null;
     }
   }
 
@@ -567,71 +565,22 @@ export class RoomSongCommandSession {
     } satisfies AcceptedRoomSongCommand;
   }
 
-  private detectMutation(payload: Record<string, unknown>, roomStatus: RoomSongStatus): CommandMutation {
-    const incomingVideoId = typeof payload.videoId === 'string' ? payload.videoId : null;
-    const roomVideoId = typeof roomStatus.videoId === 'string' ? roomStatus.videoId : null;
-    if (!roomVideoId) return incomingVideoId ? 'load' : null;
-    if (incomingVideoId && incomingVideoId !== roomVideoId) return 'load';
-
-    const roomRate = Number(roomStatus.playbackRate);
-    const incomingRate = Number(payload.playbackRate ?? 1);
-    if (
-      Number.isFinite(roomRate)
-      && Number.isFinite(incomingRate)
-      && Math.abs(roomRate - incomingRate) > 0.0001
-    ) return 'rate';
-
-    const roomState = Number(roomStatus.state);
-    const incomingState = Number(payload.state);
-    if (incomingState === 1 && ![1, 3].includes(roomState)) return 'play';
-    if (incomingState === 2 && roomState !== 2) return 'pause';
-    if (incomingState === 5 && roomState !== 5) return 'load';
-
-    // Compared against where the player's *own last accepted report* would be
-    // by now, not against `serverTime`.
-    //
-    // `serverTime` is where the room clock predicts the player should be, and
-    // a player that rebuffers falls behind that prediction without anybody
-    // seeking. Judging against it made every packet after a stall longer than
-    // the threshold look like an unrequested seek, so all of them were refused
-    // — and because a refused packet never reaches the timeline, it could never
-    // re-anchor. A two second stall left the room clock permanently two
-    // seconds ahead of the audio, silently, and growing.
-    //
-    // The honest bound is that a player can only fall behind its own last
-    // report by the time that has actually passed. Anything beyond that in
-    // either direction is a real jump.
-    const reportedTime = Number(roomStatus.youtubeTime);
-    const incomingTime = Number(payload.currentTime);
-    const elapsedSeconds = Math.max(0, Number(roomStatus.ageMs) || 0) / 1000;
-    if (Number.isFinite(reportedTime) && Number.isFinite(incomingTime)) {
-      const delta = incomingTime - reportedTime;
-      if (delta > SEEK_MUTATION_THRESHOLD_SECONDS) return 'seek';
-      if (delta < -(elapsedSeconds + SEEK_MUTATION_THRESHOLD_SECONDS)) return 'seek';
-    }
-
-    return null;
-  }
-
-  private matchesPending(
+  private pendingConvergence(
     payload: Record<string, unknown>,
     command: PendingRoomSongCommand,
     nowMs: number,
-  ) {
+  ): RoomSongConvergenceStage {
     const desired = projectDesired(command, nowMs);
-    const videoId = typeof payload.videoId === 'string' ? payload.videoId : null;
-    const currentTime = Number(payload.currentTime);
-    const state = Number(payload.state);
-    const rate = Number(payload.playbackRate ?? 1);
-
-    if (videoId !== desired.videoId) return false;
-    if (!Number.isFinite(rate) || Math.abs(rate - desired.playbackRate) > 0.0001) return false;
-    if (
-      !Number.isFinite(currentTime)
-      || Math.abs(currentTime - desired.positionSeconds) > COMMAND_POSITION_TOLERANCE_SECONDS
-    ) return false;
-    if (desired.state === 1) return state === 1;
-    if (desired.state === 2) return state === 2;
-    return state === 2 || state === 5;
+    return roomSongCommandConvergence({
+      desired,
+      observed: {
+        videoId: typeof payload.videoId === 'string' ? payload.videoId : null,
+        currentTime: Number(payload.currentTime),
+        state: Number(payload.state),
+        playbackRate: Number(payload.playbackRate ?? 1),
+      },
+      projectedPositionSeconds: desired.positionSeconds,
+      requirePosition: desired.mustApplyPosition,
+    });
   }
 }

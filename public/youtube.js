@@ -1,7 +1,13 @@
 import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
+import { shouldSetPlaybackRate } from './room-song-seek-policy.js';
 import { handoffPreparationPosition } from './playback-handoff-timing.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
+import {
+  ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
+  roomSongCommandConvergence,
+  roomSongCommandExplainsLocalDelta,
+} from './room-song-command-convergence.js';
 import { isNewPlayIntent, settledPlaybackState } from './song-playback-intent.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -266,7 +272,11 @@ function normalizedDesiredState(value) {
     || !Number.isFinite(playbackRate)
     || playbackRate <= 0
   ) return null;
-  return { videoId, positionSeconds, state, playbackRate };
+  // A desired state always carries a position, because it describes the room.
+  // Only a command that exists to move the player says so, and an older page or
+  // a payload without the flag keeps the previous behaviour of positioning.
+  const mustApplyPosition = desired.mustApplyPosition !== false;
+  return { videoId, positionSeconds, state, playbackRate, mustApplyPosition };
 }
 
 function projectedDesiredPosition(mutation, now = performance.now()) {
@@ -277,18 +287,40 @@ function projectedDesiredPosition(mutation, now = performance.now()) {
   return mutation.desired.positionSeconds + elapsedSeconds * mutation.desired.playbackRate;
 }
 
+function snapshotConvergence(snapshot, mutation) {
+  if (!snapshot || !mutation?.desired) return 'none';
+  const projectedPositionSeconds = projectedDesiredPosition(
+    mutation,
+    snapshot.sampledAtPerformanceMs,
+  );
+  const convergence = roomSongCommandConvergence({
+    desired: mutation.desired,
+    observed: snapshot,
+    projectedPositionSeconds,
+    requirePosition: mutation.desired.mustApplyPosition !== false,
+  });
+  if (convergence === 'none') return 'none';
+
+  // State-only room commands can move the media clock as a consequence of the
+  // state transition. Suppress only movement causally bounded by that apply;
+  // a real native scrub must still escape as a newer Seek intent.
+  if (mutation.source === 'room-command') {
+    const elapsedSinceApplySeconds = Math.max(
+      0,
+      snapshot.sampledAtPerformanceMs - mutation.appliedAtPerformanceMs,
+    ) / 1000;
+    if (!roomSongCommandExplainsLocalDelta({
+      desired: mutation.desired,
+      timelineDeltaSeconds: snapshot.timelineDeltaSeconds,
+      elapsedSinceApplySeconds,
+    })) return 'none';
+  }
+
+  return convergence;
+}
+
 function snapshotMatchesDesired(snapshot, mutation) {
-  if (!snapshot || !mutation?.desired) return false;
-  const desired = mutation.desired;
-  if (snapshot.videoId !== desired.videoId) return false;
-  if (Math.abs(snapshot.playbackRate - desired.playbackRate) > 0.0001) return false;
-
-  const desiredPosition = projectedDesiredPosition(mutation, snapshot.sampledAtPerformanceMs);
-  if (!Number.isFinite(desiredPosition) || Math.abs(snapshot.currentTime - desiredPosition) > 1.5) return false;
-
-  if (desired.state === 1) return snapshot.state === 1 || snapshot.state === 3;
-  if (desired.state === 2) return snapshot.state === 2;
-  return snapshot.state === 5 || snapshot.state === 2 || snapshot.state === -1;
+  return snapshotConvergence(snapshot, mutation) !== 'none';
 }
 
 function localMutationForSnapshot(snapshot) {
@@ -298,16 +330,20 @@ function localMutationForSnapshot(snapshot) {
   const mutationContext = activeServerMutation();
   if (mutationContext && mutationContext.source !== 'room-command') return null;
 
-  // Server apply itself is not a new product intent. If the player has reached
-  // the latest complete desired state, report proof instead of recursively
-  // turning that state transition into another command. A later deviation from
-  // that desired state is a genuine user gesture and may supersede it.
+  // Both intermediate and final effects of the active command are authorized.
+  // Server completion is stricter: BUFFERING remains pending until PLAYING.
   if (mutationContext?.source === 'room-command' && snapshotMatchesDesired(snapshot, mutationContext)) {
     return null;
   }
 
   if (snapshot.videoId !== snapshot.previousVideoId) {
     return { action: 'load', videoId: snapshot.videoId, positionSeconds: Math.max(0, snapshot.currentTime) };
+  }
+
+  // A large positional discontinuity is an independent mutation dimension. Do
+  // not let a simultaneous state/rate transition hide it by classifier order.
+  if (Math.abs(snapshot.timelineDeltaSeconds) > ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS) {
+    return { action: 'seek', positionSeconds: Math.max(0, snapshot.currentTime) };
   }
 
   if (
@@ -328,10 +364,6 @@ function localMutationForSnapshot(snapshot) {
     if (snapshot.state === 2 && snapshot.previousState !== 2) {
       return { action: 'pause' };
     }
-  }
-
-  if (Math.abs(snapshot.timelineDeltaSeconds) > 0.75) {
-    return { action: 'seek', positionSeconds: Math.max(0, snapshot.currentTime) };
   }
 
   return null;
@@ -772,7 +804,7 @@ function applyAuthoritativeRestore() {
       });
     }
     player.seekTo(targetPosition, true);
-    player.setPlaybackRate(desired.playbackRate);
+    applyPlaybackRate(desired.playbackRate);
     if (desired.state === 1) player.playVideo();
     else player.pauseVideo();
   }
@@ -961,6 +993,30 @@ async function ensurePlayer(videoId) {
   return player;
 }
 
+/**
+ * Reading the player is not free of risk: the IFrame answers these before it is
+ * fully ready and can throw. A failed read is not evidence that the current rate
+ * already matches, so the policy treats null as "act".
+ */
+function safePlaybackRate() {
+  try {
+    const value = Number(player.getPlaybackRate());
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyPlaybackRate(rate) {
+  if (!shouldSetPlaybackRate({
+    currentRate: safePlaybackRate(),
+    desiredRate: rate,
+  })) return;
+  try {
+    player.setPlaybackRate(Number(rate));
+  } catch {}
+}
+
 async function applyRoomSongCommand(message) {
   const commandId = typeof message.commandId === 'string' ? message.commandId : null;
   const action = typeof message.action === 'string' ? message.action : null;
@@ -1001,9 +1057,9 @@ async function applyRoomSongCommand(message) {
       throw new Error('player not ready');
     }
 
-    // Keep the previous sample across a command apply. The full desired-state
-    // matcher distinguishes server mutations, while preserving enough history
-    // to notice a user seek/play/pause that lands before the next sample.
+    // Keep the previous sample across a command apply. The convergence policy
+    // distinguishes server effects while preserving enough history to detect a
+    // genuinely newer native gesture before the next sample.
     loadedVideoId = desired.videoId;
     serverMutation.appliedAtPerformanceMs = performance.now();
 
@@ -1013,14 +1069,18 @@ async function applyRoomSongCommand(message) {
         startSeconds: Math.max(0, desired.positionSeconds),
       });
     } else {
-      if (reportedVideoId() !== desired.videoId) {
+      const videoChanged = reportedVideoId() !== desired.videoId;
+      if (videoChanged) {
         player.cueVideoById({
           videoId: desired.videoId,
           startSeconds: Math.max(0, desired.positionSeconds),
         });
       }
-      player.seekTo(Math.max(0, desired.positionSeconds), true);
-      player.setPlaybackRate(desired.playbackRate);
+      // Position is a command dimension, not a distance heuristic.
+      if (videoChanged || desired.mustApplyPosition) {
+        player.seekTo(Math.max(0, desired.positionSeconds), true);
+      }
+      applyPlaybackRate(desired.playbackRate);
       if (desired.state === 1) player.playVideo();
       else player.pauseVideo();
     }
@@ -1317,6 +1377,10 @@ function restoreRoomAfterCommandTerminal(room, trackedCommandId, appliedCommandI
     trackedCommandId,
     appliedCommandId,
   })) return false;
+  // This is a true transaction rollback, not command convergence. If a command
+  // really failed after mutating the iframe, restore the complete authoritative
+  // room snapshot. Normal Play/Pause must not arrive here merely because the
+  // room projection differs; the convergence state machine above prevents that.
   restoreAuthoritativeRoom(room).catch(console.error);
   return true;
 }

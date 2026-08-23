@@ -41,7 +41,7 @@ test('youtube sync owns command ids, revision and causal predecessor instead of 
   assert.match(sync, /relay:room-song-command-rejected/);
 });
 
-test('native controls can supersede a pending room intent but stable intermediate telemetry stays suppressed', async () => {
+test('native controls can supersede a pending room intent but stable command effects stay suppressed', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
   const requestStart = source.indexOf('function requestRoomSongCommand');
@@ -82,7 +82,7 @@ test('latest apply survives player creation without erasing the first post-apply
   assert.doesNotMatch(applySection, /previousSnapshot = null/);
 });
 
-test('terminal command status carries the latest room snapshot for local recovery', async () => {
+test('terminal command status carries the latest room snapshot for real rollback', async () => {
   const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 
@@ -125,4 +125,51 @@ test('room status observation alone never starts playback', async () => {
   const branch = sync.slice(branchStart, branchEnd);
   assert.match(branch, /latestRoomSongStatus = message/);
   assert.doesNotMatch(branch, /room-song-command-apply|playVideo|dispatchRoomCommand/, 'joining/observing room state must not apply or autoplay it');
+});
+
+test('client and server share convergence instead of a timed settled-command grace', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+
+  assert.match(source, /roomSongCommandConvergence/);
+  assert.match(source, /roomSongCommandExplainsLocalDelta/);
+  assert.doesNotMatch(source, /SETTLED_ROOM_COMMAND_MS|settledRoomCommand|rememberSettledRoomCommand|activeSettledRoomCommand/);
+
+  const completeStart = source.indexOf("window.addEventListener('relay:room-song-command-complete'");
+  assert.ok(completeStart >= 0, 'the completion handler is missing');
+  const completeSection = source.slice(completeStart, completeStart + 520);
+  assert.match(completeSection, /serverMutation\?\.commandId === commandId\) serverMutation = null/);
+  assert.doesNotMatch(completeSection, /setTimeout|rememberSettled/);
+});
+
+test('a state-only command ignores room position but a large native jump still escapes as Seek', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const convergenceStart = source.indexOf('function snapshotConvergence');
+  const convergenceEnd = source.indexOf('function snapshotMatchesDesired', convergenceStart);
+  assert.ok(convergenceStart >= 0 && convergenceEnd > convergenceStart);
+  const convergenceSection = source.slice(convergenceStart, convergenceEnd);
+  assert.match(convergenceSection, /requirePosition: mutation\.desired\.mustApplyPosition !== false/);
+  assert.match(convergenceSection, /roomSongCommandExplainsLocalDelta/);
+
+  const mutationStart = source.indexOf('function localMutationForSnapshot');
+  const mutationEnd = source.indexOf('function renderSnapshot', mutationStart);
+  const mutationSection = source.slice(mutationStart, mutationEnd);
+  const seekIndex = mutationSection.indexOf("return { action: 'seek'");
+  const stateIndex = mutationSection.indexOf('if (snapshot.state !== snapshot.previousState)');
+  assert.ok(seekIndex >= 0 && stateIndex > seekIndex, 'a simultaneous large jump must not be hidden behind Play/Pause');
+});
+
+test('the apply path moves the player only when the command says to', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const applyStart = source.indexOf('async function applyRoomSongCommand');
+  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
+  const applySection = source.slice(applyStart, applyEnd);
+
+  assert.match(applySection, /videoChanged \|\| desired\.mustApplyPosition/);
+  assert.doesNotMatch(applySection, /shouldSeekForRoomCommand/);
+
+  assert.match(
+    source,
+    /mustApplyPosition = desired\.mustApplyPosition !== false/,
+    'a payload without the flag must keep positioning, as older ones did',
+  );
 });

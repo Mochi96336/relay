@@ -170,6 +170,8 @@ function sameCommandBody(a: RoomSongCommandBody, b: RoomSongCommandBody) {
 
 /** YouTube's ENDED. Distinct from PAUSED (2), which this file used to fold it into. */
 const ENDED = 0;
+/** YouTube's BUFFERING, which every start passes through on its way to PLAYING. */
+const BUFFERING = 3;
 
 function desiredPlaybackState(value: unknown): DesiredPlaybackState {
   const state = Number(value);
@@ -630,7 +632,16 @@ export class RoomSongCommandSession {
       !Number.isFinite(currentTime)
       || Math.abs(currentTime - desired.positionSeconds) > COMMAND_POSITION_TOLERANCE_SECONDS
     ) return false;
-    if (desired.state === 1) return state === 1;
+    // A player on its way to playing reports BUFFERING first - it never arrives
+    // at PLAYING directly. Requiring an exact match meant the report that lands
+    // while a play command is still pending could not be recognised as that
+    // command's own effect, so it fell through to the seek classifier, which
+    // read the position the command had just asked for as an unrequested jump
+    // and issued a second command chasing it back.
+    //
+    // This is the same rule song-playback-intent.js already applies on the
+    // client: buffering is a transport hiccup, never a playback intent.
+    if (desired.state === 1) return state === 1 || state === BUFFERING;
     if (desired.state === 2) return state === 2;
     return state === 2 || state === 5;
   }

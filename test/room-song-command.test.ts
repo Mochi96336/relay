@@ -336,6 +336,58 @@ describe('room song telemetry command gate', () => {
     });
   });
 
+  test('a play command absorbs the buffering report its own start produces', () => {
+    const session = new RoomSongCommandSession();
+    const accepted = session.begin(
+      command('command-play-buffer', 0, 'play'),
+      A.participantId,
+      A,
+      null,
+      room({ state: 2 }),
+      0,
+      1,
+      0,
+    );
+    assert.equal(accepted.ok, true);
+
+    // A player never arrives at PLAYING directly: it reports BUFFERING on the
+    // way, at wherever the command asked it to start. Rejecting that report
+    // sent it to the seek classifier, which read the position the command had
+    // just asked for as an unrequested jump and chased it back - seen live as
+    // the video stepping forward on play and snapping back a third of a second
+    // later, with two extra revisions per press.
+    const gate = session.gateTelemetry(
+      telemetry({ state: 3, currentTime: 10.8 }),
+      A,
+      room({ state: 2, youtubeTime: 10, ageMs: 800 }),
+      800,
+    );
+    assert.deepEqual(gate, { ok: true, completesCommandId: 'command-play-buffer' });
+  });
+
+  test('buffering does not absorb a report meant for a pause or a load', () => {
+    const session = new RoomSongCommandSession();
+    const accepted = session.begin(
+      command('command-pause-buffer', 0, 'pause'),
+      A.participantId,
+      A,
+      null,
+      room({ state: 1 }),
+      0,
+      1,
+      0,
+    );
+    assert.equal(accepted.ok, true);
+
+    const gate = session.gateTelemetry(
+      telemetry({ state: 3, currentTime: 10 }),
+      A,
+      room({ state: 1 }),
+      0,
+    );
+    assert.notDeepEqual(gate, { ok: true, completesCommandId: 'command-pause-buffer' });
+  });
+
   test('lets a committing handoff target report after its command expired', () => {
     const session = new RoomSongCommandSession();
 

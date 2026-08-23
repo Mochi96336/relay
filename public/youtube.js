@@ -3,6 +3,11 @@ import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-
 import { shouldSetPlaybackRate } from './room-song-seek-policy.js';
 import { handoffPreparationPosition } from './playback-handoff-timing.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
+import {
+  ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
+  roomSongCommandConvergence,
+  roomSongCommandExplainsLocalDelta,
+} from './room-song-command-convergence.js';
 import { isNewPlayIntent, settledPlaybackState } from './song-playback-intent.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -224,35 +229,6 @@ function readSnapshot() {
   return snapshot;
 }
 
-/**
- * The command the server has just declared complete, kept for a moment longer.
- *
- * Completion means the server saw what it needed, not that this page's player
- * has finished arriving. The transition into the commanded state can be
- * sampled here afterwards, with the mutation already cleared, and there is
- * nothing left in the snapshot that says the room asked for it - so it reads as
- * somebody using YouTube's own controls, and becomes another command.
- *
- * Only snapshots that match what the command asked for are suppressed, so a
- * real gesture inside the window still reports.
- */
-const SETTLED_ROOM_COMMAND_MS = 2_000;
-let settledRoomCommand = null;
-
-function rememberSettledRoomCommand(mutation) {
-  if (!mutation?.desired) return;
-  settledRoomCommand = { ...mutation, until: performance.now() + SETTLED_ROOM_COMMAND_MS };
-}
-
-function activeSettledRoomCommand() {
-  if (!settledRoomCommand) return null;
-  if (performance.now() > settledRoomCommand.until) {
-    settledRoomCommand = null;
-    return null;
-  }
-  return settledRoomCommand;
-}
-
 function activeServerMutation() {
   if (!serverMutation) return null;
   // Room commands and same-tab reload restoration stay authoritative until the
@@ -311,18 +287,40 @@ function projectedDesiredPosition(mutation, now = performance.now()) {
   return mutation.desired.positionSeconds + elapsedSeconds * mutation.desired.playbackRate;
 }
 
+function snapshotConvergence(snapshot, mutation) {
+  if (!snapshot || !mutation?.desired) return 'none';
+  const projectedPositionSeconds = projectedDesiredPosition(
+    mutation,
+    snapshot.sampledAtPerformanceMs,
+  );
+  const convergence = roomSongCommandConvergence({
+    desired: mutation.desired,
+    observed: snapshot,
+    projectedPositionSeconds,
+    requirePosition: mutation.desired.mustApplyPosition !== false,
+  });
+  if (convergence === 'none') return 'none';
+
+  // State-only room commands can move the media clock as a consequence of the
+  // state transition. Suppress only movement causally bounded by that apply;
+  // a real native scrub must still escape as a newer Seek intent.
+  if (mutation.source === 'room-command') {
+    const elapsedSinceApplySeconds = Math.max(
+      0,
+      snapshot.sampledAtPerformanceMs - mutation.appliedAtPerformanceMs,
+    ) / 1000;
+    if (!roomSongCommandExplainsLocalDelta({
+      desired: mutation.desired,
+      timelineDeltaSeconds: snapshot.timelineDeltaSeconds,
+      elapsedSinceApplySeconds,
+    })) return 'none';
+  }
+
+  return convergence;
+}
+
 function snapshotMatchesDesired(snapshot, mutation) {
-  if (!snapshot || !mutation?.desired) return false;
-  const desired = mutation.desired;
-  if (snapshot.videoId !== desired.videoId) return false;
-  if (Math.abs(snapshot.playbackRate - desired.playbackRate) > 0.0001) return false;
-
-  const desiredPosition = projectedDesiredPosition(mutation, snapshot.sampledAtPerformanceMs);
-  if (!Number.isFinite(desiredPosition) || Math.abs(snapshot.currentTime - desiredPosition) > 1.5) return false;
-
-  if (desired.state === 1) return snapshot.state === 1 || snapshot.state === 3;
-  if (desired.state === 2) return snapshot.state === 2;
-  return snapshot.state === 5 || snapshot.state === 2 || snapshot.state === -1;
+  return snapshotConvergence(snapshot, mutation) !== 'none';
 }
 
 function localMutationForSnapshot(snapshot) {
@@ -332,19 +330,20 @@ function localMutationForSnapshot(snapshot) {
   const mutationContext = activeServerMutation();
   if (mutationContext && mutationContext.source !== 'room-command') return null;
 
-  // Server apply itself is not a new product intent. If the player has reached
-  // the latest complete desired state, report proof instead of recursively
-  // turning that state transition into another command. A later deviation from
-  // that desired state is a genuine user gesture and may supersede it.
+  // Both intermediate and final effects of the active command are authorized.
+  // Server completion is stricter: BUFFERING remains pending until PLAYING.
   if (mutationContext?.source === 'room-command' && snapshotMatchesDesired(snapshot, mutationContext)) {
     return null;
   }
 
-  const settled = activeSettledRoomCommand();
-  if (settled && snapshotMatchesDesired(snapshot, settled)) return null;
-
   if (snapshot.videoId !== snapshot.previousVideoId) {
     return { action: 'load', videoId: snapshot.videoId, positionSeconds: Math.max(0, snapshot.currentTime) };
+  }
+
+  // A large positional discontinuity is an independent mutation dimension. Do
+  // not let a simultaneous state/rate transition hide it by classifier order.
+  if (Math.abs(snapshot.timelineDeltaSeconds) > ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS) {
+    return { action: 'seek', positionSeconds: Math.max(0, snapshot.currentTime) };
   }
 
   if (
@@ -365,10 +364,6 @@ function localMutationForSnapshot(snapshot) {
     if (snapshot.state === 2 && snapshot.previousState !== 2) {
       return { action: 'pause' };
     }
-  }
-
-  if (Math.abs(snapshot.timelineDeltaSeconds) > 0.75) {
-    return { action: 'seek', positionSeconds: Math.max(0, snapshot.currentTime) };
   }
 
   return null;
@@ -999,18 +994,9 @@ async function ensurePlayer(videoId) {
 }
 
 /**
- * Setting a rate the player already has still costs an IFrame hiccup, so ask
- * only when it differs. An unreadable current rate is not evidence it matches.
- */
-/**
  * Reading the player is not free of risk: the IFrame answers these before it is
- * fully ready and can throw. The apply path runs inside one try whose catch
- * fails the whole command, so a throw here would skip playVideo() entirely and
- * report the command as failed - which is worse than the unconditional call
- * these reads exist to avoid.
- *
- * A read that fails is not evidence about the player, so both policies treat
- * null as "act", which is exactly what the code did before they existed.
+ * fully ready and can throw. A failed read is not evidence that the current rate
+ * already matches, so the policy treats null as "act".
  */
 function safePlaybackRate() {
   try {
@@ -1047,7 +1033,6 @@ async function applyRoomSongCommand(message) {
   clearAutoplayRecovery();
   retireOutgoingReleaseBarrier();
   cancelPlaybackPrewarm();
-  settledRoomCommand = null;
   serverMutation = {
     source: 'room-command',
     commandId,
@@ -1072,9 +1057,9 @@ async function applyRoomSongCommand(message) {
       throw new Error('player not ready');
     }
 
-    // Keep the previous sample across a command apply. The full desired-state
-    // matcher distinguishes server mutations, while preserving enough history
-    // to notice a user seek/play/pause that lands before the next sample.
+    // Keep the previous sample across a command apply. The convergence policy
+    // distinguishes server effects while preserving enough history to detect a
+    // genuinely newer native gesture before the next sample.
     loadedVideoId = desired.videoId;
     serverMutation.appliedAtPerformanceMs = performance.now();
 
@@ -1091,15 +1076,10 @@ async function applyRoomSongCommand(message) {
           startSeconds: Math.max(0, desired.positionSeconds),
         });
       }
-      // Whether to move the player is the command's to say, not a distance to
-      // measure: the room's position is a projection the player falls behind by
-      // buffering alone, so comparing against it turns an ordinary play into a
-      // seek. A freshly cued video has no position to keep either way.
+      // Position is a command dimension, not a distance heuristic.
       if (videoChanged || desired.mustApplyPosition) {
         player.seekTo(Math.max(0, desired.positionSeconds), true);
       }
-      // Same reason as the seek above: re-asserting a rate the player already
-      // has is not free on an IFrame, and every command was paying for it.
       applyPlaybackRate(desired.playbackRate);
       if (desired.state === 1) player.playVideo();
       else player.pauseVideo();
@@ -1397,6 +1377,10 @@ function restoreRoomAfterCommandTerminal(room, trackedCommandId, appliedCommandI
     trackedCommandId,
     appliedCommandId,
   })) return false;
+  // This is a true transaction rollback, not command convergence. If a command
+  // really failed after mutating the iframe, restore the complete authoritative
+  // room snapshot. Normal Play/Pause must not arrive here merely because the
+  // room projection differs; the convergence state machine above prevents that.
   restoreAuthoritativeRoom(room).catch(console.error);
   return true;
 }
@@ -1561,10 +1545,7 @@ window.addEventListener('relay:room-song-command-complete', (event) => {
   const commandId = event.detail?.commandId;
   const trackedCommandId = trackedRoomCommandId();
   if (!trackedCommandId || !commandId || trackedCommandId !== commandId) return;
-  if (serverMutation?.commandId === commandId) {
-    rememberSettledRoomCommand(serverMutation);
-    serverMutation = null;
-  }
+  if (serverMutation?.commandId === commandId) serverMutation = null;
   if (localCommandPending?.commandId === commandId) localCommandPending = null;
   noteNode.textContent = 'Latest room song intent applied.';
 });

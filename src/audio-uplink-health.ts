@@ -3,6 +3,10 @@ export type AudioUplinkTransportHealth = {
   maxPacketBytes: number | null;
   minWebTransportMaxPacketBytes: number | null;
   maxWebTransportMaxPacketBytes: number | null;
+  /** Relay's application packet ceiling after clamping the browser-reported budget. */
+  datagramPacketBytesCeiling: number | null;
+  /** Relay's bounded local outstanding-write budget, in packets. */
+  datagramQueuePackets: number | null;
   webTransportAttempts: number;
   webTransportConnections: number;
   webTransportDemotions: number;
@@ -93,10 +97,20 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const maxPacketBytes = positiveSafeIntegerOrNull(transport.maxPacketBytes);
   const minWebTransportMaxPacketBytes = positiveSafeIntegerOrNull(transport.minWebTransportMaxPacketBytes);
   const maxWebTransportMaxPacketBytes = positiveSafeIntegerOrNull(transport.maxWebTransportMaxPacketBytes);
+  // These fields were added after the original v1 payload. Missing means an
+  // older page, not a malformed report; a present invalid value is rejected.
+  const datagramPacketBytesCeiling = transport.datagramPacketBytesCeiling === undefined
+    ? null
+    : positiveSafeIntegerOrNull(transport.datagramPacketBytesCeiling);
+  const datagramQueuePackets = transport.datagramQueuePackets === undefined
+    ? null
+    : positiveSafeIntegerOrNull(transport.datagramQueuePackets);
   if (
     maxPacketBytes === undefined
     || minWebTransportMaxPacketBytes === undefined
     || maxWebTransportMaxPacketBytes === undefined
+    || datagramPacketBytesCeiling === undefined
+    || datagramQueuePackets === undefined
   ) return null;
   if (
     minWebTransportMaxPacketBytes !== null
@@ -135,6 +149,8 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       maxPacketBytes,
       minWebTransportMaxPacketBytes,
       maxWebTransportMaxPacketBytes,
+      datagramPacketBytesCeiling,
+      datagramQueuePackets,
       ...counters as Record<(typeof counterNames)[number], number>,
     },
   };

@@ -768,6 +768,7 @@ function roomSongCommandApplyPayload(command: AcceptedRoomSongCommand) {
     type: 'room-song-command-apply',
     commandId: command.commandId,
     revision: command.revision,
+    supersedesCommandId: command.supersedesCommandId,
     issuedByParticipantId: command.issuedByParticipantId,
     targetPlaybackTransportId: command.target.transportId,
     targetPlaybackGeneration: command.target.generation,

@@ -15,12 +15,16 @@ export type RoomSongObservedLike = {
   playbackRate: number;
 };
 
+/** Landing slack for explicit position mutations. Command delivery age is excluded. */
 export const ROOM_SONG_POSITION_TOLERANCE_SECONDS: number;
 export const ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS: number;
+/** Causal iframe correction envelope for state-only commands; never position authority. */
+export const ROOM_SONG_CAUSAL_CORRECTION_TOLERANCE_SECONDS: number;
 
 export function roomSongCommandConvergence(input: {
   desired: RoomSongDesiredLike | null | undefined;
   observed: RoomSongObservedLike | null | undefined;
+  /** Compatibility-only context. Explicit position proof always targets desired.positionSeconds. */
   projectedPositionSeconds?: number;
   requirePosition?: boolean;
   positionToleranceSeconds?: number;

@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   ROOM_SONG_SEEK_TOLERANCE_SECONDS,
   shouldSeekForRoomCommand,
+  shouldSetPlaybackRate,
 } from '../public/room-song-seek-policy.js';
 
 test('resuming a song that is already where the room wants it does not reposition the player', () => {
@@ -126,4 +127,44 @@ test('the room command apply path consults the policy instead of seeking uncondi
     /\n\s*player\.seekTo\(Math\.max\(0, desired\.positionSeconds\), true\);\n\s*player\.setPlaybackRate/,
     'the seek must sit behind the policy, not run before every rate change',
   );
+});
+
+test('a command does not re-assert a playback rate the player already has', () => {
+  assert.equal(shouldSetPlaybackRate({ currentRate: 1, desiredRate: 1 }), false);
+  assert.equal(shouldSetPlaybackRate({ currentRate: 1.25, desiredRate: 1.25 }), false);
+});
+
+test('a real rate change is still applied', () => {
+  assert.equal(shouldSetPlaybackRate({ currentRate: 1, desiredRate: 1.25 }), true);
+  assert.equal(shouldSetPlaybackRate({ currentRate: 1.25, desiredRate: 1 }), true);
+});
+
+test('an unreadable current rate is not evidence that it already matches', () => {
+  for (const currentRate of [Number.NaN, undefined, null, 0, -1, 'normal']) {
+    assert.equal(
+      shouldSetPlaybackRate({ currentRate, desiredRate: 1 }),
+      true,
+      `${String(currentRate)} says nothing about the rate in force`,
+    );
+  }
+});
+
+test('an unusable desired rate is never applied', () => {
+  for (const desiredRate of [Number.NaN, undefined, null, 0, -1, 'fast']) {
+    assert.equal(shouldSetPlaybackRate({ currentRate: 1, desiredRate }), false);
+  }
+});
+
+test('the apply path routes the rate through the policy too', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const applyStart = source.indexOf('async function applyRoomSongCommand');
+  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
+  const applySection = source.slice(applyStart, applyEnd);
+
+  assert.doesNotMatch(
+    applySection,
+    /\n\s*player\.setPlaybackRate\(desired\.playbackRate\);\n\s*if \(desired\.state === 1\)/,
+    'the rate must sit behind the policy on the per-command path',
+  );
+  assert.match(applySection, /applyPlaybackRate\(desired\.playbackRate\)/);
 });

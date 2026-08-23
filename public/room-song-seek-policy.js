@@ -52,3 +52,21 @@ export function shouldSeekForRoomCommand({
     : ROOM_SONG_SEEK_TOLERANCE_SECONDS;
   return Math.abs(current - desired) > limit;
 }
+
+/**
+ * Whether applying a command has to re-assert the playback rate.
+ *
+ * Setting a rate the player already has is not free on an IFrame either, and a
+ * command carries a rate whether or not it is the reason the command exists.
+ */
+export function shouldSetPlaybackRate({ currentRate, desiredRate } = {}) {
+  const desired = Number(desiredRate);
+  if (!Number.isFinite(desired) || desired <= 0) return false;
+
+  // An unreadable current rate is not evidence that it already matches.
+  if (currentRate === null || currentRate === undefined) return true;
+  const current = Number(currentRate);
+  if (!Number.isFinite(current) || current <= 0) return true;
+
+  return Math.abs(current - desired) >= 0.001;
+}

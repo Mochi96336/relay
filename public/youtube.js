@@ -1,6 +1,6 @@
 import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
-import { shouldSeekForRoomCommand } from './room-song-seek-policy.js';
+import { shouldSeekForRoomCommand, shouldSetPlaybackRate } from './room-song-seek-policy.js';
 import { handoffPreparationPosition } from './playback-handoff-timing.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
 import { isNewPlayIntent, settledPlaybackState } from './song-playback-intent.js';
@@ -773,7 +773,7 @@ function applyAuthoritativeRestore() {
       });
     }
     player.seekTo(targetPosition, true);
-    player.setPlaybackRate(desired.playbackRate);
+    applyPlaybackRate(desired.playbackRate);
     if (desired.state === 1) player.playVideo();
     else player.pauseVideo();
   }
@@ -962,6 +962,18 @@ async function ensurePlayer(videoId) {
   return player;
 }
 
+/**
+ * Setting a rate the player already has still costs an IFrame hiccup, so ask
+ * only when it differs. An unreadable current rate is not evidence it matches.
+ */
+function applyPlaybackRate(rate) {
+  if (!shouldSetPlaybackRate({
+    currentRate: Number(player.getPlaybackRate()),
+    desiredRate: rate,
+  })) return;
+  player.setPlaybackRate(Number(rate));
+}
+
 async function applyRoomSongCommand(message) {
   const commandId = typeof message.commandId === 'string' ? message.commandId : null;
   const action = typeof message.action === 'string' ? message.action : null;
@@ -1032,7 +1044,9 @@ async function applyRoomSongCommand(message) {
       })) {
         player.seekTo(Math.max(0, desired.positionSeconds), true);
       }
-      player.setPlaybackRate(desired.playbackRate);
+      // Same reason as the seek above: re-asserting a rate the player already
+      // has is not free on an IFrame, and every command was paying for it.
+      applyPlaybackRate(desired.playbackRate);
       if (desired.state === 1) player.playVideo();
       else player.pauseVideo();
     }

@@ -7,3 +7,8 @@ export declare function shouldSeekForRoomCommand(input?: {
   desiredSeconds?: unknown;
   toleranceSeconds?: unknown;
 }): boolean;
+
+export declare function shouldSetPlaybackRate(input?: {
+  currentRate?: unknown;
+  desiredRate?: unknown;
+}): boolean;

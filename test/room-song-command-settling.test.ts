@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { parseRoomSongCommand } from '../src/room-song-command.js';
@@ -145,4 +146,19 @@ test('position-bearing Seek still completes from one full positional proof', () 
     ),
     { ok: true, completesCommandId: 'command-seek-strong-proof' },
   );
+});
+
+test('production YouTube telemetry carries the local clock residual used by convergence', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const dispatchStart = source.indexOf("new CustomEvent('relay:youtube-telemetry'");
+  assert.ok(dispatchStart >= 0, 'YouTube telemetry dispatch is missing');
+  const dispatchSection = source.slice(dispatchStart, dispatchStart + 700);
+  assert.match(dispatchSection, /timelineDeltaSeconds:\s*snapshot\.timelineDeltaSeconds/);
+
+  const sync = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+  const forwardStart = sync.indexOf("window.addEventListener('relay:youtube-telemetry'");
+  assert.ok(forwardStart >= 0, 'YouTube telemetry forwarder is missing');
+  const forwardSection = sync.slice(forwardStart, forwardStart + 700);
+  assert.match(forwardSection, /type:\s*'youtube-telemetry'/);
+  assert.match(forwardSection, /\.\.\.detail/);
 });

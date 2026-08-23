@@ -61,8 +61,12 @@ export function roomSongCommandConvergence({
  * applied even though it did not authorize a seek. Judge that movement against
  * the player's own immediately preceding sample, not the room projection.
  *
- * This keeps ordinary Play from manufacturing a Seek while still allowing a
- * genuinely larger native scrub to supersede the command.
+ * Forward motion is bounded by elapsed command time plus the local jump guard.
+ * Backward correction uses the same positional proof envelope as server-side
+ * command convergence: YouTube can first report the advancing edge and then
+ * correct its clock on the next sample without that correction becoming a new
+ * user Seek. This tolerance is evidence classification only; it never causes a
+ * media reposition.
  */
 export function roomSongCommandExplainsLocalDelta({
   desired,
@@ -85,6 +89,6 @@ export function roomSongCommandExplainsLocalDelta({
 
   return (
     delta <= forwardAllowance
-    && delta >= -ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS
+    && delta >= -ROOM_SONG_POSITION_TOLERANCE_SECONDS
   );
 }

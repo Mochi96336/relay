@@ -400,9 +400,16 @@ export class RoomSongCommandSession {
       if (convergence === 'complete') {
         return { ok: true, completesCommandId: this.pending.commandId };
       }
-      // `intermediate` is authorized progress, not completion. `none` can also
-      // be a stable pre-command sample while the player is still catching up.
-      return { ok: true };
+      if (convergence === 'intermediate') {
+        return { ok: true };
+      }
+      // A `none` observation is only safe while the player is still showing the
+      // stable pre-command state. If it contains any semantic mutation, it is
+      // evidence for some other (or superseded) intent and must not pass as
+      // progress toward the latest pending command.
+      return mutations.size === 0
+        ? { ok: true }
+        : { ok: false, reason: 'command-mismatch' };
     }
 
     // A handoff commit is an independent authorization that can outlive the

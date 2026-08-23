@@ -1,11 +1,10 @@
 export const ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS = 0.75;
 /** Landing slack for an explicit position mutation. Command delivery age is not part of this proof. */
 export const ROOM_SONG_POSITION_TOLERANCE_SECONDS = ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS;
-/**
- * Backward/forward iframe correction envelope used only to classify causal
- * effects of state-only commands. This never authorizes a media reposition.
- */
+/** Causal iframe correction envelope for state-only commands; never position authority. */
 export const ROOM_SONG_CAUSAL_CORRECTION_TOLERANCE_SECONDS = 1.5;
+/** Reload-only equivalence slack for restoring a terminal position on a fresh iframe. */
+export const ROOM_SONG_TERMINAL_RELOAD_TOLERANCE_SECONDS = 1.5;
 
 /**
  * Classify how far an observed player has progressed toward a room command.

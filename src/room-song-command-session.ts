@@ -415,6 +415,12 @@ export class RoomSongCommandSession {
           return { ok: true, completesCommandId: this.pending.commandId };
         }
 
+        // The current production client always supplies its local timeline delta.
+        // Keep one-shot completion for an older envelope that genuinely lacks the
+        // field; malformed present data never counts as stable proof.
+        if (payload.timelineDeltaSeconds === undefined) {
+          return { ok: true, completesCommandId: this.pending.commandId };
+        }
         const localDeltaSeconds = Number(payload.timelineDeltaSeconds);
         const stableLocalClock = Number.isFinite(localDeltaSeconds)
           && Math.abs(localDeltaSeconds) <= ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS;

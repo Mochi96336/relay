@@ -353,7 +353,14 @@ export class PreferredAudioTransport extends AudioTransport {
       );
       return true;
     } catch {
-      if (generation === this.preferenceGeneration) this.demoteWebTransport(transport);
+      // A candidate can become a live HTTP/3 session before its datagram writer
+      // is installed. If setup fails after `ready`, it is not `this.webTransport`
+      // yet, so demoting the active slot alone would leave that candidate alive
+      // on the server while the browser has already fallen back to WebSocket.
+      if (transport && transport !== this.webTransport) {
+        try { transport.close(); } catch {}
+      }
+      if (generation === this.preferenceGeneration) this.demoteWebTransport();
       return false;
     }
   }

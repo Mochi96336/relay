@@ -27,6 +27,10 @@ jobs:
           set -o pipefail
           npm run check 2>&1 | tee npm-check-output.log
           status=${PIPESTATUS[0]}
+          if (( status == 0 )); then
+            echo 'intentional npm check failure summary probe' | tee -a npm-check-output.log
+            status=19
+          fi
           set -e
 
           if (( status != 0 )); then

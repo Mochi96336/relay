@@ -966,12 +966,42 @@ async function ensurePlayer(videoId) {
  * Setting a rate the player already has still costs an IFrame hiccup, so ask
  * only when it differs. An unreadable current rate is not evidence it matches.
  */
+/**
+ * Reading the player is not free of risk: the IFrame answers these before it is
+ * fully ready and can throw. The apply path runs inside one try whose catch
+ * fails the whole command, so a throw here would skip playVideo() entirely and
+ * report the command as failed - which is worse than the unconditional call
+ * these reads exist to avoid.
+ *
+ * A read that fails is not evidence about the player, so both policies treat
+ * null as "act", which is exactly what the code did before they existed.
+ */
+function safePlayerSeconds() {
+  try {
+    const value = Number(player.getCurrentTime());
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function safePlaybackRate() {
+  try {
+    const value = Number(player.getPlaybackRate());
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function applyPlaybackRate(rate) {
   if (!shouldSetPlaybackRate({
-    currentRate: Number(player.getPlaybackRate()),
+    currentRate: safePlaybackRate(),
     desiredRate: rate,
   })) return;
-  player.setPlaybackRate(Number(rate));
+  try {
+    player.setPlaybackRate(Number(rate));
+  } catch {}
 }
 
 async function applyRoomSongCommand(message) {
@@ -1039,7 +1069,7 @@ async function applyRoomSongCommand(message) {
       if (shouldSeekForRoomCommand({
         action,
         videoChanged,
-        currentSeconds: Number(player.getCurrentTime()),
+        currentSeconds: safePlayerSeconds(),
         desiredSeconds: desired.positionSeconds,
       })) {
         player.seekTo(Math.max(0, desired.positionSeconds), true);

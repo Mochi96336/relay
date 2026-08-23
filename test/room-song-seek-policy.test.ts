@@ -168,3 +168,23 @@ test('the apply path routes the rate through the policy too', async () => {
   );
   assert.match(applySection, /applyPlaybackRate\(desired\.playbackRate\)/);
 });
+
+test('the apply path never lets a player read break the command', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const applyStart = source.indexOf('async function applyRoomSongCommand');
+  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
+  const applySection = source.slice(applyStart, applyEnd);
+
+  // The whole apply runs inside one try whose catch fails the command, so a
+  // read that throws would skip playVideo() and report a failure - worse than
+  // the unconditional call the read exists to avoid.
+  assert.doesNotMatch(applySection, /player\.getCurrentTime\(\)/);
+  assert.doesNotMatch(applySection, /player\.getPlaybackRate\(\)/);
+  assert.match(applySection, /safePlayerSeconds\(\)/);
+
+  for (const helper of ['function safePlayerSeconds()', 'function safePlaybackRate()']) {
+    const start = source.indexOf(helper);
+    assert.ok(start >= 0, `${helper} is missing`);
+    assert.match(source.slice(start, start + 320), /try \{[\s\S]*\} catch \{/);
+  }
+});

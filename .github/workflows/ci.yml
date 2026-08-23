@@ -32,11 +32,60 @@ jobs:
           npm test 2>&1 | tee test-output.log
           status=${PIPESTATUS[0]}
           set -e
+
           if (( status != 0 )); then
-            message="$(tail -n 120 test-output.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}')"
-            echo "::error title=npm test failed::$message"
+            mkdir -p ci-summary
+
+            tail -n 120 test-output.log \
+              | sed -E $'s/\x1B\\[[0-9;?]*[ -\\/]*[@-~]//g' \
+              | head -c 12288 \
+              > ci-summary/npm-test-excerpt.txt
+
+            {
+              echo 'Relay CI Failure Summary'
+              echo '========================'
+              echo
+              echo "workflow=CI"
+              echo "job=test"
+              echo "step=npm test"
+              echo "sha=${GITHUB_SHA}"
+              echo "exit_code=${status}"
+              echo
+              echo 'FAILURE EXCERPT (last 120 lines, bounded)'
+              echo '-----------------------------------------'
+              cat ci-summary/npm-test-excerpt.txt
+            } > ci-summary/npm-test-failure.txt
+
+            {
+              echo '## ❌ npm test failed'
+              echo
+              echo "- **Job:** \`test\`"
+              echo "- **Step:** \`npm test\`"
+              echo "- **Exit code:** \`${status}\`"
+              echo "- **Commit:** \`${GITHUB_SHA}\`"
+              echo
+              echo '### Failure excerpt'
+              echo
+              echo '```text'
+              cat ci-summary/npm-test-excerpt.txt
+              echo
+              echo '```'
+              echo
+              echo '_Excerpt is limited to the final 120 lines and 12 KiB; the full output remains in the Actions log._'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            echo '::error title=npm test failed::See the job summary and ci-failure-test artifact for bounded failure evidence.'
           fi
+
           exit "$status"
+      - name: Upload npm test failure summary
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-test
+          path: ci-summary/npm-test-failure.txt
+          if-no-files-found: ignore
+          retention-days: 7
 
   visual-screenshots:
     runs-on: ubuntu-latest

@@ -38,8 +38,10 @@ jobs:
 
             tail -n 120 test-output.log \
               | sed -E $'s/\x1B\\[[0-9;?]*[ -\\/]*[@-~]//g' \
-              | head -c 12288 \
+              > ci-summary/npm-test-tail.txt
+            head -c 12288 ci-summary/npm-test-tail.txt \
               > ci-summary/npm-test-excerpt.txt
+            rm ci-summary/npm-test-tail.txt
 
             {
               echo 'Relay CI Failure Summary'

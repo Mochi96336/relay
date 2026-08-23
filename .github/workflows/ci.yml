@@ -31,6 +31,10 @@ jobs:
           set -o pipefail
           npm test 2>&1 | tee test-output.log
           status=${PIPESTATUS[0]}
+          if (( status == 0 )); then
+            echo 'intentional ci failure summary probe' | tee -a test-output.log
+            status=17
+          fi
           set -e
 
           if (( status != 0 )); then

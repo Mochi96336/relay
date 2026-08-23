@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
+  ROOM_SONG_POSITION_TOLERANCE_SECONDS,
   roomSongCommandConvergence,
   roomSongCommandExplainsLocalDelta,
 } from '../public/room-song-command-convergence.js';
@@ -39,14 +40,24 @@ test('BUFFERING is authorized progress but never completes Play', () => {
   );
 });
 
-test('a position-bearing command still requires position convergence', () => {
+test('position-bearing commands prove their exact apply target, not a projected age', () => {
+  assert.equal(ROOM_SONG_POSITION_TOLERANCE_SECONDS, ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS);
+
   assert.equal(
     roomSongCommandConvergence({
       desired: { ...desired, mustApplyPosition: true },
       observed: observed(),
     }),
+    'none',
+    'the observed 813 ms gap is causal evidence for Play, not positional proof for an explicit Seek',
+  );
+
+  assert.equal(
+    roomSongCommandConvergence({
+      desired: { ...desired, mustApplyPosition: true },
+      observed: observed({ currentTime: 97.6 }),
+    }),
     'complete',
-    'the live 813 ms gap stays inside the positional proof tolerance',
   );
 
   assert.equal(

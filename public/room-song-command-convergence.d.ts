@@ -20,6 +20,8 @@ export const ROOM_SONG_POSITION_TOLERANCE_SECONDS: number;
 export const ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS: number;
 /** Causal iframe correction envelope for state-only commands; never position authority. */
 export const ROOM_SONG_CAUSAL_CORRECTION_TOLERANCE_SECONDS: number;
+/** Reload-only equivalence slack for restoring a terminal position on a fresh iframe. */
+export const ROOM_SONG_TERMINAL_RELOAD_TOLERANCE_SECONDS: number;
 
 export function roomSongCommandConvergence(input: {
   desired: RoomSongDesiredLike | null | undefined;

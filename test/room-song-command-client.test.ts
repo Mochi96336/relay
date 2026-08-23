@@ -154,3 +154,22 @@ test('a completed room command keeps suppressing its own arrival until the playe
   const applySection = source.slice(applyStart, source.indexOf('async function restoreAuthoritativeRoom', applyStart));
   assert.match(applySection, /settledRoomCommand = null;/);
 });
+
+test('the apply path moves the player only when the command says to', async () => {
+  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
+  const applyStart = source.indexOf('async function applyRoomSongCommand');
+  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
+  const applySection = source.slice(applyStart, applyEnd);
+
+  // Not a distance: the position a command carries is the room's projection,
+  // which a player falls behind by buffering alone, so any threshold turns an
+  // ordinary play into a seek once the gap grows past it.
+  assert.match(applySection, /videoChanged \|\| desired\.mustApplyPosition/);
+  assert.doesNotMatch(applySection, /shouldSeekForRoomCommand/);
+
+  assert.match(
+    source,
+    /mustApplyPosition = desired\.mustApplyPosition !== false/,
+    'a payload without the flag must keep positioning, as older ones did',
+  );
+});

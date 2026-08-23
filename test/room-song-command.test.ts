@@ -319,6 +319,98 @@ describe('room song command authority and serialization', () => {
   });
 });
 
+describe('room song position provenance', () => {
+  function desiredOf(session: RoomSongCommandSession, decision: ReturnType<RoomSongCommandSession['begin']>) {
+    assert.equal(decision.ok, true);
+    if (!decision.ok) throw new Error('command was refused');
+    return decision.command.body.desired;
+  }
+
+  function begin(
+    session: RoomSongCommandSession,
+    request: ReturnType<typeof command>,
+    roomStatus: ReturnType<typeof room>,
+    revision: number,
+  ) {
+    return session.begin(request, A.participantId, A, null, roomStatus, revision, revision + 1, 0);
+  }
+
+  test('an ordinary play does not ask the player to move', () => {
+    const session = new RoomSongCommandSession();
+    const desired = desiredOf(session, begin(session, command('command-play-prov', 0, 'play'), room({ state: 2 }), 0));
+    assert.equal(desired.state, 1);
+    // The room's position is a projection the player falls behind by buffering
+    // alone. Applying it as a seek is what made an ordinary play snap back.
+    assert.equal(desired.mustApplyPosition, false);
+  });
+
+  test('an ordinary pause does not ask the player to move', () => {
+    const session = new RoomSongCommandSession();
+    const desired = desiredOf(session, begin(session, command('command-pause-prov', 0, 'pause'), room({ state: 1 }), 0));
+    assert.equal(desired.state, 2);
+    assert.equal(desired.mustApplyPosition, false);
+  });
+
+  test('a rate change does not ask the player to move', () => {
+    const session = new RoomSongCommandSession();
+    const request = command('command-rate-prov', 0, 'rate', { playbackRate: 1.25 });
+    const desired = desiredOf(session, begin(session, request, room({ state: 1 }), 0));
+    assert.equal(desired.playbackRate, 1.25);
+    assert.equal(desired.mustApplyPosition, false);
+  });
+
+  test('an explicit seek does', () => {
+    const session = new RoomSongCommandSession();
+    const request = command('command-seek-prov', 0, 'seek', { positionSeconds: 120 });
+    const desired = desiredOf(session, begin(session, request, room({ state: 1 }), 0));
+    assert.equal(desired.positionSeconds, 120);
+    assert.equal(desired.mustApplyPosition, true);
+  });
+
+  test('a load does', () => {
+    const session = new RoomSongCommandSession();
+    const request = command('command-load-prov', 0, 'load', { videoId: OTHER_VIDEO, positionSeconds: 30 });
+    const desired = desiredOf(session, begin(session, request, room({ state: 1 }), 0));
+    assert.equal(desired.positionSeconds, 30);
+    assert.equal(desired.mustApplyPosition, true);
+  });
+
+  test('play against a finished song replays from the start and says so', () => {
+    const session = new RoomSongCommandSession();
+    const ended = room({ state: 0, serverTime: 206.6, youtubeTime: 206.6 });
+    const desired = desiredOf(session, begin(session, command('command-replay-prov', 0, 'play'), ended, 0));
+    assert.equal(desired.state, 1);
+    assert.equal(desired.positionSeconds, 0);
+    // Replay names its own position; that is what replay means.
+    assert.equal(desired.mustApplyPosition, true);
+  });
+
+  test('a seek superseded before it reaches the player is inherited, not lost', () => {
+    const session = new RoomSongCommandSession();
+    const seek = begin(session, command('command-seek-prov-2', 0, 'seek', { positionSeconds: 120 }), room({ state: 1 }), 0);
+    assert.equal(seek.ok, true);
+
+    const play = session.begin(
+      { ...command('command-play-prov-2', 1, 'play'), supersedesCommandId: 'command-seek-prov-2' },
+      A.participantId,
+      A,
+      null,
+      room({ state: 1 }),
+      1,
+      2,
+      0,
+    );
+    const desired = desiredOf(session, play);
+    assert.equal(desired.state, 1);
+    assert.equal(
+      desired.mustApplyPosition,
+      true,
+      'the position the seek asked for has still never reached the player',
+    );
+    assert.ok(Math.abs(desired.positionSeconds - 120) < 0.01);
+  });
+});
+
 describe('room song telemetry command gate', () => {
   test('rejects direct identified semantic mutation without a room command', () => {
     const session = new RoomSongCommandSession();

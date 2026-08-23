@@ -1,6 +1,6 @@
 import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
-import { shouldSeekForRoomCommand, shouldSetPlaybackRate } from './room-song-seek-policy.js';
+import { shouldSetPlaybackRate } from './room-song-seek-policy.js';
 import { handoffPreparationPosition } from './playback-handoff-timing.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
 import { isNewPlayIntent, settledPlaybackState } from './song-playback-intent.js';
@@ -296,7 +296,11 @@ function normalizedDesiredState(value) {
     || !Number.isFinite(playbackRate)
     || playbackRate <= 0
   ) return null;
-  return { videoId, positionSeconds, state, playbackRate };
+  // A desired state always carries a position, because it describes the room.
+  // Only a command that exists to move the player says so, and an older page or
+  // a payload without the flag keeps the previous behaviour of positioning.
+  const mustApplyPosition = desired.mustApplyPosition !== false;
+  return { videoId, positionSeconds, state, playbackRate, mustApplyPosition };
 }
 
 function projectedDesiredPosition(mutation, now = performance.now()) {
@@ -1008,15 +1012,6 @@ async function ensurePlayer(videoId) {
  * A read that fails is not evidence about the player, so both policies treat
  * null as "act", which is exactly what the code did before they existed.
  */
-function safePlayerSeconds() {
-  try {
-    const value = Number(player.getCurrentTime());
-    return Number.isFinite(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
 function safePlaybackRate() {
   try {
     const value = Number(player.getPlaybackRate());
@@ -1096,15 +1091,11 @@ async function applyRoomSongCommand(message) {
           startSeconds: Math.max(0, desired.positionSeconds),
         });
       }
-      // Seeking is not free: the IFrame re-buffers visibly whether or not the
-      // target differs from where it already is, so an unconditional seek made
-      // every play press jump by a fixed amount.
-      if (shouldSeekForRoomCommand({
-        action,
-        videoChanged,
-        currentSeconds: safePlayerSeconds(),
-        desiredSeconds: desired.positionSeconds,
-      })) {
+      // Whether to move the player is the command's to say, not a distance to
+      // measure: the room's position is a projection the player falls behind by
+      // buffering alone, so comparing against it turns an ordinary play into a
+      // seek. A freshly cued video has no position to keep either way.
+      if (videoChanged || desired.mustApplyPosition) {
         player.seekTo(Math.max(0, desired.positionSeconds), true);
       }
       // Same reason as the seek above: re-asserting a rate the player already

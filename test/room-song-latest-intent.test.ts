@@ -95,6 +95,9 @@ describe('room song latest-intent convergence', () => {
       positionSeconds: 40,
       state: 1,
       playbackRate: 1,
+      // The seek this Play superseded never reached the player, so the position
+      // it asked for still has to be applied by whatever replaced it.
+      mustApplyPosition: true,
       // A seek moved off any ending, so Play here is a resume, not a replay.
       ended: false,
     });
@@ -148,6 +151,8 @@ describe('room song latest-intent convergence', () => {
       positionSeconds: 40.1,
       state: 2,
       playbackRate: 1.25,
+      // Folded from a seek that never reached the player.
+      mustApplyPosition: true,
       ended: false,
     });
   });

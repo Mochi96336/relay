@@ -16,6 +16,26 @@ export type RoomSongDesiredState = {
   state: DesiredPlaybackState;
   playbackRate: number;
   /**
+   * Whether this command asks the player to *move*, as distinct from where the
+   * room believes the player is.
+   *
+   * Every desired state carries a position, because it describes what the room
+   * should look like. Only some commands are a reason to reposition anything:
+   * a load, an explicit seek, and a replay of a finished song, whose position
+   * is part of what "replay" means. Play, pause and rate leave the position
+   * alone.
+   *
+   * Conflating the two made an ordinary play seek the player to the room's
+   * projected position, which is not where the player is - a player falls
+   * behind that projection by buffering and scheduling without anybody seeking.
+   * The room then moved it there, and the singer saw the video snap.
+   *
+   * Carried through supersession: a seek that is superseded before it reaches
+   * the player still has to be applied by whatever replaces it, or the position
+   * it asked for is simply lost.
+   */
+  mustApplyPosition: boolean;
+  /**
    * The room reached the end of the song rather than being parked there.
    *
    * `state` stays a state a player can actually be *put into*, so a finished
@@ -190,6 +210,8 @@ function desiredFromRoom(status: RoomSongStatus): RoomSongDesiredState | null {
     positionSeconds,
     state: desiredPlaybackState(status.state),
     playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
+    // Where the room believes the player is. Believing it is not asking for it.
+    mustApplyPosition: false,
     ended: Number(status.state) === ENDED,
   };
 }
@@ -215,6 +237,7 @@ function foldDesired(
       positionSeconds: body.positionSeconds,
       state: 5,
       playbackRate: base?.playbackRate ?? 1,
+      mustApplyPosition: true,
       ended: false,
     };
   }
@@ -224,14 +247,18 @@ function foldDesired(
     // resume kept the room's authoritative position at the ending, so the
     // command played the last fraction of a second, ended again, and the room
     // answered every further attempt by seeking back to the end.
+    // Replaying names its own position; resuming does not, and inherits any
+    // position a superseded command still owes the player.
     return base.ended
-      ? { ...base, state: 1, positionSeconds: 0, ended: false }
+      ? { ...base, state: 1, positionSeconds: 0, ended: false, mustApplyPosition: true }
       : { ...base, state: 1 };
   }
   if (body.action === 'pause') return { ...base, state: 2 };
   // Moving the position off the ending means the room is no longer finished,
   // whatever the player reports on the way there.
-  if (body.action === 'seek') return { ...base, positionSeconds: body.positionSeconds, ended: false };
+  if (body.action === 'seek') {
+    return { ...base, positionSeconds: body.positionSeconds, ended: false, mustApplyPosition: true };
+  }
   return { ...base, playbackRate: body.playbackRate };
 }
 

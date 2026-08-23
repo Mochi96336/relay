@@ -233,12 +233,6 @@ function foldDesired(
  */
 export class RoomSongCommandSession {
   private pending: PendingRoomSongCommand | null = null;
-  // State/rate-only commands deliberately ignore the room's descriptive media
-  // position. A single iframe state callback is therefore only candidate proof:
-  // keep the command authoritative until a second complete observation confirms
-  // that the player settled, so a trailing media-clock correction cannot become
-  // a fresh Seek after terminal completion.
-  private completeProofCommandId: string | null = null;
   private readonly recent = new Map<string, AcceptedRoomSongCommand>();
 
   begin(
@@ -363,7 +357,6 @@ export class RoomSongCommandSession {
     };
 
     this.pending = command;
-    this.completeProofCommandId = null;
     const accepted = this.publicCommand(command);
     this.recent.set(command.commandId, accepted);
     while (this.recent.size > MAX_RECENT_COMMANDS) {
@@ -399,27 +392,14 @@ export class RoomSongCommandSession {
           currentTime: Number(payload.currentTime),
           projectedPositionSeconds: projected.positionSeconds,
         })) {
-          this.completeProofCommandId = null;
           return { ok: false, reason: 'command-mismatch' };
         }
       }
 
       const convergence = this.pendingConvergence(payload, this.pending, nowMs);
       if (convergence === 'complete') {
-        // Position-bearing commands already have a strong full-state proof. For
-        // state/rate-only commands, require one additional complete observation
-        // so terminal completion cannot race a delayed iframe clock correction.
-        if (
-          this.pending.body.desired.mustApplyPosition
-          || this.completeProofCommandId === this.pending.commandId
-        ) {
-          return { ok: true, completesCommandId: this.pending.commandId };
-        }
-        this.completeProofCommandId = this.pending.commandId;
-        return { ok: true };
+        return { ok: true, completesCommandId: this.pending.commandId };
       }
-
-      this.completeProofCommandId = null;
       if (convergence === 'intermediate') {
         return { ok: true };
       }
@@ -464,7 +444,6 @@ export class RoomSongCommandSession {
   complete(commandId: string) {
     if (!this.pending || this.pending.commandId !== commandId) return false;
     this.pending = null;
-    this.completeProofCommandId = null;
     return true;
   }
 
@@ -475,7 +454,6 @@ export class RoomSongCommandSession {
       || !sameIdentity(this.pending.target, identity)
     ) return false;
     this.pending = null;
-    this.completeProofCommandId = null;
     return true;
   }
 
@@ -483,7 +461,6 @@ export class RoomSongCommandSession {
     if (!this.pending) return null;
     const cancelled = this.publicCommand(this.pending);
     this.pending = null;
-    this.completeProofCommandId = null;
     return cancelled;
   }
 
@@ -498,7 +475,6 @@ export class RoomSongCommandSession {
 
     const cancelled = this.publicCommand(this.pending);
     this.pending = null;
-    this.completeProofCommandId = null;
     return cancelled;
   }
 
@@ -530,7 +506,6 @@ export class RoomSongCommandSession {
   private expire(nowMs: number) {
     if (this.pending && nowMs - this.pending.issuedAtMs > COMMAND_TIMEOUT_MS) {
       this.pending = null;
-      this.completeProofCommandId = null;
     }
   }
 

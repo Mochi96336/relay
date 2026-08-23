@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# This helper stores raw child-process output in an artifact on failure.
+# Only use it for CI checks/tests that cannot emit credentials or other secrets.
 set -o pipefail
 
 if (( $# < 5 )); then
@@ -48,7 +50,8 @@ fi
 
 mkdir -p "$summary_dir"
 
-tail -n 120 "$log_file" \
+tr '\r' '\n' < "$log_file" \
+  | tail -n 120 \
   | sed -E $'s/\x1B\\[[0-9;?]*[ -\\/]*[@-~]//g' \
   > "${summary_dir}/${slug}-tail.txt"
 tail -c 12288 "${summary_dir}/${slug}-tail.txt" > "$excerpt_file"
@@ -65,8 +68,8 @@ rm -f "${summary_dir}/${slug}-tail.txt"
   echo "exit_code=${status}"
   echo "command=${command_text}"
   echo
-  echo 'FAILURE EXCERPT (last 120 lines, final 12 KiB)'
-  echo '------------------------------------------------'
+  echo 'FAILURE EXCERPT (last 120 normalized lines, final 12 KiB)'
+  echo '-----------------------------------------------------------'
   cat "$excerpt_file"
 } > "$failure_file"
 
@@ -86,7 +89,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     echo
     echo '```'
     echo
-    echo '_Excerpt is limited to the final 120 lines and final 12 KiB; the full output remains in the Actions log._'
+    echo '_Excerpt is limited to the final 120 normalized lines and final 12 KiB; the full output remains in the Actions log._'
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 

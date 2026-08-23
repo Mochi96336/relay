@@ -271,7 +271,6 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   async prefer(offer) {
-    const generation = ++this.preferenceGeneration;
     if (!offer || offer.preferred !== 'webtransport' || !offer.url) {
       this.closeWebTransport();
       return false;
@@ -280,8 +279,17 @@ export class PreferredAudioTransport extends AudioTransport {
       this.closeWebTransport();
       return false;
     }
-    if (this.datagramWriter && this.preferredUrl === offer.url) return true;
+    // A control WebSocket reconnect for the same capture re-advertises the
+    // same media ticket. Keeping that live session must also keep its write
+    // generation: bumping the generation before this early return would orphan
+    // in-flight writes from the very writer/transport we are retaining.
+    if (
+      this.datagramWriter
+      && this.webTransport
+      && this.preferredUrl === offer.url
+    ) return true;
 
+    const generation = ++this.preferenceGeneration;
     this.closeWebTransport(false);
     this.telemetry.webTransportAttempts += 1;
 

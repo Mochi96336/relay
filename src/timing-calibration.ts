@@ -25,6 +25,46 @@ export type TimingCalibrationResult = TimingCalibrationAnalysis & {
   diagnostics: TimingCalibrationDiagnostics;
 };
 
+export type TimingCalibrationFailureStage =
+  | 'sample-rate'
+  | 'duration'
+  | 'backing-level'
+  | 'mic-level'
+  | 'active-bands'
+  | 'global-score'
+  | 'distinct-peak'
+  | 'band-support'
+  | 'overlap'
+  | 'local-support'
+  | 'timing-spread'
+  | 'unexpected';
+
+export type TimingCalibrationFailureDiagnostics = {
+  failureStage: TimingCalibrationFailureStage;
+  micLevelDbfs: number | null;
+  backingLevelDbfs: number | null;
+  activeBands: number[];
+  supportingBands: number[];
+  bestLagMs: number | null;
+  bestScore: number | null;
+  runnerUpLagMs: number | null;
+  runnerUpScore: number | null;
+  peakMargin: number | null;
+  segmentLagsMs: number[];
+  segmentCorrelations: number[];
+};
+
+export type TimingCalibrationShadowAnalysis = {
+  reason: 'below-mic-level-floor' | 'below-backing-level-floor' | 'below-both-level-floors';
+  authoritative: false;
+  micLevelDbfs: number;
+  backingLevelDbfs: number;
+  wouldPass: boolean;
+  failureStage: TimingCalibrationFailureStage | null;
+  error: string | null;
+  result: TimingCalibrationResult | null;
+};
+
 type LagCandidate = {
   lagFrames: number;
   lagMs: number;
@@ -44,6 +84,16 @@ const SEGMENT_LENGTH_MS = 650;
 const SEGMENT_COUNT: number = 5;
 const SEGMENT_EDGE_MARGIN_MS = 120;
 
+// The authoritative backing is expected to be a strong direct capture, so its
+// absolute level remains a useful dead-route guard. Raw microphone RMS is not:
+// ordinary room noise can sit above the old -60 dBFS floor while usable phone-
+// speaker bleed can sit below it. Keep measuring micLevelDbfs for diagnostics,
+// but disable absolute microphone-level rejection and let the content matcher
+// decide whether timing evidence actually exists.
+export const TIMING_CALIBRATION_BACKING_LEVEL_FLOOR_DBFS = -50;
+/** Disabled: retained as an exported compatibility symbol for diagnostics/tests. */
+export const TIMING_CALIBRATION_MIC_LEVEL_FLOOR_DBFS = Number.NEGATIVE_INFINITY;
+
 // Test-calibrated safety gates. They are deliberately explicit because a
 // content calibration false positive is worse than asking for another window.
 const MIN_GLOBAL_SCORE = 0.18;
@@ -56,6 +106,17 @@ const DISTINCT_PEAK_RADIUS_MS = 100;
 
 const ENERGY_WEIGHT = 0.4;
 const FLUX_WEIGHT = 0.6;
+
+class TimingCalibrationFailure extends Error {
+  constructor(readonly stage: TimingCalibrationFailureStage, message: string) {
+    super(message);
+    this.name = 'TimingCalibrationFailure';
+  }
+}
+
+function fail(stage: TimingCalibrationFailureStage, message: string): never {
+  throw new TimingCalibrationFailure(stage, message);
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -326,17 +387,18 @@ function signedMs(value: number) {
   return `${rounded > 0 ? '+' : ''}${rounded} ms`;
 }
 
-export function analyzeTimingCalibration(
+function analyzeTimingCalibrationCore(
   micSamples: Int16Array,
   backingSamples: Int16Array,
   sampleRate: number,
-  maxLagMs: number = MAX_LAG_MS,
+  maxLagMs: number,
+  enforceLevelFloors: boolean,
 ): TimingCalibrationResult {
-  if (sampleRate <= 0) throw new Error('Invalid calibration sample rate.');
+  if (sampleRate <= 0) fail('sample-rate', 'Invalid calibration sample rate.');
 
   const requiredSamples = Math.round(sampleRate * 6);
   if (micSamples.length < requiredSamples || backingSamples.length < requiredSamples) {
-    throw new Error('Calibration needs six seconds from both microphone and backing.');
+    fail('duration', 'Calibration needs six seconds from both microphone and backing.');
   }
 
   const micPcm = micSamples.subarray(0, requiredSamples);
@@ -344,18 +406,19 @@ export function analyzeTimingCalibration(
   const micLevelDbfs = levelDbfs(micPcm);
   const backingLevelDbfs = levelDbfs(backingPcm);
 
-  if (backingLevelDbfs < -50) {
-    throw new Error('Desktop source is too quiet for timing calibration.');
+  if (enforceLevelFloors && backingLevelDbfs < TIMING_CALIBRATION_BACKING_LEVEL_FLOOR_DBFS) {
+    fail('backing-level', 'Desktop source is too quiet for timing calibration.');
   }
-  if (micLevelDbfs < -60) {
-    throw new Error('Phone speaker bleed is too quiet. Raise phone volume and try again.');
+  if (enforceLevelFloors && micLevelDbfs < TIMING_CALIBRATION_MIC_LEVEL_FLOOR_DBFS) {
+    fail('mic-level', 'Phone speaker bleed is too quiet. Raise phone volume and try again.');
   }
 
   const mic = extractMusicTimingFeatures(micPcm, sampleRate);
   const backing = extractMusicTimingFeatures(backingPcm, sampleRate);
   const activeBands = activeBackingBands(backing);
   if (activeBands.length < MIN_ACTIVE_BANDS) {
-    throw new Error(
+    fail(
+      'active-bands',
       'Calibration music has too little spectral activity. Keep playback running and try another section.',
     );
   }
@@ -363,17 +426,19 @@ export function analyzeTimingCalibration(
   const maxLagFrames = Math.max(1, Math.round(maxLagMs / backing.hopMs));
   const { best, runnerUp } = globalLagScan(backing, mic, activeBands, maxLagFrames);
   if (!best || best.score < MIN_GLOBAL_SCORE) {
-    throw new Error(
-      'Calibration signal is weak or does not match the backing track. ' +
-      'Use a louder section with clear drums or attacks and try again.',
+    fail(
+      'global-score',
+      'Calibration signal is weak or does not match the backing track. '
+      + 'Use a louder section with clear drums or attacks and try again.',
     );
   }
 
   const peakMargin = runnerUp === null ? null : best.score - runnerUp.score;
   if (peakMargin !== null && peakMargin < MIN_DISTINCT_PEAK_MARGIN) {
-    throw new Error(
-      'Calibration music is too repetitive to identify timing reliably. ' +
-      'Keep playback running and try another section.',
+    fail(
+      'distinct-peak',
+      'Calibration music is too repetitive to identify timing reliably. '
+      + 'Keep playback running and try another section.',
     );
   }
 
@@ -391,9 +456,10 @@ export function analyzeTimingCalibration(
     best.lagFrames,
   );
   if (globalDetail.supportingBands.length < MIN_SUPPORTING_BANDS) {
-    throw new Error(
-      'Calibration does not have enough independent frequency-band support. ' +
-      'Try another section with richer musical content.',
+    fail(
+      'band-support',
+      'Calibration does not have enough independent frequency-band support. '
+      + 'Try another section with richer musical content.',
     );
   }
 
@@ -411,7 +477,7 @@ export function analyzeTimingCalibration(
   );
 
   if (starts.length < 3) {
-    throw new Error('Not enough overlapping audio to validate this timing result.');
+    fail('overlap', 'Not enough overlapping audio to validate this timing result.');
   }
 
   const results = starts.map((start) => bestLocalLag(
@@ -432,9 +498,10 @@ export function analyzeTimingCalibration(
 
   if (support.length < 3) {
     const windows = segmentLagsMs.map(signedMs).join(' / ');
-    throw new Error(
-      `Could not confirm the coarse timing peak (global ${signedMs(best.lagMs)}; windows ${windows}). ` +
-      'Try another six-second section with clear attacks.',
+    fail(
+      'local-support',
+      `Could not confirm the coarse timing peak (global ${signedMs(best.lagMs)}; windows ${windows}). `
+      + 'Try another six-second section with clear attacks.',
     );
   }
 
@@ -442,9 +509,10 @@ export function analyzeTimingCalibration(
   const spreadMs = Math.max(...supportLagsMs) - Math.min(...supportLagsMs);
   if (spreadMs > 140) {
     const windows = segmentLagsMs.map(signedMs).join(' / ');
-    throw new Error(
-      `Timing moved during calibration (global ${signedMs(best.lagMs)}; windows ${windows}). ` +
-      'Keep playback continuous and try again.',
+    fail(
+      'timing-spread',
+      `Timing moved during calibration (global ${signedMs(best.lagMs)}; windows ${windows}). `
+      + 'Keep playback continuous and try again.',
     );
   }
 
@@ -489,4 +557,164 @@ export function analyzeTimingCalibration(
       localScores: segmentCorrelations,
     },
   };
+}
+
+/** Authoritative content analysis; mic RMS is diagnostic, backing keeps its direct-capture guard. */
+export function analyzeTimingCalibration(
+  micSamples: Int16Array,
+  backingSamples: Int16Array,
+  sampleRate: number,
+  maxLagMs: number = MAX_LAG_MS,
+): TimingCalibrationResult {
+  return analyzeTimingCalibrationCore(
+    micSamples,
+    backingSamples,
+    sampleRate,
+    maxLagMs,
+    true,
+  );
+}
+
+/**
+ * Extracts evidence from a rejected window without changing the authoritative
+ * decision. This deliberately reuses the same feature and lag primitives but
+ * never promotes a result; it exists so field logs retain levels and the best
+ * candidate even when a safety gate rejects the window.
+ */
+export function diagnoseTimingCalibrationFailure(
+  error: unknown,
+  micSamples: Int16Array,
+  backingSamples: Int16Array,
+  sampleRate: number,
+  maxLagMs: number = MAX_LAG_MS,
+): TimingCalibrationFailureDiagnostics {
+  const output: TimingCalibrationFailureDiagnostics = {
+    failureStage: error instanceof TimingCalibrationFailure ? error.stage : 'unexpected',
+    micLevelDbfs: null,
+    backingLevelDbfs: null,
+    activeBands: [],
+    supportingBands: [],
+    bestLagMs: null,
+    bestScore: null,
+    runnerUpLagMs: null,
+    runnerUpScore: null,
+    peakMargin: null,
+    segmentLagsMs: [],
+    segmentCorrelations: [],
+  };
+
+  if (!(sampleRate > 0)) return output;
+  const requiredSamples = Math.round(sampleRate * 6);
+  if (micSamples.length < requiredSamples || backingSamples.length < requiredSamples) return output;
+
+  const micPcm = micSamples.subarray(0, requiredSamples);
+  const backingPcm = backingSamples.subarray(0, requiredSamples);
+  output.micLevelDbfs = levelDbfs(micPcm);
+  output.backingLevelDbfs = levelDbfs(backingPcm);
+
+  try {
+    const mic = extractMusicTimingFeatures(micPcm, sampleRate);
+    const backing = extractMusicTimingFeatures(backingPcm, sampleRate);
+    const activeBands = activeBackingBands(backing);
+    output.activeBands = activeBands;
+    if (activeBands.length === 0) return output;
+
+    const maxLagFrames = Math.max(1, Math.round(maxLagMs / backing.hopMs));
+    const { best, runnerUp } = globalLagScan(backing, mic, activeBands, maxLagFrames);
+    if (!best) return output;
+    output.bestLagMs = best.lagMs;
+    output.bestScore = best.score;
+    output.runnerUpLagMs = runnerUp?.lagMs ?? null;
+    output.runnerUpScore = runnerUp?.score ?? null;
+    output.peakMargin = runnerUp === null ? null : best.score - runnerUp.score;
+
+    const globalStart = Math.max(0, -best.lagFrames);
+    const globalLength = Math.min(
+      backing.frameCount - globalStart,
+      mic.frameCount - (globalStart + best.lagFrames),
+    );
+    if (globalLength > 0) {
+      output.supportingBands = scoreLagDetailed(
+        backing, mic, activeBands, globalStart, globalLength, best.lagFrames,
+      ).supportingBands;
+    }
+
+    const localRadiusFrames = Math.round(LOCAL_SEARCH_RADIUS_MS / backing.hopMs);
+    const minLocalLag = Math.max(-maxLagFrames, best.lagFrames - localRadiusFrames);
+    const maxLocalLag = Math.min(maxLagFrames, best.lagFrames + localRadiusFrames);
+    const segmentLength = Math.round(SEGMENT_LENGTH_MS / backing.hopMs);
+    const starts = validationStarts(
+      backing.frameCount, segmentLength, minLocalLag, maxLocalLag, backing.hopMs,
+    );
+    const results = starts.map((start) => bestLocalLag(
+      backing, mic, activeBands, start, segmentLength, minLocalLag, maxLocalLag,
+    ));
+    output.segmentLagsMs = results.map((result) => result.lagFrames * backing.hopMs);
+    output.segmentCorrelations = results.map((result) => result.score);
+  } catch {
+    // Diagnostics must never replace the original authoritative failure. Return
+    // whatever evidence was safe to compute up to the secondary failure.
+  }
+
+  return output;
+}
+
+/**
+ * Re-runs a window rejected by an enabled absolute input-level floor while keeping
+ * every content/matching safety gate unchanged. The microphone floor is disabled,
+ * so this currently serves the direct backing guard. The result is diagnostic only:
+ * callers must not feed it into CalibrationSession or mixer authority.
+ */
+export function analyzeTimingCalibrationShadow(
+  micSamples: Int16Array,
+  backingSamples: Int16Array,
+  sampleRate: number,
+  maxLagMs: number = MAX_LAG_MS,
+): TimingCalibrationShadowAnalysis | null {
+  if (sampleRate <= 0) return null;
+  const requiredSamples = Math.round(sampleRate * 6);
+  if (micSamples.length < requiredSamples || backingSamples.length < requiredSamples) return null;
+
+  const micLevelDbfs = levelDbfs(micSamples.subarray(0, requiredSamples));
+  const backingLevelDbfs = levelDbfs(backingSamples.subarray(0, requiredSamples));
+  const micBelow = micLevelDbfs < TIMING_CALIBRATION_MIC_LEVEL_FLOOR_DBFS;
+  const backingBelow = backingLevelDbfs < TIMING_CALIBRATION_BACKING_LEVEL_FLOOR_DBFS;
+  if (!micBelow && !backingBelow) return null;
+
+  const reason = micBelow && backingBelow
+    ? 'below-both-level-floors' as const
+    : micBelow
+      ? 'below-mic-level-floor' as const
+      : 'below-backing-level-floor' as const;
+
+  try {
+    const result = analyzeTimingCalibrationCore(
+      micSamples,
+      backingSamples,
+      sampleRate,
+      maxLagMs,
+      false,
+    );
+    return {
+      reason,
+      authoritative: false,
+      micLevelDbfs,
+      backingLevelDbfs,
+      wouldPass: true,
+      failureStage: null,
+      error: null,
+      result,
+    };
+  } catch (error) {
+    return {
+      reason,
+      authoritative: false,
+      micLevelDbfs,
+      backingLevelDbfs,
+      wouldPass: false,
+      failureStage: error instanceof TimingCalibrationFailure ? error.stage : 'unexpected',
+      error: error instanceof Error ? error.message : String(error),
+      result: null,
+    };
+  }
 }

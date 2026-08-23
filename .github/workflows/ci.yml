@@ -19,12 +19,77 @@ jobs:
       - name: Expose deployment npm path for systemd verifier
         run: sudo ln -sf "$(command -v npm)" /usr/bin/npm
       - run: npm ci
-      - run: npm run check
+      - name: Run npm check
+        id: npm-check
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          npm run check 2>&1 | tee npm-check-output.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if (( status != 0 )); then
+            mkdir -p ci-summary
+
+            tail -n 120 npm-check-output.log \
+              | sed -E $'s/\x1B\\[[0-9;?]*[ -\\/]*[@-~]//g' \
+              > ci-summary/npm-check-tail.txt
+            tail -c 12288 ci-summary/npm-check-tail.txt \
+              > ci-summary/npm-check-excerpt.txt
+            rm ci-summary/npm-check-tail.txt
+
+            {
+              echo 'Relay CI Failure Summary'
+              echo '========================'
+              echo
+              echo "workflow=CI"
+              echo "job=test"
+              echo "step=npm run check"
+              echo "sha=${GITHUB_SHA}"
+              echo "exit_code=${status}"
+              echo
+              echo 'FAILURE EXCERPT (last 120 lines, final 12 KiB)'
+              echo '------------------------------------------------'
+              cat ci-summary/npm-check-excerpt.txt
+            } > ci-summary/npm-check-failure.txt
+
+            {
+              echo '## ❌ npm run check failed'
+              echo
+              echo "- **Job:** \`test\`"
+              echo "- **Step:** \`npm run check\`"
+              echo "- **Exit code:** \`${status}\`"
+              echo "- **Commit:** \`${GITHUB_SHA}\`"
+              echo
+              echo '### Failure excerpt'
+              echo
+              echo '```text'
+              cat ci-summary/npm-check-excerpt.txt
+              echo
+              echo '```'
+              echo
+              echo '_Excerpt is limited to the final 120 lines and final 12 KiB; the full output remains in the Actions log._'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            echo '::error title=npm run check failed::See the job summary and ci-failure-check artifact for bounded failure evidence.'
+          fi
+
+          exit "$status"
+      - name: Upload npm check failure summary
+        if: steps.npm-check.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-check
+          path: ci-summary/npm-check-failure.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Check browser JavaScript syntax
         run: find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Check launcher shell syntax
         run: bash -n scripts/*.sh
       - name: Run npm test
+        id: npm-test
         shell: bash
         run: |
           set +e
@@ -81,12 +146,12 @@ jobs:
 
           exit "$status"
       - name: Upload npm test failure summary
-        if: failure()
+        if: steps.npm-test.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: ci-failure-test
           path: ci-summary/npm-test-failure.txt
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
 
   visual-screenshots:

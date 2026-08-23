@@ -39,7 +39,7 @@ jobs:
             tail -n 120 test-output.log \
               | sed -E $'s/\x1B\\[[0-9;?]*[ -\\/]*[@-~]//g' \
               > ci-summary/npm-test-tail.txt
-            head -c 12288 ci-summary/npm-test-tail.txt \
+            tail -c 12288 ci-summary/npm-test-tail.txt \
               > ci-summary/npm-test-excerpt.txt
             rm ci-summary/npm-test-tail.txt
 
@@ -53,8 +53,8 @@ jobs:
               echo "sha=${GITHUB_SHA}"
               echo "exit_code=${status}"
               echo
-              echo 'FAILURE EXCERPT (last 120 lines, bounded)'
-              echo '-----------------------------------------'
+              echo 'FAILURE EXCERPT (last 120 lines, final 12 KiB)'
+              echo '------------------------------------------------'
               cat ci-summary/npm-test-excerpt.txt
             } > ci-summary/npm-test-failure.txt
 
@@ -73,7 +73,7 @@ jobs:
               echo
               echo '```'
               echo
-              echo '_Excerpt is limited to the final 120 lines and 12 KiB; the full output remains in the Actions log._'
+              echo '_Excerpt is limited to the final 120 lines and final 12 KiB; the full output remains in the Actions log._'
             } >> "$GITHUB_STEP_SUMMARY"
 
             echo '::error title=npm test failed::See the job summary and ci-failure-test artifact for bounded failure evidence.'

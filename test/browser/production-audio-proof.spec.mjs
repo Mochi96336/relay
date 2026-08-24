@@ -238,9 +238,9 @@ async function printReadinessDiagnostics(page, relay) {
   console.log(`[relay-production-audio-readiness] ${JSON.stringify({ browserState, readyz })}`);
 }
 
-async function readObservationStatus(relay) {
-  const response = await fetch(relay.httpUrl('/api/status/v1'), { cache: 'no-store' });
-  assert.equal(response.status, 200, `observation status request failed with ${response.status}`);
+async function readTransportStatus(relay) {
+  const response = await fetch(relay.httpUrl('/statusz'), { cache: 'no-store' });
+  assert.equal(response.status, 200, `statusz request failed with ${response.status}`);
   return response.json();
 }
 
@@ -248,7 +248,7 @@ async function waitForWebTransportProof(relay, timeoutMs = 8_000) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
   while (Date.now() < deadline) {
-    latest = await readObservationStatus(relay);
+    latest = await readTransportStatus(relay);
     const sender = latest?.audio?.captureAndSender?.transport;
     if (
       latest?.audio?.micMediaPath === 'webtransport'

@@ -167,17 +167,23 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
   assert.equal(window.relayTimingAuthority.valueMs, 42);
   assert.equal(timingValue.textContent, '+42 ms');
 
+  clock.advance(1_000);
+  socket.message({ type: 'source-status', active: true, appliedMicAdvanceMs: 43 });
+  assert.equal(window.relayTimingAuthority.authorityFresh, true);
+  assert.equal(timingValue.textContent, '+43 ms');
+
   clock.advance(1_499);
   assert.equal(socket.readyState, FakeWebSocket.OPEN, 'transport must remain OPEN for the stale-authority proof');
-  assert.equal(window.relayTimingAuthority.authorityFresh, true);
-  assert.equal(timingValue.textContent, '+42 ms');
+  assert.equal(window.relayTimingAuthority.authorityFresh, true,
+    'a fresh snapshot must reset the freshness deadline');
+  assert.equal(timingValue.textContent, '+43 ms');
 
   clock.advance(1);
   assert.equal(socket.readyState, FakeWebSocket.OPEN);
   assert.equal(window.relayTimingAuthority.authorityFresh, false);
   assert.equal(window.relayTimingAuthority.valueMs, null);
   assert.equal(timingValue.textContent, '—');
-  assert.ok(socket.sent.length >= 6, 'polling continues while responses are absent');
+  assert.ok(socket.sent.length >= 10, 'polling continues while responses are absent');
 
   socket.message({ type: 'source-status', active: true, appliedMicAdvanceMs: -37 });
   assert.equal(window.relayTimingAuthority.authorityFresh, true);

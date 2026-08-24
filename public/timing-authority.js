@@ -1,5 +1,7 @@
 const RECONNECT_MS = 1_000;
 const REFRESH_MS = 250;
+// Six missed polls tolerates short response jitter without treating an OPEN
+// transport as indefinitely authoritative.
 const FRESHNESS_TTL_MS = REFRESH_MS * 6;
 
 let socket = null;
@@ -62,7 +64,6 @@ function observeSourceStatus() {
   freshnessDeadlineTimer = setTimeout(() => {
     freshnessDeadlineTimer = null;
     if (lastObservedAt === null) return;
-    if (Date.now() - lastObservedAt < FRESHNESS_TTL_MS) return;
     expireTimingAuthority();
   }, FRESHNESS_TTL_MS);
 }

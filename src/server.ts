@@ -28,6 +28,15 @@ import { deriveRemoteStatusHealth } from './remote-status.js';
 import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
 import { RobotContentTimelineMapper } from './robot-content-timeline.js';
 import {
+  beginRobotContentTransitionWorker,
+  carryOrCreateRobotContentTransitionBounds,
+  noteRobotContentTransitionVerdict,
+  noteRobotContentTransitionWorkerFailure,
+  robotContentTransitionBoundsStatus,
+  sweepRobotContentTransitionBounds,
+  type RobotContentTransitionBounds,
+} from './robot-content-transition-bounds.js';
+import {
   compareRobotContentHypothesesInWorker,
   estimateRobotContentRawLagInWorker,
 } from './robot-content-transition-worker-client.js';
@@ -343,6 +352,23 @@ let robotBackingBoundaryRequestId = 0;
 let pendingRobotBackingBoundary: { requestId: number; backingGeneration: number } | null = null;
 const ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES = Math.round(MIX_SAMPLE_RATE * 3);
 const ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES = Math.round(MIX_SAMPLE_RATE * 0.65);
+const ROBOT_CONTENT_TRANSITION_LIFETIME_MS = envMs(
+  'RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS',
+  15_000,
+);
+const ROBOT_CONTENT_TRANSITION_MAX_WINDOWS = envPositiveInt(
+  'RELAY_ROBOT_CONTENT_TRANSITION_MAX_WINDOWS',
+  12,
+);
+const ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES = envPositiveInt(
+  'RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES',
+  3,
+);
+const ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG = {
+  lifetimeMs: ROBOT_CONTENT_TRANSITION_LIFETIME_MS,
+  maxWindows: ROBOT_CONTENT_TRANSITION_MAX_WINDOWS,
+  maxWorkerFailures: ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES,
+};
 type RobotContentTransitionChunk = { start: number; samples: Int16Array };
 type RobotContentTransitionState = {
   revision: number;
@@ -357,6 +383,8 @@ type RobotContentTransitionState = {
   commitFloorSample: number | null;
   nextWindowStart: number | null;
   analysisPending: boolean;
+  bounds: RobotContentTransitionBounds;
+  degradedHandled: boolean;
   discardWorkingEvidenceOnCommit: boolean;
   confirmedPreRanges: Array<{ start: number; end: number }>;
   chunks: RobotContentTransitionChunk[];
@@ -558,6 +586,52 @@ function clearRobotContentTransition() {
   robotContentTransition = null;
 }
 
+function robotContentTransitionStatus(nowMs = performance.now()) {
+  const state = robotContentTransition;
+  if (state === null) return { state: 'idle' as const, quarantined: false };
+  return {
+    ...robotContentTransitionBoundsStatus(state.bounds, nowMs),
+    quarantined: true,
+  };
+}
+
+function settleDegradedRobotContentTransition(
+  state: RobotContentTransitionState,
+  nowMs = performance.now(),
+) {
+  if (
+    robotContentTransition !== state
+    || state.bounds.phase !== 'degraded'
+    || state.degradedHandled
+  ) return false;
+
+  state.degradedHandled = true;
+  pendingRobotBackingBoundary = null;
+  robotContentTransitionAbortController?.abort();
+  robotContentTransitionAbortController = null;
+  state.analysisPending = false;
+  state.discardWorkingEvidenceOnCommit = true;
+  state.nextWindowStart = null;
+  state.confirmedPreRanges = [];
+  state.chunks = [];
+  console.warn(
+    '[robot-content-transition] degraded fail-closed:'
+    + ` reason=${state.bounds.degradedReason ?? 'unknown'}`
+    + ` windows=${state.bounds.windowsStarted}/${state.bounds.maxWindows}`
+    + ` workerFailures=${state.bounds.workerFailures}/${state.bounds.maxWorkerFailures}`
+    + ` ageMs=${Math.max(0, Math.round(nowMs - state.bounds.startedAtMs))}`,
+  );
+  broadcastJson(timingCalibrationStatusPayload());
+  return true;
+}
+
+function sweepRobotContentTransition(nowMs: number) {
+  const state = robotContentTransition;
+  if (state === null || state.bounds.phase === 'degraded') return false;
+  if (!sweepRobotContentTransitionBounds(state.bounds, nowMs)) return false;
+  return settleDegradedRobotContentTransition(state, nowMs);
+}
+
 function clearRobotBackingBoundaryRequest() {
   pendingRobotBackingBoundary = null;
   clearRobotContentTransition();
@@ -578,6 +652,7 @@ function beginRobotContentTransition(
   preDeltaMs: number,
   referenceDeltaMs: number,
   context: CalibrationContext,
+  nowMs = performance.now(),
 ) {
   const seekJumpMs = (toMediaTime - fromMediaTime) * 1_000;
   const preShiftSamples = Math.round(
@@ -586,6 +661,7 @@ function beginRobotContentTransition(
   const seekJumpSamples = Math.round((seekJumpMs * MIX_SAMPLE_RATE) / 1_000);
   const previous = robotContentTransition;
   const compatiblePrevious = previous !== null
+    && previous.bounds.phase === 'verifying'
     && robotTransitionContextMatches(previous.context, context)
     && previous.preShiftSamples === preShiftSamples
     && Math.round((previous.seekJumpMs * MIX_SAMPLE_RATE) / 1_000) === seekJumpSamples
@@ -614,6 +690,12 @@ function beginRobotContentTransition(
     commitFloorSample: null,
     nextWindowStart: carriedNextWindowStart,
     analysisPending: false,
+    bounds: carryOrCreateRobotContentTransitionBounds(
+      compatiblePrevious?.bounds ?? null,
+      nowMs,
+      ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG,
+    ),
+    degradedHandled: false,
     discardWorkingEvidenceOnCommit: carriedDiscardWorkingEvidence,
     confirmedPreRanges: carriedPreRanges,
     chunks: carriedChunks,
@@ -631,6 +713,10 @@ function beginRobotContentTransition(
 
   const evidence = calibration.transitionEvidence(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES);
   if (evidence === null || evidence.mic.length <= MIX_SAMPLE_RATE) return;
+  if (!beginRobotContentTransitionWorker(state.bounds, 'anchor', nowMs)) {
+    settleDegradedRobotContentTransition(state, nowMs);
+    return;
+  }
   const controller = new AbortController();
   robotContentTransitionAbortController = controller;
   state.analysisPending = true;
@@ -644,19 +730,30 @@ function beginRobotContentTransition(
     if (robotContentTransition !== state || state.revision !== robotContentTransitionRevision) return;
     state.analysisPending = false;
     robotContentTransitionAbortController = null;
+    const completedAt = performance.now();
+    if (sweepRobotContentTransitionBounds(state.bounds, completedAt)) {
+      settleDegradedRobotContentTransition(state, completedAt);
+      return;
+    }
     if (anchor === null) return;
     state.preRawLagMs = anchor.rawLagMs + preDeltaMs - referenceDeltaMs;
     state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
-    maybeAnalyzeRobotContentTransition();
+    maybeAnalyzeRobotContentTransition(completedAt);
   }, () => {
-    if (robotContentTransition !== state) return;
+    if (robotContentTransition !== state || state.bounds.phase === 'degraded') return;
     state.analysisPending = false;
     robotContentTransitionAbortController = null;
+    const failedAt = performance.now();
+    noteRobotContentTransitionWorkerFailure(state.bounds, 'anchor', failedAt);
+    if (state.bounds.phase === 'degraded') {
+      settleDegradedRobotContentTransition(state, failedAt);
+    }
   });
 }
 
 function reconcileRobotContentTransitionWithFreshDelta(
   context: CalibrationContext,
+  nowMs = performance.now(),
 ) {
   const state = robotContentTransition;
   const committedDeltaMs = robotContentTimeline.committedDeltaMs;
@@ -664,11 +761,12 @@ function reconcileRobotContentTransitionWithFreshDelta(
   const referenceDeltaMs = robotContentTimeline.referenceDeltaMs;
   if (
     state === null
+    || state.bounds.phase === 'degraded'
     || committedDeltaMs === null
     || freshDeltaMs === null
     || referenceDeltaMs === null
     || !robotTransitionContextMatches(state.context, context)
-  ) return true;
+  ) return state?.bounds.phase !== 'degraded';
 
   // Fresh absolute telemetry that still agrees with either pending content
   // hypothesis does not revoke it. Queued pre-seek PCM may still need to prove
@@ -691,6 +789,7 @@ function reconcileRobotContentTransitionWithFreshDelta(
     committedDeltaMs,
     referenceDeltaMs,
     context,
+    nowMs,
   );
   return robotContentTransition !== null;
 }
@@ -720,6 +819,7 @@ function commitRobotContentTransition(
   boundarySample: number,
   nowMs: number,
 ) {
+  if (state.bounds.phase !== 'verifying') return false;
   if (!robotContentTimeline.noteBackingBoundary(boundarySample, state.context, nowMs)) return false;
   if (state.discardWorkingEvidenceOnCommit) {
     // Unclassifiable media-transition PCM is not capture loss. Do not zero-fill
@@ -752,6 +852,7 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
   const state = robotContentTransition;
   if (
     state === null
+    || state.bounds.phase !== 'verifying'
     || state.analysisPending
     || state.preRawLagMs === null
     || state.postRawLagMs === null
@@ -773,6 +874,11 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
     || session.micTotalSamples < postMicStart + ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES
   ) return;
 
+  if (!beginRobotContentTransitionWorker(state.bounds, 'compare', nowMs)) {
+    settleDegradedRobotContentTransition(state, nowMs);
+    return;
+  }
+
   const backingWindow = session.readBacking(start, ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES);
   const preMicWindow = session.readMic(preMicStart, ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES);
   const postMicWindow = session.readMic(postMicStart, ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES);
@@ -793,6 +899,12 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
     ) return;
     state.analysisPending = false;
     robotContentTransitionAbortController = null;
+    const completedAt = performance.now();
+    if (sweepRobotContentTransitionBounds(state.bounds, completedAt)) {
+      settleDegradedRobotContentTransition(state, completedAt);
+      return;
+    }
+    noteRobotContentTransitionVerdict(state.bounds, comparison.verdict);
 
     const verdictDeltaMs = comparison.verdict === 'pre'
       ? state.preDeltaMs
@@ -809,7 +921,7 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
     if (
       verdictMatchesCurrentMapping
       && crossedCurrentTransportFrontier
-      && commitRobotContentTransition(state, start, performance.now())
+      && commitRobotContentTransition(state, start, completedAt)
     ) return;
 
     if (comparison.verdict === 'pre') {
@@ -823,16 +935,22 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
     // evidence window may discard some usable PCM, but it cannot turn a mixed
     // transition into false timing authority.
     state.nextWindowStart = end;
-    maybeAnalyzeRobotContentTransition();
+    maybeAnalyzeRobotContentTransition(completedAt);
   }, () => {
-    if (robotContentTransition !== state) return;
+    if (robotContentTransition !== state || state.bounds.phase === 'degraded') return;
     state.analysisPending = false;
     robotContentTransitionAbortController = null;
+    const failedAt = performance.now();
     // Worker failure grants no mapping. Skip this evidence window and keep the
-    // transition quarantined so a later independent window can still prove it.
+    // transition quarantined only while the explicit retry budget remains.
     state.discardWorkingEvidenceOnCommit = true;
+    noteRobotContentTransitionWorkerFailure(state.bounds, 'compare', failedAt);
+    if (state.bounds.phase === 'degraded') {
+      settleDegradedRobotContentTransition(state, failedAt);
+      return;
+    }
     state.nextWindowStart = end;
-    maybeAnalyzeRobotContentTransition();
+    maybeAnalyzeRobotContentTransition(failedAt);
   });
 }
 
@@ -845,6 +963,7 @@ function noteRobotTransitionBackingFrame(
   const state = robotContentTransition;
   if (
     state === null
+    || state.bounds.phase !== 'verifying'
     || state.transportFrontierCaptureSample === null
     || backingSampleRate === null
     || frame.firstSampleIndex === null
@@ -876,7 +995,7 @@ function noteRobotTransitionBackingFrame(
 function requestRobotBackingBoundary(nowMs = performance.now()) {
   const context = calibrationContext();
   if (!robotContentTimeline.needsBackingBoundary(context)) return false;
-  if (!reconcileRobotContentTransitionWithFreshDelta(context)) return false;
+  if (!reconcileRobotContentTransitionWithFreshDelta(context, nowMs)) return false;
   if (pendingRobotBackingBoundary !== null) return false;
   if (robotContentTransition?.transportFrontierCaptureSample !== null) return false;
   const target = backing;
@@ -1183,75 +1302,6 @@ function roomSongCommandStatusPayload(nowMs = performance.now()) {
 
 function roomSongCommandApplyPayload(command: AcceptedRoomSongCommand) {
   return {
-    type: 'room-song-command-apply',
-    commandId: command.commandId,
-    revision: command.revision,
-    supersedesCommandId: command.supersedesCommandId,
-    issuedByParticipantId: command.issuedByParticipantId,
-    targetPlaybackTransportId: command.target.transportId,
-    targetPlaybackGeneration: command.target.generation,
-    ...command.body,
-  };
-}
-
-function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: string) {
-  sendJson(socket, {
-    type: 'room-song-command-rejected',
-    commandId: typeof commandId === 'string' ? commandId : null,
-    reason,
-    revision: roomSongCommandRevision,
-    room: youtubeTimeline.roomStatusPayload(),
-  });
-}
-
-function broadcastRoomSongCommandFailure(
-  commandId: string,
-  reason: string,
-  nowMs = performance.now(),
-) {
-  broadcastJson({
-    type: 'room-song-command-failed-ack',
-    commandId,
-    revision: roomSongCommandRevision,
-    reason,
-    room: youtubeTimeline.roomStatusPayload(nowMs),
-  });
-}
-
-function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now()) {
-  const cancelled = roomSongCommands.cancelPending();
-  if (!cancelled) return false;
-  broadcastRoomSongCommandFailure(cancelled.commandId, reason, nowMs);
-  broadcastJson(roomSongCommandStatusPayload(nowMs));
-  return true;
-}
-
-function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
-  return takeSongSnapshotFromRoom(
-    youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
-  );
-}
-
-function takeFrameBoundary(nowMs = performance.now()) {
-  return takeFrameBoundaryAtOrAfter({
-    generation: session.generation,
-    sessionSampleIndex: session.sessionSampleAt(nowMs),
-    frameSamples: session.frameSamples,
-    sampleRate: session.sampleRate,
-    nowMs,
-  });
-}
-
-function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
-  sendJson(socket, {
-    type: 'take-command-rejected',
-    command,
-    reason,
-  });
-}
-
-function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
-  return {
     type,
     handoffId: plan.handoffId,
     revision: plan.revision,
@@ -1496,13 +1546,7 @@ function calibrationCanApply() {
     && calibrationKind !== 'boot-probe'
     && !probeCalibrationExhausted()
   ) return false;
-  // Boot calibration is a three-term equation. The two probe legs may be
-  // measured ahead of playback, but an unknown player delta is not zero. Keep
-  // the path result as evidence and stay on the network fallback until the
-  // active robot has published a fresh, settled delta.
   if (robotProbeTimingActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
-  // A Robot content result is expressed in the mapper's stable reference frame.
-  // It can own the live mixer only while the current media mapping is known.
   if (
     robotProbeTimingActive()
     && calibrationKind === 'content'
@@ -1511,20 +1555,6 @@ function calibrationCanApply() {
   return true;
 }
 
-/**
- * Synchronizes measurement validity into the mixer's active alignment.
- *
- * A boot result needs special treatment: once freshness/connection withdraws
- * its authority, a later delta must not resurrect the historical total before
- * `maybeReapplyBootCalibration()` has folded in the *current* delta. While a
- * boot alignment is already active, small (< threshold) delta movements are
- * intentionally left alone. While it is inactive, it may only be restored
- * directly when the stored boot result already describes exactly the current
- * reported delta; otherwise reapply owns the reactivation.
- *
- * Returns whether the mixer alignment changed so the periodic freshness check
- * can publish the transition immediately.
- */
 function syncAppliedCalibration() {
   if (takeBlocksCalibration()) return false;
   const active = session.alignment.calibratedMicLagMs;
@@ -1568,10 +1598,6 @@ function syncAppliedCalibration() {
     );
   }
 
-  // The Robot offset tracker is deliberately smoothed, but its residual noise is
-  // still not a reason to splice the Mic read head every 250 ms. The same bounded
-  // threshold used by boot re-application keeps content mapping corrections real
-  // while ignoring sub-threshold player jitter.
   if (
     robotContentAuthority
     && contentValidationSlewRevision === null
@@ -1597,9 +1623,6 @@ function syncAppliedCalibration() {
     return session.slewCalibratedMicLagTo(nextMicLagMs);
   }
 
-  // The periodic synchronizer runs while a live validation slew is still in
-  // progress. Seeing a different applied value is expected; do not snap it to
-  // the already-known target on the next 250 ms tick.
   if (nextMicLagMs !== null && session.calibratedMicLagTarget === nextMicLagMs) return false;
 
   contentValidationSlewRevision = null;
@@ -1680,22 +1703,6 @@ function frameAgeMs(atMs: number, nowMs: number) {
   return Number.isFinite(atMs) ? Math.round(nowMs - atMs) : null;
 }
 
-/**
- * The status another machine can poll.
- *
- * `/healthz` answers "is the Relay process up", which stays `true` through
- * every failure an unattended robot actually has: the browser died, the sink
- * vanished, the backing bridge stopped. This reports on the *route* instead.
- *
- * It reduces that to `ok` plus named faults so the poller does not have to
- * model Relay's internals. A fault is something that is definitely broken - a
- * connected client that stopped sending audio, or a robot route missing a
- * component - never merely "nobody is singing", which is what `idle` is for.
- * Warnings degrade quality without stopping audio, so they do not clear `ok`.
- *
- * Deliberately carries no nicknames or keys: it is unauthenticated on the LAN
- * like `/healthz`, so it reports counts and states only.
- */
 function remoteStatusPayload() {
   const nowMs = performance.now();
   const alignment = session.alignment;
@@ -1858,6 +1865,7 @@ function timingCalibrationStatusPayload() {
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    robotContentTransition: robotContentTransitionStatus(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
@@ -1888,19 +1896,9 @@ function currentTimelineStatus(nowMs = performance.now()) {
   return youtubeTimeline.statusPayload(nowMs) as TimelineStatus & Record<string, unknown>;
 }
 
-/**
- * One runtime readiness collector shared by diagnostics and product UI.
- *
- * Keep transport facts here rather than reconstructing them in /readyz, the
- * browser, or ProductViewModel independently. The pure readiness model decides
- * what those facts mean; this function only samples the live server once.
- */
 function readinessRouteMode(nowMs = performance.now()) {
   if (backingIsRobot || activeRobotSource?.readyState === WebSocket.OPEN) return 'robot' as const;
   if (backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null) return 'legacy' as const;
-  // Voice-only is valid only while the room truly has no Song. Once a Song
-  // exists, backing is an expected dependency even before a concrete route
-  // has announced itself.
   if (roomHasSong(nowMs)) return 'song' as const;
   return 'idle' as const;
 }
@@ -1943,10 +1941,6 @@ function productStatusPayload(nowMs = performance.now()) {
     : null;
   const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
   const roomState = Number(room.state);
-  // `connected` answers "is the clock authoritative right now", on a window
-  // tight enough for alignment. Telling a singer their playback is unavailable
-  // is a different question with a different answer, so the product view gets
-  // the raw age and draws its own, slower line.
   const timelineAgeMs = Number(
     (youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>).ageMs,
   );
@@ -2123,10 +2117,6 @@ function expireBackingGrace() {
 }
 
 function processPublisherFrame(frame: PcmFrame) {
-  // Physical media can outlive the control WebSocket during its reconnect
-  // grace. Authorization already happened at the WS publisher boundary or the
-  // short-lived WebTransport media ticket boundary, so the mixer must not make
-  // a control socket pointer into a second source of truth.
   if (!micAudioTransport || publisherSampleRate === null) return;
   if (!session.active) startLiveSource();
 
@@ -2145,8 +2135,6 @@ function processPublisherFrame(frame: PcmFrame) {
           calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
         } else {
           syncAppliedCalibration();
-          // Publish invalidated timing before the source summary
-          // so consumers never observe stale timing for a new capture.
           broadcastJson(timingCalibrationStatusPayload());
           broadcastJson(sourceStatusPayload());
         }
@@ -2229,8 +2217,6 @@ function maybeValidateContentCalibration(nowMs: number) {
     return;
   }
 
-  // Every state transition publishes through validator.onChange. Return values
-  // remain useful to domain tests but are no longer a second telemetry channel.
   contentCalibrationValidator.tick(nowMs);
   contentCalibrationValidator.maybeStart(nowMs);
 }
@@ -2572,9 +2558,6 @@ function dropLegacyCalibrationForRobot() {
 
 function restartBootCalibration(nowMs: number, automatic: boolean) {
   clearContentValidationBaseline();
-  // Manual/automatic Robot recalibration is a candidate transaction. Keep the
-  // previous confirmed alignment and the player delta it was measured with
-  // authoritative until a replacement probe earns promotion.
   calibration.beginExternalRecalibration();
   calibrationKind = 'boot-probe';
   calibrationWasAutomatic = automatic;
@@ -2631,6 +2614,7 @@ const youtubeTimelineTimer = setInterval(() => {
   maybeFinishProbeAnalysis(nowMs);
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
+  sweepRobotContentTransition(nowMs);
   maybeAutoCalibrate(nowMs);
   maybeValidateContentCalibration(nowMs);
 
@@ -2653,7 +2637,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
 function validSampleRate(value: unknown) {
   const sampleRate = Number(value);
-  return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000
+  return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000
     ? sampleRate
     : null;
 }
@@ -2734,7 +2718,7 @@ wss.on('connection', (rawSocket, request) => {
         noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
         const contentTimingStart = mappedContentBackingStart(start, nowMs);
         if (contentTimingStart !== null) {
-feedContentBackingEvidence(samples, contentTimingStart, nowMs);
+          feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         }
       }
       return;
@@ -2756,9 +2740,6 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
       const pending = pendingRobotBackingBoundary;
       const requestId = Number(payload.requestId);
       if (pending === null || requestId !== pending.requestId) return;
-
-      // A matching reply consumes the request even when malformed. The next
-      // fresh Robot offset may retry; an invalid reply can never grant mapping.
       pendingRobotBackingBoundary = null;
       const generation = validCaptureGeneration(payload.generation);
       const firstSampleIndex = Number(payload.firstSampleIndex);
@@ -2773,12 +2754,9 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
       const transition = robotContentTransition;
       if (
         transition === null
+        || transition.bounds.phase !== 'verifying'
         || !robotTransitionContextMatches(transition.context, calibrationContext())
       ) return;
-      // This ACK is only a capture-transport lower bound. It deliberately does
-      // not call noteBackingBoundary(): Browser/PipeWire may still deliver old
-      // music after this cursor. The next binary frames translate this capture
-      // cursor into the session timeline, then PCM evidence proves the segment.
       transition.transportFrontierCaptureSample = firstSampleIndex;
       return;
     }
@@ -2861,9 +2839,6 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         || !micStreaming(nowMs)
       ) return;
 
-      // Presence is display telemetry, not media authority. Any authenticated
-      // socket for the current Mic owner may report it, but the server binds the
-      // packet to the canonical media generation and rate-limits broadcast.
       if (
         Number.isFinite(socket.micPresenceTelemetryAt)
         && nowMs - socket.micPresenceTelemetryAt! < 60
@@ -3003,9 +2978,6 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         afterQualityEvent: () => cancelMicTransportGrace(),
         beforeTimingInvalidation: cleanReleasedMicTransport,
       });
-      // A successful explicit release always invalidates timing today. Keep this
-      // fallback so transport cleanup remains adapter-owned even if that domain
-      // effect is deliberately changed later.
       cleanReleasedMicTransport();
       broadcastSessionStatus();
       sendJson(socket, { type: 'mic-released' });
@@ -3303,10 +3275,6 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         rejectInfrastructure(socket, 'Authenticate the active Source before reporting a seek.');
         return;
       }
-      // `isRobotSource` is intentionally tri-state here: undefined means this
-      // socket was never a Robot source, while true/false means it has entered
-      // the Robot source lifecycle. Replacement clears the active flag to
-      // false, but must not restore seek authority to that old socket.
       if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
       const nowMs = performance.now();
       pendingRobotBackingBoundary = null;
@@ -3321,36 +3289,30 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         && socket.isRobotSource === true
         && backingIsRobot
         && robotContentTimeline.noteFollowerCorrection(
-fromMediaTime,
-toMediaTime,
-context,
-nowMs,
+          fromMediaTime,
+          toMediaTime,
+          context,
+          nowMs,
         );
 
       robotPlayerOffset.reset();
       if (mappedFollowerCorrection) {
         if (preDeltaMs !== null && referenceDeltaMs !== null) {
-beginRobotContentTransition(
-  fromMediaTime,
-  toMediaTime,
-  preDeltaMs,
-  referenceDeltaMs,
-  context,
-);
+          beginRobotContentTransition(
+            fromMediaTime,
+            toMediaTime,
+            preDeltaMs,
+            referenceDeltaMs,
+            context,
+            nowMs,
+          );
         }
-        // Same source/capture identity, different media mapping segment. Keep the
-        // transaction and primed evidence, but immediately rebase any already
-        // confirmed content authority onto the post-seek player delta (zero).
         syncAppliedCalibration();
         broadcastJson(sourceStatusPayload());
         broadcastJson(timingCalibrationStatusPayload());
         return;
       }
 
-      // A load/manual seek, legacy no-reason event, or a follower correction
-      // without concrete from/to media positions is destructive. Ambiguous old
-      // Source pages fail closed instead of smuggling a mapping break through as
-      // continuous calibration evidence.
       clearRobotContentTransition();
       sourceGeneration += 1;
       clearContentValidationBaseline();
@@ -3381,9 +3343,6 @@ beginRobotContentTransition(
 
     if (payload.type === 'register' && payload.role === 'publisher') {
       if (!canClaimSocketRole(socket, 'publisher')) return;
-      // A publisher is the microphone media authority. Browser clients must
-      // authenticate that authority before registration; anonymous publishers
-      // remain available only to the explicitly enabled legacy test harness.
       if (!socket.participantId && !legacyTestParticipantIdentityEnabled()) {
         sendJson(socket, {
           type: 'participant-auth-rejected',
@@ -3738,9 +3697,6 @@ beginRobotContentTransition(
         micGainDb = Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain));
         session.setMicGainDb(micGainDb);
       }
-      // `songLevel` remains accepted on the old wire shape for compatibility,
-      // but Song is now a server-owned 100% reference and cannot be mutated by
-      // any client authority.
       broadcastJson(mixSettingsPayload());
       return;
     }
@@ -3804,9 +3760,6 @@ beginRobotContentTransition(
         if (!reconnectingOwnerId) {
           clearMicMediaAuthority();
         } else {
-          // The control plane may reconnect while an independent HTTP/3 media
-          // session is still carrying the same capture. Keep the capture and
-          // sample rate authoritative until the existing grace expires.
           session.setMicExpected(directMediaStillLive);
           scheduleMicTransportGrace(reconnectingOwnerId);
         }

@@ -9,6 +9,7 @@ const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf
 const script = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
+const liveI18n = readFileSync(new URL('../public/live-i18n.js', import.meta.url), 'utf8');
 const takeHistory = readFileSync(new URL('../public/take-history.js', import.meta.url), 'utf8');
 const roomSound = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
 const roomSoundPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
@@ -67,9 +68,13 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
   assert.match(roomSound, /roomSoundControlPresentation/);
   assert.doesNotMatch(roomSound, /'房間聲音'|'只影響這支裝置'/,
     'the DOM adapter must not regain Room sound product-copy ownership');
-  assert.match(roomSoundPresentation, /'房間聲音'/);
-  assert.match(roomSoundPresentation, /'只影響這支裝置'/);
-  assert.match(roomSoundPresentation, /'Room sound'/);
+  assert.match(roomSoundPresentation, /labelKey:\s*'roomSound\.label'/);
+  assert.match(roomSoundPresentation, /scopeKey:\s*'roomSound\.scope'/);
+  assert.doesNotMatch(roomSoundPresentation, /'房間聲音'|'只影響這支裝置'|'Room sound'/,
+    'the semantic presenter owns keys, not locale branches');
+  assert.match(liveI18n, /'roomSound\.label': 'Room sound'/);
+  assert.match(liveI18n, /'roomSound\.label': '房間聲音'/);
+  assert.match(liveI18n, /'roomSound\.scope': '只影響這支裝置'/);
   assert.match(composition, /#listen-toggle\s*\{[\s\S]*?min-height:\s*44px;/);
   assert.match(composition, /\.local-sound-control \.adjust-row-heading strong\s*\{[\s\S]*?clip-path:\s*inset\(50%\);/);
 });

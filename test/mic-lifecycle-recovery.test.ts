@@ -145,5 +145,8 @@ test('localized Mic labels come only from the Mic action presenter', () => {
   assert.doesNotMatch(actionCss, /#start-publisher::after/);
   assert.doesNotMatch(styleCss, /#start-publisher::after|Take over mic|content:\s*"Take mic"/);
   assert.match(micActions, /publisherButton\.textContent = t\('mic\.takeover'\)/);
-  assert.match(micActions, /publisherButton\.textContent = t\('mic\.microphone'\)/);
+  assert.match(micActions, /publisherButton\.textContent = t\('mic\.take'\)/);
+  assert.match(micActions, /releaseButton\.textContent = t\('mic\.release'\)/);
+  assert.doesNotMatch(micActions, /mic\.microphone|mic\.takeoverConfirm/,
+    'retired generic Microphone and duplicate confirm wording must not return');
 });

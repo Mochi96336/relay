@@ -53,10 +53,21 @@
       <div class="room-mark">Relay</div>
       <div class="room-header-actions">
         <details class="people-menu">
-          <summary><strong>M&nbsp;&nbsp;J</strong></summary>
+          <summary><span class="participant-ambient" aria-hidden="true"><span class="participant-avatar mic-owner">M</span><span class="participant-avatar">J</span></span><span id="participant-count">2 人在線</span></summary>
+          <div class="people-popover">
+            <strong class="people-popover-title">房間裡</strong>
+            <div id="participant-list">
+              <div class="participant-row mic-owner"><span class="participant-row-avatar">M</span><span class="participant-row-copy"><strong>Mellow Rabbit 57</strong><span>正在唱</span></span></div>
+              <div class="participant-row"><span class="participant-row-avatar">J</span><span class="participant-row-copy"><strong>Jade Fox 18</strong><span>在線</span></span></div>
+            </div>
+          </div>
         </details>
         <details id="room-more" class="more-menu">
           <summary aria-label="選項"><span aria-hidden="true">•••</span></summary>
+          <div class="more-popover">
+            <button class="more-action" type="button">時間重新對齊</button>
+            <button class="more-action" type="button">系統</button>
+          </div>
         </details>
       </div>
     </header>
@@ -91,7 +102,7 @@
     </section>
 
     <section class="performance-stage">
-      <div class="section-label">人聲</div>
+      <div class="section-label">Mic</div>
       <div class="voice-copy">
         <strong id="live-state-title">Mellow Rabbit 57</strong>
         <span id="live-state-detail">正在唱</span>
@@ -107,22 +118,22 @@
       </div>
 
       <div class="mic-actions">
-        <button id="start-publisher" class="mic-primary" type="button">🎤 接手 Mic</button>
-        <button id="release-mic" class="text-action" type="button" hidden>放開 Mic</button>
+        <button id="start-publisher" class="mic-primary" type="button">接手 Mic</button>
+        <button id="release-mic" class="text-action" type="button" hidden>放 Mic</button>
       </div>
 
       <div id="mic-takeover" class="takeover-row" hidden>
-        <span id="mic-takeover-copy">要從 Mellow Rabbit 57 接手嗎？他的 Mic 會停止，歌曲會繼續。</span>
+        <span id="mic-takeover-copy">目前是 Mellow Rabbit 57 在使用 Mic。</span>
         <div class="inline-actions">
-          <button id="confirm-takeover" type="button">接手</button>
+          <button id="confirm-takeover" type="button">接手 Mic</button>
           <button id="cancel-takeover" class="text-action" type="button">取消</button>
         </div>
       </div>
 
       <section class="take-strip" data-take-state="idle">
         <div class="take-actions">
-          <button id="start-recording" class="record-action" type="button">開始錄音</button>
-          <button id="stop-recording" class="record-action recording" type="button" disabled>停止</button>
+          <button id="start-recording" class="record-action" type="button">錄音</button>
+          <button id="stop-recording" class="record-action recording" type="button" hidden disabled>停止錄音</button>
         </div>
         <p id="recording-status" class="microcopy"></p>
       </section>
@@ -135,17 +146,17 @@
     </section>
 
     <footer class="live-actions">
-      <section class="local-listen local-sound-control">
+      <section class="local-listen local-sound-control" aria-labelledby="local-listen-label" style="grid-template-columns:44px auto minmax(0,1fr) auto">
         <div class="adjust-group-heading">
-          <span class="section-label">房間聲音</span>
+          <span id="local-listen-label" class="section-label" style="display:block;grid-column:2;grid-row:1;white-space:nowrap">房間聲音</span>
           <span>只影響這支裝置</span>
           <button id="listen-toggle" class="text-action" type="button">靜音</button>
         </div>
         <label class="adjust-control">
           <div class="adjust-row-heading"><strong>音量</strong><output id="listen-gain-value">30%</output></div>
-          <input class="adjust-range" type="range" value="30" />
+          <input id="listen-gain" class="adjust-range" type="range" value="30" style="grid-column:3" />
         </label>
-        <p id="listen-adjust-state" class="adjust-helper"></p>
+        <p id="listen-adjust-state" class="adjust-helper" style="grid-column:4"></p>
       </section>
     </footer>
 
@@ -178,6 +189,8 @@
   const takeover = document.querySelector('#mic-takeover');
   const micControl = document.querySelector('#mic-live-control');
   const recentTake = document.querySelector('#last-take');
+  const people = document.querySelector('.people-menu');
+  const more = document.querySelector('#room-more');
   const system = document.querySelector('#system-panel');
 
   function singer() {
@@ -193,6 +206,7 @@
     detail.textContent = '';
     publisher.hidden = true;
     release.hidden = false;
+    release.textContent = '放 Mic';
     micControl.open = false;
     document.querySelector('#listen-toggle').textContent = '暫停中';
     document.querySelector('#listen-adjust-state').textContent = '唱歌時暫停';
@@ -207,9 +221,10 @@
     document.querySelector('.youtube-form').hidden = false;
     title.textContent = 'Mic 空著';
     detail.textContent = '';
+    publisher.textContent = '拿 Mic';
     document.querySelector('.voice-input-evidence').style.display = 'none';
     start.disabled = true;
-    recordingStatus.textContent = '開始唱歌或播放後可以錄音';
+    recordingStatus.textContent = '聲音準備中…';
   } else if (state === 'singer') {
     singer();
   } else if (state === 'takeover') {
@@ -218,10 +233,18 @@
   } else if (state === 'recording') {
     singer();
     take.dataset.takeState = 'recording';
-    start.disabled = true;
+    start.hidden = true;
+    stop.hidden = false;
     stop.disabled = false;
     recordingStatus.textContent = '● 0:18';
     recentTake.hidden = true;
+  } else if (state === 'reconnecting') {
+    start.disabled = true;
+    recordingStatus.textContent = '重新連線中…';
+  } else if (state === 'people') {
+    people.open = true;
+  } else if (state === 'more') {
+    more.open = true;
   } else if (state === 'system') {
     system.open = true;
   }

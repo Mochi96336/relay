@@ -22,7 +22,6 @@
 #cancel-takeover,
 #listen-toggle,
 #last-take-toggle,
-.recommendation-action,
 #calibrate-timing {
   border-radius: 0;
   background: transparent;
@@ -42,7 +41,6 @@
 #release-mic::before,
 #cancel-takeover::before,
 #last-take-toggle::before,
-.recommendation-action::before,
 #calibrate-timing::before {
   content: "";
   position: absolute;

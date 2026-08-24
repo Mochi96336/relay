@@ -4,17 +4,43 @@ const systemPanel = document.querySelector('#system-panel');
 const openSystem = document.querySelector('#open-system');
 const closeSystem = document.querySelector('#close-system');
 const calibrateTiming = document.querySelector('#calibrate-timing');
+const micSectionLabel = document.querySelector('.performance-stage > .section-label');
+const micInputDiagnostics = document.querySelector('.voice-input-evidence .evidence-heading');
 const micLiveControl = document.querySelector('#mic-live-control');
 const micLiveLabel = micLiveControl?.querySelector('summary span');
 
-// "Mic" is the product term in every locale: it is the same object the user
-// takes/releases, not a translated mixer channel named Voice/人聲. The template
-// still carries the historical i18n hook for compatibility; retire it here
-// before future locale changes can rewrite this row.
+if (micSectionLabel) {
+  micSectionLabel.removeAttribute('data-i18n');
+  micSectionLabel.textContent = 'Mic';
+}
 if (micLiveLabel) {
   micLiveLabel.removeAttribute('data-i18n');
   micLiveLabel.textContent = 'Mic';
 }
+
+// Raw capture dBFS stays available to capture/diagnostics code through its DOM
+// nodes, but it is not normal Live product copy.
+if (micInputDiagnostics) {
+  micInputDiagnostics.style.display = 'none';
+  micInputDiagnostics.setAttribute('aria-hidden', 'true');
+}
+
+// The old gain recommendation was permanently hidden in production. Retire its
+// render sentinel before app.js captures DOM references, so background input
+// updates no longer keep calculating a product recommendation that no user can
+// see. app.js still binds the compatibility action later in bootstrap; remove
+// the remaining detached presentation only after that binding is safe.
+document.querySelector('#mic-gain-advice')?.remove();
+
+function removeDeadGainRecommendationPresentation() {
+  for (const selector of [
+    '#mic-gain-recommendation-marker',
+    '.recommendation-meta',
+  ]) {
+    document.querySelector(selector)?.remove();
+  }
+}
+window.addEventListener('load', removeDeadGainRecommendationPresentation, { once: true });
 
 function closeHeaderMenus(except = null) {
   for (const menu of [peopleMenu, moreMenu]) {
@@ -81,10 +107,6 @@ systemPanel?.addEventListener('click', (event) => {
   if (event.target === systemPanel) closeSystemPanel(true);
 });
 
-// Core System/Take navigation must exist even if a semantic presenter fails.
-// Calibration is installed only after deferred module evaluation completes so
-// app.js has already captured its compatibility command node. calibration-ui
-// then replaces the painted nodes and becomes their sole visible presenter.
 function installCalibrationPresenter() {
   import('./calibration-ui.js').catch((error) => {
     console.error('Relay calibration presenter failed', error);
@@ -96,9 +118,6 @@ if (document.readyState === 'loading') {
   installCalibrationPresenter();
 }
 
-// Realignment is a direct recovery task in More, not a reason to navigate into
-// a generic Adjust surface. app.js owns the authenticated command transport;
-// calibration-ui forwards a real user click to this captured compatibility node.
 calibrateTiming?.addEventListener('click', () => {
   if (moreMenu) moreMenu.open = false;
 });
@@ -110,7 +129,20 @@ window.addEventListener('relay-microphone-local-state', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
+  if (peopleMenu?.open) {
+    event.preventDefault();
+    peopleMenu.open = false;
+    peopleMenu.querySelector(':scope > summary')?.focus({ preventScroll: true });
+    return;
+  }
+  if (moreMenu?.open) {
+    event.preventDefault();
+    moreMenu.open = false;
+    moreMenu.querySelector(':scope > summary')?.focus({ preventScroll: true });
+    return;
+  }
   if (systemPanel?.open) {
+    event.preventDefault();
     closeSystemPanel(true);
   }
 });
@@ -121,14 +153,11 @@ moreMenu?.querySelectorAll('[data-relay-locale]').forEach((button) => {
   });
 });
 
-// Only projections that can disappear without removing a product control stay
-// in this failure domain. Core Mic, Room sound, Recording, and calibration
-// semantics have dedicated presenters because they own product actions.
 for (const modulePath of [
   './mic-presence.js',
   './people-ui.js',
 ]) {
   import(modulePath).catch((error) => {
-    console.error(`Relay optional presenter failed: ${modulePath}`, error);
+    console.error(`Relay presenter failed: ${modulePath}`, error);
   });
 }

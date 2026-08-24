@@ -96,8 +96,8 @@ test('playback forced mute composes with Mic, review, and user mute without owni
 
   for (const state of ['mic-muted', 'playback-muted', 'review-muted', 'muted']) {
     const presentation = roomSoundPresentation({ state });
-    assert.notEqual(presentation.toggle, '', `${state} must have a visible Room sound action`);
-    assert.notEqual(presentation.note, '', `${state} must have a visible Room sound explanation`);
+    assert.notEqual(presentation.toggleKey, '', `${state} must have a visible Room sound action`);
+    assert.notEqual(presentation.noteKey, '', `${state} must have a visible Room sound explanation`);
   }
 });
 

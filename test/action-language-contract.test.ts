@@ -28,10 +28,11 @@ test('context and mode actions stay typographic instead of gaining hover capsule
     '#release-mic',
     '#cancel-takeover',
     '#listen-toggle',
-    '.recommendation-action',
     '#calibrate-timing',
   ]) assert.equal(actionCss.includes(selector), true);
 
+  assert.equal(actionCss.includes('.recommendation-action'), false,
+    'dead Mic gain recommendation actions must not retain normal Live styling');
   const textStart = actionCss.indexOf('.text-action {');
   const commitStart = actionCss.indexOf('/* Primary commitment');
   assert.ok(textStart >= 0 && commitStart > textStart);

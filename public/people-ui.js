@@ -1,16 +1,11 @@
+import './live-i18n.js';
+
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const menu = document.querySelector('.people-menu');
 const summary = menu?.querySelector(':scope > summary');
 const participantCount = document.querySelector('#participant-count');
 const participantList = document.querySelector('#participant-list');
 const identityEditor = menu?.querySelector('.identity-editor');
-
-function chinese() {
-  return window.relayI18n?.getLocale?.() === 'zh-Hant';
-}
-
-function localCopy(english, traditionalChinese) {
-  return chinese() ? traditionalChinese : english;
-}
 
 function initialFor(nickname) {
   const value = typeof nickname === 'string' ? nickname.trim() : '';
@@ -26,24 +21,21 @@ if (menu && summary && participantCount && participantList && identityEditor) {
   const heading = document.createElement('strong');
   heading.className = 'people-popover-title';
   participantList.before(heading);
-
-  // People is first a room-awareness surface. Keep rename available here, but
-  // below the room list so entering the popover answers "who is here?" before
-  // exposing identity maintenance.
   participantList.after(identityEditor);
 
-  let latestSession = null;
+  let latestPresence = window.relayPresenceState ?? null;
+  let latestSession = latestPresence?.session ?? null;
+  let authorityFresh = latestPresence?.authorityFresh === true;
+  let hasAuthoritativeSnapshot = Boolean(latestSession);
 
   function statusCopy(participant) {
-    if (!participant.connected) return localCopy('Reconnecting', '重新連線中');
+    if (!participant.connected) return t('people.status.reconnecting');
     if (participant.id === latestSession?.micOwnerId) {
       return latestSession?.micConnected === false
-        ? localCopy('Mic reconnecting', 'Mic 重新連線中')
-        : localCopy('Singing', '正在唱');
+        ? t('people.status.micReconnecting')
+        : t('people.status.singing');
     }
-    // Presence proves only that this participant is connected. Do not label
-    // them "listening" because Listen can be muted or never unlocked locally.
-    return localCopy('Online', '在線');
+    return t('people.status.online');
   }
 
   function orderedParticipants() {
@@ -66,9 +58,15 @@ if (menu && summary && participantCount && participantList && identityEditor) {
   }
 
   function renderAmbient() {
-    const connected = orderedParticipants().filter((participant) => participant.connected);
     ambient.replaceChildren();
+    if (!authorityFresh) {
+      const dot = document.createElement('span');
+      dot.className = 'participant-avatar placeholder';
+      ambient.append(dot);
+      return;
+    }
 
+    const connected = orderedParticipants().filter((participant) => participant.connected);
     if (connected.length === 0) {
       const dot = document.createElement('span');
       dot.className = 'participant-avatar placeholder';
@@ -95,6 +93,8 @@ if (menu && summary && participantCount && participantList && identityEditor) {
 
   function renderList() {
     participantList.replaceChildren();
+    if (!authorityFresh) return;
+
     for (const participant of orderedParticipants()) {
       const row = document.createElement('div');
       row.className = 'participant-row';
@@ -110,34 +110,38 @@ if (menu && summary && participantCount && participantList && identityEditor) {
       copy.className = 'participant-row-copy';
       const name = document.createElement('strong');
       name.textContent = participant.nickname;
-      const status = document.createElement('span');
-      status.textContent = statusCopy(participant);
-      copy.append(name, status);
+      const state = document.createElement('span');
+      state.textContent = statusCopy(participant);
+      copy.append(name, state);
       row.append(avatar, copy);
       participantList.append(row);
     }
   }
 
   function render() {
-    heading.textContent = localCopy('In the room', '房間裡');
+    heading.textContent = t('people.inRoom');
+    if (!authorityFresh) {
+      participantCount.textContent = hasAuthoritativeSnapshot
+        ? t('people.reconnecting')
+        : t('people.connecting');
+    } else {
+      const connected = orderedParticipants().filter((participant) => participant.connected).length;
+      participantCount.textContent = t('people.online', { count: connected });
+    }
     renderAmbient();
     renderList();
   }
 
-  window.addEventListener('relay-session-status', (event) => {
-    latestSession = event.detail ?? null;
+  window.addEventListener('relay-presence-state', (event) => {
+    latestPresence = event.detail ?? null;
+    latestSession = latestPresence?.session ?? null;
+    authorityFresh = latestPresence?.authorityFresh === true;
+    if (authorityFresh && latestSession) hasAuthoritativeSnapshot = true;
     render();
   });
 
-  // presence.js also localizes its legacy count/list on this event. Defer our
-  // presentation projection until all synchronous locale listeners have run so
-  // it remains the final visible People surface without taking over presence.
-  window.addEventListener('relay-locale-changed', () => queueMicrotask(render));
+  window.addEventListener('relay-locale-changed', render);
 
-  // live-ia deliberately loads optional presenters outside its own failure
-  // domain. If Presence already published before this module finished loading,
-  // ask it to replay the latest authoritative room snapshot; if Presence has
-  // not started yet, its normal first snapshot will arrive afterward.
-  window.dispatchEvent(new Event('relay-request-session-status'));
   render();
+  window.dispatchEvent(new Event('relay-request-presence-state'));
 }

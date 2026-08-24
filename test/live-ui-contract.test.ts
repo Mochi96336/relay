@@ -25,7 +25,7 @@ test('Live keeps real YouTube media before the performance task', () => {
   assert.ok(position('class="performance-stage"') < position('class="live-actions"'));
 });
 
-test('performance task contains current Mic evidence, ownership, Mic gain and recording', () => {
+test('performance task keeps local capture diagnostic while visible Mic evidence follows room authority', () => {
   const stage = position('class="performance-stage"');
   const meter = position('id="mic-input-meter"');
   const mic = position('id="start-publisher"');
@@ -39,18 +39,26 @@ test('performance task contains current Mic evidence, ownership, Mic gain and re
   assert.doesNotMatch(app, /latestMixHealth\?\.micPeakDbfs/);
   assert.equal(liveIa.includes("'./mic-presence.js'"), true);
   assert.match(liveIa, /import\(modulePath\)\.catch/);
-  assert.match(micPresence, /relay-local-mic-level/);
+  assert.doesNotMatch(micPresence, /relay-local-mic-level/,
+    'local capture telemetry must not directly paint the normal Room Mic waveform');
   assert.match(micPresence, /relay-room-mic-presence/);
+  assert.match(micPresence, /relay-product-authority/);
+  assert.match(micPresence, /ownerId !== authoritativeRoomOwnerId/);
   assert.match(micPresence, /event\.detail\?\.spectrumBands/);
 });
 
-test('input ribbon follows the actual Room Mic without fabricated animation', () => {
+test('input ribbon follows the authoritative Room Mic without fabricated animation', () => {
   assert.match(liveStatus, /document\.body\.dataset\.selfMic/);
   assert.match(liveStatus, /document\.body\.dataset\.roomMic/);
   assert.match(liveState, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(liveState, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
   assert.match(liveState, /body\[data-room-mic="live"\] \.voice-presence-wave/);
-  assert.match(micPresence, /if \(localActive\) return;/);
+  assert.doesNotMatch(micPresence, /localActive/,
+    'self capture must not outrank the authoritative room projection');
+  assert.match(micPresence, /roomAuthorityFresh/);
+  assert.match(micPresence, /authoritativeRoomLive/);
+  assert.match(micPresence, /`room:\$\{ownerId\}:\$\{generation\}`/);
+  assert.match(micPresence, /ROOM_EVIDENCE_STALE_MS = 320/);
   assert.match(liveComposition, /\.voice-presence-svg/);
   assert.match(liveComposition, /\.voice-presence-baseline/);
   assert.match(liveComposition, /\.voice-presence-wave/);

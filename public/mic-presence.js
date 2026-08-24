@@ -18,6 +18,7 @@ if (meter) {
   const CENTER_Y = VIEWBOX_HEIGHT / 2;
   const MAX_AMPLITUDE = 18;
   const PITCH_MODULATION_DEPTH = 0.18;
+  const ROOM_EVIDENCE_STALE_MS = 320;
 
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.classList.add('voice-presence-svg');
@@ -40,13 +41,10 @@ if (meter) {
 
   let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
   let sourceKey = null;
-  let localActive = false;
-  let lastLocalSampleAt = Number.NEGATIVE_INFINITY;
-  let localStaleTimer = null;
-  let remoteStaleTimer = null;
-  const LOCAL_SAMPLE_INTERVAL_MS = 40;
-  const LOCAL_EVIDENCE_STALE_MS = 160;
-  const REMOTE_EVIDENCE_STALE_MS = 320;
+  let roomStaleTimer = null;
+  let roomAuthorityFresh = false;
+  let authoritativeRoomOwnerId = null;
+  let authoritativeRoomLive = false;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -109,51 +107,33 @@ if (meter) {
     wave.style.opacity = active ? '0.9' : '0';
   }
 
-  function clearLocalStaleTimer() {
-    if (localStaleTimer === null) return;
-    clearTimeout(localStaleTimer);
-    localStaleTimer = null;
-  }
-
-  function clearRemoteStaleTimer() {
-    if (remoteStaleTimer === null) return;
-    clearTimeout(remoteStaleTimer);
-    remoteStaleTimer = null;
+  function clearRoomStaleTimer() {
+    if (roomStaleTimer === null) return;
+    clearTimeout(roomStaleTimer);
+    roomStaleTimer = null;
   }
 
   function reset(nextSourceKey = null) {
-    clearLocalStaleTimer();
-    clearRemoteStaleTimer();
+    clearRoomStaleTimer();
     history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
     sourceKey = nextSourceKey;
-    lastLocalSampleAt = Number.NEGATIVE_INFINITY;
     render(false);
   }
 
-  function armLocalStaleTimer() {
-    clearLocalStaleTimer();
-    localStaleTimer = setTimeout(() => {
-      localStaleTimer = null;
-      if (!localActive) return;
-      localActive = false;
-      if (typeof sourceKey === 'string' && sourceKey.startsWith('local:')) reset();
-    }, LOCAL_EVIDENCE_STALE_MS);
-  }
-
-  function armRemoteStaleTimer(expectedSourceKey) {
-    clearRemoteStaleTimer();
-    remoteStaleTimer = setTimeout(() => {
-      remoteStaleTimer = null;
-      if (localActive || sourceKey !== expectedSourceKey) return;
+  function armRoomStaleTimer(expectedSourceKey) {
+    clearRoomStaleTimer();
+    roomStaleTimer = setTimeout(() => {
+      roomStaleTimer = null;
+      if (sourceKey !== expectedSourceKey) return;
       reset();
-    }, REMOTE_EVIDENCE_STALE_MS);
+    }, ROOM_EVIDENCE_STALE_MS);
   }
 
   function append(source, rmsDbfs, spectrumBands, f0Hz, pitchConfidence) {
     if (source !== sourceKey) reset(source);
     history = nextPresenceHistory(history, rmsDbfs, spectrumBands, f0Hz, pitchConfidence);
     render(true);
-    if (source.startsWith('room:')) armRemoteStaleTimer(source);
+    armRoomStaleTimer(source);
   }
 
   function validGeneration(value) {
@@ -178,38 +158,35 @@ if (meter) {
     return { f0Hz, pitchConfidence: confidence };
   }
 
-  window.addEventListener('relay-local-mic-level', (event) => {
-    if (event.detail?.active !== true) {
-      localActive = false;
-      clearLocalStaleTimer();
-      if (typeof sourceKey === 'string' && sourceKey.startsWith('local:')) reset();
-      return;
+  function syncAuthoritativeRoomSurface() {
+    if (document.body?.dataset) {
+      document.body.dataset.roomMic = roomAuthorityFresh && authoritativeRoomLive ? 'live' : 'off';
     }
+  }
 
-    const rmsDbfs = Number(event.detail?.rmsDbfs);
-    const generation = validGeneration(event.detail?.captureGeneration);
-    const pitch = validPitch(event.detail?.f0Hz, event.detail?.pitchConfidence);
-    if (!Number.isFinite(rmsDbfs) || generation === null || !pitch) return;
+  function adoptRoomAuthority(authority) {
+    const fresh = authority?.authorityFresh === true;
+    const status = authority?.lastKnownSnapshot ?? null;
+    const mic = status?.room?.mic ?? {};
+    const ownerId = fresh && typeof mic.ownerId === 'string' ? mic.ownerId : null;
+    const live = fresh && mic.state === 'live' && ownerId !== null;
+    const changed = ownerId !== authoritativeRoomOwnerId || live !== authoritativeRoomLive;
 
-    localActive = true;
-    armLocalStaleTimer();
-    const now = performance.now();
-    if (now - lastLocalSampleAt < LOCAL_SAMPLE_INTERVAL_MS) return;
-    lastLocalSampleAt = now;
-    append(
-      `local:${generation}`,
-      rmsDbfs,
-      event.detail?.spectrumBands,
-      pitch.f0Hz,
-      pitch.pitchConfidence,
-    );
+    roomAuthorityFresh = fresh;
+    authoritativeRoomOwnerId = ownerId;
+    authoritativeRoomLive = live;
+    syncAuthoritativeRoomSurface();
+    if (!live || changed) reset();
+  }
+
+  window.addEventListener('relay-product-authority', (event) => {
+    adoptRoomAuthority(event.detail);
   });
 
   window.addEventListener('relay-room-mic-presence', (event) => {
-    if (localActive) return;
-
     if (event.detail?.active !== true) {
-      if (typeof sourceKey === 'string' && sourceKey.startsWith('room:')) reset();
+      syncAuthoritativeRoomSurface();
+      reset();
       return;
     }
 
@@ -221,14 +198,20 @@ if (meter) {
       : [];
     const pitch = validPitch(event.detail?.f0Hz, event.detail?.pitchConfidence);
     if (
-      !ownerId
+      !roomAuthorityFresh
+      || !authoritativeRoomLive
+      || ownerId !== authoritativeRoomOwnerId
       || generation === null
       || !Number.isFinite(rmsDbfs)
       || spectrumBands.length !== MIC_PRESENCE_BAND_COUNT
       || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
       || !pitch
-    ) return;
+    ) {
+      syncAuthoritativeRoomSurface();
+      return;
+    }
 
+    syncAuthoritativeRoomSurface();
     append(
       `room:${ownerId}:${generation}`,
       rmsDbfs,
@@ -238,5 +221,6 @@ if (meter) {
     );
   });
 
+  adoptRoomAuthority(window.relayProductAuthority ?? null);
   reset();
 }

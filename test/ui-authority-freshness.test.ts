@@ -7,9 +7,14 @@ import { authorityState } from '../public/authority-freshness.js';
 
 const micActionsSource = readFileSync(new URL('../public/mic-actions.js', import.meta.url), 'utf8');
 const recordingUiSource = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
+const liveI18nSource = readFileSync(new URL('../public/live-i18n.js', import.meta.url), 'utf8');
 const liveStatusSource = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
 const publisherSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const presenceSource = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
+
+function presenterBody(source: string) {
+  return source.replace(/^import '\.\/live-i18n\.js';\s*/, '');
+}
 
 class FakeElement {
   hidden = false;
@@ -74,12 +79,13 @@ test('production Mic action presenter disables stale actions and does not expose
   const document = { querySelector: (selector: string) => nodes.get(selector) ?? null };
   const window = {
     ...events,
-    relayI18n: { t: (key: string) => key },
+    relayI18n: { getLocale: () => 'en', t: (key: string) => key, has: () => false },
     relayMicActionState: null,
   };
   class Event { constructor(public type: string) {} }
-
-  runInNewContext(micActionsSource, { window, document, Event });
+  const context = { window, document, Event };
+  runInNewContext(liveI18nSource, context);
+  runInNewContext(presenterBody(micActionsSource), context);
 
   events.emit('relay-mic-action-state', {
     authorityFresh: false,
@@ -96,7 +102,7 @@ test('production Mic action presenter disables stale actions and does not expose
   assert.equal(nodes.get('#start-publisher')?.disabled, true);
   assert.equal(nodes.get('#confirm-takeover')?.disabled, true);
   assert.equal(nodes.get('#cancel-takeover')?.disabled, true);
-  assert.equal(nodes.get('#mic-takeover-copy')?.textContent, 'people.reconnecting');
+  assert.equal(nodes.get('#mic-takeover-copy')?.textContent, 'Reconnecting');
 
   events.emit('relay-mic-action-state', {
     authorityFresh: true,
@@ -112,6 +118,7 @@ test('production Mic action presenter disables stale actions and does not expose
   });
   assert.equal(nodes.get('#confirm-takeover')?.disabled, false);
   assert.equal(nodes.get('#cancel-takeover')?.disabled, false);
+  assert.equal(nodes.get('#confirm-takeover')?.textContent, 'Take over Mic');
 
   events.emit('relay-mic-action-state', {
     authorityFresh: true,
@@ -154,8 +161,7 @@ test('production recording presenter freezes last-known timer while Take authori
     relayI18n: { getLocale: () => 'en' },
     relayRecordingState: null,
   };
-
-  runInNewContext(recordingUiSource, {
+  const context = {
     window,
     document,
     Event,
@@ -163,7 +169,9 @@ test('production recording presenter freezes last-known timer while Take authori
     queueMicrotask,
     setTimeout,
     clearTimeout,
-  });
+  };
+  runInNewContext(liveI18nSource, context);
+  runInNewContext(presenterBody(recordingUiSource), context);
 
   const stale = {
     lifecycle: 'recording',
@@ -177,7 +185,10 @@ test('production recording presenter freezes last-known timer while Take authori
   };
   events.emit('relay-recording-state', stale);
   assert.equal(status.textContent, '● 0:04 · Reconnecting…');
-  assert.equal(stop.hidden, true);
+  assert.equal(stop.hidden, false,
+    'stale recording authority must keep Stop in the same visible control position');
+  assert.equal(stop.disabled, true,
+    'stale recording authority must disable Stop until a fresh TakeStatus replay arrives');
 
   now = 30_000;
   events.emit('relay-recording-state', stale);
@@ -192,6 +203,7 @@ test('production recording presenter freezes last-known timer while Take authori
   });
   assert.equal(status.textContent, '● 0:29');
   assert.equal(stop.hidden, false);
+  assert.equal(stop.disabled, false);
 });
 
 test('status socket reconnect keeps System unknown until ProductStatus replay', () => {
@@ -231,8 +243,8 @@ test('publisher command authority waits for registration and replayed control sn
 
 test('presence invalidates session authority through disconnect, open-without-replay, and server incarnation change', () => {
   assert.match(presenceSource, /let sessionAuthorityFresh = false/);
-  assert.match(presenceSource, /Open transport is not current room truth\. Wait for session-status replay\./);
+  assert.match(presenceSource, /const next = new WebSocket\(wsUrl\(\)\);[\s\S]*sessionAuthorityFresh = false;[\s\S]*publishPresenceState\(\)/);
   assert.match(presenceSource, /message\.type !== 'session-status'[\s\S]*sessionAuthorityFresh = true/);
-  assert.match(presenceSource, /next\.addEventListener\('close'[\s\S]*sessionAuthorityFresh = false/);
+  assert.match(presenceSource, /next\.addEventListener\('close'[\s\S]*sessionAuthorityFresh = false[\s\S]*publishPresenceState\(\)/);
   assert.match(presenceSource, /previousIncarnation[\s\S]*nextIncarnation[\s\S]*hideTakeover\(\{ cancelPrewarm: true \}\)/);
 });

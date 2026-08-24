@@ -314,9 +314,15 @@ if (
       || !spectrumBands.every((band) => Number.isFinite(band) && band >= 0 && band <= 1)
     ) return;
 
-    roomMicOwnerId = ownerId;
-    roomMicLive = true;
-    document.body.dataset.roomMic = 'live';
+    const mic = latestProductStatus?.room?.mic ?? {};
+    const authoritativeOwnerId = typeof mic.ownerId === 'string' ? mic.ownerId : null;
+    if (
+      !productAuthorityFresh
+      || mic.state !== 'live'
+      || authoritativeOwnerId === null
+      || ownerId !== authoritativeOwnerId
+    ) return;
+
     dispatchRoomMicPresence({
       active: true,
       ownerId,

@@ -1,3 +1,5 @@
+import './live-i18n.js';
+
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const publisherButton = document.querySelector('#start-publisher');
 const releaseButton = document.querySelector('#release-mic');
@@ -10,15 +12,10 @@ let latestState = window.relayMicActionState ?? null;
 
 function failureCopy(failure, owner) {
   if (!failure) return null;
-  if (failure.kind === 'start-failed') {
-    const message = failure.message || t('mic.startFailed');
-    return t('mic.takeoverKept', { message });
-  }
+  if (failure.kind === 'start-failed') return t('mic.startFailed');
   if (failure.kind === 'owner-changed') {
     const name = failure.ownerNickname || owner?.nickname;
-    return name
-      ? t('mic.takeoverChangedOwner', { name })
-      : t('mic.takeoverChanged');
+    return name ? t('mic.takeoverChangedOwner', { name }) : t('mic.takeoverChanged');
   }
   return t('mic.takeoverChanged');
 }
@@ -36,6 +33,7 @@ function render(state = latestState) {
   const takeoverPending = state.takeoverPending === true;
   const takeoverMode = state.primaryMode === 'takeover';
   const authorityFresh = state.authorityFresh === true && state.commandChannelFresh === true;
+  const selfOwnsMic = state.mine === true || state.localPublisherActive === true;
 
   releaseButton.hidden = state.releaseVisible !== true;
   releaseButton.textContent = t('mic.release');
@@ -45,16 +43,14 @@ function render(state = latestState) {
     publisherButton.textContent = t('mic.takeover');
   } else {
     delete publisherButton.dataset.presenceLabel;
-    publisherButton.textContent = t('mic.microphone');
+    publisherButton.textContent = t('mic.take');
   }
 
   publisherButton.disabled = state.primaryActionable !== true;
-
-  // Confirmation replaces the entry action instead of stacking below it.
-  publisherButton.hidden = takeoverOpen;
+  publisherButton.hidden = takeoverOpen || selfOwnsMic;
   takeoverPanel.hidden = !takeoverOpen;
   confirmTakeoverButton.disabled = state.takeoverConfirmActionable !== true;
-  confirmTakeoverButton.textContent = t('mic.take');
+  confirmTakeoverButton.textContent = t('mic.takeover');
   cancelTakeoverButton.disabled = state.takeoverCancelActionable !== true;
   cancelTakeoverButton.textContent = t('mic.cancel');
 
@@ -70,14 +66,12 @@ function render(state = latestState) {
   }
 
   if (!authorityFresh) {
-    takeoverCopy.textContent = t('people.reconnecting');
+    takeoverCopy.textContent = t('people.status.reconnecting');
     return;
   }
 
   if (takeoverPending) {
-    takeoverCopy.textContent = t('mic.takeoverPreparing', {
-      name: owner?.nickname ?? t('voice.someone'),
-    });
+    takeoverCopy.textContent = t('mic.takeoverPending');
     return;
   }
 

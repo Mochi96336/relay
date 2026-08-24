@@ -4,7 +4,9 @@ set -e -o pipefail
 
 mkdir -p screenshots
 
-for state in empty listener singer takeover recording system; do
+live_states=(empty listener singer takeover recording reconnecting people more system)
+
+for state in "${live_states[@]}"; do
   npx -y playwright@1.55.0 screenshot \
     --browser chromium \
     --viewport-size="390,844" \
@@ -12,6 +14,16 @@ for state in empty listener singer takeover recording system; do
     --wait-for-timeout=250 \
     "http://127.0.0.1:4173/__live-visual.html?state=${state}" \
     "screenshots/${state}.png"
+done
+
+for state in empty listener singer takeover recording reconnecting people more; do
+  npx -y playwright@1.55.0 screenshot \
+    --browser chromium \
+    --viewport-size="1024,768" \
+    --full-page \
+    --wait-for-timeout=250 \
+    "http://127.0.0.1:4173/__live-visual.html?state=${state}" \
+    "screenshots/desktop-${state}.png"
 done
 
 for state in take-history-one take-history-many room-sound-normal room-sound-muted room-sound-forced room-sound-retry; do

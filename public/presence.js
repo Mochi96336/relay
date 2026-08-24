@@ -1,9 +1,6 @@
 import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 window.relayIdentityReady = (async () => {
-  const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
-  const participantCount = document.querySelector('#participant-count');
-  const participantList = document.querySelector('#participant-list');
   const identityButton = document.querySelector('#identity-name');
   const identityInput = document.querySelector('#identity-input');
   const releaseButton = document.querySelector('#release-mic');
@@ -12,8 +9,8 @@ window.relayIdentityReady = (async () => {
   const publisherButton = document.querySelector('#start-publisher');
 
   if (
-    !participantCount || !participantList || !identityButton || !identityInput
-    || !releaseButton || !confirmTakeoverButton || !cancelTakeoverButton || !publisherButton
+    !identityButton || !identityInput || !releaseButton || !confirmTakeoverButton
+    || !cancelTakeoverButton || !publisherButton
   ) return;
 
   const PARTICIPANT_ID_KEY = 'relay.participantId.v1';
@@ -94,10 +91,6 @@ window.relayIdentityReady = (async () => {
   let takeoverFailure = null;
   let localPublisherActive = window.relayActiveRole === 'publisher';
 
-  // app.js reads these when it opens publisher / monitor transports. Identity
-  // is explicit per socket; Relay deliberately does not use an origin-wide
-  // cookie that could accidentally turn source.html or robot sockets into a
-  // human participant.
   window.relayParticipantId = participantId;
   window.relayParticipantCapability = participantCapability;
   window.relayNickname = nickname;
@@ -166,7 +159,7 @@ window.relayIdentityReady = (async () => {
       mine,
       localPublisherActive,
       releaseVisible: Boolean(mine || localPublisherActive),
-      primaryMode: currentOwner && !mine ? 'takeover' : 'microphone',
+      primaryMode: currentOwner && !mine ? 'takeover' : 'take',
       primaryActionable: primaryAuthority.actionable,
       takeoverOpen,
       takeoverPending: takeoverOpen && startAfterTakeover,
@@ -176,15 +169,23 @@ window.relayIdentityReady = (async () => {
     };
   }
 
-  // Presence owns room authority and takeover state. mic-actions.js is the sole
-  // presenter for the visible Mic action surface.
   function publishMicActionState() {
     const detail = micActionState();
     window.relayMicActionState = detail;
     window.dispatchEvent(new CustomEvent('relay-mic-action-state', { detail }));
   }
 
+  function publishPresenceState() {
+    const detail = {
+      session: latestSession,
+      authorityFresh: sessionAuthorityFresh,
+    };
+    window.relayPresenceState = detail;
+    window.dispatchEvent(new CustomEvent('relay-presence-state', { detail }));
+  }
+
   window.addEventListener('relay-request-mic-action-state', publishMicActionState);
+  window.addEventListener('relay-request-presence-state', publishPresenceState);
 
   function cancelSpeculativePlaybackPrewarm() {
     window.dispatchEvent(new CustomEvent('relay:playback-prewarm-cancel'));
@@ -216,32 +217,11 @@ window.relayIdentityReady = (async () => {
     return send({ type: 'participant-rename', nickname: pendingNickname });
   }
 
-  function renderParticipants() {
+  function reconcileSessionState() {
     if (!latestSession) {
       publishMicActionState();
+      publishPresenceState();
       return;
-    }
-
-    const connected = latestSession.participants.filter((participant) => participant.connected).length;
-    participantCount.textContent = t('people.online', { count: connected });
-    participantList.replaceChildren();
-
-    for (const participant of latestSession.participants) {
-      const chip = document.createElement('span');
-      chip.className = 'participant-chip';
-      if (participant.id === latestSession.micOwnerId) chip.classList.add('mic-owner');
-      if (!participant.connected) chip.classList.add('reconnecting');
-
-      const marker = participant.id === latestSession.micOwnerId
-        ? '🎤'
-        : participant.connected ? '●' : '◌';
-      const suffix = !participant.connected
-        ? ` · ${t('people.reconnectingSuffix')}`
-        : participant.id === latestSession.micOwnerId && latestSession.micConnected === false
-          ? ` · ${t('people.micReconnectingSuffix')}`
-          : '';
-      chip.textContent = `${marker} ${participant.nickname}${suffix}`;
-      participantList.append(chip);
     }
 
     const self = participantById(participantId);
@@ -253,8 +233,6 @@ window.relayIdentityReady = (async () => {
         localStorage.removeItem(PENDING_NICKNAME_KEY);
         window.relayNickname = nickname;
       } else {
-        // The server has not acknowledged the explicit rename yet. Do not let
-        // an older session snapshot overwrite the user's pending intent.
         nickname = pendingNickname;
         window.relayNickname = nickname;
       }
@@ -267,17 +245,13 @@ window.relayIdentityReady = (async () => {
 
     const mine = latestSession.micOwnerId === participantId;
     if (startAfterTakeover && mine && latestSession.micConnected === true) {
-      // The Mic transition succeeded. Do not cancel here: a matching formal
-      // song handoff may already be consuming the speculative preparation.
       hideTakeover();
     } else if (!startAfterTakeover && takeoverOwnerId && latestSession.micOwnerId !== takeoverOwnerId) {
-      // The confirmation became stale before the user accepted it. No formal
-      // handoff will consume this speculative playback, so restore its local
-      // mute state now instead of leaving a hidden muted player behind.
       hideTakeover({ cancelPrewarm: true });
     }
 
     publishMicActionState();
+    publishPresenceState();
   }
 
   function publishSessionStatus() {
@@ -285,9 +259,6 @@ window.relayIdentityReady = (async () => {
     window.dispatchEvent(new CustomEvent('relay-session-status', { detail: latestSession }));
   }
 
-  // Module scripts such as Listen can start after the first Presence snapshot
-  // has already arrived. Let late consumers explicitly request a replay instead
-  // of relying on script/network timing.
   window.addEventListener('relay-request-session-status', publishSessionStatus);
 
   function handleMessage(message) {
@@ -303,17 +274,11 @@ window.relayIdentityReady = (async () => {
       && typeof nextIncarnation === 'string'
       && previousIncarnation !== nextIncarnation
     ) {
-      // A server restart invalidates any confirmation/handoff expectation that
-      // produced the speculative player state.
       hideTakeover({ cancelPrewarm: true });
     }
     latestSession = message;
     sessionAuthorityFresh = true;
-    renderParticipants();
-    // Every tab has its own Presence socket but tabs from the same browser share
-    // one participant capability/ID. Project authoritative room ownership to
-    // local page consumers so sibling Listen tabs follow the server, not each
-    // other's process-local Mic events.
+    reconcileSessionState();
     publishSessionStatus();
   }
 
@@ -327,9 +292,9 @@ window.relayIdentityReady = (async () => {
 
   async function connect() {
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
-    participantCount.textContent = latestSession ? participantCount.textContent : t('people.connecting');
     sessionAuthorityFresh = false;
     publishMicActionState();
+    publishPresenceState();
 
     const next = new WebSocket(wsUrl());
     socket = next;
@@ -343,9 +308,9 @@ window.relayIdentityReady = (async () => {
       return;
     }
 
-    // Open transport is not current room truth. Wait for session-status replay.
     sessionAuthorityFresh = false;
     publishMicActionState();
+    publishPresenceState();
 
     next.addEventListener('message', (event) => {
       if (socket !== next || typeof event.data !== 'string') return;
@@ -357,8 +322,8 @@ window.relayIdentityReady = (async () => {
       if (socket !== next) return;
       socket = null;
       sessionAuthorityFresh = false;
-      participantCount.textContent = t('people.reconnecting');
       publishMicActionState();
+      publishPresenceState();
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -408,9 +373,6 @@ window.relayIdentityReady = (async () => {
   });
 
   releaseButton.addEventListener('click', () => {
-    // Presence may be the only healthy control socket, so keep the idempotent
-    // server release here. app.js receives the local event below and tears down
-    // capture immediately even when this socket is already disconnected.
     send({ type: 'release-mic' });
     window.dispatchEvent(new CustomEvent('relay-release-microphone'));
   });
@@ -494,10 +456,7 @@ window.relayIdentityReady = (async () => {
   });
   identityInput.addEventListener('blur', commitRename);
 
-  window.addEventListener('relay-locale-changed', () => {
-    renderParticipants();
-  });
-
   publishMicActionState();
+  publishPresenceState();
   connect().catch(scheduleReconnect);
 })();

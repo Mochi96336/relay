@@ -3,9 +3,8 @@
   display: none !important;
 }
 
-/* Start and active recording occupy the same 44px lifecycle slot. The status
-   line becomes the left side of that same row while Stop occupies the action
-   edge; transitioning into recording never inserts a second vertical module. */
+/* Start and active recording occupy the same lifecycle slot. The status becomes
+   the left side of that row while Stop occupies the action edge. */
 .take-strip:not([hidden]) {
   width: 100%;
   min-height: 44px;
@@ -61,6 +60,36 @@
 .take-strip:not([data-take-state="recording"]) .take-actions {
   grid-column: 1 / -1;
   grid-row: 1;
+}
+
+/* The bottom performance stack gains a 44px Mic-gain rail exactly when this
+   phone becomes the live Mic owner. Reserve that same lower slot before then,
+   so Record does not jump when authoritative readiness flips. A short blocked
+   reason uses the reserved slot instead of creating another product module. */
+html body:not([data-self-mic="live"]) .performance-stage > .take-strip:not([data-take-state="recording"]):not([data-take-state="finalizing"]) {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-rows: 44px 44px !important;
+}
+
+html body:not([data-self-mic="live"]) .performance-stage > .take-strip:not([data-take-state="recording"]):not([data-take-state="finalizing"]) > .take-actions {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+}
+
+html body:not([data-self-mic="live"]) .performance-stage > .take-strip:not([data-take-state="recording"]):not([data-take-state="finalizing"]) > .recent-take {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+}
+
+html body:not([data-self-mic="live"]) .performance-stage > .take-strip:not([data-take-state="recording"]):not([data-take-state="finalizing"]) > #recording-status {
+  grid-column: 1 / -1 !important;
+  grid-row: 2 !important;
+  align-self: center;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .take-strip #recording-status:empty {

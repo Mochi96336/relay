@@ -17,7 +17,7 @@ let productCanStartTake = false;
 let productStatusFresh = false;
 let takeStatusFresh = false;
 let startCommandPending = false;
-let startTakeBlockedReason = 'mix-not-active';
+let startTakeBlockedReason = null;
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -51,14 +51,15 @@ function recordingState() {
     authorized: true,
     serverAllowed: true,
   });
+  const startAllowedByServer = productCanStartTake
+    && lifecycle !== 'recording'
+    && lifecycle !== 'finalizing';
   const startAuthority = authorityState({
     authorityFresh,
     lastKnownSnapshot,
     commandChannelFresh,
     authorized: true,
-    serverAllowed: productCanStartTake
-      && lifecycle !== 'recording'
-      && lifecycle !== 'finalizing',
+    serverAllowed: startAllowedByServer && !startCommandPending,
   });
   const stopAuthority = authorityState({
     authorityFresh: takeStatusFresh,
@@ -79,11 +80,14 @@ function recordingState() {
     productStatusFresh,
     takeStatusFresh,
     canStart: startAuthority.actionable,
-    startBlockedReason: startAuthority.actionable
+    startPending: startCommandPending,
+    startBlockedReason: startCommandPending
       ? null
-      : !baseAuthority.commandChannelFresh || !baseAuthority.authorityFresh
-        ? 'reconnecting'
-        : startTakeBlockedReason,
+      : startAuthority.actionable
+        ? null
+        : !baseAuthority.commandChannelFresh || !baseAuthority.authorityFresh
+          ? 'reconnecting'
+          : startTakeBlockedReason,
     canStop: stopAuthority.actionable,
     commandError,
     snapshotObservedAt: takeStatusObservedAt,
@@ -107,7 +111,7 @@ function acceptProductStatus(status) {
   productCanStartTake = status.actions?.canStartTake === true;
   startTakeBlockedReason = typeof status.actions?.startTakeBlockedReason === 'string'
     ? status.actions.startTakeBlockedReason
-    : productCanStartTake ? null : 'mix-not-active';
+    : null;
   productStatusFresh = true;
   publishRecordingState();
 }

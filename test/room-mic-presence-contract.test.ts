@@ -8,13 +8,12 @@ const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.
 const presence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 const stateCss = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 
-test('F0 stays a capture-worklet side channel and local singer rendering skips server roundtrip', () => {
+test('local capture telemetry remains available without owning the visible waveform', () => {
   assert.match(app, /event\.data\.f0Hz/);
   assert.match(app, /pitchConfidence/);
-  assert.match(app, /captureGeneration: captureGeneration >>> 0/);
   assert.match(app, /dispatchRelayEvent\('relay-local-mic-level'/);
-  assert.match(presence, /window\.addEventListener\('relay-local-mic-level'/);
-  assert.match(presence, /local:\$\{generation\}/);
+  assert.doesNotMatch(presence, /relay-local-mic-level/);
+  assert.doesNotMatch(presence, /local:/);
 });
 
 test('Room Mic telemetry is accepted only from current authenticated Mic owner and generation', () => {
@@ -23,45 +22,38 @@ test('Room Mic telemetry is accepted only from current authenticated Mic owner a
   const end = server.indexOf("if (payload.type === 'product-status-request')", start);
   assert.ok(start >= 0 && end > start);
   const handler = server.slice(start, end);
-
   assert.match(handler, /socket\.participantId !== participants\.micOwnerId/);
   assert.match(handler, /socket\.participantId !== micMediaOwnerId/);
-  assert.match(handler, /micMediaGeneration === null/);
   assert.match(handler, /presence\.captureGeneration !== micMediaGeneration/);
   assert.match(handler, /!micStreaming\(nowMs\)/);
-  assert.match(handler, /nowMs - socket\.micPresenceTelemetryAt! < 60/);
-  assert.match(handler, /f0Hz: presence\.f0Hz/);
-  assert.match(handler, /pitchConfidence: presence\.pitchConfidence/);
 });
 
-test('singer sends lightweight F0 telemetry on the existing room status socket', () => {
+test('singer publishes Room Mic evidence through the room status path', () => {
   assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(liveStatus, /window\.addEventListener\('relay-local-mic-level'/);
   assert.match(liveStatus, /type: 'mic-presence-telemetry'/);
   assert.match(liveStatus, /captureGeneration/);
-  assert.match(liveStatus, /f0Hz/);
-  assert.match(liveStatus, /pitchConfidence/);
-  assert.match(liveStatus, /isSelfOwner\(latestProductStatus\)/);
 });
 
-test('listeners receive canonical singer generation plus truthful F0 and reuse the same renderer', () => {
+test('visible waveform has one semantic source category for remote and self owners', () => {
   assert.match(liveStatus, /message\.type === 'room-mic-presence'/);
   assert.match(liveStatus, /relay-room-mic-presence/);
-  assert.match(liveStatus, /f0Hz/);
-  assert.match(liveStatus, /pitchConfidence/);
   assert.match(presence, /window\.addEventListener\('relay-room-mic-presence'/);
-  assert.match(presence, /if \(localActive\) return;/);
   assert.match(presence, /room:\$\{ownerId\}:\$\{generation\}/);
+  assert.doesNotMatch(presence, /localActive|if \(localActive\) return/);
   assert.match(stateCss, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
 });
 
-test('handoff, capture generation change and stale remote evidence clear the old visual tail', () => {
+test('owner or generation change and stale Room Mic evidence clear the old visual tail', () => {
   assert.match(liveStatus, /const ownerChanged = ownerId !== roomMicOwnerId/);
   assert.match(liveStatus, /if \(!live \|\| ownerChanged\)/);
   assert.match(presence, /if \(source !== sourceKey\) reset\(source\)/);
-  assert.match(presence, /REMOTE_EVIDENCE_STALE_MS = 320/);
-  assert.match(presence, /armRemoteStaleTimer/);
-  assert.match(presence, /sourceKey\.startsWith\('local:'\)/);
+  assert.match(presence, /ROOM_EVIDENCE_STALE_MS = 320/);
+  assert.match(presence, /armRoomStaleTimer/);
+  const eventStart = presence.indexOf("window.addEventListener('relay-room-mic-presence'");
+  assert.ok(eventStart >= 0);
+  const eventBody = presence.slice(eventStart);
+  assert.match(eventBody, /if \(event\.detail\?\.active !== true\) \{[\s\S]*?reset\(\);[\s\S]*?return;/);
 });
 
 test('center-origin production renderer mirrors one history and never uses five bands as pitch', () => {

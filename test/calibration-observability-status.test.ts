@@ -68,3 +68,20 @@ test('status keeps a fully collected window visible while analysis is pending', 
   calibration.reset();
   resolve(analysis());
 });
+
+test('complete external authority does not invent content collection spans', () => {
+  const calibration = makeSession();
+  calibration.applyExternalResult({ micLagMs: 180, confidence: 0.9 });
+
+  const complete = calibration.status();
+  assert.equal(complete.state, 'complete');
+  assert.equal(complete.progress, 1, 'existing phase progress semantics remain unchanged');
+  assert.equal(complete.micSpanSamples, 0);
+  assert.equal(complete.backingSpanSamples, 0);
+
+  calibration.beginExternalRecalibration();
+  const retry = calibration.status();
+  assert.equal(retry.state, 'complete', 'old confirmed authority remains visible during external retry');
+  assert.equal(retry.micSpanSamples, 0);
+  assert.equal(retry.backingSpanSamples, 0);
+});

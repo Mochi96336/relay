@@ -12,6 +12,7 @@ const SAMPLE_RATE = 48_000;
 const CHUNK_MS = 20;
 const CHUNK_SAMPLES = Math.round((SAMPLE_RATE * CHUNK_MS) / 1000);
 const CAPTURE_GENERATION = 7;
+const STARVATION_FAULT_MS = 1_200;
 
 function startRelay() {
   const child = spawn(
@@ -227,8 +228,8 @@ test('real Chromium renders the real Relay monitor path through production Liste
   }
 });
 
-test('real Chromium listener recovers monitor reconnect, starvation and AudioContext interruption', async () => {
-  test.setTimeout(40_000);
+test('real Chromium listener recovers monitor reconnect, proven starvation and AudioContext interruption', async () => {
+  test.setTimeout(45_000);
   const relay = await startRelay();
   const mic = await startDeterministicMic(relay);
   const browser = await chromium.launch({
@@ -252,12 +253,33 @@ test('real Chromium listener recovers monitor reconnect, starvation and AudioCon
     ), firstConnectionCount, { timeout: 4_000 });
     await waitForHealthyPlayback(page, { afterObservedAt: beforeHealth });
 
+    const starvationBefore = await page.evaluate(() => ({
+      observedAt: Number(window.relayListenHealth?.observedAt ?? -1),
+      underruns: Number(window.relayListenHealth?.underruns ?? 0),
+      starvedMs: Number(window.relayListenHealth?.starvedMs ?? 0),
+    }));
+    await page.evaluate((durationMs) => window.__relayListenerDiagnostics.faults.dropPcm(durationMs), STARVATION_FAULT_MS);
+    await page.waitForFunction(() => (
+      window.__relayListenerDiagnostics.dump().events.some((entry) => entry.type === 'fault-pcm-dropped')
+    ));
+    await page.waitForFunction((before) => {
+      const health = window.relayListenHealth;
+      return Number(health?.observedAt) > before.observedAt
+        && (
+          Number(health?.underruns ?? 0) > before.underruns
+          || Number(health?.starvedMs ?? 0) > before.starvedMs
+        );
+    }, starvationBefore, { timeout: STARVATION_FAULT_MS + 3_000 });
     beforeHealth = await latestHealthObservedAt(page);
-    await page.evaluate(() => window.__relayListenerDiagnostics.faults.dropPcm(450));
-    await page.waitForTimeout(650);
+    await page.waitForFunction(() => window.__relayListenerDiagnostics.faults.state().dropPcm === false, null, {
+      timeout: STARVATION_FAULT_MS + 1_000,
+    });
     await waitForHealthyPlayback(page, { afterObservedAt: beforeHealth });
 
     beforeHealth = await latestHealthObservedAt(page);
+    const connectionCountBeforeInterruption = await page.evaluate(
+      () => window.__relayListenerDiagnostics.snapshot().monitorConnectionCount,
+    );
     await page.evaluate(() => window.__relayListenerDiagnostics.faults.interruptAudio(250));
     await page.waitForFunction(
       () => window.__relayListenerDiagnostics.snapshot().contextState !== 'running',
@@ -269,6 +291,9 @@ test('real Chromium listener recovers monitor reconnect, starvation and AudioCon
       null,
       { timeout: 2_500 },
     );
+    await page.waitForFunction((before) => (
+      window.__relayListenerDiagnostics.snapshot().monitorConnectionCount > before
+    ), connectionCountBeforeInterruption, { timeout: 4_000 });
     await waitForHealthyPlayback(page, { afterObservedAt: beforeHealth });
 
     const dump = await page.evaluate(() => {
@@ -278,6 +303,7 @@ test('real Chromium listener recovers monitor reconnect, starvation and AudioCon
     const eventTypes = dump.events.map((entry) => entry.type);
     expect(eventTypes).toContain('fault-monitor-disconnect');
     expect(eventTypes).toContain('fault-pcm-drop-start');
+    expect(eventTypes).toContain('fault-pcm-dropped');
     expect(eventTypes).toContain('fault-audio-interrupt-start');
     expect(eventTypes).toContain('fault-audio-interrupt-release');
     expect(dump.snapshots.at(-1)?.evidence).toBe('internally-healthy');

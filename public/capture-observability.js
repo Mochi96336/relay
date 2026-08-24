@@ -1,5 +1,15 @@
+const MAX_AUDIO_SESSION_TYPE_LENGTH = 64;
+
 function nullableBoolean(value) {
   return typeof value === 'boolean' ? value : null;
+}
+
+function boundedAudioSessionType(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= MAX_AUDIO_SESSION_TYPE_LENGTH
+    ? value
+    : null;
 }
 
 /**
@@ -18,9 +28,7 @@ export function readCaptureSettings(stream, navigatorLike = globalThis.navigator
       echoCancellation: nullableBoolean(settings.echoCancellation),
       noiseSuppression: nullableBoolean(settings.noiseSuppression),
       autoGainControl: nullableBoolean(settings.autoGainControl),
-      audioSessionType: typeof navigatorLike?.audioSession?.type === 'string'
-        ? navigatorLike.audioSession.type
-        : null,
+      audioSessionType: boundedAudioSessionType(navigatorLike?.audioSession?.type),
     };
   } catch {
     return null;

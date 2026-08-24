@@ -52,6 +52,8 @@ export type AudioUplinkHealth = {
   transport: AudioUplinkTransportHealth;
 };
 
+const MAX_AUDIO_SESSION_TYPE_LENGTH = 64;
+
 function uint32(value: unknown): number | null {
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 && number <= 0xffff_ffff
@@ -75,9 +77,13 @@ function nullableBoolean(value: unknown): boolean | null | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
-function nullableString(value: unknown): string | null | undefined {
+function nullableAudioSessionType(value: unknown): string | null | undefined {
   if (value === null) return null;
-  return typeof value === 'string' ? value : undefined;
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= MAX_AUDIO_SESSION_TYPE_LENGTH
+    ? value
+    : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -94,7 +100,7 @@ function parseCaptureAppliedSettings(value: unknown): AudioCaptureAppliedSetting
   const echoCancellation = nullableBoolean(capture.echoCancellation);
   const noiseSuppression = nullableBoolean(capture.noiseSuppression);
   const autoGainControl = nullableBoolean(capture.autoGainControl);
-  const audioSessionType = nullableString(capture.audioSessionType);
+  const audioSessionType = nullableAudioSessionType(capture.audioSessionType);
   if (
     echoCancellation === undefined
     || noiseSuppression === undefined

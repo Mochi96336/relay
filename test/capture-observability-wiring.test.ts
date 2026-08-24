@@ -21,3 +21,12 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
 
   assert.match(source, /captureAppliedSettings = null;/, 'stopping capture must clear applied facts');
 });
+
+test('server authority code does not consume capture level telemetry', async () => {
+  const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(
+    serverSource,
+    /\bcaptureLevel\b/,
+    'captureLevel may be parsed/projected as uplink health but must not enter server calibration policy',
+  );
+});

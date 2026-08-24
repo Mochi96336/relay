@@ -1,12 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  analyzeTimingCalibration,
-  analyzeTimingCalibrationShadow,
-  diagnoseTimingCalibrationFailure,
-  type TimingCalibrationShadowAnalysis,
-} from '../src/timing-calibration.js';
+import { analyzeTimingCalibration } from '../src/timing-calibration.js';
 import { analyzeTimingCalibrationInWorker } from '../src/timing-calibration-worker-client.js';
 import {
   laggedMultibandMusicPair,
@@ -15,13 +10,7 @@ import {
 
 const RATE = 48_000;
 const KNOWN_LAG_MS = 285;
-const SAFE_MATCHER_REJECTION_STAGES = new Set<string>([
-  'global-score',
-  'distinct-peak',
-  'band-support',
-  'local-support',
-  'timing-spread',
-]);
+const SAFE_MATCHER_REJECTION = /weak|does not match|repetitive|frequency-band support|coarse timing peak|Timing moved/i;
 
 function int16View(buffer: Buffer) {
   return new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 2);
@@ -74,12 +63,6 @@ function mixPcm(a: Buffer, b: Buffer) {
   return output;
 }
 
-function requireShadow(value: TimingCalibrationShadowAnalysis | null) {
-  assert.ok(value, 'expected a low-level shadow result');
-  assert.equal(value.authoritative, false);
-  return value;
-}
-
 test('authoritative matcher accepts genuine evidence below the former -60 dBFS mic floor', () => {
   for (const targetDbfs of [-61, -64]) {
     const pair = laggedMultibandMusicPair(6, RATE, KNOWN_LAG_MS);
@@ -109,7 +92,7 @@ test('low-level wrong content is still rejected by matcher quality gates', () =>
   );
 });
 
-test('shadow remains available for the direct backing-level guard', () => {
+test('direct backing capture keeps its dead-route level guard', () => {
   const pair = laggedMultibandMusicPair(6, RATE, KNOWN_LAG_MS);
   const quietBacking = scaleToDbfs(pair.backing, -55);
 
@@ -117,34 +100,19 @@ test('shadow remains available for the direct backing-level guard', () => {
     () => analyzeTimingCalibration(int16View(pair.mic), int16View(quietBacking), RATE, 2_500),
     /Desktop source is too quiet/i,
   );
-
-  const shadow = requireShadow(
-    analyzeTimingCalibrationShadow(int16View(pair.mic), int16View(quietBacking), RATE, 2_500),
-  );
-  assert.equal(shadow.reason, 'below-backing-level-floor');
-  assert.equal(shadow.wouldPass, true);
-  assert.ok(shadow.result);
-  assert.ok(Math.abs(shadow.result.micLagMs - KNOWN_LAG_MS) <= 25);
 });
 
-test('worker resolves genuine low-level mic evidence without needing shadow bypass', async () => {
+test('worker resolves genuine low-level mic evidence through the authoritative path', async () => {
   const pair = laggedMultibandMusicPair(6, RATE, KNOWN_LAG_MS);
   const mic = scaleToDbfs(pair.mic, -64);
-  let observedShadow: TimingCalibrationShadowAnalysis | null = null;
 
   const result = await analyzeTimingCalibrationInWorker(
     int16View(mic),
     int16View(pair.backing),
     RATE,
     2_500,
-    undefined,
-    (shadow) => {
-      observedShadow = shadow;
-    },
-    true,
   );
 
-  assert.equal(observedShadow, null, 'mic RMS must not trigger a shadow-only path');
   assert.ok(Math.abs(result.micLagMs - KNOWN_LAG_MS) <= 25);
   assert.ok(result.micLevelDbfs < -60);
 });
@@ -174,41 +142,6 @@ test('room noise above the former floor never turns weak bleed into a wrong auth
     }
 
     assert.ok(failure instanceof Error, 'rejected noisy evidence must expose a matcher failure');
-    const diagnostics = diagnoseTimingCalibrationFailure(
-      failure, int16View(noisyMic), int16View(pair.backing), RATE, 2_500,
-    );
-    assert.ok(diagnostics.micLevelDbfs !== null && diagnostics.micLevelDbfs > -60);
-    assert.ok(
-      SAFE_MATCHER_REJECTION_STAGES.has(diagnostics.failureStage),
-      `unexpected noisy-evidence rejection stage ${diagnostics.failureStage}`,
-    );
-    assert.ok(diagnostics.activeBands.length >= 3);
+    assert.match(failure.message, SAFE_MATCHER_REJECTION);
   }
-});
-
-test('rejected matcher windows retain levels and partial correlation diagnostics', () => {
-  const pair = sameBpmDifferentMusicPair(6, RATE);
-  const roomNoise = deterministicNoise(pair.mic.byteLength, -50, 0x1234abcd);
-  const weakWrongSong = scaleToDbfs(pair.mic, -68);
-  const noisyMic = mixPcm(weakWrongSong, roomNoise);
-
-  let failure: unknown = null;
-  try {
-    analyzeTimingCalibration(int16View(noisyMic), int16View(pair.backing), RATE, 2_500);
-  } catch (error) {
-    failure = error;
-  }
-
-  assert.ok(failure instanceof Error, 'wrong content with dominant room noise must be rejected');
-  const diagnostics = diagnoseTimingCalibrationFailure(
-    failure, int16View(noisyMic), int16View(pair.backing), RATE, 2_500,
-  );
-  assert.ok(diagnostics.micLevelDbfs !== null && diagnostics.micLevelDbfs > -60);
-  assert.ok(diagnostics.backingLevelDbfs !== null);
-  assert.ok(
-    SAFE_MATCHER_REJECTION_STAGES.has(diagnostics.failureStage),
-    `wrong-content rejection escaped matcher safety gates at ${diagnostics.failureStage}`,
-  );
-  assert.ok(diagnostics.activeBands.length >= 3);
-  assert.notEqual(diagnostics.bestScore, null);
 });

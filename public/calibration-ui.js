@@ -1,213 +1,248 @@
 import { authorityState } from './authority-freshness.js';
+import { formatTimingValueMs } from './timing-value.js';
+import './timing-authority.js';
 
-const legacyCalibrateButton = document.querySelector('#calibrate-timing');
-const legacyCalibrateStatus = document.querySelector('#calibrate-status');
+let initialized = false;
 
-function copy(key) {
-  const zh = window.relayI18n?.getLocale?.() === 'zh-Hant';
-  if (key === 'realign') return zh ? '重新對齊' : 'Realign';
-  if (key === 'aligning') return zh ? '對齊中…' : 'Aligning…';
-  if (key === 'preparing-paths') return zh ? '正在準備聲音路徑…' : 'Preparing audio paths…';
-  if (key === 'reconnecting') return zh ? '重新連線中…' : 'Reconnecting…';
-  if (key === 'finish-take') return zh ? '請先完成目前的錄音' : 'Finish the current Take before calibrating.';
-  if (key === 'unavailable') return zh ? '目前無法校準' : 'Calibration is unavailable.';
-  return '';
-}
+function initialize() {
+  if (initialized) return;
+  initialized = true;
 
-/*
- * app.js historically captured these nodes before ProductStatus had a semantic
- * calibration action. Keep that legacy node only as the command transport
- * endpoint, then replace the painted nodes so there is exactly one visible
- * presenter. app.js may continue updating its detached compatibility nodes;
- * those writes can no longer race with product presentation.
- */
-function takeVisibleOwnership(button, status) {
-  if (
-    !button || !status
-    || typeof button.cloneNode !== 'function'
-    || typeof status.cloneNode !== 'function'
-    || typeof button.replaceWith !== 'function'
-    || typeof status.replaceWith !== 'function'
-  ) {
-    return { button, status, commandTarget: null };
+  const legacyCalibrateButton = document.querySelector('#calibrate-timing');
+  const legacyCalibrateStatus = document.querySelector('#calibrate-status');
+  const legacyFineTuneSurface = document.querySelector('.more-timing');
+  const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
+
+  // Compatibility DOM remains available to app.js and the wire protocol, but
+  // manual fine tune is no longer a normal Live product control.
+  if (legacyFineTuneSurface) {
+    legacyFineTuneSurface.hidden = true;
+    legacyFineTuneSurface.setAttribute?.('aria-hidden', 'true');
   }
 
-  const visibleButton = button.cloneNode(true);
-  const visibleStatus = status.cloneNode(true);
+  function installTimingSurface(button) {
+    const existing = document.querySelector('#timing-active-value');
+    if (existing) {
+      return {
+        label: document.querySelector('#timing-active-label'),
+        value: existing,
+      };
+    }
+    if (!button || typeof document.createElement !== 'function') {
+      return { label: null, value: null };
+    }
 
-  button.id = 'calibrate-timing-command';
-  button.hidden = true;
-  button.disabled = true;
-  button.setAttribute?.('aria-hidden', 'true');
-  button.tabIndex = -1;
+    const row = document.createElement('div');
+    row.className = 'more-timing-authority';
+    row.setAttribute?.('aria-live', 'polite');
 
-  status.id = 'calibrate-status-command';
-  status.hidden = true;
-  status.setAttribute?.('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.id = 'timing-active-label';
 
-  button.replaceWith(visibleButton);
-  status.replaceWith(visibleStatus);
+    const value = document.createElement('output');
+    value.id = 'timing-active-value';
+    value.textContent = '—';
 
-  return { button: visibleButton, status: visibleStatus, commandTarget: button };
-}
-
-const ownership = takeVisibleOwnership(legacyCalibrateButton, legacyCalibrateStatus);
-const calibrateButton = ownership.button;
-const calibrateStatus = ownership.status;
-const commandTarget = ownership.commandTarget;
-
-let latestProductStatus = window.relayProductAuthority?.lastKnownSnapshot ?? null;
-let latestAction = latestProductStatus?.actions ?? null;
-let latestTiming = latestProductStatus?.timing ?? null;
-let productAuthority = window.relayProductAuthority ?? authorityState({
-  lastKnownSnapshot: latestProductStatus,
-});
-let commandAuthority = window.relayCommandAuthority ?? authorityState();
-let commandError = null;
-
-function setText(element, value) {
-  if (element && element.textContent !== value) element.textContent = value;
-}
-
-function setHidden(value) {
-  if (calibrateButton && calibrateButton.hidden !== value) calibrateButton.hidden = value;
-}
-
-function setDisabled(value) {
-  if (calibrateButton && calibrateButton.disabled !== value) calibrateButton.disabled = value;
-}
-
-function selfOwnsServerMic(status = latestProductStatus) {
-  return Boolean(
-    status?.room?.mic?.ownerId
-    && typeof window.relayParticipantId === 'string'
-    && status.room.mic.ownerId === window.relayParticipantId,
-  );
-}
-
-function calibrationAuthority() {
-  return authorityState({
-    authorityFresh: productAuthority?.authorityFresh === true,
-    lastKnownSnapshot: latestProductStatus,
-    commandChannelFresh: commandAuthority?.commandChannelFresh === true,
-    authorized: selfOwnsServerMic(),
-    serverAllowed: latestAction?.canStartCalibration === true,
-  });
-}
-
-/**
- * ProductStatus owns all visible calibration prerequisites in both modes.
- * Content correlation may require Song playback; Robot boot-probe deliberately
- * does not. Local capture state is not server authorization: the last server
- * snapshot may stay visible while stale, but it never makes this action live.
- */
-function render() {
-  if (!calibrateButton) return;
-
-  calibrateButton.removeAttribute?.('data-i18n');
-  setText(calibrateButton, copy('realign'));
-
-  const authority = calibrationAuthority();
-  const mode = latestAction?.startCalibrationMode ?? null;
-  const reason = latestAction?.startCalibrationBlockedReason ?? null;
-  const running = reason === 'calibration-active' || latestTiming?.state === 'calibrating';
-  const bootProbePreparing = mode === 'boot-probe'
-    && (reason === 'sources-not-connected' || reason === 'sources-not-streaming');
-  const owner = selfOwnsServerMic();
-
-  if (commandError) {
-    setHidden(!owner);
-    setDisabled(true);
-    setText(calibrateStatus, commandError);
-    return;
+    row.append?.(label, value);
+    button.insertAdjacentElement?.('beforebegin', row);
+    return { label, value };
   }
 
-  if (latestProductStatus && (!authority.authorityFresh || !authority.commandChannelFresh)) {
-    const relevant = owner || latestAction?.canStartCalibration === true || running;
-    setHidden(!relevant);
-    setDisabled(true);
-    setText(calibrateStatus, relevant ? copy('reconnecting') : '');
-    return;
+  function takeVisibleOwnership(button, status) {
+    if (
+      !button || !status
+      || typeof button.cloneNode !== 'function'
+      || typeof status.cloneNode !== 'function'
+      || typeof button.replaceWith !== 'function'
+      || typeof status.replaceWith !== 'function'
+    ) {
+      return { button, status, commandTarget: null };
+    }
+
+    const visibleButton = button.cloneNode(true);
+    const visibleStatus = status.cloneNode(true);
+
+    button.id = 'calibrate-timing-command';
+    button.hidden = true;
+    button.disabled = true;
+    button.setAttribute?.('aria-hidden', 'true');
+    button.tabIndex = -1;
+
+    status.id = 'calibrate-status-command';
+    status.hidden = true;
+    status.setAttribute?.('aria-hidden', 'true');
+
+    button.replaceWith(visibleButton);
+    status.replaceWith(visibleStatus);
+
+    return { button: visibleButton, status: visibleStatus, commandTarget: button };
   }
 
-  if (running) {
-    setHidden(!owner);
-    setDisabled(true);
-    setText(calibrateButton, copy('aligning'));
-    setText(calibrateStatus, owner ? copy('aligning') : '');
-    return;
-  }
+  const timingSurface = installTimingSurface(legacyCalibrateButton);
+  const activeTimingLabel = timingSurface.label;
+  const activeTimingValue = timingSurface.value;
+  const ownership = takeVisibleOwnership(legacyCalibrateButton, legacyCalibrateStatus);
+  const calibrateButton = ownership.button;
+  const calibrateStatus = ownership.status;
+  const commandTarget = ownership.commandTarget;
 
-  if (bootProbePreparing) {
-    setHidden(true);
-    setDisabled(true);
-    setText(calibrateStatus, owner ? copy('preparing-paths') : '');
-    return;
-  }
-
-  if (authority.actionable) {
-    setHidden(false);
-    setDisabled(false);
-    setText(calibrateStatus, '');
-    return;
-  }
-
-  // Unavailable recovery actions do not occupy a disabled row. ProductStatus
-  // already owns the blocked reason; normal UI does not revive Song-era guesses
-  // such as "No song to align" or local Mic ownership as server truth.
-  setHidden(true);
-  setDisabled(true);
-  setText(calibrateStatus, '');
-}
-
-window.addEventListener('relay-product-status', (event) => {
-  latestProductStatus = event.detail ?? null;
-  latestAction = latestProductStatus?.actions ?? null;
-  latestTiming = latestProductStatus?.timing ?? null;
-  productAuthority = authorityState({
-    authorityFresh: true,
+  let latestProductStatus = window.relayProductAuthority?.lastKnownSnapshot ?? null;
+  let latestAction = latestProductStatus?.actions ?? null;
+  let latestTiming = latestProductStatus?.timing ?? null;
+  let productAuthority = window.relayProductAuthority ?? authorityState({
     lastKnownSnapshot: latestProductStatus,
   });
-  commandError = null;
-  render();
-});
+  let timingAuthority = window.relayTimingAuthority ?? {
+    authorityFresh: false,
+    valueMs: null,
+  };
+  let commandAuthority = window.relayCommandAuthority ?? authorityState();
+  let commandError = null;
 
-window.addEventListener('relay-product-authority', (event) => {
-  productAuthority = event.detail ?? authorityState({ lastKnownSnapshot: latestProductStatus });
-  if (productAuthority.lastKnownSnapshot) {
-    latestProductStatus = productAuthority.lastKnownSnapshot;
+  function setText(element, value) {
+    if (element && element.textContent !== value) element.textContent = value;
+  }
+
+  function setHidden(value) {
+    if (calibrateButton && calibrateButton.hidden !== value) calibrateButton.hidden = value;
+  }
+
+  function setDisabled(value) {
+    if (calibrateButton && calibrateButton.disabled !== value) calibrateButton.disabled = value;
+  }
+
+  function renderTimingAuthority() {
+    setText(activeTimingLabel, t('timing.label'));
+    const formatted = timingAuthority?.authorityFresh === true
+      ? formatTimingValueMs(timingAuthority.valueMs)
+      : null;
+    setText(activeTimingValue, formatted ?? '—');
+  }
+
+  function selfOwnsServerMic(status = latestProductStatus) {
+    return Boolean(
+      status?.room?.mic?.ownerId
+      && typeof window.relayParticipantId === 'string'
+      && status.room.mic.ownerId === window.relayParticipantId,
+    );
+  }
+
+  function calibrationAuthority() {
+    return authorityState({
+      authorityFresh: productAuthority?.authorityFresh === true,
+      lastKnownSnapshot: latestProductStatus,
+      commandChannelFresh: commandAuthority?.commandChannelFresh === true,
+      authorized: selfOwnsServerMic(),
+      serverAllowed: latestAction?.canStartCalibration === true,
+    });
+  }
+
+  /**
+   * ProductStatus owns visible calibration lifecycle/action policy. The timing
+   * number is independent: it is painted only from the server-applied mixer
+   * read head, never from candidates, Robot observations, or local seek state.
+   */
+  function render() {
+    renderTimingAuthority();
+    if (!calibrateButton) return;
+
+    calibrateButton.removeAttribute?.('data-i18n');
+    setText(calibrateButton, t('timing.realign'));
+
+    const authority = calibrationAuthority();
+    const reason = latestAction?.startCalibrationBlockedReason ?? null;
+    const running = reason === 'calibration-active' || latestTiming?.state === 'calibrating';
+    const owner = selfOwnsServerMic();
+
+    if (commandError) {
+      setHidden(!owner);
+      setDisabled(true);
+      setText(calibrateStatus, owner ? t('timing.unavailable') : '');
+      return;
+    }
+
+    if (latestProductStatus && (!authority.authorityFresh || !authority.commandChannelFresh)) {
+      const relevant = owner || latestAction?.canStartCalibration === true || running;
+      setHidden(!relevant);
+      setDisabled(true);
+      setText(calibrateStatus, relevant ? t('timing.reconnecting') : '');
+      return;
+    }
+
+    if (running) {
+      setHidden(!owner);
+      setDisabled(true);
+      setText(calibrateStatus, owner ? t('timing.aligning') : '');
+      return;
+    }
+
+    if (authority.actionable) {
+      setHidden(false);
+      setDisabled(false);
+      setText(calibrateStatus, '');
+      return;
+    }
+
+    setHidden(!owner);
+    setDisabled(true);
+    setText(calibrateStatus, owner && latestAction ? t('timing.unavailable') : '');
+  }
+
+  window.addEventListener('relay-product-status', (event) => {
+    latestProductStatus = event.detail ?? null;
     latestAction = latestProductStatus?.actions ?? null;
     latestTiming = latestProductStatus?.timing ?? null;
-  }
+    productAuthority = authorityState({
+      authorityFresh: true,
+      lastKnownSnapshot: latestProductStatus,
+    });
+    commandError = null;
+    render();
+  });
+
+  window.addEventListener('relay-product-authority', (event) => {
+    productAuthority = event.detail ?? authorityState({ lastKnownSnapshot: latestProductStatus });
+    if (productAuthority.lastKnownSnapshot) {
+      latestProductStatus = productAuthority.lastKnownSnapshot;
+      latestAction = latestProductStatus?.actions ?? null;
+      latestTiming = latestProductStatus?.timing ?? null;
+    }
+    render();
+  });
+
+  window.addEventListener('relay-timing-authority', (event) => {
+    timingAuthority = event.detail ?? { authorityFresh: false, valueMs: null };
+    render();
+  });
+
+  window.addEventListener('relay-command-authority', (event) => {
+    commandAuthority = event.detail ?? authorityState();
+    render();
+  });
+
+  window.addEventListener('relay-calibration-command-rejected', () => {
+    commandError = true;
+    render();
+  });
+
+  window.addEventListener('relay-locale-changed', render);
+
+  calibrateButton?.addEventListener?.('click', () => {
+    if (!commandTarget || !calibrationAuthority().actionable) return;
+    commandTarget.dispatchEvent(new Event('click', { cancelable: true }));
+  });
+
+  setHidden(true);
+  setDisabled(true);
   render();
-});
+}
 
-window.addEventListener('relay-command-authority', (event) => {
-  commandAuthority = event.detail ?? authorityState();
-  render();
-});
-
-window.addEventListener('relay-calibration-command-rejected', (event) => {
-  const reason = event.detail?.reason;
-  commandError = reason === 'take-active'
-    ? copy('finish-take')
-    : `${copy('unavailable')} ${reason ?? ''}`.trim();
-  render();
-});
-
-window.addEventListener('relay-locale-changed', render);
-
-// The visible ProductStatus-owned action forwards the real user click into the
-// already-installed command transport listener. No command result is faked:
-// app.js still sends start-timing-calibration through its authenticated socket,
-// and the next server ProductStatus determines the rendered result.
-calibrateButton?.addEventListener?.('click', () => {
-  if (!commandTarget || !calibrationAuthority().actionable) return;
-  commandTarget.dispatchEvent(new Event('click', { cancelable: true }));
-});
-
-// Do not paint the template's legacy Recalibrate fallback before authoritative
-// ProductStatus arrives.
-setHidden(true);
-setDisabled(true);
-render();
+// live-ia may import this module at DOMContentLoaded, while app.js is a later
+// module script and still needs to capture/install the authenticated command
+// listener on the legacy node. Window load is the simple deterministic fence:
+// only after it fires may the presenter detach that node and become visible.
+if (document.readyState === 'complete' || typeof document.readyState !== 'string') {
+  initialize();
+} else {
+  window.addEventListener('load', initialize, { once: true });
+}

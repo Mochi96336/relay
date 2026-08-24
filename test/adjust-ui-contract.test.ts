@@ -9,6 +9,8 @@ const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'ut
 const css = readFileSync(new URL('../public/adjust.css', import.meta.url), 'utf8');
 const ia = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const calibrationUi = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8');
+const actionLanguage = readFileSync(new URL('../public/action-language.css', import.meta.url), 'utf8');
+const i18n = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
 const iaCss = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 
 test('local room sound stays on Live while generic Adjust disappears', () => {
@@ -58,40 +60,45 @@ test('Mic exposes +40 dB manual headroom without raising automatic recommendatio
   assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
 });
 
-test('realignment is a direct More task while fine tune survives as advanced detail', () => {
+test('realignment stays a direct More task while manual timing tweak is compatibility-only', () => {
   const more = html.indexOf('id="room-more"');
   const calibrate = html.indexOf('id="calibrate-timing"');
-  const fineTune = html.indexOf('id="vocal-fine-tune"');
   const system = html.indexOf('id="open-system"');
-  assert.ok(more >= 0 && more < calibrate && calibrate < fineTune && fineTune < system);
-  assert.match(html, /class="more-timing"/);
+  assert.ok(more >= 0 && more < calibrate && calibrate < system);
+  assert.match(html, /class="more-timing"/,
+    'legacy DOM may remain while app.js compatibility is retained');
+  assert.match(actionLanguage, /\.more-timing \{\n  display: none !important;/,
+    'manual timing tweak must not be a visible Live product control');
+  assert.match(app, /type: 'set-vocal-fine-tune'/,
+    'presentation cleanup must not accidentally delete the compatibility protocol');
   assert.match(ia, /calibrateTiming\?\.addEventListener\('click'/);
   assert.match(ia, /import\('\.\/calibration-ui\.js'\)/);
   assert.equal(ia.includes('adjustPanel'), false);
 });
 
-test('calibration presenter loads after core navigation and deferred command listeners', () => {
-  const systemBinding = ia.indexOf("openSystem?.addEventListener('click', revealSystem)");
-  const calibrationLoader = ia.indexOf("import('./calibration-ui.js')");
-  const domReadyGate = ia.indexOf("window.addEventListener('DOMContentLoaded', installCalibrationPresenter");
-  assert.ok(systemBinding >= 0);
-  assert.ok(calibrationLoader > systemBinding);
-  assert.ok(domReadyGate > systemBinding);
-  assert.doesNotMatch(ia, /^import\s/m);
+test('calibration presenter waits until app module scripts have installed command transport', () => {
+  assert.match(calibrationUi, /window\.addEventListener\('load', initialize, \{ once: true \}\)/);
+  assert.match(calibrationUi, /document\.readyState === 'complete'/);
+  assert.doesNotMatch(calibrationUi, /relayCalibrationCommandReady|relay-calibration-command-ready/,
+    'timing presenter must not require a second app/live-ia handshake contract');
 });
 
 test('calibration visible presenter follows ProductStatus and has one painted owner', () => {
   assert.match(calibrationUi, /latestProductStatus = event\.detail \?\? null/);
   assert.match(calibrationUi, /latestAction = latestProductStatus\?\.actions/);
   assert.match(calibrationUi, /latestTiming = latestProductStatus\?\.timing/);
-  assert.match(calibrationUi, /startCalibrationMode/);
-  assert.match(calibrationUi, /mode === 'boot-probe'/);
-  assert.match(calibrationUi, /reason === 'sources-not-connected'/);
-  assert.match(calibrationUi, /reason === 'sources-not-streaming'/);
   assert.match(calibrationUi, /reason === 'calibration-active'/);
-  assert.match(calibrationUi, /'重新對齊'/);
-  assert.match(calibrationUi, /'對齊中…'/);
-  assert.match(calibrationUi, /'正在準備聲音路徑…'/);
+  assert.match(calibrationUi, /window\.relayI18n\?\.t/);
+  assert.match(calibrationUi, /t\('timing\.realign'\)/);
+  assert.match(calibrationUi, /t\('timing\.aligning'\)/);
+  assert.match(calibrationUi, /t\('timing\.unavailable'\)/);
+  assert.doesNotMatch(calibrationUi, /startCalibrationMode|mode === 'boot-probe'|sources-not-connected|sources-not-streaming/,
+    'visible presenter must not reinterpret server implementation reasons as progress');
+  assert.doesNotMatch(calibrationUi, /getLocale/,
+    'visible calibration copy must not maintain a private locale switch');
+  assert.doesNotMatch(calibrationUi, /'重新對齊'|'對齊中…'|'Realign'|'Aligning…'/,
+    'visible copy belongs to shared i18n rather than a local bilingual table');
+  assert.match(calibrationUi, /legacyFineTuneSurface\.hidden = true/);
   assert.match(calibrationUi, /takeVisibleOwnership/);
   assert.match(calibrationUi, /cloneNode/);
   assert.match(calibrationUi, /calibrate-timing-command/);
@@ -101,10 +108,27 @@ test('calibration visible presenter follows ProductStatus and has one painted ow
     'calibration presenter must consume semantic policy instead of rebuilding Song prerequisites');
 });
 
+test('timing calibration copy is concise and contains no singing restriction', () => {
+  assert.match(i18n, /'timing\.label': '時間對齊'/);
+  assert.match(i18n, /'timing\.realign': '重新對齊'/);
+  assert.match(i18n, /'timing\.aligning': '對齊中…'/);
+  assert.match(i18n, /'timing\.unavailable': '目前無法重新對齊'/);
+  assert.match(i18n, /'timing\.realign': 'Realign'/);
+  assert.match(i18n, /'timing\.aligning': 'Aligning…'/);
+  assert.doesNotMatch(i18n, /Don’t sing|Don't sing|先不要唱|不要出聲|停止唱歌/);
+  assert.doesNotMatch(i18n, /provisional \{lag\}|已套用暫定值/);
+});
+
+test('locale changes rerender the one visible calibration presenter', () => {
+  assert.match(calibrationUi, /window\.addEventListener\('relay-locale-changed', render\)/);
+  assert.match(calibrationUi, /calibrateButton\.removeAttribute\?\.\('data-i18n'\)/);
+  assert.match(calibrationUi, /button\.id = 'calibrate-timing-command'/);
+  assert.match(calibrationUi, /button\.hidden = true/);
+});
+
 test('app remains authenticated command transport while ProductStatus owns visible result', () => {
   assert.match(app, /type: 'start-timing-calibration'/);
   assert.match(calibrationUi, /commandTarget\.dispatchEvent/);
-  assert.match(calibrationUi, /next server ProductStatus determines the rendered result/);
   assert.doesNotMatch(ia, /product-status/);
 });
 

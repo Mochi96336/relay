@@ -4,11 +4,22 @@ import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
 import { authorityState } from '../public/authority-freshness.js';
+import { formatTimingValueMs } from '../public/timing-value.js';
 
 const source = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8')
-  .replace("import { authorityState } from './authority-freshness.js';\n\n", '');
+  .replace("import { authorityState } from './authority-freshness.js';\n", '')
+  .replace("import { formatTimingValueMs } from './timing-value.js';\n", '')
+  .replace("import './timing-authority.js';\n", '');
 
 type Listener = (event: { detail?: any }) => void;
+
+const copy: Record<string, string> = {
+  'timing.label': '時間對齊',
+  'timing.realign': '重新對齊',
+  'timing.aligning': '對齊中…',
+  'timing.unavailable': '目前無法重新對齊',
+  'timing.reconnecting': '重新連線中…',
+};
 
 function harness(options: { selfMic?: 'live' | 'off' } = {}) {
   const windowListeners = new Map<string, Listener[]>();
@@ -80,9 +91,10 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
   };
 
   const window = {
-    relayI18n: { getLocale: () => 'zh-Hant' },
+    relayI18n: { t: (key: string) => copy[key] ?? key },
     relayParticipantId: 'self',
     relayProductAuthority: null as any,
+    relayTimingAuthority: null as any,
     relayCommandAuthority: null as any,
     addEventListener(type: string, listener: Listener) {
       const current = windowListeners.get(type) ?? [];
@@ -96,7 +108,13 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     constructor(type: string) { this.type = type; }
   }
 
-  runInNewContext(source, { window, document, Event, authorityState });
+  runInNewContext(source, {
+    window,
+    document,
+    Event,
+    authorityState,
+    formatTimingValueMs,
+  });
 
   function emit(type: string, detail: any) {
     for (const listener of windowListeners.get(type) ?? []) listener({ detail });
@@ -140,7 +158,6 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     legacyStatus,
     get button() { return visibleButton; },
     get status() { return visibleStatus; },
-    body,
     emit,
     emitCommandAuthority,
     emitProductAuthority,
@@ -164,15 +181,15 @@ test('calibration presenter replaces painted legacy nodes instead of racing them
 
 test('content calibration availability comes from fresh ProductStatus authority', () => {
   const ui = harness({ selfMic: 'live' });
-
   ui.emitProductStatus({
     canStartCalibration: false,
     startCalibrationBlockedReason: 'phone-not-playing',
     startCalibrationMode: 'content',
   });
-  assert.equal(ui.button.hidden, true);
+  assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.status.textContent, '');
+  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.status.textContent, '目前無法重新對齊');
 
   ui.emitProductStatus({
     canStartCalibration: true,
@@ -182,6 +199,7 @@ test('content calibration availability comes from fresh ProductStatus authority'
   assert.equal(ui.button.textContent, '重新對齊');
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, false);
+  assert.equal(ui.status.textContent, '');
 });
 
 test('local Mic state cannot impersonate server ownership', () => {
@@ -191,27 +209,24 @@ test('local Mic state cannot impersonate server ownership', () => {
     startCalibrationBlockedReason: null,
     startCalibrationMode: 'boot-probe',
   }, { state: 'idle' }, 'another-participant');
-
   assert.equal(ui.button.hidden, true);
   assert.equal(ui.button.disabled, true);
 });
 
-test('Robot ready ignores Song-era state when fresh server authority owns the Mic', () => {
+test('Robot ready follows server calibration authority', () => {
   const ui = harness({ selfMic: 'live' });
-
   ui.emitProductStatus({
     canStartCalibration: true,
     startCalibrationBlockedReason: null,
     startCalibrationMode: 'boot-probe',
   });
-
   assert.equal(ui.button.textContent, '重新對齊');
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, false);
   assert.equal(ui.status.textContent, '');
 });
 
-test('healthy calibration does not leave a disabled recovery action for a non-owner phone', () => {
+test('non-owner phone never gets a disabled recovery action', () => {
   const ui = harness({ selfMic: 'off' });
   ui.emitProductStatus({
     canStartCalibration: true,
@@ -222,7 +237,7 @@ test('healthy calibration does not leave a disabled recovery action for a non-ow
   assert.equal(ui.button.disabled, true);
 });
 
-test('Robot capture-path blocks project as preparing audio paths only for the server owner', () => {
+test('technical block reasons collapse to the normal unavailable consequence', () => {
   for (const reason of ['sources-not-connected', 'sources-not-streaming']) {
     const ui = harness({ selfMic: 'live' });
     ui.emitProductStatus({
@@ -230,13 +245,14 @@ test('Robot capture-path blocks project as preparing audio paths only for the se
       startCalibrationBlockedReason: reason,
       startCalibrationMode: 'boot-probe',
     });
-    assert.equal(ui.button.hidden, true, reason);
+    assert.equal(ui.button.hidden, false, reason);
     assert.equal(ui.button.disabled, true, reason);
-    assert.equal(ui.status.textContent, '正在準備聲音路徑…', reason);
+    assert.equal(ui.button.textContent, '重新對齊', reason);
+    assert.equal(ui.status.textContent, '目前無法重新對齊', reason);
   }
 });
 
-test('active calibration is visible as aligning and cannot be started twice', () => {
+test('active calibration keeps the action label stable and presents aligning separately', () => {
   const ui = harness({ selfMic: 'live' });
   ui.emitProductStatus({
     canStartCalibration: false,
@@ -245,11 +261,11 @@ test('active calibration is visible as aligning and cannot be started twice', ()
   }, { state: 'calibrating' });
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.button.textContent, '對齊中…');
+  assert.equal(ui.button.textContent, '重新對齊');
   assert.equal(ui.status.textContent, '對齊中…');
 });
 
-test('last-known calibration stays visible but not actionable while authority is stale', () => {
+test('last-known calibration stays visible but non-actionable while ProductStatus is stale', () => {
   const ui = harness({ selfMic: 'live' });
   const snapshot = ui.emitProductStatus({
     canStartCalibration: true,
@@ -262,12 +278,11 @@ test('last-known calibration stays visible but not actionable while authority is
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.status.textContent, '重新連線中…');
-
   ui.button.click();
   assert.equal(ui.commandCount(), 0);
 });
 
-test('open command transport without fresh registration is still non-actionable', () => {
+test('stale command transport is non-actionable', () => {
   const ui = harness({ selfMic: 'live' });
   ui.emitProductStatus({
     canStartCalibration: true,
@@ -275,22 +290,19 @@ test('open command transport without fresh registration is still non-actionable'
     startCalibrationMode: 'boot-probe',
   });
   ui.emitCommandAuthority(false);
-
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.status.textContent, '重新連線中…');
   ui.button.click();
   assert.equal(ui.commandCount(), 0);
 });
 
-test('a real visible click reaches the installed command transport and waits for server state', () => {
+test('visible click reaches the already-installed authenticated command transport', () => {
   const ui = harness({ selfMic: 'live' });
   ui.emitProductStatus({
     canStartCalibration: true,
     startCalibrationBlockedReason: null,
     startCalibrationMode: 'boot-probe',
   });
-
-  assert.equal(ui.commandCount(), 0);
   ui.button.click();
   assert.equal(ui.commandCount(), 1);
   assert.equal(ui.button.disabled, false,
@@ -302,10 +314,11 @@ test('a real visible click reaches the installed command transport and waits for
     startCalibrationMode: 'boot-probe',
   }, { state: 'calibrating' });
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.button.textContent, '對齊中…');
+  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.status.textContent, '對齊中…');
 });
 
-test('calibration command rejection is visible on the ProductStatus-owned presenter', () => {
+test('calibration command rejection stays product-generic', () => {
   const ui = harness({ selfMic: 'live' });
   ui.emitProductStatus({
     canStartCalibration: true,
@@ -313,7 +326,7 @@ test('calibration command rejection is visible on the ProductStatus-owned presen
     startCalibrationMode: 'boot-probe',
   });
   ui.emit('relay-calibration-command-rejected', { reason: 'take-active' });
-
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.status.textContent, '請先完成目前的錄音');
+  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.status.textContent, '目前無法重新對齊');
 });

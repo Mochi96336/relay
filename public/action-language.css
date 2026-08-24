@@ -53,6 +53,12 @@
   position: relative;
 }
 
+/* Manual vocal fine tune remains only as compatibility DOM for app.js and the
+   legacy wire command. It is not a normal Live product control anymore. */
+.more-timing {
+  display: none !important;
+}
+
 /* This-phone sound is the only persistent local control left on Live. */
 #listen-toggle {
   min-height: 44px;

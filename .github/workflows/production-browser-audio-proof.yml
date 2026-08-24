@@ -31,7 +31,7 @@ jobs:
         run: npm install --no-save --package-lock=false @playwright/test@1.56.0
       - name: Prove production browser audio path
         id: production-browser-audio
-        run: bash scripts/ci-run.sh production-browser-audio-proof production-browser-audio "production browser audio path" -- npx playwright test test/browser/production-audio-proof.spec.mjs --workers=1 --reporter=line
+        run: bash scripts/ci-run.sh production-browser-audio-proof production-browser-audio "production browser audio path" -- npx playwright test test/browser/production-audio-proof.spec.mjs test/browser/production-listener-proof.spec.mjs --workers=1 --reporter=line
       - name: Upload production browser audio failure summary
         if: failure() && steps.production-browser-audio.outcome == 'failure'
         uses: actions/upload-artifact@v4

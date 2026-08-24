@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Relay listener debug fixture</title>
+  </head>
+  <body>
+    <button id="listen-toggle" type="button">Mute</button>
+    <input id="listen-gain" type="range" min="0" max="100" value="100" />
+    <button id="start-publisher" type="button">Take mic</button>
+    <button id="confirm-takeover" type="button">Take over</button>
+    <script>
+      window.relayParticipantId = 'listener-debug-participant';
+      window.relayParticipantCapability = 'listener-debug-capability';
+      window.relayNickname = 'Listener Debug';
+      window.relayIdentityReady = Promise.resolve();
+    </script>
+    <script type="module" src="/listener-debug.js"></script>
+    <script type="module" src="/listen.js"></script>
+  </body>
+</html>

@@ -82,18 +82,22 @@ systemPanel?.addEventListener('click', (event) => {
 });
 
 // Core System/Take navigation must exist even if a semantic presenter fails.
-// Calibration is installed only after deferred module evaluation completes so
-// app.js has already captured its compatibility command node. calibration-ui
-// then replaces the painted nodes and becomes their sole visible presenter.
+// app.js owns the authenticated calibration command transport. It publishes an
+// explicit readiness handshake only after its listener and initial authority
+// snapshot are installed; calibration-ui may take painted ownership only then.
+let calibrationPresenterInstalled = false;
 function installCalibrationPresenter() {
+  if (calibrationPresenterInstalled) return;
+  calibrationPresenterInstalled = true;
   import('./calibration-ui.js').catch((error) => {
+    calibrationPresenterInstalled = false;
     console.error('Relay calibration presenter failed', error);
   });
 }
-if (document.readyState === 'loading') {
-  window.addEventListener('DOMContentLoaded', installCalibrationPresenter, { once: true });
-} else {
+if (window.relayCalibrationCommandReady === true) {
   installCalibrationPresenter();
+} else {
+  window.addEventListener('relay-calibration-command-ready', installCalibrationPresenter, { once: true });
 }
 
 // Realignment is a direct recovery task in More, not a reason to navigate into

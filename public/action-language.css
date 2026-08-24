@@ -35,6 +35,12 @@
   visibility: hidden;
 }
 
+/* Manual vocal fine tune is retained only as compatibility DOM for app.js and
+   the legacy wire command. It is not a normal Live product control anymore. */
+.more-timing {
+  display: none !important;
+}
+
 /* Inline typography keeps its visual rhythm while the transparent hit halo
    gives a finger more room. Keep the halo narrow enough that neighboring
    actions do not compete for the same tap. */

@@ -56,8 +56,6 @@ let liveMixActive = false;
 let latestMixHealth = null;
 let latestLocalMicLevel = null;
 let latestCalibration = null;
-let roomSongAvailable = null;
-let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
 let activeCalibrationProbeRequestId = null;
 let publisherSessionEpoch = 0;
@@ -591,76 +589,21 @@ function updateSingerControls() {
   updateCalibrateButton();
 }
 
+function calibrationServerAllowed() {
+  const authority = window.relayProductAuthority;
+  return authority?.authorityFresh === true
+    && authority?.lastKnownSnapshot?.actions?.canStartCalibration === true;
+}
+
 /**
- * Calibration runs itself, but the singer is the one who can hear that it got
- * it wrong, and they are not at the machine the other button is on.
+ * app.js is the authenticated command transport only. ProductStatus owns the
+ * room-level calibration policy, so this compatibility node must never rebuild
+ * Song/timeline/probe prerequisites or paint calibration result copy.
  */
 function updateCalibrateButton() {
-  const collecting = latestCalibration?.state === 'collecting';
-  const probeActive = latestCalibration?.probeActive === true;
   calibrateButton.disabled = !publisherCommandAuthority(
-    roomSongAvailable === true && roomCanStartCalibration === true,
+    calibrationServerAllowed(),
   ).actionable;
-
-  if (roomSongAvailable === false) {
-    calibrateStatus.textContent = 'No song to align.';
-    return;
-  }
-
-  if (roomSongAvailable === null) {
-    calibrateStatus.textContent = 'Waiting for room state.';
-    return;
-  }
-
-  if (!liveMixActive) {
-    calibrateStatus.textContent = t('adjust.calibration.auto');
-    return;
-  }
-
-  if (probeActive) {
-    const phase = String(latestCalibration?.probePhase ?? '');
-    const attempts = latestCalibration?.probeAttempts ?? {};
-    const max = Number(latestCalibration?.probeMaxAttempts) || 1;
-    const target = phase.startsWith('backing') ? 'Song path' : 'Phone mic';
-    const attempt = Number(phase.startsWith('backing') ? attempts.backing : attempts.mic) || 1;
-    calibrateStatus.textContent = `Calibrating · ${target} ${Math.min(attempt, max)}/${max}`;
-    return;
-  }
-
-  if (collecting) {
-    const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
-    const need = Number(latestCalibration.windowsNeeded) || 1;
-    // A window is not fully trusted until agreement confirms it, so say how
-    // far the run has got - otherwise repeated windows look like it is stuck.
-    // A confident single window may already be applied underneath this (see
-    // provisionalNote); that does not end the run, it just means singing does
-    // not have to wait on it.
-    const rounds = need > 1
-      ? t('adjust.calibration.rounds', { agreed: Number(latestCalibration.windowsAgreed) || 0, need })
-      : '';
-    const provisionalNote = latestCalibration.provisional
-      ? t('adjust.calibration.provisional', { lag: signed(latestCalibration.micLagMs, ' ms') })
-      : '';
-    calibrateStatus.textContent = t('adjust.calibration.collecting', { progress, rounds, provisional: provisionalNote });
-    return;
-  }
-
-  if (latestCalibration?.state === 'complete') {
-    const stale = latestCalibration.calibrationStale ? t('adjust.calibration.stale') : '';
-    calibrateStatus.textContent = t('adjust.calibration.complete', { lag: signed(latestCalibration.micLagMs, ' ms'), stale });
-    return;
-  }
-
-  if (latestCalibration?.state === 'failed') {
-    calibrateStatus.textContent = latestCalibration.probeError
-      ? t('adjust.calibration.failed', { error: latestCalibration.probeError })
-      : latestCalibration.automatic
-        ? t('adjust.calibration.autoRetry')
-        : t('adjust.calibration.failed', { error: latestCalibration.error ?? t('adjust.calibration.noSignal') });
-    return;
-  }
-
-  calibrateStatus.textContent = t('adjust.calibration.fallback');
 }
 
 function wsUrl() {
@@ -1417,12 +1360,7 @@ async function requestPublisherStart(takeoverExpectedOwnerId = null) {
   }
 }
 
-window.addEventListener('relay-product-status', (event) => {
-  const videoId = event.detail?.room?.song?.videoId;
-  roomSongAvailable = typeof videoId === 'string' && videoId.length > 0;
-  roomCanStartCalibration = event.detail?.actions?.canStartCalibration === true;
-  updateCalibrateButton();
-});
+window.addEventListener('relay-product-authority', updateCalibrateButton);
 
 publisherButton.addEventListener('click', () => {
   requestPublisherStart().catch(console.error);
@@ -1480,13 +1418,10 @@ useMicGainSuggestion.addEventListener('click', () => {
 
 window.addEventListener('relay-locale-changed', () => {
   renderGainAdvice();
-  updateCalibrateButton();
 });
 
 calibrateButton.addEventListener('click', () => {
-  if (!publisherCommandAuthority(
-    roomSongAvailable === true && roomCanStartCalibration === true,
-  ).actionable) return;
+  if (!publisherCommandAuthority(calibrationServerAllowed()).actionable) return;
   socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
 });
 
@@ -1494,4 +1429,6 @@ updateMixLabels();
 updateCalibrateButton();
 updateSingerControls();
 publishPublisherCommandAuthority();
+window.relayCalibrationCommandReady = true;
+dispatchRelayEvent('relay-calibration-command-ready');
 setStatus('Idle', 'Take the mic when you are ready.');

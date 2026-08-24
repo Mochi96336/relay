@@ -2,16 +2,16 @@ import { authorityState } from './authority-freshness.js';
 
 const legacyCalibrateButton = document.querySelector('#calibrate-timing');
 const legacyCalibrateStatus = document.querySelector('#calibrate-status');
+const legacyFineTuneSurface = document.querySelector('.more-timing');
 
-function copy(key) {
-  const zh = window.relayI18n?.getLocale?.() === 'zh-Hant';
-  if (key === 'realign') return zh ? '重新對齊' : 'Realign';
-  if (key === 'aligning') return zh ? '對齊中…' : 'Aligning…';
-  if (key === 'preparing-paths') return zh ? '正在準備聲音路徑…' : 'Preparing audio paths…';
-  if (key === 'reconnecting') return zh ? '重新連線中…' : 'Reconnecting…';
-  if (key === 'finish-take') return zh ? '請先完成目前的錄音' : 'Finish the current Take before calibrating.';
-  if (key === 'unavailable') return zh ? '目前無法校準' : 'Calibration is unavailable.';
-  return '';
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
+
+// Keep the legacy fine-tune DOM available to app.js while removing it from the
+// normal product surface. The compatibility command path is intentionally not
+// rewritten in this presentation-only repair.
+if (legacyFineTuneSurface) {
+  legacyFineTuneSurface.hidden = true;
+  legacyFineTuneSurface.setAttribute?.('aria-hidden', 'true');
 }
 
 /*
@@ -96,29 +96,33 @@ function calibrationAuthority() {
 }
 
 /**
- * ProductStatus owns all visible calibration prerequisites in both modes.
- * Content correlation may require Song playback; Robot boot-probe deliberately
- * does not. Local capture state is not server authorization: the last server
- * snapshot may stay visible while stale, but it never makes this action live.
+ * ProductStatus owns all visible calibration prerequisites. The presenter does
+ * not rebuild Song, Robot, timeline, or probe prerequisites from local events.
+ * A server-owned blocked reason means only that realignment is unavailable;
+ * normal UI does not reinterpret technical reason names as progress.
+ *
+ * Copy always comes through the shared i18n service. This module no longer has
+ * its own locale switch or bilingual fallback table, so a locale change cannot
+ * briefly expose a second calibration vocabulary.
  */
 function render() {
   if (!calibrateButton) return;
 
+  // The legacy template key belongs only to the hidden command node. Once this
+  // clone becomes the visible owner, shared i18n no longer paints it behind the
+  // presenter's back.
   calibrateButton.removeAttribute?.('data-i18n');
-  setText(calibrateButton, copy('realign'));
+  setText(calibrateButton, t('timing.realign'));
 
   const authority = calibrationAuthority();
-  const mode = latestAction?.startCalibrationMode ?? null;
   const reason = latestAction?.startCalibrationBlockedReason ?? null;
   const running = reason === 'calibration-active' || latestTiming?.state === 'calibrating';
-  const bootProbePreparing = mode === 'boot-probe'
-    && (reason === 'sources-not-connected' || reason === 'sources-not-streaming');
   const owner = selfOwnsServerMic();
 
   if (commandError) {
     setHidden(!owner);
     setDisabled(true);
-    setText(calibrateStatus, commandError);
+    setText(calibrateStatus, owner ? t('timing.unavailable') : '');
     return;
   }
 
@@ -126,22 +130,14 @@ function render() {
     const relevant = owner || latestAction?.canStartCalibration === true || running;
     setHidden(!relevant);
     setDisabled(true);
-    setText(calibrateStatus, relevant ? copy('reconnecting') : '');
+    setText(calibrateStatus, relevant ? t('timing.reconnecting') : '');
     return;
   }
 
   if (running) {
     setHidden(!owner);
     setDisabled(true);
-    setText(calibrateButton, copy('aligning'));
-    setText(calibrateStatus, owner ? copy('aligning') : '');
-    return;
-  }
-
-  if (bootProbePreparing) {
-    setHidden(true);
-    setDisabled(true);
-    setText(calibrateStatus, owner ? copy('preparing-paths') : '');
+    setText(calibrateStatus, owner ? t('timing.aligning') : '');
     return;
   }
 
@@ -152,12 +148,11 @@ function render() {
     return;
   }
 
-  // Unavailable recovery actions do not occupy a disabled row. ProductStatus
-  // already owns the blocked reason; normal UI does not revive Song-era guesses
-  // such as "No song to align" or local Mic ownership as server truth.
-  setHidden(true);
+  // ProductStatus owns the blocked reason. Normal UI exposes only the product
+  // consequence, never source/holder/probe/controller implementation wording.
+  setHidden(!owner);
   setDisabled(true);
-  setText(calibrateStatus, '');
+  setText(calibrateStatus, owner && latestAction ? t('timing.unavailable') : '');
 }
 
 window.addEventListener('relay-product-status', (event) => {
@@ -187,11 +182,8 @@ window.addEventListener('relay-command-authority', (event) => {
   render();
 });
 
-window.addEventListener('relay-calibration-command-rejected', (event) => {
-  const reason = event.detail?.reason;
-  commandError = reason === 'take-active'
-    ? copy('finish-take')
-    : `${copy('unavailable')} ${reason ?? ''}`.trim();
+window.addEventListener('relay-calibration-command-rejected', () => {
+  commandError = true;
   render();
 });
 

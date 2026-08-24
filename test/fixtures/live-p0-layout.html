@@ -367,19 +367,22 @@
         checks.push(['gain-aria', gainNode?.getAttribute('aria-label') === '房間聲音音量', gainNode?.getAttribute('aria-label')]);
         if (state === 'room-sound-normal') {
           checks.push(['toggle-aria-normal', toggleNode?.getAttribute('aria-label') === '靜音房間聲音', toggleNode?.getAttribute('aria-label')]);
+        } else if (state === 'room-sound-retry') {
+          checks.push(['toggle-aria-retry', toggleNode?.getAttribute('aria-label') === '房間聲音未啟動，再點一下重試', toggleNode?.getAttribute('aria-label')]);
+          checks.push(['retry-icon', toggleNode?.dataset.icon === 'retry', toggleNode?.dataset.icon]);
         } else {
           checks.push(['toggle-aria-muted', toggleNode?.getAttribute('aria-label') === '開啟房間聲音', toggleNode?.getAttribute('aria-label')]);
         }
         if (state === 'room-sound-forced') {
           checks.push(['forced-gain-disabled', gainNode?.disabled === true, gainNode?.disabled]);
           checks.push(['forced-toggle-disabled', toggleNode?.disabled === true, toggleNode?.disabled]);
-          checks.push(['forced-status', stateNode?.textContent === '唱歌中', stateNode?.textContent]);
+          checks.push(['forced-status', stateNode?.textContent === '唱歌時暫停', stateNode?.textContent]);
         }
         if (state === 'room-sound-muted') {
-          checks.push(['muted-status', stateNode?.textContent === '已靜音', stateNode?.textContent]);
+          checks.push(['muted-status', stateNode?.textContent === '房間聲音已靜音', stateNode?.textContent]);
         }
         if (state === 'room-sound-retry') {
-          checks.push(['retry-status', stateNode?.textContent === '重試', stateNode?.textContent]);
+          checks.push(['retry-status', stateNode?.textContent === '房間聲音未啟動，再點一下重試', stateNode?.textContent]);
           checks.push(['retry-gain-enabled', gainNode?.disabled === false, gainNode?.disabled]);
           checks.push(['retry-toggle-enabled', toggleNode?.disabled === false, toggleNode?.disabled]);
         }

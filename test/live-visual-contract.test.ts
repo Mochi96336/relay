@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
+const layout = readFileSync(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8');
+const roomSoundCss = readFileSync(new URL('../public/room-sound-ui.css', import.meta.url), 'utf8');
 const song = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
 const songSurface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
 const state = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
@@ -115,7 +117,12 @@ test('Room Mic presence is visible to listeners and self owners through the same
   assert.doesNotMatch(presence, /if \(localActive\) return;/);
 });
 
-test('forced Room sound state removes the inert slider while preserving the short reason', () => {
-  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control \.adjust-control,[\s\S]*?display:none;/);
-  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control #listen-adjust-state,[\s\S]*?display:block;/);
+test('forced Room sound state keeps the same rail geometry and changes appearance only', () => {
+  assert.doesNotMatch(composition, /\.local-sound-control|#listen-gain-value/,
+    'formal composition must not regain Room sound rail geometry');
+  assert.match(layout, /\.local-sound-control \{[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
+  assert.match(layout, /#listen-adjust-state,[\s\S]*?#listen-note \{[\s\S]*?position:\s*absolute/);
+  assert.match(roomSoundCss, /body\[data-listen="mic-muted"\] #listen-gain,[\s\S]*?opacity:\s*\.46/);
+  assert.doesNotMatch(roomSoundCss, /#listen-adjust-state|#listen-gain-value/,
+    'state paint must not regain geometry ownership');
 });

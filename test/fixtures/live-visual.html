@@ -146,17 +146,17 @@
     </section>
 
     <footer class="live-actions">
-      <section class="local-listen local-sound-control" aria-labelledby="local-listen-label" style="grid-template-columns:44px auto minmax(0,1fr) auto">
+      <section class="local-listen local-sound-control" aria-labelledby="local-listen-label">
         <div class="adjust-group-heading">
-          <span id="local-listen-label" class="section-label" style="display:block;grid-column:2;grid-row:1;white-space:nowrap">房間聲音</span>
+          <span id="local-listen-label" class="section-label">房間聲音</span>
           <span>只影響這支裝置</span>
           <button id="listen-toggle" class="text-action" type="button">靜音</button>
         </div>
         <label class="adjust-control">
           <div class="adjust-row-heading"><strong>音量</strong><output id="listen-gain-value">30%</output></div>
-          <input id="listen-gain" class="adjust-range" type="range" value="30" style="grid-column:3" />
+          <input id="listen-gain" class="adjust-range" type="range" value="30" />
         </label>
-        <p id="listen-adjust-state" class="adjust-helper" style="grid-column:4"></p>
+        <p id="listen-adjust-state" class="adjust-helper"></p>
       </section>
     </footer>
 

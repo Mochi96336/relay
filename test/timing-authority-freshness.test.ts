@@ -100,6 +100,10 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
       this.listeners.set(type, current);
     }
 
+    send(payload: string) {
+      this.sent.push(payload);
+    }
+
     emit(type: string, event: any = {}) {
       for (const listener of this.listeners.get(type) ?? []) listener(event);
     }

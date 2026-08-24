@@ -53,6 +53,36 @@ function uplinkHealth(generation: number) {
   };
 }
 
+async function requestCalibrationStatus(client: RelayClient) {
+  const fromIndex = client.messages.length;
+  client.send({ type: 'timing-calibration-status-request' });
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const status = client.messages
+      .slice(fromIndex)
+      .find((message) => message.type === 'timing-calibration-status');
+    if (status) return status;
+    await sleep(10);
+  }
+  throw new Error('Timed out waiting for timing-calibration-status.');
+}
+
+function calibrationAuthorityProjection(status: Record<string, any>) {
+  return {
+    state: status.state,
+    progress: status.progress,
+    micSpanSamples: status.micSpanSamples,
+    backingSpanSamples: status.backingSpanSamples,
+    micLagMs: status.micLagMs,
+    activeMicLagMs: status.activeMicLagMs,
+    confidence: status.confidence,
+    provisional: status.provisional,
+    error: status.error,
+    calibrationKind: status.calibrationKind,
+    calibrationStale: status.calibrationStale,
+  };
+}
+
 test('statusz separates browser uplink, receiver transport and timeline evidence', async () => {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
@@ -73,8 +103,15 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     });
     await publisher.waitForType('registered');
 
+    const calibrationBefore = await requestCalibrationStatus(publisher);
     publisher.send(uplinkHealth(7));
     await sleep(20);
+    const calibrationAfter = await requestCalibrationStatus(publisher);
+    assert.deepEqual(
+      calibrationAuthorityProjection(calibrationAfter),
+      calibrationAuthorityProjection(calibrationBefore),
+      'capture level telemetry must not start, fail, or apply calibration authority',
+    );
 
     const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
     assert.equal(status.audio.micMediaPath, 'websocket');

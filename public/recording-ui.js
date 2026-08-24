@@ -38,6 +38,7 @@ if (strip && startButton && stopButton && status) {
   let finishTimer = null;
 
   strip.hidden = false;
+  strip.dataset.recordingSlot = 'action';
   startButton.hidden = false;
   stopButton.hidden = true;
   startButton.disabled = true;
@@ -65,6 +66,22 @@ if (strip && startButton && stopButton && status) {
     stopButton.textContent = t('recording.stop');
   }
 
+  function presentSlot(mode, copy, detail = latestState) {
+    strip.dataset.recordingSlot = mode;
+    status.textContent = copy;
+
+    if (mode === 'status') {
+      startButton.hidden = true;
+      return;
+    }
+
+    if (mode === 'status-action') {
+      startButton.hidden = false;
+      startButton.disabled = detail?.canStart !== true;
+      startButton.textContent = t('recording.record');
+    }
+  }
+
   function renderState(detail = latestState) {
     if (!detail || typeof detail !== 'object') return;
     latestState = detail;
@@ -77,18 +94,26 @@ if (strip && startButton && stopButton && status) {
     renderControls(detail);
 
     if (finishFlash && lifecycle === 'ready') {
-      status.textContent = t('recording.ready');
+      presentSlot('status', t('recording.ready'), detail);
       return;
     }
 
     const commandError = detail.commandError?.reason;
     if (commandError) {
-      status.textContent = commandErrorCopy(commandError);
+      const copy = commandErrorCopy(commandError);
+      if (lifecycle !== 'recording' && lifecycle !== 'finalizing' && detail.canStart === true) {
+        presentSlot('status-action', copy, detail);
+      } else if (lifecycle !== 'recording' && lifecycle !== 'finalizing') {
+        presentSlot('status', copy, detail);
+      } else {
+        strip.dataset.recordingSlot = lifecycle === 'recording' ? 'recording' : 'status';
+        status.textContent = copy;
+      }
       return;
     }
 
     if (detail.startPending === true && lifecycle !== 'recording' && lifecycle !== 'finalizing') {
-      status.textContent = t('recording.starting');
+      presentSlot('status', t('recording.starting'), detail);
       return;
     }
 
@@ -104,6 +129,7 @@ if (strip && startButton && stopButton && status) {
       const elapsed = Number.isFinite(startedAtMs) && Number.isFinite(clockNow)
         ? clockNow - startedAtMs
         : 0;
+      strip.dataset.recordingSlot = 'recording';
       status.textContent = authorityFresh
         ? `● ${formatDuration(elapsed)}`
         : `● ${formatDuration(elapsed)} · ${t('recording.blocked.reconnecting')}`;
@@ -111,20 +137,29 @@ if (strip && startButton && stopButton && status) {
     }
 
     if (lifecycle === 'finalizing') {
-      status.textContent = authorityFresh
-        ? t('recording.finishing')
-        : `${t('recording.finishing')} · ${t('recording.blocked.reconnecting')}`;
+      presentSlot(
+        'status',
+        authorityFresh
+          ? t('recording.finishing')
+          : `${t('recording.finishing')} · ${t('recording.blocked.reconnecting')}`,
+        detail,
+      );
       return;
     }
 
     if (lifecycle === 'failed') {
-      status.textContent = t('recording.failed');
+      const copy = t('recording.failed');
+      presentSlot(detail.canStart === true ? 'status-action' : 'status', copy, detail);
       return;
     }
 
-    status.textContent = detail.canStart === true
-      ? ''
-      : blockedCopy(detail.startBlockedReason);
+    if (detail.canStart === true) {
+      strip.dataset.recordingSlot = 'action';
+      status.textContent = '';
+      return;
+    }
+
+    presentSlot('status', blockedCopy(detail.startBlockedReason), detail);
   }
 
   function showFinishedFlash() {

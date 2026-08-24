@@ -744,8 +744,7 @@ function beginRobotContentTransition(
     state.analysisPending = false;
     robotContentTransitionAbortController = null;
     const failedAt = performance.now();
-    noteRobotContentTransitionWorkerFailure(state.bounds, 'anchor', failedAt);
-    if (state.bounds.phase === 'degraded') {
+    if (noteRobotContentTransitionWorkerFailure(state.bounds, 'anchor', failedAt)) {
       settleDegradedRobotContentTransition(state, failedAt);
     }
   });
@@ -944,8 +943,7 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
     // transition quarantined so a later independent window can still prove it.
     const failedAt = performance.now();
     state.discardWorkingEvidenceOnCommit = true;
-    noteRobotContentTransitionWorkerFailure(state.bounds, 'compare', failedAt);
-    if (state.bounds.phase === 'degraded') {
+    if (noteRobotContentTransitionWorkerFailure(state.bounds, 'compare', failedAt)) {
       settleDegradedRobotContentTransition(state, failedAt);
       return;
     }
@@ -2855,7 +2853,7 @@ wss.on('connection', (rawSocket, request) => {
         noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
         const contentTimingStart = mappedContentBackingStart(start, nowMs);
         if (contentTimingStart !== null) {
-          feedContentBackingEvidence(samples, contentTimingStart, nowMs);
+feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         }
       }
       return;
@@ -3443,23 +3441,23 @@ wss.on('connection', (rawSocket, request) => {
         && socket.isRobotSource === true
         && backingIsRobot
         && robotContentTimeline.noteFollowerCorrection(
-          fromMediaTime,
-          toMediaTime,
-          context,
-          nowMs,
-        );
+fromMediaTime,
+toMediaTime,
+context,
+nowMs,
+);
 
       robotPlayerOffset.reset();
       if (mappedFollowerCorrection) {
         if (preDeltaMs !== null && referenceDeltaMs !== null) {
-          beginRobotContentTransition(
-            fromMediaTime,
-            toMediaTime,
-            preDeltaMs,
-            referenceDeltaMs,
-            context,
-            nowMs,
-          );
+beginRobotContentTransition(
+  fromMediaTime,
+  toMediaTime,
+  preDeltaMs,
+  referenceDeltaMs,
+  context,
+  nowMs,
+);
         }
         // Same source/capture identity, different media mapping segment. Keep the
         // transaction and primed evidence, but immediately rebase any already

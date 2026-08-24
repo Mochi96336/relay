@@ -1,0 +1,44 @@
+name: Robot transition bounds PR verifier
+
+on:
+  pull_request:
+    branches:
+      - agent/correctness-repair
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.head_ref == 'agent/robot-transition-bounds' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/robot-transition-bounds
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply server integration
+        run: python3 scripts/robot-transition-bounds-patch.py
+      - run: npm run check
+      - name: Run targeted Robot transition regressions
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/robot-content-transition-bounds.test.ts
+          test/robot-content-transition.test.ts
+          test/robot-content-correction-liveness.test.ts
+      - run: npm test
+      - name: Commit verified hardening
+        run: |
+          rm .github/workflows/robot-transition-bounds-patch.yml
+          rm .github/workflows/robot-transition-bounds-pr.yml
+          rm scripts/robot-transition-bounds-patch.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(robot): bound ambiguous content transitions"
+          git push origin HEAD:agent/robot-transition-bounds

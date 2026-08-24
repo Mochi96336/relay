@@ -186,7 +186,7 @@ html body .live-actions .local-sound-control #listen-gain-value {
    height below it. Recording/history, Mic gain, then Room sound form one quiet
    control stack at the bottom of Live instead of floating through the middle. */
 html body .live-shell {
-  min-height: 100dvh;
+  min-height: 100svh;
   grid-template-rows: max-content max-content minmax(max-content, 1fr) max-content max-content;
   align-content: stretch;
 }

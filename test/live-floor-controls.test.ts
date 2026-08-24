@@ -5,7 +5,8 @@ import test from 'node:test';
 test('Live rehearsal controls form one bottom floor stack', async () => {
   const css = await readFile(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8');
 
-  assert.match(css, /min-height:\s*100dvh/);
+  assert.match(css, /min-height:\s*100svh/);
+  assert.doesNotMatch(css, /\.live-shell\s*\{[^}]*min-height:\s*100dvh/s);
   assert.match(
     css,
     /grid-template-rows:\s*max-content max-content minmax\(max-content, 1fr\) max-content/,

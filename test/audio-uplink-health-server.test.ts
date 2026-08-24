@@ -15,6 +15,17 @@ function uplinkHealth(generation: number) {
     captureGeneration: generation,
     capturedSamples: 96_000,
     inputGapSamples: 128,
+    inputMuted: false,
+    capture: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      audioSessionType: 'play-and-record',
+    },
+    captureLevel: {
+      peakDbfs: -18,
+      rmsDbfs: -31,
+    },
     droppedSamples: {
       total: 960,
       disconnected: 480,
@@ -42,6 +53,36 @@ function uplinkHealth(generation: number) {
   };
 }
 
+async function requestCalibrationStatus(client: RelayClient) {
+  const fromIndex = client.messages.length;
+  client.send({ type: 'timing-calibration-status-request' });
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const status = client.messages
+      .slice(fromIndex)
+      .find((message) => message.type === 'timing-calibration-status');
+    if (status) return status;
+    await sleep(10);
+  }
+  throw new Error('Timed out waiting for timing-calibration-status.');
+}
+
+function calibrationAuthorityProjection(status: Record<string, any>) {
+  return {
+    state: status.state,
+    progress: status.progress,
+    micSpanSamples: status.micSpanSamples,
+    backingSpanSamples: status.backingSpanSamples,
+    micLagMs: status.micLagMs,
+    activeMicLagMs: status.activeMicLagMs,
+    confidence: status.confidence,
+    provisional: status.provisional,
+    error: status.error,
+    calibrationKind: status.calibrationKind,
+    calibrationStale: status.calibrationStale,
+  };
+}
+
 test('statusz separates browser uplink, receiver transport and timeline evidence', async () => {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
@@ -62,8 +103,15 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     });
     await publisher.waitForType('registered');
 
+    const calibrationBefore = await requestCalibrationStatus(publisher);
     publisher.send(uplinkHealth(7));
     await sleep(20);
+    const calibrationAfter = await requestCalibrationStatus(publisher);
+    assert.deepEqual(
+      calibrationAuthorityProjection(calibrationAfter),
+      calibrationAuthorityProjection(calibrationBefore),
+      'capture level telemetry must not start, fail, or apply calibration authority',
+    );
 
     const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
     assert.equal(status.audio.micMediaPath, 'websocket');
@@ -71,9 +119,35 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     assert.equal(status.audio.captureAndSender.inputGapSamples, 128);
     assert.equal(status.audio.captureAndSender.droppedSamples.disconnected, 480);
     assert.equal(status.audio.captureAndSender.transport.webSocketPacketsSent, 100);
+    assert.deepEqual(status.audio.captureAndSender.capture, {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      audioSessionType: 'play-and-record',
+    });
+    assert.deepEqual(status.audio.captureAndSender.captureLevel, {
+      peakDbfs: -18,
+      rmsDbfs: -31,
+    });
     assert.ok(status.audio.captureAndSender.reportAgeMs >= 0);
     assert.equal(typeof status.audio.receiverTransport.receivedPackets, 'number');
     assert.equal(typeof status.audio.timeline.micGapMs, 'number');
+
+    const malformed: any = uplinkHealth(7);
+    malformed.capturedSamples = 999_999;
+    malformed.captureLevel = { peakDbfs: -40, rmsDbfs: -20 };
+    publisher.send(malformed);
+    await sleep(20);
+    const afterMalformed = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    assert.equal(
+      afterMalformed.audio.captureAndSender.capturedSamples,
+      96_000,
+      'malformed diagnostic telemetry must not replace the last valid capture state',
+    );
+    assert.deepEqual(afterMalformed.audio.captureAndSender.captureLevel, {
+      peakDbfs: -18,
+      rmsDbfs: -31,
+    });
 
     publisher.send(uplinkHealth(6));
     await sleep(20);

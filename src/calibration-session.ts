@@ -25,6 +25,9 @@ export type CalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
 export type CalibrationStatus = {
   state: CalibrationPhase;
   progress: number;
+  /** Current content-collector spans; zero outside an in-flight collection. */
+  micSpanSamples: number;
+  backingSpanSamples: number;
   durationMs: number;
   micLagMs: number | null;
   confidence: number | null;
@@ -564,10 +567,17 @@ export class CalibrationSession {
       : this.phase === 'complete'
         ? 1
         : 0;
+    const spanForStatus = (spanSamples: number) => !this.collecting
+      ? 0
+      : this.analysisPending
+        ? this.requiredSamples
+        : Math.min(this.requiredSamples, spanSamples);
 
     return {
       state: this.phase,
       progress,
+      micSpanSamples: spanForStatus(this.collector.micSpanSamples),
+      backingSpanSamples: spanForStatus(this.collector.backingSpanSamples),
       durationMs: this.durationMs,
       micLagMs: this.appliedResultValue?.micLagMs ?? null,
       confidence: this.confidence,

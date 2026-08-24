@@ -1,3 +1,15 @@
+export type AudioCaptureAppliedSettings = {
+  echoCancellation: boolean | null;
+  noiseSuppression: boolean | null;
+  autoGainControl: boolean | null;
+  audioSessionType: string | null;
+};
+
+export type AudioCaptureLevel = {
+  peakDbfs: number;
+  rmsDbfs: number;
+};
+
 export type AudioUplinkTransportHealth = {
   path: 'websocket' | 'webtransport';
   maxPacketBytes: number | null;
@@ -26,6 +38,10 @@ export type AudioUplinkHealth = {
   capturedSamples: number;
   inputGapSamples: number;
   inputMuted: boolean;
+  /** Browser-reported facts about the applied MediaStreamTrack. Diagnostic only. */
+  capture: AudioCaptureAppliedSettings | null;
+  /** Capture-worklet level before packetization/transport. Diagnostic only. */
+  captureLevel: AudioCaptureLevel | null;
   droppedSamples: {
     total: number;
     disconnected: number;
@@ -35,6 +51,8 @@ export type AudioUplinkHealth = {
   controlReconnects: number;
   transport: AudioUplinkTransportHealth;
 };
+
+const MAX_AUDIO_SESSION_TYPE_LENGTH = 64;
 
 function uint32(value: unknown): number | null {
   const number = Number(value);
@@ -54,10 +72,61 @@ function positiveSafeIntegerOrNull(value: unknown): number | null | undefined {
   return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
+function nullableBoolean(value: unknown): boolean | null | undefined {
+  if (value === null) return null;
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function nullableAudioSessionType(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= MAX_AUDIO_SESSION_TYPE_LENGTH
+    ? value
+    : undefined;
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function parseCaptureAppliedSettings(value: unknown): AudioCaptureAppliedSettings | null | undefined {
+  if (value === null) return null;
+  const capture = record(value);
+  if (!capture) return undefined;
+
+  const echoCancellation = nullableBoolean(capture.echoCancellation);
+  const noiseSuppression = nullableBoolean(capture.noiseSuppression);
+  const autoGainControl = nullableBoolean(capture.autoGainControl);
+  const audioSessionType = nullableAudioSessionType(capture.audioSessionType);
+  if (
+    echoCancellation === undefined
+    || noiseSuppression === undefined
+    || autoGainControl === undefined
+    || audioSessionType === undefined
+  ) return undefined;
+
+  return { echoCancellation, noiseSuppression, autoGainControl, audioSessionType };
+}
+
+function parseCaptureLevel(value: unknown): AudioCaptureLevel | null | undefined {
+  if (value === null) return null;
+  const level = record(value);
+  if (!level) return undefined;
+
+  const peakDbfs = level.peakDbfs;
+  const rmsDbfs = level.rmsDbfs;
+  if (
+    typeof peakDbfs !== 'number'
+    || typeof rmsDbfs !== 'number'
+    || !Number.isFinite(peakDbfs)
+    || !Number.isFinite(rmsDbfs)
+    || peakDbfs > 0
+    || rmsDbfs > peakDbfs
+  ) return undefined;
+  return { peakDbfs, rmsDbfs };
 }
 
 export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null {
@@ -68,6 +137,8 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   const controlReconnects = nonNegativeSafeInteger(payload.controlReconnects);
+  const capture = payload.capture === undefined ? null : parseCaptureAppliedSettings(payload.capture);
+  const captureLevel = payload.captureLevel === undefined ? null : parseCaptureLevel(payload.captureLevel);
   const dropped = record(payload.droppedSamples);
   const transport = record(payload.transport);
   if (
@@ -75,6 +146,8 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     || capturedSamples === null
     || inputGapSamples === null
     || controlReconnects === null
+    || capture === undefined
+    || captureLevel === undefined
     || !dropped
     || !transport
   ) return null;
@@ -142,6 +215,8 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     capturedSamples,
     inputGapSamples,
     inputMuted: payload.inputMuted === true,
+    capture,
+    captureLevel,
     droppedSamples: { total, disconnected, congested, packetTooLarge },
     controlReconnects,
     transport: {

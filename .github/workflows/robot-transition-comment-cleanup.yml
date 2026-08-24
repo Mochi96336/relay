@@ -1,0 +1,127 @@
+name: Robot transition comment cleanup
+
+on:
+  pull_request:
+    branches:
+      - agent/correctness-repair
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.head_ref == 'agent/robot-transition-bounds'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/robot-transition-bounds
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20.19
+          cache: npm
+      - run: npm ci
+      - name: Restore comment-only base deletions
+        run: |
+          git fetch origin agent/correctness-repair
+          cp src/server.ts /tmp/server-before.ts
+          python3 - <<'PY'
+          from difflib import SequenceMatcher
+          from pathlib import Path
+          import subprocess
+
+          current_path = Path('src/server.ts')
+          current = current_path.read_text().splitlines(keepends=True)
+          base = subprocess.check_output(
+              ['git', 'show', 'origin/agent/correctness-repair:src/server.ts'],
+              text=True,
+          ).splitlines(keepends=True)
+
+          def comment_only(line: str) -> bool:
+              stripped = line.strip()
+              return (
+                  stripped == ''
+                  or stripped.startswith('//')
+                  or stripped.startswith('/*')
+                  or stripped.startswith('*')
+                  or stripped == '*/'
+              )
+
+          matcher = SequenceMatcher(a=base, b=current, autojunk=False)
+          output = []
+          restored = 0
+          for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+              if tag == 'equal' or tag == 'insert':
+                  output.extend(current[j1:j2])
+                  continue
+              if tag == 'delete':
+                  deleted = base[i1:i2]
+                  if deleted and all(comment_only(line) for line in deleted):
+                      output.extend(deleted)
+                      restored += len(deleted)
+                  continue
+              # For replacement hunks, preserve the current code and recover only
+              # leading/trailing whole-line comments that disappeared with it.
+              deleted = base[i1:i2]
+              replacement = current[j1:j2]
+              lead = 0
+              while lead < len(deleted) and comment_only(deleted[lead]):
+                  lead += 1
+              trail = len(deleted)
+              while trail > lead and comment_only(deleted[trail - 1]):
+                  trail -= 1
+              leading = deleted[:lead]
+              trailing = deleted[trail:]
+              if leading and not all(line in replacement for line in leading):
+                  output.extend(leading)
+                  restored += len(leading)
+              output.extend(replacement)
+              if trailing and not all(line in replacement for line in trailing):
+                  output.extend(trailing)
+                  restored += len(trailing)
+
+          current_path.write_text(''.join(output))
+          print(f'restored {restored} comment/blank lines')
+          PY
+      - name: Prove cleanup is comment-only
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import ts from 'typescript';
+          const before = fs.readFileSync('/tmp/server-before.ts', 'utf8');
+          const after = fs.readFileSync('src/server.ts', 'utf8');
+          const compile = (source) => ts.transpileModule(source, {
+            compilerOptions: {
+              target: ts.ScriptTarget.ES2022,
+              module: ts.ModuleKind.ESNext,
+              removeComments: true,
+            },
+            reportDiagnostics: true,
+          });
+          const a = compile(before);
+          const b = compile(after);
+          if (a.diagnostics?.length || b.diagnostics?.length) {
+            console.error('transpile diagnostics prevent semantic comparison');
+            process.exit(1);
+          }
+          if (a.outputText !== b.outputText) {
+            console.error('cleanup changed emitted JavaScript; refusing to commit');
+            process.exit(1);
+          }
+          console.log('emitted JavaScript identical after comment restoration');
+          NODE
+      - name: Typecheck
+        run: npm run check
+      - name: Commit cleanup and remove helper workflow
+        run: |
+          rm .github/workflows/robot-transition-comment-cleanup.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/server.ts .github/workflows/robot-transition-comment-cleanup.yml
+          if git diff --cached --quiet; then
+            echo 'nothing to clean'
+            exit 0
+          fi
+          git commit -m 'chore: clean robot transition diff noise'
+          git push origin HEAD:agent/robot-transition-bounds

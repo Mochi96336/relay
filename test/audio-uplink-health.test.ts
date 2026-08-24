@@ -90,7 +90,7 @@ describe('audio uplink health', () => {
     assert.equal(health.captureLevel, null);
   });
 
-  it('rejects malformed applied settings instead of turning them into policy', () => {
+  it('rejects malformed or unbounded applied settings instead of turning them into policy', () => {
     const input: any = validHealth();
     input.capture.echoCancellation = 'false';
     assert.equal(parseAudioUplinkHealth(input), null);
@@ -98,6 +98,14 @@ describe('audio uplink health', () => {
     const missing: any = validHealth();
     delete missing.capture.autoGainControl;
     assert.equal(parseAudioUplinkHealth(missing), null);
+
+    const oversized: any = validHealth();
+    oversized.capture.audioSessionType = 'x'.repeat(65);
+    assert.equal(parseAudioUplinkHealth(oversized), null);
+
+    const empty: any = validHealth();
+    empty.capture.audioSessionType = '';
+    assert.equal(parseAudioUplinkHealth(empty), null);
   });
 
   it('rejects malformed or physically inconsistent worklet levels', () => {

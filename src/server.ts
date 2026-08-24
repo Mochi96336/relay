@@ -768,17 +768,10 @@ function reconcileRobotContentTransitionWithFreshDelta(
     || !robotTransitionContextMatches(state.context, context)
   ) return state?.bounds.phase !== 'degraded';
 
-  // Fresh absolute telemetry that still agrees with either pending content
-  // hypothesis does not revoke it. Queued pre-seek PCM may still need to prove
-  // the old hypothesis before the transition can retire quarantine.
   const matchesPre = Math.abs(state.preDeltaMs - freshDeltaMs) <= CALIBRATION_TOLERANCE_MS;
   const matchesPost = Math.abs(state.postDeltaMs - freshDeltaMs) <= CALIBRATION_TOLERANCE_MS;
   if (matchesPre || matchesPost) return true;
 
-  // Repeated follower corrections can outrun settled absolute telemetry. Once a
-  // fresh mapping disagrees with both uncommitted hypotheses, rebuild from the
-  // last PCM-proven mapping to that fresh mapping. The old request/frontier was
-  // tied to discarded hypotheses and cannot authorize the rebuilt transition.
   pendingRobotBackingBoundary = null;
   const seekJumpSeconds = (freshDeltaMs - committedDeltaMs) / 1_000;
   const fromMediaTime = seekJumpSeconds < 0 ? -seekJumpSeconds : 0;
@@ -822,8 +815,6 @@ function commitRobotContentTransition(
   if (state.bounds.phase !== 'verifying') return false;
   if (!robotContentTimeline.noteBackingBoundary(boundarySample, state.context, nowMs)) return false;
   if (state.discardWorkingEvidenceOnCommit) {
-    // Unclassifiable media-transition PCM is not capture loss. Do not zero-fill
-    // it into a six-second analysis window; restart only unanalysed evidence.
     calibration.restartWorkingEvidence(nowMs);
     if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
   }
@@ -927,13 +918,8 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
     if (comparison.verdict === 'pre') {
       state.confirmedPreRanges.push({ start, end });
     } else {
-      // Ambiguous evidence, or post evidence that could not yet commit, has no
-      // replay mapping retained by this state. Never splice around it later.
       state.discardWorkingEvidenceOnCommit = true;
     }
-    // Ambiguous windows are intentionally never relabelled. Advancing by a full
-    // evidence window may discard some usable PCM, but it cannot turn a mixed
-    // transition into false timing authority.
     state.nextWindowStart = end;
     maybeAnalyzeRobotContentTransition(completedAt);
   }, () => {
@@ -941,8 +927,6 @@ function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
     state.analysisPending = false;
     robotContentTransitionAbortController = null;
     const failedAt = performance.now();
-    // Worker failure grants no mapping. Skip this evidence window and keep the
-    // transition quarantined only while the explicit retry budget remains.
     state.discardWorkingEvidenceOnCommit = true;
     noteRobotContentTransitionWorkerFailure(state.bounds, 'compare', failedAt);
     if (state.bounds.phase === 'degraded') {
@@ -986,7 +970,6 @@ function noteRobotTransitionBackingFrame(
   if (state.nextWindowStart === null) state.nextWindowStart = eligibleStart;
   state.chunks.push({ start: eligibleStart, samples: eligibleSamples });
 
-  // Keep quarantine memory bounded even if content never becomes classifiable.
   const keepAfter = Math.max(0, session.backingTotalSamples - BACKING_RETENTION_MS * MIX_SAMPLE_RATE / 1_000);
   state.chunks = state.chunks.filter((chunk) => chunk.start + chunk.samples.length > keepAfter);
   maybeAnalyzeRobotContentTransition(nowMs);
@@ -1034,7 +1017,6 @@ const calibration = new CalibrationSession({
 });
 
 let contentValidationBaselineRevision = -1;
-/** The one confirmed revision whose live read head must approach, not jump to. */
 let contentValidationSlewRevision: number | null = null;
 const contentCalibrationValidator = new ContentCalibrationValidator({
   sampleRate: MIX_SAMPLE_RATE,
@@ -1053,12 +1035,8 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
   },
   onDriftConfirmed: (result) => {
     calibrationKind = 'content';
-    // applyValidatedResult synchronously calls onSettled -> syncAppliedCalibration.
-    // Mark that revision first so only this runtime promotion takes the slew path.
     contentValidationSlewRevision = calibration.confirmedRevision + 1;
     calibration.applyValidatedResult(result);
-    // applyValidatedResult increments synchronously. Keep the validator's
-    // own drift-confirmed state rather than immediately reseeding it.
     contentValidationBaselineRevision = calibration.confirmedRevision;
   },
 });
@@ -1123,14 +1101,6 @@ function rejectInfrastructure(socket: RelaySocket, message: string) {
 
 type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
 
-/**
- * A physical media/monitor WebSocket may bind exactly one transport role.
- * Authentication says who may use it; playback identity remains orthogonal
- * because a participant's playback-control capability can intentionally live
- * on the same socket as its publisher transport. Reconnects get a new socket
- * instead of morphing publisher/backing/monitor while authority pointers still
- * reference the old transport.
- */
 function canClaimSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
   if (socket.role === 'unknown' || socket.role === requestedRole) return true;
   sendJson(socket, {
@@ -1167,9 +1137,6 @@ function participantIdentity(request: IncomingMessage): ParticipantIdentityResul
   if (rawParticipantId === null) return { kind: 'none' };
 
   const participantId = normalizeParticipantId(rawParticipantId);
-  // Browser participant capabilities are bearer secrets and must never ride in
-  // the WebSocket request URL. Query identity remains only for explicit legacy
-  // test fixtures, which cannot be enabled in production.
   if (
     !participantId
     || browserParticipantIdentity(participantId)
@@ -1221,8 +1188,6 @@ function sessionStatusPayload() {
   return {
     type: 'session-status',
     ...snapshot,
-    // Presence reports whether the owner's Mic media is available. The control
-    // WebSocket can reconnect independently while WebTransport keeps PCM live.
     micConnected: ownerId !== null
       && micMediaOwnerId === ownerId
       && micMediaConnected(),
@@ -1302,6 +1267,75 @@ function roomSongCommandStatusPayload(nowMs = performance.now()) {
 
 function roomSongCommandApplyPayload(command: AcceptedRoomSongCommand) {
   return {
+    type: 'room-song-command-apply',
+    commandId: command.commandId,
+    revision: command.revision,
+    supersedesCommandId: command.supersedesCommandId,
+    issuedByParticipantId: command.issuedByParticipantId,
+    targetPlaybackTransportId: command.target.transportId,
+    targetPlaybackGeneration: command.target.generation,
+    ...command.body,
+  };
+}
+
+function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: string) {
+  sendJson(socket, {
+    type: 'room-song-command-rejected',
+    commandId: typeof commandId === 'string' ? commandId : null,
+    reason,
+    revision: roomSongCommandRevision,
+    room: youtubeTimeline.roomStatusPayload(),
+  });
+}
+
+function broadcastRoomSongCommandFailure(
+  commandId: string,
+  reason: string,
+  nowMs = performance.now(),
+) {
+  broadcastJson({
+    type: 'room-song-command-failed-ack',
+    commandId,
+    revision: roomSongCommandRevision,
+    reason,
+    room: youtubeTimeline.roomStatusPayload(nowMs),
+  });
+}
+
+function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now()) {
+  const cancelled = roomSongCommands.cancelPending();
+  if (!cancelled) return false;
+  broadcastRoomSongCommandFailure(cancelled.commandId, reason, nowMs);
+  broadcastJson(roomSongCommandStatusPayload(nowMs));
+  return true;
+}
+
+function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
+  return takeSongSnapshotFromRoom(
+    youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
+  );
+}
+
+function takeFrameBoundary(nowMs = performance.now()) {
+  return takeFrameBoundaryAtOrAfter({
+    generation: session.generation,
+    sessionSampleIndex: session.sessionSampleAt(nowMs),
+    frameSamples: session.frameSamples,
+    sampleRate: session.sampleRate,
+    nowMs,
+  });
+}
+
+function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
+  sendJson(socket, {
+    type: 'take-command-rejected',
+    command,
+    reason,
+  });
+}
+
+function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
+  return {
     type,
     handoffId: plan.handoffId,
     revision: plan.revision,
@@ -1333,10 +1367,6 @@ function selectPlaybackHandoffTarget(participantId: string, nowMs: number) {
     .filter((candidate) => nowMs - candidate.intentAtMs <= PLAYBACK_MIC_INTENT_MS)
     .sort((a, b) => b.intentAtMs - a.intentAtMs);
   if (intended.length > 0) return intended[0].identity;
-
-  // Presence alone must never move the song. This fallback is used only after
-  // a microphone ownership action, and only when one playback transport exists
-  // so there is no multi-tab choice to guess.
   return candidates.length === 1 ? candidates[0].identity : null;
 }
 
@@ -1350,15 +1380,6 @@ function playbackTransportIsConnected(identity: PlaybackIdentity) {
   return false;
 }
 
-/**
- * Ends a handoff that has stopped being able to complete.
- *
- * A live handoff intentionally holds the room song still, so it must not be
- * able to outlive the transport it is waiting for. A page reload also lands
- * here rather than resuming: the playback generation changes on load, so the
- * reloaded tab is a different transport and the prepared target is genuinely
- * gone.
- */
 function sweepPreparedSongHandoff(nowMs: number) {
   const target = youtubeTimeline.handoffTarget();
   if (!target) return false;
@@ -1422,22 +1443,6 @@ function applyMicOwnerEffects(
   });
 }
 
-/**
- * Tells a playback page why its telemetry is being ignored.
- *
- * Rejection used to be a bare `return`, which is indistinguishable from a lost
- * connection: the page keeps sending several times a second and its server
- * timeline readout simply never advances. Telemetry is far too frequent to
- * answer every time, so only a *change* of reason is reported, and an accepted
- * packet clears the memory so the next problem is reported again.
- */
-/**
- * The same discipline for the room-command gate's refusals.
- *
- * Shares `telemetryRejectedReason` with the authority refusals above so that
- * switching between the two kinds still notifies, and one accepted packet
- * clears both.
- */
 function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
   const key = `room-song:${reason}`;
   if (socket.telemetryRejectedReason === key) return;
@@ -1468,9 +1473,6 @@ function broadcastToMonitors(
   for (const client of wss.clients) {
     const socket = client as RelaySocket;
     if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
-
-    // Once a monitor opts into positioned PCM, every binary packet must remain
-    // framed. Do not silently fall back to raw PCM on an unpositioned path.
     if (binary && socket.monitorPacketVersion === 1 && position === null) continue;
 
     const outbound = binary
@@ -2637,7 +2639,7 @@ const youtubeTimelineTimer = setInterval(() => {
 
 function validSampleRate(value: unknown) {
   const sampleRate = Number(value);
-  return Number.isFinite(value) && sampleRate >= 8_000 && sampleRate <= 192_000
+  return Number.isFinite(sampleRate) && sampleRate >= 8_000 && sampleRate <= 192_000
     ? sampleRate
     : null;
 }

@@ -74,6 +74,7 @@ test('silence with no complete evidence window still reaches the wall-clock dead
   assert.equal(bounds.phase, 'degraded');
   assert.equal(bounds.degradedReason, 'deadline-exceeded');
   assert.equal(bounds.workerInvocations, 0);
+  assert.equal(robotContentTransitionBoundsStatus(bounds, 2_000).deadlineRemainingMs, 0);
 });
 
 test('anchor worker failure is terminal and cannot be mistaken for a content hypothesis', () => {

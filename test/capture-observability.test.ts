@@ -45,6 +45,21 @@ describe('capture observability', () => {
     });
   });
 
+  test('bounds browser-reported audio session type before telemetry', () => {
+    const stream = {
+      getAudioTracks: () => [{ getSettings: () => ({}) }],
+    };
+
+    assert.equal(
+      readCaptureSettings(stream, { audioSession: { type: 'x'.repeat(65) } })?.audioSessionType,
+      null,
+    );
+    assert.equal(
+      readCaptureSettings(stream, { audioSession: { type: '' } })?.audioSessionType,
+      null,
+    );
+  });
+
   test('fails closed when getSettings is unavailable or throws', () => {
     assert.equal(readCaptureSettings({ getAudioTracks: () => [{}] }, {}), null);
     assert.equal(readCaptureSettings({

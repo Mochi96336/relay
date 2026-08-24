@@ -233,6 +233,8 @@ export class CalibrationSession {
   // the server say the answer is stale instead of applying it to a setup it was
   // never measured against.
   private measuredContext: CalibrationContext | null = null;
+  /** Context that owns unpromoted content gathered while a preferred probe is viable. */
+  private primedContext: CalibrationContext | null = null;
 
   constructor(options: CalibrationSessionOptions) {
     this.sampleRate = options.sampleRate;
@@ -326,6 +328,85 @@ export class CalibrationSession {
     this.backingLevelDbfs = null;
     this.collector.reset();
     if (revokedProvisional) this.onSettled();
+  }
+
+  /**
+   * Starts a content transaction from evidence collected while a preferred
+   * external probe was still viable. Priming is evidence only: it cannot
+   * analyze, apply, or promote until this explicit authority handoff.
+   */
+  startFromPrimed(nowMs = performance.now()) {
+    this.invalidatePendingAnalysis();
+    const currentContext = this.context();
+    // Primed PCM is measurement evidence, not free-floating audio. Never adopt
+    // it into a transaction whose session/capture/source identity has changed.
+    if (
+      this.primedContext === null
+      || !this.contextsEqual(this.primedContext, currentContext)
+    ) {
+      this.collector.reset();
+    }
+    this.primedContext = null;
+    const revokedProvisional = this.rollbackProvisional();
+    this.transactionActiveValue = true;
+    this.phase = 'collecting';
+    this.startedAt = nowMs;
+    this.candidates = [];
+    this.error = null;
+    this.confidence = null;
+    this.segmentLagsMs = [];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
+    if (revokedProvisional) this.onSettled();
+    this.drainReadyWindows();
+  }
+
+  /** Buffers Mic evidence without opening or promoting a calibration transaction. */
+  primeMic(samples: Int16Array, startSample: number) {
+    if (this.collecting || this.analysisPending || samples.length === 0) return;
+    this.preparePrimedContext();
+    this.collector.observeMic(samples, startSample);
+  }
+
+  /** Buffers source evidence without opening or promoting a calibration transaction. */
+  primeBacking(samples: Int16Array, startSample: number) {
+    if (this.collecting || this.analysisPending || samples.length === 0) return;
+    this.preparePrimedContext();
+    this.collector.observeBacking(samples, startSample);
+  }
+
+  /** Read-only, context-fenced PCM for media-transition verification only. */
+  transitionEvidence(maxSamples: number): TimingWindow | null {
+    const currentContext = this.context();
+    const ownsPrimedEvidence = this.primedContext !== null
+      && this.contextsEqual(this.primedContext, currentContext);
+    if ((!this.collecting && !ownsPrimedEvidence) || this.analysisPending) return null;
+    return this.collector.peekRecentWindow(maxSamples);
+  }
+
+  /** A destructive source identity change invalidates unpromoted backup evidence. */
+  discardPrimedContent() {
+    if (this.collecting || this.analysisPending) return;
+    this.collector.reset();
+    this.primedContext = null;
+  }
+
+  /**
+   * Records failure of an external preferred candidate while retaining only the
+   * independent, unpromoted content backup. Confirmed/applied authority keeps
+   * the normal transactional rollback semantics.
+   */
+  failPreservingPrimed(message: string) {
+    this.invalidatePendingAnalysis();
+    this.rollbackProvisional();
+    this.transactionActiveValue = false;
+    this.phase = 'failed';
+    this.error = message;
+    this.confidence = null;
+    this.segmentLagsMs = [];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
+    this.onSettled();
   }
 
   /**
@@ -439,6 +520,20 @@ export class CalibrationSession {
     this.drainReadyWindows();
   }
 
+  /**
+   * Drops only unanalysed PCM after a proven media-mapping discontinuity.
+   * The calibration transaction and any older confirmed/applied authority stay
+   * intact; a collecting transaction simply receives a fresh timeout budget.
+   */
+  restartWorkingEvidence(nowMs = this.now()) {
+    const wasCollecting = this.collecting;
+    const hadPrimedEvidence = this.primedContext !== null;
+    this.collector.reset();
+    this.primedContext = null;
+    if (wasCollecting) this.startedAt = nowMs;
+    if (wasCollecting || hadPrimedEvidence) this.onSettled();
+  }
+
   /** Gives up on a collection that stopped making progress. */
   tick(nowMs = performance.now()) {
     if (!this.collecting || this.analysisPending || nowMs - this.startedAt <= this.timeoutMs) {
@@ -501,6 +596,24 @@ export class CalibrationSession {
 
   private cloneContext(context: CalibrationContext | null): CalibrationContext | null {
     return context === null ? null : { ...context };
+  }
+
+  private contextsEqual(left: CalibrationContext, right: CalibrationContext) {
+    return left.sessionGeneration === right.sessionGeneration
+      && left.micGeneration === right.micGeneration
+      && left.backingGeneration === right.backingGeneration
+      && left.sourceGeneration === right.sourceGeneration;
+  }
+
+  private preparePrimedContext() {
+    const currentContext = this.context();
+    if (
+      this.primedContext === null
+      || !this.contextsEqual(this.primedContext, currentContext)
+    ) {
+      this.collector.reset();
+      this.primedContext = this.cloneContext(currentContext);
+    }
   }
 
   /**

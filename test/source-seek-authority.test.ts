@@ -10,8 +10,13 @@ const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 
 test('an unarmed Source preview cannot announce or chase authoritative seek discontinuities', () => {
   assert.match(
     source,
-    /loadedVideoId !== timeline\.videoId[\s\S]{0,500}if \(armed\) send\(\{ type: 'source-seeked' \}\)/,
-    'initial preview cue may position YouTube but must not invalidate active calibration',
+    /loadedVideoId !== timeline\.videoId[\s\S]{0,500}if \(armed\) send\(\{ type: 'source-seeked', reason: 'load' \}\)/,
+    'an armed real load must carry destructive seek identity',
+  );
+  assert.match(
+    source,
+    /if \(shouldSeek\)[\s\S]{0,700}reason: 'follower-correction'[\s\S]{0,200}fromMediaTime: current[\s\S]{0,200}toMediaTime: seekTarget/,
+    'the production follower must identify the concrete media mapping it changed',
   );
   assert.match(
     source,
@@ -21,9 +26,34 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
 });
 
 test('server fences source-seeked from any no-longer-active Robot source', () => {
-  assert.match(
-    serverSource,
-    /if \(payload\.type === 'source-seeked'\) \{[\s\S]{0,700}if \(socket\.isRobotSource !== undefined && socket !== activeRobotSource\) return;[\s\S]{0,200}sourceGeneration \+= 1/,
+  const handlerStart = serverSource.indexOf("if (payload.type === 'source-seeked') {");
+  const handlerEnd = serverSource.indexOf("if (payload.type === 'set-vocal-fine-tune') {", handlerStart);
+  const staleRobotFence = serverSource.indexOf(
+    'if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;',
+    handlerStart,
+  );
+  const mappingAttempt = serverSource.indexOf('robotContentTimeline.noteFollowerCorrection(', staleRobotFence);
+  const mappedBranch = serverSource.indexOf('if (mappedFollowerCorrection) {', mappingAttempt);
+  const mappedReturn = serverSource.indexOf('return;', mappedBranch);
+  const destructiveGeneration = serverSource.indexOf('sourceGeneration += 1;', mappedReturn);
+  const destructiveDiscard = serverSource.indexOf('calibration.discardPrimedContent();', destructiveGeneration);
+
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, 'source-seeked handler must exist');
+  assert.ok(staleRobotFence > handlerStart, 'stale Robot source must be fenced before seek semantics are evaluated');
+  assert.ok(mappingAttempt > staleRobotFence, 'only the active Robot may attempt follower media mapping');
+  assert.ok(mappedBranch > mappingAttempt && mappedReturn > mappedBranch, 'valid mapped follower correction must return without destructive invalidation');
+  assert.ok(
+    destructiveGeneration > mappedReturn && destructiveGeneration < handlerEnd,
+    'unmapped/load/manual seek must fall through to source-generation invalidation',
+  );
+  assert.ok(
+    destructiveDiscard > destructiveGeneration && destructiveDiscard < handlerEnd,
+    'destructive seek must discard primed content after changing source identity',
+  );
+  assert.doesNotMatch(
+    serverSource.slice(mappedBranch, mappedReturn),
+    /sourceGeneration \+= 1/,
+    'a concretely mapped follower correction preserves source identity',
   );
 });
 

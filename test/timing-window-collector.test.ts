@@ -101,4 +101,55 @@ describe('TimingWindowCollector', () => {
 
     assert.equal(collector.micSpanSamples, 20 * MS);
   });
+test('counts mapped overlap once instead of hiding a real hole', () => {
+  const collector = new TimingWindowCollector(100, 300);
+  collector.observeMic(filled(100, 1_000), 0);
+  collector.observeBacking(filled(60, 500), 0);
+  collector.observeBacking(filled(60, 700), 30);
+  // Advance the backing frontier past one full window without covering
+  // positions 90..99. A naive sum of chunk lengths would claim >100.
+  collector.observeBacking(filled(10, 900), 100);
+
+  const window = collector.takeReadyWindow();
+  assert.ok(window);
+  assert.equal(window.backingGapSamples, 10);
+  assert.equal(window.backing[29], 500);
+  assert.equal(window.backing[30], 700, 'newer mapped overlap owns the repeated media position');
+  assert.equal(window.backing[89], 700);
+  assert.equal(window.backing[90], 0);
+});
+
+test('accepts negative timing coordinates from a backward media mapping', () => {
+  const collector = new TimingWindowCollector(100);
+  collector.observeMic(filled(100, 1_000), -50);
+  collector.observeBacking(filled(100, 500), -50);
+
+  const window = collector.takeReadyWindow();
+  assert.ok(window);
+  assert.equal(window.originSample, -50);
+  assert.equal(window.endSample, 50);
+  assert.equal(window.micGapSamples, 0);
+  assert.equal(window.backingGapSamples, 0);
+});
+
+
+  test('peekRecentWindow is read-only and uses the newest shared evidence', () => {
+    const collector = new TimingWindowCollector(100, 400);
+    collector.observeMic(filled(180, 1_000), 0);
+    collector.observeBacking(filled(150, 500), 0);
+    const snapshot = collector.peekRecentWindow(80);
+    assert.ok(snapshot);
+    assert.equal(snapshot.originSample, 70);
+    assert.equal(snapshot.endSample, 150);
+    assert.equal(snapshot.mic.length, 80);
+    assert.equal(snapshot.backing.length, 80);
+    assert.equal(snapshot.micGapSamples, 0);
+    assert.equal(snapshot.backingGapSamples, 0);
+    assert.equal(collector.ready, true);
+    const consumed = collector.takeReadyWindow();
+    assert.ok(consumed);
+    assert.equal(consumed.originSample, 0);
+    assert.equal(consumed.endSample, 100);
+  });
+
 });

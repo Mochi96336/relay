@@ -183,6 +183,19 @@ function connect() {
       return;
     }
 
+    if (message.type === 'backing-sample-boundary-request') {
+      const requestId = Number(message.requestId);
+      if (registered && Number.isSafeInteger(requestId) && requestId > 0) {
+        next.send(JSON.stringify({
+          type: 'backing-sample-boundary',
+          requestId,
+          generation,
+          firstSampleIndex: sampleCursor,
+        }));
+      }
+      return;
+    }
+
     if (message.type === 'error') {
       log(`Relay error: ${String(message.message ?? 'unknown error')}`);
     }

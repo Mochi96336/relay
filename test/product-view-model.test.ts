@@ -304,6 +304,18 @@ describe('product lifecycle and health', () => {
     assert.equal(model.attention?.code, 'take-failed');
   });
 
+  test('content calibration stays session-ready without a Robot player delta', () => {
+    const snapshot = readiness({
+      playerOffsetMs: null,
+      playerOffsetFresh: false,
+      calibrationKind: 'content',
+      calibrationValid: true,
+    });
+
+    assert.equal(snapshot.components.calibration.kind, 'content');
+    assert.equal(snapshot.sessionReasons.includes('robot-player-offset-stale'), false);
+  });
+
   test('Robot route identity does not require a player delta when the active timing strategy does not', () => {
     const model = buildProductViewModel(input({
       readiness: readiness({

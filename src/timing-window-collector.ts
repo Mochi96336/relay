@@ -9,7 +9,7 @@ export type TimingWindow = {
 
 type Capture = {
   chunks: { start: number; samples: Int16Array }[];
-  /** Session sample index this side first covered, or null before anything landed. */
+  /** Shared timing-coordinate index this side first covered, or null before anything landed. */
   firstStart: number | null;
   /** One past the last index covered. */
   lastEnd: number;
@@ -20,15 +20,18 @@ function emptyCapture(): Capture {
 }
 
 /**
- * Renders one captured side onto a shared session-sample origin.
+ * Renders one captured side onto a shared timing-coordinate origin.
  *
- * Missing transport data stays zero instead of pulling later audio earlier in
- * time. This is the placement rule content calibration already relies on: a
- * dropout weakens the evidence, but never changes the lag being measured.
+ * The coordinate is normally Relay's session sample timeline, but callers may
+ * intentionally media-map one side before observation (for example across a
+ * follower seek). Missing data stays zero instead of pulling later audio earlier
+ * in time. Overlapping mapped chunks overwrite in arrival order, while coverage
+ * counts each output position only once so a repeated media segment cannot hide
+ * a real hole.
  */
 function render(capture: Capture, origin: number, total: number) {
   const output = new Int16Array(total);
-  let covered = 0;
+  const intervals: Array<{ start: number; end: number }> = [];
 
   for (const { start, samples } of capture.chunks) {
     const offset = start - origin;
@@ -37,21 +40,32 @@ function render(capture: Capture, origin: number, total: number) {
     const length = Math.min(samples.length - from, total - at);
     if (length <= 0) continue;
     output.set(samples.subarray(from, from + length), at);
-    covered += length;
+    intervals.push({ start: at, end: at + length });
+  }
+
+  intervals.sort((a, b) => a.start - b.start || a.end - b.end);
+  let covered = 0;
+  let coveredUntil = 0;
+  for (const interval of intervals) {
+    if (interval.end <= coveredUntil) continue;
+    const start = Math.max(coveredUntil, interval.start);
+    covered += interval.end - start;
+    coveredUntil = interval.end;
   }
 
   return { samples: output, gapSamples: total - covered };
 }
 
 /**
- * Collects fixed-size mic/backing windows on Relay's shared session timeline.
+ * Collects fixed-size mic/backing windows on one shared timing coordinate.
  *
- * This class deliberately knows nothing about calibration confidence, agreement,
- * stale contexts, retries, or the analyser. Its only job is preserving the
- * sample-index semantics shared by initial calibration and background
- * validation: late starts use the first position both sides actually cover,
- * dropped frames remain holes, and already-arrived suffix audio survives when a
- * complete window is consumed.
+ * Most callers use Relay's session sample timeline directly. A caller that has
+ * stronger media-time information may map a stream onto that coordinate before
+ * observation; negative mapped positions are therefore valid. This class still
+ * deliberately knows nothing about calibration confidence, agreement, stale
+ * contexts, retries, or the analyser. Late starts use the first position both
+ * sides actually cover, dropped frames remain holes, and already-arrived suffix
+ * audio survives when a complete window is consumed.
  */
 export class TimingWindowCollector {
   readonly requiredSamples: number;
@@ -100,6 +114,30 @@ export class TimingWindowCollector {
     this.backing = emptyCapture();
   }
 
+  /** Renders newest shared evidence without consuming calibration state. */
+  peekRecentWindow(maxSamples = this.requiredSamples): TimingWindow | null {
+    if (!Number.isSafeInteger(maxSamples) || maxSamples <= 0) {
+      throw new Error('maxSamples must be a positive integer.');
+    }
+    const origin = this.origin;
+    if (origin === null) return null;
+    const commonEnd = Math.min(this.mic.lastEnd, this.backing.lastEnd);
+    const available = Math.max(0, commonEnd - origin);
+    const total = Math.min(maxSamples, available);
+    if (total <= 0) return null;
+    const start = commonEnd - total;
+    const mic = render(this.mic, start, total);
+    const backing = render(this.backing, start, total);
+    return {
+      mic: mic.samples,
+      backing: backing.samples,
+      originSample: start,
+      endSample: commonEnd,
+      micGapSamples: mic.gapSamples,
+      backingGapSamples: backing.gapSamples,
+    };
+  }
+
   /**
    * Returns and consumes one ready window, retaining any suffix already buffered
    * beyond that window for the next independent measurement.
@@ -125,13 +163,13 @@ export class TimingWindowCollector {
     };
   }
 
-  /** The first session position both sides have actually reached. */
+  /** The first timing-coordinate position both sides have actually reached. */
   private get origin() {
     if (this.mic.firstStart === null || this.backing.firstStart === null) return null;
     return Math.max(this.mic.firstStart, this.backing.firstStart);
   }
 
-  /** How much contiguous timeline span both sides now reach from the shared origin. */
+  /** How much contiguous coordinate span both sides now reach from the shared origin. */
   private get capturedSamples() {
     const origin = this.origin;
     if (origin === null) return 0;
@@ -140,8 +178,8 @@ export class TimingWindowCollector {
 
   private observe(capture: Capture, samples: Int16Array, startSample: number) {
     if (samples.length === 0) return;
-    if (!Number.isSafeInteger(startSample) || startSample < 0) {
-      throw new Error('startSample must be a non-negative integer.');
+    if (!Number.isSafeInteger(startSample)) {
+      throw new Error('startSample must be a safe integer timing coordinate.');
     }
 
     // Preserve the existing collector's bounded-buffer rule: once one side has

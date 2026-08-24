@@ -1,6 +1,10 @@
 import type { RobotContentTransitionVerdict } from './robot-content-transition.js';
 
-export type RobotContentTransitionPhase = 'verifying' | 'degraded';
+// Keep the two concrete runtime states documented, but do not make control-flow
+// narrowing assume a helper call cannot mutate `phase`. The bounds helpers do
+// mutate it from verifying -> degraded, and TypeScript otherwise treats a
+// second degraded check in the caller as impossible.
+export type RobotContentTransitionPhase = 'verifying' | 'degraded' | (string & {});
 
 export type RobotContentTransitionDegradedReason =
   | 'deadline-exceeded'

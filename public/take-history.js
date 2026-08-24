@@ -37,7 +37,7 @@ function formatRecordedAt(endedAtMs) {
 
 function takeCount(count) {
   if (localeIsChinese()) return `${count} 段`;
-  return `${count} ${count === 1 ? 'take' : 'takes'}`;
+  return `${count} ${count === 1 ? 'recording' : 'recordings'}`;
 }
 
 function shortTakeId(takeId) {
@@ -85,7 +85,7 @@ function createHistoryPanel(reviewNode) {
   const groups = document.createElement('div');
   groups.className = 'take-history-groups';
 
-  sheet.append(heading, groups, reviewNode);
+  sheet.append(heading, reviewNode, groups);
   panel.append(summary, sheet);
   document.querySelector('.live-shell')?.append(panel);
 
@@ -144,12 +144,12 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
 
   function noticeCopy() {
     if (reviewNoticeKind === 'release') {
-      return localCopy('Release mic before reviewing a Take.', '請先放開 Mic，再播放錄音。');
+      return localCopy('Release mic before playing a recording.', '請先放 Mic，再播放錄音。');
     }
     if (reviewNoticeKind === 'paused') {
       return localCopy(
-        'Take review paused while this phone has the mic.',
-        '這支手機拿到 Mic，錄音回放已暫停。',
+        'Recording playback paused while this phone has the mic.',
+        '這支手機拿到 Mic，錄音播放已暫停。',
       );
     }
     return '';
@@ -174,6 +174,17 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       reviewNoticeKind = null;
       renderNotice();
     }
+  }
+
+  function revealReviewAfterSelection() {
+    const sheet = panel.querySelector('.take-history-sheet');
+    if (!sheet) return;
+    const sheetRect = sheet.getBoundingClientRect();
+    const reviewRect = review.getBoundingClientRect();
+    const headingRect = panel.querySelector('.take-history-panel-heading')?.getBoundingClientRect();
+    const visibleTop = Math.max(sheetRect.top, headingRect?.bottom ?? sheetRect.top);
+    if (reviewRect.top >= visibleTop && reviewRect.bottom <= sheetRect.bottom) return;
+    sheet.scrollTop += reviewRect.top - visibleTop;
   }
 
   function groupLabel(group) {
@@ -221,10 +232,13 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       const meta = document.createElement('span');
       meta.textContent = formatDuration(entry.artifact.durationMs);
       button.append(when, meta);
-      button.addEventListener('click', () => {
+      button.addEventListener('click', (event) => {
+        const keyboardActivation = event.detail === 0;
         selectedTakeId = entry.takeId;
         reviewNoticeKind = null;
         renderSelection();
+        revealReviewAfterSelection();
+        if (keyboardActivation) recordingPlayer.focus({ preventScroll: true });
       });
       list.append(button);
     }
@@ -263,10 +277,10 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       recordingPlayer.load();
       currentArtifactHref = href;
     }
-    recordingPlayer.setAttribute('aria-label', localCopy('Selected Take playback', '所選錄音播放'));
+    recordingPlayer.setAttribute('aria-label', localCopy('Selected recording playback', '所選錄音播放'));
     recordingDownload.href = href;
     recordingDownload.download = `relay-take-${shortTakeId(selected.takeId)}.wav`;
-    recordingDownload.textContent = localCopy('Download WAV', '下載 WAV');
+    recordingDownload.textContent = localCopy('Download recording', '下載錄音');
     renderNotice();
   }
 
@@ -288,7 +302,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     headingCount.textContent = takeCount(historyEntries.length);
     summary.textContent = localCopy('Recordings', '錄音');
     close.textContent = localCopy('Done', '完成');
-    panel.setAttribute('aria-label', localCopy('Take history', '錄音紀錄'));
+    panel.setAttribute('aria-label', localCopy('Recording history', '錄音紀錄'));
 
     if (!historyEntries.some((entry) => entry.takeId === selectedTakeId)) {
       selectedTakeId = historyEntries[0]?.takeId ?? null;

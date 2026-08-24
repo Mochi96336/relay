@@ -90,13 +90,14 @@ test('durable Take history keeps Live compact and reuses one review player in a 
   assert.doesNotMatch(history, /window\.open|location\.href\s*=/);
 });
 
-test('Take history keeps English Take language and Traditional Chinese recording language', async () => {
+test('Take History panel uses recording language while the compact entry keeps Last take wording', async () => {
   const history = await readFile(new URL('../public/take-history.js', import.meta.url), 'utf8');
 
   assert.match(history, /localCopy\('Recordings', '錄音'\)/);
-  assert.match(history, /localCopy\('Take history', '錄音紀錄'\)/);
-  assert.match(history, /localCopy\('Selected Take playback', '所選錄音播放'\)/);
-  assert.match(history, /localCopy\('Release mic before reviewing a Take\.', '請先放開 Mic，再播放錄音。'\)/);
+  assert.match(history, /localCopy\('Recording history', '錄音紀錄'\)/);
+  assert.match(history, /localCopy\('Selected recording playback', '所選錄音播放'\)/);
+  assert.match(history, /localCopy\('Release mic before playing a recording\.', '請先放 Mic，再播放錄音。'\)/);
+  assert.match(history, /localCopy\('Download recording', '下載錄音'\)/);
   assert.match(history, /`Last take · \$\{formatDuration/);
   assert.match(history, /`上一段錄音 · \$\{formatDuration/);
   assert.doesNotMatch(history, /verdictLabel|qualityVerdict\)/,

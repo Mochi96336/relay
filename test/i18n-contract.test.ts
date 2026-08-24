@@ -106,9 +106,9 @@ test('release-era Mic, feedback, and Take history review stay inside the locale 
   assert.match(roomSoundPresentation, /Take playback is playing\./);
   assert.match(roomSoundPresentation, /正在播放錄音/);
   assert.match(history, /window\.addEventListener\('relay-locale-changed', renderHistory\)/);
-  assert.match(history, /localCopy\('Release mic before reviewing a Take\.', '請先放開 Mic，再播放錄音。'\)/);
-  assert.match(history, /'Take review paused while this phone has the mic\.'/);
-  assert.match(history, /'這支手機拿到 Mic，錄音回放已暫停。'/);
+  assert.match(history, /localCopy\('Release mic before playing a recording\.', '請先放 Mic，再播放錄音。'\)/);
+  assert.match(history, /'Recording playback paused while this phone has the mic\.'/);
+  assert.match(history, /'這支手機拿到 Mic，錄音播放已暫停。'/);
   assert.doesNotMatch(read('public/recorder.js'), /take\.reviewReleaseMic|take\.reviewPausedForMic/,
     'recording lifecycle must not regain Take review copy ownership');
 });

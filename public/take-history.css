@@ -198,17 +198,27 @@ body:has(.take-history-panel[open]) {
 }
 
 .take-history-review {
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
+  min-width: 0;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
 }
 
 .take-history-selected {
+  justify-content: flex-start;
+  gap: 6px;
   margin-bottom: 10px;
+}
+
+.take-history-selected strong::after {
+  content: " ·";
+  color: var(--dim);
+  font-weight: 400;
 }
 
 .take-history-review audio {
   width: 100%;
+  max-width: 100%;
   display: block;
 }
 

@@ -3445,7 +3445,7 @@ fromMediaTime,
 toMediaTime,
 context,
 nowMs,
-);
+        );
 
       robotPlayerOffset.reset();
       if (mappedFollowerCorrection) {

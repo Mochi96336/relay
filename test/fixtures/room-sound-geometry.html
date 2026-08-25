@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Relay Room sound geometry</title>
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/live-state.css" />
+  <link rel="stylesheet" href="/adjust.css" />
+  <link rel="stylesheet" href="/live-ia.css" />
+</head>
+<body data-listen="audible">
+  <main class="live-shell">
+    <footer class="live-actions">
+      <section class="local-listen local-sound-control" aria-labelledby="local-listen-label">
+        <div class="adjust-group-heading">
+          <span id="local-listen-label" class="section-label">Room sound</span>
+          <span>This device only</span>
+          <button id="listen-toggle" class="text-action" type="button" aria-pressed="false">Mute</button>
+        </div>
+        <label class="adjust-control" for="listen-gain">
+          <div class="adjust-row-heading">
+            <strong>Volume</strong>
+            <output id="listen-gain-value" for="listen-gain">100%</output>
+          </div>
+          <input id="listen-gain" class="adjust-range" type="range" min="0" max="100" step="1" value="100" />
+        </label>
+        <p id="listen-adjust-state" class="adjust-helper"></p>
+        <span id="listen-note" class="action-note" aria-live="polite"></span>
+      </section>
+    </footer>
+  </main>
+
+  <script src="/i18n.js"></script>
+  <script>
+    window.relayI18n.setLocale('zh-Hant', { persist: false });
+    window.relayListenState = {
+      state: 'audible',
+      phase: 'playing',
+      muted: false,
+      forcedReason: null,
+      volumePercent: 100,
+    };
+  </script>
+  <script type="module" src="/room-sound-ui.js"></script>
+</body>
+</html>

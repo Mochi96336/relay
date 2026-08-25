@@ -129,7 +129,10 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
   try {
     const control = await RelayClient.connect(server, participantQuery('participant-a', 'A', key));
     await establishRoomSong(control, 'take-playback-a');
+    control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     const backing = await startBacking(server, key);
+    feedMic(control, 8);
     feedBacking(backing, 8);
     await sleep(60);
 
@@ -148,6 +151,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     assert.equal(recording.take.quality, null, 'quality is sealed when the recording stops');
 
     feedBacking(backing, 40);
+    feedMic(control, 40);
     await sleep(260);
 
     control.send({ type: 'stop-take', takeId });
@@ -177,7 +181,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     );
     assert.ok(
       ['review', 'degraded'].includes(ready.take.quality.verdict),
-      'this synthetic backing-only Take should expose missing-mic/timing evidence',
+      'this synthetic uncalibrated Song Take should expose timing fallback evidence',
     );
 
     const unauthorized = await fetch(server.httpUrl(ready.take.artifact.url));
@@ -220,6 +224,7 @@ test('a Take survives Mic takeover and can be stopped by the new participant wit
     await a.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === 'takeover-load');
 
     const backing = await startBacking(server);
+    feedMic(a, 8);
     feedBacking(backing, 8);
     await sleep(60);
     a.send({ type: 'start-take' });
@@ -270,7 +275,10 @@ test('Take keeps recording after the controller socket disconnects and another p
   try {
     const a = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
     await establishRoomSong(a, 'controller-playback-a');
+    a.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
+    await a.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     const backing = await startBacking(server);
+    feedMic(a, 8);
     feedBacking(backing, 8);
     await sleep(60);
 
@@ -381,7 +389,10 @@ test('ending the authoritative live mix auto-finalizes the active Take instead o
   try {
     const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
     await establishRoomSong(control, 'mix-end-playback-a');
+    control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     const backing = await startBacking(server);
+    feedMic(control, 8);
     feedBacking(backing, 8);
     await sleep(60);
 
@@ -389,6 +400,7 @@ test('ending the authoritative live mix auto-finalizes the active Take instead o
     const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
     const takeId = String(start.takeId);
     feedBacking(backing, 20, 11_000);
+    feedMic(control, 20);
     await sleep(180);
 
     backing.close();
@@ -420,14 +432,15 @@ test('Start Take follows blocked product health while a Song route has no audio 
       && message.attention?.code === 'audio-unavailable'
     ));
     assert.equal(product.actions.canStartTake, false);
-    assert.equal(product.actions.startTakeBlockedReason, 'take-not-ready');
+    assert.equal(product.actions.startTakeBlockedReason, 'room-blocked');
+    assert.equal(product.actions.startTakeBlockingIssue?.cause, 'backing-stalled');
 
     control.send({ type: 'start-take' });
     const rejected = await control.waitFor((message) => (
       message.type === 'take-command-rejected'
       && message.command === 'start'
     ));
-    assert.equal(rejected.reason, 'take-not-ready');
+    assert.equal(rejected.reason, 'room-blocked');
 
     backing.close();
     control.close();
@@ -447,7 +460,7 @@ test('Take commands require participant identity, recordable room audio, and the
 
     const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
     control.send({ type: 'start-take' });
-    assert.equal((await control.waitForType('take-command-rejected')).reason, 'mix-not-active');
+    assert.equal((await control.waitForType('take-command-rejected')).reason, 'mic-required');
 
     const backing = await startBacking(server);
     feedBacking(backing, 8);
@@ -456,14 +469,26 @@ test('Take commands require participant identity, recordable room audio, and the
     const noSong = await control.waitFor((message) => (
       message.type === 'take-command-rejected'
       && message.command === 'start'
-      && message.reason === 'take-not-ready'
+      && message.reason === 'mic-required'
     ));
-    assert.equal(noSong.reason, 'take-not-ready');
+    assert.equal(noSong.reason, 'mic-required');
 
     await establishRoomSong(control, 'reject-playback-a');
+    feedBacking(backing, 8);
+    await sleep(60);
+
+    // A loaded Song preserves the existing backing-only start path. Correctness
+    // repair must not silently require a Mic for a mode the product already had.
     control.send({ type: 'start-take' });
     const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
     const takeId = String(start.takeId);
+
+    // Mic may join later without changing the room-owned Take identity.
+    control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+    feedMic(control, 8);
+    feedBacking(backing, 8);
+    await sleep(60);
 
     control.send({ type: 'product-status-request' });
     const recordingProduct = await control.waitFor((message) => (

@@ -6,42 +6,120 @@ const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf
 const ui = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/recording-ui.css', import.meta.url), 'utf8');
 const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url), 'utf8');
+const product = readFileSync(new URL('../src/product-view-model.ts', import.meta.url), 'utf8');
+const policy = readFileSync(new URL('../src/take-start-policy.ts', import.meta.url), 'utf8');
 const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 
-test('required recording presentation consumes state without owning Take commands', () => {
+ test('required recording presentation consumes state without owning Take commands', () => {
   assert.match(html, /<script type="module" src="\/recording-ui\.js"><\/script>/);
   assert.equal(liveIa.includes("'./recording-ui.js'"), false);
   assert.match(ui, /relay-recording-state/);
   assert.match(ui, /relay-take-status/);
   assert.match(recorder, /type: 'start-take'/);
   assert.match(recorder, /type: 'stop-take'/);
-
   for (const forbidden of ['WebSocket', 'start-take', 'stop-take', 'take-status-request']) {
     assert.equal(ui.includes(forbidden), false, `recording-ui.js must not own ${forbidden}`);
   }
 });
 
-test('recording presenter requests the current normalized recording state', () => {
-  assert.match(ui, /window\.dispatchEvent\(new Event\('relay-request-recording-state'\)\)/);
-  assert.match(
+test('blocked Record stays visible and disabled while reason stays authoritative', () => {
+  assert.match(ui, /strip\.hidden = false/);
+  assert.match(ui, /startButton\.disabled = !canStart/);
+  assert.doesNotMatch(ui, /startButton\.hidden = !canStart/);
+  assert.match(ui, /blockedCopy\(detail\.startBlockedReason, detail\.startBlockingIssue\)/);
+  assert.match(recorder, /status\.actions\?\.startTakeBlockedReason/);
+  assert.match(recorder, /status\.actions\?\.startTakeBlockingIssue/);
+  assert.match(product, /startTakeBlockedReason:/);
+  assert.match(product, /startTakeBlockingIssue/);
+  assert.doesNotMatch(
     recorder,
-    /window\.addEventListener\('relay-request-recording-state', publishRecordingState\)/,
+    /productCanStartTake \? null : 'mix-not-active'/,
+    'recorder must not invent a readiness reason when ProductStatus omitted one',
   );
-  assert.match(recorder, /window\.relayRecordingState = detail/);
 });
 
-test('recording is one lifecycle action rather than persistent Start and Stop buttons', () => {
-  assert.match(ui, /strip\.dataset\.takeState = lifecycle/);
-  assert.match(css, /data-take-state="recording"[^\n]*#start-recording/);
-  assert.match(css, /data-take-state="finalizing"[^\n]*#start-recording/);
-  assert.match(css, /data-take-state="finalizing"[^\n]*#stop-recording/);
-  assert.match(css, /data-take-state="recording"[^\n]*#stop-recording/);
+test('normal Take policy reasons all have explicit recording presentation', () => {
+  for (const reason of [
+    'mix-not-active',
+    'timing-calibration-active',
+    'mic-required',
+    'mic-starting',
+    'mic-reconnecting',
+    'mic-audio-stalled',
+    'room-blocked',
+    'take-active',
+  ]) {
+    assert.match(policy, new RegExp(`'${reason}'`), `${reason} must be a policy reason`);
+    assert.match(ui, new RegExp(`'${reason}'`), `${reason} must have recording presentation`);
+  }
+  assert.equal(policy.includes("'take-not-ready'"), false);
+  assert.equal(ui.includes("'take-not-ready'"), false);
+});
+
+test('room-level blocks consume the server-selected ProductIssue instead of inspecting diagnostics', () => {
+  assert.match(product, /startTake\.reason === 'room-blocked'/);
+  assert.match(product, /issues\.find\(\(issue\) => issue\.severity === 'critical'\)/);
+  assert.match(recorder, /startBlockedReason === 'room-blocked'/);
+  assert.match(ui, /blockingIssueCopy\(issue\)/);
+  assert.match(ui, /issue\?\.cause/);
+  for (const forbidden of ['readiness', 'backingStreaming', 'robotSourceConnected', 'health ===']) {
+    assert.equal(ui.includes(forbidden), false, `recording-ui.js must not infer ${forbidden}`);
+  }
+});
+
+test('semantic Start rejection bridges the click race without becoming a generic recording error', () => {
+  assert.match(recorder, /commandError = \{[\s\S]*?command: message\.command === 'stop' \? 'stop' : 'start',[\s\S]*?reason:/);
+  assert.match(ui, /START_POLICY_BLOCK_REASONS\.has\(reason\)[\s\S]*?blockedCopy\(reason, issue\)/);
+  assert.match(ui, /commandErrorCopy\(commandError, blockingIssue\)/);
+  assert.match(recorder, /commandError\?\.command === 'start'[\s\S]*?START_POLICY_BLOCK_REASONS\.has\(commandError\.reason\)[\s\S]*?commandError = null/);
+  assert.match(recorder, /function acceptProductStatus\(status\)[\s\S]*?productStatusFresh = true/);
+});
+
+test('pending Start disables Record without inventing a server block reason', () => {
+  assert.match(recorder, /serverAllowed: startAllowedByServer && !startCommandPending/);
+  assert.match(recorder, /startPending: startCommandPending/);
+  assert.match(recorder, /const startBlockedReason = startCommandPending\s*\? null/);
+  assert.match(recorder, /startCommandPending = true;[\s\S]*?send\(\{ type: 'start-take' \}\)/);
+  assert.match(ui, /const startPending = detail\.startPending === true/);
+  assert.match(ui, /detail\.startPending === true[\s\S]*?t\('recording\.starting'\)/);
+});
+
+test('ready and blocked idle states keep the same Record slot', () => {
+  assert.match(ui, /startButton\.hidden = recording \|\| finalizing/);
+  assert.match(ui, /const canStart = detail\.canStart === true/);
   assert.match(css, /min-height: 44px/);
 });
 
-test('a newly completed Take gets a brief completion acknowledgement only after recording', () => {
+test('recording and finalizing keep the recording surface mounted', () => {
+  assert.match(ui, /strip\.hidden = false/);
+  assert.match(ui, /lifecycle === 'recording'/);
+  assert.match(ui, /lifecycle === 'finalizing'/);
+  assert.match(ui, /t\('recording\.finishing'\)/);
+  assert.match(ui, /stopButton\.hidden = !recording/);
+});
+
+test('failed recording is product copy without Take identity', () => {
+  assert.match(ui, /t\('recording\.failed'\)/);
+  assert.doesNotMatch(ui, /shortTakeId/);
+  assert.doesNotMatch(ui, /take\.takeId/);
+  assert.doesNotMatch(ui, /Recording \$\{/);
+  assert.doesNotMatch(ui, /錄音 \$\{/);
+});
+
+test('reconnect disables action without speculative readiness', () => {
+  assert.match(recorder, /\? 'reconnecting'/);
+  assert.match(ui, /recording\.blocked\.reconnecting/);
+  assert.match(ui, /startButton\.disabled = !canStart/);
+});
+
+test('a newly completed recording gets a brief completion acknowledgement only after recording', () => {
   assert.match(ui, /previousLifecycle === 'recording' \|\| previousLifecycle === 'finalizing'/);
-  assert.match(ui, /'✓ 錄好了'/);
+  assert.match(ui, /t\('recording\.ready'\)/);
   assert.match(ui, /1_400/);
   assert.doesNotMatch(ui, /setInterval/);
+});
+
+test('touched recording presenter uses the shared i18n boundary', () => {
+  assert.match(ui, /relayI18n\?\.t/);
+  assert.doesNotMatch(ui, /localCopy|function chinese/);
 });

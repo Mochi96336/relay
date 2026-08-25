@@ -14,17 +14,16 @@
       'people.reconnectingSuffix': 'reconnecting',
       'people.micReconnectingSuffix': 'mic reconnecting',
       'language.label': 'Language',
-      'mic.take': 'Take mic',
-      'mic.release': 'Release mic',
+      'mic.label': 'Mic',
+      'mic.take': 'Take Mic',
+      'mic.release': 'Release Mic',
       'mic.cancel': 'Cancel',
-      'mic.takeover': '🎤 Take over',
-      'mic.microphone': '🎤 Microphone',
-      'mic.takeoverPrompt': '{name} has the microphone. Relay will prepare your Mic before switching.',
-      'mic.takeoverPreparing': 'Preparing your Mic; Relay will switch from {name} only when it is ready…',
-      'mic.startFailed': 'Could not start the microphone.',
-      'mic.takeoverKept': 'The current Mic was not changed: {message}',
-      'mic.takeoverChangedOwner': 'Mic moved to {name}. Confirm again if you still want to take over.',
-      'mic.takeoverChanged': 'Mic state changed; you can press Microphone again.',
+      'mic.takeover': 'Take over Mic',
+      'mic.takeoverPrompt': '{name} is using Mic.',
+      'mic.takeoverPending': 'Taking over Mic…',
+      'mic.startFailed': 'Could not start Mic.',
+      'mic.takeoverChangedOwner': 'Mic moved to {name}. Confirm again to take over.',
+      'mic.takeoverChanged': 'Mic changed. Try taking Mic again.',
 
       'song.label': 'Song',
       'song.change': 'Change song',
@@ -164,22 +163,27 @@
       'adjust.vocalFineTuneAria': 'Vocal fine tune',
       'adjust.vocalFineTuneHelp': 'Negative moves voice earlier; positive moves it later.',
       'adjust.waitingPlayback': 'Waiting for playback',
-      'adjust.recalibrate': 'Recalibrate',
+      'adjust.recalibrate': 'Realign',
       'adjust.recommendedGain': 'Recommended +{gain} dB',
       'adjust.soundsGood': 'Sounds good',
       'adjust.aboveSuggestion': '{amount} dB above suggestion',
       'adjust.belowSuggestion': '{amount} dB below suggestion',
       'adjust.useGain': 'Use +{gain} dB',
-      'adjust.calibration.auto': 'Calibration starts automatically after playback; rerun it here if timing feels off.',
-      'adjust.calibration.collecting': 'Calibrating {progress}%{rounds}{provisional} · Don’t sing for these few seconds so the mic can hear the backing.',
-      'adjust.calibration.rounds': ' · agreed {agreed}/{need}',
-      'adjust.calibration.provisional': ' · provisional {lag}',
-      'adjust.calibration.complete': 'Aligned {lag}{stale}',
-      'adjust.calibration.stale': ' · settings changed; rerun recommended',
-      'adjust.calibration.autoRetry': 'Waiting for usable audio; Relay will retry automatically.',
-      'adjust.calibration.failed': 'Calibration failed: {error}',
+      'adjust.calibration.auto': 'Realign if timing sounds off.',
+      'adjust.calibration.collecting': 'Aligning…',
+      'adjust.calibration.rounds': '',
+      'adjust.calibration.provisional': '',
+      'adjust.calibration.complete': 'Aligned',
+      'adjust.calibration.stale': '',
+      'adjust.calibration.autoRetry': 'Waiting for usable audio; retrying automatically.',
+      'adjust.calibration.failed': 'Unable to realign right now.',
       'adjust.calibration.noSignal': 'not enough signal',
-      'adjust.calibration.fallback': 'Not calibrated yet · using the network estimate.',
+      'adjust.calibration.fallback': 'Using current timing.',
+      'timing.label': 'Timing',
+      'timing.realign': 'Realign',
+      'timing.aligning': 'Aligning…',
+      'timing.unavailable': 'Unable to realign right now',
+      'timing.reconnecting': 'Reconnecting…',
 
       'system.attention': 'System needs attention',
       'system.summary': 'System',
@@ -257,17 +261,16 @@
       'people.reconnectingSuffix': '重新連線中',
       'people.micReconnectingSuffix': 'Mic 重新連線中',
       'language.label': '語言',
+      'mic.label': 'Mic',
       'mic.take': '拿 Mic',
-      'mic.release': '放開 Mic',
+      'mic.release': '放 Mic',
       'mic.cancel': '取消',
-      'mic.takeover': '🎤 接手 Mic',
-      'mic.microphone': '🎤 麥克風',
-      'mic.takeoverPrompt': '{name} 正在使用麥克風。Relay 會先準備你的 Mic，再切換。',
-      'mic.takeoverPreparing': '正在準備你的 Mic；準備完成後才會從 {name} 接手…',
-      'mic.startFailed': '無法啟動麥克風。',
-      'mic.takeoverKept': '沒有切走目前的 Mic：{message}',
-      'mic.takeoverChangedOwner': 'Mic 已經換成 {name}。如果仍要接手，再確認一次。',
-      'mic.takeoverChanged': 'Mic 狀態已改變；可以直接重新按麥克風。',
+      'mic.takeover': '接手 Mic',
+      'mic.takeoverPrompt': '目前是 {name} 在使用 Mic。',
+      'mic.takeoverPending': '正在接手 Mic…',
+      'mic.startFailed': '無法啟動 Mic。',
+      'mic.takeoverChangedOwner': 'Mic 已換成 {name}，要接手請再確認一次。',
+      'mic.takeoverChanged': 'Mic 狀態已改變，請重新接手。',
 
       'song.label': '歌曲',
       'song.change': '換歌',
@@ -407,22 +410,27 @@
       'adjust.vocalFineTuneAria': '人聲時間微調',
       'adjust.vocalFineTuneHelp': '負值讓人聲更早，正值讓人聲更晚。',
       'adjust.waitingPlayback': '等待播放',
-      'adjust.recalibrate': '重新校正',
+      'adjust.recalibrate': '重新對齊',
       'adjust.recommendedGain': '建議 +{gain} dB',
       'adjust.soundsGood': '目前很好',
       'adjust.aboveSuggestion': '比建議高 {amount} dB',
       'adjust.belowSuggestion': '比建議低 {amount} dB',
       'adjust.useGain': '套用 +{gain} dB',
-      'adjust.calibration.auto': '播放後會自動校正；如果覺得對不上，可以在這裡重新跑一次。',
-      'adjust.calibration.collecting': '校正中 {progress}%{rounds}{provisional} · 這幾秒先不要唱，讓麥克風收到伴奏。',
-      'adjust.calibration.rounds': ' · 已一致 {agreed}/{need} 次',
-      'adjust.calibration.provisional': ' · 已套用暫定值 {lag}',
-      'adjust.calibration.complete': '已校正 {lag}{stale}',
-      'adjust.calibration.stale': ' · 設定已改變，建議重跑',
-      'adjust.calibration.autoRetry': '等待可用的音訊中，會自動重試。',
-      'adjust.calibration.failed': '校正未成功：{error}',
+      'adjust.calibration.auto': '如果時間對不上，可以重新對齊。',
+      'adjust.calibration.collecting': '對齊中…',
+      'adjust.calibration.rounds': '',
+      'adjust.calibration.provisional': '',
+      'adjust.calibration.complete': '已對齊',
+      'adjust.calibration.stale': '',
+      'adjust.calibration.autoRetry': '正在等待可用音訊，會自動重試。',
+      'adjust.calibration.failed': '目前無法重新對齊。',
       'adjust.calibration.noSignal': '訊號不足',
-      'adjust.calibration.fallback': '尚未校正 · 目前使用網路估計值。',
+      'adjust.calibration.fallback': '使用目前的時間對齊。',
+      'timing.label': '時間對齊',
+      'timing.realign': '重新對齊',
+      'timing.aligning': '對齊中…',
+      'timing.unavailable': '目前無法重新對齊',
+      'timing.reconnecting': '重新連線中…',
 
       'system.attention': '系統需要處理',
       'system.summary': '系統',
@@ -518,6 +526,52 @@
     ));
   }
 
+  function registerMessages(bundle) {
+    if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
+      throw new TypeError('Relay i18n registration bundle must be an object');
+    }
+    const pending = [];
+    const staged = new Map();
+
+    for (const [requestedLocale, additions] of Object.entries(bundle)) {
+      const normalized = normalizeLocale(requestedLocale);
+      if (!normalized || !SUPPORTED.has(normalized)) {
+        throw new RangeError(`Relay i18n locale is not supported: ${requestedLocale}`);
+      }
+      if (!additions || typeof additions !== 'object' || Array.isArray(additions)) {
+        throw new TypeError(`Relay i18n locale table must be an object: ${requestedLocale}`);
+      }
+      const table = messages[normalized];
+
+      for (const [key, template] of Object.entries(additions)) {
+        if (typeof template !== 'string') {
+          throw new TypeError(`Relay i18n template must be a string: ${normalized}:${key}`);
+        }
+        if (Object.prototype.hasOwnProperty.call(table, key)) {
+          if (table[key] !== template) {
+            throw new Error(`Relay i18n key already registered: ${normalized}:${key}`);
+          }
+          continue;
+        }
+
+        const stagedKey = `${normalized}\u0000${key}`;
+        if (staged.has(stagedKey)) {
+          if (staged.get(stagedKey) !== template) {
+            throw new Error(`Relay i18n key already registered: ${normalized}:${key}`);
+          }
+          continue;
+        }
+        staged.set(stagedKey, template);
+        pending.push({ table, key, template });
+      }
+    }
+
+    if (pending.length === 0) return false;
+    for (const { table, key, template } of pending) table[key] = template;
+    applyStatic();
+    return true;
+  }
+
   function has(key) {
     return Object.prototype.hasOwnProperty.call(messages[locale] ?? {}, key)
       || Object.prototype.hasOwnProperty.call(messages[DEFAULT_LOCALE], key);
@@ -588,6 +642,7 @@
     has,
     setLocale,
     applyStatic,
+    registerMessages,
   };
 
   document.documentElement.lang = locale;

@@ -90,7 +90,11 @@ export function buildReadiness(input: ReadinessInput) {
   if (routeMode !== 'idle') {
     if (!input.timelineConnected) sessionReasons.push('phone-timeline-not-connected');
     else if (input.timelineState !== 1) sessionReasons.push('phone-not-playing');
-    else if (routeMode === 'robot' && !input.playerOffsetFresh) {
+    else if (
+      routeMode === 'robot'
+      && input.calibrationKind !== 'content'
+      && !input.playerOffsetFresh
+    ) {
       sessionReasons.push('robot-player-offset-stale');
     }
 

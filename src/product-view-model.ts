@@ -102,6 +102,8 @@ export type ProductStatus = {
   actions: {
     canStartTake: boolean;
     startTakeBlockedReason: TakeStartBlockReason | null;
+    /** Concrete product issue that makes a Song Take's room-level block actionable to normal UI. */
+    startTakeBlockingIssue: ProductIssue | null;
     canStopTake: boolean;
     canStartCalibration: boolean;
     startCalibrationBlockedReason: CalibrationStartBlockReason | null;
@@ -229,10 +231,13 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     sessionActive: input.readiness.components.session.active,
     timingCalibrationActive: calibrationActive(input),
     songLoaded: input.roomSong.videoId !== null,
-    voiceOnlyMicReady: mic === 'live',
+    voiceOnlyMicState: mic,
     roomBlocked: health === 'blocked',
     takeLifecycle: input.take.lifecycle,
   });
+  const startTakeBlockingIssue = !startTake.ok && startTake.reason === 'room-blocked'
+    ? issues.find((issue) => issue.severity === 'critical') ?? null
+    : null;
   const startCalibration = decideCalibrationStart({
     takeLifecycle: input.take.lifecycle,
     calibrationActive: calibrationActive(input),
@@ -274,6 +279,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     actions: {
       canStartTake: startTake.ok,
       startTakeBlockedReason: startTake.ok ? null : startTake.reason,
+      startTakeBlockingIssue,
       canStopTake: input.take.lifecycle === 'recording',
       canStartCalibration: startCalibration.ok,
       startCalibrationBlockedReason: startCalibration.ok ? null : startCalibration.reason,

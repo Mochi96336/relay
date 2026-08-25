@@ -46,6 +46,7 @@ test('TakeLibrary recovers a legacy WAV into durable metadata', async () => {
     assert.equal(entries[0].recovered, true);
     assert.equal(entries[0].song, null);
     assert.equal(entries[0].startedByParticipantId, null);
+    assert.equal(entries[0].mixSampleRange, null);
     assert.equal(entries[0].artifact.durationMs, 100);
     assert.equal(entries[0].artifact.url, `/takes/${TAKE_1}.wav`);
     assert.ok(Math.abs(entries[0].endedAtMs - endedAtMs) < 10);
@@ -85,6 +86,12 @@ test('TakeLibrary preserves finalized Take metadata across a new instance', asyn
         sampleCount: 4_800,
         durationMs: 100,
       },
+      mixSampleRange: {
+        generation: 7,
+        startSampleIndex: 9_600,
+        endSampleIndex: 14_400,
+        sampleCount: 4_800,
+      },
       quality: null,
       error: null,
     };
@@ -97,8 +104,108 @@ test('TakeLibrary preserves finalized Take metadata across a new instance', asyn
     assert.equal(entry.startedByParticipantId, 'participant-a');
     assert.equal(entry.stoppedByParticipantId, 'participant-b');
     assert.equal(entry.song?.videoId, 'video-a');
+    assert.deepEqual(entry.mixSampleRange, take.mixSampleRange);
     const sidecar = JSON.parse(await readFile(path.join(directory, `${TAKE_2}.json`), 'utf8'));
     assert.equal(sidecar.version, 1);
+    assert.deepEqual(sidecar.take.mixSampleRange, take.mixSampleRange);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('TakeLibrary reads v1 sidecars written before mix sample positions existed', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-library-v1-'));
+  try {
+    const bytes = wav();
+    await writeFile(path.join(directory, `${TAKE_1}.wav`), bytes);
+    await writeFile(path.join(directory, `${TAKE_1}.json`), `${JSON.stringify({
+      version: 1,
+      take: {
+        takeId: TAKE_1,
+        startedAtMs: 1_000,
+        endedAtMs: 1_100,
+        startedByParticipantId: 'participant-a',
+        stoppedByParticipantId: 'participant-a',
+        stopReason: 'user',
+        song: null,
+        artifact: {
+          fileName: `${TAKE_1}.wav`,
+          url: `/takes/${TAKE_1}.wav`,
+          mimeType: 'audio/wav',
+          sizeBytes: bytes.byteLength,
+          sampleRate: 48_000,
+          channels: 1,
+          bitsPerSample: 16,
+          sampleCount: 4_800,
+          durationMs: 100,
+        },
+        quality: null,
+        recovered: false,
+      },
+    })}\n`);
+
+    const entry = new TakeLibrary({ directory }).get(TAKE_1);
+
+    assert.ok(entry, 'old v1 metadata remains readable after the schema extension');
+    assert.equal(entry.takeId, TAKE_1);
+    assert.equal(entry.recovered, false, 'valid old metadata must not be replaced by legacy WAV recovery');
+    assert.equal(entry.startedByParticipantId, 'participant-a');
+    assert.equal(entry.mixSampleRange, null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('TakeLibrary revokes authoritative sample metadata when the WAV no longer matches it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-library-mismatch-'));
+  try {
+    const wavPath = path.join(directory, `${TAKE_2}.wav`);
+    await writeFile(wavPath, wav());
+    const take: TakeRecord = {
+      takeId: TAKE_2,
+      lifecycle: 'ready',
+      startedAtMs: 1_000,
+      endedAtMs: 1_100,
+      startedByParticipantId: 'participant-a',
+      stoppedByParticipantId: 'participant-a',
+      stopReason: 'user',
+      song: {
+        videoId: 'video-a',
+        revision: 3,
+        state: 1,
+        serverTime: 12,
+        playbackRate: 1,
+      },
+      artifact: {
+        fileName: `${TAKE_2}.wav`,
+        url: `/takes/${TAKE_2}.wav`,
+        mimeType: 'audio/wav',
+        sizeBytes: wav().byteLength,
+        sampleRate: 48_000,
+        channels: 1,
+        bitsPerSample: 16,
+        sampleCount: 4_800,
+        durationMs: 100,
+      },
+      mixSampleRange: {
+        generation: 7,
+        startSampleIndex: 9_600,
+        endSampleIndex: 14_400,
+        sampleCount: 4_800,
+      },
+      quality: null,
+      error: null,
+    };
+    new TakeLibrary({ directory }).record(take);
+
+    await writeFile(wavPath, wav(48_000, 2_400));
+    const entry = new TakeLibrary({ directory }).get(TAKE_2);
+
+    assert.ok(entry, 'the valid WAV remains recoverable after sidecar/WAV divergence');
+    assert.equal(entry.recovered, true, 'mismatched authoritative metadata must be replaced by WAV recovery');
+    assert.equal(entry.artifact.sampleCount, 2_400);
+    assert.equal(entry.mixSampleRange, null, 'recovery cannot invent the lost authoritative mix range');
+    assert.equal(entry.startedByParticipantId, null);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -52,6 +52,10 @@ test('transport telemetry survives control reconnect and resets only for a fresh
   const { PreferredAudioTransport } = await import(moduleUrl.href);
   const transport = new PreferredAudioTransport({
     minimumPacketBytes: 26,
+    // Depth 1 so the second datagram below is refused as congestion. Backpressure
+    // counts datagrams still in flight rather than reading the writable stream's
+    // desiredSize, which only reports whether a write is outstanding.
+    datagramQueuePackets: 1,
     WebTransportClass: FakeWebTransport,
   });
   const socket = new FakeSocket();
@@ -63,7 +67,6 @@ test('transport telemetry survives control reconnect and resets only for a fresh
   });
   const instance = FakeWebTransport.instances.at(-1)!;
   transport.send(new Uint8Array([1, 2, 3]).buffer);
-  instance.writer.desiredSize = 0;
   transport.send(new Uint8Array([4]).buffer);
   instance.close();
   await Promise.resolve();

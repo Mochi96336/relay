@@ -31,7 +31,7 @@ test('Song surface uses canonical Mic state to decide shared replace-song access
   assert.match(surface, /isMicOwner: detail\.isMicOwner === true/);
   assert.match(surface, /isMicFree: detail\.isMicFree === true/);
   assert.match(surface, /changeButton\.hidden = !canChange \|\| !videoId/);
-  assert.match(surface, /播放主控已失聯/);
+  assert.match(surface, /t\('song\.playbackControllerUnavailable'\)/);
   assert.doesNotMatch(surface, /recover-youtube|playback-recovery-actions|在這支手機繼續播放/);
 
   assert.match(surfaceCss, /data-playback-role="observer"\]\[data-song-editing="true"\][^\n]*\.youtube-form/);

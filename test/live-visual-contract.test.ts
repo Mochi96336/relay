@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
+const layout = readFileSync(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8');
+const roomSoundCss = readFileSync(new URL('../public/room-sound-ui.css', import.meta.url), 'utf8');
 const song = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
 const songSurface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
 const state = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
@@ -53,21 +55,21 @@ test('Room Mic is one centered full-bleed envelope backed by one 20-sample measu
   assert.match(presence, /presenceSliceGeometry/);
   assert.match(presence, /envelopePath\(\)/);
   assert.match(presence, /smoothPath\(upper\)/);
-  assert.match(presence, /LOCAL_SAMPLE_INTERVAL_MS = 40/);
   assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(presence, /event\.detail\?\.spectrumBands/);
   assert.doesNotMatch(composition, /grid-template-columns: repeat\(10/);
   assert.doesNotMatch(presence, /voice-presence-slice|voice-presence-shape|voice-presence-band/);
 });
 
-test('local Mic evidence expires if the capture worklet stops producing samples', () => {
-  assert.match(presence, /LOCAL_EVIDENCE_STALE_MS = 160/);
-  assert.match(presence, /localStaleTimer = setTimeout/);
+test('visible Room Mic waveform never consumes local capture events directly', () => {
+  assert.doesNotMatch(presence, /relay-local-mic-level/);
+  assert.doesNotMatch(presence, /localActive|localStaleTimer|LOCAL_EVIDENCE_STALE_MS/);
+  assert.match(presence, /relay-room-mic-presence/);
 });
 
-test('listener Room Mic evidence expires when telemetry stops instead of freezing forever', () => {
-  assert.match(presence, /REMOTE_EVIDENCE_STALE_MS = 320/);
-  assert.match(presence, /remoteStaleTimer = setTimeout/);
+test('Room Mic evidence expires when authoritative telemetry stops instead of freezing forever', () => {
+  assert.match(presence, /ROOM_EVIDENCE_STALE_MS = 320/);
+  assert.match(presence, /roomStaleTimer = setTimeout/);
   assert.match(presence, /sourceKey !== expectedSourceKey/);
 });
 
@@ -105,16 +107,22 @@ test('recording morphs in place and hides the previous Take until the current Ta
   assert.doesNotMatch(composition, /#stop-recording:not\(:disabled\)::before/);
 });
 
-test('Room Mic presence is visible to listeners while local holder evidence stays strongest', () => {
+test('Room Mic presence is visible to listeners and self owners through the same room projection', () => {
   assert.match(state, /body\[data-self-mic="live"\] \.voice-copy strong/);
   assert.match(state, /font-size: clamp\(27px, 7vw, 34px\)/);
   assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
   assert.match(state, /body\[data-self-mic="live"\] \.voice-presence-wave[\s\S]*?stroke: rgba\(247, 244, 237, \.82\);/);
-  assert.match(presence, /if \(localActive\) return;/);
+  assert.match(presence, /`room:\$\{ownerId\}:\$\{generation\}`/);
+  assert.doesNotMatch(presence, /if \(localActive\) return;/);
 });
 
-test('forced Room sound state removes the inert slider while preserving the short reason', () => {
-  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control \.adjust-control,[\s\S]*?display:none;/);
-  assert.match(composition, /body\[data-listen="mic-muted"\] \.local-sound-control #listen-adjust-state,[\s\S]*?display:block;/);
+test('forced Room sound state keeps the same rail geometry and changes appearance only', () => {
+  assert.doesNotMatch(composition, /\.local-sound-control|#listen-gain-value/,
+    'formal composition must not regain Room sound rail geometry');
+  assert.match(layout, /\.local-sound-control \{[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
+  assert.match(layout, /#listen-adjust-state,[\s\S]*?#listen-note \{[\s\S]*?position:\s*absolute/);
+  assert.match(roomSoundCss, /body\[data-listen="mic-muted"\] #listen-gain,[\s\S]*?opacity:\s*\.46/);
+  assert.doesNotMatch(roomSoundCss, /#listen-adjust-state|#listen-gain-value/,
+    'state paint must not regain geometry ownership');
 });

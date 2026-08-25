@@ -6,35 +6,31 @@ export interface RoomSoundPresentationState {
 }
 
 export interface RoomSoundPresentationCopy {
-  toggle: string;
-  note: string;
+  toggleKey: string;
+  noteKey: string | null;
 }
 
 export interface RoomSoundControlPresentationCopy {
-  label: string;
-  scope: string;
-  volumeLabel: string;
-  volumeAriaLabel: string;
-  toggleAriaLabel: string;
-  compact: string;
+  labelKey: string;
+  scopeKey: string;
+  volumeLabelKey: string;
+  volumeAriaLabelKey: string;
+  toggleAriaLabelKey: string;
+  iconState: 'audible' | 'muted' | 'retry';
 }
 
 export function roomSoundControlPresentation(
   detail?: RoomSoundPresentationState,
-  isChinese?: boolean,
 ): RoomSoundControlPresentationCopy;
 
 export function roomSoundStableNote(
   detail?: RoomSoundPresentationState,
-  isChinese?: boolean,
-): string;
+): string | null;
 
 export function roomSoundActionNote(
   detail?: RoomSoundPresentationState,
-  isChinese?: boolean,
-): string;
+): string | null;
 
 export function roomSoundPresentation(
   detail?: RoomSoundPresentationState,
-  isChinese?: boolean,
 ): RoomSoundPresentationCopy;

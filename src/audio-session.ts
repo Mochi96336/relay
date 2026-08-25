@@ -470,14 +470,13 @@ export class AudioSession {
 
   /**
    * Session-sample coordinate for a real-world instant, independent of
-   * either timeline's own anchor. A probe calibration schedules playback
-   * against a client clock mapped onto this, then finds where it actually
-   * landed in the (possibly mis-anchored) mic timeline via correlation - the
-   * discrepancy between the two is exactly the anchor bias `calibratedMicLagMs`
-   * exists to correct.
+   * either timeline's own anchor. This intentionally preserves fractional
+   * sample position: command boundaries must quantize forward only after the
+   * real instant is known. Callers that need an integer sample (such as probe
+   * correlation) round explicitly at that boundary.
    */
   sessionSampleAt(nowMs: number) {
-    return this.currentSessionSample(nowMs);
+    return ((nowMs - this.startedAt) * this.sampleRate) / 1000;
   }
 
   trimMic(beforeSample: number) {

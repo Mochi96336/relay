@@ -1,19 +1,21 @@
+import './live-i18n.js';
+
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const strip = document.querySelector('.take-strip');
 const startButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 const status = document.querySelector('#recording-status');
 
-function chinese() {
-  return window.relayI18n?.getLocale?.() === 'zh-Hant';
-}
-
-function localCopy(english, traditionalChinese) {
-  return chinese() ? traditionalChinese : english;
-}
-
-function finishedCopy() {
-  return localCopy('✓ Recording ready', '✓ 錄好了');
-}
+const START_POLICY_BLOCK_REASONS = new Set([
+  'mix-not-active',
+  'timing-calibration-active',
+  'mic-required',
+  'mic-starting',
+  'mic-reconnecting',
+  'mic-audio-stalled',
+  'room-blocked',
+  'take-active',
+]);
 
 function formatDuration(durationMs) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
@@ -22,28 +24,38 @@ function formatDuration(durationMs) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-function shortTakeId(takeId) {
-  return typeof takeId === 'string' ? takeId.slice(0, 8) : '—';
+function blockingIssueCopy(issue) {
+  const key = {
+    'backing-not-ready': 'recording.blocked.issue.backing-not-ready',
+    'backing-unavailable': 'recording.blocked.issue.backing-unavailable',
+    'backing-stalled': 'recording.blocked.issue.backing-stalled',
+    'backing-route-mismatch': 'recording.blocked.issue.backing-route-mismatch',
+    'robot-source-unavailable': 'recording.blocked.issue.robot-source-unavailable',
+    'song-clock-unavailable': 'recording.blocked.issue.song-clock-unavailable',
+  }[issue?.cause];
+  return key ? t(key) : t('recording.blocked.room-blocked');
 }
 
-function errorCopy(reason) {
-  const copy = {
-    reconnecting: ['Reconnecting recording…', '錄音重新連線中…'],
-    'participant-required': ['Recording needs a room identity.', '需要房間身分才能錄音'],
-    'mix-not-active': ['Start singing or playback before recording.', '開始唱歌或播放後可以錄音'],
-    'product-blocked': ['Fix the room audio before recording.', '先處理房間音訊問題'],
-    'take-not-ready': ['Wait until the room is ready to record.', '房間準備完成後可以錄音'],
-    'timing-calibration-active': ['Wait for timing calibration to finish.', '等待時間校準完成'],
-    'take-active': ['A recording is already in progress.', '目前正在錄音'],
-    'take-not-recording': ['There is no active recording.', '目前沒有錄音'],
-    'stale-take': ['That recording is no longer active.', '那段錄音已經結束'],
-    'invalid-take-id': ['Relay could not identify that recording.', 'Relay 無法辨識這段錄音'],
-    'writer-failed': ['Relay could not start the recorder.', 'Relay 無法啟動錄音'],
-    'storage-unavailable': ['Recording storage is unavailable.', '錄音儲存空間目前不可用'],
-    unknown: ['Recording could not continue.', '錄音無法繼續'],
-  };
-  const [english, traditionalChinese] = copy[reason] ?? copy.unknown;
-  return localCopy(english, traditionalChinese);
+function blockedCopy(reason, issue) {
+  if (reason === 'room-blocked') return blockingIssueCopy(issue);
+  const key = {
+    reconnecting: 'recording.blocked.reconnecting',
+    'mix-not-active': 'recording.blocked.mix-not-active',
+    'timing-calibration-active': 'recording.blocked.timing-calibration-active',
+    'mic-required': 'recording.blocked.mic-required',
+    'mic-starting': 'recording.blocked.mic-starting',
+    'mic-reconnecting': 'recording.blocked.mic-reconnecting',
+    'mic-audio-stalled': 'recording.blocked.mic-audio-stalled',
+    'take-active': 'recording.blocked.take-active',
+  }[reason] ?? 'recording.blocked.unavailable';
+  return t(key);
+}
+
+function commandErrorCopy(reason, issue) {
+  if (reason === 'reconnecting') return t('recording.blocked.reconnecting');
+  if (reason === 'storage-unavailable') return t('recording.error.storage-unavailable');
+  if (START_POLICY_BLOCK_REASONS.has(reason)) return blockedCopy(reason, issue);
+  return t('recording.error.generic');
 }
 
 if (strip && startButton && stopButton && status) {
@@ -53,11 +65,9 @@ if (strip && startButton && stopButton && status) {
   let finishFlash = false;
   let finishTimer = null;
 
-  // Recording is not a permanently disabled control. It starts absent and only
-  // enters the product surface when authoritative state says there is a real
-  // action (or an active/finishing/error Take that must remain visible).
-  strip.hidden = true;
-  startButton.hidden = true;
+  strip.hidden = false;
+  strip.dataset.recordingSlot = 'action';
+  startButton.hidden = false;
   stopButton.hidden = true;
   startButton.disabled = true;
   stopButton.disabled = true;
@@ -68,70 +78,124 @@ if (strip && startButton && stopButton && status) {
     strip.dataset.takeState = lifecycle;
   }
 
-  function renderVisibility(detail) {
-    const canStart = detail.canStart === true
-      && lifecycle !== 'recording'
-      && lifecycle !== 'finalizing';
-    const canStop = detail.canStop === true && lifecycle === 'recording';
-    const lifecycleVisible = lifecycle === 'recording'
-      || lifecycle === 'finalizing'
-      || lifecycle === 'failed';
-    const errorVisible = Boolean(detail.commandError?.reason);
+  function renderControls(detail) {
+    const recording = lifecycle === 'recording';
+    const finalizing = lifecycle === 'finalizing';
+    const startPending = detail.startPending === true;
+    const canStart = detail.canStart === true && !startPending && !recording && !finalizing;
+    const canStop = detail.canStop === true && recording;
 
-    startButton.hidden = !canStart;
-    stopButton.hidden = !canStop;
-    strip.hidden = !(canStart || lifecycleVisible || finishFlash || errorVisible);
-
-    // Disabled controls are never used as readiness copy. If the server says
-    // the action is unavailable it is absent; server authority still decides
-    // when the real action enters the slot.
+    strip.hidden = false;
+    startButton.hidden = recording || finalizing;
+    stopButton.hidden = !recording;
     startButton.disabled = !canStart;
     stopButton.disabled = !canStop;
+    startButton.textContent = t('recording.record');
+    stopButton.textContent = t('recording.stop');
+  }
+
+  function presentSlot(mode, copy, detail = latestState) {
+    strip.dataset.recordingSlot = mode;
+    status.textContent = copy;
+
+    if (mode === 'status') {
+      startButton.hidden = true;
+      return;
+    }
+
+    if (mode === 'status-action') {
+      startButton.hidden = false;
+      startButton.disabled = detail?.canStart !== true;
+      startButton.textContent = t('recording.record');
+    }
   }
 
   function renderState(detail = latestState) {
     if (!detail || typeof detail !== 'object') return;
     latestState = detail;
-    if (String(detail.lifecycle ?? 'idle') !== lifecycle) {
-      lifecycle = String(detail.lifecycle ?? 'idle');
+    const nextLifecycle = String(detail.lifecycle ?? 'idle');
+    if (nextLifecycle !== lifecycle) {
+      lifecycle = nextLifecycle;
       strip.dataset.takeState = lifecycle;
     }
 
-    renderVisibility(detail);
+    renderControls(detail);
 
     if (finishFlash && lifecycle === 'ready') {
-      status.textContent = finishedCopy();
+      presentSlot('status', t('recording.ready'), detail);
       return;
     }
 
     const commandError = detail.commandError?.reason;
     if (commandError) {
-      status.textContent = errorCopy(commandError);
+      const blockingIssue = commandError === 'room-blocked'
+        && detail.startBlockedReason === 'room-blocked'
+        ? detail.startBlockingIssue
+        : null;
+      const copy = commandErrorCopy(commandError, blockingIssue);
+      if (lifecycle !== 'recording' && lifecycle !== 'finalizing' && detail.canStart === true) {
+        presentSlot('status-action', copy, detail);
+      } else if (lifecycle !== 'recording' && lifecycle !== 'finalizing') {
+        presentSlot('status', copy, detail);
+      } else {
+        strip.dataset.recordingSlot = lifecycle === 'recording' ? 'recording' : 'status';
+        status.textContent = copy;
+      }
+      return;
+    }
+
+    if (detail.startPending === true && lifecycle !== 'recording' && lifecycle !== 'finalizing') {
+      presentSlot('status', t('recording.starting'), detail);
       return;
     }
 
     const take = detail.take ?? null;
+    const authorityFresh = detail.authorityFresh === true
+      && detail.commandChannelFresh === true;
     if (lifecycle === 'recording' && take) {
       const startedAtMs = Number(take.startedAtMs);
-      const elapsed = Number.isFinite(startedAtMs) ? Date.now() - startedAtMs : 0;
-      status.textContent = `● ${formatDuration(elapsed)}`;
+      const snapshotObservedAt = Number(detail.snapshotObservedAt);
+      const clockNow = authorityFresh
+        ? Date.now()
+        : Number.isFinite(snapshotObservedAt) ? snapshotObservedAt : startedAtMs;
+      const elapsed = Number.isFinite(startedAtMs) && Number.isFinite(clockNow)
+        ? clockNow - startedAtMs
+        : 0;
+      strip.dataset.recordingSlot = 'recording';
+      status.textContent = authorityFresh
+        ? `● ${formatDuration(elapsed)}`
+        : `● ${formatDuration(elapsed)} · ${t('recording.blocked.reconnecting')}`;
       return;
     }
 
     if (lifecycle === 'finalizing') {
-      status.textContent = localCopy('Finishing…', '正在完成錄音…');
-      return;
-    }
-
-    if (lifecycle === 'failed' && take) {
-      status.textContent = localCopy(
-        `Recording ${shortTakeId(take.takeId)} failed.`,
-        `錄音 ${shortTakeId(take.takeId)} 失敗`,
+      presentSlot(
+        'status',
+        authorityFresh
+          ? t('recording.finishing')
+          : `${t('recording.finishing')} · ${t('recording.blocked.reconnecting')}`,
+        detail,
       );
       return;
     }
 
-    status.textContent = '';
+    if (lifecycle === 'failed') {
+      const copy = t('recording.failed');
+      presentSlot(detail.canStart === true ? 'status-action' : 'status', copy, detail);
+      return;
+    }
+
+    if (detail.canStart === true) {
+      strip.dataset.recordingSlot = 'action';
+      status.textContent = '';
+      return;
+    }
+
+    presentSlot(
+      'status',
+      blockedCopy(detail.startBlockedReason, detail.startBlockingIssue),
+      detail,
+    );
   }
 
   function showFinishedFlash() {
@@ -145,8 +209,6 @@ if (strip && startButton && stopButton && status) {
     }, 1_400);
   }
 
-  // Raw Take lifecycle remains useful for detecting the exact recording -> ready
-  // edge. All visible state comes from relay-recording-state below.
   window.addEventListener('relay-take-status', (event) => {
     const next = String(event.detail?.lifecycle ?? 'idle');
     setLifecycle(next);

@@ -68,12 +68,12 @@ describe('analyzeTimingCalibration', () => {
     );
   });
 
-  test('rejects a microphone that never heard the phone speaker', () => {
+  test('rejects a microphone that contains no matching playback content', () => {
     const { backing } = laggedPair(6, RATE, 100);
     const silence = Buffer.alloc(RATE * 6 * 2);
     assert.throws(
       () => analyzeTimingCalibration(int16View(silence), int16View(backing), RATE),
-      /too quiet/,
+      /weak|does not match|support|repetitive/i,
     );
   });
 

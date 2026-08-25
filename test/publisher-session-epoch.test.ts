@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const appSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
-test('publisher callbacks and reconnects are fenced to the capture session epoch', () => {
+test('publisher callbacks and reconnects are fenced to the Mic session and capture generation', () => {
   assert.match(appSource, /let publisherSessionEpoch = 0;/);
   assert.match(
     appSource,
@@ -12,11 +12,15 @@ test('publisher callbacks and reconnects are fenced to the capture session epoch
   );
   assert.match(
     appSource,
-    /async function connectPublisherSocket\(sessionEpoch = publisherSessionEpoch\)[\s\S]*const ws = await connectSocket\(\);[\s\S]*if \(!isCurrentPublisherSession\(sessionEpoch\)\) \{\s*ws\.close\(\);/,
+    /function isCurrentPublisherCapture\(sessionEpoch, expectedGeneration\)[\s\S]*isCurrentPublisherSession\(sessionEpoch\)[\s\S]*captureGeneration >>> 0[\s\S]*expectedGeneration >>> 0/,
   );
   assert.match(
     appSource,
-    /function schedulePublisherReconnect\(sessionEpoch = publisherSessionEpoch\)[\s\S]*if \(socketReconnectTimer !== timer\) return;[\s\S]*connectPublisherSocket\(sessionEpoch\)/,
+    /async function connectPublisherSocket\(\s*sessionEpoch = publisherSessionEpoch,\s*expectedGeneration = captureGeneration >>> 0,\s*\)[\s\S]*const ws = await connectSocket\(\);[\s\S]*if \(!isCurrentPublisherCapture\(sessionEpoch, expectedGeneration\)\) \{\s*ws\.close\(\);/,
+  );
+  assert.match(
+    appSource,
+    /function schedulePublisherReconnect\(\s*sessionEpoch = publisherSessionEpoch,\s*expectedGeneration = captureGeneration >>> 0,\s*\)[\s\S]*if \(socketReconnectTimer !== timer\) return;[\s\S]*connectPublisherSocket\(sessionEpoch, expectedGeneration\)/,
   );
   assert.match(
     appSource,
@@ -32,7 +36,11 @@ test('publisher callbacks and reconnects are fenced to the capture session epoch
   );
   assert.match(
     appSource,
-    /capture\.port\.onmessage = \(event\) => \{[\s\S]*if \(!captureIsCurrent\(\)\) return;[\s\S]*const chunkFirstSampleIndex = captureSampleCursor;/,
+    /function captureGraphIsCurrent\(graph\)[\s\S]*activeCaptureGraph === graph[\s\S]*graph\.epoch === captureGraphEpoch/,
+  );
+  assert.match(
+    appSource,
+    /function handleCaptureWorkletMessage\(event, graph\)[\s\S]*if \(!captureGraphIsCurrent\(graph\)\) return;[\s\S]*const chunkFirstSampleIndex = captureSampleCursor;/,
   );
 });
 
@@ -57,12 +65,13 @@ test('publisher teardown revokes globals before awaiting the old AudioContext cl
   }
 
   assert.match(stopSource, /const stoppedEpoch = \+\+publisherSessionEpoch;/);
+  assert.match(stopSource, /captureGraphEpoch \+= 1;/);
   assert.match(stopSource, /return stoppedEpoch;/);
 });
 
 test('late terminal completion cannot end a replacement publisher session', () => {
   assert.match(
     appSource,
-    /\.then\(\(stoppedEpoch\) => \{\s*if \(publisherSessionEpoch !== stoppedEpoch\) return;\s*dispatchRelayEvent\('relay-microphone-ended'/,
+    /function finishMicrophoneSession\(reason,[\s\S]*stop: \(\) => stop\(false, \{ releaseMic \}\),[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch,[\s\S]*dispatchRelayEvent\('relay-microphone-ended'/,
   );
 });

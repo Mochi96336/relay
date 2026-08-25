@@ -1,6 +1,6 @@
 # Robot deployment contract
 
-Relay's product topology is **phone + robot**. The desktop used during development is only a stand-in for the robot-side browser host.
+Relay's target product topology is **phone + robot**. The desktop used during development is only a stand-in for the robot-side browser host.
 
 ```text
 Singer phone
@@ -18,7 +18,7 @@ Robot                                    │
 
 Relay server
 └─ aligned song + microphone
-   └─ Monitor / Record / later Discord
+   └─ Listen / Take / later Discord
 ```
 
 ## Validated browser audio route
@@ -65,7 +65,7 @@ The launcher passes this key to `source.html` in the URL **fragment** (`#infra=.
 
 ## Launcher
 
-Before launching, the read-only doctor checks dependencies, the PipeWire
+Before launching, the read-only doctor checks the main host dependencies, the PipeWire
 server and sink monitor, and the required `localhost` Relay endpoints:
 
 ```bash
@@ -84,7 +84,8 @@ PORT=3100 npm run robot:source
 
 It:
 
-- verifies `pactl`, `parec`, `xvfb-run`, `npm`, Node.js, and Chromium are available;
+- verifies `pactl`, `parec`, `xvfb-run`, `npm`, Node.js, `flock`, and Chromium are available;
+- holds a non-blocking `flock` per sink so a second launcher targeting the same sink fails instead of injecting duplicate Chromium audio;
 - creates the `relay_browser` null sink only when it does not already exist;
 - captures `relay_browser.monitor` as mono 16-bit little-endian PCM at 48 kHz by default;
 - pipes the capture into `backing:stdin`;
@@ -119,11 +120,11 @@ With a normal publicly trusted certificate, leave `RELAY_WEBTRANSPORT_PIN_CERT` 
 
 The WebTransport URL carries a random, capture-scoped media ticket issued only after publisher registration. A fresh capture or ownership change rotates it. A same-capture control reconnect preserves it until the existing microphone reconnect grace expires. This ticket is a narrow media capability, not a replacement for `RELAY_KEY` or participant ownership.
 
-## Watching the route from another machine
+## Watching the route
 
-The robot is unattended, so the interesting question from a second host is not
-"is Relay running" but "is the route still carrying audio". `/healthz` cannot
-answer that — it stays `{"ok": true}` while Chromium is dead.
+The robot is unattended, so the interesting question is not only "is Relay running" but "is the route still carrying audio". `/healthz` cannot answer that — it stays `{"ok": true}` while Chromium is dead.
+
+For an operator spot-check, `/statusz` is the richer route diagnostic:
 
 ```bash
 curl -s http://<robot>:3100/statusz | jq '{ok, state, faults}'
@@ -135,12 +136,11 @@ Warnings such as a stale calibration are reported separately and leave `ok`
 true, because audio still flows. With nothing connected the state is `idle`,
 not a failure.
 
-Relay binds `0.0.0.0`, and the endpoint is unauthenticated like `/healthz`
-even when `RELAY_KEY` is set, so a poller needs no credentials — and the
-payload therefore contains no nicknames and no key.
+For a long-lived machine consumer, use `GET /api/status/v1` instead of scraping `/statusz`. It is Relay's stable, versioned, read-only observation contract; consumers should key on its `schema` and own their own fetch freshness. See [OBSERVATION_CONTRACT.md](OBSERVATION_CONTRACT.md).
 
-This is observation only. Nothing acts on a fault yet; restarting the route is
-still manual, and remains so until the boot-service checkpoint below.
+Both `/statusz` and `/api/status/v1` are currently unauthenticated even when `RELAY_KEY` is set. `/statusz` therefore contains no nicknames or keys, while the v1 observation contract is explicitly identity-free and credential-free.
+
+This is observation only. Nothing acts on a route fault yet; restarting the route is still manual, and remains so until a deliberately narrower recovery policy exists.
 
 ## Ownership boundaries
 
@@ -233,6 +233,6 @@ Nothing acts on a `/statusz` fault. Recovery is restarting a unit by hand, and
 a watchdog would need a narrower signal than `ok: false` — several faults it
 reports are phone-side, and restarting the robot route would not touch them.
 
-## Current checkpoint and next stage
+## Current deployment checkpoint
 
-The manually launched robot backing route is reproducible and validated. Full phone microphone + robot backing + automatic calibration still needs an integrated real-device monitor/recording test. That test is the gate on enabling the units above.
+The manually launched robot backing route is reproducible and validated. Full phone microphone + robot backing + automatic calibration still needs an integrated real-device sung Take rehearsal. That rehearsal remains the gate on enabling the units above.

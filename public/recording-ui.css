@@ -1,16 +1,18 @@
-/* Recording is part of the performance, not a persistent two-button module. */
+/* Recording is one compact lifecycle slot in the performance surface. */
 .take-strip[hidden] {
   display: none !important;
 }
 
-/* Start and active recording occupy the same 44px lifecycle slot. The status
-   line becomes the left side of that same row while Stop occupies the action
-   edge; transitioning into recording never inserts a second vertical module. */
+/* Record, blocked/pending copy, active timer and finishing/ready/error copy all
+   reuse the same 44px row. Nothing in recording presentation may allocate a
+   second explanatory row. */
 .take-strip:not([hidden]) {
+  position: relative;
   width: 100%;
   min-height: 44px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(44px, auto);
   justify-content: stretch;
   align-items: center;
   column-gap: 14px;
@@ -44,6 +46,52 @@
   align-items: center;
 }
 
+.take-strip:not([data-take-state="recording"]) .take-actions {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.take-strip #recording-status {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.take-strip #recording-status:empty {
+  display: none;
+}
+
+/* Blocked, pending and non-actionable failure copy occupies the same visual
+   slot as Record. The actual Record button is hidden rather than repurposed as
+   status text, so control semantics stay truthful. */
+.take-strip[data-recording-slot="status"] #recording-status {
+  color: #96999f;
+}
+
+/* A failed/rejected command may still be retryable. Keep the explanation and
+   retry action on this same row; the older Take yields temporarily rather than
+   forcing either control onto a second line. The extra lifecycle qualifiers
+   intentionally outrank live-p0-layout.css's !important idle action placement. */
+html body .performance-stage > .take-strip[data-recording-slot="status-action"]:not([data-take-state="recording"]):not([data-take-state="finalizing"]) > #recording-status {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+}
+
+html body .performance-stage > .take-strip[data-recording-slot="status-action"]:not([data-take-state="recording"]):not([data-take-state="finalizing"]) > .take-actions {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  justify-self: end;
+}
+
+html body .performance-stage > .take-strip[data-recording-slot="status-action"] > .recent-take {
+  display: none !important;
+}
+
 .take-strip[data-take-state="recording"] .take-actions {
   grid-column: 2;
   grid-row: 1;
@@ -56,15 +104,6 @@
   margin: 0;
   color: #d8b0ad;
   font-variant-numeric: tabular-nums;
-}
-
-.take-strip:not([data-take-state="recording"]) .take-actions {
-  grid-column: 1 / -1;
-  grid-row: 1;
-}
-
-.take-strip #recording-status:empty {
-  display: none;
 }
 
 .take-strip[data-take-state="finalizing"] #recording-status {

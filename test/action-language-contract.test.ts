@@ -28,10 +28,11 @@ test('context and mode actions stay typographic instead of gaining hover capsule
     '#release-mic',
     '#cancel-takeover',
     '#listen-toggle',
-    '.recommendation-action',
     '#calibrate-timing',
   ]) assert.equal(actionCss.includes(selector), true);
 
+  assert.equal(actionCss.includes('.recommendation-action'), false,
+    'dead Mic gain recommendation actions must not retain normal Live styling');
   const textStart = actionCss.indexOf('.text-action {');
   const commitStart = actionCss.indexOf('/* Primary commitment');
   assert.ok(textStart >= 0 && commitStart > textStart);
@@ -50,6 +51,11 @@ test('typographic actions enlarge touch affordance without enlarging their visib
   assert.equal(haloRules.includes('inset: -10px -4px;'), true);
   assert.equal(haloRules.includes('background:'), false,
     'transparent hit halos must never become visible button surfaces');
+});
+
+test('More uses one separator between System and Language', () => {
+  assert.equal(actionCss.includes('#open-system {\n  border-bottom: 0;\n}'), true);
+  assert.ok(html.indexOf('id="open-system"') < html.indexOf('class="locale-control"'));
 });
 
 test('persistent local sound and secondary menu entries carry real 44px touch rows', () => {

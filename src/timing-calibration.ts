@@ -44,6 +44,12 @@ const SEGMENT_LENGTH_MS = 650;
 const SEGMENT_COUNT: number = 5;
 const SEGMENT_EDGE_MARGIN_MS = 120;
 
+// The backing is a direct capture, so its absolute level remains a useful
+// dead-route guard. Raw microphone RMS is not authority evidence: room noise can
+// sit above the former -60 dBFS floor while usable playback bleed can sit below
+// it. Keep measuring micLevelDbfs for diagnostics and let content matching decide.
+const TIMING_CALIBRATION_BACKING_LEVEL_FLOOR_DBFS = -50;
+
 // Test-calibrated safety gates. They are deliberately explicit because a
 // content calibration false positive is worse than asking for another window.
 const MIN_GLOBAL_SCORE = 0.18;
@@ -344,11 +350,8 @@ export function analyzeTimingCalibration(
   const micLevelDbfs = levelDbfs(micPcm);
   const backingLevelDbfs = levelDbfs(backingPcm);
 
-  if (backingLevelDbfs < -50) {
+  if (backingLevelDbfs < TIMING_CALIBRATION_BACKING_LEVEL_FLOOR_DBFS) {
     throw new Error('Desktop source is too quiet for timing calibration.');
-  }
-  if (micLevelDbfs < -60) {
-    throw new Error('Phone speaker bleed is too quiet. Raise phone volume and try again.');
   }
 
   const mic = extractMusicTimingFeatures(micPcm, sampleRate);
@@ -364,16 +367,16 @@ export function analyzeTimingCalibration(
   const { best, runnerUp } = globalLagScan(backing, mic, activeBands, maxLagFrames);
   if (!best || best.score < MIN_GLOBAL_SCORE) {
     throw new Error(
-      'Calibration signal is weak or does not match the backing track. ' +
-      'Use a louder section with clear drums or attacks and try again.',
+      'Calibration signal is weak or does not match the backing track. '
+      + 'Use a louder section with clear drums or attacks and try again.',
     );
   }
 
   const peakMargin = runnerUp === null ? null : best.score - runnerUp.score;
   if (peakMargin !== null && peakMargin < MIN_DISTINCT_PEAK_MARGIN) {
     throw new Error(
-      'Calibration music is too repetitive to identify timing reliably. ' +
-      'Keep playback running and try another section.',
+      'Calibration music is too repetitive to identify timing reliably. '
+      + 'Keep playback running and try another section.',
     );
   }
 
@@ -392,8 +395,8 @@ export function analyzeTimingCalibration(
   );
   if (globalDetail.supportingBands.length < MIN_SUPPORTING_BANDS) {
     throw new Error(
-      'Calibration does not have enough independent frequency-band support. ' +
-      'Try another section with richer musical content.',
+      'Calibration does not have enough independent frequency-band support. '
+      + 'Try another section with richer musical content.',
     );
   }
 
@@ -433,8 +436,8 @@ export function analyzeTimingCalibration(
   if (support.length < 3) {
     const windows = segmentLagsMs.map(signedMs).join(' / ');
     throw new Error(
-      `Could not confirm the coarse timing peak (global ${signedMs(best.lagMs)}; windows ${windows}). ` +
-      'Try another six-second section with clear attacks.',
+      `Could not confirm the coarse timing peak (global ${signedMs(best.lagMs)}; windows ${windows}). `
+      + 'Try another six-second section with clear attacks.',
     );
   }
 
@@ -443,8 +446,8 @@ export function analyzeTimingCalibration(
   if (spreadMs > 140) {
     const windows = segmentLagsMs.map(signedMs).join(' / ');
     throw new Error(
-      `Timing moved during calibration (global ${signedMs(best.lagMs)}; windows ${windows}). ` +
-      'Keep playback continuous and try again.',
+      `Timing moved during calibration (global ${signedMs(best.lagMs)}; windows ${windows}). `
+      + 'Keep playback continuous and try again.',
     );
   }
 

@@ -444,7 +444,7 @@ function applyTimeline() {
       // Loading a preview while Source is unarmed is not an authoritative
       // playback discontinuity. Only the player actually feeding Relay may
       // invalidate timing calibration.
-      if (armed) send({ type: 'source-seeked' });
+      if (armed) send({ type: 'source-seeked', reason: 'load' });
       renderTimeline();
       return;
     }
@@ -462,10 +462,16 @@ function applyTimeline() {
     // from the same snapshot that triggers seekTo(), and do not publish the
     // IFrame's transient currentTime while it is buffering/settling afterwards.
     if (shouldSeek) {
-      player.seekTo(Math.max(0, target), true);
+      const seekTarget = Math.max(0, target);
+      player.seekTo(seekTarget, true);
       lastSeekAt = now;
       robotDeltaSuppressedUntil = now + ROBOT_DELTA_SETTLE_MS;
-      send({ type: 'source-seeked' });
+      send({
+        type: 'source-seeked',
+        reason: 'follower-correction',
+        fromMediaTime: current,
+        toMediaTime: seekTarget,
+      });
     } else if (
       ROBOT_MODE
       && armed

@@ -1,3 +1,4 @@
+import './live-i18n.js';
 import { groupHistory, historyFromStatus } from './take-history-model.js';
 
 const root = document.querySelector('#last-take');
@@ -5,13 +6,10 @@ const recentButton = document.querySelector('#last-take-toggle');
 const review = document.querySelector('#last-take-review');
 const recordingPlayer = document.querySelector('#recording-player');
 const recordingDownload = document.querySelector('#download-recording');
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 
-function localeIsChinese() {
-  return window.relayI18n?.getLocale?.() === 'zh-Hant';
-}
-
-function localCopy(english, traditionalChinese) {
-  return localeIsChinese() ? traditionalChinese : english;
+function intlLocale() {
+  return window.relayI18n?.getLocale?.() === 'zh-Hant' ? 'zh-TW' : 'en';
 }
 
 function formatDuration(durationMs) {
@@ -23,21 +21,19 @@ function formatDuration(durationMs) {
 
 function formatRecordedAt(endedAtMs) {
   const value = Number(endedAtMs);
-  if (!Number.isFinite(value)) return localCopy('Unknown time', '時間未知');
+  if (!Number.isFinite(value)) return t('takeHistory.unknownTime');
   const date = new Date(value);
   const now = new Date();
   const sameDay = date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate();
-  const locale = localeIsChinese() ? 'zh-TW' : 'en';
-  return new Intl.DateTimeFormat(locale, sameDay
+  return new Intl.DateTimeFormat(intlLocale(), sameDay
     ? { hour: '2-digit', minute: '2-digit' }
     : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
 function takeCount(count) {
-  if (localeIsChinese()) return `${count} 段`;
-  return `${count} ${count === 1 ? 'take' : 'takes'}`;
+  return t(count === 1 ? 'takeHistory.count.one' : 'takeHistory.count.many', { count });
 }
 
 function shortTakeId(takeId) {
@@ -63,7 +59,7 @@ function createHistoryPanel(reviewNode) {
   panel.className = 'take-history-panel';
 
   const summary = document.createElement('summary');
-  summary.textContent = localCopy('Recordings', '錄音');
+  summary.textContent = t('takeHistory.summary');
 
   const sheet = document.createElement('div');
   sheet.className = 'take-history-sheet';
@@ -79,13 +75,13 @@ function createHistoryPanel(reviewNode) {
   close.id = 'close-take-history';
   close.className = 'text-action panel-done';
   close.type = 'button';
-  close.textContent = localCopy('Done', '完成');
+  close.textContent = t('takeHistory.done');
   heading.append(headingCopy, close);
 
   const groups = document.createElement('div');
   groups.className = 'take-history-groups';
 
-  sheet.append(heading, groups, reviewNode);
+  sheet.append(heading, reviewNode, groups);
   panel.append(summary, sheet);
   document.querySelector('.live-shell')?.append(panel);
 
@@ -143,15 +139,8 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   }
 
   function noticeCopy() {
-    if (reviewNoticeKind === 'release') {
-      return localCopy('Release mic before reviewing a Take.', '請先放開 Mic，再播放錄音。');
-    }
-    if (reviewNoticeKind === 'paused') {
-      return localCopy(
-        'Take review paused while this phone has the mic.',
-        '這支手機拿到 Mic，錄音回放已暫停。',
-      );
-    }
+    if (reviewNoticeKind === 'release') return t('takeHistory.notice.release');
+    if (reviewNoticeKind === 'paused') return t('takeHistory.notice.paused');
     return '';
   }
 
@@ -176,10 +165,21 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     }
   }
 
+  function revealReviewAfterSelection() {
+    const sheet = panel.querySelector('.take-history-sheet');
+    if (!sheet) return;
+    const sheetRect = sheet.getBoundingClientRect();
+    const reviewRect = review.getBoundingClientRect();
+    const headingRect = panel.querySelector('.take-history-panel-heading')?.getBoundingClientRect();
+    const visibleTop = Math.max(sheetRect.top, headingRect?.bottom ?? sheetRect.top);
+    if (reviewRect.top >= visibleTop && reviewRect.bottom <= sheetRect.bottom) return;
+    sheet.scrollTop += reviewRect.top - visibleTop;
+  }
+
   function groupLabel(group) {
-    if (group.kind === 'song') return localCopy('Song', '歌曲');
-    if (group.kind === 'voice') return localCopy('Voice only', '純人聲');
-    return localCopy('Recovered recordings', '舊錄音');
+    if (group.kind === 'song') return t('takeHistory.group.song');
+    if (group.kind === 'voice') return t('takeHistory.group.voice');
+    return t('takeHistory.group.recovered');
   }
 
   function createGroup(group) {
@@ -221,10 +221,13 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       const meta = document.createElement('span');
       meta.textContent = formatDuration(entry.artifact.durationMs);
       button.append(when, meta);
-      button.addEventListener('click', () => {
+      button.addEventListener('click', (event) => {
+        const keyboardActivation = event.detail === 0;
         selectedTakeId = entry.takeId;
         reviewNoticeKind = null;
         renderSelection();
+        revealReviewAfterSelection();
+        if (keyboardActivation) recordingPlayer.focus({ preventScroll: true });
       });
       list.append(button);
     }
@@ -263,10 +266,10 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       recordingPlayer.load();
       currentArtifactHref = href;
     }
-    recordingPlayer.setAttribute('aria-label', localCopy('Selected Take playback', '所選錄音播放'));
+    recordingPlayer.setAttribute('aria-label', t('takeHistory.selectedPlaybackAria'));
     recordingDownload.href = href;
     recordingDownload.download = `relay-take-${shortTakeId(selected.takeId)}.wav`;
-    recordingDownload.textContent = localCopy('Download WAV', '下載 WAV');
+    recordingDownload.textContent = t('takeHistory.download');
     renderNotice();
   }
 
@@ -277,18 +280,17 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     }
     const latest = historyEntries[0];
     root.hidden = false;
-    recentButton.textContent = localCopy(
-      `Last take · ${formatDuration(latest.artifact.durationMs)}`,
-      `上一段錄音 · ${formatDuration(latest.artifact.durationMs)}`,
-    );
+    recentButton.textContent = t('takeHistory.last', {
+      duration: formatDuration(latest.artifact.durationMs),
+    });
   }
 
   function renderHistory() {
-    headingLabel.textContent = localCopy('Recordings', '錄音');
+    headingLabel.textContent = t('takeHistory.summary');
     headingCount.textContent = takeCount(historyEntries.length);
-    summary.textContent = localCopy('Recordings', '錄音');
-    close.textContent = localCopy('Done', '完成');
-    panel.setAttribute('aria-label', localCopy('Take history', '錄音紀錄'));
+    summary.textContent = t('takeHistory.summary');
+    close.textContent = t('takeHistory.done');
+    panel.setAttribute('aria-label', t('takeHistory.panelAria'));
 
     if (!historyEntries.some((entry) => entry.takeId === selectedTakeId)) {
       selectedTakeId = historyEntries[0]?.takeId ?? null;

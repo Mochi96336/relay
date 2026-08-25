@@ -150,9 +150,6 @@ async function installProductionDomHarness(page) {
             mark('T7');
             currentProduct = productStatus({ mic: 'live', canStartTake: true });
             mark('T8');
-            // Model the production ProductStatus cadence. The browser receives
-            // no optimistic state: the authoritative transition is broadcast
-            // only at the next 250 ms status opportunity.
             setTimeout(() => {
               mark('T9');
               broadcastProduct(currentProduct);
@@ -199,6 +196,10 @@ async function installProductionDomHarness(page) {
               type: 'registered',
               role: 'publisher',
               mediaTransport: null,
+            });
+            queueMicrotask(() => {
+              deliver(this, { type: 'mix-settings', micGainDb: 24, songLevel: 100 });
+              deliver(this, { type: 'source-status', active: true, vocalFineTuneMs: 0 });
             });
           });
           return;
@@ -395,23 +396,37 @@ async function prepareReadyMic(page) {
   await expect(page.locator('#live-state-title')).toHaveText('You’re live');
 }
 
-test('production DOM: Mic readiness arms Record, Record morphs to Stop in the same slot', async ({ page }) => {
+test('production DOM: recording stays one row through blocked readiness and morphs to Stop', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.route('https://www.youtube.com/**', (route) => route.abort());
   await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
 
   await page.waitForFunction(() => window.relayRecordingState?.connected === true);
-  await expect(page.locator('.take-strip')).toBeHidden();
+  const strip = page.locator('.take-strip');
+  const record = page.locator('#start-recording');
+  const status = page.locator('#recording-status');
+  const stop = page.locator('#stop-recording');
+  await expect(strip).toBeVisible();
+  await expect(record).toBeHidden();
+  await expect(status).toBeVisible();
+  await expect(status).toHaveText('Sound is getting ready…');
+  const blockedSlot = await strip.boundingBox();
+  expect(blockedSlot).not.toBeNull();
+  expect(blockedSlot.height).toBeLessThan(50);
 
   await page.evaluate(() => window.__relayInteractionHarness.mark('T0'));
   await page.locator('#start-publisher').click();
   await page.waitForFunction(() => Number.isFinite(window.__relayInteractionHarness.timeline.T4));
 
-  // Publisher ownership alone is not recording readiness. Until a real PCM
-  // frame reaches the server model, there is no disabled placeholder action.
   await expect(page.locator('#live-state-title')).toHaveText('Starting your mic…');
   await expect(page.locator('#live-state-detail')).toHaveText('Waiting for the first audio frame from this phone.');
-  await expect(page.locator('.take-strip')).toBeHidden();
+  await expect(strip).toBeVisible();
+  await expect(record).toBeHidden();
+  await expect(status).toBeVisible();
+  const startingSlot = await strip.boundingBox();
+  expect(startingSlot).not.toBeNull();
+  expect(Math.abs(startingSlot.y - blockedSlot.y)).toBeLessThan(1);
+  expect(Math.abs(startingSlot.height - blockedSlot.height)).toBeLessThan(1);
 
   await page.evaluate(() => window.__relayInteractionHarness.emitSilentPcm());
   await page.waitForFunction(() => Number.isFinite(window.__relayInteractionHarness.timeline.T11));
@@ -436,13 +451,14 @@ test('production DOM: Mic readiness arms Record, Record morphs to Stop in the sa
   );
   expect(timing.T11 - timing.T6).toBeLessThan(300);
 
-  const strip = page.locator('.take-strip');
-  const record = page.locator('#start-recording');
-  const stop = page.locator('#stop-recording');
   await expect(record).toBeVisible();
   await expect(record).toBeEnabled();
+  await expect(record).toHaveText('Record');
+  await expect(status).toBeHidden();
   const slotBefore = await strip.boundingBox();
   expect(slotBefore).not.toBeNull();
+  expect(slotBefore.height).toBeLessThan(50);
+  expect(Math.abs(slotBefore.height - blockedSlot.height)).toBeLessThan(1);
 
   await record.click();
   await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
@@ -450,7 +466,7 @@ test('production DOM: Mic readiness arms Record, Record morphs to Stop in the sa
   ));
   await expect(stop).toBeVisible();
   await expect(stop).toBeEnabled();
-  await expect(page.locator('#recording-status')).toContainText('●');
+  await expect(status).toContainText('●');
 
   const slotAfter = await strip.boundingBox();
   const stopBox = await stop.boundingBox();
@@ -460,21 +476,22 @@ test('production DOM: Mic readiness arms Record, Record morphs to Stop in the sa
   expect(Math.abs(slotAfter.height - slotBefore.height)).toBeLessThan(1);
   expect(Math.abs((stopBox.x + stopBox.width) - (slotAfter.x + slotAfter.width))).toBeLessThan(2);
 
-  // Disconnecting the recorder must immediately remove Stop; the recording
-  // lifecycle may remain visible, but stale socket state cannot leave an action
-  // clickable. A fresh TakeStatus replay restores Stop after reconnect.
   await page.evaluate(() => window.__relayInteractionHarness.disconnectRecorder({
     mic: 'live',
     canStartTake: false,
     replayDelayMs: 160,
   }));
   await page.waitForFunction(() => window.relayRecordingState?.connected === false);
-  await expect(stop).toBeHidden();
+  await expect(stop).toBeVisible();
+  await expect(stop).toBeDisabled();
+  await expect(status).toContainText('Reconnecting…');
   await page.waitForFunction(() => window.relayRecordingState?.connected === true
     && window.relayRecordingState?.takeStatusFresh === false);
-  await expect(stop).toBeHidden();
+  await expect(stop).toBeVisible();
+  await expect(stop).toBeDisabled();
   await page.waitForFunction(() => window.relayRecordingState?.takeStatusFresh === true);
   await expect(stop).toBeVisible();
+  await expect(stop).toBeEnabled();
 });
 
 test('production DOM: Record and Recordings share a row above Mic and Room sound', async ({ page }) => {
@@ -494,6 +511,7 @@ test('production DOM: Record and Recordings share a row above Mic and Room sound
   await expect(record).toBeVisible();
   await expect(recordings).toBeVisible();
   await expect(mic).toBeVisible();
+  await expect(roomSound).toContainText('Room sound');
   await expect(recordings).toHaveClass(/recent-take/);
   await expect(page.locator('#last-take-toggle')).toHaveText('Last take · 0:12');
   await expect(page.locator('.take-history-item span')).toHaveText('0:12');
@@ -528,6 +546,10 @@ test('production DOM: the local Mic owner can change Mic gain', async ({ page })
   await expect(micControl).toHaveAttribute('open', '');
   await expect(micGain).toBeVisible();
   await expect(micGain).toBeEnabled();
+  await expect(page.locator('.voice-input-evidence .evidence-heading')).toBeHidden();
+  await page.waitForLoadState('load');
+  await expect(page.locator('#mic-gain-advice')).toHaveCount(0);
+  await expect(page.locator('#use-mic-gain-suggestion')).toHaveCount(0);
   await micGain.focus();
   await micGain.press('Home');
 
@@ -580,27 +602,25 @@ test('production DOM: one desktop Change song click survives a transient playbac
   await expect(change).toHaveText('Done');
   await expect(page.locator('#youtube-url')).toBeFocused();
 
-  // Desktop playback handoff snapshots can briefly leave holder while the
-  // same song remains authoritative. That refresh must not consume a click.
   await publishPlayback('preparing', 'abcdefghijk', 'preparing');
   await expect(form).toBeHidden();
   await publishPlayback('holder', 'abcdefghijk');
   await expect(form).toBeVisible();
   await expect(change).toHaveText('Done');
 
-  // A genuinely different song ends the local edit session.
   await publishPlayback('holder', 'lmnopqrstuv');
   await expect(form).toBeHidden();
   await expect(change).toHaveText('Change song');
 });
 
-test('production DOM: recorder reconnect cannot replay stale Record authority', async ({ page }) => {
+test('production DOM: recorder reconnect swaps Record for status until fresh authority', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.route('https://www.youtube.com/**', (route) => route.abort());
   await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
   await prepareReadyMic(page);
 
   const record = page.locator('#start-recording');
+  const status = page.locator('#recording-status');
   await expect(record).toBeVisible();
   await expect(record).toBeEnabled();
 
@@ -611,18 +631,19 @@ test('production DOM: recorder reconnect cannot replay stale Record authority', 
   }));
   await page.waitForFunction(() => window.relayRecordingState?.connected === false);
   await expect(record).toBeHidden();
+  await expect(status).toBeVisible();
+  await expect(status).toHaveText('Reconnecting…');
 
-  // This is the old bug window: the new socket is OPEN, but its authoritative
-  // replays have intentionally not arrived yet. Record must stay absent instead
-  // of reusing canStartTake=true from the previous socket generation.
   await page.waitForFunction(() => window.relayRecordingState?.connected === true
     && window.relayRecordingState?.productStatusFresh === false
     && window.relayRecordingState?.takeStatusFresh === false);
   await expect(record).toBeHidden();
+  await expect(status).toHaveText('Reconnecting…');
 
   await page.waitForFunction(() => window.relayRecordingState?.productStatusFresh === true
     && window.relayRecordingState?.takeStatusFresh === true);
   await expect(record).toBeHidden();
+  await expect(status).toHaveText('Sound is getting ready…');
 });
 
 test('production DOM: rapid Record taps emit exactly one Start command', async ({ page }) => {
@@ -647,21 +668,29 @@ test('production DOM: rapid Record taps emit exactly one Start command', async (
   expect(startCommands).toBe(1);
 });
 
-test('production DOM: More and System are reachable only through real clicks', async ({ page }) => {
+test('production DOM: People and More close with Escape without regressing System', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.route('https://www.youtube.com/**', (route) => route.abort());
   await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
 
+  const people = page.locator('.people-menu');
   const more = page.locator('#room-more');
   const system = page.locator('#system-panel');
 
+  await page.locator('.people-menu > summary').click();
+  expect(await people.evaluate((node) => node.open)).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(await people.evaluate((node) => node.open)).toBe(false);
+
   await page.locator('#room-more > summary').click();
   expect(await more.evaluate((node) => node.open)).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(await more.evaluate((node) => node.open)).toBe(false);
 
+  await page.locator('#room-more > summary').click();
   await page.locator('#open-system').click();
   expect(await system.evaluate((node) => node.open)).toBe(true);
   expect(await more.evaluate((node) => node.open)).toBe(false);
-
-  await page.locator('#close-system').click();
+  await page.keyboard.press('Escape');
   expect(await system.evaluate((node) => node.open)).toBe(false);
 });

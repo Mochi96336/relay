@@ -25,9 +25,6 @@ function room(overrides: Record<string, unknown> = {}) {
     videoId: VIDEO,
     state: 2,
     serverTime: 10,
-    // What the player itself last reported, projected to now, and how long ago
-    // that was. The real status payload always carries both; a seek is judged
-    // against them rather than against the room's prediction.
     youtubeTime: 10,
     ageMs: 0,
     playbackRate: 1,
@@ -95,12 +92,12 @@ describe('room song latest-intent convergence', () => {
       positionSeconds: 40,
       state: 1,
       playbackRate: 1,
-      // A seek moved off any ending, so Play here is a resume, not a replay.
+      mustApplyPosition: true,
       ended: false,
     });
   });
 
-  test('folds seek, pause and rate into one self-contained latest desired state', () => {
+  test('folds seek, pause and rate without advancing an unresolved position action', () => {
     const session = new RoomSongCommandSession();
     const playingRoom = room({ state: 1 });
 
@@ -145,9 +142,12 @@ describe('room song latest-intent convergence', () => {
     if (!rate.ok) return;
     assert.deepEqual(rate.command.body.desired, {
       videoId: VIDEO,
-      positionSeconds: 40.1,
+      positionSeconds: 40,
       state: 2,
       playbackRate: 1.25,
+      // Seek(40) has not been applied yet. Server issue time cannot turn that
+      // outstanding action target into 40.1 before a player proves the seek.
+      mustApplyPosition: true,
       ended: false,
     });
   });

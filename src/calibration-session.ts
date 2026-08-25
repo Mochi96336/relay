@@ -21,6 +21,9 @@ export type CalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
 export type CalibrationStatus = {
   state: CalibrationPhase;
   progress: number;
+  /** Current content-collector spans; zero outside an in-flight collection. */
+  micSpanSamples: number;
+  backingSpanSamples: number;
   durationMs: number;
   micLagMs: number | null;
   confidence: number | null;
@@ -108,16 +111,20 @@ export class CalibrationSession {
 
   private phase: CalibrationPhase = 'idle';
   private error: string | null = null;
-  private micLagMs: number | null = null;
+  /** The only calibration value consumers may apply: confirmed, or an explicitly provisional value. */
+  private appliedResultValue: ConfirmedCalibrationResult | null = null;
   private confidence: number | null = null;
   private segmentLagsMs: number[] = [];
   private micLevelDbfs: number | null = null;
   private backingLevelDbfs: number | null = null;
-  /** True while `micLagMs` is a first-window guess agreement has not confirmed yet. */
+  /** True while the applied result is a first-window guess agreement has not confirmed yet. */
   private provisional = false;
+  /** Candidate/provisional work is open until it is promoted or rolled back. */
+  private transactionActiveValue = false;
   private startedAt = 0;
   /** Immutable authority snapshot; working retry diagnostics never mutate it. */
   private confirmedResultValue: ConfirmedCalibrationResult | null = null;
+  private confirmedContextValue: CalibrationContext | null = null;
   /** Monotonic identity for newly confirmed timing authority. Retries do not change it. */
   private confirmedRevisionValue = 0;
   private analysisPending = false;
@@ -129,6 +136,8 @@ export class CalibrationSession {
   // the server say the answer is stale instead of applying it to a setup it was
   // never measured against.
   private measuredContext: CalibrationContext | null = null;
+  /** Context that owns unpromoted content gathered while a preferred probe is viable. */
+  private primedContext: CalibrationContext | null = null;
 
   constructor(options: CalibrationSessionOptions) {
     this.sampleRate = options.sampleRate;
@@ -161,10 +170,14 @@ export class CalibrationSession {
     return this.phase === 'collecting';
   }
 
-  get result() {
-    return this.micLagMs === null
-      ? null
-      : { micLagMs: this.micLagMs, confidence: this.confidence, segmentLagsMs: this.segmentLagsMs };
+  /** The value currently allowed to reach the mixer. */
+  get result(): ConfirmedCalibrationResult | null {
+    return this.cloneResult(this.appliedResultValue);
+  }
+
+  /** True while a candidate is allowed to progress toward promotion. */
+  get transactionActive() {
+    return this.transactionActiveValue;
   }
 
   /**
@@ -191,11 +204,13 @@ export class CalibrationSession {
 
   start(nowMs = performance.now()) {
     this.invalidatePendingAnalysis();
+    // A provisional belongs to the run that created it. Starting a new run is
+    // an explicit transaction boundary, so stale provisional authority cannot
+    // leak into the retry.
+    const revokedProvisional = this.rollbackProvisional();
+    this.transactionActiveValue = true;
     this.phase = 'collecting';
     this.startedAt = nowMs;
-    // A fresh run, so nothing an earlier one measured counts towards agreement.
-    // Do not reset `provisional`: an old provisional answer must stay replaceable
-    // by a new confident window, while an old confirmed answer stays protected.
     this.candidates = [];
     this.error = null;
     this.confidence = null;
@@ -203,10 +218,108 @@ export class CalibrationSession {
     this.micLevelDbfs = null;
     this.backingLevelDbfs = null;
     this.collector.reset();
+    if (revokedProvisional) this.onSettled();
+  }
+
+  /**
+   * Starts a content transaction from evidence collected while a preferred
+   * external probe was still viable. Priming is evidence only: it cannot
+   * analyze, apply, or promote until this explicit authority handoff.
+   */
+  startFromPrimed(nowMs = performance.now()) {
+    this.invalidatePendingAnalysis();
+    const currentContext = this.context();
+    // Primed PCM is measurement evidence, not free-floating audio. Never adopt
+    // it into a transaction whose session/capture/source identity has changed.
+    if (
+      this.primedContext === null
+      || !this.contextsEqual(this.primedContext, currentContext)
+    ) {
+      this.collector.reset();
+    }
+    this.primedContext = null;
+    const revokedProvisional = this.rollbackProvisional();
+    this.transactionActiveValue = true;
+    this.phase = 'collecting';
+    this.startedAt = nowMs;
+    this.candidates = [];
+    this.error = null;
+    this.confidence = null;
+    this.segmentLagsMs = [];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
+    if (revokedProvisional) this.onSettled();
+    this.drainReadyWindows();
+  }
+
+  /** Buffers Mic evidence without opening or promoting a calibration transaction. */
+  primeMic(samples: Int16Array, startSample: number) {
+    if (this.collecting || this.analysisPending || samples.length === 0) return;
+    this.preparePrimedContext();
+    this.collector.observeMic(samples, startSample);
+  }
+
+  /** Buffers source evidence without opening or promoting a calibration transaction. */
+  primeBacking(samples: Int16Array, startSample: number) {
+    if (this.collecting || this.analysisPending || samples.length === 0) return;
+    this.preparePrimedContext();
+    this.collector.observeBacking(samples, startSample);
+  }
+
+  /** Read-only, context-fenced PCM for media-transition verification only. */
+  transitionEvidence(maxSamples: number): TimingWindow | null {
+    const currentContext = this.context();
+    const ownsPrimedEvidence = this.primedContext !== null
+      && this.contextsEqual(this.primedContext, currentContext);
+    if ((!this.collecting && !ownsPrimedEvidence) || this.analysisPending) return null;
+    return this.collector.peekRecentWindow(maxSamples);
+  }
+
+  /** A destructive source identity change invalidates unpromoted backup evidence. */
+  discardPrimedContent() {
+    if (this.collecting || this.analysisPending) return;
+    this.collector.reset();
+    this.primedContext = null;
+  }
+
+  /**
+   * Records failure of an external preferred candidate while retaining only the
+   * independent, unpromoted content backup. Confirmed/applied authority keeps
+   * the normal transactional rollback semantics.
+   */
+  failPreservingPrimed(message: string) {
+    this.invalidatePendingAnalysis();
+    this.rollbackProvisional();
+    this.transactionActiveValue = false;
+    this.phase = 'failed';
+    this.error = message;
+    this.confidence = null;
+    this.segmentLagsMs = [];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
+    this.onSettled();
+  }
+
+  /**
+   * Opens the transaction used by robot/manual probe calibration.
+   *
+   * Unlike `reset()`, this deliberately preserves the current confirmed/applied
+   * authority while the external candidate is being measured.
+   */
+  beginExternalRecalibration() {
+    this.invalidatePendingAnalysis();
+    this.rollbackProvisional();
+    this.transactionActiveValue = true;
+    this.phase = this.appliedResultValue === null ? 'idle' : 'complete';
+    this.error = null;
+    this.candidates = [];
+    this.collector.reset();
   }
 
   fail(message: string) {
     this.invalidatePendingAnalysis();
+    this.rollbackProvisional();
+    this.transactionActiveValue = false;
     this.phase = 'failed';
     this.error = message;
     this.confidence = null;
@@ -225,16 +338,16 @@ export class CalibrationSession {
   applyExternalResult(result: { micLagMs: number; confidence: number }) {
     this.invalidatePendingAnalysis();
     this.phase = 'complete';
-    this.micLagMs = result.micLagMs;
-    this.measuredContext = this.context();
     this.confidence = result.confidence;
     this.segmentLagsMs = [];
     this.micLevelDbfs = null;
     this.backingLevelDbfs = null;
     this.error = null;
-    this.provisional = false;
     this.candidates = [result.micLagMs];
-    this.confirm({ micLagMs: result.micLagMs, confidence: result.confidence, segmentLagsMs: [] });
+    this.promoteConfirmed(
+      { micLagMs: result.micLagMs, confidence: result.confidence, segmentLagsMs: [] },
+      this.context(),
+    );
     this.collector.reset();
     this.onSettled();
   }
@@ -247,20 +360,17 @@ export class CalibrationSession {
   applyValidatedResult(result: TimingCalibrationAnalysis) {
     this.invalidatePendingAnalysis();
     this.phase = 'complete';
-    this.micLagMs = result.micLagMs;
-    this.measuredContext = this.context();
     this.confidence = result.confidence;
     this.segmentLagsMs = [...result.segmentLagsMs];
     this.micLevelDbfs = result.micLevelDbfs;
     this.backingLevelDbfs = result.backingLevelDbfs;
     this.error = null;
-    this.provisional = false;
     this.candidates = [result.micLagMs];
-    this.confirm({
+    this.promoteConfirmed({
       micLagMs: result.micLagMs,
       confidence: result.confidence,
       segmentLagsMs: result.segmentLagsMs,
-    });
+    }, this.context());
     this.collector.reset();
     this.onSettled();
   }
@@ -271,12 +381,14 @@ export class CalibrationSession {
     this.phase = 'idle';
     this.error = null;
     this.candidates = [];
-    this.micLagMs = null;
+    this.appliedResultValue = null;
     this.confidence = null;
     this.segmentLagsMs = [];
     this.measuredContext = null;
     this.provisional = false;
+    this.transactionActiveValue = false;
     this.confirmedResultValue = null;
+    this.confirmedContextValue = null;
     this.collector.reset();
   }
 
@@ -291,6 +403,20 @@ export class CalibrationSession {
     if (!this.collecting || samples.length === 0) return;
     this.collector.observeBacking(samples, startSample);
     this.drainReadyWindows();
+  }
+
+  /**
+   * Drops only unanalysed PCM after a proven media-mapping discontinuity.
+   * The calibration transaction and any older confirmed/applied authority stay
+   * intact; a collecting transaction simply receives a fresh timeout budget.
+   */
+  restartWorkingEvidence(nowMs = this.now()) {
+    const wasCollecting = this.collecting;
+    const hadPrimedEvidence = this.primedContext !== null;
+    this.collector.reset();
+    this.primedContext = null;
+    if (wasCollecting) this.startedAt = nowMs;
+    if (wasCollecting || hadPrimedEvidence) this.onSettled();
   }
 
   /** Gives up on a collection that stopped making progress. */
@@ -310,7 +436,7 @@ export class CalibrationSession {
 
   /** True when the setup has moved on from the one the answer describes. */
   isStaleFor(context: CalibrationContext) {
-    if (this.micLagMs === null || this.measuredContext === null) return false;
+    if (this.appliedResultValue === null || this.measuredContext === null) return false;
     return this.measuredContext.sessionGeneration !== context.sessionGeneration
       || this.measuredContext.micGeneration !== context.micGeneration
       || this.measuredContext.backingGeneration !== context.backingGeneration
@@ -323,12 +449,19 @@ export class CalibrationSession {
       : this.phase === 'complete'
         ? 1
         : 0;
+    const spanForStatus = (spanSamples: number) => !this.collecting
+      ? 0
+      : this.analysisPending
+        ? this.requiredSamples
+        : Math.min(this.requiredSamples, spanSamples);
 
     return {
       state: this.phase,
       progress,
+      micSpanSamples: spanForStatus(this.collector.micSpanSamples),
+      backingSpanSamples: spanForStatus(this.collector.backingSpanSamples),
       durationMs: this.durationMs,
-      micLagMs: this.micLagMs,
+      micLagMs: this.appliedResultValue?.micLagMs ?? null,
       confidence: this.confidence,
       segmentLagsMs: this.segmentLagsMs,
       micLevelDbfs: this.micLevelDbfs,
@@ -344,13 +477,61 @@ export class CalibrationSession {
 
   // ---------------------------------------------------------------- internals
 
-  private confirm(result: ConfirmedCalibrationResult) {
-    this.confirmedResultValue = {
+  private cloneResult(result: ConfirmedCalibrationResult | null): ConfirmedCalibrationResult | null {
+    if (result === null) return null;
+    return {
       micLagMs: result.micLagMs,
       confidence: result.confidence,
       segmentLagsMs: [...result.segmentLagsMs],
     };
+  }
+
+  private cloneContext(context: CalibrationContext | null): CalibrationContext | null {
+    return context === null ? null : { ...context };
+  }
+
+  private contextsEqual(left: CalibrationContext, right: CalibrationContext) {
+    return left.sessionGeneration === right.sessionGeneration
+      && left.micGeneration === right.micGeneration
+      && left.backingGeneration === right.backingGeneration
+      && left.sourceGeneration === right.sourceGeneration;
+  }
+
+  private preparePrimedContext() {
+    const currentContext = this.context();
+    if (
+      this.primedContext === null
+      || !this.contextsEqual(this.primedContext, currentContext)
+    ) {
+      this.collector.reset();
+      this.primedContext = this.cloneContext(currentContext);
+    }
+  }
+
+  /**
+   * Commits a new authority in one synchronous promotion. The mixer callback
+   * therefore cannot observe a new applied lag paired with an older confirmed
+   * snapshot (or vice versa).
+   */
+  private promoteConfirmed(result: ConfirmedCalibrationResult, context: CalibrationContext) {
+    const promoted = this.cloneResult(result)!;
+    const promotedContext = this.cloneContext(context)!;
+    this.confirmedResultValue = promoted;
+    this.confirmedContextValue = promotedContext;
+    this.appliedResultValue = this.cloneResult(promoted);
+    this.measuredContext = this.cloneContext(promotedContext);
+    this.provisional = false;
+    this.transactionActiveValue = false;
     this.confirmedRevisionValue += 1;
+  }
+
+  /** Revokes only provisional authority, restoring the previous confirmed snapshot if one exists. */
+  private rollbackProvisional() {
+    if (!this.provisional) return false;
+    this.appliedResultValue = this.cloneResult(this.confirmedResultValue);
+    this.measuredContext = this.cloneContext(this.confirmedContextValue);
+    this.provisional = false;
+    return true;
   }
 
   private invalidatePendingAnalysis() {
@@ -462,9 +643,13 @@ export class CalibrationSession {
       if (
         this.provisionalConfidence !== undefined
         && result.confidence >= this.provisionalConfidence
-        && (this.micLagMs === null || this.provisional)
+        && (this.appliedResultValue === null || this.provisional)
       ) {
-        this.micLagMs = result.micLagMs;
+        this.appliedResultValue = {
+          micLagMs: result.micLagMs,
+          confidence: result.confidence,
+          segmentLagsMs: [...result.segmentLagsMs],
+        };
         this.measuredContext = this.context();
         this.provisional = true;
       }
@@ -474,25 +659,24 @@ export class CalibrationSession {
       return;
     }
 
-    this.micLagMs = result.micLagMs;
-    this.measuredContext = this.context();
     this.confidence = result.confidence;
     this.segmentLagsMs = result.segmentLagsMs;
     this.micLevelDbfs = result.micLevelDbfs;
     this.backingLevelDbfs = result.backingLevelDbfs;
     this.error = null;
-    this.provisional = false;
     this.phase = 'complete';
-    this.confirm({
+    this.promoteConfirmed({
       micLagMs: result.micLagMs,
       confidence: result.confidence,
       segmentLagsMs: result.segmentLagsMs,
-    });
+    }, this.context());
     this.collector.reset();
     this.onSettled();
   }
 
   private rejectAnalysis(error: unknown) {
+    this.rollbackProvisional();
+    this.transactionActiveValue = false;
     this.phase = 'failed';
     this.error = error instanceof Error ? error.message : String(error);
     this.confidence = null;

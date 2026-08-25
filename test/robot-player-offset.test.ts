@@ -94,9 +94,12 @@ test('a report that is not a number is refused rather than stored', () => {
   assert.equal(offset.isFresh(0), false);
 });
 
-test('the server aligns against the tracker rather than the last raw report', () => {
+test('the server aligns against the tracker and only then requests a backing boundary', () => {
   assert.match(serverSource, /const robotPlayerOffset = new RobotPlayerOffsetTracker\(/);
-  assert.match(serverSource, /robotPlayerOffset\.record\(offsetMs, performance\.now\(\)\)/);
+  assert.match(
+    serverSource,
+    /const nowMs = performance\.now\(\);\s*robotPlayerOffset\.record\(offsetMs, nowMs\);\s*const mapped = robotContentTimeline\.notePlayerOffset\(\s*robotPlayerOffset\.offsetMs\(nowMs\) \?\? offsetMs,[\s\S]*?\);\s*if \(mapped\) requestRobotBackingBoundary\(nowMs\);/,
+  );
   assert.match(serverSource, /robotDeltaIsFresh\(nowMs\) \? robotPlayerOffset\.offsetMs\(nowMs\)! : 0/);
   // No raw last-value state may survive alongside it, or the two can disagree.
   // `robotPlayerOffsetMs:` remains as a published status field, so this pins the

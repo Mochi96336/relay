@@ -1,11 +1,25 @@
-/* room-sound-ui.js decides when a state/phase deserves persistent explanation.
-   Normal audible playback stays quiet; recovery and forced-pause reasons remain visible. */
-.local-sound-control #listen-adjust-state {
+/* Room-sound geometry belongs to live-p0-layout.css. This layer may change only
+   icon/state appearance; playback state must never select columns, rows, display,
+   or measured control size. */
+.room-sound-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.room-sound-icon [data-room-sound-signal="muted"],
+.room-sound-icon [data-room-sound-signal="retry"] {
   display: none;
 }
 
-.local-sound-control[data-listen-note="visible"] #listen-adjust-state {
-  display: block;
+#listen-toggle[data-icon="muted"] .room-sound-icon [data-room-sound-signal="audible"],
+#listen-toggle[data-icon="retry"] .room-sound-icon [data-room-sound-signal="audible"] {
+  display: none;
+}
+
+#listen-toggle[data-icon="muted"] .room-sound-icon [data-room-sound-signal="muted"],
+#listen-toggle[data-icon="retry"] .room-sound-icon [data-room-sound-signal="retry"] {
+  display: inline;
 }
 
 body[data-listen="mic-muted"] .local-sound-control,
@@ -18,4 +32,8 @@ body[data-listen="mic-muted"] #listen-gain,
 body[data-listen="playback-muted"] #listen-gain,
 body[data-listen="review-muted"] #listen-gain {
   opacity: .46;
+}
+
+body[data-listen="muted"] #listen-gain {
+  opacity: .58;
 }

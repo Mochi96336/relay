@@ -71,10 +71,18 @@ function feedBacking(backing: RelayClient, frames = 8, value = 10_000) {
   for (let i = 0; i < frames; i += 1) backing.sendPcm(frame);
 }
 
+function feedMic(mic: RelayClient, frames = 4, value = 4_000) {
+  const frame = Buffer.alloc(FRAME_SAMPLES * 2);
+  for (let i = 0; i < FRAME_SAMPLES; i += 1) frame.writeInt16LE(value, i * 2);
+  for (let i = 0; i < frames; i += 1) mic.sendPcm(frame);
+}
+
 async function registerMic(server: RelayServer, participantId: string, name: string) {
   const mic = await RelayClient.connect(server, participantQuery(participantId, name));
   mic.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
   await mic.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+  feedMic(mic);
+  await sleep(30);
   return mic;
 }
 

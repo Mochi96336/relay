@@ -1,5 +1,26 @@
 const WEB_SOCKET_OPEN = 1;
 
+/**
+ * Ceiling for one QUIC datagram, in bytes.
+ *
+ * Deliberately below a 1200-byte QUIC packet rather than at it: the datagram
+ * frame rides inside that packet, after UDP/IP and QUIC headers, so a budget
+ * equal to the observed packet size still does not fit. 1000 leaves room for
+ * those headers on any path that carries a conventional 1200-byte QUIC packet,
+ * and splits one 20 ms 48 kHz mono chunk into two datagrams rather than many.
+ */
+export const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
+
+/**
+ * Outgoing datagrams that may sit queued, in packets.
+ *
+ * Covers one 20 ms chunk's burst at the ceiling above with room to spare, and
+ * no more: every queued datagram is delay on a live voice path, so a genuinely
+ * backpressured link should still start dropping quickly rather than building
+ * a backlog of audio that is already too late to be worth sending.
+ */
+export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
+
 function base64Bytes(value) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -103,14 +124,28 @@ export class PreferredAudioTransport extends AudioTransport {
   constructor({
     maxBufferedBytes = 256 * 1024,
     minimumPacketBytes = 1,
+    datagramPacketBytesCeiling = DEFAULT_DATAGRAM_PACKET_BYTES_CEILING,
+    datagramQueuePackets = DEFAULT_DATAGRAM_QUEUE_PACKETS,
     WebTransportClass = globalThis.WebTransport,
   } = {}) {
     super();
     if (!Number.isInteger(minimumPacketBytes) || minimumPacketBytes < 1) {
       throw new RangeError('minimumPacketBytes must be a positive integer');
     }
+    if (
+      !Number.isInteger(datagramPacketBytesCeiling)
+      || datagramPacketBytesCeiling < minimumPacketBytes
+    ) {
+      throw new RangeError('datagramPacketBytesCeiling must be an integer at least minimumPacketBytes');
+    }
+    if (!Number.isInteger(datagramQueuePackets) || datagramQueuePackets < 1) {
+      throw new RangeError('datagramQueuePackets must be a positive integer');
+    }
     this.fallback = new WebSocketAudioTransport({ maxBufferedBytes });
     this.minimumPacketBytes = minimumPacketBytes;
+    this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
+    this.datagramQueuePackets = datagramQueuePackets;
+    this.outstandingDatagramWrites = 0;
     this.WebTransportClass = WebTransportClass;
     this.webTransport = null;
     this.datagramWriter = null;
@@ -166,8 +201,12 @@ export class PreferredAudioTransport extends AudioTransport {
     return {
       path,
       maxPacketBytes: Number.isFinite(maxPacketBytes) ? maxPacketBytes : null,
+      // The browser-reported min/max stay raw so a clamped run still shows what
+      // the path claimed, next to the ceiling that was actually packetized to.
       minWebTransportMaxPacketBytes: this.minWebTransportMaxPacketBytes,
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
+      datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
+      datagramQueuePackets: this.datagramQueuePackets,
       ...this.telemetry,
     };
   }
@@ -180,14 +219,29 @@ export class PreferredAudioTransport extends AudioTransport {
     this.fallback.unbind(socket);
   }
 
+  /**
+   * The datagram budget this transport will actually packetize to.
+   *
+   * `maxDatagramSize` is what the browser is willing to accept from the page,
+   * not what the QUIC path can carry: Chrome reports 65535 on a path whose
+   * packets are ~1200 bytes. Believing it means a 20 ms PCM chunk goes out as
+   * one ~1944-byte datagram, `writer.write()` rejects asynchronously, and the
+   * generic write-failure handler demotes to WebSocket for the rest of the
+   * capture. The rejection never reaches the `packet-too-large` path that
+   * would have re-split it, because the synchronous size guard compared
+   * against 65535 and let it through.
+   *
+   * So cap the budget at something a path MTU can hold. The raw browser value
+   * is still recorded for diagnostics; only what we packetize to is clamped.
+   */
   currentWebTransportMaxPacketBytes() {
     const live = Number(this.webTransport?.datagrams?.maxDatagramSize);
     if (Number.isInteger(live) && live > 0) {
       this.lastWebTransportMaxPacketBytes = live;
       this.observeWebTransportPacketBudget(live);
-      return live;
+      return Math.min(live, this.datagramPacketBytesCeiling);
     }
-    return this.lastWebTransportMaxPacketBytes;
+    return Math.min(this.lastWebTransportMaxPacketBytes, this.datagramPacketBytesCeiling);
   }
 
   maxPacketBytes() {
@@ -202,12 +256,12 @@ export class PreferredAudioTransport extends AudioTransport {
 
   state() {
     if (this.datagramWriter) {
-      const desiredSize = Number(this.datagramWriter.desiredSize);
       const maxPacketBytes = this.maxPacketBytes();
       if (!this.datagramWriter) return this.fallback.state();
+      const ready = this.outstandingDatagramWrites < this.datagramQueuePackets;
       return {
-        ready: Number.isNaN(desiredSize) || desiredSize > 0,
-        reason: Number.isNaN(desiredSize) || desiredSize > 0 ? null : 'congested',
+        ready,
+        reason: ready ? null : 'congested',
         bufferedAmount: 0,
         maxPacketBytes,
         path: 'webtransport',
@@ -217,7 +271,6 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   async prefer(offer) {
-    const generation = ++this.preferenceGeneration;
     if (!offer || offer.preferred !== 'webtransport' || !offer.url) {
       this.closeWebTransport();
       return false;
@@ -226,8 +279,17 @@ export class PreferredAudioTransport extends AudioTransport {
       this.closeWebTransport();
       return false;
     }
-    if (this.datagramWriter && this.preferredUrl === offer.url) return true;
+    // A control WebSocket reconnect for the same capture re-advertises the
+    // same media ticket. Keeping that live session must also keep its write
+    // generation: bumping the generation before this early return would orphan
+    // in-flight writes from the very writer/transport we are retaining.
+    if (
+      this.datagramWriter
+      && this.webTransport
+      && this.preferredUrl === offer.url
+    ) return true;
 
+    const generation = ++this.preferenceGeneration;
     this.closeWebTransport(false);
     this.telemetry.webTransportAttempts += 1;
 
@@ -257,10 +319,30 @@ export class PreferredAudioTransport extends AudioTransport {
         return false;
       }
 
+      // One 20 ms chunk is packetized to several datagrams and written in one
+      // synchronous pass. The default outgoing high-water mark is 1, so the
+      // first write takes the only slot and every later datagram of the same
+      // chunk sees desiredSize 0 and is dropped as congested - exactly half the
+      // capture at two datagrams per chunk, with nothing actually congested.
+      //
+      // Queue depth is latency for realtime audio, so keep it just past one
+      // chunk's burst rather than generous: still shallow enough that a truly
+      // backpressured path drops promptly instead of buffering stale voice.
+      // Best effort only, and deliberately not depended on. outgoingHighWaterMark
+      // sizes the user agent's own datagram buffer; the writable stream's
+      // queuing strategy stays at one, so writer.desiredSize reports whether a
+      // write is in flight rather than whether the path is congested. Raising
+      // this was accepted by the browser and changed nothing, which is why
+      // backpressure is now counted here instead of read from the stream.
+      try {
+        transport.datagrams.outgoingHighWaterMark = this.datagramQueuePackets;
+      } catch {}
+
       const writable = transport.datagrams.writable ?? transport.datagrams.createWritable();
       const writer = writable.getWriter();
       this.webTransport = transport;
       this.datagramWriter = writer;
+      this.outstandingDatagramWrites = 0;
       this.preferredUrl = offer.url;
       this.lastWebTransportMaxPacketBytes = maxPacketBytes;
       this.observeWebTransportPacketBudget(maxPacketBytes);
@@ -271,7 +353,14 @@ export class PreferredAudioTransport extends AudioTransport {
       );
       return true;
     } catch {
-      if (generation === this.preferenceGeneration) this.demoteWebTransport(transport);
+      // A candidate can become a live HTTP/3 session before its datagram writer
+      // is installed. If setup fails after `ready`, it is not `this.webTransport`
+      // yet, so demoting the active slot alone would leave that candidate alive
+      // on the server while the browser has already fallen back to WebSocket.
+      if (transport && transport !== this.webTransport) {
+        try { transport.close(); } catch {}
+      }
+      if (generation === this.preferenceGeneration) this.demoteWebTransport();
       return false;
     }
   }
@@ -279,14 +368,23 @@ export class PreferredAudioTransport extends AudioTransport {
   demoteWebTransport(transport = this.webTransport) {
     if (transport && this.webTransport && transport !== this.webTransport) return;
     const writer = this.datagramWriter;
+    const demoted = this.webTransport;
     const wasActive = Boolean(this.webTransport || this.datagramWriter);
     this.webTransport = null;
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
+    this.outstandingDatagramWrites = 0;
     if (wasActive) this.telemetry.webTransportDemotions += 1;
     if (writer) {
       try { writer.releaseLock(); } catch {}
+    }
+    // Releasing the writer stops this page sending datagrams, but it leaves the
+    // session open, and the server reads liveness from the session rather than
+    // from traffic. Without this close, micMediaPath() keeps answering
+    // 'webtransport' for a capture whose PCM has entirely moved to the socket.
+    if (demoted) {
+      try { demoted.close(); } catch {}
     }
   }
 
@@ -346,8 +444,7 @@ export class PreferredAudioTransport extends AudioTransport {
       };
     }
 
-    const desiredSize = Number(writer.desiredSize);
-    if (!Number.isNaN(desiredSize) && desiredSize <= 0) {
+    if (this.outstandingDatagramWrites >= this.datagramQueuePackets) {
       this.telemetry.webTransportCongestedRejects += 1;
       return {
         ready: false,
@@ -364,16 +461,22 @@ export class PreferredAudioTransport extends AudioTransport {
       const transport = this.webTransport;
       const generation = this.preferenceGeneration;
       this.telemetry.webTransportPacketsSubmitted += 1;
-      Promise.resolve(writer.write(bytes)).catch(() => {
-        // A write belongs to the transport generation that submitted it. The
-        // promise may reject after Mic teardown/restart has already installed a
-        // newer WebTransport; that stale completion must not demote the new
-        // capture or contaminate its transport-health evidence.
-        if (
-          generation !== this.preferenceGeneration
-          || writer !== this.datagramWriter
-          || transport !== this.webTransport
-        ) return;
+      this.outstandingDatagramWrites += 1;
+      // A write belongs to the transport generation that submitted it. The
+      // promise may settle after Mic teardown/restart has already installed a
+      // newer WebTransport; that stale completion must not demote the new
+      // capture, contaminate its transport-health evidence, or decrement an
+      // in-flight count that now belongs to a different session.
+      const ownsCapture = () => generation === this.preferenceGeneration
+        && writer === this.datagramWriter
+        && transport === this.webTransport;
+      const settle = () => {
+        if (!ownsCapture()) return;
+        this.outstandingDatagramWrites = Math.max(0, this.outstandingDatagramWrites - 1);
+      };
+      Promise.resolve(writer.write(bytes)).then(settle, () => {
+        if (!ownsCapture()) return;
+        settle();
         this.telemetry.webTransportSendFailures += 1;
         this.demoteWebTransport(transport);
       });

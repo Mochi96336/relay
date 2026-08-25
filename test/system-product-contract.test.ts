@@ -18,6 +18,44 @@ test('normal System renders product issues without reconstructing diagnostics', 
   assert.doesNotMatch(productSurface, /latestReadiness|readyz|components|WebSocket|\.attention/);
 });
 
+test('normal System product copy is owned by relayI18n while diagnostics stay technical', () => {
+  const system = read('public/system-details.js');
+  const liveCopy = read('public/live-i18n.js');
+  const technicalStart = system.indexOf('function yesNo(');
+  assert.ok(technicalStart >= 0);
+
+  const productSurface = system.slice(0, technicalStart);
+  const technicalDetails = system.slice(technicalStart);
+
+  assert.match(system, /import '\.\/live-i18n\.js';/);
+  assert.doesNotMatch(productSurface, /localeIsChinese|productCopy\(/,
+    'normal System must not own a second bilingual product dictionary');
+  assert.match(productSurface, /t\('system\.issue\.affects'\)/);
+  assert.match(productSurface, /t\('system\.product\.connecting'\)/);
+  assert.match(productSurface, /t\('system\.product\.normal'\)/);
+  assert.match(productSurface, /t\('system\.product\.noProblems'\)/);
+  assert.match(productSurface, /issueCauseKeys/);
+  assert.match(productSurface, /issueRecoveryKeys/);
+
+  for (const key of [
+    'system.issue.cause.mic-audio-stalled',
+    'system.issue.recovery.retry-mic',
+    'system.issue.affects',
+    'system.product.connecting',
+    'system.product.normal',
+    'system.product.noProblems',
+  ]) {
+    assert.equal((liveCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 2, key);
+  }
+
+  assert.match(technicalDetails, /return 'Yes'/);
+  assert.match(technicalDetails, /return 'Disconnected'/);
+  assert.match(technicalDetails, /diagnosticsState\.textContent = 'Open to refresh'/);
+  assert.match(technicalDetails, /copyButton\.textContent = 'Copy diagnostics'/);
+  assert.doesNotMatch(technicalDetails, /system\.issue\.|system\.product\./,
+    'Technical details must not consume normal product copy keys');
+});
+
 test('readiness and diagnostics only start from Technical details', () => {
   const system = read('public/system-details.js');
 

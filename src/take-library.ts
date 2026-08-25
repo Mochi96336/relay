@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import type {
   TakeArtifact,
+  TakeMixSampleRange,
   TakeRecord,
   TakeSongSnapshot,
   TakeStopReason,
@@ -34,6 +35,7 @@ export type TakeLibraryEntry = {
   stopReason: TakeStopReason | null;
   song: TakeSongSnapshot | null;
   artifact: TakeArtifact;
+  mixSampleRange: TakeMixSampleRange | null;
   quality: TakeQualityAssessment | null;
   recovered: boolean;
 };
@@ -59,6 +61,18 @@ function finiteNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isTakeMixSampleRange(value: unknown): value is TakeMixSampleRange {
+  if (!value || typeof value !== 'object') return false;
+  const range = value as Partial<TakeMixSampleRange>;
+  if (!Number.isSafeInteger(range.generation) || Number(range.generation) < 0) return false;
+  if (!Number.isSafeInteger(range.startSampleIndex) || Number(range.startSampleIndex) < 0) return false;
+  if (!Number.isSafeInteger(range.endSampleIndex) || Number(range.endSampleIndex) < Number(range.startSampleIndex)) {
+    return false;
+  }
+  if (!Number.isSafeInteger(range.sampleCount) || Number(range.sampleCount) < 0) return false;
+  return Number(range.sampleCount) <= Number(range.endSampleIndex) - Number(range.startSampleIndex);
+}
+
 function isTakeLibraryEntry(value: unknown): value is TakeLibraryEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Partial<TakeLibraryEntry>;
@@ -77,7 +91,14 @@ function isTakeLibraryEntry(value: unknown): value is TakeLibraryEntry {
 function parseMetadata(bytes: Buffer, expectedTakeId: string) {
   const decoded = JSON.parse(bytes.toString('utf8')) as Partial<TakeMetadataV1>;
   if (decoded.version !== 1 || !isTakeLibraryEntry(decoded.take)) return null;
-  return decoded.take.takeId === expectedTakeId ? decoded.take : null;
+  if (decoded.take.takeId !== expectedTakeId) return null;
+
+  const rawRange = (decoded.take as TakeLibraryEntry & { mixSampleRange?: unknown }).mixSampleRange;
+  if (rawRange !== undefined && rawRange !== null && !isTakeMixSampleRange(rawRange)) return null;
+  return {
+    ...decoded.take,
+    mixSampleRange: rawRange && isTakeMixSampleRange(rawRange) ? { ...rawRange } : null,
+  } satisfies TakeLibraryEntry;
 }
 
 function readWavArtifact(filePath: string, takeId: string, baseUrl: string): TakeArtifact {
@@ -122,11 +143,34 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
   };
 }
 
+function readValidatedMetadata(
+  metadataPath: string,
+  wavPath: string,
+  takeId: string,
+  baseUrl: string,
+) {
+  const metadata = parseMetadata(readFileSync(metadataPath), takeId);
+  if (!metadata) return null;
+
+  const artifact = readWavArtifact(wavPath, takeId, baseUrl);
+  if (
+    metadata.artifact.sampleCount !== artifact.sampleCount
+    || metadata.artifact.sampleRate !== artifact.sampleRate
+    || metadata.artifact.sizeBytes !== artifact.sizeBytes
+  ) return null;
+  if (
+    metadata.mixSampleRange !== null
+    && metadata.mixSampleRange.sampleCount !== artifact.sampleCount
+  ) return null;
+  return metadata;
+}
+
 function cloneEntry(entry: TakeLibraryEntry): TakeLibraryEntry {
   return {
     ...entry,
     song: entry.song ? { ...entry.song } : null,
     artifact: { ...entry.artifact },
+    mixSampleRange: entry.mixSampleRange ? { ...entry.mixSampleRange } : null,
     quality: entry.quality ? structuredClone(entry.quality) : null,
   };
 }
@@ -173,6 +217,7 @@ export class TakeLibrary {
       stopReason: take.stopReason,
       song: { ...take.song },
       artifact: { ...take.artifact },
+      mixSampleRange: take.mixSampleRange ? { ...take.mixSampleRange } : null,
       quality: take.quality ? structuredClone(take.quality) : null,
       recovered: false,
     };
@@ -193,14 +238,15 @@ export class TakeLibrary {
       const takeId = match[1];
       if (!names.has(`${takeId}.wav`)) continue;
       try {
-        const metadata = parseMetadata(
-          readFileSync(path.join(this.options.directory, item.name)),
+        const metadata = readValidatedMetadata(
+          path.join(this.options.directory, item.name),
+          path.join(this.options.directory, `${takeId}.wav`),
           takeId,
+          this.artifactBaseUrl,
         );
         if (metadata) entries.push(metadata);
       } catch {
-        // A malformed sidecar must not hide a valid WAV. Recovery below rewrites
-        // it on the next pass after this invalid metadata is removed.
+        // Recovery already repaired malformed/mismatched sidecars where possible.
       }
     }
 
@@ -214,8 +260,9 @@ export class TakeLibrary {
     mkdirSync(this.options.directory, { recursive: true });
     this.recoverLegacyArtifacts();
     const metadataPath = path.join(this.options.directory, metadataFileName(takeId));
+    const wavPath = path.join(this.options.directory, `${takeId}.wav`);
     try {
-      const entry = parseMetadata(readFileSync(metadataPath), takeId);
+      const entry = readValidatedMetadata(metadataPath, wavPath, takeId, this.artifactBaseUrl);
       return entry ? cloneEntry(entry) : null;
     } catch {
       return null;
@@ -246,15 +293,20 @@ export class TakeLibrary {
       if (!match) continue;
       const takeId = match[1];
       const metadataName = metadataFileName(takeId);
+      const wavPath = path.join(this.options.directory, name);
       if (names.has(metadataName)) {
         try {
-          if (parseMetadata(readFileSync(path.join(this.options.directory, metadataName)), takeId)) continue;
+          if (readValidatedMetadata(
+            path.join(this.options.directory, metadataName),
+            wavPath,
+            takeId,
+            this.artifactBaseUrl,
+          )) continue;
         } catch {}
         rmSync(path.join(this.options.directory, metadataName), { force: true });
       }
 
       try {
-        const wavPath = path.join(this.options.directory, name);
         const artifact = readWavArtifact(wavPath, takeId, this.artifactBaseUrl);
         const endedAtMs = statSync(wavPath).mtimeMs;
         const entry: TakeLibraryEntry = {
@@ -266,6 +318,7 @@ export class TakeLibrary {
           stopReason: null,
           song: null,
           artifact,
+          mixSampleRange: null,
           quality: null,
           recovered: true,
         };

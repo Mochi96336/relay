@@ -46,6 +46,17 @@ test('recording and reconnecting states come from the recording presenter', asyn
   await expect(page.locator('#recording-status')).toHaveText('重新連線中…');
 });
 
+test('recording blocker uses the authoritative ProductIssue cause and rerenders locale', async ({ page }) => {
+  await openState(page, 'recording-blocked');
+
+  await expect(page.locator('#start-recording')).toBeHidden();
+  await expect(page.locator('#recording-status')).toHaveText('伴奏音訊中斷');
+  await expect(page.locator('#recording-status')).not.toHaveText('目前無法錄音');
+
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('#recording-status')).toHaveText('Backing track interrupted');
+});
+
 test('takeover, People, More and System use production DOM and presenter state', async ({ page }) => {
   await openState(page, 'takeover');
   await expect(page.locator('#mic-takeover')).toBeVisible();

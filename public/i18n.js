@@ -526,6 +526,32 @@
     ));
   }
 
+  function registerMessages(bundle) {
+    if (!bundle || typeof bundle !== 'object') return false;
+    let registered = false;
+
+    for (const [requestedLocale, additions] of Object.entries(bundle)) {
+      const normalized = normalizeLocale(requestedLocale);
+      if (!normalized || !SUPPORTED.has(normalized) || !additions || typeof additions !== 'object') continue;
+      const table = messages[normalized];
+
+      for (const [key, template] of Object.entries(additions)) {
+        if (typeof template !== 'string') continue;
+        if (Object.prototype.hasOwnProperty.call(table, key)) {
+          if (table[key] !== template) {
+            throw new Error(`Relay i18n key already registered: ${normalized}:${key}`);
+          }
+          continue;
+        }
+        table[key] = template;
+        registered = true;
+      }
+    }
+
+    if (registered) applyStatic();
+    return registered;
+  }
+
   function has(key) {
     return Object.prototype.hasOwnProperty.call(messages[locale] ?? {}, key)
       || Object.prototype.hasOwnProperty.call(messages[DEFAULT_LOCALE], key);
@@ -596,6 +622,7 @@
     has,
     setLocale,
     applyStatic,
+    registerMessages,
   };
 
   document.documentElement.lang = locale;

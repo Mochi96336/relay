@@ -90,9 +90,8 @@ jobs:
         run: npm install --no-save --package-lock=false @playwright/test@1.55.0
       - name: Serve deterministic Live fixtures from Relay static root
         run: |
-          cp test/fixtures/live-visual.html public/__live-visual.html
-          cp test/fixtures/live-visual-ribbon.js public/__live-visual-ribbon.js
-          sed -i 's#</body>#<script src="/__live-visual-ribbon.js"></script></body>#' public/__live-visual.html
+          cp test/fixtures/live-visual-bootstrap.js public/__live-visual-bootstrap.js
+          node scripts/build-live-visual-fixture.mjs public/index.html public/__live-visual.html
           cp test/fixtures/live-p0-layout.html public/__live-p0-layout.html
           cp test/fixtures/room-sound-geometry.html public/__room-sound-geometry.html
           cp test/fixtures/listener-debug.html public/__listener-debug.html

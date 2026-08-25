@@ -6,6 +6,7 @@ import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 import { captureLevelSnapshot, readCaptureSettings } from './capture-observability.js';
+import { MicLifecycleTransaction } from './mic-lifecycle-transaction.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 
@@ -53,6 +54,7 @@ let publisherStarting = false;
 let publisherStartRequest = null;
 const micStartup = new MicStartupGate();
 const micCaptureRecovery = new MicCaptureRecoveryWatchdog();
+const micLifecycle = new MicLifecycleTransaction();
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestLocalMicLevel = null;
@@ -789,6 +791,17 @@ function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
 
+function finishMicrophoneSession(reason, { releaseMic = false, afterEnded = null } = {}) {
+  return micLifecycle.run({
+    stop: () => stop(false, { releaseMic }),
+    isCurrent: (stoppedEpoch) => publisherSessionEpoch === stoppedEpoch,
+    onEnded: () => {
+      dispatchRelayEvent('relay-microphone-ended', { reason });
+      afterEnded?.();
+    },
+  });
+}
+
 function handleServerMessage(
   message,
   sessionEpoch = publisherSessionEpoch,
@@ -832,12 +845,7 @@ function handleServerMessage(
     const owner = message.owner ?? null;
     setStatus('Microphone is in use', owner ? `${owner.nickname} has the mic.` : 'Another participant has the mic.');
     dispatchRelayEvent('relay-mic-busy', { owner });
-    stop(false, { releaseMic: false })
-      .then((stoppedEpoch) => {
-        if (publisherSessionEpoch !== stoppedEpoch) return;
-        dispatchRelayEvent('relay-microphone-ended', { reason: 'busy' });
-      })
-      .catch(console.error);
+    finishMicrophoneSession('busy').catch(console.error);
     return;
   }
 
@@ -845,26 +853,19 @@ function handleServerMessage(
     const owner = message.owner ?? null;
     setStatus('Takeover changed', owner ? `${owner.nickname} has the mic now.` : 'The mic state changed.');
     dispatchRelayEvent('relay-mic-takeover-rejected', { owner, reason: message.reason });
-    stop(false, { releaseMic: false })
-      .then((stoppedEpoch) => {
-        if (publisherSessionEpoch !== stoppedEpoch) return;
-        dispatchRelayEvent('relay-microphone-ended', { reason: 'takeover-rejected' });
-      })
-      .catch(console.error);
+    finishMicrophoneSession('takeover-rejected').catch(console.error);
     return;
   }
 
   if (message.type === 'mic-revoked') {
     setStatus('Microphone handed off', message.message ?? 'Another participant now has the mic.');
-    dispatchRelayEvent('relay-microphone-ended', { reason: 'revoked' });
-    stop(false, { releaseMic: false }).catch(console.error);
+    finishMicrophoneSession('revoked').catch(console.error);
     return;
   }
 
   if (message.type === 'publisher-superseded') {
     setStatus('Microphone moved to another tab', message.message ?? 'A newer microphone capture is active.');
-    dispatchRelayEvent('relay-microphone-ended', { reason: 'superseded' });
-    stop(false, { releaseMic: false }).catch(console.error);
+    finishMicrophoneSession('superseded').catch(console.error);
     return;
   }
 
@@ -1359,13 +1360,12 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     });
     track?.addEventListener('ended', () => {
       if (!captureIsCurrent()) return;
-      stop(false, { releaseMic: true })
-        .then((stoppedEpoch) => {
-          if (publisherSessionEpoch !== stoppedEpoch) return;
-          dispatchRelayEvent('relay-microphone-ended', { reason: 'input-ended' });
+      finishMicrophoneSession('input-ended', {
+        releaseMic: true,
+        afterEnded: () => {
           setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.');
-        })
-        .catch(console.error);
+        },
+      }).catch(console.error);
     });
 
     micCaptureRecovery.start(captureSnapshot(), 'startup');
@@ -1454,13 +1454,12 @@ window.addEventListener('pageshow', recoverPublisherAudio);
 
 window.addEventListener('relay-release-microphone', () => {
   if (!publisherActive) return;
-  stop(false, { releaseMic: true })
-    .then((stoppedEpoch) => {
-      if (publisherSessionEpoch !== stoppedEpoch) return;
-      dispatchRelayEvent('relay-microphone-ended', { reason: 'released' });
+  finishMicrophoneSession('released', {
+    releaseMic: true,
+    afterEnded: () => {
       setStatus('Microphone released', 'This phone is no longer using the microphone.');
-    })
-    .catch(console.error);
+    },
+  }).catch(console.error);
 });
 
 for (const slider of [micGain, songLevel]) {

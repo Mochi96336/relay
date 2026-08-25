@@ -13,6 +13,7 @@ const CHUNK_MS = 20;
 const CHUNK_SAMPLES = Math.round((SAMPLE_RATE * CHUNK_MS) / 1000);
 const CAPTURE_GENERATION = 7;
 const STARVATION_FAULT_MS = 1_200;
+const IOS_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1';
 
 function startRelay() {
   const child = spawn(
@@ -307,6 +308,168 @@ test('real Chromium listener recovers monitor reconnect, proven starvation and A
     expect(eventTypes).toContain('fault-audio-interrupt-start');
     expect(eventTypes).toContain('fault-audio-interrupt-release');
     expect(dump.snapshots.at(-1)?.evidence).toBe('internally-healthy');
+  } finally {
+    await browser.close();
+    mic.close();
+    await relay.stop();
+  }
+});
+
+test('iOS foreground lifecycle restarts the real AudioDestination once and returns to healthy playback', async () => {
+  test.setTimeout(45_000);
+  const relay = await startRelay();
+  const mic = await startDeterministicMic(relay);
+  const browser = await chromium.launch({
+    channel: 'chromium',
+    args: ['--autoplay-policy=no-user-gesture-required'],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    userAgent: IOS_USER_AGENT,
+  });
+  const page = await context.newPage();
+
+  try {
+    await openListener(page, relay, { debug: true });
+    await page.waitForFunction(() => window.__relayListenerDiagnostics?.snapshot?.()?.evidence === 'internally-healthy');
+    assert.match(await page.evaluate(() => navigator.userAgent), /iPhone/);
+    const beforeHealth = await latestHealthObservedAt(page);
+    const eventStart = await page.evaluate(() => window.__relayListenerDiagnostics.dump().events.length);
+
+    await page.evaluate(() => window.dispatchEvent(new Event('pageshow')));
+    await page.waitForFunction((start) => {
+      const events = window.__relayListenerDiagnostics.dump().events.slice(start);
+      const suspendAt = events.findIndex((entry) => (
+        entry.type === 'audio-context-suspend-request' && entry.detail?.listener === true
+      ));
+      if (suspendAt < 0) return false;
+      const settled = events.some((entry, index) => (
+        index > suspendAt
+        && entry.type === 'audio-context-suspend-settled'
+        && entry.detail?.listener === true
+      ));
+      const resumed = events.some((entry, index) => (
+        index > suspendAt
+        && entry.type === 'audio-context-resume-request'
+        && entry.detail?.listener === true
+      ));
+      return settled && resumed;
+    }, eventStart, { timeout: 4_000 });
+    await waitForHealthyPlayback(page, { afterObservedAt: beforeHealth });
+
+    const firstKickCount = await page.evaluate((start) => (
+      window.__relayListenerDiagnostics.dump().events.slice(start).filter((entry) => (
+        entry.type === 'audio-context-suspend-request' && entry.detail?.listener === true
+      )).length
+    ), eventStart);
+    assert.equal(firstKickCount, 1, 'one foreground boundary must request one destination stop/start');
+
+    await page.evaluate(() => window.dispatchEvent(new Event('pageshow')));
+    await page.waitForTimeout(500);
+    const duplicateKickCount = await page.evaluate((start) => (
+      window.__relayListenerDiagnostics.dump().events.slice(start).filter((entry) => (
+        entry.type === 'audio-context-suspend-request' && entry.detail?.listener === true
+      )).length
+    ), eventStart);
+    assert.equal(duplicateKickCount, 1, 'duplicate pageshow for the same foreground boundary must be idempotent');
+    await waitForHealthyPlayback(page);
+  } finally {
+    await browser.close();
+    mic.close();
+    await relay.stop();
+  }
+});
+
+test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ownership', async () => {
+  test.setTimeout(45_000);
+  const relay = await startRelay();
+  const mic = await startDeterministicMic(relay);
+  const browser = await chromium.launch({
+    channel: 'chromium',
+    args: ['--autoplay-policy=no-user-gesture-required'],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    userAgent: IOS_USER_AGENT,
+  });
+  const page = await context.newPage();
+
+  const waitForDestinationRestart = async (eventStart) => {
+    await page.waitForFunction((start) => {
+      const events = window.__relayListenerDiagnostics.dump().events.slice(start);
+      const suspendAt = events.findIndex((entry) => (
+        entry.type === 'audio-context-suspend-request' && entry.detail?.listener === true
+      ));
+      if (suspendAt < 0) return false;
+      const settled = events.some((entry, index) => (
+        index > suspendAt
+        && entry.type === 'audio-context-suspend-settled'
+        && entry.detail?.listener === true
+      ));
+      const resumed = events.some((entry, index) => (
+        index > suspendAt
+        && entry.type === 'audio-context-resume-request'
+        && entry.detail?.listener === true
+      ));
+      return settled && resumed;
+    }, eventStart, { timeout: 4_000 });
+  };
+
+  try {
+    await openListener(page, relay, { debug: true });
+    await page.waitForFunction(() => window.__relayListenerDiagnostics?.snapshot?.()?.evidence === 'internally-healthy');
+
+    await page.evaluate(() => window.__relayListenerDiagnostics.faults.interruptAudio(350));
+    const slowForegroundStart = await page.evaluate(() => window.__relayListenerDiagnostics.dump().events.length);
+    const healthBeforeForeground = await latestHealthObservedAt(page);
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('pagehide'));
+      window.dispatchEvent(new Event('pageshow'));
+    });
+    await page.waitForTimeout(175);
+    const earlyForegroundKicks = await page.evaluate((start) => (
+      window.__relayListenerDiagnostics.dump().events.slice(start).filter((entry) => (
+        entry.type === 'audio-context-suspend-request' && entry.detail?.listener === true
+      )).length
+    ), slowForegroundStart);
+    assert.equal(earlyForegroundKicks, 0,
+      'the destination kick must wait while foreground resume is still blocked past 100 ms');
+    await waitForDestinationRestart(slowForegroundStart);
+    await waitForHealthyPlayback(page, { afterObservedAt: healthBeforeForeground });
+
+    const participantId = await page.evaluate(() => window.relayParticipantId ?? null);
+    assert.equal(typeof participantId, 'string');
+    assert.ok(participantId.length > 0);
+    await page.evaluate((ownerId) => {
+      window.dispatchEvent(new CustomEvent('relay-session-status', {
+        detail: { micOwnerId: ownerId },
+      }));
+    }, participantId);
+    await page.waitForFunction(() => window.relayListenState?.muted === true);
+
+    const postMicStart = await page.evaluate(() => window.__relayListenerDiagnostics.dump().events.length);
+    const healthBeforePostMic = await latestHealthObservedAt(page);
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('relay-microphone-ended', {
+        detail: { reason: 'proof-delayed-owner' },
+      }));
+    });
+    await page.waitForTimeout(250);
+    const earlyPostMicKicks = await page.evaluate((start) => (
+      window.__relayListenerDiagnostics.dump().events.slice(start).filter((entry) => (
+        entry.type === 'audio-context-suspend-request' && entry.detail?.listener === true
+      )).length
+    ), postMicStart);
+    assert.equal(earlyPostMicKicks, 0,
+      'post-Mic recovery must not touch AudioDestination while room ownership is still muted');
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('relay-session-status', {
+        detail: { micOwnerId: null },
+      }));
+    });
+    await waitForDestinationRestart(postMicStart);
+    await waitForHealthyPlayback(page, { afterObservedAt: healthBeforePostMic });
   } finally {
     await browser.close();
     mic.close();

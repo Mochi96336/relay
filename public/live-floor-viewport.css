@@ -1,0 +1,15 @@
+/* Persistent Live controls have a stable layout authority. Runtime viewport
+   reconciliation may move the visible floor after Safari browser chrome settles,
+   but CSS viewport units never drive that motion frame-by-frame. */
+@media (max-width: 759px) {
+  html body .live-shell {
+    --live-floor-viewport-offset: 0px;
+  }
+
+  html body .performance-stage > .take-strip,
+  html body[data-self-mic="live"] .performance-stage > .mic-live-control,
+  html body .live-shell > #system-attention,
+  html body .live-shell > .live-actions {
+    transform: translateY(var(--live-floor-viewport-offset));
+  }
+}

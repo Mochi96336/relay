@@ -1,7 +1,3 @@
-import { installLiveFloorViewport } from './live-floor-viewport.js';
-
-installLiveFloorViewport();
-
 const peopleMenu = document.querySelector('.people-menu');
 const moreMenu = document.querySelector('#room-more');
 const systemPanel = document.querySelector('#system-panel');
@@ -110,6 +106,14 @@ closeSystem?.addEventListener('click', () => closeSystemPanel(true));
 systemPanel?.addEventListener('click', (event) => {
   if (event.target === systemPanel) closeSystemPanel(true);
 });
+
+// Floor reconciliation is degradable presentation. System navigation is bound
+// first so a viewport-module load failure can never block the recovery surface.
+import('./live-floor-viewport.js')
+  .then(({ installLiveFloorViewport }) => installLiveFloorViewport())
+  .catch((error) => {
+    console.error('Relay floor viewport presenter failed', error);
+  });
 
 function installCalibrationPresenter() {
   import('./calibration-ui.js').catch((error) => {

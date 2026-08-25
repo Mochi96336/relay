@@ -151,8 +151,8 @@ async function installBrowserAudioHarness(page) {
   });
 }
 
-async function startListener(page) {
-  await page.goto(`${LIVE_URL}__listener-debug.html?audioDebug=1`, { waitUntil: 'domcontentloaded' });
+async function startListener(page, query = 'audioDebug=1') {
+  await page.goto(`${LIVE_URL}__listener-debug.html?${query}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => Boolean(window.__relayListenerDiagnostics));
   await page.dispatchEvent('body', 'pointerdown');
   await page.waitForFunction(() => {
@@ -217,4 +217,43 @@ test('listener debug faults exercise starvation, reconnect, interruption and sil
   expect(eventTypes).toContain('fault-audio-interrupt-release');
   expect(eventTypes).toContain('fault-output-silence-start');
   expect(eventTypes).toContain('fault-output-silence-release');
+});
+
+test('listener silence report uploads the local flight recorder without leaking the Relay key', async ({ page }) => {
+  let uploaded = null;
+  let requestUrl = null;
+  await page.route('**/api/debug/listener-incidents**', async (route) => {
+    requestUrl = route.request().url();
+    uploaded = route.request().postDataJSON();
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, incidentId: 'incident-test' }),
+    });
+  });
+
+  await installBrowserAudioHarness(page);
+  await startListener(page, 'audioDebug=1&key=secret-test-key');
+
+  const reportButton = page.locator('[data-relay-listener-incident="1"]');
+  await expect(reportButton).toBeVisible();
+  await reportButton.click();
+  await expect(reportButton).toHaveText('已回報');
+
+  expect(requestUrl).not.toBeNull();
+  const endpoint = new URL(requestUrl);
+  expect(endpoint.pathname).toBe('/api/debug/listener-incidents');
+  expect(endpoint.searchParams.get('audioDebug')).toBe('1');
+  expect(endpoint.searchParams.get('key')).toBe('secret-test-key');
+
+  expect(uploaded.reason).toBe('user-reported-silent');
+  expect(uploaded.page.pathname).toBe('/__listener-debug.html');
+  expect(uploaded.flight.snapshots.length).toBeGreaterThan(0);
+  expect(uploaded.flight.events.map((entry) => entry.type)).toContain('user-reported-silent');
+  expect(JSON.stringify(uploaded)).not.toContain('secret-test-key');
+
+  const eventTypes = await page.evaluate(
+    () => window.__relayListenerDiagnostics.dump().events.map((entry) => entry.type),
+  );
+  expect(eventTypes).toContain('listener-incident-uploaded');
 });

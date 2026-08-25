@@ -83,3 +83,18 @@ test('Mic presenter keeps the same product copy when locale changes without a Li
   await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
   await expect(page.locator('#release-mic')).toHaveText('Release Mic');
 });
+
+test('registered Live feature messages rerender through the base provider', async ({ page }) => {
+  await openState(page, 'listener');
+  await expect(page.locator('#local-listen-label')).toHaveText('房間聲音');
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('#local-listen-label')).toHaveText('Room sound');
+
+  await openState(page, 'people');
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('.people-popover-title')).toHaveText('In the room');
+
+  await openState(page, 'recording');
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('#stop-recording')).toHaveText('Stop recording');
+});

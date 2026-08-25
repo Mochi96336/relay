@@ -529,6 +529,7 @@
   function registerMessages(bundle) {
     if (!bundle || typeof bundle !== 'object') return false;
     const pending = [];
+    const staged = new Map();
 
     for (const [requestedLocale, additions] of Object.entries(bundle)) {
       const normalized = normalizeLocale(requestedLocale);
@@ -543,6 +544,15 @@
           }
           continue;
         }
+
+        const stagedKey = `${normalized}\u0000${key}`;
+        if (staged.has(stagedKey)) {
+          if (staged.get(stagedKey) !== template) {
+            throw new Error(`Relay i18n key already registered: ${normalized}:${key}`);
+          }
+          continue;
+        }
+        staged.set(stagedKey, template);
         pending.push({ table, key, template });
       }
     }

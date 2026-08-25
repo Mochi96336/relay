@@ -527,17 +527,26 @@
   }
 
   function registerMessages(bundle) {
-    if (!bundle || typeof bundle !== 'object') return false;
+    if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
+      throw new TypeError('Relay i18n registration bundle must be an object');
+    }
     const pending = [];
     const staged = new Map();
 
     for (const [requestedLocale, additions] of Object.entries(bundle)) {
       const normalized = normalizeLocale(requestedLocale);
-      if (!normalized || !SUPPORTED.has(normalized) || !additions || typeof additions !== 'object') continue;
+      if (!normalized || !SUPPORTED.has(normalized)) {
+        throw new RangeError(`Relay i18n locale is not supported: ${requestedLocale}`);
+      }
+      if (!additions || typeof additions !== 'object' || Array.isArray(additions)) {
+        throw new TypeError(`Relay i18n locale table must be an object: ${requestedLocale}`);
+      }
       const table = messages[normalized];
 
       for (const [key, template] of Object.entries(additions)) {
-        if (typeof template !== 'string') continue;
+        if (typeof template !== 'string') {
+          throw new TypeError(`Relay i18n template must be a string: ${normalized}:${key}`);
+        }
         if (Object.prototype.hasOwnProperty.call(table, key)) {
           if (table[key] !== template) {
             throw new Error(`Relay i18n key already registered: ${normalized}:${key}`);

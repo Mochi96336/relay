@@ -47,7 +47,7 @@ The target deployment uses the phone plus an unattended robot/host. During deskt
 - **Audio is sample-addressed.** Capture/sample position is separate from packet arrival order, so a transport reconnect does not by itself mean a new capture timeline and delayed packets are not silently appended at the wrong audio position.
 - **Mic identity, Mic ownership, and transports are separate lifecycles.** A participant may have multiple browser transports; a socket closing is not automatically equivalent to a person leaving or the Mic lease ending.
 - **Takes are server-owned.** The browser sends Take commands and reviews artifacts; the authoritative mixed PCM, recording lifecycle, quality evidence, storage, and durable history are server responsibilities.
-- **Product state and diagnostics are separate surfaces.** Normal Live UI reads product/domain semantics from the contracts that own them, including server ProductStatus and browser-local capture/presence state where those are authoritative. Technical transport, sample/timing, calibration, and operational evidence stays in diagnostics rather than becoming a second source of product authority.
+- **Product state and diagnostics are separate surfaces.** Normal Live UI reads product/domain semantics from the contracts that own them, including server ProductStatus, browser-local capture evidence, and Presence/session authority state where those contracts apply. Technical transport, sample/timing, calibration, and operational evidence stays in diagnostics rather than becoming a second source of product authority.
 - **WebTransport is optional.** When direct microphone WebTransport is unavailable or not configured, microphone media continues over the WebSocket compatibility path.
 
 Normative ownership details live in [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md) and [SESSION_MODEL.md](SESSION_MODEL.md).
@@ -143,7 +143,7 @@ By default Take artifacts live under `./takes`; deployment/storage policy is imp
 
 ## Product state and diagnostics
 
-Normal Live surfaces consume product/domain state from the owners responsible for each decision. ProductStatus supplies room-level health, issues, and server-owned action semantics; browser-local capture and Presence state remain authoritative for the local/realtime interactions they own. Technical diagnostics are a separate engineering surface and are not required to reconstruct normal product recovery.
+Normal Live surfaces consume product/domain state from the owners responsible for each decision. ProductStatus supplies room-level health, issues, and server-owned action semantics; browser-local capture evidence and Presence/session authority remain the sources for the local/realtime interactions they respectively own. Technical diagnostics are a separate engineering surface and are not required to reconstruct normal product recovery.
 
 For machine-readable monitoring, `GET /api/status/v1` is the stable read-only observation contract. It reports anonymous workload and route health such as `idle`, `live`, `degraded`, or `fault` without exposing participant identity, credentials, Takes, or internal runtime generations.
 

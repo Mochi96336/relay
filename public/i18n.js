@@ -528,7 +528,7 @@
 
   function registerMessages(bundle) {
     if (!bundle || typeof bundle !== 'object') return false;
-    let registered = false;
+    const pending = [];
 
     for (const [requestedLocale, additions] of Object.entries(bundle)) {
       const normalized = normalizeLocale(requestedLocale);
@@ -543,13 +543,14 @@
           }
           continue;
         }
-        table[key] = template;
-        registered = true;
+        pending.push({ table, key, template });
       }
     }
 
-    if (registered) applyStatic();
-    return registered;
+    if (pending.length === 0) return false;
+    for (const { table, key, template } of pending) table[key] = template;
+    applyStatic();
+    return true;
   }
 
   function has(key) {

@@ -1,0 +1,17 @@
+/* Persistent Live controls need two different viewport authorities.
+   The grid stays on the stable small viewport so Safari browser chrome cannot
+   resize the 1fr floor row during toolbar animation. Only the visible floor
+   controls follow newly revealed viewport height, through a transform that does
+   not participate in layout. */
+@media (max-width: 759px) {
+  html body .live-shell {
+    --live-floor-viewport-offset: calc(100dvh - 100svh);
+  }
+
+  html body .performance-stage > .take-strip,
+  html body[data-self-mic="live"] .performance-stage > .mic-live-control,
+  html body .live-shell > #system-attention,
+  html body .live-shell > .live-actions {
+    transform: translateY(var(--live-floor-viewport-offset));
+  }
+}

@@ -6,6 +6,16 @@ const recordButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 
 const RECONNECT_MS = 1_000;
+const START_POLICY_BLOCK_REASONS = new Set([
+  'mix-not-active',
+  'timing-calibration-active',
+  'mic-required',
+  'mic-starting',
+  'mic-reconnecting',
+  'mic-audio-stalled',
+  'room-blocked',
+  'take-active',
+]);
 
 let socket = null;
 let reconnectTimer = null;
@@ -122,13 +132,23 @@ function acceptProductStatus(status) {
     && typeof status.actions.startTakeBlockingIssue === 'object'
     ? status.actions.startTakeBlockingIssue
     : null;
+  // A policy rejection is only an authoritative bridge across the race between
+  // the click and the next ProductStatus. Once a fresh ProductStatus arrives,
+  // that snapshot owns current readiness again. Infrastructure failures such as
+  // storage-unavailable remain visible until their own lifecycle clears them.
+  if (
+    commandError?.command === 'start'
+    && START_POLICY_BLOCK_REASONS.has(commandError.reason)
+  ) {
+    commandError = null;
+  }
   productStatusFresh = true;
   publishRecordingState();
 }
 
 function send(payload) {
   if (socket?.readyState !== WebSocket.OPEN) {
-    commandError = { reason: 'reconnecting' };
+    commandError = { command: payload?.type === 'stop-take' ? 'stop' : 'start', reason: 'reconnecting' };
     publishRecordingState();
     return false;
   }
@@ -244,6 +264,7 @@ async function connect() {
     if (message.type === 'take-command-rejected') {
       if (message.command === 'start') startCommandPending = false;
       commandError = {
+        command: message.command === 'stop' ? 'stop' : 'start',
         reason: typeof message.reason === 'string' ? message.reason : 'unknown',
       };
       publishRecordingState();

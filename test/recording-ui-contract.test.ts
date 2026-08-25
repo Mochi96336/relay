@@ -67,6 +67,14 @@ test('room-level blocks consume the server-selected ProductIssue instead of insp
   }
 });
 
+test('semantic Start rejection bridges the click race without becoming a generic recording error', () => {
+  assert.match(recorder, /commandError = \{[\s\S]*?command: message\.command === 'stop' \? 'stop' : 'start',[\s\S]*?reason:/);
+  assert.match(ui, /START_POLICY_BLOCK_REASONS\.has\(reason\)[\s\S]*?blockedCopy\(reason, issue\)/);
+  assert.match(ui, /commandErrorCopy\(commandError, blockingIssue\)/);
+  assert.match(recorder, /commandError\?\.command === 'start'[\s\S]*?START_POLICY_BLOCK_REASONS\.has\(commandError\.reason\)[\s\S]*?commandError = null/);
+  assert.match(recorder, /function acceptProductStatus\(status\)[\s\S]*?productStatusFresh = true/);
+});
+
 test('pending Start disables Record without inventing a server block reason', () => {
   assert.match(recorder, /serverAllowed: startAllowedByServer && !startCommandPending/);
   assert.match(recorder, /startPending: startCommandPending/);

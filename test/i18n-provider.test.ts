@@ -68,6 +68,47 @@ test('a conflicting message bundle is rejected atomically', () => {
   assert.equal(i18n.t('mic.take'), 'Take Mic');
 });
 
+test('malformed registration input is rejected before any staged message commits', () => {
+  for (const { bundle, error } of [
+    {
+      bundle: {
+        en: { 'feature.partial': 'Must not stick' },
+        unsupported: { 'feature.title': 'Title' },
+      },
+      error: /Relay i18n locale is not supported: unsupported/,
+    },
+    {
+      bundle: {
+        en: { 'feature.partial': 'Must not stick' },
+        'zh-Hant': 'not-a-table',
+      },
+      error: /Relay i18n locale table must be an object: zh-Hant/,
+    },
+    {
+      bundle: {
+        en: { 'feature.partial': 'Must not stick' },
+        'zh-Hant': { 'feature.title': 123 },
+      },
+      error: /Relay i18n template must be a string: zh-Hant:feature\.title/,
+    },
+  ] as Array<{ bundle: unknown; error: RegExp }>) {
+    const i18n = runtime();
+    assert.throws(() => i18n.registerMessages(bundle), error);
+    assert.equal(i18n.has('feature.partial'), false,
+      'validation failure must leave earlier staged additions uncommitted');
+  }
+
+  const i18n = runtime();
+  assert.throws(
+    () => i18n.registerMessages(null),
+    /Relay i18n registration bundle must be an object/,
+  );
+  assert.throws(
+    () => i18n.registerMessages([]),
+    /Relay i18n registration bundle must be an object/,
+  );
+});
+
 test('normalized locale aliases cannot race to own the same staged key', () => {
   const i18n = runtime();
 

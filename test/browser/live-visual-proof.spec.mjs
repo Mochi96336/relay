@@ -62,6 +62,7 @@ test('takeover, People, More and System use production DOM and presenter state',
 
   await openState(page, 'system');
   await expect(page.locator('#system-panel')).toHaveJSProperty('open', true);
-  await expect(page.locator('#system-relay')).toHaveText('已連線');
-  await expect(page.locator('#system-phones')).toContainText('2');
+  await expect(page.locator('#system-product')).toBeVisible();
+  await expect(page.locator('#system-product')).toContainText('系統正常');
+  await expect(page.locator('#system-product')).toContainText('目前沒有需要處理的問題。');
 });

@@ -39,7 +39,7 @@ test('Room sound has one CSS geometry owner and no presenter geometry rewrite', 
   assert.doesNotMatch(ui, /\.style\.(?:gridTemplateColumns|gridColumn|gridRow|display|whiteSpace)/);
   assert.match(layoutCss, /grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
   assert.match(layoutCss, /#local-listen-label,[\s\S]*?#listen-note \{[\s\S]*?position:\s*absolute;/);
-  assert.match(layoutCss, /#listen-gain-value \{[\s\S]*?display:\s*block;[\s\S]*?width:\s*4ch;/);
+  assert.match(layoutCss, /#listen-gain-value \{[\s\S]*?display:\s*block;[\s\S]*?width:\s*5ch;/);
   assert.doesNotMatch(layoutCss, /data-room-sound-value|data-room-sound-state/);
   assert.doesNotMatch(css, /#local-listen-label|#listen-gain-value|#listen-adjust-state|#listen-note/,
     'room-sound-ui.css may paint state but must not regain rail geometry ownership');

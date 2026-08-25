@@ -16,7 +16,7 @@ function presenterBody(source: string) {
   return source.replace(/^import '\.\/live-i18n\.js';\s*/, '');
 }
 
-function baseMicI18nEnglish() {
+function baseI18nEnglish() {
   const messages: Record<string, string> = {
     'mic.take': 'Take Mic',
     'mic.release': 'Release Mic',
@@ -37,6 +37,18 @@ function baseMicI18nEnglish() {
       ));
     },
     has: (key: string) => Object.prototype.hasOwnProperty.call(messages, key),
+    registerMessages(bundle: Record<string, Record<string, string>>) {
+      let registered = false;
+      for (const [key, template] of Object.entries(bundle.en ?? {})) {
+        if (Object.prototype.hasOwnProperty.call(messages, key)) {
+          if (messages[key] !== template) throw new Error(`duplicate i18n key: ${key}`);
+          continue;
+        }
+        messages[key] = template;
+        registered = true;
+      }
+      return registered;
+    },
   };
 }
 
@@ -103,7 +115,7 @@ test('production Mic action presenter disables stale actions and does not expose
   const document = { querySelector: (selector: string) => nodes.get(selector) ?? null };
   const window = {
     ...events,
-    relayI18n: baseMicI18nEnglish(),
+    relayI18n: baseI18nEnglish(),
     relayMicActionState: null,
   };
   class Event { constructor(public type: string) {} }
@@ -182,7 +194,7 @@ test('production recording presenter freezes last-known timer while Take authori
   class Event { constructor(public type: string) {} }
   const window = {
     ...events,
-    relayI18n: { getLocale: () => 'en' },
+    relayI18n: baseI18nEnglish(),
     relayRecordingState: null,
   };
   const context = {

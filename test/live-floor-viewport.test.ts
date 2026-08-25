@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { resolveLiveFloorViewportOffset } from '../public/live-floor-viewport.js';
-
 test('mobile Live floor keeps dynamic viewport units out of persistent layout CSS', async () => {
   const [stateCss, layoutCss, viewportCss, liveIa] = await Promise.all([
     readFile(new URL('../public/live-state.css', import.meta.url), 'utf8'),
@@ -50,7 +48,12 @@ test('mobile Live floor keeps dynamic viewport units out of persistent layout CS
   );
 });
 
-test('floor viewport resolution follows only a one-screen unzoomed Live surface', () => {
+test('floor viewport resolution follows only a one-screen unzoomed Live surface', async () => {
+  // Production browser modules are plain JS by design; this test executes the
+  // real module while keeping the TypeScript-only test harness declaration-free.
+  // @ts-expect-error no declaration file for browser production module
+  const { resolveLiveFloorViewportOffset } = await import('../public/live-floor-viewport.js');
+
   assert.equal(resolveLiveFloorViewportOffset({
     mobile: true,
     smallViewportHeight: 844,

@@ -9,13 +9,17 @@ test('Safari Live floor keeps one stable small-viewport authority', async () => 
     readFile(new URL('../public/live-ia.js', import.meta.url), 'utf8'),
   ]);
 
-  const shellBlock = layoutCss.match(/html body \.live-shell\s*\{[^}]*\}/s)?.[0] ?? '';
-  assert.match(shellBlock, /min-height:\s*100svh;/,
+  const shellBlocks = [...layoutCss.matchAll(/html body \.live-shell\s*\{[^}]*\}/gs)]
+    .map((match) => match[0]);
+  assert.ok(shellBlocks.length > 0, 'Live layout must retain an explicit shell rule');
+  assert.ok(shellBlocks.some((block) => /min-height:\s*100svh;/.test(block)),
     'persistent Live layout must use the stable small viewport');
-  assert.doesNotMatch(shellBlock, /\b(?:100dvh|100lvh)\b/,
-    'dynamic or large viewport units must not own persistent Live height');
-  assert.doesNotMatch(shellBlock, /position:\s*fixed/,
-    'the Live shell stays in normal document flow rather than fixed positioning');
+  for (const block of shellBlocks) {
+    assert.doesNotMatch(block, /\b(?:100dvh|100lvh)\b/,
+      'dynamic or large viewport units must not own persistent Live height');
+    assert.doesNotMatch(block, /position:\s*fixed/,
+      'the Live shell stays in normal document flow rather than fixed positioning');
+  }
 
   assert.equal(stateCss.includes('live-floor-viewport'), false,
     'Live CSS must not reintroduce a browser-chrome floor-motion layer');

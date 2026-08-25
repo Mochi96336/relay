@@ -5,6 +5,7 @@ import test from 'node:test';
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../public/live-ia.css', import.meta.url), 'utf8');
 const composition = readFileSync(new URL('../public/live-composition.css', import.meta.url), 'utf8');
+const layout = readFileSync(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8');
 const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -75,8 +76,10 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
   assert.match(liveI18n, /'roomSound\.label': 'Room sound'/);
   assert.match(liveI18n, /'roomSound\.label': '房間聲音'/);
   assert.match(liveI18n, /'roomSound\.scope': '只影響這支裝置'/);
-  assert.match(composition, /#listen-toggle\s*\{[\s\S]*?min-height:\s*44px;/);
-  assert.match(composition, /\.local-sound-control \.adjust-row-heading strong\s*\{[\s\S]*?clip-path:\s*inset\(50%\);/);
+  assert.doesNotMatch(composition, /\.local-sound-control|#listen-gain-value/,
+    'formal composition must not own persistent Room sound rail geometry');
+  assert.match(layout, /#listen-toggle \{[\s\S]*?width:\s*44px;[\s\S]*?min-height:\s*44px;/);
+  assert.match(layout, /\.adjust-row-heading strong,[\s\S]*?#listen-adjust-state,[\s\S]*?#listen-note \{[\s\S]*?clip-path:\s*inset\(50%\);/);
 });
 
 test('Room sound presentation does not own Listen transport or mute authority', () => {

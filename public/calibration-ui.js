@@ -20,34 +20,6 @@ function initialize() {
     legacyFineTuneSurface.setAttribute?.('aria-hidden', 'true');
   }
 
-  function installTimingSurface(button) {
-    const existing = document.querySelector('#timing-active-value');
-    if (existing) {
-      return {
-        label: document.querySelector('#timing-active-label'),
-        value: existing,
-      };
-    }
-    if (!button || typeof document.createElement !== 'function') {
-      return { label: null, value: null };
-    }
-
-    const row = document.createElement('div');
-    row.className = 'more-timing-authority';
-    row.setAttribute?.('aria-live', 'polite');
-
-    const label = document.createElement('span');
-    label.id = 'timing-active-label';
-
-    const value = document.createElement('output');
-    value.id = 'timing-active-value';
-    value.textContent = '—';
-
-    row.append?.(label, value);
-    button.insertAdjacentElement?.('beforebegin', row);
-    return { label, value };
-  }
-
   function takeVisibleOwnership(button, status) {
     if (
       !button || !status
@@ -78,13 +50,38 @@ function initialize() {
     return { button: visibleButton, status: visibleStatus, commandTarget: button };
   }
 
-  const timingSurface = installTimingSurface(legacyCalibrateButton);
-  const activeTimingLabel = timingSurface.label;
-  const activeTimingValue = timingSurface.value;
+  function installTimingButtonSurface(button) {
+    if (
+      !button
+      || typeof document.createElement !== 'function'
+      || typeof button.replaceChildren !== 'function'
+    ) {
+      return { label: button, value: null };
+    }
+
+    const label = document.createElement('span');
+    label.className = 'calibrate-timing-label';
+
+    const value = document.createElement('span');
+    value.id = 'timing-active-value';
+    value.className = 'calibrate-timing-value';
+    value.setAttribute?.('aria-live', 'polite');
+    value.textContent = '—';
+
+    // The existing .more-action flex row already owns spacing. Keep the
+    // authoritative mixer value on the action it qualifies instead of adding
+    // a separate pseudo-setting above it.
+    button.replaceChildren(label, value);
+    return { label, value };
+  }
+
   const ownership = takeVisibleOwnership(legacyCalibrateButton, legacyCalibrateStatus);
   const calibrateButton = ownership.button;
   const calibrateStatus = ownership.status;
   const commandTarget = ownership.commandTarget;
+  const timingSurface = installTimingButtonSurface(calibrateButton);
+  const calibrateLabel = timingSurface.label;
+  const activeTimingValue = timingSurface.value;
 
   let latestProductStatus = window.relayProductAuthority?.lastKnownSnapshot ?? null;
   let latestAction = latestProductStatus?.actions ?? null;
@@ -112,7 +109,6 @@ function initialize() {
   }
 
   function renderTimingAuthority() {
-    setText(activeTimingLabel, t('timing.label'));
     const formatted = timingAuthority?.authorityFresh === true
       ? formatTimingValueMs(timingAuthority.valueMs)
       : null;
@@ -147,7 +143,7 @@ function initialize() {
     if (!calibrateButton) return;
 
     calibrateButton.removeAttribute?.('data-i18n');
-    setText(calibrateButton, t('timing.realign'));
+    setText(calibrateLabel, t('timing.realign'));
 
     const authority = calibrationAuthority();
     const reason = latestAction?.startCalibrationBlockedReason ?? null;

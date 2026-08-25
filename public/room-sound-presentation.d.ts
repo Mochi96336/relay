@@ -16,7 +16,7 @@ export interface RoomSoundControlPresentationCopy {
   volumeLabelKey: string;
   volumeAriaLabelKey: string;
   toggleAriaLabelKey: string;
-  compactKey: string | null;
+  iconState: 'audible' | 'muted' | 'retry';
 }
 
 export function roomSoundControlPresentation(

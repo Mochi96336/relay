@@ -1,10 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
-import {
-  analyzeTimingCalibration,
-  type TimingCalibrationAnalysis,
-  type TimingCalibrationShadowAnalysis,
-} from './timing-calibration.js';
+import { analyzeTimingCalibration, type TimingCalibrationAnalysis } from './timing-calibration.js';
 import { TimingWindowCollector, type TimingWindow } from './timing-window-collector.js';
 
 /**
@@ -54,26 +50,6 @@ export type CalibrationContext = {
   sourceGeneration: number;
 };
 
-export type CalibrationPassiveShadowContext = {
-  sessionGeneration: number;
-  micGeneration: number;
-  backingGeneration: number;
-  sourceGeneration: number;
-};
-
-export type CalibrationPassiveShadowObservation = {
-  authoritative: false;
-  context: CalibrationPassiveShadowContext;
-  originSample: number;
-  endSample: number;
-  micGapMs: number;
-  backingGapMs: number;
-  strictPassed: boolean;
-  error: string | null;
-  result: TimingCalibrationAnalysis | null;
-  shadow: TimingCalibrationShadowAnalysis | null;
-};
-
 export type CalibrationSessionOptions = {
   sampleRate: number;
   durationMs: number;
@@ -87,8 +63,6 @@ export type CalibrationSessionOptions = {
     sampleRate: number,
     maxLagMs?: number,
     signal?: AbortSignal,
-    onShadow?: (shadow: TimingCalibrationShadowAnalysis) => void,
-    shadowLowLevel?: boolean,
   ) => TimingCalibrationAnalysis | PromiseLike<TimingCalibrationAnalysis>;
   /** Fired whenever a window changes applied/settled state. */
   onSettled?: () => void;
@@ -102,13 +76,6 @@ export type CalibrationSessionOptions = {
   now?: () => number;
   /** How far the analyser may look for a match. */
   maxLagMs?: number;
-  /**
-   * Collect independent content windows even while normal content calibration
-   * is not collecting. This is evidence-only and can never reach authority.
-   */
-  passiveShadowEnabled?: boolean;
-  /** Injectable sink for tests/diagnostics. Defaults to one structured log. */
-  onPassiveShadow?: (observation: CalibrationPassiveShadowObservation) => void;
 };
 
 export type ConfirmedCalibrationResult = {
@@ -121,60 +88,6 @@ function isPromiseLikeAnalysis(
   value: TimingCalibrationAnalysis | PromiseLike<TimingCalibrationAnalysis>,
 ): value is PromiseLike<TimingCalibrationAnalysis> {
   return 'then' in value && typeof value.then === 'function';
-}
-
-function passiveShadowContext(context: CalibrationContext): CalibrationPassiveShadowContext | null {
-  if (context.micGeneration === null || context.backingGeneration === null) return null;
-  return {
-    sessionGeneration: context.sessionGeneration,
-    micGeneration: context.micGeneration,
-    backingGeneration: context.backingGeneration,
-    sourceGeneration: context.sourceGeneration,
-  };
-}
-
-function samePassiveShadowContext(
-  a: CalibrationPassiveShadowContext | null,
-  b: CalibrationPassiveShadowContext | null,
-) {
-  return a !== null
-    && b !== null
-    && a.sessionGeneration === b.sessionGeneration
-    && a.micGeneration === b.micGeneration
-    && a.backingGeneration === b.backingGeneration
-    && a.sourceGeneration === b.sourceGeneration;
-}
-
-function passiveShadowLogPayload(observation: CalibrationPassiveShadowObservation) {
-  const effective = observation.result ?? observation.shadow?.result ?? null;
-  const diagnostics = effective?.diagnostics;
-  return {
-    source: 'passive-window',
-    authoritative: false,
-    context: observation.context,
-    originSample: observation.originSample,
-    endSample: observation.endSample,
-    micGapMs: observation.micGapMs,
-    backingGapMs: observation.backingGapMs,
-    strictPassed: observation.strictPassed,
-    reason: observation.shadow?.reason ?? null,
-    wouldPass: observation.strictPassed || observation.shadow?.wouldPass === true,
-    failureStage: observation.shadow?.failureStage ?? null,
-    error: observation.error ?? observation.shadow?.error ?? null,
-    micLevelDbfs: effective?.micLevelDbfs ?? observation.shadow?.micLevelDbfs ?? null,
-    backingLevelDbfs: effective?.backingLevelDbfs ?? observation.shadow?.backingLevelDbfs ?? null,
-    micLagMs: effective?.micLagMs ?? null,
-    confidence: effective?.confidence ?? null,
-    bestLagMs: diagnostics?.bestLagMs ?? null,
-    bestScore: diagnostics?.bestScore ?? null,
-    runnerUpLagMs: diagnostics?.runnerUpLagMs ?? null,
-    runnerUpScore: diagnostics?.runnerUpScore ?? null,
-    peakMargin: diagnostics?.peakMargin ?? null,
-    activeBands: diagnostics?.activeBands ?? [],
-    supportingBands: diagnostics?.supportingBands ?? [],
-    segmentLagsMs: effective?.segmentLagsMs ?? [],
-    segmentCorrelations: effective?.segmentCorrelations ?? [],
-  };
 }
 
 export class CalibrationSession {
@@ -192,9 +105,6 @@ export class CalibrationSession {
   private readonly now: () => number;
   private readonly maxLagMs: number | undefined;
   private readonly collector: TimingWindowCollector;
-  private readonly passiveShadowEnabled: boolean;
-  private readonly onPassiveShadow: NonNullable<CalibrationSessionOptions['onPassiveShadow']>;
-  private readonly passiveShadowCollector: TimingWindowCollector;
 
   /** Lags from recent windows, kept only as far back as agreement needs. */
   private candidates: number[] = [];
@@ -222,16 +132,6 @@ export class CalibrationSession {
   /** Invalidates an answer when its collection is restarted or cancelled. */
   private analysisRevision = 0;
 
-  /**
-   * Passive shadow uses the full calibration identity fence. Destructive source
-   * changes must invalidate partial evidence; a mapped follower correction may
-   * span a window only when the source layer intentionally preserves sourceGeneration.
-   */
-  private passiveShadowMeasuredContext: CalibrationPassiveShadowContext | null = null;
-  private passiveShadowAnalysisPending = false;
-  private passiveShadowAnalysisAbortController: AbortController | null = null;
-  private passiveShadowAnalysisRevision = 0;
-
   // The measurement describes one pairing of transports. Remembering which lets
   // the server say the answer is stale instead of applying it to a setup it was
   // never measured against.
@@ -257,21 +157,12 @@ export class CalibrationSession {
     this.provisionalConfidence = options.provisionalConfidence;
     this.now = options.now ?? (() => performance.now());
     this.maxLagMs = options.maxLagMs;
-    this.passiveShadowEnabled = options.passiveShadowEnabled
-      ?? process.env.RELAY_CALIBRATION_SHADOW_LOW_LEVEL === '1';
-    this.onPassiveShadow = options.onPassiveShadow ?? ((observation) => {
-      console.log(`[calibration-shadow] ${JSON.stringify(passiveShadowLogPayload(observation))}`);
-    });
 
     // Preserve the old bounded-buffer rule exactly: enough slack for every
     // agreement window plus one window of start skew.
     this.collector = new TimingWindowCollector(
       this.requiredSamples,
       this.requiredSamples * (this.agreementWindows + 1),
-    );
-    this.passiveShadowCollector = new TimingWindowCollector(
-      this.requiredSamples,
-      this.requiredSamples * 2,
     );
   }
 
@@ -313,9 +204,6 @@ export class CalibrationSession {
 
   start(nowMs = performance.now()) {
     this.invalidatePendingAnalysis();
-    this.invalidatePassiveShadowAnalysis();
-    this.passiveShadowCollector.reset();
-    this.passiveShadowMeasuredContext = null;
     // A provisional belongs to the run that created it. Starting a new run is
     // an explicit transaction boundary, so stale provisional authority cannot
     // leak into the retry.
@@ -416,8 +304,7 @@ export class CalibrationSession {
    * Opens the transaction used by robot/manual probe calibration.
    *
    * Unlike `reset()`, this deliberately preserves the current confirmed/applied
-   * authority while the external candidate is being measured. Passive content
-   * observation also remains independent so probe retries cannot starve it.
+   * authority while the external candidate is being measured.
    */
   beginExternalRecalibration() {
     this.invalidatePendingAnalysis();
@@ -491,7 +378,6 @@ export class CalibrationSession {
   /** Drops any measurement, for when the thing it described is gone. */
   reset() {
     this.invalidatePendingAnalysis();
-    this.invalidatePassiveShadowAnalysis();
     this.phase = 'idle';
     this.error = null;
     this.candidates = [];
@@ -504,20 +390,16 @@ export class CalibrationSession {
     this.confirmedResultValue = null;
     this.confirmedContextValue = null;
     this.collector.reset();
-    this.passiveShadowCollector.reset();
-    this.passiveShadowMeasuredContext = null;
   }
 
   /** `startSample` is where `AudioSession` placed these samples on its timeline. */
   observeMic(samples: Int16Array, startSample: number) {
-    this.observePassiveShadow('mic', samples, startSample);
     if (!this.collecting || samples.length === 0) return;
     this.collector.observeMic(samples, startSample);
     this.drainReadyWindows();
   }
 
   observeBacking(samples: Int16Array, startSample: number) {
-    this.observePassiveShadow('backing', samples, startSample);
     if (!this.collecting || samples.length === 0) return;
     this.collector.observeBacking(samples, startSample);
     this.drainReadyWindows();
@@ -657,203 +539,6 @@ export class CalibrationSession {
     this.analysisAbortController = null;
     this.analysisRevision += 1;
     this.analysisPending = false;
-  }
-
-  private invalidatePassiveShadowAnalysis() {
-    this.passiveShadowAnalysisAbortController?.abort();
-    this.passiveShadowAnalysisAbortController = null;
-    this.passiveShadowAnalysisRevision += 1;
-    this.passiveShadowAnalysisPending = false;
-  }
-
-  private observePassiveShadow(
-    side: 'mic' | 'backing',
-    samples: Int16Array,
-    startSample: number,
-  ) {
-    if (
-      !this.passiveShadowEnabled
-      || this.collecting
-      || this.passiveShadowAnalysisPending
-      || samples.length === 0
-    ) return;
-
-    const currentContext = passiveShadowContext(this.context());
-    if (currentContext === null) {
-      this.passiveShadowCollector.reset();
-      this.passiveShadowMeasuredContext = null;
-      return;
-    }
-
-    if (!samePassiveShadowContext(this.passiveShadowMeasuredContext, currentContext)) {
-      this.passiveShadowCollector.reset();
-      this.passiveShadowMeasuredContext = currentContext;
-    }
-
-    if (side === 'mic') this.passiveShadowCollector.observeMic(samples, startSample);
-    else this.passiveShadowCollector.observeBacking(samples, startSample);
-    this.finishReadyPassiveShadowWindow();
-  }
-
-  private finishReadyPassiveShadowWindow() {
-    const window = this.passiveShadowCollector.takeReadyWindow();
-    const measuredContext = this.passiveShadowMeasuredContext;
-    if (window === null || measuredContext === null) return;
-
-    const micGapMs = Math.round((window.micGapSamples / this.sampleRate) * 1000);
-    const backingGapMs = Math.round((window.backingGapSamples / this.sampleRate) * 1000);
-    if (Math.max(micGapMs, backingGapMs) > MAX_CAPTURE_GAP_MS) {
-      this.emitPassiveShadow({
-        authoritative: false,
-        context: { ...measuredContext },
-        originSample: window.originSample,
-        endSample: window.endSample,
-        micGapMs,
-        backingGapMs,
-        strictPassed: false,
-        error: `Passive shadow window lost ${Math.max(micGapMs, backingGapMs)} ms of audio.`,
-        result: null,
-        shadow: null,
-      });
-      this.passiveShadowCollector.reset();
-      return;
-    }
-
-    let capturedShadow: TimingCalibrationShadowAnalysis | null = null;
-    const abortController = new AbortController();
-    this.passiveShadowAnalysisAbortController = abortController;
-
-    try {
-      const result = this.analyze(
-        window.mic,
-        window.backing,
-        this.sampleRate,
-        this.maxLagMs,
-        abortController.signal,
-        (shadow) => {
-          capturedShadow = shadow;
-        },
-        true,
-      );
-
-      if (isPromiseLikeAnalysis(result)) {
-        const revision = ++this.passiveShadowAnalysisRevision;
-        this.passiveShadowAnalysisPending = true;
-        void Promise.resolve(result).then(
-          (analysis) => this.settlePassiveShadowAnalysis(
-            revision,
-            measuredContext,
-            window,
-            micGapMs,
-            backingGapMs,
-            analysis,
-            capturedShadow,
-          ),
-          (error: unknown) => this.rejectPassiveShadowAnalysis(
-            revision,
-            measuredContext,
-            window,
-            micGapMs,
-            backingGapMs,
-            error,
-            capturedShadow,
-          ),
-        );
-        return;
-      }
-
-      this.passiveShadowAnalysisAbortController = null;
-      this.completePassiveShadowWindow(measuredContext, window, micGapMs, backingGapMs, {
-        strictPassed: true,
-        error: null,
-        result,
-        shadow: capturedShadow,
-      });
-    } catch (error) {
-      this.passiveShadowAnalysisAbortController = null;
-      this.completePassiveShadowWindow(measuredContext, window, micGapMs, backingGapMs, {
-        strictPassed: false,
-        error: error instanceof Error ? error.message : String(error),
-        result: null,
-        shadow: capturedShadow,
-      });
-    }
-  }
-
-  private settlePassiveShadowAnalysis(
-    revision: number,
-    measuredContext: CalibrationPassiveShadowContext,
-    window: TimingWindow,
-    micGapMs: number,
-    backingGapMs: number,
-    result: TimingCalibrationAnalysis,
-    shadow: TimingCalibrationShadowAnalysis | null,
-  ) {
-    if (revision !== this.passiveShadowAnalysisRevision || !this.passiveShadowAnalysisPending) return;
-    this.passiveShadowAnalysisPending = false;
-    this.passiveShadowAnalysisAbortController = null;
-    this.completePassiveShadowWindow(measuredContext, window, micGapMs, backingGapMs, {
-      strictPassed: true,
-      error: null,
-      result,
-      shadow,
-    });
-  }
-
-  private rejectPassiveShadowAnalysis(
-    revision: number,
-    measuredContext: CalibrationPassiveShadowContext,
-    window: TimingWindow,
-    micGapMs: number,
-    backingGapMs: number,
-    error: unknown,
-    shadow: TimingCalibrationShadowAnalysis | null,
-  ) {
-    if (revision !== this.passiveShadowAnalysisRevision || !this.passiveShadowAnalysisPending) return;
-    this.passiveShadowAnalysisPending = false;
-    this.passiveShadowAnalysisAbortController = null;
-    this.completePassiveShadowWindow(measuredContext, window, micGapMs, backingGapMs, {
-      strictPassed: false,
-      error: error instanceof Error ? error.message : String(error),
-      result: null,
-      shadow,
-    });
-  }
-
-  private completePassiveShadowWindow(
-    measuredContext: CalibrationPassiveShadowContext,
-    window: TimingWindow,
-    micGapMs: number,
-    backingGapMs: number,
-    outcome: Pick<
-      CalibrationPassiveShadowObservation,
-      'strictPassed' | 'error' | 'result' | 'shadow'
-    >,
-  ) {
-    const currentContext = passiveShadowContext(this.context());
-    if (!samePassiveShadowContext(measuredContext, currentContext)) {
-      this.passiveShadowCollector.reset();
-      this.passiveShadowMeasuredContext = currentContext;
-      return;
-    }
-
-    this.emitPassiveShadow({
-      authoritative: false,
-      context: { ...measuredContext },
-      originSample: window.originSample,
-      endSample: window.endSample,
-      micGapMs,
-      backingGapMs,
-      ...outcome,
-    });
-    // Samples arriving while the worker was busy were intentionally ignored.
-    // Start the next evidence window at a fresh shared session position.
-    this.passiveShadowCollector.reset();
-    this.passiveShadowMeasuredContext = currentContext;
-  }
-
-  private emitPassiveShadow(observation: CalibrationPassiveShadowObservation) {
-    this.onPassiveShadow(observation);
   }
 
   private drainReadyWindows() {

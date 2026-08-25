@@ -56,17 +56,7 @@
 .performance-stage .take-link { min-height: 44px; margin-top: 0; border-bottom: 0; display: inline-flex; align-items: center; }
 body[data-self-mic="live"] .mic-live-control { margin-top: 8px; }
 .live-actions { margin-top:22px; padding-top:14px; }
-.local-sound-control { display:grid; gap:7px; }
-.local-sound-control .adjust-group-heading { align-items:center; }
-.local-sound-control .adjust-group-heading .section-label { font-size:13px; font-weight:620; letter-spacing:-.02em; }
-.local-sound-control .adjust-group-heading > span:not(.section-label) { margin-left:auto; color:#777a82; font-size:10px; }
-#listen-toggle { min-height:44px; padding:0 4px 0 10px; color:#c8c9cc; font-size:12px; }
-.local-sound-control .adjust-control { gap:4px; }
-body[data-listen="mic-muted"] .local-sound-control .adjust-control, body[data-listen="playback-muted"] .local-sound-control .adjust-control, body[data-listen="review-muted"] .local-sound-control .adjust-control { display:none; }
-.local-sound-control .adjust-row-heading { min-height:14px; justify-content:flex-end; }
-.local-sound-control .adjust-row-heading strong { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; }
-#listen-gain-value { color:#aeb0b5; font-size:11px; font-variant-numeric:tabular-nums; }
-.local-sound-control #listen-adjust-state { min-height:14px; }
-body[data-listen="muted"] .local-sound-control #listen-adjust-state, body[data-listen="mic-muted"] .local-sound-control #listen-adjust-state, body[data-listen="playback-muted"] .local-sound-control #listen-adjust-state, body[data-listen="review-muted"] .local-sound-control #listen-adjust-state { display:block; }
+/* Room sound's persistent rail geometry is intentionally absent here.
+   live-p0-layout.css owns that contract; room-sound-ui.css owns state paint. */
 @media (max-width:420px) { .song-stage{padding-top:16px;} .performance-stage{padding-top:22px;} .voice-input-meter{width:100%;} .youtube-form{grid-template-columns:minmax(0,1fr) auto;align-items:center;} .youtube-form button{justify-self:auto;} }
 @media (max-height:760px) { .live-shell{padding-top:14px;} .song-stage{padding-top:12px;} .performance-stage{padding-top:18px;} .voice-input-evidence{margin-top:8px;} .mic-actions{margin-top:8px;} .take-strip{margin-top:6px;} .live-actions{margin-top:18px;padding-top:12px;} }

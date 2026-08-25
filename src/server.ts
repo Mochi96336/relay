@@ -3021,11 +3021,12 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
       const nowMs = performance.now();
       const productStatus = productStatusPayload(nowMs);
       if (!productStatus.actions.canStartTake) {
-        rejectTakeCommand(
-          socket,
-          'start',
-          productStatus.actions.startTakeBlockedReason ?? 'take-not-ready',
-        );
+        const blockedReason = productStatus.actions.startTakeBlockedReason;
+        if (blockedReason === null) {
+          rejectTakeCommand(socket, 'start', 'product-state-invalid');
+          return;
+        }
+        rejectTakeCommand(socket, 'start', blockedReason);
         return;
       }
       const boundary = takeFrameBoundary(nowMs);

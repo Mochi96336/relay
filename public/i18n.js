@@ -14,17 +14,16 @@
       'people.reconnectingSuffix': 'reconnecting',
       'people.micReconnectingSuffix': 'mic reconnecting',
       'language.label': 'Language',
-      'mic.take': 'Take mic',
-      'mic.release': 'Release mic',
+      'mic.label': 'Mic',
+      'mic.take': 'Take Mic',
+      'mic.release': 'Release Mic',
       'mic.cancel': 'Cancel',
-      'mic.takeover': '🎤 Take over',
-      'mic.microphone': '🎤 Microphone',
-      'mic.takeoverPrompt': '{name} has the microphone. Relay will prepare your Mic before switching.',
-      'mic.takeoverPreparing': 'Preparing your Mic; Relay will switch from {name} only when it is ready…',
-      'mic.startFailed': 'Could not start the microphone.',
-      'mic.takeoverKept': 'The current Mic was not changed: {message}',
-      'mic.takeoverChangedOwner': 'Mic moved to {name}. Confirm again if you still want to take over.',
-      'mic.takeoverChanged': 'Mic state changed; you can press Microphone again.',
+      'mic.takeover': 'Take over Mic',
+      'mic.takeoverPrompt': '{name} is using Mic.',
+      'mic.takeoverPending': 'Taking over Mic…',
+      'mic.startFailed': 'Could not start Mic.',
+      'mic.takeoverChangedOwner': 'Mic moved to {name}. Confirm again to take over.',
+      'mic.takeoverChanged': 'Mic changed. Try taking Mic again.',
 
       'song.label': 'Song',
       'song.change': 'Change song',
@@ -262,17 +261,16 @@
       'people.reconnectingSuffix': '重新連線中',
       'people.micReconnectingSuffix': 'Mic 重新連線中',
       'language.label': '語言',
+      'mic.label': 'Mic',
       'mic.take': '拿 Mic',
-      'mic.release': '放開 Mic',
+      'mic.release': '放 Mic',
       'mic.cancel': '取消',
-      'mic.takeover': '🎤 接手 Mic',
-      'mic.microphone': '🎤 麥克風',
-      'mic.takeoverPrompt': '{name} 正在使用麥克風。Relay 會先準備你的 Mic，再切換。',
-      'mic.takeoverPreparing': '正在準備你的 Mic；準備完成後才會從 {name} 接手…',
-      'mic.startFailed': '無法啟動麥克風。',
-      'mic.takeoverKept': '沒有切走目前的 Mic：{message}',
-      'mic.takeoverChangedOwner': 'Mic 已經換成 {name}。如果仍要接手，再確認一次。',
-      'mic.takeoverChanged': 'Mic 狀態已改變；可以直接重新按麥克風。',
+      'mic.takeover': '接手 Mic',
+      'mic.takeoverPrompt': '目前是 {name} 在使用 Mic。',
+      'mic.takeoverPending': '正在接手 Mic…',
+      'mic.startFailed': '無法啟動 Mic。',
+      'mic.takeoverChangedOwner': 'Mic 已換成 {name}，要接手請再確認一次。',
+      'mic.takeoverChanged': 'Mic 狀態已改變，請重新接手。',
 
       'song.label': '歌曲',
       'song.change': '換歌',
@@ -528,6 +526,52 @@
     ));
   }
 
+  function registerMessages(bundle) {
+    if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
+      throw new TypeError('Relay i18n registration bundle must be an object');
+    }
+    const pending = [];
+    const staged = new Map();
+
+    for (const [requestedLocale, additions] of Object.entries(bundle)) {
+      const normalized = normalizeLocale(requestedLocale);
+      if (!normalized || !SUPPORTED.has(normalized)) {
+        throw new RangeError(`Relay i18n locale is not supported: ${requestedLocale}`);
+      }
+      if (!additions || typeof additions !== 'object' || Array.isArray(additions)) {
+        throw new TypeError(`Relay i18n locale table must be an object: ${requestedLocale}`);
+      }
+      const table = messages[normalized];
+
+      for (const [key, template] of Object.entries(additions)) {
+        if (typeof template !== 'string') {
+          throw new TypeError(`Relay i18n template must be a string: ${normalized}:${key}`);
+        }
+        if (Object.prototype.hasOwnProperty.call(table, key)) {
+          if (table[key] !== template) {
+            throw new Error(`Relay i18n key already registered: ${normalized}:${key}`);
+          }
+          continue;
+        }
+
+        const stagedKey = `${normalized}\u0000${key}`;
+        if (staged.has(stagedKey)) {
+          if (staged.get(stagedKey) !== template) {
+            throw new Error(`Relay i18n key already registered: ${normalized}:${key}`);
+          }
+          continue;
+        }
+        staged.set(stagedKey, template);
+        pending.push({ table, key, template });
+      }
+    }
+
+    if (pending.length === 0) return false;
+    for (const { table, key, template } of pending) table[key] = template;
+    applyStatic();
+    return true;
+  }
+
   function has(key) {
     return Object.prototype.hasOwnProperty.call(messages[locale] ?? {}, key)
       || Object.prototype.hasOwnProperty.call(messages[DEFAULT_LOCALE], key);
@@ -598,6 +642,7 @@
     has,
     setLocale,
     applyStatic,
+    registerMessages,
   };
 
   document.documentElement.lang = locale;

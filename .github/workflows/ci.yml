@@ -90,16 +90,17 @@ jobs:
         run: npm install --no-save --package-lock=false @playwright/test@1.55.0
       - name: Serve deterministic Live fixtures from Relay static root
         run: |
-          cp test/fixtures/live-visual.html public/__live-visual.html
-          cp test/fixtures/live-visual-ribbon.js public/__live-visual-ribbon.js
-          sed -i 's#</body>#<script src="/__live-visual-ribbon.js"></script></body>#' public/__live-visual.html
+          cp test/fixtures/live-visual-bootstrap.js public/__live-visual-bootstrap.js
+          node scripts/build-live-visual-fixture.mjs public/index.html public/__live-visual.html
           cp test/fixtures/live-p0-layout.html public/__live-p0-layout.html
+          cp test/fixtures/room-sound-geometry.html public/__room-sound-geometry.html
           cp test/fixtures/listener-debug.html public/__listener-debug.html
           python3 -m http.server 4173 --bind 127.0.0.1 --directory public > /tmp/relay-visual-http.log 2>&1 &
           echo $! > /tmp/relay-visual-http.pid
           for attempt in {1..20}; do
             if curl --fail --silent http://127.0.0.1:4173/__live-visual.html > /dev/null \
               && curl --fail --silent http://127.0.0.1:4173/__live-p0-layout.html > /dev/null \
+              && curl --fail --silent http://127.0.0.1:4173/__room-sound-geometry.html > /dev/null \
               && curl --fail --silent http://127.0.0.1:4173/__listener-debug.html > /dev/null; then
               exit 0
             fi
@@ -111,7 +112,7 @@ jobs:
         id: browser-interaction
         env:
           RELAY_INTERACTION_URL: http://127.0.0.1:4173/
-        run: bash scripts/ci-run.sh visual-screenshots browser-interaction "production DOM interaction tests" -- npx playwright test test/browser/live-interaction.spec.mjs test/browser/listener-debug.spec.mjs test/browser/take-history-review.spec.mjs test/browser/take-history-long-list.spec.mjs --workers=1 --reporter=line
+        run: bash scripts/ci-run.sh visual-screenshots browser-interaction "production DOM interaction tests" -- npx playwright test test/browser/live-interaction.spec.mjs test/browser/live-visual-proof.spec.mjs test/browser/room-sound-geometry.spec.mjs test/browser/listener-debug.spec.mjs test/browser/take-history-review.spec.mjs test/browser/take-history-long-list.spec.mjs --workers=1 --reporter=line
       - name: Upload browser interaction failure summary
         if: failure() && steps.browser-interaction.outcome == 'failure'
         uses: actions/upload-artifact@v4

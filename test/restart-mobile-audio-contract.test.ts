@@ -77,7 +77,11 @@ test('Listen consumes mix rate, stays at unity or below, and recovers suspended 
   assert.doesNotMatch(listenSource, /await\s+resumeAudioGraph\(/);
   assert.match(listenSource, /addEventListener\('statechange'/);
   assert.match(listenSource, /document\.addEventListener\('visibilitychange'/);
-  assert.match(listenSource, /window\.addEventListener\('pageshow', recoverAudioGraph\)/);
+  assert.match(
+    listenSource,
+    /function recoverForegroundAudio\(\) \{\n    recoverAudioGraph\(\);\n    scheduleIosAudioDestinationRecovery\(`foreground:\$\{foregroundAudioBoundary\}`\);\n  \}/,
+  );
+  assert.match(listenSource, /window\.addEventListener\('pageshow', recoverForegroundAudio\)/);
 });
 
 test('page audio session arbitration prefers microphone capture over playback', () => {
@@ -126,8 +130,17 @@ test('Listen uses playback and play-and-record AudioSession claims at user inten
   assert.match(listenSource, /userMuted = !userMuted;\n    claimPlaybackAudio\(!userMuted\);/);
   assert.match(listenSource, /publisherButton\.addEventListener\('click',[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
   assert.match(listenSource, /relay-request-microphone'[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
-  assert.match(listenSource, /function restoreAfterMicBoundary[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*claimMicrophoneAudio\(false\)[\s\S]*restoreAfterMic\(phase\)/,
-    'Mic AudioSession release must share the deferred epoch fence with local Listen restore');
+  assert.match(
+    listenSource,
+    /function restoreAfterMicBoundary[\s\S]*claimMicrophoneAudio\(false\)[\s\S]*restoreAfterMic\(phase\)/,
+    'Mic AudioSession release must happen at the authoritative post-teardown Listen boundary',
+  );
+  assert.doesNotMatch(
+    listenSource,
+    /function restoreAfterMicBoundary[\s\S]*setTimeout\(/,
+    'Mic AudioSession release must not depend on a guessed later task',
+  );
+  assert.match(appSource, /function finishMicrophoneSession[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch[\s\S]*dispatchRelayEvent\('relay-microphone-ended'/);
   assert.match(listenSource, /relay-microphone-ended'[\s\S]*restoreAfterMicBoundary\(\)/);
   assert.match(listenSource, /relay-microphone-start-failed'[\s\S]*restoreAfterMicBoundary\('mic-failed-resume'\)/);
 });

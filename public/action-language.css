@@ -53,6 +53,23 @@
   position: relative;
 }
 
+/* The applied mixer correction qualifies Realign itself. Pin it to the far
+   edge explicitly instead of relying only on the generic .more-action spacing,
+   and keep digit widths stable as the authoritative value changes. */
+#calibrate-timing .calibrate-timing-value {
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Language starts a separate More group and owns that boundary. The final
+   System action must not draw a second separator immediately above it. */
+#open-system {
+  border-bottom: 0;
+}
+
 /* Manual vocal fine tune remains only as compatibility DOM for app.js and the
    legacy wire command. It is not a normal Live product control anymore. */
 .more-timing {

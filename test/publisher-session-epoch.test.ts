@@ -72,6 +72,6 @@ test('publisher teardown revokes globals before awaiting the old AudioContext cl
 test('late terminal completion cannot end a replacement publisher session', () => {
   assert.match(
     appSource,
-    /\.then\(\(stoppedEpoch\) => \{\s*if \(publisherSessionEpoch !== stoppedEpoch\) return;\s*dispatchRelayEvent\('relay-microphone-ended'/,
+    /function finishMicrophoneSession\(reason,[\s\S]*stop: \(\) => stop\(false, \{ releaseMic \}\),[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch,[\s\S]*dispatchRelayEvent\('relay-microphone-ended'/,
   );
 });

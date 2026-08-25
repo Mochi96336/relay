@@ -78,6 +78,44 @@ if (debugEnabled) {
   }
 
   function instrumentAudioContext(context) {
+    const nativeSuspend = context.suspend?.bind(context);
+    if (nativeSuspend) {
+      try {
+        context.suspend = (...args) => {
+          const listener = listenerContext === context;
+          recorder.recordEvent('audio-context-suspend-request', {
+            listener,
+            state: context.state,
+          });
+          let pending;
+          try {
+            pending = nativeSuspend(...args);
+          } catch (error) {
+            recorder.recordEvent('audio-context-suspend-failed', {
+              listener,
+              state: context.state,
+              message: String(error),
+            });
+            throw error;
+          }
+          Promise.resolve(pending).then(() => {
+            recorder.recordEvent('audio-context-suspend-settled', {
+              listener: listenerContext === context,
+              state: context.state,
+            });
+            recordSnapshot();
+          }, (error) => {
+            recorder.recordEvent('audio-context-suspend-failed', {
+              listener: listenerContext === context,
+              state: context.state,
+              message: String(error),
+            });
+          });
+          return pending;
+        };
+      } catch {}
+    }
+
     const nativeResume = context.resume?.bind(context);
     if (nativeResume) {
       try {

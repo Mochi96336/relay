@@ -53,6 +53,11 @@ test('typographic actions enlarge touch affordance without enlarging their visib
     'transparent hit halos must never become visible button surfaces');
 });
 
+test('More uses one separator between System and Language', () => {
+  assert.equal(actionCss.includes('#open-system {\n  border-bottom: 0;\n}'), true);
+  assert.ok(html.indexOf('id="open-system"') < html.indexOf('class="locale-control"'));
+});
+
 test('persistent local sound and secondary menu entries carry real 44px touch rows', () => {
   assert.equal(actionCss.includes('#listen-toggle {\n  min-height: 44px;'), true);
   assert.equal(liveIaCss.includes('.more-menu > summary {\n  min-width: 44px;\n  min-height: 44px;'), true);

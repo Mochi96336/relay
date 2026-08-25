@@ -6,6 +6,17 @@ const startButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 const status = document.querySelector('#recording-status');
 
+const START_POLICY_BLOCK_REASONS = new Set([
+  'mix-not-active',
+  'timing-calibration-active',
+  'mic-required',
+  'mic-starting',
+  'mic-reconnecting',
+  'mic-audio-stalled',
+  'room-blocked',
+  'take-active',
+]);
+
 function formatDuration(durationMs) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -13,20 +24,37 @@ function formatDuration(durationMs) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-function blockedCopy(reason) {
+function blockingIssueCopy(issue) {
+  const key = {
+    'backing-not-ready': 'recording.blocked.issue.backing-not-ready',
+    'backing-unavailable': 'recording.blocked.issue.backing-unavailable',
+    'backing-stalled': 'recording.blocked.issue.backing-stalled',
+    'backing-route-mismatch': 'recording.blocked.issue.backing-route-mismatch',
+    'robot-source-unavailable': 'recording.blocked.issue.robot-source-unavailable',
+    'song-clock-unavailable': 'recording.blocked.issue.song-clock-unavailable',
+  }[issue?.cause];
+  return key ? t(key) : t('recording.blocked.room-blocked');
+}
+
+function blockedCopy(reason, issue) {
+  if (reason === 'room-blocked') return blockingIssueCopy(issue);
   const key = {
     reconnecting: 'recording.blocked.reconnecting',
     'mix-not-active': 'recording.blocked.mix-not-active',
     'timing-calibration-active': 'recording.blocked.timing-calibration-active',
-    'take-not-ready': 'recording.blocked.take-not-ready',
+    'mic-required': 'recording.blocked.mic-required',
+    'mic-starting': 'recording.blocked.mic-starting',
+    'mic-reconnecting': 'recording.blocked.mic-reconnecting',
+    'mic-audio-stalled': 'recording.blocked.mic-audio-stalled',
     'take-active': 'recording.blocked.take-active',
   }[reason] ?? 'recording.blocked.unavailable';
   return t(key);
 }
 
-function commandErrorCopy(reason) {
+function commandErrorCopy(reason, issue) {
   if (reason === 'reconnecting') return t('recording.blocked.reconnecting');
   if (reason === 'storage-unavailable') return t('recording.error.storage-unavailable');
+  if (START_POLICY_BLOCK_REASONS.has(reason)) return blockedCopy(reason, issue);
   return t('recording.error.generic');
 }
 
@@ -38,6 +66,7 @@ if (strip && startButton && stopButton && status) {
   let finishTimer = null;
 
   strip.hidden = false;
+  strip.dataset.recordingSlot = 'action';
   startButton.hidden = false;
   stopButton.hidden = true;
   startButton.disabled = true;
@@ -65,6 +94,22 @@ if (strip && startButton && stopButton && status) {
     stopButton.textContent = t('recording.stop');
   }
 
+  function presentSlot(mode, copy, detail = latestState) {
+    strip.dataset.recordingSlot = mode;
+    status.textContent = copy;
+
+    if (mode === 'status') {
+      startButton.hidden = true;
+      return;
+    }
+
+    if (mode === 'status-action') {
+      startButton.hidden = false;
+      startButton.disabled = detail?.canStart !== true;
+      startButton.textContent = t('recording.record');
+    }
+  }
+
   function renderState(detail = latestState) {
     if (!detail || typeof detail !== 'object') return;
     latestState = detail;
@@ -77,18 +122,30 @@ if (strip && startButton && stopButton && status) {
     renderControls(detail);
 
     if (finishFlash && lifecycle === 'ready') {
-      status.textContent = t('recording.ready');
+      presentSlot('status', t('recording.ready'), detail);
       return;
     }
 
     const commandError = detail.commandError?.reason;
     if (commandError) {
-      status.textContent = commandErrorCopy(commandError);
+      const blockingIssue = commandError === 'room-blocked'
+        && detail.startBlockedReason === 'room-blocked'
+        ? detail.startBlockingIssue
+        : null;
+      const copy = commandErrorCopy(commandError, blockingIssue);
+      if (lifecycle !== 'recording' && lifecycle !== 'finalizing' && detail.canStart === true) {
+        presentSlot('status-action', copy, detail);
+      } else if (lifecycle !== 'recording' && lifecycle !== 'finalizing') {
+        presentSlot('status', copy, detail);
+      } else {
+        strip.dataset.recordingSlot = lifecycle === 'recording' ? 'recording' : 'status';
+        status.textContent = copy;
+      }
       return;
     }
 
     if (detail.startPending === true && lifecycle !== 'recording' && lifecycle !== 'finalizing') {
-      status.textContent = t('recording.starting');
+      presentSlot('status', t('recording.starting'), detail);
       return;
     }
 
@@ -104,6 +161,7 @@ if (strip && startButton && stopButton && status) {
       const elapsed = Number.isFinite(startedAtMs) && Number.isFinite(clockNow)
         ? clockNow - startedAtMs
         : 0;
+      strip.dataset.recordingSlot = 'recording';
       status.textContent = authorityFresh
         ? `● ${formatDuration(elapsed)}`
         : `● ${formatDuration(elapsed)} · ${t('recording.blocked.reconnecting')}`;
@@ -111,20 +169,33 @@ if (strip && startButton && stopButton && status) {
     }
 
     if (lifecycle === 'finalizing') {
-      status.textContent = authorityFresh
-        ? t('recording.finishing')
-        : `${t('recording.finishing')} · ${t('recording.blocked.reconnecting')}`;
+      presentSlot(
+        'status',
+        authorityFresh
+          ? t('recording.finishing')
+          : `${t('recording.finishing')} · ${t('recording.blocked.reconnecting')}`,
+        detail,
+      );
       return;
     }
 
     if (lifecycle === 'failed') {
-      status.textContent = t('recording.failed');
+      const copy = t('recording.failed');
+      presentSlot(detail.canStart === true ? 'status-action' : 'status', copy, detail);
       return;
     }
 
-    status.textContent = detail.canStart === true
-      ? ''
-      : blockedCopy(detail.startBlockedReason);
+    if (detail.canStart === true) {
+      strip.dataset.recordingSlot = 'action';
+      status.textContent = '';
+      return;
+    }
+
+    presentSlot(
+      'status',
+      blockedCopy(detail.startBlockedReason, detail.startBlockingIssue),
+      detail,
+    );
   }
 
   function showFinishedFlash() {

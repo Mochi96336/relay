@@ -38,15 +38,24 @@ test('Release tears down local capture even if the Presence websocket cannot sen
   const slidersStart = app.indexOf('for (const slider', appReleaseStart);
   assert.ok(appReleaseStart >= 0 && slidersStart > appReleaseStart);
   const appRelease = app.slice(appReleaseStart, slidersStart);
-  assert.match(appRelease, /stop\(false, \{ releaseMic: true \}\)/);
-  assert.match(appRelease, /relay-microphone-ended/);
+  assert.match(appRelease, /finishMicrophoneSession\('released', \{[\s\S]*releaseMic: true/);
+  assert.doesNotMatch(appRelease, /dispatchRelayEvent\('relay-microphone-ended'/,
+    'normal release must not bypass the shared teardown transaction');
 });
 
-test('failed Mic ownership attempts clean up before Listen is allowed to recover', () => {
+test('Mic terminal lifecycle tears down before Listen is allowed to recover', () => {
+  const restoreStart = listen.indexOf('function restoreAfterMicBoundary');
+  const roomMuteStart = listen.indexOf('function setRoomMicForcedMute', restoreStart);
+  assert.ok(restoreStart >= 0 && roomMuteStart > restoreStart);
+  const restoreBoundary = listen.slice(restoreStart, roomMuteStart);
+  assert.match(restoreBoundary, /claimMicrophoneAudio\(false\);[\s\S]*restoreAfterMic\(phase\);/);
+  assert.doesNotMatch(restoreBoundary, /setTimeout/,
+    'Listen must consume the completed transaction instead of guessing capture cleanup timing');
+
   assert.match(
-    listen,
-    /function restoreAfterMicBoundary\(phase[\s\S]*const restoreEpoch = micMuteEpoch[\s\S]*setTimeout\(\(\) => \{[\s\S]*if \(micMuteEpoch !== restoreEpoch\) return;[\s\S]*restoreAfterMic\(phase\);[\s\S]*\}, 0\)/,
-    'a stale terminal restore must not unmute a replacement Mic session',
+    app,
+    /function finishMicrophoneSession\(reason,[\s\S]*micLifecycle\.run\(\{[\s\S]*stop: \(\) => stop\(false, \{ releaseMic \}\),[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch,[\s\S]*dispatchRelayEvent\('relay-microphone-ended', \{ reason \}\)/,
+    'ended must be emitted only by the shared post-stop transaction',
   );
   assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMicBoundary/);
   assert.match(listen, /window\.addEventListener\('relay-microphone-start-failed',[\s\S]*restoreAfterMicBoundary/);
@@ -56,12 +65,28 @@ test('failed Mic ownership attempts clean up before Listen is allowed to recover
   const busyStart = app.indexOf("if (message.type === 'mic-busy')");
   const takeoverStart = app.indexOf("if (message.type === 'mic-takeover-rejected')", busyStart);
   const revokedStart = app.indexOf("if (message.type === 'mic-revoked')", takeoverStart);
-  assert.ok(busyStart >= 0 && takeoverStart > busyStart && revokedStart > takeoverStart);
+  const supersededStart = app.indexOf("if (message.type === 'publisher-superseded')", revokedStart);
+  const registeredStart = app.indexOf("message.type === 'registered'", supersededStart);
+  assert.ok(
+    busyStart >= 0
+      && takeoverStart > busyStart
+      && revokedStart > takeoverStart
+      && supersededStart > revokedStart
+      && registeredStart > supersededStart,
+  );
 
   const busy = app.slice(busyStart, takeoverStart);
   const takeover = app.slice(takeoverStart, revokedStart);
-  assert.match(busy, /stop\(false, \{ releaseMic: false \}\)[\s\S]*relay-microphone-ended'[\s\S]*reason: 'busy'/);
-  assert.match(takeover, /stop\(false, \{ releaseMic: false \}\)[\s\S]*relay-microphone-ended'[\s\S]*reason: 'takeover-rejected'/);
+  const revoked = app.slice(revokedStart, supersededStart);
+  const superseded = app.slice(supersededStart, registeredStart);
+  assert.match(busy, /finishMicrophoneSession\('busy'\)/);
+  assert.match(takeover, /finishMicrophoneSession\('takeover-rejected'\)/);
+  assert.match(revoked, /finishMicrophoneSession\('revoked'\)/);
+  assert.match(superseded, /finishMicrophoneSession\('superseded'\)/);
+  for (const terminalPath of [busy, takeover, revoked, superseded]) {
+    assert.doesNotMatch(terminalPath, /dispatchRelayEvent\('relay-microphone-ended'/,
+      'server terminal paths must not emit ended before shared teardown completion');
+  }
 });
 
 test('room Mic ownership force-mutes Listen in sibling tabs that share the participant identity', () => {
@@ -96,8 +121,8 @@ test('hardware input ending completes the same Mic lifecycle', () => {
   const handler = app.slice(trackStart, watchdogStart);
   assert.match(handler, /if \(!captureIsCurrent\(\)\) return/,
     'a stale track callback must not terminate a replacement Mic session');
-  assert.match(handler, /stop\(false, \{ releaseMic: true \}\)/);
-  assert.match(handler, /relay-microphone-ended'[\s\S]*reason: 'input-ended'/);
+  assert.match(handler, /finishMicrophoneSession\('input-ended', \{[\s\S]*releaseMic: true/);
+  assert.doesNotMatch(handler, /dispatchRelayEvent\('relay-microphone-ended'/);
 });
 
 test('Mic startup is single-flight, deadline-bound, and disposes late permission capture', () => {

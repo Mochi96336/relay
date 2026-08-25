@@ -42,7 +42,7 @@ else
   fail "RELAY_BROWSER_SINK may contain only letters, numbers, dot, underscore, and hyphen"
 fi
 
-for command_name in pactl parec xvfb-run npm node curl; do
+for command_name in pactl parec xvfb-run npm node curl flock; do
   check_command "$command_name"
 done
 

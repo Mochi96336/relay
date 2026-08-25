@@ -1,9 +1,14 @@
 const RECONNECT_MS = 1_000;
 const REFRESH_MS = 250;
+// Six missed polls tolerates short response jitter without treating an OPEN
+// transport as indefinitely authoritative.
+const FRESHNESS_TTL_MS = REFRESH_MS * 6;
 
 let socket = null;
 let reconnectTimer = null;
 let refreshTimer = null;
+let freshnessDeadlineTimer = null;
+let lastObservedAt = null;
 
 function currentState() {
   const state = window.relayTimingAuthority;
@@ -42,6 +47,27 @@ function stopRefresh() {
   refreshTimer = null;
 }
 
+function stopFreshnessDeadline() {
+  if (freshnessDeadlineTimer !== null) clearTimeout(freshnessDeadlineTimer);
+  freshnessDeadlineTimer = null;
+}
+
+function expireTimingAuthority() {
+  lastObservedAt = null;
+  stopFreshnessDeadline();
+  publish(false, null);
+}
+
+function observeSourceStatus() {
+  lastObservedAt = Date.now();
+  stopFreshnessDeadline();
+  freshnessDeadlineTimer = setTimeout(() => {
+    freshnessDeadlineTimer = null;
+    if (lastObservedAt === null) return;
+    expireTimingAuthority();
+  }, FRESHNESS_TTL_MS);
+}
+
 function requestSourceStatus() {
   if (socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'source-status-request' }));
@@ -62,6 +88,7 @@ function scheduleReconnect() {
 
 function acceptSourceStatus(message) {
   if (message?.type !== 'source-status') return;
+  observeSourceStatus();
   const applied = message.appliedMicAdvanceMs;
   const valueMs = message.active === true
     && typeof applied === 'number'
@@ -69,8 +96,6 @@ function acceptSourceStatus(message) {
     ? applied
     : null;
   publish(true, valueMs);
-  if (message.active === true) startRefresh();
-  else stopRefresh();
 }
 
 function connect() {
@@ -78,14 +103,18 @@ function connect() {
   if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
 
   stopRefresh();
-  publish(false, null);
+  expireTimingAuthority();
 
   const next = new WebSocket(wsUrl());
   socket = next;
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
+    // Keep observing across idle -> active transitions. An inactive mix means
+    // there is no applied value to paint yet; it must not stop the authority
+    // adapter or the first later calibration can remain invisible forever.
     requestSourceStatus();
+    startRefresh();
   });
 
   next.addEventListener('message', (event) => {
@@ -99,7 +128,7 @@ function connect() {
     if (socket !== next) return;
     socket = null;
     stopRefresh();
-    publish(false, null);
+    expireTimingAuthority();
     scheduleReconnect();
   });
 

@@ -141,6 +141,21 @@ test('Take History is review-first without changing newest-first selection seman
 
   await expect(page.locator('.take-history-heading-copy strong')).toHaveText('錄音');
   await expect(page.locator('.take-history-heading-copy span')).toHaveText('3 段');
+  await expect(page.locator('.take-history-group-copy strong')).toHaveText('純人聲');
+  await expect(page.locator('#download-recording')).toHaveText('下載錄音');
+
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('.take-history-heading-copy strong')).toHaveText('Recordings');
+  await expect(page.locator('.take-history-heading-copy span')).toHaveText('3 recordings');
+  await expect(page.locator('.take-history-group-copy strong')).toHaveText('Voice only');
+  await expect(page.locator('#close-take-history')).toHaveText('Done');
+  await expect(page.locator('#download-recording')).toHaveText('Download recording');
+  await expect(panel).toHaveAttribute('aria-label', 'Recording history');
+
+  await page.evaluate(() => window.relayI18n.setLocale('zh-Hant', { persist: false }));
+  await expect(page.locator('.take-history-heading-copy strong')).toHaveText('錄音');
+  await expect(page.locator('.take-history-heading-copy span')).toHaveText('3 段');
+
   expect(await renderedTakeIds(page)).toEqual([
     'recording-0712',
     'recording-0705',
@@ -208,6 +223,11 @@ test('Take History is review-first without changing newest-first selection seman
     return document.querySelector('#recording-player').play();
   });
   await expect(page.locator('#recording-player')).toHaveJSProperty('paused', true);
+  await expect(page.locator('.take-history-notice')).toHaveText('請先放 Mic，再播放錄音。');
+
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('.take-history-notice')).toHaveText('Release mic before playing a recording.');
+  await page.evaluate(() => window.relayI18n.setLocale('zh-Hant', { persist: false }));
   await expect(page.locator('.take-history-notice')).toHaveText('請先放 Mic，再播放錄音。');
 
   await page.evaluate(async () => {

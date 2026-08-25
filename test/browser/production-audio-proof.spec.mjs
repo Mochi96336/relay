@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -17,25 +17,61 @@ const SEGMENT_MS = 350;
 const TRAIL_MS = 1_000;
 const MIN_PLATEAU_SAMPLES = 256;
 const MIXED_SAMPLE_TOLERANCE = Math.ceil(10 ** (DEFAULT_MIC_GAIN_DB / 20)) + 2;
+const REQUIRE_WEBTRANSPORT = process.env.RELAY_PRODUCTION_AUDIO_PROOF_WEBTRANSPORT === '1';
+const WEBTRANSPORT_PORT = 44_338;
+const WEBTRANSPORT_ENV_NAMES = [
+  'RELAY_WEBTRANSPORT_PUBLIC_URL',
+  'RELAY_WEBTRANSPORT_HOST',
+  'RELAY_WEBTRANSPORT_PORT',
+  'RELAY_WEBTRANSPORT_CERT',
+  'RELAY_WEBTRANSPORT_KEY',
+  'RELAY_WEBTRANSPORT_PIN_CERT',
+];
 
-function startRelay(takeDir) {
+function pinnedWebTransportEnv(directory) {
+  const keyPath = path.join(directory, 'webtransport-key.pem');
+  const certPath = path.join(directory, 'webtransport-cert.pem');
+  execFileSync('openssl', ['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', keyPath]);
+  execFileSync('openssl', [
+    'req', '-new', '-x509',
+    '-key', keyPath,
+    '-out', certPath,
+    '-days', '1',
+    '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ]);
+  return {
+    RELAY_WEBTRANSPORT_PUBLIC_URL: `https://127.0.0.1:${WEBTRANSPORT_PORT}/media`,
+    RELAY_WEBTRANSPORT_HOST: '127.0.0.1',
+    RELAY_WEBTRANSPORT_PORT: String(WEBTRANSPORT_PORT),
+    RELAY_WEBTRANSPORT_CERT: certPath,
+    RELAY_WEBTRANSPORT_KEY: keyPath,
+    RELAY_WEBTRANSPORT_PIN_CERT: '1',
+  };
+}
+
+function startRelay(takeDir, directMediaEnv = {}) {
+  const env = {
+    ...process.env,
+    PORT: '0',
+    NODE_ENV: 'test',
+    RELAY_TAKE_DIR: takeDir,
+    RELAY_TAKE_MIN_FREE_GIB: '0',
+    RELAY_AUTO_CALIBRATE: '0',
+    RELAY_CALIBRATION_VALIDATION: '0',
+    RELAY_CALIBRATION_PROBE: '0',
+    RELAY_HEARTBEAT_MS: '60000',
+    RELAY_LIVE_PREBUFFER_MS: '40',
+  };
+  for (const name of WEBTRANSPORT_ENV_NAMES) delete env[name];
+  Object.assign(env, directMediaEnv);
+
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
     {
       cwd: root,
-      env: {
-        ...process.env,
-        PORT: '0',
-        NODE_ENV: 'test',
-        RELAY_TAKE_DIR: takeDir,
-        RELAY_TAKE_MIN_FREE_GIB: '0',
-        RELAY_AUTO_CALIBRATE: '0',
-        RELAY_CALIBRATION_VALIDATION: '0',
-        RELAY_CALIBRATION_PROBE: '0',
-        RELAY_HEARTBEAT_MS: '60000',
-        RELAY_LIVE_PREBUFFER_MS: '40',
-      },
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
@@ -68,7 +104,7 @@ function startRelay(takeDir) {
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
-      const match = stdout.match(/listening on http:\/\/localhost:(\d+)/);
+      const match = stdout.match(/listening on http:\/\/localhost:(\d+)/i);
       if (!match) return;
 
       clearTimeout(timer);
@@ -202,12 +238,53 @@ async function printReadinessDiagnostics(page, relay) {
   console.log(`[relay-production-audio-readiness] ${JSON.stringify({ browserState, readyz })}`);
 }
 
-test('real Chromium PCM survives production capture, transport, mixer and Take WAV', async () => {
+async function readTransportStatus(relay) {
+  const response = await fetch(relay.httpUrl('/statusz'), { cache: 'no-store' });
+  assert.equal(response.status, 200, `statusz request failed with ${response.status}`);
+  return response.json();
+}
+
+async function waitForWebTransportProof(relay, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = null;
+  while (Date.now() < deadline) {
+    latest = await readTransportStatus(relay);
+    const sender = latest?.audio?.captureAndSender?.transport;
+    if (
+      latest?.audio?.micMediaPath === 'webtransport'
+      && sender?.path === 'webtransport'
+      && sender?.webTransportConnections >= 1
+      && sender?.webTransportPacketsSubmitted > 0
+    ) return latest;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Chromium never proved an active WebTransport media path: ${JSON.stringify(latest)}`);
+}
+
+function assertNoWebSocketAudioFallback(statusPayload) {
+  const sender = statusPayload?.audio?.captureAndSender?.transport;
+  assert.equal(statusPayload?.audio?.micMediaPath, 'webtransport');
+  assert.equal(sender?.path, 'webtransport');
+  assert.ok(sender?.webTransportConnections >= 1, 'browser must establish a native WebTransport session');
+  assert.ok(sender?.webTransportPacketsSubmitted > 0, 'browser must submit microphone datagrams');
+  assert.equal(sender?.webTransportDemotions, 0, 'WebTransport must remain selected for the proof');
+  assert.equal(sender?.webSocketPacketsSent, 0, 'no microphone packet may use WebSocket fallback');
+  assert.equal(sender?.webSocketCongestedRejects, 0, 'WebSocket fallback must remain unused');
+  assert.equal(sender?.webSocketDisconnectedRejects, 0, 'WebSocket fallback must remain unused');
+  assert.equal(sender?.webSocketSendFailures, 0, 'WebSocket fallback must remain unused');
+}
+
+const proofName = REQUIRE_WEBTRANSPORT
+  ? 'real Chromium PCM survives native WebTransport, mixer and Take WAV'
+  : 'real Chromium PCM survives production capture, transport, mixer and Take WAV';
+
+test(proofName, async () => {
   test.setTimeout(45_000);
   const takeDir = await mkdtemp(path.join(os.tmpdir(), 'relay-production-browser-audio-'));
   const capturePath = path.join(takeDir, 'deterministic-browser-mic.wav');
   await writeFile(capturePath, deterministicCaptureWav());
-  const relay = await startRelay(takeDir);
+  const directMediaEnv = REQUIRE_WEBTRANSPORT ? pinnedWebTransportEnv(takeDir) : {};
+  const relay = await startRelay(takeDir, directMediaEnv);
   const browser = await chromium.launch({
     // Playwright's default headless executable is chromium-headless-shell.
     // The production proof intentionally uses full Chromium's new headless mode
@@ -240,8 +317,12 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
       audioWorkletNode: Function.prototype.toString.call(window.AudioWorkletNode),
       getUserMedia: Function.prototype.toString.call(navigator.mediaDevices.getUserMedia),
       webSocket: Function.prototype.toString.call(window.WebSocket),
+      webTransport: typeof window.WebTransport === 'function'
+        ? Function.prototype.toString.call(window.WebTransport)
+        : null,
     }));
     for (const [name, source] of Object.entries(browserPrimitives)) {
+      if (name === 'webTransport' && !REQUIRE_WEBTRANSPORT) continue;
       expect(source, `${name} must remain Chromium-native`).toContain('[native code]');
     }
 
@@ -287,6 +368,13 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
     // gives the production server time to establish Mic readiness and arm Record;
     // keep recording through all three deterministic plateaus and trailing zero.
     await page.waitForTimeout(LEAD_MS + INPUT_LEVELS.length * SEGMENT_MS + 500);
+
+    let transportProof = null;
+    if (REQUIRE_WEBTRANSPORT) {
+      transportProof = await waitForWebTransportProof(relay);
+      assertNoWebSocketAudioFallback(transportProof);
+    }
+
     await page.locator('#stop-recording').click();
     await page.waitForFunction(
       (id) => window.relayRecordingState?.lifecycle === 'ready'
@@ -312,8 +400,14 @@ test('real Chromium PCM survives production capture, transport, mixer and Take W
       cursor = plateau.end;
     }
 
+    const senderTransport = transportProof?.audio?.captureAndSender?.transport ?? null;
     console.log(`[relay-production-audio-proof] ${JSON.stringify({
       takeId,
+      requiredTransport: REQUIRE_WEBTRANSPORT ? 'webtransport' : 'production-default',
+      negotiatedTransport: senderTransport?.path ?? null,
+      webTransportConnections: senderTransport?.webTransportConnections ?? null,
+      webTransportPacketsSubmitted: senderTransport?.webTransportPacketsSubmitted ?? null,
+      webSocketPacketsSent: senderTransport?.webSocketPacketsSent ?? null,
       inputSampleRate: SAMPLE_RATE,
       inputSamples: INPUT_LEVELS,
       wavSamples: samples.length,

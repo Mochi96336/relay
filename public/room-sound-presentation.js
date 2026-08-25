@@ -9,33 +9,23 @@ function operationalNoteKey(phase) {
   return null;
 }
 
-function compactStatusKey(state, phase) {
-  if (phase === 'retry' || phase === 'start-failed') return 'roomSound.compact.retry';
-  if (state === 'mic-muted') return 'roomSound.compact.singing';
-  if (state === 'playback-muted') return 'roomSound.compact.backing';
-  if (state === 'review-muted') return 'roomSound.compact.recording';
-  if (phase === 'interrupted') return 'roomSound.compact.recovering';
-  if (phase === 'reconnecting') return 'roomSound.compact.reconnecting';
-  if (phase === 'connecting') return 'roomSound.compact.connecting';
-  if (phase === 'buffering') return 'roomSound.compact.buffering';
-  if (phase === 'first-interaction') return 'roomSound.compact.enable';
-  if (state === 'muted' || state === 'off') return 'roomSound.compact.muted';
-  return null;
-}
-
 export function roomSoundControlPresentation(detail = {}) {
-  const state = String(detail.state ?? 'ready');
-  const phase = String(detail.phase ?? '');
   const forced = Boolean(detail.forcedReason);
   const muted = detail.muted === true;
+  const phase = String(detail.phase ?? '');
+  const retry = phase === 'retry' || phase === 'start-failed';
 
   return {
     labelKey: 'roomSound.label',
     scopeKey: 'roomSound.scope',
     volumeLabelKey: 'roomSound.volume',
     volumeAriaLabelKey: 'roomSound.volumeAria',
-    toggleAriaLabelKey: muted || forced ? 'roomSound.turnOnAria' : 'roomSound.muteAria',
-    compactKey: compactStatusKey(state, phase),
+    toggleAriaLabelKey: retry
+      ? 'roomSound.retry'
+      : muted || forced
+        ? 'roomSound.turnOnAria'
+        : 'roomSound.muteAria',
+    iconState: retry ? 'retry' : muted || forced ? 'muted' : 'audible',
   };
 }
 

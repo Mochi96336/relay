@@ -7,6 +7,7 @@ import {
   claimMicrophoneAudio,
   claimPlaybackAudio,
 } from './audio-session-policy.js';
+import { IosAudioDestinationRecovery } from './ios-audio-destination-recovery.js';
 import {
   MONITOR_PCM_PACKET_VERSION,
   createMonitorPcmReceiver,
@@ -26,6 +27,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const MAX_QUEUE_MS = 800;
   const monitorPcmReceiver = createMonitorPcmReceiver();
   const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
+  const iosAudioDestinationRecovery = new IosAudioDestinationRecovery();
 
   let socket = null;
   let pendingSocket = null;
@@ -49,6 +51,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let roomMicForcedMuted = false;
   let playbackForcedMuted = false;
   let takeReviewForcedMuted = false;
+  let foregroundAudioBoundary = 0;
+  let micAudioBoundary = 0;
   let sourceSampleRate = MIX_SAMPLE_RATE;
   let micPrimaryMode = window.relayMicActionState?.primaryMode === 'takeover'
     ? 'takeover'
@@ -395,6 +399,25 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     reconcile('resumed');
   }
 
+  function scheduleIosAudioDestinationRecovery(boundaryId) {
+    const context = audioContext;
+    if (!context) return false;
+    return iosAudioDestinationRecovery.schedule(boundaryId, {
+      context,
+      isCurrent: () => audioContext === context,
+      isEligible: () => (
+        document.visibilityState === 'visible'
+        && !effectiveMuted()
+        && audioGraphReady()
+      ),
+    });
+  }
+
+  function recoverForegroundAudio() {
+    recoverAudioGraph();
+    scheduleIosAudioDestinationRecovery(`foreground:${foregroundAudioBoundary}`);
+  }
+
   function publishListenHealth(health) {
     const detail = {
       ...health,
@@ -552,17 +575,13 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   function restoreAfterMicBoundary(phase = 'resumed') {
-    // Legacy terminal notifications can be dispatched immediately before
-    // app.js enters stop(). Defer one task so stop() has synchronously stopped
-    // MediaStream tracks before room audio can become audible again. Fence the
-    // deferred restore to this Mic transition: a new Mic request in the same
-    // turn must not be unmuted by the previous session's stale timer.
-    const restoreEpoch = micMuteEpoch;
-    setTimeout(() => {
-      if (micMuteEpoch !== restoreEpoch) return;
-      claimMicrophoneAudio(false);
-      restoreAfterMic(phase);
-    }, 0);
+    // app.js emits terminal lifecycle only after capture teardown and the owned
+    // AudioContext close have completed. Listen therefore restores playback
+    // directly from that transaction boundary instead of guessing a later task.
+    claimMicrophoneAudio(false);
+    restoreAfterMic(phase);
+    micAudioBoundary += 1;
+    scheduleIosAudioDestinationRecovery(`post-mic:${micAudioBoundary}`);
   }
 
   function setRoomMicForcedMute(forced) {
@@ -761,11 +780,21 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   armAudioUnlock();
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') recoverAudioGraph();
+    if (document.visibilityState !== 'visible') {
+      foregroundAudioBoundary += 1;
+      iosAudioDestinationRecovery.cancel();
+      return;
+    }
+    recoverForegroundAudio();
   });
-  window.addEventListener('pageshow', recoverAudioGraph);
+  window.addEventListener('pageshow', recoverForegroundAudio);
+  window.addEventListener('pagehide', () => {
+    foregroundAudioBoundary += 1;
+    iosAudioDestinationRecovery.cancel();
+  });
 
   window.addEventListener('beforeunload', () => {
+    iosAudioDestinationRecovery.cancel();
     disarmAudioUnlock();
     closeTransport();
     claimPlaybackAudio(false);

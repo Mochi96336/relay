@@ -7,12 +7,12 @@ const READY: TakeStartFacts = {
   sessionActive: true,
   timingCalibrationActive: false,
   songLoaded: true,
-  voiceOnlyMicReady: false,
+  voiceOnlyMicState: 'live',
   roomBlocked: false,
   takeLifecycle: 'idle',
 };
 
-test('Take start policy preserves server rejection precedence', () => {
+test('Take start policy preserves Song-path rejection precedence', () => {
   assert.deepEqual(
     decideTakeStart({
       ...READY,
@@ -33,32 +33,64 @@ test('Take start policy preserves server rejection precedence', () => {
   );
 });
 
-test('a voice-only Take requires a live Mic but ignores unused Robot health', () => {
+test('a voice-only Take exposes the Mic state that blocks recording', () => {
+  const expected = [
+    ['free', 'mic-required'],
+    ['starting', 'mic-starting'],
+    ['reconnecting', 'mic-reconnecting'],
+    ['interrupted', 'mic-audio-stalled'],
+  ] as const;
+
+  for (const [voiceOnlyMicState, reason] of expected) {
+    assert.deepEqual(
+      decideTakeStart({
+        ...READY,
+        songLoaded: false,
+        voiceOnlyMicState,
+        roomBlocked: true,
+      }),
+      { ok: false, reason },
+    );
+  }
+
   assert.deepEqual(
-    decideTakeStart({ ...READY, songLoaded: false, voiceOnlyMicReady: false, roomBlocked: true }),
-    { ok: false, reason: 'take-not-ready' },
-  );
-  assert.deepEqual(
-    decideTakeStart({ ...READY, songLoaded: false, voiceOnlyMicReady: true, roomBlocked: true }),
+    decideTakeStart({
+      ...READY,
+      songLoaded: false,
+      voiceOnlyMicState: 'live',
+      roomBlocked: true,
+    }),
     { ok: true },
+  );
+});
+
+test('a live voice-only Mic still waits for the AudioSession when necessary', () => {
+  assert.deepEqual(
+    decideTakeStart({
+      ...READY,
+      songLoaded: false,
+      voiceOnlyMicState: 'live',
+      sessionActive: false,
+    }),
+    { ok: false, reason: 'mix-not-active' },
   );
 });
 
 test('a Song Take preserves the existing backing-only recording path', () => {
   assert.deepEqual(
-    decideTakeStart({ ...READY, songLoaded: true, voiceOnlyMicReady: false }),
+    decideTakeStart({ ...READY, songLoaded: true, voiceOnlyMicState: 'free' }),
     { ok: true },
   );
   assert.deepEqual(
-    decideTakeStart({ ...READY, songLoaded: true, voiceOnlyMicReady: true }),
+    decideTakeStart({ ...READY, songLoaded: true, voiceOnlyMicState: 'live' }),
     { ok: true },
   );
 });
 
-test('a Song Take follows blocked product health even when the mix is still alive', () => {
+test('a Song Take exposes a room-level product blocker when health is blocked', () => {
   assert.deepEqual(
     decideTakeStart({ ...READY, roomBlocked: true }),
-    { ok: false, reason: 'take-not-ready' },
+    { ok: false, reason: 'room-blocked' },
   );
 });
 

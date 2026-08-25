@@ -12,7 +12,7 @@ const READY: TakeStartFacts = {
   takeLifecycle: 'idle',
 };
 
-test('Take start policy preserves Song-path rejection precedence', () => {
+test('active timing calibration remains the normal preparation reason', () => {
   assert.deepEqual(
     decideTakeStart({
       ...READY,
@@ -21,15 +21,18 @@ test('Take start policy preserves Song-path rejection precedence', () => {
       roomBlocked: true,
       takeLifecycle: 'recording',
     }),
-    { ok: false, reason: 'mix-not-active' },
+    { ok: false, reason: 'timing-calibration-active' },
   );
+});
+
+test('a Song room blocker outranks generic inactive mix state', () => {
   assert.deepEqual(
     decideTakeStart({
       ...READY,
-      timingCalibrationActive: true,
+      sessionActive: false,
       roomBlocked: true,
     }),
-    { ok: false, reason: 'timing-calibration-active' },
+    { ok: false, reason: 'room-blocked' },
   );
 });
 

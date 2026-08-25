@@ -24,6 +24,14 @@ test('locale loads before product runtimes and remains a header secondary contro
   assert.equal(html.includes('data-relay-locale="en"'), true);
 });
 
+test('browser geometry fixture uses the production i18n provider', () => {
+  const fixture = read('test/fixtures/live-p0-layout.html');
+  assert.match(fixture, /<script src="\/i18n\.js"><\/script>/);
+  assert.match(fixture, /relayI18n\?\.setLocale\?\.\('zh-Hant'/);
+  assert.doesNotMatch(fixture, /window\.relayI18n\s*=/,
+    'geometry proof must not replace the production provider with a partial stub');
+});
+
 test('product surfaces localize while Technical details and Raw stay technical', () => {
   const html = read('public/index.html');
   assert.equal(html.includes('data-i18n="song.label"'), true);

@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('mobile Live floor keeps dynamic viewport units out of persistent layout CSS', async () => {
-  const [stateCss, layoutCss, viewportCss, liveIa] = await Promise.all([
+test('mobile Live floor keeps dynamic viewport units and viewport panning out of persistent authority', async () => {
+  const [stateCss, layoutCss, viewportCss, viewportJs, liveIa] = await Promise.all([
     readFile(new URL('../public/live-state.css', import.meta.url), 'utf8'),
     readFile(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8'),
     readFile(new URL('../public/live-floor-viewport.css', import.meta.url), 'utf8'),
+    readFile(new URL('../public/live-floor-viewport.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/live-ia.js', import.meta.url), 'utf8'),
   ]);
 
@@ -26,6 +27,11 @@ test('mobile Live floor keeps dynamic viewport units out of persistent layout CS
     viewportCss,
     /\b(?:dvh|lvh)\b/,
     'persistent floor CSS must not move frame-by-frame with dynamic viewport units',
+  );
+  assert.doesNotMatch(
+    viewportJs,
+    /\.offsetTop\b/,
+    'visual viewport panning, including keyboard focus panning, must not become floor authority',
   );
 
   for (const selector of [

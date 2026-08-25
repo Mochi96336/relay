@@ -134,6 +134,7 @@
     </footer>
   </main>
 
+  <script src="/i18n.js"></script>
   <script type="module">
     const visualStates = [
       'empty',
@@ -152,7 +153,7 @@
     const state = visualStates.includes(requestedState) ? requestedState : 'listener';
     document.body.dataset.fixtureState = state;
 
-    window.relayI18n = { getLocale: () => 'zh-Hant' };
+    window.relayI18n?.setLocale?.('zh-Hant', { persist: false });
     window.relayIdentityReady = Promise.resolve();
     window.relayParticipantId = 'fixture-phone';
 
@@ -384,7 +385,7 @@
         if (state === 'room-sound-retry') {
           checks.push(['retry-status', stateNode?.textContent === '房間聲音未啟動，再點一下重試', stateNode?.textContent]);
           checks.push(['retry-gain-enabled', gainNode?.disabled === false, gainNode?.disabled]);
-          checks.push(['retry-toggle-enabled', toggleNode?.disabled === false, toggleNode?.disabled]);
+          checks.push(['retry-toggle-enabled', toggleNode?.disabled === false, gainNode?.disabled]);
         }
       }
 

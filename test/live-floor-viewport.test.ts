@@ -41,10 +41,17 @@ test('mobile Live floor keeps dynamic viewport units out of persistent layout CS
     /transform:\s*translateY\(var\(--live-floor-viewport-offset\)\)/,
     'settled browser chrome changes may move the floor visually but must not reflow it',
   );
+
+  const systemBinding = liveIa.indexOf("openSystem?.addEventListener('click', revealSystem)");
+  const floorPresenter = liveIa.indexOf("import('./live-floor-viewport.js')");
+  assert.ok(systemBinding >= 0 && floorPresenter > systemBinding,
+    'System navigation must bind before the degradable floor viewport presenter');
+  assert.doesNotMatch(liveIa, /^import\s/m,
+    'the floor viewport presenter must not become a bootstrap-blocking static import');
   assert.match(
     liveIa,
-    /import \{ installLiveFloorViewport \} from '\.\/live-floor-viewport\.js';[\s\S]*installLiveFloorViewport\(\);/,
-    'the production Live bootstrap must install the single viewport controller',
+    /import\('\.\/live-floor-viewport\.js'\)\s*\.then\(\(\{ installLiveFloorViewport \}\) => installLiveFloorViewport\(\)\)\s*\.catch/,
+    'production Live must install the viewport controller through a degradable dynamic import',
   );
 });
 

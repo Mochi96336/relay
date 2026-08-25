@@ -1,3 +1,7 @@
+import { installLiveFloorViewport } from './live-floor-viewport.js';
+
+installLiveFloorViewport();
+
 const peopleMenu = document.querySelector('.people-menu');
 const moreMenu = document.querySelector('#room-more');
 const systemPanel = document.querySelector('#system-panel');

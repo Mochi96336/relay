@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('mobile Live floor follows browser chrome without giving dynamic viewport ownership to layout', async () => {
-  const [stateCss, layoutCss, viewportCss] = await Promise.all([
+import { resolveLiveFloorViewportOffset } from '../public/live-floor-viewport.js';
+
+test('mobile Live floor keeps dynamic viewport units out of persistent layout CSS', async () => {
+  const [stateCss, layoutCss, viewportCss, liveIa] = await Promise.all([
     readFile(new URL('../public/live-state.css', import.meta.url), 'utf8'),
     readFile(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8'),
     readFile(new URL('../public/live-floor-viewport.css', import.meta.url), 'utf8'),
+    readFile(new URL('../public/live-ia.js', import.meta.url), 'utf8'),
   ]);
 
   assert.match(
@@ -20,8 +23,13 @@ test('mobile Live floor follows browser chrome without giving dynamic viewport o
     /\.live-shell\s*\{[^}]*min-height:\s*100dvh/s,
     'dynamic viewport height must never resize the Live grid',
   );
+  assert.match(viewportCss, /--live-floor-viewport-offset:\s*0px/);
+  assert.doesNotMatch(
+    viewportCss,
+    /\b(?:dvh|lvh)\b/,
+    'persistent floor CSS must not move frame-by-frame with dynamic viewport units',
+  );
 
-  assert.match(viewportCss, /--live-floor-viewport-offset:\s*calc\(100dvh - 100svh\)/);
   for (const selector of [
     '.performance-stage > .take-strip',
     'body[data-self-mic="live"] .performance-stage > .mic-live-control',
@@ -33,6 +41,49 @@ test('mobile Live floor follows browser chrome without giving dynamic viewport o
   assert.match(
     viewportCss,
     /transform:\s*translateY\(var\(--live-floor-viewport-offset\)\)/,
-    'browser chrome changes may move the floor visually but must not reflow it',
+    'settled browser chrome changes may move the floor visually but must not reflow it',
   );
+  assert.match(
+    liveIa,
+    /import \{ installLiveFloorViewport \} from '\.\/live-floor-viewport\.js';[\s\S]*installLiveFloorViewport\(\);/,
+    'the production Live bootstrap must install the single viewport controller',
+  );
+});
+
+test('floor viewport resolution follows only a one-screen unzoomed Live surface', () => {
+  assert.equal(resolveLiveFloorViewportOffset({
+    mobile: true,
+    smallViewportHeight: 844,
+    visualViewportHeight: 908,
+    shellHeight: 844,
+  }), 64);
+
+  assert.equal(resolveLiveFloorViewportOffset({
+    mobile: true,
+    smallViewportHeight: 667,
+    visualViewportHeight: 731,
+    shellHeight: 702,
+  }), 0, 'overflowing short Live must stay in normal document flow');
+
+  assert.equal(resolveLiveFloorViewportOffset({
+    mobile: true,
+    smallViewportHeight: 844,
+    visualViewportHeight: 620,
+    shellHeight: 844,
+  }), 0, 'keyboard-sized visual viewport must never push the floor down');
+
+  assert.equal(resolveLiveFloorViewportOffset({
+    mobile: true,
+    smallViewportHeight: 844,
+    visualViewportHeight: 908,
+    visualViewportScale: 1.2,
+    shellHeight: 844,
+  }), 0, 'pinch zoom must not reuse browser-chrome floor positioning');
+
+  assert.equal(resolveLiveFloorViewportOffset({
+    mobile: false,
+    smallViewportHeight: 844,
+    visualViewportHeight: 908,
+    shellHeight: 844,
+  }), 0, 'desktop layout must not inherit the phone floor policy');
 });

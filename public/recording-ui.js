@@ -13,12 +13,28 @@ function formatDuration(durationMs) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-function blockedCopy(reason) {
+function blockingIssueCopy(issue) {
+  const key = {
+    'backing-not-ready': 'recording.blocked.issue.backing-not-ready',
+    'backing-unavailable': 'recording.blocked.issue.backing-unavailable',
+    'backing-stalled': 'recording.blocked.issue.backing-stalled',
+    'backing-route-mismatch': 'recording.blocked.issue.backing-route-mismatch',
+    'robot-source-unavailable': 'recording.blocked.issue.robot-source-unavailable',
+    'song-clock-unavailable': 'recording.blocked.issue.song-clock-unavailable',
+  }[issue?.cause];
+  return key ? t(key) : t('recording.blocked.room-blocked');
+}
+
+function blockedCopy(reason, issue) {
+  if (reason === 'room-blocked') return blockingIssueCopy(issue);
   const key = {
     reconnecting: 'recording.blocked.reconnecting',
     'mix-not-active': 'recording.blocked.mix-not-active',
     'timing-calibration-active': 'recording.blocked.timing-calibration-active',
-    'take-not-ready': 'recording.blocked.take-not-ready',
+    'mic-required': 'recording.blocked.mic-required',
+    'mic-starting': 'recording.blocked.mic-starting',
+    'mic-reconnecting': 'recording.blocked.mic-reconnecting',
+    'mic-audio-stalled': 'recording.blocked.mic-audio-stalled',
     'take-active': 'recording.blocked.take-active',
   }[reason] ?? 'recording.blocked.unavailable';
   return t(key);
@@ -159,7 +175,11 @@ if (strip && startButton && stopButton && status) {
       return;
     }
 
-    presentSlot('status', blockedCopy(detail.startBlockedReason), detail);
+    presentSlot(
+      'status',
+      blockedCopy(detail.startBlockedReason, detail.startBlockingIssue),
+      detail,
+    );
   }
 
   function showFinishedFlash() {

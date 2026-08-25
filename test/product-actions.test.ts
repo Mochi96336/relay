@@ -80,6 +80,21 @@ test('a lingering active mix cannot start a new Take while Robot audio is blocke
   assert.equal(status.actions.startTakeBlockingIssue?.cause, 'backing-stalled');
 });
 
+test('a blocked Song keeps its concrete ProductIssue even before the mix becomes active', () => {
+  const status = model({
+    ...READY,
+    backingConnected: false,
+    backingStreaming: false,
+    backingIsRobot: false,
+    sessionActive: false,
+  });
+
+  assert.equal(status.health, 'blocked');
+  assert.equal(status.actions.canStartTake, false);
+  assert.equal(status.actions.startTakeBlockedReason, 'room-blocked');
+  assert.equal(status.actions.startTakeBlockingIssue?.cause, 'backing-not-ready');
+});
+
 test('active calibration disables Start Take even though calibration is normal preparation', () => {
   const status = model(READY, 'idle', true);
 

@@ -65,7 +65,7 @@ The launcher passes this key to `source.html` in the URL **fragment** (`#infra=.
 
 ## Launcher
 
-Before launching, the read-only doctor checks dependencies, the PipeWire
+Before launching, the read-only doctor checks the main host dependencies, the PipeWire
 server and sink monitor, and the required `localhost` Relay endpoints:
 
 ```bash
@@ -84,7 +84,8 @@ PORT=3100 npm run robot:source
 
 It:
 
-- verifies `pactl`, `parec`, `xvfb-run`, `npm`, Node.js, and Chromium are available;
+- verifies `pactl`, `parec`, `xvfb-run`, `npm`, Node.js, `flock`, and Chromium are available;
+- holds a non-blocking `flock` per sink so a second launcher targeting the same sink fails instead of injecting duplicate Chromium audio;
 - creates the `relay_browser` null sink only when it does not already exist;
 - captures `relay_browser.monitor` as mono 16-bit little-endian PCM at 48 kHz by default;
 - pipes the capture into `backing:stdin`;

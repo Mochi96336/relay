@@ -34,31 +34,26 @@ function voiceOnlyMicBlockReason(state: RoomMicState): TakeStartBlockReason | nu
 }
 
 /**
- * Owns the room-level decision for whether a new Take may start.
+ * Decide whether a Take can start from already-derived product facts.
  *
- * Participant authentication and storage/writer failures stay outside this
- * policy. A voice-only room requires current Mic media but deliberately ignores
- * unused Robot/backing health. A loaded Song keeps the existing backing-only
- * recording behavior; correctness repair must not silently redefine the product
- * as Mic-required unless that product decision is made separately.
- *
- * Block reasons are product semantics, not transport diagnostics. In particular,
- * a voice-only room reports the Mic state that prevents recording instead of
- * collapsing it into generic Take readiness, while a loaded Song reports a
- * room-level blocker whose concrete ProductIssue is projected separately.
+ * The order is also presentation priority because the returned reason is
+ * projected through ProductStatus. Prefer an actionable upstream product state
+ * over a downstream generic mixer consequence: a Song whose backing route is
+ * blocked should say what is wrong with the room audio, not merely that the mix
+ * has not become active yet.
  */
 export function decideTakeStart(facts: TakeStartFacts): TakeStartDecision {
   if (!facts.songLoaded) {
     const micBlockReason = voiceOnlyMicBlockReason(facts.voiceOnlyMicState);
     if (micBlockReason) return { ok: false, reason: micBlockReason };
   }
-  if (!facts.sessionActive) return { ok: false, reason: 'mix-not-active' };
   if (facts.timingCalibrationActive) {
     return { ok: false, reason: 'timing-calibration-active' };
   }
   if (facts.songLoaded && facts.roomBlocked) {
     return { ok: false, reason: 'room-blocked' };
   }
+  if (!facts.sessionActive) return { ok: false, reason: 'mix-not-active' };
   if (facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing') {
     return { ok: false, reason: 'take-active' };
   }

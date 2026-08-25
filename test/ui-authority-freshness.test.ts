@@ -16,6 +16,30 @@ function presenterBody(source: string) {
   return source.replace(/^import '\.\/live-i18n\.js';\s*/, '');
 }
 
+function baseMicI18nEnglish() {
+  const messages: Record<string, string> = {
+    'mic.take': 'Take Mic',
+    'mic.release': 'Release Mic',
+    'mic.cancel': 'Cancel',
+    'mic.takeover': 'Take over Mic',
+    'mic.takeoverPrompt': '{name} is using Mic.',
+    'mic.takeoverPending': 'Taking over Mic…',
+    'mic.startFailed': 'Could not start Mic.',
+    'mic.takeoverChangedOwner': 'Mic moved to {name}. Confirm again to take over.',
+    'mic.takeoverChanged': 'Mic changed. Try taking Mic again.',
+  };
+  return {
+    getLocale: () => 'en',
+    t(key: string, vars: Record<string, unknown> = {}) {
+      const template = messages[key] ?? key;
+      return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) => (
+        Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match
+      ));
+    },
+    has: (key: string) => Object.prototype.hasOwnProperty.call(messages, key),
+  };
+}
+
 class FakeElement {
   hidden = false;
   disabled = false;
@@ -79,7 +103,7 @@ test('production Mic action presenter disables stale actions and does not expose
   const document = { querySelector: (selector: string) => nodes.get(selector) ?? null };
   const window = {
     ...events,
-    relayI18n: { getLocale: () => 'en', t: (key: string) => key, has: () => false },
+    relayI18n: baseMicI18nEnglish(),
     relayMicActionState: null,
   };
   class Event { constructor(public type: string) {} }

@@ -15,7 +15,10 @@ test('blocked and pending recording copy use the status node in the Record slot'
   assert.match(css, /data-recording-slot="status"[\s\S]*?#recording-status/);
   assert.doesNotMatch(css, /data-recording-slot="button-status"/);
   assert.match(ui, /presentSlot\('status', t\('recording\.starting'\)/);
-  assert.match(ui, /presentSlot\('status', blockedCopy\(detail\.startBlockedReason\)/);
+  assert.match(
+    ui,
+    /presentSlot\([\s\S]{0,80}?'status',[\s\S]{0,120}?blockedCopy\(detail\.startBlockedReason, detail\.startBlockingIssue\)/,
+  );
   assert.doesNotMatch(ui, /startButton\.textContent = copy/);
 });
 

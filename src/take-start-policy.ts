@@ -1,17 +1,22 @@
+import type { RoomMicState } from './room-domain.js';
 import type { TakeLifecycle } from './take-session.js';
 
 export type TakeStartBlockReason =
   | 'mix-not-active'
   | 'timing-calibration-active'
-  | 'take-not-ready'
+  | 'mic-required'
+  | 'mic-starting'
+  | 'mic-reconnecting'
+  | 'mic-audio-stalled'
+  | 'room-blocked'
   | 'take-active';
 
 export type TakeStartFacts = {
   sessionActive: boolean;
   timingCalibrationActive: boolean;
   songLoaded: boolean;
-  /** Current live Mic media readiness for the voice-only Take path. */
-  voiceOnlyMicReady: boolean;
+  /** Product-semantic Mic state for the voice-only Take path. */
+  voiceOnlyMicState: RoomMicState;
   roomBlocked: boolean;
   takeLifecycle: TakeLifecycle;
 };
@@ -20,26 +25,35 @@ export type TakeStartDecision =
   | { ok: true }
   | { ok: false; reason: TakeStartBlockReason };
 
+function voiceOnlyMicBlockReason(state: RoomMicState): TakeStartBlockReason | null {
+  if (state === 'live') return null;
+  if (state === 'free') return 'mic-required';
+  if (state === 'starting') return 'mic-starting';
+  if (state === 'reconnecting') return 'mic-reconnecting';
+  return 'mic-audio-stalled';
+}
+
 /**
- * Owns the room-level decision for whether a new Take may start.
+ * Decide whether a Take can start from already-derived product facts.
  *
- * Participant authentication and storage/writer failures stay outside this
- * policy. A voice-only room requires current Mic media but deliberately ignores
- * unused Robot/backing health. A loaded Song keeps the existing backing-only
- * recording behavior; correctness repair must not silently redefine the product
- * as Mic-required unless that product decision is made separately.
+ * The order is also presentation priority because the returned reason is
+ * projected through ProductStatus. Prefer an actionable upstream product state
+ * over a downstream generic mixer consequence: a Song whose backing route is
+ * blocked should say what is wrong with the room audio, not merely that the mix
+ * has not become active yet.
  */
 export function decideTakeStart(facts: TakeStartFacts): TakeStartDecision {
-  if (!facts.sessionActive) return { ok: false, reason: 'mix-not-active' };
+  if (!facts.songLoaded) {
+    const micBlockReason = voiceOnlyMicBlockReason(facts.voiceOnlyMicState);
+    if (micBlockReason) return { ok: false, reason: micBlockReason };
+  }
   if (facts.timingCalibrationActive) {
     return { ok: false, reason: 'timing-calibration-active' };
   }
-  if (!facts.songLoaded && !facts.voiceOnlyMicReady) {
-    return { ok: false, reason: 'take-not-ready' };
-  }
   if (facts.songLoaded && facts.roomBlocked) {
-    return { ok: false, reason: 'take-not-ready' };
+    return { ok: false, reason: 'room-blocked' };
   }
+  if (!facts.sessionActive) return { ok: false, reason: 'mix-not-active' };
   if (facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing') {
     return { ok: false, reason: 'take-active' };
   }

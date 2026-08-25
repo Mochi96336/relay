@@ -432,14 +432,15 @@ test('Start Take follows blocked product health while a Song route has no audio 
       && message.attention?.code === 'audio-unavailable'
     ));
     assert.equal(product.actions.canStartTake, false);
-    assert.equal(product.actions.startTakeBlockedReason, 'take-not-ready');
+    assert.equal(product.actions.startTakeBlockedReason, 'room-blocked');
+    assert.equal(product.actions.startTakeBlockingIssue?.cause, 'backing-stalled');
 
     control.send({ type: 'start-take' });
     const rejected = await control.waitFor((message) => (
       message.type === 'take-command-rejected'
       && message.command === 'start'
     ));
-    assert.equal(rejected.reason, 'take-not-ready');
+    assert.equal(rejected.reason, 'room-blocked');
 
     backing.close();
     control.close();
@@ -459,7 +460,7 @@ test('Take commands require participant identity, recordable room audio, and the
 
     const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
     control.send({ type: 'start-take' });
-    assert.equal((await control.waitForType('take-command-rejected')).reason, 'mix-not-active');
+    assert.equal((await control.waitForType('take-command-rejected')).reason, 'mic-required');
 
     const backing = await startBacking(server);
     feedBacking(backing, 8);
@@ -468,9 +469,9 @@ test('Take commands require participant identity, recordable room audio, and the
     const noSong = await control.waitFor((message) => (
       message.type === 'take-command-rejected'
       && message.command === 'start'
-      && message.reason === 'take-not-ready'
+      && message.reason === 'mic-required'
     ));
-    assert.equal(noSong.reason, 'take-not-ready');
+    assert.equal(noSong.reason, 'mic-required');
 
     await establishRoomSong(control, 'reject-playback-a');
     feedBacking(backing, 8);

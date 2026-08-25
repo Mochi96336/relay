@@ -29,10 +29,31 @@ function productStatusFor(nextState) {
   const recording = nextState === 'recording';
   const selfOwner = nextState === 'singer' || recording;
   const issueState = nextState === 'system-issue';
+  const recordingBlocked = nextState === 'recording-blocked';
+  const issues = issueState
+    ? [{
+        code: 'mic-audio-stalled',
+        scope: 'mic',
+        severity: 'warning',
+        cause: 'mic-audio-stalled',
+        affects: ['voice', 'recording'],
+        recovery: 'retry-mic',
+      }]
+    : recordingBlocked
+      ? [{
+          code: 'robot-audio-unavailable',
+          scope: 'robot',
+          severity: 'critical',
+          cause: 'backing-stalled',
+          affects: ['song', 'recording'],
+          recovery: 'automatic',
+        }]
+      : [];
+  const startTakeBlockingIssue = recordingBlocked ? issues[0] : null;
   return {
     type: 'product-status',
     lifecycle: empty ? 'ready' : 'live',
-    health: issueState ? 'degraded' : 'healthy',
+    health: recordingBlocked ? 'blocked' : issueState ? 'degraded' : 'healthy',
     room: {
       participantCount: 2,
       mic: empty
@@ -44,19 +65,11 @@ function productStatusFor(nextState) {
     },
     timing: { state: empty ? 'idle' : 'aligned' },
     take: { lifecycle: recording ? 'recording' : 'idle' },
-    issues: issueState
-      ? [{
-          code: 'mic-audio-stalled',
-          scope: 'mic',
-          severity: 'warning',
-          cause: 'mic-audio-stalled',
-          affects: ['voice', 'recording'],
-          recovery: 'retry-mic',
-        }]
-      : [],
+    issues,
     actions: {
-      canStartTake: !empty && !recording && !issueState,
-      startTakeBlockedReason: empty ? 'mix-not-active' : issueState ? 'product-blocked' : null,
+      canStartTake: !empty && !recording && !recordingBlocked,
+      startTakeBlockedReason: empty ? 'mix-not-active' : recordingBlocked ? 'room-blocked' : null,
+      startTakeBlockingIssue,
     },
   };
 }
@@ -165,6 +178,7 @@ function recordingStateFor(nextState) {
       canStop: true,
       startPending: false,
       startBlockedReason: 'take-active',
+      startBlockingIssue: null,
       snapshotObservedAt: now,
       commandError: null,
     };
@@ -179,11 +193,14 @@ function recordingStateFor(nextState) {
       canStop: false,
       startPending: false,
       startBlockedReason: 'reconnecting',
+      startBlockingIssue: null,
       snapshotObservedAt: now,
       commandError: null,
     };
   }
-  const canStart = nextState !== 'empty' && nextState !== 'system-issue';
+  const empty = nextState === 'empty';
+  const recordingBlocked = nextState === 'recording-blocked';
+  const canStart = !empty && !recordingBlocked;
   return {
     lifecycle: 'idle',
     take: null,
@@ -192,7 +209,17 @@ function recordingStateFor(nextState) {
     canStart,
     canStop: false,
     startPending: false,
-    startBlockedReason: canStart ? null : nextState === 'system-issue' ? 'product-blocked' : 'mix-not-active',
+    startBlockedReason: empty ? 'mix-not-active' : recordingBlocked ? 'room-blocked' : null,
+    startBlockingIssue: recordingBlocked
+      ? {
+          code: 'robot-audio-unavailable',
+          scope: 'robot',
+          severity: 'critical',
+          cause: 'backing-stalled',
+          affects: ['song', 'recording'],
+          recovery: 'automatic',
+        }
+      : null,
     snapshotObservedAt: now,
     commandError: null,
   };

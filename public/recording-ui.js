@@ -6,6 +6,17 @@ const startButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 const status = document.querySelector('#recording-status');
 
+const START_POLICY_BLOCK_REASONS = new Set([
+  'mix-not-active',
+  'timing-calibration-active',
+  'mic-required',
+  'mic-starting',
+  'mic-reconnecting',
+  'mic-audio-stalled',
+  'room-blocked',
+  'take-active',
+]);
+
 function formatDuration(durationMs) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -13,20 +24,37 @@ function formatDuration(durationMs) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-function blockedCopy(reason) {
+function blockingIssueCopy(issue) {
+  const key = {
+    'backing-not-ready': 'recording.blocked.issue.backing-not-ready',
+    'backing-unavailable': 'recording.blocked.issue.backing-unavailable',
+    'backing-stalled': 'recording.blocked.issue.backing-stalled',
+    'backing-route-mismatch': 'recording.blocked.issue.backing-route-mismatch',
+    'robot-source-unavailable': 'recording.blocked.issue.robot-source-unavailable',
+    'song-clock-unavailable': 'recording.blocked.issue.song-clock-unavailable',
+  }[issue?.cause];
+  return key ? t(key) : t('recording.blocked.room-blocked');
+}
+
+function blockedCopy(reason, issue) {
+  if (reason === 'room-blocked') return blockingIssueCopy(issue);
   const key = {
     reconnecting: 'recording.blocked.reconnecting',
     'mix-not-active': 'recording.blocked.mix-not-active',
     'timing-calibration-active': 'recording.blocked.timing-calibration-active',
-    'take-not-ready': 'recording.blocked.take-not-ready',
+    'mic-required': 'recording.blocked.mic-required',
+    'mic-starting': 'recording.blocked.mic-starting',
+    'mic-reconnecting': 'recording.blocked.mic-reconnecting',
+    'mic-audio-stalled': 'recording.blocked.mic-audio-stalled',
     'take-active': 'recording.blocked.take-active',
   }[reason] ?? 'recording.blocked.unavailable';
   return t(key);
 }
 
-function commandErrorCopy(reason) {
+function commandErrorCopy(reason, issue) {
   if (reason === 'reconnecting') return t('recording.blocked.reconnecting');
   if (reason === 'storage-unavailable') return t('recording.error.storage-unavailable');
+  if (START_POLICY_BLOCK_REASONS.has(reason)) return blockedCopy(reason, issue);
   return t('recording.error.generic');
 }
 
@@ -100,7 +128,11 @@ if (strip && startButton && stopButton && status) {
 
     const commandError = detail.commandError?.reason;
     if (commandError) {
-      const copy = commandErrorCopy(commandError);
+      const blockingIssue = commandError === 'room-blocked'
+        && detail.startBlockedReason === 'room-blocked'
+        ? detail.startBlockingIssue
+        : null;
+      const copy = commandErrorCopy(commandError, blockingIssue);
       if (lifecycle !== 'recording' && lifecycle !== 'finalizing' && detail.canStart === true) {
         presentSlot('status-action', copy, detail);
       } else if (lifecycle !== 'recording' && lifecycle !== 'finalizing') {
@@ -159,7 +191,11 @@ if (strip && startButton && stopButton && status) {
       return;
     }
 
-    presentSlot('status', blockedCopy(detail.startBlockedReason), detail);
+    presentSlot(
+      'status',
+      blockedCopy(detail.startBlockedReason, detail.startBlockingIssue),
+      detail,
+    );
   }
 
   function showFinishedFlash() {

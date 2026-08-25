@@ -39,7 +39,7 @@ Robot source
 └─ rendered backing audio
 ```
 
-Production uses the phone plus an unattended robot/host. During desktop development, `chrome-tab-audio-probe/` can capture the rendered audio of `source.html` instead of using the robot's PipeWire route.
+The target deployment uses the phone plus an unattended robot/host. During desktop development, `chrome-tab-audio-probe/` can capture the rendered audio of `source.html` instead of using the robot's PipeWire route.
 
 ## Core contracts
 
@@ -47,7 +47,7 @@ Production uses the phone plus an unattended robot/host. During desktop developm
 - **Audio is sample-addressed.** Capture/sample position is separate from packet arrival order, so a transport reconnect does not by itself mean a new capture timeline and delayed packets are not silently appended at the wrong audio position.
 - **Mic identity, Mic ownership, and transports are separate lifecycles.** A participant may have multiple browser transports; a socket closing is not automatically equivalent to a person leaving or the Mic lease ending.
 - **Takes are server-owned.** The browser sends Take commands and reviews artifacts; the authoritative mixed PCM, recording lifecycle, quality evidence, storage, and durable history are server responsibilities.
-- **Product state and diagnostics are separate surfaces.** Normal Live UI consumes product-semantic state. Transport identities, sample/timing evidence, raw calibration observations, and operational health belong to diagnostics.
+- **Product state and diagnostics are separate surfaces.** Normal Live UI reads product/domain semantics from the contracts that own them, including server ProductStatus and browser-local capture/presence state where those are authoritative. Technical transport, sample/timing, calibration, and operational evidence stays in diagnostics rather than becoming a second source of product authority.
 - **WebTransport is optional.** When direct microphone WebTransport is unavailable or not configured, microphone media continues over the WebSocket compatibility path.
 
 Normative ownership details live in [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md) and [SESSION_MODEL.md](SESSION_MODEL.md).
@@ -143,7 +143,7 @@ By default Take artifacts live under `./takes`; deployment/storage policy is imp
 
 ## Product state and diagnostics
 
-Normal Live surfaces use server-derived product state for user-facing availability, recovery, and action decisions. Technical diagnostics remain a separate engineering surface.
+Normal Live surfaces consume product/domain state from the owners responsible for each decision. ProductStatus supplies room-level health, issues, and server-owned action semantics; browser-local capture and Presence state remain authoritative for the local/realtime interactions they own. Technical diagnostics are a separate engineering surface and are not required to reconstruct normal product recovery.
 
 For machine-readable monitoring, `GET /api/status/v1` is the stable read-only observation contract. It reports anonymous workload and route health such as `idle`, `live`, `degraded`, or `fault` without exposing participant identity, credentials, Takes, or internal runtime generations.
 
@@ -165,7 +165,7 @@ Pull-request CI adds several higher-level proof layers instead of relying only o
 - production-shaped Live DOM interaction tests;
 - phone/desktop geometry checks and screenshot artifacts;
 - a real HTTP/3 WebTransport loopback;
-- a real Chromium microphone → AudioWorklet → Relay → authoritative mix → Take path;
+- real Chromium `getUserMedia` → AudioWorklet → Relay → authoritative mix → Take coverage using deterministic browser capture input;
 - a real Chromium listener path through Relay's monitor framing and playback worklet; and
 - a real Chromium native-WebTransport microphone mode proving the direct path without using WebSocket media fallback.
 
@@ -189,6 +189,5 @@ Claims about those boundaries should come from explicit handset/robot rehearsal,
 - [SESSION_MODEL.md](SESSION_MODEL.md) — participant identity, presence, Mic lease, takeover, reconnect, and publisher transport lifecycle.
 - [ROBOT_DEPLOYMENT.md](ROBOT_DEPLOYMENT.md) — robot Chromium/PipeWire route, launcher, systemd deployment, infrastructure auth, and optional WebTransport setup.
 - [OBSERVATION_CONTRACT.md](OBSERVATION_CONTRACT.md) — stable machine-readable monitoring contract.
-- [HANDOFF.md](HANDOFF.md) — engineering handoff notes and hardware-validation context; useful for ongoing development, not the canonical product overview.
 
 The README intentionally stays at the repository-entry level. Detailed state machines, calibration internals, implementation history, temporary debugging paths, and PR-era milestones belong in their owning code, tests, or dedicated engineering documents rather than being duplicated here.

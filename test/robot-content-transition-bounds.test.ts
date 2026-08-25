@@ -11,6 +11,7 @@ import {
   sweepRobotContentTransitionBounds,
 } from '../src/robot-content-transition-bounds.js';
 import { compareRobotContentHypotheses } from '../src/robot-content-transition.js';
+import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
 const CONFIG = {
   lifetimeMs: 10_000,
@@ -109,4 +110,111 @@ test('a later concrete transition gets a fresh budget after a degraded predecess
   assert.equal(noteRobotContentTransitionVerdict(next, 'post'), true);
   assert.equal(next.phase, 'verifying');
   assert.equal(next.lastVerdict, 'post');
+});
+
+async function waitForServerTransition(
+  monitor: RelayClient,
+  predicate: (status: Record<string, any>) => boolean,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let last: Record<string, any> | undefined;
+  while (Date.now() < deadline) {
+    const from = monitor.messages.length;
+    monitor.send({ type: 'timing-calibration-status-request' });
+    await sleep(50);
+    const statuses = monitor.messages
+      .slice(from)
+      .filter((message) => message.type === 'timing-calibration-status');
+    last = statuses.at(-1) ?? last;
+    const match = statuses.find(predicate);
+    if (match) return match;
+  }
+  throw new Error(`Timed out waiting for Robot transition status. Last=${JSON.stringify(last ?? null)}`);
+}
+
+function boundaryRequestCount(backing: RelayClient) {
+  return backing.messages.filter((message) => message.type === 'backing-sample-boundary-request').length;
+}
+
+test('server deadline makes quarantine terminal and a later follower correction starts a fresh budget', async () => {
+  const server = await startRelay({
+    RELAY_CALIBRATION_PROBE: '1',
+    RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS: '600',
+    RELAY_ROBOT_CONTENT_TRANSITION_MAX_WINDOWS: '3',
+    RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES: '2',
+    RELAY_HEARTBEAT_MS: '60000',
+  });
+  const backing = await RelayClient.connect(server);
+  const publisher = await RelayClient.connect(server);
+  const robot = await RelayClient.connect(server);
+  const monitor = await RelayClient.connect(server);
+
+  try {
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
+    await backing.waitForType('registered');
+    publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    await publisher.waitForType('registered');
+    robot.send({ type: 'robot-source-hello' });
+    monitor.send({ type: 'register', role: 'monitor' });
+    await monitor.waitForType('registered');
+
+    robot.send({ type: 'robot-player-offset', offsetMs: 500 });
+    await sleep(50);
+    robot.send({
+      type: 'source-seeked',
+      reason: 'follower-correction',
+      fromMediaTime: 100.5,
+      toMediaTime: 100,
+    });
+
+    const verifying = await waitForServerTransition(
+      monitor,
+      (status) => status.robotContentTransition?.state === 'verifying',
+      2_000,
+    );
+    const firstStartedAtMs = Number(verifying.robotContentTransition.startedAtMs);
+    assert.equal(verifying.robotContentTransition.quarantined, true);
+    assert.equal(verifying.robotContentTransition.workerInvocations, 0);
+
+    const degraded = await waitForServerTransition(
+      monitor,
+      (status) => status.robotContentTransition?.state === 'degraded',
+      3_000,
+    );
+    assert.equal(degraded.robotContentTransition.degradedReason, 'deadline-exceeded');
+    assert.equal(degraded.robotContentTransition.quarantined, true);
+    assert.equal(degraded.robotContentTransition.workerInvocations, 0);
+
+    const requestsAtDegrade = boundaryRequestCount(backing);
+    robot.send({ type: 'robot-player-offset', offsetMs: 0 });
+    await sleep(300);
+    assert.equal(
+      boundaryRequestCount(backing),
+      requestsAtDegrade,
+      'a degraded transition must not restart backing-boundary churn from fresh telemetry alone',
+    );
+
+    robot.send({
+      type: 'source-seeked',
+      reason: 'follower-correction',
+      fromMediaTime: 100.25,
+      toMediaTime: 100,
+    });
+    const restarted = await waitForServerTransition(
+      monitor,
+      (status) => status.robotContentTransition?.state === 'verifying'
+        && Number(status.robotContentTransition.startedAtMs) > firstStartedAtMs,
+      2_000,
+    );
+    assert.equal(restarted.robotContentTransition.windowsStarted, 0);
+    assert.equal(restarted.robotContentTransition.workerFailures, 0);
+    assert.equal(restarted.robotContentTransition.degradedReason, null);
+  } finally {
+    monitor.close();
+    robot.close();
+    publisher.close();
+    backing.close();
+    await server.stop();
+  }
 });

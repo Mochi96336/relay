@@ -7,53 +7,6 @@ permissions:
   contents: read
 
 jobs:
-  patch-stale-take-fallback:
-    if: github.event.pull_request.head.ref == 'agent/ui-recording-readiness-semantics'
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: agent/ui-recording-readiness-semantics
-      - name: Remove stale Take readiness fallback
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('src/server.ts')
-          source = path.read_text()
-          old = """        rejectTakeCommand(
-          socket,
-          'start',
-          productStatus.actions.startTakeBlockedReason ?? 'take-not-ready',
-        );
-        return;"""
-          new = """        const blockedReason = productStatus.actions.startTakeBlockedReason;
-        if (blockedReason === null) {
-          rejectTakeCommand(socket, 'start', 'product-state-invalid');
-          return;
-        }
-        rejectTakeCommand(socket, 'start', blockedReason);
-        return;"""
-          count = source.count(old)
-          if count == 0:
-              raise SystemExit(0)
-          if count != 1:
-              raise SystemExit(f'expected one stale fallback, found {count}')
-          path.write_text(source.replace(old, new))
-          PY
-          if git diff --quiet; then
-            exit 0
-          fi
-          git diff --check
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/server.ts
-          git commit -m "refactor(takes): remove stale Take readiness fallback"
-          git push origin HEAD:agent/ui-recording-readiness-semantics
-
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

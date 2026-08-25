@@ -6,6 +6,17 @@ const startButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 const status = document.querySelector('#recording-status');
 
+const START_POLICY_BLOCK_REASONS = new Set([
+  'mix-not-active',
+  'timing-calibration-active',
+  'mic-required',
+  'mic-starting',
+  'mic-reconnecting',
+  'mic-audio-stalled',
+  'room-blocked',
+  'take-active',
+]);
+
 function formatDuration(durationMs) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -40,9 +51,10 @@ function blockedCopy(reason, issue) {
   return t(key);
 }
 
-function commandErrorCopy(reason) {
+function commandErrorCopy(reason, issue) {
   if (reason === 'reconnecting') return t('recording.blocked.reconnecting');
   if (reason === 'storage-unavailable') return t('recording.error.storage-unavailable');
+  if (START_POLICY_BLOCK_REASONS.has(reason)) return blockedCopy(reason, issue);
   return t('recording.error.generic');
 }
 
@@ -116,7 +128,11 @@ if (strip && startButton && stopButton && status) {
 
     const commandError = detail.commandError?.reason;
     if (commandError) {
-      const copy = commandErrorCopy(commandError);
+      const blockingIssue = commandError === 'room-blocked'
+        && detail.startBlockedReason === 'room-blocked'
+        ? detail.startBlockingIssue
+        : null;
+      const copy = commandErrorCopy(commandError, blockingIssue);
       if (lifecycle !== 'recording' && lifecycle !== 'finalizing' && detail.canStart === true) {
         presentSlot('status-action', copy, detail);
       } else if (lifecycle !== 'recording' && lifecycle !== 'finalizing') {

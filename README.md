@@ -8,7 +8,7 @@ Discord output is not connected yet.
 
 ## What Relay does
 
-The phone is the human-facing surface: it owns normal song control, Mic actions, room listening, Take control, recording review, and product-facing recovery state.
+The phone is the human-facing surface: it presents normal song control, Mic actions, room listening, Take control, recording review, and product-facing recovery state.
 
 The Relay host owns the room's authoritative runtime state: Mic and Song authority, timing/alignment, the 48 kHz mix, ProductStatus, Take lifecycle, Take quality evidence, and durable recording history.
 

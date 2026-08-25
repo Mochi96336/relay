@@ -51,3 +51,19 @@ test('message registration cannot silently take ownership from an existing provi
   );
   assert.equal(i18n.t('mic.take'), 'Take Mic');
 });
+
+test('a conflicting message bundle is rejected atomically', () => {
+  const i18n = runtime();
+
+  assert.throws(
+    () => i18n.registerMessages({
+      en: { 'feature.partial': 'Must not stick' },
+      'zh-Hant': { 'mic.take': '不同文案' },
+    }),
+    /Relay i18n key already registered: zh-Hant:mic\.take/,
+  );
+
+  assert.equal(i18n.has('feature.partial'), false,
+    'a later conflict must not leave earlier locale additions registered');
+  assert.equal(i18n.t('mic.take'), 'Take Mic');
+});

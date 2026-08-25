@@ -1,3 +1,4 @@
+import './live-i18n.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 
@@ -45,42 +46,38 @@ if (
     'take-failed': 'system.attention.take-failed',
   };
 
-  function localeIsChinese() {
-    return window.relayI18n?.getLocale?.() === 'zh-Hant';
-  }
+  const issueCauseKeys = {
+    'backing-not-ready': 'system.issue.cause.backing-not-ready',
+    'backing-unavailable': 'system.issue.cause.backing-unavailable',
+    'backing-stalled': 'system.issue.cause.backing-stalled',
+    'backing-route-mismatch': 'system.issue.cause.backing-route-mismatch',
+    'robot-source-unavailable': 'system.issue.cause.robot-source-unavailable',
+    'song-clock-unavailable': 'system.issue.cause.song-clock-unavailable',
+    'mic-transport-disconnected': 'system.issue.cause.mic-transport-disconnected',
+    'mic-audio-stalled': 'system.issue.cause.mic-audio-stalled',
+    'timing-calibrating': 'system.issue.cause.timing-calibrating',
+    'timing-fallback': 'system.issue.cause.timing-fallback',
+    'timing-stale': 'system.issue.cause.timing-stale',
+    'timing-clamped': 'system.issue.cause.timing-clamped',
+    'recording-failed': 'system.issue.cause.recording-failed',
+  };
 
-  function productCopy(english, traditionalChinese) {
-    return localeIsChinese() ? traditionalChinese : english;
-  }
+  const issueRecoveryKeys = {
+    automatic: 'system.issue.recovery.automatic',
+    'retry-mic': 'system.issue.recovery.retry-mic',
+    'retry-recording': 'system.issue.recovery.retry-recording',
+    recalibrate: 'system.issue.recovery.recalibrate',
+    'host-service': 'system.issue.recovery.host-service',
+  };
 
   function causeCopy(cause) {
-    const copy = {
-      'backing-not-ready': ['Song audio is still getting ready.', '伴奏正在準備中。'],
-      'backing-unavailable': ['Song audio is unavailable.', '伴奏目前無法使用。'],
-      'backing-stalled': ['Song audio stopped arriving.', '伴奏音訊已停止送達。'],
-      'backing-route-mismatch': ['The Robot backing route does not match the active mode.', 'Robot 伴奏路徑與目前模式不一致。'],
-      'robot-source-unavailable': ['The Robot playback source is unavailable.', 'Robot 播放來源目前無法使用。'],
-      'song-clock-unavailable': ['Shared song timing is unavailable.', '共用歌曲的時間資訊目前無法使用。'],
-      'mic-transport-disconnected': ['The Mic connection was interrupted.', 'Mic 連線已中斷。'],
-      'mic-audio-stalled': ['The Mic is connected, but audio stopped arriving.', 'Mic 仍連線，但音訊已停止送達。'],
-      'timing-calibrating': ['Relay is measuring timing.', 'Relay 正在量測 Timing。'],
-      'timing-fallback': ['Relay is using the network timing estimate for now.', '目前先使用網路 Timing 估計值。'],
-      'timing-stale': ['Timing settings changed and the alignment is stale.', 'Timing 設定已改變，原本的對齊已過期。'],
-      'timing-clamped': ['The required timing correction is outside the safe range.', '需要的 Timing 修正超出安全範圍。'],
-      'recording-failed': ['The last recording did not finish successfully.', '上一段錄音沒有成功完成。'],
-    }[cause];
-    return copy ? productCopy(copy[0], copy[1]) : '';
+    const key = issueCauseKeys[cause];
+    return key ? t(key) : '';
   }
 
   function recoveryCopy(recovery) {
-    const copy = {
-      automatic: ['Relay is recovering automatically.', 'Relay 正在自動恢復。'],
-      'retry-mic': ['Reconnect the Mic, then try again.', '重新連接 Mic 後再試一次。'],
-      'retry-recording': ['Start a new recording when you are ready.', '準備好後重新錄一次。'],
-      recalibrate: ['Run timing calibration again.', '重新校正 Timing。'],
-      'host-service': ['The host service needs attention.', '需要處理主機端服務。'],
-    }[recovery];
-    return copy ? productCopy(copy[0], copy[1]) : '';
+    const key = issueRecoveryKeys[recovery];
+    return key ? t(key) : '';
   }
 
   function impactLabel(impact) {
@@ -127,7 +124,7 @@ if (
       : [];
     const affected = document.createElement('span');
     affected.textContent = affects.length > 0
-      ? `${productCopy('Affects', '影響')}：${affects.join(' · ')}`
+      ? `${t('system.issue.affects')}：${affects.join(' · ')}`
       : '';
     const recovery = document.createElement('span');
     recovery.className = 'system-issue-recovery';
@@ -142,7 +139,7 @@ if (
     const product = latestProduct;
     if (!product) {
       healthyNode.hidden = false;
-      healthyTitle.textContent = productCopy('Connecting…', '連線中…');
+      healthyTitle.textContent = t('system.product.connecting');
       healthyDetail.textContent = '';
       issuesNode.replaceChildren();
       return;
@@ -151,8 +148,8 @@ if (
     const issues = Array.isArray(product.issues) ? product.issues : [];
     if (issues.length === 0) {
       healthyNode.hidden = false;
-      healthyTitle.textContent = productCopy('System normal', '系統正常');
-      healthyDetail.textContent = productCopy('No current problems need your attention.', '目前沒有需要處理的問題。');
+      healthyTitle.textContent = t('system.product.normal');
+      healthyDetail.textContent = t('system.product.noProblems');
       issuesNode.replaceChildren();
       return;
     }

@@ -28,22 +28,35 @@ function productStatusFor(nextState) {
   const empty = nextState === 'empty';
   const recording = nextState === 'recording';
   const selfOwner = nextState === 'singer' || recording;
+  const issueState = nextState === 'system-issue';
   return {
     type: 'product-status',
     lifecycle: empty ? 'ready' : 'live',
-    health: 'healthy',
+    health: issueState ? 'degraded' : 'healthy',
     room: {
       participantCount: 2,
       mic: empty
         ? { state: 'free', ownerId: null, ownerNickname: null }
-        : { state: 'live', ownerId: selfOwner ? selfId : 'visual-owner', ownerNickname: selfOwner ? '浚翔' : 'Mellow Rabbit 57' },
+        : issueState
+          ? { state: 'interrupted', ownerId: 'visual-owner', ownerNickname: 'Mellow Rabbit 57' }
+          : { state: 'live', ownerId: selfOwner ? selfId : 'visual-owner', ownerNickname: selfOwner ? '浚翔' : 'Mellow Rabbit 57' },
       song: empty ? { state: 'empty', videoId: null } : { state: 'playing', ...songSnapshot },
     },
     timing: { state: empty ? 'idle' : 'aligned' },
     take: { lifecycle: recording ? 'recording' : 'idle' },
+    issues: issueState
+      ? [{
+          code: 'mic-audio-stalled',
+          scope: 'mic',
+          severity: 'warning',
+          cause: 'mic-audio-stalled',
+          affects: ['voice', 'recording'],
+          recovery: 'retry-mic',
+        }]
+      : [],
     actions: {
-      canStartTake: !empty && !recording,
-      startTakeBlockedReason: empty ? 'mix-not-active' : null,
+      canStartTake: !empty && !recording && !issueState,
+      startTakeBlockedReason: empty ? 'mix-not-active' : issueState ? 'product-blocked' : null,
     },
   };
 }
@@ -170,7 +183,7 @@ function recordingStateFor(nextState) {
       commandError: null,
     };
   }
-  const canStart = nextState !== 'empty';
+  const canStart = nextState !== 'empty' && nextState !== 'system-issue';
   return {
     lifecycle: 'idle',
     take: null,
@@ -179,7 +192,7 @@ function recordingStateFor(nextState) {
     canStart,
     canStop: false,
     startPending: false,
-    startBlockedReason: canStart ? null : 'mix-not-active',
+    startBlockedReason: canStart ? null : nextState === 'system-issue' ? 'product-blocked' : 'mix-not-active',
     snapshotObservedAt: now,
     commandError: null,
   };
@@ -271,7 +284,7 @@ setInterval(publishPresenceEvidence, 120);
 await new Promise((resolve) => setTimeout(resolve, 20));
 if (state === 'people') document.querySelector('.people-menu').open = true;
 if (state === 'more') document.querySelector('#room-more').open = true;
-if (state === 'system') document.querySelector('#system-panel').open = true;
+if (state === 'system' || state === 'system-issue') document.querySelector('#system-panel').open = true;
 
 document.body.dataset.fixtureState = state;
 window.__relayVisualReady = true;

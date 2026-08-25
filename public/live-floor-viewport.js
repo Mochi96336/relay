@@ -11,7 +11,6 @@ export function resolveLiveFloorViewportOffset({
   mobile,
   smallViewportHeight,
   visualViewportHeight,
-  visualViewportOffsetTop = 0,
   visualViewportScale = 1,
   shellHeight,
 }) {
@@ -19,7 +18,6 @@ export function resolveLiveFloorViewportOffset({
   if (!finiteNumber(smallViewportHeight) || smallViewportHeight <= 0) return 0;
   if (!finiteNumber(visualViewportHeight) || visualViewportHeight <= 0) return 0;
   if (!finiteNumber(shellHeight) || shellHeight <= 0) return 0;
-  if (!finiteNumber(visualViewportOffsetTop)) return 0;
   if (!finiteNumber(visualViewportScale) || Math.abs(visualViewportScale - 1) > 0.01) return 0;
 
   // Once Live needs real document scrolling, the controls stay in normal flow.
@@ -27,8 +25,12 @@ export function resolveLiveFloorViewportOffset({
   // feed Safari browser-chrome/scrollability changes back into each other.
   if (shellHeight > smallViewportHeight + EPSILON_PX) return 0;
 
-  const visualBottom = visualViewportOffsetTop + visualViewportHeight;
-  return Math.max(0, visualBottom - smallViewportHeight);
+  // Browser chrome retraction makes the unzoomed visual viewport taller than
+  // the stable small viewport. Keyboard presentation does the opposite. Ignore
+  // visual viewport panning entirely: offsetTop may change to keep a focused
+  // field visible and must never become bottom-floor authority.
+  if (visualViewportHeight < smallViewportHeight - EPSILON_PX) return 0;
+  return Math.max(0, visualViewportHeight - smallViewportHeight);
 }
 
 function measureSmallViewportHeight(documentRef) {
@@ -49,12 +51,10 @@ function measureSmallViewportHeight(documentRef) {
   return height;
 }
 
-function visualBottom(viewport) {
+function viewportHeight(viewport) {
   if (!viewport) return 0;
   const height = Number(viewport.height);
-  const offsetTop = Number(viewport.offsetTop ?? 0);
-  if (!Number.isFinite(height) || !Number.isFinite(offsetTop)) return 0;
-  return height + offsetTop;
+  return Number.isFinite(height) ? height : 0;
 }
 
 export function createLiveFloorViewportController(options = {}) {
@@ -74,7 +74,7 @@ export function createLiveFloorViewportController(options = {}) {
   let started = false;
   let timer = null;
   let shellObserver = null;
-  let lastVisualBottom = visualBottom(viewport);
+  let lastViewportHeight = viewportHeight(viewport);
 
   function applyOffset(offset) {
     if (!shell) return 0;
@@ -92,11 +92,10 @@ export function createLiveFloorViewportController(options = {}) {
       mobile: isMobile(),
       smallViewportHeight,
       visualViewportHeight: Number(viewport.height),
-      visualViewportOffsetTop: Number(viewport.offsetTop ?? 0),
       visualViewportScale: Number(viewport.scale ?? 1),
       shellHeight,
     });
-    lastVisualBottom = visualBottom(viewport);
+    lastViewportHeight = viewportHeight(viewport);
     return applyOffset(offset);
   }
 
@@ -115,11 +114,11 @@ export function createLiveFloorViewportController(options = {}) {
   }
 
   function handleViewportMotion() {
-    const nextBottom = visualBottom(viewport);
+    const nextHeight = viewportHeight(viewport);
     // If browser chrome or the keyboard is taking space back, favor visibility:
     // remove the old downward offset immediately, then wait for a settled value.
-    if (nextBottom < lastVisualBottom - EPSILON_PX) applyOffset(0);
-    lastVisualBottom = nextBottom;
+    if (nextHeight < lastViewportHeight - EPSILON_PX) applyOffset(0);
+    lastViewportHeight = nextHeight;
     scheduleReconcile();
   }
 

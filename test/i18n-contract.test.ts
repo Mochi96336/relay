@@ -71,6 +71,7 @@ test('locale is not room authority or a protocol command', () => {
 });
 
 test('touched Live product copy is centralized on relayI18n with complete en and zh-Hant', () => {
+  const baseCopy = read('public/i18n.js');
   const liveCopy = read('public/live-i18n.js');
   const micActions = read('public/mic-actions.js');
   const people = read('public/people-ui.js');
@@ -83,6 +84,13 @@ test('touched Live product copy is centralized on relayI18n with complete en and
     'mic.release',
     'mic.takeover',
     'mic.takeoverPrompt',
+  ]) {
+    assert.equal((baseCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 2, key);
+    assert.equal((liveCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 0,
+      `${key} must not be re-owned by the Live overlay`);
+  }
+
+  for (const key of [
     'people.inRoom',
     'recording.record',
     'recording.failed',
@@ -92,9 +100,9 @@ test('touched Live product copy is centralized on relayI18n with complete en and
     assert.equal((liveCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 2, key);
   }
 
-  assert.match(liveCopy, /'mic\.release': '放 Mic'/);
-  assert.match(liveCopy, /'mic\.takeover': '接手 Mic'/);
-  assert.match(liveCopy, /'mic\.takeoverPrompt': '目前是 \{name\} 在使用 Mic。'/);
+  assert.match(baseCopy, /'mic\.release': '放 Mic'/);
+  assert.match(baseCopy, /'mic\.takeover': '接手 Mic'/);
+  assert.match(baseCopy, /'mic\.takeoverPrompt': '目前是 \{name\} 在使用 Mic。'/);
   assert.match(liveCopy, /'recording\.failed': '錄音未完成'/);
   assert.match(liveCopy, /'roomSound\.label': '房間聲音'/);
 

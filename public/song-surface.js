@@ -1,3 +1,4 @@
+import './live-i18n.js';
 import './youtube-song-metadata.js';
 import {
   canChangeRoomSong,
@@ -36,10 +37,6 @@ function formatTime(seconds) {
   const whole = Math.floor(value);
   const minutes = Math.floor(whole / 60);
   return `${minutes}:${String(whole % 60).padStart(2, '0')}`;
-}
-
-function localCopy(english, traditionalChinese) {
-  return window.relayI18n?.getLocale?.() === 'zh-Hant' ? traditionalChinese : english;
 }
 
 function cleanMetadata(value) {
@@ -94,7 +91,7 @@ if (
       return;
     }
     deviceNote.textContent = recoverable
-      ? localCopy('Playback controller unavailable', '播放主控已失聯')
+      ? t('song.playbackControllerUnavailable')
       : roleCopy(role);
   }
 
@@ -104,7 +101,7 @@ if (
     const titleCopy = cleanMetadata(room.videoTitle) || t('song.roomSong');
     const authorCopy = cleanMetadata(room.videoAuthor);
     const stateLabel = recoverable
-      ? localCopy('Playback interrupted', '播放已中斷')
+      ? t('song.playbackInterrupted')
       : STATE_LABELS.has(state)
         ? t(STATE_LABELS.get(state))
         : t('song.roomSong');

@@ -85,6 +85,45 @@ test('System issue cause, impact and recovery rerender through product i18n', as
   await expect(issue.locator('.system-issue-recovery')).toHaveText('Reconnect the Mic, then try again.');
 });
 
+test('recoverable Song copy rerenders through product i18n', async ({ page }) => {
+  await openState(page, 'listener');
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay:playback-view', {
+      detail: {
+        role: 'observer',
+        timeline: {
+          videoId: 'PZGwZwGQTlk',
+          videoTitle: '林俊傑 JJ Lin－偉大的渺小',
+          videoAuthor: 'JJ Lin 林俊傑',
+          state: 1,
+          serverTime: 102,
+          duration: 311,
+          handoffState: 'idle',
+          playbackLeaderParticipantId: 'visual-owner',
+          playbackTransportId: 'visual-playback',
+          playbackGeneration: 1,
+          leaderConnected: false,
+          leaderFresh: false,
+          ageMs: 7_000,
+        },
+        isMicOwner: false,
+        isMicFree: false,
+      },
+    }));
+  });
+
+  await expect(page.locator('.song-stage')).toHaveAttribute('data-playback-health', 'disconnected');
+  await expect(page.locator('#song-device-note')).toBeVisible();
+  await expect(page.locator('#song-device-note')).toHaveText('播放主控已失聯');
+  await expect(page.locator('.song-observer-status')).toBeVisible();
+  await expect(page.locator('.song-observer-status')).toHaveText('播放已中斷');
+
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('#song-device-note')).toHaveText('Playback controller unavailable');
+  await expect(page.locator('.song-observer-status')).toHaveText('Playback interrupted');
+});
+
 test('Mic presenter keeps the same product copy when locale changes without a Live override', async ({ page }) => {
   await openState(page, 'takeover');
 

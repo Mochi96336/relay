@@ -23,9 +23,17 @@ if (debugEnabled) {
   let lastWorkletHealthAt = null;
   let blockResumeUntilMs = 0;
   let snapshotTimer = null;
+  let previousContextTime = null;
+  let previousOutputContextTime = null;
+  let previousOutputPerformanceTime = null;
 
   function now() {
     return performance.now();
+  }
+
+  function finiteOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
   }
 
   function ageMs(timestamp) {
@@ -40,13 +48,67 @@ if (debugEnabled) {
     return 'closed';
   }
 
+  function audioSessionSnapshot() {
+    try {
+      const session = navigator.audioSession;
+      if (!session) return { supported: false, type: null, state: null };
+      return {
+        supported: true,
+        type: typeof session.type === 'string' ? session.type : null,
+        state: typeof session.state === 'string' ? session.state : null,
+      };
+    } catch {
+      return { supported: false, type: null, state: null };
+    }
+  }
+
+  function outputTimestampSnapshot(context) {
+    if (!context || typeof context.getOutputTimestamp !== 'function') return null;
+    try {
+      const timestamp = context.getOutputTimestamp();
+      const contextTime = finiteOrNull(timestamp?.contextTime);
+      const performanceTime = finiteOrNull(timestamp?.performanceTime);
+      if (contextTime === null && performanceTime === null) return null;
+      return { contextTime, performanceTime };
+    } catch {
+      return null;
+    }
+  }
+
+  function resetClockEvidence() {
+    previousContextTime = null;
+    previousOutputContextTime = null;
+    previousOutputPerformanceTime = null;
+  }
+
   function recordSnapshot() {
     const listenState = window.relayListenState ?? {};
+    const contextTime = finiteOrNull(listenerContext?.currentTime);
+    const outputTimestamp = outputTimestampSnapshot(listenerContext);
+    const contextTimeDeltaMs = contextTime !== null && previousContextTime !== null
+      ? Math.max(0, (contextTime - previousContextTime) * 1000)
+      : null;
+    const outputContextTimeDeltaMs = outputTimestamp?.contextTime !== null
+      && outputTimestamp?.contextTime !== undefined
+      && previousOutputContextTime !== null
+      ? Math.max(0, (outputTimestamp.contextTime - previousOutputContextTime) * 1000)
+      : null;
+    const outputPerformanceTimeDeltaMs = outputTimestamp?.performanceTime !== null
+      && outputTimestamp?.performanceTime !== undefined
+      && previousOutputPerformanceTime !== null
+      ? Math.max(0, outputTimestamp.performanceTime - previousOutputPerformanceTime)
+      : null;
+
     recorder.recordSnapshot({
       visibilityState: document.visibilityState,
       hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null,
+      audioSession: audioSessionSnapshot(),
       contextState: listenerContext?.state ?? 'closed',
-      contextTime: listenerContext?.currentTime ?? null,
+      contextTime,
+      contextTimeDeltaMs,
+      outputTimestamp,
+      outputContextTimeDeltaMs,
+      outputPerformanceTimeDeltaMs,
       audioReady: listenState.audioReady === true,
       effectiveMuted: listenState.muted === true,
       userMuted: listenState.userMuted === true,
@@ -62,11 +124,16 @@ if (debugEnabled) {
       blockResumeRemainingMs: Math.max(0, blockResumeUntilMs - now()),
       faults: faults.snapshot(),
     });
+
+    previousContextTime = contextTime;
+    previousOutputContextTime = outputTimestamp?.contextTime ?? null;
+    previousOutputPerformanceTime = outputTimestamp?.performanceTime ?? null;
   }
 
   function markListenerContext(context) {
     if (!context || listenerContext === context) return;
     listenerContext = context;
+    resetClockEvidence();
     recorder.recordEvent('listener-context-selected', {
       state: context.state,
       sampleRate: context.sampleRate,
@@ -201,6 +268,14 @@ if (debugEnabled) {
     });
   }
 
+  const audioSession = (() => {
+    try { return navigator.audioSession ?? null; } catch { return null; }
+  })();
+  audioSession?.addEventListener?.('statechange', () => {
+    recorder.recordEvent('audio-session-statechange', audioSessionSnapshot());
+    recordSnapshot();
+  });
+
   window.addEventListener('relay-listen-health', (event) => {
     lastWorkletHealth = event.detail ? { ...event.detail } : null;
     lastWorkletHealthAt = now();
@@ -215,16 +290,57 @@ if (debugEnabled) {
     });
   });
   document.addEventListener('visibilitychange', () => {
-    recorder.recordEvent('visibilitychange', { state: document.visibilityState });
+    recorder.recordEvent('visibilitychange', {
+      state: document.visibilityState,
+      audioSession: audioSessionSnapshot(),
+    });
     recordSnapshot();
   });
   window.addEventListener('pageshow', (event) => {
-    recorder.recordEvent('pageshow', { persisted: event.persisted === true });
+    recorder.recordEvent('pageshow', {
+      persisted: event.persisted === true,
+      audioSession: audioSessionSnapshot(),
+    });
     recordSnapshot();
   });
   window.addEventListener('pagehide', (event) => {
-    recorder.recordEvent('pagehide', { persisted: event.persisted === true });
+    recorder.recordEvent('pagehide', {
+      persisted: event.persisted === true,
+      audioSession: audioSessionSnapshot(),
+    });
     recordSnapshot();
+  });
+
+  function recordMicBoundary(type, detail = {}) {
+    recorder.recordEvent(type, {
+      ...detail,
+      audioSession: audioSessionSnapshot(),
+      contextState: listenerContext?.state ?? 'closed',
+      contextTime: finiteOrNull(listenerContext?.currentTime),
+    });
+    recordSnapshot();
+  }
+
+  document.querySelector('#start-publisher')?.addEventListener('click', () => {
+    recordMicBoundary('mic-request-ui', { action: 'microphone' });
+  }, { capture: true });
+  document.querySelector('#confirm-takeover')?.addEventListener('click', () => {
+    recordMicBoundary('mic-request-ui', { action: 'takeover' });
+  }, { capture: true });
+  document.querySelector('#release-mic')?.addEventListener('click', () => {
+    recordMicBoundary('mic-release-ui');
+  }, { capture: true });
+  window.addEventListener('relay-request-microphone', () => {
+    recordMicBoundary('mic-request-event');
+  }, { capture: true });
+  window.addEventListener('relay-microphone-started', () => {
+    recordMicBoundary('mic-started');
+  });
+  window.addEventListener('relay-microphone-ended', (event) => {
+    recordMicBoundary('mic-ended', { reason: event.detail?.reason ?? null });
+  });
+  window.addEventListener('relay-microphone-start-failed', () => {
+    recordMicBoundary('mic-start-failed');
   });
 
   function scheduleSnapshotLoop() {
@@ -389,7 +505,7 @@ if (debugEnabled) {
     },
   };
 
-  recorder.recordEvent('listener-debug-enabled');
+  recorder.recordEvent('listener-debug-enabled', { audioSession: audioSessionSnapshot() });
   installIncidentButton();
   scheduleSnapshotLoop();
   recordSnapshot();

@@ -66,3 +66,20 @@ test('takeover, People, More and System use production DOM and presenter state',
   await expect(page.locator('#system-product')).toContainText('系統正常');
   await expect(page.locator('#system-product')).toContainText('目前沒有需要處理的問題。');
 });
+
+test('Mic presenter keeps the same product copy when locale changes without a Live override', async ({ page }) => {
+  await openState(page, 'takeover');
+
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('#mic-takeover-copy')).toHaveText('Mellow Rabbit 57 is using Mic.');
+  await expect(page.locator('#confirm-takeover')).toHaveText('Take over Mic');
+  await expect(page.locator('#cancel-takeover')).toHaveText('Cancel');
+
+  await page.evaluate(() => window.relayI18n.setLocale('zh-Hant', { persist: false }));
+  await expect(page.locator('#mic-takeover-copy')).toHaveText('目前是 Mellow Rabbit 57 在使用 Mic。');
+  await expect(page.locator('#confirm-takeover')).toHaveText('接手 Mic');
+
+  await openState(page, 'singer');
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('#release-mic')).toHaveText('Release Mic');
+});

@@ -51,6 +51,8 @@ npx -y playwright@1.55.0 screenshot \
   "http://127.0.0.1:4173/__live-p0-layout.html?state=take-history-one" \
   "/tmp/take-history-desktop.png"
 
+npx playwright test test/browser/live-floor-viewport.spec.mjs --workers=1 --reporter=line
+
 sleep 0.25
 if grep -q '/__geometry-fail' /tmp/relay-visual-http.log; then
   echo 'Chromium layout geometry failed:'

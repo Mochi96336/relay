@@ -7,6 +7,7 @@ const ui = readFileSync(new URL('../public/recording-ui.js', import.meta.url), '
 const css = readFileSync(new URL('../public/recording-ui.css', import.meta.url), 'utf8');
 const recorder = readFileSync(new URL('../public/recorder.js', import.meta.url), 'utf8');
 const product = readFileSync(new URL('../src/product-view-model.ts', import.meta.url), 'utf8');
+const policy = readFileSync(new URL('../src/take-start-policy.ts', import.meta.url), 'utf8');
 const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 
  test('required recording presentation consumes state without owning Take commands', () => {
@@ -25,9 +26,11 @@ test('blocked Record stays visible and disabled while reason stays authoritative
   assert.match(ui, /strip\.hidden = false/);
   assert.match(ui, /startButton\.disabled = !canStart/);
   assert.doesNotMatch(ui, /startButton\.hidden = !canStart/);
-  assert.match(ui, /blockedCopy\(detail\.startBlockedReason\)/);
+  assert.match(ui, /blockedCopy\(detail\.startBlockedReason, detail\.startBlockingIssue\)/);
   assert.match(recorder, /status\.actions\?\.startTakeBlockedReason/);
+  assert.match(recorder, /status\.actions\?\.startTakeBlockingIssue/);
   assert.match(product, /startTakeBlockedReason:/);
+  assert.match(product, /startTakeBlockingIssue/);
   assert.doesNotMatch(
     recorder,
     /productCanStartTake \? null : 'mix-not-active'/,
@@ -35,10 +38,39 @@ test('blocked Record stays visible and disabled while reason stays authoritative
   );
 });
 
+test('normal Take policy reasons all have explicit recording presentation', () => {
+  for (const reason of [
+    'mix-not-active',
+    'timing-calibration-active',
+    'mic-required',
+    'mic-starting',
+    'mic-reconnecting',
+    'mic-audio-stalled',
+    'room-blocked',
+    'take-active',
+  ]) {
+    assert.match(policy, new RegExp(`'${reason}'`), `${reason} must be a policy reason`);
+    assert.match(ui, new RegExp(`'${reason}'`), `${reason} must have recording presentation`);
+  }
+  assert.equal(policy.includes("'take-not-ready'"), false);
+  assert.equal(ui.includes("'take-not-ready'"), false);
+});
+
+test('room-level blocks consume the server-selected ProductIssue instead of inspecting diagnostics', () => {
+  assert.match(product, /startTake\.reason === 'room-blocked'/);
+  assert.match(product, /issues\.find\(\(issue\) => issue\.severity === 'critical'\)/);
+  assert.match(recorder, /startBlockedReason === 'room-blocked'/);
+  assert.match(ui, /blockingIssueCopy\(issue\)/);
+  assert.match(ui, /issue\?\.cause/);
+  for (const forbidden of ['readiness', 'backingStreaming', 'robotSourceConnected', 'health ===']) {
+    assert.equal(ui.includes(forbidden), false, `recording-ui.js must not infer ${forbidden}`);
+  }
+});
+
 test('pending Start disables Record without inventing a server block reason', () => {
   assert.match(recorder, /serverAllowed: startAllowedByServer && !startCommandPending/);
   assert.match(recorder, /startPending: startCommandPending/);
-  assert.match(recorder, /startBlockedReason: startCommandPending\s*\? null/);
+  assert.match(recorder, /const startBlockedReason = startCommandPending\s*\? null/);
   assert.match(recorder, /startCommandPending = true;[\s\S]*?send\(\{ type: 'start-take' \}\)/);
   assert.match(ui, /const startPending = detail\.startPending === true/);
   assert.match(ui, /detail\.startPending === true[\s\S]*?t\('recording\.starting'\)/);

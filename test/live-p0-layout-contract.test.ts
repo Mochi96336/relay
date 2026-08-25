@@ -38,7 +38,7 @@ test('Room sound is one fixed 44px rail whose geometry lives only in the P0 layo
   assert.match(layoutCss, /\.local-sound-control \{[\s\S]*?height:\s*44px;[\s\S]*?min-height:\s*44px;[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
   assert.match(layoutCss, /#listen-gain \{[\s\S]*?height:\s*44px/);
   assert.match(layoutCss, /#listen-gain::\-webkit-slider-runnable-track \{[\s\S]*?height:\s*2px/);
-  assert.match(layoutCss, /#listen-gain-value \{[\s\S]*?display:\s*block;[\s\S]*?width:\s*4ch/);
+  assert.match(layoutCss, /#listen-gain-value \{[\s\S]*?display:\s*block;[\s\S]*?width:\s*5ch/);
   assert.match(layoutCss, /#local-listen-label,[\s\S]*?#listen-note \{[\s\S]*?position:\s*absolute/);
   assert.doesNotMatch(layoutCss, /data-room-sound-value|data-room-sound-state/);
   assert.doesNotMatch(roomCss, /#local-listen-label|#listen-gain-value|#listen-adjust-state|#listen-note/);

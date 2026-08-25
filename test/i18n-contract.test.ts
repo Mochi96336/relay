@@ -70,7 +70,7 @@ test('locale is not room authority or a protocol command', () => {
     'locale rerender must not synthesize room song commands');
 });
 
-test('touched Live product copy is centralized on relayI18n with complete en and zh-Hant', () => {
+test('Live feature copy registers through the base relayI18n provider', () => {
   const baseCopy = read('public/i18n.js');
   const liveCopy = read('public/live-i18n.js');
   const micActions = read('public/mic-actions.js');
@@ -78,6 +78,15 @@ test('touched Live product copy is centralized on relayI18n with complete en and
   const recording = read('public/recording-ui.js');
   const roomSound = read('public/room-sound-ui.js');
   const roomSoundPresentation = read('public/room-sound-presentation.js');
+
+  assert.match(baseCopy, /function registerMessages\(bundle\)/);
+  assert.match(baseCopy, /Relay i18n key already registered:/,
+    'base provider must reject conflicting key ownership');
+  assert.match(baseCopy, /registerMessages,/,
+    'the public provider must expose feature-message registration');
+  assert.match(liveCopy, /base\?\.registerMessages\?\.\(messages\);/);
+  assert.doesNotMatch(liveCopy, /base\.t\s*=|base\.has\s*=|const baseT|const baseHas|function format\(/,
+    'feature message packs must not wrap or replace provider lookup behavior');
 
   for (const key of [
     'mic.take',
@@ -87,7 +96,7 @@ test('touched Live product copy is centralized on relayI18n with complete en and
   ]) {
     assert.equal((baseCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 2, key);
     assert.equal((liveCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 0,
-      `${key} must not be re-owned by the Live overlay`);
+      `${key} must not be re-owned by the Live feature pack`);
   }
 
   for (const key of [

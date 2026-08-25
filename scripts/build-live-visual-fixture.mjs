@@ -50,6 +50,7 @@ const fixtureStyle = `
 const fixtureRuntime = `
     <script>localStorage.setItem('relay.locale.v1', 'zh-Hant');</script>
     <script src="/i18n.js"></script>
+    <script type="module" src="/system-details.js"></script>
     <script type="module" src="/__live-visual-bootstrap.js"></script>
 `;
 

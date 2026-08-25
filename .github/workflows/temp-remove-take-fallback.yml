@@ -1,0 +1,47 @@
+name: Temporary Take fallback cleanup
+
+on:
+  push:
+    branches:
+      - agent/ui-recording-readiness-semantics
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, 'remove stale Take readiness fallback') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Remove stale Take readiness fallback
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          source = path.read_text()
+          old = """        rejectTakeCommand(
+          socket,
+          'start',
+          productStatus.actions.startTakeBlockedReason ?? 'take-not-ready',
+        );
+        return;"""
+          new = """        const blockedReason = productStatus.actions.startTakeBlockedReason;
+        if (blockedReason === null) {
+          rejectTakeCommand(socket, 'start', 'product-state-invalid');
+          return;
+        }
+        rejectTakeCommand(socket, 'start', blockedReason);
+        return;"""
+          if source.count(old) != 1:
+              raise SystemExit(f'expected exactly one stale fallback, found {source.count(old)}')
+          path.write_text(source.replace(old, new))
+          PY
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/server.ts
+          git commit -m "refactor(takes): remove stale Take readiness fallback"
+          git push

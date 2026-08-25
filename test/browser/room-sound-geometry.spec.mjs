@@ -55,6 +55,7 @@ async function geometry(page) {
       };
     };
     const toggle = document.querySelector('#listen-toggle');
+    const value = document.querySelector('#listen-gain-value');
     return {
       row: rect('.local-sound-control'),
       toggle: rect('#listen-toggle'),
@@ -66,7 +67,9 @@ async function geometry(page) {
       labelStyle: style('#local-listen-label'),
       stableNoteStyle: style('#listen-adjust-state'),
       actionNoteStyle: style('#listen-note'),
-      valueText: document.querySelector('#listen-gain-value')?.value ?? '',
+      valueText: value?.value ?? '',
+      valueClientWidth: value?.clientWidth ?? 0,
+      valueScrollWidth: value?.scrollWidth ?? 0,
       iconState: toggle?.dataset.icon ?? '',
       toggleAria: toggle?.getAttribute('aria-label') ?? '',
       toggleDescription: toggle?.getAttribute('aria-describedby') ?? '',
@@ -101,6 +104,7 @@ for (const viewport of viewports) {
     expect(baseline.row?.height).toBeLessThan(45);
     expect(baseline.toggle?.width).toBeGreaterThanOrEqual(43);
     expect(baseline.toggle?.height).toBeGreaterThanOrEqual(43);
+    expect(baseline.valueScrollWidth).toBeLessThanOrEqual(baseline.valueClientWidth);
     expect(baseline.scrollWidth).toBe(baseline.viewportWidth);
 
     for (const locale of ['zh-Hant', 'en']) {
@@ -121,6 +125,7 @@ for (const viewport of viewports) {
         expectSameBox(current.gain, baseline.gain, 'gain');
         expectSameBox(current.value, baseline.value, 'value');
         expect(current.valueText).toBe(`${detail.volumePercent}%`);
+        expect(current.valueScrollWidth, `value must not clip at ${detail.volumePercent}%`).toBeLessThanOrEqual(current.valueClientWidth);
         expect(current.scrollWidth).toBe(current.viewportWidth);
 
         const retry = detail.phase === 'retry' || detail.phase === 'start-failed';

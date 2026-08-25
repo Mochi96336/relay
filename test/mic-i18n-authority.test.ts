@@ -18,7 +18,7 @@ const actionKeys = [
   'mic.takeoverPrompt',
 ];
 
-function countKey(source, key) {
+function countKey(source: string, key: string) {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return source.match(new RegExp(`'${escaped}':`, 'g'))?.length ?? 0;
 }

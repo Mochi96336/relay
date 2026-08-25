@@ -13,7 +13,10 @@ test('listener debug observer installs before production Listen and only activat
 
   assert.match(debugSource, /new URLSearchParams\(location\.search\)\.get\('audioDebug'\) === '1'/);
   assert.match(debugSource, /if \(debugEnabled\) \{/);
-  assert.doesNotMatch(debugSource, /fetch\(/);
+  assert.match(debugSource, /async function reportSilent\(\)/);
+  assert.match(debugSource, /button\.addEventListener\('click', async \(\) => \{[\s\S]*await reportSilent\(\)/);
+  const fetchCalls = debugSource.match(/\bfetch\s*\(/g) ?? [];
+  assert.equal(fetchCalls.length, 1, 'debug observer may only upload on the explicit incident-report path');
   assert.doesNotMatch(debugSource, /localStorage/);
   assert.doesNotMatch(debugSource, /sessionStorage/);
 });

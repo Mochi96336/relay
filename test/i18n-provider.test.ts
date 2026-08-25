@@ -67,3 +67,24 @@ test('a conflicting message bundle is rejected atomically', () => {
     'a later conflict must not leave earlier locale additions registered');
   assert.equal(i18n.t('mic.take'), 'Take Mic');
 });
+
+test('normalized locale aliases cannot race to own the same staged key', () => {
+  const i18n = runtime();
+
+  assert.throws(
+    () => i18n.registerMessages({
+      en: { 'feature.alias': 'First owner' },
+      'en-US': { 'feature.alias': 'Second owner' },
+    }),
+    /Relay i18n key already registered: en:feature\.alias/,
+  );
+  assert.equal(i18n.has('feature.alias'), false,
+    'conflicting aliases must not commit either staged value');
+
+  assert.equal(i18n.registerMessages({
+    en: { 'feature.alias': 'Same owner' },
+    'en-US': { 'feature.alias': 'Same owner' },
+  }), true,
+    'identical aliases collapse to one staged registration');
+  assert.equal(i18n.t('feature.alias'), 'Same owner');
+});

@@ -75,7 +75,9 @@ test('a lingering active mix cannot start a new Take while Robot audio is blocke
   assert.equal(status.health, 'blocked');
   assert.equal(status.attention?.code, 'robot-audio-unavailable');
   assert.equal(status.actions.canStartTake, false);
-  assert.equal(status.actions.startTakeBlockedReason, 'take-not-ready');
+  assert.equal(status.actions.startTakeBlockedReason, 'room-blocked');
+  assert.equal(status.actions.startTakeBlockingIssue?.code, 'robot-audio-unavailable');
+  assert.equal(status.actions.startTakeBlockingIssue?.cause, 'backing-stalled');
 });
 
 test('active calibration disables Start Take even though calibration is normal preparation', () => {
@@ -85,6 +87,7 @@ test('active calibration disables Start Take even though calibration is normal p
   assert.equal(status.health, 'healthy');
   assert.equal(status.actions.canStartTake, false);
   assert.equal(status.actions.startTakeBlockedReason, 'timing-calibration-active');
+  assert.equal(status.actions.startTakeBlockingIssue, null);
   assert.equal(status.actions.canStartCalibration, false);
   assert.equal(status.actions.startCalibrationBlockedReason, 'calibration-active');
   assert.equal(status.actions.startCalibrationMode, 'boot-probe');

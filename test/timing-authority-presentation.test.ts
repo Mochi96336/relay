@@ -29,8 +29,11 @@ test('read-only timing adapter publishes only server-applied mixer timing', () =
   assert.match(adapter, /type: 'source-status-request'/);
   assert.match(adapter, /const REFRESH_MS = 250/);
   assert.match(adapter, /setInterval\(requestSourceStatus, REFRESH_MS\)/);
-  assert.match(adapter, /if \(message\.active === true\) startRefresh\(\)/);
-  assert.match(adapter, /else stopRefresh\(\)/);
+  assert.match(adapter,
+    /next\.addEventListener\('open',[\s\S]*requestSourceStatus\(\);[\s\S]*startRefresh\(\);/,
+    'an open authority socket must keep polling even when the current mix is idle');
+  assert.doesNotMatch(adapter, /if \(message\.active === true\) startRefresh\(\)|else stopRefresh\(\)/,
+    'source activity must control the numeric value, not whether authority observation stays alive');
   assert.match(adapter, /publish\(false, null\)/,
     'reconnect must revoke numeric freshness instead of retaining stale truth');
   assert.doesNotMatch(adapter, /requestedMicAdvanceMs|robot-player-offset|source-seeked|provisional/,

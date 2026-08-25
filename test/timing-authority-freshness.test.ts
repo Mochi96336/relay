@@ -60,7 +60,87 @@ class FakeClock {
 }
 
 class FakeElement {
+  ownerDocument: FakeDocument | null = null;
+  id = '';
+  className = '';
   textContent = '';
+  hidden = false;
+  disabled = false;
+  tabIndex = 0;
+  attributes = new Map<string, string>();
+  children: FakeElement[] = [];
+
+  constructor(init: Partial<Pick<FakeElement, 'id' | 'className' | 'textContent'>> = {}) {
+    Object.assign(this, init);
+  }
+
+  cloneNode() {
+    const clone = new FakeElement({
+      id: this.id,
+      className: this.className,
+      textContent: this.textContent,
+    });
+    clone.hidden = this.hidden;
+    clone.disabled = this.disabled;
+    clone.tabIndex = this.tabIndex;
+    clone.attributes = new Map(this.attributes);
+    return clone;
+  }
+
+  replaceWith(replacement: FakeElement) {
+    this.ownerDocument?.replace(this, replacement);
+  }
+
+  replaceChildren(...children: FakeElement[]) {
+    this.children = children;
+    this.textContent = '';
+    for (const child of children) this.ownerDocument?.attach(child);
+  }
+
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, String(value));
+  }
+
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
+
+  addEventListener() {}
+}
+
+class FakeDocument {
+  readyState = 'complete';
+  elements: FakeElement[] = [];
+
+  attach(element: FakeElement) {
+    element.ownerDocument = this;
+    if (!this.elements.includes(element)) this.elements.push(element);
+    return element;
+  }
+
+  createElement() {
+    return new FakeElement();
+  }
+
+  replace(current: FakeElement, replacement: FakeElement) {
+    const index = this.elements.indexOf(current);
+    assert.notEqual(index, -1);
+    current.ownerDocument = null;
+    replacement.ownerDocument = this;
+    this.elements[index] = replacement;
+  }
+
+  querySelector(selector: string) {
+    if (selector.startsWith('#')) {
+      const id = selector.slice(1);
+      return this.elements.find((element) => element.id === id) ?? null;
+    }
+    if (selector.startsWith('.')) {
+      const className = selector.slice(1);
+      return this.elements.find((element) => element.className.split(/\s+/).includes(className)) ?? null;
+    }
+    return null;
+  }
 }
 
 function eventWindow() {
@@ -128,16 +208,11 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
     get detail() { return this.init.detail; }
   }
 
-  const timingLabel = new FakeElement();
-  const timingValue = new FakeElement();
-  const document = {
-    readyState: 'complete',
-    querySelector(selector: string) {
-      if (selector === '#timing-active-label') return timingLabel;
-      if (selector === '#timing-active-value') return timingValue;
-      return null;
-    },
-  };
+  const document = new FakeDocument();
+  document.attach(new FakeElement({ id: 'calibrate-timing', textContent: 'Recalibrate' }));
+  document.attach(new FakeElement({ id: 'calibrate-status' }));
+  document.attach(new FakeElement({ className: 'more-timing' }));
+
   const window = {
     ...eventWindow(),
     relayI18n: { t: (key: string) => key },
@@ -160,6 +235,9 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
 
   runInNewContext(adapterSource, context);
   runInNewContext(calibrationUiSource, context);
+
+  const timingValue = document.querySelector('#timing-active-value');
+  assert.ok(timingValue, 'inline Realign action should own the timing value surface');
 
   assert.equal(sockets.length, 1);
   const socket = sockets[0];

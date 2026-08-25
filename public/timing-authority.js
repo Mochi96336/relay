@@ -96,8 +96,6 @@ function acceptSourceStatus(message) {
     ? applied
     : null;
   publish(true, valueMs);
-  if (message.active === true) startRefresh();
-  else stopRefresh();
 }
 
 function connect() {
@@ -112,7 +110,11 @@ function connect() {
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
+    // Keep observing across idle -> active transitions. An inactive mix means
+    // there is no applied value to paint yet; it must not stop the authority
+    // adapter or the first later calibration can remain invisible forever.
     requestSourceStatus();
+    startRefresh();
   });
 
   next.addEventListener('message', (event) => {

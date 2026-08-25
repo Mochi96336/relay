@@ -79,6 +79,20 @@ class FakeElement extends EventTarget {
 
   append(...children: FakeElement[]) {
     this.children.push(...children);
+    for (const child of children) this.ownerDocument?.add(child);
+  }
+
+  replaceChildren(...children: FakeElement[]) {
+    for (const child of this.children) {
+      child.ownerDocument = null;
+      if (this.ownerDocument) {
+        const index = this.ownerDocument.elements.indexOf(child);
+        if (index !== -1) this.ownerDocument.elements.splice(index, 1);
+      }
+    }
+    this.children = [];
+    this.textContent = '';
+    this.append(...children);
   }
 
   insertAdjacentElement(position: string, element: FakeElement) {
@@ -185,10 +199,10 @@ test('timing presenter keeps applied authority through blocked, active, failure,
 
     const visibleButton = document.querySelector('#calibrate-timing');
     const visibleStatus = document.querySelector('#calibrate-status');
-    const timingLabel = document.querySelector('#timing-active-label');
+    const timingLabel = document.querySelector('.calibrate-timing-label');
     const timingValue = document.querySelector('#timing-active-value');
     assert.ok(visibleButton && visibleStatus && timingLabel && timingValue);
-    assert.equal(timingLabel.textContent, 'Timing');
+    assert.equal(timingLabel.textContent, 'Realign');
     assert.equal(timingValue.textContent, '+237 ms');
     assert.notEqual(visibleButton, legacyButton,
       'presenter must replace the app-captured command node instead of sharing it');
@@ -234,7 +248,7 @@ test('timing presenter keeps applied authority through blocked, active, failure,
       'provisional calibration state must not replace the applied mixer value');
     assert.equal(visibleButton.hidden, false);
     assert.equal(visibleButton.disabled, true);
-    assert.equal(visibleButton.textContent, 'Realign');
+    assert.equal(timingLabel.textContent, 'Realign');
     assert.equal(visibleStatus.textContent, 'Aligning…');
     assert.equal(document.elements.filter((element) => element.id === 'calibrate-timing').length, 1);
 
@@ -243,9 +257,8 @@ test('timing presenter keeps applied authority through blocked, active, failure,
 
     assert.equal(document.querySelector('#calibrate-timing'), visibleButton,
       'locale changes must rerender the same visible presenter');
-    assert.equal(timingLabel.textContent, '時間對齊');
+    assert.equal(timingLabel.textContent, '重新對齊');
     assert.equal(timingValue.textContent, '+237 ms');
-    assert.equal(visibleButton.textContent, '重新對齊');
     assert.equal(visibleStatus.textContent, '對齊中…');
     assert.equal(document.elements.filter((element) => element.id === 'calibrate-timing').length, 1,
       'locale switching must never revive the legacy command node');

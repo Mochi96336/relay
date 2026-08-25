@@ -18,6 +18,7 @@ let productStatusFresh = false;
 let takeStatusFresh = false;
 let startCommandPending = false;
 let startTakeBlockedReason = null;
+let startTakeBlockingIssue = null;
 
 function wsUrl() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -68,6 +69,13 @@ function recordingState() {
     authorized: true,
     serverAllowed: lifecycle === 'recording' && Boolean(take?.takeId),
   });
+  const startBlockedReason = startCommandPending
+    ? null
+    : startAuthority.actionable
+      ? null
+      : !baseAuthority.commandChannelFresh || !baseAuthority.authorityFresh
+        ? 'reconnecting'
+        : startTakeBlockedReason;
 
   return {
     lifecycle,
@@ -81,13 +89,10 @@ function recordingState() {
     takeStatusFresh,
     canStart: startAuthority.actionable,
     startPending: startCommandPending,
-    startBlockedReason: startCommandPending
-      ? null
-      : startAuthority.actionable
-        ? null
-        : !baseAuthority.commandChannelFresh || !baseAuthority.authorityFresh
-          ? 'reconnecting'
-          : startTakeBlockedReason,
+    startBlockedReason,
+    startBlockingIssue: startBlockedReason === 'room-blocked'
+      ? startTakeBlockingIssue
+      : null,
     canStop: stopAuthority.actionable,
     commandError,
     snapshotObservedAt: takeStatusObservedAt,
@@ -111,6 +116,11 @@ function acceptProductStatus(status) {
   productCanStartTake = status.actions?.canStartTake === true;
   startTakeBlockedReason = typeof status.actions?.startTakeBlockedReason === 'string'
     ? status.actions.startTakeBlockedReason
+    : null;
+  startTakeBlockingIssue = startTakeBlockedReason === 'room-blocked'
+    && status.actions?.startTakeBlockingIssue
+    && typeof status.actions.startTakeBlockingIssue === 'object'
+    ? status.actions.startTakeBlockingIssue
     : null;
   productStatusFresh = true;
   publishRecordingState();

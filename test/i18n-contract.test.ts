@@ -84,6 +84,7 @@ test('Live feature copy registers through the base relayI18n provider', () => {
   const micActions = read('public/mic-actions.js');
   const people = read('public/people-ui.js');
   const recording = read('public/recording-ui.js');
+  const takeHistory = read('public/take-history.js');
   const roomSound = read('public/room-sound-ui.js');
   const roomSoundPresentation = read('public/room-sound-presentation.js');
 
@@ -112,6 +113,9 @@ test('Live feature copy registers through the base relayI18n provider', () => {
     'recording.record',
     'recording.failed',
     'recording.blocked.reconnecting',
+    'takeHistory.summary',
+    'takeHistory.notice.release',
+    'takeHistory.download',
     'roomSound.label',
   ]) {
     assert.equal((liveCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 2, key);
@@ -121,9 +125,10 @@ test('Live feature copy registers through the base relayI18n provider', () => {
   assert.match(baseCopy, /'mic\.takeover': '接手 Mic'/);
   assert.match(baseCopy, /'mic\.takeoverPrompt': '目前是 \{name\} 在使用 Mic。'/);
   assert.match(liveCopy, /'recording\.failed': '錄音未完成'/);
+  assert.match(liveCopy, /'takeHistory\.notice\.release': '請先放 Mic，再播放錄音。'/);
   assert.match(liveCopy, /'roomSound\.label': '房間聲音'/);
 
-  for (const source of [micActions, people, recording, roomSound]) {
+  for (const source of [micActions, people, recording, takeHistory, roomSound]) {
     assert.match(source, /relayI18n\?\.t/);
     assert.doesNotMatch(source, /function chinese|localCopy\(/);
   }
@@ -151,10 +156,17 @@ test('release-era voice feedback stays inside the locale boundary', () => {
     'recording lifecycle must not regain Take review copy ownership');
 });
 
-test('Take History keeps recording review wording inside its own locale boundary', () => {
+test('Take History visible wording is owned by the registered feature dictionary', () => {
   const history = read('public/take-history.js');
+  const liveCopy = read('public/live-i18n.js');
+
+  assert.match(history, /import '\.\/live-i18n\.js';/);
   assert.match(history, /window\.addEventListener\('relay-locale-changed', renderHistory\)/);
-  assert.match(history, /localCopy\('Release mic before playing a recording\.', '請先放 Mic，再播放錄音。'\)/);
-  assert.match(history, /'Recording playback paused while this phone has the mic\.'/);
-  assert.match(history, /'這支手機拿到 Mic，錄音播放已暫停。'/);
+  assert.match(history, /t\('takeHistory\.notice\.release'\)/);
+  assert.match(history, /t\('takeHistory\.notice\.paused'\)/);
+  assert.match(history, /t\('takeHistory\.download'\)/);
+  assert.match(history, /t\('takeHistory\.panelAria'\)/);
+  assert.doesNotMatch(history, /localCopy\(|Release mic before playing a recording\.|請先放 Mic，再播放錄音。/);
+  assert.match(liveCopy, /'takeHistory\.group\.voice': 'Voice only'/);
+  assert.match(liveCopy, /'takeHistory\.group\.voice': '純人聲'/);
 });

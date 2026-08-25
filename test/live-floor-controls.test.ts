@@ -39,8 +39,11 @@ test('Record and the original recent recording control share the action row with
     'a real recording history must stay reachable even when Record is unavailable',
   );
   assert.doesNotMatch(css, /#last-take-toggle::after|font-size:\s*0/);
-  assert.match(takeHistory, /`Last take · \$\{formatDuration/);
-  assert.match(takeHistory, /`上一段錄音 · \$\{formatDuration/);
+  assert.match(
+    takeHistory,
+    /recentButton\.textContent = t\('takeHistory\.last', \{[\s\S]*duration: formatDuration\(latest\.artifact\.durationMs\)/,
+    'the compact recent recording entry keeps its wording while using the shared i18n provider',
+  );
   assert.match(css, /> \.recent-take[\s\S]*grid-column:\s*2 !important/);
 });
 

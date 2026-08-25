@@ -61,14 +61,14 @@ test('durable Take history keeps Live compact and reuses one review player in a 
   assert.match(model, /export function groupHistory/);
   assert.match(model, /`song:\$\{videoId\}`/);
   assert.match(history, /i\.ytimg\.com\/vi/);
-  assert.match(history, /localCopy\('Voice only', '純人聲'\)/);
-  assert.match(history, /localCopy\('Recovered recordings', '舊錄音'\)/);
+  assert.match(history, /t\('takeHistory\.group\.voice'\)/);
+  assert.match(history, /t\('takeHistory\.group\.recovered'\)/);
   assert.match(history, /panel\.id = 'take-history-panel'/,
     'full history belongs to a secondary sheet rather than the Live performance flow');
   assert.match(historyCss, /\.take-history-panel\[open\][\s\S]*?position: fixed;/);
   assert.match(history, /root\.classList\.add\('recent-take'\)/,
     'Live retains only a compact latest-Take continuation');
-  assert.match(history, /recentButton\.textContent = localCopy\(/);
+  assert.match(history, /recentButton\.textContent = t\('takeHistory\.last'/);
   assert.match(history, /recordingPlayer\.src = href/);
   assert.match(history, /recordingDownload\.href = href/);
   assert.match(history, /recordingDownload\.download = `relay-take-/);
@@ -92,14 +92,28 @@ test('durable Take history keeps Live compact and reuses one review player in a 
 
 test('Take History panel uses recording language while the compact entry keeps Last take wording', async () => {
   const history = await readFile(new URL('../public/take-history.js', import.meta.url), 'utf8');
+  const copy = await readFile(new URL('../public/live-i18n.js', import.meta.url), 'utf8');
 
-  assert.match(history, /localCopy\('Recordings', '錄音'\)/);
-  assert.match(history, /localCopy\('Recording history', '錄音紀錄'\)/);
-  assert.match(history, /localCopy\('Selected recording playback', '所選錄音播放'\)/);
-  assert.match(history, /localCopy\('Release mic before playing a recording\.', '請先放 Mic，再播放錄音。'\)/);
-  assert.match(history, /localCopy\('Download recording', '下載錄音'\)/);
-  assert.match(history, /`Last take · \$\{formatDuration/);
-  assert.match(history, /`上一段錄音 · \$\{formatDuration/);
+  assert.match(history, /t\('takeHistory\.summary'\)/);
+  assert.match(history, /t\('takeHistory\.panelAria'\)/);
+  assert.match(history, /t\('takeHistory\.selectedPlaybackAria'\)/);
+  assert.match(history, /t\('takeHistory\.notice\.release'\)/);
+  assert.match(history, /t\('takeHistory\.download'\)/);
+  assert.match(history, /t\('takeHistory\.last'/);
+  assert.doesNotMatch(history, /localCopy\(/);
+
+  assert.match(copy, /'takeHistory\.summary': 'Recordings'/);
+  assert.match(copy, /'takeHistory\.summary': '錄音'/);
+  assert.match(copy, /'takeHistory\.panelAria': 'Recording history'/);
+  assert.match(copy, /'takeHistory\.panelAria': '錄音紀錄'/);
+  assert.match(copy, /'takeHistory\.selectedPlaybackAria': 'Selected recording playback'/);
+  assert.match(copy, /'takeHistory\.selectedPlaybackAria': '所選錄音播放'/);
+  assert.match(copy, /'takeHistory\.notice\.release': 'Release mic before playing a recording\.'/);
+  assert.match(copy, /'takeHistory\.notice\.release': '請先放 Mic，再播放錄音。'/);
+  assert.match(copy, /'takeHistory\.download': 'Download recording'/);
+  assert.match(copy, /'takeHistory\.download': '下載錄音'/);
+  assert.match(copy, /'takeHistory\.last': 'Last take · \{duration\}'/);
+  assert.match(copy, /'takeHistory\.last': '上一段錄音 · \{duration\}'/);
   assert.doesNotMatch(history, /verdictLabel|qualityVerdict\)/,
     'recording history must not present technical capture quality as a user rating');
 });

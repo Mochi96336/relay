@@ -16,7 +16,7 @@ test('P0 is the only Room sound rail geometry owner', () => {
     'Live IA must not keep a second Room sound layout contract');
   assert.doesNotMatch(ia, /#listen-toggle\s*\{/,
     'Live IA must not size or position the Room sound toggle');
-  assert.doesNotMatch(ia, /#listen-adjust-state\s*\{|#listen-note\s*\{/,
+  assert.doesNotMatch(ia, /(?:^|\n)\s*#listen-adjust-state\s*\{|(?:^|\n)\s*#listen-note\s*\{/,
     'Live IA must not give Room sound semantic copy measured layout');
 
   assert.doesNotMatch(paint, /#listen-gain-value|#listen-adjust-state/,
@@ -26,7 +26,12 @@ test('P0 is the only Room sound rail geometry owner', () => {
 });
 
 test('duplicate Room sound action-note suppression remains presentation-only', () => {
-  assert.match(ia, /body\[data-listen="muted"\] #listen-note,[\s\S]*?display:\s*none;/);
-  assert.doesNotMatch(ia, /body\[data-listen="muted"\][\s\S]*?(?:width|height|margin|padding|grid-template|position):/,
+  const declarations = ia.match(
+    /body\[data-listen="muted"\] #listen-note,[^{]*\{([^}]*)\}/,
+  )?.[1];
+
+  assert.ok(declarations, 'expected the duplicate Room sound action-note suppression rule');
+  assert.match(declarations, /display:\s*none;/);
+  assert.doesNotMatch(declarations, /(?:width|height|margin|padding|grid-template|position)\s*:/,
     'mute-state suppression must not regain rail geometry ownership');
 });

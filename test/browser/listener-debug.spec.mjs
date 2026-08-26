@@ -60,6 +60,19 @@ async function installBrowserAudioHarness(page) {
       }
     }
 
+    class FakeAudioSession extends EventTarget {
+      constructor() {
+        super();
+        this.type = 'playback';
+        this.state = 'active';
+      }
+    }
+
+    Object.defineProperty(navigator, 'audioSession', {
+      configurable: true,
+      value: new FakeAudioSession(),
+    });
+
     class FakeAudioContext extends EventTarget {
       constructor() {
         super();
@@ -91,6 +104,13 @@ async function installBrowserAudioHarness(page) {
       async close() {
         this.state = 'closed';
         this.dispatchEvent(new Event('statechange'));
+      }
+
+      getOutputTimestamp() {
+        return {
+          contextTime: this.currentTime,
+          performanceTime: performance.now(),
+        };
       }
 
       createGain() { return new FakeGainNode(); }
@@ -151,8 +171,8 @@ async function installBrowserAudioHarness(page) {
   });
 }
 
-async function startListener(page) {
-  await page.goto(`${LIVE_URL}__listener-debug.html?audioDebug=1`, { waitUntil: 'domcontentloaded' });
+async function startListener(page, query = 'audioDebug=1') {
+  await page.goto(`${LIVE_URL}__listener-debug.html?${query}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => Boolean(window.__relayListenerDiagnostics));
   await page.dispatchEvent('body', 'pointerdown');
   await page.waitForFunction(() => {
@@ -174,7 +194,44 @@ test('listener debug flight recorder sees a healthy internal playback path', asy
   expect(snapshot.monitorSocketState).toBe('open');
   expect(snapshot.monitorFrameCount).toBeGreaterThanOrEqual(1);
   expect(snapshot.workletHealth.playing).toBe(true);
+  expect(snapshot.audioSession).toEqual({ supported: true, type: 'playback', state: 'active' });
+  expect(snapshot.outputTimestamp.contextTime).toBe(snapshot.contextTime);
   expect(snapshot.evidence).toBe('internally-healthy');
+});
+
+test('listener debug records clock progress, AudioSession changes and Mic boundaries', async ({ page }) => {
+  await installBrowserAudioHarness(page);
+  await startListener(page);
+
+  const progressed = await page.evaluate(() => {
+    const context = window.__listenerDebugBrowserHarness.contexts.at(-1);
+    window.__relayListenerDiagnostics.snapshot();
+    context.currentTime += 0.25;
+    return window.__relayListenerDiagnostics.snapshot();
+  });
+  expect(progressed.contextTimeDeltaMs).toBeCloseTo(250, 5);
+  expect(progressed.outputContextTimeDeltaMs).toBeCloseTo(250, 5);
+  expect(progressed.outputPerformanceTimeDeltaMs).toBeGreaterThanOrEqual(0);
+
+  await page.evaluate(() => {
+    navigator.audioSession.state = 'interrupted';
+    navigator.audioSession.dispatchEvent(new Event('statechange'));
+    window.dispatchEvent(new CustomEvent('relay-microphone-started'));
+    navigator.audioSession.type = 'playback';
+    navigator.audioSession.state = 'active';
+    window.dispatchEvent(new CustomEvent('relay-microphone-ended', {
+      detail: { reason: 'released' },
+    }));
+  });
+
+  const dump = await page.evaluate(() => window.__relayListenerDiagnostics.dump());
+  const sessionChange = dump.events.find((entry) => entry.type === 'audio-session-statechange');
+  expect(sessionChange.detail.state).toBe('interrupted');
+  const micStarted = dump.events.find((entry) => entry.type === 'mic-started');
+  expect(micStarted.detail.audioSession.state).toBe('interrupted');
+  const micEnded = dump.events.find((entry) => entry.type === 'mic-ended');
+  expect(micEnded.detail.reason).toBe('released');
+  expect(micEnded.detail.audioSession).toEqual({ supported: true, type: 'playback', state: 'active' });
 });
 
 test('listener debug faults exercise starvation, reconnect, interruption and silent output', async ({ page }) => {
@@ -217,4 +274,45 @@ test('listener debug faults exercise starvation, reconnect, interruption and sil
   expect(eventTypes).toContain('fault-audio-interrupt-release');
   expect(eventTypes).toContain('fault-output-silence-start');
   expect(eventTypes).toContain('fault-output-silence-release');
+});
+
+test('listener silence report uploads the local flight recorder without leaking the Relay key', async ({ page }) => {
+  let uploaded = null;
+  let requestUrl = null;
+  await page.route('**/api/debug/listener-incidents**', async (route) => {
+    requestUrl = route.request().url();
+    uploaded = route.request().postDataJSON();
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, incidentId: 'incident-test' }),
+    });
+  });
+
+  await installBrowserAudioHarness(page);
+  await startListener(page, 'audioDebug=1&key=secret-test-key');
+
+  const reportButton = page.locator('[data-relay-listener-incident="1"]');
+  await expect(reportButton).toBeVisible();
+  await reportButton.click();
+  await expect(reportButton).toHaveText('已回報');
+
+  expect(requestUrl).not.toBeNull();
+  const endpoint = new URL(requestUrl);
+  expect(endpoint.pathname).toBe('/api/debug/listener-incidents');
+  expect(endpoint.searchParams.get('audioDebug')).toBe('1');
+  expect(endpoint.searchParams.get('key')).toBe('secret-test-key');
+
+  expect(uploaded.reason).toBe('user-reported-silent');
+  expect(uploaded.page.pathname).toBe('/__listener-debug.html');
+  expect(uploaded.flight.snapshots.length).toBeGreaterThan(0);
+  expect(uploaded.flight.snapshots.at(-1).audioSession.type).toBe('playback');
+  expect(uploaded.flight.snapshots.at(-1).outputTimestamp).not.toBeNull();
+  expect(uploaded.flight.events.map((entry) => entry.type)).toContain('user-reported-silent');
+  expect(JSON.stringify(uploaded)).not.toContain('secret-test-key');
+
+  const eventTypes = await page.evaluate(
+    () => window.__relayListenerDiagnostics.dump().events.map((entry) => entry.type),
+  );
+  expect(eventTypes).toContain('listener-incident-uploaded');
 });

@@ -1,6 +1,7 @@
 import process from 'node:process';
 
 import { loadRelayConfig } from './config.js';
+import { installListenerIncidentDebugEndpoint } from './listener-incident-http-bootstrap.js';
 
 // Parse once at the process boundary, then publish only normalized values to the
 // legacy server module. This makes config.ts the deployment source of truth
@@ -37,4 +38,13 @@ Object.assign(process.env, {
 if (config.relayKey === null) delete process.env.RELAY_KEY;
 else process.env.RELAY_KEY = config.relayKey;
 
-await import('./server.js');
+// The incident endpoint is deliberately installed at the process boundary and
+// only when explicitly enabled. It wraps the one HTTP server created during
+// server module evaluation, then immediately restores Node's createServer so
+// normal runtime code never depends on a global monkey patch.
+const restoreCreateServer = installListenerIncidentDebugEndpoint();
+try {
+  await import('./server.js');
+} finally {
+  restoreCreateServer();
+}

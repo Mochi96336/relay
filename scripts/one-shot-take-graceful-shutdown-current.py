@@ -60,7 +60,7 @@ replace_once(
 migration_path = Path('scripts/one-shot-take-graceful-shutdown.py')
 migration_source = migration_path.read_text()
 controller_call = re.compile(
-    r"\nreplace_once\(\n    'src/take-controller\\.ts',\n.*?\n\)\n",
+    r"\nreplace_once\(\n    'src/take-controller\.ts',\n.*?\n\)\n",
     re.DOTALL,
 )
 migration_source, removed = controller_call.subn('\n', migration_source)

@@ -1,16 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const product = readFileSync(new URL('../src/product-view-model.ts', import.meta.url), 'utf8');
+import {
+  findUniqueFunctionSource,
+  readRepositoryTextFile,
+} from './helpers/source-contract.js';
+
+const product = readRepositoryTextFile('src/product-view-model.ts');
 
 function functionBody(name: string) {
-  const start = server.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `${name} must exist`);
-  const end = server.indexOf('\nfunction ', start + 1);
-  assert.ok(end > start, `${name} must have a following function boundary`);
-  return server.slice(start, end);
+  return findUniqueFunctionSource(name).declaration;
 }
 
 test('/statusz projects readiness-owned facts from one sampled snapshot', () => {
@@ -47,8 +46,8 @@ test('canonical readiness recognizes either Mic media transport, including WebTr
 });
 
 test('Robot route identity stays separate from Robot player-delta timing dependency', () => {
-  assert.match(server, /function robotProbeTimingActive\(\)/);
-  assert.doesNotMatch(server, /function robotRouteActive\(\)/);
+  assert.doesNotThrow(() => functionBody('robotProbeTimingActive'));
+  assert.throws(() => functionBody('robotRouteActive'), /found 0/);
   assert.match(product, /requiresRobotPlayerDelta: boolean/);
   assert.match(product, /!input\.timing\.requiresRobotPlayerDelta \|\| input\.timing\.robotDeltaFresh/);
   assert.doesNotMatch(product, /timing\.robotRoute/);

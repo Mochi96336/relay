@@ -1,5 +1,5 @@
 from pathlib import Path
-import re
+import ast
 
 
 def replace_once(path: str, old: str, new: str, label: str) -> None:
@@ -59,12 +59,36 @@ replace_once(
 
 migration_path = Path('scripts/one-shot-take-graceful-shutdown.py')
 migration_source = migration_path.read_text()
-controller_call = re.compile(
-    r"\nreplace_once\(\n    'src/take-controller\.ts',\n.*?\n\)\n",
-    re.DOTALL,
-)
-migration_source, removed = controller_call.subn('\n', migration_source)
-if removed != 3:
-    raise SystemExit(f'expected three stale TakeController migration blocks, removed {removed}')
+tree = ast.parse(migration_source)
+lines = migration_source.splitlines(keepends=True)
+ranges: list[tuple[int, int]] = []
+for node in tree.body:
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        continue
+    call = node.value
+    if not isinstance(call.func, ast.Name) or call.func.id != 'replace_once' or not call.args:
+        continue
+    first = call.args[0]
+    if isinstance(first, ast.Constant) and first.value == 'src/take-controller.ts':
+        if node.end_lineno is None:
+            raise SystemExit('stale TakeController migration node has no end line')
+        ranges.append((node.lineno - 1, node.end_lineno))
+
+if not ranges:
+    raise SystemExit('no stale TakeController migration blocks found')
+for start, end in reversed(ranges):
+    del lines[start:end]
+migration_source = ''.join(lines)
+
+sanitized_tree = ast.parse(migration_source)
+for node in sanitized_tree.body:
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        continue
+    call = node.value
+    if not isinstance(call.func, ast.Name) or call.func.id != 'replace_once' or not call.args:
+        continue
+    first = call.args[0]
+    if isinstance(first, ast.Constant) and first.value == 'src/take-controller.ts':
+        raise SystemExit('stale TakeController migration block remained after sanitizing')
 
 exec(compile(migration_source, str(migration_path), 'exec'), {'__name__': '__main__'})

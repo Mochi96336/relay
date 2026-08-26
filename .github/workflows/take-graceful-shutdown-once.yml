@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/take-graceful-shutdown-once.yml
       - scripts/one-shot-take-graceful-shutdown.py
+      - scripts/one-shot-take-graceful-shutdown-current.py
       - scripts/one-shot-take-graceful-shutdown-fixtures.py
       - scripts/one-shot-take-graceful-shutdown-harness.py
 
@@ -38,7 +39,7 @@ jobs:
 
       - name: Apply exact Take shutdown patch
         run: |
-          python3 scripts/one-shot-take-graceful-shutdown.py
+          python3 scripts/one-shot-take-graceful-shutdown-current.py
           python3 scripts/one-shot-take-graceful-shutdown-fixtures.py
           python3 scripts/one-shot-take-graceful-shutdown-harness.py
           git add -N test/server-take-shutdown.test.ts
@@ -113,6 +114,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/take-graceful-shutdown-once.yml \
             scripts/one-shot-take-graceful-shutdown.py \
+            scripts/one-shot-take-graceful-shutdown-current.py \
             scripts/one-shot-take-graceful-shutdown-fixtures.py \
             scripts/one-shot-take-graceful-shutdown-harness.py
           git add -- \

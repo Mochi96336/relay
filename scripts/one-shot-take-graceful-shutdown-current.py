@@ -92,3 +92,8 @@ for node in sanitized_tree.body:
         raise SystemExit('stale TakeController migration block remained after sanitizing')
 
 exec(compile(migration_source, str(migration_path), 'exec'), {'__name__': '__main__'})
+
+# Historical migration text appended a second blank line at EOF. The product
+# source contract is one terminating newline, and diff --check should enforce it.
+server_path = Path('src/server.ts')
+server_path.write_text(server_path.read_text().rstrip() + '\n')

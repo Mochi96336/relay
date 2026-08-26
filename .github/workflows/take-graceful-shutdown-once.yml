@@ -1,5 +1,5 @@
 name: One-shot Take graceful shutdown
-# retrigger after the stale i18n presence contract was repaired
+# final run from current main before removing this one-shot scaffold
 
 on:
   push:

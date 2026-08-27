@@ -5,6 +5,7 @@ import test from 'node:test';
 import WebSocket from 'ws';
 
 import {
+  createRelaySocketTransport,
   createRelayWebSocketServer,
   type RelaySocket,
 } from '../src/relay-socket-server.js';
@@ -80,6 +81,7 @@ test('socket substrate owns upgrade admission and initializes transport metadata
     relayKey: 'secret',
     heartbeatMs: 1_000,
   });
+  const transport = createRelaySocketTransport(wss);
   const port = await listen(server);
 
   try {
@@ -104,6 +106,34 @@ test('socket substrate owns upgrade admission and initializes transport metadata
     client.send(JSON.stringify({ type: 'clock-ping' }));
     await serverMessage;
     assert.equal(socket.isAlive, true, 'message traffic refreshes heartbeat liveness');
+
+    const directMessage = waitForEvent(client, 'message', 'direct transport JSON');
+    transport.sendJson(socket, { type: 'transport-direct' });
+    const [directPayload] = await directMessage;
+    assert.deepEqual(JSON.parse(directPayload.toString()), { type: 'transport-direct' });
+
+    assert.equal(transport.canClaimSocketRole(socket, 'publisher'), true);
+    transport.commitSocketRole(socket, 'publisher');
+    assert.equal(socket.role, 'publisher');
+    assert.equal(transport.canClaimSocketRole(socket, 'publisher'), true);
+
+    const conflictMessage = waitForEvent(client, 'message', 'role conflict JSON');
+    assert.equal(transport.canClaimSocketRole(socket, 'backing'), false);
+    const [conflictPayload] = await conflictMessage;
+    assert.deepEqual(JSON.parse(conflictPayload.toString()), {
+      type: 'role-conflict',
+      currentRole: 'publisher',
+      requestedRole: 'backing',
+    });
+    assert.throws(
+      () => transport.commitSocketRole(socket, 'backing'),
+      /Cannot change WebSocket role from publisher to backing/,
+    );
+
+    const broadcastMessage = waitForEvent(client, 'message', 'broadcast transport JSON');
+    transport.broadcastJson({ type: 'transport-broadcast' });
+    const [broadcastPayload] = await broadcastMessage;
+    assert.deepEqual(JSON.parse(broadcastPayload.toString()), { type: 'transport-broadcast' });
 
     const clientClosed = waitForEvent(client, 'close', 'accepted client close');
     const serverSocketClosed = waitForEvent(socket, 'close', 'accepted server socket close');

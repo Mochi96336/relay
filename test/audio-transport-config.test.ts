@@ -63,16 +63,27 @@ describe('audio transport configuration', () => {
     );
   });
 
-  it('keeps the server on the validated config boundary instead of restoring raw env fallbacks', () => {
+  it('keeps the receiver on the validated config boundary after Mic runtime extraction', () => {
     const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+    const micRuntime = readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8');
+    const transportBoundary = `${server}\n${micRuntime}`;
 
     assert.match(server, /const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig\(\);/);
     assert.match(
       server,
-      /createWebSocketAudioTransport\(\{[\s\S]{0,500}receiver:\s*\{[\s\S]{0,300}\.\.\.AUDIO_TRANSPORT_CONFIG/,
-      'the receiver must consume the already-validated config object',
+      /new MicRuntime\(\{[\s\S]{0,300}audioTransportConfig:\s*AUDIO_TRANSPORT_CONFIG/,
+      'server orchestration must inject the already-validated config object',
     );
-    assert.doesNotMatch(server, /envNonNegativeInt|MIC_REORDER_WINDOW_PACKETS|MIC_REORDER_DEADLINE_MS|MIC_MAX_FORWARD_JUMP_PACKETS/);
-    assert.doesNotMatch(server, /maxForwardJumpPackets:\s*Math\.max/);
+    assert.doesNotMatch(server, /createWebSocketAudioTransport/,
+      'server orchestration must not reconstruct receiver tuning after handing it to MicRuntime');
+    assert.match(
+      micRuntime,
+      /createWebSocketAudioTransport\(\{[\s\S]{0,500}receiver:\s*\{[\s\S]{0,300}\.\.\.this\.options\.audioTransportConfig/,
+      'MicRuntime receiver construction must consume the injected validated config object',
+    );
+    assert.doesNotMatch(micRuntime, /loadAudioTransportConfig|process\.env/,
+      'MicRuntime must not create a second deployment-config authority');
+    assert.doesNotMatch(transportBoundary, /envNonNegativeInt|MIC_REORDER_WINDOW_PACKETS|MIC_REORDER_DEADLINE_MS|MIC_MAX_FORWARD_JUMP_PACKETS/);
+    assert.doesNotMatch(transportBoundary, /maxForwardJumpPackets:\s*Math\.max/);
   });
 });

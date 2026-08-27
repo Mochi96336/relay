@@ -18,6 +18,7 @@ import { ContentCalibrationValidator } from './content-calibration-validator.js'
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicRuntime } from './mic-runtime.js';
+import { TimingRuntime } from './timing-runtime.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, encodePcmFrame, type PcmFrame } from './pcm-frame.js';
@@ -193,8 +194,6 @@ const youtubeTimeline = new SongSession();
 const roomSongCommands = new RoomSongCommandSession();
 let roomSongCommandRevision = 0;
 
-type CalibrationKind = 'none' | 'content' | 'boot-probe';
-
 type TimelineStatus = {
   connected?: boolean;
   videoId?: string;
@@ -259,9 +258,9 @@ const CONTENT_VALIDATION_DEVIATION_MS = envMs(
   'RELAY_CALIBRATION_VALIDATION_DEVIATION_MS',
   30,
 );
-let lastAutoCalibrationAt = -Infinity;
-let calibrationWasAutomatic = false;
-let calibrationKind: CalibrationKind = 'none';
+const timingRuntime = new TimingRuntime({
+  autoCalibrationRetryMs: AUTO_CALIBRATION_RETRY_MS,
+});
 
 const PROBE_CALIBRATE = process.env.RELAY_CALIBRATION_PROBE !== '0';
 const PROBE_RETRY_MS = envMs('RELAY_CALIBRATION_PROBE_RETRY_MS', 6_000);
@@ -648,7 +647,7 @@ function beginRobotContentTransition(
   };
   robotContentTransition = state;
 
-  const confirmedReferenceLagMs = calibrationKind === 'content'
+  const confirmedReferenceLagMs = timingRuntime.calibrationKind === 'content'
     ? calibration.confirmedResult?.micLagMs ?? null
     : null;
   if (confirmedReferenceLagMs !== null) {
@@ -977,9 +976,6 @@ const calibration = new CalibrationSession({
   },
 });
 
-let contentValidationBaselineRevision = -1;
-/** The one confirmed revision whose live read head must approach, not jump to. */
-let contentValidationSlewRevision: number | null = null;
 const contentCalibrationValidator = new ContentCalibrationValidator({
   sampleRate: MIX_SAMPLE_RATE,
   durationMs: TIMING_CALIBRATION_MS,
@@ -996,27 +992,26 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
     broadcastJson(timingCalibrationStatusPayload());
   },
   onDriftConfirmed: (result) => {
-    calibrationKind = 'content';
+    timingRuntime.markContentAuthority();
     // applyValidatedResult synchronously calls onSettled -> syncAppliedCalibration.
     // Mark that revision first so only this runtime promotion takes the slew path.
-    contentValidationSlewRevision = calibration.confirmedRevision + 1;
+    timingRuntime.prepareContentValidationSlew(calibration.confirmedRevision + 1);
     calibration.applyValidatedResult(result);
     // applyValidatedResult increments synchronously. Keep the validator's
     // own drift-confirmed state rather than immediately reseeding it.
-    contentValidationBaselineRevision = calibration.confirmedRevision;
+    timingRuntime.markContentValidationBaseline(calibration.confirmedRevision);
   },
 });
 
 function clearContentValidationBaseline() {
-  contentValidationBaselineRevision = -1;
-  contentValidationSlewRevision = null;
+  timingRuntime.clearContentValidationBaseline();
   contentCalibrationValidator.clearBaseline();
 }
 
 function syncContentValidationBaseline(nowMs: number) {
   const confirmed = calibration.confirmedResult;
   if (
-    calibrationKind !== 'content'
+    timingRuntime.calibrationKind !== 'content'
     || confirmed === null
     || calibrationIsStale()
   ) {
@@ -1025,7 +1020,7 @@ function syncContentValidationBaseline(nowMs: number) {
   }
 
   if (
-    contentValidationBaselineRevision === calibration.confirmedRevision
+    timingRuntime.contentValidationBaselineRevision === calibration.confirmedRevision
     && contentCalibrationValidator.hasBaseline
   ) return;
 
@@ -1035,7 +1030,7 @@ function syncContentValidationBaseline(nowMs: number) {
     segmentLagsMs: confirmed.segmentLagsMs,
     context: calibrationContext(),
   }, nowMs);
-  contentValidationBaselineRevision = calibration.confirmedRevision;
+  timingRuntime.markContentValidationBaseline(calibration.confirmedRevision);
 }
 
 function cancelActiveContentValidation(nowMs = performance.now()) {
@@ -1515,19 +1510,19 @@ function calibrationCanApply() {
   if (result === null || calibrationIsStale()) return false;
   if (
     robotProbeTimingActive()
-    && calibrationKind !== 'boot-probe'
+    && timingRuntime.calibrationKind !== 'boot-probe'
     && !probeCalibrationExhausted()
   ) return false;
   // Boot calibration is a three-term equation. The two probe legs may be
   // measured ahead of playback, but an unknown player delta is not zero. Keep
   // the path result as evidence and stay on the network fallback until the
   // active robot has published a fresh, settled delta.
-  if (robotProbeTimingActive() && calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
+  if (robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   // A Robot content result is expressed in the mapper's stable reference frame.
   // It can own the live mixer only while the current media mapping is known.
   if (
     robotProbeTimingActive()
-    && calibrationKind === 'content'
+    && timingRuntime.calibrationKind === 'content'
     && !robotContentMappingReady()
   ) return false;
   return true;
@@ -1551,7 +1546,7 @@ function syncAppliedCalibration() {
   if (takeBlocksCalibration()) return false;
   const active = session.alignment.calibratedMicLagMs;
 
-  if (robotProbeTimingActive() && calibrationKind === 'boot-probe') {
+  if (robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe') {
     if (!calibrationCanApply()) {
       if (active === null) return false;
       session.setAlignment({ calibratedMicLagMs: null });
@@ -1581,7 +1576,7 @@ function syncAppliedCalibration() {
   }
 
   let nextMicLagMs = calibrationCanApply() ? calibration.result!.micLagMs : null;
-  const robotContentAuthority = robotProbeTimingActive() && calibrationKind === 'content';
+  const robotContentAuthority = robotProbeTimingActive() && timingRuntime.calibrationKind === 'content';
   if (nextMicLagMs !== null && robotContentAuthority) {
     nextMicLagMs = robotContentTimeline.liveLagMs(
       nextMicLagMs,
@@ -1596,26 +1591,26 @@ function syncAppliedCalibration() {
   // while ignoring sub-threshold player jitter.
   if (
     robotContentAuthority
-    && contentValidationSlewRevision === null
+    && timingRuntime.contentValidationSlewRevision === null
     && active !== null
     && nextMicLagMs !== null
     && Math.abs(nextMicLagMs - active) < BOOT_DELTA_REAPPLY_MS
   ) return false;
 
   if (active === nextMicLagMs) {
-    if (contentValidationSlewRevision === calibration.confirmedRevision) {
-      contentValidationSlewRevision = null;
+    if (timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision)) {
+      timingRuntime.clearContentValidationSlew();
     }
     return false;
   }
 
   if (
-    calibrationKind === 'content'
+    timingRuntime.calibrationKind === 'content'
     && active !== null
     && nextMicLagMs !== null
-    && contentValidationSlewRevision === calibration.confirmedRevision
+    && timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision)
   ) {
-    contentValidationSlewRevision = null;
+    timingRuntime.clearContentValidationSlew();
     return session.slewCalibratedMicLagTo(nextMicLagMs);
   }
 
@@ -1624,7 +1619,7 @@ function syncAppliedCalibration() {
   // the already-known target on the next 250 ms tick.
   if (nextMicLagMs !== null && session.calibratedMicLagTarget === nextMicLagMs) return false;
 
-  contentValidationSlewRevision = null;
+  timingRuntime.clearContentValidationSlew();
   session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
   return true;
 }
@@ -1649,7 +1644,7 @@ function sourceStatusPayload() {
     activeCalibratedMicLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
-    calibrationKind,
+    calibrationKind: timingRuntime.calibrationKind,
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
@@ -1846,7 +1841,7 @@ function probeStatus(nowMs = performance.now()) {
 }
 
 function bootProbeInProgress(nowMs = performance.now()) {
-  return calibrationKind === 'boot-probe'
+  return timingRuntime.calibrationKind === 'boot-probe'
     && (calibration.result === null || calibration.transactionActive)
     && probeStatus(nowMs).active;
 }
@@ -1870,7 +1865,7 @@ function timingCalibrationStatusPayload() {
     activeMicLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
-    calibrationKind,
+    calibrationKind: timingRuntime.calibrationKind,
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
@@ -1887,7 +1882,7 @@ function timingCalibrationStatusPayload() {
     probeError: probe.error,
     bootCalibration: lastBootCalibration,
     robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs) : null,
-    automatic: calibrationWasAutomatic,
+    automatic: timingRuntime.automatic,
     autoCalibrate: AUTO_CALIBRATE,
     validation: contentCalibrationValidator.status(nowMs),
   };
@@ -1946,7 +1941,7 @@ function readinessPayload(nowMs = performance.now()) {
     calibrationState: String(calibrationStatus.state ?? 'idle'),
     calibrationValid: calibrationCanApply() && session.alignment.calibratedMicLagMs !== null,
     calibrationStale: calibrationIsStale(),
-    calibrationKind,
+    calibrationKind: timingRuntime.calibrationKind,
     probeCorrelation: lastProbeCorrelation,
     bootCalibration: lastBootCalibration,
   });
@@ -1996,7 +1991,7 @@ function productStatusPayload(nowMs = performance.now()) {
       calibrationActive: timingCalibrationInProgress(nowMs),
       calibrationStale: calibrationIsStale(),
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
-      requiresRobotPlayerDelta: robotProbeTimingActive() && calibrationKind === 'boot-probe',
+      requiresRobotPlayerDelta: robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe',
       robotProbeTimingActive: robotProbeTimingActive(),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
     },
@@ -2033,8 +2028,8 @@ function invalidateMicTiming(message: string) {
   clearContentValidationBaseline();
   if (calibration.collecting) calibration.fail(message);
   else calibration.reset();
-  calibrationKind = 'none';
-  lastAutoCalibrationAt = -Infinity;
+  timingRuntime.clearCalibrationKind();
+  timingRuntime.resetAutoCalibrationSchedule();
   syncAppliedCalibration();
   broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
@@ -2103,8 +2098,8 @@ function stopLiveSource() {
   clearRobotBackingBoundaryRequest();
   session.stop();
   calibration.reset();
-  calibrationKind = 'none';
-  lastAutoCalibrationAt = -Infinity;
+  timingRuntime.clearCalibrationKind();
+  timingRuntime.resetAutoCalibrationSchedule();
   broadcastJson(timingCalibrationStatusPayload());
   broadcastJson(sourceStatusPayload());
   broadcastStatus();
@@ -2203,16 +2198,14 @@ function maybeAutoCalibrate(nowMs: number) {
   if (robotProbeTimingActive() && !robotContentMappingReady(nowMs)) return;
   if (!session.active || calibration.collecting) return;
   if (calibration.confirmedResult !== null && !calibrationIsStale()) return;
-  if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
+  if (!timingRuntime.autoCalibrationDue(nowMs)) return;
 
   if (backing?.readyState !== WebSocket.OPEN || !micRuntime.controlConnected()) return;
   if (!bothStreamsFlowing(nowMs)) return;
   const timeline = currentTimelineStatus();
   if (!timeline.connected || Number(timeline.state) !== 1) return;
 
-  lastAutoCalibrationAt = nowMs;
-  calibrationWasAutomatic = true;
-  calibrationKind = 'content';
+  timingRuntime.beginContentCalibration(nowMs, true);
   if (exhaustedRobotProbe) calibration.startFromPrimed(nowMs);
   else calibration.start(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
@@ -2224,7 +2217,7 @@ function contentValidationPathReady(nowMs: number) {
   if (robotProbeTimingActive() && !robotContentMappingReady(nowMs)) return false;
   if (!session.active || calibration.collecting) return false;
   if (
-    calibrationKind !== 'content'
+    timingRuntime.calibrationKind !== 'content'
     || calibration.confirmedResult === null
     || calibrationIsStale()
   ) return false;
@@ -2273,7 +2266,7 @@ function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
 
   const failure = probeLifecycle.failAttempt(target, reason, nowMs);
   if (failure) {
-    calibrationKind = 'boot-probe';
+    timingRuntime.markBootProbeAuthority();
     calibration.failPreservingPrimed(failure.message);
     return;
   }
@@ -2281,9 +2274,8 @@ function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
 }
 
 function sendProbeRequest(target: ProbeTarget, nowMs: number) {
-  if (calibrationKind !== 'boot-probe') {
-    calibrationWasAutomatic = true;
-    calibrationKind = 'boot-probe';
+  if (timingRuntime.calibrationKind !== 'boot-probe') {
+    timingRuntime.beginBootProbe(true);
   }
 
   probeRequestId += 1;
@@ -2322,7 +2314,7 @@ function maybeStartProbeCalibration(nowMs: number) {
   }
 
   if (
-    calibrationKind === 'boot-probe'
+    timingRuntime.calibrationKind === 'boot-probe'
     && calibration.result !== null
     && !calibrationIsStale()
     && !calibration.transactionActive
@@ -2538,7 +2530,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   lastBootCalibration = result;
   bootPathDifferenceMs = result.micLatencyMs - result.backingLatencyMs;
   bootConfidence = result.confidence;
-  calibrationKind = 'boot-probe';
+  timingRuntime.markBootProbeAuthority();
   calibration.applyExternalResult({
     micLagMs: result.advanceMs,
     confidence: Math.max(0, Math.min(1, result.confidence)),
@@ -2551,7 +2543,7 @@ function currentDeltaMs(nowMs: number) {
 
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
-  if (!robotProbeTimingActive() || calibrationKind !== 'boot-probe') return;
+  if (!robotProbeTimingActive() || timingRuntime.calibrationKind !== 'boot-probe') return;
   if (bootPathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
   if (!robotDeltaIsFresh(nowMs)) return;
   if (lastProbeContext === null) return;
@@ -2573,17 +2565,17 @@ function maybeReapplyBootCalibration(nowMs: number) {
     advanceMs,
     deltaMs: currentDeltaMs(nowMs),
   };
-  calibrationKind = 'boot-probe';
+  timingRuntime.markBootProbeAuthority();
   calibration.applyExternalResult({ micLagMs: advanceMs, confidence: bootConfidence ?? 0 });
 }
 
 function dropLegacyCalibrationForRobot() {
-  if (!robotProbeTimingActive() || calibrationKind !== 'content') return;
+  if (!robotProbeTimingActive() || timingRuntime.calibrationKind !== 'content') return;
   if (probeCalibrationExhausted()) return;
   clearContentValidationBaseline();
   calibration.reset();
-  calibrationKind = 'none';
-  lastAutoCalibrationAt = -Infinity;
+  timingRuntime.clearCalibrationKind();
+  timingRuntime.resetAutoCalibrationSchedule();
   syncAppliedCalibration();
 }
 
@@ -2593,8 +2585,7 @@ function restartBootCalibration(nowMs: number, automatic: boolean) {
   // previous confirmed alignment and the player delta it was measured with
   // authoritative until a replacement probe earns promotion.
   calibration.beginExternalRecalibration();
-  calibrationKind = 'boot-probe';
-  calibrationWasAutomatic = automatic;
+  timingRuntime.beginBootProbe(automatic);
   abandonProbeRun();
   lastProbeCorrelation = { mic: null, backing: null };
   syncAppliedCalibration();
@@ -3298,8 +3289,7 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
       }
 
       cancelActiveContentValidation(nowMs);
-      calibrationWasAutomatic = false;
-      calibrationKind = 'content';
+      timingRuntime.beginContentCalibration(nowMs, false);
       calibration.start(nowMs);
       broadcastJson(timingCalibrationStatusPayload());
       return;

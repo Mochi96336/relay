@@ -2,8 +2,6 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import ts from 'typescript';
-
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../..',
@@ -53,34 +51,36 @@ export function readSourceTree(
   return sources;
 }
 
-function scriptKind(sourcePath: string) {
-  return sourcePath.endsWith('.js') || sourcePath.endsWith('.mjs')
-    ? ts.ScriptKind.JS
-    : ts.ScriptKind.TS;
+function escapedRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function parsedSource(source: RepositoryTextSource) {
-  return ts.createSourceFile(
-    source.path,
-    source.text,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKind(source.path),
-  );
-}
-
+/**
+ * Finds a top-level function without making its file path part of the contract.
+ * Relay's source uses one top-level closing brace per function declaration, so
+ * this intentionally small reader is enough for structural tests and does not
+ * depend on TypeScript's compiler API being exposed by the installed compiler.
+ */
 export function findUniqueFunctionSource(name: string) {
+  const declaration = new RegExp(
+    `^(?:export\\s+)?(?:async\\s+)?function\\s+${escapedRegExp(name)}\\s*\\(`,
+  );
   const matches: Array<RepositoryTextSource & { declaration: string }> = [];
 
   for (const source of readSourceTree('src', ['.ts'])) {
-    const sourceFile = parsedSource(source);
-    const visit = (node: ts.Node): void => {
-      if (ts.isFunctionDeclaration(node) && node.name?.text === name) {
-        matches.push({ ...source, declaration: node.getText(sourceFile) });
+    const lines = source.text.split('\n');
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!declaration.test(lines[index])) continue;
+      let end = index + 1;
+      while (end < lines.length && !/^}\s*$/.test(lines[end])) end += 1;
+      if (end >= lines.length) {
+        throw new Error(`Could not find the end of ${name} in ${source.path}.`);
       }
-      node.forEachChild(visit);
-    };
-    sourceFile.forEachChild(visit);
+      matches.push({
+        ...source,
+        declaration: lines.slice(index, end + 1).join('\n'),
+      });
+    }
   }
 
   if (matches.length !== 1) {
@@ -93,29 +93,18 @@ export function findUniqueFunctionSource(name: string) {
 }
 
 export function staticModuleSpecifiers(source: RepositoryTextSource) {
-  const sourceFile = parsedSource(source);
   const specifiers = new Set<string>();
+  const patterns = [
+    /\bfrom\s+['"]([^'"]+)['"]/g,
+    /\bimport\s+['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
 
-  const visit = (node: ts.Node): void => {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
-      && node.moduleSpecifier
-      && ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      specifiers.add(node.moduleSpecifier.text);
+  for (const pattern of patterns) {
+    for (const match of source.text.matchAll(pattern)) {
+      if (match[1]) specifiers.add(match[1]);
     }
-    if (
-      ts.isCallExpression(node)
-      && node.expression.kind === ts.SyntaxKind.ImportKeyword
-      && node.arguments.length === 1
-      && ts.isStringLiteral(node.arguments[0])
-    ) {
-      specifiers.add(node.arguments[0].text);
-    }
-    node.forEachChild(visit);
-  };
-
-  sourceFile.forEachChild(visit);
+  }
   return [...specifiers].sort();
 }
 

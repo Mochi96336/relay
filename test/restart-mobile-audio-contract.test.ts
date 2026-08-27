@@ -9,6 +9,7 @@ import { AudioSessionPolicy, resolveAudioSessionType } from '../public/audio-ses
 import { RelayClient, startRelay } from './helpers/harness.js';
 
 const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+const micRuntimeSource = readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const listenSource = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
 const liveStatusSource = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
@@ -159,7 +160,8 @@ test('Mic recovery exposes OS input mute to server liveness', () => {
   assert.match(appSource, /document\.addEventListener\('visibilitychange'/);
   assert.match(appSource, /window\.addEventListener\('pageshow', recoverPublisherAudio\)/);
   assert.match(appSource, /captureContext\.addEventListener\('statechange'/);
-  assert.match(serverSource, /micUplinkHealth\?\.inputMuted !== true/);
+  assert.match(serverSource, /function micStreaming\(nowMs = performance\.now\(\)\)[\s\S]{0,160}micRuntime\.streaming\(nowMs\)/);
+  assert.match(micRuntimeSource, /this\.currentUplinkHealth\?\.inputMuted !== true/);
 
   const parsed = parseAudioUplinkHealth({
     version: 1,

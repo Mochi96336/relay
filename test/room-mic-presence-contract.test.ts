@@ -23,8 +23,8 @@ test('Room Mic telemetry is accepted only from current authenticated Mic owner a
   assert.ok(start >= 0 && end > start);
   const handler = server.slice(start, end);
   assert.match(handler, /socket\.participantId !== participants\.micOwnerId/);
-  assert.match(handler, /socket\.participantId !== micMediaOwnerId/);
-  assert.match(handler, /presence\.captureGeneration !== micMediaGeneration/);
+  assert.match(handler, /socket\.participantId !== micRuntime\.mediaOwnerId/);
+  assert.match(handler, /presence\.captureGeneration !== micRuntime\.mediaGeneration/);
   assert.match(handler, /!micStreaming\(nowMs\)/);
 });
 

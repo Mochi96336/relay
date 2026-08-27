@@ -7,9 +7,8 @@ import express from 'express';
 import WebSocket from 'ws';
 
 import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './audio-session.js';
-import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
-import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
+import { parseAudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
 import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
@@ -18,6 +17,7 @@ import { CalibrationSession, type CalibrationContext } from './calibration-sessi
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
+import { MicRuntime } from './mic-runtime.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, encodePcmFrame, type PcmFrame } from './pcm-frame.js';
@@ -204,14 +204,6 @@ type TimelineStatus = {
   transportEstimateMs?: number;
 };
 
-let publisher: RelaySocket | null = null;
-let publisherSampleRate: number | null = null;
-let micAudioTransport: AudioTransport | null = null;
-let micMediaTicket: string | null = null;
-let micMediaOwnerId: string | null = null;
-let micMediaGeneration: number | null = null;
-let micUplinkHealth: AudioUplinkHealth | null = null;
-let micUplinkHealthAt = -Infinity;
 let webTransportMedia: WebTransportMediaServer | null = null;
 let backing: RelaySocket | null = null;
 let backingSampleRate: number | null = null;
@@ -370,43 +362,31 @@ let robotContentTransitionAbortController: AbortController | null = null;
 
 const STREAM_LIVE_MS = 1_000;
 const COLLECTION_SILENCE_GRACE_MS = 1_500;
-let lastMicFrameAt = -Infinity;
-let lastMicFrameOwnerId: string | null = null;
-let lastMicFrameGeneration: number | null = null;
-let micFirstFrameWaitStartedAt = -Infinity;
 let lastBackingFrameAt = -Infinity;
 
-function resetMicFlowEvidence(nowMs = performance.now()) {
-  lastMicFrameAt = -Infinity;
-  lastMicFrameOwnerId = micMediaOwnerId;
-  lastMicFrameGeneration = micMediaGeneration;
-  micFirstFrameWaitStartedAt = micMediaOwnerId === null ? -Infinity : nowMs;
-}
+const micRuntime = new MicRuntime({
+  audioTransportConfig: AUDIO_TRANSPORT_CONFIG,
+  firstFrameTimeoutMs: MIC_FIRST_FRAME_TIMEOUT_MS,
+  streamLiveMs: STREAM_LIVE_MS,
+  createDirectMediaTicket: () => webTransportMedia ? createWebTransportMediaTicket() : null,
+  directMediaConnected: (ticket) => webTransportMedia?.hasSession(ticket) ?? false,
+  offerDirectMedia: (ticket) => webTransportMedia?.offer(ticket),
+});
 
 function noteMicFrame(nowMs: number) {
-  lastMicFrameAt = nowMs;
-  lastMicFrameOwnerId = micMediaOwnerId;
-  lastMicFrameGeneration = micMediaGeneration;
+  micRuntime.noteFrame(nowMs);
 }
 
 function micFlowObserved() {
-  return Number.isFinite(lastMicFrameAt)
-    && lastMicFrameOwnerId === micMediaOwnerId
-    && lastMicFrameGeneration === micMediaGeneration;
+  return micRuntime.flowObserved();
 }
 
 function micStartupTimedOut(nowMs = performance.now()) {
-  return micMediaConnected()
-    && !micFlowObserved()
-    && Number.isFinite(micFirstFrameWaitStartedAt)
-    && nowMs - micFirstFrameWaitStartedAt >= MIC_FIRST_FRAME_TIMEOUT_MS;
+  return micRuntime.startupTimedOut(nowMs);
 }
 
 function micStreaming(nowMs = performance.now()) {
-  return micMediaConnected()
-    && micFlowObserved()
-    && micUplinkHealth?.inputMuted !== true
-    && nowMs - lastMicFrameAt < STREAM_LIVE_MS;
+  return micRuntime.streaming(nowMs);
 }
 
 function bothStreamsFlowing(nowMs: number) {
@@ -436,28 +416,19 @@ function cancelMicTransportGrace() {
 }
 
 function webTransportMicConnected() {
-  return webTransportMedia?.hasSession(micMediaTicket) ?? false;
+  return micRuntime.directMediaConnected();
 }
 
 function micMediaConnected() {
-  return publisher?.readyState === WebSocket.OPEN || webTransportMicConnected();
+  return micRuntime.connected();
 }
 
 function micMediaPath() {
-  if (webTransportMicConnected()) return 'webtransport';
-  if (publisher?.readyState === WebSocket.OPEN) return 'websocket';
-  return null;
+  return micRuntime.mediaPath();
 }
 
 function clearMicMediaAuthority() {
-  micAudioTransport = null;
-  micMediaTicket = null;
-  micMediaOwnerId = null;
-  micMediaGeneration = null;
-  resetMicFlowEvidence();
-  micUplinkHealth = null;
-  micUplinkHealthAt = -Infinity;
-  publisherSampleRate = null;
+  micRuntime.clearMediaAuthority(performance.now());
   session.setMicExpected(false);
 }
 
@@ -470,11 +441,11 @@ function scheduleMicTransportGrace(ownerId: string) {
     micTransportGraceOwnerId = null;
     if (!expectedOwnerId || participants.micOwnerId !== expectedOwnerId) return;
     if (
-      publisher?.readyState === WebSocket.OPEN
-      && publisher.participantId === expectedOwnerId
+      micRuntime.controlConnected()
+      && micRuntime.publisher?.participantId === expectedOwnerId
     ) return;
 
-    const directMediaStillFlowing = micMediaOwnerId === expectedOwnerId
+    const directMediaStillFlowing = micRuntime.mediaOwnerId === expectedOwnerId
       && webTransportMicConnected()
       && micStreaming(performance.now());
     if (directMediaStillFlowing) {
@@ -1156,7 +1127,7 @@ function sessionStatusPayload() {
     // Presence reports whether the owner's Mic media is available. The control
     // WebSocket can reconnect independently while WebTransport keeps PCM live.
     micConnected: ownerId !== null
-      && micMediaOwnerId === ownerId
+      && micRuntime.mediaOwnerId === ownerId
       && micMediaConnected(),
   };
 }
@@ -1173,7 +1144,7 @@ function requireMicOwnerCommand(socket: RelaySocket, command: MicOwnerCommand) {
   const decision = authorizeMicOwnerCommand(
     {
       participantId: socket.participantId ?? null,
-      isCurrentPublisher: socket === publisher && socket.role === 'publisher',
+      isCurrentPublisher: micRuntime.isPublisher(socket),
     },
     participants.micOwnerId,
   );
@@ -1530,7 +1501,7 @@ function publisherStatusPayload() {
   return {
     type: 'publisher-status',
     connected: micMediaConnected(),
-    sampleRate: publisherSampleRate,
+    sampleRate: micRuntime.sampleRate,
     mediaPath: micMediaPath(),
   };
 }
@@ -1702,13 +1673,7 @@ function takeQualityFrameState(nowMs = performance.now()) {
 }
 
 function micUplinkHealthPayload(nowMs = performance.now()) {
-  if (!micUplinkHealth) return null;
-  return {
-    ...micUplinkHealth,
-    reportAgeMs: Number.isFinite(micUplinkHealthAt)
-      ? Math.max(0, Math.round(nowMs - micUplinkHealthAt))
-      : null,
-  };
+  return micRuntime.uplinkHealthPayload(nowMs);
 }
 
 function mixHealthPayload() {
@@ -1723,7 +1688,7 @@ function mixHealthPayload() {
     prebufferMs: session.prebufferMs,
     micMediaPath: micMediaPath(),
     micUplink: micUplinkHealthPayload(),
-    micTransport: micAudioTransport?.stats() ?? null,
+    micTransport: micRuntime.receiverStats(),
   };
 }
 
@@ -1780,7 +1745,7 @@ function remoteStatusPayload() {
       micConnected,
       micStreaming,
       micMediaPath: micMediaPath(),
-      micFrameAgeMs: micFlowObserved() ? frameAgeMs(lastMicFrameAt, nowMs) : null,
+      micFrameAgeMs: micRuntime.frameAgeMs(nowMs),
       participants: snapshot.participants.length,
       participantsConnected: snapshot.participants.filter((participant) => participant.connected).length,
     },
@@ -1801,7 +1766,7 @@ function remoteStatusPayload() {
     audio: {
       micMediaPath: micMediaPath(),
       captureAndSender: micUplinkHealthPayload(nowMs),
-      receiverTransport: micAudioTransport?.stats() ?? null,
+      receiverTransport: micRuntime.receiverStats(),
       timeline: {
         micGapMs: mixHealth.micGapMs,
         micHeadroomMs: mixHealth.micHeadroomMs,
@@ -1844,7 +1809,7 @@ function observationStatusV1Payload() {
       microphone: {
         connected: remote.source.micConnected,
         streaming: remote.source.micStreaming,
-        sampleRate: publisherSampleRate,
+        sampleRate: micRuntime.sampleRate,
         frameAgeMs: remote.source.micFrameAgeMs,
       },
       robot: {
@@ -2012,7 +1977,7 @@ function productStatusPayload(nowMs = performance.now()) {
     participantCount: participantSnapshot.participants.length,
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
-    publisherControlConnected: publisher?.readyState === WebSocket.OPEN,
+    publisherControlConnected: micRuntime.controlConnected(),
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),
@@ -2054,9 +2019,9 @@ function broadcastStatus() {
 }
 
 function revokePublisherTransport(message: string) {
-  const previous = publisher;
-  const hadMedia = Boolean(previous || micAudioTransport || micMediaTicket);
-  publisher = null;
+  const previous = micRuntime.publisher;
+  const hadMedia = Boolean(previous || micRuntime.audioTransport || micRuntime.mediaTicket);
+  if (previous) micRuntime.detachPublisher(previous);
   clearMicMediaAuthority();
   if (previous) retirePublisherTransport(previous, 'mic-revoked', message);
   broadcastStatus();
@@ -2151,7 +2116,7 @@ function roomHasSong(nowMs = performance.now()) {
 
 function maybeStopLiveSourceWhenUnarmed() {
   if (!session.active) return;
-  const micArmed = publisher?.readyState === WebSocket.OPEN
+  const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGraceTimer !== null;
   const backingArmed = backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null;
@@ -2160,7 +2125,7 @@ function maybeStopLiveSourceWhenUnarmed() {
 
 function expireBackingGrace() {
   backingAbsenceTimer = null;
-  const micArmed = publisher?.readyState === WebSocket.OPEN
+  const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGraceTimer !== null;
   if (roomHasSong() || !micArmed) {
@@ -2179,13 +2144,13 @@ function processPublisherFrame(frame: PcmFrame) {
   // grace. Authorization already happened at the WS publisher boundary or the
   // short-lived WebTransport media ticket boundary, so the mixer must not make
   // a control socket pointer into a second source of truth.
-  if (!micAudioTransport || publisherSampleRate === null) return;
+  if (!micRuntime.audioTransport || micRuntime.sampleRate === null) return;
   if (!session.active) startLiveSource();
 
   if (session.active) {
     const previousGeneration = session.micGeneration;
     noteMicFrame(performance.now());
-    const { samples, start } = session.ingestMic(frame, publisherSampleRate);
+    const { samples, start } = session.ingestMic(frame, micRuntime.sampleRate);
 
     if (session.active) {
       const micRestarted = previousGeneration !== null && session.micGeneration !== previousGeneration;
@@ -2220,8 +2185,8 @@ function deliverMicPackets(packets: PcmFrame[]) {
 }
 
 const mixerTimer = setInterval(() => {
-  if (micAudioTransport) {
-    deliverMicPackets(micAudioTransport.flush(performance.now()));
+  if (micRuntime.audioTransport) {
+    deliverMicPackets(micRuntime.flush(performance.now()));
   }
 
   session.drain((frame, evidence, position) => {
@@ -2240,7 +2205,7 @@ function maybeAutoCalibrate(nowMs: number) {
   if (calibration.confirmedResult !== null && !calibrationIsStale()) return;
   if (nowMs - lastAutoCalibrationAt < AUTO_CALIBRATION_RETRY_MS) return;
 
-  if (backing?.readyState !== WebSocket.OPEN || publisher?.readyState !== WebSocket.OPEN) return;
+  if (backing?.readyState !== WebSocket.OPEN || !micRuntime.controlConnected()) return;
   if (!bothStreamsFlowing(nowMs)) return;
   const timeline = currentTimelineStatus();
   if (!timeline.connected || Number(timeline.state) !== 1) return;
@@ -2263,7 +2228,7 @@ function contentValidationPathReady(nowMs: number) {
     || calibration.confirmedResult === null
     || calibrationIsStale()
   ) return false;
-  if (backing?.readyState !== WebSocket.OPEN || publisher?.readyState !== WebSocket.OPEN) return false;
+  if (backing?.readyState !== WebSocket.OPEN || !micRuntime.controlConnected()) return false;
   if (!bothStreamsFlowing(nowMs)) return false;
   const timeline = currentTimelineStatus(nowMs);
   return Boolean(timeline.connected) && Number(timeline.state) === 1;
@@ -2293,7 +2258,7 @@ function probeGeneration(target: ProbeTarget) {
 
 function probePathReady(target: ProbeTarget, nowMs: number) {
   if (target === 'mic') {
-    return publisher?.readyState === WebSocket.OPEN && micStreaming(nowMs);
+    return micRuntime.controlConnected() && micStreaming(nowMs);
   }
   return backing?.readyState === WebSocket.OPEN
     && nowMs - lastBackingFrameAt < STREAM_LIVE_MS
@@ -2335,7 +2300,7 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
 
   const payload = { type: 'play-calibration-probe', target, requestId: probeRequestId, leadMs: PROBE_LEAD_MS };
   if (target === 'mic') {
-    sendJson(publisher!, payload);
+    sendJson(micRuntime.publisher!, payload);
   } else if (activeRobotSource) {
     sendJson(activeRobotSource, payload);
   }
@@ -2742,10 +2707,8 @@ wss.on('connection', (rawSocket, request) => {
 
   socket.on('message', (data, isBinary) => {
     if (isBinary) {
-      if (socket === publisher && socket.role === 'publisher') {
-        if (micAudioTransport) {
-          deliverMicPackets(micAudioTransport.receive(data as Buffer, performance.now()));
-        }
+      if (micRuntime.isPublisher(socket)) {
+        deliverMicPackets(micRuntime.receivePublisher(socket, data as Buffer, performance.now()));
         return;
       }
 
@@ -2886,11 +2849,8 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
     }
 
     if (payload.type === 'audio-uplink-health') {
-      if (socket !== publisher || socket.role !== 'publisher' || socket.audioPacketVersion !== 2) return;
       const health = parseAudioUplinkHealth(payload);
-      if (!health || socket.captureGeneration === undefined || health.captureGeneration !== socket.captureGeneration) return;
-      micUplinkHealth = health;
-      micUplinkHealthAt = performance.now();
+      if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
       return;
     }
 
@@ -2901,9 +2861,9 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         !presence
         || !socket.participantId
         || socket.participantId !== participants.micOwnerId
-        || socket.participantId !== micMediaOwnerId
-        || micMediaGeneration === null
-        || presence.captureGeneration !== micMediaGeneration
+        || socket.participantId !== micRuntime.mediaOwnerId
+        || micRuntime.mediaGeneration === null
+        || presence.captureGeneration !== micRuntime.mediaGeneration
         || !micStreaming(nowMs)
       ) return;
 
@@ -2918,8 +2878,8 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
       broadcastJson({
         type: 'room-mic-presence',
         version: 1,
-        ownerId: micMediaOwnerId,
-        captureGeneration: micMediaGeneration,
+        ownerId: micRuntime.mediaOwnerId,
+        captureGeneration: micRuntime.mediaGeneration,
         rmsDbfs: presence.rmsDbfs,
         spectrumBands: presence.spectrumBands,
         f0Hz: presence.f0Hz,
@@ -3040,9 +3000,9 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
       const cleanReleasedMicTransport = () => {
         if (transportCleaned) return;
         transportCleaned = true;
-        if (publisher?.participantId === socket.participantId) {
+        if (micRuntime.publisher?.participantId === socket.participantId) {
           revokePublisherTransport('You released the microphone.');
-        } else if (micMediaOwnerId === socket.participantId) {
+        } else if (micRuntime.mediaOwnerId === socket.participantId) {
           clearMicMediaAuthority();
         }
       };
@@ -3206,7 +3166,7 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         ?? normalizePlaybackGeneration(payload.playbackGeneration);
 
       if (!playbackParticipantId) {
-        if (socket !== publisher || socket.role !== 'publisher') {
+        if (!micRuntime.isPublisher(socket)) {
           reportTelemetryRejected(socket, 'not-publisher');
           return;
         }
@@ -3536,36 +3496,18 @@ beginRobotContentTransition(
         });
       }
 
-      const previousPublisher = publisher;
-      const sameParticipantReplacement = Boolean(
-        previousPublisher
-        && previousPublisher !== socket
-        && previousPublisher.participantId
-        && previousPublisher.participantId === socket.participantId,
-      );
-      const sameCapture = Boolean(
-        sameParticipantReplacement
-        && previousPublisher?.captureGeneration !== undefined
-        && captureGeneration !== null
-        && previousPublisher.captureGeneration === captureGeneration,
-      );
-      const reconnectingSameCapture = Boolean(
-        socket.participantId
-        && micMediaOwnerId === socket.participantId
-        && captureGeneration !== null
-        && micMediaGeneration === captureGeneration
-        && audioPacketVersion === 2
-        && micAudioTransport?.packetVersion === 2,
-      );
-      const preserveAudioTransport = Boolean(
-        reconnectingSameCapture
-        || (
-          sameCapture
-          && previousPublisher?.audioPacketVersion === 2
-          && audioPacketVersion === 2
-          && micAudioTransport
-        ),
-      );
+      const {
+        previousPublisher,
+        sameParticipantReplacement,
+        sameCapture,
+      } = micRuntime.bindPublisher({
+        socket,
+        sampleRate,
+        captureGeneration,
+        initialSequence: initialSequence ?? undefined,
+        audioPacketVersion,
+        nowMs: performance.now(),
+      });
 
       if (previousPublisher && previousPublisher !== socket) {
         const newOwnerName = socket.participantId
@@ -3580,39 +3522,9 @@ beginRobotContentTransition(
         );
       }
 
-      socket.sampleRate = sampleRate;
-      socket.captureGeneration = captureGeneration ?? undefined;
-      socket.audioPacketVersion = audioPacketVersion;
-      publisher = socket;
-      publisherSampleRate = sampleRate;
       cancelMicTransportGrace();
       session.setMicExpected(true);
       if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
-
-      if (!preserveAudioTransport) {
-        micUplinkHealth = null;
-        micUplinkHealthAt = -Infinity;
-        if (audioPacketVersion === 2) {
-          micAudioTransport = createWebSocketAudioTransport({
-            packetVersion: 2,
-            receiver: {
-              source: 'mic',
-              generation: captureGeneration!,
-              initialSequence: initialSequence ?? undefined,
-              ...AUDIO_TRANSPORT_CONFIG,
-            },
-          });
-          micMediaGeneration = captureGeneration;
-          micMediaOwnerId = socket.participantId ?? null;
-          micMediaTicket = webTransportMedia ? createWebTransportMediaTicket() : null;
-        } else {
-          micAudioTransport = createWebSocketAudioTransport({ packetVersion: 1 });
-          micMediaGeneration = null;
-          micMediaOwnerId = socket.participantId ?? null;
-          micMediaTicket = null;
-        }
-        resetMicFlowEvidence();
-      }
 
       if (deferredOwnershipTimingReason) {
         invalidateMicTiming(deferredOwnershipTimingReason);
@@ -3621,9 +3533,7 @@ beginRobotContentTransition(
       }
 
       restartLiveSourceAfterMicReconnect();
-      const mediaTransport = micMediaTicket && webTransportMedia
-        ? webTransportMedia.offer(micMediaTicket)
-        : undefined;
+      const mediaTransport = micRuntime.directMediaOffer();
       sendJson(socket, {
         type: 'registered',
         role: 'publisher',
@@ -3717,7 +3627,7 @@ beginRobotContentTransition(
     }
 
     if (payload.type === 'calibration-probe-played' || payload.type === 'calibration-probe-failed') {
-      const fromPublisher = socket === publisher && socket.role === 'publisher';
+      const fromPublisher = micRuntime.isPublisher(socket);
       const target = payload.target === 'backing' ? 'backing' : 'mic';
       const fromActiveRobot = socket === activeRobotSource && socket.isRobotSource === true;
       if (target === 'mic' ? fromPublisher : fromActiveRobot) {
@@ -3841,13 +3751,13 @@ beginRobotContentTransition(
         broadcastJson(timingCalibrationStatusPayload());
       }
 
-      if (socket === publisher) {
+      if (micRuntime.isPublisher(socket)) {
         takeController.noteQualityEvent('mic-transport-disconnected');
         const reconnectingOwnerId = socket.participantId
           && participants.micOwnerId === socket.participantId
           ? socket.participantId
           : null;
-        publisher = null;
+        micRuntime.detachPublisher(socket);
         const directMediaStillLive = webTransportMicConnected();
         if (!reconnectingOwnerId) {
           clearMicMediaAuthority();
@@ -3915,15 +3825,10 @@ if (directMediaConfig) {
   try {
     webTransportMedia = await startWebTransportMediaServer(directMediaConfig, {
       authorize(ticket) {
-        return Boolean(
-          ticket
-          && ticket === micMediaTicket
-          && micAudioTransport?.packetVersion === 2,
-        );
+        return micRuntime.authorizeDirectMedia(ticket);
       },
       onDatagram(ticket, packet, nowMs) {
-        if (ticket !== micMediaTicket || !micAudioTransport) return;
-        deliverMicPackets(micAudioTransport.receive(packet, nowMs));
+        deliverMicPackets(micRuntime.receiveDirectMedia(ticket, packet, nowMs));
       },
     });
     if (webTransportMedia.available) {

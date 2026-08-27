@@ -26,8 +26,8 @@ import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
 import {
+  createRelaySocketTransport,
   createRelayWebSocketServer,
-  type ClientRole,
   type RelaySocket,
 } from './relay-socket-server.js';
 import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
@@ -182,6 +182,12 @@ const wss = createRelayWebSocketServer(server, {
   relayKey,
   heartbeatMs: HEARTBEAT_MS,
 });
+const {
+  sendJson,
+  broadcastJson,
+  canClaimSocketRole,
+  commitSocketRole,
+} = createRelaySocketTransport(wss);
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 const youtubeTimeline = new SongSession();
 const roomSongCommands = new RoomSongCommandSession();
@@ -276,7 +282,7 @@ const PROBE_MAX_ATTEMPTS = envPositiveInt('RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS'
  * Long enough for the probe to play, be captured and reach the server.
  *
  * Derived from the search window rather than set independently: the analysis
- * cannot run until the timeline has covered the whole window, so a timeout
+ * cannot run until the timeline has covered its whole window, so a timeout
  * shorter than that rejects every probe before it is even looked at. Raising
  * `RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS` to 10 s did exactly that, and the
  * only symptom was every leg reporting `analysis dropped ... timedOut=true`.
@@ -1068,12 +1074,6 @@ function cancelActiveContentValidation(nowMs = performance.now()) {
   return true;
 }
 
-function sendJson(socket: WebSocket, payload: unknown) {
-  if (socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(payload));
-  }
-}
-
 function legacyTestInfrastructureEnabled() {
   return process.env.NODE_ENV === 'test'
     && process.env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1';
@@ -1086,41 +1086,6 @@ function infrastructureAuthorized(socket: RelaySocket) {
 function rejectInfrastructure(socket: RelaySocket, message: string) {
   sendJson(socket, { type: 'infrastructure-auth-rejected', message });
   socket.close(1008, 'Infrastructure authentication required.');
-}
-
-type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
-
-/**
- * A physical media/monitor WebSocket may bind exactly one transport role.
- * Authentication says who may use it; playback identity remains orthogonal
- * because a participant's playback-control capability can intentionally live
- * on the same socket as its publisher transport. Reconnects get a new socket
- * instead of morphing publisher/backing/monitor while authority pointers still
- * reference the old transport.
- */
-function canClaimSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
-  if (socket.role === 'unknown' || socket.role === requestedRole) return true;
-  sendJson(socket, {
-    type: 'role-conflict',
-    currentRole: socket.role,
-    requestedRole,
-  });
-  return false;
-}
-
-function commitSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
-  if (socket.role !== 'unknown' && socket.role !== requestedRole) {
-    throw new Error(`Cannot change WebSocket role from ${socket.role} to ${requestedRole}.`);
-  }
-  socket.role = requestedRole;
-}
-
-function broadcastJson(payload: unknown) {
-  const message = JSON.stringify(payload);
-  for (const client of wss.clients) {
-    const socket = client as RelaySocket;
-    if (socket.readyState === WebSocket.OPEN) socket.send(message);
-  }
 }
 
 type ParticipantIdentityResult =

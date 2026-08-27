@@ -3,6 +3,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 
 export type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';
+type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
 
 /**
  * Transport-local metadata carried by one Relay WebSocket.
@@ -40,10 +41,63 @@ export type RelaySocketServerOptions = {
 };
 
 /**
+ * Binds transport-only helpers to one Relay WebSocket server.
+ *
+ * These helpers know only physical socket state. They do not decide whether a
+ * participant may own the Mic, lead Song playback, control a Take, or hold any
+ * other domain authority.
+ */
+export function createRelaySocketTransport(wss: WebSocketServer) {
+  function sendJson(socket: WebSocket, payload: unknown) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(payload));
+    }
+  }
+
+  function broadcastJson(payload: unknown) {
+    const message = JSON.stringify(payload);
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(message);
+    }
+  }
+
+  /**
+   * A physical media/monitor WebSocket may bind exactly one transport role.
+   * Authentication says who may use it; playback identity remains orthogonal
+   * because a participant's playback-control capability can intentionally live
+   * on the same socket as its publisher transport. Reconnects get a new socket
+   * instead of morphing publisher/backing/monitor while authority pointers still
+   * reference the old transport.
+   */
+  function canClaimSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
+    if (socket.role === 'unknown' || socket.role === requestedRole) return true;
+    sendJson(socket, {
+      type: 'role-conflict',
+      currentRole: socket.role,
+      requestedRole,
+    });
+    return false;
+  }
+
+  function commitSocketRole(socket: RelaySocket, requestedRole: ClaimedClientRole) {
+    if (socket.role !== 'unknown' && socket.role !== requestedRole) {
+      throw new Error(`Cannot change WebSocket role from ${socket.role} to ${requestedRole}.`);
+    }
+    socket.role = requestedRole;
+  }
+
+  return {
+    sendJson,
+    broadcastJson,
+    canClaimSocketRole,
+    commitSocketRole,
+  };
+}
+
+/**
  * Owns the physical WebSocket substrate only: HTTP upgrade admission, socket
- * liveness, and heartbeat cleanup. Message meaning, transport-role claims and
- * disconnect effects stay in server orchestration until those seams are moved
- * independently.
+ * liveness, and heartbeat cleanup. Message meaning, identity/auth authority,
+ * and disconnect domain effects stay in server orchestration.
  */
 export function createRelayWebSocketServer(
   server: HttpServer,

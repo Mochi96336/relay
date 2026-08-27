@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 import express from 'express';
-import WebSocket, { WebSocketServer } from 'ws';
+import WebSocket from 'ws';
 
 import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './audio-session.js';
 import { createWebSocketAudioTransport, type AudioTransport } from './audio-transport.js';
@@ -25,6 +25,11 @@ import { ProbeLifecycle, type ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
+import {
+  createRelayWebSocketServer,
+  type ClientRole,
+  type RelaySocket,
+} from './relay-socket-server.js';
 import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
 import { RobotContentTimelineMapper } from './robot-content-timeline.js';
 import {
@@ -173,52 +178,16 @@ app.get('/readyz', (_req, res) => {
 });
 
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+const wss = createRelayWebSocketServer(server, {
+  relayKey,
+  heartbeatMs: HEARTBEAT_MS,
+});
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 const youtubeTimeline = new SongSession();
 const roomSongCommands = new RoomSongCommandSession();
 let roomSongCommandRevision = 0;
 
-server.on('upgrade', (request, socket, head) => {
-  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  if (url.pathname !== '/ws') {
-    socket.destroy();
-    return;
-  }
-
-  if (relayKey && url.searchParams.get('key') !== relayKey) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  wss.handleUpgrade(request, socket, head, (webSocket) => {
-    wss.emit('connection', webSocket, request);
-  });
-});
-
-type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';
 type CalibrationKind = 'none' | 'content' | 'boot-probe';
-type RelaySocket = WebSocket & {
-  role: ClientRole;
-  sampleRate?: number;
-  captureGeneration?: number;
-  audioPacketVersion?: 1 | 2;
-  monitorPacketVersion?: 1;
-  isAlive: boolean;
-  replaced?: boolean;
-  isRobotSource?: boolean;
-  participantId?: string;
-  participantConnectionId?: string;
-  playbackParticipantId?: string;
-  playbackTransportId?: string;
-  playbackGeneration?: number;
-  playbackMicIntentAtMs?: number;
-  legacyPlaybackGeneration?: number;
-  telemetryRejectedReason?: string;
-  micPresenceTelemetryAt?: number;
-  infrastructureAuthenticated?: boolean;
-};
 
 type TimelineStatus = {
   connected?: boolean;
@@ -2792,8 +2761,6 @@ function validAudioPacketVersion(value: unknown): 1 | 2 | null {
 
 wss.on('connection', (rawSocket, request) => {
   const socket = rawSocket as RelaySocket;
-  socket.role = 'unknown';
-  socket.isAlive = true;
   legacyPlaybackConnectionSequence += 1;
   socket.legacyPlaybackGeneration = legacyPlaybackConnectionSequence;
 
@@ -2808,13 +2775,7 @@ wss.on('connection', (rawSocket, request) => {
   }
   if (identity.kind === 'valid') attachParticipantIdentity(socket, identity);
 
-  socket.on('pong', () => {
-    socket.isAlive = true;
-  });
-
   socket.on('message', (data, isBinary) => {
-    socket.isAlive = true;
-
     if (isBinary) {
       if (socket === publisher && socket.role === 'publisher') {
         if (micAudioTransport) {
@@ -3966,24 +3927,11 @@ beginRobotContentTransition(
   });
 });
 
-const heartbeat = setInterval(() => {
-  for (const client of wss.clients) {
-    const socket = client as RelaySocket;
-    if (!socket.isAlive) {
-      socket.terminate();
-      continue;
-    }
-    socket.isAlive = false;
-    socket.ping();
-  }
-}, HEARTBEAT_MS);
-
 wss.on('close', () => {
   cancelMicTransportGrace();
   takeController.shutdown();
   clearMicMediaAuthority();
   void webTransportMedia?.stop();
-  clearInterval(heartbeat);
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
 });

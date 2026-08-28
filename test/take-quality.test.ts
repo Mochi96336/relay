@@ -83,6 +83,7 @@ function evidence(patch: Partial<TakeQualityEvidence> = {}): TakeQualityEvidence
       'robot-source-connected': 0,
       'robot-source-replaced': 0,
       'mic-owner-changed': 0,
+      'server-shutdown': 0,
     },
     ...patch,
   };
@@ -250,4 +251,16 @@ test('small clipping asks for review while sustained clipping is degraded', () =
   const sustained = assessTakeQuality(evidence({ clippedSamples: 960, clippedMs: 20 }));
   assert.equal(sustained.verdict, 'degraded');
   assert.equal(sustained.issues.find((issue) => issue.code === 'output-clipping')?.severity, 'critical');
+});
+
+
+test('controlled server shutdown is explicit review evidence', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), mixedFrame());
+  quality.noteEvent('server-shutdown');
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.events['server-shutdown'], 1);
+  assert.equal(result.verdict, 'review');
+  assert.equal(result.issues.some((issue) => issue.code === 'recording-interrupted'), true);
 });

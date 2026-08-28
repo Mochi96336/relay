@@ -126,6 +126,7 @@ export class TakeController {
   private pendingStop: PendingStop | null = null;
   private storagePrepared = false;
   private pruneChain: Promise<void> = Promise.resolve();
+  private finalization: Promise<void> | null = null;
 
   constructor(private readonly options: {
     directory: string;
@@ -307,24 +308,7 @@ export class TakeController {
   }
 
   endMix(nowMs = Date.now()) {
-    const current = this.session.currentTake();
-    if (!current || current.lifecycle !== 'recording' || !current.mixSampleRange) return false;
-
-    // A source shutdown means no later frame can ever reach an already-armed
-    // Stop. Close at the actual writer frontier rather than inventing silence up
-    // to a command boundary the mixer will never emit.
-    const request: PendingStop = {
-      takeId: current.takeId,
-      actorParticipantId: null,
-      stopReason: 'mix-ended',
-      stopPosition: {
-        generation: current.mixSampleRange.generation,
-        firstSampleIndex: current.mixSampleRange.endSampleIndex,
-      },
-      endedAtMs: nowMs,
-    };
-    this.pendingStop = request;
-    return this.finalizeStop(request).ok;
+    return this.finalizeAtCurrentFrontier('mix-ended', nowMs);
   }
 
   append(
@@ -393,12 +377,48 @@ export class TakeController {
     return true;
   }
 
-  shutdown() {
-    const writer = this.writer;
+  async shutdown(nowMs = Date.now()) {
+    if (this.session.recordingTakeId) {
+      this.quality?.noteEvent('server-shutdown');
+      this.finalizeAtCurrentFrontier('server-shutdown', nowMs);
+    }
+
+    const finalization = this.finalization;
+    if (finalization) await finalization;
+
+    // A normal recording/finalizing Take has been drained above. This only
+    // covers an impossible lifecycle mismatch or a writer that failed before
+    // the Take could enter finalizing.
+    const orphanWriter = this.writer;
     this.writer = null;
     this.quality = null;
     this.pendingStop = null;
-    if (writer) void writer.abort();
+    if (orphanWriter) await orphanWriter.abort();
+    await this.pruneChain;
+  }
+
+  private finalizeAtCurrentFrontier(
+    stopReason: 'mix-ended' | 'server-shutdown',
+    nowMs: number,
+  ) {
+    const current = this.session.currentTake();
+    if (!current || current.lifecycle !== 'recording' || !current.mixSampleRange) return false;
+
+    // Once no later mix frame can be accepted, the only truthful boundary is
+    // the writer frontier already committed to this Take. Never invent silence
+    // to reach a previously armed command boundary.
+    const request: PendingStop = {
+      takeId: current.takeId,
+      actorParticipantId: null,
+      stopReason,
+      stopPosition: {
+        generation: current.mixSampleRange.generation,
+        firstSampleIndex: current.mixSampleRange.endSampleIndex,
+      },
+      endedAtMs: nowMs,
+    };
+    this.pendingStop = request;
+    return this.finalizeStop(request).ok;
   }
 
   private finalizeStop(request: PendingStop): StopTakeResult {
@@ -454,65 +474,72 @@ export class TakeController {
       return decision;
     }
 
-    void writer.finalize()
-      .then((file) => {
-        const pendingTake = this.session.currentTake();
-        const recordedSampleCount = pendingTake?.mixSampleRange?.sampleCount ?? 0;
-        if (recordedSampleCount !== file.sampleCount) {
-          if (this.session.fail(
-            request.takeId,
-            `Take sample metadata recorded ${recordedSampleCount} samples but WAV contains ${file.sampleCount}.`,
-            Date.now(),
-          )) this.emitChange();
-          void writer.discardFinalized();
-          return;
-        }
-
-        const base = this.options.artifactBaseUrl ?? '/takes';
-        const completed = this.session.complete(request.takeId, {
-          fileName: file.fileName,
-          url: `${base}/${encodeURIComponent(request.takeId)}.wav`,
-          mimeType: 'audio/wav',
-          sizeBytes: file.sizeBytes,
-          sampleRate: file.sampleRate,
-          channels: 1,
-          bitsPerSample: 16,
-          sampleCount: file.sampleCount,
-          durationMs: file.durationMs,
-        });
-        if (completed) {
-          const readyTake = this.session.currentTake();
-          if (readyTake?.lifecycle === 'ready' && readyTake.artifact) {
-            try {
-              const item = historyItem(this.library.record(readyTake));
-              this.historyCache = Object.freeze([
-                structuredClone(item),
-                ...this.historyCache
-                  .filter((candidate) => candidate.takeId !== item.takeId)
-                  .map((candidate) => structuredClone(candidate)),
-              ]);
-            } catch (error) {
-              // The finalized WAV remains authoritative and recoverable. A
-              // metadata failure must not turn a successfully recorded Take
-              // into a failed one; the browser receives the ready Take beside
-              // the last durable history snapshot and can review it now.
-              this.reportStorageError(error);
-            }
-          }
-          this.emitChange();
-          this.scheduleRetentionPrune();
-        } else {
-          // A finalized file without a matching ready Take is not a valid
-          // artifact and must not become an unreferenced disk leak.
-          void writer.discardFinalized();
-        }
-      })
-      .catch((error) => {
-        if (this.session.fail(request.takeId, errorMessage(error), Date.now())) this.emitChange();
-        void writer.abort();
-      });
+    const finalization = this.finalizeWriter(writer, request.takeId);
+    this.finalization = finalization;
+    void finalization.finally(() => {
+      if (this.finalization === finalization) this.finalization = null;
+    });
 
     return decision;
+  }
+
+  private async finalizeWriter(writer: WavTakeWriter, takeId: string) {
+    try {
+      const file = await writer.finalize();
+      const pendingTake = this.session.currentTake();
+      const recordedSampleCount = pendingTake?.mixSampleRange?.sampleCount ?? 0;
+      if (recordedSampleCount !== file.sampleCount) {
+        if (this.session.fail(
+          takeId,
+          `Take sample metadata recorded ${recordedSampleCount} samples but WAV contains ${file.sampleCount}.`,
+          Date.now(),
+        )) this.emitChange();
+        await writer.discardFinalized();
+        return;
+      }
+
+      const base = this.options.artifactBaseUrl ?? '/takes';
+      const completed = this.session.complete(takeId, {
+        fileName: file.fileName,
+        url: `${base}/${encodeURIComponent(takeId)}.wav`,
+        mimeType: 'audio/wav',
+        sizeBytes: file.sizeBytes,
+        sampleRate: file.sampleRate,
+        channels: 1,
+        bitsPerSample: 16,
+        sampleCount: file.sampleCount,
+        durationMs: file.durationMs,
+      });
+      if (completed) {
+        const readyTake = this.session.currentTake();
+        if (readyTake?.lifecycle === 'ready' && readyTake.artifact) {
+          try {
+            const item = historyItem(this.library.record(readyTake));
+            this.historyCache = Object.freeze([
+              structuredClone(item),
+              ...this.historyCache
+                .filter((candidate) => candidate.takeId !== item.takeId)
+                .map((candidate) => structuredClone(candidate)),
+            ]);
+          } catch (error) {
+            // The finalized WAV remains authoritative and recoverable. A
+            // metadata failure must not turn a successfully recorded Take
+            // into a failed one; the browser receives the ready Take beside
+            // the last durable history snapshot and can review it now.
+            this.reportStorageError(error);
+          }
+        }
+        this.emitChange();
+        this.scheduleRetentionPrune();
+      } else {
+        // A finalized file without a matching ready Take is not a valid
+        // artifact and must not become an unreferenced disk leak.
+        await writer.discardFinalized();
+      }
+    } catch (error) {
+      if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();
+      await writer.abort();
+    }
   }
 
   private failWriter(writer: WavTakeWriter, error: unknown) {

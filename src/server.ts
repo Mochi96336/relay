@@ -2680,8 +2680,14 @@ function validAudioPacketVersion(value: unknown): 1 | 2 | null {
   return version === 1 || version === 2 ? version : null;
 }
 
+let shuttingDown = false;
+
 wss.on('connection', (rawSocket, request) => {
   const socket = rawSocket as RelaySocket;
+  if (shuttingDown) {
+    socket.close(1012, 'Relay is shutting down.');
+    return;
+  }
   legacyPlaybackConnectionSequence += 1;
   socket.legacyPlaybackGeneration = legacyPlaybackConnectionSequence;
 
@@ -2697,6 +2703,7 @@ wss.on('connection', (rawSocket, request) => {
   if (identity.kind === 'valid') attachParticipantIdentity(socket, identity);
 
   socket.on('message', (data, isBinary) => {
+    if (shuttingDown) return;
     if (isBinary) {
       if (micRuntime.isPublisher(socket)) {
         deliverMicPackets(micRuntime.receivePublisher(socket, data as Buffer, performance.now()));
@@ -3794,9 +3801,7 @@ beginRobotContentTransition(
 
 wss.on('close', () => {
   cancelMicTransportGrace();
-  takeController.shutdown();
   clearMicMediaAuthority();
-  void webTransportMedia?.stop();
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
 });
@@ -3839,3 +3844,48 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`Relay listening on http://localhost:${actualPort}`);
   console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');
 });
+
+let shutdownPromise: Promise<void> | null = null;
+
+async function gracefulShutdown(signal: NodeJS.Signals) {
+  if (shutdownPromise) return shutdownPromise;
+  shuttingDown = true;
+  shutdownPromise = (async () => {
+    console.log(`Relay received ${signal}; finalizing active work before shutdown.`);
+
+    // Freeze the sample frontier first. Any Take finalized below is therefore
+    // closed at the last full mixed frame that production actually accepted.
+    clearInterval(mixerTimer);
+    clearInterval(youtubeTimelineTimer);
+    cancelMicTransportGrace();
+    cancelBackingGrace();
+
+    await takeController.shutdown(Date.now());
+    await webTransportMedia?.stop();
+
+    for (const client of wss.clients) client.terminate();
+    // relay-socket-server owns its heartbeat and retires it when WSS closes.
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
+  })().catch((error) => {
+    console.error('Relay graceful shutdown failed', error);
+    process.exitCode = 1;
+  });
+  return shutdownPromise;
+}
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    // Keep both signal handlers installed until the shared shutdown
+    // transaction completes. Repeated controlled-shutdown signals
+    // must join the same durability barrier instead of restoring
+    // Node's default termination while the WAV is still flushing.
+    void gracefulShutdown(signal).finally(() => {
+      process.exit(process.exitCode ?? 0);
+    });
+  });
+}

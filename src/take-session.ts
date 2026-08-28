@@ -3,7 +3,7 @@ import type { TakeQualityAssessment } from './take-quality.js';
 
 export type TakeLifecycle = 'idle' | 'recording' | 'finalizing' | 'ready' | 'failed';
 
-export type TakeStopReason = 'user' | 'mix-ended';
+export type TakeStopReason = 'user' | 'mix-ended' | 'server-shutdown';
 
 export type TakeSongSnapshot = {
   // Null is an intentional voice-only Take, not a missing required field.

@@ -129,7 +129,32 @@ it('retires direct-media authority at every Mic ownership terminal boundary', ()
   );
   assert.match(
     server,
-    /wss\.on\('close'[\s\S]{0,500}takeController\.shutdown\(\)[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}webTransportMedia\?\.stop\(\)/,
-    'server shutdown must close Take, direct-media authority, and the HTTP\/3 server',
+    /wss\.on\('close'[\s\S]{0,500}clearMicMediaAuthority\(\)/,
+    'WebSocket shutdown must still retire direct-media authority',
+  );
+  assert.match(
+    server,
+    /async function gracefulShutdown\(signal: NodeJS\.Signals\)[\s\S]{0,2000}clearInterval\(mixerTimer\)[\s\S]{0,2000}await takeController\.shutdown\(Date\.now\(\)\)[\s\S]{0,1000}await webTransportMedia\?\.stop\(\)[\s\S]{0,1000}for \(const client of wss\.clients\) client\.terminate\(\)[\s\S]{0,1000}wss\.close/,
+    'controlled process shutdown must freeze mixing, await Take and HTTP/3 finalization, then close sockets',
+  );
+  assert.match(
+    server,
+    /let shuttingDown = false;[\s\S]{0,400}wss\.on\('connection'[\s\S]{0,300}if \(shuttingDown\) \{[\s\S]{0,200}socket\.close\(1012/,
+    'controlled shutdown must reject connections opened after the shutdown fence is raised',
+  );
+  assert.match(
+    server,
+    /socket\.on\('message', \(data, isBinary\) => \{\s*if \(shuttingDown\) return;/,
+    'existing WebSocket clients must not mutate Relay state after controlled shutdown begins',
+  );
+  assert.match(
+    server,
+    /async function gracefulShutdown\(signal: NodeJS\.Signals\) \{\s*if \(shutdownPromise\) return shutdownPromise;\s*shuttingDown = true;/,
+    'the shutdown fence must rise before asynchronous Take finalization yields back to socket handlers',
+  );
+  assert.match(
+    server,
+    /for \(const signal of \['SIGTERM', 'SIGINT'\] as const\) \{\s*process\.on\(signal,/,
+    'repeated controlled-shutdown signals must keep joining the shared shutdown transaction',
   );
 });

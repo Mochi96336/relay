@@ -14,6 +14,7 @@ export type RelayServer = {
   port: number;
   wsUrl: (query?: string) => string;
   httpUrl: (pathname?: string) => string;
+  signal: (signal?: NodeJS.Signals) => Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   stop: () => Promise<void>;
 };
 
@@ -50,33 +51,42 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
       reject(new Error(`Relay did not start within ${STARTUP_TIMEOUT_MS} ms.\n${stdout}\n${stderr}`));
     }, STARTUP_TIMEOUT_MS);
 
-    const stop = () => new Promise<void>((done) => {
+    const signal = (signal: NodeJS.Signals = 'SIGTERM') => new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done) => {
       if (child.exitCode !== null || child.signalCode !== null) {
-        done();
+        done({ code: child.exitCode, signal: child.signalCode });
         return;
       }
-      child.once('exit', () => done());
-      child.kill();
+      child.once('exit', (code, exitSignal) => done({ code, signal: exitSignal }));
+      child.kill(signal);
     });
 
-    child.once('exit', (code) => {
+    const stop = async () => {
+      await signal('SIGTERM');
+    };
+
+    const onEarlyExit = (code: number | null) => {
       clearTimeout(timer);
       reject(new Error(`Relay exited early with code ${code}.\n${stdout}\n${stderr}`));
-    });
+    };
+    child.once('exit', onEarlyExit);
 
+    let started = false;
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
       stdout += chunk;
+      if (started) return;
       const match = stdout.match(/listening on http:\/\/localhost:(\d+)/);
       if (!match) return;
 
+      started = true;
       clearTimeout(timer);
-      child.removeAllListeners('exit');
+      child.off('exit', onEarlyExit);
       const port = Number(match[1]);
       resolve({
         port,
         wsUrl: (query = '') => `ws://127.0.0.1:${port}/ws${query}`,
         httpUrl: (pathname = '/') => `http://127.0.0.1:${port}${pathname}`,
+        signal,
         stop,
       });
     });

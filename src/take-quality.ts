@@ -16,7 +16,8 @@ export type TakeQualityEventKind =
   | 'robot-source-disconnected'
   | 'robot-source-connected'
   | 'robot-source-replaced'
-  | 'mic-owner-changed';
+  | 'mic-owner-changed'
+  | 'server-shutdown';
 
 export type TakeQualityEventCounts = Record<TakeQualityEventKind, number>;
 
@@ -81,7 +82,8 @@ export type TakeQualityIssueCode =
   | 'calibration-stale'
   | 'alignment-clamped'
   | 'robot-delta-missing'
-  | 'transport-instability';
+  | 'transport-instability'
+  | 'recording-interrupted';
 
 export type TakeQualityIssue = {
   code: TakeQualityIssueCode;
@@ -114,6 +116,7 @@ function emptyEvents(): TakeQualityEventCounts {
     'robot-source-connected': 0,
     'robot-source-replaced': 0,
     'mic-owner-changed': 0,
+    'server-shutdown': 0,
   };
 }
 
@@ -250,6 +253,16 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
       value: instabilityEvents,
       unit: 'events',
       message: 'One or more source transports changed or restarted while the Take was recording.',
+    });
+  }
+
+  if (evidence.events['server-shutdown'] > 0) {
+    issues.push({
+      code: 'recording-interrupted',
+      severity: 'warning',
+      value: evidence.events['server-shutdown'],
+      unit: 'events',
+      message: 'Relay stopped while this Take was recording; the WAV was finalized at the shutdown boundary.',
     });
   }
 

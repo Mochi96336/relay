@@ -75,6 +75,7 @@ function cleanQuality() {
       'robot-source-connected': 0,
       'robot-source-replaced': 0,
       'mic-owner-changed': 0,
+      'server-shutdown': 0,
     },
   };
   return assessTakeQuality(evidence);

@@ -58,17 +58,18 @@ function startRelay() {
       child.kill();
     });
 
-    child.once('exit', (code) => {
+    const onEarlyExit = (code) => {
       clearTimeout(timer);
       reject(new Error(`Relay exited early with code ${code}.\n${stdout}\n${stderr}`));
-    });
+    };
+    child.once('exit', onEarlyExit);
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
       const match = stdout.match(/listening on http:\/\/localhost:(\d+)/);
       if (!match) return;
       clearTimeout(timer);
-      child.removeAllListeners('exit');
+      child.off('exit', onEarlyExit);
       const port = Number(match[1]);
       resolve({
         httpUrl: (pathname = '/') => `http://127.0.0.1:${port}${pathname}`,

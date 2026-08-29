@@ -21,9 +21,14 @@ test('monitor drops the frame that would push server-side stale PCM past the bud
   assert.equal(monitorFrameWouldExceedBacklog(budget, FRAME_BYTES, budget), true);
 });
 
-test('monitor backlog policy stays wired into the server instead of reverting to a byte magic number', async () => {
+test('monitor backlog budget stays server-configured while socket fanout owns enforcement', async () => {
   const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
+  const socketSource = await readFile(new URL('../src/relay-socket-server.ts', import.meta.url), 'utf8');
+
   assert.match(serverSource, /monitorBacklogBudgetBytes\(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS\)/);
-  assert.match(serverSource, /monitorFrameWouldExceedBacklog\([\s\S]*socket\.bufferedAmount[\s\S]*outbound\.byteLength/);
-  assert.doesNotMatch(serverSource, /512\s*\*\s*1024/);
+  assert.match(serverSource, /createMonitorSocketTransport\(wss, \{[\s\S]*backlogBytes: MONITOR_BACKLOG_BYTES/);
+  assert.doesNotMatch(serverSource, /monitorFrameWouldExceedBacklog|socket\.bufferedAmount/);
+
+  assert.match(socketSource, /monitorFrameWouldExceedBacklog\([\s\S]*socket\.bufferedAmount[\s\S]*outbound\.byteLength[\s\S]*options\.backlogBytes/);
+  assert.doesNotMatch(socketSource, /512\s*\*\s*1024/);
 });

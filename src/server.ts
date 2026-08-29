@@ -13,7 +13,8 @@ import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
-import { combineBootCalibration, type BootCalibrationResult } from './boot-calibration.js';
+import { combineBootCalibration } from './boot-calibration.js';
+import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
@@ -24,7 +25,7 @@ import { TimingRuntime } from './timing-runtime.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, encodePcmFrame, type PcmFrame } from './pcm-frame.js';
-import { ProbeLifecycle, type ProbeTarget } from './probe-lifecycle.js';
+import type { ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
@@ -272,26 +273,10 @@ const PROBE_ANALYSIS_TIMEOUT_MS = Math.max(
   PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 5_000,
 );
 
-type MeasuredMicLeg = {
-  targetSample: number;
-  actualSample: number;
-  correlation: number;
-  sessionGeneration: number;
-  micGeneration: number | null;
-};
-
-const probeLifecycle = new ProbeLifecycle(PROBE_MAX_ATTEMPTS, PROBE_RETRY_MS);
-let probeRequestId = 0;
-let measuredMicLeg: MeasuredMicLeg | null = null;
-let lastProbeCorrelation: { mic: number | null; backing: number | null } = { mic: null, backing: null };
-let lastProbeContext: {
-  sessionGeneration: number;
-  micGeneration: number | null;
-  backingGeneration: number | null;
-} | null = null;
-let lastBootCalibration: BootCalibrationResult | null = null;
-let bootPathDifferenceMs: number | null = null;
-let bootConfidence: number | null = null;
+const bootProbeRuntime = new BootProbeRuntime({
+  maxAttempts: PROBE_MAX_ATTEMPTS,
+  retryMs: PROBE_RETRY_MS,
+});
 const BOOT_DELTA_REAPPLY_MS = envMs('RELAY_CALIBRATION_DELTA_REAPPLY_MS', 40);
 const ROBOT_OFFSET_FRESH_MS = 2_000;
 const ROBOT_OFFSET_WINDOW_MS = envMs('RELAY_ROBOT_OFFSET_WINDOW_MS', 2_000);
@@ -1224,7 +1209,7 @@ function syncAppliedCalibration() {
       return false;
     }
 
-    const storedDeltaMs = lastBootCalibration?.deltaMs;
+    const storedDeltaMs = bootProbeRuntime.calibrationResult?.deltaMs;
     const currentDelta = currentDeltaMs(performance.now());
     if (
       result !== null
@@ -1499,7 +1484,7 @@ function recommendedMicGainDb(micPeakDbfs: number | null) {
 }
 
 function probeStatus(nowMs = performance.now()) {
-  return probeLifecycle.status(nowMs);
+  return bootProbeRuntime.status(nowMs);
 }
 
 function bootProbeInProgress(nowMs = performance.now()) {
@@ -1536,13 +1521,13 @@ function timingCalibrationStatusPayload() {
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
-    probeCorrelation: lastProbeCorrelation,
+    probeCorrelation: bootProbeRuntime.correlations,
     probeActive: bootProbeInProgress(nowMs),
     probePhase: probe.phase,
     probeAttempts: probe.attempts,
     probeMaxAttempts: probe.maxAttempts,
     probeError: probe.error,
-    bootCalibration: lastBootCalibration,
+    bootCalibration: bootProbeRuntime.calibrationResult,
     robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs) : null,
     automatic: timingRuntime.automatic,
     autoCalibrate: AUTO_CALIBRATE,
@@ -1604,8 +1589,8 @@ function readinessPayload(nowMs = performance.now()) {
     calibrationValid: calibrationCanApply() && session.alignment.calibratedMicLagMs !== null,
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
-    probeCorrelation: lastProbeCorrelation,
-    bootCalibration: lastBootCalibration,
+    probeCorrelation: bootProbeRuntime.correlations,
+    bootCalibration: bootProbeRuntime.calibrationResult,
   });
 }
 
@@ -1735,17 +1720,11 @@ function restartLiveSourceAfterMicReconnect() {
 }
 
 function abandonProbeRun() {
-  probeLifecycle.reset();
-  measuredMicLeg = null;
+  bootProbeRuntime.abandonRun();
 }
 
 function clearBootCalibrationState() {
-  abandonProbeRun();
-  lastProbeContext = null;
-  lastBootCalibration = null;
-  bootPathDifferenceMs = null;
-  bootConfidence = null;
-  lastProbeCorrelation = { mic: null, backing: null };
+  bootProbeRuntime.clear();
 }
 
 function stopLiveSource() {
@@ -1910,6 +1889,14 @@ function probeGeneration(target: ProbeTarget) {
   return target === 'mic' ? session.micGeneration : session.backingGeneration;
 }
 
+function bootProbeContext() {
+  return {
+    sessionGeneration: session.generation,
+    micGeneration: session.micGeneration,
+    backingGeneration: session.backingGeneration,
+  };
+}
+
 function probePathReady(target: ProbeTarget, nowMs: number) {
   if (target === 'mic') {
     return micRuntime.controlConnected() && micStreaming(nowMs);
@@ -1920,12 +1907,7 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
 }
 
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
-  if (target === 'mic') {
-    measuredMicLeg = null;
-    probeLifecycle.setMicMeasured(false);
-  }
-
-  const failure = probeLifecycle.failAttempt(target, reason, nowMs);
+  const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
   if (failure) {
     timingRuntime.markBootProbeAuthority();
     calibration.failPreservingPrimed(failure.message);
@@ -1939,19 +1921,19 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
     timingRuntime.beginBootProbe(true);
   }
 
-  probeRequestId += 1;
+  const requestId = bootProbeRuntime.nextRequestId();
   const request = {
     target,
-    requestId: probeRequestId,
+    requestId,
     serverSentAtMs: nowMs,
     sessionGeneration: session.generation,
     generation: probeGeneration(target),
   };
-  if (!probeLifecycle.beginRequest(request)) return;
+  if (!bootProbeRuntime.beginRequest(request)) return;
 
-  if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${probeRequestId} generation=${request.generation}`);
+  if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${requestId} generation=${request.generation}`);
 
-  const payload = { type: 'play-calibration-probe', target, requestId: probeRequestId, leadMs: PROBE_LEAD_MS };
+  const payload = { type: 'play-calibration-probe', target, requestId, leadMs: PROBE_LEAD_MS };
   if (target === 'mic') {
     sendJson(micRuntime.publisher!, payload);
   } else if (sourceRuntime.socket) {
@@ -1964,13 +1946,8 @@ function maybeStartProbeCalibration(nowMs: number) {
   if (!PROBE_CALIBRATE || !robotProbeTimingActive() || takeBlocksCalibration()) return;
   if (!session.active || calibration.collecting) return;
 
-  if (
-    measuredMicLeg !== null
-    && (
-      measuredMicLeg.sessionGeneration !== session.generation
-      || measuredMicLeg.micGeneration !== session.micGeneration
-    )
-  ) {
+  const context = bootProbeContext();
+  if (bootProbeRuntime.micLeg !== null && !bootProbeRuntime.micLegMatches(context)) {
     abandonProbeRun();
   }
 
@@ -1980,26 +1957,23 @@ function maybeStartProbeCalibration(nowMs: number) {
     && !calibrationIsStale()
     && !calibration.transactionActive
   ) return;
-  if (probeLifecycle.pendingRequest !== null || probeLifecycle.pendingAnalysis !== null) return;
+  if (bootProbeRuntime.pendingRequest !== null || bootProbeRuntime.pendingAnalysis !== null) return;
   if (probeStatus(nowMs).error !== null) return;
 
   if (
     !calibration.transactionActive
-    && measuredMicLeg === null
-    && lastProbeContext !== null
-    && lastProbeContext.sessionGeneration === session.generation
-    && lastProbeContext.micGeneration === session.micGeneration
-    && lastProbeContext.backingGeneration === session.backingGeneration
+    && bootProbeRuntime.micLeg === null
+    && bootProbeRuntime.completedContextMatches(context)
   ) return;
 
-  const target: ProbeTarget = measuredMicLeg === null ? 'mic' : 'backing';
-  if (!probeLifecycle.canStart(target, nowMs)) return;
+  const target: ProbeTarget = bootProbeRuntime.micLeg === null ? 'mic' : 'backing';
+  if (!bootProbeRuntime.canStart(target, nowMs)) return;
   if (!probePathReady(target, nowMs)) return;
   sendProbeRequest(target, nowMs);
 }
 
 function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
-  const pending = probeLifecycle.acceptClientReply(reply.requestId, reply.generation);
+  const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
   if (!pending) return;
   if (!session.active || pending.sessionGeneration !== session.generation) {
     abandonProbeRun();
@@ -2029,7 +2003,7 @@ function handleProbeReply(reply: { requestId: unknown; generation: unknown }, no
   const marginSamples = Math.round((MIX_SAMPLE_RATE * PROBE_SEARCH_MARGIN_MS) / 1000);
   const referenceSamples = Math.round((MIX_SAMPLE_RATE * PROBE_REFERENCE_MS) / 1000);
 
-  probeLifecycle.beginAnalysis({
+  bootProbeRuntime.beginAnalysis({
     target: pending.target,
     targetSample,
     windowStart: targetSample - Math.round(marginSamples / 8),
@@ -2045,7 +2019,7 @@ function handleProbeFailure(
   reply: { requestId: unknown; generation: unknown; reason: unknown },
   nowMs: number,
 ) {
-  const pending = probeLifecycle.acceptClientReply(reply.requestId, reply.generation);
+  const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
   if (!pending) return;
   if (!session.active || pending.sessionGeneration !== session.generation) {
     abandonProbeRun();
@@ -2073,7 +2047,7 @@ function handleProbeFailure(
 }
 
 function maybeFinishProbeAnalysis(nowMs: number) {
-  const waiting = probeLifecycle.pendingAnalysis;
+  const waiting = bootProbeRuntime.pendingAnalysis;
   if (!waiting) return;
 
   const reached = waiting.target === 'mic' ? session.micTotalSamples : session.backingTotalSamples;
@@ -2098,13 +2072,13 @@ function maybeFinishProbeAnalysis(nowMs: number) {
         `[probe] ${waiting.target} analysis timed out: reached=${reached} needed=${needed}`,
       );
     }
-    probeLifecycle.takeAnalysis();
+    bootProbeRuntime.takeAnalysis();
     failProbeAttempt(waiting.target, 'captured audio did not reach the analyzer before timeout', nowMs);
     return;
   }
 
   if (reached < needed) return;
-  const analysis = probeLifecycle.takeAnalysis();
+  const analysis = bootProbeRuntime.takeAnalysis();
   if (!analysis) return;
 
   const window = analysis.target === 'mic'
@@ -2113,7 +2087,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   const { offsetSamples, correlation } = locateProbe(window, MIX_SAMPLE_RATE);
   const actualSample = analysis.windowStart + offsetSamples;
   const latencyMs = ((actualSample - analysis.targetSample) / MIX_SAMPLE_RATE) * 1000;
-  lastProbeCorrelation = { ...lastProbeCorrelation, [analysis.target]: correlation };
+  bootProbeRuntime.noteCorrelation(analysis.target, correlation);
 
   if (PROBE_DEBUG) {
     let peak = 0;
@@ -2149,19 +2123,16 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   const leg = { targetSample: analysis.targetSample, actualSample, correlation };
 
   if (analysis.target === 'mic') {
-    measuredMicLeg = {
+    bootProbeRuntime.setMicLeg({
       ...leg,
       sessionGeneration: session.generation,
       micGeneration: analysis.generation,
-    };
-    probeLifecycle.setMicMeasured(true);
+    });
     broadcastJson(timingCalibrationStatusPayload());
     return;
   }
 
-  const micLeg = measuredMicLeg;
-  measuredMicLeg = null;
-  probeLifecycle.setMicMeasured(false);
+  const micLeg = bootProbeRuntime.takeMicLeg();
   if (
     micLeg === null
     || micLeg.sessionGeneration !== session.generation
@@ -2183,14 +2154,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     );
   }
 
-  lastProbeContext = {
-    sessionGeneration: session.generation,
-    micGeneration: session.micGeneration,
-    backingGeneration: session.backingGeneration,
-  };
-  lastBootCalibration = result;
-  bootPathDifferenceMs = result.micLatencyMs - result.backingLatencyMs;
-  bootConfidence = result.confidence;
+  bootProbeRuntime.recordCalibration(bootProbeContext(), result);
   timingRuntime.markBootProbeAuthority();
   calibration.applyExternalResult({
     micLagMs: result.advanceMs,
@@ -2205,29 +2169,20 @@ function currentDeltaMs(nowMs: number) {
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
   if (!robotProbeTimingActive() || timingRuntime.calibrationKind !== 'boot-probe') return;
-  if (bootPathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
+  if (bootProbeRuntime.pathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
   if (!robotDeltaIsFresh(nowMs)) return;
-  if (lastProbeContext === null) return;
-  if (
-    lastProbeContext.sessionGeneration !== session.generation
-    || lastProbeContext.micGeneration !== session.micGeneration
-    || lastProbeContext.backingGeneration !== session.backingGeneration
-  ) return;
+  if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return;
 
-  const advanceMs = bootPathDifferenceMs + currentDeltaMs(nowMs);
+  const advanceMs = bootProbeRuntime.pathDifferenceMs + currentDeltaMs(nowMs);
   const applied = session.alignment.calibratedMicLagMs;
   if (applied !== null && Math.abs(advanceMs - applied) < BOOT_DELTA_REAPPLY_MS) return;
 
   if (PROBE_DEBUG) {
     console.log(`[probe] delta moved; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
   }
-  lastBootCalibration = lastBootCalibration === null ? null : {
-    ...lastBootCalibration,
-    advanceMs,
-    deltaMs: currentDeltaMs(nowMs),
-  };
+  bootProbeRuntime.reapplyCalibration(advanceMs, currentDeltaMs(nowMs));
   timingRuntime.markBootProbeAuthority();
-  calibration.applyExternalResult({ micLagMs: advanceMs, confidence: bootConfidence ?? 0 });
+  calibration.applyExternalResult({ micLagMs: advanceMs, confidence: bootProbeRuntime.confidence ?? 0 });
 }
 
 function dropLegacyCalibrationForRobot() {
@@ -2248,7 +2203,7 @@ function restartBootCalibration(nowMs: number, automatic: boolean) {
   calibration.beginExternalRecalibration();
   timingRuntime.beginBootProbe(automatic);
   abandonProbeRun();
-  lastProbeCorrelation = { mic: null, backing: null };
+  bootProbeRuntime.resetCorrelations();
   syncAppliedCalibration();
   maybeStartProbeCalibration(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
@@ -2286,9 +2241,9 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(mixHealthPayload());
   }
 
-  const pendingProbe = probeLifecycle.pendingRequest;
+  const pendingProbe = bootProbeRuntime.pendingRequest;
   if (pendingProbe !== null && nowMs - pendingProbe.serverSentAtMs > PROBE_REPLY_TIMEOUT_MS) {
-    const expired = probeLifecycle.acceptReply(pendingProbe.requestId);
+    const expired = bootProbeRuntime.acceptReply(pendingProbe.requestId);
     if (expired) failProbeAttempt(expired.target, 'playback acknowledgement timed out', nowMs);
   }
 

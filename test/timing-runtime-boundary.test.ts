@@ -11,7 +11,7 @@ test('TimingRuntime owns orchestration metadata without absorbing timing authori
 
   assert.match(server, /const calibration = new CalibrationSession\(\{/);
   assert.match(server, /const contentCalibrationValidator = new ContentCalibrationValidator\(\{/);
-  assert.match(server, /const probeLifecycle = new ProbeLifecycle\(/);
+  assert.match(server, /const bootProbeRuntime = new BootProbeRuntime\(\{/);
 
   const imports = [...runtime.matchAll(/^import\s+.*?from\s+['"]([^'"]+)['"];?$/gm)].map((match) => match[1]);
   for (const forbidden of [

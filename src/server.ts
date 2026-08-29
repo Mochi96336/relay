@@ -21,6 +21,7 @@ import { ContentCalibrationValidator } from './content-calibration-validator.js'
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicRuntime } from './mic-runtime.js';
+import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
 import { TimingRuntime } from './timing-runtime.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
@@ -199,8 +200,6 @@ let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
 let legacyPlaybackConnectionSequence = 0;
-let micTransportGraceTimer: NodeJS.Timeout | null = null;
-let micTransportGraceOwnerId: string | null = null;
 
 const session = new AudioSession({
   sampleRate: MIX_SAMPLE_RATE,
@@ -370,6 +369,11 @@ const micRuntime = new MicRuntime({
   offerDirectMedia: (ticket) => webTransportMedia?.offer(ticket),
 });
 
+const micTransportGrace = new MicTransportGraceRuntime({
+  graceMs: MIC_TRANSPORT_GRACE_MS,
+  onExpired: expireMicTransportGrace,
+});
+
 function noteMicFrame(nowMs: number) {
   micRuntime.noteFrame(nowMs);
 }
@@ -397,12 +401,6 @@ function silentSides(nowMs: number) {
   return silent;
 }
 
-function cancelMicTransportGrace() {
-  if (micTransportGraceTimer !== null) clearTimeout(micTransportGraceTimer);
-  micTransportGraceTimer = null;
-  micTransportGraceOwnerId = null;
-}
-
 function webTransportMicConnected() {
   return micRuntime.directMediaConnected();
 }
@@ -420,37 +418,29 @@ function clearMicMediaAuthority() {
   session.setMicExpected(false);
 }
 
-function scheduleMicTransportGrace(ownerId: string) {
-  cancelMicTransportGrace();
-  micTransportGraceOwnerId = ownerId;
-  micTransportGraceTimer = setTimeout(() => {
-    micTransportGraceTimer = null;
-    const expectedOwnerId = micTransportGraceOwnerId;
-    micTransportGraceOwnerId = null;
-    if (!expectedOwnerId || participants.micOwnerId !== expectedOwnerId) return;
-    if (
-      micRuntime.controlConnected()
-      && micRuntime.publisher?.participantId === expectedOwnerId
-    ) return;
+function expireMicTransportGrace(expectedOwnerId: string) {
+  if (participants.micOwnerId !== expectedOwnerId) return;
+  if (
+    micRuntime.controlConnected()
+    && micRuntime.publisher?.participantId === expectedOwnerId
+  ) return;
 
-    const directMediaStillFlowing = micRuntime.mediaOwnerId === expectedOwnerId
-      && webTransportMicConnected()
-      && micStreaming(performance.now());
-    if (directMediaStillFlowing) {
-      // Control-plane loss must not revoke a Mic whose independent media plane
-      // is still carrying the same capture. Keep checking until control returns
-      // or the direct media path actually stops carrying fresh PCM.
-      scheduleMicTransportGrace(expectedOwnerId);
-      return;
-    }
+  const directMediaStillFlowing = micRuntime.mediaOwnerId === expectedOwnerId
+    && webTransportMicConnected()
+    && micStreaming(performance.now());
+  if (directMediaStillFlowing) {
+    // Control-plane loss must not revoke a Mic whose independent media plane
+    // is still carrying the same capture. Keep checking until control returns
+    // or the direct media path actually stops carrying fresh PCM.
+    micTransportGrace.schedule(expectedOwnerId);
+    return;
+  }
 
-    const released = participants.releaseMic(expectedOwnerId, 'transport-expired');
-    if (!released.ok) return;
-    clearMicMediaAuthority();
-    applyMicOwnerEffects(released.effects);
-    broadcastSessionStatus();
-  }, MIC_TRANSPORT_GRACE_MS);
-  micTransportGraceTimer.unref();
+  const released = participants.releaseMic(expectedOwnerId, 'transport-expired');
+  if (!released.ok) return;
+  clearMicMediaAuthority();
+  applyMicOwnerEffects(released.effects);
+  broadcastSessionStatus();
 }
 
 function calibrationContext(): CalibrationContext {
@@ -1751,7 +1741,7 @@ function maybeStopLiveSourceWhenUnarmed() {
   if (!session.active) return;
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
-    || micTransportGraceTimer !== null;
+    || micTransportGrace.pending;
   const backingArmed = backingRuntime.armed();
   if (!micArmed && !backingArmed) stopLiveSource();
 }
@@ -1759,7 +1749,7 @@ function maybeStopLiveSourceWhenUnarmed() {
 function expireBackingGrace() {
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
-    || micTransportGraceTimer !== null;
+    || micTransportGrace.pending;
   if (roomHasSong() || !micArmed) {
     stopLiveSource();
     return;
@@ -2262,7 +2252,7 @@ const youtubeTimelineTimer = setInterval(() => {
   if (presenceSweep.releasedMicOwnerId && presenceSweep.micOwnerEffects) {
     applyMicOwnerEffects(presenceSweep.micOwnerEffects, nowMs, {
       afterQualityEvent: () => {
-        cancelMicTransportGrace();
+        micTransportGrace.cancel();
         clearMicMediaAuthority();
       },
       publishFullHandoffStatus: false,
@@ -2604,7 +2594,7 @@ wss.on('connection', (rawSocket, request) => {
         }
       };
       applyMicOwnerEffects(result.effects, performance.now(), {
-        afterQualityEvent: () => cancelMicTransportGrace(),
+        afterQualityEvent: () => micTransportGrace.cancel(),
         beforeTimingInvalidation: cleanReleasedMicTransport,
       });
       // A successful explicit release always invalidates timing today. Keep this
@@ -3114,7 +3104,7 @@ wss.on('connection', (rawSocket, request) => {
         );
       }
 
-      cancelMicTransportGrace();
+      micTransportGrace.cancel();
       session.setMicExpected(true);
       if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
 
@@ -3348,7 +3338,7 @@ wss.on('connection', (rawSocket, request) => {
           // session is still carrying the same capture. Keep the capture and
           // sample rate authoritative until the existing grace expires.
           session.setMicExpected(directMediaStillLive);
-          scheduleMicTransportGrace(reconnectingOwnerId);
+          micTransportGrace.schedule(reconnectingOwnerId);
         }
         micTransportChanged = true;
         if (!reconnectingOwnerId) maybeStopLiveSourceWhenUnarmed();
@@ -3381,7 +3371,7 @@ wss.on('connection', (rawSocket, request) => {
 });
 
 wss.on('close', () => {
-  cancelMicTransportGrace();
+  micTransportGrace.cancel();
   clearMicMediaAuthority();
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
@@ -3438,7 +3428,7 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     // closed at the last full mixed frame that production actually accepted.
     clearInterval(mixerTimer);
     clearInterval(youtubeTimelineTimer);
-    cancelMicTransportGrace();
+    micTransportGrace.cancel();
     backingRuntime.cancelGrace();
 
     await takeController.shutdown(Date.now());

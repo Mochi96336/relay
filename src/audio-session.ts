@@ -256,7 +256,7 @@ export class AudioSession {
   private micExpected = false;
   private backingExpected = false;
 
-  private micGainDb = 24;
+  private micGainDbValue = 24;
   private alignmentState: AlignmentState = {
     networkCompensationMs: 0,
     calibratedMicLagMs: null,
@@ -382,8 +382,12 @@ export class AudioSession {
     this.backingExpected = expected;
   }
 
+  get micGainDb() {
+    return this.micGainDbValue;
+  }
+
   setMicGainDb(value: number) {
-    this.micGainDb = value;
+    this.micGainDbValue = value;
   }
 
   get alignment(): AlignmentState {
@@ -915,7 +919,7 @@ export class AudioSession {
     const lookahead = this.limiterLookaheadSamples;
     const mic = this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     const song = this.readRange(this.backing, startSample, this.frameSamples);
-    const micGain = 10 ** (this.micGainDb / 20);
+    const micGain = 10 ** (this.micGainDbValue / 20);
     // `backingExpected` and `micExpected` are the room's semantic signals for
     // which sources this mix has. Both must hold: the reservation is headroom
     // for a sum, so a room with only one source has nothing to reserve against.

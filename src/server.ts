@@ -194,7 +194,6 @@ type TimelineStatus = {
 };
 
 let webTransportMedia: WebTransportMediaServer | null = null;
-let micGainDb = 24;
 const songLevel = FIXED_SONG_LEVEL;
 let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
@@ -212,7 +211,6 @@ const session = new AudioSession({
   // whole search window, so anything it will look at has to survive that wait.
   backingRetentionMs: BACKING_RETENTION_MS,
 });
-session.setMicGainDb(micGainDb);
 
 const takeController = new TakeController({
   directory: takeDir,
@@ -1312,7 +1310,7 @@ function mixHealthPayload() {
     active: session.active,
     ...health,
     recommendedMicGainDb: recommendedMicGainDb(health.micPeakDbfs),
-    micGainDb,
+    micGainDb: session.micGainDb,
     monitorDroppedFrames,
     prebufferMs: session.prebufferMs,
     micMediaPath: micMediaPath(),
@@ -1525,7 +1523,7 @@ function timingCalibrationStatusPayload() {
 function mixSettingsPayload() {
   return {
     type: 'mix-settings',
-    micGainDb,
+    micGainDb: session.micGainDb,
     songLevel,
   };
 }
@@ -3267,8 +3265,7 @@ wss.on('connection', (rawSocket, request) => {
       if (!requireMicOwnerCommand(socket, 'set-mix')) return;
       const nextGain = Number(payload.micGainDb);
       if (Number.isFinite(nextGain)) {
-        micGainDb = Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain));
-        session.setMicGainDb(micGainDb);
+        session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
       }
       // `songLevel` remains accepted on the old wire shape for compatibility,
       // but Song is now a server-owned 100% reference and cannot be mutated by

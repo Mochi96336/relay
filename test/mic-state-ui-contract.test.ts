@@ -29,5 +29,5 @@ test('Mic presence follows media availability and direct WebTransport can retain
     server,
     /directMediaStillFlowing[\s\S]*webTransportMicConnected\(\)[\s\S]*micStreaming\(performance\.now\(\)\)/,
   );
-  assert.match(server, /scheduleMicTransportGrace\(expectedOwnerId\);/);
+  assert.match(server, /micTransportGrace\.schedule\(expectedOwnerId\);/);
 });

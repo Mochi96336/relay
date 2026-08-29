@@ -33,19 +33,7 @@ import {
 } from './relay-socket-server.js';
 import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
 import { RobotContentTimelineMapper } from './robot-content-timeline.js';
-import {
-  beginRobotContentTransitionWorker,
-  carryOrCreateRobotContentTransitionBounds,
-  noteRobotContentTransitionVerdict,
-  noteRobotContentTransitionWorkerFailure,
-  robotContentTransitionBoundsStatus,
-  sweepRobotContentTransitionBounds,
-  type RobotContentTransitionBounds,
-} from './robot-content-transition-bounds.js';
-import {
-  compareRobotContentHypothesesInWorker,
-  estimateRobotContentRawLagInWorker,
-} from './robot-content-transition-worker-client.js';
+import { RobotContentTransitionRuntime } from './robot-content-transition-runtime.js';
 import {
   ParticipantSession,
   normalizeNickname,
@@ -314,8 +302,6 @@ const robotContentTimeline = new RobotContentTimelineMapper({
   sampleRate: MIX_SAMPLE_RATE,
   freshForMs: ROBOT_OFFSET_FRESH_MS,
 });
-let robotBackingBoundaryRequestId = 0;
-let pendingRobotBackingBoundary: { requestId: number; backingGeneration: number } | null = null;
 const ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES = Math.round(MIX_SAMPLE_RATE * 3);
 const ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES = Math.round(MIX_SAMPLE_RATE * 0.65);
 const ROBOT_CONTENT_TRANSITION_LIFETIME_MS = envMs(
@@ -335,29 +321,53 @@ const ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG = {
   maxWindows: ROBOT_CONTENT_TRANSITION_MAX_WINDOWS,
   maxWorkerFailures: ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES,
 };
-type RobotContentTransitionChunk = { start: number; samples: Int16Array };
-type RobotContentTransitionState = {
-  revision: number;
-  context: CalibrationContext;
-  seekJumpMs: number;
-  preDeltaMs: number;
-  postDeltaMs: number;
-  preShiftSamples: number;
-  preRawLagMs: number | null;
-  postRawLagMs: number | null;
-  transportFrontierCaptureSample: number | null;
-  commitFloorSample: number | null;
-  nextWindowStart: number | null;
-  analysisPending: boolean;
-  bounds: RobotContentTransitionBounds;
-  degradedHandled: boolean;
-  discardWorkingEvidenceOnCommit: boolean;
-  confirmedPreRanges: Array<{ start: number; end: number }>;
-  chunks: RobotContentTransitionChunk[];
-};
-let robotContentTransitionRevision = 0;
-let robotContentTransition: RobotContentTransitionState | null = null;
-let robotContentTransitionAbortController: AbortController | null = null;
+
+const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
+  sampleRate: MIX_SAMPLE_RATE,
+  historySamples: ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES,
+  windowSamples: ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES,
+  maxLagMs: CALIBRATION_MAX_LAG_MS,
+  toleranceMs: CALIBRATION_TOLERANCE_MS,
+  retentionSamples: BACKING_RETENTION_MS * MIX_SAMPLE_RATE / 1_000,
+  bounds: ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG,
+  host: {
+    context: calibrationContext,
+    currentDeltaMs: () => robotContentTimeline.currentDeltaMs,
+    backingTotalSamples: () => session.backingTotalSamples,
+    micTotalSamples: () => session.micTotalSamples,
+    readBacking: (start, length) => session.readBacking(start, length),
+    readMic: (start, length) => session.readMic(start, length),
+    transitionEvidence: (maxSamples) => calibration.transitionEvidence(maxSamples),
+    commit: (plan, nowMs) => {
+      if (!robotContentTimeline.noteBackingBoundary(plan.boundarySample, plan.context, nowMs)) return false;
+      if (plan.discardWorkingEvidence) {
+        // Unclassifiable media-transition PCM is not capture loss. Do not zero-fill
+        // it into a six-second analysis window; restart only unanalysed evidence.
+        calibration.restartWorkingEvidence(nowMs);
+        if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
+      }
+
+      for (const chunk of plan.confirmedPreChunks) {
+        feedContentBackingEvidence(chunk.samples, chunk.start, nowMs);
+      }
+      for (const chunk of plan.postChunks) {
+        const mapped = robotContentTimeline.mapBackingStart(chunk.start, plan.context, nowMs);
+        if (mapped !== null) feedContentBackingEvidence(chunk.samples, mapped, nowMs);
+      }
+      return true;
+    },
+    onDegraded: (status) => {
+      console.warn(
+        '[robot-content-transition] degraded fail-closed:'
+        + ` reason=${status.degradedReason ?? 'unknown'}`
+        + ` windows=${status.windowsStarted}/${status.maxWindows}`
+        + ` workerFailures=${status.workerFailures}/${status.maxWorkerFailures}`
+        + ` ageMs=${status.ageMs}`,
+      );
+      broadcastJson(timingCalibrationStatusPayload());
+    },
+  },
+});
 
 const STREAM_LIVE_MS = 1_000;
 const COLLECTION_SILENCE_GRACE_MS = 1_500;
@@ -514,72 +524,20 @@ function mappedContentBackingStart(startSample: number, nowMs = performance.now(
   return robotContentTimeline.mapBackingStart(startSample, calibrationContext(), nowMs);
 }
 
-function robotTransitionContextMatches(
-  left: CalibrationContext,
-  right: CalibrationContext,
-) {
-  return left.sessionGeneration === right.sessionGeneration
-    && left.micGeneration === right.micGeneration
-    && left.backingGeneration === right.backingGeneration
-    && left.sourceGeneration === right.sourceGeneration;
-}
-
 function clearRobotContentTransition() {
-  robotContentTransitionRevision += 1;
-  robotContentTransitionAbortController?.abort();
-  robotContentTransitionAbortController = null;
-  robotContentTransition = null;
+  robotContentTransitionRuntime.clear();
 }
 
 function robotContentTransitionStatus(nowMs = performance.now()) {
-  const state = robotContentTransition;
-  if (state === null) return { state: 'idle' as const, quarantined: false };
-  return {
-    ...robotContentTransitionBoundsStatus(state.bounds, nowMs),
-    quarantined: true,
-  };
-}
-
-function settleDegradedRobotContentTransition(
-  state: RobotContentTransitionState,
-  nowMs = performance.now(),
-) {
-  if (
-    robotContentTransition !== state
-    || state.bounds.phase !== 'degraded'
-    || state.degradedHandled
-  ) return false;
-
-  state.degradedHandled = true;
-  pendingRobotBackingBoundary = null;
-  robotContentTransitionAbortController?.abort();
-  robotContentTransitionAbortController = null;
-  state.analysisPending = false;
-  state.discardWorkingEvidenceOnCommit = true;
-  state.nextWindowStart = null;
-  state.confirmedPreRanges = [];
-  state.chunks = [];
-  console.warn(
-    '[robot-content-transition] degraded fail-closed:'
-    + ` reason=${state.bounds.degradedReason ?? 'unknown'}`
-    + ` windows=${state.bounds.windowsStarted}/${state.bounds.maxWindows}`
-    + ` workerFailures=${state.bounds.workerFailures}/${state.bounds.maxWorkerFailures}`
-    + ` ageMs=${Math.max(0, Math.round(nowMs - state.bounds.startedAtMs))}`,
-  );
-  broadcastJson(timingCalibrationStatusPayload());
-  return true;
+  return robotContentTransitionRuntime.status(nowMs);
 }
 
 function sweepRobotContentTransition(nowMs: number) {
-  const state = robotContentTransition;
-  if (state === null || state.bounds.phase === 'degraded') return false;
-  if (!sweepRobotContentTransitionBounds(state.bounds, nowMs)) return false;
-  return settleDegradedRobotContentTransition(state, nowMs);
+  return robotContentTransitionRuntime.sweep(nowMs);
 }
 
 function clearRobotBackingBoundaryRequest() {
-  pendingRobotBackingBoundary = null;
-  clearRobotContentTransition();
+  robotContentTransitionRuntime.clear();
 }
 
 function feedContentBackingEvidence(samples: Int16Array, start: number, nowMs: number) {
@@ -599,302 +557,33 @@ function beginRobotContentTransition(
   context: CalibrationContext,
   nowMs = performance.now(),
 ) {
-  const seekJumpMs = (toMediaTime - fromMediaTime) * 1_000;
-  const preShiftSamples = Math.round(
-    ((preDeltaMs - referenceDeltaMs) * MIX_SAMPLE_RATE) / 1_000,
-  );
-  const seekJumpSamples = Math.round((seekJumpMs * MIX_SAMPLE_RATE) / 1_000);
-  const previous = robotContentTransition;
-  const compatiblePrevious = previous !== null
-    && previous.bounds.phase === 'verifying'
-    && robotTransitionContextMatches(previous.context, context)
-    && previous.preShiftSamples === preShiftSamples
-    && Math.round((previous.seekJumpMs * MIX_SAMPLE_RATE) / 1_000) === seekJumpSamples
-      ? previous
-      : null;
-  const carriedNextWindowStart = compatiblePrevious?.nextWindowStart ?? null;
-  const carriedDiscardWorkingEvidence = compatiblePrevious?.discardWorkingEvidenceOnCommit ?? false;
-  const carriedPreRanges = compatiblePrevious?.confirmedPreRanges.map((range) => ({ ...range })) ?? [];
-  const carriedChunks = compatiblePrevious?.chunks.map((chunk) => ({
-    start: chunk.start,
-    samples: new Int16Array(chunk.samples),
-  })) ?? [];
-
-  clearRobotContentTransition();
-  const revision = robotContentTransitionRevision;
-  const state: RobotContentTransitionState = {
-    revision,
-    context: { ...context },
-    seekJumpMs,
-    preDeltaMs,
-    postDeltaMs: preDeltaMs + seekJumpMs,
-    preShiftSamples,
-    preRawLagMs: null,
-    postRawLagMs: null,
-    transportFrontierCaptureSample: null,
-    commitFloorSample: null,
-    nextWindowStart: carriedNextWindowStart,
-    analysisPending: false,
-    bounds: carryOrCreateRobotContentTransitionBounds(
-      compatiblePrevious?.bounds ?? null,
-      nowMs,
-      ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG,
-    ),
-    degradedHandled: false,
-    discardWorkingEvidenceOnCommit: carriedDiscardWorkingEvidence,
-    confirmedPreRanges: carriedPreRanges,
-    chunks: carriedChunks,
-  };
-  robotContentTransition = state;
-
   const confirmedReferenceLagMs = timingRuntime.calibrationKind === 'content'
     ? calibration.confirmedResult?.micLagMs ?? null
     : null;
-  if (confirmedReferenceLagMs !== null) {
-    state.preRawLagMs = confirmedReferenceLagMs + preDeltaMs - referenceDeltaMs;
-    state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
-    return;
-  }
-
-  const evidence = calibration.transitionEvidence(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES);
-  if (evidence === null || evidence.mic.length <= MIX_SAMPLE_RATE) return;
-  if (!beginRobotContentTransitionWorker(state.bounds, 'anchor', nowMs)) {
-    settleDegradedRobotContentTransition(state, nowMs);
-    return;
-  }
-  const controller = new AbortController();
-  robotContentTransitionAbortController = controller;
-  state.analysisPending = true;
-  void estimateRobotContentRawLagInWorker(
-    evidence.mic,
-    evidence.backing,
-    MIX_SAMPLE_RATE,
-    CALIBRATION_MAX_LAG_MS,
-    controller.signal,
-  ).then((anchor) => {
-    if (robotContentTransition !== state || state.revision !== robotContentTransitionRevision) return;
-    state.analysisPending = false;
-    robotContentTransitionAbortController = null;
-    const completedAt = performance.now();
-    if (sweepRobotContentTransitionBounds(state.bounds, completedAt)) {
-      settleDegradedRobotContentTransition(state, completedAt);
-      return;
-    }
-    if (anchor === null) return;
-    state.preRawLagMs = anchor.rawLagMs + preDeltaMs - referenceDeltaMs;
-    state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
-    maybeAnalyzeRobotContentTransition(completedAt);
-  }, () => {
-    if (robotContentTransition !== state || state.bounds.phase === 'degraded') return;
-    state.analysisPending = false;
-    robotContentTransitionAbortController = null;
-    const failedAt = performance.now();
-    if (noteRobotContentTransitionWorkerFailure(state.bounds, 'anchor', failedAt)) {
-      settleDegradedRobotContentTransition(state, failedAt);
-    }
-  });
+  robotContentTransitionRuntime.begin({
+    fromMediaTime,
+    toMediaTime,
+    preDeltaMs,
+    referenceDeltaMs,
+    context,
+    confirmedReferenceLagMs,
+  }, nowMs);
 }
 
 function reconcileRobotContentTransitionWithFreshDelta(
   context: CalibrationContext,
   nowMs = performance.now(),
 ) {
-  const state = robotContentTransition;
-  const committedDeltaMs = robotContentTimeline.committedDeltaMs;
-  const freshDeltaMs = robotContentTimeline.currentDeltaMs;
-  const referenceDeltaMs = robotContentTimeline.referenceDeltaMs;
-  if (
-    state === null
-    || state.bounds.phase === 'degraded'
-    || committedDeltaMs === null
-    || freshDeltaMs === null
-    || referenceDeltaMs === null
-    || !robotTransitionContextMatches(state.context, context)
-  ) return state?.bounds.phase !== 'degraded';
-
-  // Fresh absolute telemetry that still agrees with either pending content
-  // hypothesis does not revoke it. Queued pre-seek PCM may still need to prove
-  // the old hypothesis before the transition can retire quarantine.
-  const matchesPre = Math.abs(state.preDeltaMs - freshDeltaMs) <= CALIBRATION_TOLERANCE_MS;
-  const matchesPost = Math.abs(state.postDeltaMs - freshDeltaMs) <= CALIBRATION_TOLERANCE_MS;
-  if (matchesPre || matchesPost) return true;
-
-  // Repeated follower corrections can outrun settled absolute telemetry. Once a
-  // fresh mapping disagrees with both uncommitted hypotheses, rebuild from the
-  // last PCM-proven mapping to that fresh mapping. The old request/frontier was
-  // tied to discarded hypotheses and cannot authorize the rebuilt transition.
-  pendingRobotBackingBoundary = null;
-  const seekJumpSeconds = (freshDeltaMs - committedDeltaMs) / 1_000;
-  const fromMediaTime = seekJumpSeconds < 0 ? -seekJumpSeconds : 0;
-  const toMediaTime = seekJumpSeconds < 0 ? 0 : seekJumpSeconds;
-  beginRobotContentTransition(
-    fromMediaTime,
-    toMediaTime,
-    committedDeltaMs,
-    referenceDeltaMs,
+  const confirmedReferenceLagMs = timingRuntime.calibrationKind === 'content'
+    ? calibration.confirmedResult?.micLagMs ?? null
+    : null;
+  return robotContentTransitionRuntime.reconcileWithFreshDelta({
     context,
-    nowMs,
-  );
-  return robotContentTransition !== null;
-}
-
-function transitionChunkSlices(
-  state: RobotContentTransitionState,
-  rangeStart: number,
-  rangeEnd: number,
-) {
-  const slices: RobotContentTransitionChunk[] = [];
-  for (const chunk of state.chunks) {
-    const chunkEnd = chunk.start + chunk.samples.length;
-    const start = Math.max(chunk.start, rangeStart);
-    const end = Math.min(chunkEnd, rangeEnd);
-    if (end <= start) continue;
-    const offset = start - chunk.start;
-    slices.push({
-      start,
-      samples: new Int16Array(chunk.samples.subarray(offset, offset + end - start)),
-    });
-  }
-  return slices;
-}
-
-function commitRobotContentTransition(
-  state: RobotContentTransitionState,
-  boundarySample: number,
-  nowMs: number,
-) {
-  if (state.bounds.phase !== 'verifying') return false;
-  if (!robotContentTimeline.noteBackingBoundary(boundarySample, state.context, nowMs)) return false;
-  if (state.discardWorkingEvidenceOnCommit) {
-    // Unclassifiable media-transition PCM is not capture loss. Do not zero-fill
-    // it into a six-second analysis window; restart only unanalysed evidence.
-    calibration.restartWorkingEvidence(nowMs);
-    if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
-  }
-
-  for (const range of state.discardWorkingEvidenceOnCommit ? [] : state.confirmedPreRanges) {
-    for (const chunk of transitionChunkSlices(state, range.start, range.end)) {
-      feedContentBackingEvidence(chunk.samples, chunk.start + state.preShiftSamples, nowMs);
-    }
-  }
-
-  for (const chunk of state.discardWorkingEvidenceOnCommit ? [] : transitionChunkSlices(
-    state,
-    boundarySample,
-    Number.POSITIVE_INFINITY,
-  )) {
-    const mapped = robotContentTimeline.mapBackingStart(chunk.start, state.context, nowMs);
-    if (mapped !== null) feedContentBackingEvidence(chunk.samples, mapped, nowMs);
-  }
-
-  robotContentTransitionAbortController = null;
-  robotContentTransition = null;
-  return true;
-}
-
-function maybeAnalyzeRobotContentTransition(nowMs = performance.now()) {
-  const state = robotContentTransition;
-  if (
-    state === null
-    || state.bounds.phase !== 'verifying'
-    || state.analysisPending
-    || state.preRawLagMs === null
-    || state.postRawLagMs === null
-    || state.nextWindowStart === null
-    || !robotTransitionContextMatches(state.context, calibrationContext())
-  ) return;
-
-  const start = state.nextWindowStart;
-  const end = start + ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES;
-  const preMicStart = start + Math.round((state.preRawLagMs * MIX_SAMPLE_RATE) / 1_000);
-  const postMicStart = start + Math.round((state.postRawLagMs * MIX_SAMPLE_RATE) / 1_000);
-  if (preMicStart < 0 || postMicStart < 0) {
-    state.nextWindowStart = end;
-    return;
-  }
-  if (
-    session.backingTotalSamples < end
-    || session.micTotalSamples < preMicStart + ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES
-    || session.micTotalSamples < postMicStart + ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES
-  ) return;
-
-  if (!beginRobotContentTransitionWorker(state.bounds, 'compare', nowMs)) {
-    settleDegradedRobotContentTransition(state, nowMs);
-    return;
-  }
-
-  const backingWindow = session.readBacking(start, ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES);
-  const preMicWindow = session.readMic(preMicStart, ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES);
-  const postMicWindow = session.readMic(postMicStart, ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES);
-  const controller = new AbortController();
-  robotContentTransitionAbortController = controller;
-  state.analysisPending = true;
-
-  void compareRobotContentHypothesesInWorker(
-    backingWindow,
-    preMicWindow,
-    postMicWindow,
-    MIX_SAMPLE_RATE,
-    controller.signal,
-  ).then((comparison) => {
-    if (
-      robotContentTransition !== state
-      || state.revision !== robotContentTransitionRevision
-    ) return;
-    state.analysisPending = false;
-    robotContentTransitionAbortController = null;
-    const completedAt = performance.now();
-    if (sweepRobotContentTransitionBounds(state.bounds, completedAt)) {
-      settleDegradedRobotContentTransition(state, completedAt);
-      return;
-    }
-    noteRobotContentTransitionVerdict(state.bounds, comparison.verdict);
-
-    const verdictDeltaMs = comparison.verdict === 'pre'
-      ? state.preDeltaMs
-      : comparison.verdict === 'post'
-        ? state.postDeltaMs
-        : null;
-    const currentDeltaMs = robotContentTimeline.currentDeltaMs;
-    const verdictMatchesCurrentMapping = verdictDeltaMs !== null
-      && currentDeltaMs !== null
-      && Math.abs(currentDeltaMs - verdictDeltaMs) <= CALIBRATION_TOLERANCE_MS;
-    const crossedCurrentTransportFrontier = state.commitFloorSample !== null
-      && start >= state.commitFloorSample;
-
-    if (
-      verdictMatchesCurrentMapping
-      && crossedCurrentTransportFrontier
-      && commitRobotContentTransition(state, start, completedAt)
-    ) return;
-
-    if (comparison.verdict === 'pre') {
-      state.confirmedPreRanges.push({ start, end });
-    } else {
-      // Ambiguous evidence, or post evidence that could not yet commit, has no
-      // replay mapping retained by this state. Never splice around it later.
-      state.discardWorkingEvidenceOnCommit = true;
-    }
-    // Ambiguous windows are intentionally never relabelled. Advancing by a full
-    // evidence window may discard some usable PCM, but it cannot turn a mixed
-    // transition into false timing authority.
-    state.nextWindowStart = end;
-    maybeAnalyzeRobotContentTransition(completedAt);
-  }, () => {
-    if (robotContentTransition !== state || state.bounds.phase === 'degraded') return;
-    state.analysisPending = false;
-    robotContentTransitionAbortController = null;
-    // Worker failure grants no mapping. Skip this evidence window and keep the
-    // transition quarantined so a later independent window can still prove it.
-    const failedAt = performance.now();
-    state.discardWorkingEvidenceOnCommit = true;
-    if (noteRobotContentTransitionWorkerFailure(state.bounds, 'compare', failedAt)) {
-      settleDegradedRobotContentTransition(state, failedAt);
-      return;
-    }
-    state.nextWindowStart = end;
-    maybeAnalyzeRobotContentTransition(failedAt);
-  });
+    committedDeltaMs: robotContentTimeline.committedDeltaMs,
+    freshDeltaMs: robotContentTimeline.currentDeltaMs,
+    referenceDeltaMs: robotContentTimeline.referenceDeltaMs,
+    confirmedReferenceLagMs,
+  }, nowMs);
 }
 
 function noteRobotTransitionBackingFrame(
@@ -903,44 +592,21 @@ function noteRobotTransitionBackingFrame(
   start: number,
   nowMs: number,
 ) {
-  const state = robotContentTransition;
-  if (
-    state === null
-    || state.bounds.phase !== 'verifying'
-    || state.transportFrontierCaptureSample === null
-    || backingSampleRate === null
-    || frame.firstSampleIndex === null
-    || frame.generation !== state.context.backingGeneration
-  ) return;
-
-  const sourceSamples = Math.floor(frame.pcm.byteLength / 2);
-  const sourceEnd = frame.firstSampleIndex + sourceSamples;
-  if (sourceEnd <= state.transportFrontierCaptureSample) return;
-
-  const sourceOffset = Math.max(0, state.transportFrontierCaptureSample - frame.firstSampleIndex);
-  const sampleOffset = Math.min(
-    samples.length,
-    Math.max(0, Math.round((sourceOffset * MIX_SAMPLE_RATE) / backingSampleRate)),
-  );
-  if (sampleOffset >= samples.length) return;
-  const eligibleStart = start + sampleOffset;
-  const eligibleSamples = new Int16Array(samples.subarray(sampleOffset));
-  if (state.commitFloorSample === null) state.commitFloorSample = eligibleStart;
-  if (state.nextWindowStart === null) state.nextWindowStart = eligibleStart;
-  state.chunks.push({ start: eligibleStart, samples: eligibleSamples });
-
-  // Keep quarantine memory bounded even if content never becomes classifiable.
-  const keepAfter = Math.max(0, session.backingTotalSamples - BACKING_RETENTION_MS * MIX_SAMPLE_RATE / 1_000);
-  state.chunks = state.chunks.filter((chunk) => chunk.start + chunk.samples.length > keepAfter);
-  maybeAnalyzeRobotContentTransition(nowMs);
+  robotContentTransitionRuntime.noteBackingFrame({
+    frameGeneration: frame.generation,
+    firstSampleIndex: frame.firstSampleIndex,
+    sourceSampleCount: Math.floor(frame.pcm.byteLength / 2),
+    sourceSampleRate: backingSampleRate,
+    samples,
+    start,
+    backingTotalSamples: session.backingTotalSamples,
+  }, nowMs);
 }
 
 function requestRobotBackingBoundary(nowMs = performance.now()) {
   const context = calibrationContext();
   if (!robotContentTimeline.needsBackingBoundary(context)) return false;
   if (!reconcileRobotContentTransitionWithFreshDelta(context, nowMs)) return false;
-  if (pendingRobotBackingBoundary !== null) return false;
-  if (robotContentTransition?.transportFrontierCaptureSample !== null) return false;
   const target = backing;
   const backingGeneration = session.backingGeneration;
   if (
@@ -949,12 +615,11 @@ function requestRobotBackingBoundary(nowMs = performance.now()) {
     || backingGeneration === null
   ) return false;
 
-  robotBackingBoundaryRequestId += 1;
-  if (!Number.isSafeInteger(robotBackingBoundaryRequestId)) robotBackingBoundaryRequestId = 1;
-  pendingRobotBackingBoundary = { requestId: robotBackingBoundaryRequestId, backingGeneration };
+  const request = robotContentTransitionRuntime.requestBackingBoundary(backingGeneration);
+  if (request === null) return false;
   sendJson(target, {
     type: 'backing-sample-boundary-request',
-    requestId: robotBackingBoundaryRequestId,
+    requestId: request.requestId,
   });
   return true;
 }
@@ -2168,7 +1833,7 @@ function processPublisherFrame(frame: PcmFrame) {
       }
       calibration.observeMic(samples, start);
       contentCalibrationValidator.observeMic(samples, start);
-      maybeAnalyzeRobotContentTransition();
+      robotContentTransitionRuntime.noteMicProgress();
     }
   } else {
     broadcastToMonitors(frame.pcm, true);
@@ -2740,7 +2405,7 @@ wss.on('connection', (rawSocket, request) => {
         noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
         const contentTimingStart = mappedContentBackingStart(start, nowMs);
         if (contentTimingStart !== null) {
-feedContentBackingEvidence(samples, contentTimingStart, nowMs);
+          feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         }
       }
       return;
@@ -2759,34 +2424,20 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
 
     if (payload.type === 'backing-sample-boundary') {
       if (socket !== backing || socket.role !== 'backing' || !backingIsRobot) return;
-      const pending = pendingRobotBackingBoundary;
       const requestId = Number(payload.requestId);
-      if (pending === null || requestId !== pending.requestId) return;
-
-      // A matching reply consumes the request even when malformed. The next
-      // fresh Robot offset may retry; an invalid reply can never grant mapping.
-      pendingRobotBackingBoundary = null;
       const generation = validCaptureGeneration(payload.generation);
       const firstSampleIndex = Number(payload.firstSampleIndex);
-      if (
-        generation === null
-        || generation !== pending.backingGeneration
-        || generation !== session.backingGeneration
-        || !Number.isSafeInteger(firstSampleIndex)
-        || firstSampleIndex < 0
-      ) return;
-
-      const transition = robotContentTransition;
-      if (
-        transition === null
-        || transition.bounds.phase !== 'verifying'
-        || !robotTransitionContextMatches(transition.context, calibrationContext())
-      ) return;
       // This ACK is only a capture-transport lower bound. It deliberately does
       // not call noteBackingBoundary(): Browser/PipeWire may still deliver old
       // music after this cursor. The next binary frames translate this capture
       // cursor into the session timeline, then PCM evidence proves the segment.
-      transition.transportFrontierCaptureSample = firstSampleIndex;
+      robotContentTransitionRuntime.acceptBackingBoundary({
+        requestId,
+        generation,
+        firstSampleIndex,
+        currentBackingGeneration: session.backingGeneration,
+        context: calibrationContext(),
+      });
       return;
     }
 
@@ -3313,7 +2964,7 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
       // false, but must not restore seek authority to that old socket.
       if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
       const nowMs = performance.now();
-      pendingRobotBackingBoundary = null;
+      robotContentTransitionRuntime.clearPendingBoundary();
       const requestedFollowerCorrection = payload.reason === 'follower-correction';
       const fromMediaTime = Number(payload.fromMediaTime);
       const toMediaTime = Number(payload.toMediaTime);
@@ -3325,23 +2976,23 @@ feedContentBackingEvidence(samples, contentTimingStart, nowMs);
         && socket.isRobotSource === true
         && backingIsRobot
         && robotContentTimeline.noteFollowerCorrection(
-fromMediaTime,
-toMediaTime,
-context,
-nowMs,
+          fromMediaTime,
+          toMediaTime,
+          context,
+          nowMs,
         );
 
       robotPlayerOffset.reset();
       if (mappedFollowerCorrection) {
         if (preDeltaMs !== null && referenceDeltaMs !== null) {
-beginRobotContentTransition(
-  fromMediaTime,
-  toMediaTime,
-  preDeltaMs,
-  referenceDeltaMs,
-  context,
-  nowMs,
-);
+          beginRobotContentTransition(
+            fromMediaTime,
+            toMediaTime,
+            preDeltaMs,
+            referenceDeltaMs,
+            context,
+            nowMs,
+          );
         }
         // Same source/capture identity, different media mapping segment. Keep the
         // transaction and primed evidence, but immediately rebase any already

@@ -7,6 +7,7 @@ import express from 'express';
 import WebSocket from 'ws';
 
 import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './audio-session.js';
+import { BackingRuntime } from './backing-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
@@ -129,6 +130,7 @@ const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
 const MIX_HEALTH_INTERVAL_MS = 1_000;
 const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
 const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
+const BACKING_GRACE_MS = envMs('RELAY_BACKING_GRACE_MS', 10_000);
 const MIC_FIRST_FRAME_TIMEOUT_MS = envMs('RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_000);
 const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
@@ -192,9 +194,6 @@ type TimelineStatus = {
 };
 
 let webTransportMedia: WebTransportMediaServer | null = null;
-let backing: RelaySocket | null = null;
-let backingSampleRate: number | null = null;
-let backingIsRobot = false;
 let activeRobotSource: RelaySocket | null = null;
 let micGainDb = 24;
 const songLevel = FIXED_SONG_LEVEL;
@@ -371,7 +370,12 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
 
 const STREAM_LIVE_MS = 1_000;
 const COLLECTION_SILENCE_GRACE_MS = 1_500;
-let lastBackingFrameAt = -Infinity;
+
+const backingRuntime = new BackingRuntime<RelaySocket>({
+  graceMs: BACKING_GRACE_MS,
+  isConnected: (socket) => socket.readyState === WebSocket.OPEN,
+  onGraceExpired: expireBackingGrace,
+});
 
 const micRuntime = new MicRuntime({
   audioTransportConfig: AUDIO_TRANSPORT_CONFIG,
@@ -405,17 +409,8 @@ function bothStreamsFlowing(nowMs: number) {
 function silentSides(nowMs: number) {
   const silent: string[] = [];
   if (!micStreaming(nowMs)) silent.push('phone microphone');
-  if (nowMs - lastBackingFrameAt >= STREAM_LIVE_MS) silent.push('desktop capture');
+  if (!backingRuntime.streaming(nowMs, STREAM_LIVE_MS)) silent.push('desktop capture');
   return silent;
-}
-
-const BACKING_GRACE_MS = envMs('RELAY_BACKING_GRACE_MS', 10_000);
-let backingAbsenceTimer: NodeJS.Timeout | null = null;
-
-function cancelBackingGrace() {
-  if (backingAbsenceTimer === null) return;
-  clearTimeout(backingAbsenceTimer);
-  backingAbsenceTimer = null;
 }
 
 function cancelMicTransportGrace() {
@@ -485,7 +480,7 @@ function calibrationContext(): CalibrationContext {
 
 function robotProbeTimingActive() {
   return PROBE_CALIBRATE && (
-    backingIsRobot
+    backingRuntime.isRobot
     || activeRobotSource?.readyState === WebSocket.OPEN
   );
 }
@@ -520,7 +515,7 @@ function robotContentMappingReady(nowMs = performance.now()) {
 }
 
 function mappedContentBackingStart(startSample: number, nowMs = performance.now()) {
-  if (!backingIsRobot) return startSample;
+  if (!backingRuntime.isRobot) return startSample;
   return robotContentTimeline.mapBackingStart(startSample, calibrationContext(), nowMs);
 }
 
@@ -596,7 +591,7 @@ function noteRobotTransitionBackingFrame(
     frameGeneration: frame.generation,
     firstSampleIndex: frame.firstSampleIndex,
     sourceSampleCount: Math.floor(frame.pcm.byteLength / 2),
-    sourceSampleRate: backingSampleRate,
+    sourceSampleRate: backingRuntime.sampleRate,
     samples,
     start,
     backingTotalSamples: session.backingTotalSamples,
@@ -607,10 +602,10 @@ function requestRobotBackingBoundary(nowMs = performance.now()) {
   const context = calibrationContext();
   if (!robotContentTimeline.needsBackingBoundary(context)) return false;
   if (!reconcileRobotContentTransitionWithFreshDelta(context, nowMs)) return false;
-  const target = backing;
+  const target = backingRuntime.socket;
   const backingGeneration = session.backingGeneration;
   if (
-    !backingIsRobot
+    !backingRuntime.isRobot
     || target?.readyState !== WebSocket.OPEN
     || backingGeneration === null
   ) return false;
@@ -1295,12 +1290,12 @@ function sourceStatusPayload() {
   const nowMs = performance.now();
   return {
     type: 'source-status',
-    connected: backing?.readyState === WebSocket.OPEN,
+    connected: backingRuntime.connected(),
     micConnected: micMediaConnected(),
     micMediaPath: micMediaPath(),
-    backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
+    backingStreaming: backingRuntime.streaming(nowMs, STREAM_LIVE_MS),
     micStreaming: micStreaming(nowMs),
-    sampleRate: backingSampleRate,
+    sampleRate: backingRuntime.sampleRate,
     active: session.active,
     prebufferMs: session.prebufferMs,
     mixSampleRate: MIX_SAMPLE_RATE,
@@ -1401,7 +1396,7 @@ function remoteStatusPayload() {
       backingStreaming,
       backingSampleRate: components.backing.sampleRate,
       backingIsRobot: components.backing.robot,
-      backingFrameAgeMs: frameAgeMs(lastBackingFrameAt, nowMs),
+      backingFrameAgeMs: frameAgeMs(backingRuntime.lastFrameAt, nowMs),
       micConnected,
       micStreaming,
       micMediaPath: micMediaPath(),
@@ -1573,8 +1568,8 @@ function currentTimelineStatus(nowMs = performance.now()) {
  * what those facts mean; this function only samples the live server once.
  */
 function readinessRouteMode(nowMs = performance.now()) {
-  if (backingIsRobot || activeRobotSource?.readyState === WebSocket.OPEN) return 'robot' as const;
-  if (backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null) return 'legacy' as const;
+  if (backingRuntime.isRobot || activeRobotSource?.readyState === WebSocket.OPEN) return 'robot' as const;
+  if (backingRuntime.armed()) return 'legacy' as const;
   // Voice-only is valid only while the room truly has no Song. Once a Song
   // exists, backing is an expected dependency even before a concrete route
   // has announced itself.
@@ -1589,10 +1584,10 @@ function readinessPayload(nowMs = performance.now()) {
 
   return buildReadiness({
     routeMode: readinessRouteMode(nowMs),
-    backingConnected: backing?.readyState === WebSocket.OPEN,
-    backingStreaming: nowMs - lastBackingFrameAt < STREAM_LIVE_MS,
-    backingSampleRate,
-    backingIsRobot,
+    backingConnected: backingRuntime.connected(),
+    backingStreaming: backingRuntime.streaming(nowMs, STREAM_LIVE_MS),
+    backingSampleRate: backingRuntime.sampleRate,
+    backingIsRobot: backingRuntime.isRobot,
     micConnected: micMediaConnected(),
     micStreaming: micStreaming(nowMs),
     micFlowObserved: micFlowObserved(),
@@ -1711,7 +1706,7 @@ function refreshLiveMicNetworkCompensation() {
 }
 
 function startLiveSource() {
-  cancelBackingGrace();
+  backingRuntime.cancelGrace();
 
   if (session.active) {
     refreshLiveMicNetworkCompensation();
@@ -1728,7 +1723,7 @@ function startLiveSource() {
 }
 
 function restartLiveSourceAfterMicReconnect() {
-  if (!session.active || backing?.readyState !== WebSocket.OPEN) return;
+  if (!session.active || !backingRuntime.connected()) return;
   refreshLiveMicNetworkCompensation();
   if (calibration.collecting) {
     calibration.fail('Microphone reconnected during calibration. Start calibration again.');
@@ -1752,8 +1747,8 @@ function clearBootCalibrationState() {
 }
 
 function stopLiveSource() {
-  cancelBackingGrace();
-  backingIsRobot = false;
+  backingRuntime.cancelGrace();
+  backingRuntime.retireRobotRoute();
   if (!session.active) return;
   takeController.endMix();
   clearBootCalibrationState();
@@ -1779,12 +1774,11 @@ function maybeStopLiveSourceWhenUnarmed() {
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGraceTimer !== null;
-  const backingArmed = backing?.readyState === WebSocket.OPEN || backingAbsenceTimer !== null;
+  const backingArmed = backingRuntime.armed();
   if (!micArmed && !backingArmed) stopLiveSource();
 }
 
 function expireBackingGrace() {
-  backingAbsenceTimer = null;
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGraceTimer !== null;
@@ -1793,7 +1787,7 @@ function expireBackingGrace() {
     return;
   }
 
-  backingIsRobot = false;
+  backingRuntime.retireRobotRoute();
   clearRobotBackingBoundaryRequest();
   invalidateMicTiming('Backing route ended while the room continued voice-only.');
   broadcastStatus();
@@ -1865,7 +1859,7 @@ function maybeAutoCalibrate(nowMs: number) {
   if (calibration.confirmedResult !== null && !calibrationIsStale()) return;
   if (!timingRuntime.autoCalibrationDue(nowMs)) return;
 
-  if (backing?.readyState !== WebSocket.OPEN || !micRuntime.controlConnected()) return;
+  if (!backingRuntime.connected() || !micRuntime.controlConnected()) return;
   if (!bothStreamsFlowing(nowMs)) return;
   const timeline = currentTimelineStatus();
   if (!timeline.connected || Number(timeline.state) !== 1) return;
@@ -1886,7 +1880,7 @@ function contentValidationPathReady(nowMs: number) {
     || calibration.confirmedResult === null
     || calibrationIsStale()
   ) return false;
-  if (backing?.readyState !== WebSocket.OPEN || !micRuntime.controlConnected()) return false;
+  if (!backingRuntime.connected() || !micRuntime.controlConnected()) return false;
   if (!bothStreamsFlowing(nowMs)) return false;
   const timeline = currentTimelineStatus(nowMs);
   return Boolean(timeline.connected) && Number(timeline.state) === 1;
@@ -1918,8 +1912,8 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
   if (target === 'mic') {
     return micRuntime.controlConnected() && micStreaming(nowMs);
   }
-  return backing?.readyState === WebSocket.OPEN
-    && nowMs - lastBackingFrameAt < STREAM_LIVE_MS
+  return backingRuntime.connected()
+    && backingRuntime.streaming(nowMs, STREAM_LIVE_MS)
     && activeRobotSource?.readyState === WebSocket.OPEN;
 }
 
@@ -2375,16 +2369,16 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      if (socket === backing && socket.role === 'backing' && session.active) {
+      if (backingRuntime.isSocket(socket) && socket.role === 'backing' && session.active) {
         const frame = decodePcmFrame(data as Buffer);
         const previousGeneration = session.backingGeneration;
         const nowMs = performance.now();
-        lastBackingFrameAt = nowMs;
+        backingRuntime.noteFrame(socket, nowMs);
         const { samples, start } = session.ingestBacking(
           frame,
-          backingSampleRate,
+          backingRuntime.sampleRate,
           nowMs,
-          backingIsRobot,
+          backingRuntime.isRobot,
         );
         if (
           previousGeneration !== null
@@ -2423,7 +2417,7 @@ wss.on('connection', (rawSocket, request) => {
     const payload = message as Record<string, unknown>;
 
     if (payload.type === 'backing-sample-boundary') {
-      if (socket !== backing || socket.role !== 'backing' || !backingIsRobot) return;
+      if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
       const requestId = Number(payload.requestId);
       const generation = validCaptureGeneration(payload.generation);
       const firstSampleIndex = Number(payload.firstSampleIndex);
@@ -2974,7 +2968,7 @@ wss.on('connection', (rawSocket, request) => {
       const mappedFollowerCorrection = requestedFollowerCorrection
         && socket === activeRobotSource
         && socket.isRobotSource === true
-        && backingIsRobot
+        && backingRuntime.isRobot
         && robotContentTimeline.noteFollowerCorrection(
           fromMediaTime,
           toMediaTime,
@@ -3216,22 +3210,19 @@ wss.on('connection', (rawSocket, request) => {
       }
 
       commitSocketRole(socket, 'backing');
-      const previousBacking = backing;
+      const previousBacking = backingRuntime.socket;
       clearRobotBackingBoundaryRequest();
       if (previousBacking && previousBacking !== socket) {
         takeController.noteQualityEvent('backing-transport-replaced');
       }
-      if (previousBacking !== socket) lastBackingFrameAt = -Infinity;
       replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
       socket.sampleRate = sampleRate;
-      backing = socket;
-      backingSampleRate = sampleRate;
-      backingIsRobot = payload.robot === true;
+      backingRuntime.bind({ socket, sampleRate, robot: payload.robot === true });
       session.setBackingExpected(true);
       if (!previousBacking && session.active) takeController.noteQualityEvent('backing-transport-connected');
 
       dropLegacyCalibrationForRobot();
-      sendJson(socket, { type: 'registered', role: 'backing', robot: backingIsRobot });
+      sendJson(socket, { type: 'registered', role: 'backing', robot: backingRuntime.isRobot });
       startLiveSource();
       return;
     }
@@ -3425,19 +3416,15 @@ wss.on('connection', (rawSocket, request) => {
         broadcastStatus();
       }
 
-      if (socket === backing) {
+      if (backingRuntime.isSocket(socket)) {
         takeController.noteQualityEvent('backing-transport-disconnected');
         clearRobotBackingBoundaryRequest();
-        backing = null;
-        backingSampleRate = null;
-        lastBackingFrameAt = -Infinity;
+        backingRuntime.detach(socket);
         session.setBackingExpected(false);
         if (calibration.collecting) {
           calibration.fail('Desktop Source disconnected during calibration.');
         }
         if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-        cancelBackingGrace();
-        backingAbsenceTimer = setTimeout(expireBackingGrace, BACKING_GRACE_MS);
         broadcastJson(sourceStatusPayload());
         broadcastStatus();
       }
@@ -3509,7 +3496,7 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     clearInterval(mixerTimer);
     clearInterval(youtubeTimelineTimer);
     cancelMicTransportGrace();
-    cancelBackingGrace();
+    backingRuntime.cancelGrace();
 
     await takeController.shutdown(Date.now());
     await webTransportMedia?.stop();

@@ -2,6 +2,9 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 
 import WebSocket, { WebSocketServer } from 'ws';
 
+import { monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
+import { encodePcmFrame } from './pcm-frame.js';
+
 export type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';
 type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
 
@@ -38,6 +41,15 @@ export type RelaySocketServerOptions = {
   path?: string;
   relayKey: string | null;
   heartbeatMs: number;
+};
+
+export type MonitorFramePosition = {
+  generation: number;
+  firstSampleIndex: number;
+};
+
+export type MonitorSocketTransportOptions = {
+  backlogBytes: number;
 };
 
 /**
@@ -91,6 +103,64 @@ export function createRelaySocketTransport(wss: WebSocketServer) {
     broadcastJson,
     canClaimSocketRole,
     commitSocketRole,
+  };
+}
+/**
+ * Owns monitor-specific physical fanout: role filtering, positioned PCM wire
+ * framing, and per-destination WebSocket backlog drops. The caller still owns
+ * when a mix frame should be published and what that frame means.
+ */
+export function createMonitorSocketTransport(
+  wss: WebSocketServer,
+  options: MonitorSocketTransportOptions,
+) {
+  if (!Number.isFinite(options.backlogBytes) || options.backlogBytes <= 0) {
+    throw new Error('MonitorSocketTransport backlogBytes must be positive.');
+  }
+
+  let droppedFrames = 0;
+
+  function broadcast(
+    payload: string | Buffer,
+    binary = false,
+    position: MonitorFramePosition | null = null,
+  ) {
+    for (const client of wss.clients) {
+      const socket = client as RelaySocket;
+      if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
+
+      // Once a monitor opts into positioned PCM, every binary packet must remain
+      // framed. Do not silently fall back to raw PCM on an unpositioned path.
+      if (binary && socket.monitorPacketVersion === 1 && position === null) continue;
+
+      const outbound = binary
+        && Buffer.isBuffer(payload)
+        && socket.monitorPacketVersion === 1
+        && position !== null
+        ? encodePcmFrame(position.generation, position.firstSampleIndex, payload)
+        : payload;
+
+      if (
+        binary
+        && Buffer.isBuffer(outbound)
+        && monitorFrameWouldExceedBacklog(
+          socket.bufferedAmount,
+          outbound.byteLength,
+          options.backlogBytes,
+        )
+      ) {
+        droppedFrames += 1;
+        continue;
+      }
+      socket.send(outbound, { binary });
+    }
+  }
+
+  return {
+    broadcast,
+    get droppedFrames() {
+      return droppedFrames;
+    },
   };
 }
 

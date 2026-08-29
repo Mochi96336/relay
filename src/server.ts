@@ -6,13 +6,13 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import WebSocket from 'ws';
 
-import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './audio-session.js';
+import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
-import { monitorBacklogBudgetBytes, monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
+import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
@@ -25,12 +25,13 @@ import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
 import { TimingRuntime } from './timing-runtime.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
-import { decodePcmFrame, encodePcmFrame, type PcmFrame } from './pcm-frame.js';
+import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import type { ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
 import {
+  createMonitorSocketTransport,
   createRelaySocketTransport,
   createRelayWebSocketServer,
   type RelaySocket,
@@ -180,6 +181,9 @@ const {
   canClaimSocketRole,
   commitSocketRole,
 } = createRelaySocketTransport(wss);
+const monitorTransport = createMonitorSocketTransport(wss, {
+  backlogBytes: MONITOR_BACKLOG_BYTES,
+});
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 const youtubeTimeline = new SongSession();
 const roomSongCommands = new RoomSongCommandRuntime();
@@ -195,7 +199,6 @@ type TimelineStatus = {
 
 let webTransportMedia: WebTransportMediaServer | null = null;
 const songLevel = FIXED_SONG_LEVEL;
-let monitorDroppedFrames = 0;
 let lastMixHealthAt = 0;
 let participantConnectionSequence = 0;
 let legacyPlaybackConnectionSequence = 0;
@@ -1059,42 +1062,6 @@ function reportTelemetryRejected(socket: RelaySocket, reason: string) {
   });
 }
 
-function broadcastToMonitors(
-  payload: string | Buffer,
-  binary = false,
-  position: MixFramePosition | null = null,
-) {
-  for (const client of wss.clients) {
-    const socket = client as RelaySocket;
-    if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
-
-    // Once a monitor opts into positioned PCM, every binary packet must remain
-    // framed. Do not silently fall back to raw PCM on an unpositioned path.
-    if (binary && socket.monitorPacketVersion === 1 && position === null) continue;
-
-    const outbound = binary
-      && Buffer.isBuffer(payload)
-      && socket.monitorPacketVersion === 1
-      && position !== null
-      ? encodePcmFrame(position.generation, position.firstSampleIndex, payload)
-      : payload;
-
-    if (
-      binary
-      && Buffer.isBuffer(outbound)
-      && monitorFrameWouldExceedBacklog(
-        socket.bufferedAmount,
-        outbound.byteLength,
-        MONITOR_BACKLOG_BYTES,
-      )
-    ) {
-      monitorDroppedFrames += 1;
-      continue;
-    }
-    socket.send(outbound, { binary });
-  }
-}
-
 function replacePrevious(previous: RelaySocket | null, next: RelaySocket, message: string) {
   if (!previous || previous === next) return;
   previous.replaced = true;
@@ -1311,7 +1278,7 @@ function mixHealthPayload() {
     ...health,
     recommendedMicGainDb: recommendedMicGainDb(health.micPeakDbfs),
     micGainDb: session.micGainDb,
-    monitorDroppedFrames,
+    monitorDroppedFrames: monitorTransport.droppedFrames,
     prebufferMs: session.prebufferMs,
     micMediaPath: micMediaPath(),
     micUplink: micUplinkHealthPayload(),
@@ -1388,7 +1355,7 @@ function remoteStatusPayload() {
     mix: {
       active: session.active,
       ...mixHealth,
-      monitorDroppedFrames,
+      monitorDroppedFrames: monitorTransport.droppedFrames,
     },
     audio: {
       micMediaPath: micMediaPath(),
@@ -1641,7 +1608,7 @@ function broadcastProductStatus(nowMs = performance.now()) {
 }
 
 function broadcastStatus() {
-  broadcastToMonitors(JSON.stringify(publisherStatusPayload()));
+  monitorTransport.broadcast(JSON.stringify(publisherStatusPayload()));
   broadcastJson(sourceStatusPayload());
 }
 
@@ -1796,7 +1763,7 @@ function processPublisherFrame(frame: PcmFrame) {
       robotContentTransitionRuntime.noteMicProgress();
     }
   } else {
-    broadcastToMonitors(frame.pcm, true);
+    monitorTransport.broadcast(frame.pcm, true);
   }
 }
 
@@ -1812,7 +1779,7 @@ const mixerTimer = setInterval(() => {
   session.drain((frame, evidence, position) => {
     const nowMs = performance.now();
     takeController.append(frame, takeQualityFrameState(nowMs), evidence, position);
-    broadcastToMonitors(frame, true, position);
+    monitorTransport.broadcast(frame, true, position);
   });
 }, 5);
 

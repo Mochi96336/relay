@@ -29,13 +29,13 @@ test('server fences source-seeked from any no-longer-active Robot source', () =>
   const handlerStart = serverSource.indexOf("if (payload.type === 'source-seeked') {");
   const handlerEnd = serverSource.indexOf("if (payload.type === 'set-vocal-fine-tune') {", handlerStart);
   const staleRobotFence = serverSource.indexOf(
-    'if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;',
+    'if (!sourceRuntime.canReportSeek(socket)) return;',
     handlerStart,
   );
   const mappingAttempt = serverSource.indexOf('robotContentTimeline.noteFollowerCorrection(', staleRobotFence);
   const mappedBranch = serverSource.indexOf('if (mappedFollowerCorrection) {', mappingAttempt);
   const mappedReturn = serverSource.indexOf('return;', mappedBranch);
-  const destructiveGeneration = serverSource.indexOf('sourceGeneration += 1;', mappedReturn);
+  const destructiveGeneration = serverSource.indexOf('sourceRuntime.invalidateMapping();', mappedReturn);
   const destructiveDiscard = serverSource.indexOf('calibration.discardPrimedContent();', destructiveGeneration);
 
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, 'source-seeked handler must exist');
@@ -52,7 +52,7 @@ test('server fences source-seeked from any no-longer-active Robot source', () =>
   );
   assert.doesNotMatch(
     serverSource.slice(mappedBranch, mappedReturn),
-    /sourceGeneration \+= 1/,
+    /sourceRuntime\.invalidateMapping\(\)/,
     'a concretely mapped follower correction preserves source identity',
   );
 });

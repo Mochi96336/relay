@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 
 import { AudioSession, LIMITER_THRESHOLD_DBFS, type MixFramePosition } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
+import { SourceRuntime } from './source-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
@@ -194,7 +195,6 @@ type TimelineStatus = {
 };
 
 let webTransportMedia: WebTransportMediaServer | null = null;
-let activeRobotSource: RelaySocket | null = null;
 let micGainDb = 24;
 const songLevel = FIXED_SONG_LEVEL;
 let monitorDroppedFrames = 0;
@@ -223,7 +223,9 @@ const takeController = new TakeController({
   onChange: (status) => broadcastJson(status),
 });
 
-let sourceGeneration = 0;
+const sourceRuntime = new SourceRuntime<RelaySocket>({
+  isConnected: (socket) => socket.readyState === WebSocket.OPEN,
+});
 const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
 const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATION_RETRY_MS', 15_000);
 const CALIBRATION_AGREEMENT = Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3);
@@ -474,14 +476,14 @@ function calibrationContext(): CalibrationContext {
     sessionGeneration: session.generation,
     micGeneration: session.micGeneration,
     backingGeneration: session.backingGeneration,
-    sourceGeneration,
+    sourceGeneration: sourceRuntime.generation,
   };
 }
 
 function robotProbeTimingActive() {
   return PROBE_CALIBRATE && (
     backingRuntime.isRobot
-    || activeRobotSource?.readyState === WebSocket.OPEN
+    || sourceRuntime.connected()
   );
 }
 
@@ -503,14 +505,14 @@ function robotContentFallbackPrimingActive(nowMs = performance.now()) {
 }
 
 function robotDeltaIsFresh(nowMs = performance.now()) {
-  return activeRobotSource?.readyState === WebSocket.OPEN
+  return sourceRuntime.connected()
     && robotPlayerOffset.offsetMs(nowMs) !== null
     && robotPlayerOffset.isFresh(nowMs);
 }
 
 function robotContentMappingReady(nowMs = performance.now()) {
   if (!robotProbeTimingActive()) return true;
-  return activeRobotSource?.readyState === WebSocket.OPEN
+  return sourceRuntime.connected()
     && robotContentTimeline.isReady(calibrationContext(), nowMs);
 }
 
@@ -1306,7 +1308,7 @@ function sourceStatusPayload() {
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
     robotRoute: robotProbeTimingActive(),
-    robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
@@ -1527,7 +1529,7 @@ function timingCalibrationStatusPayload() {
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
     robotRoute: robotProbeTimingActive(),
-    robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     robotContentTransition: robotContentTransitionStatus(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
@@ -1568,7 +1570,7 @@ function currentTimelineStatus(nowMs = performance.now()) {
  * what those facts mean; this function only samples the live server once.
  */
 function readinessRouteMode(nowMs = performance.now()) {
-  if (backingRuntime.isRobot || activeRobotSource?.readyState === WebSocket.OPEN) return 'robot' as const;
+  if (backingRuntime.isRobot || sourceRuntime.connected()) return 'robot' as const;
   if (backingRuntime.armed()) return 'legacy' as const;
   // Voice-only is valid only while the room truly has no Song. Once a Song
   // exists, backing is an expected dependency even before a concrete route
@@ -1592,7 +1594,7 @@ function readinessPayload(nowMs = performance.now()) {
     micStreaming: micStreaming(nowMs),
     micFlowObserved: micFlowObserved(),
     micStartupTimedOut: micStartupTimedOut(nowMs),
-    robotSourceConnected: activeRobotSource?.readyState === WebSocket.OPEN,
+    robotSourceConnected: sourceRuntime.connected(),
     sessionActive: session.active,
     timelineConnected: Boolean(timeline.connected && timeline.videoId),
     timelineState: Number.isFinite(timelineState) ? timelineState : null,
@@ -1914,7 +1916,7 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
   }
   return backingRuntime.connected()
     && backingRuntime.streaming(nowMs, STREAM_LIVE_MS)
-    && activeRobotSource?.readyState === WebSocket.OPEN;
+    && sourceRuntime.connected();
 }
 
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
@@ -1952,8 +1954,8 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
   const payload = { type: 'play-calibration-probe', target, requestId: probeRequestId, leadMs: PROBE_LEAD_MS };
   if (target === 'mic') {
     sendJson(micRuntime.publisher!, payload);
-  } else if (activeRobotSource) {
-    sendJson(activeRobotSource, payload);
+  } else if (sourceRuntime.socket) {
+    sendJson(sourceRuntime.socket, payload);
   }
   broadcastJson(timingCalibrationStatusPayload());
 }
@@ -2956,7 +2958,7 @@ wss.on('connection', (rawSocket, request) => {
       // socket was never a Robot source, while true/false means it has entered
       // the Robot source lifecycle. Replacement clears the active flag to
       // false, but must not restore seek authority to that old socket.
-      if (socket.isRobotSource !== undefined && socket !== activeRobotSource) return;
+      if (!sourceRuntime.canReportSeek(socket)) return;
       const nowMs = performance.now();
       robotContentTransitionRuntime.clearPendingBoundary();
       const requestedFollowerCorrection = payload.reason === 'follower-correction';
@@ -2966,8 +2968,7 @@ wss.on('connection', (rawSocket, request) => {
       const preDeltaMs = robotContentTimeline.currentDeltaMs;
       const referenceDeltaMs = robotContentTimeline.referenceDeltaMs;
       const mappedFollowerCorrection = requestedFollowerCorrection
-        && socket === activeRobotSource
-        && socket.isRobotSource === true
+        && sourceRuntime.isActiveRobot(socket)
         && backingRuntime.isRobot
         && robotContentTimeline.noteFollowerCorrection(
           fromMediaTime,
@@ -3002,7 +3003,7 @@ wss.on('connection', (rawSocket, request) => {
       // Source pages fail closed instead of smuggling a mapping break through as
       // continuous calibration evidence.
       clearRobotContentTransition();
-      sourceGeneration += 1;
+      sourceRuntime.invalidateMapping();
       clearContentValidationBaseline();
       calibration.discardPrimedContent();
       robotContentTimeline.reset();
@@ -3268,7 +3269,7 @@ wss.on('connection', (rawSocket, request) => {
     if (payload.type === 'calibration-probe-played' || payload.type === 'calibration-probe-failed') {
       const fromPublisher = micRuntime.isPublisher(socket);
       const target = payload.target === 'backing' ? 'backing' : 'mic';
-      const fromActiveRobot = socket === activeRobotSource && socket.isRobotSource === true;
+      const fromActiveRobot = sourceRuntime.isActiveRobot(socket);
       if (target === 'mic' ? fromPublisher : fromActiveRobot) {
         const nowMs = performance.now();
         if (payload.type === 'calibration-probe-played') {
@@ -3288,21 +3289,16 @@ wss.on('connection', (rawSocket, request) => {
         rejectInfrastructure(socket, 'Authenticate Relay infrastructure before becoming the Robot source.');
         return;
       }
-      if (activeRobotSource === socket) return;
+      if (sourceRuntime.isActive(socket)) return;
 
-      const previous = activeRobotSource;
-      if (previous && previous !== socket) {
-        previous.isRobotSource = false;
+      const { previous, replaced } = sourceRuntime.attachRobot(socket);
+      if (replaced && previous) {
         sendJson(previous, { type: 'robot-source-replaced' });
-        sourceGeneration += 1;
         takeController.noteQualityEvent('robot-source-replaced');
         abandonProbeRun();
       } else if (!previous && session.active) {
         takeController.noteQualityEvent('robot-source-connected');
       }
-
-      activeRobotSource = socket;
-      socket.isRobotSource = true;
       robotPlayerOffset.reset();
       robotContentTimeline.reset();
       clearRobotBackingBoundaryRequest();
@@ -3315,7 +3311,7 @@ wss.on('connection', (rawSocket, request) => {
 
     if (payload.type === 'robot-player-offset') {
       const offsetMs = Number(payload.offsetMs);
-      if (socket === activeRobotSource && socket.isRobotSource === true && Number.isFinite(offsetMs)) {
+      if (sourceRuntime.isActiveRobot(socket) && Number.isFinite(offsetMs)) {
         const nowMs = performance.now();
         robotPlayerOffset.record(offsetMs, nowMs);
         const mapped = robotContentTimeline.notePlayerOffset(
@@ -3376,14 +3372,12 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (!socket.replaced) {
-      if (socket === activeRobotSource) {
+      if (sourceRuntime.isActive(socket)) {
         takeController.noteQualityEvent('robot-source-disconnected');
-        activeRobotSource = null;
-        socket.isRobotSource = false;
+        sourceRuntime.detachRobot(socket);
         robotPlayerOffset.reset();
         robotContentTimeline.reset();
         clearRobotBackingBoundaryRequest();
-        sourceGeneration += 1;
         abandonProbeRun();
         syncAppliedCalibration();
         broadcastJson(sourceStatusPayload());

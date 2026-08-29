@@ -48,10 +48,8 @@ import {
   participantCapabilityMatches,
 } from './participant-capability.js';
 import { parseRoomSongCommand } from './room-song-command.js';
-import {
-  RoomSongCommandSession,
-  type AcceptedRoomSongCommand,
-} from './room-song-command-session.js';
+import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
+import { RoomSongCommandRuntime } from './room-song-command-runtime.js';
 import {
   LEGACY_PLAYBACK_PARTICIPANT_ID,
   LEGACY_PLAYBACK_TRANSPORT_ID,
@@ -183,8 +181,7 @@ const {
 } = createRelaySocketTransport(wss);
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 const youtubeTimeline = new SongSession();
-const roomSongCommands = new RoomSongCommandSession();
-let roomSongCommandRevision = 0;
+const roomSongCommands = new RoomSongCommandRuntime();
 
 type TimelineStatus = {
   connected?: boolean;
@@ -840,7 +837,7 @@ function sendToPlayback(identity: PlaybackIdentity, payload: unknown) {
 
 function roomSongCommandStatusPayload(nowMs = performance.now()) {
   return {
-    ...roomSongCommands.statusPayload(roomSongCommandRevision, nowMs),
+    ...roomSongCommands.statusPayload(nowMs),
     serverIncarnation: SERVER_INCARNATION,
   };
 }
@@ -863,7 +860,7 @@ function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: 
     type: 'room-song-command-rejected',
     commandId: typeof commandId === 'string' ? commandId : null,
     reason,
-    revision: roomSongCommandRevision,
+    revision: roomSongCommands.revision,
     room: youtubeTimeline.roomStatusPayload(),
   });
 }
@@ -876,7 +873,7 @@ function broadcastRoomSongCommandFailure(
   broadcastJson({
     type: 'room-song-command-failed-ack',
     commandId,
-    revision: roomSongCommandRevision,
+    revision: roomSongCommands.revision,
     reason,
     room: youtubeTimeline.roomStatusPayload(nowMs),
   });
@@ -1059,7 +1056,7 @@ function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
   sendJson(socket, {
     type: 'room-song-telemetry-rejected',
     reason,
-    revision: roomSongCommandRevision,
+    revision: roomSongCommands.revision,
   });
 }
 
@@ -2691,8 +2688,6 @@ wss.on('connection', (rawSocket, request) => {
         playbackIdentity,
         participants.micOwnerId,
         youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
-        roomSongCommandRevision,
-        roomSongCommandRevision + 1,
         nowMs,
       );
       if (!decision.ok) {
@@ -2700,7 +2695,6 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      if (!decision.duplicate) roomSongCommandRevision = decision.command.revision;
       sendJson(socket, {
         type: 'room-song-command-accepted',
         commandId: decision.command.commandId,
@@ -2820,7 +2814,7 @@ wss.on('connection', (rawSocket, request) => {
           broadcastJson({
             type: 'room-song-command-complete',
             commandId: commandGate.completesCommandId,
-            revision: roomSongCommandRevision,
+            revision: roomSongCommands.revision,
           });
           broadcastJson(roomSongCommandStatusPayload(nowMs));
         }

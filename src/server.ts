@@ -66,10 +66,8 @@ import { TakeController, type TakeSongSnapshot } from './take-controller.js';
 import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import {
-  createWebTransportMediaTicket,
-  startWebTransportMediaServer,
+  WebTransportMediaRuntime,
   webTransportMediaConfig,
-  type WebTransportMediaServer,
 } from './webtransport-media-server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -197,7 +195,7 @@ type TimelineStatus = {
   transportEstimateMs?: number;
 };
 
-let webTransportMedia: WebTransportMediaServer | null = null;
+const webTransportMedia = new WebTransportMediaRuntime();
 const songLevel = FIXED_SONG_LEVEL;
 let lastMixHealthAt = 0;
 
@@ -363,9 +361,9 @@ const micRuntime = new MicRuntime({
   audioTransportConfig: AUDIO_TRANSPORT_CONFIG,
   firstFrameTimeoutMs: MIC_FIRST_FRAME_TIMEOUT_MS,
   streamLiveMs: STREAM_LIVE_MS,
-  createDirectMediaTicket: () => webTransportMedia ? createWebTransportMediaTicket() : null,
-  directMediaConnected: (ticket) => webTransportMedia?.hasSession(ticket) ?? false,
-  offerDirectMedia: (ticket) => webTransportMedia?.offer(ticket),
+  createDirectMediaTicket: () => webTransportMedia.createTicket(),
+  directMediaConnected: (ticket) => webTransportMedia.hasSession(ticket),
+  offerDirectMedia: (ticket) => webTransportMedia.offer(ticket),
 });
 
 const micTransportGrace = new MicTransportGraceRuntime({
@@ -3347,7 +3345,7 @@ server.on('error', (error: NodeJS.ErrnoException) => {
 const directMediaConfig = webTransportMediaConfig();
 if (directMediaConfig) {
   try {
-    webTransportMedia = await startWebTransportMediaServer(directMediaConfig, {
+    await webTransportMedia.start(directMediaConfig, {
       authorize(ticket) {
         return micRuntime.authorizeDirectMedia(ticket);
       },
@@ -3390,7 +3388,7 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     backingRuntime.cancelGrace();
 
     await takeController.shutdown(Date.now());
-    await webTransportMedia?.stop();
+    await webTransportMedia.stop();
 
     for (const client of wss.clients) client.terminate();
     // relay-socket-server owns its heartbeat and retires it when WSS closes.

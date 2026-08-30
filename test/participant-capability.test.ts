@@ -75,9 +75,14 @@ describe('participant capability', () => {
       assert.doesNotMatch(source, /params\.set\('cap',/);
     }
 
+    const identity = readFileSync('src/participant-identity.ts', 'utf8');
+    assert.match(identity, /participantCapabilityMatches\(participantId, payload\.capability\)/);
+    assert.match(identity, /browserParticipantIdentity\(participantId\)/);
+
     const server = readFileSync('src/server.ts', 'utf8');
     assert.match(server, /payload\.type === 'participant-authenticate'/);
-    assert.match(server, /participantCapabilityMatches\(participantId, payload\.capability\)/);
+    assert.match(server, /participantIdentityFromAuthentication\(payload\)/);
+    assert.doesNotMatch(server, /participantCapabilityMatches/);
     assert.match(server, /participant-auth-rejected/);
   });
 });

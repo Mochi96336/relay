@@ -1,4 +1,3 @@
-import type { IncomingMessage } from 'node:http';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -41,14 +40,14 @@ import { RobotContentTimelineMapper } from './robot-content-timeline.js';
 import { RobotContentTransitionRuntime } from './robot-content-transition-runtime.js';
 import {
   ParticipantSession,
-  normalizeNickname,
   normalizeParticipantId,
 } from './participant-session.js';
+import { legacyTestParticipantIdentityEnabled } from './participant-capability.js';
 import {
-  browserParticipantIdentity,
-  legacyTestParticipantIdentityEnabled,
-  participantCapabilityMatches,
-} from './participant-capability.js';
+  participantIdentityFromAuthentication,
+  participantIdentityFromUpgradeRequest,
+  type ParticipantIdentityResult,
+} from './participant-identity.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
 import { RoomSongCommandRuntime } from './room-song-command-runtime.js';
@@ -658,45 +657,6 @@ function infrastructureAuthorized(socket: RelaySocket) {
 function rejectInfrastructure(socket: RelaySocket, message: string) {
   sendJson(socket, { type: 'infrastructure-auth-rejected', message });
   socket.close(1008, 'Infrastructure authentication required.');
-}
-
-type ParticipantIdentityResult =
-  | { kind: 'none' }
-  | { kind: 'invalid' }
-  | { kind: 'valid'; participantId: string; nickname: string };
-
-function participantIdentity(request: IncomingMessage): ParticipantIdentityResult {
-  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  const rawParticipantId = url.searchParams.get('participant');
-  if (rawParticipantId === null) return { kind: 'none' };
-
-  const participantId = normalizeParticipantId(rawParticipantId);
-  // Browser participant capabilities are bearer secrets and must never ride in
-  // the WebSocket request URL. Query identity remains only for explicit legacy
-  // test fixtures, which cannot be enabled in production.
-  if (
-    !participantId
-    || browserParticipantIdentity(participantId)
-    || !participantCapabilityMatches(participantId, null)
-  ) {
-    return { kind: 'invalid' };
-  }
-
-  const nickname = normalizeNickname(url.searchParams.get('name')) ?? 'Guest';
-  return { kind: 'valid', participantId, nickname };
-}
-
-function participantIdentityFromMessage(payload: Record<string, unknown>): ParticipantIdentityResult {
-  const participantId = normalizeParticipantId(payload.participantId);
-  if (
-    !participantId
-    || !browserParticipantIdentity(participantId)
-    || !participantCapabilityMatches(participantId, payload.capability)
-  ) {
-    return { kind: 'invalid' };
-  }
-  const nickname = normalizeNickname(payload.nickname) ?? 'Guest';
-  return { kind: 'valid', participantId, nickname };
 }
 
 function attachParticipantIdentity(
@@ -2226,7 +2186,7 @@ wss.on('connection', (rawSocket, request) => {
     socket.close(1012, 'Relay is shutting down.');
     return;
   }
-  const identity = participantIdentity(request);
+  const identity = participantIdentityFromUpgradeRequest(request);
   if (identity.kind === 'invalid') {
     sendJson(socket, {
       type: 'participant-auth-rejected',
@@ -2329,7 +2289,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'participant-authenticate') {
-      const authenticated = participantIdentityFromMessage(payload);
+      const authenticated = participantIdentityFromAuthentication(payload);
       if (
         authenticated.kind !== 'valid'
         || socket.infrastructureAuthenticated === true

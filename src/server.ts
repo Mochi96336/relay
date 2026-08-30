@@ -1,9 +1,8 @@
-import { createServer, type IncomingMessage } from 'node:http';
+import type { IncomingMessage } from 'node:http';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
-import express from 'express';
 import WebSocket from 'ws';
 
 import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
@@ -30,6 +29,7 @@ import type { ProbeTarget } from './probe-lifecycle.js';
 import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
+import { createRelayHttpServer } from './relay-http-server.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -135,40 +135,15 @@ const MIC_FIRST_FRAME_TIMEOUT_MS = envMs('RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_0
 const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
 const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-const TAKE_ARTIFACT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const app = express();
-app.disable('x-powered-by');
-app.get('/takes/:takeId.wav', (req, res) => {
-  if (relayKey && req.query.key !== relayKey) {
-    res.sendStatus(401);
-    return;
-  }
-  const takeId = String(req.params.takeId ?? '');
-  if (!TAKE_ARTIFACT_ID_PATTERN.test(takeId)) {
-    res.sendStatus(404);
-    return;
-  }
-  res.setHeader('Cache-Control', 'private, no-store');
-  res.type('audio/wav');
-  res.sendFile(path.join(takeDir, `${takeId}.wav`));
+const server = createRelayHttpServer({
+  publicDir,
+  takeDir,
+  relayKey,
+  remoteStatus: () => remoteStatusPayload(),
+  observationStatusV1: () => observationStatusV1Payload(),
+  readiness: () => readinessPayload(),
 });
-app.use(express.static(publicDir));
-app.get('/healthz', (_req, res) => {
-  res.json({ ok: true });
-});
-app.get('/statusz', (_req, res) => {
-  res.json(remoteStatusPayload());
-});
-app.get('/api/status/v1', (_req, res) => {
-  res.json(observationStatusV1Payload());
-});
-app.get('/readyz', (_req, res) => {
-  const readiness = readinessPayload();
-  res.status(readiness.ready ? 200 : 503).json(readiness);
-});
-
-const server = createServer(app);
 const wss = createRelayWebSocketServer(server, {
   relayKey,
   heartbeatMs: HEARTBEAT_MS,

@@ -49,6 +49,7 @@ import {
   type ParticipantIdentityResult,
 } from './participant-identity.js';
 import { PlaybackTransportRuntime } from './playback-transport-runtime.js';
+import { InfrastructureCapabilityRuntime } from './infrastructure-capability-runtime.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
 import { RoomSongCommandRuntime } from './room-song-command-runtime.js';
@@ -155,6 +156,11 @@ const {
 } = createRelaySocketTransport(wss);
 const monitorTransport = createMonitorSocketTransport(wss, {
   backlogBytes: MONITOR_BACKLOG_BYTES,
+});
+const infrastructureCapability = new InfrastructureCapabilityRuntime<RelaySocket>({
+  key: infrastructureKey,
+  legacyAuthorized: process.env.NODE_ENV === 'test'
+    && process.env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1',
 });
 const playbackTransport = new PlaybackTransportRuntime<RelaySocket>({
   clients: () => Array.from(wss.clients, (client) => client as RelaySocket),
@@ -651,15 +657,6 @@ function cancelActiveContentValidation(nowMs = performance.now()) {
   return true;
 }
 
-function legacyTestInfrastructureEnabled() {
-  return process.env.NODE_ENV === 'test'
-    && process.env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1';
-}
-
-function infrastructureAuthorized(socket: RelaySocket) {
-  return socket.infrastructureAuthenticated === true || legacyTestInfrastructureEnabled();
-}
-
 function rejectInfrastructure(socket: RelaySocket, message: string) {
   sendJson(socket, { type: 'infrastructure-auth-rejected', message });
   socket.close(1008, 'Infrastructure authentication required.');
@@ -669,7 +666,7 @@ function attachParticipantIdentity(
   socket: RelaySocket,
   identity: Extract<ParticipantIdentityResult, { kind: 'valid' }>,
 ) {
-  if (socket.infrastructureAuthenticated === true) return false;
+  if (infrastructureCapability.authenticated(socket)) return false;
   if (socket.participantId) return socket.participantId === identity.participantId;
   socket.participantId = identity.participantId;
   socket.participantConnectionId = `connection-${socket.connectionIncarnation}`;
@@ -2208,18 +2205,13 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'infrastructure-authenticate') {
-      if (
-        socket.participantId !== undefined
-        || !infrastructureKey
-        || payload.key !== infrastructureKey
-      ) {
+      if (!infrastructureCapability.authenticate(socket, payload.key)) {
         rejectInfrastructure(
           socket,
           'Infrastructure capability did not match this Relay deployment.',
         );
         return;
       }
-      socket.infrastructureAuthenticated = true;
       sendJson(socket, { type: 'infrastructure-authenticated' });
       return;
     }
@@ -2228,7 +2220,7 @@ wss.on('connection', (rawSocket, request) => {
       const authenticated = participantIdentityFromAuthentication(payload);
       if (
         authenticated.kind !== 'valid'
-        || socket.infrastructureAuthenticated === true
+        || infrastructureCapability.authenticated(socket)
         || (socket.participantId !== undefined && socket.participantId !== authenticated.participantId)
       ) {
         sendJson(socket, {
@@ -2717,7 +2709,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'source-seeked') {
-      if (!infrastructureAuthorized(socket)) {
+      if (!infrastructureCapability.authorized(socket)) {
         rejectInfrastructure(socket, 'Authenticate the active Source before reporting a seek.');
         return;
       }
@@ -2966,7 +2958,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'register' && payload.role === 'backing') {
-      if (!infrastructureAuthorized(socket)) {
+      if (!infrastructureCapability.authorized(socket)) {
         rejectInfrastructure(socket, 'Authenticate Relay infrastructure before registering backing audio.');
         return;
       }
@@ -2996,7 +2988,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'register' && payload.role === 'monitor') {
-      if (!socket.participantId && !infrastructureAuthorized(socket)) {
+      if (!socket.participantId && !infrastructureCapability.authorized(socket)) {
         rejectInfrastructure(socket, 'Monitor audio requires a Relay participant or infrastructure capability.');
         return;
       }
@@ -3052,7 +3044,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'robot-source-hello') {
-      if (!infrastructureAuthorized(socket)) {
+      if (!infrastructureCapability.authorized(socket)) {
         rejectInfrastructure(socket, 'Authenticate Relay infrastructure before becoming the Robot source.');
         return;
       }

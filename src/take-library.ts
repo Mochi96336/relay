@@ -25,6 +25,7 @@ const WAV_HEADER_BYTES = 44;
 const TAKE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TAKE_WAV_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.wav$/i;
 const TAKE_METADATA_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/i;
+const TAKE_METADATA_PART_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json\.part$/i;
 
 export type TakeLibraryEntry = {
   takeId: string;
@@ -288,22 +289,62 @@ export class TakeLibrary {
 
   private recoverLegacyArtifacts() {
     const names = new Set(readdirSync(this.options.directory));
-    for (const name of names) {
+
+    // A metadata partial without a finalized WAV can never describe a durable
+    // Take. Remove only those true orphans here; candidates beside a WAV are
+    // validated below before they are trusted.
+    for (const name of [...names]) {
+      const match = TAKE_METADATA_PART_PATTERN.exec(name);
+      if (!match || names.has(`${match[1]}.wav`)) continue;
+      rmSync(path.join(this.options.directory, name), { force: true });
+      names.delete(name);
+    }
+
+    for (const name of [...names]) {
       const match = TAKE_WAV_PATTERN.exec(name);
       if (!match) continue;
       const takeId = match[1];
       const metadataName = metadataFileName(takeId);
+      const metadataPartName = metadataPartFileName(takeId);
+      const metadataPath = path.join(this.options.directory, metadataName);
+      const metadataPartPath = path.join(this.options.directory, metadataPartName);
       const wavPath = path.join(this.options.directory, name);
+
       if (names.has(metadataName)) {
         try {
           if (readValidatedMetadata(
-            path.join(this.options.directory, metadataName),
+            metadataPath,
             wavPath,
             takeId,
             this.artifactBaseUrl,
-          )) continue;
+          )) {
+            if (names.has(metadataPartName)) {
+              rmSync(metadataPartPath, { force: true });
+              names.delete(metadataPartName);
+            }
+            continue;
+          }
         } catch {}
-        rmSync(path.join(this.options.directory, metadataName), { force: true });
+        rmSync(metadataPath, { force: true });
+        names.delete(metadataName);
+      }
+
+      if (names.has(metadataPartName)) {
+        try {
+          if (readValidatedMetadata(
+            metadataPartPath,
+            wavPath,
+            takeId,
+            this.artifactBaseUrl,
+          )) {
+            renameSync(metadataPartPath, metadataPath);
+            names.delete(metadataPartName);
+            names.add(metadataName);
+            continue;
+          }
+        } catch {}
+        rmSync(metadataPartPath, { force: true });
+        names.delete(metadataPartName);
       }
 
       try {

@@ -291,3 +291,54 @@ export async function startWebTransportMediaServer(
     return unavailableWebTransportMediaServer(error);
   }
 }
+
+export type WebTransportMediaStarter = (
+  config: WebTransportMediaConfig,
+  hooks: WebTransportMediaHooks,
+) => Promise<WebTransportMediaServer>;
+
+/**
+ * Owns the optional HTTP/3 media server resource lifecycle only. Mic lease,
+ * capture authorization, packet acceptance, and fallback policy remain with
+ * the caller and MicRuntime.
+ */
+export class WebTransportMediaRuntime {
+  private server: WebTransportMediaServer | null = null;
+
+  constructor(
+    private readonly startServer: WebTransportMediaStarter = startWebTransportMediaServer,
+  ) {}
+
+  get started() {
+    return this.server !== null;
+  }
+
+  get available() {
+    return this.server?.available ?? false;
+  }
+
+  createTicket() {
+    return this.server ? createWebTransportMediaTicket() : null;
+  }
+
+  hasSession(ticket: string | null) {
+    return this.server?.hasSession(ticket) ?? false;
+  }
+
+  offer(ticket: string) {
+    return this.server?.offer(ticket);
+  }
+
+  async start(config: WebTransportMediaConfig, hooks: WebTransportMediaHooks) {
+    if (this.server) throw new Error('WebTransportMediaRuntime is already started.');
+    this.server = await this.startServer(config, hooks);
+    return this.server;
+  }
+
+  async stop() {
+    const current = this.server;
+    if (!current) return;
+    await current.stop();
+    if (this.server === current) this.server = null;
+  }
+}

@@ -48,6 +48,7 @@ import {
   participantIdentityFromUpgradeRequest,
   type ParticipantIdentityResult,
 } from './participant-identity.js';
+import { PlaybackTransportRuntime } from './playback-transport-runtime.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
 import { RoomSongCommandRuntime } from './room-song-command-runtime.js';
@@ -57,7 +58,6 @@ import {
   SongSession,
   normalizePlaybackGeneration,
   normalizePlaybackTransportId,
-  type PlaybackIdentity,
   type SongHandoffPlan,
 } from './song-session.js';
 import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
@@ -155,6 +155,12 @@ const {
 } = createRelaySocketTransport(wss);
 const monitorTransport = createMonitorSocketTransport(wss, {
   backlogBytes: MONITOR_BACKLOG_BYTES,
+});
+const playbackTransport = new PlaybackTransportRuntime<RelaySocket>({
+  clients: () => Array.from(wss.clients, (client) => client as RelaySocket),
+  isOpen: (socket) => socket.readyState === WebSocket.OPEN,
+  send: (socket, payload) => sendJson(socket, payload),
+  micIntentMs: PLAYBACK_MIC_INTENT_MS,
 });
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 const youtubeTimeline = new SongSession();
@@ -720,42 +726,6 @@ function requireMicOwnerCommand(socket: RelaySocket, command: MicOwnerCommand) {
   return false;
 }
 
-function playbackIdentityForSocket(socket: RelaySocket): PlaybackIdentity | null {
-  if (
-    !socket.playbackParticipantId
-    || !socket.playbackTransportId
-    || socket.playbackGeneration === undefined
-  ) return null;
-  return {
-    participantId: socket.playbackParticipantId,
-    transportId: socket.playbackTransportId,
-    generation: socket.playbackGeneration,
-  };
-}
-
-function samePlaybackIdentity(a: PlaybackIdentity, b: PlaybackIdentity) {
-  return a.participantId === b.participantId
-    && a.transportId === b.transportId
-    && a.generation === b.generation;
-}
-
-function sendToPlayback(identity: PlaybackIdentity, payload: unknown) {
-  let sent = 0;
-  for (const client of wss.clients) {
-    const candidate = client as RelaySocket;
-    const candidateIdentity = playbackIdentityForSocket(candidate);
-    if (
-      candidate.readyState === WebSocket.OPEN
-      && candidateIdentity
-      && samePlaybackIdentity(candidateIdentity, identity)
-    ) {
-      sendJson(candidate, payload);
-      sent += 1;
-    }
-  }
-  return sent;
-}
-
 function roomSongCommandStatusPayload(nowMs = performance.now()) {
   return {
     ...roomSongCommands.statusPayload(nowMs),
@@ -845,41 +815,7 @@ function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', pl
 }
 
 function sendHandoffPlan(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
-  return sendToPlayback(plan.target, handoffPayload(type, plan));
-}
-
-function selectPlaybackHandoffTarget(participantId: string, nowMs: number) {
-  const candidates: Array<{ identity: PlaybackIdentity; intentAtMs: number }> = [];
-  for (const client of wss.clients) {
-    const candidate = client as RelaySocket;
-    const identity = playbackIdentityForSocket(candidate);
-    if (
-      candidate.readyState !== WebSocket.OPEN
-      || !identity
-      || identity.participantId !== participantId
-    ) continue;
-    candidates.push({ identity, intentAtMs: candidate.playbackMicIntentAtMs ?? -Infinity });
-  }
-
-  const intended = candidates
-    .filter((candidate) => nowMs - candidate.intentAtMs <= PLAYBACK_MIC_INTENT_MS)
-    .sort((a, b) => b.intentAtMs - a.intentAtMs);
-  if (intended.length > 0) return intended[0].identity;
-
-  // Presence alone must never move the song. This fallback is used only after
-  // a microphone ownership action, and only when one playback transport exists
-  // so there is no multi-tab choice to guess.
-  return candidates.length === 1 ? candidates[0].identity : null;
-}
-
-function playbackTransportIsConnected(identity: PlaybackIdentity) {
-  for (const client of wss.clients) {
-    const candidate = client as RelaySocket;
-    if (candidate.readyState !== WebSocket.OPEN) continue;
-    const candidateIdentity = playbackIdentityForSocket(candidate);
-    if (candidateIdentity && samePlaybackIdentity(candidateIdentity, identity)) return true;
-  }
-  return false;
+  return playbackTransport.send(plan.target, handoffPayload(type, plan));
 }
 
 /**
@@ -895,19 +831,19 @@ function sweepPreparedSongHandoff(nowMs: number) {
   const target = youtubeTimeline.handoffTarget();
   if (!target) return false;
   if (!youtubeTimeline.sweepHandoff(
-    playbackTransportIsConnected(target),
+    playbackTransport.connected(target),
     nowMs,
     participants.micOwnerId,
   )) return false;
 
-  sendToPlayback(target, { type: 'song-handoff-cancelled' });
+  playbackTransport.send(target, { type: 'song-handoff-cancelled' });
   broadcastJson(youtubeTimeline.statusPayload(nowMs));
   broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
   return true;
 }
 
 function beginPreparedSongHandoff(participantId: string, nowMs = performance.now()) {
-  const target = selectPlaybackHandoffTarget(participantId, nowMs);
+  const target = playbackTransport.selectHandoffTarget(participantId, nowMs);
   if (!target) return false;
   const plan = youtubeTimeline.beginHandoff(target, participants.micOwnerId, nowMs);
   if (!plan) return false;
@@ -2507,14 +2443,15 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      socket.playbackParticipantId = socket.participantId;
-      socket.playbackTransportId = transportId;
-      socket.playbackGeneration = generation;
+      const playbackIdentity = playbackTransport.register(socket, {
+        participantId: socket.participantId,
+        transportId,
+        generation,
+      });
       sendJson(socket, { type: 'playback-registered', playbackTransportId: transportId, playbackGeneration: generation });
       sendJson(socket, youtubeTimeline.roomStatusPayload());
       sendJson(socket, roomSongCommandStatusPayload());
 
-      const playbackIdentity = playbackIdentityForSocket(socket);
       const pendingPlan = playbackIdentity
         ? youtubeTimeline.handoffPlanForTarget(playbackIdentity)
         : null;
@@ -2523,14 +2460,14 @@ wss.on('connection', (rawSocket, request) => {
       const pendingCommand = playbackIdentity
         ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
         : null;
-      if (pendingCommand) sendToPlayback(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
+      if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
       return;
     }
 
     if (payload.type === 'playback-mic-intent') {
-      const playbackIdentity = playbackIdentityForSocket(socket);
+      const playbackIdentity = playbackTransport.identity(socket);
       if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) return;
-      socket.playbackMicIntentAtMs = performance.now();
+      playbackTransport.noteMicIntent(socket, performance.now());
       sendJson(socket, { type: 'playback-mic-intent-registered' });
       return;
     }
@@ -2551,7 +2488,7 @@ wss.on('connection', (rawSocket, request) => {
         return;
       }
 
-      const playbackIdentity = playbackIdentityForSocket(socket);
+      const playbackIdentity = playbackTransport.identity(socket);
       if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) {
         rejectRoomSongCommand(socket, payload.commandId, 'playback-transport-required');
         return;
@@ -2587,14 +2524,14 @@ wss.on('connection', (rawSocket, request) => {
       const commandTarget = decision.command.target;
       const stillPending = roomSongCommands.pendingForTarget(commandTarget, nowMs);
       if (stillPending?.commandId === decision.command.commandId) {
-        sendToPlayback(commandTarget, roomSongCommandApplyPayload(decision.command));
+        playbackTransport.send(commandTarget, roomSongCommandApplyPayload(decision.command));
       }
       broadcastJson(roomSongCommandStatusPayload(nowMs));
       return;
     }
 
     if (payload.type === 'room-song-command-failed') {
-      const playbackIdentity = playbackIdentityForSocket(socket);
+      const playbackIdentity = playbackTransport.identity(socket);
       if (!playbackIdentity) return;
       const nowMs = performance.now();
       const pendingCommand = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
@@ -2610,7 +2547,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'song-handoff-ready') {
-      const playbackIdentity = playbackIdentityForSocket(socket);
+      const playbackIdentity = playbackTransport.identity(socket);
       if (!playbackIdentity) return;
       const plan = youtubeTimeline.markHandoffReady(
         playbackIdentity,
@@ -2625,7 +2562,7 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'song-handoff-failed') {
-      const playbackIdentity = playbackIdentityForSocket(socket);
+      const playbackIdentity = playbackTransport.identity(socket);
       if (!playbackIdentity) return;
       if (youtubeTimeline.deferHandoff(playbackIdentity, payload.handoffId)) {
         broadcastJson(youtubeTimeline.statusPayload());
@@ -2635,10 +2572,11 @@ wss.on('connection', (rawSocket, request) => {
     }
 
     if (payload.type === 'youtube-telemetry') {
+      const registeredPlaybackIdentity = playbackTransport.identity(socket);
       let playbackParticipantId = socket.participantId;
-      let playbackTransportId = socket.playbackTransportId
+      let playbackTransportId = registeredPlaybackIdentity?.transportId
         ?? normalizePlaybackTransportId(payload.playbackTransportId);
-      let playbackGeneration = socket.playbackGeneration
+      let playbackGeneration = registeredPlaybackIdentity?.generation
         ?? normalizePlaybackGeneration(payload.playbackGeneration);
 
       if (!playbackParticipantId) {
@@ -2678,9 +2616,7 @@ wss.on('connection', (rawSocket, request) => {
         nowMs,
       );
       if (result.accepted) {
-        socket.playbackParticipantId = playbackParticipantId;
-        socket.playbackTransportId = playbackTransportId;
-        socket.playbackGeneration = playbackGeneration;
+        playbackTransport.register(socket, acceptedIdentity);
         socket.telemetryRejectedReason = undefined;
         const timelineStatus = youtubeTimeline.statusPayload(nowMs);
         if (Number(timelineStatus.state) !== 1 && cancelActiveContentValidation(nowMs)) {
@@ -2703,13 +2639,13 @@ wss.on('connection', (rawSocket, request) => {
 
         if (result.handoffCompleted && result.handoffId) {
           if (result.previousLeader) {
-            sendToPlayback(result.previousLeader, {
+            playbackTransport.send(result.previousLeader, {
               type: 'song-handoff-release',
               handoffId: result.handoffId,
               videoId: timelineStatus.videoId ?? null,
             });
           }
-          sendToPlayback(acceptedIdentity, {
+          playbackTransport.send(acceptedIdentity, {
             type: 'song-handoff-complete',
             handoffId: result.handoffId,
           });
@@ -3172,7 +3108,7 @@ wss.on('connection', (rawSocket, request) => {
   socket.on('close', () => {
     let micTransportChanged = false;
 
-    const closingPlaybackIdentity = playbackIdentityForSocket(socket);
+    const closingPlaybackIdentity = playbackTransport.identity(socket);
     if (closingPlaybackIdentity) {
       const nowMs = performance.now();
       const pendingCommand = roomSongCommands.pendingForTarget(closingPlaybackIdentity, nowMs);
@@ -3185,16 +3121,8 @@ wss.on('connection', (rawSocket, request) => {
       }
     }
 
-    if (
-      socket.playbackParticipantId
-      && socket.playbackTransportId
-      && socket.playbackGeneration !== undefined
-    ) {
-      const playbackChanged = youtubeTimeline.detach({
-        participantId: socket.playbackParticipantId,
-        transportId: socket.playbackTransportId,
-        generation: socket.playbackGeneration,
-      });
+    if (closingPlaybackIdentity) {
+      const playbackChanged = youtubeTimeline.detach(closingPlaybackIdentity);
       if (playbackChanged) {
         broadcastJson(youtubeTimeline.statusPayload());
         broadcastJson(youtubeTimeline.roomStatusPayload());

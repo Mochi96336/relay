@@ -64,7 +64,7 @@ test('server adapter passes current Mic ownership into sweep and retires holdove
 
   assert.match(
     source,
-    /youtubeTimeline\.sweepHandoff\([\s\S]*?playbackTransportIsConnected\(target\),[\s\S]*?nowMs,[\s\S]*?participants\.micOwnerId,[\s\S]*?\)/,
+    /youtubeTimeline\.sweepHandoff\([\s\S]*?playbackTransport\.connected\(target\),[\s\S]*?nowMs,[\s\S]*?participants\.micOwnerId,[\s\S]*?\)/,
     'watchdog failure must decide holdover from current ownership, not only the historical target',
   );
   assert.match(

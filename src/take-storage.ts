@@ -13,7 +13,8 @@ const GIB = 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WAV_HEADER_BYTES = 44;
 const TAKE_WAV_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.wav$/i;
-const TAKE_PART_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:wav|json)\.part$/i;
+const TAKE_WAV_PART_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.wav\.part$/i;
+const TAKE_METADATA_PART_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json\.part$/i;
 const TAKE_METADATA_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/i;
 
 export type TakeStoragePolicy = {
@@ -125,6 +126,18 @@ function removeMetadataOrphansSync(directory: string) {
   return removed;
 }
 
+function removeMetadataPartialOrphansSync(directory: string) {
+  const names = new Set(readdirSync(directory));
+  let removed = 0;
+  for (const name of names) {
+    const match = TAKE_METADATA_PART_PATTERN.exec(name);
+    if (!match || names.has(`${match[1]}.wav`)) continue;
+    rmSync(path.join(directory, name), { force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
 /**
  * Runs only on the control-plane path before the first Take of this process.
  * This directory is single-writer storage owned by one Relay process.
@@ -138,7 +151,7 @@ export function prepareTakeStorage(
 
   let removedPartialFiles = 0;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !TAKE_PART_PATTERN.test(entry.name)) continue;
+    if (!entry.isFile() || !TAKE_WAV_PART_PATTERN.test(entry.name)) continue;
     rmSync(path.join(directory, entry.name), { force: true });
     removedPartialFiles += 1;
   }
@@ -169,6 +182,11 @@ export function prepareTakeStorage(
     }
   }
   removedMetadataFiles += removeMetadataOrphansSync(directory);
+  // A metadata transaction beside a retained finalized WAV may contain the
+  // complete rich Take record from a crash just before rename. Leave that
+  // candidate for TakeLibrary to validate and promote; only true orphans are
+  // unrecoverable here.
+  removedPartialFiles += removeMetadataPartialOrphansSync(directory);
 
   return {
     removedPartialFiles,

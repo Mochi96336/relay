@@ -200,8 +200,6 @@ type TimelineStatus = {
 let webTransportMedia: WebTransportMediaServer | null = null;
 const songLevel = FIXED_SONG_LEVEL;
 let lastMixHealthAt = 0;
-let participantConnectionSequence = 0;
-let legacyPlaybackConnectionSequence = 0;
 
 const session = new AudioSession({
   sampleRate: MIX_SAMPLE_RATE,
@@ -734,9 +732,8 @@ function attachParticipantIdentity(
 ) {
   if (socket.infrastructureAuthenticated === true) return false;
   if (socket.participantId) return socket.participantId === identity.participantId;
-  participantConnectionSequence += 1;
   socket.participantId = identity.participantId;
-  socket.participantConnectionId = `connection-${participantConnectionSequence}`;
+  socket.participantConnectionId = `connection-${socket.connectionIncarnation}`;
   const changed = participants.attach({
     connectionId: socket.participantConnectionId,
     participantId: identity.participantId,
@@ -2256,9 +2253,6 @@ wss.on('connection', (rawSocket, request) => {
     socket.close(1012, 'Relay is shutting down.');
     return;
   }
-  legacyPlaybackConnectionSequence += 1;
-  socket.legacyPlaybackGeneration = legacyPlaybackConnectionSequence;
-
   const identity = participantIdentity(request);
   if (identity.kind === 'invalid') {
     sendJson(socket, {
@@ -2721,7 +2715,7 @@ wss.on('connection', (rawSocket, request) => {
         }
         playbackParticipantId = LEGACY_PLAYBACK_PARTICIPANT_ID;
         playbackTransportId = LEGACY_PLAYBACK_TRANSPORT_ID;
-        playbackGeneration = socket.legacyPlaybackGeneration ?? 0;
+        playbackGeneration = socket.connectionIncarnation;
       } else if (!playbackTransportId || playbackGeneration === null) {
         reportTelemetryRejected(socket, 'invalid-identity');
         return;

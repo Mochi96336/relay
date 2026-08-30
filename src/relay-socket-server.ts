@@ -18,6 +18,7 @@ type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
  */
 export type RelaySocket = WebSocket & {
   role: ClientRole;
+  connectionIncarnation: number;
   sampleRate?: number;
   captureGeneration?: number;
   audioPacketVersion?: 1 | 2;
@@ -31,7 +32,6 @@ export type RelaySocket = WebSocket & {
   playbackTransportId?: string;
   playbackGeneration?: number;
   playbackMicIntentAtMs?: number;
-  legacyPlaybackGeneration?: number;
   telemetryRejectedReason?: string;
   micPresenceTelemetryAt?: number;
   infrastructureAuthenticated?: boolean;
@@ -175,6 +175,7 @@ export function createRelayWebSocketServer(
 ) {
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   const socketPath = options.path ?? '/ws';
+  let connectionSequence = 0;
 
   server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -196,6 +197,8 @@ export function createRelayWebSocketServer(
 
   wss.on('connection', (rawSocket: WebSocket, _request: IncomingMessage) => {
     const socket = rawSocket as RelaySocket;
+    connectionSequence += 1;
+    socket.connectionIncarnation = connectionSequence;
     socket.role = 'unknown';
     socket.isAlive = true;
 

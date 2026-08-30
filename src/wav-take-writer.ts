@@ -1,6 +1,8 @@
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
-import { open, rename, rm, stat } from 'node:fs/promises';
+import { open, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+import { durableRename } from './file-durability.js';
 
 const WAV_HEADER_BYTES = 44;
 const MAX_WAV_DATA_BYTES = 0xffff_ffff - 36;
@@ -159,7 +161,7 @@ export class WavTakeWriter {
       await handle.close();
     }
 
-    await rename(this.partPath, this.filePath);
+    await durableRename(this.partPath, this.filePath);
     try {
       const info = await stat(this.filePath);
       return {

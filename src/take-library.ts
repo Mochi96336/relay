@@ -5,13 +5,13 @@ import {
   readFileSync,
   readSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 
+import { durableRenameSync } from './file-durability.js';
 import type {
   TakeArtifact,
   TakeMixSampleRange,
@@ -337,7 +337,7 @@ export class TakeLibrary {
             takeId,
             this.artifactBaseUrl,
           )) {
-            renameSync(metadataPartPath, metadataPath);
+            durableRenameSync(metadataPartPath, metadataPath);
             names.delete(metadataPartName);
             names.add(metadataName);
             continue;
@@ -375,7 +375,7 @@ export class TakeLibrary {
     const finalPath = path.join(this.options.directory, metadataFileName(entry.takeId));
     const partialPath = path.join(this.options.directory, metadataPartFileName(entry.takeId));
     const payload: TakeMetadataV1 = { version: 1, take: entry };
-    writeFileSync(partialPath, `${JSON.stringify(payload)}\n`, { encoding: 'utf8' });
-    renameSync(partialPath, finalPath);
+    writeFileSync(partialPath, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', flush: true });
+    durableRenameSync(partialPath, finalPath);
   }
 }

@@ -119,18 +119,33 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
     || header.toString('ascii', 36, 40) !== 'data'
   ) throw new Error('Take WAV header is invalid.');
 
+  const riffBytes = header.readUInt32LE(4);
+  const fmtBytes = header.readUInt32LE(16);
   const audioFormat = header.readUInt16LE(20);
   const channels = header.readUInt16LE(22);
   const sampleRate = header.readUInt32LE(24);
+  const byteRate = header.readUInt32LE(28);
+  const blockAlign = header.readUInt16LE(32);
   const bitsPerSample = header.readUInt16LE(34);
   const dataBytes = header.readUInt32LE(40);
-  if (audioFormat !== 1 || channels !== 1 || bitsPerSample !== 16 || sampleRate <= 0) {
+  if (
+    fmtBytes !== 16
+    || audioFormat !== 1
+    || channels !== 1
+    || bitsPerSample !== 16
+    || sampleRate <= 0
+    || byteRate !== sampleRate * 2
+    || blockAlign !== 2
+  ) {
     throw new Error('Take WAV format is unsupported.');
   }
+  if (dataBytes % 2 !== 0) throw new Error('Take WAV PCM payload is not 16-bit aligned.');
+
   const info = statSync(filePath);
-  const availableDataBytes = Math.max(0, info.size - WAV_HEADER_BYTES);
-  const trustedDataBytes = Math.min(dataBytes, availableDataBytes);
-  const sampleCount = Math.floor(trustedDataBytes / 2);
+  if (riffBytes !== 36 + dataBytes || info.size !== WAV_HEADER_BYTES + dataBytes) {
+    throw new Error('Take WAV length is inconsistent with its header.');
+  }
+  const sampleCount = dataBytes / 2;
   return {
     fileName: `${takeId}.wav`,
     url: artifactUrl(baseUrl, takeId),

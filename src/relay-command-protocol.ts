@@ -9,6 +9,7 @@ type RelayCommandProtocolHandlers<TSocket> = {
   startTake: RelayCommandHandler<TSocket>;
   stopTake: RelayCommandHandler<TSocket>;
   releaseMic: RelayCommandHandler<TSocket>;
+  roomSongCommand: RelayCommandHandler<TSocket>;
   participantRename: RelayCommandHandler<TSocket>;
   rejectMicReservation: RelayCommandHandler<TSocket>;
   playbackMicIntent: RelayCommandHandler<TSocket>;
@@ -33,6 +34,9 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'release-mic':
           handlers.releaseMic(socket, payload);
+          return true;
+        case 'room-song-command':
+          handlers.roomSongCommand(socket, payload);
           return true;
         case 'participant-rename':
           handlers.participantRename(socket, payload);

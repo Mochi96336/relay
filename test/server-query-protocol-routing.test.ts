@@ -31,7 +31,6 @@ test('server delegates read-only text protocol selection through the query proto
 });
 
 test('query protocol still does not own mutating command authority', () => {
-  assert.match(server, /payload\.type === 'room-song-command'/);
   assert.match(server, /payload\.type === 'register'/);
   assert.doesNotMatch(queryProtocol, /start-take|stop-take|room-song-command'\s*,\s*\(socket, payload\)|register'\s*,/);
 });

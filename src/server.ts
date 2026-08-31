@@ -2191,6 +2191,52 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     broadcastSessionStatus();
     sendJson(socket, { type: 'mic-released' });
   },
+  roomSongCommand: (socket, payload) => {
+    if (!socket.participantId) {
+      rejectRoomSongCommand(socket, payload.commandId, 'participant-required');
+      return;
+    }
+
+    const playbackIdentity = playbackTransport.identity(socket);
+    if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) {
+      rejectRoomSongCommand(socket, payload.commandId, 'playback-transport-required');
+      return;
+    }
+
+    const parsed = parseRoomSongCommand(payload);
+    if (!parsed.ok) {
+      rejectRoomSongCommand(socket, payload.commandId, parsed.reason);
+      return;
+    }
+
+    const nowMs = performance.now();
+    const decision = roomSongCommands.begin(
+      parsed.request,
+      socket.participantId,
+      playbackIdentity,
+      participants.micOwnerId,
+      youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
+      nowMs,
+    );
+    if (!decision.ok) {
+      rejectRoomSongCommand(socket, parsed.request.commandId, decision.reason);
+      return;
+    }
+
+    sendJson(socket, {
+      type: 'room-song-command-accepted',
+      commandId: decision.command.commandId,
+      revision: decision.command.revision,
+      duplicate: decision.duplicate,
+    });
+
+    const commandTarget = decision.command.target;
+    const stillPending = roomSongCommands.pendingForTarget(commandTarget, nowMs);
+    if (stillPending?.commandId === decision.command.commandId) {
+      playbackTransport.send(commandTarget, roomSongCommandApplyPayload(decision.command));
+    }
+    broadcastJson(roomSongCommandStatusPayload(nowMs));
+  },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;
     if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
@@ -2409,54 +2455,6 @@ wss.on('connection', (rawSocket, request) => {
         ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
         : null;
       if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
-      return;
-    }
-
-    if (payload.type === 'room-song-command') {
-      if (!socket.participantId) {
-        rejectRoomSongCommand(socket, payload.commandId, 'participant-required');
-        return;
-      }
-
-      const playbackIdentity = playbackTransport.identity(socket);
-      if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) {
-        rejectRoomSongCommand(socket, payload.commandId, 'playback-transport-required');
-        return;
-      }
-
-      const parsed = parseRoomSongCommand(payload);
-      if (!parsed.ok) {
-        rejectRoomSongCommand(socket, payload.commandId, parsed.reason);
-        return;
-      }
-
-      const nowMs = performance.now();
-      const decision = roomSongCommands.begin(
-        parsed.request,
-        socket.participantId,
-        playbackIdentity,
-        participants.micOwnerId,
-        youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
-        nowMs,
-      );
-      if (!decision.ok) {
-        rejectRoomSongCommand(socket, parsed.request.commandId, decision.reason);
-        return;
-      }
-
-      sendJson(socket, {
-        type: 'room-song-command-accepted',
-        commandId: decision.command.commandId,
-        revision: decision.command.revision,
-        duplicate: decision.duplicate,
-      });
-
-      const commandTarget = decision.command.target;
-      const stillPending = roomSongCommands.pendingForTarget(commandTarget, nowMs);
-      if (stillPending?.commandId === decision.command.commandId) {
-        playbackTransport.send(commandTarget, roomSongCommandApplyPayload(decision.command));
-      }
-      broadcastJson(roomSongCommandStatusPayload(nowMs));
       return;
     }
 

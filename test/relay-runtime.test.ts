@@ -21,10 +21,10 @@ test('runtime constructs the server explicitly without an environment or dynamic
   assert.match(server, /export async function startRelayServer\(relayConfig: RelayConfig\)/);
   assert.match(server, /const port = relayConfig\.port;/);
   assert.match(server, /const relayKey = relayConfig\.relayKey;/);
-  assert.doesNotMatch(
-    server,
-    /process\.env\.(?:PORT|RELAY_KEY|RELAY_LIVE_PREBUFFER_MS|RELAY_MIC_RETENTION_MS|RELAY_CALIBRATION_TIMEOUT_MS|RELAY_HEARTBEAT_MS|RELAY_PARTICIPANT_GRACE_MS|RELAY_MIC_TRANSPORT_GRACE_MS|RELAY_AUTO_CALIBRATE|RELAY_AUTO_CALIBRATION_RETRY_MS|RELAY_CALIBRATION_VALIDATION|RELAY_CALIBRATION_PROBE|RELAY_BACKING_GRACE_MS|RELAY_CALIBRATION_AGREEMENT|RELAY_CALIBRATION_TOLERANCE_MS|RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE|RELAY_CALIBRATION_MAX_LAG_MS)/,
-  );
+  assert.match(server, /const takeDir = path\.resolve\(relayConfig\.takeDir\);/);
+  assert.match(server, /key: relayConfig\.infrastructureKey,/);
+  assert.match(server, /legacyAuthorized: relayConfig\.legacyTestInfrastructure,/);
+  assert.doesNotMatch(server, /process\.env|function envMs|function envPositiveInt/);
 });
 
 test('runtime owns process signals while the constructed server owns the shutdown transaction', () => {

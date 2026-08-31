@@ -6,11 +6,11 @@ const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'
 const micRuntime = readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8');
 
 test('server bounds connected Mic startup through the MicRuntime readiness owner', () => {
-  assert.match(server, /RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_000/);
+  assert.match(server, /const MIC_FIRST_FRAME_TIMEOUT_MS = relayConfig\.micFirstFrameTimeoutMs;/);
   assert.match(
     server,
     /new MicRuntime\(\{[\s\S]{0,300}firstFrameTimeoutMs:\s*MIC_FIRST_FRAME_TIMEOUT_MS/,
-    'the validated server deadline must be injected into the transport-state owner',
+    'the normalized server deadline must be injected into the transport-state owner',
   );
   assert.match(micRuntime, /private firstFrameWaitStartedAt = -Infinity/);
   assert.match(

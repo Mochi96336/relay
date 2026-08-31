@@ -76,28 +76,13 @@ type RelayConfig = ReturnType<typeof loadRelayConfig>;
 export async function startRelayServer(relayConfig: RelayConfig) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
-const takeDir = path.resolve(process.env.RELAY_TAKE_DIR ?? path.join(process.cwd(), 'takes'));
+const takeDir = path.resolve(relayConfig.takeDir);
 const port = relayConfig.port;
 const relayKey = relayConfig.relayKey;
-const rawInfrastructureKey = process.env.RELAY_INFRA_KEY?.trim() ?? '';
-if (rawInfrastructureKey && !/^[0-9a-f]{64}$/.test(rawInfrastructureKey)) {
-  throw new Error('RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret.');
-}
-const infrastructureKey = rawInfrastructureKey || null;
-
-function envMs(name: string, fallback: number) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function envPositiveInt(name: string, fallback: number) {
-  const value = Number(process.env[name]);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
-}
 
 const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
-const MONITOR_BACKLOG_MS = envMs('RELAY_MONITOR_BACKLOG_MS', 200);
+const MONITOR_BACKLOG_MS = relayConfig.monitorBacklogMs;
 const MONITOR_BACKLOG_BYTES = monitorBacklogBudgetBytes(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS);
 const LIVE_MIX_PREBUFFER_MS = relayConfig.livePrebufferMs;
 const LIVE_BACKING_GAIN = 0.65;
@@ -135,7 +120,7 @@ const MIX_HEALTH_INTERVAL_MS = 1_000;
 const PARTICIPANT_GRACE_MS = relayConfig.participantGraceMs;
 const MIC_TRANSPORT_GRACE_MS = relayConfig.micTransportGraceMs;
 const BACKING_GRACE_MS = relayConfig.backingGraceMs;
-const MIC_FIRST_FRAME_TIMEOUT_MS = envMs('RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_000);
+const MIC_FIRST_FRAME_TIMEOUT_MS = relayConfig.micFirstFrameTimeoutMs;
 const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
 const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -162,9 +147,8 @@ const monitorTransport = createMonitorSocketTransport(wss, {
   backlogBytes: MONITOR_BACKLOG_BYTES,
 });
 const infrastructureCapability = new InfrastructureCapabilityRuntime<RelaySocket>({
-  key: infrastructureKey,
-  legacyAuthorized: process.env.NODE_ENV === 'test'
-    && process.env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1',
+  key: relayConfig.infrastructureKey,
+  legacyAuthorized: relayConfig.legacyTestInfrastructure,
 });
 const playbackTransport = new PlaybackTransportRuntime<RelaySocket>({
   clients: () => Array.from(wss.clients, (client) => client as RelaySocket),
@@ -229,8 +213,8 @@ const PROBE_RETRY_MS = relayConfig.probeRetryMs;
 const PROBE_LEAD_MS = relayConfig.probeLeadMs;
 const PROBE_MIN_CORRELATION = relayConfig.probeMinCorrelation;
 const PROBE_DEBUG = relayConfig.probeDebug;
-const PROBE_REPLY_TIMEOUT_MS = envMs('RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS', 3_000);
-const PROBE_MAX_ATTEMPTS = envPositiveInt('RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS', 3);
+const PROBE_REPLY_TIMEOUT_MS = relayConfig.probeReplyTimeoutMs;
+const PROBE_MAX_ATTEMPTS = relayConfig.probeMaxAttempts;
 /**
  * Long enough for the probe to play, be captured and reach the server.
  *
@@ -251,7 +235,7 @@ const bootProbeRuntime = new BootProbeRuntime({
 });
 const BOOT_DELTA_REAPPLY_MS = relayConfig.calibrationDeltaReapplyMs;
 const ROBOT_OFFSET_FRESH_MS = 2_000;
-const ROBOT_OFFSET_WINDOW_MS = envMs('RELAY_ROBOT_OFFSET_WINDOW_MS', 2_000);
+const ROBOT_OFFSET_WINDOW_MS = relayConfig.robotOffsetWindowMs;
 const robotPlayerOffset = new RobotPlayerOffsetTracker({
   freshForMs: ROBOT_OFFSET_FRESH_MS,
   windowMs: ROBOT_OFFSET_WINDOW_MS,
@@ -262,18 +246,9 @@ const robotContentTimeline = new RobotContentTimelineMapper({
 });
 const ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES = Math.round(MIX_SAMPLE_RATE * 3);
 const ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES = Math.round(MIX_SAMPLE_RATE * 0.65);
-const ROBOT_CONTENT_TRANSITION_LIFETIME_MS = envMs(
-  'RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS',
-  15_000,
-);
-const ROBOT_CONTENT_TRANSITION_MAX_WINDOWS = envPositiveInt(
-  'RELAY_ROBOT_CONTENT_TRANSITION_MAX_WINDOWS',
-  12,
-);
-const ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES = envPositiveInt(
-  'RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES',
-  3,
-);
+const ROBOT_CONTENT_TRANSITION_LIFETIME_MS = relayConfig.robotContentTransitionLifetimeMs;
+const ROBOT_CONTENT_TRANSITION_MAX_WINDOWS = relayConfig.robotContentTransitionMaxWindows;
+const ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES = relayConfig.robotContentTransitionMaxWorkerFailures;
 const ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG = {
   lifetimeMs: ROBOT_CONTENT_TRANSITION_LIFETIME_MS,
   maxWindows: ROBOT_CONTENT_TRANSITION_MAX_WINDOWS,

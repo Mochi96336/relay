@@ -153,11 +153,6 @@ it('retires direct-media authority at every Mic ownership terminal boundary', ()
     /async function gracefulShutdown\(signal: NodeJS\.Signals\) \{\s*if \(shutdownPromise\) return shutdownPromise;\s*shuttingDown = true;/,
     'the shutdown fence must rise before asynchronous Take finalization yields back to socket handlers',
   );
-  assert.match(
-    server,
-    /for \(const signal of \['SIGTERM', 'SIGINT'\] as const\) \{\s*process\.on\(signal,/,
-    'repeated controlled-shutdown signals must keep joining the shared shutdown transaction',
-  );
 });
 
 

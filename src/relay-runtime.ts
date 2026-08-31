@@ -52,12 +52,23 @@ export function applyLegacyServerEnvironment(
 /**
  * Composition boundary for the current Relay process.
  *
- * Today activation still crosses one compatibility bridge into the legacy
- * side-effectful server module. Future extraction should move construction and
- * shutdown ownership into this module without putting deployment parsing back
- * into `server.ts`.
+ * Activation still crosses one compatibility bridge into the legacy
+ * side-effectful server module, but process signal ownership now terminates at
+ * this composition boundary. Future extraction should move construction/startup
+ * behind the same boundary without putting deployment parsing back into `server.ts`.
  */
 export async function startRelayRuntime(config: RelayConfig) {
   applyLegacyServerEnvironment(config);
-  await import('./server.js');
+  const relayServer = await import('./server.js');
+
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+      // Process lifecycle belongs at the composition boundary. Keep both
+      // handlers installed while the server's idempotent shutdown transaction
+      // is active so repeated signals join the same durability barrier.
+      void relayServer.gracefulShutdown(signal).finally(() => {
+        process.exit(process.exitCode ?? 0);
+      });
+    });
+  }
 }

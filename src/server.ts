@@ -2237,6 +2237,20 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     }
     broadcastJson(roomSongCommandStatusPayload(nowMs));
   },
+  roomSongCommandFailed: (socket, payload) => {
+    const playbackIdentity = playbackTransport.identity(socket);
+    if (!playbackIdentity) return;
+    const nowMs = performance.now();
+    const pendingCommand = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
+    if (
+      pendingCommand
+      && payload.commandId === pendingCommand.commandId
+      && roomSongCommands.fail(playbackIdentity, pendingCommand.commandId)
+    ) {
+      broadcastRoomSongCommandFailure(pendingCommand.commandId, 'playback-failed', nowMs);
+      broadcastJson(roomSongCommandStatusPayload(nowMs));
+    }
+  },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;
     if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
@@ -2455,22 +2469,6 @@ wss.on('connection', (rawSocket, request) => {
         ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
         : null;
       if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
-      return;
-    }
-
-    if (payload.type === 'room-song-command-failed') {
-      const playbackIdentity = playbackTransport.identity(socket);
-      if (!playbackIdentity) return;
-      const nowMs = performance.now();
-      const pendingCommand = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
-      if (
-        pendingCommand
-        && payload.commandId === pendingCommand.commandId
-        && roomSongCommands.fail(playbackIdentity, pendingCommand.commandId)
-      ) {
-        broadcastRoomSongCommandFailure(pendingCommand.commandId, 'playback-failed', nowMs);
-        broadcastJson(roomSongCommandStatusPayload(nowMs));
-      }
       return;
     }
 

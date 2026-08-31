@@ -2251,6 +2251,27 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       broadcastJson(roomSongCommandStatusPayload(nowMs));
     }
   },
+  songHandoffReady: (socket, payload) => {
+    const playbackIdentity = playbackTransport.identity(socket);
+    if (!playbackIdentity) return;
+    const plan = youtubeTimeline.markHandoffReady(
+      playbackIdentity,
+      payload.handoffId,
+      participants.micOwnerId,
+    );
+    if (!plan) return;
+    sendHandoffPlan('song-handoff-commit', plan);
+    broadcastJson(youtubeTimeline.statusPayload());
+    broadcastJson(youtubeTimeline.roomStatusPayload());
+  },
+  songHandoffFailed: (socket, payload) => {
+    const playbackIdentity = playbackTransport.identity(socket);
+    if (!playbackIdentity) return;
+    if (youtubeTimeline.deferHandoff(playbackIdentity, payload.handoffId)) {
+      broadcastJson(youtubeTimeline.statusPayload());
+      broadcastJson(youtubeTimeline.roomStatusPayload());
+    }
+  },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;
     if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
@@ -2469,31 +2490,6 @@ wss.on('connection', (rawSocket, request) => {
         ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
         : null;
       if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
-      return;
-    }
-
-    if (payload.type === 'song-handoff-ready') {
-      const playbackIdentity = playbackTransport.identity(socket);
-      if (!playbackIdentity) return;
-      const plan = youtubeTimeline.markHandoffReady(
-        playbackIdentity,
-        payload.handoffId,
-        participants.micOwnerId,
-      );
-      if (!plan) return;
-      sendHandoffPlan('song-handoff-commit', plan);
-      broadcastJson(youtubeTimeline.statusPayload());
-      broadcastJson(youtubeTimeline.roomStatusPayload());
-      return;
-    }
-
-    if (payload.type === 'song-handoff-failed') {
-      const playbackIdentity = playbackTransport.identity(socket);
-      if (!playbackIdentity) return;
-      if (youtubeTimeline.deferHandoff(playbackIdentity, payload.handoffId)) {
-        broadcastJson(youtubeTimeline.statusPayload());
-        broadcastJson(youtubeTimeline.roomStatusPayload());
-      }
       return;
     }
 

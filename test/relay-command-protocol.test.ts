@@ -12,6 +12,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     releaseMic: (nextSocket, payload) => seen.push({ handler: 'release-mic', socket: nextSocket, payload }),
     roomSongCommand: (nextSocket, payload) => seen.push({ handler: 'room-song-command', socket: nextSocket, payload }),
     roomSongCommandFailed: (nextSocket, payload) => seen.push({ handler: 'room-song-command-failed', socket: nextSocket, payload }),
+    songHandoffReady: (nextSocket, payload) => seen.push({ handler: 'song-handoff-ready', socket: nextSocket, payload }),
+    songHandoffFailed: (nextSocket, payload) => seen.push({ handler: 'song-handoff-failed', socket: nextSocket, payload }),
     participantRename: (nextSocket, payload) => seen.push({ handler: 'rename', socket: nextSocket, payload }),
     rejectMicReservation: (nextSocket, payload) => seen.push({ handler: 'mic-reservation', socket: nextSocket, payload }),
     playbackMicIntent: (nextSocket, payload) => seen.push({ handler: 'playback-intent', socket: nextSocket, payload }),
@@ -22,6 +24,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   const releaseMic = { type: 'release-mic' };
   const roomSongCommand = { type: 'room-song-command', commandId: 'command-a' };
   const roomSongCommandFailed = { type: 'room-song-command-failed', commandId: 'command-a' };
+  const songHandoffReady = { type: 'song-handoff-ready', handoffId: 'handoff-a' };
+  const songHandoffFailed = { type: 'song-handoff-failed', handoffId: 'handoff-a' };
   const rename = { type: 'participant-rename', nickname: 'Mochi' };
   const acquire = { type: 'acquire-mic' };
   const forceAcquire = { type: 'force-acquire-mic' };
@@ -32,6 +36,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(protocol.dispatch(socket, releaseMic), true);
   assert.equal(protocol.dispatch(socket, roomSongCommand), true);
   assert.equal(protocol.dispatch(socket, roomSongCommandFailed), true);
+  assert.equal(protocol.dispatch(socket, songHandoffReady), true);
+  assert.equal(protocol.dispatch(socket, songHandoffFailed), true);
   assert.equal(protocol.dispatch(socket, rename), true);
   assert.equal(protocol.dispatch(socket, acquire), true);
   assert.equal(protocol.dispatch(socket, forceAcquire), true);
@@ -43,6 +49,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     'release-mic',
     'room-song-command',
     'room-song-command-failed',
+    'song-handoff-ready',
+    'song-handoff-failed',
     'rename',
     'mic-reservation',
     'mic-reservation',
@@ -54,10 +62,12 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(seen[2]?.payload, releaseMic);
   assert.equal(seen[3]?.payload, roomSongCommand);
   assert.equal(seen[4]?.payload, roomSongCommandFailed);
-  assert.equal(seen[5]?.payload, rename);
-  assert.equal(seen[6]?.payload, acquire);
-  assert.equal(seen[7]?.payload, forceAcquire);
-  assert.equal(seen[8]?.payload, intent);
+  assert.equal(seen[5]?.payload, songHandoffReady);
+  assert.equal(seen[6]?.payload, songHandoffFailed);
+  assert.equal(seen[7]?.payload, rename);
+  assert.equal(seen[8]?.payload, acquire);
+  assert.equal(seen[9]?.payload, forceAcquire);
+  assert.equal(seen[10]?.payload, intent);
 });
 
 test('command protocol leaves unextracted commands and malformed envelopes to later routing', () => {
@@ -68,12 +78,14 @@ test('command protocol leaves unextracted commands and malformed envelopes to la
     releaseMic: () => { calls += 1; },
     roomSongCommand: () => { calls += 1; },
     roomSongCommandFailed: () => { calls += 1; },
+    songHandoffReady: () => { calls += 1; },
+    songHandoffFailed: () => { calls += 1; },
     participantRename: () => { calls += 1; },
     rejectMicReservation: () => { calls += 1; },
     playbackMicIntent: () => { calls += 1; },
   });
 
-  assert.equal(protocol.dispatch({}, { type: 'song-handoff-ready' }), false);
+  assert.equal(protocol.dispatch({}, { type: 'youtube-telemetry' }), false);
   assert.equal(protocol.dispatch({}, { type: 'robot-source-hello' }), false);
   assert.equal(protocol.dispatch({}, {}), false);
   assert.equal(calls, 0);

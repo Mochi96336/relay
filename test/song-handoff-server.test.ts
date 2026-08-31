@@ -280,3 +280,57 @@ test('closing the tab a handoff is waiting for gives the room song back', async 
     await server.stop();
   }
 });
+
+test('client-reported commit failure returns the handoff to preparation without replacing the old leader', async () => {
+  const server = await startRelay(FAST);
+  try {
+    const aPlayback = await playback(server, 'participant-a', 'A', 'playback-tab-a');
+    const aPublisher = await publisher(server, 'participant-a', 'A');
+    await establishPlayingRoom(aPlayback, 'playback-tab-a', 30, 'handoff-failure');
+
+    const bPlayback = await playback(server, 'participant-b', 'B', 'playback-tab-b');
+    bPlayback.send({ type: 'playback-mic-intent' });
+    await bPlayback.waitForType('playback-mic-intent-registered');
+    const bPublisher = await publisher(server, 'participant-b', 'B', 'participant-a');
+
+    const prepare = await bPlayback.waitForType('song-handoff-prepare');
+    bPlayback.send({ type: 'song-handoff-ready', handoffId: prepare.handoffId });
+    const commit = await bPlayback.waitForType('song-handoff-commit');
+    assert.equal(commit.handoffId, prepare.handoffId);
+
+    const failureStart = bPlayback.messages.length;
+    bPlayback.send({ type: 'song-handoff-failed', handoffId: prepare.handoffId });
+    const deferred = await bPlayback.waitFor((message) => (
+      bPlayback.messages.indexOf(message) >= failureStart
+      && message.type === 'youtube-timeline-status'
+      && message.handoffState === 'preparing'
+    ));
+    assert.equal(deferred.playbackLeaderParticipantId, 'participant-a');
+    assert.equal(deferred.playbackTransportId, 'playback-tab-a');
+
+    const room = await bPlayback.waitFor((message) => (
+      bPlayback.messages.indexOf(message) >= failureStart
+      && message.type === 'room-song-status'
+      && message.handoffState === 'preparing'
+    ));
+    assert.equal(room.handoffTargetParticipantId, 'participant-b');
+
+    const continuationStart = aPlayback.messages.length;
+    aPlayback.send(telemetry(Number(deferred.serverTime) + 0.05));
+    const continued = await aPlayback.waitFor((message) => (
+      aPlayback.messages.indexOf(message) >= continuationStart
+      && message.type === 'youtube-timeline-status'
+      && message.playbackLeaderParticipantId === 'participant-a'
+      && message.handoffState === 'preparing'
+    ));
+    assert.equal(continued.state, 1);
+
+    aPlayback.close();
+    aPublisher.close();
+    bPlayback.close();
+    bPublisher.close();
+  } finally {
+    await server.stop();
+  }
+});
+

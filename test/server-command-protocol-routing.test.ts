@@ -13,6 +13,8 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.match(protocol, /case 'release-mic'/);
   assert.match(protocol, /case 'room-song-command'/);
   assert.match(protocol, /case 'room-song-command-failed'/);
+  assert.match(protocol, /case 'song-handoff-ready'/);
+  assert.match(protocol, /case 'song-handoff-failed'/);
   assert.match(protocol, /case 'participant-rename'/);
   assert.match(protocol, /case 'acquire-mic'/);
   assert.match(protocol, /case 'force-acquire-mic'/);
@@ -23,6 +25,8 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.doesNotMatch(server, /payload\.type === 'release-mic'/);
   assert.doesNotMatch(server, /payload\.type === 'room-song-command'/);
   assert.doesNotMatch(server, /payload\.type === 'room-song-command-failed'/);
+  assert.doesNotMatch(server, /payload\.type === 'song-handoff-ready'/);
+  assert.doesNotMatch(server, /payload\.type === 'song-handoff-failed'/);
   assert.doesNotMatch(server, /payload\.type === 'participant-rename'/);
   assert.doesNotMatch(server, /payload\.type === 'acquire-mic'/);
   assert.doesNotMatch(server, /payload\.type === 'force-acquire-mic'/);
@@ -48,6 +52,11 @@ test('the server composition boundary still owns the extracted command effects',
   assert.match(server, /roomSongCommands\.pendingForTarget\(playbackIdentity, nowMs\)/);
   assert.match(server, /roomSongCommands\.fail\(playbackIdentity, pendingCommand\.commandId\)/);
   assert.match(server, /broadcastRoomSongCommandFailure\(pendingCommand\.commandId, 'playback-failed', nowMs\)/);
+  assert.match(server, /youtubeTimeline\.markHandoffReady\(/);
+  assert.match(server, /sendHandoffPlan\('song-handoff-commit', plan\)/);
+  assert.match(server, /youtubeTimeline\.deferHandoff\(playbackIdentity, payload\.handoffId\)/);
+  assert.match(server, /broadcastJson\(youtubeTimeline\.statusPayload\(\)\)/);
+  assert.match(server, /broadcastJson\(youtubeTimeline\.roomStatusPayload\(\)\)/);
   assert.match(server, /participants\.rename\(socket\.participantId, payload\.nickname, Date\.now\(\)\)/);
   assert.match(server, /Microphone ownership is committed by publisher registration/);
   assert.match(server, /playbackTransport\.noteMicIntent\(socket, performance\.now\(\)\)/);

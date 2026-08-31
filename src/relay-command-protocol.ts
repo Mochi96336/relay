@@ -11,6 +11,8 @@ type RelayCommandProtocolHandlers<TSocket> = {
   releaseMic: RelayCommandHandler<TSocket>;
   roomSongCommand: RelayCommandHandler<TSocket>;
   roomSongCommandFailed: RelayCommandHandler<TSocket>;
+  songHandoffReady: RelayCommandHandler<TSocket>;
+  songHandoffFailed: RelayCommandHandler<TSocket>;
   participantRename: RelayCommandHandler<TSocket>;
   rejectMicReservation: RelayCommandHandler<TSocket>;
   playbackMicIntent: RelayCommandHandler<TSocket>;
@@ -41,6 +43,12 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'room-song-command-failed':
           handlers.roomSongCommandFailed(socket, payload);
+          return true;
+        case 'song-handoff-ready':
+          handlers.songHandoffReady(socket, payload);
+          return true;
+        case 'song-handoff-failed':
+          handlers.songHandoffFailed(socket, payload);
           return true;
         case 'participant-rename':
           handlers.participantRename(socket, payload);

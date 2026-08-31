@@ -10,6 +10,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     startTake: (nextSocket, payload) => seen.push({ handler: 'start-take', socket: nextSocket, payload }),
     stopTake: (nextSocket, payload) => seen.push({ handler: 'stop-take', socket: nextSocket, payload }),
     releaseMic: (nextSocket, payload) => seen.push({ handler: 'release-mic', socket: nextSocket, payload }),
+    roomSongCommand: (nextSocket, payload) => seen.push({ handler: 'room-song-command', socket: nextSocket, payload }),
     participantRename: (nextSocket, payload) => seen.push({ handler: 'rename', socket: nextSocket, payload }),
     rejectMicReservation: (nextSocket, payload) => seen.push({ handler: 'mic-reservation', socket: nextSocket, payload }),
     playbackMicIntent: (nextSocket, payload) => seen.push({ handler: 'playback-intent', socket: nextSocket, payload }),
@@ -18,6 +19,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   const startTake = { type: 'start-take' };
   const stopTake = { type: 'stop-take', takeId: 'take-a' };
   const releaseMic = { type: 'release-mic' };
+  const roomSongCommand = { type: 'room-song-command', commandId: 'command-a' };
   const rename = { type: 'participant-rename', nickname: 'Mochi' };
   const acquire = { type: 'acquire-mic' };
   const forceAcquire = { type: 'force-acquire-mic' };
@@ -26,6 +28,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(protocol.dispatch(socket, startTake), true);
   assert.equal(protocol.dispatch(socket, stopTake), true);
   assert.equal(protocol.dispatch(socket, releaseMic), true);
+  assert.equal(protocol.dispatch(socket, roomSongCommand), true);
   assert.equal(protocol.dispatch(socket, rename), true);
   assert.equal(protocol.dispatch(socket, acquire), true);
   assert.equal(protocol.dispatch(socket, forceAcquire), true);
@@ -35,6 +38,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     'start-take',
     'stop-take',
     'release-mic',
+    'room-song-command',
     'rename',
     'mic-reservation',
     'mic-reservation',
@@ -44,10 +48,11 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(seen[0]?.payload, startTake);
   assert.equal(seen[1]?.payload, stopTake);
   assert.equal(seen[2]?.payload, releaseMic);
-  assert.equal(seen[3]?.payload, rename);
-  assert.equal(seen[4]?.payload, acquire);
-  assert.equal(seen[5]?.payload, forceAcquire);
-  assert.equal(seen[6]?.payload, intent);
+  assert.equal(seen[3]?.payload, roomSongCommand);
+  assert.equal(seen[4]?.payload, rename);
+  assert.equal(seen[5]?.payload, acquire);
+  assert.equal(seen[6]?.payload, forceAcquire);
+  assert.equal(seen[7]?.payload, intent);
 });
 
 test('command protocol leaves unextracted commands and malformed envelopes to later routing', () => {
@@ -56,12 +61,13 @@ test('command protocol leaves unextracted commands and malformed envelopes to la
     startTake: () => { calls += 1; },
     stopTake: () => { calls += 1; },
     releaseMic: () => { calls += 1; },
+    roomSongCommand: () => { calls += 1; },
     participantRename: () => { calls += 1; },
     rejectMicReservation: () => { calls += 1; },
     playbackMicIntent: () => { calls += 1; },
   });
 
-  assert.equal(protocol.dispatch({}, { type: 'room-song-command' }), false);
+  assert.equal(protocol.dispatch({}, { type: 'room-song-command-failed' }), false);
   assert.equal(protocol.dispatch({}, { type: 'robot-source-hello' }), false);
   assert.equal(protocol.dispatch({}, {}), false);
   assert.equal(calls, 0);

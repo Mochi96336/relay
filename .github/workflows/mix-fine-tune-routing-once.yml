@@ -1,0 +1,64 @@
+name: One-shot mix control routing
+
+on:
+  push:
+    branches:
+      - agent/server-mix-fine-tune-routing
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/server-mix-fine-tune-routing
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply mix control routing extraction
+        run: python3 scripts/one-shot-mix-fine-tune-routing.py
+      - name: Typecheck
+        run: npm run check
+      - name: Focused mix control routing proof
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/relay-command-protocol.test.ts
+          test/server-command-protocol-routing.test.ts
+          test/command-authority-server.test.ts
+          test/source-control-authority.test.ts
+      - name: Full repository proof
+        run: npm test
+      - name: Validate and publish clean result
+        env:
+          BASE_SHA: 4b5f7e3c59d13abe7bb2da0b60ef6f050cdc532a
+        run: |
+          rm scripts/one-shot-mix-fine-tune-routing.py
+          rm .github/workflows/mix-fine-tune-routing-once.yml
+          test ! -e scripts/one-shot-mix-fine-tune-routing.py
+          test ! -e .github/workflows/mix-fine-tune-routing-once.yml
+
+          changed="$(git diff --name-only "$BASE_SHA" | sort)"
+          expected="$(printf '%s\n' \
+            src/relay-command-protocol.ts \
+            src/server.ts \
+            test/relay-command-protocol.test.ts \
+            test/server-command-protocol-routing.test.ts \
+            test/command-authority-server.test.ts | sort)"
+          printf 'Changed files:\n%s\n' "$changed"
+          test "$changed" = "$expected"
+          ! grep -Fq "payload.type === 'set-vocal-fine-tune'" src/server.ts
+          ! grep -Fq "payload.type === 'set-mix'" src/server.ts
+          grep -Fq "case 'set-vocal-fine-tune'" src/relay-command-protocol.ts
+          grep -Fq "case 'set-mix'" src/relay-command-protocol.ts
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor(server): route mix controls through protocol'
+          git push origin HEAD:agent/server-mix-fine-tune-routing

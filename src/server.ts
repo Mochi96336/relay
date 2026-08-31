@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import WebSocket from 'ws';
 
+import type { loadRelayConfig } from './config.js';
 import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
@@ -70,11 +71,14 @@ import {
   webTransportMediaConfig,
 } from './webtransport-media-server.js';
 
+type RelayConfig = ReturnType<typeof loadRelayConfig>;
+
+export async function startRelayServer(relayConfig: RelayConfig) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
 const takeDir = path.resolve(process.env.RELAY_TAKE_DIR ?? path.join(process.cwd(), 'takes'));
-const port = Number(process.env.PORT ?? 3000);
-const relayKey = process.env.RELAY_KEY ?? null;
+const port = relayConfig.port;
+const relayKey = relayConfig.relayKey;
 const rawInfrastructureKey = process.env.RELAY_INFRA_KEY?.trim() ?? '';
 if (rawInfrastructureKey && !/^[0-9a-f]{64}$/.test(rawInfrastructureKey)) {
   throw new Error('RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret.');
@@ -95,10 +99,10 @@ const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
 const MONITOR_BACKLOG_MS = envMs('RELAY_MONITOR_BACKLOG_MS', 200);
 const MONITOR_BACKLOG_BYTES = monitorBacklogBudgetBytes(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS);
-const LIVE_MIX_PREBUFFER_MS = envMs('RELAY_LIVE_PREBUFFER_MS', 400);
+const LIVE_MIX_PREBUFFER_MS = relayConfig.livePrebufferMs;
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
-const MIC_RETENTION_MS = envMs('RELAY_MIC_RETENTION_MS', 3_000);
+const MIC_RETENTION_MS = relayConfig.micRetentionMs;
 /**
  * How far either side of the estimated position a probe is searched for.
  *
@@ -107,7 +111,7 @@ const MIC_RETENTION_MS = envMs('RELAY_MIC_RETENTION_MS', 3_000);
  * error. The robot's browser-to-PipeWire path measured close to two seconds,
  * which a 400 ms window would have silently missed.
  */
-const PROBE_SEARCH_MARGIN_MS = envMs('RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000);
+const PROBE_SEARCH_MARGIN_MS = relayConfig.probeSearchMarginMs;
 /**
  * Captured-song history kept, sized by the probe rather than by the mixer.
  *
@@ -121,16 +125,16 @@ const PROBE_SEARCH_MARGIN_MS = envMs('RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS',
  */
 const BACKING_RETENTION_MS = PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 2_000;
 const TIMING_CALIBRATION_MS = 6_000;
-const TIMING_CALIBRATION_TIMEOUT_MS = envMs('RELAY_CALIBRATION_TIMEOUT_MS', 20_000);
+const TIMING_CALIBRATION_TIMEOUT_MS = relayConfig.calibrationTimeoutMs;
 const MAX_VOCAL_FINE_TUNE_MS = 100;
 const MAX_MIC_GAIN_DB = 40;
 const MAX_RECOMMENDED_MIC_GAIN_DB = 36;
 const FIXED_SONG_LEVEL = 100;
-const HEARTBEAT_MS = envMs('RELAY_HEARTBEAT_MS', 8_000);
+const HEARTBEAT_MS = relayConfig.heartbeatMs;
 const MIX_HEALTH_INTERVAL_MS = 1_000;
-const PARTICIPANT_GRACE_MS = envMs('RELAY_PARTICIPANT_GRACE_MS', 5_000);
-const MIC_TRANSPORT_GRACE_MS = envMs('RELAY_MIC_TRANSPORT_GRACE_MS', 5_000);
-const BACKING_GRACE_MS = envMs('RELAY_BACKING_GRACE_MS', 10_000);
+const PARTICIPANT_GRACE_MS = relayConfig.participantGraceMs;
+const MIC_TRANSPORT_GRACE_MS = relayConfig.micTransportGraceMs;
+const BACKING_GRACE_MS = relayConfig.backingGraceMs;
 const MIC_FIRST_FRAME_TIMEOUT_MS = envMs('RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_000);
 const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
@@ -206,36 +210,25 @@ const takeController = new TakeController({
 const sourceRuntime = new SourceRuntime<RelaySocket>({
   isConnected: (socket) => socket.readyState === WebSocket.OPEN,
 });
-const AUTO_CALIBRATE = process.env.RELAY_AUTO_CALIBRATE !== '0';
-const AUTO_CALIBRATION_RETRY_MS = envMs('RELAY_AUTO_CALIBRATION_RETRY_MS', 15_000);
-const CALIBRATION_AGREEMENT = Number(process.env.RELAY_CALIBRATION_AGREEMENT ?? 3);
-const CALIBRATION_TOLERANCE_MS = envMs('RELAY_CALIBRATION_TOLERANCE_MS', 25);
-const CALIBRATION_PROVISIONAL_CONFIDENCE = Number(
-  process.env.RELAY_CALIBRATION_PROVISIONAL_CONFIDENCE ?? 0.55,
-);
-const CALIBRATION_MAX_LAG_MS = envMs('RELAY_CALIBRATION_MAX_LAG_MS', 2_500);
-const CONTENT_VALIDATION_ENABLED = process.env.RELAY_CALIBRATION_VALIDATION !== '0';
-const CONTENT_VALIDATION_INTERVAL_MS = envMs(
-  'RELAY_CALIBRATION_VALIDATION_INTERVAL_MS',
-  30_000,
-);
-const CONTENT_VALIDATION_RETRY_MS = envMs(
-  'RELAY_CALIBRATION_VALIDATION_RETRY_MS',
-  10_000,
-);
-const CONTENT_VALIDATION_DEVIATION_MS = envMs(
-  'RELAY_CALIBRATION_VALIDATION_DEVIATION_MS',
-  30,
-);
+const AUTO_CALIBRATE = relayConfig.autoCalibrate;
+const AUTO_CALIBRATION_RETRY_MS = relayConfig.autoCalibrationRetryMs;
+const CALIBRATION_AGREEMENT = relayConfig.calibrationAgreement;
+const CALIBRATION_TOLERANCE_MS = relayConfig.calibrationToleranceMs;
+const CALIBRATION_PROVISIONAL_CONFIDENCE = relayConfig.calibrationProvisionalConfidence;
+const CALIBRATION_MAX_LAG_MS = relayConfig.calibrationMaxLagMs;
+const CONTENT_VALIDATION_ENABLED = relayConfig.contentValidation;
+const CONTENT_VALIDATION_INTERVAL_MS = relayConfig.contentValidationIntervalMs;
+const CONTENT_VALIDATION_RETRY_MS = relayConfig.contentValidationRetryMs;
+const CONTENT_VALIDATION_DEVIATION_MS = relayConfig.contentValidationDeviationMs;
 const timingRuntime = new TimingRuntime({
   autoCalibrationRetryMs: AUTO_CALIBRATION_RETRY_MS,
 });
 
-const PROBE_CALIBRATE = process.env.RELAY_CALIBRATION_PROBE !== '0';
-const PROBE_RETRY_MS = envMs('RELAY_CALIBRATION_PROBE_RETRY_MS', 6_000);
-const PROBE_LEAD_MS = envMs('RELAY_CALIBRATION_PROBE_LEAD_MS', 200);
-const PROBE_MIN_CORRELATION = Number(process.env.RELAY_CALIBRATION_PROBE_MIN_CORRELATION ?? 0.5);
-const PROBE_DEBUG = process.env.RELAY_CALIBRATION_PROBE_DEBUG === '1';
+const PROBE_CALIBRATE = relayConfig.probeCalibrate;
+const PROBE_RETRY_MS = relayConfig.probeRetryMs;
+const PROBE_LEAD_MS = relayConfig.probeLeadMs;
+const PROBE_MIN_CORRELATION = relayConfig.probeMinCorrelation;
+const PROBE_DEBUG = relayConfig.probeDebug;
 const PROBE_REPLY_TIMEOUT_MS = envMs('RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS', 3_000);
 const PROBE_MAX_ATTEMPTS = envPositiveInt('RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS', 3);
 /**
@@ -248,7 +241,7 @@ const PROBE_MAX_ATTEMPTS = envPositiveInt('RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS'
  * only symptom was every leg reporting `analysis dropped ... timedOut=true`.
  */
 const PROBE_ANALYSIS_TIMEOUT_MS = Math.max(
-  envMs('RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000),
+  relayConfig.probeAnalysisTimeoutMs,
   PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 5_000,
 );
 
@@ -256,7 +249,7 @@ const bootProbeRuntime = new BootProbeRuntime({
   maxAttempts: PROBE_MAX_ATTEMPTS,
   retryMs: PROBE_RETRY_MS,
 });
-const BOOT_DELTA_REAPPLY_MS = envMs('RELAY_CALIBRATION_DELTA_REAPPLY_MS', 40);
+const BOOT_DELTA_REAPPLY_MS = relayConfig.calibrationDeltaReapplyMs;
 const ROBOT_OFFSET_FRESH_MS = 2_000;
 const ROBOT_OFFSET_WINDOW_MS = envMs('RELAY_ROBOT_OFFSET_WINDOW_MS', 2_000);
 const robotPlayerOffset = new RobotPlayerOffsetTracker({
@@ -3229,7 +3222,7 @@ server.listen(port, '0.0.0.0', () => {
 
 let shutdownPromise: Promise<void> | null = null;
 
-export async function gracefulShutdown(signal: NodeJS.Signals) {
+async function gracefulShutdown(signal: NodeJS.Signals) {
   if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
   shutdownPromise = (async () => {
@@ -3258,4 +3251,7 @@ export async function gracefulShutdown(signal: NodeJS.Signals) {
     process.exitCode = 1;
   });
   return shutdownPromise;
+}
+
+return { gracefulShutdown } as const;
 }

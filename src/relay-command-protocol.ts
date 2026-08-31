@@ -6,6 +6,8 @@ type RelayCommandHandler<TSocket> = (
 ) => void;
 
 type RelayCommandProtocolHandlers<TSocket> = {
+  startTake: RelayCommandHandler<TSocket>;
+  stopTake: RelayCommandHandler<TSocket>;
   participantRename: RelayCommandHandler<TSocket>;
   rejectMicReservation: RelayCommandHandler<TSocket>;
   playbackMicIntent: RelayCommandHandler<TSocket>;
@@ -22,6 +24,12 @@ export function createRelayCommandProtocol<TSocket>(
   return {
     dispatch(socket: TSocket, payload: RelayCommandPayload) {
       switch (payload.type) {
+        case 'start-take':
+          handlers.startTake(socket, payload);
+          return true;
+        case 'stop-take':
+          handlers.stopTake(socket, payload);
+          return true;
         case 'participant-rename':
           handlers.participantRename(socket, payload);
           return true;

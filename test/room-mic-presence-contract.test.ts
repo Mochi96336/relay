@@ -19,7 +19,7 @@ test('local capture telemetry remains available without owning the visible wavef
 test('Room Mic telemetry is accepted only from current authenticated Mic owner and generation', () => {
   assert.match(server, /parseMicPresenceTelemetry/);
   const start = server.indexOf("if (payload.type === 'mic-presence-telemetry')");
-  const end = server.indexOf("if (payload.type === 'release-mic')", start);
+  const end = server.indexOf("if (payload.type === 'playback-hello')", start);
   assert.ok(start >= 0 && end > start);
   const handler = server.slice(start, end);
   assert.match(handler, /socket\.participantId !== participants\.micOwnerId/);

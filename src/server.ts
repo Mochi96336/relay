@@ -2165,6 +2165,32 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       duplicate: result.duplicate,
     });
   },
+  releaseMic: (socket) => {
+    if (!socket.participantId) return;
+    const result = participants.releaseMic(socket.participantId);
+    if (!result.ok) return;
+
+    let transportCleaned = false;
+    const cleanReleasedMicTransport = () => {
+      if (transportCleaned) return;
+      transportCleaned = true;
+      if (micRuntime.publisher?.participantId === socket.participantId) {
+        revokePublisherTransport('You released the microphone.');
+      } else if (micRuntime.mediaOwnerId === socket.participantId) {
+        clearMicMediaAuthority();
+      }
+    };
+    applyMicOwnerEffects(result.effects, performance.now(), {
+      afterQualityEvent: () => micTransportGrace.cancel(),
+      beforeTimingInvalidation: cleanReleasedMicTransport,
+    });
+    // A successful explicit release always invalidates timing today. Keep this
+    // fallback so transport cleanup remains adapter-owned even if that domain
+    // effect is deliberately changed later.
+    cleanReleasedMicTransport();
+    broadcastSessionStatus();
+    sendJson(socket, { type: 'mic-released' });
+  },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;
     if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
@@ -2353,34 +2379,6 @@ wss.on('connection', (rawSocket, request) => {
         f0Hz: presence.f0Hz,
         pitchConfidence: presence.pitchConfidence,
       });
-      return;
-    }
-
-    if (payload.type === 'release-mic') {
-      if (!socket.participantId) return;
-      const result = participants.releaseMic(socket.participantId);
-      if (!result.ok) return;
-
-      let transportCleaned = false;
-      const cleanReleasedMicTransport = () => {
-        if (transportCleaned) return;
-        transportCleaned = true;
-        if (micRuntime.publisher?.participantId === socket.participantId) {
-          revokePublisherTransport('You released the microphone.');
-        } else if (micRuntime.mediaOwnerId === socket.participantId) {
-          clearMicMediaAuthority();
-        }
-      };
-      applyMicOwnerEffects(result.effects, performance.now(), {
-        afterQualityEvent: () => micTransportGrace.cancel(),
-        beforeTimingInvalidation: cleanReleasedMicTransport,
-      });
-      // A successful explicit release always invalidates timing today. Keep this
-      // fallback so transport cleanup remains adapter-owned even if that domain
-      // effect is deliberately changed later.
-      cleanReleasedMicTransport();
-      broadcastSessionStatus();
-      sendJson(socket, { type: 'mic-released' });
       return;
     }
 

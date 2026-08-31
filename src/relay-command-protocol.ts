@@ -8,13 +8,14 @@ type RelayCommandHandler<TSocket> = (
 type RelayCommandProtocolHandlers<TSocket> = {
   startTake: RelayCommandHandler<TSocket>;
   stopTake: RelayCommandHandler<TSocket>;
+  releaseMic: RelayCommandHandler<TSocket>;
   participantRename: RelayCommandHandler<TSocket>;
   rejectMicReservation: RelayCommandHandler<TSocket>;
   playbackMicIntent: RelayCommandHandler<TSocket>;
 };
 
 /**
- * Selects low-risk mutating control commands without taking ownership of their
+ * Selects extracted mutating control commands without taking ownership of their
  * state. Domain/session/transport effects remain in the handlers supplied by
  * the server composition boundary.
  */
@@ -29,6 +30,9 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'stop-take':
           handlers.stopTake(socket, payload);
+          return true;
+        case 'release-mic':
+          handlers.releaseMic(socket, payload);
           return true;
         case 'participant-rename':
           handlers.participantRename(socket, payload);

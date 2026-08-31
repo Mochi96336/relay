@@ -31,6 +31,7 @@ import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
+import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2092,6 +2093,29 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
   timingCalibrationStatusPayload: () => timingCalibrationStatusPayload(),
 });
 
+const commandProtocol = createRelayCommandProtocol<RelaySocket>({
+  participantRename: (socket, payload) => {
+    if (!socket.participantId) return;
+    if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
+      broadcastSessionStatus();
+    } else {
+      sendJson(socket, sessionStatusPayload());
+    }
+  },
+  rejectMicReservation: (socket) => {
+    sendJson(socket, {
+      type: 'error',
+      message: 'Microphone ownership is committed by publisher registration, not reserved separately.',
+    });
+  },
+  playbackMicIntent: (socket) => {
+    const playbackIdentity = playbackTransport.identity(socket);
+    if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) return;
+    playbackTransport.noteMicIntent(socket, performance.now());
+    sendJson(socket, { type: 'playback-mic-intent-registered' });
+  },
+});
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -2166,6 +2190,7 @@ wss.on('connection', (rawSocket, request) => {
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
     if (queryProtocol.dispatch(socket, payload)) return;
+    if (commandProtocol.dispatch(socket, payload)) return;
 
     if (payload.type === 'backing-sample-boundary') {
       if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
@@ -2335,24 +2360,6 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'participant-rename') {
-      if (!socket.participantId) return;
-      if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
-        broadcastSessionStatus();
-      } else {
-        sendJson(socket, sessionStatusPayload());
-      }
-      return;
-    }
-
-    if (payload.type === 'acquire-mic' || payload.type === 'force-acquire-mic') {
-      sendJson(socket, {
-        type: 'error',
-        message: 'Microphone ownership is committed by publisher registration, not reserved separately.',
-      });
-      return;
-    }
-
     if (payload.type === 'release-mic') {
       if (!socket.participantId) return;
       const result = participants.releaseMic(socket.participantId);
@@ -2408,14 +2415,6 @@ wss.on('connection', (rawSocket, request) => {
         ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
         : null;
       if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
-      return;
-    }
-
-    if (payload.type === 'playback-mic-intent') {
-      const playbackIdentity = playbackTransport.identity(socket);
-      if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) return;
-      playbackTransport.noteMicIntent(socket, performance.now());
-      sendJson(socket, { type: 'playback-mic-intent-registered' });
       return;
     }
 

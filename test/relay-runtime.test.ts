@@ -62,3 +62,14 @@ test('server entry parses deployment config once and delegates activation', () =
   assert.match(entry, /startRelayRuntime\(loadRelayConfig\(\)\)/);
   assert.doesNotMatch(entry, /process\.env|server\.js/);
 });
+
+test('runtime owns process signals while server owns only the shutdown transaction', () => {
+  const runtime = readRepositoryTextFile('src/relay-runtime.ts');
+  const server = readRepositoryTextFile('src/server.ts');
+
+  assert.match(runtime, /for \(const signal of \['SIGTERM', 'SIGINT'\] as const\)/);
+  assert.match(runtime, /process\.on\(signal/);
+  assert.match(runtime, /relayServer\.gracefulShutdown\(signal\)/);
+  assert.match(server, /export async function gracefulShutdown\(signal: NodeJS\.Signals\)/);
+  assert.doesNotMatch(server, /process\.on\(signal/);
+});

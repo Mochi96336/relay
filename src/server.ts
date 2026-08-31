@@ -3229,7 +3229,7 @@ server.listen(port, '0.0.0.0', () => {
 
 let shutdownPromise: Promise<void> | null = null;
 
-async function gracefulShutdown(signal: NodeJS.Signals) {
+export async function gracefulShutdown(signal: NodeJS.Signals) {
   if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
   shutdownPromise = (async () => {
@@ -3258,16 +3258,4 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     process.exitCode = 1;
   });
   return shutdownPromise;
-}
-
-for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-  process.on(signal, () => {
-    // Keep both signal handlers installed until the shared shutdown
-    // transaction completes. Repeated controlled-shutdown signals
-    // must join the same durability barrier instead of restoring
-    // Node's default termination while the WAV is still flushing.
-    void gracefulShutdown(signal).finally(() => {
-      process.exit(process.exitCode ?? 0);
-    });
-  });
 }

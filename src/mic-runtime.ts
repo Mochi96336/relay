@@ -119,35 +119,32 @@ export class MicRuntime {
     }
 
     const previousPublisher = this.currentPublisher;
-    const sameParticipantReplacement = Boolean(
-      previousPublisher
-      && previousPublisher !== socket
-      && previousPublisher.participantId
-      && previousPublisher.participantId === socket.participantId,
-    );
-    const sameCapture = Boolean(
-      sameParticipantReplacement
-      && previousPublisher?.captureGeneration !== undefined
-      && captureGeneration !== null
-      && previousPublisher.captureGeneration === captureGeneration,
-    );
-    const reconnectingSameCapture = Boolean(
+    // Media authority deliberately survives a short control-socket grace. Treat
+    // a same-participant reconnect as a replacement even after the old control
+    // pointer has detached, otherwise a changed capture can bypass the server's
+    // timing-invalidation boundary merely by disconnecting first.
+    const sameParticipantMedia = Boolean(
       socket.participantId
       && this.currentMediaOwnerId === socket.participantId
+      && this.currentAudioTransport,
+    );
+    // A capture generation names one capture clock, not just a packet epoch.
+    // Reusing it with a different sample rate is contradictory identity and
+    // must not inherit receiver sequence state, media tickets, or calibration.
+    const continuingV2Capture = Boolean(
+      sameParticipantMedia
       && captureGeneration !== null
       && this.currentMediaGeneration === captureGeneration
+      && this.currentSampleRate === sampleRate
       && audioPacketVersion === 2
       && this.currentAudioTransport?.packetVersion === 2,
     );
-    const preservedAudioTransport = Boolean(
-      reconnectingSameCapture
-      || (
-        sameCapture
-        && previousPublisher?.audioPacketVersion === 2
-        && audioPacketVersion === 2
-        && this.currentAudioTransport
-      ),
+    const sameParticipantReplacement = Boolean(
+      sameParticipantMedia
+      && (previousPublisher !== socket || !continuingV2Capture),
     );
+    const sameCapture = Boolean(sameParticipantReplacement && continuingV2Capture);
+    const preservedAudioTransport = continuingV2Capture;
 
     socket.sampleRate = sampleRate;
     socket.captureGeneration = captureGeneration ?? undefined;

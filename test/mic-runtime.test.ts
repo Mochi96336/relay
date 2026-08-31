@@ -90,6 +90,9 @@ test('same-capture reconnect preserves receiver continuity while a new capture r
     audioPacketVersion: 2,
     nowMs: 200,
   });
+  assert.equal(reconnectBind.previousPublisher, null);
+  assert.equal(reconnectBind.sameParticipantReplacement, true);
+  assert.equal(reconnectBind.sameCapture, true);
   assert.equal(reconnectBind.preservedAudioTransport, true);
   assert.equal(mic.audioTransport, firstTransport);
   assert.equal(mic.mediaTicket, firstTicket);
@@ -107,6 +110,41 @@ test('same-capture reconnect preserves receiver continuity while a new capture r
   assert.equal(freshBind.preservedAudioTransport, false);
   assert.notEqual(mic.audioTransport, firstTransport);
   assert.equal(mic.mediaGeneration, 8);
+  assert.equal(mic.mediaTicket, 'ticket-2');
+});
+
+test('same generation with a different sample rate cannot inherit capture continuity', () => {
+  const { mic } = runtime();
+  const first = socket('participant-alice');
+  mic.bindPublisher({
+    socket: first,
+    sampleRate: 48_000,
+    captureGeneration: 12,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+  const originalTransport = mic.audioTransport;
+  const originalTicket = mic.mediaTicket;
+  assert.ok(originalTransport);
+  assert.equal(originalTicket, 'ticket-1');
+
+  assert.equal(mic.detachPublisher(first), true);
+  const contradictoryReconnect = socket('participant-alice');
+  const rebound = mic.bindPublisher({
+    socket: contradictoryReconnect,
+    sampleRate: 44_100,
+    captureGeneration: 12,
+    audioPacketVersion: 2,
+    nowMs: 200,
+  });
+
+  assert.equal(rebound.previousPublisher, null);
+  assert.equal(rebound.sameParticipantReplacement, true);
+  assert.equal(rebound.sameCapture, false);
+  assert.equal(rebound.preservedAudioTransport, false);
+  assert.notEqual(mic.audioTransport, originalTransport);
+  assert.equal(mic.sampleRate, 44_100);
+  assert.equal(mic.mediaGeneration, 12);
   assert.equal(mic.mediaTicket, 'ticket-2');
 });
 

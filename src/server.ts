@@ -2094,6 +2094,77 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
 });
 
 const commandProtocol = createRelayCommandProtocol<RelaySocket>({
+  startTake: (socket) => {
+    if (!socket.participantId) {
+      rejectTakeCommand(socket, 'start', 'participant-required');
+      return;
+    }
+    const commandWallClockMs = Date.now();
+    const nowMs = performance.now();
+    const productStatus = productStatusPayload(nowMs);
+    if (!productStatus.actions.canStartTake) {
+      const blockedReason = productStatus.actions.startTakeBlockedReason;
+      if (blockedReason === null) {
+        rejectTakeCommand(socket, 'start', 'product-state-invalid');
+        return;
+      }
+      rejectTakeCommand(socket, 'start', blockedReason);
+      return;
+    }
+    const boundary = takeFrameBoundary(nowMs);
+    const song = takeSongSnapshot(boundary.atMs);
+
+    if (cancelActiveContentValidation(nowMs)) {
+      broadcastJson(timingCalibrationStatusPayload());
+    }
+    const result = takeController.start(
+      socket.participantId,
+      song,
+      boundary.position,
+      commandWallClockMs + (boundary.atMs - nowMs),
+    );
+    if (!result.ok) {
+      rejectTakeCommand(socket, 'start', result.reason);
+      return;
+    }
+    sendJson(socket, {
+      type: 'take-command-accepted',
+      command: 'start',
+      takeId: result.takeId,
+    });
+  },
+  stopTake: (socket, payload) => {
+    if (!socket.participantId) {
+      rejectTakeCommand(socket, 'stop', 'participant-required');
+      return;
+    }
+    const takeId = typeof payload.takeId === 'string' ? payload.takeId.trim() : '';
+    if (!TAKE_ID_PATTERN.test(takeId)) {
+      rejectTakeCommand(socket, 'stop', 'invalid-take-id');
+      return;
+    }
+
+    const commandWallClockMs = Date.now();
+    const nowMs = performance.now();
+    const boundary = takeFrameBoundary(nowMs);
+    const result = takeController.stop(
+      takeId,
+      socket.participantId,
+      boundary.position,
+      'user',
+      commandWallClockMs + (boundary.atMs - nowMs),
+    );
+    if (!result.ok) {
+      rejectTakeCommand(socket, 'stop', result.reason);
+      return;
+    }
+    sendJson(socket, {
+      type: 'take-command-accepted',
+      command: 'stop',
+      takeId,
+      duplicate: result.duplicate,
+    });
+  },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;
     if (participants.rename(socket.participantId, payload.nickname, Date.now())) {
@@ -2281,81 +2352,6 @@ wss.on('connection', (rawSocket, request) => {
         spectrumBands: presence.spectrumBands,
         f0Hz: presence.f0Hz,
         pitchConfidence: presence.pitchConfidence,
-      });
-      return;
-    }
-
-    if (payload.type === 'start-take') {
-      if (!socket.participantId) {
-        rejectTakeCommand(socket, 'start', 'participant-required');
-        return;
-      }
-      const commandWallClockMs = Date.now();
-      const nowMs = performance.now();
-      const productStatus = productStatusPayload(nowMs);
-      if (!productStatus.actions.canStartTake) {
-        const blockedReason = productStatus.actions.startTakeBlockedReason;
-        if (blockedReason === null) {
-          rejectTakeCommand(socket, 'start', 'product-state-invalid');
-          return;
-        }
-        rejectTakeCommand(socket, 'start', blockedReason);
-        return;
-      }
-      const boundary = takeFrameBoundary(nowMs);
-      const song = takeSongSnapshot(boundary.atMs);
-
-      if (cancelActiveContentValidation(nowMs)) {
-        broadcastJson(timingCalibrationStatusPayload());
-      }
-      const result = takeController.start(
-        socket.participantId,
-        song,
-        boundary.position,
-        commandWallClockMs + (boundary.atMs - nowMs),
-      );
-      if (!result.ok) {
-        rejectTakeCommand(socket, 'start', result.reason);
-        return;
-      }
-      sendJson(socket, {
-        type: 'take-command-accepted',
-        command: 'start',
-        takeId: result.takeId,
-      });
-      return;
-    }
-
-    if (payload.type === 'stop-take') {
-      if (!socket.participantId) {
-        rejectTakeCommand(socket, 'stop', 'participant-required');
-        return;
-      }
-      const takeId = typeof payload.takeId === 'string' ? payload.takeId.trim() : '';
-      if (!TAKE_ID_PATTERN.test(takeId)) {
-        rejectTakeCommand(socket, 'stop', 'invalid-take-id');
-        return;
-      }
-
-      const commandWallClockMs = Date.now();
-      const nowMs = performance.now();
-      const boundary = takeFrameBoundary(nowMs);
-      const result = takeController.stop(
-        takeId,
-        socket.participantId,
-        boundary.position,
-        'user',
-        commandWallClockMs + (boundary.atMs - nowMs),
-      );
-      if (!result.ok) {
-        rejectTakeCommand(socket, 'stop', result.reason);
-        return;
-      }
-      sendJson(socket, {
-        type: 'take-command-accepted',
-        command: 'stop',
-        takeId,
-        duplicate: result.duplicate,
       });
       return;
     }

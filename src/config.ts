@@ -56,10 +56,52 @@ export function envBoolean(env: Env, name: string, fallback: boolean) {
   }
 }
 
+function legacyPositiveNumber(env: Env, name: string, fallback: number) {
+  const value = Number(env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function legacyPositiveInt(env: Env, name: string, fallback: number) {
+  const value = Number(env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+function relayInfrastructureKey(env: Env) {
+  const raw = env.RELAY_INFRA_KEY?.trim() ?? '';
+  if (raw && !/^[0-9a-f]{64}$/.test(raw)) {
+    throw new Error('RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret.');
+  }
+  return raw || null;
+}
+
 export function loadRelayConfig(env: Env = process.env) {
   return {
     port: envNumber(env, 'PORT', 3000, { min: 0, max: 65_535, integer: true }),
     relayKey: rawValue(env, 'RELAY_KEY') ?? null,
+    takeDir: env.RELAY_TAKE_DIR ?? 'takes',
+    infrastructureKey: relayInfrastructureKey(env),
+    legacyTestInfrastructure: env.NODE_ENV === 'test'
+      && env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1',
+    monitorBacklogMs: legacyPositiveNumber(env, 'RELAY_MONITOR_BACKLOG_MS', 200),
+    micFirstFrameTimeoutMs: legacyPositiveNumber(env, 'RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_000),
+    probeReplyTimeoutMs: legacyPositiveNumber(env, 'RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS', 3_000),
+    probeMaxAttempts: legacyPositiveInt(env, 'RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS', 3),
+    robotOffsetWindowMs: legacyPositiveNumber(env, 'RELAY_ROBOT_OFFSET_WINDOW_MS', 2_000),
+    robotContentTransitionLifetimeMs: legacyPositiveNumber(
+      env,
+      'RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS',
+      15_000,
+    ),
+    robotContentTransitionMaxWindows: legacyPositiveInt(
+      env,
+      'RELAY_ROBOT_CONTENT_TRANSITION_MAX_WINDOWS',
+      12,
+    ),
+    robotContentTransitionMaxWorkerFailures: legacyPositiveInt(
+      env,
+      'RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES',
+      3,
+    ),
     livePrebufferMs: envNumber(env, 'RELAY_LIVE_PREBUFFER_MS', 400, { min: 1 }),
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),

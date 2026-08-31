@@ -19,6 +19,80 @@ test('relay config rejects malformed numeric deployment settings', () => {
   );
 });
 
+test('relay config owns remaining server-local deployment inputs', () => {
+  const defaults = loadRelayConfig({});
+  assert.equal(defaults.takeDir, 'takes');
+  assert.equal(defaults.infrastructureKey, null);
+  assert.equal(defaults.legacyTestInfrastructure, false);
+  assert.equal(defaults.monitorBacklogMs, 200);
+  assert.equal(defaults.micFirstFrameTimeoutMs, 3_000);
+  assert.equal(defaults.probeReplyTimeoutMs, 3_000);
+  assert.equal(defaults.probeMaxAttempts, 3);
+  assert.equal(defaults.robotOffsetWindowMs, 2_000);
+  assert.equal(defaults.robotContentTransitionLifetimeMs, 15_000);
+  assert.equal(defaults.robotContentTransitionMaxWindows, 12);
+  assert.equal(defaults.robotContentTransitionMaxWorkerFailures, 3);
+
+  const infrastructureKey = 'a'.repeat(64);
+  const configured = loadRelayConfig({
+    RELAY_TAKE_DIR: './custom-takes',
+    RELAY_INFRA_KEY: infrastructureKey,
+    NODE_ENV: 'test',
+    RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
+    RELAY_MONITOR_BACKLOG_MS: '350',
+    RELAY_MIC_FIRST_FRAME_TIMEOUT_MS: '4500',
+    RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '4200',
+    RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '5',
+    RELAY_ROBOT_OFFSET_WINDOW_MS: '2750',
+    RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS: '18000',
+    RELAY_ROBOT_CONTENT_TRANSITION_MAX_WINDOWS: '15',
+    RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES: '4',
+  });
+  assert.equal(configured.takeDir, './custom-takes');
+  assert.equal(configured.infrastructureKey, infrastructureKey);
+  assert.equal(configured.legacyTestInfrastructure, true);
+  assert.equal(configured.monitorBacklogMs, 350);
+  assert.equal(configured.micFirstFrameTimeoutMs, 4_500);
+  assert.equal(configured.probeReplyTimeoutMs, 4_200);
+  assert.equal(configured.probeMaxAttempts, 5);
+  assert.equal(configured.robotOffsetWindowMs, 2_750);
+  assert.equal(configured.robotContentTransitionLifetimeMs, 18_000);
+  assert.equal(configured.robotContentTransitionMaxWindows, 15);
+  assert.equal(configured.robotContentTransitionMaxWorkerFailures, 4);
+
+  // These fields historically fell back instead of failing deployment parsing.
+  // Preserve that behavior while moving ownership out of server.ts.
+  const legacyFallbacks = loadRelayConfig({
+    RELAY_MONITOR_BACKLOG_MS: 'nope',
+    RELAY_MIC_FIRST_FRAME_TIMEOUT_MS: '0',
+    RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '-1',
+    RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '2.5',
+    RELAY_ROBOT_OFFSET_WINDOW_MS: 'Infinity',
+    RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS: '',
+    RELAY_ROBOT_CONTENT_TRANSITION_MAX_WINDOWS: '0',
+    RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES: 'NaN',
+  });
+  assert.equal(legacyFallbacks.monitorBacklogMs, 200);
+  assert.equal(legacyFallbacks.micFirstFrameTimeoutMs, 3_000);
+  assert.equal(legacyFallbacks.probeReplyTimeoutMs, 3_000);
+  assert.equal(legacyFallbacks.probeMaxAttempts, 3);
+  assert.equal(legacyFallbacks.robotOffsetWindowMs, 2_000);
+  assert.equal(legacyFallbacks.robotContentTransitionLifetimeMs, 15_000);
+  assert.equal(legacyFallbacks.robotContentTransitionMaxWindows, 12);
+  assert.equal(legacyFallbacks.robotContentTransitionMaxWorkerFailures, 3);
+
+  assert.equal(loadRelayConfig({ RELAY_TAKE_DIR: '' }).takeDir, '');
+  assert.equal(
+    loadRelayConfig({ NODE_ENV: 'production', RELAY_TEST_LEGACY_INFRASTRUCTURE: '1' })
+      .legacyTestInfrastructure,
+    false,
+  );
+  assert.throws(
+    () => loadRelayConfig({ RELAY_INFRA_KEY: 'ABC' }),
+    /RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret/,
+  );
+});
+
 test('relay config owns the participant and mic transport grace windows', () => {
   assert.throws(() => loadRelayConfig({ RELAY_PARTICIPANT_GRACE_MS: '0' }), />= 1/);
   assert.throws(

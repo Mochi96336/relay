@@ -30,6 +30,7 @@ import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
 import { createRelayHttpServer } from './relay-http-server.js';
+import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2079,6 +2080,18 @@ function validAudioPacketVersion(value: unknown): 1 | 2 | null {
   return version === 1 || version === 2 ? version : null;
 }
 
+const queryProtocol = createRelayQueryProtocol<RelaySocket>({
+  sendJson,
+  sessionStatusPayload: () => sessionStatusPayload(),
+  productStatusPayload: () => productStatusPayload(),
+  takeStatusPayload: () => takeController.statusPayload(),
+  roomSongStatusPayload: () => youtubeTimeline.roomStatusPayload(),
+  roomSongCommandStatusPayload: () => roomSongCommandStatusPayload(),
+  youtubeTimelineStatusPayload: () => youtubeTimeline.statusPayload(),
+  sourceStatusPayload: () => sourceStatusPayload(),
+  timingCalibrationStatusPayload: () => timingCalibrationStatusPayload(),
+});
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -2152,6 +2165,7 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
+    if (queryProtocol.dispatch(socket, payload)) return;
 
     if (payload.type === 'backing-sample-boundary') {
       if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
@@ -2206,23 +2220,6 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'clock-ping') {
-      const serverReceivedAtMs = Date.now();
-      sendJson(socket, {
-        type: 'clock-pong',
-        id: payload.id,
-        clientSentAtMs: payload.clientSentAtMs,
-        serverReceivedAtMs,
-        serverSentAtMs: Date.now(),
-      });
-      return;
-    }
-
-    if (payload.type === 'session-status-request') {
-      sendJson(socket, sessionStatusPayload());
-      return;
-    }
-
     if (payload.type === 'audio-uplink-health') {
       const health = parseAudioUplinkHealth(payload);
       if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
@@ -2260,16 +2257,6 @@ wss.on('connection', (rawSocket, request) => {
         f0Hz: presence.f0Hz,
         pitchConfidence: presence.pitchConfidence,
       });
-      return;
-    }
-
-    if (payload.type === 'product-status-request') {
-      sendJson(socket, productStatusPayload());
-      return;
-    }
-
-    if (payload.type === 'take-status-request') {
-      sendJson(socket, takeController.statusPayload());
       return;
     }
 
@@ -2429,16 +2416,6 @@ wss.on('connection', (rawSocket, request) => {
       if (!playbackIdentity || playbackIdentity.participantId !== socket.participantId) return;
       playbackTransport.noteMicIntent(socket, performance.now());
       sendJson(socket, { type: 'playback-mic-intent-registered' });
-      return;
-    }
-
-    if (payload.type === 'room-song-status-request') {
-      sendJson(socket, youtubeTimeline.roomStatusPayload());
-      return;
-    }
-
-    if (payload.type === 'room-song-command-status-request') {
-      sendJson(socket, roomSongCommandStatusPayload());
       return;
     }
 
@@ -2613,21 +2590,6 @@ wss.on('connection', (rawSocket, request) => {
       } else {
         reportTelemetryRejected(socket, result.reason ?? 'invalid-telemetry');
       }
-      return;
-    }
-
-    if (payload.type === 'youtube-timeline-request') {
-      sendJson(socket, youtubeTimeline.statusPayload());
-      return;
-    }
-
-    if (payload.type === 'source-status-request') {
-      sendJson(socket, sourceStatusPayload());
-      return;
-    }
-
-    if (payload.type === 'timing-calibration-status-request') {
-      sendJson(socket, timingCalibrationStatusPayload());
       return;
     }
 

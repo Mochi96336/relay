@@ -1,0 +1,108 @@
+name: One-shot Mic mix command routing patch
+
+on:
+  push:
+    branches:
+      - agent/server-mic-mix-command-routing
+    paths:
+      - .github/workflows/one-shot-mic-mix-routing.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/server-mic-mix-command-routing
+          fetch-depth: 1
+
+      - name: Move existing Mic mix handlers mechanically
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          source = path.read_text()
+
+          command_start_marker = "const commandProtocol = createRelayCommandProtocol<RelaySocket>({\n"
+          command_end_marker = "\n});\n\nlet shuttingDown = false;"
+
+          def extract_handler(source: str, route: str, next_marker: str, callback_name: str):
+              inline_start = f"    if (payload.type === '{route}') {{\n"
+              assert source.count(inline_start) == 1, f'expected exactly one inline {route} route'
+              start = source.index(inline_start)
+              end = source.index(next_marker, start)
+              block = source[start:end]
+              assert block.endswith("      return;\n    }\n"), f'unexpected {route} block ending'
+
+              body = block[len(inline_start):-len("    }\n")]
+              body_lines = []
+              for line in body.splitlines(keepends=True):
+                  if line.strip():
+                      assert line.startswith('  '), f'unexpected indentation in {route}: {line!r}'
+                      body_lines.append(line[2:])
+                  else:
+                      body_lines.append(line)
+              callback = f"  {callback_name}: (socket, payload) => {{\n" + ''.join(body_lines) + "  },\n"
+              return source[:start] + source[end:], callback
+
+          source, fine_tune = extract_handler(
+              source,
+              'set-vocal-fine-tune',
+              "\n    if (payload.type === 'register' && payload.role === 'publisher') {",
+              'setVocalFineTune',
+          )
+          source, set_mix = extract_handler(
+              source,
+              'set-mix',
+              "\n  });\n\n  socket.on('close', () => {",
+              'setMix',
+          )
+
+          command_start = source.index(command_start_marker)
+          command_end = source.index(command_end_marker, command_start)
+          source = source[:command_end] + "\n" + fine_tune + set_mix + source[command_end:]
+
+          assert "payload.type === 'set-vocal-fine-tune'" not in source
+          assert "payload.type === 'set-mix'" not in source
+          assert source.count('setVocalFineTune: (socket, payload) => {') == 1
+          assert source.count('setMix: (socket, payload) => {') == 1
+          assert "requireMicOwnerCommand(socket, 'set-vocal-fine-tune')" in fine_tune
+          assert "session.setAlignment({" in fine_tune
+          assert "fineTuneMs: Math.max(-MAX_VOCAL_FINE_TUNE_MS" in fine_tune
+          assert "requireMicOwnerCommand(socket, 'set-mix')" in set_mix
+          assert "session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)))" in set_mix
+          assert "Song is now a server-owned 100% reference" in set_mix
+          assert "broadcastJson(mixSettingsPayload())" in set_mix
+
+          path.write_text(source)
+          PY
+
+      - name: Verify diff is only handler relocation
+        shell: bash
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          diff = subprocess.check_output(['git', 'diff', '--', 'src/server.ts'], text=True)
+          assert "-    if (payload.type === 'set-vocal-fine-tune') {" in diff
+          assert "+  setVocalFineTune: (socket, payload) => {" in diff
+          assert "-    if (payload.type === 'set-mix') {" in diff
+          assert "+  setMix: (socket, payload) => {" in diff
+          assert "-      // `songLevel` remains accepted" in diff
+          assert "+    // `songLevel` remains accepted" in diff
+          PY
+
+      - name: Commit patch and retire one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "relay-cleanup-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-mic-mix-routing.yml
+          git add src/server.ts
+          git commit -m "refactor(server): delegate Mic mix command routing"
+          git push origin HEAD:agent/server-mic-mix-command-routing

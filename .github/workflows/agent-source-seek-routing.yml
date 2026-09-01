@@ -1,0 +1,97 @@
+name: Agent source seek routing construction
+
+on:
+  push:
+    branches:
+      - agent/server-source-seek-routing
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Move only source seek routing
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text()
+          header = "    if (payload.type === 'source-seeked') {\n"
+          next_header = "    if (payload.type === 'register' && payload.role === 'publisher') {"
+          start = text.index(header)
+          next_start = text.index(next_header, start)
+          block = text[start:next_start].rstrip()
+          inner = block[len(header):]
+          if not inner.endswith('    }'):
+              raise SystemExit('source seek block ending changed')
+          inner = inner[:-5]
+          dedented = ''.join(
+              line[2:] if line.startswith('  ') else line
+              for line in inner.splitlines(keepends=True)
+          )
+          handler = "  sourceSeeked: (socket, payload) => {\n" + dedented + "  },"
+          text = text[:start] + text[next_start:]
+
+          protocol_anchor = text.index('const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({')
+          close = text.index('\n});', protocol_anchor)
+          text = text[:close] + '\n' + handler + text[close:]
+
+          if "payload.type === 'source-seeked'" in text:
+              raise SystemExit('inline source-seeked selector still exists')
+          for marker in (
+              'sourceSeeked: (socket, payload) => {',
+              'infrastructureCapability.authorized(socket)',
+              'sourceRuntime.canReportSeek(socket)',
+              'robotContentTransitionRuntime.clearPendingBoundary()',
+              'robotContentTimeline.noteFollowerCorrection(',
+              'beginRobotContentTransition(',
+              'robotPlayerOffset.reset()',
+              'sourceRuntime.invalidateMapping()',
+              'clearContentValidationBaseline()',
+              'calibration.discardPrimedContent()',
+              'robotContentTimeline.reset()',
+          ):
+              if marker not in text:
+                  raise SystemExit(f'missing retained source seek marker: {marker}')
+          path.write_text(text)
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Focused source seek tests
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/relay-infrastructure-event-protocol.test.ts
+          test/server-infrastructure-event-protocol-routing.test.ts
+          test/source-seek-authority.test.ts
+          test/timing-validity.test.ts
+          test/robot-content-live-boundary.test.ts
+          test/robot-content-correction-liveness.test.ts
+          test/robot-source-disconnect.test.ts
+          test/infrastructure-authority.test.ts
+      - name: Verify diff
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- src/server.ts
+      - name: Commit validated server move
+        shell: bash
+        run: |
+          rm .github/workflows/agent-source-seek-routing.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts .github/workflows/agent-source-seek-routing.yml
+          git commit -m 'refactor(server): route source seek events through protocol'
+          git push origin HEAD:agent/server-source-seek-routing

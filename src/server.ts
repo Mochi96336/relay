@@ -34,6 +34,7 @@ import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
+import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2671,6 +2672,242 @@ const authenticationProtocol = createRelayAuthenticationProtocol<RelaySocket>({
   },
 });
 
+const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
+  publisher: (socket, payload) => {
+    if (!canClaimSocketRole(socket, 'publisher')) return;
+    // A publisher is the microphone media authority. Browser clients must
+    // authenticate that authority before registration; anonymous publishers
+    // remain available only to the explicitly enabled legacy test harness.
+    if (!socket.participantId && !legacyTestParticipantIdentityEnabled()) {
+      sendJson(socket, {
+        type: 'participant-auth-rejected',
+        message: 'Authenticate this Relay participant before registering the microphone.',
+      });
+      socket.close(1008, 'Participant authentication required.');
+      return;
+    }
+
+    const sampleRate = validSampleRate(payload.sampleRate);
+    if (!sampleRate) {
+      sendJson(socket, { type: 'error', message: 'Invalid sample rate.' });
+      return;
+    }
+
+    const captureGeneration = validCaptureGeneration(payload.captureGeneration);
+    const initialSequence = payload.initialSequence === undefined
+      ? undefined
+      : validCaptureGeneration(payload.initialSequence);
+    const audioPacketVersion = validAudioPacketVersion(payload.audioPacketVersion);
+    if (!audioPacketVersion) {
+      sendJson(socket, { type: 'error', message: 'Unsupported audio packet version.' });
+      return;
+    }
+    if (audioPacketVersion === 2 && captureGeneration === null) {
+      sendJson(socket, {
+        type: 'error',
+        message: 'AudioPacket v2 requires a capture generation in publisher registration.',
+      });
+      return;
+    }
+    if (audioPacketVersion === 2 && initialSequence === null) {
+      sendJson(socket, {
+        type: 'error',
+        message: 'AudioPacket v2 initial sequence must be a uint32 when provided.',
+      });
+      return;
+    }
+    const hasTakeoverExpectation = Object.prototype.hasOwnProperty.call(payload, 'takeoverExpectedOwnerId');
+    const expectedOwnerId = hasTakeoverExpectation
+      ? normalizeParticipantId(payload.takeoverExpectedOwnerId)
+      : null;
+
+    if (
+      hasTakeoverExpectation
+      && payload.takeoverExpectedOwnerId !== null
+      && !expectedOwnerId
+    ) {
+      sendJson(socket, {
+        type: 'mic-takeover-rejected',
+        reason: 'owner-changed',
+        owner: participantPayload(participants.micOwnerId),
+        revision: participants.revision,
+      });
+      sendJson(socket, sessionStatusPayload());
+      return;
+    }
+
+    let ownershipEffects: Parameters<typeof applyMicOwnerTransitionEffects>[0] | null = null;
+    let previousOwnerId: string | null = participants.micOwnerId;
+    if (socket.participantId) {
+      const ownership = hasTakeoverExpectation
+        ? participants.takeoverMic(socket.participantId, expectedOwnerId)
+        : participants.acquireMic(socket.participantId);
+      if (!ownership.ok) {
+        if (ownership.reason === 'busy') {
+          sendJson(socket, {
+            type: 'mic-busy',
+            owner: participantPayload(ownership.ownerId),
+            revision: participants.revision,
+          });
+        } else {
+          sendJson(socket, {
+            type: 'mic-takeover-rejected',
+            reason: ownership.reason,
+            owner: participantPayload(ownership.ownerId),
+            revision: participants.revision,
+          });
+        }
+        sendJson(socket, sessionStatusPayload());
+        return;
+      }
+      ownershipEffects = ownership.effects;
+      previousOwnerId = ownership.previousOwnerId;
+    } else if (participants.micOwnerId !== null) {
+      sendJson(socket, { type: 'error', message: 'Microphone is owned by an active Relay participant.' });
+      return;
+    }
+
+    commitSocketRole(socket, 'publisher');
+
+    let deferredOwnershipTimingReason: string | null = null;
+    let deferredHandoffParticipantId: string | null = null;
+    if (ownershipEffects) {
+      applyMicOwnerEffects(ownershipEffects, performance.now(), {
+        invalidateTiming: (reason) => {
+          deferredOwnershipTimingReason = reason;
+        },
+        prepareSongHandoff: (participantId) => {
+          deferredHandoffParticipantId = participantId;
+        },
+      });
+    }
+
+    const {
+      previousPublisher,
+      sameParticipantReplacement,
+      sameCapture,
+    } = micRuntime.bindPublisher({
+      socket,
+      sampleRate,
+      captureGeneration,
+      initialSequence: initialSequence ?? undefined,
+      audioPacketVersion,
+      nowMs: performance.now(),
+    });
+
+    if (previousPublisher && previousPublisher !== socket) {
+      const newOwnerName = socket.participantId
+        ? participantPayload(socket.participantId)?.nickname ?? 'Another participant'
+        : 'Another microphone';
+      retirePublisherTransport(
+        previousPublisher,
+        sameParticipantReplacement ? 'publisher-superseded' : 'mic-revoked',
+        sameParticipantReplacement
+          ? 'A newer microphone capture from this participant became active.'
+          : `${newOwnerName} took over the microphone.`,
+      );
+    }
+
+    micTransportGrace.cancel();
+    session.setMicExpected(true);
+    if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
+
+    if (deferredOwnershipTimingReason) {
+      invalidateMicTiming(deferredOwnershipTimingReason);
+    } else if (sameParticipantReplacement && !sameCapture) {
+      invalidateMicTiming('Microphone capture changed.');
+    }
+
+    restartLiveSourceAfterMicReconnect();
+    const mediaTransport = micRuntime.directMediaOffer();
+    sendJson(socket, {
+      type: 'registered',
+      role: 'publisher',
+      takeover: hasTakeoverExpectation && previousOwnerId !== socket.participantId,
+      ...(mediaTransport ? { mediaTransport } : {}),
+    });
+    sendJson(socket, mixSettingsPayload());
+    sendJson(socket, youtubeTimeline.statusPayload());
+    sendJson(socket, youtubeTimeline.roomStatusPayload());
+    sendJson(socket, roomSongCommandStatusPayload());
+    sendJson(socket, takeController.statusPayload());
+    sendJson(socket, sourceStatusPayload());
+    sendJson(socket, timingCalibrationStatusPayload());
+    broadcastStatus();
+    if (socket.participantId) {
+      broadcastSessionStatus();
+      if (deferredHandoffParticipantId) beginPreparedSongHandoff(deferredHandoffParticipantId);
+    }
+    return;
+  },
+  backing: (socket, payload) => {
+    if (!infrastructureCapability.authorized(socket)) {
+      rejectInfrastructure(socket, 'Authenticate Relay infrastructure before registering backing audio.');
+      return;
+    }
+    if (!canClaimSocketRole(socket, 'backing')) return;
+    const sampleRate = validSampleRate(payload.sampleRate);
+    if (!sampleRate) {
+      sendJson(socket, { type: 'error', message: 'Invalid backing sample rate.' });
+      return;
+    }
+
+    commitSocketRole(socket, 'backing');
+    const previousBacking = backingRuntime.socket;
+    clearRobotBackingBoundaryRequest();
+    if (previousBacking && previousBacking !== socket) {
+      takeController.noteQualityEvent('backing-transport-replaced');
+    }
+    replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
+    socket.sampleRate = sampleRate;
+    backingRuntime.bind({ socket, sampleRate, robot: payload.robot === true });
+    session.setBackingExpected(true);
+    if (!previousBacking && session.active) takeController.noteQualityEvent('backing-transport-connected');
+
+    dropLegacyCalibrationForRobot();
+    sendJson(socket, { type: 'registered', role: 'backing', robot: backingRuntime.isRobot });
+    startLiveSource();
+    return;
+  },
+  monitor: (socket, payload) => {
+    if (!socket.participantId && !infrastructureCapability.authorized(socket)) {
+      rejectInfrastructure(socket, 'Monitor audio requires a Relay participant or infrastructure capability.');
+      return;
+    }
+    if (!canClaimSocketRole(socket, 'monitor')) return;
+
+    const requestedMonitorPacketVersion = payload.monitorPacketVersion;
+    const monitorPacketVersion = requestedMonitorPacketVersion === undefined
+      || requestedMonitorPacketVersion === null
+      ? undefined
+      : Number(requestedMonitorPacketVersion) === 1
+        ? 1
+        : null;
+    if (monitorPacketVersion === null) {
+      sendJson(socket, { type: 'error', message: 'Unsupported monitor packet version.' });
+      return;
+    }
+
+    commitSocketRole(socket, 'monitor');
+    socket.monitorPacketVersion = monitorPacketVersion;
+    sendJson(socket, {
+      type: 'registered',
+      role: 'monitor',
+      ...(monitorPacketVersion ? { monitorPacketVersion } : {}),
+    });
+    sendJson(socket, publisherStatusPayload());
+    sendJson(socket, sourceStatusPayload());
+    sendJson(socket, timingCalibrationStatusPayload());
+    sendJson(socket, mixSettingsPayload());
+    sendJson(socket, youtubeTimeline.statusPayload());
+    sendJson(socket, youtubeTimeline.roomStatusPayload());
+    sendJson(socket, roomSongCommandStatusPayload());
+    sendJson(socket, takeController.statusPayload());
+    if (socket.participantId) sendJson(socket, sessionStatusPayload());
+    return;
+  },
+});
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -2748,242 +2985,7 @@ wss.on('connection', (rawSocket, request) => {
     if (commandProtocol.dispatch(socket, payload)) return;
     if (infrastructureEventProtocol.dispatch(socket, payload)) return;
     if (authenticationProtocol.dispatch(socket, payload)) return;
-
-    if (payload.type === 'register' && payload.role === 'publisher') {
-      if (!canClaimSocketRole(socket, 'publisher')) return;
-      // A publisher is the microphone media authority. Browser clients must
-      // authenticate that authority before registration; anonymous publishers
-      // remain available only to the explicitly enabled legacy test harness.
-      if (!socket.participantId && !legacyTestParticipantIdentityEnabled()) {
-        sendJson(socket, {
-          type: 'participant-auth-rejected',
-          message: 'Authenticate this Relay participant before registering the microphone.',
-        });
-        socket.close(1008, 'Participant authentication required.');
-        return;
-      }
-
-      const sampleRate = validSampleRate(payload.sampleRate);
-      if (!sampleRate) {
-        sendJson(socket, { type: 'error', message: 'Invalid sample rate.' });
-        return;
-      }
-
-      const captureGeneration = validCaptureGeneration(payload.captureGeneration);
-      const initialSequence = payload.initialSequence === undefined
-        ? undefined
-        : validCaptureGeneration(payload.initialSequence);
-      const audioPacketVersion = validAudioPacketVersion(payload.audioPacketVersion);
-      if (!audioPacketVersion) {
-        sendJson(socket, { type: 'error', message: 'Unsupported audio packet version.' });
-        return;
-      }
-      if (audioPacketVersion === 2 && captureGeneration === null) {
-        sendJson(socket, {
-          type: 'error',
-          message: 'AudioPacket v2 requires a capture generation in publisher registration.',
-        });
-        return;
-      }
-      if (audioPacketVersion === 2 && initialSequence === null) {
-        sendJson(socket, {
-          type: 'error',
-          message: 'AudioPacket v2 initial sequence must be a uint32 when provided.',
-        });
-        return;
-      }
-      const hasTakeoverExpectation = Object.prototype.hasOwnProperty.call(payload, 'takeoverExpectedOwnerId');
-      const expectedOwnerId = hasTakeoverExpectation
-        ? normalizeParticipantId(payload.takeoverExpectedOwnerId)
-        : null;
-
-      if (
-        hasTakeoverExpectation
-        && payload.takeoverExpectedOwnerId !== null
-        && !expectedOwnerId
-      ) {
-        sendJson(socket, {
-          type: 'mic-takeover-rejected',
-          reason: 'owner-changed',
-          owner: participantPayload(participants.micOwnerId),
-          revision: participants.revision,
-        });
-        sendJson(socket, sessionStatusPayload());
-        return;
-      }
-
-      let ownershipEffects: Parameters<typeof applyMicOwnerTransitionEffects>[0] | null = null;
-      let previousOwnerId: string | null = participants.micOwnerId;
-      if (socket.participantId) {
-        const ownership = hasTakeoverExpectation
-          ? participants.takeoverMic(socket.participantId, expectedOwnerId)
-          : participants.acquireMic(socket.participantId);
-        if (!ownership.ok) {
-          if (ownership.reason === 'busy') {
-            sendJson(socket, {
-              type: 'mic-busy',
-              owner: participantPayload(ownership.ownerId),
-              revision: participants.revision,
-            });
-          } else {
-            sendJson(socket, {
-              type: 'mic-takeover-rejected',
-              reason: ownership.reason,
-              owner: participantPayload(ownership.ownerId),
-              revision: participants.revision,
-            });
-          }
-          sendJson(socket, sessionStatusPayload());
-          return;
-        }
-        ownershipEffects = ownership.effects;
-        previousOwnerId = ownership.previousOwnerId;
-      } else if (participants.micOwnerId !== null) {
-        sendJson(socket, { type: 'error', message: 'Microphone is owned by an active Relay participant.' });
-        return;
-      }
-
-      commitSocketRole(socket, 'publisher');
-
-      let deferredOwnershipTimingReason: string | null = null;
-      let deferredHandoffParticipantId: string | null = null;
-      if (ownershipEffects) {
-        applyMicOwnerEffects(ownershipEffects, performance.now(), {
-          invalidateTiming: (reason) => {
-            deferredOwnershipTimingReason = reason;
-          },
-          prepareSongHandoff: (participantId) => {
-            deferredHandoffParticipantId = participantId;
-          },
-        });
-      }
-
-      const {
-        previousPublisher,
-        sameParticipantReplacement,
-        sameCapture,
-      } = micRuntime.bindPublisher({
-        socket,
-        sampleRate,
-        captureGeneration,
-        initialSequence: initialSequence ?? undefined,
-        audioPacketVersion,
-        nowMs: performance.now(),
-      });
-
-      if (previousPublisher && previousPublisher !== socket) {
-        const newOwnerName = socket.participantId
-          ? participantPayload(socket.participantId)?.nickname ?? 'Another participant'
-          : 'Another microphone';
-        retirePublisherTransport(
-          previousPublisher,
-          sameParticipantReplacement ? 'publisher-superseded' : 'mic-revoked',
-          sameParticipantReplacement
-            ? 'A newer microphone capture from this participant became active.'
-            : `${newOwnerName} took over the microphone.`,
-        );
-      }
-
-      micTransportGrace.cancel();
-      session.setMicExpected(true);
-      if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
-
-      if (deferredOwnershipTimingReason) {
-        invalidateMicTiming(deferredOwnershipTimingReason);
-      } else if (sameParticipantReplacement && !sameCapture) {
-        invalidateMicTiming('Microphone capture changed.');
-      }
-
-      restartLiveSourceAfterMicReconnect();
-      const mediaTransport = micRuntime.directMediaOffer();
-      sendJson(socket, {
-        type: 'registered',
-        role: 'publisher',
-        takeover: hasTakeoverExpectation && previousOwnerId !== socket.participantId,
-        ...(mediaTransport ? { mediaTransport } : {}),
-      });
-      sendJson(socket, mixSettingsPayload());
-      sendJson(socket, youtubeTimeline.statusPayload());
-      sendJson(socket, youtubeTimeline.roomStatusPayload());
-      sendJson(socket, roomSongCommandStatusPayload());
-      sendJson(socket, takeController.statusPayload());
-      sendJson(socket, sourceStatusPayload());
-      sendJson(socket, timingCalibrationStatusPayload());
-      broadcastStatus();
-      if (socket.participantId) {
-        broadcastSessionStatus();
-        if (deferredHandoffParticipantId) beginPreparedSongHandoff(deferredHandoffParticipantId);
-      }
-      return;
-    }
-
-    if (payload.type === 'register' && payload.role === 'backing') {
-      if (!infrastructureCapability.authorized(socket)) {
-        rejectInfrastructure(socket, 'Authenticate Relay infrastructure before registering backing audio.');
-        return;
-      }
-      if (!canClaimSocketRole(socket, 'backing')) return;
-      const sampleRate = validSampleRate(payload.sampleRate);
-      if (!sampleRate) {
-        sendJson(socket, { type: 'error', message: 'Invalid backing sample rate.' });
-        return;
-      }
-
-      commitSocketRole(socket, 'backing');
-      const previousBacking = backingRuntime.socket;
-      clearRobotBackingBoundaryRequest();
-      if (previousBacking && previousBacking !== socket) {
-        takeController.noteQualityEvent('backing-transport-replaced');
-      }
-      replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
-      socket.sampleRate = sampleRate;
-      backingRuntime.bind({ socket, sampleRate, robot: payload.robot === true });
-      session.setBackingExpected(true);
-      if (!previousBacking && session.active) takeController.noteQualityEvent('backing-transport-connected');
-
-      dropLegacyCalibrationForRobot();
-      sendJson(socket, { type: 'registered', role: 'backing', robot: backingRuntime.isRobot });
-      startLiveSource();
-      return;
-    }
-
-    if (payload.type === 'register' && payload.role === 'monitor') {
-      if (!socket.participantId && !infrastructureCapability.authorized(socket)) {
-        rejectInfrastructure(socket, 'Monitor audio requires a Relay participant or infrastructure capability.');
-        return;
-      }
-      if (!canClaimSocketRole(socket, 'monitor')) return;
-
-      const requestedMonitorPacketVersion = payload.monitorPacketVersion;
-      const monitorPacketVersion = requestedMonitorPacketVersion === undefined
-        || requestedMonitorPacketVersion === null
-        ? undefined
-        : Number(requestedMonitorPacketVersion) === 1
-          ? 1
-          : null;
-      if (monitorPacketVersion === null) {
-        sendJson(socket, { type: 'error', message: 'Unsupported monitor packet version.' });
-        return;
-      }
-
-      commitSocketRole(socket, 'monitor');
-      socket.monitorPacketVersion = monitorPacketVersion;
-      sendJson(socket, {
-        type: 'registered',
-        role: 'monitor',
-        ...(monitorPacketVersion ? { monitorPacketVersion } : {}),
-      });
-      sendJson(socket, publisherStatusPayload());
-      sendJson(socket, sourceStatusPayload());
-      sendJson(socket, timingCalibrationStatusPayload());
-      sendJson(socket, mixSettingsPayload());
-      sendJson(socket, youtubeTimeline.statusPayload());
-      sendJson(socket, youtubeTimeline.roomStatusPayload());
-      sendJson(socket, roomSongCommandStatusPayload());
-      sendJson(socket, takeController.statusPayload());
-      if (socket.participantId) sendJson(socket, sessionStatusPayload());
-      return;
-    }
+    if (registrationProtocol.dispatch(socket, payload)) return;
 
     if (payload.type === 'robot-source-hello') {
       if (!infrastructureCapability.authorized(socket)) {

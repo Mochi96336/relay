@@ -21,6 +21,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     youtubeTelemetry: (nextSocket, payload) => seen.push({ handler: 'youtube-telemetry', socket: nextSocket, payload }),
     setVocalFineTune: (nextSocket, payload) => seen.push({ handler: 'set-vocal-fine-tune', socket: nextSocket, payload }),
     setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),
+    audioUplinkHealth: (nextSocket, payload) => seen.push({ handler: 'audio-uplink-health', socket: nextSocket, payload }),
   });
 
   const startTake = { type: 'start-take' };
@@ -38,6 +39,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   const telemetry = { type: 'youtube-telemetry', playbackTransportId: 'playback-tab-a', playbackGeneration: 2 };
   const fineTune = { type: 'set-vocal-fine-tune', valueMs: 12 };
   const mix = { type: 'set-mix', micGainDb: 6 };
+  const uplinkHealth = { type: 'audio-uplink-health', version: 1 };
 
   assert.equal(protocol.dispatch(socket, startTake), true);
   assert.equal(protocol.dispatch(socket, stopTake), true);
@@ -54,6 +56,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(protocol.dispatch(socket, telemetry), true);
   assert.equal(protocol.dispatch(socket, fineTune), true);
   assert.equal(protocol.dispatch(socket, mix), true);
+  assert.equal(protocol.dispatch(socket, uplinkHealth), true);
 
   assert.deepEqual(seen.map((entry) => entry.handler), [
     'start-take',
@@ -71,6 +74,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     'youtube-telemetry',
     'set-vocal-fine-tune',
     'set-mix',
+    'audio-uplink-health',
   ]);
   assert.equal(seen[0]?.socket, socket);
   assert.equal(seen[0]?.payload, startTake);
@@ -88,6 +92,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(seen[12]?.payload, telemetry);
   assert.equal(seen[13]?.payload, fineTune);
   assert.equal(seen[14]?.payload, mix);
+  assert.equal(seen[15]?.payload, uplinkHealth);
 });
 
 test('command protocol leaves unextracted commands and malformed envelopes to later routing', () => {
@@ -107,6 +112,7 @@ test('command protocol leaves unextracted commands and malformed envelopes to la
     youtubeTelemetry: () => { calls += 1; },
     setVocalFineTune: () => { calls += 1; },
     setMix: () => { calls += 1; },
+    audioUplinkHealth: () => { calls += 1; },
   });
 
   assert.equal(protocol.dispatch({}, { type: 'robot-source-hello' }), false);

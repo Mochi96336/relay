@@ -23,6 +23,7 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.match(protocol, /case 'youtube-telemetry'/);
   assert.match(protocol, /case 'set-vocal-fine-tune'/);
   assert.match(protocol, /case 'set-mix'/);
+  assert.match(protocol, /case 'audio-uplink-health'/);
 
   assert.doesNotMatch(server, /payload\.type === 'start-take'/);
   assert.doesNotMatch(server, /payload\.type === 'stop-take'/);
@@ -39,6 +40,7 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.doesNotMatch(server, /payload\.type === 'youtube-telemetry'/);
   assert.doesNotMatch(server, /payload\.type === 'set-vocal-fine-tune'/);
   assert.doesNotMatch(server, /payload\.type === 'set-mix'/);
+  assert.doesNotMatch(server, /payload\.type === 'audio-uplink-health'/);
 });
 
 test('the server composition boundary still owns the extracted command effects', () => {
@@ -91,6 +93,8 @@ test('the server composition boundary still owns the extracted command effects',
   assert.match(server, /session\.setMicGainDb\(Math\.max\(0, Math\.min\(MAX_MIC_GAIN_DB, nextGain\)\)\)/);
   assert.match(server, /Song is now a server-owned 100% reference/);
   assert.match(server, /broadcastJson\(mixSettingsPayload\(\)\)/);
+  assert.match(server, /parseAudioUplinkHealth\(payload\)/);
+  assert.match(server, /micRuntime\.noteUplinkHealth\(socket, health, performance\.now\(\)\)/);
 
   assert.doesNotMatch(
     protocol,

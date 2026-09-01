@@ -1,0 +1,148 @@
+name: Agent timing calibration routing construction
+
+on:
+  push:
+    branches:
+      - agent/server-start-calibration-routing
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Move only timing calibration routing
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one target, found {count}: {old!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          test_path = 'test/relay-command-protocol.test.ts'
+          replace_once(
+              test_path,
+              "    setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),\n    audioUplinkHealth:",
+              "    setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),\n    startTimingCalibration: (nextSocket, payload) => seen.push({ handler: 'start-timing-calibration', socket: nextSocket, payload }),\n    audioUplinkHealth:",
+          )
+          replace_once(
+              test_path,
+              "  const mix = { type: 'set-mix', micGainDb: 6 };\n  const uplinkHealth =",
+              "  const mix = { type: 'set-mix', micGainDb: 6 };\n  const startCalibration = { type: 'start-timing-calibration' };\n  const uplinkHealth =",
+          )
+          replace_once(
+              test_path,
+              "  assert.equal(protocol.dispatch(socket, mix), true);\n  assert.equal(protocol.dispatch(socket, uplinkHealth), true);",
+              "  assert.equal(protocol.dispatch(socket, mix), true);\n  assert.equal(protocol.dispatch(socket, startCalibration), true);\n  assert.equal(protocol.dispatch(socket, uplinkHealth), true);",
+          )
+          replace_once(
+              test_path,
+              "    'set-mix',\n    'audio-uplink-health',",
+              "    'set-mix',\n    'start-timing-calibration',\n    'audio-uplink-health',",
+          )
+          replace_once(
+              test_path,
+              "  assert.equal(seen[14]?.payload, mix);\n  assert.equal(seen[15]?.payload, uplinkHealth);\n  assert.equal(seen[16]?.payload, micPresence);",
+              "  assert.equal(seen[14]?.payload, mix);\n  assert.equal(seen[15]?.payload, startCalibration);\n  assert.equal(seen[16]?.payload, uplinkHealth);\n  assert.equal(seen[17]?.payload, micPresence);",
+          )
+          replace_once(
+              test_path,
+              "    setMix: () => { calls += 1; },\n    audioUplinkHealth:",
+              "    setMix: () => { calls += 1; },\n    startTimingCalibration: () => { calls += 1; },\n    audioUplinkHealth:",
+          )
+
+          routing_path = 'test/server-command-protocol-routing.test.ts'
+          replace_once(
+              routing_path,
+              "  assert.match(protocol, /case 'set-mix'/);\n  assert.match(protocol, /case 'audio-uplink-health'/);",
+              "  assert.match(protocol, /case 'set-mix'/);\n  assert.match(protocol, /case 'start-timing-calibration'/);\n  assert.match(protocol, /case 'audio-uplink-health'/);",
+          )
+          replace_once(
+              routing_path,
+              "  assert.doesNotMatch(server, /payload\\.type === 'set-mix'/);\n  assert.doesNotMatch(server, /payload\\.type === 'audio-uplink-health'/);",
+              "  assert.doesNotMatch(server, /payload\\.type === 'set-mix'/);\n  assert.doesNotMatch(server, /payload\\.type === 'start-timing-calibration'/);\n  assert.doesNotMatch(server, /payload\\.type === 'audio-uplink-health'/);",
+          )
+          replace_once(
+              routing_path,
+              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n  assert.match(server, /parseAudioUplinkHealth/);",
+              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n  assert.match(server, /requireMicOwnerCommand\\(socket, 'start-timing-calibration'\\)/);\n  assert.match(server, /productStatusPayload\\(nowMs\\)\\.actions/);\n  assert.match(server, /restartBootCalibration\\(nowMs, false\\)/);\n  assert.match(server, /timingRuntime\\.beginContentCalibration\\(nowMs, false\\)/);\n  assert.match(server, /calibration\\.start\\(nowMs\\)/);\n  assert.match(server, /parseAudioUplinkHealth/);",
+          )
+
+          server_path = Path('src/server.ts')
+          text = server_path.read_text()
+          header = "    if (payload.type === 'start-timing-calibration') {\n"
+          next_header = "    if (payload.type === 'source-seeked') {"
+          start = text.index(header)
+          next_start = text.index(next_header, start)
+          block = text[start:next_start].rstrip()
+          inner = block[len(header):]
+          if not inner.endswith('    }'):
+              raise SystemExit('timing calibration block ending changed')
+          inner = inner[:-5]
+          dedented = ''.join(
+              line[2:] if line.startswith('  ') else line
+              for line in inner.splitlines(keepends=True)
+          )
+          handler = "  startTimingCalibration: (socket) => {\n" + dedented + "  },"
+          text = text[:start] + text[next_start:]
+          anchor = text.index('  micPresenceTelemetry: (socket, payload) => {')
+          close = text.index('\n\n});', anchor)
+          text = text[:close] + '\n' + handler + text[close:]
+
+          if "payload.type === 'start-timing-calibration'" in text:
+              raise SystemExit('inline timing calibration selector still exists')
+          for marker in (
+              "startTimingCalibration: (socket) => {",
+              "requireMicOwnerCommand(socket, 'start-timing-calibration')",
+              'productStatusPayload(nowMs).actions',
+              'restartBootCalibration(nowMs, false)',
+              'cancelActiveContentValidation(nowMs)',
+              'timingRuntime.beginContentCalibration(nowMs, false)',
+              'calibration.start(nowMs)',
+              'broadcastJson(timingCalibrationStatusPayload())',
+          ):
+              if marker not in text:
+                  raise SystemExit(f'missing retained timing calibration marker: {marker}')
+          server_path.write_text(text)
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Focused calibration routing tests
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/relay-command-protocol.test.ts
+          test/server-command-protocol-routing.test.ts
+          test/command-authority-server.test.ts
+          test/take-server.test.ts
+          test/robot-calibration-semantics.test.ts
+          test/server.test.ts
+      - name: Verify diff
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- src/relay-command-protocol.ts src/server.ts test/relay-command-protocol.test.ts test/server-command-protocol-routing.test.ts
+      - name: Commit validated slice
+        shell: bash
+        run: |
+          rm .github/workflows/agent-start-calibration-routing.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts test/relay-command-protocol.test.ts test/server-command-protocol-routing.test.ts .github/workflows/agent-start-calibration-routing.yml
+          git commit -m 'refactor(server): route timing calibration through protocol'
+          git push origin HEAD:agent/server-start-calibration-routing

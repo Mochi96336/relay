@@ -1,0 +1,109 @@
+name: Agent Robot disconnect coordinator construction
+
+on:
+  push:
+    branches:
+      - agent/robot-disconnect-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Move Robot close ordering behind coordinator seam
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text()
+
+          marker = "import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';\n"
+          addition = "import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';\n"
+          if addition not in text:
+              if marker not in text:
+                  raise SystemExit('Robot lifecycle import marker missing')
+              text = text.replace(marker, marker + addition, 1)
+
+          composition_marker = "const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({"
+          if 'const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySocket>({' not in text:
+              at = text.find(composition_marker)
+              if at < 0:
+                  raise SystemExit('playback disconnect composition marker missing')
+              lines = [
+                  "const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySocket>({",
+                  "  isActive: (socket) => sourceRuntime.isActive(socket),",
+                  "  noteDisconnected: () => takeController.noteQualityEvent('robot-source-disconnected'),",
+                  "  detach: (socket) => sourceRuntime.detachRobot(socket),",
+                  "  resetPlayerOffset: () => robotPlayerOffset.reset(),",
+                  "  resetContentTimeline: () => robotContentTimeline.reset(),",
+                  "  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),",
+                  "  abandonProbeRun: () => abandonProbeRun(),",
+                  "  syncAppliedCalibration: () => syncAppliedCalibration(),",
+                  "  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),",
+                  "  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),",
+                  "});",
+                  "",
+              ]
+              text = text[:at] + '\n'.join(lines) + text[at:]
+
+          close_start = text.find("  socket.on('close', () => {")
+          if close_start < 0:
+              raise SystemExit('socket close marker missing')
+          fence = text.find("    if (!socket.replaced) {", close_start)
+          mic = text.find("      if (micRuntime.isPublisher(socket)) {", fence)
+          if fence < 0 or mic < 0:
+              raise SystemExit('close Robot block markers missing')
+          robot_block = text[fence + len("    if (!socket.replaced) {\n"):mic]
+          required = [
+              "if (sourceRuntime.isActive(socket)) {",
+              "takeController.noteQualityEvent('robot-source-disconnected')",
+              "sourceRuntime.detachRobot(socket)",
+              "robotPlayerOffset.reset()",
+              "robotContentTimeline.reset()",
+              "clearRobotBackingBoundaryRequest()",
+              "abandonProbeRun()",
+              "syncAppliedCalibration()",
+              "broadcastJson(sourceStatusPayload())",
+              "broadcastJson(timingCalibrationStatusPayload())",
+          ]
+          for item in required:
+              if item not in robot_block:
+                  raise SystemExit(f'Robot close marker missing: {item}')
+          replacement = "      robotDisconnectCoordinator.handle(socket);\n\n"
+          text = text[:fence + len("    if (!socket.replaced) {\n")] + replacement + text[mic:]
+          path.write_text(text)
+          PY
+      - run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Focused Robot disconnect proof
+        run: |
+          node --import tsx --test --test-concurrency=1 \
+            test/relay-robot-disconnect-coordinator.test.ts \
+            test/server-robot-disconnect-coordinator.test.ts \
+            test/robot-source-disconnect.test.ts \
+            test/relay-robot-lifecycle-protocol.test.ts \
+            test/server-robot-lifecycle-protocol-routing.test.ts \
+            test/take-quality.test.ts \
+            test/take-session.test.ts \
+            test/server.test.ts
+      - name: Diff check
+        run: git diff --check
+      - name: Commit production move and remove construction workflow
+        run: |
+          rm .github/workflows/agent-robot-disconnect-coordinator.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts src/relay-robot-disconnect-coordinator.ts test/relay-robot-disconnect-coordinator.test.ts test/server-robot-disconnect-coordinator.test.ts .github/workflows/agent-robot-disconnect-coordinator.yml
+          git commit -m 'refactor(server): isolate Robot disconnect ordering'
+          git push origin HEAD:agent/robot-disconnect-coordinator

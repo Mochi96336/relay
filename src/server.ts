@@ -2292,6 +2292,35 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     playbackTransport.noteMicIntent(socket, performance.now());
     sendJson(socket, { type: 'playback-mic-intent-registered' });
   },
+  playbackHello: (socket, payload) => {
+    if (!socket.participantId) return;
+    const transportId = normalizePlaybackTransportId(payload.playbackTransportId);
+    const generation = normalizePlaybackGeneration(payload.playbackGeneration);
+    if (!transportId || generation === null) {
+      sendJson(socket, { type: 'error', message: 'Invalid playback transport identity.' });
+      return;
+    }
+
+    const playbackIdentity = playbackTransport.register(socket, {
+      participantId: socket.participantId,
+      transportId,
+      generation,
+    });
+    sendJson(socket, { type: 'playback-registered', playbackTransportId: transportId, playbackGeneration: generation });
+    sendJson(socket, youtubeTimeline.roomStatusPayload());
+    sendJson(socket, roomSongCommandStatusPayload());
+
+    const pendingPlan = playbackIdentity
+      ? youtubeTimeline.handoffPlanForTarget(playbackIdentity)
+      : null;
+    if (pendingPlan) sendHandoffPlan('song-handoff-prepare', pendingPlan);
+
+    const pendingCommand = playbackIdentity
+      ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
+      : null;
+    if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
+    return;
+  },
 });
 
 let shuttingDown = false;
@@ -2460,36 +2489,6 @@ wss.on('connection', (rawSocket, request) => {
         f0Hz: presence.f0Hz,
         pitchConfidence: presence.pitchConfidence,
       });
-      return;
-    }
-
-    if (payload.type === 'playback-hello') {
-      if (!socket.participantId) return;
-      const transportId = normalizePlaybackTransportId(payload.playbackTransportId);
-      const generation = normalizePlaybackGeneration(payload.playbackGeneration);
-      if (!transportId || generation === null) {
-        sendJson(socket, { type: 'error', message: 'Invalid playback transport identity.' });
-        return;
-      }
-
-      const playbackIdentity = playbackTransport.register(socket, {
-        participantId: socket.participantId,
-        transportId,
-        generation,
-      });
-      sendJson(socket, { type: 'playback-registered', playbackTransportId: transportId, playbackGeneration: generation });
-      sendJson(socket, youtubeTimeline.roomStatusPayload());
-      sendJson(socket, roomSongCommandStatusPayload());
-
-      const pendingPlan = playbackIdentity
-        ? youtubeTimeline.handoffPlanForTarget(playbackIdentity)
-        : null;
-      if (pendingPlan) sendHandoffPlan('song-handoff-prepare', pendingPlan);
-
-      const pendingCommand = playbackIdentity
-        ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
-        : null;
-      if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
       return;
     }
 

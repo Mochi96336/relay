@@ -80,7 +80,8 @@ describe('participant capability', () => {
     assert.match(identity, /browserParticipantIdentity\(participantId\)/);
 
     const server = readFileSync('src/server.ts', 'utf8');
-    assert.match(server, /payload\.type === 'participant-authenticate'/);
+    const authenticationProtocol = readFileSync('src/relay-authentication-protocol.ts', 'utf8');
+    assert.match(authenticationProtocol, /case 'participant-authenticate'/);
     assert.match(server, /participantIdentityFromAuthentication\(payload\)/);
     assert.doesNotMatch(server, /participantCapabilityMatches/);
     assert.match(server, /participant-auth-rejected/);

@@ -10,8 +10,11 @@ test('server delegates low-risk infrastructure observations through their own ro
   assert.match(server, /infrastructureEventProtocol\.dispatch\(socket, payload\)/);
   assert.match(protocol, /case 'backing-sample-boundary'/);
   assert.match(protocol, /case 'robot-player-offset'/);
+  assert.match(protocol, /case 'calibration-probe-played'/);
+  assert.match(protocol, /case 'calibration-probe-failed'/);
   assert.doesNotMatch(server, /payload\.type === 'backing-sample-boundary'/);
   assert.doesNotMatch(server, /payload\.type === 'robot-player-offset'/);
+  assert.doesNotMatch(server, /payload\.type === 'calibration-probe-played' \|\| payload\.type === 'calibration-probe-failed'/);
 });
 
 test('server still owns infrastructure observation authority and effects', () => {
@@ -29,9 +32,15 @@ test('server still owns infrastructure observation authority and effects', () =>
   assert.match(server, /robotContentTimeline\.notePlayerOffset\(/);
   assert.match(server, /if \(mapped\) requestRobotBackingBoundary\(nowMs\)/);
 
+  assert.match(server, /micRuntime\.isPublisher\(socket\)/);
+  assert.match(server, /payload\.target === 'backing' \? 'backing' : 'mic'/);
+  assert.match(server, /sourceRuntime\.isActiveRobot\(socket\)/);
+  assert.match(server, /handleProbeReply\(\{ requestId: payload\.requestId, generation: payload\.generation \}, nowMs\)/);
+  assert.match(server, /handleProbeFailure\(/);
+
   assert.doesNotMatch(
     protocol,
-    /BackingRuntime|SourceRuntime|RobotPlayerOffsetTracker|RobotContentTimelineMapper|RobotContentTransitionRuntime|performance\.now|session\./,
+    /BackingRuntime|SourceRuntime|MicRuntime|RobotPlayerOffsetTracker|RobotContentTimelineMapper|RobotContentTransitionRuntime|handleProbeReply|handleProbeFailure|performance\.now|session\./,
   );
 });
 

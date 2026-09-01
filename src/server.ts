@@ -2549,6 +2549,23 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     }
     return;
   },
+  calibrationProbe: (socket, payload) => {
+    const fromPublisher = micRuntime.isPublisher(socket);
+    const target = payload.target === 'backing' ? 'backing' : 'mic';
+    const fromActiveRobot = sourceRuntime.isActiveRobot(socket);
+    if (target === 'mic' ? fromPublisher : fromActiveRobot) {
+      const nowMs = performance.now();
+      if (payload.type === 'calibration-probe-played') {
+        handleProbeReply({ requestId: payload.requestId, generation: payload.generation }, nowMs);
+      } else {
+        handleProbeFailure(
+          { requestId: payload.requestId, generation: payload.generation, reason: payload.reason },
+          nowMs,
+        );
+      }
+    }
+    return;
+  },
 });
 
 let shuttingDown = false;
@@ -2967,24 +2984,6 @@ wss.on('connection', (rawSocket, request) => {
       sendJson(socket, roomSongCommandStatusPayload());
       sendJson(socket, takeController.statusPayload());
       if (socket.participantId) sendJson(socket, sessionStatusPayload());
-      return;
-    }
-
-    if (payload.type === 'calibration-probe-played' || payload.type === 'calibration-probe-failed') {
-      const fromPublisher = micRuntime.isPublisher(socket);
-      const target = payload.target === 'backing' ? 'backing' : 'mic';
-      const fromActiveRobot = sourceRuntime.isActiveRobot(socket);
-      if (target === 'mic' ? fromPublisher : fromActiveRobot) {
-        const nowMs = performance.now();
-        if (payload.type === 'calibration-probe-played') {
-          handleProbeReply({ requestId: payload.requestId, generation: payload.generation }, nowMs);
-        } else {
-          handleProbeFailure(
-            { requestId: payload.requestId, generation: payload.generation, reason: payload.reason },
-            nowMs,
-          );
-        }
-      }
       return;
     }
 

@@ -1,0 +1,165 @@
+name: Agent audio uplink routing construction
+
+on:
+  push:
+    branches:
+      - agent/server-audio-uplink-routing
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Apply exact routing extraction
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one replacement target, found {count}')
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/relay-command-protocol.ts',
+              "  setMix: RelayCommandHandler<TSocket>;\n};",
+              "  setMix: RelayCommandHandler<TSocket>;\n  audioUplinkHealth: RelayCommandHandler<TSocket>;\n};",
+          )
+          replace_once(
+              'src/relay-command-protocol.ts',
+              "        case 'set-mix':\n          handlers.setMix(socket, payload);\n          return true;\n        default:",
+              "        case 'set-mix':\n          handlers.setMix(socket, payload);\n          return true;\n        case 'audio-uplink-health':\n          handlers.audioUplinkHealth(socket, payload);\n          return true;\n        default:",
+          )
+
+          server_handler = """  setMix: (socket, payload) => {
+    if (!requireMicOwnerCommand(socket, 'set-mix')) return;
+    const nextGain = Number(payload.micGainDb);
+    if (Number.isFinite(nextGain)) {
+      session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
+    }
+    // `songLevel` remains accepted on the old wire shape for compatibility,
+    // but Song is now a server-owned 100% reference and cannot be mutated by
+    // any client authority.
+    broadcastJson(mixSettingsPayload());
+    return;
+  },
+
+});"""
+          server_handler_with_uplink = """  setMix: (socket, payload) => {
+    if (!requireMicOwnerCommand(socket, 'set-mix')) return;
+    const nextGain = Number(payload.micGainDb);
+    if (Number.isFinite(nextGain)) {
+      session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
+    }
+    // `songLevel` remains accepted on the old wire shape for compatibility,
+    // but Song is now a server-owned 100% reference and cannot be mutated by
+    // any client authority.
+    broadcastJson(mixSettingsPayload());
+    return;
+  },
+  audioUplinkHealth: (socket, payload) => {
+    const health = parseAudioUplinkHealth(payload);
+    if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
+    return;
+  },
+
+});"""
+          replace_once('src/server.ts', server_handler, server_handler_with_uplink)
+          replace_once(
+              'src/server.ts',
+              """    if (payload.type === 'audio-uplink-health') {
+      const health = parseAudioUplinkHealth(payload);
+      if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
+      return;
+    }
+
+""",
+              '',
+          )
+
+          replace_once(
+              'test/relay-command-protocol.test.ts',
+              "    setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),\n  });",
+              "    setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),\n    audioUplinkHealth: (nextSocket, payload) => seen.push({ handler: 'audio-uplink-health', socket: nextSocket, payload }),\n  });",
+          )
+          replace_once(
+              'test/relay-command-protocol.test.ts',
+              "  const mix = { type: 'set-mix', micGainDb: 6 };\n",
+              "  const mix = { type: 'set-mix', micGainDb: 6 };\n  const uplinkHealth = { type: 'audio-uplink-health', version: 1 };\n",
+          )
+          replace_once(
+              'test/relay-command-protocol.test.ts',
+              "  assert.equal(protocol.dispatch(socket, mix), true);\n",
+              "  assert.equal(protocol.dispatch(socket, mix), true);\n  assert.equal(protocol.dispatch(socket, uplinkHealth), true);\n",
+          )
+          replace_once(
+              'test/relay-command-protocol.test.ts',
+              "    'set-mix',\n  ]);",
+              "    'set-mix',\n    'audio-uplink-health',\n  ]);",
+          )
+          replace_once(
+              'test/relay-command-protocol.test.ts',
+              "  assert.equal(seen[14]?.payload, mix);\n});",
+              "  assert.equal(seen[14]?.payload, mix);\n  assert.equal(seen[15]?.payload, uplinkHealth);\n});",
+          )
+          replace_once(
+              'test/relay-command-protocol.test.ts',
+              "    setMix: () => { calls += 1; },\n  });",
+              "    setMix: () => { calls += 1; },\n    audioUplinkHealth: () => { calls += 1; },\n  });",
+          )
+
+          replace_once(
+              'test/server-command-protocol-routing.test.ts',
+              "  assert.match(protocol, /case 'set-mix'/);\n",
+              "  assert.match(protocol, /case 'set-mix'/);\n  assert.match(protocol, /case 'audio-uplink-health'/);\n",
+          )
+          replace_once(
+              'test/server-command-protocol-routing.test.ts',
+              "  assert.doesNotMatch(server, /payload\\.type === 'set-mix'/);\n",
+              "  assert.doesNotMatch(server, /payload\\.type === 'set-mix'/);\n  assert.doesNotMatch(server, /payload\\.type === 'audio-uplink-health'/);\n",
+          )
+          replace_once(
+              'test/server-command-protocol-routing.test.ts',
+              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n\n",
+              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n  assert.match(server, /parseAudioUplinkHealth\\(payload\\)/);\n  assert.match(server, /micRuntime\\.noteUplinkHealth\\(socket, health, performance\\.now\\(\\)\\)/);\n\n",
+          )
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Focused routing and uplink tests
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/relay-command-protocol.test.ts
+          test/server-command-protocol-routing.test.ts
+          test/audio-uplink-health.test.ts
+          test/audio-uplink-health-server.test.ts
+          test/audio-uplink-health-webtransport.test.ts
+      - name: Verify final diff boundary
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- src/relay-command-protocol.ts src/server.ts test/relay-command-protocol.test.ts test/server-command-protocol-routing.test.ts
+      - name: Commit validated slice and remove construction workflow
+        shell: bash
+        run: |
+          rm .github/workflows/agent-audio-uplink-routing.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/relay-command-protocol.ts src/server.ts test/relay-command-protocol.test.ts test/server-command-protocol-routing.test.ts .github/workflows/agent-audio-uplink-routing.yml
+          git commit -m 'refactor(server): route audio uplink health through protocol'
+          git push origin HEAD:agent/server-audio-uplink-routing

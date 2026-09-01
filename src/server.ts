@@ -35,6 +35,7 @@ import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
+import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2908,6 +2909,33 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   },
 });
 
+const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
+  robotSourceHello: (socket, payload) => {
+    if (!infrastructureCapability.authorized(socket)) {
+      rejectInfrastructure(socket, 'Authenticate Relay infrastructure before becoming the Robot source.');
+      return;
+    }
+    if (sourceRuntime.isActive(socket)) return;
+
+    const { previous, replaced } = sourceRuntime.attachRobot(socket);
+    if (replaced && previous) {
+      sendJson(previous, { type: 'robot-source-replaced' });
+      takeController.noteQualityEvent('robot-source-replaced');
+      abandonProbeRun();
+    } else if (!previous && session.active) {
+      takeController.noteQualityEvent('robot-source-connected');
+    }
+    robotPlayerOffset.reset();
+    robotContentTimeline.reset();
+    clearRobotBackingBoundaryRequest();
+    dropLegacyCalibrationForRobot();
+    syncAppliedCalibration();
+    broadcastJson(sourceStatusPayload());
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  },
+});
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -2986,31 +3014,9 @@ wss.on('connection', (rawSocket, request) => {
     if (infrastructureEventProtocol.dispatch(socket, payload)) return;
     if (authenticationProtocol.dispatch(socket, payload)) return;
     if (registrationProtocol.dispatch(socket, payload)) return;
+    if (robotLifecycleProtocol.dispatch(socket, payload)) return;
 
-    if (payload.type === 'robot-source-hello') {
-      if (!infrastructureCapability.authorized(socket)) {
-        rejectInfrastructure(socket, 'Authenticate Relay infrastructure before becoming the Robot source.');
-        return;
-      }
-      if (sourceRuntime.isActive(socket)) return;
 
-      const { previous, replaced } = sourceRuntime.attachRobot(socket);
-      if (replaced && previous) {
-        sendJson(previous, { type: 'robot-source-replaced' });
-        takeController.noteQualityEvent('robot-source-replaced');
-        abandonProbeRun();
-      } else if (!previous && session.active) {
-        takeController.noteQualityEvent('robot-source-connected');
-      }
-      robotPlayerOffset.reset();
-      robotContentTimeline.reset();
-      clearRobotBackingBoundaryRequest();
-      dropLegacyCalibrationForRobot();
-      syncAppliedCalibration();
-      broadcastJson(sourceStatusPayload());
-      broadcastJson(timingCalibrationStatusPayload());
-      return;
-    }
 
 
 

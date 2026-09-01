@@ -37,9 +37,12 @@ jobs:
               start = source.index(inline_start)
               end = source.index(next_marker, start)
               block = source[start:end]
-              assert block.endswith("      return;\n    }\n"), f'unexpected {route} block ending'
 
-              body = block[len(inline_start):-len("    }\n")]
+              closing = "    }\n" if block.endswith("    }\n") else "    }" if block.endswith("    }") else None
+              assert closing is not None, f'unexpected {route} closing brace'
+              assert block[:-len(closing)].endswith("      return;\n"), f'unexpected {route} block ending'
+
+              body = block[len(inline_start):-len(closing)]
               body_lines = []
               for line in body.splitlines(keepends=True):
                   if line.strip():

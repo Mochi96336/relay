@@ -23,6 +23,7 @@ test('server delegates the extracted low-risk control-plane messages through the
   assert.match(protocol, /case 'youtube-telemetry'/);
   assert.match(protocol, /case 'set-vocal-fine-tune'/);
   assert.match(protocol, /case 'set-mix'/);
+  assert.match(protocol, /case 'start-timing-calibration'/);
   assert.match(protocol, /case 'audio-uplink-health'/);
   assert.match(protocol, /case 'mic-presence-telemetry'/);
 
@@ -41,6 +42,7 @@ test('server delegates the extracted low-risk control-plane messages through the
   assert.doesNotMatch(server, /payload\.type === 'youtube-telemetry'/);
   assert.doesNotMatch(server, /payload\.type === 'set-vocal-fine-tune'/);
   assert.doesNotMatch(server, /payload\.type === 'set-mix'/);
+  assert.doesNotMatch(server, /payload\.type === 'start-timing-calibration'/);
   assert.doesNotMatch(server, /payload\.type === 'audio-uplink-health'/);
   assert.doesNotMatch(server, /payload\.type === 'mic-presence-telemetry'/);
 });
@@ -95,6 +97,11 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /session\.setMicGainDb\(Math\.max\(0, Math\.min\(MAX_MIC_GAIN_DB, nextGain\)\)\)/);
   assert.match(server, /Song is now a server-owned 100% reference/);
   assert.match(server, /broadcastJson\(mixSettingsPayload\(\)\)/);
+  assert.match(server, /requireMicOwnerCommand\(socket, 'start-timing-calibration'\)/);
+  assert.match(server, /productStatusPayload\(nowMs\)\.actions/);
+  assert.match(server, /restartBootCalibration\(nowMs, false\)/);
+  assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, false\)/);
+  assert.match(server, /calibration\.start\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
   assert.match(server, /micRuntime\.noteUplinkHealth\(socket, health, performance\.now\(\)\)/);
 

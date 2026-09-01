@@ -21,6 +21,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
     youtubeTelemetry: (nextSocket, payload) => seen.push({ handler: 'youtube-telemetry', socket: nextSocket, payload }),
     setVocalFineTune: (nextSocket, payload) => seen.push({ handler: 'set-vocal-fine-tune', socket: nextSocket, payload }),
     setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),
+    startTimingCalibration: (nextSocket, payload) => seen.push({ handler: 'start-timing-calibration', socket: nextSocket, payload }),
     audioUplinkHealth: (nextSocket, payload) => seen.push({ handler: 'audio-uplink-health', socket: nextSocket, payload }),
     micPresenceTelemetry: (nextSocket, payload) => seen.push({ handler: 'mic-presence-telemetry', socket: nextSocket, payload }),
   });
@@ -40,6 +41,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
   const telemetry = { type: 'youtube-telemetry', playbackTransportId: 'playback-tab-a', playbackGeneration: 2 };
   const fineTune = { type: 'set-vocal-fine-tune', valueMs: 12 };
   const mix = { type: 'set-mix', micGainDb: 6 };
+  const startCalibration = { type: 'start-timing-calibration' };
   const uplinkHealth = { type: 'audio-uplink-health', version: 1 };
   const micPresence = { type: 'mic-presence-telemetry', captureGeneration: 7 };
 
@@ -58,6 +60,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
   assert.equal(protocol.dispatch(socket, telemetry), true);
   assert.equal(protocol.dispatch(socket, fineTune), true);
   assert.equal(protocol.dispatch(socket, mix), true);
+  assert.equal(protocol.dispatch(socket, startCalibration), true);
   assert.equal(protocol.dispatch(socket, uplinkHealth), true);
   assert.equal(protocol.dispatch(socket, micPresence), true);
 
@@ -77,6 +80,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
     'youtube-telemetry',
     'set-vocal-fine-tune',
     'set-mix',
+    'start-timing-calibration',
     'audio-uplink-health',
     'mic-presence-telemetry',
   ]);
@@ -96,8 +100,9 @@ test('command protocol selects the extracted low-risk control-plane messages and
   assert.equal(seen[12]?.payload, telemetry);
   assert.equal(seen[13]?.payload, fineTune);
   assert.equal(seen[14]?.payload, mix);
-  assert.equal(seen[15]?.payload, uplinkHealth);
-  assert.equal(seen[16]?.payload, micPresence);
+  assert.equal(seen[15]?.payload, startCalibration);
+  assert.equal(seen[16]?.payload, uplinkHealth);
+  assert.equal(seen[17]?.payload, micPresence);
 });
 
 test('command protocol leaves unextracted messages and malformed envelopes to later routing', () => {
@@ -117,6 +122,7 @@ test('command protocol leaves unextracted messages and malformed envelopes to la
     youtubeTelemetry: () => { calls += 1; },
     setVocalFineTune: () => { calls += 1; },
     setMix: () => { calls += 1; },
+    startTimingCalibration: () => { calls += 1; },
     audioUplinkHealth: () => { calls += 1; },
     micPresenceTelemetry: () => { calls += 1; },
   });

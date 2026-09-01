@@ -21,10 +21,11 @@ type RelayCommandProtocolHandlers<TSocket> = {
   setVocalFineTune: RelayCommandHandler<TSocket>;
   setMix: RelayCommandHandler<TSocket>;
   audioUplinkHealth: RelayCommandHandler<TSocket>;
+  micPresenceTelemetry: RelayCommandHandler<TSocket>;
 };
 
 /**
- * Selects extracted mutating control commands without taking ownership of their
+ * Selects extracted control-plane messages without taking ownership of their
  * state. Domain/session/transport effects remain in the handlers supplied by
  * the server composition boundary.
  */
@@ -79,6 +80,9 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'audio-uplink-health':
           handlers.audioUplinkHealth(socket, payload);
+          return true;
+        case 'mic-presence-telemetry':
+          handlers.micPresenceTelemetry(socket, payload);
           return true;
         default:
           return false;

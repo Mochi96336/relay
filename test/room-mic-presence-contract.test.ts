@@ -17,15 +17,23 @@ test('local capture telemetry remains available without owning the visible wavef
 });
 
 test('Room Mic telemetry is accepted only from current authenticated Mic owner and generation', () => {
-  assert.match(server, /parseMicPresenceTelemetry/);
-  const start = server.indexOf("if (payload.type === 'mic-presence-telemetry')");
-  const nextHandler = server.indexOf("\n    if (payload.type === '", start + 1);
-  assert.ok(start >= 0 && nextHandler > start);
-  const handler = server.slice(start, nextHandler);
-  assert.match(handler, /socket\.participantId !== participants\.micOwnerId/);
-  assert.match(handler, /socket\.participantId !== micRuntime\.mediaOwnerId/);
-  assert.match(handler, /presence\.captureGeneration !== micRuntime\.mediaGeneration/);
-  assert.match(handler, /!micStreaming\(nowMs\)/);
+  const handlerStart = server.indexOf('micPresenceTelemetry: (socket, payload) => {');
+  const parsePresence = server.indexOf('const presence = parseMicPresenceTelemetry(payload);', handlerStart);
+  const ownerFence = server.indexOf('socket.participantId !== participants.micOwnerId', parsePresence);
+  const mediaOwnerFence = server.indexOf('socket.participantId !== micRuntime.mediaOwnerId', ownerFence);
+  const generationFence = server.indexOf('presence.captureGeneration !== micRuntime.mediaGeneration', mediaOwnerFence);
+  const streamingFence = server.indexOf('!micStreaming(nowMs)', generationFence);
+  const rateLimit = server.indexOf('nowMs - socket.micPresenceTelemetryAt! < 60', streamingFence);
+  const broadcast = server.indexOf("type: 'room-mic-presence'", rateLimit);
+
+  assert.ok(handlerStart >= 0);
+  assert.ok(parsePresence > handlerStart);
+  assert.ok(ownerFence > parsePresence);
+  assert.ok(mediaOwnerFence > ownerFence);
+  assert.ok(generationFence > mediaOwnerFence);
+  assert.ok(streamingFence > generationFence);
+  assert.ok(rateLimit > streamingFence);
+  assert.ok(broadcast > rateLimit);
 });
 
 test('singer publishes Room Mic evidence through the room status path', () => {

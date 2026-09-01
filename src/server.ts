@@ -2435,6 +2435,39 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
     return;
   },
+  micPresenceTelemetry: (socket, payload) => {
+    const presence = parseMicPresenceTelemetry(payload);
+    const nowMs = performance.now();
+    if (
+      !presence
+      || !socket.participantId
+      || socket.participantId !== participants.micOwnerId
+      || socket.participantId !== micRuntime.mediaOwnerId
+      || micRuntime.mediaGeneration === null
+      || presence.captureGeneration !== micRuntime.mediaGeneration
+      || !micStreaming(nowMs)
+    ) return;
+
+    // Presence is display telemetry, not media authority. Any authenticated
+    // socket for the current Mic owner may report it, but the server binds the
+    // packet to the canonical media generation and rate-limits broadcast.
+    if (
+      Number.isFinite(socket.micPresenceTelemetryAt)
+      && nowMs - socket.micPresenceTelemetryAt! < 60
+    ) return;
+    socket.micPresenceTelemetryAt = nowMs;
+    broadcastJson({
+      type: 'room-mic-presence',
+      version: 1,
+      ownerId: micRuntime.mediaOwnerId,
+      captureGeneration: micRuntime.mediaGeneration,
+      rmsDbfs: presence.rmsDbfs,
+      spectrumBands: presence.spectrumBands,
+      f0Hz: presence.f0Hz,
+      pitchConfidence: presence.pitchConfidence,
+    });
+    return;
+  },
 
 });
 
@@ -2567,39 +2600,7 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'mic-presence-telemetry') {
-      const presence = parseMicPresenceTelemetry(payload);
-      const nowMs = performance.now();
-      if (
-        !presence
-        || !socket.participantId
-        || socket.participantId !== participants.micOwnerId
-        || socket.participantId !== micRuntime.mediaOwnerId
-        || micRuntime.mediaGeneration === null
-        || presence.captureGeneration !== micRuntime.mediaGeneration
-        || !micStreaming(nowMs)
-      ) return;
 
-      // Presence is display telemetry, not media authority. Any authenticated
-      // socket for the current Mic owner may report it, but the server binds the
-      // packet to the canonical media generation and rate-limits broadcast.
-      if (
-        Number.isFinite(socket.micPresenceTelemetryAt)
-        && nowMs - socket.micPresenceTelemetryAt! < 60
-      ) return;
-      socket.micPresenceTelemetryAt = nowMs;
-      broadcastJson({
-        type: 'room-mic-presence',
-        version: 1,
-        ownerId: micRuntime.mediaOwnerId,
-        captureGeneration: micRuntime.mediaGeneration,
-        rmsDbfs: presence.rmsDbfs,
-        spectrumBands: presence.spectrumBands,
-        f0Hz: presence.f0Hz,
-        pitchConfidence: presence.pitchConfidence,
-      });
-      return;
-    }
 
 
     if (payload.type === 'start-timing-calibration') {

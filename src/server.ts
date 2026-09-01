@@ -32,6 +32,7 @@ import { deriveRemoteStatusHealth } from './remote-status.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { createRelayCommandProtocol } from './relay-command-protocol.js';
+import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2515,6 +2516,41 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
 
 });
 
+const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({
+  backingSampleBoundary: (socket, payload) => {
+    if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
+    const requestId = Number(payload.requestId);
+    const generation = validCaptureGeneration(payload.generation);
+    const firstSampleIndex = Number(payload.firstSampleIndex);
+    // This ACK is only a capture-transport lower bound. It deliberately does
+    // not call noteBackingBoundary(): Browser/PipeWire may still deliver old
+    // music after this cursor. The next binary frames translate this capture
+    // cursor into the session timeline, then PCM evidence proves the segment.
+    robotContentTransitionRuntime.acceptBackingBoundary({
+      requestId,
+      generation,
+      firstSampleIndex,
+      currentBackingGeneration: session.backingGeneration,
+      context: calibrationContext(),
+    });
+    return;
+  },
+  robotPlayerOffset: (socket, payload) => {
+    const offsetMs = Number(payload.offsetMs);
+    if (sourceRuntime.isActiveRobot(socket) && Number.isFinite(offsetMs)) {
+      const nowMs = performance.now();
+      robotPlayerOffset.record(offsetMs, nowMs);
+      const mapped = robotContentTimeline.notePlayerOffset(
+        robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
+        calibrationContext(),
+        nowMs,
+      );
+      if (mapped) requestRobotBackingBoundary(nowMs);
+    }
+    return;
+  },
+});
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -2590,25 +2626,7 @@ wss.on('connection', (rawSocket, request) => {
     const payload = message as Record<string, unknown>;
     if (queryProtocol.dispatch(socket, payload)) return;
     if (commandProtocol.dispatch(socket, payload)) return;
-
-    if (payload.type === 'backing-sample-boundary') {
-      if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
-      const requestId = Number(payload.requestId);
-      const generation = validCaptureGeneration(payload.generation);
-      const firstSampleIndex = Number(payload.firstSampleIndex);
-      // This ACK is only a capture-transport lower bound. It deliberately does
-      // not call noteBackingBoundary(): Browser/PipeWire may still deliver old
-      // music after this cursor. The next binary frames translate this capture
-      // cursor into the session timeline, then PCM evidence proves the segment.
-      robotContentTransitionRuntime.acceptBackingBoundary({
-        requestId,
-        generation,
-        firstSampleIndex,
-        currentBackingGeneration: session.backingGeneration,
-        context: calibrationContext(),
-      });
-      return;
-    }
+    if (infrastructureEventProtocol.dispatch(socket, payload)) return;
 
     if (payload.type === 'infrastructure-authenticate') {
       if (!infrastructureCapability.authenticate(socket, payload.key)) {
@@ -2995,20 +3013,7 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'robot-player-offset') {
-      const offsetMs = Number(payload.offsetMs);
-      if (sourceRuntime.isActiveRobot(socket) && Number.isFinite(offsetMs)) {
-        const nowMs = performance.now();
-        robotPlayerOffset.record(offsetMs, nowMs);
-        const mapped = robotContentTimeline.notePlayerOffset(
-          robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
-          calibrationContext(),
-          nowMs,
-        );
-        if (mapped) requestRobotBackingBoundary(nowMs);
-      }
-      return;
-    }
+
 
 
   });

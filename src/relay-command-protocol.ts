@@ -20,6 +20,7 @@ type RelayCommandProtocolHandlers<TSocket> = {
   youtubeTelemetry: RelayCommandHandler<TSocket>;
   setVocalFineTune: RelayCommandHandler<TSocket>;
   setMix: RelayCommandHandler<TSocket>;
+  audioUplinkHealth: RelayCommandHandler<TSocket>;
 };
 
 /**
@@ -75,6 +76,9 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'set-mix':
           handlers.setMix(socket, payload);
+          return true;
+        case 'audio-uplink-health':
+          handlers.audioUplinkHealth(socket, payload);
           return true;
         default:
           return false;

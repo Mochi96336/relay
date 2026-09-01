@@ -36,6 +36,7 @@ import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-e
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
+import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2937,6 +2938,18 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   },
 });
 
+const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySocket>({
+  isActive: (socket) => sourceRuntime.isActive(socket),
+  noteDisconnected: () => takeController.noteQualityEvent('robot-source-disconnected'),
+  detach: (socket) => sourceRuntime.detachRobot(socket),
+  resetPlayerOffset: () => robotPlayerOffset.reset(),
+  resetContentTimeline: () => robotContentTimeline.reset(),
+  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  abandonProbeRun: () => abandonProbeRun(),
+  syncAppliedCalibration: () => syncAppliedCalibration(),
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+});
 const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
   identity: (socket) => playbackTransport.identity(socket),
   now: () => performance.now(),
@@ -3045,17 +3058,7 @@ wss.on('connection', (rawSocket, request) => {
     let micTransportChanged = false;
 
     if (!socket.replaced) {
-      if (sourceRuntime.isActive(socket)) {
-        takeController.noteQualityEvent('robot-source-disconnected');
-        sourceRuntime.detachRobot(socket);
-        robotPlayerOffset.reset();
-        robotContentTimeline.reset();
-        clearRobotBackingBoundaryRequest();
-        abandonProbeRun();
-        syncAppliedCalibration();
-        broadcastJson(sourceStatusPayload());
-        broadcastJson(timingCalibrationStatusPayload());
-      }
+      robotDisconnectCoordinator.handle(socket);
 
       if (micRuntime.isPublisher(socket)) {
         takeController.noteQualityEvent('mic-transport-disconnected');

@@ -35,8 +35,9 @@ test('server still owns Robot source lifecycle authority and effects', () => {
   );
 });
 
-test('socket close still owns Robot detach lifecycle rather than the message router', () => {
-  assert.match(server, /if \(sourceRuntime\.isActive\(socket\)\) \{/);
-  assert.match(server, /sourceRuntime\.detachRobot\(socket\)/);
-  assert.doesNotMatch(protocol, /detachRobot|socket\.on\('close'/);
+test('socket close routes Robot detach outside the message lifecycle protocol', () => {
+  assert.match(server, /createRelayRobotDisconnectCoordinator<RelaySocket>/);
+  assert.match(server, /if \(!socket\.replaced\) \{[\s\S]*robotDisconnectCoordinator\.handle\(socket\)/);
+  assert.match(server, /detach: \(socket\) => sourceRuntime\.detachRobot\(socket\)/);
+  assert.doesNotMatch(protocol, /disconnect|detachRobot|socket\.on\('close'/);
 });

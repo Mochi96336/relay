@@ -88,13 +88,16 @@ function waitForReady(directory: string) {
 
 test('Take records exactly the addressed first and final full mix frames', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-position-'));
+  let controller: TakeController | null = null;
   try {
     const session = makeSession();
     session.start(0);
 
     assert.equal(session.drain(() => {}, 20, 2), 2, 'advance the mix before recording starts');
 
-    const { controller, ready } = waitForReady(directory);
+    const setup = waitForReady(directory);
+    controller = setup.controller;
+    const { ready } = setup;
     const startPosition = {
       generation: session.generation,
       firstSampleIndex: FRAME_SAMPLES * 2,
@@ -141,12 +144,16 @@ test('Take records exactly the addressed first and final full mix frames', async
       'finalized sidecar and actual WAV must agree on samples written',
     );
   } finally {
+    // ready is emitted before the retention-prune chain finishes. Drain
+    // all controller-owned async work before deleting the fixture root.
+    if (controller) await controller.shutdown();
     await rm(directory, { recursive: true, force: true });
   }
 });
 
 test('a positioned capture packet gap does not compress the Take sample timeline', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-position-gap-'));
+  let controller: TakeController | null = null;
   try {
     const session = makeSession();
     session.setMicExpected(true);
@@ -155,7 +162,9 @@ test('a positioned capture packet gap does not compress the Take sample timeline
     session.ingestMic(positionedFrame(0), RATE, 0);
     session.ingestMic(positionedFrame(FRAME_SAMPLES * 2, 2_000), RATE, 0);
 
-    const { controller, ready } = waitForReady(directory);
+    const setup = waitForReady(directory);
+    controller = setup.controller;
+    const { ready } = setup;
     const started = controller.start(
       'participant-a',
       VOICE_ONLY_SONG,
@@ -203,14 +212,20 @@ test('a positioned capture packet gap does not compress the Take sample timeline
     });
     assert.equal(entry.artifact.sampleCount, FRAME_SAMPLES * 3);
   } finally {
+    // ready is emitted before the retention-prune chain finishes. Drain
+    // all controller-owned async work before deleting the fixture root.
+    if (controller) await controller.shutdown();
     await rm(directory, { recursive: true, force: true });
   }
 });
 
 test('rapid Start/Stop on the same full-frame boundary finalizes a zero-sample Take', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-position-rapid-'));
+  let controller: TakeController | null = null;
   try {
-    const { controller, ready } = waitForReady(directory);
+    const setup = waitForReady(directory);
+    controller = setup.controller;
+    const { ready } = setup;
     const boundary = { generation: 7, firstSampleIndex: FRAME_SAMPLES * 20 };
     const started = controller.start('participant-a', VOICE_ONLY_SONG, boundary, 1_000);
     assert.equal(started.ok, true);
@@ -230,6 +245,9 @@ test('rapid Start/Stop on the same full-frame boundary finalizes a zero-sample T
     });
     assert.equal(entry.artifact.sampleCount, 0);
   } finally {
+    // ready is emitted before the retention-prune chain finishes. Drain
+    // all controller-owned async work before deleting the fixture root.
+    if (controller) await controller.shutdown();
     await rm(directory, { recursive: true, force: true });
   }
 });

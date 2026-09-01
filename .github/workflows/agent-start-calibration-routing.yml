@@ -78,8 +78,8 @@ jobs:
           )
           replace_once(
               routing_path,
-              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n  assert.match(server, /parseAudioUplinkHealth/);",
-              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n  assert.match(server, /requireMicOwnerCommand\\(socket, 'start-timing-calibration'\\)/);\n  assert.match(server, /productStatusPayload\\(nowMs\\)\\.actions/);\n  assert.match(server, /restartBootCalibration\\(nowMs, false\\)/);\n  assert.match(server, /timingRuntime\\.beginContentCalibration\\(nowMs, false\\)/);\n  assert.match(server, /calibration\\.start\\(nowMs\\)/);\n  assert.match(server, /parseAudioUplinkHealth/);",
+              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n  assert.match(server, /parseAudioUplinkHealth\\(payload\\)/);",
+              "  assert.match(server, /broadcastJson\\(mixSettingsPayload\\(\\)\\)/);\n  assert.match(server, /requireMicOwnerCommand\\(socket, 'start-timing-calibration'\\)/);\n  assert.match(server, /productStatusPayload\\(nowMs\\)\\.actions/);\n  assert.match(server, /restartBootCalibration\\(nowMs, false\\)/);\n  assert.match(server, /timingRuntime\\.beginContentCalibration\\(nowMs, false\\)/);\n  assert.match(server, /calibration\\.start\\(nowMs\\)/);\n  assert.match(server, /parseAudioUplinkHealth\\(payload\\)/);",
           )
 
           server_path = Path('src/server.ts')

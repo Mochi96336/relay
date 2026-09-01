@@ -18,6 +18,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     rejectMicReservation: (nextSocket, payload) => seen.push({ handler: 'mic-reservation', socket: nextSocket, payload }),
     playbackMicIntent: (nextSocket, payload) => seen.push({ handler: 'playback-intent', socket: nextSocket, payload }),
     playbackHello: (nextSocket, payload) => seen.push({ handler: 'playback-hello', socket: nextSocket, payload }),
+    youtubeTelemetry: (nextSocket, payload) => seen.push({ handler: 'youtube-telemetry', socket: nextSocket, payload }),
   });
 
   const startTake = { type: 'start-take' };
@@ -32,6 +33,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   const forceAcquire = { type: 'force-acquire-mic' };
   const intent = { type: 'playback-mic-intent' };
   const hello = { type: 'playback-hello', playbackTransportId: 'playback-tab-a', playbackGeneration: 2 };
+  const telemetry = { type: 'youtube-telemetry', playbackTransportId: 'playback-tab-a', playbackGeneration: 2 };
 
   assert.equal(protocol.dispatch(socket, startTake), true);
   assert.equal(protocol.dispatch(socket, stopTake), true);
@@ -45,6 +47,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(protocol.dispatch(socket, forceAcquire), true);
   assert.equal(protocol.dispatch(socket, intent), true);
   assert.equal(protocol.dispatch(socket, hello), true);
+  assert.equal(protocol.dispatch(socket, telemetry), true);
 
   assert.deepEqual(seen.map((entry) => entry.handler), [
     'start-take',
@@ -59,6 +62,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     'mic-reservation',
     'playback-intent',
     'playback-hello',
+    'youtube-telemetry',
   ]);
   assert.equal(seen[0]?.socket, socket);
   assert.equal(seen[0]?.payload, startTake);
@@ -73,6 +77,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(seen[9]?.payload, forceAcquire);
   assert.equal(seen[10]?.payload, intent);
   assert.equal(seen[11]?.payload, hello);
+  assert.equal(seen[12]?.payload, telemetry);
 });
 
 test('command protocol leaves unextracted commands and malformed envelopes to later routing', () => {
@@ -89,9 +94,9 @@ test('command protocol leaves unextracted commands and malformed envelopes to la
     rejectMicReservation: () => { calls += 1; },
     playbackMicIntent: () => { calls += 1; },
     playbackHello: () => { calls += 1; },
+    youtubeTelemetry: () => { calls += 1; },
   });
 
-  assert.equal(protocol.dispatch({}, { type: 'youtube-telemetry' }), false);
   assert.equal(protocol.dispatch({}, { type: 'robot-source-hello' }), false);
   assert.equal(protocol.dispatch({}, {}), false);
   assert.equal(calls, 0);

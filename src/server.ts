@@ -2321,6 +2321,91 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
     return;
   },
+  youtubeTelemetry: (socket, payload) => {
+    const registeredPlaybackIdentity = playbackTransport.identity(socket);
+    let playbackParticipantId = socket.participantId;
+    let playbackTransportId = registeredPlaybackIdentity?.transportId
+      ?? normalizePlaybackTransportId(payload.playbackTransportId);
+    let playbackGeneration = registeredPlaybackIdentity?.generation
+      ?? normalizePlaybackGeneration(payload.playbackGeneration);
+
+    if (!playbackParticipantId) {
+      if (!micRuntime.isPublisher(socket)) {
+        reportTelemetryRejected(socket, 'not-publisher');
+        return;
+      }
+      playbackParticipantId = LEGACY_PLAYBACK_PARTICIPANT_ID;
+      playbackTransportId = LEGACY_PLAYBACK_TRANSPORT_ID;
+      playbackGeneration = socket.connectionIncarnation;
+    } else if (!playbackTransportId || playbackGeneration === null) {
+      reportTelemetryRejected(socket, 'invalid-identity');
+      return;
+    }
+
+    const acceptedIdentity = {
+      participantId: playbackParticipantId,
+      transportId: playbackTransportId,
+      generation: playbackGeneration,
+    };
+    const nowMs = performance.now();
+    const commandGate = roomSongCommands.gateTelemetry(
+      payload,
+      acceptedIdentity,
+      youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
+      nowMs,
+    );
+    if (!commandGate.ok) {
+      reportRoomSongTelemetryRejected(socket, commandGate.reason);
+      return;
+    }
+
+    const result = youtubeTimeline.update(
+      payload,
+      acceptedIdentity,
+      participants.micOwnerId,
+      nowMs,
+    );
+    if (result.accepted) {
+      playbackTransport.register(socket, acceptedIdentity);
+      socket.telemetryRejectedReason = undefined;
+      const timelineStatus = youtubeTimeline.statusPayload(nowMs);
+      if (Number(timelineStatus.state) !== 1 && cancelActiveContentValidation(nowMs)) {
+        broadcastJson(timingCalibrationStatusPayload());
+      }
+      broadcastJson(timelineStatus);
+      broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+
+      if (
+        commandGate.completesCommandId
+        && roomSongCommands.complete(commandGate.completesCommandId)
+      ) {
+        broadcastJson({
+          type: 'room-song-command-complete',
+          commandId: commandGate.completesCommandId,
+          revision: roomSongCommands.revision,
+        });
+        broadcastJson(roomSongCommandStatusPayload(nowMs));
+      }
+
+      if (result.handoffCompleted && result.handoffId) {
+        if (result.previousLeader) {
+          playbackTransport.send(result.previousLeader, {
+            type: 'song-handoff-release',
+            handoffId: result.handoffId,
+            videoId: timelineStatus.videoId ?? null,
+          });
+        }
+        playbackTransport.send(acceptedIdentity, {
+          type: 'song-handoff-complete',
+          handoffId: result.handoffId,
+        });
+      }
+    } else {
+      reportTelemetryRejected(socket, result.reason ?? 'invalid-telemetry');
+    }
+    return;
+  },
+
 });
 
 let shuttingDown = false;
@@ -2492,90 +2577,6 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'youtube-telemetry') {
-      const registeredPlaybackIdentity = playbackTransport.identity(socket);
-      let playbackParticipantId = socket.participantId;
-      let playbackTransportId = registeredPlaybackIdentity?.transportId
-        ?? normalizePlaybackTransportId(payload.playbackTransportId);
-      let playbackGeneration = registeredPlaybackIdentity?.generation
-        ?? normalizePlaybackGeneration(payload.playbackGeneration);
-
-      if (!playbackParticipantId) {
-        if (!micRuntime.isPublisher(socket)) {
-          reportTelemetryRejected(socket, 'not-publisher');
-          return;
-        }
-        playbackParticipantId = LEGACY_PLAYBACK_PARTICIPANT_ID;
-        playbackTransportId = LEGACY_PLAYBACK_TRANSPORT_ID;
-        playbackGeneration = socket.connectionIncarnation;
-      } else if (!playbackTransportId || playbackGeneration === null) {
-        reportTelemetryRejected(socket, 'invalid-identity');
-        return;
-      }
-
-      const acceptedIdentity = {
-        participantId: playbackParticipantId,
-        transportId: playbackTransportId,
-        generation: playbackGeneration,
-      };
-      const nowMs = performance.now();
-      const commandGate = roomSongCommands.gateTelemetry(
-        payload,
-        acceptedIdentity,
-        youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
-        nowMs,
-      );
-      if (!commandGate.ok) {
-        reportRoomSongTelemetryRejected(socket, commandGate.reason);
-        return;
-      }
-
-      const result = youtubeTimeline.update(
-        payload,
-        acceptedIdentity,
-        participants.micOwnerId,
-        nowMs,
-      );
-      if (result.accepted) {
-        playbackTransport.register(socket, acceptedIdentity);
-        socket.telemetryRejectedReason = undefined;
-        const timelineStatus = youtubeTimeline.statusPayload(nowMs);
-        if (Number(timelineStatus.state) !== 1 && cancelActiveContentValidation(nowMs)) {
-          broadcastJson(timingCalibrationStatusPayload());
-        }
-        broadcastJson(timelineStatus);
-        broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
-
-        if (
-          commandGate.completesCommandId
-          && roomSongCommands.complete(commandGate.completesCommandId)
-        ) {
-          broadcastJson({
-            type: 'room-song-command-complete',
-            commandId: commandGate.completesCommandId,
-            revision: roomSongCommands.revision,
-          });
-          broadcastJson(roomSongCommandStatusPayload(nowMs));
-        }
-
-        if (result.handoffCompleted && result.handoffId) {
-          if (result.previousLeader) {
-            playbackTransport.send(result.previousLeader, {
-              type: 'song-handoff-release',
-              handoffId: result.handoffId,
-              videoId: timelineStatus.videoId ?? null,
-            });
-          }
-          playbackTransport.send(acceptedIdentity, {
-            type: 'song-handoff-complete',
-            handoffId: result.handoffId,
-          });
-        }
-      } else {
-        reportTelemetryRejected(socket, result.reason ?? 'invalid-telemetry');
-      }
-      return;
-    }
 
     if (payload.type === 'start-timing-calibration') {
       if (!requireMicOwnerCommand(socket, 'start-timing-calibration')) return;

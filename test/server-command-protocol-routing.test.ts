@@ -20,6 +20,7 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.match(protocol, /case 'force-acquire-mic'/);
   assert.match(protocol, /case 'playback-mic-intent'/);
   assert.match(protocol, /case 'playback-hello'/);
+  assert.match(protocol, /case 'youtube-telemetry'/);
 
   assert.doesNotMatch(server, /payload\.type === 'start-take'/);
   assert.doesNotMatch(server, /payload\.type === 'stop-take'/);
@@ -33,6 +34,7 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.doesNotMatch(server, /payload\.type === 'force-acquire-mic'/);
   assert.doesNotMatch(server, /payload\.type === 'playback-mic-intent'/);
   assert.doesNotMatch(server, /payload\.type === 'playback-hello'/);
+  assert.doesNotMatch(server, /payload\.type === 'youtube-telemetry'/);
 });
 
 test('the server composition boundary still owns the extracted command effects', () => {
@@ -67,7 +69,21 @@ test('the server composition boundary still owns the extracted command effects',
   assert.match(server, /playbackTransport\.register\(socket,/);
   assert.match(server, /youtubeTimeline\.handoffPlanForTarget\(playbackIdentity\)/);
   assert.match(server, /roomSongCommands\.pendingForTarget\(playbackIdentity, performance\.now\(\)\)/);
-  assert.doesNotMatch(protocol, /ParticipantSession|PlaybackTransportRuntime|sendJson|performance\.now/);
+
+  assert.match(server, /roomSongCommands\.gateTelemetry\(/);
+  assert.match(server, /youtubeTimeline\.update\(/);
+  assert.match(server, /playbackTransport\.register\(socket, acceptedIdentity\)/);
+  assert.match(server, /cancelActiveContentValidation\(nowMs\)/);
+  assert.match(server, /roomSongCommands\.complete\(commandGate\.completesCommandId\)/);
+  assert.match(server, /playbackTransport\.send\(result\.previousLeader,/);
+  assert.match(server, /type: 'song-handoff-complete'/);
+  assert.match(server, /reportRoomSongTelemetryRejected\(socket, commandGate\.reason\)/);
+  assert.match(server, /reportTelemetryRejected\(socket, result\.reason \?\? 'invalid-telemetry'\)/);
+
+  assert.doesNotMatch(
+    protocol,
+    /ParticipantSession|PlaybackTransportRuntime|SongSession|RoomSongCommandRuntime|sendJson|performance\.now/,
+  );
 });
 
 test('remaining high-risk command authority stays inline for later extractions', () => {

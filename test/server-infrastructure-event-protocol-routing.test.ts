@@ -12,9 +12,11 @@ test('server delegates low-risk infrastructure observations through their own ro
   assert.match(protocol, /case 'robot-player-offset'/);
   assert.match(protocol, /case 'calibration-probe-played'/);
   assert.match(protocol, /case 'calibration-probe-failed'/);
+  assert.match(protocol, /case 'source-seeked'/);
   assert.doesNotMatch(server, /payload\.type === 'backing-sample-boundary'/);
   assert.doesNotMatch(server, /payload\.type === 'robot-player-offset'/);
   assert.doesNotMatch(server, /payload\.type === 'calibration-probe-played' \|\| payload\.type === 'calibration-probe-failed'/);
+  assert.doesNotMatch(server, /payload\.type === 'source-seeked'/);
 });
 
 test('server still owns infrastructure observation authority and effects', () => {
@@ -34,20 +36,26 @@ test('server still owns infrastructure observation authority and effects', () =>
 
   assert.match(server, /micRuntime\.isPublisher\(socket\)/);
   assert.match(server, /payload\.target === 'backing' \? 'backing' : 'mic'/);
-  assert.match(server, /sourceRuntime\.isActiveRobot\(socket\)/);
   assert.match(server, /handleProbeReply\(\{ requestId: payload\.requestId, generation: payload\.generation \}, nowMs\)/);
   assert.match(server, /handleProbeFailure\(/);
 
+  assert.match(server, /infrastructureCapability\.authorized\(socket\)/);
+  assert.match(server, /sourceRuntime\.canReportSeek\(socket\)/);
+  assert.match(server, /robotContentTransitionRuntime\.clearPendingBoundary\(\)/);
+  assert.match(server, /robotContentTimeline\.noteFollowerCorrection\(/);
+  assert.match(server, /beginRobotContentTransition\(/);
+  assert.match(server, /sourceRuntime\.invalidateMapping\(\)/);
+  assert.match(server, /calibration\.discardPrimedContent\(\)/);
+
   assert.doesNotMatch(
     protocol,
-    /BackingRuntime|SourceRuntime|MicRuntime|RobotPlayerOffsetTracker|RobotContentTimelineMapper|RobotContentTransitionRuntime|handleProbeReply|handleProbeFailure|performance\.now|session\./,
+    /BackingRuntime|SourceRuntime|MicRuntime|RobotPlayerOffsetTracker|RobotContentTimelineMapper|RobotContentTransitionRuntime|handleProbeReply|handleProbeFailure|performance\.now|session\.|infrastructureCapability/,
   );
 });
 
-test('authentication, registration, seek, and Robot lifecycle authority remain inline', () => {
+test('authentication, registration, and Robot lifecycle authority remain inline', () => {
   assert.match(server, /payload\.type === 'infrastructure-authenticate'/);
   assert.match(server, /payload\.type === 'participant-authenticate'/);
   assert.match(server, /payload\.type === 'register'/);
-  assert.match(server, /payload\.type === 'source-seeked'/);
   assert.match(server, /payload\.type === 'robot-source-hello'/);
 });

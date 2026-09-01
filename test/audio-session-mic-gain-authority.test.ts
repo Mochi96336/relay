@@ -34,7 +34,7 @@ test('server owns Mic gain command policy while AudioSession owns the applied va
   assert.equal((server.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 2);
   assert.match(
     server,
-    /if \(payload\.type === 'set-mix'\)[\s\S]*requireMicOwnerCommand\(socket, 'set-mix'\)[\s\S]*session\.setMicGainDb\(Math\.max\(0, Math\.min\(MAX_MIC_GAIN_DB, nextGain\)\)\)/,
+    /setMix:\s*\(socket, payload\) => \{[\s\S]*requireMicOwnerCommand\(socket, 'set-mix'\)[\s\S]*session\.setMicGainDb\(Math\.max\(0, Math\.min\(MAX_MIC_GAIN_DB, nextGain\)\)\)/,
   );
 
   assert.match(audio, /private micGainDbValue = 24;/);

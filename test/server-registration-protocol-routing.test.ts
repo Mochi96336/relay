@@ -45,6 +45,7 @@ test('server still owns registration authority, validation, and effects', () => 
   );
 });
 
-test('Robot source lifecycle remains inline after registration extraction', () => {
-  assert.match(server, /payload\.type === 'robot-source-hello'/);
+test('Robot lifecycle is not registration authority', () => {
+  assert.match(server, /robotLifecycleProtocol\.dispatch\(socket, payload\)/);
+  assert.doesNotMatch(protocol, /robot-source-hello/);
 });

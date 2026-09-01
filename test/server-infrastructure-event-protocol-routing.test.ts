@@ -53,6 +53,7 @@ test('server still owns infrastructure observation authority and effects', () =>
   );
 });
 
-test('Robot lifecycle authority remains inline after infrastructure observation extraction', () => {
-  assert.match(server, /payload\.type === 'robot-source-hello'/);
+test('Robot lifecycle is not an infrastructure observation', () => {
+  assert.match(server, /robotLifecycleProtocol\.dispatch\(socket, payload\)/);
+  assert.doesNotMatch(protocol, /robot-source-hello/);
 });

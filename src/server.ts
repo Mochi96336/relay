@@ -33,6 +33,7 @@ import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
+import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2635,6 +2636,41 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
   },
 });
 
+const authenticationProtocol = createRelayAuthenticationProtocol<RelaySocket>({
+  infrastructureAuthenticate: (socket, payload) => {
+    if (!infrastructureCapability.authenticate(socket, payload.key)) {
+      rejectInfrastructure(
+        socket,
+        'Infrastructure capability did not match this Relay deployment.',
+      );
+      return;
+    }
+    sendJson(socket, { type: 'infrastructure-authenticated' });
+    return;
+  },
+  participantAuthenticate: (socket, payload) => {
+    const authenticated = participantIdentityFromAuthentication(payload);
+    if (
+      authenticated.kind !== 'valid'
+      || infrastructureCapability.authenticated(socket)
+      || (socket.participantId !== undefined && socket.participantId !== authenticated.participantId)
+    ) {
+      sendJson(socket, {
+        type: 'participant-auth-rejected',
+        message: 'Participant identity did not match its private browser capability. Reload Relay.',
+      });
+      socket.close(1008, 'Participant capability mismatch.');
+      return;
+    }
+    attachParticipantIdentity(socket, authenticated);
+    sendJson(socket, {
+      type: 'participant-authenticated',
+      participantId: authenticated.participantId,
+    });
+    return;
+  },
+});
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -2711,43 +2747,7 @@ wss.on('connection', (rawSocket, request) => {
     if (queryProtocol.dispatch(socket, payload)) return;
     if (commandProtocol.dispatch(socket, payload)) return;
     if (infrastructureEventProtocol.dispatch(socket, payload)) return;
-
-    if (payload.type === 'infrastructure-authenticate') {
-      if (!infrastructureCapability.authenticate(socket, payload.key)) {
-        rejectInfrastructure(
-          socket,
-          'Infrastructure capability did not match this Relay deployment.',
-        );
-        return;
-      }
-      sendJson(socket, { type: 'infrastructure-authenticated' });
-      return;
-    }
-
-    if (payload.type === 'participant-authenticate') {
-      const authenticated = participantIdentityFromAuthentication(payload);
-      if (
-        authenticated.kind !== 'valid'
-        || infrastructureCapability.authenticated(socket)
-        || (socket.participantId !== undefined && socket.participantId !== authenticated.participantId)
-      ) {
-        sendJson(socket, {
-          type: 'participant-auth-rejected',
-          message: 'Participant identity did not match its private browser capability. Reload Relay.',
-        });
-        socket.close(1008, 'Participant capability mismatch.');
-        return;
-      }
-      attachParticipantIdentity(socket, authenticated);
-      sendJson(socket, {
-        type: 'participant-authenticated',
-        participantId: authenticated.participantId,
-      });
-      return;
-    }
-
-
-
+    if (authenticationProtocol.dispatch(socket, payload)) return;
 
     if (payload.type === 'register' && payload.role === 'publisher') {
       if (!canClaimSocketRole(socket, 'publisher')) return;

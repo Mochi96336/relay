@@ -53,9 +53,7 @@ test('server still owns infrastructure observation authority and effects', () =>
   );
 });
 
-test('authentication, registration, and Robot lifecycle authority remain inline', () => {
-  assert.match(server, /payload\.type === 'infrastructure-authenticate'/);
-  assert.match(server, /payload\.type === 'participant-authenticate'/);
+test('registration and Robot lifecycle authority remain inline', () => {
   assert.match(server, /payload\.type === 'register'/);
   assert.match(server, /payload\.type === 'robot-source-hello'/);
 });

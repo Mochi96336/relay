@@ -56,6 +56,7 @@ import {
   type ParticipantIdentityResult,
 } from './participant-identity.js';
 import { PlaybackTransportRuntime } from './playback-transport-runtime.js';
+import { createRelayPlaybackDisconnectCoordinator } from './relay-playback-disconnect-coordinator.js';
 import { InfrastructureCapabilityRuntime } from './infrastructure-capability-runtime.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
@@ -2936,6 +2937,22 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   },
 });
 
+const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
+  identity: (socket) => playbackTransport.identity(socket),
+  now: () => performance.now(),
+  pendingCommand: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
+  failPending: (identity, commandId) => roomSongCommands.fail(identity, commandId),
+  reportCommandFailure: (commandId, nowMs) => {
+    broadcastRoomSongCommandFailure(commandId, 'playback-disconnected', nowMs);
+    broadcastJson(roomSongCommandStatusPayload(nowMs));
+  },
+  detachTimeline: (identity) => youtubeTimeline.detach(identity),
+  reportTimelineChanged: () => {
+    broadcastJson(youtubeTimeline.statusPayload());
+    broadcastJson(youtubeTimeline.roomStatusPayload());
+  },
+});
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -3024,28 +3041,8 @@ wss.on('connection', (rawSocket, request) => {
   });
 
   socket.on('close', () => {
+    playbackDisconnectCoordinator.handle(socket);
     let micTransportChanged = false;
-
-    const closingPlaybackIdentity = playbackTransport.identity(socket);
-    if (closingPlaybackIdentity) {
-      const nowMs = performance.now();
-      const pendingCommand = roomSongCommands.pendingForTarget(closingPlaybackIdentity, nowMs);
-      if (
-        pendingCommand
-        && roomSongCommands.fail(closingPlaybackIdentity, pendingCommand.commandId)
-      ) {
-        broadcastRoomSongCommandFailure(pendingCommand.commandId, 'playback-disconnected', nowMs);
-        broadcastJson(roomSongCommandStatusPayload(nowMs));
-      }
-    }
-
-    if (closingPlaybackIdentity) {
-      const playbackChanged = youtubeTimeline.detach(closingPlaybackIdentity);
-      if (playbackChanged) {
-        broadcastJson(youtubeTimeline.statusPayload());
-        broadcastJson(youtubeTimeline.roomStatusPayload());
-      }
-    }
 
     if (!socket.replaced) {
       if (sourceRuntime.isActive(socket)) {

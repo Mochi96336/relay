@@ -118,7 +118,8 @@ test('the server composition boundary still owns the extracted message effects',
   );
 });
 
-test('remaining high-risk command authority stays inline for later extractions', () => {
-  assert.match(server, /payload\.type === 'register'/);
+test('registration is not command authority and Robot lifecycle stays inline', () => {
+  assert.doesNotMatch(protocol, /case 'register'/);
+  assert.match(server, /registrationProtocol\.dispatch\(socket, payload\)/);
   assert.match(server, /payload\.type === 'robot-source-hello'/);
 });

@@ -37,6 +37,7 @@ import { createRelayAuthenticationProtocol } from './relay-authentication-protoc
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
+import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2950,6 +2951,34 @@ const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySo
   reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
 });
+const micDisconnectCoordinator = createRelayMicDisconnectCoordinator<RelaySocket>({
+  isPublisher: (socket) => micRuntime.isPublisher(socket),
+  noteDisconnected: () => takeController.noteQualityEvent('mic-transport-disconnected'),
+  reconnectingOwnerId: (socket) => socket.participantId
+    && participants.micOwnerId === socket.participantId
+    ? socket.participantId
+    : null,
+  detachPublisher: (socket) => micRuntime.detachPublisher(socket),
+  clearMediaAuthority: () => clearMicMediaAuthority(),
+  preserveMediaForReconnect: (ownerId) => {
+    // The control plane may reconnect while an independent HTTP/3 media
+    // session is still carrying the same capture. Keep the capture and
+    // sample rate authoritative until the existing grace expires.
+    const directMediaStillLive = webTransportMicConnected();
+    session.setMicExpected(directMediaStillLive);
+    micTransportGrace.schedule(ownerId);
+  },
+  maybeStopLiveSourceWhenUnarmed: () => maybeStopLiveSourceWhenUnarmed(),
+  failCalibrationIfCollecting: () => {
+    if (calibration.collecting) {
+      calibration.fail('Microphone disconnected during calibration.');
+    }
+  },
+  cancelContentValidationAndReport: () => {
+    if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
+  },
+  reportStatus: () => broadcastStatus(),
+});
 const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
   identity: (socket) => playbackTransport.identity(socket),
   now: () => performance.now(),
@@ -3059,32 +3088,7 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!socket.replaced) {
       robotDisconnectCoordinator.handle(socket);
-
-      if (micRuntime.isPublisher(socket)) {
-        takeController.noteQualityEvent('mic-transport-disconnected');
-        const reconnectingOwnerId = socket.participantId
-          && participants.micOwnerId === socket.participantId
-          ? socket.participantId
-          : null;
-        micRuntime.detachPublisher(socket);
-        const directMediaStillLive = webTransportMicConnected();
-        if (!reconnectingOwnerId) {
-          clearMicMediaAuthority();
-        } else {
-          // The control plane may reconnect while an independent HTTP/3 media
-          // session is still carrying the same capture. Keep the capture and
-          // sample rate authoritative until the existing grace expires.
-          session.setMicExpected(directMediaStillLive);
-          micTransportGrace.schedule(reconnectingOwnerId);
-        }
-        micTransportChanged = true;
-        if (!reconnectingOwnerId) maybeStopLiveSourceWhenUnarmed();
-        if (calibration.collecting) {
-          calibration.fail('Microphone disconnected during calibration.');
-        }
-        if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-        broadcastStatus();
-      }
+      micTransportChanged = micDisconnectCoordinator.handle(socket);
 
       if (backingRuntime.isSocket(socket)) {
         takeController.noteQualityEvent('backing-transport-disconnected');

@@ -2468,6 +2468,50 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     });
     return;
   },
+  startTimingCalibration: (socket) => {
+    if (!requireMicOwnerCommand(socket, 'start-timing-calibration')) return;
+    const nowMs = performance.now();
+    const calibrationAction = productStatusPayload(nowMs).actions;
+    if (!calibrationAction.canStartCalibration) {
+      switch (calibrationAction.startCalibrationBlockedReason) {
+        case 'take-active':
+          sendJson(socket, {
+            type: 'calibration-command-rejected',
+            reason: 'take-active',
+          });
+          return;
+        case 'calibration-active':
+          sendJson(socket, timingCalibrationStatusPayload());
+          return;
+        case 'sources-not-connected':
+          calibration.fail('Connect both phone Microphone and Desktop Source before calibration.');
+          return;
+        case 'sources-not-streaming': {
+          const silent = silentSides(nowMs);
+          calibration.fail(
+            `No audio arriving from the ${silent.join(' or ')}. `
+            + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
+          );
+          return;
+        }
+        case 'phone-not-playing':
+          calibration.fail('Play YouTube on the phone before calibration.');
+          return;
+      }
+      return;
+    }
+
+    if (calibrationAction.startCalibrationMode === 'boot-probe') {
+      restartBootCalibration(nowMs, false);
+      return;
+    }
+
+    cancelActiveContentValidation(nowMs);
+    timingRuntime.beginContentCalibration(nowMs, false);
+    calibration.start(nowMs);
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  },
 
 });
 
@@ -2602,51 +2646,6 @@ wss.on('connection', (rawSocket, request) => {
 
 
 
-
-    if (payload.type === 'start-timing-calibration') {
-      if (!requireMicOwnerCommand(socket, 'start-timing-calibration')) return;
-      const nowMs = performance.now();
-      const calibrationAction = productStatusPayload(nowMs).actions;
-      if (!calibrationAction.canStartCalibration) {
-        switch (calibrationAction.startCalibrationBlockedReason) {
-          case 'take-active':
-            sendJson(socket, {
-              type: 'calibration-command-rejected',
-              reason: 'take-active',
-            });
-            return;
-          case 'calibration-active':
-            sendJson(socket, timingCalibrationStatusPayload());
-            return;
-          case 'sources-not-connected':
-            calibration.fail('Connect both phone Microphone and Desktop Source before calibration.');
-            return;
-          case 'sources-not-streaming': {
-            const silent = silentSides(nowMs);
-            calibration.fail(
-              `No audio arriving from the ${silent.join(' or ')}. `
-              + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
-            );
-            return;
-          }
-          case 'phone-not-playing':
-            calibration.fail('Play YouTube on the phone before calibration.');
-            return;
-        }
-        return;
-      }
-
-      if (calibrationAction.startCalibrationMode === 'boot-probe') {
-        restartBootCalibration(nowMs, false);
-        return;
-      }
-
-      cancelActiveContentValidation(nowMs);
-      timingRuntime.beginContentCalibration(nowMs, false);
-      calibration.start(nowMs);
-      broadcastJson(timingCalibrationStatusPayload());
-      return;
-    }
 
     if (payload.type === 'source-seeked') {
       if (!infrastructureCapability.authorized(socket)) {

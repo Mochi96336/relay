@@ -39,23 +39,23 @@ jobs:
           if insertion < 0:
               raise SystemExit('shuttingDown insertion marker missing')
           if 'const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({' not in text:
-              composition = """
-
-const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
-  identity: (socket) => playbackTransport.identity(socket),
-  now: () => performance.now(),
-  pendingCommand: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
-  failPending: (identity, commandId) => roomSongCommands.fail(identity, commandId),
-  reportCommandFailure: (commandId, nowMs) => {
-    broadcastRoomSongCommandFailure(commandId, 'playback-disconnected', nowMs);
-    broadcastJson(roomSongCommandStatusPayload(nowMs));
-  },
-  detachTimeline: (identity) => youtubeTimeline.detach(identity),
-  reportTimelineChanged: () => {
-    broadcastJson(youtubeTimeline.statusPayload());
-    broadcastJson(youtubeTimeline.roomStatusPayload());
-  },
-});"""
+              composition = (
+                  "\n\nconst playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({\n"
+                  "  identity: (socket) => playbackTransport.identity(socket),\n"
+                  "  now: () => performance.now(),\n"
+                  "  pendingCommand: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),\n"
+                  "  failPending: (identity, commandId) => roomSongCommands.fail(identity, commandId),\n"
+                  "  reportCommandFailure: (commandId, nowMs) => {\n"
+                  "    broadcastRoomSongCommandFailure(commandId, 'playback-disconnected', nowMs);\n"
+                  "    broadcastJson(roomSongCommandStatusPayload(nowMs));\n"
+                  "  },\n"
+                  "  detachTimeline: (identity) => youtubeTimeline.detach(identity),\n"
+                  "  reportTimelineChanged: () => {\n"
+                  "    broadcastJson(youtubeTimeline.statusPayload());\n"
+                  "    broadcastJson(youtubeTimeline.roomStatusPayload());\n"
+                  "  },\n"
+                  "});"
+              )
               text = text[:insertion] + composition + text[insertion:]
 
           close_marker = "  socket.on('close', () => {\n"

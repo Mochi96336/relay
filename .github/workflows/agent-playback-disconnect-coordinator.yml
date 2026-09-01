@@ -1,0 +1,110 @@
+name: Agent playback disconnect coordinator construction
+
+on:
+  push:
+    branches:
+      - agent/playback-disconnect-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Move playback close ordering behind coordinator seam
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text()
+
+          playback_import = "import { PlaybackTransportRuntime } from './playback-transport-runtime.js';\n"
+          coordinator_import = "import { createRelayPlaybackDisconnectCoordinator } from './relay-playback-disconnect-coordinator.js';\n"
+          if coordinator_import not in text:
+              if playback_import not in text:
+                  raise SystemExit('playback import marker missing')
+              text = text.replace(playback_import, playback_import + coordinator_import, 1)
+
+          insertion_marker = "\n\nlet shuttingDown = false;"
+          insertion = text.find(insertion_marker)
+          if insertion < 0:
+              raise SystemExit('shuttingDown insertion marker missing')
+          if 'const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({' not in text:
+              composition = """
+
+const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
+  identity: (socket) => playbackTransport.identity(socket),
+  now: () => performance.now(),
+  pendingCommand: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
+  failPending: (identity, commandId) => roomSongCommands.fail(identity, commandId),
+  reportCommandFailure: (commandId, nowMs) => {
+    broadcastRoomSongCommandFailure(commandId, 'playback-disconnected', nowMs);
+    broadcastJson(roomSongCommandStatusPayload(nowMs));
+  },
+  detachTimeline: (identity) => youtubeTimeline.detach(identity),
+  reportTimelineChanged: () => {
+    broadcastJson(youtubeTimeline.statusPayload());
+    broadcastJson(youtubeTimeline.roomStatusPayload());
+  },
+});"""
+              text = text[:insertion] + composition + text[insertion:]
+
+          close_marker = "  socket.on('close', () => {\n"
+          close_start = text.find(close_marker)
+          if close_start < 0:
+              raise SystemExit('socket close marker missing')
+          body_start = close_start + len(close_marker)
+          remaining_marker = "    if (!socket.replaced) {"
+          remaining = text.find(remaining_marker, body_start)
+          if remaining < 0:
+              raise SystemExit('non-playback close marker missing')
+          old_prefix = text[body_start:remaining]
+          required = [
+              "const closingPlaybackIdentity = playbackTransport.identity(socket);",
+              "roomSongCommands.pendingForTarget(closingPlaybackIdentity, nowMs)",
+              "roomSongCommands.fail(closingPlaybackIdentity, pendingCommand.commandId)",
+              "youtubeTimeline.detach(closingPlaybackIdentity)",
+          ]
+          for marker in required:
+              if marker not in old_prefix:
+                  raise SystemExit(f'playback close marker missing: {marker}')
+          new_prefix = "    playbackDisconnectCoordinator.handle(socket);\n    let micTransportChanged = false;\n\n"
+          text = text[:body_start] + new_prefix + text[remaining:]
+
+          if 'const closingPlaybackIdentity = playbackTransport.identity(socket);' in text:
+              raise SystemExit('old playback close block still present')
+          path.write_text(text)
+          PY
+      - run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Focused playback disconnect and untouched-close proof
+        run: |
+          node --import tsx --test --test-concurrency=1 \
+            test/relay-playback-disconnect-coordinator.test.ts \
+            test/server-playback-disconnect-coordinator.test.ts \
+            test/playback-transport-runtime-boundary.test.ts \
+            test/room-song-command-runtime.test.ts \
+            test/room-song-command-runtime-boundary.test.ts \
+            test/song-authority-server.test.ts \
+            test/playback-continuation-semantics.test.ts \
+            test/robot-source-disconnect.test.ts
+      - name: Diff check
+        run: git diff --check
+      - name: Commit production move and remove construction workflow
+        run: |
+          rm .github/workflows/agent-playback-disconnect-coordinator.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts src/relay-playback-disconnect-coordinator.ts test/relay-playback-disconnect-coordinator.test.ts test/server-playback-disconnect-coordinator.test.ts .github/workflows/agent-playback-disconnect-coordinator.yml
+          git commit -m 'refactor(server): isolate playback disconnect ordering'
+          git push origin HEAD:agent/playback-disconnect-coordinator

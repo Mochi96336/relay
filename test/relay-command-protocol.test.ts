@@ -19,6 +19,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     playbackMicIntent: (nextSocket, payload) => seen.push({ handler: 'playback-intent', socket: nextSocket, payload }),
     playbackHello: (nextSocket, payload) => seen.push({ handler: 'playback-hello', socket: nextSocket, payload }),
     youtubeTelemetry: (nextSocket, payload) => seen.push({ handler: 'youtube-telemetry', socket: nextSocket, payload }),
+    setVocalFineTune: (nextSocket, payload) => seen.push({ handler: 'set-vocal-fine-tune', socket: nextSocket, payload }),
+    setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),
   });
 
   const startTake = { type: 'start-take' };
@@ -34,6 +36,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   const intent = { type: 'playback-mic-intent' };
   const hello = { type: 'playback-hello', playbackTransportId: 'playback-tab-a', playbackGeneration: 2 };
   const telemetry = { type: 'youtube-telemetry', playbackTransportId: 'playback-tab-a', playbackGeneration: 2 };
+  const fineTune = { type: 'set-vocal-fine-tune', valueMs: 12 };
+  const mix = { type: 'set-mix', micGainDb: 6 };
 
   assert.equal(protocol.dispatch(socket, startTake), true);
   assert.equal(protocol.dispatch(socket, stopTake), true);
@@ -48,6 +52,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(protocol.dispatch(socket, intent), true);
   assert.equal(protocol.dispatch(socket, hello), true);
   assert.equal(protocol.dispatch(socket, telemetry), true);
+  assert.equal(protocol.dispatch(socket, fineTune), true);
+  assert.equal(protocol.dispatch(socket, mix), true);
 
   assert.deepEqual(seen.map((entry) => entry.handler), [
     'start-take',
@@ -63,6 +69,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     'playback-intent',
     'playback-hello',
     'youtube-telemetry',
+    'set-vocal-fine-tune',
+    'set-mix',
   ]);
   assert.equal(seen[0]?.socket, socket);
   assert.equal(seen[0]?.payload, startTake);
@@ -78,6 +86,8 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(seen[10]?.payload, intent);
   assert.equal(seen[11]?.payload, hello);
   assert.equal(seen[12]?.payload, telemetry);
+  assert.equal(seen[13]?.payload, fineTune);
+  assert.equal(seen[14]?.payload, mix);
 });
 
 test('command protocol leaves unextracted commands and malformed envelopes to later routing', () => {
@@ -95,6 +105,8 @@ test('command protocol leaves unextracted commands and malformed envelopes to la
     playbackMicIntent: () => { calls += 1; },
     playbackHello: () => { calls += 1; },
     youtubeTelemetry: () => { calls += 1; },
+    setVocalFineTune: () => { calls += 1; },
+    setMix: () => { calls += 1; },
   });
 
   assert.equal(protocol.dispatch({}, { type: 'robot-source-hello' }), false);

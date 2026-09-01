@@ -5,7 +5,7 @@ import test from 'node:test';
 const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 const protocol = readFileSync(new URL('../src/relay-command-protocol.ts', import.meta.url), 'utf8');
 
-test('server delegates the extracted low-risk mutating commands through the command protocol seam', () => {
+test('server delegates the extracted low-risk control-plane messages through the command protocol seam', () => {
   assert.match(server, /createRelayCommandProtocol<RelaySocket>/);
   assert.match(server, /commandProtocol\.dispatch\(socket, payload\)/);
   assert.match(protocol, /case 'start-take'/);
@@ -24,6 +24,7 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.match(protocol, /case 'set-vocal-fine-tune'/);
   assert.match(protocol, /case 'set-mix'/);
   assert.match(protocol, /case 'audio-uplink-health'/);
+  assert.match(protocol, /case 'mic-presence-telemetry'/);
 
   assert.doesNotMatch(server, /payload\.type === 'start-take'/);
   assert.doesNotMatch(server, /payload\.type === 'stop-take'/);
@@ -41,9 +42,10 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.doesNotMatch(server, /payload\.type === 'set-vocal-fine-tune'/);
   assert.doesNotMatch(server, /payload\.type === 'set-mix'/);
   assert.doesNotMatch(server, /payload\.type === 'audio-uplink-health'/);
+  assert.doesNotMatch(server, /payload\.type === 'mic-presence-telemetry'/);
 });
 
-test('the server composition boundary still owns the extracted command effects', () => {
+test('the server composition boundary still owns the extracted message effects', () => {
   assert.match(server, /takeController\.start\(/);
   assert.match(server, /takeController\.stop\(/);
   assert.match(server, /takeFrameBoundary\(nowMs\)/);
@@ -95,6 +97,13 @@ test('the server composition boundary still owns the extracted command effects',
   assert.match(server, /broadcastJson\(mixSettingsPayload\(\)\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
   assert.match(server, /micRuntime\.noteUplinkHealth\(socket, health, performance\.now\(\)\)/);
+
+  assert.match(server, /parseMicPresenceTelemetry\(payload\)/);
+  assert.match(server, /socket\.participantId !== participants\.micOwnerId/);
+  assert.match(server, /socket\.participantId !== micRuntime\.mediaOwnerId/);
+  assert.match(server, /presence\.captureGeneration !== micRuntime\.mediaGeneration/);
+  assert.match(server, /socket\.micPresenceTelemetryAt = nowMs/);
+  assert.match(server, /type: 'room-mic-presence'/);
 
   assert.doesNotMatch(
     protocol,

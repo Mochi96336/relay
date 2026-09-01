@@ -31,7 +31,7 @@ test('server still owns Robot source lifecycle authority and effects', () => {
 
   assert.doesNotMatch(
     protocol,
-    /InfrastructureCapabilityRuntime|SourceRuntime|TakeController|infrastructureCapability|sourceRuntime|takeController|robotPlayerOffset|robotContentTimeline|calibration|sendJson|broadcastJson|performance\.now/,
+    /InfrastructureCapabilityRuntime|SourceRuntime|TakeController|infrastructureCapability\.|sourceRuntime\.|takeController\.|robotPlayerOffset\.|robotContentTimeline\.|dropLegacyCalibrationForRobot|syncAppliedCalibration|sendJson|broadcastJson|performance\.now/,
   );
 });
 

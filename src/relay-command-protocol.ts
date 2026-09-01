@@ -18,6 +18,8 @@ type RelayCommandProtocolHandlers<TSocket> = {
   playbackMicIntent: RelayCommandHandler<TSocket>;
   playbackHello: RelayCommandHandler<TSocket>;
   youtubeTelemetry: RelayCommandHandler<TSocket>;
+  setVocalFineTune: RelayCommandHandler<TSocket>;
+  setMix: RelayCommandHandler<TSocket>;
 };
 
 /**
@@ -67,6 +69,12 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'youtube-telemetry':
           handlers.youtubeTelemetry(socket, payload);
+          return true;
+        case 'set-vocal-fine-tune':
+          handlers.setVocalFineTune(socket, payload);
+          return true;
+        case 'set-mix':
+          handlers.setMix(socket, payload);
           return true;
         default:
           return false;

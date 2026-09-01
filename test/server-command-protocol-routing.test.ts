@@ -19,6 +19,7 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.match(protocol, /case 'acquire-mic'/);
   assert.match(protocol, /case 'force-acquire-mic'/);
   assert.match(protocol, /case 'playback-mic-intent'/);
+  assert.match(protocol, /case 'playback-hello'/);
 
   assert.doesNotMatch(server, /payload\.type === 'start-take'/);
   assert.doesNotMatch(server, /payload\.type === 'stop-take'/);
@@ -31,6 +32,7 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.doesNotMatch(server, /payload\.type === 'acquire-mic'/);
   assert.doesNotMatch(server, /payload\.type === 'force-acquire-mic'/);
   assert.doesNotMatch(server, /payload\.type === 'playback-mic-intent'/);
+  assert.doesNotMatch(server, /payload\.type === 'playback-hello'/);
 });
 
 test('the server composition boundary still owns the extracted command effects', () => {
@@ -60,6 +62,11 @@ test('the server composition boundary still owns the extracted command effects',
   assert.match(server, /participants\.rename\(socket\.participantId, payload\.nickname, Date\.now\(\)\)/);
   assert.match(server, /Microphone ownership is committed by publisher registration/);
   assert.match(server, /playbackTransport\.noteMicIntent\(socket, performance\.now\(\)\)/);
+  assert.match(server, /normalizePlaybackTransportId\(payload\.playbackTransportId\)/);
+  assert.match(server, /normalizePlaybackGeneration\(payload\.playbackGeneration\)/);
+  assert.match(server, /playbackTransport\.register\(socket,/);
+  assert.match(server, /youtubeTimeline\.handoffPlanForTarget\(playbackIdentity\)/);
+  assert.match(server, /roomSongCommands\.pendingForTarget\(playbackIdentity, performance\.now\(\)\)/);
   assert.doesNotMatch(protocol, /ParticipantSession|PlaybackTransportRuntime|sendJson|performance\.now/);
 });
 

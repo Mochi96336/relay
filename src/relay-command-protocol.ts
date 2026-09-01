@@ -16,6 +16,7 @@ type RelayCommandProtocolHandlers<TSocket> = {
   participantRename: RelayCommandHandler<TSocket>;
   rejectMicReservation: RelayCommandHandler<TSocket>;
   playbackMicIntent: RelayCommandHandler<TSocket>;
+  playbackHello: RelayCommandHandler<TSocket>;
 };
 
 /**
@@ -59,6 +60,9 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'playback-mic-intent':
           handlers.playbackMicIntent(socket, payload);
+          return true;
+        case 'playback-hello':
+          handlers.playbackHello(socket, payload);
           return true;
         default:
           return false;

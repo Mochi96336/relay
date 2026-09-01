@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createRelayCommandProtocol } from '../src/relay-command-protocol.js';
 
-test('command protocol selects the extracted low-risk commands and preserves payload identity', () => {
+test('command protocol selects the extracted low-risk control-plane messages and preserves payload identity', () => {
   const socket = { id: 'socket-a' };
   const seen: Array<{ handler: string; socket: typeof socket; payload: Record<string, unknown> }> = [];
   const protocol = createRelayCommandProtocol<typeof socket>({
@@ -22,6 +22,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     setVocalFineTune: (nextSocket, payload) => seen.push({ handler: 'set-vocal-fine-tune', socket: nextSocket, payload }),
     setMix: (nextSocket, payload) => seen.push({ handler: 'set-mix', socket: nextSocket, payload }),
     audioUplinkHealth: (nextSocket, payload) => seen.push({ handler: 'audio-uplink-health', socket: nextSocket, payload }),
+    micPresenceTelemetry: (nextSocket, payload) => seen.push({ handler: 'mic-presence-telemetry', socket: nextSocket, payload }),
   });
 
   const startTake = { type: 'start-take' };
@@ -40,6 +41,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   const fineTune = { type: 'set-vocal-fine-tune', valueMs: 12 };
   const mix = { type: 'set-mix', micGainDb: 6 };
   const uplinkHealth = { type: 'audio-uplink-health', version: 1 };
+  const micPresence = { type: 'mic-presence-telemetry', captureGeneration: 7 };
 
   assert.equal(protocol.dispatch(socket, startTake), true);
   assert.equal(protocol.dispatch(socket, stopTake), true);
@@ -57,6 +59,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(protocol.dispatch(socket, fineTune), true);
   assert.equal(protocol.dispatch(socket, mix), true);
   assert.equal(protocol.dispatch(socket, uplinkHealth), true);
+  assert.equal(protocol.dispatch(socket, micPresence), true);
 
   assert.deepEqual(seen.map((entry) => entry.handler), [
     'start-take',
@@ -75,6 +78,7 @@ test('command protocol selects the extracted low-risk commands and preserves pay
     'set-vocal-fine-tune',
     'set-mix',
     'audio-uplink-health',
+    'mic-presence-telemetry',
   ]);
   assert.equal(seen[0]?.socket, socket);
   assert.equal(seen[0]?.payload, startTake);
@@ -93,9 +97,10 @@ test('command protocol selects the extracted low-risk commands and preserves pay
   assert.equal(seen[13]?.payload, fineTune);
   assert.equal(seen[14]?.payload, mix);
   assert.equal(seen[15]?.payload, uplinkHealth);
+  assert.equal(seen[16]?.payload, micPresence);
 });
 
-test('command protocol leaves unextracted commands and malformed envelopes to later routing', () => {
+test('command protocol leaves unextracted messages and malformed envelopes to later routing', () => {
   let calls = 0;
   const protocol = createRelayCommandProtocol<object>({
     startTake: () => { calls += 1; },
@@ -113,6 +118,7 @@ test('command protocol leaves unextracted commands and malformed envelopes to la
     setVocalFineTune: () => { calls += 1; },
     setMix: () => { calls += 1; },
     audioUplinkHealth: () => { calls += 1; },
+    micPresenceTelemetry: () => { calls += 1; },
   });
 
   assert.equal(protocol.dispatch({}, { type: 'robot-source-hello' }), false);

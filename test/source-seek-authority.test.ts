@@ -26,7 +26,7 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
 });
 
 test('server fences source-seeked from any no-longer-active Robot source', () => {
-  const handlerStart = serverSource.indexOf("if (payload.type === 'source-seeked') {");
+  const handlerStart = serverSource.indexOf('sourceSeeked: (socket, payload) => {');
   const staleRobotFence = serverSource.indexOf(
     'if (!sourceRuntime.canReportSeek(socket)) return;',
     handlerStart,

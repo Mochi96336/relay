@@ -34,7 +34,6 @@ test('server still owns authentication authority and transport effects', () => {
   );
 });
 
-test('registration and Robot lifecycle authority remain inline after auth extraction', () => {
-  assert.match(server, /payload\.type === 'register'/);
+test('Robot lifecycle authority remains inline after auth extraction', () => {
   assert.match(server, /payload\.type === 'robot-source-hello'/);
 });

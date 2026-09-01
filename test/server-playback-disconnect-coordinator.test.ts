@@ -31,7 +31,7 @@ test('server composition still owns playback disconnect authority and broadcasts
   );
 });
 
-test('Robot, Mic, Backing and participant close authority remain in the socket close boundary', () => {
+test('Robot dispatch, Mic, Backing and participant close authority remain in the socket close boundary', () => {
   const closeStart = server.indexOf("socket.on('close', () => {");
   assert.ok(closeStart >= 0);
   const closeEnd = server.indexOf("\n  });\n});\n\nwss.on('close'", closeStart);
@@ -39,8 +39,7 @@ test('Robot, Mic, Backing and participant close authority remain in the socket c
   const close = server.slice(closeStart, closeEnd);
 
   assert.match(close, /if \(!socket\.replaced\) \{/);
-  assert.match(close, /sourceRuntime\.isActive\(socket\)/);
-  assert.match(close, /sourceRuntime\.detachRobot\(socket\)/);
+  assert.match(close, /robotDisconnectCoordinator\.handle\(socket\)/);
   assert.match(close, /micRuntime\.isPublisher\(socket\)/);
   assert.match(close, /micRuntime\.detachPublisher\(socket\)/);
   assert.match(close, /micTransportGrace\.schedule\(reconnectingOwnerId\)/);

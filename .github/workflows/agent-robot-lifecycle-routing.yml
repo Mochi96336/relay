@@ -1,0 +1,120 @@
+name: Agent Robot lifecycle routing construction
+
+on:
+  push:
+    branches:
+      - agent/server-robot-lifecycle-routing
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Move Robot lifecycle selection behind protocol seam
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text()
+
+          registration_import = "import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';\n"
+          robot_import = "import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';\n"
+          if robot_import not in text:
+              if registration_import not in text:
+                  raise SystemExit('registration protocol import marker missing')
+              text = text.replace(registration_import, registration_import + robot_import, 1)
+
+          start_marker = "    if (payload.type === 'robot-source-hello') {"
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit('inline Robot source hello marker missing')
+          message_end_marker = "\n\n\n\n\n  });"
+          end = text.find(message_end_marker, start)
+          if end < 0:
+              raise SystemExit('message callback end marker missing')
+          block = text[start:end]
+          lines = block.splitlines()
+          if lines[0] != start_marker or lines[-1] != '    }':
+              raise SystemExit('unexpected Robot source hello block shape')
+          inner = lines[1:-1]
+          callback_lines = []
+          for line in inner:
+              callback_lines.append(line[2:] if line.startswith('  ') else line)
+          callback_body = '\n'.join(callback_lines)
+
+          registration_end = "const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({"
+          registration_start = text.find(registration_end)
+          if registration_start < 0:
+              raise SystemExit('registration protocol composition marker missing')
+          insertion_marker = "\n\nlet shuttingDown = false;"
+          insertion = text.find(insertion_marker, registration_start)
+          if insertion < 0:
+              raise SystemExit('protocol composition insertion marker missing')
+          robot_composition = (
+              "\n\nconst robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({\n"
+              "  robotSourceHello: (socket, payload) => {\n"
+              + callback_body
+              + "\n  },\n});"
+          )
+          text = text[:insertion] + robot_composition + text[insertion:]
+
+          dispatch_marker = "    if (registrationProtocol.dispatch(socket, payload)) return;\n"
+          robot_dispatch = "    if (robotLifecycleProtocol.dispatch(socket, payload)) return;\n"
+          if robot_dispatch not in text:
+              if dispatch_marker not in text:
+                  raise SystemExit('registration dispatch marker missing')
+              text = text.replace(dispatch_marker, dispatch_marker + robot_dispatch, 1)
+
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit('inline Robot block disappeared before removal')
+          end = text.find(message_end_marker, start)
+          if end < 0:
+              raise SystemExit('message callback end marker missing before removal')
+          text = text[:start] + text[end:]
+
+          if "payload.type === 'robot-source-hello'" in text:
+              raise SystemExit('inline Robot selector still present')
+          path.write_text(text)
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Focused Robot lifecycle and authority proof
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/relay-robot-lifecycle-protocol.test.ts
+          test/server-robot-lifecycle-protocol-routing.test.ts
+          test/server-registration-protocol-routing.test.ts
+          test/server-authentication-protocol-routing.test.ts
+          test/server-infrastructure-event-protocol-routing.test.ts
+          test/server-command-protocol-routing.test.ts
+          test/server-query-protocol-routing.test.ts
+          test/infrastructure-authority.test.ts
+          test/source-seek-authority.test.ts
+          test/robot-source-disconnect.test.ts
+          test/robot-calibration-semantics.test.ts
+          test/probe-server-lifecycle.test.ts
+          test/readiness.test.ts
+          test/timing-validity.test.ts
+      - name: Diff check
+        run: git diff --check
+      - name: Commit production move and remove construction workflow
+        run: |
+          rm .github/workflows/agent-robot-lifecycle-routing.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/server.ts .github/workflows/agent-robot-lifecycle-routing.yml
+          git commit -m "refactor(server): route Robot lifecycle through protocol"
+          git push origin HEAD:agent/server-robot-lifecycle-routing

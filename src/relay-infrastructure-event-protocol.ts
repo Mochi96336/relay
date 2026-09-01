@@ -9,6 +9,7 @@ type RelayInfrastructureEventProtocolHandlers<TSocket> = {
   backingSampleBoundary: RelayInfrastructureEventHandler<TSocket>;
   robotPlayerOffset: RelayInfrastructureEventHandler<TSocket>;
   calibrationProbe: RelayInfrastructureEventHandler<TSocket>;
+  sourceSeeked: RelayInfrastructureEventHandler<TSocket>;
 };
 
 /**
@@ -31,6 +32,9 @@ export function createRelayInfrastructureEventProtocol<TSocket>(
         case 'calibration-probe-played':
         case 'calibration-probe-failed':
           handlers.calibrationProbe(socket, payload);
+          return true;
+        case 'source-seeked':
+          handlers.sourceSeeked(socket, payload);
           return true;
         default:
           return false;

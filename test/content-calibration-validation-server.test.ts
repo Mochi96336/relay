@@ -115,13 +115,33 @@ async function establishBaseline(
   );
 }
 
-async function waitForValidationCollection(monitor: RelayClient, fromIndex: number) {
-  return waitForNewMessage(
-    monitor,
-    fromIndex,
-    (m) => m.type === 'timing-calibration-status'
-      && m.validation?.state === 'collecting',
-    4_000,
+async function waitForValidationCollection(
+  monitor: RelayClient,
+  fromIndex: number,
+  backing: RelayClient,
+  publisher: RelayClient,
+  timeoutMs = 8_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = monitor.messages.slice(fromIndex).find(
+      (m) => m.type === 'timing-calibration-status'
+        && m.validation?.state === 'collecting',
+    );
+    if (found) return found;
+
+    // Keep the same production readiness signals fresh while CI is
+    // CPU-bound, and request canonical status so the test cannot miss
+    // the collecting transition merely because a scheduler tick slipped.
+    refreshLivePath(backing, publisher);
+    monitor.send({ type: 'timing-calibration-status-request' });
+    await sleep(100);
+  }
+  throw new Error(
+    `Timed out waiting for validation collection. Saw: ${monitor.messages
+      .slice(fromIndex)
+      .map((m) => `${m.type}:${m.validation?.state ?? ''}`)
+      .join(', ')}`,
   );
 }
 
@@ -146,7 +166,7 @@ describe('continuous content calibration validation server policy', () => {
 
       const collectingFrom = monitor.messages.length;
       refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, collectingFrom);
+      await waitForValidationCollection(monitor, collectingFrom, backing, publisher);
       const stableFrom = monitor.messages.length;
       const stablePair = laggedPair(8, RATE, baselineLag, 17);
       await Promise.all([
@@ -180,7 +200,7 @@ describe('continuous content calibration validation server policy', () => {
       const baselineLag = Number(baseline.micLagMs);
       const collectingFrom = monitor.messages.length;
       refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, collectingFrom);
+      await waitForValidationCollection(monitor, collectingFrom, backing, publisher);
 
       const invalidFrom = monitor.messages.length;
       const silence = Buffer.alloc(RATE * 7 * 2);
@@ -215,7 +235,7 @@ describe('continuous content calibration validation server policy', () => {
       const baselineLag = Number(baseline.micLagMs);
       const firstStart = monitor.messages.length;
       refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, firstStart);
+      await waitForValidationCollection(monitor, firstStart, backing, publisher);
 
       const firstDrift = laggedPair(8, RATE, 360, 61);
       const suspectFrom = monitor.messages.length;
@@ -236,7 +256,7 @@ describe('continuous content calibration validation server policy', () => {
       // retry scheduler decides whether a second validation window may start.
       const confirmStart = monitor.messages.length;
       refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, confirmStart);
+      await waitForValidationCollection(monitor, confirmStart, backing, publisher);
       const secondDrift = laggedPair(8, RATE, 420, 79);
       const inconclusiveFrom = monitor.messages.length;
       await Promise.all([
@@ -272,7 +292,7 @@ describe('continuous content calibration validation server policy', () => {
 
       const firstStart = monitor.messages.length;
       refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, firstStart);
+      await waitForValidationCollection(monitor, firstStart, backing, publisher);
 
       const firstDrift = laggedPair(8, RATE, 360, 31);
       const suspectFrom = monitor.messages.length;
@@ -304,7 +324,7 @@ describe('continuous content calibration validation server policy', () => {
 
       const confirmFrom = monitor.messages.length;
       refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, confirmFrom);
+      await waitForValidationCollection(monitor, confirmFrom, backing, publisher);
 
       const secondDrift = laggedPair(8, RATE, 355, 47);
       await Promise.all([

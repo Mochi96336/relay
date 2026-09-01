@@ -2430,6 +2430,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     broadcastJson(mixSettingsPayload());
     return;
   },
+  audioUplinkHealth: (socket, payload) => {
+    const health = parseAudioUplinkHealth(payload);
+    if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
+    return;
+  },
 
 });
 
@@ -2559,12 +2564,6 @@ wss.on('connection', (rawSocket, request) => {
         type: 'participant-authenticated',
         participantId: authenticated.participantId,
       });
-      return;
-    }
-
-    if (payload.type === 'audio-uplink-health') {
-      const health = parseAudioUplinkHealth(payload);
-      if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
       return;
     }
 

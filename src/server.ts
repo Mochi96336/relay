@@ -2406,6 +2406,31 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     return;
   },
 
+  setVocalFineTune: (socket, payload) => {
+    if (!requireMicOwnerCommand(socket, 'set-vocal-fine-tune')) return;
+    const nextFineTune = Number(payload.valueMs);
+    if (Number.isFinite(nextFineTune)) {
+      session.setAlignment({
+        fineTuneMs: Math.max(-MAX_VOCAL_FINE_TUNE_MS, Math.min(MAX_VOCAL_FINE_TUNE_MS, nextFineTune)),
+      });
+      broadcastJson(sourceStatusPayload());
+      broadcastJson(timingCalibrationStatusPayload());
+    }
+    return;
+  },
+  setMix: (socket, payload) => {
+    if (!requireMicOwnerCommand(socket, 'set-mix')) return;
+    const nextGain = Number(payload.micGainDb);
+    if (Number.isFinite(nextGain)) {
+      session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
+    }
+    // `songLevel` remains accepted on the old wire shape for compatibility,
+    // but Song is now a server-owned 100% reference and cannot be mutated by
+    // any client authority.
+    broadcastJson(mixSettingsPayload());
+    return;
+  },
+
 });
 
 let shuttingDown = false;
@@ -2691,18 +2716,6 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'set-vocal-fine-tune') {
-      if (!requireMicOwnerCommand(socket, 'set-vocal-fine-tune')) return;
-      const nextFineTune = Number(payload.valueMs);
-      if (Number.isFinite(nextFineTune)) {
-        session.setAlignment({
-          fineTuneMs: Math.max(-MAX_VOCAL_FINE_TUNE_MS, Math.min(MAX_VOCAL_FINE_TUNE_MS, nextFineTune)),
-        });
-        broadcastJson(sourceStatusPayload());
-        broadcastJson(timingCalibrationStatusPayload());
-      }
-      return;
-    }
 
     if (payload.type === 'register' && payload.role === 'publisher') {
       if (!canClaimSocketRole(socket, 'publisher')) return;
@@ -2998,18 +3011,7 @@ wss.on('connection', (rawSocket, request) => {
       return;
     }
 
-    if (payload.type === 'set-mix') {
-      if (!requireMicOwnerCommand(socket, 'set-mix')) return;
-      const nextGain = Number(payload.micGainDb);
-      if (Number.isFinite(nextGain)) {
-        session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
-      }
-      // `songLevel` remains accepted on the old wire shape for compatibility,
-      // but Song is now a server-owned 100% reference and cannot be mutated by
-      // any client authority.
-      broadcastJson(mixSettingsPayload());
-      return;
-    }
+
   });
 
   socket.on('close', () => {

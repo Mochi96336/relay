@@ -2566,6 +2566,73 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     }
     return;
   },
+  sourceSeeked: (socket, payload) => {
+    if (!infrastructureCapability.authorized(socket)) {
+      rejectInfrastructure(socket, 'Authenticate the active Source before reporting a seek.');
+      return;
+    }
+    // `isRobotSource` is intentionally tri-state here: undefined means this
+    // socket was never a Robot source, while true/false means it has entered
+    // the Robot source lifecycle. Replacement clears the active flag to
+    // false, but must not restore seek authority to that old socket.
+    if (!sourceRuntime.canReportSeek(socket)) return;
+    const nowMs = performance.now();
+    robotContentTransitionRuntime.clearPendingBoundary();
+    const requestedFollowerCorrection = payload.reason === 'follower-correction';
+    const fromMediaTime = Number(payload.fromMediaTime);
+    const toMediaTime = Number(payload.toMediaTime);
+    const context = calibrationContext();
+    const preDeltaMs = robotContentTimeline.currentDeltaMs;
+    const referenceDeltaMs = robotContentTimeline.referenceDeltaMs;
+    const mappedFollowerCorrection = requestedFollowerCorrection
+      && sourceRuntime.isActiveRobot(socket)
+      && backingRuntime.isRobot
+      && robotContentTimeline.noteFollowerCorrection(
+        fromMediaTime,
+        toMediaTime,
+        context,
+        nowMs,
+      );
+
+    robotPlayerOffset.reset();
+    if (mappedFollowerCorrection) {
+      if (preDeltaMs !== null && referenceDeltaMs !== null) {
+        beginRobotContentTransition(
+          fromMediaTime,
+          toMediaTime,
+          preDeltaMs,
+          referenceDeltaMs,
+          context,
+          nowMs,
+        );
+      }
+      // Same source/capture identity, different media mapping segment. Keep the
+      // transaction and primed evidence, but immediately rebase any already
+      // confirmed content authority onto the post-seek player delta (zero).
+      syncAppliedCalibration();
+      broadcastJson(sourceStatusPayload());
+      broadcastJson(timingCalibrationStatusPayload());
+      return;
+    }
+
+    // A load/manual seek, legacy no-reason event, or a follower correction
+    // without concrete from/to media positions is destructive. Ambiguous old
+    // Source pages fail closed instead of smuggling a mapping break through as
+    // continuous calibration evidence.
+    clearRobotContentTransition();
+    sourceRuntime.invalidateMapping();
+    clearContentValidationBaseline();
+    calibration.discardPrimedContent();
+    robotContentTimeline.reset();
+    if (calibration.collecting) {
+      calibration.fail('The desktop player seeked during calibration. Start calibration again.');
+    } else {
+      syncAppliedCalibration();
+      broadcastJson(sourceStatusPayload());
+      broadcastJson(timingCalibrationStatusPayload());
+    }
+    return;
+  },
 });
 
 let shuttingDown = false;
@@ -2680,75 +2747,6 @@ wss.on('connection', (rawSocket, request) => {
     }
 
 
-
-
-    if (payload.type === 'source-seeked') {
-      if (!infrastructureCapability.authorized(socket)) {
-        rejectInfrastructure(socket, 'Authenticate the active Source before reporting a seek.');
-        return;
-      }
-      // `isRobotSource` is intentionally tri-state here: undefined means this
-      // socket was never a Robot source, while true/false means it has entered
-      // the Robot source lifecycle. Replacement clears the active flag to
-      // false, but must not restore seek authority to that old socket.
-      if (!sourceRuntime.canReportSeek(socket)) return;
-      const nowMs = performance.now();
-      robotContentTransitionRuntime.clearPendingBoundary();
-      const requestedFollowerCorrection = payload.reason === 'follower-correction';
-      const fromMediaTime = Number(payload.fromMediaTime);
-      const toMediaTime = Number(payload.toMediaTime);
-      const context = calibrationContext();
-      const preDeltaMs = robotContentTimeline.currentDeltaMs;
-      const referenceDeltaMs = robotContentTimeline.referenceDeltaMs;
-      const mappedFollowerCorrection = requestedFollowerCorrection
-        && sourceRuntime.isActiveRobot(socket)
-        && backingRuntime.isRobot
-        && robotContentTimeline.noteFollowerCorrection(
-          fromMediaTime,
-          toMediaTime,
-          context,
-          nowMs,
-        );
-
-      robotPlayerOffset.reset();
-      if (mappedFollowerCorrection) {
-        if (preDeltaMs !== null && referenceDeltaMs !== null) {
-          beginRobotContentTransition(
-            fromMediaTime,
-            toMediaTime,
-            preDeltaMs,
-            referenceDeltaMs,
-            context,
-            nowMs,
-          );
-        }
-        // Same source/capture identity, different media mapping segment. Keep the
-        // transaction and primed evidence, but immediately rebase any already
-        // confirmed content authority onto the post-seek player delta (zero).
-        syncAppliedCalibration();
-        broadcastJson(sourceStatusPayload());
-        broadcastJson(timingCalibrationStatusPayload());
-        return;
-      }
-
-      // A load/manual seek, legacy no-reason event, or a follower correction
-      // without concrete from/to media positions is destructive. Ambiguous old
-      // Source pages fail closed instead of smuggling a mapping break through as
-      // continuous calibration evidence.
-      clearRobotContentTransition();
-      sourceRuntime.invalidateMapping();
-      clearContentValidationBaseline();
-      calibration.discardPrimedContent();
-      robotContentTimeline.reset();
-      if (calibration.collecting) {
-        calibration.fail('The desktop player seeked during calibration. Start calibration again.');
-      } else {
-        syncAppliedCalibration();
-        broadcastJson(sourceStatusPayload());
-        broadcastJson(timingCalibrationStatusPayload());
-      }
-      return;
-    }
 
 
     if (payload.type === 'register' && payload.role === 'publisher') {

@@ -17,6 +17,7 @@ type RelayCommandProtocolHandlers<TSocket> = {
   rejectMicReservation: RelayCommandHandler<TSocket>;
   playbackMicIntent: RelayCommandHandler<TSocket>;
   playbackHello: RelayCommandHandler<TSocket>;
+  youtubeTelemetry: RelayCommandHandler<TSocket>;
 };
 
 /**
@@ -63,6 +64,9 @@ export function createRelayCommandProtocol<TSocket>(
           return true;
         case 'playback-hello':
           handlers.playbackHello(socket, payload);
+          return true;
+        case 'youtube-telemetry':
+          handlers.youtubeTelemetry(socket, payload);
           return true;
         default:
           return false;

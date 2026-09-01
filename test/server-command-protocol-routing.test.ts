@@ -21,6 +21,8 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.match(protocol, /case 'playback-mic-intent'/);
   assert.match(protocol, /case 'playback-hello'/);
   assert.match(protocol, /case 'youtube-telemetry'/);
+  assert.match(protocol, /case 'set-vocal-fine-tune'/);
+  assert.match(protocol, /case 'set-mix'/);
 
   assert.doesNotMatch(server, /payload\.type === 'start-take'/);
   assert.doesNotMatch(server, /payload\.type === 'stop-take'/);
@@ -35,6 +37,8 @@ test('server delegates the extracted low-risk mutating commands through the comm
   assert.doesNotMatch(server, /payload\.type === 'playback-mic-intent'/);
   assert.doesNotMatch(server, /payload\.type === 'playback-hello'/);
   assert.doesNotMatch(server, /payload\.type === 'youtube-telemetry'/);
+  assert.doesNotMatch(server, /payload\.type === 'set-vocal-fine-tune'/);
+  assert.doesNotMatch(server, /payload\.type === 'set-mix'/);
 });
 
 test('the server composition boundary still owns the extracted command effects', () => {
@@ -80,9 +84,17 @@ test('the server composition boundary still owns the extracted command effects',
   assert.match(server, /reportRoomSongTelemetryRejected\(socket, commandGate\.reason\)/);
   assert.match(server, /reportTelemetryRejected\(socket, result\.reason \?\? 'invalid-telemetry'\)/);
 
+  assert.match(server, /requireMicOwnerCommand\(socket, 'set-vocal-fine-tune'\)/);
+  assert.match(server, /session\.setAlignment\(\{/);
+  assert.match(server, /fineTuneMs: Math\.max\(-MAX_VOCAL_FINE_TUNE_MS, Math\.min\(MAX_VOCAL_FINE_TUNE_MS, nextFineTune\)\)/);
+  assert.match(server, /requireMicOwnerCommand\(socket, 'set-mix'\)/);
+  assert.match(server, /session\.setMicGainDb\(Math\.max\(0, Math\.min\(MAX_MIC_GAIN_DB, nextGain\)\)\)/);
+  assert.match(server, /Song is now a server-owned 100% reference/);
+  assert.match(server, /broadcastJson\(mixSettingsPayload\(\)\)/);
+
   assert.doesNotMatch(
     protocol,
-    /ParticipantSession|PlaybackTransportRuntime|SongSession|RoomSongCommandRuntime|sendJson|performance\.now/,
+    /AudioSession|ParticipantSession|PlaybackTransportRuntime|SongSession|RoomSongCommandRuntime|sendJson|performance\.now/,
   );
 });
 

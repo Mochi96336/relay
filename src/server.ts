@@ -50,6 +50,7 @@ import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-res
 import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
+import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -2183,6 +2184,27 @@ const takeCommandCoordinator = createRelayTakeCommandCoordinator<
   },
 });
 
+// Room-song admission and intent/revision authority stay in the command handler
+// and RoomSongCommandRuntime. This seam starts only after begin() accepts and
+// owns the acknowledgement -> pending recheck -> delivery -> status ordering.
+const roomSongCommandAcceptanceCoordinator = createRelayRoomSongCommandAcceptanceCoordinator<
+  RelaySocket,
+  PlaybackIdentity,
+  AcceptedRoomSongCommand
+>({
+  sendAccepted: (socket, commandId, revision, duplicate) => {
+    sendJson(socket, {
+      type: 'room-song-command-accepted',
+      commandId,
+      revision,
+      duplicate,
+    });
+  },
+  pendingForTarget: (target, nowMs) => roomSongCommands.pendingForTarget(target, nowMs),
+  sendApply: (target, command) => playbackTransport.send(target, roomSongCommandApplyPayload(command)),
+  reportStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
+});
+
 const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAcceptanceCoordinator<RelaySocket, PlaybackIdentity>({
   registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
   clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
@@ -2306,19 +2328,12 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    sendJson(socket, {
-      type: 'room-song-command-accepted',
-      commandId: decision.command.commandId,
-      revision: decision.command.revision,
+    roomSongCommandAcceptanceCoordinator.accept({
+      socket,
+      command: decision.command,
       duplicate: decision.duplicate,
+      nowMs,
     });
-
-    const commandTarget = decision.command.target;
-    const stillPending = roomSongCommands.pendingForTarget(commandTarget, nowMs);
-    if (stillPending?.commandId === decision.command.commandId) {
-      playbackTransport.send(commandTarget, roomSongCommandApplyPayload(decision.command));
-    }
-    broadcastJson(roomSongCommandStatusPayload(nowMs));
   },
   roomSongCommandFailed: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);

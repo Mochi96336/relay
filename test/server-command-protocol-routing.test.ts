@@ -60,7 +60,15 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /parseRoomSongCommand\(payload\)/);
   assert.match(server, /roomSongCommands\.begin\(/);
   assert.match(server, /playbackTransport\.identity\(socket\)/);
-  assert.match(server, /playbackTransport\.send\(commandTarget, roomSongCommandApplyPayload\(decision\.command\)\)/);
+  assert.match(server, /roomSongCommandAcceptanceCoordinator\.accept\(\{/);
+  assert.match(
+    server,
+    /pendingForTarget: \(target, nowMs\) => roomSongCommands\.pendingForTarget\(target, nowMs\)/,
+  );
+  assert.match(
+    server,
+    /sendApply: \(target, command\) => playbackTransport\.send\(target, roomSongCommandApplyPayload\(command\)\)/,
+  );
   assert.match(server, /rejectRoomSongCommand\(/);
   assert.match(server, /broadcastJson\(roomSongCommandStatusPayload\(nowMs\)\)/);
   assert.match(server, /roomSongCommands\.pendingForTarget\(playbackIdentity, nowMs\)/);

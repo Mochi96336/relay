@@ -49,6 +49,7 @@ import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-
 import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
 import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
+import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -2148,6 +2149,40 @@ const micReleaseCoordinator = createRelayMicReleaseCoordinator<
   sendReleased: (socket) => sendJson(socket, { type: 'mic-released' }),
 });
 
+// Participant/product admission and take-id validation stay in the command handler.
+// TakeController remains recording/storage authority; this seam owns only admitted
+// command ordering around the authoritative mix-frame boundary.
+const takeCommandCoordinator = createRelayTakeCommandCoordinator<
+  RelaySocket,
+  ReturnType<typeof takeFrameBoundary>['position'],
+  TakeSongSnapshot
+>({
+  frameBoundary: (nowMs) => takeFrameBoundary(nowMs),
+  songSnapshot: (atMs) => takeSongSnapshot(atMs),
+  cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  startTake: (participantId, song, position, wallClockMs) =>
+    takeController.start(participantId, song, position, wallClockMs),
+  stopTake: (takeId, participantId, position, reason, wallClockMs) =>
+    takeController.stop(takeId, participantId, position, reason, wallClockMs),
+  reject: (socket, command, reason) => rejectTakeCommand(socket, command, reason),
+  acceptStart: (socket, takeId) => {
+    sendJson(socket, {
+      type: 'take-command-accepted',
+      command: 'start',
+      takeId,
+    });
+  },
+  acceptStop: (socket, takeId, duplicate) => {
+    sendJson(socket, {
+      type: 'take-command-accepted',
+      command: 'stop',
+      takeId,
+      duplicate,
+    });
+  },
+});
+
 const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAcceptanceCoordinator<RelaySocket, PlaybackIdentity>({
   registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
   clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
@@ -2197,27 +2232,14 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       rejectTakeCommand(socket, 'start', blockedReason);
       return;
     }
-    const boundary = takeFrameBoundary(nowMs);
-    const song = takeSongSnapshot(boundary.atMs);
 
-    if (cancelActiveContentValidation(nowMs)) {
-      broadcastJson(timingCalibrationStatusPayload());
-    }
-    const result = takeController.start(
-      socket.participantId,
-      song,
-      boundary.position,
-      commandWallClockMs + (boundary.atMs - nowMs),
-    );
-    if (!result.ok) {
-      rejectTakeCommand(socket, 'start', result.reason);
-      return;
-    }
-    sendJson(socket, {
-      type: 'take-command-accepted',
-      command: 'start',
-      takeId: result.takeId,
+    takeCommandCoordinator.start({
+      socket,
+      participantId: socket.participantId,
+      commandWallClockMs,
+      nowMs,
     });
+    return;
   },
   stopTake: (socket, payload) => {
     if (!socket.participantId) {
@@ -2232,24 +2254,14 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
 
     const commandWallClockMs = Date.now();
     const nowMs = performance.now();
-    const boundary = takeFrameBoundary(nowMs);
-    const result = takeController.stop(
+    takeCommandCoordinator.stop({
+      socket,
+      participantId: socket.participantId,
       takeId,
-      socket.participantId,
-      boundary.position,
-      'user',
-      commandWallClockMs + (boundary.atMs - nowMs),
-    );
-    if (!result.ok) {
-      rejectTakeCommand(socket, 'stop', result.reason);
-      return;
-    }
-    sendJson(socket, {
-      type: 'take-command-accepted',
-      command: 'stop',
-      takeId,
-      duplicate: result.duplicate,
+      commandWallClockMs,
+      nowMs,
     });
+    return;
   },
   releaseMic: (socket) => {
     if (!socket.participantId) return;

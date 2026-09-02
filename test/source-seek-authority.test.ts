@@ -6,6 +6,10 @@ import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
 const source = readFileSync(new URL('../public/source.js', import.meta.url), 'utf8');
 const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+const seekCoordinatorSource = readFileSync(
+  new URL('../src/relay-source-seek-transaction-coordinator.ts', import.meta.url),
+  'utf8',
+);
 
 test('an unarmed Source preview cannot announce or chase authoritative seek discontinuities', () => {
   assert.match(
@@ -25,33 +29,40 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
   );
 });
 
-test('server fences source-seeked from any no-longer-active Robot source', () => {
+test('server fences source-seeked before classification and mapped corrections remain non-destructive', () => {
   const handlerStart = serverSource.indexOf('sourceSeeked: (socket, payload) => {');
   const staleRobotFence = serverSource.indexOf(
     'if (!sourceRuntime.canReportSeek(socket)) return;',
     handlerStart,
   );
   const mappingAttempt = serverSource.indexOf('robotContentTimeline.noteFollowerCorrection(', staleRobotFence);
-  const mappedBranch = serverSource.indexOf('if (mappedFollowerCorrection) {', mappingAttempt);
-  const mappedReturn = serverSource.indexOf('return;', mappedBranch);
-  const destructiveGeneration = serverSource.indexOf('sourceRuntime.invalidateMapping();', mappedReturn);
-  const destructiveDiscard = serverSource.indexOf('calibration.discardPrimedContent();', destructiveGeneration);
+  const delegation = serverSource.indexOf('sourceSeekTransactionCoordinator.handle({', mappingAttempt);
 
   assert.ok(handlerStart >= 0, 'source-seeked handler must exist');
   assert.ok(staleRobotFence > handlerStart, 'stale Robot source must be fenced before seek semantics are evaluated');
   assert.ok(mappingAttempt > staleRobotFence, 'only the active Robot may attempt follower media mapping');
-  assert.ok(mappedBranch > mappingAttempt && mappedReturn > mappedBranch, 'valid mapped follower correction must return without destructive invalidation');
+  assert.ok(delegation > mappingAttempt, 'post-classification effects must begin only after mapping authority decides');
+  assert.doesNotMatch(
+    serverSource.slice(mappingAttempt, delegation),
+    /sourceRuntime\.invalidateMapping\(\)|calibration\.discardPrimedContent\(\)|robotPlayerOffset\.reset\(\)/,
+    'classification must not perform post-seek destructive lifecycle effects',
+  );
+
+  const mappedBranch = seekCoordinatorSource.indexOf('if (input.mappedFollowerCorrection) {');
+  const mappedReturn = seekCoordinatorSource.indexOf("return 'mapped-follower-correction'", mappedBranch);
+  const destructiveGeneration = seekCoordinatorSource.indexOf('dependencies.invalidateSourceMapping();', mappedReturn);
+  const destructiveDiscard = seekCoordinatorSource.indexOf('dependencies.discardPrimedContent();', destructiveGeneration);
   assert.ok(
-    destructiveGeneration > mappedReturn,
-    'unmapped/load/manual seek must fall through to source-generation invalidation',
+    mappedBranch >= 0 && mappedReturn > mappedBranch && destructiveGeneration > mappedReturn,
+    'valid mapped follower correction must return before destructive invalidation',
   );
   assert.ok(
     destructiveDiscard > destructiveGeneration,
     'destructive seek must discard primed content after changing source identity',
   );
   assert.doesNotMatch(
-    serverSource.slice(mappedBranch, mappedReturn),
-    /sourceRuntime\.invalidateMapping\(\)/,
+    seekCoordinatorSource.slice(mappedBranch, mappedReturn),
+    /invalidateSourceMapping|discardPrimedContent/,
     'a concretely mapped follower correction preserves source identity',
   );
 });

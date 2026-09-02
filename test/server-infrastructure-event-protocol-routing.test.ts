@@ -43,9 +43,11 @@ test('server still owns infrastructure observation authority and effects', () =>
   assert.match(server, /sourceRuntime\.canReportSeek\(socket\)/);
   assert.match(server, /robotContentTransitionRuntime\.clearPendingBoundary\(\)/);
   assert.match(server, /robotContentTimeline\.noteFollowerCorrection\(/);
+  assert.match(server, /sourceSeekTransactionCoordinator\.handle\(\{/);
+  assert.match(server, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
   assert.match(server, /beginRobotContentTransition\(/);
-  assert.match(server, /sourceRuntime\.invalidateMapping\(\)/);
-  assert.match(server, /calibration\.discardPrimedContent\(\)/);
+  assert.match(server, /invalidateSourceMapping: \(\) => sourceRuntime\.invalidateMapping\(\)/);
+  assert.match(server, /discardPrimedContent: \(\) => calibration\.discardPrimedContent\(\)/);
 
   assert.doesNotMatch(
     protocol,

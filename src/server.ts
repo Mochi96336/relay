@@ -35,6 +35,7 @@ import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
+import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
@@ -2678,6 +2679,60 @@ const authenticationProtocol = createRelayAuthenticationProtocol<RelaySocket>({
   },
 });
 
+const publisherActivationCoordinator = createRelayPublisherActivationCoordinator<
+  RelaySocket,
+  Parameters<typeof applyMicOwnerTransitionEffects>[0]
+>({
+  now: () => performance.now(),
+  participantId: (socket) => socket.participantId ?? null,
+  applyOwnershipEffects: (effects, hooks) => {
+    applyMicOwnerEffects(effects, performance.now(), {
+      invalidateTiming: hooks.invalidateTiming,
+      prepareSongHandoff: hooks.prepareSongHandoff,
+    });
+  },
+  bindPublisher: (registration) => micRuntime.bindPublisher(registration),
+  retirePrevious: (previousPublisher, nextPublisher, sameParticipantReplacement) => {
+    const newOwnerName = nextPublisher.participantId
+      ? participantPayload(nextPublisher.participantId)?.nickname ?? 'Another participant'
+      : 'Another microphone';
+    retirePublisherTransport(
+      previousPublisher,
+      sameParticipantReplacement ? 'publisher-superseded' : 'mic-revoked',
+      sameParticipantReplacement
+        ? 'A newer microphone capture from this participant became active.'
+        : `${newOwnerName} took over the microphone.`,
+    );
+  },
+  cancelTransportGrace: () => micTransportGrace.cancel(),
+  setMicExpected: () => session.setMicExpected(true),
+  sessionActive: () => session.active,
+  noteTransportConnected: () => takeController.noteQualityEvent('mic-transport-connected'),
+  invalidateTiming: (reason) => invalidateMicTiming(reason),
+  restartLiveSource: () => restartLiveSourceAfterMicReconnect(),
+  directMediaOffer: () => micRuntime.directMediaOffer(),
+  sendRegistered: (socket, result) => {
+    sendJson(socket, {
+      type: 'registered',
+      role: 'publisher',
+      takeover: result.takeover,
+      ...(result.mediaTransport ? { mediaTransport: result.mediaTransport } : {}),
+    });
+  },
+  sendInitialState: (socket) => {
+    sendJson(socket, mixSettingsPayload());
+    sendJson(socket, youtubeTimeline.statusPayload());
+    sendJson(socket, youtubeTimeline.roomStatusPayload());
+    sendJson(socket, roomSongCommandStatusPayload());
+    sendJson(socket, takeController.statusPayload());
+    sendJson(socket, sourceStatusPayload());
+    sendJson(socket, timingCalibrationStatusPayload());
+  },
+  broadcastStatus: () => broadcastStatus(),
+  broadcastSessionStatus: () => broadcastSessionStatus(),
+  beginPreparedSongHandoff: (participantId) => beginPreparedSongHandoff(participantId),
+});
+
 const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   publisher: (socket, payload) => {
     if (!canClaimSocketRole(socket, 'publisher')) return;
@@ -2775,75 +2830,17 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
 
     commitSocketRole(socket, 'publisher');
 
-    let deferredOwnershipTimingReason: string | null = null;
-    let deferredHandoffParticipantId: string | null = null;
-    if (ownershipEffects) {
-      applyMicOwnerEffects(ownershipEffects, performance.now(), {
-        invalidateTiming: (reason) => {
-          deferredOwnershipTimingReason = reason;
-        },
-        prepareSongHandoff: (participantId) => {
-          deferredHandoffParticipantId = participantId;
-        },
-      });
-    }
 
-    const {
-      previousPublisher,
-      sameParticipantReplacement,
-      sameCapture,
-    } = micRuntime.bindPublisher({
+    publisherActivationCoordinator.activate({
       socket,
+      ownershipEffects,
+      previousOwnerId,
+      takeoverRequested: hasTakeoverExpectation,
       sampleRate,
       captureGeneration,
       initialSequence: initialSequence ?? undefined,
       audioPacketVersion,
-      nowMs: performance.now(),
     });
-
-    if (previousPublisher && previousPublisher !== socket) {
-      const newOwnerName = socket.participantId
-        ? participantPayload(socket.participantId)?.nickname ?? 'Another participant'
-        : 'Another microphone';
-      retirePublisherTransport(
-        previousPublisher,
-        sameParticipantReplacement ? 'publisher-superseded' : 'mic-revoked',
-        sameParticipantReplacement
-          ? 'A newer microphone capture from this participant became active.'
-          : `${newOwnerName} took over the microphone.`,
-      );
-    }
-
-    micTransportGrace.cancel();
-    session.setMicExpected(true);
-    if (!previousPublisher && session.active) takeController.noteQualityEvent('mic-transport-connected');
-
-    if (deferredOwnershipTimingReason) {
-      invalidateMicTiming(deferredOwnershipTimingReason);
-    } else if (sameParticipantReplacement && !sameCapture) {
-      invalidateMicTiming('Microphone capture changed.');
-    }
-
-    restartLiveSourceAfterMicReconnect();
-    const mediaTransport = micRuntime.directMediaOffer();
-    sendJson(socket, {
-      type: 'registered',
-      role: 'publisher',
-      takeover: hasTakeoverExpectation && previousOwnerId !== socket.participantId,
-      ...(mediaTransport ? { mediaTransport } : {}),
-    });
-    sendJson(socket, mixSettingsPayload());
-    sendJson(socket, youtubeTimeline.statusPayload());
-    sendJson(socket, youtubeTimeline.roomStatusPayload());
-    sendJson(socket, roomSongCommandStatusPayload());
-    sendJson(socket, takeController.statusPayload());
-    sendJson(socket, sourceStatusPayload());
-    sendJson(socket, timingCalibrationStatusPayload());
-    broadcastStatus();
-    if (socket.participantId) {
-      broadcastSessionStatus();
-      if (deferredHandoffParticipantId) beginPreparedSongHandoff(deferredHandoffParticipantId);
-    }
     return;
   },
   backing: (socket, payload) => {

@@ -39,6 +39,7 @@ import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-proto
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
+import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2940,6 +2941,45 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   },
 });
 
+const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
+  isMicPublisher: (socket) => micRuntime.isPublisher(socket),
+  receiveMic: (socket, data, nowMs) => {
+    deliverMicPackets(micRuntime.receivePublisher(socket, data, nowMs));
+  },
+  isBackingActive: (socket) => (
+    backingRuntime.isSocket(socket) && socket.role === 'backing' && session.active
+  ),
+  decodeBacking: (data) => decodePcmFrame(data),
+  backingGeneration: () => session.backingGeneration,
+  now: () => performance.now(),
+  noteBackingFrame: (socket, nowMs) => backingRuntime.noteFrame(socket, nowMs),
+  ingestBacking: (frame, nowMs) => session.ingestBacking(
+    frame,
+    backingRuntime.sampleRate,
+    nowMs,
+    backingRuntime.isRobot,
+  ),
+  onBackingCaptureRestarted: () => {
+    clearRobotBackingBoundaryRequest();
+    takeController.noteQualityEvent('backing-capture-restarted');
+    abandonProbeRun();
+    clearContentValidationBaseline();
+    if (calibration.collecting) {
+      calibration.fail('Backing capture restarted during calibration. Start calibration again.');
+    } else {
+      syncAppliedCalibration();
+      broadcastJson(timingCalibrationStatusPayload());
+      broadcastJson(sourceStatusPayload());
+    }
+  },
+  noteRobotTransitionBackingFrame: (frame, samples, start, nowMs) => {
+    noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
+  },
+  mappedContentBackingStart: (start, nowMs) => mappedContentBackingStart(start, nowMs),
+  feedContentBackingEvidence: (samples, start, nowMs) => {
+    feedContentBackingEvidence(samples, start, nowMs);
+  },
+});
 const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySocket>({
   isActive: (socket) => sourceRuntime.isActive(socket),
   noteDisconnected: () => takeController.noteQualityEvent('robot-source-disconnected'),
@@ -3035,44 +3075,7 @@ wss.on('connection', (rawSocket, request) => {
   socket.on('message', (data, isBinary) => {
     if (shuttingDown) return;
     if (isBinary) {
-      if (micRuntime.isPublisher(socket)) {
-        deliverMicPackets(micRuntime.receivePublisher(socket, data as Buffer, performance.now()));
-        return;
-      }
-
-      if (backingRuntime.isSocket(socket) && socket.role === 'backing' && session.active) {
-        const frame = decodePcmFrame(data as Buffer);
-        const previousGeneration = session.backingGeneration;
-        const nowMs = performance.now();
-        backingRuntime.noteFrame(socket, nowMs);
-        const { samples, start } = session.ingestBacking(
-          frame,
-          backingRuntime.sampleRate,
-          nowMs,
-          backingRuntime.isRobot,
-        );
-        if (
-          previousGeneration !== null
-          && session.backingGeneration !== previousGeneration
-        ) {
-          clearRobotBackingBoundaryRequest();
-          takeController.noteQualityEvent('backing-capture-restarted');
-          abandonProbeRun();
-          clearContentValidationBaseline();
-          if (calibration.collecting) {
-            calibration.fail('Backing capture restarted during calibration. Start calibration again.');
-          } else {
-            syncAppliedCalibration();
-            broadcastJson(timingCalibrationStatusPayload());
-            broadcastJson(sourceStatusPayload());
-          }
-        }
-        noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
-        const contentTimingStart = mappedContentBackingStart(start, nowMs);
-        if (contentTimingStart !== null) {
-          feedContentBackingEvidence(samples, contentTimingStart, nowMs);
-        }
-      }
+      audioUplinkCoordinator.handle(socket, data as Buffer);
       return;
     }
 

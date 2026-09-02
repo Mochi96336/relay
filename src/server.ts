@@ -49,6 +49,7 @@ import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-
 import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
 import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
+import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
@@ -2607,6 +2608,33 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
 
 });
 
+// Infrastructure capability and Source/mapping classification stay in the
+// infrastructure handler. This seam begins only after the seek is accepted and
+// follower-correction mapping has been classified by the authoritative runtimes.
+const sourceSeekTransactionCoordinator = createRelaySourceSeekTransactionCoordinator<CalibrationContext>({
+  resetPlayerOffset: () => robotPlayerOffset.reset(),
+  beginContentTransition: (fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs) => {
+    beginRobotContentTransition(
+      fromMediaTime,
+      toMediaTime,
+      preDeltaMs,
+      referenceDeltaMs,
+      context,
+      nowMs,
+    );
+  },
+  syncAppliedCalibration: () => { syncAppliedCalibration(); },
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  clearContentTransition: () => clearRobotContentTransition(),
+  invalidateSourceMapping: () => sourceRuntime.invalidateMapping(),
+  clearContentValidation: () => clearContentValidationBaseline(),
+  discardPrimedContent: () => calibration.discardPrimedContent(),
+  resetContentTimeline: () => robotContentTimeline.reset(),
+  calibrationCollecting: () => calibration.collecting,
+  failCalibration: (message) => calibration.fail(message),
+});
+
 const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({
   backingSampleBoundary: (socket, payload) => {
     if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
@@ -2685,43 +2713,15 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
         nowMs,
       );
 
-    robotPlayerOffset.reset();
-    if (mappedFollowerCorrection) {
-      if (preDeltaMs !== null && referenceDeltaMs !== null) {
-        beginRobotContentTransition(
-          fromMediaTime,
-          toMediaTime,
-          preDeltaMs,
-          referenceDeltaMs,
-          context,
-          nowMs,
-        );
-      }
-      // Same source/capture identity, different media mapping segment. Keep the
-      // transaction and primed evidence, but immediately rebase any already
-      // confirmed content authority onto the post-seek player delta (zero).
-      syncAppliedCalibration();
-      broadcastJson(sourceStatusPayload());
-      broadcastJson(timingCalibrationStatusPayload());
-      return;
-    }
-
-    // A load/manual seek, legacy no-reason event, or a follower correction
-    // without concrete from/to media positions is destructive. Ambiguous old
-    // Source pages fail closed instead of smuggling a mapping break through as
-    // continuous calibration evidence.
-    clearRobotContentTransition();
-    sourceRuntime.invalidateMapping();
-    clearContentValidationBaseline();
-    calibration.discardPrimedContent();
-    robotContentTimeline.reset();
-    if (calibration.collecting) {
-      calibration.fail('The desktop player seeked during calibration. Start calibration again.');
-    } else {
-      syncAppliedCalibration();
-      broadcastJson(sourceStatusPayload());
-      broadcastJson(timingCalibrationStatusPayload());
-    }
+    sourceSeekTransactionCoordinator.handle({
+      mappedFollowerCorrection,
+      fromMediaTime,
+      toMediaTime,
+      preDeltaMs,
+      referenceDeltaMs,
+      context,
+      nowMs,
+    });
     return;
   },
 });

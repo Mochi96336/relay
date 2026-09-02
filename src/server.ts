@@ -47,6 +47,7 @@ import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordina
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
 import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
+import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -2986,6 +2987,17 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   },
 });
 
+const backingCaptureRestartCoordinator = createRelayBackingCaptureRestartCoordinator({
+  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
+  abandonProbeRun: () => abandonProbeRun(),
+  clearContentValidation: () => clearContentValidationBaseline(),
+  failCalibration: (message) => calibration.fail(message),
+  syncAppliedCalibration: () => { syncAppliedCalibration(); },
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+});
+
 const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
   isMicPublisher: (socket) => micRuntime.isPublisher(socket),
   receiveMic: (socket, data, nowMs) => {
@@ -3005,17 +3017,9 @@ const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
     backingRuntime.isRobot,
   ),
   onBackingCaptureRestarted: () => {
-    clearRobotBackingBoundaryRequest();
-    takeController.noteQualityEvent('backing-capture-restarted');
-    abandonProbeRun();
-    clearContentValidationBaseline();
-    if (calibration.collecting) {
-      calibration.fail('Backing capture restarted during calibration. Start calibration again.');
-    } else {
-      syncAppliedCalibration();
-      broadcastJson(timingCalibrationStatusPayload());
-      broadcastJson(sourceStatusPayload());
-    }
+    backingCaptureRestartCoordinator.restart({
+      calibrationCollecting: calibration.collecting,
+    });
   },
   noteRobotTransitionBackingFrame: (frame, samples, start, nowMs) => {
     noteRobotTransitionBackingFrame(frame, samples, start, nowMs);

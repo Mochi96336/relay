@@ -46,6 +46,7 @@ import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconn
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
+import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -1584,6 +1585,17 @@ function expireBackingGrace() {
   broadcastStatus();
 }
 
+
+const micCaptureRestartCoordinator = createRelayMicCaptureRestartCoordinator({
+  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
+  abandonProbeRun: () => abandonProbeRun(),
+  clearContentValidation: () => clearContentValidationBaseline(),
+  failCalibration: (message) => calibration.fail(message),
+  syncAppliedCalibration: () => { syncAppliedCalibration(); },
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+});
+
 function processPublisherFrame(frame: PcmFrame) {
   // Physical media can outlive the control WebSocket during its reconnect
   // grace. Authorization already happened at the WS publisher boundary or the
@@ -1600,18 +1612,9 @@ function processPublisherFrame(frame: PcmFrame) {
     if (session.active) {
       const micRestarted = previousGeneration !== null && session.micGeneration !== previousGeneration;
       if (micRestarted) {
-        takeController.noteQualityEvent('mic-capture-restarted');
-        abandonProbeRun();
-        clearContentValidationBaseline();
-        if (calibration.collecting) {
-          calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
-        } else {
-          syncAppliedCalibration();
-          // Publish invalidated timing before the source summary
-          // so consumers never observe stale timing for a new capture.
-          broadcastJson(timingCalibrationStatusPayload());
-          broadcastJson(sourceStatusPayload());
-        }
+        micCaptureRestartCoordinator.restart({
+          calibrationCollecting: calibration.collecting,
+        });
       }
       if (robotContentFallbackPrimingActive()) {
         calibration.primeMic(samples, start);

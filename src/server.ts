@@ -45,6 +45,7 @@ import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coor
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
+import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -1469,16 +1470,22 @@ function revokePublisherTransport(message: string) {
   return hadMedia;
 }
 
+const micTimingInvalidationCoordinator = createRelayMicTimingInvalidationCoordinator({
+  clearBootCalibration: () => clearBootCalibrationState(),
+  clearContentValidation: () => clearContentValidationBaseline(),
+  invalidateCalibration: (message) => {
+    if (calibration.collecting) calibration.fail(message);
+    else calibration.reset();
+  },
+  clearTimingKind: () => timingRuntime.clearCalibrationKind(),
+  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
+  syncAppliedCalibration: () => { syncAppliedCalibration(); },
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+});
+
 function invalidateMicTiming(message: string) {
-  clearBootCalibrationState();
-  clearContentValidationBaseline();
-  if (calibration.collecting) calibration.fail(message);
-  else calibration.reset();
-  timingRuntime.clearCalibrationKind();
-  timingRuntime.resetAutoCalibrationSchedule();
-  syncAppliedCalibration();
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
+  micTimingInvalidationCoordinator.invalidate(message);
 }
 
 function refreshLiveMicNetworkCompensation() {

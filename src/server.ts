@@ -38,6 +38,7 @@ import { createRelayRegistrationProtocol } from './relay-registration-protocol.j
 import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
 import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
+import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
@@ -2925,6 +2926,22 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   },
 });
 
+const robotActivationCoordinator = createRelayRobotActivationCoordinator<RelaySocket>({
+  notifyPreviousReplaced: (previous) => {
+    sendJson(previous, { type: 'robot-source-replaced' });
+  },
+  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
+  abandonProbeRun: () => abandonProbeRun(),
+  sessionActive: () => session.active,
+  resetPlayerOffset: () => robotPlayerOffset.reset(),
+  resetContentTimeline: () => robotContentTimeline.reset(),
+  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
+  syncAppliedCalibration: () => { syncAppliedCalibration(); },
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+});
+
 const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   robotSourceHello: (socket, payload) => {
     if (!infrastructureCapability.authorized(socket)) {
@@ -2934,20 +2951,7 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
     if (sourceRuntime.isActive(socket)) return;
 
     const { previous, replaced } = sourceRuntime.attachRobot(socket);
-    if (replaced && previous) {
-      sendJson(previous, { type: 'robot-source-replaced' });
-      takeController.noteQualityEvent('robot-source-replaced');
-      abandonProbeRun();
-    } else if (!previous && session.active) {
-      takeController.noteQualityEvent('robot-source-connected');
-    }
-    robotPlayerOffset.reset();
-    robotContentTimeline.reset();
-    clearRobotBackingBoundaryRequest();
-    dropLegacyCalibrationForRobot();
-    syncAppliedCalibration();
-    broadcastJson(sourceStatusPayload());
-    broadcastJson(timingCalibrationStatusPayload());
+    robotActivationCoordinator.activate({ previous, replaced });
     return;
   },
 });

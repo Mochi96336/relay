@@ -18,8 +18,7 @@ test('server still owns Robot source lifecycle authority and effects', () => {
   assert.match(server, /sourceRuntime\.isActive\(socket\)/);
   assert.match(server, /sourceRuntime\.attachRobot\(socket\)/);
   assert.match(server, /type: 'robot-source-replaced'/);
-  assert.match(server, /takeController\.noteQualityEvent\('robot-source-replaced'\)/);
-  assert.match(server, /takeController\.noteQualityEvent\('robot-source-connected'\)/);
+  assert.match(server, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
   assert.match(server, /abandonProbeRun\(\)/);
   assert.match(server, /robotPlayerOffset\.reset\(\)/);
   assert.match(server, /robotContentTimeline\.reset\(\)/);

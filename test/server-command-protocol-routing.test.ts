@@ -82,11 +82,22 @@ test('the server composition boundary still owns the extracted message effects',
 
   assert.match(server, /roomSongCommands\.gateTelemetry\(/);
   assert.match(server, /youtubeTimeline\.update\(/);
-  assert.match(server, /playbackTransport\.register\(socket, acceptedIdentity\)/);
-  assert.match(server, /cancelActiveContentValidation\(nowMs\)/);
-  assert.match(server, /roomSongCommands\.complete\(commandGate\.completesCommandId\)/);
-  assert.match(server, /playbackTransport\.send\(result\.previousLeader,/);
+  assert.match(
+    server,
+    /registerPlayback: \(socket, identity\) => \{ playbackTransport\.register\(socket, identity\); \}/,
+  );
+  assert.match(
+    server,
+    /cancelActiveContentValidation: \(nowMs\) => cancelActiveContentValidation\(nowMs\)/,
+  );
+  assert.match(
+    server,
+    /completeRoomSongCommand: \(commandId\) => roomSongCommands\.complete\(commandId\)/,
+  );
+  assert.match(server, /releasePreviousLeader: \(previousLeader, handoffId, videoId\) => \{/);
+  assert.match(server, /playbackTransport\.send\(previousLeader,/);
   assert.match(server, /type: 'song-handoff-complete'/);
+  assert.match(server, /youtubeTelemetryAcceptanceCoordinator\.accept\(\{/);
   assert.match(server, /reportRoomSongTelemetryRejected\(socket, commandGate\.reason\)/);
   assert.match(server, /reportTelemetryRejected\(socket, result\.reason \?\? 'invalid-telemetry'\)/);
 

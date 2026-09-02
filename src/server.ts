@@ -47,6 +47,7 @@ import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordina
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
 import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
+import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -78,6 +79,7 @@ import {
   SongSession,
   normalizePlaybackGeneration,
   normalizePlaybackTransportId,
+  type PlaybackIdentity,
   type SongHandoffPlan,
 } from './song-session.js';
 import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
@@ -2140,6 +2142,37 @@ const micReleaseCoordinator = createRelayMicReleaseCoordinator<
   sendReleased: (socket) => sendJson(socket, { type: 'mic-released' }),
 });
 
+const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAcceptanceCoordinator<RelaySocket, PlaybackIdentity>({
+  registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
+  clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
+  cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  reportTimelineStatus: (status) => broadcastJson(status),
+  reportRoomStatus: (nowMs) => broadcastJson(youtubeTimeline.roomStatusPayload(nowMs)),
+  completeRoomSongCommand: (commandId) => roomSongCommands.complete(commandId),
+  reportRoomSongCommandComplete: (commandId) => {
+    broadcastJson({
+      type: 'room-song-command-complete',
+      commandId,
+      revision: roomSongCommands.revision,
+    });
+  },
+  reportRoomSongCommandStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
+  releasePreviousLeader: (previousLeader, handoffId, videoId) => {
+    playbackTransport.send(previousLeader, {
+      type: 'song-handoff-release',
+      handoffId,
+      videoId,
+    });
+  },
+  completeHandoff: (identity, handoffId) => {
+    playbackTransport.send(identity, {
+      type: 'song-handoff-complete',
+      handoffId,
+    });
+  },
+});
+
 const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   startTake: (socket) => {
     if (!socket.participantId) {
@@ -2398,40 +2431,17 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       nowMs,
     );
     if (result.accepted) {
-      playbackTransport.register(socket, acceptedIdentity);
-      socket.telemetryRejectedReason = undefined;
       const timelineStatus = youtubeTimeline.statusPayload(nowMs);
-      if (Number(timelineStatus.state) !== 1 && cancelActiveContentValidation(nowMs)) {
-        broadcastJson(timingCalibrationStatusPayload());
-      }
-      broadcastJson(timelineStatus);
-      broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
-
-      if (
-        commandGate.completesCommandId
-        && roomSongCommands.complete(commandGate.completesCommandId)
-      ) {
-        broadcastJson({
-          type: 'room-song-command-complete',
-          commandId: commandGate.completesCommandId,
-          revision: roomSongCommands.revision,
-        });
-        broadcastJson(roomSongCommandStatusPayload(nowMs));
-      }
-
-      if (result.handoffCompleted && result.handoffId) {
-        if (result.previousLeader) {
-          playbackTransport.send(result.previousLeader, {
-            type: 'song-handoff-release',
-            handoffId: result.handoffId,
-            videoId: timelineStatus.videoId ?? null,
-          });
-        }
-        playbackTransport.send(acceptedIdentity, {
-          type: 'song-handoff-complete',
-          handoffId: result.handoffId,
-        });
-      }
+      youtubeTelemetryAcceptanceCoordinator.accept({
+        socket,
+        acceptedIdentity,
+        nowMs,
+        timelineStatus,
+        completesCommandId: commandGate.completesCommandId,
+        handoffCompleted: result.handoffCompleted,
+        handoffId: result.handoffId,
+        previousLeader: result.previousLeader,
+      });
     } else {
       reportTelemetryRejected(socket, result.reason ?? 'invalid-telemetry');
     }

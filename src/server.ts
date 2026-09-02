@@ -44,6 +44,7 @@ import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
+import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -1525,23 +1526,27 @@ function clearBootCalibrationState() {
   bootProbeRuntime.clear();
 }
 
+const liveSourceStopCoordinator = createRelayLiveSourceStopCoordinator({
+  cancelBackingGrace: () => backingRuntime.cancelGrace(),
+  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
+  sessionActive: () => session.active,
+  endTakeMix: () => takeController.endMix(),
+  clearBootCalibration: () => clearBootCalibrationState(),
+  clearContentValidation: () => clearContentValidationBaseline(),
+  resetRobotPlayerOffset: () => robotPlayerOffset.reset(),
+  resetRobotContentTimeline: () => robotContentTimeline.reset(),
+  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  stopSession: () => session.stop(),
+  resetCalibration: () => calibration.reset(),
+  clearTimingKind: () => timingRuntime.clearCalibrationKind(),
+  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+  reportStatus: () => broadcastStatus(),
+});
+
 function stopLiveSource() {
-  backingRuntime.cancelGrace();
-  backingRuntime.retireRobotRoute();
-  if (!session.active) return;
-  takeController.endMix();
-  clearBootCalibrationState();
-  clearContentValidationBaseline();
-  robotPlayerOffset.reset();
-  robotContentTimeline.reset();
-  clearRobotBackingBoundaryRequest();
-  session.stop();
-  calibration.reset();
-  timingRuntime.clearCalibrationKind();
-  timingRuntime.resetAutoCalibrationSchedule();
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
-  broadcastStatus();
+  liveSourceStopCoordinator.stop();
 }
 
 function roomHasSong(nowMs = performance.now()) {

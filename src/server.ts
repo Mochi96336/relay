@@ -38,6 +38,7 @@ import { createRelayRegistrationProtocol } from './relay-registration-protocol.j
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
+import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -2979,6 +2980,23 @@ const micDisconnectCoordinator = createRelayMicDisconnectCoordinator<RelaySocket
   },
   reportStatus: () => broadcastStatus(),
 });
+const backingDisconnectCoordinator = createRelayBackingDisconnectCoordinator<RelaySocket>({
+  isBacking: (socket) => backingRuntime.isSocket(socket),
+  noteDisconnected: () => takeController.noteQualityEvent('backing-transport-disconnected'),
+  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  detach: (socket) => backingRuntime.detach(socket),
+  clearBackingExpectation: () => session.setBackingExpected(false),
+  failCalibrationIfCollecting: () => {
+    if (calibration.collecting) {
+      calibration.fail('Desktop Source disconnected during calibration.');
+    }
+  },
+  cancelContentValidationAndReport: () => {
+    if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
+  },
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+  reportStatus: () => broadcastStatus(),
+});
 const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
   identity: (socket) => playbackTransport.identity(socket),
   now: () => performance.now(),
@@ -3090,18 +3108,7 @@ wss.on('connection', (rawSocket, request) => {
       robotDisconnectCoordinator.handle(socket);
       micTransportChanged = micDisconnectCoordinator.handle(socket);
 
-      if (backingRuntime.isSocket(socket)) {
-        takeController.noteQualityEvent('backing-transport-disconnected');
-        clearRobotBackingBoundaryRequest();
-        backingRuntime.detach(socket);
-        session.setBackingExpected(false);
-        if (calibration.collecting) {
-          calibration.fail('Desktop Source disconnected during calibration.');
-        }
-        if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-        broadcastJson(sourceStatusPayload());
-        broadcastStatus();
-      }
+      backingDisconnectCoordinator.handle(socket);
     }
 
     const presenceChanged = socket.participantConnectionId

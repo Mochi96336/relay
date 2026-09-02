@@ -37,19 +37,19 @@ test('server composes Robot disconnect coordinator from existing authority/effec
   assert.match(server, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
 });
 
-test('close callback keeps replacement fence, Mic dispatch, and Backing authority inline', () => {
+test('close callback keeps replacement fence and Robot, Mic, Backing dispatch order', () => {
   const close = closeBlock();
   const fence = close.indexOf('if (!socket.replaced) {');
   const robot = close.indexOf('robotDisconnectCoordinator.handle(socket);');
   const mic = close.indexOf('micDisconnectCoordinator.handle(socket);');
-  const backing = close.indexOf('if (backingRuntime.isSocket(socket)) {');
+  const backing = close.indexOf('backingDisconnectCoordinator.handle(socket);');
 
   assert.ok(fence >= 0 && robot > fence, 'replacement fence must remain outside Robot disconnect seam');
   assert.ok(mic > robot, 'Mic disconnect dispatch must remain after Robot cleanup');
-  assert.ok(backing > mic, 'Backing close authority must remain after Mic cleanup');
+  assert.ok(backing > mic, 'Backing disconnect dispatch must remain after Mic cleanup');
   assert.doesNotMatch(close, /if \(sourceRuntime\.isActive\(socket\)\) \{/);
   assert.doesNotMatch(close, /if \(micRuntime\.isPublisher\(socket\)\) \{/);
-  assert.match(close, /backingRuntime\.detach\(socket\)/);
+  assert.doesNotMatch(close, /if \(backingRuntime\.isSocket\(socket\)\) \{/);
 });
 
 test('coordinator owns ordering only, not Robot/calibration domain state', () => {

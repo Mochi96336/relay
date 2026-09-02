@@ -48,6 +48,7 @@ import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-c
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
 import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
 import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
+import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -2011,19 +2012,23 @@ function dropLegacyCalibrationForRobot() {
   syncAppliedCalibration();
 }
 
+// Command authority and product action availability stay in the command handler.
+// Calibration, timing and probe state authority stay in their existing runtimes;
+// this seam owns only the already-authorized manual transaction ordering.
+const manualBootRecalibrationCoordinator = createRelayManualBootRecalibrationCoordinator({
+  clearContentValidation: () => clearContentValidationBaseline(),
+  beginExternalRecalibration: () => calibration.beginExternalRecalibration(),
+  beginManualBootProbe: () => timingRuntime.beginBootProbe(false),
+  abandonProbeRun: () => abandonProbeRun(),
+  resetProbeCorrelations: () => bootProbeRuntime.resetCorrelations(),
+  syncAppliedCalibration: () => syncAppliedCalibration(),
+  maybeStartProbeCalibration: (nowMs) => maybeStartProbeCalibration(nowMs),
+  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+});
+
 function restartManualBootCalibration(nowMs: number) {
-  clearContentValidationBaseline();
-  // Manual Robot recalibration is a candidate transaction. Keep the
-  // previous confirmed alignment and the player delta it was measured with
-  // authoritative until a replacement probe earns promotion.
-  calibration.beginExternalRecalibration();
-  timingRuntime.beginBootProbe(false);
-  abandonProbeRun();
-  bootProbeRuntime.resetCorrelations();
-  syncAppliedCalibration();
-  maybeStartProbeCalibration(nowMs);
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
+  manualBootRecalibrationCoordinator.restart(nowMs);
 }
 
 const youtubeTimelineTimer = setInterval(() => {

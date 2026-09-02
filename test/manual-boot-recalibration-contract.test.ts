@@ -12,16 +12,22 @@ function functionBlock(name: string) {
 test('manual Robot recalibration is explicit and does not masquerade as the automatic path', () => {
   const restart = functionBlock('restartManualBootCalibration');
   assert.ok(restart);
-  assert.match(restart, /calibration\.beginExternalRecalibration\(\)/);
-  assert.match(restart, /timingRuntime\.beginBootProbe\(false\)/);
-  assert.match(restart, /abandonProbeRun\(\)/);
-  assert.match(restart, /bootProbeRuntime\.resetCorrelations\(\)/);
-  assert.match(restart, /syncAppliedCalibration\(\)/);
-  assert.match(restart, /maybeStartProbeCalibration\(nowMs\)/);
+  assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
   assert.doesNotMatch(restart, /automatic/);
   assert.doesNotMatch(restart, /calibration\.reset\(\)/);
   assert.doesNotMatch(restart, /clearBootCalibrationState\(\)/);
   assert.doesNotMatch(server, /function restartBootCalibration\(/);
+
+  const start = server.indexOf('const manualBootRecalibrationCoordinator =');
+  const end = server.indexOf('function restartManualBootCalibration', start);
+  assert.ok(start >= 0 && end > start, 'manual recalibration composition must remain identifiable');
+  const composition = server.slice(start, end);
+  assert.match(composition, /beginExternalRecalibration: \(\) => calibration\.beginExternalRecalibration\(\)/);
+  assert.match(composition, /beginManualBootProbe: \(\) => timingRuntime\.beginBootProbe\(false\)/);
+  assert.match(composition, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
+  assert.match(composition, /resetProbeCorrelations: \(\) => bootProbeRuntime\.resetCorrelations\(\)/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => syncAppliedCalibration\(\)/);
+  assert.match(composition, /maybeStartProbeCalibration: \(nowMs\) => maybeStartProbeCalibration\(nowMs\)/);
 });
 
 test('automatic boot-probe remains owned by the probe request path', () => {

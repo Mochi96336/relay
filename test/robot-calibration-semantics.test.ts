@@ -87,10 +87,19 @@ test('Robot manual realignment starts boot-probe from fresh silent capture witho
 test('Robot recalibration adapter preserves old authority until candidate promotion', async () => {
   const source = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
   const restart = source.match(/function restartManualBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(restart, /calibration\.beginExternalRecalibration\(\)/);
-  assert.doesNotMatch(restart, /calibration\.reset\(\)/, 'manual retry must not erase known-good calibration first');
-  assert.doesNotMatch(restart, /clearBootCalibrationState\(\)/, 'old confirmed boot evidence remains rollback authority');
-  assert.doesNotMatch(restart, /robotPlayerOffset\.reset\(\)/, 'old confirmed Robot total still depends on its live player delta');
+  assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
+
+  const compositionStart = source.indexOf('const manualBootRecalibrationCoordinator =');
+  const compositionEnd = source.indexOf('function restartManualBootCalibration', compositionStart);
+  assert.ok(
+    compositionStart >= 0 && compositionEnd > compositionStart,
+    'manual recalibration composition must remain identifiable',
+  );
+  const composition = source.slice(compositionStart, compositionEnd);
+  assert.match(composition, /beginExternalRecalibration: \(\) => calibration\.beginExternalRecalibration\(\)/);
+  assert.doesNotMatch(composition, /calibration\.reset\(\)/, 'manual retry must not erase known-good calibration first');
+  assert.doesNotMatch(composition, /clearBootCalibrationState\(\)/, 'old confirmed boot evidence remains rollback authority');
+  assert.doesNotMatch(composition, /robotPlayerOffset\.reset\(\)/, 'old confirmed Robot total still depends on its live player delta');
 
   const startProbe = source.match(/function maybeStartProbeCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(

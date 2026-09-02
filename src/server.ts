@@ -51,6 +51,7 @@ import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-cap
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
+import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -2205,6 +2206,31 @@ const roomSongCommandAcceptanceCoordinator = createRelayRoomSongCommandAcceptanc
   reportStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
 });
 
+// Playback identity validation and registration stay in the command handler/runtime.
+// This seam begins only after register() commits that identity and owns the
+// registration snapshots plus pending handoff/command continuation ordering.
+const playbackRegistrationContinuationCoordinator = createRelayPlaybackRegistrationContinuationCoordinator<
+  RelaySocket,
+  PlaybackIdentity,
+  SongHandoffPlan,
+  AcceptedRoomSongCommand
+>({
+  sendRegistered: (socket, identity) => {
+    sendJson(socket, {
+      type: 'playback-registered',
+      playbackTransportId: identity.transportId,
+      playbackGeneration: identity.generation,
+    });
+  },
+  sendRoomStatus: (socket) => sendJson(socket, youtubeTimeline.roomStatusPayload()),
+  sendCommandStatus: (socket) => sendJson(socket, roomSongCommandStatusPayload()),
+  handoffPlanForTarget: (identity) => youtubeTimeline.handoffPlanForTarget(identity),
+  sendHandoffPrepare: (plan) => { sendHandoffPlan('song-handoff-prepare', plan); },
+  now: () => performance.now(),
+  pendingCommandForTarget: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
+  sendCommandApply: (identity, command) => playbackTransport.send(identity, roomSongCommandApplyPayload(command)),
+});
+
 const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAcceptanceCoordinator<RelaySocket, PlaybackIdentity>({
   registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
   clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
@@ -2404,19 +2430,10 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       transportId,
       generation,
     });
-    sendJson(socket, { type: 'playback-registered', playbackTransportId: transportId, playbackGeneration: generation });
-    sendJson(socket, youtubeTimeline.roomStatusPayload());
-    sendJson(socket, roomSongCommandStatusPayload());
-
-    const pendingPlan = playbackIdentity
-      ? youtubeTimeline.handoffPlanForTarget(playbackIdentity)
-      : null;
-    if (pendingPlan) sendHandoffPlan('song-handoff-prepare', pendingPlan);
-
-    const pendingCommand = playbackIdentity
-      ? roomSongCommands.pendingForTarget(playbackIdentity, performance.now())
-      : null;
-    if (pendingCommand) playbackTransport.send(playbackIdentity!, roomSongCommandApplyPayload(pendingCommand));
+    playbackRegistrationContinuationCoordinator.continueRegistration({
+      socket,
+      identity: playbackIdentity,
+    });
     return;
   },
   youtubeTelemetry: (socket, payload) => {

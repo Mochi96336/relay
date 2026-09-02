@@ -85,8 +85,16 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /normalizePlaybackTransportId\(payload\.playbackTransportId\)/);
   assert.match(server, /normalizePlaybackGeneration\(payload\.playbackGeneration\)/);
   assert.match(server, /playbackTransport\.register\(socket,/);
-  assert.match(server, /youtubeTimeline\.handoffPlanForTarget\(playbackIdentity\)/);
-  assert.match(server, /roomSongCommands\.pendingForTarget\(playbackIdentity, performance\.now\(\)\)/);
+  assert.match(server, /playbackRegistrationContinuationCoordinator\.continueRegistration\(\{/);
+  assert.match(server, /handoffPlanForTarget: \(identity\) => youtubeTimeline\.handoffPlanForTarget\(identity\)/);
+  assert.match(
+    server,
+    /pendingCommandForTarget: \(identity, nowMs\) => roomSongCommands\.pendingForTarget\(identity, nowMs\)/,
+  );
+  assert.match(
+    server,
+    /sendCommandApply: \(identity, command\) => playbackTransport\.send\(identity, roomSongCommandApplyPayload\(command\)\)/,
+  );
 
   assert.match(server, /roomSongCommands\.gateTelemetry\(/);
   assert.match(server, /youtubeTimeline\.update\(/);

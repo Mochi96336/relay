@@ -2005,13 +2005,13 @@ function dropLegacyCalibrationForRobot() {
   syncAppliedCalibration();
 }
 
-function restartBootCalibration(nowMs: number, automatic: boolean) {
+function restartManualBootCalibration(nowMs: number) {
   clearContentValidationBaseline();
-  // Manual/automatic Robot recalibration is a candidate transaction. Keep the
+  // Manual Robot recalibration is a candidate transaction. Keep the
   // previous confirmed alignment and the player delta it was measured with
   // authoritative until a replacement probe earns promotion.
   calibration.beginExternalRecalibration();
-  timingRuntime.beginBootProbe(automatic);
+  timingRuntime.beginBootProbe(false);
   abandonProbeRun();
   bootProbeRuntime.resetCorrelations();
   syncAppliedCalibration();
@@ -2531,7 +2531,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     }
 
     if (calibrationAction.startCalibrationMode === 'boot-probe') {
-      restartBootCalibration(nowMs, false);
+      restartManualBootCalibration(nowMs);
       return;
     }
 

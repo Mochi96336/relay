@@ -99,7 +99,7 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /broadcastJson\(mixSettingsPayload\(\)\)/);
   assert.match(server, /requireMicOwnerCommand\(socket, 'start-timing-calibration'\)/);
   assert.match(server, /productStatusPayload\(nowMs\)\.actions/);
-  assert.match(server, /restartBootCalibration\(nowMs, false\)/);
+  assert.match(server, /restartManualBootCalibration\(nowMs\)/);
   assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, false\)/);
   assert.match(server, /calibration\.start\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);

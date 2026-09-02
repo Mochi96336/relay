@@ -31,7 +31,8 @@ test('server delegates auto retry, run provenance, calibration kind and validati
   assert.match(server, /timingRuntime\.autoCalibrationDue\(nowMs\)/);
   assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, true\)/);
   assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, false\)/);
-  assert.match(server, /timingRuntime\.beginBootProbe\(automatic\)/);
+  assert.match(server, /timingRuntime\.beginBootProbe\(true\)/);
+  assert.match(server, /timingRuntime\.beginBootProbe\(false\)/);
   assert.match(server, /timingRuntime\.prepareContentValidationSlew\(calibration\.confirmedRevision \+ 1\)/);
   assert.match(server, /timingRuntime\.markContentValidationBaseline\(calibration\.confirmedRevision\)/);
   assert.match(server, /automatic: timingRuntime\.automatic/);

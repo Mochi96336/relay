@@ -86,7 +86,7 @@ test('Robot manual realignment starts boot-probe from fresh silent capture witho
 
 test('Robot recalibration adapter preserves old authority until candidate promotion', async () => {
   const source = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
-  const restart = source.match(/function restartBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  const restart = source.match(/function restartManualBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(restart, /calibration\.beginExternalRecalibration\(\)/);
   assert.doesNotMatch(restart, /calibration\.reset\(\)/, 'manual retry must not erase known-good calibration first');
   assert.doesNotMatch(restart, /clearBootCalibrationState\(\)/, 'old confirmed boot evidence remains rollback authority');

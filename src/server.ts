@@ -36,6 +36,7 @@ import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-e
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
+import { createRelayMicReleaseCoordinator } from './relay-mic-release-coordinator.js';
 import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
@@ -2105,6 +2106,25 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
   timingCalibrationStatusPayload: () => timingCalibrationStatusPayload(),
 });
 
+const micReleaseCoordinator = createRelayMicReleaseCoordinator<
+  RelaySocket,
+  Parameters<typeof applyMicOwnerTransitionEffects>[0]
+>({
+  publisherParticipantId: () => micRuntime.publisher?.participantId ?? null,
+  mediaOwnerId: () => micRuntime.mediaOwnerId,
+  revokePublisherTransport: (message) => revokePublisherTransport(message),
+  clearMediaAuthority: () => clearMicMediaAuthority(),
+  cancelTransportGrace: () => micTransportGrace.cancel(),
+  applyOwnershipEffects: (effects, hooks) => {
+    applyMicOwnerEffects(effects, performance.now(), {
+      afterQualityEvent: hooks.afterQualityEvent,
+      beforeTimingInvalidation: hooks.beforeTimingInvalidation,
+    });
+  },
+  broadcastSessionStatus: () => broadcastSessionStatus(),
+  sendReleased: (socket) => sendJson(socket, { type: 'mic-released' }),
+});
+
 const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   startTake: (socket) => {
     if (!socket.participantId) {
@@ -2182,26 +2202,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const result = participants.releaseMic(socket.participantId);
     if (!result.ok) return;
 
-    let transportCleaned = false;
-    const cleanReleasedMicTransport = () => {
-      if (transportCleaned) return;
-      transportCleaned = true;
-      if (micRuntime.publisher?.participantId === socket.participantId) {
-        revokePublisherTransport('You released the microphone.');
-      } else if (micRuntime.mediaOwnerId === socket.participantId) {
-        clearMicMediaAuthority();
-      }
-    };
-    applyMicOwnerEffects(result.effects, performance.now(), {
-      afterQualityEvent: () => micTransportGrace.cancel(),
-      beforeTimingInvalidation: cleanReleasedMicTransport,
+    micReleaseCoordinator.release({
+      socket,
+      participantId: socket.participantId,
+      effects: result.effects,
     });
-    // A successful explicit release always invalidates timing today. Keep this
-    // fallback so transport cleanup remains adapter-owned even if that domain
-    // effect is deliberately changed later.
-    cleanReleasedMicTransport();
-    broadcastSessionStatus();
-    sendJson(socket, { type: 'mic-released' });
   },
   roomSongCommand: (socket, payload) => {
     if (!socket.participantId) {

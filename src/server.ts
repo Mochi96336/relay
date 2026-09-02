@@ -36,6 +36,7 @@ import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-e
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
+import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
@@ -2733,6 +2734,27 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
   beginPreparedSongHandoff: (participantId) => beginPreparedSongHandoff(participantId),
 });
 
+const backingActivationCoordinator = createRelayBackingActivationCoordinator<RelaySocket>({
+  previousBacking: () => backingRuntime.socket,
+  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
+  retirePrevious: (previous, next) => {
+    replacePrevious(previous, next, 'Replaced by a newer tab capture.');
+  },
+  setSocketSampleRate: (socket, sampleRate) => {
+    socket.sampleRate = sampleRate;
+  },
+  bindBacking: (registration) => backingRuntime.bind(registration),
+  setBackingExpected: () => session.setBackingExpected(true),
+  sessionActive: () => session.active,
+  dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
+  activeBackingIsRobot: () => backingRuntime.isRobot,
+  sendRegistered: (socket, robot) => {
+    sendJson(socket, { type: 'registered', role: 'backing', robot });
+  },
+  startLiveSource: () => startLiveSource(),
+});
+
 const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   publisher: (socket, payload) => {
     if (!canClaimSocketRole(socket, 'publisher')) return;
@@ -2856,20 +2878,12 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
     }
 
     commitSocketRole(socket, 'backing');
-    const previousBacking = backingRuntime.socket;
-    clearRobotBackingBoundaryRequest();
-    if (previousBacking && previousBacking !== socket) {
-      takeController.noteQualityEvent('backing-transport-replaced');
-    }
-    replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
-    socket.sampleRate = sampleRate;
-    backingRuntime.bind({ socket, sampleRate, robot: payload.robot === true });
-    session.setBackingExpected(true);
-    if (!previousBacking && session.active) takeController.noteQualityEvent('backing-transport-connected');
 
-    dropLegacyCalibrationForRobot();
-    sendJson(socket, { type: 'registered', role: 'backing', robot: backingRuntime.isRobot });
-    startLiveSource();
+    backingActivationCoordinator.activate({
+      socket,
+      sampleRate,
+      robot: payload.robot === true,
+    });
     return;
   },
   monitor: (socket, payload) => {

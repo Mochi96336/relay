@@ -2,15 +2,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import {
+  topLevelFunctionSource,
+  topLevelInitializerSource,
+} from './helpers/source-boundary.js';
+
 const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 const coordinator = readFileSync(
   new URL('../src/relay-manual-boot-recalibration-coordinator.ts', import.meta.url),
   'utf8',
 );
-
-function functionBlock(name: string) {
-  return server.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0] ?? '';
-}
 
 test('manual Robot recalibration delegates only after server command authority', () => {
   assert.match(
@@ -21,7 +22,7 @@ test('manual Robot recalibration delegates only after server command authority',
   assert.match(server, /productStatusPayload\(nowMs\)\.actions/);
   assert.match(server, /restartManualBootCalibration\(nowMs\)/);
 
-  const restart = functionBlock('restartManualBootCalibration');
+  const restart = topLevelFunctionSource(server, 'restartManualBootCalibration');
   assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
   assert.doesNotMatch(restart, /calibration\./);
   assert.doesNotMatch(restart, /timingRuntime\./);
@@ -32,10 +33,7 @@ test('manual Robot recalibration delegates only after server command authority',
 });
 
 test('server composition retains candidate-state and publication effects', () => {
-  const start = server.indexOf('const manualBootRecalibrationCoordinator =');
-  const end = server.indexOf('function restartManualBootCalibration', start);
-  assert.ok(start >= 0 && end > start, 'manual recalibration composition must remain identifiable');
-  const composition = server.slice(start, end);
+  const composition = topLevelInitializerSource(server, 'manualBootRecalibrationCoordinator');
 
   assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
   assert.match(composition, /beginExternalRecalibration: \(\) => calibration\.beginExternalRecalibration\(\)/);

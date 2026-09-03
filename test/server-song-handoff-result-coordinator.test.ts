@@ -2,19 +2,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import {
+  callObjectPropertySource,
+  topLevelInitializerSource,
+} from './helpers/source-boundary.js';
+
 const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 const coordinator = readFileSync(new URL('../src/relay-song-handoff-result-coordinator.ts', import.meta.url), 'utf8');
 
-function commandBlock(name: 'songHandoffReady' | 'songHandoffFailed', next: string) {
-  const start = server.indexOf(`  ${name}: (socket, payload) => {`);
-  const end = server.indexOf(`\n  ${next}:`, start);
-  assert.ok(start >= 0 && end > start, `${name} block must remain identifiable`);
-  return server.slice(start, end);
-}
-
 test('server keeps playback identity authority and delegates handoff result ordering', () => {
-  const ready = commandBlock('songHandoffReady', 'songHandoffFailed');
-  const failed = commandBlock('songHandoffFailed', 'participantRename');
+  const ready = callObjectPropertySource(server, 'commandProtocol', 'songHandoffReady');
+  const failed = callObjectPropertySource(server, 'commandProtocol', 'songHandoffFailed');
 
   for (const block of [ready, failed]) {
     assert.match(block, /playbackTransport\.identity\(socket\)/);
@@ -34,15 +32,15 @@ test('server composition retains SongSession authority and delivery effects', ()
     server,
     /import \{ createRelaySongHandoffResultCoordinator \} from '\.\/relay-song-handoff-result-coordinator\.js';/,
   );
-  assert.match(server, /const songHandoffResultCoordinator = createRelaySongHandoffResultCoordinator/);
+  const composition = topLevelInitializerSource(server, 'songHandoffResultCoordinator');
   assert.match(
-    server,
+    composition,
     /markReady: \(identity, handoffId, micOwnerId\) => youtubeTimeline\.markHandoffReady\(identity, handoffId, micOwnerId\)/,
   );
-  assert.match(server, /defer: \(identity, handoffId\) => youtubeTimeline\.deferHandoff\(identity, handoffId\)/);
-  assert.match(server, /sendCommit: \(plan\) => \{ sendHandoffPlan\('song-handoff-commit', plan\); \}/);
-  assert.match(server, /reportTimelineStatus: \(\) => broadcastJson\(youtubeTimeline\.statusPayload\(\)\)/);
-  assert.match(server, /reportRoomStatus: \(\) => broadcastJson\(youtubeTimeline\.roomStatusPayload\(\)\)/);
+  assert.match(composition, /defer: \(identity, handoffId\) => youtubeTimeline\.deferHandoff\(identity, handoffId\)/);
+  assert.match(composition, /sendCommit: \(plan\) => \{ sendHandoffPlan\('song-handoff-commit', plan\); \}/);
+  assert.match(composition, /reportTimelineStatus: \(\) => broadcastJson\(youtubeTimeline\.statusPayload\(\)\)/);
+  assert.match(composition, /reportRoomStatus: \(\) => broadcastJson\(youtubeTimeline\.roomStatusPayload\(\)\)/);
 });
 
 test('song handoff result coordinator owns no playback or SongSession runtime authority', () => {

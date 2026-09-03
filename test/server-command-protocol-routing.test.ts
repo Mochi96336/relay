@@ -74,11 +74,13 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /roomSongCommands\.pendingForTarget\(playbackIdentity, nowMs\)/);
   assert.match(server, /roomSongCommands\.fail\(playbackIdentity, pendingCommand\.commandId\)/);
   assert.match(server, /broadcastRoomSongCommandFailure\(pendingCommand\.commandId, 'playback-failed', nowMs\)/);
-  assert.match(server, /youtubeTimeline\.markHandoffReady\(/);
-  assert.match(server, /sendHandoffPlan\('song-handoff-commit', plan\)/);
-  assert.match(server, /youtubeTimeline\.deferHandoff\(playbackIdentity, payload\.handoffId\)/);
-  assert.match(server, /broadcastJson\(youtubeTimeline\.statusPayload\(\)\)/);
-  assert.match(server, /broadcastJson\(youtubeTimeline\.roomStatusPayload\(\)\)/);
+  assert.match(server, /songHandoffResultCoordinator\.ready\(\{/);
+  assert.match(server, /songHandoffResultCoordinator\.failed\(\{/);
+  assert.match(server, /markReady: \(identity, handoffId, micOwnerId\) => youtubeTimeline\.markHandoffReady\(identity, handoffId, micOwnerId\)/);
+  assert.match(server, /defer: \(identity, handoffId\) => youtubeTimeline\.deferHandoff\(identity, handoffId\)/);
+  assert.match(server, /sendCommit: \(plan\) => \{ sendHandoffPlan\('song-handoff-commit', plan\); \}/);
+  assert.match(server, /reportTimelineStatus: \(\) => broadcastJson\(youtubeTimeline\.statusPayload\(\)\)/);
+  assert.match(server, /reportRoomStatus: \(\) => broadcastJson\(youtubeTimeline\.roomStatusPayload\(\)\)/);
   assert.match(server, /participants\.rename\(socket\.participantId, payload\.nickname, Date\.now\(\)\)/);
   assert.match(server, /Microphone ownership is committed by publisher registration/);
   assert.match(server, /playbackTransport\.noteMicIntent\(socket, performance\.now\(\)\)/);

@@ -48,7 +48,7 @@ jobs:
       - name: Check launcher shell syntax
         id: shell-syntax
         run: bash scripts/ci-run.sh test shell-syntax "launcher shell syntax" -- bash -c 'bash -n scripts/*.sh'
-      - name: Upload launcher shell syntax failure summary
+      - name: Upload launcher shell failure summary
         if: failure() && steps.shell-syntax.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:

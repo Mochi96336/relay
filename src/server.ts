@@ -168,6 +168,7 @@ const wss = createRelayWebSocketServer(server, {
 const {
   sendJson,
   broadcastJson,
+  retire: retireSocket,
   canClaimSocketRole,
   commitSocketRole,
 } = createRelaySocketTransport(wss);
@@ -923,14 +924,7 @@ function reportTelemetryRejected(socket: RelaySocket, reason: string) {
 
 function replacePrevious(previous: RelaySocket | null, next: RelaySocket, message: string) {
   if (!previous || previous === next) return;
-  previous.replaced = true;
-  sendJson(previous, { type: 'error', message });
-  try {
-    previous.close();
-  } catch {}
-  setTimeout(() => {
-    if (previous.readyState !== WebSocket.CLOSED) previous.terminate();
-  }, 1_000).unref();
+  retireSocket(previous, { type: 'error', message });
 }
 
 function retirePublisherTransport(
@@ -939,14 +933,7 @@ function retirePublisherTransport(
   message: string,
 ) {
   if (!previous) return false;
-  previous.replaced = true;
-  sendJson(previous, { type, message });
-  try {
-    previous.close();
-  } catch {}
-  setTimeout(() => {
-    if (previous.readyState !== WebSocket.CLOSED) previous.terminate();
-  }, 1_000).unref();
+  retireSocket(previous, { type, message });
   return true;
 }
 

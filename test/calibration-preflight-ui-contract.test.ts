@@ -20,10 +20,12 @@ test('no-Song Robot boot-probe bypasses only the legacy Song-gated command liste
 });
 
 test('preflight command authenticates the Mic owner before sending calibration', () => {
-  const auth = command.indexOf("message?.type !== 'participant-authenticated'");
-  const calibration = command.indexOf("type: 'start-timing-calibration'");
-  assert.ok(auth >= 0 && calibration > auth);
   assert.match(command, /sendParticipantAuthentication\(socket\)/);
+  assert.match(
+    command,
+    /if \(message\?\.type === 'participant-authenticated' && !sent\) \{[\s\S]*?socket\.send\(JSON\.stringify\(\{ type: 'start-timing-calibration' \}\)\);/,
+    'calibration command must only be emitted from the authenticated acknowledgement branch',
+  );
 });
 
 test('System timing diagnostics expose content, validation, and path evidence separately', () => {

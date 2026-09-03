@@ -2,17 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
-function functionBlock(name: string, nextName: string) {
-  const start = server.indexOf(`function ${name}(`);
-  const end = server.indexOf(`\nfunction ${nextName}(`, start);
-  assert.ok(start >= 0 && end > start, `${name} block must remain identifiable`);
-  return server.slice(start, end);
-}
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
 
 test('accepted probe client results share one current-generation fence', () => {
-  const fence = functionBlock('acceptCurrentProbeClientResult', 'handleProbeReply');
+  const fence = functionCode(server, 'acceptCurrentProbeClientResult');
 
   assert.match(fence, /bootProbeRuntime\.acceptClientReply\(reply\.requestId, reply\.generation\)/);
   assert.match(fence, /!session\.active \|\| pending\.sessionGeneration !== session\.generation/);
@@ -25,8 +23,8 @@ test('accepted probe client results share one current-generation fence', () => {
 });
 
 test('probe reply and failure handlers delegate fencing instead of duplicating it', () => {
-  const reply = functionBlock('handleProbeReply', 'handleProbeFailure');
-  const failure = functionBlock('handleProbeFailure', 'maybeFinishProbeAnalysis');
+  const reply = functionCode(server, 'handleProbeReply');
+  const failure = functionCode(server, 'handleProbeFailure');
 
   assert.match(reply, /acceptCurrentProbeClientResult\(reply, nowMs, \{/);
   assert.match(reply, /client reported a different capture generation/);

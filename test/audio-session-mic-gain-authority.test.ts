@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
+import {
+  classMethodCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
 
 function makeSession() {
   return new AudioSession({
@@ -25,24 +30,45 @@ test('AudioSession is the single source of truth for the applied Mic gain', () =
 });
 
 test('server owns Mic gain command policy while AudioSession owns the applied value', () => {
-  const root = process.cwd();
-  const server = fs.readFileSync(path.join(root, 'src/server.ts'), 'utf8');
-  const audio = fs.readFileSync(path.join(root, 'src/audio-session.ts'), 'utf8');
-
-  assert.doesNotMatch(server, /let\s+micGainDb\s*=/);
-  assert.doesNotMatch(server, /session\.setMicGainDb\(micGainDb\)/);
-  assert.equal((server.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 2);
-  assert.match(
-    server,
-    /setMix:\s*\(socket, payload\) => \{[\s\S]*requireMicOwnerCommand\(socket, 'set-mix'\)[\s\S]*session\.setMicGainDb\(Math\.max\(0, Math\.min\(MAX_MIC_GAIN_DB, nextGain\)\)\)/,
+  const server = parseTypeScriptSource(
+    new URL('../src/server.ts', import.meta.url),
+    readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
   );
+  const audio = parseTypeScriptSource(
+    new URL('../src/audio-session.ts', import.meta.url),
+    readFileSync(new URL('../src/audio-session.ts', import.meta.url), 'utf8'),
+  );
+  const serverCode = sourceCode(server);
+  const audioCode = sourceCode(audio);
 
-  assert.match(audio, /private micGainDbValue = 24;/);
-  assert.match(audio, /get micGainDb\(\) \{\s*return this\.micGainDbValue;\s*\}/);
-  assert.match(audio, /setMicGainDb\(value: number\) \{\s*this\.micGainDbValue = value;\s*\}/);
+  assert.doesNotMatch(serverCode, /let\s+micGainDb\s*=/);
+  assert.doesNotMatch(serverCode, /session\.setMicGainDb\(micGainDb\)/);
+  assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 2);
+
+  const commands = variableInitializerCode(server, 'commandProtocol');
+  const setMix = commands.indexOf('setMix: (socket, payload) => {');
+  const authority = commands.indexOf("requireMicOwnerCommand(socket, 'set-mix')", setMix);
+  const parseGain = commands.indexOf('const nextGain = Number(payload.micGainDb);', authority);
+  const applyGain = commands.indexOf(
+    'session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)))',
+    parseGain,
+  );
+  const publishMix = commands.indexOf('broadcastJson(mixSettingsPayload())', applyGain);
+  assert.ok(setMix >= 0, 'set-mix command handler must exist');
+  assert.ok(authority > setMix, 'Mic ownership must authorize gain mutation before parsing/applying it');
+  assert.ok(parseGain > authority, 'gain parsing must remain behind command authority');
+  assert.ok(applyGain > parseGain, 'server command policy must clamp before storing the DSP value');
+  assert.ok(publishMix > applyGain, 'accepted gain mutation must publish the resulting mix settings');
+
+  assert.ok(audioCode.includes('private micGainDbValue = 24;'));
+  const getter = classMethodCode(audio, 'AudioSession', 'micGainDb');
+  assert.ok(getter.includes('return this.micGainDbValue;'));
+
+  const setter = classMethodCode(audio, 'AudioSession', 'setMicGainDb');
+  assert.ok(setter.includes('this.micGainDbValue = value;'));
   assert.doesNotMatch(
-    audio,
-    /setMicGainDb\(value: number\) \{[\s\S]{0,200}(Math\.min|Math\.max|MAX_MIC_GAIN_DB|requireMicOwnerCommand)/,
+    setter,
+    /Math\.min|Math\.max|MAX_MIC_GAIN_DB|requireMicOwnerCommand/,
     'AudioSession must store the DSP value, not absorb command authorization or clamping policy',
   );
 });

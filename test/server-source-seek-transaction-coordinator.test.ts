@@ -2,26 +2,26 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const coordinator = readFileSync(
+import {
+  importSources,
+  objectArrowCallbackCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const coordinator = parseTypeScriptSource(
   new URL('../src/relay-source-seek-transaction-coordinator.ts', import.meta.url),
-  'utf8',
+  readFileSync(new URL('../src/relay-source-seek-transaction-coordinator.ts', import.meta.url), 'utf8'),
 );
 
-function sourceSeekBlock() {
-  const protocol = server.indexOf('const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({');
-  const start = server.indexOf('  sourceSeeked: (socket, payload) => {', protocol);
-  const end = server.indexOf('\n  },\n});', start);
-  assert.ok(protocol >= 0 && start > protocol && end > start, 'sourceSeeked block must remain identifiable');
-  return server.slice(start, end);
-}
-
 test('server retains Source seek authority and mapping classification before delegation', () => {
-  assert.match(
-    server,
-    /import \{ createRelaySourceSeekTransactionCoordinator \} from '\.\/relay-source-seek-transaction-coordinator\.js';/,
-  );
-  const block = sourceSeekBlock();
+  assert.ok(importSources(server).includes('./relay-source-seek-transaction-coordinator.js'));
+  const block = objectArrowCallbackCode(server, 'infrastructureEventProtocol', 'sourceSeeked');
   assert.match(block, /infrastructureCapability\.authorized\(socket\)/);
   assert.match(block, /sourceRuntime\.canReportSeek\(socket\)/);
   assert.match(block, /robotContentTransitionRuntime\.clearPendingBoundary\(\)/);
@@ -43,29 +43,31 @@ test('server retains Source seek authority and mapping classification before del
 });
 
 test('server composition retains concrete Source seek lifecycle effects', () => {
-  assert.match(server, /const sourceSeekTransactionCoordinator = createRelaySourceSeekTransactionCoordinator<CalibrationContext>\(\{/);
-  assert.match(server, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
-  assert.match(server, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
-  assert.match(server, /beginRobotContentTransition\(/);
-  assert.match(server, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
-  assert.match(server, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
-  assert.match(server, /invalidateSourceMapping: \(\) => sourceRuntime\.invalidateMapping\(\)/);
-  assert.match(server, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
-  assert.match(server, /discardPrimedContent: \(\) => calibration\.discardPrimedContent\(\)/);
-  assert.match(server, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
-  assert.match(server, /calibrationCollecting: \(\) => calibration\.collecting/);
-  assert.match(server, /failCalibration: \(message\) => calibration\.fail\(message\)/);
-  assert.match(server, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
-  assert.match(server, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
+  const composition = variableInitializerCode(server, 'sourceSeekTransactionCoordinator');
+  assert.match(composition, /^createRelaySourceSeekTransactionCoordinator<CalibrationContext>\(\{/);
+  assert.match(composition, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
+  assert.match(composition, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
+  assert.match(composition, /beginRobotContentTransition\(/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
+  assert.match(composition, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
+  assert.match(composition, /invalidateSourceMapping: \(\) => sourceRuntime\.invalidateMapping\(\)/);
+  assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
+  assert.match(composition, /discardPrimedContent: \(\) => calibration\.discardPrimedContent\(\)/);
+  assert.match(composition, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
+  assert.match(composition, /calibrationCollecting: \(\) => calibration\.collecting/);
+  assert.match(composition, /failCalibration: \(message\) => calibration\.fail\(message\)/);
+  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(composition, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
 });
 
 test('Source seek coordinator owns no infrastructure, mapping or calibration authority', () => {
+  const coordinatorCode = sourceCode(coordinator);
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /from '\.\/(?:source-runtime|robot-content-timeline|robot-content-transition-runtime|calibration-session|timing-runtime)\.js'/,
   );
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /InfrastructureCapabilityRuntime|SourceRuntime|RobotContentTimelineMapper|RobotContentTransitionRuntime|CalibrationSession/,
   );
 });

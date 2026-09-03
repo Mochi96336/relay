@@ -2,19 +2,26 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const coordinator = readFileSync(new URL('../src/relay-song-handoff-result-coordinator.ts', import.meta.url), 'utf8');
+import {
+  importSources,
+  objectArrowCallbackCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
 
-function commandBlock(name: 'songHandoffReady' | 'songHandoffFailed', next: string) {
-  const start = server.indexOf(`  ${name}: (socket, payload) => {`);
-  const end = server.indexOf(`\n  ${next}:`, start);
-  assert.ok(start >= 0 && end > start, `${name} block must remain identifiable`);
-  return server.slice(start, end);
-}
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const coordinator = parseTypeScriptSource(
+  new URL('../src/relay-song-handoff-result-coordinator.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-song-handoff-result-coordinator.ts', import.meta.url), 'utf8'),
+);
 
 test('server keeps playback identity authority and delegates handoff result ordering', () => {
-  const ready = commandBlock('songHandoffReady', 'songHandoffFailed');
-  const failed = commandBlock('songHandoffFailed', 'participantRename');
+  const ready = objectArrowCallbackCode(server, 'commandProtocol', 'songHandoffReady');
+  const failed = objectArrowCallbackCode(server, 'commandProtocol', 'songHandoffFailed');
 
   for (const block of [ready, failed]) {
     assert.match(block, /playbackTransport\.identity\(socket\)/);
@@ -30,22 +37,21 @@ test('server keeps playback identity authority and delegates handoff result orde
 });
 
 test('server composition retains SongSession authority and delivery effects', () => {
+  assert.ok(importSources(server).includes('./relay-song-handoff-result-coordinator.js'));
+  const composition = variableInitializerCode(server, 'songHandoffResultCoordinator');
+  assert.match(composition, /^createRelaySongHandoffResultCoordinator/);
   assert.match(
-    server,
-    /import \{ createRelaySongHandoffResultCoordinator \} from '\.\/relay-song-handoff-result-coordinator\.js';/,
-  );
-  assert.match(server, /const songHandoffResultCoordinator = createRelaySongHandoffResultCoordinator/);
-  assert.match(
-    server,
+    composition,
     /markReady: \(identity, handoffId, micOwnerId\) => youtubeTimeline\.markHandoffReady\(identity, handoffId, micOwnerId\)/,
   );
-  assert.match(server, /defer: \(identity, handoffId\) => youtubeTimeline\.deferHandoff\(identity, handoffId\)/);
-  assert.match(server, /sendCommit: \(plan\) => \{ sendHandoffPlan\('song-handoff-commit', plan\); \}/);
-  assert.match(server, /reportTimelineStatus: \(\) => broadcastJson\(youtubeTimeline\.statusPayload\(\)\)/);
-  assert.match(server, /reportRoomStatus: \(\) => broadcastJson\(youtubeTimeline\.roomStatusPayload\(\)\)/);
+  assert.match(composition, /defer: \(identity, handoffId\) => youtubeTimeline\.deferHandoff\(identity, handoffId\)/);
+  assert.match(composition, /sendCommit: \(plan\) => \{ sendHandoffPlan\('song-handoff-commit', plan\); \}/);
+  assert.match(composition, /reportTimelineStatus: \(\) => broadcastJson\(youtubeTimeline\.statusPayload\(\)\)/);
+  assert.match(composition, /reportRoomStatus: \(\) => broadcastJson\(youtubeTimeline\.roomStatusPayload\(\)\)/);
 });
 
 test('song handoff result coordinator owns no playback or SongSession runtime authority', () => {
-  assert.doesNotMatch(coordinator, /^import\s+.*(?:playback-transport-runtime|song-session)/m);
-  assert.doesNotMatch(coordinator, /\byoutubeTimeline\.|\bplaybackTransport\./);
+  const coordinatorCode = sourceCode(coordinator);
+  assert.doesNotMatch(coordinatorCode, /^import\s+.*(?:playback-transport-runtime|song-session)/m);
+  assert.doesNotMatch(coordinatorCode, /\byoutubeTimeline\.|\bplaybackTransport\./);
 });

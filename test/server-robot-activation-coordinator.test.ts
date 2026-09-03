@@ -2,22 +2,25 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const coordinator = readFileSync(
+import {
+  importSources,
+  objectArrowCallbackCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const coordinator = parseTypeScriptSource(
   new URL('../src/relay-robot-activation-coordinator.ts', import.meta.url),
-  'utf8',
+  readFileSync(new URL('../src/relay-robot-activation-coordinator.ts', import.meta.url), 'utf8'),
 );
 
-function robotHelloBlock() {
-  const lifecycle = server.indexOf('const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({');
-  const start = server.indexOf('robotSourceHello: (socket, payload) => {', lifecycle);
-  const end = server.indexOf('\n  },\n});', start);
-  assert.ok(lifecycle >= 0 && start > lifecycle && end > start);
-  return server.slice(start, end);
-}
-
 test('Robot hello keeps infrastructure and SourceRuntime attach authority in server', () => {
-  const hello = robotHelloBlock();
+  const hello = objectArrowCallbackCode(server, 'robotLifecycleProtocol', 'robotSourceHello');
   assert.match(hello, /infrastructureCapability\.authorized\(socket\)/);
   assert.match(hello, /sourceRuntime\.isActive\(socket\)/);
   assert.match(hello, /sourceRuntime\.attachRobot\(socket\)/);
@@ -34,31 +37,30 @@ test('Robot hello keeps infrastructure and SourceRuntime attach authority in ser
 });
 
 test('server composition retains Robot activation effects', () => {
-  assert.match(
-    server,
-    /import \{ createRelayRobotActivationCoordinator \} from '\.\/relay-robot-activation-coordinator\.js';/,
-  );
-  assert.match(server, /const robotActivationCoordinator = createRelayRobotActivationCoordinator<RelaySocket>/);
-  assert.match(server, /type: 'robot-source-replaced'/);
-  assert.match(server, /takeController\.noteQualityEvent\(event\)/);
-  assert.match(server, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
-  assert.match(server, /sessionActive: \(\) => session\.active/);
-  assert.match(server, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
-  assert.match(server, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
-  assert.match(server, /clearBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
-  assert.match(server, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
-  assert.match(server, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
-  assert.match(server, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
-  assert.match(server, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
+  assert.ok(importSources(server).includes('./relay-robot-activation-coordinator.js'));
+  const composition = variableInitializerCode(server, 'robotActivationCoordinator');
+  assert.match(composition, /^createRelayRobotActivationCoordinator<RelaySocket>/);
+  assert.match(composition, /type: 'robot-source-replaced'/);
+  assert.match(composition, /takeController\.noteQualityEvent\(event\)/);
+  assert.match(composition, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
+  assert.match(composition, /sessionActive: \(\) => session\.active/);
+  assert.match(composition, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
+  assert.match(composition, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
+  assert.match(composition, /clearBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(composition, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
+  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(composition, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
 });
 
 test('Robot activation coordinator owns ordering only, not source or timing authority', () => {
+  const coordinatorCode = sourceCode(coordinator);
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /from '\.\/(?:source-runtime|take-controller|audio-session|calibration-session)\.js'/,
   );
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /infrastructureCapability\.|sourceRuntime\.|takeController\.|robotPlayerOffset\.|robotContentTimeline\.|\bsendJson\b|\bbroadcastJson\b/,
   );
 });

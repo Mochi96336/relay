@@ -25,6 +25,10 @@ function alpha(options: { nested: boolean }) {
   return options.nested ? text : '';
 }
 
+function genericFactory<TContext extends Record<string, Array<number>>>(options: TContext) {
+  return options;
+}
+
 class ExampleRuntime {
   run(value: number) {
     // run(999) is documentation, not another method declaration.
@@ -55,6 +59,14 @@ test('function contracts are declaration-based rather than next-function slices'
   assert.doesNotMatch(alpha, /forbiddenRuntime/);
   assert.equal(hasFunction(fixture, 'ghost'), false);
   assert.equal(hasFunction(fixture, 'beta'), true);
+});
+
+test('function contracts support generic declarations without widening to later code', () => {
+  const genericFactory = functionCode(fixture, 'genericFactory');
+  assert.match(genericFactory, /^function genericFactory<TContext extends Record<string, Array<number>>>/);
+  assert.match(genericFactory, /return options;/);
+  assert.doesNotMatch(genericFactory, /class ExampleRuntime/);
+  assert.equal(hasFunction(fixture, 'genericFactory'), true);
 });
 
 test('class method contracts stay at class-member depth and ignore calls or string decoys', () => {

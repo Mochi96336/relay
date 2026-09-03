@@ -53,6 +53,7 @@ import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
+import { createRelaySongHandoffResultCoordinator } from './relay-song-handoff-result-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -2207,6 +2208,20 @@ const roomSongCommandAcceptanceCoordinator = createRelayRoomSongCommandAcceptanc
   reportStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
 });
 
+// Playback identity resolution remains in the command handler and SongSession
+// remains authoritative behind these callbacks. This seam owns only the
+// ready/failed handoff result ordering and publication sequence.
+const songHandoffResultCoordinator = createRelaySongHandoffResultCoordinator<
+  PlaybackIdentity,
+  SongHandoffPlan
+>({
+  markReady: (identity, handoffId, micOwnerId) => youtubeTimeline.markHandoffReady(identity, handoffId, micOwnerId),
+  defer: (identity, handoffId) => youtubeTimeline.deferHandoff(identity, handoffId),
+  sendCommit: (plan) => { sendHandoffPlan('song-handoff-commit', plan); },
+  reportTimelineStatus: () => broadcastJson(youtubeTimeline.statusPayload()),
+  reportRoomStatus: () => broadcastJson(youtubeTimeline.roomStatusPayload()),
+});
+
 // Playback identity validation and registration stay in the command handler/runtime.
 // This seam begins only after register() commits that identity and owns the
 // registration snapshots plus pending handoff/command continuation ordering.
@@ -2379,23 +2394,19 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   songHandoffReady: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    const plan = youtubeTimeline.markHandoffReady(
-      playbackIdentity,
-      payload.handoffId,
-      participants.micOwnerId,
-    );
-    if (!plan) return;
-    sendHandoffPlan('song-handoff-commit', plan);
-    broadcastJson(youtubeTimeline.statusPayload());
-    broadcastJson(youtubeTimeline.roomStatusPayload());
+    songHandoffResultCoordinator.ready({
+      identity: playbackIdentity,
+      handoffId: payload.handoffId,
+      micOwnerId: participants.micOwnerId,
+    });
   },
   songHandoffFailed: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    if (youtubeTimeline.deferHandoff(playbackIdentity, payload.handoffId)) {
-      broadcastJson(youtubeTimeline.statusPayload());
-      broadcastJson(youtubeTimeline.roomStatusPayload());
-    }
+    songHandoffResultCoordinator.failed({
+      identity: playbackIdentity,
+      handoffId: payload.handoffId,
+    });
   },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;

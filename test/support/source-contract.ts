@@ -148,8 +148,32 @@ function matchingDelimiter(code: string, start: number, open: string, close: str
 }
 
 function functionMatches(source: SourceContract, name: string) {
-  const pattern = new RegExp(`\\bfunction\\s+${escapeRegExp(name)}\\s*\\(`, 'g');
-  return Array.from(source.codeMask.matchAll(pattern));
+  const pattern = new RegExp(`\\bfunction\\s+${escapeRegExp(name)}\\b`, 'g');
+  return Array.from(source.codeMask.matchAll(pattern)).flatMap((match) => {
+    const start = match.index;
+    let cursor = start + match[0].length;
+    while (/\s/.test(source.codeMask[cursor] ?? '')) cursor += 1;
+
+    if (source.codeMask[cursor] === '<') {
+      let depth = 0;
+      for (; cursor < source.codeMask.length; cursor += 1) {
+        const char = source.codeMask[cursor];
+        if (char === '<') depth += 1;
+        else if (char === '>' && source.codeMask[cursor - 1] !== '=') {
+          depth -= 1;
+          if (depth === 0) {
+            cursor += 1;
+            break;
+          }
+        }
+      }
+      if (depth !== 0) return [];
+      while (/\s/.test(source.codeMask[cursor] ?? '')) cursor += 1;
+    }
+
+    if (source.codeMask[cursor] !== '(') return [];
+    return [{ index: start, openParen: cursor }];
+  });
 }
 
 function classRange(source: SourceContract, name: string) {
@@ -184,7 +208,7 @@ export function functionCode(source: SourceContract, name: string) {
   const matches = functionMatches(source, name);
   assert.equal(matches.length, 1, `expected exactly one function declaration named ${name} in ${source.fileName}`);
   const start = matches[0].index;
-  const openParen = source.codeMask.indexOf('(', start);
+  const openParen = matches[0].openParen;
   const closeParen = matchingDelimiter(source.codeMask, openParen, '(', ')');
   const bodyStart = source.codeMask.indexOf('{', closeParen + 1);
   assert.ok(bodyStart >= 0, `${name} must keep a function body`);

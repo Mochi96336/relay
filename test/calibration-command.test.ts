@@ -8,7 +8,7 @@ const source = `${readFileSync(new URL('../public/calibration-command.js', impor
   .replace('export function sendPreflightCalibrationCommand', 'function sendPreflightCalibrationCommand')}\n`
   + 'globalThis.sendPreflightCalibrationCommand = sendPreflightCalibrationCommand;\n';
 
-test('no-Song preflight authenticates before sending the calibration command', async () => {
+test('no-Song preflight authenticates and waits for server timing acknowledgement', async () => {
   type Listener = (event?: { data?: string }) => void;
   const sockets: FakeSocket[] = [];
 
@@ -72,7 +72,10 @@ test('no-Song preflight authenticates before sending the calibration command', a
     options?: { timeoutMs?: number },
   ) => Promise<void>;
 
-  const command = sendPreflightCalibrationCommand({ timeoutMs: 1_000 });
+  let resolved = false;
+  const command = sendPreflightCalibrationCommand({ timeoutMs: 1_000 }).then(() => {
+    resolved = true;
+  });
   assert.equal(sockets.length, 1);
   const socket = sockets[0]!;
   assert.equal(socket.url, 'wss://relay.test/ws?key=room-key');
@@ -90,8 +93,22 @@ test('no-Song preflight authenticates before sending the calibration command', a
   socket.emit('message', {
     data: JSON.stringify({ type: 'participant-authenticated', participantId: 'participant-a' }),
   });
+  assert.deepEqual(JSON.parse(socket.sent[1]!), { type: 'start-timing-calibration' });
+
+  await Promise.resolve();
+  assert.equal(resolved, false, 'sending alone must not reopen the visible action before server status arrives');
+  assert.equal(socket.readyState, FakeSocket.OPEN);
+
+  socket.emit('message', {
+    data: JSON.stringify({
+      type: 'timing-calibration-status',
+      state: 'idle',
+      probeActive: true,
+      probePhase: 'mic-requested',
+    }),
+  });
 
   await command;
-  assert.deepEqual(JSON.parse(socket.sent[1]!), { type: 'start-timing-calibration' });
+  assert.equal(resolved, true);
   assert.equal(socket.readyState, FakeSocket.CLOSED);
 });

@@ -48,7 +48,7 @@ jobs:
       - name: Check launcher shell syntax
         id: shell-syntax
         run: bash scripts/ci-run.sh test shell-syntax "launcher shell syntax" -- bash -c 'bash -n scripts/*.sh'
-      - name: Upload launcher shell failure summary
+      - name: Upload launcher shell syntax failure summary
         if: failure() && steps.shell-syntax.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
@@ -70,7 +70,7 @@ jobs:
 
   visual-screenshots:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:

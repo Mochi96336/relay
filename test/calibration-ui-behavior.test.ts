@@ -7,9 +7,7 @@ import { authorityState } from '../public/authority-freshness.js';
 import { formatTimingValueMs } from '../public/timing-value.js';
 
 const source = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8')
-  .replace("import { authorityState } from './authority-freshness.js';\n", '')
-  .replace("import { formatTimingValueMs } from './timing-value.js';\n", '')
-  .replace("import './timing-authority.js';\n", '');
+  .replace(/^import .*;\s*$/gm, '');
 
 type Listener = (event: { detail?: any }) => void;
 
@@ -26,6 +24,7 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
   let visibleButton: any = null;
   let visibleStatus: any = null;
   let commandCount = 0;
+  let preflightCommandCount = 0;
 
   class Element {
     id: string;
@@ -114,6 +113,10 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     Event,
     authorityState,
     formatTimingValueMs,
+    sendPreflightCalibrationCommand: () => {
+      preflightCommandCount += 1;
+      return Promise.resolve();
+    },
   });
 
   function emit(type: string, detail: any) {
@@ -141,12 +144,16 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     actions: Record<string, unknown>,
     timing: Record<string, unknown> = { state: 'idle' },
     ownerId: string | null = options.selfMic === 'live' ? 'self' : 'other',
+    videoId: string | null = 'abcdefghijk',
   ) {
     const detail = {
       type: 'product-status',
       actions,
       timing,
-      room: { mic: { ownerId, state: ownerId ? 'live' : 'free' } },
+      room: {
+        mic: { ownerId, state: ownerId ? 'live' : 'free' },
+        song: { videoId },
+      },
     };
     emitCommandAuthority(true);
     emit('relay-product-status', detail);
@@ -163,6 +170,7 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     emitProductAuthority,
     emitProductStatus,
     commandCount: () => commandCount,
+    preflightCommandCount: () => preflightCommandCount,
   };
 }
 
@@ -296,7 +304,7 @@ test('stale command transport is non-actionable', () => {
   assert.equal(ui.commandCount(), 0);
 });
 
-test('visible click reaches the already-installed authenticated command transport', () => {
+test('visible Song calibration click reaches the already-installed authenticated command transport', () => {
   const ui = harness({ selfMic: 'live' });
   ui.emitProductStatus({
     canStartCalibration: true,
@@ -305,6 +313,7 @@ test('visible click reaches the already-installed authenticated command transpor
   });
   ui.button.click();
   assert.equal(ui.commandCount(), 1);
+  assert.equal(ui.preflightCommandCount(), 0);
   assert.equal(ui.button.disabled, false,
     'presenter must not fake a running result before ProductStatus changes');
 
@@ -316,6 +325,19 @@ test('visible click reaches the already-installed authenticated command transpor
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.button.textContent, '重新對齊');
   assert.equal(ui.status.textContent, '對齊中…');
+});
+
+test('no-Song Robot preflight uses the dedicated authenticated command path exactly once', () => {
+  const ui = harness({ selfMic: 'live' });
+  ui.emitProductStatus({
+    canStartCalibration: true,
+    startCalibrationBlockedReason: null,
+    startCalibrationMode: 'boot-probe',
+  }, { state: 'idle' }, 'self', null);
+
+  ui.button.click();
+  assert.equal(ui.commandCount(), 0);
+  assert.equal(ui.preflightCommandCount(), 1);
 });
 
 test('calibration command rejection stays product-generic', () => {

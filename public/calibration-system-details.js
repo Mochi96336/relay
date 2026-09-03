@@ -55,6 +55,7 @@ function initialize() {
   let refreshTimer = null;
 
   function finite(value) {
+    if (value === null || value === undefined || value === '') return null;
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
   }
@@ -139,10 +140,11 @@ function initialize() {
       ? `Mic ${confidence(correlations.mic)} · Song ${confidence(correlations.backing)}`
       : '—';
 
+    let pathDifference = null;
     if (boot && typeof boot === 'object') {
       const micLatency = finite(boot.micLatencyMs);
       const backingLatency = finite(boot.backingLatencyMs);
-      const pathDifference = micLatency !== null && backingLatency !== null
+      pathDifference = micLatency !== null && backingLatency !== null
         ? micLatency - backingLatency
         : null;
       nodes.pathDifference.textContent = pathDifference === null
@@ -154,8 +156,8 @@ function initialize() {
 
     const liveDelta = finite(timing.robotPlayerOffsetMs);
     nodes.playerDelta.textContent = liveDelta === null ? 'Waiting for playback' : ms(liveDelta);
-    nodes.effective.textContent = boot && liveDelta !== null
-      ? `${ms((finite(boot.micLatencyMs) ?? 0) - (finite(boot.backingLatencyMs) ?? 0) + liveDelta)} · confidence ${confidence(boot.confidence)}`
+    nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null
+      ? `${ms(pathDifference + liveDelta)} · confidence ${confidence(boot.confidence)}`
       : boot ? 'Path ready · waiting for playback' : '—';
   }
 

@@ -50,6 +50,7 @@ import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-res
 import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
+import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
@@ -282,6 +283,23 @@ const ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG = {
   maxWorkerFailures: ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES,
 };
 
+// RobotContentTransitionRuntime remains plan and state authority. Timeline,
+// calibration and validation authority remain behind these server-owned callbacks;
+// this seam owns only the accepted commit effect ordering.
+const robotContentTransitionCommitCoordinator =
+  createRelayRobotContentTransitionCommitCoordinator<CalibrationContext>({
+    noteBackingBoundary: (boundarySample, context, nowMs) =>
+      robotContentTimeline.noteBackingBoundary(boundarySample, context, nowMs),
+    restartWorkingEvidence: (nowMs) => calibration.restartWorkingEvidence(nowMs),
+    contentValidationCollecting: () => contentCalibrationValidator.collecting,
+    cancelContentValidation: (nowMs) => contentCalibrationValidator.cancel(nowMs),
+    feedBackingEvidence: (samples, start, nowMs) => {
+      feedContentBackingEvidence(samples, start, nowMs);
+    },
+    mapBackingStart: (start, context, nowMs) =>
+      robotContentTimeline.mapBackingStart(start, context, nowMs),
+  });
+
 const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
   sampleRate: MIX_SAMPLE_RATE,
   historySamples: ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES,
@@ -298,24 +316,7 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
     readBacking: (start, length) => session.readBacking(start, length),
     readMic: (start, length) => session.readMic(start, length),
     transitionEvidence: (maxSamples) => calibration.transitionEvidence(maxSamples),
-    commit: (plan, nowMs) => {
-      if (!robotContentTimeline.noteBackingBoundary(plan.boundarySample, plan.context, nowMs)) return false;
-      if (plan.discardWorkingEvidence) {
-        // Unclassifiable media-transition PCM is not capture loss. Do not zero-fill
-        // it into a six-second analysis window; restart only unanalysed evidence.
-        calibration.restartWorkingEvidence(nowMs);
-        if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
-      }
-
-      for (const chunk of plan.confirmedPreChunks) {
-        feedContentBackingEvidence(chunk.samples, chunk.start, nowMs);
-      }
-      for (const chunk of plan.postChunks) {
-        const mapped = robotContentTimeline.mapBackingStart(chunk.start, plan.context, nowMs);
-        if (mapped !== null) feedContentBackingEvidence(chunk.samples, mapped, nowMs);
-      }
-      return true;
-    },
+    commit: (plan, nowMs) => robotContentTransitionCommitCoordinator.commit(plan, nowMs),
     onDegraded: (status) => {
       console.warn(
         '[robot-content-transition] degraded fail-closed:'

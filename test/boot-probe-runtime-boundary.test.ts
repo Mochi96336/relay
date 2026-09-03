@@ -1,44 +1,50 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const root = process.cwd();
-const runtime = fs.readFileSync(path.join(root, 'src/boot-probe-runtime.ts'), 'utf8');
-const server = fs.readFileSync(path.join(root, 'src/server.ts'), 'utf8');
+import {
+  importSources,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
 
-function withoutComments(source: string) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/.*$/gm, '');
-}
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const runtime = parseTypeScriptSource(
+  new URL('../src/boot-probe-runtime.ts', import.meta.url),
+  readFileSync(new URL('../src/boot-probe-runtime.ts', import.meta.url), 'utf8'),
+);
+const serverCode = sourceCode(server);
+const runtimeCode = sourceCode(runtime);
 
 test('BootProbeRuntime aggregates probe evidence without absorbing calibration or media authority', () => {
-  const imports = [...runtime.matchAll(/^import\s+(?:type\s+)?[\s\S]*?from\s+['"]([^'"]+)['"];?$/gm)]
-    .map((match) => match[1]);
   assert.deepEqual(
-    imports.sort(),
+    importSources(runtime).sort(),
     ['./boot-calibration.js', './probe-lifecycle.js'].sort(),
     'BootProbeRuntime may depend only on the probe state machine and boot-result type',
   );
 
-  assert.match(server, /new BootProbeRuntime\(\{/);
-  assert.doesNotMatch(server, /const probeLifecycle = new ProbeLifecycle\(/);
-  assert.doesNotMatch(server, /let probeRequestId =/);
-  assert.doesNotMatch(server, /let measuredMicLeg:/);
-  assert.doesNotMatch(server, /let lastProbeCorrelation:/);
-  assert.doesNotMatch(server, /let lastProbeContext:/);
-  assert.doesNotMatch(server, /let lastBootCalibration:/);
-  assert.doesNotMatch(server, /let bootPathDifferenceMs:/);
-  assert.doesNotMatch(server, /let bootConfidence:/);
+  const construction = variableInitializerCode(server, 'bootProbeRuntime');
+  assert.ok(construction.includes('new BootProbeRuntime({'));
+  assert.doesNotMatch(serverCode, /const probeLifecycle = new ProbeLifecycle\(/);
+  assert.doesNotMatch(serverCode, /let probeRequestId =/);
+  assert.doesNotMatch(serverCode, /let measuredMicLeg:/);
+  assert.doesNotMatch(serverCode, /let lastProbeCorrelation:/);
+  assert.doesNotMatch(serverCode, /let lastProbeContext:/);
+  assert.doesNotMatch(serverCode, /let lastBootCalibration:/);
+  assert.doesNotMatch(serverCode, /let bootPathDifferenceMs:/);
+  assert.doesNotMatch(serverCode, /let bootConfidence:/);
 
   // Signal analysis, combination and application remain orchestration/domain work.
-  assert.match(server, /locateProbe\(/);
-  assert.match(server, /combineBootCalibration\(/);
-  assert.match(server, /calibration\.applyExternalResult\(/);
-  assert.match(server, /timingRuntime\.markBootProbeAuthority\(\)/);
+  assert.ok(serverCode.includes('locateProbe('));
+  assert.ok(serverCode.includes('combineBootCalibration('));
+  assert.ok(serverCode.includes('calibration.applyExternalResult('));
+  assert.ok(serverCode.includes('timingRuntime.markBootProbeAuthority()'));
   assert.doesNotMatch(
-    withoutComments(runtime),
+    runtimeCode,
     /locateProbe|combineBootCalibration|applyExternalResult|markBootProbeAuthority|AudioSession|CalibrationSession|TimingRuntime/,
   );
 });

@@ -4,12 +4,20 @@ import test from 'node:test';
 import {
   functionCode,
   hasFunction,
+  importSources,
   parseTypeScriptSource,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
 const fixtureText = `
+import type { Example } from './types.js';
+import {
+  createThing,
+} from './thing.js';
+import './side-effect.js';
+// import { decoy } from './comment-only.js';
+
 function alpha(options: { nested: boolean }) {
   // forbiddenRuntime.call() is documentation only.
   const text = "braces in a string do not close the function: }}}";
@@ -42,6 +50,14 @@ test('variable initializer contracts balance nested delimiters and ignore string
   assert.match(initializer, /run: \(\) => alpha/);
   assert.match(initializer, /semi; braces \{ \} stay inside a string/);
   assert.doesNotMatch(initializer, /const decoy/);
+});
+
+test('import contracts include multiline and side-effect imports while ignoring comments', () => {
+  assert.deepEqual(importSources(fixture), [
+    './types.js',
+    './thing.js',
+    './side-effect.js',
+  ]);
 });
 
 test('whole-source contracts ignore documentation comments without erasing string literals', () => {

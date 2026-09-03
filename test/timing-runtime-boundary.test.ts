@@ -2,18 +2,37 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const runtime = readFileSync(new URL('../src/timing-runtime.ts', import.meta.url), 'utf8');
+import {
+  importSources,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const runtime = parseTypeScriptSource(
+  new URL('../src/timing-runtime.ts', import.meta.url),
+  readFileSync(new URL('../src/timing-runtime.ts', import.meta.url), 'utf8'),
+);
+const serverCode = sourceCode(server);
 
 test('TimingRuntime owns orchestration metadata without absorbing timing authorities', () => {
-  assert.match(server, /new TimingRuntime\(\{[\s\S]{0,160}autoCalibrationRetryMs:\s*AUTO_CALIBRATION_RETRY_MS/);
-  assert.doesNotMatch(server, /let\s+(?:lastAutoCalibrationAt|calibrationWasAutomatic|calibrationKind|contentValidationBaselineRevision|contentValidationSlewRevision)\b/);
+  const construction = variableInitializerCode(server, 'timingRuntime');
+  assert.ok(construction.includes('new TimingRuntime({'));
+  assert.ok(construction.includes('autoCalibrationRetryMs: AUTO_CALIBRATION_RETRY_MS'));
+  assert.doesNotMatch(
+    serverCode,
+    /let\s+(?:lastAutoCalibrationAt|calibrationWasAutomatic|calibrationKind|contentValidationBaselineRevision|contentValidationSlewRevision)\b/,
+  );
 
-  assert.match(server, /const calibration = new CalibrationSession\(\{/);
-  assert.match(server, /const contentCalibrationValidator = new ContentCalibrationValidator\(\{/);
-  assert.match(server, /const bootProbeRuntime = new BootProbeRuntime\(\{/);
+  assert.ok(variableInitializerCode(server, 'calibration').includes('new CalibrationSession({'));
+  assert.ok(variableInitializerCode(server, 'contentCalibrationValidator').includes('new ContentCalibrationValidator({'));
+  assert.ok(variableInitializerCode(server, 'bootProbeRuntime').includes('new BootProbeRuntime({'));
 
-  const imports = [...runtime.matchAll(/^import\s+.*?from\s+['"]([^'"]+)['"];?$/gm)].map((match) => match[1]);
+  const imports = importSources(runtime);
   for (const forbidden of [
     './calibration-session.js',
     './content-calibration-validator.js',
@@ -28,12 +47,16 @@ test('TimingRuntime owns orchestration metadata without absorbing timing authori
 });
 
 test('server delegates auto retry, run provenance, calibration kind and validation revisions to TimingRuntime', () => {
-  assert.match(server, /timingRuntime\.autoCalibrationDue\(nowMs\)/);
-  assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, true\)/);
-  assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, false\)/);
-  assert.match(server, /timingRuntime\.beginBootProbe\(true\)/);
-  assert.match(server, /timingRuntime\.beginBootProbe\(false\)/);
-  assert.match(server, /timingRuntime\.prepareContentValidationSlew\(calibration\.confirmedRevision \+ 1\)/);
-  assert.match(server, /timingRuntime\.markContentValidationBaseline\(calibration\.confirmedRevision\)/);
-  assert.match(server, /automatic: timingRuntime\.automatic/);
+  for (const expected of [
+    'timingRuntime.autoCalibrationDue(nowMs)',
+    'timingRuntime.beginContentCalibration(nowMs, true)',
+    'timingRuntime.beginContentCalibration(nowMs, false)',
+    'timingRuntime.beginBootProbe(true)',
+    'timingRuntime.beginBootProbe(false)',
+    'timingRuntime.prepareContentValidationSlew(calibration.confirmedRevision + 1)',
+    'timingRuntime.markContentValidationBaseline(calibration.confirmedRevision)',
+    'automatic: timingRuntime.automatic',
+  ]) {
+    assert.ok(serverCode.includes(expected), `server must retain TimingRuntime delegation: ${expected}`);
+  }
 });

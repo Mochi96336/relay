@@ -1870,6 +1870,15 @@ function handleProbeFailure(
   failProbeAttempt(pending.target, reason, nowMs);
 }
 
+function promoteBootProbeCalibration(
+  mutateProbe: () => void,
+  result: () => { micLagMs: number; confidence: number },
+) {
+  mutateProbe();
+  timingRuntime.markBootProbeAuthority();
+  calibration.applyExternalResult(result());
+}
+
 function maybeFinishProbeAnalysis(nowMs: number) {
   const waiting = bootProbeRuntime.pendingAnalysis;
   if (!waiting) return;
@@ -1978,12 +1987,13 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     );
   }
 
-  bootProbeRuntime.recordCalibration(bootProbeContext(), result);
-  timingRuntime.markBootProbeAuthority();
-  calibration.applyExternalResult({
-    micLagMs: result.advanceMs,
-    confidence: Math.max(0, Math.min(1, result.confidence)),
-  });
+  promoteBootProbeCalibration(
+    () => bootProbeRuntime.recordCalibration(bootProbeContext(), result),
+    () => ({
+      micLagMs: result.advanceMs,
+      confidence: Math.max(0, Math.min(1, result.confidence)),
+    }),
+  );
 }
 
 function currentDeltaMs(nowMs: number) {
@@ -2004,9 +2014,10 @@ function maybeReapplyBootCalibration(nowMs: number) {
   if (PROBE_DEBUG) {
     console.log(`[probe] delta moved; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
   }
-  bootProbeRuntime.reapplyCalibration(advanceMs, currentDeltaMs(nowMs));
-  timingRuntime.markBootProbeAuthority();
-  calibration.applyExternalResult({ micLagMs: advanceMs, confidence: bootProbeRuntime.confidence ?? 0 });
+  promoteBootProbeCalibration(
+    () => bootProbeRuntime.reapplyCalibration(advanceMs, currentDeltaMs(nowMs)),
+    () => ({ micLagMs: advanceMs, confidence: bootProbeRuntime.confidence ?? 0 }),
+  );
 }
 
 function dropLegacyCalibrationForRobot() {

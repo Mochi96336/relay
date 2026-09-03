@@ -17,6 +17,9 @@ export type CalibrationStartFacts = {
   backingStreaming: boolean;
   micStreaming: boolean;
   robotProbeTimingActive: boolean;
+  /** Explicit Robot topology facts. Optional only for legacy pure-policy callers. */
+  backingIsRobot?: boolean;
+  robotSourceConnected?: boolean;
   timelineConnected: boolean;
   timelineState: number | null;
 };
@@ -36,6 +39,12 @@ export type CalibrationStartDecision =
  * therefore run while YouTube is paused/disconnected as long as Mic + backing
  * capture keep delivering fresh PCM frames; content correlation still needs a
  * playing phone timeline.
+ *
+ * A boot probe is a two-leg measurement. If runtime supplied explicit Robot
+ * topology facts, both the Robot backing identity and Robot source transport
+ * must be present before the action is advertised. Otherwise the UI can start
+ * a run whose Mic leg succeeds and whose backing leg waits forever without
+ * spending an attempt.
  */
 export function decideCalibrationStart(
   facts: CalibrationStartFacts,
@@ -53,7 +62,12 @@ export function decideCalibrationStart(
     return { ok: false, mode, reason: 'sources-not-streaming' };
   }
 
-  if (mode === 'boot-probe') return { ok: true, mode };
+  if (mode === 'boot-probe') {
+    if (facts.backingIsRobot === false || facts.robotSourceConnected === false) {
+      return { ok: false, mode, reason: 'sources-not-connected' };
+    }
+    return { ok: true, mode };
+  }
 
   if (!facts.timelineConnected || facts.timelineState !== 1) {
     return { ok: false, mode, reason: 'phone-not-playing' };

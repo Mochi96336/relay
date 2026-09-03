@@ -18,6 +18,10 @@ function wsUrl() {
  * it is useful as a preflight path measurement before any Song is loaded. This
  * adapter keeps that exceptional command path narrow while the legacy publisher
  * control surface is retired.
+ *
+ * The promise resolves only after the server publishes the timing transition.
+ * Keeping the caller pending across that acknowledgement prevents the visible
+ * action from briefly becoming clickable again between send() and ProductStatus.
  */
 export function sendPreflightCalibrationCommand({ timeoutMs = 4_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -56,17 +60,42 @@ export function sendPreflightCalibrationCommand({ timeoutMs = 4_000 } = {}) {
         return;
       }
 
-      if (message?.type !== 'participant-authenticated' || sent) return;
-      sent = true;
-      socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
-      // WebSocket preserves message order; keep the connection alive for one
-      // task turn so the command is flushed before closing the helper socket.
-      setTimeout(() => finish(), 0);
+      if (
+        message?.type === 'command-rejected'
+        && message.command === 'start-timing-calibration'
+      ) {
+        finish(new Error(
+          typeof message.reason === 'string' && message.reason
+            ? message.reason
+            : 'Calibration command was rejected.',
+        ));
+        return;
+      }
+
+      if (message?.type === 'participant-authenticated' && !sent) {
+        sent = true;
+        socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
+        return;
+      }
+
+      if (sent && message?.type === 'timing-calibration-status') {
+        if (message.state === 'failed' && typeof message.error === 'string' && message.error) {
+          finish(new Error(message.error));
+        } else {
+          finish();
+        }
+      }
     });
 
     socket.addEventListener('error', () => finish(new Error('Calibration command transport failed.')));
     socket.addEventListener('close', () => {
-      if (!settled && !sent) finish(new Error('Calibration command transport closed early.'));
+      if (!settled) {
+        finish(new Error(
+          sent
+            ? 'Calibration command transport closed before server acknowledgement.'
+            : 'Calibration command transport closed early.',
+        ));
+      }
     });
   });
 }

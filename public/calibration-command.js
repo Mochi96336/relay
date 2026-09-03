@@ -19,9 +19,10 @@ function wsUrl() {
  * adapter keeps that exceptional command path narrow while the legacy publisher
  * control surface is retired.
  *
- * The promise resolves only after the server publishes the timing transition.
- * Keeping the caller pending across that acknowledgement prevents the visible
- * action from briefly becoming clickable again between send() and ProductStatus.
+ * The promise resolves only after the server publishes the expected boot-probe
+ * transition. Keeping the caller pending across that acknowledgement prevents
+ * the visible action from briefly becoming clickable again between send() and
+ * ProductStatus, and avoids treating an unrelated timing broadcast as success.
  */
 export function sendPreflightCalibrationCommand({ timeoutMs = 4_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -60,6 +61,15 @@ export function sendPreflightCalibrationCommand({ timeoutMs = 4_000 } = {}) {
         return;
       }
 
+      if (message?.type === 'calibration-command-rejected') {
+        finish(new Error(
+          typeof message.reason === 'string' && message.reason
+            ? message.reason
+            : 'Calibration command was rejected.',
+        ));
+        return;
+      }
+
       if (
         message?.type === 'command-rejected'
         && message.command === 'start-timing-calibration'
@@ -81,7 +91,7 @@ export function sendPreflightCalibrationCommand({ timeoutMs = 4_000 } = {}) {
       if (sent && message?.type === 'timing-calibration-status') {
         if (message.state === 'failed' && typeof message.error === 'string' && message.error) {
           finish(new Error(message.error));
-        } else {
+        } else if (message.probeActive === true) {
           finish();
         }
       }

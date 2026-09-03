@@ -109,8 +109,13 @@ export class TimingRuntime {
     return facts.hasConfirmedResult ? this.authorityKindValue : 'none';
   }
 
-  /** Restore orchestration after a failed replacement candidate kept old authority. */
+  /**
+   * Restore orchestration after a failed replacement candidate kept old
+   * authority. With no confirmed authority there is nothing to restore, so the
+   * failed candidate kind remains available as diagnostic provenance.
+   */
   restoreCandidateKindToAuthority() {
+    if (this.authorityKindValue === 'none') return;
     this.calibrationKindValue = this.authorityKindValue;
   }
 

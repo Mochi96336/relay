@@ -112,8 +112,11 @@ function initialize() {
   }
 
   function timingIsProductRelevant() {
-    return latestProductStatus?.timing?.state !== undefined
-      && latestProductStatus.timing.state !== 'idle';
+    // Before the first ProductStatus snapshot, preserve the last-known timing
+    // authority rather than flashing it away. Once ProductStatus is known, its
+    // semantic idle state wins over the mixer's technical read-head value.
+    if (!latestProductStatus) return true;
+    return latestProductStatus?.timing?.state !== 'idle';
   }
 
   function renderTimingAuthority() {

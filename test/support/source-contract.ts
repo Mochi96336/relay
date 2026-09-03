@@ -204,6 +204,12 @@ export function variableInitializerCode(source: SourceContract, name: string) {
   assert.fail(`unterminated initializer for ${name}`);
 }
 
+export function importSources(source: SourceContract) {
+  const code = stripComments(source.text);
+  const pattern = /^\s*import(?:\s+type)?(?:[\s\S]*?\s+from\s+)?\s*['"]([^'"]+)['"]\s*;?\s*$/gm;
+  return Array.from(code.matchAll(pattern), (match) => match[1]);
+}
+
 export function sourceCode(source: SourceContract) {
   return stripComments(source.text);
 }

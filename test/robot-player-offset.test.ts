@@ -3,8 +3,17 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { RobotPlayerOffsetTracker } from '../src/robot-player-offset.js';
+import {
+  functionCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
 
-const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
 
 function tracker() {
   return new RobotPlayerOffsetTracker({ freshForMs: 2_000, windowMs: 2_000 });
@@ -95,15 +104,24 @@ test('a report that is not a number is refused rather than stored', () => {
 });
 
 test('the server aligns against the tracker and only then requests a backing boundary', () => {
-  assert.match(serverSource, /const robotPlayerOffset = new RobotPlayerOffsetTracker\(/);
-  assert.match(
-    serverSource,
-    /const nowMs = performance\.now\(\);\s*robotPlayerOffset\.record\(offsetMs, nowMs\);\s*const mapped = robotContentTimeline\.notePlayerOffset\(\s*robotPlayerOffset\.offsetMs\(nowMs\) \?\? offsetMs,[\s\S]*?\);\s*if \(mapped\) requestRobotBackingBoundary\(nowMs\);/,
-  );
-  assert.match(serverSource, /robotDeltaIsFresh\(nowMs\) \? robotPlayerOffset\.offsetMs\(nowMs\)! : 0/);
+  assert.ok(variableInitializerCode(server, 'robotPlayerOffset').includes('new RobotPlayerOffsetTracker({'));
+
+  const infrastructure = variableInitializerCode(server, 'infrastructureEventProtocol');
+  const recorded = infrastructure.indexOf('robotPlayerOffset.record(offsetMs, nowMs)');
+  const mapped = infrastructure.indexOf('robotContentTimeline.notePlayerOffset(');
+  const requested = infrastructure.indexOf('if (mapped) requestRobotBackingBoundary(nowMs)');
+  assert.ok(recorded >= 0, 'Robot offset reports must enter RobotPlayerOffsetTracker');
+  assert.ok(mapped > recorded, 'timeline mapping must consume the tracked offset after it is recorded');
+  assert.ok(requested > mapped, 'backing-boundary requests must follow accepted timeline mapping');
+  assert.ok(infrastructure.includes('robotPlayerOffset.offsetMs(nowMs) ?? offsetMs'));
+
+  const currentDelta = functionCode(server, 'currentDeltaMs');
+  assert.ok(currentDelta.includes('robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs)! : 0'));
+
   // No raw last-value state may survive alongside it, or the two can disagree.
   // `robotPlayerOffsetMs:` remains as a published status field, so this pins the
   // absence of the mutable variables it used to be read from.
-  assert.doesNotMatch(serverSource, /let robotPlayerOffset(Ms|At)\b/);
-  assert.doesNotMatch(serverSource, /robotPlayerOffset(Ms|At) =/);
+  const serverCode = sourceCode(server);
+  assert.doesNotMatch(serverCode, /let robotPlayerOffset(Ms|At)\b/);
+  assert.doesNotMatch(serverCode, /robotPlayerOffset(Ms|At) =/);
 });

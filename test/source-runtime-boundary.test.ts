@@ -1,30 +1,45 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const root = process.cwd();
-const runtime = fs.readFileSync(path.join(root, 'src/source-runtime.ts'), 'utf8');
-const server = fs.readFileSync(path.join(root, 'src/server.ts'), 'utf8');
+import {
+  importSources,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const runtime = parseTypeScriptSource(
+  new URL('../src/source-runtime.ts', import.meta.url),
+  readFileSync(new URL('../src/source-runtime.ts', import.meta.url), 'utf8'),
+);
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
 
 test('SourceRuntime owns source identity without absorbing mapping or product effects', () => {
-  assert.doesNotMatch(runtime, /^import /m, 'SourceRuntime must stay dependency-free');
-  assert.match(server, /new SourceRuntime<RelaySocket>/);
-  assert.match(server, /sourceGeneration: sourceRuntime\.generation/);
-  assert.match(server, /sourceRuntime\.attachRobot\(socket\)/);
-  assert.match(server, /sourceRuntime\.detachRobot\(socket\)/);
-  assert.match(server, /sourceRuntime\.invalidateMapping\(\)/);
-  assert.match(server, /sourceRuntime\.canReportSeek\(socket\)/);
+  const runtimeCode = sourceCode(runtime);
+  const serverCode = sourceCode(server);
+  const sourceRuntime = variableInitializerCode(server, 'sourceRuntime');
 
-  assert.doesNotMatch(server, /let activeRobotSource: RelaySocket \| null/);
-  assert.doesNotMatch(server, /let sourceGeneration =/);
-  assert.doesNotMatch(server, /sourceGeneration \+= 1/);
+  assert.deepEqual(importSources(runtime), [], 'SourceRuntime must stay dependency-free');
+  assert.match(sourceRuntime, /^new SourceRuntime<RelaySocket>/);
+  assert.match(serverCode, /sourceGeneration: sourceRuntime\.generation/);
+  assert.match(serverCode, /sourceRuntime\.attachRobot\(socket\)/);
+  assert.match(serverCode, /sourceRuntime\.detachRobot\(socket\)/);
+  assert.match(serverCode, /sourceRuntime\.invalidateMapping\(\)/);
+  assert.match(serverCode, /sourceRuntime\.canReportSeek\(socket\)/);
+
+  assert.doesNotMatch(serverCode, /let activeRobotSource: RelaySocket \| null/);
+  assert.doesNotMatch(serverCode, /let sourceGeneration =/);
+  assert.doesNotMatch(serverCode, /sourceGeneration \+= 1/);
 
   // Domain consequences remain explicit in server orchestration, even when
   // their ordering is delegated through a coordinator callback seam.
-  assert.match(server, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
-  assert.match(server, /robotPlayerOffset\.reset\(\)/);
-  assert.match(server, /robotContentTimeline\.reset\(\)/);
-  assert.match(server, /calibration\.discardPrimedContent\(\)/);
-  assert.doesNotMatch(runtime, /noteQualityEvent|discardPrimedContent|sendJson|broadcastJson/);
+  assert.match(serverCode, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
+  assert.match(serverCode, /robotPlayerOffset\.reset\(\)/);
+  assert.match(serverCode, /robotContentTimeline\.reset\(\)/);
+  assert.match(serverCode, /calibration\.discardPrimedContent\(\)/);
+  assert.doesNotMatch(runtimeCode, /noteQualityEvent|discardPrimedContent|sendJson|broadcastJson/);
 });

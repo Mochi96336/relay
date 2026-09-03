@@ -26,6 +26,20 @@ test('boot-probe promotion mutates probe authority before synchronous calibratio
   );
 });
 
+test('terminal probe failure settles only after probe and timing authority agree', () => {
+  const failure = functionCode(server, 'failProbeAttempt');
+  const mutate = failure.indexOf('bootProbeRuntime.failAttempt(target, reason, nowMs)');
+  const timingAuthority = failure.indexOf('timingRuntime.markBootProbeAuthority();', mutate);
+  const settle = failure.indexOf('calibration.failPreservingPrimed(failure.message);', timingAuthority);
+
+  assert.ok(mutate >= 0, 'terminal failure must begin with the authoritative probe mutation');
+  assert.ok(timingAuthority > mutate, 'terminal failure must mark boot-probe timing authority after mutation');
+  assert.ok(
+    settle > timingAuthority,
+    'failure settlement may synchronously publish only after probe and timing authority are coherent',
+  );
+});
+
 test('fresh two-leg probe result delegates ordered promotion without duplicating settlement effects', () => {
   const finish = functionCode(server, 'maybeFinishProbeAnalysis');
 

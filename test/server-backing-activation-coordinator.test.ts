@@ -2,22 +2,25 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const coordinator = readFileSync(
+import {
+  importSources,
+  objectArrowCallbackCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const coordinator = parseTypeScriptSource(
   new URL('../src/relay-backing-activation-coordinator.ts', import.meta.url),
-  'utf8',
+  readFileSync(new URL('../src/relay-backing-activation-coordinator.ts', import.meta.url), 'utf8'),
 );
 
-function backingRegistrationBlock() {
-  const registration = server.indexOf('const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({');
-  const start = server.indexOf('backing: (socket, payload) => {', registration);
-  const end = server.indexOf('monitor: (socket, payload) => {', start);
-  assert.ok(registration >= 0 && start > registration && end > start);
-  return server.slice(start, end);
-}
-
 test('Backing registration keeps infrastructure admission, validation and role commit in server', () => {
-  const backing = backingRegistrationBlock();
+  const backing = objectArrowCallbackCode(server, 'registrationProtocol', 'backing');
   assert.match(backing, /infrastructureCapability\.authorized\(socket\)/);
   assert.match(backing, /canClaimSocketRole\(socket, 'backing'\)/);
   assert.match(backing, /validSampleRate\(payload\.sampleRate\)/);
@@ -34,32 +37,31 @@ test('Backing registration keeps infrastructure admission, validation and role c
 });
 
 test('server composition retains Backing activation domain effects', () => {
-  assert.match(
-    server,
-    /import \{ createRelayBackingActivationCoordinator \} from '\.\/relay-backing-activation-coordinator\.js';/,
-  );
-  assert.match(server, /const backingActivationCoordinator = createRelayBackingActivationCoordinator<RelaySocket>/);
-  assert.match(server, /previousBacking: \(\) => backingRuntime\.socket/);
-  assert.match(server, /clearRobotBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
-  assert.match(server, /takeController\.noteQualityEvent\(event\)/);
-  assert.match(server, /replacePrevious\(previous, next, 'Replaced by a newer tab capture\.'\)/);
-  assert.match(server, /socket\.sampleRate = sampleRate/);
-  assert.match(server, /backingRuntime\.bind\(registration\)/);
-  assert.match(server, /session\.setBackingExpected\(true\)/);
-  assert.match(server, /sessionActive: \(\) => session\.active/);
-  assert.match(server, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
-  assert.match(server, /activeBackingIsRobot: \(\) => backingRuntime\.isRobot/);
-  assert.match(server, /type: 'registered', role: 'backing', robot/);
-  assert.match(server, /startLiveSource: \(\) => startLiveSource\(\)/);
+  assert.ok(importSources(server).includes('./relay-backing-activation-coordinator.js'));
+  const composition = variableInitializerCode(server, 'backingActivationCoordinator');
+  assert.match(composition, /^createRelayBackingActivationCoordinator<RelaySocket>/);
+  assert.match(composition, /previousBacking: \(\) => backingRuntime\.socket/);
+  assert.match(composition, /clearRobotBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(composition, /takeController\.noteQualityEvent\(event\)/);
+  assert.match(composition, /replacePrevious\(previous, next, 'Replaced by a newer tab capture\.'\)/);
+  assert.match(composition, /socket\.sampleRate = sampleRate/);
+  assert.match(composition, /backingRuntime\.bind\(registration\)/);
+  assert.match(composition, /session\.setBackingExpected\(true\)/);
+  assert.match(composition, /sessionActive: \(\) => session\.active/);
+  assert.match(composition, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
+  assert.match(composition, /activeBackingIsRobot: \(\) => backingRuntime\.isRobot/);
+  assert.match(composition, /type: 'registered', role: 'backing', robot/);
+  assert.match(composition, /startLiveSource: \(\) => startLiveSource\(\)/);
 });
 
 test('Backing activation coordinator owns ordering only, not Relay runtimes or authority', () => {
+  const coordinatorCode = sourceCode(coordinator);
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /from '\.\/(?:backing-runtime|audio-session|take-controller|infrastructure-capability-runtime)\.js'/,
   );
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /infrastructureCapability\.|backingRuntime\.|session\.|takeController\.|\bsendJson\b|\breplacePrevious\b/,
   );
 });

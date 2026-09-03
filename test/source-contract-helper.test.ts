@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  classMethodCode,
   functionCode,
   hasFunction,
   importSources,
@@ -24,6 +25,18 @@ function alpha(options: { nested: boolean }) {
   return options.nested ? text : '';
 }
 
+class ExampleRuntime {
+  run(value: number) {
+    // run(999) is documentation, not another method declaration.
+    return this.helper(value);
+  }
+
+  helper(value: number) {
+    const decoy = 'run(123)';
+    return value + 1 + decoy.length;
+  }
+}
+
 const coordinator = createThing({
   run: () => alpha({ nested: true }),
   label: 'semi; braces { } stay inside a string',
@@ -42,6 +55,14 @@ test('function contracts are declaration-based rather than next-function slices'
   assert.doesNotMatch(alpha, /forbiddenRuntime/);
   assert.equal(hasFunction(fixture, 'ghost'), false);
   assert.equal(hasFunction(fixture, 'beta'), true);
+});
+
+test('class method contracts stay at class-member depth and ignore calls or string decoys', () => {
+  const run = classMethodCode(fixture, 'ExampleRuntime', 'run');
+  assert.match(run, /^run\(value: number\)/);
+  assert.match(run, /this\.helper\(value\)/);
+  assert.doesNotMatch(run, /helper\(value: number\)/);
+  assert.doesNotMatch(run, /run\(999\)/);
 });
 
 test('variable initializer contracts balance nested delimiters and ignore strings', () => {

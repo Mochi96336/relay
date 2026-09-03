@@ -2,29 +2,56 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const micRuntime = readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8');
+import {
+  classMethodCode,
+  functionCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const micRuntime = parseTypeScriptSource(
+  new URL('../src/mic-runtime.ts', import.meta.url),
+  readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8'),
+);
+const serverCode = sourceCode(server);
+const micRuntimeCode = sourceCode(micRuntime);
 
 test('server bounds connected Mic startup through the MicRuntime readiness owner', () => {
-  assert.match(server, /const MIC_FIRST_FRAME_TIMEOUT_MS = relayConfig\.micFirstFrameTimeoutMs;/);
-  assert.match(
-    server,
-    /new MicRuntime\(\{[\s\S]{0,300}firstFrameTimeoutMs:\s*MIC_FIRST_FRAME_TIMEOUT_MS/,
+  assert.ok(serverCode.includes('const MIC_FIRST_FRAME_TIMEOUT_MS = relayConfig.micFirstFrameTimeoutMs;'));
+
+  const construction = variableInitializerCode(server, 'micRuntime');
+  assert.ok(construction.includes('new MicRuntime({'));
+  assert.ok(
+    construction.includes('firstFrameTimeoutMs: MIC_FIRST_FRAME_TIMEOUT_MS'),
     'the normalized server deadline must be injected into the transport-state owner',
   );
-  assert.match(micRuntime, /private firstFrameWaitStartedAt = -Infinity/);
-  assert.match(
-    micRuntime,
-    /resetFlowEvidence\(nowMs: number\)[\s\S]{0,400}this\.firstFrameWaitStartedAt = this\.currentMediaOwnerId === null \? -Infinity : nowMs/,
-  );
-  assert.match(
-    micRuntime,
-    /startupTimedOut\(nowMs: number\)[\s\S]{0,400}this\.connected\(\)[\s\S]{0,200}!this\.flowObserved\(\)[\s\S]{0,300}this\.options\.firstFrameTimeoutMs/,
-  );
-  assert.match(
-    server,
-    /function micStartupTimedOut\(nowMs = performance\.now\(\)\)[\s\S]{0,150}micRuntime\.startupTimedOut\(nowMs\)/,
+
+  assert.ok(micRuntimeCode.includes('private firstFrameWaitStartedAt = -Infinity'));
+
+  const resetFlowEvidence = classMethodCode(micRuntime, 'MicRuntime', 'resetFlowEvidence');
+  assert.ok(resetFlowEvidence.includes(
+    'this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs',
+  ));
+
+  const startupTimedOut = classMethodCode(micRuntime, 'MicRuntime', 'startupTimedOut');
+  for (const expected of [
+    'this.connected()',
+    '!this.flowObserved()',
+    'Number.isFinite(this.firstFrameWaitStartedAt)',
+    'nowMs - this.firstFrameWaitStartedAt >= this.options.firstFrameTimeoutMs',
+  ]) {
+    assert.ok(startupTimedOut.includes(expected), `MicRuntime startup deadline must retain ${expected}`);
+  }
+
+  const serverDeadline = functionCode(server, 'micStartupTimedOut');
+  assert.ok(
+    serverDeadline.includes('return micRuntime.startupTimedOut(nowMs)'),
     'server readiness must consume the runtime deadline result instead of duplicating its timer state',
   );
-  assert.match(server, /micStartupTimedOut: micStartupTimedOut\(nowMs\)/);
+  assert.ok(serverCode.includes('micStartupTimedOut: micStartupTimedOut(nowMs)'));
 });

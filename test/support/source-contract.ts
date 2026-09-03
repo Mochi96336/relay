@@ -152,6 +152,26 @@ function functionMatches(source: SourceContract, name: string) {
   return Array.from(source.codeMask.matchAll(pattern));
 }
 
+function classRange(source: SourceContract, name: string) {
+  const pattern = new RegExp(`\\bclass\\s+${escapeRegExp(name)}\\b`, 'g');
+  const matches = Array.from(source.codeMask.matchAll(pattern));
+  assert.equal(matches.length, 1, `expected exactly one class declaration named ${name} in ${source.fileName}`);
+  const start = matches[0].index;
+  const bodyStart = source.codeMask.indexOf('{', start + matches[0][0].length);
+  assert.ok(bodyStart >= 0, `${name} must keep a class body`);
+  const bodyEnd = matchingDelimiter(source.codeMask, bodyStart, '{', '}');
+  return { start, bodyStart, bodyEnd };
+}
+
+function braceDepthAt(code: string, start: number, end: number) {
+  let depth = 0;
+  for (let index = start; index < end; index += 1) {
+    if (code[index] === '{') depth += 1;
+    else if (code[index] === '}') depth -= 1;
+  }
+  return depth;
+}
+
 export function parseTypeScriptSource(url: URL, text: string): SourceContract {
   return {
     fileName: url.pathname,
@@ -174,6 +194,34 @@ export function functionCode(source: SourceContract, name: string) {
 
 export function hasFunction(source: SourceContract, name: string) {
   return functionMatches(source, name).length > 0;
+}
+
+export function classMethodCode(source: SourceContract, className: string, methodName: string) {
+  const range = classRange(source, className);
+  const pattern = new RegExp(`\\b${escapeRegExp(methodName)}\\s*\\(`, 'g');
+  const candidates = Array.from(source.codeMask.matchAll(pattern))
+    .filter((match) => {
+      const index = match.index;
+      if (index <= range.bodyStart || index >= range.bodyEnd) return false;
+      if (braceDepthAt(source.codeMask, range.bodyStart, index) !== 1) return false;
+      let previous = index - 1;
+      while (previous > range.bodyStart && /\s/.test(source.codeMask[previous])) previous -= 1;
+      return source.codeMask[previous] !== '.';
+    });
+  assert.equal(
+    candidates.length,
+    1,
+    `expected exactly one top-level method named ${className}.${methodName} in ${source.fileName}`,
+  );
+
+  const start = candidates[0].index;
+  const openParen = source.codeMask.indexOf('(', start);
+  const closeParen = matchingDelimiter(source.codeMask, openParen, '(', ')');
+  const bodyStart = source.codeMask.indexOf('{', closeParen + 1);
+  assert.ok(bodyStart >= 0 && bodyStart < range.bodyEnd, `${className}.${methodName} must keep a method body`);
+  const bodyEnd = matchingDelimiter(source.codeMask, bodyStart, '{', '}');
+  assert.ok(bodyEnd <= range.bodyEnd, `${className}.${methodName} body must stay inside ${className}`);
+  return stripComments(source.text.slice(start, bodyEnd + 1));
 }
 
 export function variableInitializerCode(source: SourceContract, name: string) {

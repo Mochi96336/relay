@@ -7,6 +7,12 @@ import {
   loadAudioTransportConfig,
 } from '../src/audio-transport-config.js';
 import { startRelay } from './helpers/harness.js';
+import {
+  classMethodCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
 
 describe('audio transport configuration', () => {
   it('has one explicit set of defaults', () => {
@@ -64,26 +70,48 @@ describe('audio transport configuration', () => {
   });
 
   it('keeps the receiver on the validated config boundary after Mic runtime extraction', () => {
-    const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-    const micRuntime = readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8');
-    const transportBoundary = `${server}\n${micRuntime}`;
+    const server = parseTypeScriptSource(
+      new URL('../src/server.ts', import.meta.url),
+      readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+    );
+    const micRuntime = parseTypeScriptSource(
+      new URL('../src/mic-runtime.ts', import.meta.url),
+      readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8'),
+    );
+    const serverCode = sourceCode(server);
+    const micRuntimeCode = sourceCode(micRuntime);
+    const transportBoundary = `${serverCode}\n${micRuntimeCode}`;
 
-    assert.match(server, /const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig\(\);/);
-    assert.match(
-      server,
-      /new MicRuntime\(\{[\s\S]{0,300}audioTransportConfig:\s*AUDIO_TRANSPORT_CONFIG/,
+    assert.equal(variableInitializerCode(server, 'AUDIO_TRANSPORT_CONFIG'), 'loadAudioTransportConfig()');
+
+    const construction = variableInitializerCode(server, 'micRuntime');
+    assert.ok(construction.includes('new MicRuntime({'));
+    assert.ok(
+      construction.includes('audioTransportConfig: AUDIO_TRANSPORT_CONFIG'),
       'server orchestration must inject the already-validated config object',
     );
-    assert.doesNotMatch(server, /createWebSocketAudioTransport/,
-      'server orchestration must not reconstruct receiver tuning after handing it to MicRuntime');
-    assert.match(
-      micRuntime,
-      /createWebSocketAudioTransport\(\{[\s\S]{0,500}receiver:\s*\{[\s\S]{0,300}\.\.\.this\.options\.audioTransportConfig/,
+    assert.doesNotMatch(
+      serverCode,
+      /createWebSocketAudioTransport/,
+      'server orchestration must not reconstruct receiver tuning after handing it to MicRuntime',
+    );
+
+    const bindPublisher = classMethodCode(micRuntime, 'MicRuntime', 'bindPublisher');
+    assert.ok(bindPublisher.includes('createWebSocketAudioTransport({'));
+    assert.ok(bindPublisher.includes('receiver: {'));
+    assert.ok(
+      bindPublisher.includes('...this.options.audioTransportConfig'),
       'MicRuntime receiver construction must consume the injected validated config object',
     );
-    assert.doesNotMatch(micRuntime, /loadAudioTransportConfig|process\.env/,
-      'MicRuntime must not create a second deployment-config authority');
-    assert.doesNotMatch(transportBoundary, /envNonNegativeInt|MIC_REORDER_WINDOW_PACKETS|MIC_REORDER_DEADLINE_MS|MIC_MAX_FORWARD_JUMP_PACKETS/);
+    assert.doesNotMatch(
+      micRuntimeCode,
+      /loadAudioTransportConfig|process\.env/,
+      'MicRuntime must not create a second deployment-config authority',
+    );
+    assert.doesNotMatch(
+      transportBoundary,
+      /envNonNegativeInt|MIC_REORDER_WINDOW_PACKETS|MIC_REORDER_DEADLINE_MS|MIC_MAX_FORWARD_JUMP_PACKETS/,
+    );
     assert.doesNotMatch(transportBoundary, /maxForwardJumpPackets:\s*Math\.max/);
   });
 });

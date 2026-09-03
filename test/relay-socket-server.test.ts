@@ -135,9 +135,16 @@ test('socket substrate owns upgrade admission and initializes transport metadata
     const [broadcastPayload] = await broadcastMessage;
     assert.deepEqual(JSON.parse(broadcastPayload.toString()), { type: 'transport-broadcast' });
 
-    const clientClosed = waitForEvent(client, 'close', 'accepted client close');
-    const serverSocketClosed = waitForEvent(socket, 'close', 'accepted server socket close');
-    client.terminate();
+    const retirementMessage = waitForEvent(client, 'message', 'retirement payload');
+    const clientClosed = waitForEvent(client, 'close', 'retired client close');
+    const serverSocketClosed = waitForEvent(socket, 'close', 'retired server socket close');
+    transport.retire(socket, { type: 'transport-retired', message: 'replaced' });
+    const [retirementPayload] = await retirementMessage;
+    assert.deepEqual(JSON.parse(retirementPayload.toString()), {
+      type: 'transport-retired',
+      message: 'replaced',
+    });
+    assert.equal(socket.replaced, true);
     await Promise.all([clientClosed, serverSocketClosed]);
   } finally {
     await closeWebSocketServer(wss);

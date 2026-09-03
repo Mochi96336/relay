@@ -7,7 +7,7 @@ const command = readFileSync(new URL('../public/calibration-command.js', import.
 const system = readFileSync(new URL('../public/calibration-system-details.js', import.meta.url), 'utf8');
 
 test('normal timing value is hidden when ProductStatus says timing is idle', () => {
-  assert.match(ui, /latestProductStatus\.timing\.state !== 'idle'/);
+  assert.match(ui, /return latestProductStatus\?\.timing\?\.state !== 'idle'/);
   assert.match(ui, /timingIsProductRelevant\(\) && timingAuthority\?\.authorityFresh === true/);
 });
 

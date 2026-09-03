@@ -1794,31 +1794,49 @@ function maybeStartProbeCalibration(nowMs: number) {
   sendProbeRequest(target, nowMs);
 }
 
-function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
+function acceptCurrentProbeClientResult(
+  reply: { requestId: unknown; generation: unknown },
+  nowMs: number,
+  options: {
+    clientGenerationMismatchReason: string;
+    logCaptureGenerationMismatch?: boolean;
+  },
+) {
   const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
-  if (!pending) return;
+  if (!pending) return null;
+
   if (!session.active || pending.sessionGeneration !== session.generation) {
     abandonProbeRun();
     broadcastJson(timingCalibrationStatusPayload());
-    return;
+    return null;
   }
 
-  const generationHeld = probeGeneration(pending.target) === pending.generation;
-  if (!generationHeld) {
-    if (PROBE_DEBUG) console.log(`[probe] ${pending.target} dropped: capture generation changed`);
+  if (probeGeneration(pending.target) !== pending.generation) {
+    if (options.logCaptureGenerationMismatch && PROBE_DEBUG) {
+      console.log(`[probe] ${pending.target} dropped: capture generation changed`);
+    }
     abandonProbeRun();
     broadcastJson(timingCalibrationStatusPayload());
-    return;
+    return null;
   }
 
-  const clientAgrees = pending.target === 'mic'
-    ? (Number(reply.generation) >>> 0) === pending.generation
-    : true;
-  if (!clientAgrees) {
-    if (PROBE_DEBUG) console.log(`[probe] ${pending.target} dropped: client generation mismatch`);
-    failProbeAttempt(pending.target, 'client reported a different capture generation', nowMs);
-    return;
+  if (
+    pending.target === 'mic'
+    && (Number(reply.generation) >>> 0) !== pending.generation
+  ) {
+    failProbeAttempt('mic', options.clientGenerationMismatchReason, nowMs);
+    return null;
   }
+
+  return pending;
+}
+
+function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
+  const pending = acceptCurrentProbeClientResult(reply, nowMs, {
+    clientGenerationMismatchReason: 'client reported a different capture generation',
+    logCaptureGenerationMismatch: true,
+  });
+  if (!pending) return;
 
   const oneWayMs = (nowMs - pending.serverSentAtMs) / 2;
   const targetSample = Math.round(session.sessionSampleAt(pending.serverSentAtMs + oneWayMs + PROBE_LEAD_MS));
@@ -1841,27 +1859,10 @@ function handleProbeFailure(
   reply: { requestId: unknown; generation: unknown; reason: unknown },
   nowMs: number,
 ) {
-  const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
+  const pending = acceptCurrentProbeClientResult(reply, nowMs, {
+    clientGenerationMismatchReason: 'client failed from a different capture generation',
+  });
   if (!pending) return;
-  if (!session.active || pending.sessionGeneration !== session.generation) {
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  if (probeGeneration(pending.target) !== pending.generation) {
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  if (
-    pending.target === 'mic'
-    && (Number(reply.generation) >>> 0) !== pending.generation
-  ) {
-    failProbeAttempt('mic', 'client failed from a different capture generation', nowMs);
-    return;
-  }
 
   const rawReason = typeof reply.reason === 'string' ? reply.reason.trim() : '';
   const reason = rawReason ? rawReason.slice(0, 240) : 'client could not play the probe';

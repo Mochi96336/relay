@@ -276,6 +276,51 @@ export function variableInitializerCode(source: SourceContract, name: string) {
   assert.fail(`unterminated initializer for ${name}`);
 }
 
+export function objectArrowCallbackCode(source: SourceContract, variableName: string, propertyName: string) {
+  const initializer = variableInitializerCode(source, variableName);
+  const initializerSource: SourceContract = {
+    fileName: `${source.fileName}#${variableName}`,
+    text: initializer,
+    codeMask: maskNonCode(initializer),
+  };
+  const objectStart = initializerSource.codeMask.indexOf('{');
+  assert.ok(objectStart >= 0, `${variableName} must keep an object argument`);
+  const objectEnd = matchingDelimiter(initializerSource.codeMask, objectStart, '{', '}');
+  const pattern = new RegExp(`\\b${escapeRegExp(propertyName)}\\s*:\\s*\\(`, 'g');
+  const candidates = Array.from(initializerSource.codeMask.matchAll(pattern)).filter((match) => {
+    const index = match.index;
+    return index > objectStart
+      && index < objectEnd
+      && braceDepthAt(initializerSource.codeMask, objectStart, index) === 1;
+  });
+  assert.equal(
+    candidates.length,
+    1,
+    `expected exactly one top-level callback property named ${variableName}.${propertyName} in ${source.fileName}`,
+  );
+
+  const start = candidates[0].index;
+  const openParen = initializerSource.codeMask.indexOf('(', start);
+  const closeParen = matchingDelimiter(initializerSource.codeMask, openParen, '(', ')');
+  let arrow = closeParen + 1;
+  while (/\s/.test(initializerSource.codeMask[arrow] ?? '')) arrow += 1;
+  assert.equal(
+    initializerSource.codeMask.slice(arrow, arrow + 2),
+    '=>',
+    `${variableName}.${propertyName} must remain an arrow callback`,
+  );
+  let bodyStart = arrow + 2;
+  while (/\s/.test(initializerSource.codeMask[bodyStart] ?? '')) bodyStart += 1;
+  assert.equal(
+    initializerSource.codeMask[bodyStart],
+    '{',
+    `${variableName}.${propertyName} must keep a block body`,
+  );
+  const bodyEnd = matchingDelimiter(initializerSource.codeMask, bodyStart, '{', '}');
+  assert.ok(bodyEnd < objectEnd, `${variableName}.${propertyName} body must stay inside ${variableName}`);
+  return stripComments(initializerSource.text.slice(start, bodyEnd + 1));
+}
+
 export function importSources(source: SourceContract) {
   const code = stripComments(source.text);
   const pattern = /^\s*import(?:\s+type)?(?:[\s\S]*?\s+from\s+)?\s*['"]([^'"]+)['"]\s*;?\s*$/gm;

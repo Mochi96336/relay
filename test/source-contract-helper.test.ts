@@ -6,6 +6,7 @@ import {
   functionCode,
   hasFunction,
   importSources,
+  objectArrowCallbackCode,
   parseTypeScriptSource,
   sourceCode,
   variableInitializerCode,
@@ -46,6 +47,19 @@ const coordinator = createThing({
   label: 'semi; braces { } stay inside a string',
 });
 
+const callbacks = createThing({
+  publisher: (value: number) => {
+    // backing: () => false is documentation only.
+    const nested = {
+      publisher: () => value + 100,
+    };
+    return nested.publisher();
+  },
+  backing: (value: number) => {
+    return value + 1;
+  },
+});
+
 const decoy = 'function ghost() { return false; }';
 function beta() { return true; }
 `;
@@ -83,6 +97,15 @@ test('variable initializer contracts balance nested delimiters and ignore string
   assert.match(initializer, /run: \(\) => alpha/);
   assert.match(initializer, /semi; braces \{ \} stay inside a string/);
   assert.doesNotMatch(initializer, /const decoy/);
+});
+
+test('object callback contracts ignore adjacent handlers, nested names and comment decoys', () => {
+  const publisher = objectArrowCallbackCode(fixture, 'callbacks', 'publisher');
+  assert.match(publisher, /^publisher: \(value: number\) => \{/);
+  assert.match(publisher, /const nested = \{/);
+  assert.match(publisher, /publisher: \(\) => value \+ 100/);
+  assert.doesNotMatch(publisher, /backing: \(value: number\)/);
+  assert.doesNotMatch(publisher, /documentation only/);
 });
 
 test('import contracts include multiline and side-effect imports while ignoring comments', () => {

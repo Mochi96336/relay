@@ -2,26 +2,34 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const coordinator = readFileSync(
-  new URL('../src/relay-manual-boot-recalibration-coordinator.ts', import.meta.url),
-  'utf8',
-);
+import {
+  functionCode,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
 
-function functionBlock(name: string) {
-  return server.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0] ?? '';
-}
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const coordinator = parseTypeScriptSource(
+  new URL('../src/relay-manual-boot-recalibration-coordinator.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-manual-boot-recalibration-coordinator.ts', import.meta.url), 'utf8'),
+);
+const serverCode = sourceCode(server);
+const coordinatorCode = sourceCode(coordinator);
 
 test('manual Robot recalibration delegates only after server command authority', () => {
   assert.match(
-    server,
+    serverCode,
     /import \{ createRelayManualBootRecalibrationCoordinator \} from '\.\/relay-manual-boot-recalibration-coordinator\.js';/,
   );
-  assert.match(server, /requireMicOwnerCommand\(socket, 'start-timing-calibration'\)/);
-  assert.match(server, /productStatusPayload\(nowMs\)\.actions/);
-  assert.match(server, /restartManualBootCalibration\(nowMs\)/);
+  assert.match(serverCode, /requireMicOwnerCommand\(socket, 'start-timing-calibration'\)/);
+  assert.match(serverCode, /productStatusPayload\(nowMs\)\.actions/);
+  assert.match(serverCode, /restartManualBootCalibration\(nowMs\)/);
 
-  const restart = functionBlock('restartManualBootCalibration');
+  const restart = functionCode(server, 'restartManualBootCalibration');
   assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
   assert.doesNotMatch(restart, /calibration\./);
   assert.doesNotMatch(restart, /timingRuntime\./);
@@ -32,10 +40,7 @@ test('manual Robot recalibration delegates only after server command authority',
 });
 
 test('server composition retains candidate-state and publication effects', () => {
-  const start = server.indexOf('const manualBootRecalibrationCoordinator =');
-  const end = server.indexOf('function restartManualBootCalibration', start);
-  assert.ok(start >= 0 && end > start, 'manual recalibration composition must remain identifiable');
-  const composition = server.slice(start, end);
+  const composition = variableInitializerCode(server, 'manualBootRecalibrationCoordinator');
 
   assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
   assert.match(composition, /beginExternalRecalibration: \(\) => calibration\.beginExternalRecalibration\(\)/);
@@ -50,11 +55,11 @@ test('server composition retains candidate-state and publication effects', () =>
 
 test('manual recalibration coordinator owns no runtime or command authority', () => {
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /from '\.\/(?:calibration-session|timing-runtime|boot-probe-runtime|command-authority|product-view-model)\.js'/,
   );
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /calibration\.|timingRuntime|bootProbeRuntime|requireMicOwnerCommand|productStatusPayload|broadcastJson/,
   );
 });

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createRelayManualBootRecalibrationCoordinator } from '../src/relay-manual-boot-recalibration-coordinator.js';
 
-test('manual Robot recalibration preserves exact candidate transaction ordering', () => {
+test('manual Robot recalibration preserves active authority before candidate strategy switch', () => {
   const calls: string[] = [];
   const coordinator = createRelayManualBootRecalibrationCoordinator({
     clearContentValidation: () => calls.push('clear-content-validation'),
@@ -22,10 +22,10 @@ test('manual Robot recalibration preserves exact candidate transaction ordering'
   assert.deepEqual(calls, [
     'clear-content-validation',
     'begin-external-recalibration',
+    'sync-applied-calibration',
     'begin-manual-boot-probe',
     'abandon-probe-run',
     'reset-probe-correlations',
-    'sync-applied-calibration',
     'start-probe:1234',
     'timing-status',
     'source-status',

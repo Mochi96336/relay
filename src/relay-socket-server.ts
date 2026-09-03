@@ -74,6 +74,22 @@ export function createRelaySocketTransport(wss: WebSocketServer) {
   }
 
   /**
+   * Physically retires one transport after server/domain policy has decided it
+   * is replaced. The delayed terminate is only a close-handshake backstop; it
+   * carries no authority decision of its own.
+   */
+  function retire(socket: RelaySocket, payload: unknown) {
+    socket.replaced = true;
+    sendJson(socket, payload);
+    try {
+      socket.close();
+    } catch {}
+    setTimeout(() => {
+      if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+    }, 1_000).unref();
+  }
+
+  /**
    * A physical media/monitor WebSocket may bind exactly one transport role.
    * Authentication says who may use it; playback identity remains orthogonal
    * because a participant's playback-control capability can intentionally live
@@ -101,6 +117,7 @@ export function createRelaySocketTransport(wss: WebSocketServer) {
   return {
     sendJson,
     broadcastJson,
+    retire,
     canClaimSocketRole,
     commitSocketRole,
   };

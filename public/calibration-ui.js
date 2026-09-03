@@ -1,6 +1,8 @@
 import { authorityState } from './authority-freshness.js';
+import { sendPreflightCalibrationCommand } from './calibration-command.js';
 import { formatTimingValueMs } from './timing-value.js';
 import './timing-authority.js';
+import './calibration-system-details.js';
 
 let initialized = false;
 
@@ -95,6 +97,7 @@ function initialize() {
   };
   let commandAuthority = window.relayCommandAuthority ?? authorityState();
   let commandError = null;
+  let preflightCommandPending = false;
 
   function setText(element, value) {
     if (element && element.textContent !== value) element.textContent = value;
@@ -108,8 +111,19 @@ function initialize() {
     if (calibrateButton && calibrateButton.disabled !== value) calibrateButton.disabled = value;
   }
 
+  function timingIsProductRelevant() {
+    // Before the first ProductStatus snapshot, preserve the last-known timing
+    // authority rather than flashing it away. Once ProductStatus is known, its
+    // semantic idle state wins over the mixer's technical read-head value.
+    if (!latestProductStatus) return true;
+    return latestProductStatus?.timing?.state !== 'idle';
+  }
+
   function renderTimingAuthority() {
-    const formatted = timingAuthority?.authorityFresh === true
+    // A running AudioSession is not enough to make an alignment value meaningful.
+    // Voice-only and paused rooms intentionally render no number even if the
+    // mixer happens to carry a technical 0 ms read-head value.
+    const formatted = timingIsProductRelevant() && timingAuthority?.authorityFresh === true
       ? formatTimingValueMs(timingAuthority.valueMs)
       : null;
     setText(activeTimingValue, formatted ?? '—');
@@ -133,6 +147,11 @@ function initialize() {
     });
   }
 
+  function needsPreflightCommandPath() {
+    return latestAction?.startCalibrationMode === 'boot-probe'
+      && latestProductStatus?.room?.song?.videoId == null;
+  }
+
   /**
    * ProductStatus owns visible calibration lifecycle/action policy. The timing
    * number is independent: it is painted only from the server-applied mixer
@@ -147,7 +166,9 @@ function initialize() {
 
     const authority = calibrationAuthority();
     const reason = latestAction?.startCalibrationBlockedReason ?? null;
-    const running = reason === 'calibration-active' || latestTiming?.state === 'calibrating';
+    const running = preflightCommandPending
+      || reason === 'calibration-active'
+      || latestTiming?.state === 'calibrating';
     const owner = selfOwnsServerMic();
 
     if (commandError) {
@@ -193,6 +214,9 @@ function initialize() {
       lastKnownSnapshot: latestProductStatus,
     });
     commandError = null;
+    if (latestAction?.startCalibrationBlockedReason === 'calibration-active') {
+      preflightCommandPending = false;
+    }
     render();
   });
 
@@ -218,6 +242,7 @@ function initialize() {
 
   window.addEventListener('relay-calibration-command-rejected', () => {
     commandError = true;
+    preflightCommandPending = false;
     render();
   });
 
@@ -225,6 +250,23 @@ function initialize() {
 
   calibrateButton?.addEventListener?.('click', () => {
     if (!commandTarget || !calibrationAuthority().actionable) return;
+
+    // app.js still owns the historical publisher command listener, but that
+    // listener incorrectly requires a Song. Use a narrow authenticated command
+    // socket only for the no-Song Robot preflight case; all normal commands keep
+    // flowing through the established publisher transport.
+    if (needsPreflightCommandPath()) {
+      preflightCommandPending = true;
+      render();
+      void sendPreflightCalibrationCommand().catch(() => {
+        commandError = true;
+      }).finally(() => {
+        preflightCommandPending = false;
+        render();
+      });
+      return;
+    }
+
     commandTarget.dispatchEvent(new Event('click', { cancelable: true }));
   });
 

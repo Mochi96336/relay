@@ -92,8 +92,13 @@ test('calibration visible presenter follows ProductStatus and has one painted ow
   assert.match(calibrationUi, /t\('timing\.realign'\)/);
   assert.match(calibrationUi, /t\('timing\.aligning'\)/);
   assert.match(calibrationUi, /t\('timing\.unavailable'\)/);
-  assert.doesNotMatch(calibrationUi, /startCalibrationMode|mode === 'boot-probe'|sources-not-connected|sources-not-streaming/,
+  assert.doesNotMatch(calibrationUi, /mode === 'boot-probe'|sources-not-connected|sources-not-streaming/,
     'visible presenter must not reinterpret server implementation reasons as progress');
+  assert.match(
+    calibrationUi,
+    /function needsPreflightCommandPath\(\)[\s\S]*?latestAction\?\.startCalibrationMode === 'boot-probe'/,
+    'server-selected calibration mode may route the exceptional no-Song transport without painting lifecycle state',
+  );
   assert.doesNotMatch(calibrationUi, /getLocale/,
     'visible calibration copy must not maintain a private locale switch');
   assert.doesNotMatch(calibrationUi, /'重新對齊'|'對齊中…'|'Realign'|'Aligning…'/,

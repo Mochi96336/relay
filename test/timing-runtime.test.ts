@@ -11,6 +11,8 @@ test('timing runtime starts with no calibration authority and an immediately eli
   const timing = runtime();
 
   assert.equal(timing.calibrationKind, 'none');
+  assert.equal(timing.authorityKind, 'none');
+  assert.equal(timing.authorityRevision, 0);
   assert.equal(timing.automatic, false);
   assert.equal(timing.autoCalibrationDue(0), true);
   assert.equal(timing.contentValidationBaselineRevision, -1);
@@ -36,15 +38,122 @@ test('automatic content calibration owns the retry timestamp while manual conten
   );
 });
 
-test('boot probe and validated content promotion change kind without inventing measurement authority', () => {
+test('candidate kind cannot reclassify a retained confirmed authority revision', () => {
+  const timing = runtime();
+
+  timing.beginContentCalibration(1_000, false);
+  assert.equal(timing.appliedCalibrationKind({
+    confirmedRevision: 1,
+    hasConfirmedResult: true,
+    provisional: false,
+  }), 'content');
+  assert.equal(timing.authorityKind, 'content');
+
+  timing.beginBootProbe(false);
+  assert.equal(timing.calibrationKind, 'boot-probe', 'replacement candidate uses boot probes');
+  assert.equal(
+    timing.appliedCalibrationKind({
+      confirmedRevision: 1,
+      hasConfirmedResult: true,
+      provisional: false,
+    }),
+    'content',
+    'same confirmed revision must keep the strategy that actually produced it',
+  );
+  assert.equal(timing.authorityKind, 'content');
+
+  timing.restoreCandidateKindToAuthority();
+  assert.equal(timing.calibrationKind, 'content', 'failed replacement rolls orchestration back to retained authority');
+});
+
+test('failed candidate keeps its own provenance when there is no confirmed authority to restore', () => {
+  const timing = runtime();
+
+  timing.beginBootProbe(false);
+  assert.equal(timing.calibrationKind, 'boot-probe');
+  assert.equal(timing.authorityKind, 'none');
+
+  timing.restoreCandidateKindToAuthority();
+  assert.equal(
+    timing.calibrationKind,
+    'boot-probe',
+    'a first-run terminal failure must remain identifiable as a failed boot-probe',
+  );
+  assert.equal(timing.authorityKind, 'none');
+});
+
+test('new confirmation revision atomically promotes candidate strategy to authority', () => {
+  const timing = runtime();
+
+  timing.beginContentCalibration(1_000, false);
+  timing.appliedCalibrationKind({
+    confirmedRevision: 4,
+    hasConfirmedResult: true,
+    provisional: false,
+  });
+
+  timing.beginBootProbe(false);
+  assert.equal(timing.authorityKind, 'content');
+  assert.equal(timing.appliedCalibrationKind({
+    confirmedRevision: 5,
+    hasConfirmedResult: true,
+    provisional: false,
+  }), 'boot-probe');
+  assert.equal(timing.authorityKind, 'boot-probe');
+  assert.equal(timing.authorityRevision, 5);
+});
+
+test('provisional result belongs to the in-flight candidate without mutating confirmed provenance', () => {
+  const timing = runtime();
+
+  timing.beginBootProbe(false);
+  assert.equal(timing.appliedCalibrationKind({
+    confirmedRevision: 0,
+    hasConfirmedResult: false,
+    provisional: true,
+  }), 'boot-probe');
+  assert.equal(timing.authorityKind, 'none');
+
+  timing.beginContentCalibration(2_000, false);
+  assert.equal(timing.appliedCalibrationKind({
+    confirmedRevision: 0,
+    hasConfirmedResult: false,
+    provisional: true,
+  }), 'content');
+  assert.equal(timing.authorityKind, 'none');
+});
+
+test('clearing a confirmed result clears active authority without rewinding monotonic revision', () => {
+  const timing = runtime();
+
+  timing.beginContentCalibration(1_000, false);
+  timing.appliedCalibrationKind({
+    confirmedRevision: 3,
+    hasConfirmedResult: true,
+    provisional: false,
+  });
+  assert.equal(timing.authorityKind, 'content');
+
+  assert.equal(timing.appliedCalibrationKind({
+    confirmedRevision: 3,
+    hasConfirmedResult: false,
+    provisional: false,
+  }), 'none');
+  assert.equal(timing.authorityKind, 'none');
+  assert.equal(timing.authorityRevision, 3);
+});
+
+test('boot probe and validated content promotion change candidate kind without inventing measurement authority', () => {
   const timing = runtime();
 
   timing.beginBootProbe(true);
   assert.equal(timing.calibrationKind, 'boot-probe');
+  assert.equal(timing.authorityKind, 'none');
   assert.equal(timing.automatic, true);
 
   timing.markContentAuthority();
   assert.equal(timing.calibrationKind, 'content');
+  assert.equal(timing.authorityKind, 'none');
   assert.equal(
     timing.automatic,
     true,
@@ -53,14 +162,16 @@ test('boot probe and validated content promotion change kind without inventing m
 
   timing.markBootProbeAuthority();
   assert.equal(timing.calibrationKind, 'boot-probe');
+  assert.equal(timing.authorityKind, 'none');
   assert.equal(
     timing.automatic,
     true,
-    'a settled/failing probe may reaffirm boot authority without changing how the run began',
+    'preparing a probe promotion must not claim confirmed authority before its result lands',
   );
 
   timing.clearCalibrationKind();
   assert.equal(timing.calibrationKind, 'none');
+  assert.equal(timing.authorityKind, 'none');
   assert.equal(timing.automatic, true, 'clearing authority does not rewrite historical run provenance');
 });
 
@@ -95,6 +206,8 @@ test('content validation baseline and slew revision form one bounded promotion s
 });
 
 test('invalid automatic retry windows fail closed at construction', () => {
+  const timing = runtime();
+
   assert.throws(
     () => new TimingRuntime({ autoCalibrationRetryMs: 0 }),
     /positive finite number/,
@@ -102,5 +215,19 @@ test('invalid automatic retry windows fail closed at construction', () => {
   assert.throws(
     () => new TimingRuntime({ autoCalibrationRetryMs: Number.POSITIVE_INFINITY }),
     /positive finite number/,
+  );
+});
+
+test('invalid confirmed authority revision fails closed', () => {
+  const timing = runtime();
+  timing.beginContentCalibration(0, false);
+
+  assert.throws(
+    () => timing.appliedCalibrationKind({
+      confirmedRevision: -1,
+      hasConfirmedResult: true,
+      provisional: false,
+    }),
+    /confirmedRevision must be a non-negative safe integer/,
   );
 });

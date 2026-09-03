@@ -247,6 +247,8 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     backingStreaming: input.readiness.components.backing.streaming,
     micStreaming: input.readiness.components.mic.streaming,
     robotProbeTimingActive: input.timing.robotProbeTimingActive === true,
+    backingIsRobot: input.readiness.components.backing.robot,
+    robotSourceConnected: input.readiness.components.robotSource.connected,
     timelineConnected: input.readiness.components.player.timelineConnected,
     timelineState: input.readiness.components.player.state,
   });

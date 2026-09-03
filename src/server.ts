@@ -950,24 +950,51 @@ function calibrationIsStale() {
   return calibration.isStaleFor(calibrationContext());
 }
 
-function calibrationCanApply() {
+/**
+ * Strategy that owns the value currently exposed by `CalibrationSession.result`.
+ *
+ * Candidate/orchestration kind may switch as soon as a retry starts. Confirmed
+ * authority kind may switch only with a new confirmed revision. A provisional
+ * result is the one exception: by definition it belongs to the in-flight
+ * candidate that produced it.
+ */
+function appliedCalibrationKind() {
+  const status = calibration.status();
+  return timingRuntime.appliedCalibrationKind({
+    confirmedRevision: calibration.confirmedRevision,
+    hasConfirmedResult: calibration.confirmedResult !== null,
+    provisional: status.provisional,
+  });
+}
+
+function calibrationCanApply(kind = appliedCalibrationKind()) {
   const result = calibration.result;
   if (result === null || calibrationIsStale()) return false;
+
+  const status = calibration.status();
+  const retainingConfirmedAuthority = calibration.transactionActive
+    && !status.provisional
+    && calibration.confirmedResult !== null;
+
+  // Probe preference chooses which *candidate* may promote. It must not revoke
+  // an independently valid confirmed content authority merely because a boot
+  // replacement transaction has started.
   if (
     robotProbeTimingActive()
-    && timingRuntime.calibrationKind !== 'boot-probe'
+    && kind !== 'boot-probe'
     && !probeCalibrationExhausted()
+    && !retainingConfirmedAuthority
   ) return false;
   // Boot calibration is a three-term equation. The two probe legs may be
   // measured ahead of playback, but an unknown player delta is not zero. Keep
   // the path result as evidence and stay on the network fallback until the
   // active robot has published a fresh, settled delta.
-  if (robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe' && !robotDeltaIsFresh()) return false;
+  if (robotProbeTimingActive() && kind === 'boot-probe' && !robotDeltaIsFresh()) return false;
   // A Robot content result is expressed in the mapper's stable reference frame.
   // It can own the live mixer only while the current media mapping is known.
   if (
     robotProbeTimingActive()
-    && timingRuntime.calibrationKind === 'content'
+    && kind === 'content'
     && !robotContentMappingReady()
   ) return false;
   return true;
@@ -984,15 +1011,20 @@ function calibrationCanApply() {
  * directly when the stored boot result already describes exactly the current
  * reported delta; otherwise reapply owns the reactivation.
  *
+ * Candidate strategy is intentionally not consulted here. A replacement retry
+ * cannot reinterpret the old confirmed result under its own strategy before
+ * promotion.
+ *
  * Returns whether the mixer alignment changed so the periodic freshness check
  * can publish the transition immediately.
  */
 function syncAppliedCalibration() {
   if (takeBlocksCalibration()) return false;
   const active = session.alignment.calibratedMicLagMs;
+  const calibrationKind = appliedCalibrationKind();
 
-  if (robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe') {
-    if (!calibrationCanApply()) {
+  if (robotProbeTimingActive() && calibrationKind === 'boot-probe') {
+    if (!calibrationCanApply(calibrationKind)) {
       if (active === null) return false;
       session.setAlignment({ calibratedMicLagMs: null });
       return true;
@@ -1020,8 +1052,8 @@ function syncAppliedCalibration() {
     return false;
   }
 
-  let nextMicLagMs = calibrationCanApply() ? calibration.result!.micLagMs : null;
-  const robotContentAuthority = robotProbeTimingActive() && timingRuntime.calibrationKind === 'content';
+  let nextMicLagMs = calibrationCanApply(calibrationKind) ? calibration.result!.micLagMs : null;
+  const robotContentAuthority = robotProbeTimingActive() && calibrationKind === 'content';
   if (nextMicLagMs !== null && robotContentAuthority) {
     nextMicLagMs = robotContentTimeline.liveLagMs(
       nextMicLagMs,
@@ -1050,7 +1082,7 @@ function syncAppliedCalibration() {
   }
 
   if (
-    timingRuntime.calibrationKind === 'content'
+    calibrationKind === 'content'
     && active !== null
     && nextMicLagMs !== null
     && timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision)
@@ -1090,6 +1122,7 @@ function sourceStatusPayload() {
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
+    activeCalibrationKind: appliedCalibrationKind(),
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
@@ -1311,6 +1344,7 @@ function timingCalibrationStatusPayload() {
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
+    activeCalibrationKind: appliedCalibrationKind(),
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
@@ -1386,7 +1420,7 @@ function readinessPayload(nowMs = performance.now()) {
     calibrationState: String(calibrationStatus.state ?? 'idle'),
     calibrationValid: calibrationCanApply() && session.alignment.calibratedMicLagMs !== null,
     calibrationStale: calibrationIsStale(),
-    calibrationKind: timingRuntime.calibrationKind,
+    calibrationKind: appliedCalibrationKind(),
     probeCorrelation: bootProbeRuntime.correlations,
     bootCalibration: bootProbeRuntime.calibrationResult,
   });
@@ -1719,7 +1753,11 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
   const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
   if (failure) {
-    timingRuntime.markBootProbeAuthority();
+    // The replacement candidate failed. `failPreservingPrimed()` synchronously
+    // publishes through onSettled, so restore orchestration provenance first;
+    // that callback must continue interpreting any retained confirmed result
+    // under the strategy that actually produced it.
+    timingRuntime.restoreCandidateKindToAuthority();
     calibration.failPreservingPrimed(failure.message);
     return;
   }
@@ -1989,7 +2027,7 @@ function currentDeltaMs(nowMs: number) {
 
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
-  if (!robotProbeTimingActive() || timingRuntime.calibrationKind !== 'boot-probe') return;
+  if (!robotProbeTimingActive() || appliedCalibrationKind() !== 'boot-probe') return;
   if (bootProbeRuntime.pathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
   if (!robotDeltaIsFresh(nowMs)) return;
   if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return;

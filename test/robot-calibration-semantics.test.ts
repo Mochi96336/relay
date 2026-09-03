@@ -114,12 +114,53 @@ test('Robot recalibration adapter preserves old authority until candidate promot
     /calibration\.transactionActive/,
     'delta reapply must not accidentally promote old probe evidence through a new candidate transaction',
   );
+  assert.match(
+    reapply,
+    /appliedCalibrationKind\(\) !== 'boot-probe'/,
+    'boot reapply must follow confirmed authority provenance rather than the replacement candidate kind',
+  );
+
+  const appliedKind = source.match(/function appliedCalibrationKind\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(appliedKind, /timingRuntime\.appliedCalibrationKind/);
+  assert.match(appliedKind, /confirmedRevision: calibration\.confirmedRevision/);
+  assert.match(appliedKind, /hasConfirmedResult: calibration\.confirmedResult !== null/);
+
+  const canApply = source.match(/function calibrationCanApply\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(canApply, /retainingConfirmedAuthority/);
+  assert.match(
+    canApply,
+    /&& !retainingConfirmedAuthority/,
+    'preferred replacement probes must not revoke a still-valid retained authority',
+  );
 
   const sync = source.match(/function syncAppliedCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(sync, /const calibrationKind = appliedCalibrationKind\(\)/);
+  assert.doesNotMatch(
+    sync,
+    /timingRuntime\.calibrationKind === 'boot-probe'/,
+    'mixer authority must not be interpreted through the in-flight candidate kind',
+  );
+  assert.doesNotMatch(
+    sync,
+    /timingRuntime\.calibrationKind === 'content'/,
+    'mixer authority must not be interpreted through the in-flight candidate kind',
+  );
   assert.doesNotMatch(sync, /if \(active !== null\) return false;/, 'an old active Robot lag must not block promotion');
   assert.match(
     sync,
     /active !== result\.micLagMs/,
     'successful Robot promotion must atomically replace the previously active lag',
+  );
+
+  const failProbe = source.match(/function failProbeAttempt\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(
+    failProbe,
+    /timingRuntime\.restoreCandidateKindToAuthority\(\)[\s\S]*?calibration\.failPreservingPrimed/,
+    'failed replacement must restore orchestration provenance before rollback publishes',
+  );
+  assert.doesNotMatch(
+    failProbe,
+    /markBootProbeAuthority/,
+    'failed candidate must never relabel retained confirmed authority as boot-probe',
   );
 });

@@ -2,23 +2,38 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('capture gaps are reported as exact sample deltas without changing the padded timeline', () => {
-  const worklet = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
-  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+import {
+  functionCode,
+  parseTypeScriptSource,
+  sourceCode,
+} from './support/source-contract.js';
 
-  assert.match(worklet, /samples: unreported \* RENDER_QUANTUM/);
-  assert.match(worklet, /this\.writeSilence\(RENDER_QUANTUM\)/);
-  assert.match(worklet, /this\.reportInputGap\(true\)/);
-  assert.match(app, /captureInputGapSamples \+= samples/);
-  assert.match(app, /type: 'audio-uplink-health'/);
-  assert.match(app, /transport: audioTransport\.stats\(\)/);
+test('capture gaps are reported as exact sample deltas without changing the padded timeline', () => {
+  const worklet = parseTypeScriptSource(
+    new URL('../public/capture-worklet.js', import.meta.url),
+    readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8'),
+  );
+  const app = parseTypeScriptSource(
+    new URL('../public/app.js', import.meta.url),
+    readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'),
+  );
+  const workletCode = sourceCode(worklet);
+  const appCode = sourceCode(app);
+
+  assert.match(workletCode, /samples: unreported \* RENDER_QUANTUM/);
+  assert.match(workletCode, /this\.writeSilence\(RENDER_QUANTUM\)/);
+  assert.match(workletCode, /this\.reportInputGap\(true\)/);
+  assert.match(appCode, /captureInputGapSamples \+= samples/);
+  assert.match(appCode, /type: 'audio-uplink-health'/);
+  assert.match(appCode, /transport: audioTransport\.stats\(\)/);
 });
 
 test('readiness samples media connectivity rather than only the control websocket', () => {
-  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-  const readinessStart = server.indexOf('function readinessPayload');
-  const readinessEnd = server.indexOf('function productStatusPayload', readinessStart);
-  const readiness = server.slice(readinessStart, readinessEnd);
+  const server = parseTypeScriptSource(
+    new URL('../src/server.ts', import.meta.url),
+    readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+  );
+  const readiness = functionCode(server, 'readinessPayload');
   assert.match(readiness, /micConnected: micMediaConnected\(\)/);
   assert.doesNotMatch(readiness, /micConnected: publisher\?\.readyState === WebSocket\.OPEN/);
 });

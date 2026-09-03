@@ -2,21 +2,25 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const coordinator = readFileSync(
+import {
+  functionCode,
+  importSources,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const coordinator = parseTypeScriptSource(
   new URL('../src/relay-mic-timing-invalidation-coordinator.ts', import.meta.url),
-  'utf8',
+  readFileSync(new URL('../src/relay-mic-timing-invalidation-coordinator.ts', import.meta.url), 'utf8'),
 );
 
-function invalidateMicTimingBlock() {
-  const start = server.indexOf('function invalidateMicTiming(message: string) {');
-  const end = server.indexOf('\n}\n\nfunction refreshLiveMicNetworkCompensation', start);
-  assert.ok(start >= 0 && end > start);
-  return server.slice(start, end + 2);
-}
-
 test('invalidateMicTiming delegates cross-runtime ordering through the coordinator seam', () => {
-  const invalidation = invalidateMicTimingBlock();
+  const invalidation = functionCode(server, 'invalidateMicTiming');
   assert.match(invalidation, /micTimingInvalidationCoordinator\.invalidate\(message\)/);
   assert.doesNotMatch(invalidation, /clearBootCalibrationState\(/);
   assert.doesNotMatch(invalidation, /clearContentValidationBaseline\(/);
@@ -27,36 +31,32 @@ test('invalidateMicTiming delegates cross-runtime ordering through the coordinat
 });
 
 test('server composition retains calibration policy and all timing invalidation effects', () => {
+  assert.ok(importSources(server).includes('./relay-mic-timing-invalidation-coordinator.js'));
+  const composition = variableInitializerCode(server, 'micTimingInvalidationCoordinator');
+  assert.match(composition, /^createRelayMicTimingInvalidationCoordinator\(\{/);
+  assert.match(composition, /clearBootCalibration: \(\) => clearBootCalibrationState\(\)/);
+  assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
+  assert.match(composition, /invalidateCalibration: \(message\) => \{/);
+  assert.match(composition, /if \(calibration\.collecting\) calibration\.fail\(message\)/);
+  assert.match(composition, /else calibration\.reset\(\)/);
+  assert.match(composition, /clearTimingKind: \(\) => timingRuntime\.clearCalibrationKind\(\)/);
   assert.match(
-    server,
-    /import \{ createRelayMicTimingInvalidationCoordinator \} from '\.\/relay-mic-timing-invalidation-coordinator\.js';/,
-  );
-  assert.match(
-    server,
-    /const micTimingInvalidationCoordinator = createRelayMicTimingInvalidationCoordinator\(\{/,
-  );
-  assert.match(server, /clearBootCalibration: \(\) => clearBootCalibrationState\(\)/);
-  assert.match(server, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
-  assert.match(server, /invalidateCalibration: \(message\) => \{/);
-  assert.match(server, /if \(calibration\.collecting\) calibration\.fail\(message\)/);
-  assert.match(server, /else calibration\.reset\(\)/);
-  assert.match(server, /clearTimingKind: \(\) => timingRuntime\.clearCalibrationKind\(\)/);
-  assert.match(
-    server,
+    composition,
     /resetAutoCalibrationSchedule: \(\) => timingRuntime\.resetAutoCalibrationSchedule\(\)/,
   );
-  assert.match(server, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
   assert.match(
-    server,
+    composition,
     /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/,
   );
-  assert.match(server, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
 });
 
 test('Mic timing invalidation coordinator owns ordering only, not runtime authority', () => {
-  assert.doesNotMatch(coordinator, /^import /m);
+  const coordinatorCode = sourceCode(coordinator);
+  assert.doesNotMatch(coordinatorCode, /^import /m);
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /calibration\.|timingRuntime\.|bootProbeRuntime\.|contentCalibrationValidator\.|session\.|broadcastJson|(?:^|[^.])syncAppliedCalibration\(/m,
   );
 });

@@ -2,21 +2,25 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-const coordinator = readFileSync(
+import {
+  functionCode,
+  importSources,
+  parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
+} from './support/source-contract.js';
+
+const server = parseTypeScriptSource(
+  new URL('../src/server.ts', import.meta.url),
+  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+);
+const coordinator = parseTypeScriptSource(
   new URL('../src/relay-mic-capture-restart-coordinator.ts', import.meta.url),
-  'utf8',
+  readFileSync(new URL('../src/relay-mic-capture-restart-coordinator.ts', import.meta.url), 'utf8'),
 );
 
-function publisherFrameBlock() {
-  const start = server.indexOf('function processPublisherFrame(frame: PcmFrame) {');
-  const end = server.indexOf('\n}\n\nfunction deliverMicPackets', start);
-  assert.ok(start >= 0 && end > start);
-  return server.slice(start, end + 2);
-}
-
 test('server keeps Mic generation authority and delegates only confirmed restart effects', () => {
-  const block = publisherFrameBlock();
+  const block = functionCode(server, 'processPublisherFrame');
   assert.match(block, /const previousGeneration = session\.micGeneration;/);
   assert.match(block, /session\.ingestMic\(frame, micRuntime\.sampleRate\)/);
   assert.match(
@@ -38,34 +42,30 @@ test('server keeps Mic generation authority and delegates only confirmed restart
 });
 
 test('server composition retains all Mic capture restart domain effects', () => {
+  assert.ok(importSources(server).includes('./relay-mic-capture-restart-coordinator.js'));
+  const composition = variableInitializerCode(server, 'micCaptureRestartCoordinator');
+  assert.match(composition, /^createRelayMicCaptureRestartCoordinator\(\{/);
+  assert.match(composition, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
+  assert.match(composition, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
+  assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
+  assert.match(composition, /failCalibration: \(message\) => calibration\.fail\(message\)/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
   assert.match(
-    server,
-    /import \{ createRelayMicCaptureRestartCoordinator \} from '\.\/relay-mic-capture-restart-coordinator\.js';/,
-  );
-  assert.match(
-    server,
-    /const micCaptureRestartCoordinator = createRelayMicCaptureRestartCoordinator\(\{/,
-  );
-  assert.match(server, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
-  assert.match(server, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
-  assert.match(server, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
-  assert.match(server, /failCalibration: \(message\) => calibration\.fail\(message\)/);
-  assert.match(server, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
-  assert.match(
-    server,
+    composition,
     /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/,
   );
-  assert.match(server, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
 });
 
 test('Mic capture restart coordinator owns ordering only, not runtime authority', () => {
-  assert.doesNotMatch(coordinator, /^import /m);
+  const coordinatorCode = sourceCode(coordinator);
+  assert.doesNotMatch(coordinatorCode, /^import /m);
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /\bsession\.|\btakeController\.|\bbootProbeRuntime\.|\bcontentCalibrationValidator\.|\btimingRuntime\.|\bbroadcastJson\b/,
   );
   assert.doesNotMatch(
-    coordinator,
+    coordinatorCode,
     /(?:^|[^A-Za-z0-9_.])calibration\.(?:collecting|fail|reset|apply|begin|status|observe)/m,
   );
 });

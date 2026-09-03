@@ -6,9 +6,11 @@ const ui = readFileSync(new URL('../public/calibration-ui.js', import.meta.url),
 const command = readFileSync(new URL('../public/calibration-command.js', import.meta.url), 'utf8');
 const system = readFileSync(new URL('../public/calibration-system-details.js', import.meta.url), 'utf8');
 
-test('normal timing value is hidden when ProductStatus says timing is idle', () => {
-  assert.match(ui, /return latestProductStatus\?\.timing\?\.state !== 'idle'/);
-  assert.match(ui, /timingIsProductRelevant\(\) && timingAuthority\?\.authorityFresh === true/);
+test('normal timing value follows fresh mixer authority independently of ProductStatus lifecycle', () => {
+  assert.doesNotMatch(ui, /timingIsProductRelevant|timing\?\.state !== 'idle'/,
+    'Song/product lifecycle must not hide the user-facing mixer timing value');
+  assert.match(ui, /timingAuthority\?\.authorityFresh === true[\s\S]*?formatTimingValueMs\(timingAuthority\.valueMs\)/,
+    'a fresh server-applied mixer value must be painted directly');
 });
 
 test('no-Song Robot boot-probe bypasses only the legacy Song-gated command listener', () => {

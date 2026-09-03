@@ -66,6 +66,22 @@ test('candidate kind cannot reclassify a retained confirmed authority revision',
   assert.equal(timing.calibrationKind, 'content', 'failed replacement rolls orchestration back to retained authority');
 });
 
+test('failed candidate keeps its own provenance when there is no confirmed authority to restore', () => {
+  const timing = runtime();
+
+  timing.beginBootProbe(false);
+  assert.equal(timing.calibrationKind, 'boot-probe');
+  assert.equal(timing.authorityKind, 'none');
+
+  timing.restoreCandidateKindToAuthority();
+  assert.equal(
+    timing.calibrationKind,
+    'boot-probe',
+    'a first-run terminal failure must remain identifiable as a failed boot-probe',
+  );
+  assert.equal(timing.authorityKind, 'none');
+});
+
 test('new confirmation revision atomically promotes candidate strategy to authority', () => {
   const timing = runtime();
 
@@ -190,6 +206,8 @@ test('content validation baseline and slew revision form one bounded promotion s
 });
 
 test('invalid automatic retry windows fail closed at construction', () => {
+  const timing = runtime();
+
   assert.throws(
     () => new TimingRuntime({ autoCalibrationRetryMs: 0 }),
     /positive finite number/,

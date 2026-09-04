@@ -453,8 +453,12 @@ function applyTimeline() {
     const errorSeconds = Number.isFinite(current) ? current - target : Number.NaN;
     const now = performance.now();
     const playerState = safePlayerState();
+    // Source owns convergence to the room media clock. Relay owns whether a
+    // concrete seek may preserve an existing content mapping. Bootstrap can be
+    // minutes away from the phone timeline, so requiring an already-confirmed
+    // content anchor *before* seek would deadlock the very calibration that
+    // creates that anchor.
     const shouldSeek = armed
-      && latestSourceStatus?.robotContentTransitionAnchorReady === true
       && Number.isFinite(errorSeconds)
       && Math.abs(errorSeconds) > 0.45
       && now - lastSeekAt > 700;

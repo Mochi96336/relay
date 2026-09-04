@@ -1,0 +1,29 @@
+name: Apply manual Robot content calibration gate
+
+on:
+  push:
+    branches:
+      - agent/robot-content-evidence-readiness
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/robot-content-evidence-readiness
+      - name: Patch manual gate and remove one-shot tooling
+        run: |
+          python scripts/patch-manual-robot-content-gate.py
+          rm scripts/patch-manual-robot-content-gate.py
+          rm .github/workflows/patch-manual-robot-content-gate.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(timing): reject manual content calibration on pending Robot mapping"
+          git push origin HEAD:agent/robot-content-evidence-readiness

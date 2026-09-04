@@ -1,0 +1,89 @@
+name: Apply PR 215 path-only timing patch
+
+on:
+  push:
+    branches:
+      - agent/robot-path-waiting-is-not-zero
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/robot-path-waiting-is-not-zero
+          fetch-depth: 0
+      - name: Apply server and integration-test patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          server = Path('src/server.ts')
+          text = server.read_text()
+          old = """  // Boot calibration is a three-term equation. The two probe legs may be
+  // measured ahead of playback, but an unknown player delta is not zero. Keep
+  // the path result as evidence and stay on the network fallback until the
+  // active robot has published a fresh, settled delta.
+  if (robotProbeTimingActive() && kind === 'boot-probe' && !robotDeltaIsFresh()) return false;
+"""
+          new = """  // A freshly completed boot probe may contain only the two measured path legs:
+  // currentDeltaMs() contributes zero until the Robot has reported a player
+  // offset, so `advanceMs === pathDifferenceMs` is the best correction we can
+  // apply before playback. Keep that path-only authority active provisionally.
+  //
+  // Once a real/non-zero player delta has been folded into the confirmed boot
+  // result, losing freshness must still fail closed; silently subtracting the
+  // last player-relative term would jump the Mic read head during playback.
+  if (robotProbeTimingActive() && kind === 'boot-probe' && !robotDeltaIsFresh()) {
+    const boot = bootProbeRuntime.calibrationResult;
+    const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
+    const pathOnly = boot !== null
+      && pathDifferenceMs !== null
+      && Math.abs(boot.deltaMs) < 0.001
+      && Math.abs(boot.advanceMs - pathDifferenceMs) < 0.001;
+    if (!pathOnly) return false;
+  }
+"""
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one calibrationCanApply block, found {text.count(old)}')
+          server.write_text(text.replace(old, new))
+
+          test = Path('test/robot-source-disconnect.test.ts')
+          text = test.read_text()
+          old = """    assert.equal(measured.timingMode, 'network-estimate');
+    assert.equal(measured.activeMicLagMs, null);
+    assert.equal(measured.robotDeltaFresh, false);
+    assert.ok(measured.probeCorrelation.mic >= 0.5);
+    assert.ok(measured.probeCorrelation.backing >= 0.5);
+"""
+          new = """    assert.equal(measured.timingMode, 'acoustic-calibration');
+    assert.equal(measured.robotDeltaFresh, false);
+    const measuredPathDifference = Number(measured.bootCalibration?.micLatencyMs)
+      - Number(measured.bootCalibration?.backingLatencyMs);
+    assert.ok(Number.isFinite(measuredPathDifference));
+    assert.ok(
+      Math.abs(Number(measured.activeMicLagMs) - measuredPathDifference) < 0.001,
+      `path-only boot authority ${measured.activeMicLagMs} must equal measured path difference ${measuredPathDifference}`,
+    );
+    assert.equal(Math.round(measured.bootCalibration?.deltaMs), 0);
+    assert.ok(measured.probeCorrelation.mic >= 0.5);
+    assert.ok(measured.probeCorrelation.backing >= 0.5);
+"""
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one initial boot assertion block, found {text.count(old)}')
+          test.write_text(text.replace(old, new))
+          PY
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/server.ts test/robot-source-disconnect.test.ts
+          git diff --cached --check
+          git commit -m "fix(timing): apply boot path before player delta"
+          git push origin HEAD:agent/robot-path-waiting-is-not-zero

@@ -55,6 +55,10 @@ let lastSeekAt = 0;
 let playerError = null;
 let robotSuperseded = false;
 let robotDeltaSuppressedUntil = 0;
+// Every seek must be answered by at least one fresh player offset before the
+// next one. Without that the server never gets to re-anchor its content mapping
+// between corrections.
+let offsetReportedSinceSeek = true;
 let activeBackingProbeRequestId = null;
 
 function wsUrl() {
@@ -141,6 +145,15 @@ function safePlayerState() {
   if (!playerReady || !player) return Number.NaN;
   try {
     return Number(player.getPlayerState());
+  } catch {
+    return Number.NaN;
+  }
+}
+
+function safePlaybackRate() {
+  if (!playerReady || !player || typeof player.getPlaybackRate !== 'function') return Number.NaN;
+  try {
+    return Number(player.getPlaybackRate());
   } catch {
     return Number.NaN;
   }
@@ -290,7 +303,17 @@ function renderCalibration() {
   const phonePlaying = Boolean(latestTimeline?.connected) && Number(latestTimeline?.state) === 1;
   const collecting = latestCalibration?.state === 'collecting';
   const probeActive = latestCalibration?.probeActive === true;
-  timingButton.disabled = robotSuperseded || collecting || probeActive || !sourceConnected || !micConnected || !phonePlaying;
+  // A Robot boot probe measures the two capture paths and needs no Song at all;
+  // only content correlation needs a playing phone timeline. The server policy
+  // already says so, so requiring a Song here just hides an action the room
+  // would have accepted.
+  const needsPhonePlaying = latestCalibration?.robotRoute !== true;
+  timingButton.disabled = robotSuperseded
+    || collecting
+    || probeActive
+    || !sourceConnected
+    || !micConnected
+    || (needsPhonePlaying && !phonePlaying);
 
   if (robotSuperseded) {
     timingStatus.textContent = '這個 Robot Source 已被較新的頁面取代；不再參與播放或校正。';
@@ -357,7 +380,7 @@ function renderCalibration() {
 
   if (!sourceConnected || !micConnected) {
     timingStatus.textContent = '先連上手機 Microphone 與 Chrome Source。';
-  } else if (!phonePlaying) {
+  } else if (needsPhonePlaying && !phonePlaying) {
     timingStatus.textContent = latestCalibration?.autoCalibrate
       ? '手機開始播放後會自動校正，不需要有人在這台電腦前面。'
       : '手機播放 YouTube 後即可按 Calibrate timing。';
@@ -449,6 +472,23 @@ function applyTimeline() {
       return;
     }
 
+    // The room clock advances at the Song's playback rate. A follower stuck at
+    // 1x while the room plays at 2x accumulates error at one second per second,
+    // which no amount of seeking can fix: every correction is already stale by
+    // the next tick. Rate is part of following the room, not a decoration.
+    const desiredRate = Number(timeline.playbackRate);
+    const currentRate = safePlaybackRate();
+    if (
+      armed
+      && Number.isFinite(desiredRate)
+      && desiredRate > 0
+      && Number.isFinite(currentRate)
+      && Math.abs(currentRate - desiredRate) > 0.001
+      && typeof player.setPlaybackRate === 'function'
+    ) {
+      player.setPlaybackRate(desiredRate);
+    }
+
     const current = safePlayerTime();
     const errorSeconds = Number.isFinite(current) ? current - target : Number.NaN;
     const now = performance.now();
@@ -458,10 +498,19 @@ function applyTimeline() {
     // minutes away from the phone timeline, so requiring an already-confirmed
     // content anchor *before* seek would deadlock the very calibration that
     // creates that anchor.
+    //
+    // The floor between seeks is the settle window, not a shorter cadence: a
+    // seek suppresses offset reporting for ROBOT_DELTA_SETTLE_MS, so seeking
+    // again before it expires guarantees the server never sees the fresh delta
+    // that would let it re-anchor. While the offset path is open, also require
+    // that one actually arrived, so a persistent convergence error degrades
+    // into slow corrections rather than an unbounded seek loop.
+    const offsetPathOpen = ROBOT_MODE && armed && desiredState === 1 && playerState === 1;
     const shouldSeek = armed
       && Number.isFinite(errorSeconds)
       && Math.abs(errorSeconds) > 0.45
-      && now - lastSeekAt > 700;
+      && now >= robotDeltaSuppressedUntil
+      && (offsetReportedSinceSeek || !offsetPathOpen);
 
     // A seek is a discontinuity, not a measurement. Do not publish the offset
     // from the same snapshot that triggers seekTo(), and do not publish the
@@ -471,20 +520,24 @@ function applyTimeline() {
       player.seekTo(seekTarget, true);
       lastSeekAt = now;
       robotDeltaSuppressedUntil = now + ROBOT_DELTA_SETTLE_MS;
+      offsetReportedSinceSeek = false;
       send({
         type: 'source-seeked',
-        reason: 'follower-correction',
+        // Only a seek taken while the room is actually playing can preserve a
+        // live content mapping. Repositioning a paused player has no backing
+        // audio to preserve and cannot publish the offset that would commit the
+        // transition, so calling it a follower correction opens a quarantine
+        // that can only ever expire into a degraded mapping.
+        reason: desiredState === 1 ? 'follower-correction' : 'paused-reposition',
         fromMediaTime: current,
         toMediaTime: seekTarget,
       });
     } else if (
-      ROBOT_MODE
-      && armed
-      && desiredState === 1
-      && playerState === 1
+      offsetPathOpen
       && now >= robotDeltaSuppressedUntil
       && Number.isFinite(errorSeconds)
     ) {
+      offsetReportedSinceSeek = true;
       send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000 });
     }
 

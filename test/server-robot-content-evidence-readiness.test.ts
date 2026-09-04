@@ -57,8 +57,17 @@ test('ProductStatus and command rejection share the content mapping pending poli
 });
 
 test('a degraded Robot content transition ends a stuck content calibration instead of waiting for its own timeout', () => {
+  // The teardown itself now lives in one revocation transaction, so a degraded
+  // transition ends the run by delegating to it rather than by re-spelling the
+  // checklist. Leaving the run alive would let Mic evidence keep growing
+  // against quarantined backing PCM until the calibration timeout.
   assert.match(
     server,
-    /onDegraded: \(status\) => \{[\s\S]*?timingRuntime\.calibrationKind === 'content'[\s\S]*?&& calibration\.collecting[\s\S]*?calibration\.fail\([\s\S]*?Robot backing content mapping could not be verified\./,
+    /onDegraded: \(status\) => \{[\s\S]*?revokeRobotContentMapping\(\{[\s\S]*?could not be verified\./,
+  );
+  assert.match(
+    functionBlock('revokeRobotContentMapping'),
+    /if \(calibration\.collecting\) calibration\.fail\(reason\)/,
+    'the revocation transaction is what ends a run that can no longer be completed',
   );
 });

@@ -49,13 +49,20 @@ test('server composition retains concrete Source seek lifecycle effects', () => 
   assert.match(composition, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
   assert.match(composition, /beginRobotContentTransition\(/);
   assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
-  assert.match(composition, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
-  assert.match(composition, /invalidateSourceMapping: \(\) => sourceRuntime\.invalidateMapping\(\)/);
-  assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
-  assert.match(composition, /discardPrimedContent: \(\) => calibration\.discardPrimedContent\(\)/);
-  assert.match(composition, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
-  assert.match(composition, /calibrationCollecting: \(\) => calibration\.collecting/);
-  assert.match(composition, /failCalibration: \(message\) => calibration\.fail\(message\)/);
+  // The destructive branch's teardown is the server's one revocation
+  // transaction, not a checklist re-spelled per call site.
+  assert.match(composition, /revokeContentMapping: \(reason\) => revokeRobotContentMapping\(\{ reason \}\)/);
+  for (const step of [
+    /clearContentTransition:/,
+    /invalidateSourceMapping:/,
+    /clearContentValidation:/,
+    /discardPrimedContent:/,
+    /resetContentTimeline:/,
+    /calibrationCollecting:/,
+    /failCalibration:/,
+  ]) {
+    assert.doesNotMatch(composition, step, 'teardown steps belong to revokeRobotContentMapping');
+  }
   assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
   assert.match(composition, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
 });

@@ -5,7 +5,7 @@ import { createRelaySourceSeekTransactionCoordinator } from '../src/relay-source
 
 type Context = { sessionGeneration: number };
 
-function coordinator(calls: string[], collecting = false) {
+function coordinator(calls: string[]) {
   return createRelaySourceSeekTransactionCoordinator<Context>({
     resetPlayerOffset: () => calls.push('reset-player-offset'),
     beginContentTransition: (from, to, pre, reference, context, nowMs) => {
@@ -14,16 +14,7 @@ function coordinator(calls: string[], collecting = false) {
     syncAppliedCalibration: () => calls.push('sync-calibration'),
     reportSourceStatus: () => calls.push('source-status'),
     reportTimingStatus: () => calls.push('timing-status'),
-    clearContentTransition: () => calls.push('clear-transition'),
-    invalidateSourceMapping: () => calls.push('invalidate-mapping'),
-    clearContentValidation: () => calls.push('clear-validation'),
-    discardPrimedContent: () => calls.push('discard-primed'),
-    resetContentTimeline: () => calls.push('reset-content-timeline'),
-    calibrationCollecting: () => {
-      calls.push('calibration-collecting');
-      return collecting;
-    },
-    failCalibration: (message) => calls.push(`fail:${message}`),
+    revokeContentMapping: (reason) => calls.push(`revoke:${reason}`),
   });
 }
 
@@ -67,7 +58,11 @@ test('mapped follower correction without complete deltas skips transition but st
   ]);
 });
 
-test('destructive seek clears mapping evidence before rebasing and publishing', () => {
+test('destructive seek delegates the whole teardown to the shared revocation', () => {
+  // A destructive seek *is* a Robot mapping revocation. Re-spelling its steps
+  // here is how the teardown drifted into seven different subsets in the first
+  // place, so this seam must own ordering only: reset the tracker the runtimes
+  // already classified against, then hand the transaction over intact.
   const calls: string[] = [];
   coordinator(calls).handle({
     mappedFollowerCorrection: false,
@@ -80,37 +75,6 @@ test('destructive seek clears mapping evidence before rebasing and publishing', 
   });
   assert.deepEqual(calls, [
     'reset-player-offset',
-    'clear-transition',
-    'invalidate-mapping',
-    'clear-validation',
-    'discard-primed',
-    'reset-content-timeline',
-    'calibration-collecting',
-    'sync-calibration',
-    'source-status',
-    'timing-status',
-  ]);
-});
-
-test('destructive seek during calibration fails after cleanup without duplicate publication', () => {
-  const calls: string[] = [];
-  coordinator(calls, true).handle({
-    mappedFollowerCorrection: false,
-    fromMediaTime: 5,
-    toMediaTime: 9,
-    preDeltaMs: 1,
-    referenceDeltaMs: 2,
-    context: { sessionGeneration: 3 },
-    nowMs: 40,
-  });
-  assert.deepEqual(calls, [
-    'reset-player-offset',
-    'clear-transition',
-    'invalidate-mapping',
-    'clear-validation',
-    'discard-primed',
-    'reset-content-timeline',
-    'calibration-collecting',
-    'fail:The desktop player seeked during calibration. Start calibration again.',
+    'revoke:The desktop player seeked during calibration. Start calibration again.',
   ]);
 });

@@ -208,6 +208,35 @@ describe('CalibrationSession asynchronous analysis', () => {
     assert.equal(harness.settled, 1);
   });
 
+  test('media-transition evidence stays readable while the analyser is still running', async () => {
+    // A seek can land in the last moments of a calibration. Withholding the
+    // window there told the transition gate there was no evidence at all, so
+    // the seek was classified as a destructive bootstrap remap - invalidating
+    // the run that was about to produce the content authority it needed.
+    // `peekRecentWindow()` does not consume collection state, and a pending
+    // analysis is the moment this session holds the most evidence, not the
+    // least.
+    const result = deferred<TimingCalibrationAnalysis>();
+    const harness = makeSession({ analyze: () => result.promise });
+    harness.calibration.start(0);
+
+    // A full window plus a second of the audio that keeps arriving while the
+    // worker runs. `takeReadyWindow()` consumes the analysed window, so this
+    // trailing second is exactly the evidence a seek would need right now.
+    fill(harness.calibration, REQUIRED + RATE, REQUIRED + RATE);
+    assert.equal(harness.calibration.status().state, 'collecting');
+    assert.equal(harness.calibration.status().progress, 1, 'a full window is being analysed');
+
+    const evidence = harness.calibration.transitionEvidence(RATE);
+    assert.notEqual(evidence, null, 'a pending analysis must not hide still-usable evidence');
+    assert.equal(evidence?.mic.length, RATE);
+    assert.equal(evidence?.backing.length, RATE);
+
+    result.resolve(analysis(240));
+    await nextTurn();
+    assert.equal(harness.calibration.status().state, 'complete');
+  });
+
   test('ignores a worker answer after the collection is reset', async () => {
     const result = deferred<TimingCalibrationAnalysis>();
     let workerSignal: AbortSignal | undefined;

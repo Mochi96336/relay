@@ -221,21 +221,34 @@ describe('robot calibration ownership', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      const probe = await publisher.waitFor(
-        (m) => m.type === 'play-calibration-probe' && m.target === 'mic',
-        3_000,
-      );
-      assert.equal(probe.target, 'mic');
-
       monitor.send({ type: 'timing-calibration-status-request' });
       const status = await monitor.waitFor(
-        (m) => m.type === 'timing-calibration-status'
-          && m.robotRoute === true
-          && m.calibrationKind === 'boot-probe',
+        (m) => m.type === 'timing-calibration-status' && m.robotRoute === true,
         3_000,
       );
       assert.notEqual(status.state, 'collecting', 'the legacy content collector must not win the launch race');
 
+      // A boot probe is a two-leg measurement of one Robot route. Until
+      // Chromium actually owns the Source, neither leg may start: beeping into
+      // the singer's phone for a run whose backing leg cannot exist spends no
+      // attempt and terminates nothing.
+      await sleep(600);
+      assert.deepEqual(
+        publisher.messages.filter((m) => m.type === 'play-calibration-probe'),
+        [],
+        'no probe leg may run before the Robot route is complete',
+      );
+
+      // Chromium says hello; the boot probe then owns the launch.
+      const robot = await RelayClient.connect(server);
+      robot.send({ type: 'robot-source-hello' });
+      const probe = await publisher.waitFor(
+        (m) => m.type === 'play-calibration-probe' && m.target === 'mic',
+        4_000,
+      );
+      assert.equal(probe.target, 'mic');
+
+      robot.close();
       backing.close();
       publisher.close();
       monitor.close();
@@ -332,7 +345,10 @@ describe('boot probe lifecycle', () => {
     });
 
     try {
-      const { backing, publisher, monitor } = await liveSession(server);
+      // A Robot *route*, not a Robot Source over legacy backing: a boot probe
+      // measures one route's two legs, and mixing them would correlate a Mic
+      // leg against backing the Robot never rendered.
+      const { backing, publisher, monitor } = await liveSession(server, true);
       const robot = await RelayClient.connect(server);
       robot.send({ type: 'robot-source-hello' });
       await primeStreams(backing, publisher);
@@ -366,7 +382,7 @@ describe('boot probe lifecycle', () => {
 
       const newBacking = await RelayClient.connect(server);
       newBacking.newCaptureSession();
-      newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE });
+      newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
       await newBacking.waitForType('registered');
 
       const newPublisher = await RelayClient.connect(server);

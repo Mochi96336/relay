@@ -55,6 +55,27 @@ test('SourceRuntime owns active Robot identity and source discontinuity generati
   assert.equal(source.canReportSeek(second), false, 'disconnected former Robot remains fenced');
 });
 
+test('an active Robot is the room\'s only source discontinuity authority', () => {
+  const source = runtime();
+  const legacy: FakeSocket = { id: 'legacy-source-page', open: true };
+  const robot: FakeSocket = { id: 'robot', open: true };
+
+  // The desktop development adapter, with no Robot in the room.
+  assert.equal(source.canReportSeek(legacy), true);
+
+  source.attachRobot(robot);
+  assert.equal(
+    source.canReportSeek(legacy),
+    false,
+    'a legacy Source page must not invalidate the active Robot mapping it does not own',
+  );
+  assert.equal(source.canReportSeek(robot), true);
+
+  // Losing the Robot hands authority back to the development path.
+  source.detachRobot(robot);
+  assert.equal(source.canReportSeek(legacy), true);
+});
+
 test('SourceRuntime samples connection liveness without owning transport', () => {
   const source = runtime();
   const socket: FakeSocket = { id: 'robot', open: true };

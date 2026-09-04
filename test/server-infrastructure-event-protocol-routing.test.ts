@@ -67,8 +67,9 @@ test('server still owns infrastructure observation authority and effects', () =>
   assert.match(serverFlow, /sourceSeekTransactionCoordinator\.handle\(\{/);
   assert.match(serverFlow, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
   assert.match(serverFlow, /beginRobotContentTransition\(/);
-  assert.match(serverFlow, /invalidateSourceMapping: \(\) => sourceRuntime\.invalidateMapping\(\)/);
-  assert.match(serverFlow, /discardPrimedContent: \(\) => calibration\.discardPrimedContent\(\)/);
+  // The destructive branch's teardown is the server's one revocation
+  // transaction, so the composition supplies that rather than each step.
+  assert.match(serverFlow, /revokeContentMapping: \(reason\) => revokeRobotContentMapping\(\{ reason \}\)/);
 
   assert.doesNotMatch(
     factory,

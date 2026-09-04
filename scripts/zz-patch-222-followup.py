@@ -9,6 +9,15 @@ def replace_once(path: str, old: str, new: str):
         raise SystemExit(f'{path}: expected one patch anchor, found {count}')
     p.write_text(text.replace(old, new, 1))
 
+
+def replace_exact(path: str, old: str, new: str, expected: int):
+    p = Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count != expected:
+        raise SystemExit(f'{path}: expected {expected} patch anchors, found {count}')
+    p.write_text(text.replace(old, new))
+
 replace_once(
     'src/server.ts',
     """/**
@@ -64,7 +73,7 @@ function robotContentTransitionAnchorReady(nowMs = performance.now()) {
 """,
 )
 
-replace_once(
+replace_exact(
     'src/server.ts',
     """  const confirmedReferenceLagMs = timingRuntime.calibrationKind === 'content'
     ? calibration.confirmedResult?.micLagMs ?? null
@@ -75,21 +84,7 @@ replace_once(
     ? calibration.confirmedResult?.micLagMs ?? null
     : null;
 """,
-)
-
-replace_once(
-    'src/server.ts',
-    """  const confirmedReferenceLagMs = timingRuntime.calibrationKind === 'content'
-    ? calibration.confirmedResult?.micLagMs ?? null
-    : null;
-  return robotContentTransitionRuntime.reconcileWithFreshDelta({
-""",
-    """  const confirmedReferenceLagMs = appliedCalibrationKind() === 'content'
-    && !calibrationIsStale()
-    ? calibration.confirmedResult?.micLagMs ?? null
-    : null;
-  return robotContentTransitionRuntime.reconcileWithFreshDelta({
-""",
+    2,
 )
 
 replace_once(
@@ -130,7 +125,6 @@ replace_once(
 bounds = Path('test/robot-content-transition-bounds.test.ts')
 text = bounds.read_text()
 start = text.index("test('server deadline makes quarantine terminal and a later follower correction starts a fresh budget'")
-old = text[start:]
 new = """test('server treats an unanchored follower correction as destructive bootstrap instead of opening quarantine', async () => {
   const server = await startRelay({
     RELAY_CALIBRATION_PROBE: '1',

@@ -1,0 +1,30 @@
+name: Apply Robot content anchor recovery patch
+
+on:
+  push:
+    branches:
+      - agent/robot-content-anchor-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/robot-content-anchor-recovery
+      - name: Patch runtime, source and tests; remove one-shot tooling
+        shell: bash
+        run: |
+          python scripts/patch-robot-content-anchor-recovery.py
+          rm scripts/patch-robot-content-anchor-recovery.py
+          rm .github/workflows/patch-robot-content-anchor-recovery.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(timing): require verifiable Robot content transitions"
+          git push origin HEAD:agent/robot-content-anchor-recovery

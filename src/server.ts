@@ -2710,6 +2710,14 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
+    if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) {
+      sendJson(socket, {
+        type: 'calibration-command-rejected',
+        reason: 'robot-content-mapping-pending',
+      });
+      return;
+    }
+
     cancelActiveContentValidation(nowMs);
     timingRuntime.beginContentCalibration(nowMs, false);
     calibration.start(nowMs);

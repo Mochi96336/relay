@@ -111,19 +111,12 @@ function initialize() {
     if (calibrateButton && calibrateButton.disabled !== value) calibrateButton.disabled = value;
   }
 
-  function timingIsProductRelevant() {
-    // Before the first ProductStatus snapshot, preserve the last-known timing
-    // authority rather than flashing it away. Once ProductStatus is known, its
-    // semantic idle state wins over the mixer's technical read-head value.
-    if (!latestProductStatus) return true;
-    return latestProductStatus?.timing?.state !== 'idle';
-  }
-
   function renderTimingAuthority() {
-    // A running AudioSession is not enough to make an alignment value meaningful.
-    // Voice-only and paused rooms intentionally render no number even if the
-    // mixer happens to carry a technical 0 ms read-head value.
-    const formatted = timingIsProductRelevant() && timingAuthority?.authorityFresh === true
+    // This is the one user-facing timing value: the mixer read head actually in
+    // force after network estimate, calibration, fine tune, and buffer clamping.
+    // Product/Song lifecycle only controls whether recalibration is actionable;
+    // it must not hide a fresh value the user is currently hearing.
+    const formatted = timingAuthority?.authorityFresh === true
       ? formatTimingValueMs(timingAuthority.valueMs)
       : null;
     setText(activeTimingValue, formatted ?? '—');

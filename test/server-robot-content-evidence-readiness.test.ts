@@ -32,6 +32,13 @@ test('priming, automatic calibration and content validation all require an evide
   );
 });
 
+test('manual content calibration is rejected while Robot backing evidence is quarantined', () => {
+  assert.match(
+    server,
+    /if \(calibrationAction\.startCalibrationMode === 'boot-probe'\)[\s\S]*?robotProbeTimingActive\(\)[\s\S]*?!robotContentEvidenceMappingReady\(nowMs\)[\s\S]*?type: 'calibration-command-rejected'[\s\S]*?reason: 'robot-content-mapping-pending'/,
+  );
+});
+
 test('a degraded Robot content transition ends a stuck content calibration instead of waiting for its own timeout', () => {
   assert.match(
     server,

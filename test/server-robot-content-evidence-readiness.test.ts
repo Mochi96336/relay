@@ -11,6 +11,14 @@ function functionBlock(name: string) {
   return server.slice(start, next === -1 ? server.length : next);
 }
 
+function commandHandlerBlock(name: string) {
+  const start = server.indexOf(`  ${name}: (socket) => {`);
+  assert.notEqual(start, -1, `${name} command handler must exist`);
+  const next = server.indexOf('\n  },\n', start + 1);
+  assert.notEqual(next, -1, `${name} command handler must have a closing boundary`);
+  return server.slice(start, next + 5);
+}
+
 test('Robot content evidence readiness rejects a pending backing boundary even while the timeline is fresh', () => {
   const block = functionBlock('robotContentEvidenceMappingReady');
   assert.match(block, /robotContentMappingReady\(nowMs\)/);
@@ -42,7 +50,7 @@ test('ProductStatus and command rejection share the content mapping pending poli
     /case 'content-mapping-pending':[\s\S]*?type: 'calibration-command-rejected'[\s\S]*?reason: 'content-mapping-pending'/,
   );
   assert.doesNotMatch(
-    server,
+    commandHandlerBlock('startTimingCalibration'),
     /if \(robotProbeTimingActive\(\) && !robotContentEvidenceMappingReady\(nowMs\)\)/,
     'manual calibration must consume the shared product policy rather than grow an ad-hoc server gate',
   );

@@ -15,7 +15,11 @@ import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
-import { CalibrationSession, type CalibrationContext } from './calibration-session.js';
+import {
+  CalibrationSession,
+  MAX_CAPTURE_GAP_MS,
+  type CalibrationContext,
+} from './calibration-session.js';
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
@@ -64,6 +68,7 @@ import {
 } from './relay-socket-server.js';
 import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
 import { RobotContentTimelineMapper } from './robot-content-timeline.js';
+import { robotContentAnchorEvidenceUsable } from './robot-content-transition.js';
 import { RobotContentTransitionRuntime } from './robot-content-transition-runtime.js';
 import {
   ParticipantSession,
@@ -338,22 +343,10 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
       // evidence quarantined forever. A fresh Robot delta can then establish a
       // new bootstrap mapping, while the source-generation bump makes the old
       // reference-frame calibration fail closed.
-      const collectingContent = timingRuntime.calibrationKind === 'content'
-        && calibration.collecting;
-      robotPlayerOffset.reset();
-      robotContentTimeline.reset();
-      sourceRuntime.invalidateMapping();
-      clearContentValidationBaseline();
-      calibration.discardPrimedContent();
-      clearRobotContentTransition();
-      if (collectingContent) {
-        calibration.fail(
-          'Robot backing content mapping could not be verified. Rebuilding the Robot content mapping before calibration retries.',
-        );
-      }
-      syncAppliedCalibration();
-      broadcastJson(sourceStatusPayload());
-      broadcastJson(timingCalibrationStatusPayload());
+      revokeRobotContentMapping({
+        reason: 'Robot backing content mapping could not be verified.'
+          + ' Rebuilding the Robot content mapping before calibration retries.',
+      });
     },
   },
 });
@@ -471,12 +464,33 @@ function probeCalibrationExhausted(nowMs = performance.now()) {
   return robotProbeTimingActive() && probeStatus(nowMs).error !== null;
 }
 
+/**
+ * Whether the bounded boot probe has stopped being the preferred strategy.
+ *
+ * Boot probe is a fast baseline, not the terminal strategy, so the question
+ * every content gate needs to ask is "has boot finished?", not "has boot
+ * failed?". It finishes either way: by producing a usable path baseline for the
+ * current capture context, or by spending its bounded attempts. Only *before*
+ * that must content calibration wait its turn.
+ *
+ * Asking the failure question instead is what left content permanently
+ * un-appliable and drift validation permanently unarmed on a successful boot:
+ * a probe that succeeds never reports an error, so a gate keyed on error stays
+ * shut forever.
+ */
+function bootProbeSettled(nowMs = performance.now()) {
+  if (!robotProbeTimingActive()) return true;
+  if (probeCalibrationExhausted(nowMs)) return true;
+  return bootProbeRuntime.pathDifferenceMs !== null
+    && bootProbeRuntime.completedContextMatches(bootProbeContext());
+}
+
 function robotContentFallbackPrimingActive(nowMs = performance.now()) {
   if (
     !AUTO_CALIBRATE
     || takeBlocksCalibration()
     || !robotProbeTimingActive()
-    || probeCalibrationExhausted(nowMs)
+    || bootProbeSettled(nowMs)
     || !robotContentEvidenceMappingReady(nowMs)
   ) return false;
   const timeline = currentTimelineStatus(nowMs);
@@ -522,7 +536,7 @@ function mappedContentBackingStart(startSample: number, nowMs = performance.now(
  * immediately. With neither source of evidence, preservation would recreate
  * the windows=0 catch-22, so the seek must reset mapping instead.
  */
-function robotContentTransitionAnchorReady(nowMs = performance.now()) {
+function robotFollowerSeekMayPreserveMapping(nowMs = performance.now()) {
   if (!backingRuntime.isRobot && !sourceRuntime.connected()) return true;
   const context = calibrationContext();
   if (!sourceRuntime.connected() || !robotContentTimeline.isReady(context, nowMs)) return false;
@@ -533,14 +547,60 @@ function robotContentTransitionAnchorReady(nowMs = performance.now()) {
   if (confirmedContentAuthority) return true;
 
   if (timingRuntime.calibrationKind !== 'content' || !calibration.collecting) return false;
-  const evidence = calibration.transitionEvidence(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES);
-  return evidence !== null
-    && evidence.mic.length > MIX_SAMPLE_RATE
-    && evidence.backing.length > MIX_SAMPLE_RATE;
+  // Preserving is only safe against evidence the correlator could actually use.
+  // Anything worse falls through to a clean destructive remap, which recovers,
+  // rather than to a doomed anchor worker, which does not.
+  return robotContentAnchorEvidenceUsable(
+    calibration.transitionEvidence(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES),
+    MIX_SAMPLE_RATE,
+    MAX_CAPTURE_GAP_MS,
+  );
 }
 
 function clearRobotContentTransition() {
   robotContentTransitionRuntime.clear();
+}
+
+/**
+ * The single way to revoke Robot content mapping.
+ *
+ * This used to be an open-coded checklist repeated at every event that could
+ * invalidate the mapping, and no two copies cleared the same subset - which is
+ * why fixing one path kept leaving the others holding state that had just been
+ * proven wrong. `reason` is what an in-flight calibration reports when it
+ * cannot survive the revocation; anything else that later needs to differ per
+ * caller belongs in an option here, not in which lines somebody remembered to
+ * write at the call site.
+ */
+function revokeRobotContentMapping({ reason }: { reason: string }) {
+  robotPlayerOffset.reset();
+  robotContentTimeline.reset();
+  clearRobotContentTransition();
+  // The reference *frame* is void here, not merely the current mapping.
+  // Bumping the source generation is what fails an existing content authority
+  // closed: without it a confirmed result keeps matching the live calibration
+  // context, so it stays eligible to be re-applied the moment a new delta makes
+  // the mapper ready again.
+  sourceRuntime.invalidateMapping();
+
+  // Deliberately before the failure below: `discardPrimedContent()` is a no-op
+  // while a run is collecting, so this drops an *idle* primed backup only. A
+  // collecting run keeps its own working evidence and hands it to the retry;
+  // the primed content is context-fenced, so the generation bump above already
+  // stops it being reused in a frame it was not measured in.
+  calibration.discardPrimedContent();
+  clearContentValidationBaseline();
+
+  // A pending analyzer is the one piece of state that survives every other
+  // reset here. `CalibrationSession` stamps its promotion with the context that
+  // is live when the worker answers, so a run left alive across a revocation
+  // promotes evidence measured in a reference frame that no longer exists.
+  // Failing the run is what aborts it.
+  if (calibration.collecting) calibration.fail(reason);
+
+  syncAppliedCalibration();
+  broadcastJson(sourceStatusPayload());
+  broadcastJson(timingCalibrationStatusPayload());
 }
 
 function robotContentTransitionStatus(nowMs = performance.now()) {
@@ -690,10 +750,20 @@ function clearContentValidationBaseline() {
   contentCalibrationValidator.clearBaseline();
 }
 
+/**
+ * Seeds the drift validator from the content result that is actually in force.
+ *
+ * Provenance here must come from `appliedCalibrationKind()`, never the
+ * candidate kind. `CalibrationSession.start()` deliberately keeps the previous
+ * confirmed result serving while a replacement is measured, so
+ * `candidate = content` alongside `confirmed = boot-probe` is an ordinary
+ * state - and reading the candidate there would install a boot-probe
+ * measurement as the baseline that content drift is judged against.
+ */
 function syncContentValidationBaseline(nowMs: number) {
   const confirmed = calibration.confirmedResult;
   if (
-    timingRuntime.calibrationKind !== 'content'
+    appliedCalibrationKind() !== 'content'
     || confirmed === null
     || calibrationIsStale()
   ) {
@@ -1047,10 +1117,15 @@ function calibrationCanApply(kind = appliedCalibrationKind()) {
   // Probe preference chooses which *candidate* may promote. It must not revoke
   // an independently valid confirmed content authority merely because a boot
   // replacement transaction has started.
+  //
+  // Preference lasts only until the boot probe settles. A settled baseline is
+  // the thing content is meant to replace, so keying this on probe *failure*
+  // would leave a successfully measured content result permanently parked
+  // behind the boot result it improves on.
   if (
     robotProbeTimingActive()
     && kind !== 'boot-probe'
-    && !probeCalibrationExhausted()
+    && !bootProbeSettled()
     && !retainingConfirmedAuthority
   ) return false;
   // Player-relative delta matters only while a Song exists. In a no-Song room
@@ -1232,7 +1307,7 @@ function sourceStatusPayload() {
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    robotContentTransitionAnchorReady: robotContentTransitionAnchorReady(nowMs),
+    robotFollowerSeekPreservesMapping: robotFollowerSeekMayPreserveMapping(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
@@ -1786,16 +1861,12 @@ const mixerTimer = setInterval(() => {
 function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
   const robotRoute = robotProbeTimingActive();
-  const exhaustedRobotProbe = probeCalibrationExhausted(nowMs);
-  const completedBootBaseline = robotRoute
-    && bootProbeRuntime.pathDifferenceMs !== null
-    && bootProbeRuntime.completedContextMatches(bootProbeContext());
   // Boot probe is the fast baseline, not the terminal strategy. Before it has
   // either completed or exhausted its bounded attempts, keep its preference.
   // Once a baseline exists, a playing Song must be allowed to promote to
   // content authority instead of being blocked forever by the boot result it
   // is supposed to replace.
-  if (robotRoute && !exhaustedRobotProbe && !completedBootBaseline) return;
+  if (!bootProbeSettled(nowMs)) return;
   if (robotRoute && !robotContentEvidenceMappingReady(nowMs)) return;
   if (!session.active || calibration.collecting) return;
   const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
@@ -1811,18 +1882,24 @@ function maybeAutoCalibrate(nowMs: number) {
   if (!timeline.connected || Number(timeline.state) !== 1) return;
 
   timingRuntime.beginContentCalibration(nowMs, true);
-  if (exhaustedRobotProbe) calibration.startFromPrimed(nowMs);
+  // A failed probe hands its priming run straight over; a *successful* one
+  // still restarts collection from scratch. Reusing primed evidence there is a
+  // separate change with its own measurement risk, so keep it out of the policy
+  // fix.
+  if (probeCalibrationExhausted(nowMs)) calibration.startFromPrimed(nowMs);
   else calibration.start(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
 }
 
 function contentValidationPathReady(nowMs: number) {
   if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
-  if (robotProbeTimingActive() && !probeCalibrationExhausted(nowMs)) return false;
+  if (!bootProbeSettled(nowMs)) return false;
   if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return false;
   if (!session.active || calibration.collecting) return false;
+  // Same provenance rule as the baseline itself: validate the authority that is
+  // actually applied, not whichever candidate happens to be in flight.
   if (
-    timingRuntime.calibrationKind !== 'content'
+    appliedCalibrationKind() !== 'content'
     || calibration.confirmedResult === null
     || calibrationIsStale()
   ) return false;
@@ -1863,6 +1940,16 @@ function bootProbeContext() {
 }
 
 function probePathReady(target: ProbeTarget, nowMs: number) {
+  // A boot probe is a two-leg measurement of one Robot route, so admitting a
+  // leg whose topology does not exist is what strands a run: the Mic leg
+  // succeeds, the backing leg sits in `backing-waiting` forever, and because
+  // nothing was ever requested no attempt is ever spent - so the bounded run
+  // never terminates. `decideCalibrationStart` already refuses this for manual
+  // and product-advertised starts; the automatic scheduler needs the same rule
+  // rather than a second, laxer policy.
+  if (robotProbeTimingActive() && (!backingRuntime.isRobot || !sourceRuntime.connected())) {
+    return false;
+  }
   if (target === 'mic') {
     return micRuntime.controlConnected() && micStreaming(nowMs);
   }
@@ -1941,13 +2028,19 @@ function maybeStartProbeCalibration(nowMs: number) {
   sendProbeRequest(target, nowMs);
 }
 
+/**
+ * The one place a probe client's answer is fenced against the run it claims.
+ *
+ * A capture-generation mismatch on the *reply* is deliberately not handled
+ * here. `ProbeLifecycle.acceptClientReply()` already drops it without consuming
+ * the request, because the phone reports its live AudioWorklet generation
+ * rather than echoing the request: a racy mismatch must leave the current
+ * request authoritative so the real acknowledgement can still land. Anything
+ * that reaches this function has already passed that fence.
+ */
 function acceptCurrentProbeClientResult(
   reply: { requestId: unknown; generation: unknown },
-  nowMs: number,
-  options: {
-    clientGenerationMismatchReason: string;
-    logCaptureGenerationMismatch?: boolean;
-  },
+  options: { logCaptureGenerationMismatch?: boolean } = {},
 ) {
   const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
   if (!pending) return null;
@@ -1967,22 +2060,11 @@ function acceptCurrentProbeClientResult(
     return null;
   }
 
-  if (
-    pending.target === 'mic'
-    && (Number(reply.generation) >>> 0) !== pending.generation
-  ) {
-    failProbeAttempt('mic', options.clientGenerationMismatchReason, nowMs);
-    return null;
-  }
-
   return pending;
 }
 
 function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
-  const pending = acceptCurrentProbeClientResult(reply, nowMs, {
-    clientGenerationMismatchReason: 'client reported a different capture generation',
-    logCaptureGenerationMismatch: true,
-  });
+  const pending = acceptCurrentProbeClientResult(reply, { logCaptureGenerationMismatch: true });
   if (!pending) return;
 
   const oneWayMs = (nowMs - pending.serverSentAtMs) / 2;
@@ -2006,9 +2088,7 @@ function handleProbeFailure(
   reply: { requestId: unknown; generation: unknown; reason: unknown },
   nowMs: number,
 ) {
-  const pending = acceptCurrentProbeClientResult(reply, nowMs, {
-    clientGenerationMismatchReason: 'client failed from a different capture generation',
-  });
+  const pending = acceptCurrentProbeClientResult(reply);
   if (!pending) return;
 
   const rawReason = typeof reply.reason === 'string' ? reply.reason.trim() : '';
@@ -2167,9 +2247,19 @@ function maybeReapplyBootCalibration(nowMs: number) {
   );
 }
 
+/**
+ * Retires a content calibration that belongs to the pre-Robot route.
+ *
+ * This exists because a route can *become* Robot underneath a content run that
+ * was measured for a legacy backing path. It must not touch a content run the
+ * Robot route started for itself: once the boot probe has settled, content is
+ * the strategy this route is supposed to be running, and resetting it here also
+ * discards the confirmed boot result, dropping the live mixer to its network
+ * estimate mid-upgrade.
+ */
 function dropLegacyCalibrationForRobot() {
   if (!robotProbeTimingActive() || timingRuntime.calibrationKind !== 'content') return;
-  if (probeCalibrationExhausted()) return;
+  if (bootProbeSettled()) return;
   clearContentValidationBaseline();
   calibration.reset();
   timingRuntime.clearCalibrationKind();
@@ -2803,13 +2893,7 @@ const sourceSeekTransactionCoordinator = createRelaySourceSeekTransactionCoordin
   syncAppliedCalibration: () => { syncAppliedCalibration(); },
   reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  clearContentTransition: () => clearRobotContentTransition(),
-  invalidateSourceMapping: () => sourceRuntime.invalidateMapping(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  discardPrimedContent: () => calibration.discardPrimedContent(),
-  resetContentTimeline: () => robotContentTimeline.reset(),
-  calibrationCollecting: () => calibration.collecting,
-  failCalibration: (message) => calibration.fail(message),
+  revokeContentMapping: (reason) => revokeRobotContentMapping({ reason }),
 });
 
 const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({
@@ -2837,14 +2921,14 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     const nowMs = performance.now();
     if (Math.abs(offsetMs) > ROBOT_PLAYER_OFFSET_MAX_ABS_MS) {
       // A minutes-wide media-position gap is a convergence problem, never an
-      // acoustic timing measurement. Revoke the old delta/mapping immediately
-      // and wait for Source to seek and report a bounded residual.
-      robotPlayerOffset.reset();
-      robotContentTimeline.reset();
-      clearRobotContentTransition();
-      syncAppliedCalibration();
-      broadcastJson(sourceStatusPayload());
-      broadcastJson(timingCalibrationStatusPayload());
+      // acoustic timing measurement. This is a fail-closed fence, so it has to
+      // invalidate the reference frame too: clearing only the tracker and the
+      // mapper would leave the confirmed content result matching the live
+      // context, ready to be re-applied as soon as a bounded residual arrives.
+      revokeRobotContentMapping({
+        reason: 'The Robot player jumped away from the room timeline.'
+          + ' Rebuilding the Robot content mapping before calibration retries.',
+      });
       return;
     }
     robotPlayerOffset.record(offsetMs, nowMs);
@@ -2898,7 +2982,7 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     const mappedFollowerCorrection = requestedFollowerCorrection
       && sourceRuntime.isActiveRobot(socket)
       && backingRuntime.isRobot
-      && robotContentTransitionAnchorReady(nowMs)
+      && robotFollowerSeekMayPreserveMapping(nowMs)
       && robotContentTimeline.noteFollowerCorrection(
         fromMediaTime,
         toMediaTime,
@@ -3209,6 +3293,11 @@ const robotActivationCoordinator = createRelayRobotActivationCoordinator<RelaySo
   resetPlayerOffset: () => robotPlayerOffset.reset(),
   resetContentTimeline: () => robotContentTimeline.reset(),
   clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  failCalibrationIfCollecting: () => {
+    if (calibration.collecting) {
+      calibration.fail('The Robot source changed during calibration. Start calibration again.');
+    }
+  },
   dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
   syncAppliedCalibration: () => { syncAppliedCalibration(); },
   reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
@@ -3279,6 +3368,11 @@ const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySo
   resetContentTimeline: () => robotContentTimeline.reset(),
   clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
   abandonProbeRun: () => abandonProbeRun(),
+  failCalibrationIfCollecting: () => {
+    if (calibration.collecting) {
+      calibration.fail('The Robot source changed during calibration. Start calibration again.');
+    }
+  },
   syncAppliedCalibration: () => syncAppliedCalibration(),
   reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),

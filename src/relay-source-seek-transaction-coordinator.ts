@@ -21,13 +21,12 @@ export type RelaySourceSeekTransactionDependencies<TContext> = {
   syncAppliedCalibration: () => void;
   reportSourceStatus: () => void;
   reportTimingStatus: () => void;
-  clearContentTransition: () => void;
-  invalidateSourceMapping: () => void;
-  clearContentValidation: () => void;
-  discardPrimedContent: () => void;
-  resetContentTimeline: () => void;
-  calibrationCollecting: () => boolean;
-  failCalibration: (message: string) => void;
+  /**
+   * The server's single Robot mapping revocation. A destructive seek is exactly
+   * that event, so it must not re-spell the teardown: a step added to the
+   * transaction has to reach this path too.
+   */
+  revokeContentMapping: (reason: string) => void;
 };
 
 /**
@@ -60,20 +59,9 @@ export function createRelaySourceSeekTransactionCoordinator<TContext>(
         return 'mapped-follower-correction' as const;
       }
 
-      dependencies.clearContentTransition();
-      dependencies.invalidateSourceMapping();
-      dependencies.clearContentValidation();
-      dependencies.discardPrimedContent();
-      dependencies.resetContentTimeline();
-      if (dependencies.calibrationCollecting()) {
-        dependencies.failCalibration(
-          'The desktop player seeked during calibration. Start calibration again.',
-        );
-      } else {
-        dependencies.syncAppliedCalibration();
-        dependencies.reportSourceStatus();
-        dependencies.reportTimingStatus();
-      }
+      dependencies.revokeContentMapping(
+        'The desktop player seeked during calibration. Start calibration again.',
+      );
       return 'destructive-seek' as const;
     },
   };

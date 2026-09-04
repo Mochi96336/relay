@@ -49,13 +49,21 @@ export class SourceRuntime<TSocket extends SourceRuntimeSocket> {
   }
 
   /**
-   * Legacy Source sockets never enter the Robot lifecycle and keep their old
-   * seek authority. Once a socket has been a Robot source, only the currently
-   * active Robot may report source discontinuities; a superseded socket stays
-   * fenced even though its marker is reset to false.
+   * A room has exactly one source discontinuity authority.
+   *
+   * While a Robot source owns playback, only that Robot may report one. A
+   * legacy Source page is the desktop development adapter: in a mixed
+   * deployment its seeks describe a player Relay is not listening to, so
+   * honouring them would let a page that owns nothing invalidate the active
+   * Robot's content mapping and calibration.
+   *
+   * With no Robot attached, a legacy Source keeps its old authority - that is
+   * the whole development path. A superseded Robot stays fenced either way,
+   * even though its marker is reset to false.
    */
   canReportSeek(socket: TSocket) {
-    return socket.isRobotSource === undefined || this.isActiveRobot(socket);
+    if (this.activeRobotSocket !== null) return this.isActiveRobot(socket);
+    return socket.isRobotSource === undefined;
   }
 
   attachRobot(socket: TSocket): SourceRuntimeAttachResult<TSocket> {

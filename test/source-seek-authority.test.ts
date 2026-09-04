@@ -38,7 +38,7 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
   const seekDecision = applyTimeline.indexOf('const shouldSeek = armed');
   const finiteError = applyTimeline.indexOf('&& Number.isFinite(errorSeconds)', seekDecision);
   const followerBranch = applyTimeline.indexOf('if (shouldSeek) {', finiteError);
-  const followerReason = applyTimeline.indexOf("reason: 'follower-correction'", followerBranch);
+  const followerReason = applyTimeline.indexOf("'follower-correction'", followerBranch);
   const fromMediaTime = applyTimeline.indexOf('fromMediaTime: current', followerReason);
   const toMediaTime = applyTimeline.indexOf('toMediaTime: seekTarget', fromMediaTime);
 
@@ -49,6 +49,16 @@ test('an unarmed Source preview cannot announce or chase authoritative seek disc
   assert.ok(
     fromMediaTime > followerReason && toMediaTime > fromMediaTime,
     'the production follower must report the concrete media mapping it changed',
+  );
+
+  // Only a seek taken while the room is playing can preserve a live content
+  // mapping. Repositioning a paused player has no backing audio to preserve and
+  // cannot publish the offset that would commit the transition, so claiming to
+  // be a follower correction there opens a quarantine that can only expire.
+  assert.match(
+    applyTimeline.slice(followerBranch),
+    /reason: desiredState === 1 \? 'follower-correction' : 'paused-reposition'/,
+    'a paused reposition must not be announced as a follower correction',
   );
 });
 
@@ -75,19 +85,14 @@ test('server fences source-seeked before classification and mapped corrections r
   const coordinator = functionCode(seekCoordinator, 'createRelaySourceSeekTransactionCoordinator');
   const mappedBranch = coordinator.indexOf('if (input.mappedFollowerCorrection) {');
   const mappedReturn = coordinator.indexOf("return 'mapped-follower-correction'", mappedBranch);
-  const destructiveGeneration = coordinator.indexOf('dependencies.invalidateSourceMapping();', mappedReturn);
-  const destructiveDiscard = coordinator.indexOf('dependencies.discardPrimedContent();', destructiveGeneration);
+  const revocation = coordinator.indexOf('dependencies.revokeContentMapping(', mappedReturn);
   assert.ok(
-    mappedBranch >= 0 && mappedReturn > mappedBranch && destructiveGeneration > mappedReturn,
-    'valid mapped follower correction must return before destructive invalidation',
-  );
-  assert.ok(
-    destructiveDiscard > destructiveGeneration,
-    'destructive seek must discard primed content after changing source identity',
+    mappedBranch >= 0 && mappedReturn > mappedBranch && revocation > mappedReturn,
+    'valid mapped follower correction must return before the destructive revocation',
   );
   assert.doesNotMatch(
     coordinator.slice(mappedBranch, mappedReturn),
-    /invalidateSourceMapping|discardPrimedContent/,
+    /revokeContentMapping/,
     'a concretely mapped follower correction preserves source identity',
   );
 });

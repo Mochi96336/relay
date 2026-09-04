@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   compareRobotContentHypotheses,
   estimateRobotContentRawLag,
+  robotContentAnchorEvidenceUsable,
 } from '../src/robot-content-transition.js';
 import { pulseTrain } from './helpers/harness.js';
 
@@ -67,4 +68,41 @@ test('silent evidence cannot commit a media segment', () => {
   const silence = new Int16Array(count);
   const result = compareRobotContentHypotheses(silence, silence, silence, RATE);
   assert.equal(result.verdict, 'ambiguous');
+});
+
+function evidence(seconds: number, micGapMs = 0, backingGapMs = 0) {
+  const samples = Math.round(RATE * seconds);
+  return {
+    mic: new Int16Array(samples),
+    backing: new Int16Array(samples),
+    micGapSamples: Math.round((RATE * micGapMs) / 1_000),
+    backingGapSamples: Math.round((RATE * backingGapMs) / 1_000),
+  };
+}
+
+test('anchor evidence needs more than a second of common span on both sides', () => {
+  assert.equal(robotContentAnchorEvidenceUsable(null, RATE, 300), false);
+  assert.equal(robotContentAnchorEvidenceUsable(evidence(1), RATE, 300), false, 'exactly one second is not more than one second');
+  assert.equal(robotContentAnchorEvidenceUsable(evidence(1.2), RATE, 300), true);
+
+  const shortMic = { ...evidence(1.2), mic: new Int16Array(RATE) };
+  assert.equal(robotContentAnchorEvidenceUsable(shortMic, RATE, 300), false, 'both sides must reach the span');
+});
+
+test('a window that is mostly capture hole cannot anchor a preserving seek', () => {
+  // The collector keeps missing PCM as zeros so positions stay truthful, so
+  // length alone says nothing about whether the correlator has anything to
+  // match. Without this the gate launches an anchor worker that returns null
+  // and the transition dies at windows=0.
+  assert.equal(robotContentAnchorEvidenceUsable(evidence(1.2, 299), RATE, 300), true);
+  assert.equal(robotContentAnchorEvidenceUsable(evidence(1.2, 301), RATE, 300), false);
+  assert.equal(
+    robotContentAnchorEvidenceUsable(evidence(1.2, 0, 900), RATE, 300),
+    false,
+    'a hole on either side is disqualifying',
+  );
+});
+
+test('anchor evidence rejects a nonsense sample rate rather than guessing', () => {
+  assert.throws(() => robotContentAnchorEvidenceUsable(evidence(2), 0, 300), /sampleRate/);
 });

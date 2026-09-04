@@ -124,6 +124,38 @@ function scoreOverlap(
  * ambiguity must keep post-seek content quarantined; this result can never be
  * promoted as calibration or applied to the mixer.
  */
+/**
+ * Whether a collected window can actually anchor a preserving follower seek.
+ *
+ * `TimingWindowCollector` keeps missing PCM as zeros so sample positions stay
+ * truthful, which means a window's length is its *span*, not its evidence. A
+ * mostly-silent window therefore passes a length check and then fails to
+ * correlate, stranding the transition at windows=0 until its deadline expires -
+ * the exact failure the anchor gate exists to prevent.
+ *
+ * `maxGapMs` is the same bound calibration enforces on its own windows; the two
+ * correlate the same kind of audio and have no reason to disagree.
+ */
+export function robotContentAnchorEvidenceUsable(
+  evidence: {
+    mic: Int16Array;
+    backing: Int16Array;
+    micGapSamples: number;
+    backingGapSamples: number;
+  } | null,
+  sampleRate: number,
+  maxGapMs: number,
+) {
+  if (evidence === null) return false;
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new Error('sampleRate must be a positive finite number.');
+  }
+  const minimumSamples = sampleRate;
+  if (evidence.mic.length <= minimumSamples || evidence.backing.length <= minimumSamples) return false;
+  const gapMs = (Math.max(evidence.micGapSamples, evidence.backingGapSamples) / sampleRate) * 1_000;
+  return gapMs <= maxGapMs;
+}
+
 export function estimateRobotContentRawLag(
   micSamples: Int16Array,
   backingSamples: Int16Array,

@@ -96,3 +96,70 @@ Examples:
 - product-status tests prove that rich issues are self-contained while legacy compatibility fields keep their exact runtime shape.
 
 This keeps future failures close to the code that owns the rule and avoids turning architecture validation into another cross-cutting monolith.
+
+## 7. Timing strategy, timing authority, and the Robot route are three different facts
+
+Timing is measured by more than one strategy, and the parts of the system that
+ask about it want different questions answered. Conflating them is what lets a
+correct-looking change to one gate silently contradict another.
+
+Keep these separate:
+
+- **Route** is a physical fact: whether this room's backing and Source are the
+  Robot pair. It must not be inferred from whether a strategy is *enabled*; a
+  configuration flag that turns off boot probing cannot also turn off Robot
+  content authority, mapping readiness, or Robot Take quality semantics.
+- **Candidate strategy** is what is being measured right now.
+- **Applied authority** is what produced the result currently serving the
+  mixer. `CalibrationSession` deliberately keeps the previous confirmed result
+  serving while a replacement is measured, so a candidate of one kind
+  alongside confirmed authority of another kind is an ordinary state, not an
+  error.
+- **Fallback measurement** is a settled result being retained for later use.
+
+Provenance decisions - which result a validator baselines against, which
+reference frame a media transition may carry forward - read applied authority.
+Reading the candidate there attributes one strategy's measurement to another.
+
+### Strategy preference is bounded and terminates both ways
+
+A bounded fast strategy is a baseline, not a gate on the strategies that
+replace it. Anything that waits for such a strategy must wait for it to
+**settle** - produce a usable result, or spend its bounded attempts - never for
+it to *fail*. A gate keyed on failure never opens on the healthy path.
+
+A bounded run must also be able to reach a terminal state from every topology
+it is admitted in. Admitting one leg of a multi-leg measurement whose other leg
+cannot exist produces a run that waits forever without spending an attempt.
+Automatic scheduling and product-advertised actions must share one admission
+policy rather than growing a second, laxer copy.
+
+### Revoking a media mapping is one transaction
+
+Every event that invalidates the Robot content mapping performs the *same*
+teardown. Differences between callers belong in that transaction's parameters,
+not in which steps each call site remembers.
+
+Two of those steps are easy to omit and expensive to miss:
+
+- **Invalidating the reference frame.** Clearing a mapping without advancing
+  the generation it is scoped to leaves the confirmed result still matching the
+  live context, so it becomes eligible to be re-applied as soon as new
+  telemetry makes the mapper ready. A fail-closed fence has to fail closed.
+- **Aborting a pending analysis.** Analysis is asynchronous and its promotion is
+  stamped with the context that is live when the worker answers, not when the
+  audio was captured. Any generation change that outlives a running analysis
+  promotes evidence measured in a frame that no longer exists.
+
+### Evidence length is not evidence
+
+Capture collectors keep missing PCM as zeros so sample positions stay truthful.
+A window's length is therefore its span, not the amount of audio in it. Every
+consumer that hands a window to a correlator must bound the gap as well as the
+span, and all of them must use the same bound.
+
+### A room has one source discontinuity authority
+
+Only the transport that currently owns playback may report a seek that
+invalidates mapping and calibration. A development adapter holds that authority
+only while no production Source does.

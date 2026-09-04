@@ -183,30 +183,61 @@ async function acknowledgeNextBackingBoundary(backing: RelayClient, previousCoun
 
 function productionCorrectionCadence() {
   const settleMatch = source.match(/const ROBOT_DELTA_SETTLE_MS = ([0-9_]+);/);
-  const intervalMatch = source.match(/now - lastSeekAt > ([0-9_]+)/);
   assert.ok(settleMatch, 'production Source must declare Robot delta settle suppression');
-  assert.ok(intervalMatch, 'production Source must declare the follower correction interval');
-  return {
-    settleMs: Number(settleMatch[1].replaceAll('_', '')),
-    correctionIntervalMs: Number(intervalMatch[1].replaceAll('_', '')),
-  };
+  return { settleMs: Number(settleMatch[1].replaceAll('_', '')) };
 }
 
-test('production Source always converges gross media drift while Relay owns mapping preservation', () => {
-  const { settleMs, correctionIntervalMs } = productionCorrectionCadence();
+/**
+ * Source runs in the browser, so the server-side harness cannot observe its
+ * seek decision directly. These assertions read the shipped decision instead -
+ * deliberately as a shape check, because the alternative is no coverage of the
+ * client half of the convergence contract at all.
+ */
+test('production Source converges gross media drift without outrunning its own offset reporting', () => {
+  const { settleMs } = productionCorrectionCadence();
   assert.equal(settleMs, 1_000);
-  assert.equal(correctionIntervalMs, 700);
-  assert.ok(correctionIntervalMs < settleMs);
+
   const start = source.indexOf('const shouldSeek = armed');
   const end = source.indexOf(';', start);
   assert.ok(start >= 0 && end > start, 'Source must keep an explicit seek decision');
   const shouldSeek = source.slice(start, end + 1);
+
   assert.match(shouldSeek, /Math\.abs\(errorSeconds\) > 0\.45/);
-  assert.match(shouldSeek, /now - lastSeekAt > 700/);
   assert.doesNotMatch(
     shouldSeek,
-    /robotContentTransitionAnchorReady/,
+    /robotContentTransitionAnchorReady|robotFollowerSeekPreservesMapping/,
     'bootstrap convergence must not require the content authority it is trying to create',
+  );
+  // A seek suppresses offset reporting for the whole settle window, so seeking
+  // again before it expires guarantees the server never sees the fresh delta it
+  // needs to re-anchor. The settle window is therefore the floor between
+  // corrections, not a shorter cadence that can outrun it.
+  assert.match(
+    shouldSeek,
+    /now >= robotDeltaSuppressedUntil/,
+    'the seek floor must be the settle window that gates offset reporting',
+  );
+  assert.match(
+    shouldSeek,
+    /offsetReportedSinceSeek/,
+    'while the offset path is open, a correction must be answered before the next one',
+  );
+});
+
+test('production Source follows the room playback rate instead of seeking against it', () => {
+  // The room clock advances at the Song's rate. A follower pinned at 1x while
+  // the room plays at 2x accumulates error at one second per second, which
+  // turns every correction stale before the next tick - a seek loop no cadence
+  // rule can bound, produced by an ordinary product action.
+  assert.match(
+    source,
+    /player\.setPlaybackRate\(desiredRate\)/,
+    'Source must apply the room playback rate to its own player',
+  );
+  assert.match(
+    source,
+    /const desiredRate = Number\(timeline\.playbackRate\)/,
+    'the applied rate must come from the room timeline, not a local assumption',
   );
 });
 

@@ -12,15 +12,18 @@ function functionBlock(name: string) {
 }
 
 test('Robot follower preservation requires proven content authority or enough in-flight pre-seek evidence', () => {
-  const gate = functionBlock('robotContentTransitionAnchorReady');
+  const gate = functionBlock('robotFollowerSeekMayPreserveMapping');
   assert.match(gate, /robotContentTimeline\.isReady\(context, nowMs\)/);
   assert.match(gate, /appliedCalibrationKind\(\) === 'content'/);
   assert.match(gate, /calibration\.confirmedResult !== null/);
   assert.match(gate, /!calibrationIsStale\(\)/);
   assert.match(gate, /timingRuntime\.calibrationKind !== 'content' \|\| !calibration\.collecting/);
   assert.match(gate, /calibration\.transitionEvidence\(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES\)/);
-  assert.match(gate, /evidence\.mic\.length > MIX_SAMPLE_RATE/);
-  assert.match(gate, /evidence\.backing\.length > MIX_SAMPLE_RATE/);
+  // Usability is a named policy with its own unit tests rather than a length
+  // check inlined here: length is span, and a window that is mostly capture
+  // hole would otherwise pass and then strand the transition at windows=0.
+  assert.match(gate, /robotContentAnchorEvidenceUsable\(/);
+  assert.match(gate, /MAX_CAPTURE_GAP_MS/, 'the transition must use the same gap bound calibration enforces');
   assert.doesNotMatch(
     gate,
     /needsBackingBoundary/,
@@ -31,7 +34,7 @@ test('Robot follower preservation requires proven content authority or enough in
 test('server uses content anchor authority only to preserve a follower seek, not to permit the seek itself', () => {
   assert.match(
     server,
-    /const mappedFollowerCorrection = requestedFollowerCorrection[\s\S]*?robotContentTransitionAnchorReady\(nowMs\)[\s\S]*?robotContentTimeline\.noteFollowerCorrection/,
+    /const mappedFollowerCorrection = requestedFollowerCorrection[\s\S]*?robotFollowerSeekMayPreserveMapping\(nowMs\)[\s\S]*?robotContentTimeline\.noteFollowerCorrection/,
   );
 });
 
@@ -39,6 +42,6 @@ test('source-status publishes the server-owned follower-seek authority fact', ()
   const status = functionBlock('sourceStatusPayload');
   assert.match(
     status,
-    /robotContentTransitionAnchorReady: robotContentTransitionAnchorReady\(nowMs\)/,
+    /robotFollowerSeekPreservesMapping: robotFollowerSeekMayPreserveMapping\(nowMs\)/,
   );
 });

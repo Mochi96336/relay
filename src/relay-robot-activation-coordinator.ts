@@ -13,6 +13,13 @@ export type RelayRobotActivationDependencies<TSocket> = {
   resetPlayerOffset: () => void;
   resetContentTimeline: () => void;
   clearBackingBoundaryRequest: () => void;
+  /**
+   * Replacing the active Robot source bumps the source generation, so a
+   * calibration still in flight belongs to a reference frame that is gone. Its
+   * async analysis is stamped with the context live at completion, so it has to
+   * be aborted here rather than allowed to promote under the new generation.
+   */
+  failCalibrationIfCollecting: () => void;
   dropLegacyCalibrationForRobot: () => void;
   syncAppliedCalibration: () => void;
   reportSourceStatus: () => void;
@@ -37,6 +44,7 @@ export function createRelayRobotActivationCoordinator<TSocket>(
         dependencies.notifyPreviousReplaced(input.previous);
         dependencies.noteQualityEvent('robot-source-replaced');
         dependencies.abandonProbeRun();
+        dependencies.failCalibrationIfCollecting();
       } else if (!input.previous && dependencies.sessionActive()) {
         dependencies.noteQualityEvent('robot-source-connected');
       }

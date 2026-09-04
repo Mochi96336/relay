@@ -13,8 +13,16 @@ import { TimingWindowCollector, type TimingWindow } from './timing-window-collec
  * applies the result to the session's alignment when one lands.
  */
 
-/** How much of the six seconds may be missing before the answer is rejected. */
-const MAX_CAPTURE_GAP_MS = 300;
+/**
+ * How much of the six seconds may be missing before the answer is rejected.
+ *
+ * Exported because the same bound has to hold anywhere PCM is correlated.
+ * `TimingWindowCollector` keeps missing audio as zeros so sample positions stay
+ * truthful, which means a window's *length* is its span, not its evidence -
+ * so any consumer that reads length alone will happily hand a mostly-silent
+ * window to a correlator that cannot possibly match it.
+ */
+export const MAX_CAPTURE_GAP_MS = 300;
 
 export type CalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
 
@@ -266,12 +274,22 @@ export class CalibrationSession {
     this.collector.observeBacking(samples, startSample);
   }
 
-  /** Read-only, context-fenced PCM for media-transition verification only. */
+  /**
+   * Read-only, context-fenced PCM for media-transition verification only.
+   *
+   * Deliberately available while an analysis is pending. `peekRecentWindow()`
+   * does not consume or mutate collection state, and `analysisPending` is the
+   * moment this session holds the *most* evidence, not the least: a full window
+   * has just been collected. Refusing here made a seek arriving in the last
+   * moments of a calibration look like it had no evidence at all, so it was
+   * classified as a destructive bootstrap remap - invalidating the very run
+   * that was about to produce the content authority the seek needed.
+   */
   transitionEvidence(maxSamples: number): TimingWindow | null {
     const currentContext = this.context();
     const ownsPrimedEvidence = this.primedContext !== null
       && this.contextsEqual(this.primedContext, currentContext);
-    if ((!this.collecting && !ownsPrimedEvidence) || this.analysisPending) return null;
+    if (!this.collecting && !ownsPrimedEvidence) return null;
     return this.collector.peekRecentWindow(maxSamples);
   }
 

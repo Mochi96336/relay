@@ -6,6 +6,7 @@ export type CalibrationStartBlockReason =
   | 'calibration-active'
   | 'sources-not-connected'
   | 'sources-not-streaming'
+  | 'content-mapping-pending'
   | 'phone-not-playing';
 
 export type CalibrationStartFacts = {
@@ -20,6 +21,8 @@ export type CalibrationStartFacts = {
   /** Explicit Robot topology facts. Optional only for legacy pure-policy callers. */
   backingIsRobot?: boolean;
   robotSourceConnected?: boolean;
+  /** Whether Robot backing can currently be mapped into new content-correlation evidence. */
+  contentEvidenceReady?: boolean;
   timelineConnected: boolean;
   timelineState: number | null;
 };
@@ -71,6 +74,9 @@ export function decideCalibrationStart(
 
   if (!facts.timelineConnected || facts.timelineState !== 1) {
     return { ok: false, mode, reason: 'phone-not-playing' };
+  }
+  if (facts.contentEvidenceReady === false) {
+    return { ok: false, mode, reason: 'content-mapping-pending' };
   }
   return { ok: true, mode };
 }

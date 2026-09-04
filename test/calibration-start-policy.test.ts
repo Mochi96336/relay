@@ -15,6 +15,7 @@ const READY: CalibrationStartFacts = {
   backingStreaming: true,
   micStreaming: true,
   robotProbeTimingActive: false,
+  contentEvidenceReady: true,
   timelineConnected: true,
   timelineState: 1,
 };
@@ -104,4 +105,21 @@ test('content calibration alone requires the phone timeline to be playing', () =
     { ok: false, mode: 'content', reason: 'phone-not-playing' },
   );
   assert.deepEqual(decideCalibrationStart(READY), { ok: true, mode: 'content' });
+});
+
+test('content calibration waits for an evidence-usable Robot mapping without blocking boot probe', () => {
+  assert.deepEqual(
+    decideCalibrationStart({ ...READY, contentEvidenceReady: false }),
+    { ok: false, mode: 'content', reason: 'content-mapping-pending' },
+  );
+  assert.deepEqual(
+    decideCalibrationStart({
+      ...READY,
+      robotProbeTimingActive: true,
+      contentEvidenceReady: false,
+      timelineConnected: false,
+      timelineState: null,
+    }),
+    { ok: true, mode: 'boot-probe' },
+  );
 });

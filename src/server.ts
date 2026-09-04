@@ -326,6 +326,19 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
         + ` workerFailures=${status.workerFailures}/${status.maxWorkerFailures}`
         + ` ageMs=${status.ageMs}`,
       );
+      // A verifying transition may temporarily pause an existing content
+      // collection while its backing PCM is quarantined. Once the verifier
+      // degrades, however, there is no commit that can ever release that PCM.
+      // End the transaction immediately instead of leaving Mic evidence to
+      // grow against 0 ms of usable backing until the calibration timeout.
+      if (
+        timingRuntime.calibrationKind === 'content'
+        && calibration.collecting
+      ) {
+        calibration.fail(
+          'Robot backing content mapping could not be verified. Wait for the Robot source mapping to recover before calibration.',
+        );
+      }
       broadcastJson(timingCalibrationStatusPayload());
     },
   },
@@ -450,7 +463,7 @@ function robotContentFallbackPrimingActive(nowMs = performance.now()) {
     || takeBlocksCalibration()
     || !robotProbeTimingActive()
     || probeCalibrationExhausted(nowMs)
-    || !robotContentMappingReady(nowMs)
+    || !robotContentEvidenceMappingReady(nowMs)
   ) return false;
   const timeline = currentTimelineStatus(nowMs);
   return Boolean(timeline.connected) && Number(timeline.state) === 1;
@@ -466,6 +479,16 @@ function robotContentMappingReady(nowMs = performance.now()) {
   if (!robotProbeTimingActive()) return true;
   return sourceRuntime.connected()
     && robotContentTimeline.isReady(calibrationContext(), nowMs);
+}
+
+// A fresh timeline can still be intentionally withholding backing PCM while a
+// follower correction waits for its capture/content boundary. That mapping is
+// safe for the already-applied live authority (which keeps using committed
+// content), but it is not usable as new correlation evidence: mapBackingStart()
+// will return null until the boundary is committed.
+function robotContentEvidenceMappingReady(nowMs = performance.now()) {
+  if (!robotContentMappingReady(nowMs)) return false;
+  return !robotContentTimeline.needsBackingBoundary(calibrationContext());
 }
 
 function mappedContentBackingStart(startSample: number, nowMs = performance.now()) {
@@ -1533,6 +1556,7 @@ function productStatusPayload(nowMs = performance.now()) {
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
       requiresRobotPlayerDelta: robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe',
       robotProbeTimingActive: robotProbeTimingActive(),
+      contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
     },
   });
@@ -1740,7 +1764,7 @@ function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
   const exhaustedRobotProbe = probeCalibrationExhausted(nowMs);
   if (robotProbeTimingActive() && !exhaustedRobotProbe) return;
-  if (robotProbeTimingActive() && !robotContentMappingReady(nowMs)) return;
+  if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return;
   if (!session.active || calibration.collecting) return;
   if (calibration.confirmedResult !== null && !calibrationIsStale()) return;
   if (!timingRuntime.autoCalibrationDue(nowMs)) return;
@@ -1759,7 +1783,7 @@ function maybeAutoCalibrate(nowMs: number) {
 function contentValidationPathReady(nowMs: number) {
   if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
   if (robotProbeTimingActive() && !probeCalibrationExhausted(nowMs)) return false;
-  if (robotProbeTimingActive() && !robotContentMappingReady(nowMs)) return false;
+  if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return false;
   if (!session.active || calibration.collecting) return false;
   if (
     timingRuntime.calibrationKind !== 'content'
@@ -2700,6 +2724,12 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
         }
         case 'phone-not-playing':
           calibration.fail('Play YouTube on the phone before calibration.');
+          return;
+        case 'content-mapping-pending':
+          sendJson(socket, {
+            type: 'calibration-command-rejected',
+            reason: 'content-mapping-pending',
+          });
           return;
       }
       return;

@@ -41,11 +41,31 @@ if old not in text:
     raise SystemExit("priming gate anchor not found")
 text = text.replace(old, new, 1)
 
-old = "if (robotProbeTimingActive() && !robotContentMappingReady(nowMs)) return;"
-count = text.count(old)
-if count != 2:
-    raise SystemExit(f"expected 2 auto/validation mapping gates, found {count}")
-text = text.replace(old, "if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return;")
+old = """function maybeAutoCalibrate(nowMs: number) {
+  if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
+  const exhaustedRobotProbe = probeCalibrationExhausted(nowMs);
+  if (robotProbeTimingActive() && !exhaustedRobotProbe) return;
+  if (robotProbeTimingActive() && !robotContentMappingReady(nowMs)) return;"""
+new = """function maybeAutoCalibrate(nowMs: number) {
+  if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
+  const exhaustedRobotProbe = probeCalibrationExhausted(nowMs);
+  if (robotProbeTimingActive() && !exhaustedRobotProbe) return;
+  if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return;"""
+if old not in text:
+    raise SystemExit("auto calibration gate anchor not found")
+text = text.replace(old, new, 1)
+
+old = """function contentValidationPathReady(nowMs: number) {
+  if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
+  if (robotProbeTimingActive() && !probeCalibrationExhausted(nowMs)) return false;
+  if (robotProbeTimingActive() && !robotContentMappingReady(nowMs)) return false;"""
+new = """function contentValidationPathReady(nowMs: number) {
+  if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
+  if (robotProbeTimingActive() && !probeCalibrationExhausted(nowMs)) return false;
+  if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return false;"""
+if old not in text:
+    raise SystemExit("content validation gate anchor not found")
+text = text.replace(old, new, 1)
 
 old = """      console.warn(
         '[robot-content-transition] degraded fail-closed:'

@@ -137,7 +137,7 @@ function boundaryRequestCount(backing: RelayClient) {
   return backing.messages.filter((message) => message.type === 'backing-sample-boundary-request').length;
 }
 
-test('server deadline makes quarantine terminal and a later follower correction starts a fresh budget', async () => {
+test('server treats an unanchored follower correction as destructive bootstrap instead of opening quarantine', async () => {
   const server = await startRelay({
     RELAY_CALIBRATION_PROBE: '1',
     RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS: '600',
@@ -161,6 +161,7 @@ test('server deadline makes quarantine terminal and a later follower correction 
 
     robot.send({ type: 'robot-player-offset', offsetMs: 500 });
     await sleep(50);
+    const requestsBeforeSeek = boundaryRequestCount(backing);
     robot.send({
       type: 'source-seeked',
       reason: 'follower-correction',
@@ -168,48 +169,30 @@ test('server deadline makes quarantine terminal and a later follower correction 
       toMediaTime: 100,
     });
 
-    const verifying = await waitForServerTransition(
+    const reset = await waitForServerTransition(
       monitor,
-      (status) => status.robotContentTransition?.state === 'verifying',
+      (status) => status.robotContentTransition?.state === 'idle'
+        && status.robotContentTransition?.quarantined === false
+        && status.robotDeltaFresh === false,
       2_000,
     );
-    const firstStartedAtMs = Number(verifying.robotContentTransition.startedAtMs);
-    assert.equal(verifying.robotContentTransition.quarantined, true);
-    assert.equal(verifying.robotContentTransition.workerInvocations, 0);
-
-    const degraded = await waitForServerTransition(
-      monitor,
-      (status) => status.robotContentTransition?.state === 'degraded',
-      3_000,
-    );
-    assert.equal(degraded.robotContentTransition.degradedReason, 'deadline-exceeded');
-    assert.equal(degraded.robotContentTransition.quarantined, true);
-    assert.equal(degraded.robotContentTransition.workerInvocations, 0);
-
-    const requestsAtDegrade = boundaryRequestCount(backing);
-    robot.send({ type: 'robot-player-offset', offsetMs: 0 });
-    await sleep(300);
+    assert.equal(reset.robotContentTransition.state, 'idle');
+    assert.equal(reset.robotContentTransition.quarantined, false);
     assert.equal(
       boundaryRequestCount(backing),
-      requestsAtDegrade,
-      'a degraded transition must not restart backing-boundary churn from fresh telemetry alone',
+      requestsBeforeSeek,
+      'an unanchored bootstrap remap must not request a transition boundary',
     );
 
-    robot.send({
-      type: 'source-seeked',
-      reason: 'follower-correction',
-      fromMediaTime: 100.25,
-      toMediaTime: 100,
-    });
-    const restarted = await waitForServerTransition(
+    robot.send({ type: 'robot-player-offset', offsetMs: 0 });
+    await sleep(100);
+    const stable = await waitForServerTransition(
       monitor,
-      (status) => status.robotContentTransition?.state === 'verifying'
-        && Number(status.robotContentTransition.startedAtMs) > firstStartedAtMs,
+      (status) => status.robotContentTransition?.state === 'idle'
+        && status.robotDeltaFresh === true,
       2_000,
     );
-    assert.equal(restarted.robotContentTransition.windowsStarted, 0);
-    assert.equal(restarted.robotContentTransition.workerFailures, 0);
-    assert.equal(restarted.robotContentTransition.degradedReason, null);
+    assert.equal(stable.robotContentTransition.quarantined, false);
   } finally {
     monitor.close();
     robot.close();

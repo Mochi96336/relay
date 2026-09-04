@@ -11,17 +11,20 @@ function functionBlock(name: string) {
   return server.slice(start, next === -1 ? server.length : next);
 }
 
-test('Robot follower seek requires fresh confirmed content authority before it can create quarantine', () => {
+test('Robot follower preservation requires proven content authority or enough in-flight pre-seek evidence', () => {
   const gate = functionBlock('robotContentTransitionAnchorReady');
   assert.match(gate, /robotContentTimeline\.isReady\(context, nowMs\)/);
-  assert.match(gate, /!robotContentTimeline\.needsBackingBoundary\(context\)/);
-  assert.match(gate, /timingRuntime\.calibrationKind === 'content'/);
+  assert.match(gate, /appliedCalibrationKind\(\) === 'content'/);
   assert.match(gate, /calibration\.confirmedResult !== null/);
   assert.match(gate, /!calibrationIsStale\(\)/);
+  assert.match(gate, /timingRuntime\.calibrationKind !== 'content' \|\| !calibration\.collecting/);
+  assert.match(gate, /calibration\.transitionEvidence\(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES\)/);
+  assert.match(gate, /evidence\.mic\.length > MIX_SAMPLE_RATE/);
+  assert.match(gate, /evidence\.backing\.length > MIX_SAMPLE_RATE/);
   assert.doesNotMatch(
     gate,
-    /transitionEvidence|readBacking|readMic/,
-    'seek permission must use already-confirmed authority, not speculative post-seek discovery',
+    /needsBackingBoundary/,
+    'a repeated mapped correction must not become destructive merely because the prior boundary is still pending',
   );
 });
 

@@ -24,6 +24,20 @@ test('successful boot probe is a baseline that may promote to automatic content 
   );
 });
 
+test('boot-probe result cannot impersonate a confirmed content transition anchor', () => {
+  const begin = functionBlock('beginRobotContentTransition');
+  const reconcile = functionBlock('reconcileRobotContentTransitionWithFreshDelta');
+  for (const block of [begin, reconcile]) {
+    assert.match(block, /appliedCalibrationKind\(\) === 'content'/);
+    assert.match(block, /!calibrationIsStale\(\)/);
+    assert.doesNotMatch(
+      block,
+      /timingRuntime\.calibrationKind === 'content'/,
+      'candidate content mode must not relabel a retained boot-probe result as content authority',
+    );
+  }
+});
+
 test('gross Robot offset is revoked before boot-probe can fold it into mixer timing', () => {
   assert.match(server, /const ROBOT_PLAYER_OFFSET_MAX_ABS_MS = 5_000;/);
   assert.match(

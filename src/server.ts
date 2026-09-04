@@ -511,25 +511,32 @@ function mappedContentBackingStart(startSample: number, nowMs = performance.now(
 }
 
 /**
- * Whether Robot Source may create a follower seek right now.
+ * Whether a concrete Robot follower seek may preserve the existing content
+ * mapping rather than becoming a destructive bootstrap remap.
  *
- * A seek is safe only when the transition verifier already has a proven
- * pre-seek content lag. Trying to discover that lag after seek is a catch-22:
- * backing PCM is quarantined at that point, so an initially missing anchor can
- * never gain safe pre-seek backing evidence and the transition dies at
- * windows=0. Keep reporting player delta until content calibration itself has
- * confirmed the reference-frame lag; then a seek can use that authority
- * synchronously without a speculative anchor worker.
+ * Confirmed content authority is sufficient even while a prior correction is
+ * still waiting for its PCM boundary: repeated finite corrections intentionally
+ * carry that proven pre-seek reference forward. Before first promotion, an
+ * in-flight content collection may also preserve a small correction when it
+ * already owns enough common pre-seek PCM to launch the anchor worker
+ * immediately. With neither source of evidence, preservation would recreate
+ * the windows=0 catch-22, so the seek must reset mapping instead.
  */
 function robotContentTransitionAnchorReady(nowMs = performance.now()) {
   if (!backingRuntime.isRobot && !sourceRuntime.connected()) return true;
   const context = calibrationContext();
-  return sourceRuntime.connected()
-    && robotContentTimeline.isReady(context, nowMs)
-    && !robotContentTimeline.needsBackingBoundary(context)
-    && timingRuntime.calibrationKind === 'content'
+  if (!sourceRuntime.connected() || !robotContentTimeline.isReady(context, nowMs)) return false;
+
+  const confirmedContentAuthority = appliedCalibrationKind() === 'content'
     && calibration.confirmedResult !== null
     && !calibrationIsStale();
+  if (confirmedContentAuthority) return true;
+
+  if (timingRuntime.calibrationKind !== 'content' || !calibration.collecting) return false;
+  const evidence = calibration.transitionEvidence(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES);
+  return evidence !== null
+    && evidence.mic.length > MIX_SAMPLE_RATE
+    && evidence.backing.length > MIX_SAMPLE_RATE;
 }
 
 function clearRobotContentTransition() {
@@ -565,7 +572,8 @@ function beginRobotContentTransition(
   context: CalibrationContext,
   nowMs = performance.now(),
 ) {
-  const confirmedReferenceLagMs = timingRuntime.calibrationKind === 'content'
+  const confirmedReferenceLagMs = appliedCalibrationKind() === 'content'
+    && !calibrationIsStale()
     ? calibration.confirmedResult?.micLagMs ?? null
     : null;
   robotContentTransitionRuntime.begin({
@@ -582,7 +590,8 @@ function reconcileRobotContentTransitionWithFreshDelta(
   context: CalibrationContext,
   nowMs = performance.now(),
 ) {
-  const confirmedReferenceLagMs = timingRuntime.calibrationKind === 'content'
+  const confirmedReferenceLagMs = appliedCalibrationKind() === 'content'
+    && !calibrationIsStale()
     ? calibration.confirmedResult?.micLagMs ?? null
     : null;
   return robotContentTransitionRuntime.reconcileWithFreshDelta({

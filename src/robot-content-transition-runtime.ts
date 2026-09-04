@@ -98,6 +98,8 @@ type RobotContentTransitionState = {
   preDeltaMs: number;
   postDeltaMs: number;
   preShiftSamples: number;
+  anchorAdjustmentMs: number;
+  anchorEvidenceSamplesAttempted: number;
   preRawLagMs: number | null;
   postRawLagMs: number | null;
   transportFrontierCaptureSample: number | null;
@@ -221,6 +223,8 @@ export class RobotContentTransitionRuntime {
       preDeltaMs: input.preDeltaMs,
       postDeltaMs: input.preDeltaMs + seekJumpMs,
       preShiftSamples,
+      anchorAdjustmentMs: input.preDeltaMs - input.referenceDeltaMs,
+      anchorEvidenceSamplesAttempted: 0,
       preRawLagMs: null,
       postRawLagMs: null,
       transportFrontierCaptureSample: null,
@@ -240,49 +244,12 @@ export class RobotContentTransitionRuntime {
     this.state = state;
 
     if (input.confirmedReferenceLagMs !== null) {
-      state.preRawLagMs = input.confirmedReferenceLagMs + input.preDeltaMs - input.referenceDeltaMs;
+      state.preRawLagMs = input.confirmedReferenceLagMs + state.anchorAdjustmentMs;
       state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
       return;
     }
 
-    const evidence = this.host.transitionEvidence(this.historySamples);
-    if (evidence === null || evidence.mic.length <= this.sampleRate) return;
-    if (!beginRobotContentTransitionWorker(state.bounds, 'anchor', nowMs)) {
-      this.settleDegraded(state, nowMs);
-      return;
-    }
-
-    const controller = new AbortController();
-    this.abortController = controller;
-    state.analysisPending = true;
-    void this.estimateRawLag(
-      evidence.mic,
-      evidence.backing,
-      this.sampleRate,
-      this.maxLagMs,
-      controller.signal,
-    ).then((anchor) => {
-      if (!this.current(state)) return;
-      state.analysisPending = false;
-      this.abortController = null;
-      const completedAt = this.now();
-      if (sweepRobotContentTransitionBounds(state.bounds, completedAt)) {
-        this.settleDegraded(state, completedAt);
-        return;
-      }
-      if (anchor === null) return;
-      state.preRawLagMs = anchor.rawLagMs + input.preDeltaMs - input.referenceDeltaMs;
-      state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
-      this.maybeAnalyze(completedAt);
-    }, () => {
-      if (!this.current(state) || state.bounds.phase === 'degraded') return;
-      state.analysisPending = false;
-      this.abortController = null;
-      const failedAt = this.now();
-      if (noteRobotContentTransitionWorkerFailure(state.bounds, 'anchor', failedAt)) {
-        this.settleDegraded(state, failedAt);
-      }
-    });
+    this.maybeStartAnchor(state, nowMs);
   }
 
   reconcileWithFreshDelta(input: {
@@ -403,11 +370,14 @@ export class RobotContentTransitionRuntime {
 
     const keepAfter = Math.max(0, input.backingTotalSamples - this.retentionSamples);
     state.chunks = state.chunks.filter((chunk) => chunk.start + chunk.samples.length > keepAfter);
+    this.maybeStartAnchor(state, nowMs);
     this.maybeAnalyze(nowMs);
     return true;
   }
 
   noteMicProgress(nowMs = this.now()) {
+    const state = this.state;
+    if (state !== null) this.maybeStartAnchor(state, nowMs);
     this.maybeAnalyze(nowMs);
   }
 
@@ -485,6 +455,68 @@ export class RobotContentTransitionRuntime {
     this.abortController = null;
     this.pendingBoundary = null;
     this.state = null;
+    return true;
+  }
+
+  private maybeStartAnchor(state: RobotContentTransitionState, nowMs = this.now()) {
+    if (
+      !this.current(state)
+      || state.bounds.phase !== 'verifying'
+      || state.analysisPending
+      || state.preRawLagMs !== null
+      || state.postRawLagMs !== null
+      || !contextMatches(state.context, this.host.context())
+    ) return false;
+
+    const evidence = this.host.transitionEvidence(this.historySamples);
+    if (evidence === null) return false;
+    const evidenceSamples = Math.min(evidence.mic.length, evidence.backing.length);
+    if (
+      evidenceSamples <= this.sampleRate
+      || evidenceSamples <= state.anchorEvidenceSamplesAttempted
+    ) return false;
+
+    // A null/ambiguous anchor is not terminal. More pre-seek evidence may make
+    // the next bounded attempt decisive. Never rerun the worker for the exact
+    // same snapshot, though: Mic/backing frame callbacks are much faster than
+    // the analyser and would otherwise create an accidental worker storm.
+    state.anchorEvidenceSamplesAttempted = evidenceSamples;
+    if (!beginRobotContentTransitionWorker(state.bounds, 'anchor', nowMs)) {
+      this.settleDegraded(state, nowMs);
+      return false;
+    }
+
+    const controller = new AbortController();
+    this.abortController = controller;
+    state.analysisPending = true;
+    void this.estimateRawLag(
+      evidence.mic,
+      evidence.backing,
+      this.sampleRate,
+      this.maxLagMs,
+      controller.signal,
+    ).then((anchor) => {
+      if (!this.current(state)) return;
+      state.analysisPending = false;
+      this.abortController = null;
+      const completedAt = this.now();
+      if (sweepRobotContentTransitionBounds(state.bounds, completedAt)) {
+        this.settleDegraded(state, completedAt);
+        return;
+      }
+      if (anchor === null) return;
+      state.preRawLagMs = anchor.rawLagMs + state.anchorAdjustmentMs;
+      state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
+      this.maybeAnalyze(completedAt);
+    }, () => {
+      if (!this.current(state) || state.bounds.phase === 'degraded') return;
+      state.analysisPending = false;
+      this.abortController = null;
+      const failedAt = this.now();
+      if (noteRobotContentTransitionWorkerFailure(state.bounds, 'anchor', failedAt)) {
+        this.settleDegraded(state, failedAt);
+      }
+    });
     return true;
   }
 

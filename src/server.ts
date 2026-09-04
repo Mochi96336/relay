@@ -473,6 +473,26 @@ function mappedContentBackingStart(startSample: number, nowMs = performance.now(
   return robotContentTimeline.mapBackingStart(startSample, calibrationContext(), nowMs);
 }
 
+function robotContentTransitionAnchorReady(nowMs = performance.now()) {
+  if (!robotProbeTimingActive()) return true;
+  const context = calibrationContext();
+  if (
+    !sourceRuntime.connected()
+    || !robotContentTimeline.isReady(context, nowMs)
+    || robotContentTimeline.needsBackingBoundary(context)
+  ) return false;
+
+  // An existing confirmed content authority already names the pre-seek raw
+  // hypothesis, so no backup correlation window is needed. Otherwise require
+  // the full bounded history before allowing Source to create a discontinuity.
+  if (
+    timingRuntime.calibrationKind === 'content'
+    && calibration.confirmedResult !== null
+    && !calibrationIsStale()
+  ) return true;
+  return calibration.transitionEvidenceSpanSamples >= ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES;
+}
+
 function clearRobotContentTransition() {
   robotContentTransitionRuntime.clear();
 }
@@ -1164,6 +1184,7 @@ function sourceStatusPayload() {
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    robotContentTransitionAnchorReady: robotContentTransitionAnchorReady(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,

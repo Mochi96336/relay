@@ -101,6 +101,11 @@ export class TimingWindowCollector {
     return this.spanSamples(this.backing);
   }
 
+  /** Shared timing-coordinate span currently covered by both sides. */
+  get sharedSpanSamples() {
+    return this.capturedSamples;
+  }
+
   observeMic(samples: Int16Array, startSample: number) {
     this.observe(this.mic, samples, startSample);
   }

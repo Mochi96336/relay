@@ -266,6 +266,19 @@ export class CalibrationSession {
     this.collector.observeBacking(samples, startSample);
   }
 
+  /**
+   * Shared context-fenced evidence currently available to a media-transition
+   * verifier. This is intentionally metadata-only so Robot Source can ask
+   * whether a seek is provable without copying several seconds of PCM.
+   */
+  get transitionEvidenceSpanSamples() {
+    const currentContext = this.context();
+    const ownsPrimedEvidence = this.primedContext !== null
+      && this.contextsEqual(this.primedContext, currentContext);
+    if ((!this.collecting && !ownsPrimedEvidence) || this.analysisPending) return 0;
+    return this.collector.sharedSpanSamples;
+  }
+
   /** Read-only, context-fenced PCM for media-transition verification only. */
   transitionEvidence(maxSamples: number): TimingWindow | null {
     const currentContext = this.context();

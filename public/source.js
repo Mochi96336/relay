@@ -454,6 +454,7 @@ function applyTimeline() {
     const now = performance.now();
     const playerState = safePlayerState();
     const shouldSeek = armed
+      && latestSourceStatus?.robotContentTransitionAnchorReady === true
       && Number.isFinite(errorSeconds)
       && Math.abs(errorSeconds) > 0.45
       && now - lastSeekAt > 700;
@@ -599,6 +600,11 @@ function connect() {
 
     if (message.type === 'youtube-timeline-status') {
       latestTimeline = message;
+      // Follower correction is allowed only after the server confirms it has
+      // enough pre-seek content evidence to verify the backing transition.
+      // Refresh that narrow readiness fact at the same cadence as the 250 ms
+      // authoritative timeline rather than trusting the connect-time snapshot.
+      if (ROBOT_MODE && armed) send({ type: 'source-status-request' });
       // `serverTime` is already projected to the instant the server emitted
       // this snapshot. Re-applying the same snapshot on a local timer used to
       // make its age look like player drift, feeding a false +0..250 ms sawtooth

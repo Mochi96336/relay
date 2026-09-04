@@ -192,13 +192,19 @@ function productionCorrectionCadence() {
   };
 }
 
-test('production follower cadence permits another correction before fresh Robot delta telemetry resumes', () => {
+test('production follower correction requires server-confirmed transition anchor evidence', () => {
   const { settleMs, correctionIntervalMs } = productionCorrectionCadence();
   assert.equal(settleMs, 1_000);
   assert.equal(correctionIntervalMs, 700);
-  assert.ok(
-    correctionIntervalMs < settleMs,
-    'this regression must continue to model the production 700 ms correction / 1000 ms suppression overlap',
+  assert.ok(correctionIntervalMs < settleMs);
+  assert.match(
+    source,
+    /const shouldSeek = armed[\s\S]*?latestSourceStatus\?\.robotContentTransitionAnchorReady === true[\s\S]*?now - lastSeekAt > 700/,
+  );
+  assert.match(
+    source,
+    /if \(ROBOT_MODE && armed\) send\(\{ type: 'source-status-request' \}\);/,
+    'Robot Source must refresh readiness at the authoritative timeline cadence',
   );
 });
 

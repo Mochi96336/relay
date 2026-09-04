@@ -92,6 +92,29 @@ describe('CalibrationSession primed fallback', () => {
     assert.equal(harness.calibration.confirmedRevision, confirmedRevision + 1);
   });
 
+  test('reports shared context-fenced primed evidence without consuming it', () => {
+    const harness = makeSession();
+    prime(harness.calibration, RATE * 3, 0);
+
+    assert.equal(harness.calibration.transitionEvidenceSpanSamples, RATE * 3);
+    const snapshot = harness.calibration.transitionEvidence(RATE * 2);
+    assert.ok(snapshot);
+    assert.equal(snapshot.mic.length, RATE * 2);
+    assert.equal(snapshot.backing.length, RATE * 2);
+    assert.equal(
+      harness.calibration.transitionEvidenceSpanSamples,
+      RATE * 3,
+      'readiness inspection must not consume the primed transition history',
+    );
+
+    harness.setContext({ ...harness.context, sourceGeneration: harness.context.sourceGeneration + 1 });
+    assert.equal(
+      harness.calibration.transitionEvidenceSpanSamples,
+      0,
+      'stale source-generation evidence must never authorize a follower seek',
+    );
+  });
+
   test('discardPrimedContent makes a destructive source change start from zero backup evidence', () => {
     const harness = makeSession();
     const primedSamples = REQUIRED - RATE;

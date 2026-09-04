@@ -175,6 +175,47 @@ test('late anchor completion cannot revive a cleared transition', async () => {
   assert.equal(compares, 0, 'stale worker completion must not schedule comparison work');
 });
 
+test('anchor retries only after safe pre-seek evidence grows', async () => {
+  let evidenceSamples = 900;
+  let anchorRuns = 0;
+  const { runtime } = runtimeHarness({
+    transitionEvidence: () => ({
+      mic: new Int16Array(evidenceSamples),
+      backing: new Int16Array(evidenceSamples),
+    }),
+    estimateRawLag: async () => {
+      anchorRuns += 1;
+      return null;
+    },
+  });
+
+  runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs: null,
+  }, 100);
+  assert.equal(anchorRuns, 0, 'sub-second evidence cannot start an anchor worker');
+
+  evidenceSamples = 1_500;
+  runtime.noteMicProgress(120);
+  await nextTurn();
+  await nextTurn();
+  assert.equal(anchorRuns, 1, 'newly sufficient evidence must retry the missing anchor');
+
+  runtime.noteMicProgress(130);
+  await nextTurn();
+  assert.equal(anchorRuns, 1, 'the same evidence snapshot must not spin another worker');
+
+  evidenceSamples = 2_000;
+  runtime.noteMicProgress(140);
+  await nextTurn();
+  await nextTurn();
+  assert.equal(anchorRuns, 2, 'a larger safe pre-seek window may retry an ambiguous anchor');
+});
+
 test('post evidence commits only after the acknowledged transport floor and current mapping agree', async () => {
   const commitPlans: RobotContentTransitionCommitPlan[] = [];
   const { runtime } = runtimeHarness({

@@ -92,6 +92,7 @@ describe('TimingWindowCollector', () => {
 
     assert.equal(collector.micSpanSamples, 2_000 * MS);
     assert.equal(collector.backingSpanSamples, 4_000 * MS);
+    assert.equal(collector.sharedSpanSamples, 2_000 * MS);
   });
 
   test('ignores chunks that start beyond the configured fast-side buffer horizon', () => {

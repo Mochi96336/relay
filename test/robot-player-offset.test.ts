@@ -110,6 +110,10 @@ test('the server aligns against the tracker and only then requests a backing bou
   const recorded = infrastructure.indexOf('robotPlayerOffset.record(offsetMs, nowMs)');
   const mapped = infrastructure.indexOf('robotContentTimeline.notePlayerOffset(');
   const requested = infrastructure.indexOf('if (mapped) requestRobotBackingBoundary(nowMs)');
+  assert.ok(
+    infrastructure.includes('Math.abs(offsetMs) > ROBOT_PLAYER_OFFSET_MAX_ABS_MS'),
+    'gross media-position gaps must be rejected before they enter timing authority',
+  );
   assert.ok(recorded >= 0, 'Robot offset reports must enter RobotPlayerOffsetTracker');
   assert.ok(mapped > recorded, 'timeline mapping must consume the tracked offset after it is recorded');
   assert.ok(requested > mapped, 'backing-boundary requests must follow accepted timeline mapping');

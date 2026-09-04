@@ -25,6 +25,13 @@ test('Robot follower seek requires fresh confirmed content authority before it c
   );
 });
 
+test('server uses content anchor authority only to preserve a follower seek, not to permit the seek itself', () => {
+  assert.match(
+    server,
+    /const mappedFollowerCorrection = requestedFollowerCorrection[\s\S]*?robotContentTransitionAnchorReady\(nowMs\)[\s\S]*?robotContentTimeline\.noteFollowerCorrection/,
+  );
+});
+
 test('source-status publishes the server-owned follower-seek authority fact', () => {
   const status = functionBlock('sourceStatusPayload');
   assert.match(

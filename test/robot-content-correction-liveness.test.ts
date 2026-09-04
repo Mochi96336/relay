@@ -192,20 +192,21 @@ function productionCorrectionCadence() {
   };
 }
 
-test('production follower correction waits for a server-proven content anchor', () => {
+test('production Source always converges gross media drift while Relay owns mapping preservation', () => {
   const { settleMs, correctionIntervalMs } = productionCorrectionCadence();
   assert.equal(settleMs, 1_000);
   assert.equal(correctionIntervalMs, 700);
   assert.ok(correctionIntervalMs < settleMs);
-  assert.match(
-    source,
-    /const shouldSeek = armed[\s\S]*?latestSourceStatus\?\.robotContentTransitionAnchorReady === true[\s\S]*?Math\.abs\(errorSeconds\) > 0\.45[\s\S]*?now - lastSeekAt > 700/,
-    'local correction cadence must never outrun server transition authority',
-  );
-  assert.ok(
-    source.indexOf('latestSourceStatus?.robotContentTransitionAnchorReady === true')
-      < source.indexOf('player.seekTo(seekTarget, true)'),
-    'server-proven content authority must gate the actual seekTo call',
+  const start = source.indexOf('const shouldSeek = armed');
+  const end = source.indexOf(';', start);
+  assert.ok(start >= 0 && end > start, 'Source must keep an explicit seek decision');
+  const shouldSeek = source.slice(start, end + 1);
+  assert.match(shouldSeek, /Math\.abs\(errorSeconds\) > 0\.45/);
+  assert.match(shouldSeek, /now - lastSeekAt > 700/);
+  assert.doesNotMatch(
+    shouldSeek,
+    /robotContentTransitionAnchorReady/,
+    'bootstrap convergence must not require the content authority it is trying to create',
   );
 });
 

@@ -265,6 +265,10 @@ const bootProbeRuntime = new BootProbeRuntime({
 const BOOT_DELTA_REAPPLY_MS = relayConfig.calibrationDeltaReapplyMs;
 const ROBOT_OFFSET_FRESH_MS = 2_000;
 const ROBOT_OFFSET_WINDOW_MS = relayConfig.robotOffsetWindowMs;
+// robot-player-offset is a residual tracking measurement, not an arbitrary
+// media-position gap. Source seeks at 450 ms; keep a generous server-side
+// sanity fence so a bootstrap gap can never become timing authority.
+const ROBOT_PLAYER_OFFSET_MAX_ABS_MS = 5_000;
 const robotPlayerOffset = new RobotPlayerOffsetTracker({
   freshForMs: ROBOT_OFFSET_FRESH_MS,
   windowMs: ROBOT_OFFSET_WINDOW_MS,
@@ -329,16 +333,26 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
       // A verifying transition may temporarily pause an existing content
       // collection while its backing PCM is quarantined. Once the verifier
       // degrades, however, there is no commit that can ever release that PCM.
-      // End the transaction immediately instead of leaving Mic evidence to
-      // grow against 0 ms of usable backing until the calibration timeout.
-      if (
-        timingRuntime.calibrationKind === 'content'
-        && calibration.collecting
-      ) {
+      // Tear down both halves of that failed transaction: leaving the runtime
+      // degraded *or* the mapper awaiting a boundary would keep content
+      // evidence quarantined forever. A fresh Robot delta can then establish a
+      // new bootstrap mapping, while the source-generation bump makes the old
+      // reference-frame calibration fail closed.
+      const collectingContent = timingRuntime.calibrationKind === 'content'
+        && calibration.collecting;
+      robotPlayerOffset.reset();
+      robotContentTimeline.reset();
+      sourceRuntime.invalidateMapping();
+      clearContentValidationBaseline();
+      calibration.discardPrimedContent();
+      clearRobotContentTransition();
+      if (collectingContent) {
         calibration.fail(
-          'Robot backing content mapping could not be verified. Wait for the Robot source mapping to recover before calibration.',
+          'Robot backing content mapping could not be verified. Rebuilding the Robot content mapping before calibration retries.',
         );
       }
+      syncAppliedCalibration();
+      broadcastJson(sourceStatusPayload());
       broadcastJson(timingCalibrationStatusPayload());
     },
   },
@@ -1762,11 +1776,24 @@ const mixerTimer = setInterval(() => {
 
 function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
+  const robotRoute = robotProbeTimingActive();
   const exhaustedRobotProbe = probeCalibrationExhausted(nowMs);
-  if (robotProbeTimingActive() && !exhaustedRobotProbe) return;
-  if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return;
+  const completedBootBaseline = robotRoute
+    && bootProbeRuntime.pathDifferenceMs !== null
+    && bootProbeRuntime.completedContextMatches(bootProbeContext());
+  // Boot probe is the fast baseline, not the terminal strategy. Before it has
+  // either completed or exhausted its bounded attempts, keep its preference.
+  // Once a baseline exists, a playing Song must be allowed to promote to
+  // content authority instead of being blocked forever by the boot result it
+  // is supposed to replace.
+  if (robotRoute && !exhaustedRobotProbe && !completedBootBaseline) return;
+  if (robotRoute && !robotContentEvidenceMappingReady(nowMs)) return;
   if (!session.active || calibration.collecting) return;
-  if (calibration.confirmedResult !== null && !calibrationIsStale()) return;
+  const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
+  if (
+    freshConfirmedResult
+    && (!robotRoute || appliedCalibrationKind() === 'content')
+  ) return;
   if (!timingRuntime.autoCalibrationDue(nowMs)) return;
 
   if (!backingRuntime.connected() || !micRuntime.controlConnected()) return;
@@ -2797,16 +2824,27 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
   },
   robotPlayerOffset: (socket, payload) => {
     const offsetMs = Number(payload.offsetMs);
-    if (sourceRuntime.isActiveRobot(socket) && Number.isFinite(offsetMs)) {
-      const nowMs = performance.now();
-      robotPlayerOffset.record(offsetMs, nowMs);
-      const mapped = robotContentTimeline.notePlayerOffset(
-        robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
-        calibrationContext(),
-        nowMs,
-      );
-      if (mapped) requestRobotBackingBoundary(nowMs);
+    if (!sourceRuntime.isActiveRobot(socket) || !Number.isFinite(offsetMs)) return;
+    const nowMs = performance.now();
+    if (Math.abs(offsetMs) > ROBOT_PLAYER_OFFSET_MAX_ABS_MS) {
+      // A minutes-wide media-position gap is a convergence problem, never an
+      // acoustic timing measurement. Revoke the old delta/mapping immediately
+      // and wait for Source to seek and report a bounded residual.
+      robotPlayerOffset.reset();
+      robotContentTimeline.reset();
+      clearRobotContentTransition();
+      syncAppliedCalibration();
+      broadcastJson(sourceStatusPayload());
+      broadcastJson(timingCalibrationStatusPayload());
+      return;
     }
+    robotPlayerOffset.record(offsetMs, nowMs);
+    const mapped = robotContentTimeline.notePlayerOffset(
+      robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
+      calibrationContext(),
+      nowMs,
+    );
+    if (mapped) requestRobotBackingBoundary(nowMs);
     return;
   },
   calibrationProbe: (socket, payload) => {
@@ -2844,9 +2882,14 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     const context = calibrationContext();
     const preDeltaMs = robotContentTimeline.currentDeltaMs;
     const referenceDeltaMs = robotContentTimeline.referenceDeltaMs;
+    // Source always converges gross media-time error. Only preserve the old
+    // mapping through that seek when Relay already has a proven content anchor;
+    // otherwise the existing coordinator deliberately treats it as a
+    // destructive bootstrap remap and clears stale transition state.
     const mappedFollowerCorrection = requestedFollowerCorrection
       && sourceRuntime.isActiveRobot(socket)
       && backingRuntime.isRobot
+      && robotContentTransitionAnchorReady(nowMs)
       && robotContentTimeline.noteFollowerCorrection(
         fromMediaTime,
         toMediaTime,

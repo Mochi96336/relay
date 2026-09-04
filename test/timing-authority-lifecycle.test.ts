@@ -116,6 +116,54 @@ test('timing authority keeps polling across idle and observes the later applied 
     data: JSON.stringify({
       type: 'source-status',
       active: true,
+      robotRoute: true,
+      activeCalibrationKind: 'boot-probe',
+      timingMode: 'network-estimate',
+      robotDeltaFresh: false,
+      appliedMicAdvanceMs: 0,
+    }),
+  });
+
+  assert.equal(window.relayTimingAuthority?.authorityFresh, true);
+  assert.equal(window.relayTimingAuthority?.valueMs, null,
+    'path-ready Robot calibration awaiting player delta must not expose fallback zero as user timing');
+
+  socket.emit('message', {
+    data: JSON.stringify({
+      type: 'source-status',
+      active: true,
+      robotRoute: true,
+      activeCalibrationKind: 'boot-probe',
+      timingMode: 'acoustic-calibration',
+      robotDeltaFresh: false,
+      appliedMicAdvanceMs: 0,
+    }),
+  });
+
+  assert.equal(window.relayTimingAuthority?.authorityFresh, true);
+  assert.equal(window.relayTimingAuthority?.valueMs, 0,
+    'a real applied path-only measurement of exactly zero must remain visible as 0 ms');
+
+  socket.emit('message', {
+    data: JSON.stringify({
+      type: 'source-status',
+      active: true,
+      robotRoute: true,
+      activeCalibrationKind: 'boot-probe',
+      timingMode: 'acoustic-calibration',
+      robotDeltaFresh: true,
+      appliedMicAdvanceMs: 143,
+    }),
+  });
+
+  assert.equal(window.relayTimingAuthority?.authorityFresh, true);
+  assert.equal(window.relayTimingAuthority?.valueMs, 143,
+    'once player delta promotes the complete Robot alignment, the final applied value must become visible');
+
+  socket.emit('message', {
+    data: JSON.stringify({
+      type: 'source-status',
+      active: true,
       appliedMicAdvanceMs: 37,
     }),
   });

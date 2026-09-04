@@ -86,11 +86,23 @@ function scheduleReconnect() {
   }, RECONNECT_MS);
 }
 
+function waitingForRobotPlayerDelta(message) {
+  return message?.robotRoute === true
+    && message?.activeCalibrationKind === 'boot-probe'
+    && message?.timingMode === 'network-estimate'
+    && message?.robotDeltaFresh !== true;
+}
+
 function acceptSourceStatus(message) {
   if (message?.type !== 'source-status') return;
   observeSourceStatus();
   const applied = message.appliedMicAdvanceMs;
+  // A completed Robot path probe without a fresh player delta is not a 0 ms
+  // user alignment. The mixer temporarily falls back to its network estimate
+  // until advance = Lmic - Lbacking + playerDelta can be completed. Do not
+  // publish that fallback as though it were the calibrated user-facing value.
   const valueMs = message.active === true
+    && !waitingForRobotPlayerDelta(message)
     && typeof applied === 'number'
     && Number.isFinite(applied)
     ? applied

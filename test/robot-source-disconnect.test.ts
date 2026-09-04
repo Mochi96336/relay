@@ -12,6 +12,15 @@ import {
 } from './helpers/harness.js';
 
 const RATE = 48_000;
+const PLAYING_TELEMETRY = {
+  type: 'youtube-telemetry',
+  videoId: 'dQw4w9WgXcQ',
+  state: 1,
+  currentTime: 42,
+  duration: 200,
+  playbackRate: 1,
+  networkRttMs: 40,
+};
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
@@ -126,11 +135,31 @@ test('robot source disconnect suspends the applied delta until a fresh source of
         && m.state === 'complete',
       5_000,
     );
-    assert.equal(measured.timingMode, 'network-estimate');
-    assert.equal(measured.activeMicLagMs, null);
+    assert.equal(measured.timingMode, 'acoustic-calibration');
     assert.equal(measured.robotDeltaFresh, false);
+    const measuredPathDifference = Number(measured.bootCalibration?.micLatencyMs)
+      - Number(measured.bootCalibration?.backingLatencyMs);
+    assert.ok(Number.isFinite(measuredPathDifference));
+    assert.ok(
+      Math.abs(Number(measured.activeMicLagMs) - measuredPathDifference) < 0.001,
+      `path-only boot authority ${measured.activeMicLagMs} must equal measured path difference ${measuredPathDifference}`,
+    );
+    assert.equal(Math.round(measured.bootCalibration?.deltaMs), 0);
     assert.ok(measured.probeCorrelation.mic >= 0.5);
     assert.ok(measured.probeCorrelation.backing >= 0.5);
+
+    const beforeSong = monitor.messages.length;
+    publisher.send(PLAYING_TELEMETRY);
+    const awaitingDelta = await waitForNewMessage(
+      monitor,
+      beforeSong,
+      (m) => m.type === 'source-status'
+        && m.timingMode === 'network-estimate'
+        && m.robotDeltaFresh === false,
+      3_000,
+    );
+    assert.equal(awaitingDelta.activeCalibratedMicLagMs, null,
+      'once a Song exists, path-only authority must wait for player-relative delta');
 
     robot.send({ type: 'robot-player-offset', offsetMs: 80 });
     const firstApplied = await monitor.waitFor(

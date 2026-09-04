@@ -985,11 +985,16 @@ function calibrationCanApply(kind = appliedCalibrationKind()) {
     && !probeCalibrationExhausted()
     && !retainingConfirmedAuthority
   ) return false;
-  // Boot calibration is a three-term equation. The two probe legs may be
-  // measured ahead of playback, but an unknown player delta is not zero. Keep
-  // the path result as evidence and stay on the network fallback until the
-  // active robot has published a fresh, settled delta.
-  if (robotProbeTimingActive() && kind === 'boot-probe' && !robotDeltaIsFresh()) return false;
+  // Player-relative delta matters only while a Song exists. In a no-Song room
+  // the two measured path legs are already the complete correction the mixer
+  // can use; once a Song exists, boot authority must fail closed until the
+  // active Robot has a fresh player offset.
+  if (
+    robotProbeTimingActive()
+    && kind === 'boot-probe'
+    && roomHasSong()
+    && !robotDeltaIsFresh()
+  ) return false;
   // A Robot content result is expressed in the mapper's stable reference frame.
   // It can own the live mixer only while the current media mapping is known.
   if (
@@ -1024,13 +1029,46 @@ function syncAppliedCalibration() {
   const calibrationKind = appliedCalibrationKind();
 
   if (robotProbeTimingActive() && calibrationKind === 'boot-probe') {
+    const nowMs = performance.now();
+    const result = calibration.result;
+    const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
+
+    // With no Song there is no player-relative term to apply. The measured path
+    // difference is therefore the authoritative mixer correction regardless of
+    // any historical Robot offset that may have been folded into the stored
+    // boot result during an earlier playback session.
+    if (
+      !roomHasSong(nowMs)
+      && result !== null
+      && pathDifferenceMs !== null
+      && !calibrationIsStale()
+      && bootProbeRuntime.completedContextMatches(bootProbeContext())
+    ) {
+      if (active === pathDifferenceMs) return false;
+      session.setAlignment({ calibratedMicLagMs: pathDifferenceMs });
+      return true;
+    }
+
     if (!calibrationCanApply(calibrationKind)) {
       if (active === null) return false;
       session.setAlignment({ calibratedMicLagMs: null });
       return true;
     }
 
-    const result = calibration.result;
+    const storedDeltaMs = bootProbeRuntime.calibrationResult?.deltaMs;
+    const currentDelta = currentDeltaMs(nowMs);
+    // A fresh player report may have moved since the stored boot result was
+    // promoted. Do not briefly apply that historical total while the reapply
+    // path below is about to fold in the current delta.
+    if (
+      storedDeltaMs === undefined
+      || Math.abs(storedDeltaMs - currentDelta) >= 0.001
+    ) {
+      if (active === null) return false;
+      session.setAlignment({ calibratedMicLagMs: null });
+      return true;
+    }
+
     if (active !== null) {
       if (result !== null && active !== result.micLagMs) {
         session.setAlignment({ calibratedMicLagMs: result.micLagMs });
@@ -1039,13 +1077,7 @@ function syncAppliedCalibration() {
       return false;
     }
 
-    const storedDeltaMs = bootProbeRuntime.calibrationResult?.deltaMs;
-    const currentDelta = currentDeltaMs(performance.now());
-    if (
-      result !== null
-      && storedDeltaMs !== undefined
-      && Math.abs(storedDeltaMs - currentDelta) < 0.001
-    ) {
+    if (result !== null) {
       session.setAlignment({ calibratedMicLagMs: result.micLagMs });
       return true;
     }
@@ -2028,6 +2060,7 @@ function currentDeltaMs(nowMs: number) {
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
   if (!robotProbeTimingActive() || appliedCalibrationKind() !== 'boot-probe') return;
+  if (!roomHasSong(nowMs)) return;
   if (bootProbeRuntime.pathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
   if (!robotDeltaIsFresh(nowMs)) return;
   if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return;

@@ -32,10 +32,19 @@ test('priming, automatic calibration and content validation all require an evide
   );
 });
 
-test('manual content calibration is rejected while Robot backing evidence is quarantined', () => {
+test('ProductStatus and command rejection share the content mapping pending policy', () => {
+  assert.match(
+    functionBlock('productStatusPayload'),
+    /contentEvidenceReady: robotContentEvidenceMappingReady\(nowMs\)/,
+  );
   assert.match(
     server,
-    /if \(calibrationAction\.startCalibrationMode === 'boot-probe'\)[\s\S]*?robotProbeTimingActive\(\)[\s\S]*?!robotContentEvidenceMappingReady\(nowMs\)[\s\S]*?type: 'calibration-command-rejected'[\s\S]*?reason: 'robot-content-mapping-pending'/,
+    /case 'content-mapping-pending':[\s\S]*?type: 'calibration-command-rejected'[\s\S]*?reason: 'content-mapping-pending'/,
+  );
+  assert.doesNotMatch(
+    server,
+    /if \(robotProbeTimingActive\(\) && !robotContentEvidenceMappingReady\(nowMs\)\)/,
+    'manual calibration must consume the shared product policy rather than grow an ad-hoc server gate',
   );
 });
 

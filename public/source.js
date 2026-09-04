@@ -454,6 +454,7 @@ function applyTimeline() {
     const now = performance.now();
     const playerState = safePlayerState();
     const shouldSeek = armed
+      && latestSourceStatus?.robotContentTransitionAnchorReady === true
       && Number.isFinite(errorSeconds)
       && Math.abs(errorSeconds) > 0.45
       && now - lastSeekAt > 700;

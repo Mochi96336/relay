@@ -192,13 +192,20 @@ function productionCorrectionCadence() {
   };
 }
 
-test('production follower cadence permits another correction before fresh Robot delta telemetry resumes', () => {
+test('production follower correction waits for a server-proven content anchor', () => {
   const { settleMs, correctionIntervalMs } = productionCorrectionCadence();
   assert.equal(settleMs, 1_000);
   assert.equal(correctionIntervalMs, 700);
+  assert.ok(correctionIntervalMs < settleMs);
+  assert.match(
+    source,
+    /const shouldSeek = armed[\s\S]*?latestSourceStatus\?\.robotContentTransitionAnchorReady === true[\s\S]*?Math\.abs\(errorSeconds\) > 0\.45[\s\S]*?now - lastSeekAt > 700/,
+    'local correction cadence must never outrun server transition authority',
+  );
   assert.ok(
-    correctionIntervalMs < settleMs,
-    'this regression must continue to model the production 700 ms correction / 1000 ms suppression overlap',
+    source.indexOf('latestSourceStatus?.robotContentTransitionAnchorReady === true')
+      < source.indexOf('player.seekTo(seekTarget, true)'),
+    'server-proven content authority must gate the actual seekTo call',
   );
 });
 

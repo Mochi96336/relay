@@ -496,6 +496,28 @@ function mappedContentBackingStart(startSample: number, nowMs = performance.now(
   return robotContentTimeline.mapBackingStart(startSample, calibrationContext(), nowMs);
 }
 
+/**
+ * Whether Robot Source may create a follower seek right now.
+ *
+ * A seek is safe only when the transition verifier already has a proven
+ * pre-seek content lag. Trying to discover that lag after seek is a catch-22:
+ * backing PCM is quarantined at that point, so an initially missing anchor can
+ * never gain safe pre-seek backing evidence and the transition dies at
+ * windows=0. Keep reporting player delta until content calibration itself has
+ * confirmed the reference-frame lag; then a seek can use that authority
+ * synchronously without a speculative anchor worker.
+ */
+function robotContentTransitionAnchorReady(nowMs = performance.now()) {
+  if (!backingRuntime.isRobot && !sourceRuntime.connected()) return true;
+  const context = calibrationContext();
+  return sourceRuntime.connected()
+    && robotContentTimeline.isReady(context, nowMs)
+    && !robotContentTimeline.needsBackingBoundary(context)
+    && timingRuntime.calibrationKind === 'content'
+    && calibration.confirmedResult !== null
+    && !calibrationIsStale();
+}
+
 function clearRobotContentTransition() {
   robotContentTransitionRuntime.clear();
 }
@@ -1187,6 +1209,7 @@ function sourceStatusPayload() {
     robotRoute: robotProbeTimingActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    robotContentTransitionAnchorReady: robotContentTransitionAnchorReady(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,

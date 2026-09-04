@@ -89,6 +89,7 @@ test('fractional command time cannot round backward across a full-frame boundary
 
 test('prebuffer does not move the WAV Start boundary before the Start command', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-prebuffer-boundary-'));
+  let controller: TakeController | null = null;
   try {
     const session = new AudioSession({
       sampleRate: RATE,
@@ -112,7 +113,9 @@ test('prebuffer does not move the WAV Start boundary before the Start command', 
       'full-frame quantization may move Start forward by less than one frame only',
     );
 
-    const { controller, ready } = waitForReady(directory);
+    const readyState = waitForReady(directory);
+    controller = readyState.controller;
+    const { ready } = readyState;
     const started = controller.start(
       'participant-a',
       VOICE_ONLY_SONG,
@@ -125,7 +128,7 @@ test('prebuffer does not move the WAV Start boundary before the Start command', 
     const immediatePositions: number[] = [];
     session.drain((frame, evidence, position) => {
       immediatePositions.push(position.firstSampleIndex);
-      assert.equal(controller.append(frame, QUALITY_STATE, evidence, position), false);
+      assert.equal(controller!.append(frame, QUALITY_STATE, evidence, position), false);
     }, startCommandAtMs, 10);
     assert.deepEqual(immediatePositions, [0],
       'the frame available at command time is still the prebuffered past and must not enter the WAV');
@@ -149,7 +152,7 @@ test('prebuffer does not move the WAV Start boundary before the Start command', 
 
     const acceptedPositions: number[] = [];
     session.drain((frame, evidence, position) => {
-      if (controller.append(frame, QUALITY_STATE, evidence, position)) {
+      if (controller!.append(frame, QUALITY_STATE, evidence, position)) {
         acceptedPositions.push(position.firstSampleIndex);
       }
     }, 860, 100);
@@ -168,6 +171,10 @@ test('prebuffer does not move the WAV Start boundary before the Start command', 
     });
     assert.equal(entry.artifact.sampleCount, FRAME_SAMPLES);
   } finally {
+    // Ready is emitted before the asynchronous retention prune is necessarily
+    // finished. Drain the controller lifecycle before removing its storage so
+    // a late prune cannot race the test teardown and scandir a deleted tmpdir.
+    await controller?.shutdown();
     await rm(directory, { recursive: true, force: true });
   }
 });

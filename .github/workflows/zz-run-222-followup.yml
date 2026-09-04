@@ -1,0 +1,25 @@
+name: Run PR 222 transition authority follow-up
+on:
+  push:
+    branches:
+      - agent/robot-bootstrap-timing-deadlock
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/robot-bootstrap-timing-deadlock
+      - name: Apply follow-up
+        run: python3 scripts/zz-patch-222-followup.py
+      - name: Commit follow-up
+        run: |
+          rm scripts/zz-patch-222-followup.py .github/workflows/zz-run-222-followup.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts test/server-robot-content-anchor-readiness.test.ts test/robot-content-transition-bounds.test.ts test/server-robot-bootstrap-timing-deadlock.test.ts scripts/zz-patch-222-followup.py .github/workflows/zz-run-222-followup.yml
+          git commit -m 'fix(timing): preserve valid Robot follower transitions'
+          git push origin HEAD:agent/robot-bootstrap-timing-deadlock

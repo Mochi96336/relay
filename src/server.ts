@@ -985,11 +985,23 @@ function calibrationCanApply(kind = appliedCalibrationKind()) {
     && !probeCalibrationExhausted()
     && !retainingConfirmedAuthority
   ) return false;
-  // Boot calibration is a three-term equation. The two probe legs may be
-  // measured ahead of playback, but an unknown player delta is not zero. Keep
-  // the path result as evidence and stay on the network fallback until the
-  // active robot has published a fresh, settled delta.
-  if (robotProbeTimingActive() && kind === 'boot-probe' && !robotDeltaIsFresh()) return false;
+  // A freshly completed boot probe may contain only the two measured path legs:
+  // currentDeltaMs() contributes zero until the Robot has reported a player
+  // offset, so `advanceMs === pathDifferenceMs` is the best correction we can
+  // apply before playback. Keep that path-only authority active provisionally.
+  //
+  // Once a real/non-zero player delta has been folded into the confirmed boot
+  // result, losing freshness must still fail closed; silently subtracting the
+  // last player-relative term would jump the Mic read head during playback.
+  if (robotProbeTimingActive() && kind === 'boot-probe' && !robotDeltaIsFresh()) {
+    const boot = bootProbeRuntime.calibrationResult;
+    const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
+    const pathOnly = boot !== null
+      && pathDifferenceMs !== null
+      && Math.abs(boot.deltaMs) < 0.001
+      && Math.abs(boot.advanceMs - pathDifferenceMs) < 0.001;
+    if (!pathOnly) return false;
+  }
   // A Robot content result is expressed in the mapper's stable reference frame.
   // It can own the live mixer only while the current media mapping is known.
   if (

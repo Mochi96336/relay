@@ -126,9 +126,16 @@ test('robot source disconnect suspends the applied delta until a fresh source of
         && m.state === 'complete',
       5_000,
     );
-    assert.equal(measured.timingMode, 'network-estimate');
-    assert.equal(measured.activeMicLagMs, null);
+    assert.equal(measured.timingMode, 'acoustic-calibration');
     assert.equal(measured.robotDeltaFresh, false);
+    const measuredPathDifference = Number(measured.bootCalibration?.micLatencyMs)
+      - Number(measured.bootCalibration?.backingLatencyMs);
+    assert.ok(Number.isFinite(measuredPathDifference));
+    assert.ok(
+      Math.abs(Number(measured.activeMicLagMs) - measuredPathDifference) < 0.001,
+      `path-only boot authority ${measured.activeMicLagMs} must equal measured path difference ${measuredPathDifference}`,
+    );
+    assert.equal(Math.round(measured.bootCalibration?.deltaMs), 0);
     assert.ok(measured.probeCorrelation.mic >= 0.5);
     assert.ok(measured.probeCorrelation.backing >= 0.5);
 

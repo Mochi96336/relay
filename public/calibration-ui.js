@@ -130,19 +130,25 @@ function initialize() {
     );
   }
 
+  function needsPreflightCommandPath() {
+    return latestAction?.startCalibrationMode === 'boot-probe'
+      && latestProductStatus?.room?.song?.videoId == null;
+  }
+
   function calibrationAuthority() {
     return authorityState({
       authorityFresh: productAuthority?.authorityFresh === true,
       lastKnownSnapshot: latestProductStatus,
-      commandChannelFresh: commandAuthority?.commandChannelFresh === true,
+      // No-Song boot preflight deliberately owns a separate short-lived
+      // authenticated command socket. Its availability must not be coupled to
+      // the publisher control socket that app.js uses for ordinary commands.
+      // ProductStatus freshness, server ownership and server policy still gate
+      // the action, and the preflight socket itself fails closed on auth/IO.
+      commandChannelFresh: needsPreflightCommandPath()
+        || commandAuthority?.commandChannelFresh === true,
       authorized: selfOwnsServerMic(),
       serverAllowed: latestAction?.canStartCalibration === true,
     });
-  }
-
-  function needsPreflightCommandPath() {
-    return latestAction?.startCalibrationMode === 'boot-probe'
-      && latestProductStatus?.room?.song?.videoId == null;
   }
 
   /**

@@ -1057,16 +1057,22 @@ function syncAppliedCalibration() {
 
     const storedDeltaMs = bootProbeRuntime.calibrationResult?.deltaMs;
     const currentDelta = currentDeltaMs(nowMs);
-    // A fresh player report may have moved since the stored boot result was
-    // promoted. Do not briefly apply that historical total while the reapply
-    // path below is about to fold in the current delta.
-    if (
-      storedDeltaMs === undefined
-      || Math.abs(storedDeltaMs - currentDelta) >= 0.001
-    ) {
+    // A fresh player report moving away from the stored boot delta is not an
+    // authority failure. Keep the last applied total in force while
+    // maybeReapplyBootCalibration() decides whether the smoothed movement is
+    // large enough to cross BOOT_DELTA_REAPPLY_MS. Clearing here would turn
+    // every tiny delta jitter into a null/network fallback and then bypass the
+    // reapply threshold because the next step sees `applied === null`.
+    //
+    // Missing stored provenance is different: there is no safe boot total to
+    // retain, so keep the existing fail-closed behavior for that invariant.
+    if (storedDeltaMs === undefined) {
       if (active === null) return false;
       session.setAlignment({ calibratedMicLagMs: null });
       return true;
+    }
+    if (Math.abs(storedDeltaMs - currentDelta) >= 0.001) {
+      return false;
     }
 
     if (active !== null) {

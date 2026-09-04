@@ -171,6 +171,45 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     );
     assertBootUsesDelta(firstApplied, 80);
 
+    // The Robot reports noisy player offsets roughly every 250 ms. A small
+    // smoothed movement below RELAY_CALIBRATION_DELTA_REAPPLY_MS must not
+    // transiently withdraw an otherwise fresh boot authority or bypass the
+    // reapply threshold by first clearing the applied lag to null.
+    const stableLag = Number(firstApplied.activeMicLagMs);
+    const beforeJitter = monitor.messages.length;
+    robot.send({ type: 'robot-player-offset', offsetMs: 90 });
+    await sleep(700);
+
+    const jitterMessages = monitor.messages.slice(beforeJitter);
+    assert.equal(
+      jitterMessages.some((m) => (
+        (m.type === 'source-status' || m.type === 'timing-calibration-status')
+        && m.robotDeltaFresh === true
+        && m.timingMode === 'network-estimate'
+      )),
+      false,
+      'fresh sub-threshold Robot delta jitter must never create a network-fallback window',
+    );
+
+    const beforeJitterStatus = monitor.messages.length;
+    monitor.send({ type: 'timing-calibration-status-request' });
+    const afterJitter = await waitForNewMessage(
+      monitor,
+      beforeJitterStatus,
+      (m) => m.type === 'timing-calibration-status' && m.robotDeltaFresh === true,
+      3_000,
+    );
+    assert.equal(afterJitter.timingMode, 'acoustic-calibration');
+    assert.ok(
+      Math.abs(Number(afterJitter.activeMicLagMs) - stableLag) < 0.001,
+      `sub-threshold delta jitter must retain ${stableLag}, got ${afterJitter.activeMicLagMs}`,
+     );
+    assert.equal(
+      Math.round(afterJitter.bootCalibration?.deltaMs),
+      80,
+      'sub-threshold delta jitter must not repromote the boot result',
+    );
+
     const probeRequestsBeforeDisconnect = publisher.messages.filter(
       (m) => m.type === 'play-calibration-probe',
     ).length;

@@ -66,6 +66,8 @@ export type ProductViewModelInput = {
     requiresRobotPlayerDelta: boolean;
     /** Whether manual calibration should use the Robot boot-probe path. */
     robotProbeTimingActive?: boolean;
+    /** Whether a content-mode calibration can accept Robot backing evidence now. */
+    contentEvidenceReady?: boolean;
     robotDeltaFresh: boolean;
   };
 };
@@ -247,6 +249,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     backingStreaming: input.readiness.components.backing.streaming,
     micStreaming: input.readiness.components.mic.streaming,
     robotProbeTimingActive: input.timing.robotProbeTimingActive === true,
+    contentEvidenceReady: input.timing.contentEvidenceReady,
     backingIsRobot: input.readiness.components.backing.robot,
     robotSourceConnected: input.readiness.components.robotSource.connected,
     timelineConnected: input.readiness.components.player.timelineConnected,

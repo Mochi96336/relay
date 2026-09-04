@@ -1533,6 +1533,7 @@ function productStatusPayload(nowMs = performance.now()) {
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
       requiresRobotPlayerDelta: robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe',
       robotProbeTimingActive: robotProbeTimingActive(),
+      contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
     },
   });
@@ -2701,20 +2702,18 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
         case 'phone-not-playing':
           calibration.fail('Play YouTube on the phone before calibration.');
           return;
+        case 'content-mapping-pending':
+          sendJson(socket, {
+            type: 'calibration-command-rejected',
+            reason: 'content-mapping-pending',
+          });
+          return;
       }
       return;
     }
 
     if (calibrationAction.startCalibrationMode === 'boot-probe') {
       restartManualBootCalibration(nowMs);
-      return;
-    }
-
-    if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) {
-      sendJson(socket, {
-        type: 'calibration-command-rejected',
-        reason: 'robot-content-mapping-pending',
-      });
       return;
     }
 

@@ -996,7 +996,8 @@ function calibrationCanApply(kind = appliedCalibrationKind()) {
   if (robotProbeTimingActive() && kind === 'boot-probe' && !robotDeltaIsFresh()) {
     const boot = bootProbeRuntime.calibrationResult;
     const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
-    const pathOnly = boot !== null
+    const pathOnly = !roomHasSong()
+      && boot !== null
       && pathDifferenceMs !== null
       && Math.abs(boot.deltaMs) < 0.001
       && Math.abs(boot.advanceMs - pathDifferenceMs) < 0.001;

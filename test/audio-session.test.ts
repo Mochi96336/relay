@@ -716,6 +716,26 @@ describe('AudioSession microphone frontier', () => {
     );
   });
 
+  test('restarting the capture drops the correction instead of unwinding it for a song', () => {
+    // A new capture epoch is anchored to the current mix clock, so it starts
+    // with healthy headroom and owes nothing to the old deficit. Carrying the
+    // correction forward would hold the read head a second behind fresh audio
+    // and give it back only at the slew rate - about 10 ms per second, so most
+    // of a song before the vocal is where it belongs.
+    const session = laggingMicSession(900);
+    assert.ok(session.appliedMicAdvanceMs < -500, 'the fixture must have taken a real correction');
+
+    const frameSamples = Math.round(RATE * 0.02);
+    // The phone restarts its microphone: a new capture generation, from index 0.
+    session.ingestMic(frame(0, pcmOf(new Array(frameSamples).fill(8_000)), 2), RATE, 2_900);
+
+    assert.equal(
+      session.appliedMicAdvanceMs,
+      150,
+      'a fresh capture epoch must start from the requested alignment, not the old correction',
+    );
+  });
+
   test('a healthy microphone timeline is left entirely alone', () => {
     const session = makeSession({ prebufferMs: 400, retentionMs: 5_000 });
     session.start(0);

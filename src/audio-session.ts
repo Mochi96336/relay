@@ -367,9 +367,7 @@ export class AudioSession {
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     // The frontier correction described the old timelines' positions.
-    this.micFrontierCorrectionSamples = 0;
-    this.micFrontierAtLastFrame = 0;
-    this.micFrontierIdleFrames = 0;
+    this.resetMicFrontierTracking();
     // A pending correction belongs to the old mix epoch. Preserve the value
     // already being applied but do not continue walking an old target forward.
     this.calibratedMicLagTargetMs = this.alignmentState.calibratedMicLagMs;
@@ -496,6 +494,12 @@ export class AudioSession {
     return this.micFrontierIdleFrames > Math.ceil(ADVANCE_SAFETY_MS / this.frameMs);
   }
 
+  private resetMicFrontierTracking() {
+    this.micFrontierCorrectionSamples = 0;
+    this.micFrontierAtLastFrame = 0;
+    this.micFrontierIdleFrames = 0;
+  }
+
   private trackMicFrontierProgress() {
     const advanced = this.mic.totalSamples - this.micFrontierAtLastFrame;
     this.micFrontierAtLastFrame = this.mic.totalSamples;
@@ -604,6 +608,7 @@ export class AudioSession {
 
   clearMic() {
     this.clearTimeline(this.mic);
+    this.resetMicFrontierTracking();
   }
 
   /** Emits every frame whose time has come. Returns how many were produced. */
@@ -726,6 +731,11 @@ export class AudioSession {
         timeline.originOffset = Math.max(0, this.currentSessionSample(nowMs) - samples.length) - streamStart;
         timeline.clockErrorSamples = 0;
         timeline.sourceFrontier = null;
+        // The new epoch is anchored to the current mix clock, so it starts with
+        // healthy headroom and owes nothing to the deficit the correction was
+        // covering. Carrying that forward would hold the read head a second
+        // behind fresh audio and unwind only at the slew rate - most of a song.
+        if (timeline === this.mic) this.resetMicFrontierTracking();
       }
 
       start = streamStart + timeline.originOffset;

@@ -37,16 +37,11 @@ const MASTER_SECONDS = 60;
 const VIDEO = 'dQw4w9WgXcQ';
 
 const FAST = {
-  // Deliberately leave the boot probe enabled and let it spend its bounded
-  // attempts. `RELAY_CALIBRATION_PROBE=0` currently also switches the Robot
-  // route itself off, which is the separate boundary defect recorded against
-  // ARCHITECTURE_BOUNDARIES.md section 7 - a room configured that way never
-  // reaches the Robot content authority this case is about.
-  RELAY_CALIBRATION_PROBE: '1',
-  RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
-  RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '100',
-  RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '2',
-  RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '1500',
+  // Turning the audible boot probe off leaves the Robot route itself intact, so
+  // this room goes straight to content authority. That is also the behavioural
+  // half of ARCHITECTURE_BOUNDARIES.md section 7: a strategy flag may not
+  // decide whether the room is on a Robot route.
+  RELAY_CALIBRATION_PROBE: '0',
   RELAY_AUTO_CALIBRATE: '1',
   RELAY_AUTO_CALIBRATION_RETRY_MS: '100',
   RELAY_CALIBRATION_AGREEMENT: '1',

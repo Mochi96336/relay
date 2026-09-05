@@ -51,7 +51,7 @@ test('ProductStatus and command rejection share the content mapping pending poli
   );
   assert.doesNotMatch(
     commandHandlerBlock('startTimingCalibration'),
-    /if \(robotProbeTimingActive\(\) && !robotContentEvidenceMappingReady\(nowMs\)\)/,
+    /if \(robot(ProbeTiming|Route)Active\(\) && !robotContentEvidenceMappingReady\(nowMs\)\)/,
     'manual calibration must consume the shared product policy rather than grow an ad-hoc server gate',
   );
 });

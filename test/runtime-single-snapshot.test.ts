@@ -47,12 +47,50 @@ test('canonical readiness recognizes either Mic media transport, including WebTr
 
 test('Robot route identity stays separate from Robot player-delta timing dependency', () => {
   assert.doesNotThrow(() => functionBody('robotProbeTimingActive'));
-  assert.throws(() => functionBody('robotRouteActive'), /found 0/);
   assert.match(product, /requiresRobotPlayerDelta: boolean/);
   assert.match(product, /!input\.timing\.requiresRobotPlayerDelta \|\| input\.timing\.robotDeltaFresh/);
   assert.doesNotMatch(product, /timing\.robotRoute/);
 
   const status = functionBody('productStatusPayload');
-  assert.match(status, /requiresRobotPlayerDelta: robotProbeTimingActive\(\)/);
+  assert.match(status, /requiresRobotPlayerDelta: robotRouteActive\(\)/);
   assert.doesNotMatch(status, /robotRoute: robotProbeTimingActive\(\)/);
+});
+
+/**
+ * ARCHITECTURE_BOUNDARIES.md section 7: "a configuration flag that turns off
+ * boot probing cannot also turn off Robot content authority, mapping
+ * readiness, or Robot Take quality semantics."
+ *
+ * `robotProbeTimingActive()` answers a strategy question and is allowed to
+ * read the flag. Everything that asks whether this room *is* a Robot pair must
+ * read the route, or `RELAY_CALIBRATION_PROBE=0` silently retires the mapping
+ * on a room plainly running one.
+ */
+test('the Robot route is a physical fact that no strategy flag may switch off', () => {
+  const route = functionBody('robotRouteActive');
+  assert.match(route, /backingRuntime\.isRobot \|\| sourceRuntime\.connected\(\)/);
+  assert.doesNotMatch(route, /PROBE_CALIBRATE/);
+
+  // The strategy predicate is the one place the flag belongs.
+  assert.match(functionBody('robotProbeTimingActive'), /PROBE_CALIBRATE && robotRouteActive\(\)/);
+
+  for (const name of [
+    'robotContentMappingReady',
+    'takeQualityFrameState',
+    'maybeAutoCalibrate',
+    'contentValidationPathReady',
+    'dropLegacyCalibrationForRobot',
+    'maybeReapplyBootCalibration',
+  ]) {
+    assert.doesNotMatch(
+      functionBody(name),
+      /robotProbeTimingActive\(\)/,
+      `${name} asks whether the room is on a Robot route, so it must read robotRouteActive()`,
+    );
+  }
+
+  // Content authority and its live-coordinate carry are route questions too.
+  const sync = functionBody('syncAppliedCalibration');
+  assert.match(sync, /robotContentAuthority = robotRouteActive\(\) && calibrationKind === 'content'/);
+  assert.doesNotMatch(functionBody('desiredCalibratedMicLagMs'), /robotProbeTimingActive\(\)/);
 });

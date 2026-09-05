@@ -106,6 +106,8 @@ type RobotContentTransitionState = {
   revision: number;
   context: RobotContentTransitionContext;
   playbackRate: number;
+  /** The content authority the carried evidence was classified against. */
+  confirmedReferenceLagMs: number | null;
   seekJumpMs: number;
   preDeltaMs: number;
   postDeltaMs: number;
@@ -211,10 +213,18 @@ export class RobotContentTransitionRuntime {
     );
     const seekJumpSamples = this.seekJumpSamples(seekJumpMs, input.playbackRate);
     const previous = this.state;
+    // Carrying evidence forward is only sound while the new transaction would
+    // classify it the same way. The generations say the streams are the same
+    // streams and the shifts say the media jump is the same jump, but the
+    // hypothesis positions are measured *from* the confirmed content authority:
+    // a validator that promotes a new lag mid-transition leaves already
+    // classified PRE ranges answering a question this attempt is no longer
+    // asking. Re-anchor instead of inheriting them.
     const compatiblePrevious = previous !== null
       && previous.bounds.phase === 'verifying'
       && contextMatches(previous.context, input.context)
       && previous.playbackRate === input.playbackRate
+      && previous.confirmedReferenceLagMs === input.confirmedReferenceLagMs
       && previous.preShiftSamples === preShiftSamples
       && this.seekJumpSamples(previous.seekJumpMs, previous.playbackRate) === seekJumpSamples
         ? previous
@@ -232,6 +242,7 @@ export class RobotContentTransitionRuntime {
       revision: this.revision,
       context: { ...input.context },
       playbackRate: input.playbackRate,
+      confirmedReferenceLagMs: input.confirmedReferenceLagMs,
       seekJumpMs,
       preDeltaMs: input.preDeltaMs,
       postDeltaMs: input.preDeltaMs + seekJumpMs,

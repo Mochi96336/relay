@@ -471,3 +471,54 @@ test('the post-seek hypothesis is looked for at the wall-time distance the rate 
   // postRawLag = 750 + (-500 ms of media)/2 = 500.
   assert.deepEqual(micStarts, [750, 500]);
 });
+
+test('a new content authority mid-transition cannot inherit the old one classifications', async () => {
+  // Same streams, same media jump, same rate - but the hypothesis positions are
+  // measured from the confirmed content authority. A validator that promotes a
+  // corrected lag while a transition is verifying leaves the PRE ranges it
+  // already classified answering the previous authority's question.
+  let now = 0;
+  const { runtime } = runtimeHarness({ now: () => now });
+  const begin = (confirmedReferenceLagMs: number | null) => runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs,
+    playbackRate: 1,
+  });
+
+  begin(750);
+  now = 1_000;
+  begin(750);
+  const carried = runtime.status();
+  assert.equal('ageMs' in carried ? carried.ageMs : null, 1_000, 'an unchanged authority is one continuing attempt');
+
+  now = 2_000;
+  begin(820);
+  const restarted = runtime.status();
+  assert.equal('ageMs' in restarted ? restarted.ageMs : null, 0, 'a moved authority starts a new transaction');
+});
+
+test('losing content authority entirely also refuses to inherit its classifications', async () => {
+  let now = 0;
+  const { runtime } = runtimeHarness({ now: () => now });
+  const begin = (confirmedReferenceLagMs: number | null) => runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs,
+    playbackRate: 1,
+  });
+
+  begin(750);
+  now = 1_000;
+  // Null means the lags now come from an anchor estimate instead, which is a
+  // different basis, not a weaker version of the same one.
+  begin(null);
+  const restarted = runtime.status();
+  assert.equal('ageMs' in restarted ? restarted.ageMs : null, 0);
+});

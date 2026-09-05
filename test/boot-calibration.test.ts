@@ -27,6 +27,7 @@ describe('boot calibration arithmetic', () => {
       backing: leg(1000, 1100),
       deltaMs: 0,
       sampleRate: RATE,
+      playbackRate: 1,
     });
 
     assert.equal(result.micLatencyMs, 500);
@@ -39,10 +40,10 @@ describe('boot calibration arithmetic', () => {
     // the backing timeline is 100 ms further on than what was sung against,
     // so the matching vocal is 100 ms further along too.
     const behind = combineBootCalibration({
-      mic: leg(1000, 1500), backing: leg(1000, 1100), deltaMs: 0, sampleRate: RATE,
+      mic: leg(1000, 1500), backing: leg(1000, 1100), deltaMs: 0, sampleRate: RATE, playbackRate: 1,
     });
     const ahead = combineBootCalibration({
-      mic: leg(1000, 1500), backing: leg(1000, 1100), deltaMs: 100, sampleRate: RATE,
+      mic: leg(1000, 1500), backing: leg(1000, 1100), deltaMs: 100, sampleRate: RATE, playbackRate: 1,
     });
 
     assert.equal(ahead.advanceMs - behind.advanceMs, 100);
@@ -50,14 +51,14 @@ describe('boot calibration arithmetic', () => {
 
   test('a robot running behind the phone subtracts from it', () => {
     const result = combineBootCalibration({
-      mic: leg(1000, 1500), backing: leg(1000, 1100), deltaMs: -250, sampleRate: RATE,
+      mic: leg(1000, 1500), backing: leg(1000, 1100), deltaMs: -250, sampleRate: RATE, playbackRate: 1,
     });
     assert.equal(result.advanceMs, 150);
   });
 
   test('identical paths with aligned players need no correction', () => {
     const result = combineBootCalibration({
-      mic: leg(1000, 1200), backing: leg(1000, 1200), deltaMs: 0, sampleRate: RATE,
+      mic: leg(1000, 1200), backing: leg(1000, 1200), deltaMs: 0, sampleRate: RATE, playbackRate: 1,
     });
     assert.equal(result.advanceMs, 0);
   });
@@ -71,6 +72,7 @@ describe('boot calibration arithmetic', () => {
       backing: leg(1000, 2900),
       deltaMs: -40,
       sampleRate: RATE,
+      playbackRate: 1,
     });
 
     assert.equal(result.micLatencyMs, 150);
@@ -84,7 +86,45 @@ describe('boot calibration arithmetic', () => {
       backing: leg(1000, 1150, 0.55),
       deltaMs: 0,
       sampleRate: RATE,
+      playbackRate: 1,
     });
     assert.equal(result.confidence, 0.55);
   });
+});
+
+test('the player delta is media time, so the rate converts it to the mixer advance', () => {
+  // The pipeline legs are wall-clock measurements and do not move with the
+  // rate; the player delta is a difference of two media positions and does.
+  const at = (playbackRate: number) => combineBootCalibration({
+    mic: leg(1000, 1500),
+    backing: leg(1000, 1100),
+    deltaMs: 400,
+    sampleRate: RATE,
+    playbackRate,
+  });
+
+  assert.equal(at(1).advanceMs, 800);
+  // 400 ms of media at 2x is 200 ms of real time.
+  assert.equal(at(2).advanceMs, 600);
+  // ...and at half speed it is 800 ms of it.
+  assert.equal(at(0.5).advanceMs, 1200);
+
+  for (const rate of [1, 2, 0.5]) {
+    assert.equal(at(rate).micLatencyMs, 500, 'a measured path latency is rate-independent');
+    assert.equal(at(rate).backingLatencyMs, 100);
+    assert.equal(at(rate).deltaMs, 400, 'the reported delta stays the media value the Robot sent');
+  }
+});
+
+test('a nonsense rate falls back to 1x rather than producing an infinite advance', () => {
+  for (const playbackRate of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const result = combineBootCalibration({
+      mic: leg(1000, 1500),
+      backing: leg(1000, 1100),
+      deltaMs: 400,
+      sampleRate: RATE,
+      playbackRate,
+    });
+    assert.equal(result.advanceMs, 800, `rate ${playbackRate} must not corrupt the advance`);
+  }
 });

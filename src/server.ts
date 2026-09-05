@@ -12,7 +12,7 @@ import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
-import { combineBootCalibration } from './boot-calibration.js';
+import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
@@ -530,6 +530,18 @@ function robotDeltaIsFresh(nowMs = performance.now()) {
  * applied total already carries a player-relative term measured in this
  * mapping".
  */
+/**
+ * The room's playback rate, as the mixer must read it.
+ *
+ * The single source for every media-to-wall conversion in the timing domain.
+ * A room with no Song, or one whose Source has not reported yet, is 1x by
+ * definition: there is no media clock running at any other speed.
+ */
+function currentPlaybackRate(nowMs = performance.now()) {
+  const rate = Number(currentTimelineStatus(nowMs).playbackRate);
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
+}
+
 function robotDeltaEverEstablished() {
   return Number.isFinite(robotPlayerOffset.lastReportedAtMs);
 }
@@ -634,6 +646,31 @@ function revokeRobotContentMapping({ reason }: { reason: string }) {
   broadcastJson(timingCalibrationStatusPayload());
 }
 
+/**
+ * Retires a Robot content mapping the room's playback rate has invalidated.
+ *
+ * The mapper folds media-time player deltas into a wall-time reference frame,
+ * so the rate is part of the mapping, not a parameter of reading it. Every
+ * delta already folded in was converted at the old rate; nothing can be
+ * rescaled in place. That makes a rate change the same class of event as a
+ * destructive seek, and it takes the same single revocation transaction.
+ *
+ * Boot-probe authority deliberately survives: a measured pipeline latency is
+ * wall time and says nothing about how fast the song is playing.
+ * `maybeReapplyBootCalibration()` folds the delta back in at the new rate.
+ */
+function revokeContentMappingOnRateChange(playbackRate: unknown) {
+  const rate = Number(playbackRate);
+  if (!Number.isFinite(rate) || rate <= 0) return false;
+  if (robotContentTimeline.matchesPlaybackRate(rate)) return false;
+
+  revokeRobotContentMapping({
+    reason: 'The room changed playback rate during calibration.'
+      + ' Rebuilding the Robot content mapping before calibration retries.',
+  });
+  return true;
+}
+
 function robotContentTransitionStatus(nowMs = performance.now()) {
   return robotContentTransitionRuntime.status(nowMs);
 }
@@ -674,6 +711,7 @@ function beginRobotContentTransition(
     referenceDeltaMs,
     context,
     confirmedReferenceLagMs,
+    playbackRate: currentPlaybackRate(nowMs),
   }, nowMs);
 }
 
@@ -691,6 +729,7 @@ function reconcileRobotContentTransitionWithFreshDelta(
     freshDeltaMs: robotContentTimeline.currentDeltaMs,
     referenceDeltaMs: robotContentTimeline.referenceDeltaMs,
     confirmedReferenceLagMs,
+    playbackRate: currentPlaybackRate(nowMs),
   }, nowMs);
 }
 
@@ -1220,7 +1259,9 @@ function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationA
 function bootProbeAdvanceMs(nowMs: number) {
   const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
   if (pathDifferenceMs === null) return null;
-  return pathDifferenceMs + currentDeltaMs(nowMs);
+  // The measured path difference is wall time and rate-independent; the player
+  // delta is media time and is not.
+  return pathDifferenceMs + mediaToWallMs(currentDeltaMs(nowMs), currentPlaybackRate(nowMs));
 }
 
 /**
@@ -2339,6 +2380,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     backing: leg,
     deltaMs: currentDeltaMs(nowMs),
     sampleRate: MIX_SAMPLE_RATE,
+    playbackRate: currentPlaybackRate(nowMs),
   });
 
   if (PROBE_DEBUG) {
@@ -2664,6 +2706,7 @@ const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAccepta
   registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
   clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
   cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
+  revokeContentMappingOnRateChange: (playbackRate) => revokeContentMappingOnRateChange(playbackRate),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
   reportTimelineStatus: (status) => broadcastJson(status),
   reportRoomStatus: (nowMs) => broadcastJson(youtubeTimeline.roomStatusPayload(nowMs)),
@@ -3099,6 +3142,7 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
       robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
       calibrationContext(),
       nowMs,
+      currentPlaybackRate(nowMs),
     );
     if (mapped) requestRobotBackingBoundary(nowMs);
     return;

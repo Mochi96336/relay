@@ -10,6 +10,7 @@ import {
   type RobotContentTransitionBounds,
   type RobotContentTransitionBoundsConfig,
 } from './robot-content-transition-bounds.js';
+import { mediaToWallMs } from './boot-calibration.js';
 import {
   compareRobotContentHypothesesInWorker,
   estimateRobotContentRawLagInWorker,
@@ -89,11 +90,22 @@ export type RobotContentTransitionBeginInput = {
   referenceDeltaMs: number;
   context: RobotContentTransitionContext;
   confirmedReferenceLagMs: number | null;
+  /**
+   * The rate the mapper converts media deltas at.
+   *
+   * Every quantity a transition reasons about except the raw lags is media
+   * time - the seek jump, both player deltas - while the windows it compares
+   * are indexed in capture samples. A transition that assumed 1x looked for
+   * post-seek content at twice its real offset in a 2x room and could only
+   * fail closed.
+   */
+  playbackRate: number;
 };
 
 type RobotContentTransitionState = {
   revision: number;
   context: RobotContentTransitionContext;
+  playbackRate: number;
   seekJumpMs: number;
   preDeltaMs: number;
   postDeltaMs: number;
@@ -194,15 +206,17 @@ export class RobotContentTransitionRuntime {
   begin(input: RobotContentTransitionBeginInput, nowMs = this.now()) {
     const seekJumpMs = (input.toMediaTime - input.fromMediaTime) * 1_000;
     const preShiftSamples = Math.round(
-      ((input.preDeltaMs - input.referenceDeltaMs) * this.sampleRate) / 1_000,
+      (mediaToWallMs(input.preDeltaMs - input.referenceDeltaMs, input.playbackRate)
+        * this.sampleRate) / 1_000,
     );
-    const seekJumpSamples = Math.round((seekJumpMs * this.sampleRate) / 1_000);
+    const seekJumpSamples = this.seekJumpSamples(seekJumpMs, input.playbackRate);
     const previous = this.state;
     const compatiblePrevious = previous !== null
       && previous.bounds.phase === 'verifying'
       && contextMatches(previous.context, input.context)
+      && previous.playbackRate === input.playbackRate
       && previous.preShiftSamples === preShiftSamples
-      && Math.round((previous.seekJumpMs * this.sampleRate) / 1_000) === seekJumpSamples
+      && this.seekJumpSamples(previous.seekJumpMs, previous.playbackRate) === seekJumpSamples
         ? previous
         : null;
     const carriedNextWindowStart = compatiblePrevious?.nextWindowStart ?? null;
@@ -217,6 +231,7 @@ export class RobotContentTransitionRuntime {
     const state: RobotContentTransitionState = {
       revision: this.revision,
       context: { ...input.context },
+      playbackRate: input.playbackRate,
       seekJumpMs,
       preDeltaMs: input.preDeltaMs,
       postDeltaMs: input.preDeltaMs + seekJumpMs,
@@ -240,8 +255,9 @@ export class RobotContentTransitionRuntime {
     this.state = state;
 
     if (input.confirmedReferenceLagMs !== null) {
-      state.preRawLagMs = input.confirmedReferenceLagMs + input.preDeltaMs - input.referenceDeltaMs;
-      state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
+      state.preRawLagMs = input.confirmedReferenceLagMs
+        + mediaToWallMs(input.preDeltaMs - input.referenceDeltaMs, input.playbackRate);
+      state.postRawLagMs = state.preRawLagMs + mediaToWallMs(state.seekJumpMs, state.playbackRate);
       return;
     }
 
@@ -271,8 +287,9 @@ export class RobotContentTransitionRuntime {
         return;
       }
       if (anchor === null) return;
-      state.preRawLagMs = anchor.rawLagMs + input.preDeltaMs - input.referenceDeltaMs;
-      state.postRawLagMs = state.preRawLagMs + state.seekJumpMs;
+      state.preRawLagMs = anchor.rawLagMs
+        + mediaToWallMs(input.preDeltaMs - input.referenceDeltaMs, input.playbackRate);
+      state.postRawLagMs = state.preRawLagMs + mediaToWallMs(state.seekJumpMs, state.playbackRate);
       this.maybeAnalyze(completedAt);
     }, () => {
       if (!this.current(state) || state.bounds.phase === 'degraded') return;
@@ -291,6 +308,7 @@ export class RobotContentTransitionRuntime {
     freshDeltaMs: number | null;
     referenceDeltaMs: number | null;
     confirmedReferenceLagMs: number | null;
+    playbackRate: number;
   }, nowMs = this.now()) {
     const state = this.state;
     if (
@@ -315,6 +333,7 @@ export class RobotContentTransitionRuntime {
       referenceDeltaMs: input.referenceDeltaMs,
       context: input.context,
       confirmedReferenceLagMs: input.confirmedReferenceLagMs,
+      playbackRate: input.playbackRate,
     }, nowMs);
     return this.state !== null;
   }
@@ -416,6 +435,11 @@ export class RobotContentTransitionRuntime {
     if (state === null || state.bounds.phase === 'degraded') return false;
     if (!sweepRobotContentTransitionBounds(state.bounds, nowMs)) return false;
     return this.settleDegraded(state, nowMs);
+  }
+
+  /** Media-time jump expressed in capture samples, which advance in wall time. */
+  private seekJumpSamples(seekJumpMs: number, playbackRate: number) {
+    return Math.round((mediaToWallMs(seekJumpMs, playbackRate) * this.sampleRate) / 1_000);
   }
 
   private current(state: RobotContentTransitionState) {

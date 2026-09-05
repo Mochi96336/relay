@@ -26,6 +26,7 @@ function beginShifted(runtime: RobotContentTransitionRuntime, nowMs: number) {
     referenceDeltaMs: 500,
     context,
     confirmedReferenceLagMs: 750,
+    playbackRate: 1,
   }, nowMs);
 }
 
@@ -187,6 +188,7 @@ test('repeated compare-worker failure degrades fail-closed without committing ma
     referenceDeltaMs: 500,
     context,
     confirmedReferenceLagMs: 750,
+    playbackRate: 1,
   }, 100);
   const request = runtime.requestBackingBoundary(3)!;
   assert.equal(runtime.acceptBackingBoundary({
@@ -227,6 +229,7 @@ test('repeated compare-worker failure degrades fail-closed without committing ma
     referenceDeltaMs: 500,
     context,
     confirmedReferenceLagMs: 750,
+    playbackRate: 1,
   }, 200);
   const fresh = runtime.status(200);
   assert.equal(fresh.state, 'verifying');

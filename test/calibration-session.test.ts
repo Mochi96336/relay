@@ -889,3 +889,60 @@ describe('CalibrationSession with the real analyser', () => {
     assert.ok(Math.abs((status.micLagMs ?? 0) - 320) <= 15, `got ${status.micLagMs} ms`);
   });
 });
+
+describe('measurement provenance', () => {
+  test('an answer is stamped with the setup its own audio came from', async () => {
+    const pending = deferred<TimingCalibrationAnalysis>();
+    const harness = makeSession({ analyze: () => pending.promise });
+
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED, REQUIRED);
+
+    // The room moves on while the worker is still correlating. Every caller
+    // that does this is expected to abort the run; this proves the answer is
+    // fenced even when one does not.
+    harness.context = { ...harness.context, backingGeneration: 21 };
+    pending.resolve(analysis(240));
+    await nextTurn();
+    await nextTurn();
+
+    assert.equal(harness.calibration.result, null, 'evidence from a departed setup must not become authority');
+    assert.equal(harness.calibration.confirmedResult, null);
+    assert.equal(harness.calibration.status().state, 'failed');
+    assert.match(String(harness.calibration.status().error), /capture arrangement changed/i);
+  });
+
+  test('an unchanged setup promotes exactly as before', async () => {
+    const pending = deferred<TimingCalibrationAnalysis>();
+    const harness = makeSession({ analyze: () => pending.promise });
+
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED, REQUIRED);
+    pending.resolve(analysis(240));
+    await nextTurn();
+    await nextTurn();
+
+    assert.equal(harness.calibration.result?.micLagMs, 240);
+    assert.equal(harness.calibration.confirmedResult?.micLagMs, 240);
+    assert.equal(harness.calibration.isStaleFor(harness.context), false);
+  });
+
+  test('a confirmed answer is stale against the setup that replaced it, not the one it measured', async () => {
+    const pending = deferred<TimingCalibrationAnalysis>();
+    const harness = makeSession({ analyze: () => pending.promise });
+    const measured = { ...harness.context };
+
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED, REQUIRED);
+    pending.resolve(analysis(240));
+    await nextTurn();
+    await nextTurn();
+
+    assert.equal(harness.calibration.isStaleFor(measured), false);
+    assert.equal(
+      harness.calibration.isStaleFor({ ...measured, micGeneration: 11 }),
+      true,
+      'the stamp has to be the measured setup for staleness to mean anything',
+    );
+  });
+});

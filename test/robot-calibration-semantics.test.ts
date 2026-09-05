@@ -114,10 +114,19 @@ test('Robot recalibration adapter preserves old authority until candidate promot
     /calibration\.transactionActive/,
     'delta reapply must not accidentally promote old probe evidence through a new candidate transaction',
   );
+  // Asserted as the two halves of the rule rather than one literal expression:
+  // the decision must come from confirmed authority and must never come from the
+  // in-flight candidate. Matching a single spelling made an equivalent hoist
+  // look like a contract break.
   assert.match(
     reapply,
-    /appliedCalibrationKind\(\) !== 'boot-probe'/,
-    'boot reapply must follow confirmed authority provenance rather than the replacement candidate kind',
+    /appliedCalibrationKind\(\)/,
+    'boot reapply must follow confirmed authority provenance',
+  );
+  assert.doesNotMatch(
+    reapply,
+    /timingRuntime\.calibrationKind/,
+    'boot reapply must not follow the replacement candidate kind',
   );
 
   const appliedKind = source.match(/function appliedCalibrationKind\([\s\S]*?\n\}/)?.[0] ?? '';

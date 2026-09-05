@@ -121,6 +121,32 @@ Provenance decisions - which result a validator baselines against, which
 reference frame a media transition may carry forward - read applied authority.
 Reading the candidate there attributes one strategy's measurement to another.
 
+### A measurement is a stage only if it occupies the room
+
+Timing is measured by strategies that cost the room very different things, and
+product state must follow the cost, not the word "calibration".
+
+- The **boot probe** plays its own chimes through the phone and the Robot
+  output and needs both captures to itself. While it runs the room really is
+  getting ready, so it is a preparation stage: the lifecycle says `preparing`
+  and a Take waits for it.
+- **Content calibration** is a tap on audio the room is already making. It
+  changes nothing the singer hears and holds nothing up, so presenting the room
+  as preparing - or refusing a Take - would be describing a measurement rather
+  than the room.
+
+The same distinction decides what the timing surface reports. A background run
+deliberately leaves the previous confirmed result serving the mixer, so the
+room's timing state is that applied authority; `calibrating` is the honest
+answer only while nothing trustworthy is applied, where it also outranks
+`stale`/`fallback`, whose recovery is the recalibration already running.
+
+Not being a stage is not permission to run through a Take. A Take that starts
+while a content run is collecting stands that run down, because confirming it
+would move the mixer's alignment into the middle of the recording. Standing
+down is not a failure and must not be reported as one. This is the same policy
+as refusing to *begin* content work during a Take, applied from the other side.
+
 ### Strategy preference is bounded and terminates both ways
 
 A bounded fast strategy is a baseline, not a gate on the strategies that

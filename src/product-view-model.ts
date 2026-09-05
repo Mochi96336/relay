@@ -66,6 +66,14 @@ export type ProductViewModelInput = {
     requiresRobotPlayerDelta: boolean;
     /** Whether manual calibration should use the Robot boot-probe path. */
     robotProbeTimingActive?: boolean;
+    /**
+     * Whether the measurement in flight is the audible boot probe.
+     *
+     * `robotProbeTimingActive` is which strategy a *new* run would use;
+     * this is what the run happening now actually is. Only the probe occupies
+     * the room, so only the probe is a preparation stage.
+     */
+    bootProbeActive?: boolean;
     /** Whether a content-mode calibration can accept Robot backing evidence now. */
     contentEvidenceReady?: boolean;
     robotDeltaFresh: boolean;
@@ -119,6 +127,26 @@ function calibrationActive(input: ProductViewModelInput) {
     || input.timing.calibrationState === 'collecting';
 }
 
+/**
+ * The half of calibration that is a stage the room waits in.
+ *
+ * The boot probe plays its own chimes through the phone and the Robot output
+ * and needs both captures to itself, so while it runs the room really is
+ * getting ready. Content calibration only listens to audio the room is already
+ * making: it changes nothing the singer hears, so presenting the room as
+ * preparing - or refusing a Take - would describe a measurement, not the room.
+ */
+function preparingCalibrationActive(input: ProductViewModelInput) {
+  return calibrationActive(input) && input.timing.bootProbeActive === true;
+}
+
+/** Whether an acoustic measurement is the alignment the mixer is actually serving. */
+function acousticAlignmentServing(input: ProductViewModelInput) {
+  return input.timing.timingMode === 'acoustic-calibration'
+    && input.readiness.components.calibration.valid
+    && (!input.timing.requiresRobotPlayerDelta || input.timing.robotDeltaFresh);
+}
+
 function micState(input: ProductViewModelInput): RoomMicState {
   const mic = input.readiness.components.mic;
   return deriveRoomMicState({
@@ -137,7 +165,7 @@ function productLifecycle(input: ProductViewModelInput): ProductLifecycle {
   const songLoaded = input.roomSong.videoId !== null;
   if (
     input.roomSong.handoffState !== 'idle'
-    || (songLoaded && calibrationActive(input))
+    || (songLoaded && preparingCalibrationActive(input))
   ) {
     return 'preparing';
   }
@@ -165,17 +193,21 @@ function timingState(
 ): ProductStatus['timing']['state'] {
   const songLoaded = input.roomSong.videoId !== null;
   if (!songLoaded) return 'idle';
-  if (calibrationActive(input)) return 'calibrating';
+  if (preparingCalibrationActive(input)) return 'calibrating';
   const performanceActive = input.roomSong.state === 1
     && (lifecycle === 'live' || lifecycle === 'recording');
-  if (!performanceActive) return 'idle';
+  if (!performanceActive) return calibrationActive(input) ? 'calibrating' : 'idle';
   if (input.timing.alignmentClamped) return 'clamped';
+  // Applied authority, not the candidate being measured. A background content
+  // run deliberately leaves the previous confirmed result serving, so reading
+  // the run here would report a room whose alignment is live and correct as
+  // one that is still getting ready.
+  if (acousticAlignmentServing(input) && !input.timing.calibrationStale) return 'aligned';
+  // Nothing trustworthy is serving. A measurement already in flight *is* the
+  // recovery, so say that rather than asking for a recalibration that is
+  // already running.
+  if (calibrationActive(input)) return 'calibrating';
   if (input.timing.calibrationStale) return 'stale';
-  if (
-    input.timing.timingMode === 'acoustic-calibration'
-    && input.readiness.components.calibration.valid
-    && (!input.timing.requiresRobotPlayerDelta || input.timing.robotDeltaFresh)
-  ) return 'aligned';
   return 'fallback';
 }
 
@@ -231,7 +263,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
 
   const startTake = decideTakeStart({
     sessionActive: input.readiness.components.session.active,
-    timingCalibrationActive: calibrationActive(input),
+    bootProbeCalibrationActive: preparingCalibrationActive(input),
     songLoaded: input.roomSong.videoId !== null,
     voiceOnlyMicState: mic,
     roomBlocked: health === 'blocked',

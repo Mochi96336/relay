@@ -349,6 +349,43 @@ export class CalibrationSession {
   }
 
   /**
+   * Stands a collection down without calling it a failure.
+   *
+   * Content calibration is a tap on the live audio, so something else taking
+   * priority - a Take starting on the same audio this run is measuring - is not
+   * evidence that the measurement went wrong. `fail()` would publish an error
+   * the room never caused and would be read as a timing problem; this returns
+   * the session to its settled phase with the confirmed authority still
+   * serving, so the next automatic run starts clean.
+   *
+   * Only a collection can be stood down. A probe transaction opened by
+   * `beginExternalRecalibration()` is never `collecting`, and it owns its own
+   * lifecycle.
+   */
+  abandon() {
+    if (!this.collecting) return false;
+    this.invalidatePendingAnalysis();
+    this.rollbackProvisional();
+    this.transactionActiveValue = false;
+    this.phase = this.confirmedResultValue === null ? 'idle' : 'complete';
+    this.error = null;
+    this.candidates = [];
+    // Working diagnostics belong to the run that was stood down. Confidence and
+    // segment lags revert to whatever the confirmed snapshot earned, so status
+    // never reports an abandoned candidate's numbers as the room's answer.
+    this.confidence = this.confirmedResultValue?.confidence ?? null;
+    this.segmentLagsMs = this.confirmedResultValue === null
+      ? []
+      : [...this.confirmedResultValue.segmentLagsMs];
+    this.micLevelDbfs = null;
+    this.backingLevelDbfs = null;
+    this.collector.reset();
+    this.primedContext = null;
+    this.onSettled();
+    return true;
+  }
+
+  /**
    * Applies a result measured outside normal content collection, used by the
    * known robot probe path. Probe evidence is unambiguous by construction and
    * therefore settles directly to complete.

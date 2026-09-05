@@ -30,6 +30,7 @@ function model(
   takeLifecycle: 'idle' | 'recording' = 'idle',
   calibrationActive = false,
   robotProbeTimingActive = true,
+  bootProbeActive = false,
 ) {
   return buildProductViewModel({
     readiness: buildReadiness(readinessInput),
@@ -57,6 +58,7 @@ function model(
       alignmentClamped: false,
       requiresRobotPlayerDelta: robotProbeTimingActive,
       robotProbeTimingActive,
+      bootProbeActive,
       robotDeltaFresh: true,
     },
   });
@@ -95,8 +97,8 @@ test('a blocked Song keeps its concrete ProductIssue even before the mix becomes
   assert.equal(status.actions.startTakeBlockingIssue?.cause, 'backing-not-ready');
 });
 
-test('active calibration disables Start Take even though calibration is normal preparation', () => {
-  const status = model(READY, 'idle', true);
+test('an audible boot probe disables Start Take because it is normal preparation', () => {
+  const status = model(READY, 'idle', true, true, true);
 
   assert.equal(status.lifecycle, 'preparing');
   assert.equal(status.health, 'healthy');
@@ -106,6 +108,19 @@ test('active calibration disables Start Take even though calibration is normal p
   assert.equal(status.actions.canStartCalibration, false);
   assert.equal(status.actions.startCalibrationBlockedReason, 'calibration-active');
   assert.equal(status.actions.startCalibrationMode, 'boot-probe');
+});
+
+test('a background content measurement leaves Start Take available', () => {
+  // The room is singing normally; the run is a tap on that same audio. It still
+  // occupies the calibration path - a second run cannot start - but nothing
+  // about a recording has to wait for it.
+  const status = model(READY, 'idle', true);
+
+  assert.equal(status.lifecycle, 'live');
+  assert.equal(status.actions.canStartTake, true);
+  assert.equal(status.actions.startTakeBlockedReason, null);
+  assert.equal(status.actions.canStartCalibration, false);
+  assert.equal(status.actions.startCalibrationBlockedReason, 'calibration-active');
 });
 
 test('an active Take remains stoppable even if Robot health becomes blocked', () => {

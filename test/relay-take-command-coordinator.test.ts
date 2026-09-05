@@ -19,6 +19,10 @@ test('Take start preserves boundary, validation, commit and acceptance ordering'
       calls.push(`cancel-validation:${nowMs}`);
       return true;
     },
+    standDownContentCalibration: () => {
+      calls.push('stand-down-calibration');
+      return true;
+    },
     reportTimingStatus: () => calls.push('timing-status'),
     startTake: (participantId, song, position, wallClockMs) => {
       calls.push(`start:${participantId}:${song.videoId}:${position.firstSampleIndex}:${wallClockMs}`);
@@ -42,11 +46,13 @@ test('Take start preserves boundary, validation, commit and acceptance ordering'
     'cancel-validation:100',
     'timing-status',
     'start:participant-1:video:480:1010',
+    'stand-down-calibration',
+    'timing-status',
     'accept-start:take-1',
   ]);
 });
 
-test('Take start rejects a controller race after the same pre-commit effects', () => {
+test('a rejected Take start leaves the background content measurement running', () => {
   const calls: string[] = [];
   const coordinator = createRelayTakeCommandCoordinator({
     frameBoundary: () => ({ atMs: 20, position: 30 }),
@@ -54,6 +60,10 @@ test('Take start rejects a controller race after the same pre-commit effects', (
     cancelActiveContentValidation: () => {
       calls.push('cancel-validation');
       return false;
+    },
+    standDownContentCalibration: () => {
+      calls.push('stand-down-calibration');
+      return true;
     },
     reportTimingStatus: () => calls.push('timing-status'),
     startTake: () => {
@@ -84,6 +94,10 @@ test('Take stop preserves boundary, controller commit and duplicate acceptance',
     },
     songSnapshot: () => null,
     cancelActiveContentValidation: () => false,
+    standDownContentCalibration: () => {
+      calls.push('stand-down-calibration');
+      return true;
+    },
     reportTimingStatus: () => calls.push('timing-status'),
     startTake: () => ({ ok: false as const, reason: 'unused' }),
     stopTake: (takeId, participantId, position, reason, wallClockMs) => {

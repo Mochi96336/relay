@@ -1654,6 +1654,7 @@ function productStatusPayload(nowMs = performance.now()) {
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
       requiresRobotPlayerDelta: robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe',
       robotProbeTimingActive: robotProbeTimingActive(),
+      bootProbeActive: bootProbeInProgress(nowMs),
       contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
     },
@@ -2414,6 +2415,7 @@ const takeCommandCoordinator = createRelayTakeCommandCoordinator<
   frameBoundary: (nowMs) => takeFrameBoundary(nowMs),
   songSnapshot: (atMs) => takeSongSnapshot(atMs),
   cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
+  standDownContentCalibration: () => calibration.abandon(),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
   startTake: (participantId, song, position, wallClockMs) =>
     takeController.start(participantId, song, position, wallClockMs),

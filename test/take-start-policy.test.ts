@@ -5,23 +5,34 @@ import { decideTakeStart, type TakeStartFacts } from '../src/take-start-policy.j
 
 const READY: TakeStartFacts = {
   sessionActive: true,
-  timingCalibrationActive: false,
+  bootProbeCalibrationActive: false,
   songLoaded: true,
   voiceOnlyMicState: 'live',
   roomBlocked: false,
   takeLifecycle: 'idle',
 };
 
-test('active timing calibration remains the normal preparation reason', () => {
+test('an audible boot probe remains the normal preparation reason', () => {
   assert.deepEqual(
     decideTakeStart({
       ...READY,
       sessionActive: false,
-      timingCalibrationActive: true,
+      bootProbeCalibrationActive: true,
       roomBlocked: true,
       takeLifecycle: 'recording',
     }),
     { ok: false, reason: 'timing-calibration-active' },
+  );
+});
+
+test('a background content measurement does not hold a Take back', () => {
+  // Content calibration only listens to audio the room is already making, so
+  // there is nothing for a recording to wait for. Only the probe, which puts
+  // its own chimes in the room, is a reason to refuse.
+  assert.deepEqual(decideTakeStart({ ...READY }), { ok: true });
+  assert.deepEqual(
+    decideTakeStart({ ...READY, songLoaded: false, voiceOnlyMicState: 'live' }),
+    { ok: true },
   );
 });
 

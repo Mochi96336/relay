@@ -63,6 +63,9 @@ function cleanQuality() {
     alignmentClampedMs: 0,
     robotDeltaMissingSamples: 0,
     robotDeltaMissingMs: 0,
+    timingDivergedSamples: 0,
+    timingDivergedMs: 0,
+    peakTimingDivergenceMs: 0,
     events: {
       'mic-transport-disconnected': 0,
       'mic-transport-connected': 0,

@@ -115,6 +115,7 @@ test('voice-only quality ignores intentionally absent backing and timing evidenc
     alignmentClamped: true,
     robotRoute: true,
     robotDeltaFresh: false,
+    timingDivergenceMs: 500,
   }, {
     micGapSamples: 0,
     backingGapSamples: 960,

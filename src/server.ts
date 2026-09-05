@@ -1191,6 +1191,67 @@ function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationA
 }
 
 /**
+ * The boot baseline's live total: measured pipeline path, plus where the
+ * player currently is.
+ *
+ * One expression with two readers - the applier in
+ * `maybeReapplyBootCalibration()` and the observer in
+ * `desiredCalibratedMicLagMs()`. They must never be able to disagree about
+ * what the boot strategy currently wants.
+ */
+function bootProbeAdvanceMs(nowMs: number) {
+  const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
+  if (pathDifferenceMs === null) return null;
+  return pathDifferenceMs + currentDeltaMs(nowMs);
+}
+
+/**
+ * A content result carried from the mapper's stable reference frame into live
+ * coordinates. Same two-reader rule as `bootProbeAdvanceMs()`.
+ */
+function contentLiveLagMs(referenceLagMs: number, nowMs: number) {
+  return robotContentTimeline.liveLagMs(referenceLagMs, calibrationContext(), nowMs);
+}
+
+/**
+ * What the mixer's Mic advance would be if it were free to follow the mapping.
+ *
+ * `syncAppliedCalibration()` deliberately freezes the applied alignment for the
+ * whole of a Take, because moving the read head mid-recording splices the voice
+ * audibly. What is *not* frozen is the mapping underneath it: the Robot player
+ * delta keeps drifting, and a preserving follower correction commits a new
+ * content mapping without ever invalidating the measurement - so neither
+ * `calibrationStale` nor any transport event fires. The recording is then
+ * aligned to a mapping that is no longer the room's, and every existing quality
+ * signal still reads clean.
+ *
+ * This computes the value the appliers would install, without installing it, so
+ * a Take can record how far it drifted from the alignment it was handed.
+ * `null` means there is no current answer to diverge from - which the
+ * timing-fallback, calibration-stale and robot-delta-missing signals already
+ * describe.
+ */
+function desiredCalibratedMicLagMs(nowMs: number): number | null {
+  const kind = appliedCalibrationKind();
+
+  if (robotProbeTimingActive() && kind === 'boot-probe') {
+    if (calibration.result === null || calibrationIsStale()) return null;
+    if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return null;
+    // With no Song there is no player-relative term, exactly as the applier
+    // reads it: the measured path difference is the whole correction.
+    if (!roomHasSong(nowMs)) return bootProbeRuntime.pathDifferenceMs;
+    if (calibrationApplicability(kind) !== 'apply') return null;
+    return bootProbeAdvanceMs(nowMs);
+  }
+
+  if (calibrationApplicability(kind) !== 'apply') return null;
+  const result = calibration.result;
+  if (result === null) return null;
+  if (!robotProbeTimingActive() || kind !== 'content') return result.micLagMs;
+  return contentLiveLagMs(result.micLagMs, nowMs);
+}
+
+/**
  * Synchronizes measurement validity into the mixer's active alignment.
  *
  * A boot result needs special treatment: once freshness/connection withdraws
@@ -1285,11 +1346,7 @@ function syncAppliedCalibration() {
   let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;
   const robotContentAuthority = robotProbeTimingActive() && calibrationKind === 'content';
   if (nextMicLagMs !== null && robotContentAuthority) {
-    nextMicLagMs = robotContentTimeline.liveLagMs(
-      nextMicLagMs,
-      calibrationContext(),
-      performance.now(),
-    );
+    nextMicLagMs = contentLiveLagMs(nextMicLagMs, performance.now());
   }
 
   // The Robot offset tracker is deliberately smoothed, but its residual noise is
@@ -1365,6 +1422,7 @@ function sourceStatusPayload() {
 
 function takeQualityFrameState(nowMs = performance.now()) {
   const alignment = session.alignment;
+  const desiredMicLagMs = desiredCalibratedMicLagMs(nowMs);
   return {
     timingMode: alignment.calibratedMicLagMs === null
       ? 'network-estimate' as const
@@ -1373,6 +1431,12 @@ function takeQualityFrameState(nowMs = performance.now()) {
     alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
     robotRoute: robotProbeTimingActive(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    // How far the frozen recording alignment has drifted from the mapping the
+    // room is actually on. Null while there is no applicable answer to compare
+    // against; the other timing signals own that case.
+    timingDivergenceMs: desiredMicLagMs === null || alignment.calibratedMicLagMs === null
+      ? null
+      : desiredMicLagMs - alignment.calibratedMicLagMs,
   };
 }
 
@@ -2312,7 +2376,8 @@ function maybeReapplyBootCalibration(nowMs: number) {
   if (!robotDeltaIsFresh(nowMs)) return;
   if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return;
 
-  const advanceMs = bootProbeRuntime.pathDifferenceMs + currentDeltaMs(nowMs);
+  const advanceMs = bootProbeAdvanceMs(nowMs);
+  if (advanceMs === null) return;
   const applied = session.alignment.calibratedMicLagMs;
   if (applied !== null && Math.abs(advanceMs - applied) < BOOT_DELTA_REAPPLY_MS) return;
 

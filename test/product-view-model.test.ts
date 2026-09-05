@@ -182,7 +182,32 @@ describe('product lifecycle and health', () => {
     assert.equal(model.room.song.state, 'handoff');
   });
 
-  test('turns normal calibration collection into preparing rather than degradation', () => {
+  test('turns an audible boot probe into preparing rather than degradation', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ calibrationState: 'idle', calibrationValid: false }),
+      timing: {
+        timingMode: 'network-estimate',
+        calibrationState: 'idle',
+        calibrationActive: true,
+        bootProbeActive: true,
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: false,
+      },
+    }));
+
+    assert.equal(model.lifecycle, 'preparing');
+    assert.equal(model.health, 'healthy');
+    assert.equal(model.timing.state, 'calibrating');
+    assert.equal(model.actions.canStartTake, false);
+    assert.equal(model.actions.startTakeBlockedReason, 'timing-calibration-active');
+  });
+
+  test('leaves the room live while a background content measurement runs', () => {
+    // Content calibration only listens to audio the room is already making.
+    // Presenting a singing room as getting ready - or refusing a Take - would
+    // describe the measurement rather than the room.
     const model = buildProductViewModel(input({
       readiness: readiness({ calibrationState: 'collecting', calibrationValid: false }),
       timing: {
@@ -195,9 +220,32 @@ describe('product lifecycle and health', () => {
       },
     }));
 
-    assert.equal(model.lifecycle, 'preparing');
-    assert.equal(model.health, 'healthy');
+    assert.equal(model.lifecycle, 'live');
     assert.equal(model.timing.state, 'calibrating');
+    assert.equal(model.actions.canStartTake, true);
+    assert.equal(model.actions.startTakeBlockedReason, null);
+  });
+
+  test('reports the alignment being served, not the replacement being measured', () => {
+    // CalibrationSession deliberately keeps the confirmed result serving while
+    // a replacement collects, so the room's timing state is that applied
+    // authority - reading the candidate would call an aligned room unready.
+    const model = buildProductViewModel(input({
+      readiness: readiness({ calibrationState: 'collecting' }),
+      timing: {
+        timingMode: 'acoustic-calibration',
+        calibrationState: 'collecting',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: true,
+      },
+    }));
+
+    assert.equal(model.lifecycle, 'live');
+    assert.equal(model.health, 'healthy');
+    assert.equal(model.timing.state, 'aligned');
+    assert.equal(model.actions.canStartTake, true);
   });
 
   test('keeps recording as the primary lifecycle while timing falls back', () => {

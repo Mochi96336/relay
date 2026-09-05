@@ -187,6 +187,52 @@ describe('CalibrationSession lifecycle', () => {
     assert.equal(calibration.status().state, 'idle');
     assert.equal(calibration.status().micLagMs, null);
   });
+
+  test('standing a collection down does not report it as a failure', () => {
+    // Something else taking priority is not evidence the measurement went
+    // wrong, so the room must not be told a calibration error occurred.
+    const harness = makeSession();
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED / 2, REQUIRED / 2);
+
+    assert.equal(harness.calibration.abandon(), true);
+    assert.equal(harness.calibration.status().state, 'idle');
+    assert.equal(harness.calibration.status().error, null);
+    assert.equal(harness.calibration.transactionActive, false);
+    assert.equal(harness.settled, 1);
+
+    harness.calibration.start(0);
+    assert.equal(harness.calibration.status().progress, 0, 'no leftovers from the abandoned run');
+  });
+
+  test('standing down keeps the confirmed answer serving', () => {
+    let lag = 240;
+    const { calibration } = makeSession({ analyze: () => analysis(lag) });
+    calibration.start(0);
+    fill(calibration, REQUIRED, REQUIRED);
+    assert.equal(calibration.result?.micLagMs, 240);
+
+    lag = 999;
+    calibration.start(0);
+    fill(calibration, REQUIRED / 2, REQUIRED / 2);
+    assert.equal(calibration.abandon(), true);
+
+    assert.equal(calibration.status().state, 'complete');
+    assert.equal(calibration.status().error, null);
+    assert.equal(calibration.result?.micLagMs, 240);
+    assert.equal(calibration.confirmedResult?.micLagMs, 240);
+  });
+
+  test('there is nothing to stand down outside a collection', () => {
+    const harness = makeSession();
+    assert.equal(harness.calibration.abandon(), false);
+
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED, REQUIRED);
+    assert.equal(harness.calibration.status().state, 'complete');
+    assert.equal(harness.calibration.abandon(), false, 'a settled answer is not a run in flight');
+    assert.equal(harness.calibration.result?.micLagMs, 240);
+  });
 });
 
 describe('CalibrationSession asynchronous analysis', () => {
@@ -258,6 +304,28 @@ describe('CalibrationSession asynchronous analysis', () => {
     assert.equal(harness.calibration.status().state, 'idle');
     assert.equal(harness.calibration.result, null);
     assert.equal(harness.settled, 0);
+  });
+
+  test('ignores a worker answer after the collection is stood down', async () => {
+    const result = deferred<TimingCalibrationAnalysis>();
+    let workerSignal: AbortSignal | undefined;
+    const harness = makeSession({
+      analyze: (_mic, _backing, _rate, _maxLagMs, signal) => {
+        workerSignal = signal;
+        return result.promise;
+      },
+    });
+    harness.calibration.start(0);
+    fill(harness.calibration, REQUIRED, REQUIRED);
+
+    assert.equal(workerSignal?.aborted, false);
+    assert.equal(harness.calibration.abandon(), true);
+    assert.equal(workerSignal?.aborted, true, 'a stood-down run cancels the work it can no longer use');
+    result.resolve(analysis(999));
+    await nextTurn();
+
+    assert.equal(harness.calibration.status().state, 'idle');
+    assert.equal(harness.calibration.result, null);
   });
 
   test('retains the next agreement window while the first is being analyzed', async () => {
@@ -591,6 +659,18 @@ describe('CalibrationSession provisional application', () => {
     // The applied value is the newest agreeing window's own reading (250), not
     // the discarded provisional guess (175) or an earlier agreeing one (244).
     assert.equal(calibration.result?.micLagMs, 250);
+  });
+
+  test('standing a run down revokes the provisional value it applied', () => {
+    const calibration = makeProvisional([[175, 0.7], [-600, 0.5], [-320, 0.5]], 0.55);
+    calibration.start(0);
+    window(calibration, 0);
+    assert.equal(calibration.result?.micLagMs, 175);
+
+    assert.equal(calibration.abandon(), true);
+    assert.equal(calibration.result, null, 'a guess belongs to the run that made it');
+    assert.equal(calibration.status().provisional, false);
+    assert.equal(calibration.status().error, null);
   });
 
   test('a later provisional window can replace an earlier one', () => {

@@ -13,7 +13,16 @@ export type TakeStartBlockReason =
 
 export type TakeStartFacts = {
   sessionActive: boolean;
-  timingCalibrationActive: boolean;
+  /**
+   * Whether the audible boot probe is measuring.
+   *
+   * Only a measurement that puts its own sound in the room is a reason to
+   * refuse a Take: the probe plays chimes through the phone and the Robot
+   * output and needs both captures to itself. Content calibration is a tap on
+   * audio the room is already making, so it neither delays a recording nor
+   * colours one, and a Take must not wait for it.
+   */
+  bootProbeCalibrationActive: boolean;
   songLoaded: boolean;
   /** Product-semantic Mic state for the voice-only Take path. */
   voiceOnlyMicState: RoomMicState;
@@ -47,7 +56,7 @@ export function decideTakeStart(facts: TakeStartFacts): TakeStartDecision {
     const micBlockReason = voiceOnlyMicBlockReason(facts.voiceOnlyMicState);
     if (micBlockReason) return { ok: false, reason: micBlockReason };
   }
-  if (facts.timingCalibrationActive) {
+  if (facts.bootProbeCalibrationActive) {
     return { ok: false, reason: 'timing-calibration-active' };
   }
   if (facts.songLoaded && facts.roomBlocked) {

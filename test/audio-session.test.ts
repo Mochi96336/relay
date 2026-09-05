@@ -619,3 +619,140 @@ describe('AudioSession clock', () => {
     });
   });
 });
+
+describe('AudioSession microphone frontier', () => {
+  /**
+   * A capture that joined late and never caught up: the frontier keeps
+   * advancing at the mix rate, but always from behind. This is the case the
+   * buffer budget cannot bound, because the budget assumes the microphone runs
+   * *ahead* of the mix clock by roughly the prebuffer.
+   */
+  function laggingMicSession(deficitMs: number, tailMs = 2_000) {
+    const session = makeSession({ prebufferMs: 400, retentionMs: 5_000 });
+    session.start(0);
+    session.setMicExpected(true);
+    session.setBackingExpected(true);
+    session.setAlignment({ networkCompensationMs: 150 });
+
+    const frameSamples = Math.round(RATE * 0.02);
+    const totalMs = deficitMs + tailMs;
+    // The song side is complete from the start; only the microphone is late.
+    const backingSamples = Math.round((RATE * (totalMs + 500)) / 1000);
+    session.ingestBacking(frame(0, pcmOf(new Array(backingSamples).fill(1_000))), RATE, 0);
+
+    // One frame anchors the microphone timeline, then the mix clock is allowed
+    // to run `deficitMs` past it before the stream resumes at the mix rate.
+    session.ingestMic(frame(0, pcmOf(new Array(frameSamples).fill(8_000))), RATE, 0);
+    drainAll(session, deficitMs);
+
+    let micAt = frameSamples;
+    for (let elapsed = deficitMs; elapsed < totalMs; elapsed += 20) {
+      session.ingestMic(frame(micAt, pcmOf(new Array(frameSamples).fill(8_000))), RATE, elapsed);
+      micAt += frameSamples;
+      drainAll(session, elapsed + 20);
+    }
+    return session;
+  }
+
+  test('a microphone timeline behind the mix clock is still audible, not silence', () => {
+    const session = laggingMicSession(900);
+
+    assert.ok(
+      session.appliedMicAdvanceMs < 0,
+      `the read head must be held behind the frontier that exists, saw ${session.appliedMicAdvanceMs} ms`,
+    );
+    assert.ok(
+      session.health().micHeadroomMs >= 0,
+      `the mixer must not keep reading past arrived audio, saw ${session.health().micHeadroomMs} ms`,
+    );
+    const evidence = session.readMic(0, RATE);
+    assert.ok(evidence.some((v) => v !== 0), 'the microphone history must still hold real audio');
+  });
+
+  test('the correction is held, so the read head keeps advancing between packets', () => {
+    // Re-deriving the bound every frame would pin the read position to arrival
+    // and replay the same samples whenever a packet was late.
+    const session = laggingMicSession(900);
+    const settled = session.appliedMicAdvanceMs;
+    const starvedAfterSettling = session.health().micStarvedFrames;
+
+    const frameSamples = Math.round(RATE * 0.02);
+    let micAt = session.micTotalSamples;
+    for (let elapsed = 2_900; elapsed < 3_900; elapsed += 20) {
+      session.ingestMic(frame(micAt, pcmOf(new Array(frameSamples).fill(8_000))), RATE, elapsed);
+      micAt += frameSamples;
+      drainAll(session, elapsed + 20);
+    }
+
+    const drift = Math.abs(session.appliedMicAdvanceMs - settled);
+    assert.ok(
+      drift < 50,
+      `a steady deficit must not move the read head by packet-sized steps, drifted ${drift.toFixed(1)} ms`,
+    );
+    assert.equal(
+      session.health().micStarvedFrames,
+      starvedAfterSettling,
+      'a held correction must not starve once it has taken effect',
+    );
+  });
+
+  test('a microphone that stops is reported as starving, not replayed', () => {
+    // The difference between *behind* and *stopped*. Chasing a frozen frontier
+    // would pin the read head to the last samples that arrived and replay them
+    // as though they were live, which a Take would then record.
+    const session = laggingMicSession(200, 600);
+    const starvedWhileHealthy = session.health().micStarvedFrames;
+
+    // The phone goes away; the song keeps playing.
+    drainAll(session, 4_000);
+
+    assert.ok(
+      session.health().micStarvedFrames > starvedWhileHealthy,
+      'a stopped microphone must still be reported as starvation',
+    );
+    assert.ok(
+      session.health().micHeadroomMs < 0,
+      `a stopped microphone must show negative headroom, saw ${session.health().micHeadroomMs} ms`,
+    );
+  });
+
+  test('restarting the capture drops the correction instead of unwinding it for a song', () => {
+    // A new capture epoch is anchored to the current mix clock, so it starts
+    // with healthy headroom and owes nothing to the old deficit. Carrying the
+    // correction forward would hold the read head a second behind fresh audio
+    // and give it back only at the slew rate - about 10 ms per second, so most
+    // of a song before the vocal is where it belongs.
+    const session = laggingMicSession(900);
+    assert.ok(session.appliedMicAdvanceMs < -500, 'the fixture must have taken a real correction');
+
+    const frameSamples = Math.round(RATE * 0.02);
+    // The phone restarts its microphone: a new capture generation, from index 0.
+    session.ingestMic(frame(0, pcmOf(new Array(frameSamples).fill(8_000)), 2), RATE, 2_900);
+
+    assert.equal(
+      session.appliedMicAdvanceMs,
+      150,
+      'a fresh capture epoch must start from the requested alignment, not the old correction',
+    );
+  });
+
+  test('a healthy microphone timeline is left entirely alone', () => {
+    const session = makeSession({ prebufferMs: 400, retentionMs: 5_000 });
+    session.start(0);
+    session.setMicExpected(true);
+    session.setBackingExpected(true);
+
+    const total = Math.round(RATE * 3);
+    session.ingestBacking(frame(0, pcmOf(new Array(total).fill(1_000))), RATE, 0);
+    session.ingestMic(frame(0, pcmOf(new Array(total).fill(8_000))), RATE, 0);
+    session.setAlignment({ networkCompensationMs: 150 });
+
+    drainAll(session, 2_000);
+    assert.equal(
+      session.appliedMicAdvanceMs,
+      150,
+      'a frontier with slack must leave the requested advance untouched',
+    );
+    assert.equal(session.health().micStarvedFrames, 0);
+  });
+});

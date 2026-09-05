@@ -50,6 +50,7 @@ test('server composition retains TakeController and recording-domain effects', (
     composition,
     /cancelActiveContentValidation: \(nowMs\) => cancelActiveContentValidation\(nowMs\)/,
   );
+  assert.match(composition, /standDownContentCalibration: \(\) => calibration\.abandon\(\)/);
   assert.match(composition, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
   assert.match(composition, /startTake: \(participantId, song, position, wallClockMs\) =>\s*takeController\.start\(participantId, song, position, wallClockMs\)/);
   assert.match(composition, /stopTake: \(takeId, participantId, position, reason, wallClockMs\) =>\s*takeController\.stop\(takeId, participantId, position, reason, wallClockMs\)/);

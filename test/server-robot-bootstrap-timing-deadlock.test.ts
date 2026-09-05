@@ -61,7 +61,7 @@ test('content gates ask whether the boot probe settled, not whether it failed', 
   // permanently un-appliable and drift validation permanently unarmed.
   for (const name of [
     'maybeAutoCalibrate',
-    'calibrationCanApply',
+    'calibrationApplicability',
     'contentValidationPathReady',
     'dropLegacyCalibrationForRobot',
   ]) {

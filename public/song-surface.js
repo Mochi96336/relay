@@ -39,6 +39,20 @@ function formatTime(seconds) {
   return `${minutes}:${String(whole % 60).padStart(2, '0')}`;
 }
 
+/**
+ * The playback view repaints about eight times a second: the server sweeps the
+ * room every 250ms and broadcasts the timeline and room snapshots as a pair.
+ *
+ * Assigning textContent replaces the element's text node even when the string
+ * is identical, and Chrome drops a click whose pressed node was removed before
+ * mouseup. An ordinary desktop press is long enough to straddle a repaint, so
+ * unconditional writes made Change Song swallow real clicks. Paint text only
+ * when it actually changed; that is also less layout churn per sweep.
+ */
+function setText(node, value) {
+  if (node.textContent !== value) node.textContent = value;
+}
+
 function cleanMetadata(value) {
   if (typeof value !== 'string') return '';
   return value.replace(/\s+/g, ' ').trim();
@@ -87,12 +101,12 @@ if (
     const visible = recoverable || role === 'preparing' || role === 'connecting';
     deviceNote.hidden = !visible;
     if (!visible) {
-      deviceNote.textContent = '';
+      setText(deviceNote, '');
       return;
     }
-    deviceNote.textContent = recoverable
+    setText(deviceNote, recoverable
       ? t('song.playbackControllerUnavailable')
-      : roleCopy(role);
+      : roleCopy(role));
   }
 
   function renderObserver(room, recoverable) {
@@ -108,12 +122,12 @@ if (
 
     // Observers get the full compact snapshot. Playback holders project only
     // the title into the heading row above the real YouTube controls.
-    headingTitle.textContent = titleCopy;
-    observerState.textContent = titleCopy;
-    observerAuthor.textContent = authorCopy;
+    setText(headingTitle, titleCopy);
+    setText(observerState, titleCopy);
+    setText(observerAuthor, authorCopy);
     observerAuthor.hidden = !authorCopy;
-    observerTimeline.textContent = `${formatTime(room.serverTime)} / ${formatTime(room.duration)}`;
-    observerPlaybackState.textContent = stateLabel;
+    setText(observerTimeline, `${formatTime(room.serverTime)} / ${formatTime(room.duration)}`);
+    setText(observerPlaybackState, stateLabel);
     observerPlaybackState.hidden = !recoverable && state === 1;
 
     if (videoId) {
@@ -167,7 +181,7 @@ if (
     headingTitle.hidden = !holderWithSong;
     form.hidden = role === 'preparing' || !canChange || (Boolean(videoId) && !editing);
     changeButton.hidden = !canChange || !videoId;
-    changeButton.textContent = editing ? t('song.done') : t('song.change');
+    setText(changeButton, editing ? t('song.done') : t('song.change'));
     changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
 
     // Once the old playback transport disappears, resolvePlaybackRole returns
@@ -192,7 +206,7 @@ if (
     editingVideoId = editing ? lastVideoId : null;
     stage.dataset.songEditing = editing ? 'true' : 'false';
     form.hidden = !editing;
-    changeButton.textContent = editing ? t('song.done') : t('song.change');
+    setText(changeButton, editing ? t('song.done') : t('song.change'));
     changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');
     if (editing) input.focus();
   });
@@ -201,7 +215,7 @@ if (
   window.addEventListener('relay-locale-changed', () => {
     const recoverable = canRecoverPlayback({ role, timeline: lastRoom });
     renderDeviceNote(recoverable);
-    changeButton.textContent = editing ? t('song.done') : t('song.change');
+    setText(changeButton, editing ? t('song.done') : t('song.change'));
     if (
       role === 'observer'
       || (Boolean(lastVideoId) && (role === 'holder' || role === 'empty'))

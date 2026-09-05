@@ -312,6 +312,112 @@ test('boot baseline promotes to content authority, reaches the mixer, and arms d
   }
 });
 
+test('a quiet Robot offset heartbeat holds the measured alignment instead of guessing', async () => {
+  const server = await startRelay(BOOT_ROOM);
+  const room = await bootedRobotRoom(server);
+  try {
+    assert.equal(room.bootApplied.timingMode, 'acoustic-calibration');
+    const heldLagMs = Number(room.bootApplied.activeMicLagMs);
+    assert.ok(Number.isFinite(heldLagMs));
+
+    // The Robot reports its offset a few times a second and goes quiet for
+    // ordinary reasons - buffering, the settle window after a seek, a track
+    // change. Its position does not teleport while it is quiet, so replacing a
+    // measured alignment with the network estimate there is a step the room
+    // hears in the middle of a song.
+    room.stopHeartbeat();
+    const beforeQuiet = room.monitor.messages.length;
+
+    // Wait for the room to actually notice the silence rather than for a fixed
+    // delay, so the assertion below is about a genuinely stale heartbeat.
+    const stillHeld = await waitForNewMessage(
+      room.monitor,
+      beforeQuiet,
+      (m) => m.type === 'timing-calibration-status' && m.robotDeltaFresh === false,
+      8_000,
+    );
+    assert.equal(
+      stillHeld.timingMode,
+      'acoustic-calibration',
+      'a quiet offset heartbeat must not replace the measurement with an estimate',
+    );
+    assert.equal(
+      Math.round(Number(stillHeld.activeMicLagMs)),
+      Math.round(heldLagMs),
+      'the held total must be the one that was measured, unchanged',
+    );
+
+    await sleep(1_500);
+    const fellBack = room.monitor.messages
+      .slice(beforeQuiet)
+      .filter((m) => m.type === 'source-status' || m.type === 'timing-calibration-status')
+      .filter((m) => m.timingMode === 'network-estimate');
+    assert.deepEqual(
+      fellBack.map((m) => `${m.type} lag=${m.activeCalibratedMicLagMs ?? m.activeMicLagMs}`),
+      [],
+      'the measurement must stay in force for as long as the heartbeat is quiet',
+    );
+  } finally {
+    room.close();
+    await server.stop();
+  }
+});
+
+test('a seek that invalidates content hands the mixer back to the boot baseline', async () => {
+  const server = await startRelay(BOOT_ROOM);
+  const room = await bootedRobotRoom(server);
+  try {
+    const beforeContent = room.monitor.messages.length;
+    const music = laggedPair(9, RATE, 30);
+    await Promise.all([
+      sendPcmInChunks(room.backing, music.backing),
+      sendPcmInChunks(room.publisher, music.mic),
+    ]);
+    const confirmed = await waitForNewMessage(
+      room.monitor,
+      beforeContent,
+      (m) => m.type === 'timing-calibration-status'
+        && m.state === 'complete'
+        && m.activeCalibrationKind === 'content',
+      15_000,
+    );
+    assert.equal(confirmed.timingMode, 'acoustic-calibration');
+
+    // A discontinuity that cannot be preserved - a load, not a follower
+    // correction the mapper can carry forward - advances the source generation
+    // and takes content's reference frame with it. The boot probe measured
+    // pipeline latency with a known tone, so the seek says nothing about that
+    // measurement: it must reclaim the mixer rather than let the room fall to
+    // the network estimate.
+    const beforeSeek = room.monitor.messages.length;
+    room.robot.send({ type: 'source-seeked', reason: 'load' });
+
+    const reclaimed = await waitForNewMessage(
+      room.monitor,
+      beforeSeek,
+      (m) => m.type === 'timing-calibration-status'
+        && m.activeCalibrationKind === 'boot-probe'
+        && m.timingMode === 'acoustic-calibration',
+      10_000,
+    );
+    assert.notEqual(reclaimed.activeMicLagMs, null);
+
+    const pathDifferenceMs = Number(reclaimed.bootCalibration?.micLatencyMs)
+      - Number(reclaimed.bootCalibration?.backingLatencyMs);
+    assert.ok(Number.isFinite(pathDifferenceMs));
+    assert.ok(
+      Math.abs(
+        Number(reclaimed.activeMicLagMs)
+        - (pathDifferenceMs + Number(reclaimed.bootCalibration?.deltaMs)),
+      ) < 1,
+      'the reclaimed total must be the measured pipeline latency plus the current delta',
+    );
+  } finally {
+    room.close();
+    await server.stop();
+  }
+});
+
 test('a gross player jump revokes content authority instead of parking it for later reuse', async () => {
   const server = await startRelay(BOOT_ROOM);
   const room = await bootedRobotRoom(server);

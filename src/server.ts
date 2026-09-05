@@ -503,6 +503,19 @@ function robotDeltaIsFresh(nowMs = performance.now()) {
     && robotPlayerOffset.isFresh(nowMs);
 }
 
+/**
+ * Whether the Robot has reported a player offset at all in the current mapping.
+ *
+ * The discriminator between a heartbeat that has gone quiet and one that never
+ * started. Every path that genuinely invalidates the mapping resets the
+ * tracker, so "something was reported since the last reset" is exactly "the
+ * applied total already carries a player-relative term measured in this
+ * mapping".
+ */
+function robotDeltaEverEstablished() {
+  return Number.isFinite(robotPlayerOffset.lastReportedAtMs);
+}
+
 function robotContentMappingReady(nowMs = performance.now()) {
   if (!robotProbeTimingActive()) return true;
   return sourceRuntime.connected()
@@ -1105,9 +1118,27 @@ function appliedCalibrationKind() {
   });
 }
 
-function calibrationCanApply(kind = appliedCalibrationKind()) {
+/**
+ * Whether a measurement may drive the mixer, and what to do when it may not.
+ *
+ * `revoke` means the measurement itself is void. `hold` means it is still a
+ * valid measurement of an unchanged acoustic path, but a *live* input needed
+ * to complete it has momentarily gone quiet - which is not the same thing and
+ * must not be treated as one. Falling back to the network estimate there
+ * replaces a measured alignment with a guess, and the room hears the whole
+ * difference as a step in the middle of a song. The Robot reports its player
+ * offset a few times a second and goes quiet for ordinary reasons: buffering,
+ * the settle window after a seek, a track change. Its position does not
+ * teleport while it is quiet, so the last applied total stays the best answer
+ * available until either a fresh offset arrives or something actually
+ * invalidates the mapping - a disconnect, a capture epoch, a gross jump - each
+ * of which revokes through its own path.
+ */
+type CalibrationApplicability = 'apply' | 'hold' | 'revoke';
+
+function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationApplicability {
   const result = calibration.result;
-  if (result === null || calibrationIsStale()) return false;
+  if (result === null || calibrationIsStale()) return 'revoke';
 
   const status = calibration.status();
   const retainingConfirmedAuthority = calibration.transactionActive
@@ -1127,25 +1158,36 @@ function calibrationCanApply(kind = appliedCalibrationKind()) {
     && kind !== 'boot-probe'
     && !bootProbeSettled()
     && !retainingConfirmedAuthority
-  ) return false;
+  ) return 'revoke';
+
+  // A Robot that is gone is a real invalidation; one that has merely not spoken
+  // for a moment is not.
+  const robotGone = robotProbeTimingActive() && !sourceRuntime.connected();
+  if (robotGone) return 'revoke';
+
   // Player-relative delta matters only while a Song exists. In a no-Song room
   // the two measured path legs are already the complete correction the mixer
-  // can use; once a Song exists, boot authority must fail closed until the
-  // active Robot has a fresh player offset.
+  // can use.
+  //
+  // A delta that has *never* been established is not the same as one that has
+  // gone quiet. Before the first report the applied total does not contain a
+  // player-relative term at all, so it answers a different question than the
+  // room is now asking and must be revoked. After one, the total already
+  // includes that term and the Robot has simply stopped talking.
   if (
     robotProbeTimingActive()
     && kind === 'boot-probe'
     && roomHasSong()
     && !robotDeltaIsFresh()
-  ) return false;
+  ) return robotDeltaEverEstablished() ? 'hold' : 'revoke';
   // A Robot content result is expressed in the mapper's stable reference frame.
   // It can own the live mixer only while the current media mapping is known.
   if (
     robotProbeTimingActive()
     && kind === 'content'
     && !robotContentMappingReady()
-  ) return false;
-  return true;
+  ) return robotDeltaEverEstablished() ? 'hold' : 'revoke';
+  return 'apply';
 }
 
 /**
@@ -1192,7 +1234,12 @@ function syncAppliedCalibration() {
       return true;
     }
 
-    if (!calibrationCanApply(calibrationKind)) {
+    const applicability = calibrationApplicability(calibrationKind);
+    // `hold` means the measurement is intact and only a live input went quiet.
+    // Leaving the applied total in force is what keeps the room from hearing a
+    // step in the middle of a song.
+    if (applicability === 'hold') return false;
+    if (applicability === 'revoke') {
       if (active === null) return false;
       session.setAlignment({ calibratedMicLagMs: null });
       return true;
@@ -1233,7 +1280,9 @@ function syncAppliedCalibration() {
     return false;
   }
 
-  let nextMicLagMs = calibrationCanApply(calibrationKind) ? calibration.result!.micLagMs : null;
+  const applicability = calibrationApplicability(calibrationKind);
+  if (applicability === 'hold') return false;
+  let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;
   const robotContentAuthority = robotProbeTimingActive() && calibrationKind === 'content';
   if (nextMicLagMs !== null && robotContentAuthority) {
     nextMicLagMs = robotContentTimeline.liveLagMs(
@@ -1600,7 +1649,11 @@ function readinessPayload(nowMs = performance.now()) {
     playerOffsetMs: robotPlayerOffset.offsetMs(nowMs),
     playerOffsetFresh: robotDeltaIsFresh(nowMs),
     calibrationState: String(calibrationStatus.state ?? 'idle'),
-    calibrationValid: calibrationCanApply() && session.alignment.calibratedMicLagMs !== null,
+    // A held measurement is still a measured alignment in force, so readiness
+    // must not report it as invalid merely because the Robot's offset heartbeat
+    // is momentarily quiet.
+    calibrationValid: calibrationApplicability() !== 'revoke'
+      && session.alignment.calibratedMicLagMs !== null,
     calibrationStale: calibrationIsStale(),
     calibrationKind: appliedCalibrationKind(),
     probeCorrelation: bootProbeRuntime.correlations,
@@ -2227,9 +2280,33 @@ function currentDeltaMs(nowMs: number) {
   return robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs)! : 0;
 }
 
+/**
+ * Keeps the boot baseline on the mixer, and lets it reclaim the mixer when the
+ * authority that replaced it can no longer drive one.
+ *
+ * The boot probe measures *pipeline* latency with a known tone, so its result
+ * does not depend on where the Robot's player happens to be - `bootProbeContext()`
+ * deliberately leaves the source generation out for exactly that reason. A seek
+ * invalidates content's reference frame, because content is measured between two
+ * content streams and one of them was just spliced at an unknown sample. It says
+ * nothing about the pipeline.
+ *
+ * Without a reclaim path that distinction is lost: content dies and the mixer
+ * drops straight to the network estimate while a still-valid measurement sits in
+ * the probe runtime. That is a step down two levels instead of one, and the room
+ * hears the whole difference.
+ *
+ * Reclaiming deliberately waits for `calibration.collecting` to be false, since
+ * `applyExternalResult()` would otherwise discard an in-flight content retry -
+ * and for a fresh delta, since the total is only meaningful with one.
+ */
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
-  if (!robotProbeTimingActive() || appliedCalibrationKind() !== 'boot-probe') return;
+  if (!robotProbeTimingActive()) return;
+  const appliedKind = appliedCalibrationKind();
+  const reclaiming = appliedKind !== 'boot-probe'
+    && calibrationApplicability(appliedKind) === 'revoke';
+  if (appliedKind !== 'boot-probe' && !reclaiming) return;
   if (!roomHasSong(nowMs)) return;
   if (bootProbeRuntime.pathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
   if (!robotDeltaIsFresh(nowMs)) return;
@@ -2240,7 +2317,8 @@ function maybeReapplyBootCalibration(nowMs: number) {
   if (applied !== null && Math.abs(advanceMs - applied) < BOOT_DELTA_REAPPLY_MS) return;
 
   if (PROBE_DEBUG) {
-    console.log(`[probe] delta moved; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
+    const why = reclaiming ? 'reclaimed by boot baseline' : 'delta moved';
+    console.log(`[probe] ${why}; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
   }
   promoteBootProbeCalibration(
     () => bootProbeRuntime.reapplyCalibration(advanceMs, currentDeltaMs(nowMs)),

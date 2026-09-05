@@ -253,19 +253,47 @@ test('robot source disconnect suspends the applied delta until a fresh source of
       3_000,
     );
     assert.equal(expired.robotSourceConnected, true, 'the source socket itself is still alive');
-    assert.equal(expired.timingMode, 'network-estimate');
-    assert.equal(expired.activeCalibratedMicLagMs, null);
+    // A delta that has gone quiet is not a delta that has changed. The Robot
+    // reports a few times a second and stops for ordinary reasons - buffering,
+    // the settle window after a seek, a track change - and its playback
+    // position does not move while it is quiet. Falling back to the network
+    // estimate here replaces a measurement with a guess, and the room hears the
+    // whole difference as a step in the middle of a song. The measurement is
+    // held until something actually invalidates the mapping: a disconnect, a
+    // capture epoch, a gross jump, a seek.
+    assert.equal(expired.timingMode, 'acoustic-calibration');
+    assert.ok(
+      Math.abs(Number(expired.activeCalibratedMicLagMs) - Number(restored.activeMicLagMs)) < 0.001,
+      `a quiet heartbeat must hold ${restored.activeMicLagMs}, got ${expired.activeCalibratedMicLagMs}`,
+    );
     assert.equal(expired.calibrationStale, false, 'the measured path is still valid; only delta expired');
 
+    const beforeResumed = monitor.messages.length;
     replacement.send({ type: 'robot-player-offset', offsetMs: 25 });
-    const resumed = await monitor.waitFor(
+    monitor.send({ type: 'timing-calibration-status-request' });
+    const resumed = await waitForNewMessage(
+      monitor,
+      beforeResumed,
       (m) => m.type === 'timing-calibration-status'
-        && m.timingMode === 'acoustic-calibration'
         && m.robotDeltaFresh === true
         && Math.round(m.robotPlayerOffsetMs) === 25,
       4_000,
     );
-    assertBootUsesDelta(resumed, 25);
+    assert.equal(resumed.timingMode, 'acoustic-calibration');
+    // Resuming 10 ms from where the heartbeat left off is sub-threshold
+    // movement, exactly like the jitter case earlier in this test. Holding the
+    // measurement through the quiet period is what keeps it that way: nulling
+    // the alignment first would have bypassed RELAY_CALIBRATION_DELTA_REAPPLY_MS
+    // and re-promoted on a 10 ms move.
+    assert.equal(
+      Math.round(resumed.bootCalibration?.deltaMs),
+      35,
+      'a sub-threshold delta move must not repromote the boot result',
+    );
+    assert.ok(
+      Math.abs(Number(resumed.activeMicLagMs) - Number(restored.activeMicLagMs)) < 0.001,
+      `the held total must survive the quiet period, got ${resumed.activeMicLagMs}`,
+    );
 
     await sleep(300);
     const probeRequestsAfterReconnect = publisher.messages.filter(

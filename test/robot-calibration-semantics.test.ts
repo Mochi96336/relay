@@ -125,7 +125,7 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   assert.match(appliedKind, /confirmedRevision: calibration\.confirmedRevision/);
   assert.match(appliedKind, /hasConfirmedResult: calibration\.confirmedResult !== null/);
 
-  const canApply = source.match(/function calibrationCanApply\([\s\S]*?\n\}/)?.[0] ?? '';
+  const canApply = source.match(/function calibrationApplicability\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(canApply, /retainingConfirmedAuthority/);
   assert.match(
     canApply,

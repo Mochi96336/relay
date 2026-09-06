@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
@@ -128,4 +129,33 @@ test('normalized locale aliases cannot race to own the same staged key', () => {
   }), true,
     'identical aliases collapse to one staged registration');
   assert.equal(i18n.t('feature.alias'), 'Same owner');
+});
+
+/**
+ * The button's status line is the only place a refusal is explained, so a
+ * reason without copy silently degrades every locale to one generic sentence.
+ * Bind the copy to the policy's own union rather than to a hand-kept list.
+ */
+test('every calibration refusal reason has copy in every locale', async () => {
+  const policy = await readFile(new URL('../src/calibration-start-policy.ts', import.meta.url), 'utf8');
+  const block = policy.slice(
+    policy.indexOf('export type CalibrationStartBlockReason'),
+    policy.indexOf(';', policy.indexOf('export type CalibrationStartBlockReason')),
+  );
+  const reasons = [...block.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]);
+  assert.ok(reasons.length >= 6, `expected the policy union, got ${reasons.join(',')}`);
+
+  const source = await readFile(new URL('../public/i18n.js', import.meta.url), 'utf8');
+  for (const locale of ['en', 'zh-Hant']) {
+    for (const reason of reasons) {
+      assert.match(
+        source,
+        new RegExp(`'timing\\.blocked\\.${reason}'`),
+        `${reason} has no status copy; the user would be told only that it will not work`,
+      );
+    }
+  }
+  // Both locale tables carry every key, so the count is a multiple of the union.
+  const painted = [...source.matchAll(/'timing\.blocked\.[a-z-]+'/g)].length;
+  assert.equal(painted, reasons.length * 2, 'both locales must define the same reasons');
 });

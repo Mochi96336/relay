@@ -6,12 +6,23 @@ export type CalibrationStartBlockReason =
   | 'calibration-active'
   | 'sources-not-connected'
   | 'sources-not-streaming'
+  | 'robot-route-incomplete'
   | 'content-mapping-pending'
   | 'phone-not-playing';
 
 export type CalibrationStartFacts = {
   takeLifecycle: TakeLifecycle;
-  calibrationActive: boolean;
+  /**
+   * Whether the *audible* boot probe is measuring.
+   *
+   * Only a measurement that puts its own sound in the room can collide with a
+   * second run. Content calibration is a tap on audio the room is already
+   * making, so refusing a deliberate Realign because one is collecting
+   * describes a measurement rather than the room - and leaves the action
+   * unavailable for most of a session while automatic runs retry. Same
+   * distinction the Take start policy already draws.
+   */
+  bootProbeCalibrationActive: boolean;
   sessionActive: boolean;
   backingConnected: boolean;
   publisherControlConnected: boolean;
@@ -48,6 +59,9 @@ export type CalibrationStartDecision =
  * must be present before the action is advertised. Otherwise the UI can start
  * a run whose Mic leg succeeds and whose backing leg waits forever without
  * spending an attempt.
+ *
+ * Every reason returned here is shown to someone deciding what to do next, so
+ * two situations with different recoveries never share one.
  */
 export function decideCalibrationStart(
   facts: CalibrationStartFacts,
@@ -57,7 +71,7 @@ export function decideCalibrationStart(
   if (facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing') {
     return { ok: false, mode, reason: 'take-active' };
   }
-  if (facts.calibrationActive) return { ok: false, mode, reason: 'calibration-active' };
+  if (facts.bootProbeCalibrationActive) return { ok: false, mode, reason: 'calibration-active' };
   if (!facts.sessionActive || !facts.backingConnected || !facts.publisherControlConnected) {
     return { ok: false, mode, reason: 'sources-not-connected' };
   }
@@ -66,8 +80,12 @@ export function decideCalibrationStart(
   }
 
   if (mode === 'boot-probe') {
+    // Deliberately not `sources-not-connected`: a Robot route has no Desktop
+    // Source for anyone to plug in, so telling the user to connect one names
+    // something that does not exist on that deployment. The missing leg here
+    // is infrastructure, and its recovery is restarting the route.
     if (facts.backingIsRobot === false || facts.robotSourceConnected === false) {
-      return { ok: false, mode, reason: 'sources-not-connected' };
+      return { ok: false, mode, reason: 'robot-route-incomplete' };
     }
     return { ok: true, mode };
   }

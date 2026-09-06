@@ -67,12 +67,12 @@ test('Robot backing without Robot source does not advertise a boot probe that wi
   const product = status({ ...BASE, robotSourceConnected: false });
   assert.equal(product.actions.startCalibrationMode, 'boot-probe');
   assert.equal(product.actions.canStartCalibration, false);
-  assert.equal(product.actions.startCalibrationBlockedReason, 'sources-not-connected');
+  assert.equal(product.actions.startCalibrationBlockedReason, 'robot-route-incomplete');
 });
 
 test('Robot source with a non-Robot backing cannot advertise boot-probe calibration', () => {
   const product = status({ ...BASE, backingIsRobot: false });
   assert.equal(product.actions.startCalibrationMode, 'boot-probe');
   assert.equal(product.actions.canStartCalibration, false);
-  assert.equal(product.actions.startCalibrationBlockedReason, 'sources-not-connected');
+  assert.equal(product.actions.startCalibrationBlockedReason, 'robot-route-incomplete');
 });

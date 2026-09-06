@@ -17,6 +17,9 @@ const copy: Record<string, string> = {
   'timing.aligning': '對齊中…',
   'timing.unavailable': '目前無法重新對齊',
   'timing.reconnecting': '重新連線中…',
+  'timing.blocked.phone-not-playing': '播放歌曲後才能重新對齊',
+  'timing.blocked.robot-route-incomplete': 'Robot 音訊路由中斷，重啟後才能重新對齊',
+  'timing.blocked.calibration-active': '對齊中…',
 };
 
 function harness(options: { selfMic?: 'live' | 'off' } = {}) {
@@ -197,7 +200,9 @@ test('content calibration availability comes from fresh ProductStatus authority'
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.button.textContent, '重新對齊');
-  assert.equal(ui.status.textContent, '目前無法重新對齊');
+  // The server said exactly why; repeating a generic "unavailable" would throw
+  // that away and leave the user with no idea what to do next.
+  assert.equal(ui.status.textContent, '播放歌曲後才能重新對齊');
 
   ui.emitProductStatus({
     canStartCalibration: true,
@@ -351,4 +356,62 @@ test('calibration command rejection stays product-generic', () => {
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.button.textContent, '重新對齊');
   assert.equal(ui.status.textContent, '目前無法重新對齊');
+});
+
+test('each refusal says what to do, not just that it will not work', () => {
+  const ui = harness({ selfMic: 'live' });
+
+  // A Robot route has no Desktop Source to plug in, so it must not borrow the
+  // copy for a transport the user actually owns.
+  ui.emitProductStatus({
+    canStartCalibration: false,
+    startCalibrationBlockedReason: 'robot-route-incomplete',
+    startCalibrationMode: 'boot-probe',
+  });
+  assert.equal(ui.status.textContent, 'Robot 音訊路由中斷，重啟後才能重新對齊');
+
+  // A reason with no copy yet still degrades to the generic line rather than
+  // painting a raw key at the user.
+  ui.emitProductStatus({
+    canStartCalibration: false,
+    startCalibrationBlockedReason: 'sources-not-streaming',
+    startCalibrationMode: 'content',
+  });
+  assert.equal(ui.status.textContent, '目前無法重新對齊');
+});
+
+test('a background content run does not flip the button while it retries', () => {
+  const ui = harness({ selfMic: 'live' });
+
+  // `timing.state` describes what the room's alignment currently *is*, not
+  // whether the action may run. Reading it here made every automatic content
+  // retry - and there is one every few seconds when conditions are poor -
+  // blink the button between enabled and "Aligning…".
+  ui.emitProductStatus(
+    {
+      canStartCalibration: true,
+      startCalibrationBlockedReason: null,
+      startCalibrationMode: 'content',
+    },
+    { state: 'calibrating' },
+  );
+
+  assert.equal(ui.button.hidden, false);
+  assert.equal(ui.button.disabled, false);
+  assert.equal(ui.status.textContent, '');
+});
+
+test('the audible boot probe still shows the room as aligning', () => {
+  const ui = harness({ selfMic: 'live' });
+  ui.emitProductStatus(
+    {
+      canStartCalibration: false,
+      startCalibrationBlockedReason: 'calibration-active',
+      startCalibrationMode: 'boot-probe',
+    },
+    { state: 'calibrating' },
+  );
+
+  assert.equal(ui.button.disabled, true);
+  assert.equal(ui.status.textContent, '對齊中…');
 });

@@ -8,7 +8,7 @@ import {
 
 const READY: CalibrationStartFacts = {
   takeLifecycle: 'idle',
-  calibrationActive: false,
+  bootProbeCalibrationActive: false,
   sessionActive: true,
   backingConnected: true,
   publisherControlConnected: true,
@@ -25,13 +25,13 @@ test('calibration start policy preserves runtime rejection precedence and mode',
     decideCalibrationStart({
       ...READY,
       takeLifecycle: 'recording',
-      calibrationActive: true,
+      bootProbeCalibrationActive: true,
       sessionActive: false,
     }),
     { ok: false, mode: 'content', reason: 'take-active' },
   );
   assert.deepEqual(
-    decideCalibrationStart({ ...READY, calibrationActive: true, sessionActive: false }),
+    decideCalibrationStart({ ...READY, bootProbeCalibrationActive: true, sessionActive: false }),
     { ok: false, mode: 'content', reason: 'calibration-active' },
   );
   assert.deepEqual(
@@ -121,5 +121,71 @@ test('content calibration waits for an evidence-usable Robot mapping without blo
       timelineState: null,
     }),
     { ok: true, mode: 'boot-probe' },
+  );
+});
+/**
+ * The same distinction the Take policy already draws.
+ *
+ * The boot probe plays its own chimes and needs both captures to itself, so a
+ * second run really would collide with it. Content calibration only listens to
+ * audio the room is already making - it holds nothing up and the singer cannot
+ * perceive it. Refusing a deliberate Realign because of one describes a
+ * measurement rather than the room, and leaves the action unavailable for most
+ * of a session whenever automatic content runs are retrying.
+ */
+test('a background content run does not refuse a deliberate Realign', () => {
+  assert.deepEqual(
+    decideCalibrationStart({ ...READY, bootProbeCalibrationActive: false }),
+    { ok: true, mode: 'content' },
+  );
+  assert.deepEqual(
+    decideCalibrationStart({
+      ...READY,
+      robotProbeTimingActive: true,
+      bootProbeCalibrationActive: false,
+    }),
+    { ok: true, mode: 'boot-probe' },
+  );
+});
+
+test('the audible boot probe still refuses a second run', () => {
+  assert.deepEqual(
+    decideCalibrationStart({ ...READY, bootProbeCalibrationActive: true }),
+    { ok: false, mode: 'content', reason: 'calibration-active' },
+  );
+});
+
+/**
+ * A Robot route has no Desktop Source for anyone to connect: the second leg is
+ * this machine's own browser. Sharing `sources-not-connected` with the case
+ * where the user really has a transport missing produced a recovery
+ * instruction pointing at something that does not exist on the deployment.
+ */
+test('a missing Robot leg is not the user failing to connect a device', () => {
+  assert.deepEqual(
+    decideCalibrationStart({
+      ...READY,
+      robotProbeTimingActive: true,
+      backingIsRobot: false,
+    }),
+    { ok: false, mode: 'boot-probe', reason: 'robot-route-incomplete' },
+  );
+  assert.deepEqual(
+    decideCalibrationStart({
+      ...READY,
+      robotProbeTimingActive: true,
+      robotSourceConnected: false,
+    }),
+    { ok: false, mode: 'boot-probe', reason: 'robot-route-incomplete' },
+  );
+
+  // A transport the user actually owns keeps the reason that names it.
+  assert.deepEqual(
+    decideCalibrationStart({
+      ...READY,
+      robotProbeTimingActive: true,
+      publisherControlConnected: false,
+    }),
+    { ok: false, mode: 'boot-probe', reason: 'sources-not-connected' },
   );
 });

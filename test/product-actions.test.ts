@@ -110,15 +110,27 @@ test('an audible boot probe disables Start Take because it is normal preparation
   assert.equal(status.actions.startCalibrationMode, 'boot-probe');
 });
 
-test('a background content measurement leaves Start Take available', () => {
-  // The room is singing normally; the run is a tap on that same audio. It still
-  // occupies the calibration path - a second run cannot start - but nothing
-  // about a recording has to wait for it.
+test('a background content measurement blocks neither a Take nor a Realign', () => {
+  // The room is singing normally and the run is a tap on that same audio: it
+  // changes nothing the singer hears and holds nothing up. Refusing either
+  // action because of it describes a measurement rather than the room - and
+  // since automatic content runs retry every few seconds when conditions are
+  // poor, refusing Realign left the action unavailable for most of a session,
+  // exactly when the user most wanted it.
   const status = model(READY, 'idle', true);
 
   assert.equal(status.lifecycle, 'live');
   assert.equal(status.actions.canStartTake, true);
   assert.equal(status.actions.startTakeBlockedReason, null);
+  assert.equal(status.actions.canStartCalibration, true);
+  assert.equal(status.actions.startCalibrationBlockedReason, null);
+});
+
+test('the audible boot probe blocks a second Realign, because it owns the room', () => {
+  // The other half of the same distinction: this run plays its own chimes and
+  // needs both captures to itself, so a second one really would collide.
+  const status = model(READY, 'idle', true, true, true);
+
   assert.equal(status.actions.canStartCalibration, false);
   assert.equal(status.actions.startCalibrationBlockedReason, 'calibration-active');
 });

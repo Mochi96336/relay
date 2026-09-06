@@ -9,6 +9,7 @@ type Socket = { id: string };
 function coordinatorFor(calls: string[], options: {
   cancelValidation?: boolean;
   completeCommand?: boolean;
+  rateChanged?: boolean;
 } = {}) {
   return createRelayYoutubeTelemetryAcceptanceCoordinator<Socket, Identity>({
     registerPlayback: (socket, identity) => calls.push(`register:${socket.id}:${identity.id}`),
@@ -16,6 +17,10 @@ function coordinatorFor(calls: string[], options: {
     cancelActiveContentValidation: (nowMs) => {
       calls.push(`cancel-validation:${nowMs}`);
       return options.cancelValidation === true;
+    },
+    revokeContentMappingOnRateChange: (playbackRate) => {
+      calls.push(`rate-check:${String(playbackRate)}`);
+      return options.rateChanged === true;
     },
     reportTimingStatus: () => calls.push('timing-status'),
     reportTimelineStatus: (status) => calls.push(`timeline:${String(status.videoId ?? '')}`),
@@ -42,7 +47,7 @@ test('accepted playing telemetry publishes timeline and room after transport reg
     socket,
     acceptedIdentity,
     nowMs: 10,
-    timelineStatus: { state: 1, videoId: 'video' },
+    timelineStatus: { state: 1, videoId: 'video', playbackRate: 1 },
     completesCommandId: null,
     handoffCompleted: false,
     handoffId: null,
@@ -52,6 +57,7 @@ test('accepted playing telemetry publishes timeline and room after transport reg
   assert.deepEqual(calls, [
     'register:socket:accepted',
     'clear-rejection:socket',
+    'rate-check:1',
     'timeline:video',
     'room:10',
   ]);
@@ -63,7 +69,7 @@ test('accepted non-playing telemetry invalidates active content validation befor
     socket,
     acceptedIdentity,
     nowMs: 20,
-    timelineStatus: { state: 2, videoId: 'video' },
+    timelineStatus: { state: 2, videoId: 'video', playbackRate: 1 },
     completesCommandId: null,
     handoffCompleted: false,
     handoffId: null,
@@ -73,6 +79,7 @@ test('accepted non-playing telemetry invalidates active content validation befor
   assert.deepEqual(calls, [
     'register:socket:accepted',
     'clear-rejection:socket',
+    'rate-check:1',
     'cancel-validation:20',
     'timing-status',
     'timeline:video',
@@ -86,7 +93,7 @@ test('Room Song completion publishes before handoff terminal messages', () => {
     socket,
     acceptedIdentity,
     nowMs: 30,
-    timelineStatus: { state: 1, videoId: 'video' },
+    timelineStatus: { state: 1, videoId: 'video', playbackRate: 1 },
     completesCommandId: 'command-1',
     handoffCompleted: true,
     handoffId: 'handoff-1',
@@ -96,6 +103,7 @@ test('Room Song completion publishes before handoff terminal messages', () => {
   assert.deepEqual(calls, [
     'register:socket:accepted',
     'clear-rejection:socket',
+    'rate-check:1',
     'timeline:video',
     'room:30',
     'complete-command:command-1',
@@ -112,7 +120,7 @@ test('failed Room Song completion does not fabricate terminal command publicatio
     socket,
     acceptedIdentity,
     nowMs: 40,
-    timelineStatus: { state: 1, videoId: 'video' },
+    timelineStatus: { state: 1, videoId: 'video', playbackRate: 1 },
     completesCommandId: 'command-2',
     handoffCompleted: false,
     handoffId: null,
@@ -122,8 +130,34 @@ test('failed Room Song completion does not fabricate terminal command publicatio
   assert.deepEqual(calls, [
     'register:socket:accepted',
     'clear-rejection:socket',
+    'rate-check:1',
     'timeline:video',
     'room:40',
     'complete-command:command-2',
+  ]);
+});
+
+test('a rate change retires the content mapping before anything else reads it', () => {
+  const calls: string[] = [];
+  coordinatorFor(calls, { rateChanged: true, cancelValidation: true }).accept({
+    socket,
+    acceptedIdentity,
+    nowMs: 10,
+    timelineStatus: { state: 2, videoId: 'video', playbackRate: 2 },
+    completesCommandId: null,
+    handoffCompleted: false,
+    handoffId: null,
+    previousLeader: null,
+  });
+
+  // The revocation is one transaction that publishes its own timing status, so
+  // this seam must not also cancel validation and publish a second one for the
+  // same telemetry.
+  assert.deepEqual(calls, [
+    'register:socket:accepted',
+    'clear-rejection:socket',
+    'rate-check:2',
+    'timeline:video',
+    'room:10',
   ]);
 });

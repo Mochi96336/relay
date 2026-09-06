@@ -1,3 +1,4 @@
+import { mediaToWallMs } from './boot-calibration.js';
 import type { CalibrationContext } from './calibration-session.js';
 
 function sameContext(left: CalibrationContext, right: CalibrationContext) {
@@ -14,6 +15,13 @@ function sameContext(left: CalibrationContext, right: CalibrationContext) {
  * while the YouTube content position does not. The Robot's player delta is
  * therefore part of the mapping from backing capture samples to song time,
  * not a permanent acoustic path property.
+ *
+ * Player deltas are *media* time - the Robot subtracts two `currentTime`
+ * readings - while capture sample positions advance in wall time. The room's
+ * playback rate is the conversion between them, so a mapping is only meaningful
+ * alongside the rate it was built at. The rate is bound with the context for
+ * that reason: a rate change is a mapping discontinuity, and the server revokes
+ * on one rather than silently reinterpreting old deltas at a new rate.
  *
  * The first authoritative player delta in a CalibrationContext becomes the
  * reference frame. Player control may observe a new delta before Browser ->
@@ -34,6 +42,8 @@ export class RobotContentTimelineMapper {
   private lastMappedAtMs = Number.NEGATIVE_INFINITY;
   private awaitingBackingBoundaryValue = false;
   private minimumBackingSampleValue: number | null = null;
+  /** The rate the bound mapping's media/wall conversion assumes. */
+  private playbackRateValue = 1;
 
   constructor(options: { sampleRate: number; freshForMs: number }) {
     if (!Number.isFinite(options.sampleRate) || options.sampleRate <= 0) {
@@ -54,13 +64,21 @@ export class RobotContentTimelineMapper {
     this.lastMappedAtMs = Number.NEGATIVE_INFINITY;
     this.awaitingBackingBoundaryValue = false;
     this.minimumBackingSampleValue = null;
+    this.playbackRateValue = 1;
   }
 
   /** Records the smoothed live Robot error: player media time - room target. */
-  notePlayerOffset(deltaMs: number, context: CalibrationContext, nowMs: number) {
+  notePlayerOffset(
+    deltaMs: number,
+    context: CalibrationContext,
+    nowMs: number,
+    playbackRate = 1,
+  ) {
     if (!Number.isFinite(deltaMs) || !Number.isFinite(nowMs)) return false;
     this.bindContext(context);
     if (this.referenceDeltaMsValue === null) {
+      // The reference frame and the rate that reads it are one fact.
+      this.bindPlaybackRate(playbackRate);
       this.referenceDeltaMsValue = deltaMs;
       this.committedDeltaMsValue = deltaMs;
     }
@@ -162,7 +180,7 @@ export class RobotContentTimelineMapper {
     if (this.awaitingBackingBoundaryValue) return null;
     if (this.minimumBackingSampleValue !== null && startSample < this.minimumBackingSampleValue) return null;
     const shiftSamples = Math.round(
-      ((this.committedDeltaMsValue! - this.referenceDeltaMsValue!) * this.sampleRate) / 1_000,
+      (this.mappingShiftWallMs() * this.sampleRate) / 1_000,
     );
     const mapped = startSample + shiftSamples;
     return Number.isSafeInteger(mapped) ? mapped : null;
@@ -171,7 +189,39 @@ export class RobotContentTimelineMapper {
   /** Converts reference-frame authority using the delta proven to be in backing PCM. */
   liveLagMs(referenceLagMs: number, context: CalibrationContext, nowMs: number) {
     if (!Number.isFinite(referenceLagMs) || !this.isReady(context, nowMs)) return null;
-    return referenceLagMs + this.committedDeltaMsValue! - this.referenceDeltaMsValue!;
+    return referenceLagMs + this.mappingShiftWallMs();
+  }
+
+  /**
+   * How far committed content sits from the reference frame, in wall time.
+   *
+   * The deltas are media milliseconds; capture samples and the mixer read head
+   * are wall time. Converting here is what keeps a 2x room from being aligned
+   * as if its player error were twice the real audio offset.
+   */
+  private mappingShiftWallMs() {
+    return mediaToWallMs(
+      this.committedDeltaMsValue! - this.referenceDeltaMsValue!,
+      this.playbackRateValue,
+    );
+  }
+
+  /** The rate this mapping converts media deltas at. */
+  get playbackRate() {
+    return this.playbackRateValue;
+  }
+
+  /**
+   * Whether an existing mapping still describes the room's current rate.
+   *
+   * False is a mapping discontinuity, not a recoverable disagreement: every
+   * delta already folded into the reference frame was converted at the old
+   * rate, so nothing here can be reinterpreted in place.
+   */
+  matchesPlaybackRate(playbackRate: number) {
+    if (this.contextValue === null || this.referenceDeltaMsValue === null) return true;
+    if (!Number.isFinite(playbackRate) || playbackRate <= 0) return true;
+    return Math.abs(this.playbackRateValue - playbackRate) <= 0.0001;
   }
 
   get referenceDeltaMs() {
@@ -186,6 +236,10 @@ export class RobotContentTimelineMapper {
   /** Delta whose music content has been proven to have reached backing PCM. */
   get committedDeltaMs() {
     return this.committedDeltaMsValue;
+  }
+
+  private bindPlaybackRate(playbackRate: number) {
+    this.playbackRateValue = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1;
   }
 
   private bindContext(context: CalibrationContext) {

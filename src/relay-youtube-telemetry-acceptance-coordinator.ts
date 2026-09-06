@@ -1,6 +1,7 @@
 export type RelayYoutubeTelemetryStatus = {
   state?: unknown;
   videoId?: unknown;
+  playbackRate?: unknown;
 };
 
 export type RelayYoutubeTelemetryAcceptanceInput<TSocket, TPlaybackIdentity> = {
@@ -18,6 +19,15 @@ export type RelayYoutubeTelemetryAcceptanceDependencies<TSocket, TPlaybackIdenti
   registerPlayback: (socket: TSocket, identity: TPlaybackIdentity) => void;
   clearTelemetryRejection: (socket: TSocket) => void;
   cancelActiveContentValidation: (nowMs: number) => boolean;
+  /**
+   * Retires a Robot content mapping built at a rate the room has left.
+   *
+   * Media deltas convert to wall time through the playback rate, so a rate
+   * change is a mapping discontinuity of exactly the same kind as a
+   * destructive seek - not a value that can be reinterpreted in place. Returns
+   * whether it revoked, so this seam does not have to know the rule.
+   */
+  revokeContentMappingOnRateChange: (playbackRate: unknown) => boolean;
   reportTimingStatus: () => void;
   reportTimelineStatus: (status: RelayYoutubeTelemetryStatus) => void;
   reportRoomStatus: (nowMs: number) => void;
@@ -45,8 +55,15 @@ export function createRelayYoutubeTelemetryAcceptanceCoordinator<TSocket, TPlayb
       dependencies.registerPlayback(input.socket, input.acceptedIdentity);
       dependencies.clearTelemetryRejection(input.socket);
 
+      // Before anything reads the mapping: a rate change invalidates it, and
+      // the revocation publishes its own timing status.
+      const revoked = dependencies.revokeContentMappingOnRateChange(
+        input.timelineStatus.playbackRate,
+      );
+
       if (
-        Number(input.timelineStatus.state) !== 1
+        !revoked
+        && Number(input.timelineStatus.state) !== 1
         && dependencies.cancelActiveContentValidation(input.nowMs)
       ) {
         dependencies.reportTimingStatus();

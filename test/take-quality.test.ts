@@ -34,6 +34,7 @@ function frameState(patch: Partial<TakeQualityFrameState> = {}): TakeQualityFram
     alignmentClamped: false,
     robotRoute: false,
     robotDeltaFresh: true,
+    timingDivergenceMs: null,
     ...patch,
   };
 }
@@ -71,6 +72,9 @@ function evidence(patch: Partial<TakeQualityEvidence> = {}): TakeQualityEvidence
     alignmentClampedMs: 0,
     robotDeltaMissingSamples: 0,
     robotDeltaMissingMs: 0,
+    timingDivergedSamples: 0,
+    timingDivergedMs: 0,
+    peakTimingDivergenceMs: 0,
     events: {
       'mic-transport-disconnected': 0,
       'mic-transport-connected': 0,
@@ -263,4 +267,62 @@ test('controlled server shutdown is explicit review evidence', () => {
   assert.equal(result.evidence.events['server-shutdown'], 1);
   assert.equal(result.verdict, 'review');
   assert.equal(result.issues.some((issue) => issue.code === 'recording-interrupted'), true);
+});
+
+test('a Take that holds its alignment while the mapping moves under it is not clean', () => {
+  const quality = tracker();
+  // The mixer alignment is deliberately frozen for the whole recording, so the
+  // mapping moving underneath leaves every other signal reading healthy.
+  quality.observeFrame(960, frameState({ timingDivergenceMs: 450 }), mixedFrame());
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.timingDivergedSamples, 960);
+  assert.equal(result.evidence.timingDivergedMs, 20);
+  assert.equal(result.evidence.peakTimingDivergenceMs, 450);
+  assert.equal(result.evidence.calibrationStaleMs, 0);
+  assert.equal(result.evidence.robotDeltaMissingMs, 0);
+  assert.equal(result.evidence.networkEstimateMs, 0);
+  assert.notEqual(result.verdict, 'clean');
+  assert.equal(result.issues.some((issue) => issue.code === 'timing-diverged'), true);
+});
+
+test('divergence below the mixer own re-apply threshold is player jitter, not drift', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState({ timingDivergenceMs: 39 }), mixedFrame());
+  quality.observeFrame(960, frameState({ timingDivergenceMs: -39 }), mixedFrame());
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.timingDivergedSamples, 0);
+  assert.equal(result.evidence.peakTimingDivergenceMs, 0);
+  assert.equal(result.verdict, 'clean');
+});
+
+test('divergence is charged by magnitude in either direction', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState({ timingDivergenceMs: -820 }), mixedFrame());
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.timingDivergedSamples, 960);
+  assert.equal(result.evidence.peakTimingDivergenceMs, 820);
+});
+
+test('an unknown desired alignment is not evidence of divergence', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState({ timingDivergenceMs: null }), mixedFrame());
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.timingDivergedSamples, 0);
+  assert.equal(result.verdict, 'clean');
+});
+
+test('sustained divergence degrades the Take rather than only asking for review', () => {
+  const result = assessTakeQuality(evidence({
+    timingDivergedSamples: 14_400,
+    timingDivergedMs: 300,
+    peakTimingDivergenceMs: 512,
+  }));
+  assert.equal(result.verdict, 'degraded');
+  const issue = result.issues.find((candidate) => candidate.code === 'timing-diverged');
+  assert.equal(issue?.severity, 'critical');
+  assert.match(String(issue?.message), /512 ms/);
 });

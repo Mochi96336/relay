@@ -12,7 +12,7 @@ import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
-import { combineBootCalibration } from './boot-calibration.js';
+import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
@@ -452,11 +452,29 @@ function calibrationContext(): CalibrationContext {
   };
 }
 
+/**
+ * Whether this room's backing and Source are the Robot pair.
+ *
+ * A physical fact about the topology, and deliberately nothing else. Turning
+ * off a *strategy* cannot make a Robot stop being a Robot: content authority,
+ * mapping readiness and Robot Take quality semantics all describe the route
+ * that exists, not the measurement anyone happens to prefer. Reading a
+ * strategy flag for those made `RELAY_CALIBRATION_PROBE=0` silently retire the
+ * Robot content mapping and report `robotRoute: false` for a room plainly on
+ * one - see ARCHITECTURE_BOUNDARIES.md section 7.
+ */
+function robotRouteActive() {
+  return backingRuntime.isRobot || sourceRuntime.connected();
+}
+
+/**
+ * Whether the boot probe is the strategy a *new* measurement would use here.
+ *
+ * Route AND configuration: the audible probe is opt-out, so this is the only
+ * question `RELAY_CALIBRATION_PROBE` is allowed to answer.
+ */
 function robotProbeTimingActive() {
-  return PROBE_CALIBRATE && (
-    backingRuntime.isRobot
-    || sourceRuntime.connected()
-  );
+  return PROBE_CALIBRATE && robotRouteActive();
 }
 
 /** The current Robot route has spent its bounded probe attempts. */
@@ -512,12 +530,24 @@ function robotDeltaIsFresh(nowMs = performance.now()) {
  * applied total already carries a player-relative term measured in this
  * mapping".
  */
+/**
+ * The room's playback rate, as the mixer must read it.
+ *
+ * The single source for every media-to-wall conversion in the timing domain.
+ * A room with no Song, or one whose Source has not reported yet, is 1x by
+ * definition: there is no media clock running at any other speed.
+ */
+function currentPlaybackRate(nowMs = performance.now()) {
+  const rate = Number(currentTimelineStatus(nowMs).playbackRate);
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
+}
+
 function robotDeltaEverEstablished() {
   return Number.isFinite(robotPlayerOffset.lastReportedAtMs);
 }
 
 function robotContentMappingReady(nowMs = performance.now()) {
-  if (!robotProbeTimingActive()) return true;
+  if (!robotRouteActive()) return true;
   return sourceRuntime.connected()
     && robotContentTimeline.isReady(calibrationContext(), nowMs);
 }
@@ -616,6 +646,31 @@ function revokeRobotContentMapping({ reason }: { reason: string }) {
   broadcastJson(timingCalibrationStatusPayload());
 }
 
+/**
+ * Retires a Robot content mapping the room's playback rate has invalidated.
+ *
+ * The mapper folds media-time player deltas into a wall-time reference frame,
+ * so the rate is part of the mapping, not a parameter of reading it. Every
+ * delta already folded in was converted at the old rate; nothing can be
+ * rescaled in place. That makes a rate change the same class of event as a
+ * destructive seek, and it takes the same single revocation transaction.
+ *
+ * Boot-probe authority deliberately survives: a measured pipeline latency is
+ * wall time and says nothing about how fast the song is playing.
+ * `maybeReapplyBootCalibration()` folds the delta back in at the new rate.
+ */
+function revokeContentMappingOnRateChange(playbackRate: unknown) {
+  const rate = Number(playbackRate);
+  if (!Number.isFinite(rate) || rate <= 0) return false;
+  if (robotContentTimeline.matchesPlaybackRate(rate)) return false;
+
+  revokeRobotContentMapping({
+    reason: 'The room changed playback rate during calibration.'
+      + ' Rebuilding the Robot content mapping before calibration retries.',
+  });
+  return true;
+}
+
 function robotContentTransitionStatus(nowMs = performance.now()) {
   return robotContentTransitionRuntime.status(nowMs);
 }
@@ -656,6 +711,7 @@ function beginRobotContentTransition(
     referenceDeltaMs,
     context,
     confirmedReferenceLagMs,
+    playbackRate: currentPlaybackRate(nowMs),
   }, nowMs);
 }
 
@@ -673,6 +729,7 @@ function reconcileRobotContentTransitionWithFreshDelta(
     freshDeltaMs: robotContentTimeline.currentDeltaMs,
     referenceDeltaMs: robotContentTimeline.referenceDeltaMs,
     confirmedReferenceLagMs,
+    playbackRate: currentPlaybackRate(nowMs),
   }, nowMs);
 }
 
@@ -1162,7 +1219,7 @@ function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationA
 
   // A Robot that is gone is a real invalidation; one that has merely not spoken
   // for a moment is not.
-  const robotGone = robotProbeTimingActive() && !sourceRuntime.connected();
+  const robotGone = robotRouteActive() && !sourceRuntime.connected();
   if (robotGone) return 'revoke';
 
   // Player-relative delta matters only while a Song exists. In a no-Song room
@@ -1175,7 +1232,7 @@ function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationA
   // room is now asking and must be revoked. After one, the total already
   // includes that term and the Robot has simply stopped talking.
   if (
-    robotProbeTimingActive()
+    robotRouteActive()
     && kind === 'boot-probe'
     && roomHasSong()
     && !robotDeltaIsFresh()
@@ -1183,11 +1240,74 @@ function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationA
   // A Robot content result is expressed in the mapper's stable reference frame.
   // It can own the live mixer only while the current media mapping is known.
   if (
-    robotProbeTimingActive()
+    robotRouteActive()
     && kind === 'content'
     && !robotContentMappingReady()
   ) return robotDeltaEverEstablished() ? 'hold' : 'revoke';
   return 'apply';
+}
+
+/**
+ * The boot baseline's live total: measured pipeline path, plus where the
+ * player currently is.
+ *
+ * One expression with two readers - the applier in
+ * `maybeReapplyBootCalibration()` and the observer in
+ * `desiredCalibratedMicLagMs()`. They must never be able to disagree about
+ * what the boot strategy currently wants.
+ */
+function bootProbeAdvanceMs(nowMs: number) {
+  const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
+  if (pathDifferenceMs === null) return null;
+  // The measured path difference is wall time and rate-independent; the player
+  // delta is media time and is not.
+  return pathDifferenceMs + mediaToWallMs(currentDeltaMs(nowMs), currentPlaybackRate(nowMs));
+}
+
+/**
+ * A content result carried from the mapper's stable reference frame into live
+ * coordinates. Same two-reader rule as `bootProbeAdvanceMs()`.
+ */
+function contentLiveLagMs(referenceLagMs: number, nowMs: number) {
+  return robotContentTimeline.liveLagMs(referenceLagMs, calibrationContext(), nowMs);
+}
+
+/**
+ * What the mixer's Mic advance would be if it were free to follow the mapping.
+ *
+ * `syncAppliedCalibration()` deliberately freezes the applied alignment for the
+ * whole of a Take, because moving the read head mid-recording splices the voice
+ * audibly. What is *not* frozen is the mapping underneath it: the Robot player
+ * delta keeps drifting, and a preserving follower correction commits a new
+ * content mapping without ever invalidating the measurement - so neither
+ * `calibrationStale` nor any transport event fires. The recording is then
+ * aligned to a mapping that is no longer the room's, and every existing quality
+ * signal still reads clean.
+ *
+ * This computes the value the appliers would install, without installing it, so
+ * a Take can record how far it drifted from the alignment it was handed.
+ * `null` means there is no current answer to diverge from - which the
+ * timing-fallback, calibration-stale and robot-delta-missing signals already
+ * describe.
+ */
+function desiredCalibratedMicLagMs(nowMs: number): number | null {
+  const kind = appliedCalibrationKind();
+
+  if (robotRouteActive() && kind === 'boot-probe') {
+    if (calibration.result === null || calibrationIsStale()) return null;
+    if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return null;
+    // With no Song there is no player-relative term, exactly as the applier
+    // reads it: the measured path difference is the whole correction.
+    if (!roomHasSong(nowMs)) return bootProbeRuntime.pathDifferenceMs;
+    if (calibrationApplicability(kind) !== 'apply') return null;
+    return bootProbeAdvanceMs(nowMs);
+  }
+
+  if (calibrationApplicability(kind) !== 'apply') return null;
+  const result = calibration.result;
+  if (result === null) return null;
+  if (!robotRouteActive() || kind !== 'content') return result.micLagMs;
+  return contentLiveLagMs(result.micLagMs, nowMs);
 }
 
 /**
@@ -1213,7 +1333,7 @@ function syncAppliedCalibration() {
   const active = session.alignment.calibratedMicLagMs;
   const calibrationKind = appliedCalibrationKind();
 
-  if (robotProbeTimingActive() && calibrationKind === 'boot-probe') {
+  if (robotRouteActive() && calibrationKind === 'boot-probe') {
     const nowMs = performance.now();
     const result = calibration.result;
     const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
@@ -1283,13 +1403,9 @@ function syncAppliedCalibration() {
   const applicability = calibrationApplicability(calibrationKind);
   if (applicability === 'hold') return false;
   let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;
-  const robotContentAuthority = robotProbeTimingActive() && calibrationKind === 'content';
+  const robotContentAuthority = robotRouteActive() && calibrationKind === 'content';
   if (nextMicLagMs !== null && robotContentAuthority) {
-    nextMicLagMs = robotContentTimeline.liveLagMs(
-      nextMicLagMs,
-      calibrationContext(),
-      performance.now(),
-    );
+    nextMicLagMs = contentLiveLagMs(nextMicLagMs, performance.now());
   }
 
   // The Robot offset tracker is deliberately smoothed, but its residual noise is
@@ -1353,7 +1469,7 @@ function sourceStatusPayload() {
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
     activeCalibrationKind: appliedCalibrationKind(),
-    robotRoute: robotProbeTimingActive(),
+    robotRoute: robotRouteActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     robotFollowerSeekPreservesMapping: robotFollowerSeekMayPreserveMapping(nowMs),
@@ -1365,14 +1481,21 @@ function sourceStatusPayload() {
 
 function takeQualityFrameState(nowMs = performance.now()) {
   const alignment = session.alignment;
+  const desiredMicLagMs = desiredCalibratedMicLagMs(nowMs);
   return {
     timingMode: alignment.calibratedMicLagMs === null
       ? 'network-estimate' as const
       : 'acoustic-calibration' as const,
     calibrationStale: calibrationIsStale(),
     alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
-    robotRoute: robotProbeTimingActive(),
+    robotRoute: robotRouteActive(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    // How far the frozen recording alignment has drifted from the mapping the
+    // room is actually on. Null while there is no applicable answer to compare
+    // against; the other timing signals own that case.
+    timingDivergenceMs: desiredMicLagMs === null || alignment.calibratedMicLagMs === null
+      ? null
+      : desiredMicLagMs - alignment.calibratedMicLagMs,
   };
 }
 
@@ -1576,7 +1699,7 @@ function timingCalibrationStatusPayload() {
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
     activeCalibrationKind: appliedCalibrationKind(),
-    robotRoute: robotProbeTimingActive(),
+    robotRoute: robotRouteActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     robotContentTransition: robotContentTransitionStatus(nowMs),
@@ -1618,7 +1741,7 @@ function currentTimelineStatus(nowMs = performance.now()) {
  * what those facts mean; this function only samples the live server once.
  */
 function readinessRouteMode(nowMs = performance.now()) {
-  if (backingRuntime.isRobot || sourceRuntime.connected()) return 'robot' as const;
+  if (robotRouteActive()) return 'robot' as const;
   if (backingRuntime.armed()) return 'legacy' as const;
   // Voice-only is valid only while the room truly has no Song. Once a Song
   // exists, backing is an expected dependency even before a concrete route
@@ -1705,7 +1828,7 @@ function productStatusPayload(nowMs = performance.now()) {
       calibrationActive: timingCalibrationInProgress(nowMs),
       calibrationStale: calibrationIsStale(),
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
-      requiresRobotPlayerDelta: robotProbeTimingActive() && timingRuntime.calibrationKind === 'boot-probe',
+      requiresRobotPlayerDelta: robotRouteActive() && timingRuntime.calibrationKind === 'boot-probe',
       robotProbeTimingActive: robotProbeTimingActive(),
       bootProbeActive: bootProbeInProgress(nowMs),
       contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
@@ -1914,7 +2037,7 @@ const mixerTimer = setInterval(() => {
 
 function maybeAutoCalibrate(nowMs: number) {
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
-  const robotRoute = robotProbeTimingActive();
+  const robotRoute = robotRouteActive();
   // Boot probe is the fast baseline, not the terminal strategy. Before it has
   // either completed or exhausted its bounded attempts, keep its preference.
   // Once a baseline exists, a playing Song must be allowed to promote to
@@ -1948,7 +2071,7 @@ function maybeAutoCalibrate(nowMs: number) {
 function contentValidationPathReady(nowMs: number) {
   if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
   if (!bootProbeSettled(nowMs)) return false;
-  if (robotProbeTimingActive() && !robotContentEvidenceMappingReady(nowMs)) return false;
+  if (robotRouteActive() && !robotContentEvidenceMappingReady(nowMs)) return false;
   if (!session.active || calibration.collecting) return false;
   // Same provenance rule as the baseline itself: validate the authority that is
   // actually applied, not whichever candidate happens to be in flight.
@@ -2001,7 +2124,7 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
   // never terminates. `decideCalibrationStart` already refuses this for manual
   // and product-advertised starts; the automatic scheduler needs the same rule
   // rather than a second, laxer policy.
-  if (robotProbeTimingActive() && (!backingRuntime.isRobot || !sourceRuntime.connected())) {
+  if (robotRouteActive() && (!backingRuntime.isRobot || !sourceRuntime.connected())) {
     return false;
   }
   if (target === 'mic') {
@@ -2053,7 +2176,7 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
 }
 
 function maybeStartProbeCalibration(nowMs: number) {
-  if (!PROBE_CALIBRATE || !robotProbeTimingActive() || takeBlocksCalibration()) return;
+  if (!robotProbeTimingActive() || takeBlocksCalibration()) return;
   if (!session.active || calibration.collecting) return;
 
   const context = bootProbeContext();
@@ -2257,6 +2380,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     backing: leg,
     deltaMs: currentDeltaMs(nowMs),
     sampleRate: MIX_SAMPLE_RATE,
+    playbackRate: currentPlaybackRate(nowMs),
   });
 
   if (PROBE_DEBUG) {
@@ -2302,7 +2426,7 @@ function currentDeltaMs(nowMs: number) {
  */
 function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
-  if (!robotProbeTimingActive()) return;
+  if (!robotRouteActive()) return;
   const appliedKind = appliedCalibrationKind();
   const reclaiming = appliedKind !== 'boot-probe'
     && calibrationApplicability(appliedKind) === 'revoke';
@@ -2312,7 +2436,8 @@ function maybeReapplyBootCalibration(nowMs: number) {
   if (!robotDeltaIsFresh(nowMs)) return;
   if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return;
 
-  const advanceMs = bootProbeRuntime.pathDifferenceMs + currentDeltaMs(nowMs);
+  const advanceMs = bootProbeAdvanceMs(nowMs);
+  if (advanceMs === null) return;
   const applied = session.alignment.calibratedMicLagMs;
   if (applied !== null && Math.abs(advanceMs - applied) < BOOT_DELTA_REAPPLY_MS) return;
 
@@ -2337,7 +2462,7 @@ function maybeReapplyBootCalibration(nowMs: number) {
  * estimate mid-upgrade.
  */
 function dropLegacyCalibrationForRobot() {
-  if (!robotProbeTimingActive() || timingRuntime.calibrationKind !== 'content') return;
+  if (!robotRouteActive() || timingRuntime.calibrationKind !== 'content') return;
   if (bootProbeSettled()) return;
   clearContentValidationBaseline();
   calibration.reset();
@@ -2581,6 +2706,7 @@ const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAccepta
   registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
   clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
   cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
+  revokeContentMappingOnRateChange: (playbackRate) => revokeContentMappingOnRateChange(playbackRate),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
   reportTimelineStatus: (status) => broadcastJson(status),
   reportRoomStatus: (nowMs) => broadcastJson(youtubeTimeline.roomStatusPayload(nowMs)),
@@ -3016,6 +3142,7 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
       robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
       calibrationContext(),
       nowMs,
+      currentPlaybackRate(nowMs),
     );
     if (mapped) requestRobotBackingBoundary(nowMs);
     return;

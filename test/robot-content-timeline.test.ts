@@ -120,4 +120,68 @@ describe('RobotContentTimelineMapper', () => {
     assert.equal(mapper.isReady(context, 1_201), false);
     assert.equal(mapper.liveLagMs(400, context, 1_201), null);
   });
+
+  test('a media-time delta becomes a wall-time shift through the room playback rate', () => {
+    // Capture sample positions advance in real time; the Robot subtracts two
+    // media positions. At 2x a 400 ms player delta is only 200 ms of audio.
+    const mapper = new RobotContentTimelineMapper({ sampleRate: RATE, freshForMs: 2_000 });
+    mapper.notePlayerOffset(100, context, 0, 2);
+    mapper.notePlayerOffset(500, context, 10, 2);
+
+    assert.equal(mapper.committedDeltaMs, 500, 'the delta itself stays the media value');
+    assert.equal(mapper.liveLagMs(750, context, 10), 750 + 200);
+    assert.equal(mapper.mapBackingStart(RATE, context, 10), RATE + (RATE * 200) / 1_000);
+  });
+
+  test('half speed stretches the same delta over twice the real time', () => {
+    const mapper = new RobotContentTimelineMapper({ sampleRate: RATE, freshForMs: 2_000 });
+    mapper.notePlayerOffset(100, context, 0, 0.5);
+    mapper.notePlayerOffset(500, context, 10, 0.5);
+
+    assert.equal(mapper.liveLagMs(750, context, 10), 750 + 800);
+    assert.equal(mapper.mapBackingStart(RATE, context, 10), RATE + (RATE * 800) / 1_000);
+  });
+
+  test('an unstated rate keeps the historical 1x behaviour exactly', () => {
+    const mapper = new RobotContentTimelineMapper({ sampleRate: RATE, freshForMs: 2_000 });
+    mapper.notePlayerOffset(100, context, 0);
+    mapper.notePlayerOffset(500, context, 10);
+
+    assert.equal(mapper.playbackRate, 1);
+    assert.equal(mapper.liveLagMs(750, context, 10), 750 + 400);
+  });
+
+  test('the rate belongs to the mapping, so a changed rate is a discontinuity', () => {
+    const mapper = new RobotContentTimelineMapper({ sampleRate: RATE, freshForMs: 2_000 });
+
+    // Nothing mapped yet: any rate is compatible with no mapping.
+    assert.equal(mapper.matchesPlaybackRate(2), true);
+
+    mapper.notePlayerOffset(100, context, 0, 1);
+    assert.equal(mapper.matchesPlaybackRate(1), true);
+    assert.equal(mapper.matchesPlaybackRate(2), false);
+    assert.equal(mapper.matchesPlaybackRate(0.5), false);
+
+    // Every delta already folded into the reference frame was converted at the
+    // bound rate, so a later report cannot silently re-scale the mapping.
+    mapper.notePlayerOffset(500, context, 10, 2);
+    assert.equal(mapper.playbackRate, 1);
+    assert.equal(mapper.liveLagMs(750, context, 10), 750 + 400);
+
+    // Only a fresh mapping adopts the new rate.
+    mapper.reset();
+    mapper.notePlayerOffset(100, context, 20, 2);
+    assert.equal(mapper.playbackRate, 2);
+    assert.equal(mapper.matchesPlaybackRate(2), true);
+  });
+
+  test('a nonsense rate never reaches the mapping arithmetic', () => {
+    const mapper = new RobotContentTimelineMapper({ sampleRate: RATE, freshForMs: 2_000 });
+    mapper.notePlayerOffset(100, context, 0, 0);
+    mapper.notePlayerOffset(500, context, 10, 0);
+
+    assert.equal(mapper.playbackRate, 1);
+    assert.equal(mapper.liveLagMs(750, context, 10), 750 + 400);
+    assert.equal(mapper.matchesPlaybackRate(Number.NaN), true, 'an unreadable report is not a discontinuity');
+  });
 });

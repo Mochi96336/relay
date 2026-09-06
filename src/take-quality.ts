@@ -1,6 +1,6 @@
 import type { MixFrameEvidence } from './audio-session.js';
 
-export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v1' as const;
+export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v2' as const;
 
 export type TakeQualityVerdict = 'clean' | 'review' | 'degraded';
 export type TakeQualitySeverity = 'warning' | 'critical';
@@ -27,6 +27,15 @@ export type TakeQualityFrameState = {
   alignmentClamped: boolean;
   robotRoute: boolean;
   robotDeltaFresh: boolean;
+  /**
+   * Applied mixer alignment subtracted from the alignment the current mapping
+   * asks for, or null while there is no applicable answer to compare against.
+   *
+   * A recording deliberately freezes the applied value, so this is the one
+   * timing fault with no other witness: the measurement stays valid, every
+   * transport stays up, and the WAV still drifts.
+   */
+  timingDivergenceMs: number | null;
 };
 
 /**
@@ -66,6 +75,10 @@ export type TakeQualityEvidence = {
   alignmentClampedMs: number;
   robotDeltaMissingSamples: number;
   robotDeltaMissingMs: number;
+  timingDivergedSamples: number;
+  timingDivergedMs: number;
+  /** Worst divergence seen, so a brief large excursion is not averaged away. */
+  peakTimingDivergenceMs: number;
   events: TakeQualityEventCounts;
 };
 
@@ -82,6 +95,7 @@ export type TakeQualityIssueCode =
   | 'calibration-stale'
   | 'alignment-clamped'
   | 'robot-delta-missing'
+  | 'timing-diverged'
   | 'transport-instability'
   | 'recording-interrupted';
 
@@ -102,6 +116,18 @@ export type TakeQualityAssessment = {
 
 const DEGRADED_DURATION_MS = 250;
 const DEGRADED_CLIPPING_MS = 20;
+
+/**
+ * How far the applied alignment may sit from the mapping before a recorded
+ * frame counts as diverged.
+ *
+ * Deliberately the same 40 ms the mixer itself uses to decide that a player
+ * delta has really moved rather than jittered, so the Take never calls
+ * "diverged" something the running mixer would have ignored. Kept as a policy
+ * constant rather than an env knob for the same reason the other thresholds
+ * here are: a stored verdict has to mean the same thing across deployments.
+ */
+const TIMING_DIVERGENCE_TOLERANCE_MS = 40;
 
 function emptyEvents(): TakeQualityEventCounts {
   return {
@@ -238,6 +264,17 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     });
   }
 
+  // A Take freezes the mixer alignment on purpose, so divergence is not a
+  // transport failure and no other signal reports it. Without this a recording
+  // made against a mapping the room had already left still assessed as clean.
+  addDurationIssue(
+    issues,
+    'timing-diverged',
+    evidence.timingDivergedMs,
+    `The recorded alignment drifted up to ${Math.round(evidence.peakTimingDivergenceMs)} ms `
+    + 'from the timing the Robot content mapping asked for while the Take held it frozen.',
+  );
+
   const instabilityEvents =
     evidence.events['mic-transport-disconnected']
     + evidence.events['mic-capture-restarted']
@@ -303,6 +340,8 @@ export class TakeQualityTracker {
   private calibrationStaleSamples = 0;
   private alignmentClampedSamples = 0;
   private robotDeltaMissingSamples = 0;
+  private timingDivergedSamples = 0;
+  private peakTimingDivergenceMs = 0;
   private readonly events = emptyEvents();
 
   constructor(private readonly options: {
@@ -338,6 +377,14 @@ export class TakeQualityTracker {
       if (state.calibrationStale) this.calibrationStaleSamples += sampleCount;
       if (state.alignmentClamped) this.alignmentClampedSamples += sampleCount;
       if (state.robotRoute && !state.robotDeltaFresh) this.robotDeltaMissingSamples += sampleCount;
+
+      if (state.timingDivergenceMs !== null) {
+        const divergenceMs = Math.abs(state.timingDivergenceMs);
+        if (divergenceMs >= TIMING_DIVERGENCE_TOLERANCE_MS) {
+          this.timingDivergedSamples += sampleCount;
+          this.peakTimingDivergenceMs = Math.max(this.peakTimingDivergenceMs, divergenceMs);
+        }
+      }
     }
   }
 
@@ -385,6 +432,9 @@ export class TakeQualityTracker {
       alignmentClampedMs: toMs(this.alignmentClampedSamples),
       robotDeltaMissingSamples: this.robotDeltaMissingSamples,
       robotDeltaMissingMs: toMs(this.robotDeltaMissingSamples),
+      timingDivergedSamples: this.timingDivergedSamples,
+      timingDivergedMs: toMs(this.timingDivergedSamples),
+      peakTimingDivergenceMs: this.peakTimingDivergenceMs,
       events: { ...this.events },
     });
   }

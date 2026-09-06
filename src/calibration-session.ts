@@ -62,7 +62,14 @@ export type CalibrationSessionOptions = {
   sampleRate: number;
   durationMs: number;
   timeoutMs: number;
-  /** Read when an answer lands, not when collection starts. */
+  /**
+   * The setup a measurement would describe if taken now.
+   *
+   * Read when a window is *collected*, and compared again when its answer
+   * lands. An answer is only ever stamped with the context its own audio came
+   * from, so a run left alive across a change cannot promote evidence measured
+   * in a setup that no longer exists.
+   */
   context: () => CalibrationContext;
   /** Injectable so lifecycle tests do not have to synthesize six real seconds. */
   analyze?: (
@@ -625,6 +632,10 @@ export class CalibrationSession {
   }
 
   private finish(window: TimingWindow) {
+    // The window's audio was captured under this setup. Everything downstream
+    // is stamped with it rather than with whatever is live when the worker
+    // answers, so provenance is a property of the evidence and not of timing.
+    const measurementContext = this.context();
     try {
       // Holes displace nothing, but they remove evidence. Past a few percent the
       // answer is not worth trusting.
@@ -652,25 +663,43 @@ export class CalibrationSession {
         const revision = ++this.analysisRevision;
         this.analysisPending = true;
         void Promise.resolve(result).then(
-          (analysis) => this.settlePendingAnalysis(revision, analysis),
+          (analysis) => this.settlePendingAnalysis(revision, measurementContext, analysis),
           (error: unknown) => this.rejectPendingAnalysis(revision, error),
         );
         return;
       }
 
       this.analysisAbortController = null;
-      this.applyAnalysis(result);
+      this.applyAnalysis(result, measurementContext);
     } catch (error) {
       this.analysisAbortController = null;
       this.rejectAnalysis(error);
     }
   }
 
-  private settlePendingAnalysis(revision: number, result: TimingCalibrationAnalysis) {
+  private settlePendingAnalysis(
+    revision: number,
+    measurementContext: CalibrationContext,
+    result: TimingCalibrationAnalysis,
+  ) {
     if (revision !== this.analysisRevision || !this.analysisPending) return;
     this.analysisPending = false;
     this.analysisAbortController = null;
-    this.applyAnalysis(result);
+
+    // Callers that move the setup are expected to abort the run themselves, and
+    // they all do. This is what makes that a redundancy rather than the whole
+    // guarantee: an answer whose audio predates the change describes a pairing
+    // of transports the room has left, and the buffered evidence behind it
+    // spans the change too.
+    if (!this.contextsEqual(measurementContext, this.context())) {
+      this.fail(
+        'The capture arrangement changed while calibration was being measured. '
+        + 'Start calibration again.',
+      );
+      return;
+    }
+
+    this.applyAnalysis(result, measurementContext);
     this.drainReadyWindows();
   }
 
@@ -681,7 +710,10 @@ export class CalibrationSession {
     this.rejectAnalysis(error);
   }
 
-  private applyAnalysis(result: TimingCalibrationAnalysis) {
+  private applyAnalysis(
+    result: TimingCalibrationAnalysis,
+    measurementContext: CalibrationContext,
+  ) {
     this.candidates.push(result.micLagMs);
     if (this.candidates.length > this.agreementWindows) this.candidates.shift();
 
@@ -705,7 +737,7 @@ export class CalibrationSession {
           confidence: result.confidence,
           segmentLagsMs: [...result.segmentLagsMs],
         };
-        this.measuredContext = this.context();
+        this.measuredContext = this.cloneContext(measurementContext);
         this.provisional = true;
       }
 
@@ -724,7 +756,7 @@ export class CalibrationSession {
       micLagMs: result.micLagMs,
       confidence: result.confidence,
       segmentLagsMs: result.segmentLagsMs,
-    }, this.context());
+    }, measurementContext);
     this.collector.reset();
     this.onSettled();
   }

@@ -24,6 +24,7 @@ function runtimeHarness(overrides: {
   backingTotalSamples?: () => number;
   micTotalSamples?: () => number;
   transitionEvidence?: (maxSamples: number) => { mic: Int16Array; backing: Int16Array } | null;
+  readMic?: (start: number, length: number) => Int16Array;
   commit?: (plan: RobotContentTransitionCommitPlan, nowMs: number) => boolean;
   estimateRawLag?: ConstructorParameters<typeof RobotContentTransitionRuntime>[0]['estimateRawLag'];
   compareHypotheses?: ConstructorParameters<typeof RobotContentTransitionRuntime>[0]['compareHypotheses'];
@@ -47,7 +48,7 @@ function runtimeHarness(overrides: {
       backingTotalSamples: overrides.backingTotalSamples ?? (() => 2_000),
       micTotalSamples: overrides.micTotalSamples ?? (() => 2_000),
       readBacking: (_start, length) => new Int16Array(length).fill(10),
-      readMic: (_start, length) => new Int16Array(length).fill(10),
+      readMic: overrides.readMic ?? ((_start, length) => new Int16Array(length).fill(10)),
       transitionEvidence: overrides.transitionEvidence ?? (() => null),
       commit: overrides.commit ?? (() => true),
       onDegraded: (status) => {
@@ -72,6 +73,7 @@ function beginConfirmed(runtime: RobotContentTransitionRuntime) {
     referenceDeltaMs: 500,
     context,
     confirmedReferenceLagMs: 750,
+    playbackRate: 1,
   }, 100);
 }
 
@@ -162,6 +164,7 @@ test('late anchor completion cannot revive a cleared transition', async () => {
     referenceDeltaMs: 500,
     context,
     confirmedReferenceLagMs: null,
+    playbackRate: 1,
   }, 100);
   assert.deepEqual(historyRequests, [3_000], 'runtime owns the bounded anchor-history request');
   assert.equal(runtime.status(100).state, 'verifying');
@@ -363,4 +366,159 @@ test('deadline degradation aborts work and remains fail-closed until a later con
   assert.ok('degradedReason' in degradedStatus);
   assert.equal(degradedStatus.degradedReason, 'deadline-exceeded');
   assert.equal(runtime.requestBackingBoundary(3), null, 'degraded transition cannot acquire new transport evidence');
+});
+
+test('a repeated transition at the same rate carries its bounded lifetime', () => {
+  let now = 0;
+  const { runtime } = runtimeHarness({ now: () => now });
+  const begin = (playbackRate: number) => runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs: 750,
+    playbackRate,
+  });
+
+  begin(1);
+  now = 1_000;
+  begin(1);
+
+  // Same context, same media jump, same conversion: one continuing attempt, so
+  // it keeps the deadline it started under rather than buying a fresh one.
+  const carried = runtime.status();
+  assert.equal(carried.quarantined, true);
+  assert.equal('ageMs' in carried ? carried.ageMs : null, 1_000);
+});
+
+test('a rate change cannot carry evidence classified under the old rate', () => {
+  let now = 0;
+  const { runtime } = runtimeHarness({ now: () => now });
+  const begin = (playbackRate: number) => runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs: 750,
+    playbackRate,
+  });
+
+  begin(1);
+  now = 1_000;
+  begin(2);
+
+  // The media jump is identical, but at 2x it describes half as many capture
+  // samples. Windows the previous attempt had already classified answer a
+  // different question now, so this is a new transaction and not a retry.
+  const restarted = runtime.status();
+  assert.equal(restarted.quarantined, true);
+  assert.equal('ageMs' in restarted ? restarted.ageMs : null, 0);
+});
+
+test('the post-seek hypothesis is looked for at the wall-time distance the rate implies', async () => {
+  // sampleRate is 1_000 here, so one wall millisecond is exactly one sample.
+  // The seek jumps 500 ms of media backwards; at 2x that is 250 ms of real
+  // audio, so the post-seek vocal sits 250 samples from the pre-seek one -
+  // not 500. Looking in the wrong place can only ever fail closed.
+  const micStarts: number[] = [];
+  const { runtime } = runtimeHarness({
+    micTotalSamples: () => 10_000,
+    backingTotalSamples: () => 10_000,
+    readMic: (start, length) => {
+      micStarts.push(start);
+      return new Int16Array(length).fill(10);
+    },
+    compareHypotheses: async () => ({
+      verdict: 'post' as const,
+      preScore: 0.1,
+      postScore: 0.9,
+      preSupportingBands: 3,
+      postSupportingBands: 5,
+    }),
+  });
+
+  runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs: 750,
+    playbackRate: 2,
+  });
+  const request = runtime.requestBackingBoundary(3)!;
+  runtime.acceptBackingBoundary({
+    requestId: request.requestId,
+    generation: 3,
+    firstSampleIndex: 0,
+    currentBackingGeneration: 3,
+    context,
+  });
+  runtime.noteBackingFrame({
+    frameGeneration: 3,
+    firstSampleIndex: 0,
+    sourceSampleCount: 1_000,
+    sourceSampleRate: 1_000,
+    samples: new Int16Array(1_000).fill(7),
+    start: 0,
+    backingTotalSamples: 1_000,
+  }, 120);
+  await nextTurn();
+
+  // preRawLag = 750 (the confirmed reference; both deltas are equal here).
+  // postRawLag = 750 + (-500 ms of media)/2 = 500.
+  assert.deepEqual(micStarts, [750, 500]);
+});
+
+test('a new content authority mid-transition cannot inherit the old one classifications', async () => {
+  // Same streams, same media jump, same rate - but the hypothesis positions are
+  // measured from the confirmed content authority. A validator that promotes a
+  // corrected lag while a transition is verifying leaves the PRE ranges it
+  // already classified answering the previous authority's question.
+  let now = 0;
+  const { runtime } = runtimeHarness({ now: () => now });
+  const begin = (confirmedReferenceLagMs: number | null) => runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs,
+    playbackRate: 1,
+  });
+
+  begin(750);
+  now = 1_000;
+  begin(750);
+  const carried = runtime.status();
+  assert.equal('ageMs' in carried ? carried.ageMs : null, 1_000, 'an unchanged authority is one continuing attempt');
+
+  now = 2_000;
+  begin(820);
+  const restarted = runtime.status();
+  assert.equal('ageMs' in restarted ? restarted.ageMs : null, 0, 'a moved authority starts a new transaction');
+});
+
+test('losing content authority entirely also refuses to inherit its classifications', async () => {
+  let now = 0;
+  const { runtime } = runtimeHarness({ now: () => now });
+  const begin = (confirmedReferenceLagMs: number | null) => runtime.begin({
+    fromMediaTime: 100.5,
+    toMediaTime: 100,
+    preDeltaMs: 500,
+    referenceDeltaMs: 500,
+    context,
+    confirmedReferenceLagMs,
+    playbackRate: 1,
+  });
+
+  begin(750);
+  now = 1_000;
+  // Null means the lags now come from an anchor estimate instead, which is a
+  // different basis, not a weaker version of the same one.
+  begin(null);
+  const restarted = runtime.status();
+  assert.equal('ageMs' in restarted ? restarted.ageMs : null, 0);
 });

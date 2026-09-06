@@ -42,6 +42,29 @@ test('a recoverable Mic owner keeps the music snapshot and Change Song action', 
     'leader health alone must not expose a change form to every observer');
 });
 
+test('the Song surface repaint never rewrites unchanged text', async () => {
+  const source = await readFile(new URL('../public/song-surface.js', import.meta.url), 'utf8');
+
+  // The server sweeps the room every 250ms and broadcasts the timeline and room
+  // snapshots as a pair, so this surface repaints about eight times a second.
+  // Assigning textContent replaces the text node even when the string is
+  // identical, and Chrome cancels a click whose pressed node was removed before
+  // mouseup: a desktop press that straddled one repaint produced mousedown and
+  // mouseup but no click, so Change Song needed a second press. Measured in
+  // headless Chrome, a 200ms press landed 0/12 clicks before this guard and
+  // 12/12 after.
+  assert.match(source, /function setText\(node, value\) \{\s+if \(node\.textContent !== value\) node\.textContent = value;/,
+    'repainted text must be compared before it is written');
+  assert.match(source, /setText\(changeButton, editing \? t\('song\.done'\) : t\('song\.change'\)\)/,
+    'the Change Song label is the click target and must not be rebuilt per sweep');
+  assert.doesNotMatch(source, /changeButton\.textContent =/,
+    'an unconditional label write drops real desktop clicks');
+  for (const node of ['deviceNote', 'headingTitle', 'observerState', 'observerAuthor', 'observerTimeline', 'observerPlaybackState']) {
+    assert.doesNotMatch(source, new RegExp(`${node}\\.textContent =`),
+      `${node} repaints on every sweep and must go through setText`);
+  }
+});
+
 test('terminal handoff preparation uses the non-ended proof position', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
 

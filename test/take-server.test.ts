@@ -169,7 +169,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     assert.equal(ready.take.artifact.channels, 1);
     assert.equal(ready.take.artifact.bitsPerSample, 16);
     assert.ok(ready.take.artifact.durationMs > 0);
-    assert.equal(ready.take.quality.policyVersion, 'take-quality-v1');
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v2');
     assert.equal(
       ready.take.quality.evidence.recordedSamples,
       ready.take.artifact.sampleCount,

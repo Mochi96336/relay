@@ -22,6 +22,7 @@ const QUALITY_STATE: TakeQualityFrameState = {
   alignmentClamped: false,
   robotRoute: false,
   robotDeltaFresh: true,
+  timingDivergenceMs: null,
 };
 const VOICE_ONLY_SONG = {
   videoId: null,

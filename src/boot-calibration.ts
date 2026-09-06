@@ -20,10 +20,21 @@
  * `X` is the phone's playback position. `mic[s + advance]` holds what was sung
  * at real time `s + advance - Lmic`, against phone position
  * `X(s + advance - Lmic)`. Setting those equal, and using that `X` advances
- * with real time at rate 1:
+ * with real time at the room's playback rate `r`:
  *
- *     s + advance - Lmic = s - Lbacking + delta
- *     advance = Lmic - Lbacking + delta
+ *     r*(s + advance - Lmic) = r*(s - Lbacking) + delta
+ *     advance = Lmic - Lbacking + delta/r
+ *
+ * ## Why `delta` is the only term divided by the rate
+ *
+ * `advance` is a distance along the mixer's own timeline, and `Lmic` and
+ * `Lbacking` are wall-clock path latencies: a probe took so many real
+ * milliseconds to travel a pipeline, which is true whatever the song is doing.
+ * `delta` is the odd one out - it is a difference of two *media* positions read
+ * off a player, so at 2x it describes half as much real time as its number
+ * says. Treating it as wall time is exactly the mistake that makes every
+ * non-1x room's alignment wrong by `delta*(1 - 1/r)`, deterministically and
+ * with no failure to notice.
  *
  * Content correlation measures that whole sum in one go, which is why it works
  * at all - but the song's own beat makes the correlation ambiguous, and every
@@ -55,10 +66,14 @@ export type BootCalibrationInput = {
   backing: ProbeLeg;
   /**
    * Robot player position minus the phone's, in milliseconds, as the robot
-   * page measures it (`current - target` in its follower).
+   * page measures it (`current - target` in its follower). Media time: the
+   * page subtracts two `currentTime` readings, so it is not wall time unless
+   * the room happens to be playing at 1x.
    */
   deltaMs: number;
   sampleRate: number;
+  /** The room's playback rate, which converts `deltaMs` into wall time. */
+  playbackRate: number;
 };
 
 export type BootCalibrationResult = {
@@ -76,12 +91,18 @@ export function legLatencyMs(leg: ProbeLeg, sampleRate: number) {
   return ((leg.actualSample - leg.targetSample) / sampleRate) * 1000;
 }
 
+/** Wall-clock milliseconds spanned by `mediaDeltaMs` of media at `playbackRate`. */
+export function mediaToWallMs(mediaDeltaMs: number, playbackRate: number) {
+  if (!Number.isFinite(playbackRate) || playbackRate <= 0) return mediaDeltaMs;
+  return mediaDeltaMs / playbackRate;
+}
+
 export function combineBootCalibration(input: BootCalibrationInput): BootCalibrationResult {
   const micLatencyMs = legLatencyMs(input.mic, input.sampleRate);
   const backingLatencyMs = legLatencyMs(input.backing, input.sampleRate);
 
   return {
-    advanceMs: micLatencyMs - backingLatencyMs + input.deltaMs,
+    advanceMs: micLatencyMs - backingLatencyMs + mediaToWallMs(input.deltaMs, input.playbackRate),
     micLatencyMs,
     backingLatencyMs,
     deltaMs: input.deltaMs,

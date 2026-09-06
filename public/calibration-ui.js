@@ -135,6 +135,18 @@ function initialize() {
       && latestProductStatus?.room?.song?.videoId == null;
   }
 
+  /**
+   * Says why the action is refused, using the reason the server already
+   * computed. Falling back to one "unavailable" line told the user it would
+   * not work while the payload said exactly why, and each of these has a
+   * different recovery.
+   */
+  function blockedText(reason) {
+    const key = reason ? `timing.blocked.${reason}` : null;
+    const copy = key ? t(key) : null;
+    return copy && copy !== key ? copy : t('timing.unavailable');
+  }
+
   function calibrationAuthority() {
     return authorityState({
       authorityFresh: productAuthority?.authorityFresh === true,
@@ -165,9 +177,12 @@ function initialize() {
 
     const authority = calibrationAuthority();
     const reason = latestAction?.startCalibrationBlockedReason ?? null;
-    const running = preflightCommandPending
-      || reason === 'calibration-active'
-      || latestTiming?.state === 'calibrating';
+    // Whether the action may run is the server's question and it answers it
+    // precisely. `timing.state` answers a different one - what the room's
+    // alignment currently *is* - and reading it here made a background content
+    // run, which holds nothing up and the singer cannot perceive, flip the
+    // button between enabled and "Aligning…" every time one retried.
+    const running = preflightCommandPending || reason === 'calibration-active';
     const owner = selfOwnsServerMic();
 
     if (commandError) {
@@ -201,7 +216,7 @@ function initialize() {
 
     setHidden(!owner);
     setDisabled(true);
-    setText(calibrateStatus, owner && latestAction ? t('timing.unavailable') : '');
+    setText(calibrateStatus, owner && latestAction ? blockedText(reason) : '');
   }
 
   window.addEventListener('relay-product-status', (event) => {

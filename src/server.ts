@@ -3062,6 +3062,14 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
         case 'phone-not-playing':
           calibration.fail('Play YouTube on the phone before calibration.');
           return;
+        case 'robot-route-incomplete':
+          // Not "connect your devices": on a Robot route the second leg is
+          // this machine's own browser, and its recovery is the route unit.
+          sendJson(socket, {
+            type: 'calibration-command-rejected',
+            reason: 'robot-route-incomplete',
+          });
+          return;
         case 'content-mapping-pending':
           sendJson(socket, {
             type: 'calibration-command-rejected',

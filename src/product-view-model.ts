@@ -274,7 +274,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     : null;
   const startCalibration = decideCalibrationStart({
     takeLifecycle: input.take.lifecycle,
-    calibrationActive: calibrationActive(input),
+    bootProbeCalibrationActive: preparingCalibrationActive(input),
     sessionActive: input.readiness.components.session.active,
     backingConnected: input.readiness.components.backing.connected,
     publisherControlConnected: input.publisherControlConnected === true,

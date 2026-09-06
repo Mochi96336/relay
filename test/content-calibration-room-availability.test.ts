@@ -163,10 +163,11 @@ test('a running content measurement leaves the room live and recordable', async 
     assert.equal(product.actions.canStartTake, true);
     assert.equal(product.actions.startTakeBlockedReason, null);
     assert.equal(
-      product.actions.startCalibrationBlockedReason,
-      'calibration-active',
-      'the calibration path itself is still occupied',
+      product.actions.canStartCalibration,
+      true,
+      'a tap on the live audio does not occupy the room, so it cannot refuse Realign either',
     );
+    assert.equal(product.actions.startCalibrationBlockedReason, null);
 
     const from = singer.messages.length;
     const monitorFrom = monitor.messages.length;

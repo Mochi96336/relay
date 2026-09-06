@@ -184,6 +184,16 @@
       'timing.aligning': 'Aligning…',
       'timing.unavailable': 'Unable to realign right now',
       'timing.reconnecting': 'Reconnecting…',
+      // One line per reason the server can refuse the action. A single
+      // "unavailable" told the user it would not work while the payload
+      // already said exactly why, and every recovery here is different.
+      'timing.blocked.take-active': 'Stop the recording to realign',
+      'timing.blocked.calibration-active': 'Aligning…',
+      'timing.blocked.sources-not-connected': 'Connect the microphone and backing source to realign',
+      'timing.blocked.sources-not-streaming': 'Waiting for audio from the microphone and backing source',
+      'timing.blocked.robot-route-incomplete': 'The Robot audio route is down; restart it to realign',
+      'timing.blocked.phone-not-playing': 'Play the song to realign',
+      'timing.blocked.content-mapping-pending': 'Waiting for the Robot backing to settle…',
 
       'system.attention': 'System needs attention',
       'system.summary': 'System',
@@ -431,6 +441,13 @@
       'timing.aligning': '對齊中…',
       'timing.unavailable': '目前無法重新對齊',
       'timing.reconnecting': '重新連線中…',
+      'timing.blocked.take-active': '停止錄音後才能重新對齊',
+      'timing.blocked.calibration-active': '對齊中…',
+      'timing.blocked.sources-not-connected': '連接麥克風與伴奏來源後才能重新對齊',
+      'timing.blocked.sources-not-streaming': '等待麥克風與伴奏來源送出聲音',
+      'timing.blocked.robot-route-incomplete': 'Robot 音訊路由中斷，重啟後才能重新對齊',
+      'timing.blocked.phone-not-playing': '播放歌曲後才能重新對齊',
+      'timing.blocked.content-mapping-pending': '等待 Robot 伴奏穩定…',
 
       'system.attention': '系統需要處理',
       'system.summary': '系統',

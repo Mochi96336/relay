@@ -75,6 +75,7 @@ function evidence(patch: Partial<TakeQualityEvidence> = {}): TakeQualityEvidence
     timingDivergedSamples: 0,
     timingDivergedMs: 0,
     peakTimingDivergenceMs: 0,
+    timingDivergenceToleranceMs: 40,
     events: {
       'mic-transport-disconnected': 0,
       'mic-transport-connected': 0,
@@ -320,9 +321,57 @@ test('sustained divergence degrades the Take rather than only asking for review'
     timingDivergedSamples: 14_400,
     timingDivergedMs: 300,
     peakTimingDivergenceMs: 512,
+    timingDivergenceToleranceMs: 150,
   }));
   assert.equal(result.verdict, 'degraded');
   const issue = result.issues.find((candidate) => candidate.code === 'timing-diverged');
   assert.equal(issue?.severity, 'critical');
+  // The message names both the drift and the line it crossed, so a stored
+  // assessment can be read without knowing the deployment's configuration.
   assert.match(String(issue?.message), /512 ms/);
+  assert.match(String(issue?.message), /150 ms/);
+});
+
+test('the tolerance is the mixer own re-apply threshold, not a number of our own', () => {
+  // Deployments tune RELAY_CALIBRATION_DELTA_REAPPLY_MS; this Pi runs 150.
+  // Below that line the mixer deliberately declines to chase the delta, so an
+  // ordinary Take sits inside the band for its whole duration. Charging it
+  // would fire on healthy recordings.
+  const lenient = new TakeQualityTracker({ sampleRate: RATE, timingDivergenceToleranceMs: 150 });
+  lenient.observeFrame(960, frameState({ timingDivergenceMs: 120 }), mixedFrame());
+
+  const lenientResult = lenient.assessment();
+  assert.equal(lenientResult.evidence.timingDivergedSamples, 0);
+  assert.equal(lenientResult.verdict, 'clean');
+
+  // The same recording under a mixer that would have corrected at 40 ms is a
+  // correction the Take actually blocked.
+  const strict = new TakeQualityTracker({ sampleRate: RATE, timingDivergenceToleranceMs: 40 });
+  strict.observeFrame(960, frameState({ timingDivergenceMs: 120 }), mixedFrame());
+
+  const strictResult = strict.assessment();
+  assert.equal(strictResult.evidence.timingDivergedSamples, 960);
+  assert.equal(strictResult.verdict, 'review');
+});
+
+test('a stored assessment records the tolerance it applied', () => {
+  // The policy version says which rule ran; this says the one number that rule
+  // was parameterised by, so an archived verdict stays readable.
+  const quality = new TakeQualityTracker({ sampleRate: RATE, timingDivergenceToleranceMs: 150 });
+  quality.observeFrame(960, frameState({ timingDivergenceMs: 400 }), mixedFrame());
+
+  const result = quality.assessment();
+  assert.equal(result.evidence.timingDivergenceToleranceMs, 150);
+  assert.equal(result.evidence.timingDivergedSamples, 960);
+});
+
+test('an unconfigured or nonsense tolerance falls back to the documented default', () => {
+  for (const timingDivergenceToleranceMs of [undefined, 0, -10, Number.NaN]) {
+    const quality = new TakeQualityTracker({ sampleRate: RATE, timingDivergenceToleranceMs });
+    quality.observeFrame(960, frameState({ timingDivergenceMs: 45 }), mixedFrame());
+
+    const result = quality.assessment();
+    assert.equal(result.evidence.timingDivergenceToleranceMs, 40, `tolerance ${timingDivergenceToleranceMs}`);
+    assert.equal(result.evidence.timingDivergedSamples, 960);
+  }
 });

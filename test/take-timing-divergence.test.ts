@@ -50,6 +50,9 @@ const FAST = {
   // Let the smoothing median follow a sustained drift inside the test rather
   // than over the production two-second window.
   RELAY_ROBOT_OFFSET_WINDOW_MS: '300',
+  // Deliberately not the default: the Take policy must take its tolerance from
+  // the mixer's own re-apply threshold, which deployments tune. The Pi runs 150.
+  RELAY_CALIBRATION_DELTA_REAPPLY_MS: '150',
 };
 
 const playing = {
@@ -234,8 +237,13 @@ test('a Take whose Robot mapping drifts under its frozen alignment is not publis
       quality.evidence.timingDivergedMs > 0,
       `expected recorded divergence, got ${JSON.stringify(quality.evidence)}`,
     );
+    assert.equal(
+      quality.evidence.timingDivergenceToleranceMs,
+      150,
+      'the Take policy must apply the mixer configured threshold, not a constant of its own',
+    );
     assert.ok(
-      quality.evidence.peakTimingDivergenceMs >= 40,
+      quality.evidence.peakTimingDivergenceMs >= 150,
       `expected a peak past the mixer own re-apply threshold, got ${quality.evidence.peakTimingDivergenceMs}`,
     );
     assert.ok(

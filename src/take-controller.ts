@@ -133,6 +133,13 @@ export class TakeController {
     sampleRate: number;
     artifactBaseUrl?: string;
     storagePolicy?: TakeStoragePolicy;
+    /**
+     * The mixer's own alignment re-apply threshold.
+     *
+     * A Take freezes the alignment, so this is the line between the mixer's
+     * deliberate hysteresis and a correction the recording actually blocked.
+     */
+    timingDivergenceToleranceMs?: number;
     onChange?: (status: TakeControllerStatusPayload) => void;
     onStorageError?: (error: unknown) => void;
   }) {
@@ -226,6 +233,7 @@ export class TakeController {
       sampleRate: this.options.sampleRate,
       backingExpected,
       timingExpected: backingExpected,
+      timingDivergenceToleranceMs: this.options.timingDivergenceToleranceMs,
     });
     this.pendingStop = null;
 

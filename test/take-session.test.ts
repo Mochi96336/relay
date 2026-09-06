@@ -66,6 +66,7 @@ function cleanQuality() {
     timingDivergedSamples: 0,
     timingDivergedMs: 0,
     peakTimingDivergenceMs: 0,
+    timingDivergenceToleranceMs: 40,
     events: {
       'mic-transport-disconnected': 0,
       'mic-transport-connected': 0,

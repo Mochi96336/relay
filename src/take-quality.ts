@@ -1,6 +1,6 @@
 import type { MixFrameEvidence } from './audio-session.js';
 
-export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v2' as const;
+export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v3' as const;
 
 export type TakeQualityVerdict = 'clean' | 'review' | 'degraded';
 export type TakeQualitySeverity = 'warning' | 'critical';
@@ -79,6 +79,14 @@ export type TakeQualityEvidence = {
   timingDivergedMs: number;
   /** Worst divergence seen, so a brief large excursion is not averaged away. */
   peakTimingDivergenceMs: number;
+  /**
+   * The tolerance this assessment actually applied.
+   *
+   * Deployments tune the mixer's re-apply threshold, so recording it is what
+   * keeps a stored verdict self-describing: the policy version says which rule
+   * ran, and this says the one number that rule was parameterised by.
+   */
+  timingDivergenceToleranceMs: number;
   events: TakeQualityEventCounts;
 };
 
@@ -118,16 +126,22 @@ const DEGRADED_DURATION_MS = 250;
 const DEGRADED_CLIPPING_MS = 20;
 
 /**
- * How far the applied alignment may sit from the mapping before a recorded
- * frame counts as diverged.
+ * Fallback for how far the applied alignment may sit from the mapping before a
+ * recorded frame counts as diverged. The mixer's own re-apply threshold is
+ * passed in instead wherever one exists.
  *
- * Deliberately the same 40 ms the mixer itself uses to decide that a player
- * delta has really moved rather than jittered, so the Take never calls
- * "diverged" something the running mixer would have ignored. Kept as a policy
- * constant rather than an env knob for the same reason the other thresholds
- * here are: a stored verdict has to mean the same thing across deployments.
+ * It has to be that threshold and not a number of our own, because below it
+ * the divergence is the mixer's *deliberate* hysteresis: it declines to chase
+ * a delta that has not moved far enough to be worth splicing the voice for, so
+ * an ordinary Take sits somewhere inside that band the whole time it records.
+ * A tolerance tighter than the band would therefore fire on healthy Takes, and
+ * a signal that fires on healthy Takes is one people learn to ignore - which
+ * costs exactly the thing this evidence exists to catch.
+ *
+ * At or beyond it the meaning inverts: the mixer *would* have moved and the
+ * Take is what stopped it, so the recording is now knowingly misaligned.
  */
-const TIMING_DIVERGENCE_TOLERANCE_MS = 40;
+const DEFAULT_TIMING_DIVERGENCE_TOLERANCE_MS = 40;
 
 function emptyEvents(): TakeQualityEventCounts {
   return {
@@ -272,7 +286,8 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     'timing-diverged',
     evidence.timingDivergedMs,
     `The recorded alignment drifted up to ${Math.round(evidence.peakTimingDivergenceMs)} ms `
-    + 'from the timing the Robot content mapping asked for while the Take held it frozen.',
+    + `from the timing the Robot content mapping asked for - past the ${Math.round(evidence.timingDivergenceToleranceMs)} ms `
+    + 'the mixer would have corrected - while the Take held it frozen.',
   );
 
   const instabilityEvents =
@@ -350,7 +365,16 @@ export class TakeQualityTracker {
     backingExpected?: boolean;
     /** False when there is no Song for Voice to align against. */
     timingExpected?: boolean;
+    /** The mixer's own re-apply threshold; see the constant below its default. */
+    timingDivergenceToleranceMs?: number;
   }) {}
+
+  private get divergenceToleranceMs() {
+    const configured = this.options.timingDivergenceToleranceMs;
+    return Number.isFinite(configured) && (configured as number) > 0
+      ? configured as number
+      : DEFAULT_TIMING_DIVERGENCE_TOLERANCE_MS;
+  }
 
   observeFrame(sampleCount: number, state: TakeQualityFrameState, audio: MixFrameEvidence) {
     if (!Number.isSafeInteger(sampleCount) || sampleCount <= 0) return;
@@ -380,7 +404,7 @@ export class TakeQualityTracker {
 
       if (state.timingDivergenceMs !== null) {
         const divergenceMs = Math.abs(state.timingDivergenceMs);
-        if (divergenceMs >= TIMING_DIVERGENCE_TOLERANCE_MS) {
+        if (divergenceMs >= this.divergenceToleranceMs) {
           this.timingDivergedSamples += sampleCount;
           this.peakTimingDivergenceMs = Math.max(this.peakTimingDivergenceMs, divergenceMs);
         }
@@ -435,6 +459,7 @@ export class TakeQualityTracker {
       timingDivergedSamples: this.timingDivergedSamples,
       timingDivergedMs: toMs(this.timingDivergedSamples),
       peakTimingDivergenceMs: this.peakTimingDivergenceMs,
+      timingDivergenceToleranceMs: this.divergenceToleranceMs,
       events: { ...this.events },
     });
   }

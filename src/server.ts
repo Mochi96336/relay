@@ -219,9 +219,15 @@ const session = new AudioSession({
   backingRetentionMs: BACKING_RETENTION_MS,
 });
 
+// Read here rather than beside the other calibration constants because the
+// Take quality policy needs it too: it is the line between the mixer's own
+// hysteresis and a correction a recording actually blocked.
+const BOOT_DELTA_REAPPLY_MS = relayConfig.calibrationDeltaReapplyMs;
+
 const takeController = new TakeController({
   directory: takeDir,
   sampleRate: MIX_SAMPLE_RATE,
+  timingDivergenceToleranceMs: BOOT_DELTA_REAPPLY_MS,
   onChange: (status) => broadcastJson(status),
 });
 
@@ -267,7 +273,6 @@ const bootProbeRuntime = new BootProbeRuntime({
   maxAttempts: PROBE_MAX_ATTEMPTS,
   retryMs: PROBE_RETRY_MS,
 });
-const BOOT_DELTA_REAPPLY_MS = relayConfig.calibrationDeltaReapplyMs;
 const ROBOT_OFFSET_FRESH_MS = 2_000;
 const ROBOT_OFFSET_WINDOW_MS = relayConfig.robotOffsetWindowMs;
 // robot-player-offset is a residual tracking measurement, not an arbitrary

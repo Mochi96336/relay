@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
@@ -142,7 +145,11 @@ async function productStatus(singer: RelayClient) {
 }
 
 test('a running content measurement leaves the room live and recordable', async () => {
-  const server = await startRelay(FAST);
+  // Without an explicit directory the server falls back to `takes`, which on a
+  // deployment is the room's real recording library - this case records one and
+  // is torn down mid-take, so every suite run left a zero-length artifact in it.
+  const takeDirectory = await mkdtemp(path.join(os.tmpdir(), 'relay-content-availability-'));
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: takeDirectory });
   try {
     const { backing, singer, monitor, songStartedAtMs } = await liveRoom(server);
 
@@ -191,5 +198,6 @@ test('a running content measurement leaves the room live and recordable', async 
     monitor.close();
   } finally {
     await server.stop();
+    await rm(takeDirectory, { recursive: true, force: true });
   }
 });

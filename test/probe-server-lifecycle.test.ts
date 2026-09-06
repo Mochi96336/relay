@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
@@ -69,7 +72,8 @@ async function waitForProbeCount(client: RelayClient, target: 'mic' | 'backing',
 }
 
 test('probe acknowledgement retries stop at the configured limit and block Take while active', async () => {
-  const server = await startRelay(PROBE_FAST);
+  const takeDirectory = await mkdtemp(path.join(os.tmpdir(), 'relay-probe-lifecycle-'));
+  const server = await startRelay({ ...PROBE_FAST, RELAY_TAKE_DIR: takeDirectory });
   const clients = await robotSession(server);
   try {
     const first = (await waitForProbeCount(clients.publisher, 'mic', 1))[0];
@@ -108,11 +112,14 @@ test('probe acknowledgement retries stop at the configured limit and block Take 
   } finally {
     clients.close();
     await server.stop();
+    await rm(takeDirectory, { recursive: true, force: true });
   }
 });
 
 test('stale or wrong-generation acknowledgements cannot cancel the newer Mic probe request', async () => {
+  const takeDirectory = await mkdtemp(path.join(os.tmpdir(), 'relay-probe-lifecycle-'));
   const server = await startRelay({
+    RELAY_TAKE_DIR: takeDirectory,
     ...PROBE_FAST,
     RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS: '3',
     // This test isolates request ownership, so leave enough wall-clock room to
@@ -167,5 +174,6 @@ test('stale or wrong-generation acknowledgements cannot cancel the newer Mic pro
   } finally {
     clients.close();
     await server.stop();
+    await rm(takeDirectory, { recursive: true, force: true });
   }
 });

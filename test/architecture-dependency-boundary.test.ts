@@ -10,7 +10,6 @@ import {
 const existingServerToPublicDebt = [
   'src/room-song-command-session.ts -> ../public/playback-policy.js',
   'src/room-song-command-session.ts -> ../public/room-song-command-convergence.js',
-  'src/room-song-command-session.ts -> ../public/room-song-command-mutations.js',
 ].sort();
 
 function resolvedTarget(sourcePath: string, specifier: string) {

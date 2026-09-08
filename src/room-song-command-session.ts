@@ -14,11 +14,17 @@ import {
   roomSongObservedMutations,
   roomSongPendingOwnsMutation,
   type RoomSongMutation,
-} from '../public/room-song-command-mutations.js';
+  type RoomSongMutationThresholds,
+} from './room-song-command-mutations.js';
 
 const COMMAND_TIMEOUT_MS = 4_000;
 const MAX_RECENT_COMMANDS = 64;
 const ENDED = 0;
+const ROOM_SONG_MUTATION_THRESHOLDS = {
+  localJumpToleranceSeconds: ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
+  positionToleranceSeconds: ROOM_SONG_POSITION_TOLERANCE_SECONDS,
+  rateTolerance: ROOM_SONG_RATE_TOLERANCE,
+} satisfies RoomSongMutationThresholds;
 
 type DesiredPlaybackState = 1 | 2 | 5;
 type RoomSongStatus = Record<string, unknown>;
@@ -446,7 +452,11 @@ export class RoomSongCommandSession {
 
     if (identity.participantId === LEGACY_PLAYBACK_PARTICIPANT_ID) return { ok: true };
 
-    const mutations = roomSongObservedMutations({ observed: payload, room: roomStatus });
+    const mutations = roomSongObservedMutations({
+      observed: payload,
+      room: roomStatus,
+      thresholds: ROOM_SONG_MUTATION_THRESHOLDS,
+    });
     if (this.pending) {
       if (!sameIdentity(this.pending.target, identity)) {
         return { ok: false, reason: 'command-target-mismatch' };
@@ -485,6 +495,7 @@ export class RoomSongCommandSession {
             desired: this.pending.body.desired,
             currentTime: Number(payload.currentTime),
             projectedPositionSeconds: projected.positionSeconds,
+            thresholds: ROOM_SONG_MUTATION_THRESHOLDS,
           })
         ) {
           this.stableCompleteProofCommandId = null;

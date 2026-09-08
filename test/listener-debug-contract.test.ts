@@ -13,7 +13,9 @@ test('listener debug observer installs before production Listen and only activat
 
   assert.match(debugSource, /new URLSearchParams\(location\.search\)\.get\('audioDebug'\) === '1'/);
   assert.match(debugSource, /if \(debugEnabled\) \{/);
-  assert.doesNotMatch(debugSource, /fetch\(/);
+  assert.match(debugSource, /async function reportSilent\(\)/);
+  assert.match(debugSource, /fitListenerIncidentReport\(rawReport\)/);
+  assert.match(debugSource, /button\.dataset\.relayListenerIncident = '1'/);
   assert.doesNotMatch(debugSource, /localStorage/);
   assert.doesNotMatch(debugSource, /sessionStorage/);
 });
@@ -33,4 +35,15 @@ test('listener debug faults cover transport, starvation, lifecycle and acoustic-
   assert.match(debugSource, /function silenceOutput\(ms = 3_000\)/);
   assert.match(debugSource, /window\.__relayListenerDiagnostics = \{/);
   assert.match(debugSource, /event\.stopImmediatePropagation\(\)/);
+});
+
+
+test('listener incident reporting captures iOS output-route evidence without automatic recovery', () => {
+  assert.match(debugSource, /navigator\.audioSession/);
+  assert.match(debugSource, /getOutputTimestamp/);
+  assert.match(debugSource, /contextTimeDeltaMs/);
+  assert.match(debugSource, /outputContextTimeDeltaMs/);
+  assert.match(debugSource, /mic-ended/);
+  assert.match(debugSource, /user-reported-silent/);
+  assert.doesNotMatch(debugSource, /rebuild|replaceGraph|autonomous/i);
 });

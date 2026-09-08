@@ -79,6 +79,14 @@ export function loadRelayConfig(env: Env = process.env) {
     port: envNumber(env, 'PORT', 3000, { min: 0, max: 65_535, integer: true }),
     relayKey: rawValue(env, 'RELAY_KEY') ?? null,
     takeDir: env.RELAY_TAKE_DIR ?? 'takes',
+    listenerIncidentsEnabled: envBoolean(env, 'RELAY_LISTENER_INCIDENTS', false),
+    listenerIncidentDir: rawValue(env, 'RELAY_LISTENER_INCIDENT_DIR') ?? 'listener-incidents',
+    listenerIncidentMaxFiles: envNumber(
+      env,
+      'RELAY_LISTENER_INCIDENT_MAX_FILES',
+      100,
+      { min: 1, max: 10_000, integer: true },
+    ),
     infrastructureKey: relayInfrastructureKey(env),
     legacyTestInfrastructure: env.NODE_ENV === 'test'
       && env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1',

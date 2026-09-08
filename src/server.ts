@@ -165,6 +165,12 @@ const server = createRelayHttpServer({
   remoteStatus: () => remoteStatusPayload(),
   observationStatusV1: () => observationStatusV1Payload(),
   readiness: () => readinessPayload(),
+  listenerIncidents: relayConfig.listenerIncidentsEnabled
+    ? {
+      directory: path.resolve(relayConfig.listenerIncidentDir),
+      maxFiles: relayConfig.listenerIncidentMaxFiles,
+    }
+    : null,
 });
 const wss = createRelayWebSocketServer(server, {
   relayKey,

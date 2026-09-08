@@ -218,3 +218,38 @@ test('listener debug faults exercise starvation, reconnect, interruption and sil
   expect(eventTypes).toContain('fault-output-silence-start');
   expect(eventTypes).toContain('fault-output-silence-release');
 });
+
+
+test('listener silence reporting is an explicit user action and uploads bounded metadata', async ({ page }) => {
+  let captured = null;
+  await page.route('**/api/debug/listener-incidents?**', async (route) => {
+    const request = route.request();
+    captured = {
+      method: request.method(),
+      url: request.url(),
+      body: request.postData() ?? '',
+    };
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, incidentId: 'browser-proof' }),
+    });
+  });
+  await installBrowserAudioHarness(page);
+  await startListener(page);
+
+  const button = page.locator('[data-relay-listener-incident="1"]');
+  await expect(button).toBeVisible();
+  expect(captured).toBeNull();
+  await button.click();
+  await expect(button).toHaveText('已回報');
+
+  expect(captured.method).toBe('POST');
+  expect(captured.url).toContain('audioDebug=1');
+  expect(Buffer.byteLength(captured.body)).toBeLessThan(512 * 1024);
+  const report = JSON.parse(captured.body);
+  expect(report.reason).toBe('user-reported-silent');
+  expect(report.flight.snapshots.at(-1).contextState).toBe('running');
+  expect(report.flight.snapshots.at(-1).evidence).toBe('internally-healthy');
+  expect(report.flight.events.some((entry) => entry.type === 'user-reported-silent')).toBe(true);
+});

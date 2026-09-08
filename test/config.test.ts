@@ -22,6 +22,9 @@ test('relay config rejects malformed numeric deployment settings', () => {
 test('relay config owns remaining server-local deployment inputs', () => {
   const defaults = loadRelayConfig({});
   assert.equal(defaults.takeDir, 'takes');
+  assert.equal(defaults.listenerIncidentsEnabled, false);
+  assert.equal(defaults.listenerIncidentDir, 'listener-incidents');
+  assert.equal(defaults.listenerIncidentMaxFiles, 100);
   assert.equal(defaults.infrastructureKey, null);
   assert.equal(defaults.legacyTestInfrastructure, false);
   assert.equal(defaults.monitorBacklogMs, 200);
@@ -36,6 +39,9 @@ test('relay config owns remaining server-local deployment inputs', () => {
   const infrastructureKey = 'a'.repeat(64);
   const configured = loadRelayConfig({
     RELAY_TAKE_DIR: './custom-takes',
+    RELAY_LISTENER_INCIDENTS: '1',
+    RELAY_LISTENER_INCIDENT_DIR: './custom-incidents',
+    RELAY_LISTENER_INCIDENT_MAX_FILES: '12',
     RELAY_INFRA_KEY: infrastructureKey,
     NODE_ENV: 'test',
     RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
@@ -49,6 +55,9 @@ test('relay config owns remaining server-local deployment inputs', () => {
     RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES: '4',
   });
   assert.equal(configured.takeDir, './custom-takes');
+  assert.equal(configured.listenerIncidentsEnabled, true);
+  assert.equal(configured.listenerIncidentDir, './custom-incidents');
+  assert.equal(configured.listenerIncidentMaxFiles, 12);
   assert.equal(configured.infrastructureKey, infrastructureKey);
   assert.equal(configured.legacyTestInfrastructure, true);
   assert.equal(configured.monitorBacklogMs, 350);
@@ -82,6 +91,14 @@ test('relay config owns remaining server-local deployment inputs', () => {
   assert.equal(legacyFallbacks.robotContentTransitionMaxWorkerFailures, 3);
 
   assert.equal(loadRelayConfig({ RELAY_TAKE_DIR: '' }).takeDir, '');
+  assert.throws(
+    () => loadRelayConfig({ RELAY_LISTENER_INCIDENTS: 'sometimes' }),
+    /must be one of: 1, 0, true, false/,
+  );
+  assert.throws(
+    () => loadRelayConfig({ RELAY_LISTENER_INCIDENT_MAX_FILES: '0' }),
+    /from 1 to 10000/,
+  );
   assert.equal(
     loadRelayConfig({ NODE_ENV: 'production', RELAY_TEST_LEGACY_INFRASTRUCTURE: '1' })
       .legacyTestInfrastructure,

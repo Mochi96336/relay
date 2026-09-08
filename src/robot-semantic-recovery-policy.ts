@@ -1,10 +1,26 @@
-import type { RelayObservationStatusV1 } from './observation-status.js';
-
 export type RobotSemanticRecoveryConfig = {
   faultGraceMs: number;
   cooldownMs: number;
   budgetWindowMs: number;
   maxRestarts: number;
+};
+
+/**
+ * The only Relay observation facts allowed to participate in automatic Robot
+ * restart authority. A full RelayObservationStatusV1 is structurally compatible,
+ * but runtime consumers do not need to pretend they validated unrelated fields.
+ */
+export type RobotSemanticRecoveryObservation = {
+  sources: {
+    backing: {
+      connected: boolean;
+      streaming: boolean;
+      robot: boolean;
+    };
+    robot: {
+      sourceConnected: boolean;
+    };
+  };
 };
 
 export type RobotSemanticRecoveryState = {
@@ -79,12 +95,12 @@ function trimRestartHistory(history: number[], nowMs: number, windowMs: number) 
 }
 
 /**
- * Derives only robot-local physical faults from the stable observation contract.
- * Phone, Mic, timeline, calibration, player-delta and generic issue strings are
- * deliberately outside automatic restart authority.
+ * Derives only robot-local physical faults from the narrow recovery observation
+ * boundary. Phone, Mic, timeline, calibration, player-delta and generic issue
+ * strings are deliberately outside automatic restart authority.
  */
 export function robotSemanticRecoveryFaults(
-  observation: RelayObservationStatusV1,
+  observation: RobotSemanticRecoveryObservation,
 ): RobotSemanticRecoveryFault[] {
   const faults: RobotSemanticRecoveryFault[] = [];
   const backing = observation.sources.backing;
@@ -111,7 +127,7 @@ export function robotSemanticRecoveryFaults(
  */
 export function decideRobotSemanticRecovery(
   current: RobotSemanticRecoveryState,
-  observation: RelayObservationStatusV1,
+  observation: RobotSemanticRecoveryObservation,
   routeServiceActive: boolean,
   nowMs: number,
   config: RobotSemanticRecoveryConfig,

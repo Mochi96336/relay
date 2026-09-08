@@ -41,7 +41,7 @@ test('Song surface uses canonical Mic state to decide shared replace-song access
 
 test('the exact playback holder does not lose Change Song while Mic state reconnects', () => {
   assert.match(surface, /canChangeRoomSong/);
-  const policy = readFileSync(new URL('../public/playback-policy.js', import.meta.url), 'utf8');
+  const policy = readFileSync(new URL('../shared/playback-policy.js', import.meta.url), 'utf8');
   assert.ok(
     policy.indexOf("hasSong && role === 'holder'") < policy.indexOf('if (isMicFree)'),
     'exact playback authority must be evaluated before the secondary Mic projection',

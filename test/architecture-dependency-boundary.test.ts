@@ -8,7 +8,6 @@ import {
 } from './helpers/source-contract.js';
 
 const existingServerToPublicDebt = [
-  'src/room-song-command-session.ts -> ../public/playback-policy.js',
   'src/room-song-command-session.ts -> ../public/room-song-command-convergence.js',
 ].sort();
 

@@ -131,7 +131,7 @@ test('systemd read is pinned to one user unit and never turns inactive into acti
 
 test('dry-run can produce a restart candidate without owning any restart effect', async () => {
   const state: RobotSemanticRecoveryState = {
-    faultKey: 'backing-not-connected',
+    faultKey: 'backing-not-connected|robot-source-not-connected',
     faultSinceMs: 100_000,
     cooldownUntilMs: 0,
     restartHistoryMs: [],

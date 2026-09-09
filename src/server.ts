@@ -15,6 +15,7 @@ import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
+import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
@@ -2364,21 +2365,27 @@ function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
   if (!robotRouteActive()) return;
   const appliedKind = appliedCalibrationKind();
-  const reclaiming = appliedKind !== 'boot-probe'
-    && calibrationApplicability(appliedKind) === 'revoke';
-  if (appliedKind !== 'boot-probe' && !reclaiming) return;
-  if (!roomHasSong(nowMs)) return;
-  if (bootProbeRuntime.pathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
-  if (!robotDeltaIsFresh(nowMs)) return;
-  if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return;
-
-  const advanceMs = bootProbeAdvanceMs(nowMs);
-  if (advanceMs === null) return;
   const applied = session.alignment.calibratedMicLagMs;
-  if (applied !== null && Math.abs(advanceMs - applied) < BOOT_DELTA_REAPPLY_MS) return;
+  const decision = decideBootProbeReapplication({
+    appliedKind,
+    replacementApplicability: appliedKind === 'boot-probe'
+      ? null
+      : calibrationApplicability(appliedKind),
+    roomHasSong: roomHasSong(nowMs),
+    pathDifferenceReady: bootProbeRuntime.pathDifferenceMs !== null,
+    calibrationCollecting: calibration.collecting,
+    calibrationTransactionActive: calibration.transactionActive,
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
+    advanceMs: bootProbeAdvanceMs(nowMs),
+    appliedMicLagMs: applied,
+    reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS,
+  });
+  if (decision.kind === 'none') return;
 
+  const advanceMs = decision.advanceMs;
   if (PROBE_DEBUG) {
-    const why = reclaiming ? 'reclaimed by boot baseline' : 'delta moved';
+    const why = decision.reason === 'reclaim' ? 'reclaimed by boot baseline' : 'delta moved';
     console.log(`[probe] ${why}; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
   }
   promoteBootProbeCalibration(

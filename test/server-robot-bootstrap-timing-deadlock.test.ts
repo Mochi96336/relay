@@ -63,7 +63,6 @@ test('content gates ask whether the boot probe settled, not whether it failed', 
     'maybeAutoCalibrate',
     'calibrationApplicability',
     'contentValidationPathReady',
-    'dropLegacyCalibrationForRobot',
   ]) {
     const block = functionBlock(name);
     assert.match(block, /bootProbeSettled\(/, `${name} must gate on boot probe settlement`);

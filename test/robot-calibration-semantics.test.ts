@@ -135,12 +135,12 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   assert.match(appliedKind, /hasConfirmedResult: calibration\.confirmedResult !== null/);
 
   const canApply = source.match(/function calibrationApplicability\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(canApply, /retainingConfirmedAuthority/);
-  assert.match(
-    canApply,
-    /&& !retainingConfirmedAuthority/,
-    'preferred replacement probes must not revoke a still-valid retained authority',
-  );
+assert.match(canApply, /decideCalibrationApplicability\(\{/);
+assert.match(canApply, /calibrationTransactionActive: calibration\.transactionActive/);
+assert.match(canApply, /calibrationProvisional: status\.provisional/);
+assert.match(canApply, /hasConfirmedResult: calibration\.confirmedResult !== null/);
+assert.match(canApply, /bootProbeSettled: bootProbeSettled\(nowMs\)/);
+assert.doesNotMatch(canApply, /retainingConfirmedAuthority/);
 
   const sync = source.match(/function syncAppliedCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(sync, /const calibrationKind = appliedCalibrationKind\(\)/);

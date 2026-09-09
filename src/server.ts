@@ -17,6 +17,10 @@ import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
 import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
+import {
+  decideCalibrationApplicability,
+  type CalibrationApplicability,
+} from './calibration-applicability.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
   CalibrationSession,
@@ -1193,60 +1197,26 @@ function appliedCalibrationKind() {
  * invalidates the mapping - a disconnect, a capture epoch, a gross jump - each
  * of which revokes through its own path.
  */
-type CalibrationApplicability = 'apply' | 'hold' | 'revoke';
-
 function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationApplicability {
+  const nowMs = performance.now();
   const result = calibration.result;
-  if (result === null || calibrationIsStale()) return 'revoke';
-
   const status = calibration.status();
-  const retainingConfirmedAuthority = calibration.transactionActive
-    && !status.provisional
-    && calibration.confirmedResult !== null;
-
-  // Probe preference chooses which *candidate* may promote. It must not revoke
-  // an independently valid confirmed content authority merely because a boot
-  // replacement transaction has started.
-  //
-  // Preference lasts only until the boot probe settles. A settled baseline is
-  // the thing content is meant to replace, so keying this on probe *failure*
-  // would leave a successfully measured content result permanently parked
-  // behind the boot result it improves on.
-  if (
-    robotProbeTimingActive()
-    && kind !== 'boot-probe'
-    && !bootProbeSettled()
-    && !retainingConfirmedAuthority
-  ) return 'revoke';
-
-  // A Robot that is gone is a real invalidation; one that has merely not spoken
-  // for a moment is not.
-  const robotGone = robotRouteActive() && !sourceRuntime.connected();
-  if (robotGone) return 'revoke';
-
-  // Player-relative delta matters only while a Song exists. In a no-Song room
-  // the two measured path legs are already the complete correction the mixer
-  // can use.
-  //
-  // A delta that has *never* been established is not the same as one that has
-  // gone quiet. Before the first report the applied total does not contain a
-  // player-relative term at all, so it answers a different question than the
-  // room is now asking and must be revoked. After one, the total already
-  // includes that term and the Robot has simply stopped talking.
-  if (
-    robotRouteActive()
-    && kind === 'boot-probe'
-    && roomHasSong()
-    && !robotDeltaIsFresh()
-  ) return robotDeltaEverEstablished() ? 'hold' : 'revoke';
-  // A Robot content result is expressed in the mapper's stable reference frame.
-  // It can own the live mixer only while the current media mapping is known.
-  if (
-    robotRouteActive()
-    && kind === 'content'
-    && !robotContentMappingReady()
-  ) return robotDeltaEverEstablished() ? 'hold' : 'revoke';
-  return 'apply';
+  return decideCalibrationApplicability({
+    kind,
+    hasResult: result !== null,
+    stale: result !== null && calibrationIsStale(),
+    calibrationTransactionActive: calibration.transactionActive,
+    calibrationProvisional: status.provisional,
+    hasConfirmedResult: calibration.confirmedResult !== null,
+    robotProbeTimingActive: robotProbeTimingActive(),
+    bootProbeSettled: bootProbeSettled(nowMs),
+    robotRouteActive: robotRouteActive(),
+    robotSourceConnected: sourceRuntime.connected(),
+    roomHasSong: roomHasSong(nowMs),
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    robotDeltaEverEstablished: robotDeltaEverEstablished(),
+    robotContentMappingReady: robotContentMappingReady(nowMs),
+  });
 }
 
 /**

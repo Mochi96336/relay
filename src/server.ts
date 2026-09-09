@@ -50,6 +50,7 @@ import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconn
 import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
 import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
 import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
+import { createRelayRobotLegacyCalibrationDropCoordinator } from './relay-robot-legacy-calibration-drop-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
@@ -2464,14 +2465,19 @@ function maybeReapplyBootCalibration(nowMs: number) {
  * discards the confirmed boot result, dropping the live mixer to its network
  * estimate mid-upgrade.
  */
+const robotLegacyCalibrationDropCoordinator = createRelayRobotLegacyCalibrationDropCoordinator({
+  robotRouteActive: () => robotRouteActive(),
+  calibrationKind: () => timingRuntime.calibrationKind,
+  bootProbeSettled: () => bootProbeSettled(),
+  clearContentValidationBaseline: () => clearContentValidationBaseline(),
+  resetCalibration: () => calibration.reset(),
+  clearCalibrationKind: () => timingRuntime.clearCalibrationKind(),
+  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
+  syncAppliedCalibration: () => { syncAppliedCalibration(); },
+});
+
 function dropLegacyCalibrationForRobot() {
-  if (!robotRouteActive() || timingRuntime.calibrationKind !== 'content') return;
-  if (bootProbeSettled()) return;
-  clearContentValidationBaseline();
-  calibration.reset();
-  timingRuntime.clearCalibrationKind();
-  timingRuntime.resetAutoCalibrationSchedule();
-  syncAppliedCalibration();
+  robotLegacyCalibrationDropCoordinator.drop();
 }
 
 // Command authority and product action availability stay in the command handler.

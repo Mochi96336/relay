@@ -47,6 +47,7 @@ import { createRelayRobotActivationCoordinator } from './relay-robot-activation-
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
+import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
@@ -1956,19 +1957,22 @@ function maybeStopLiveSourceWhenUnarmed() {
   if (!micArmed && !backingArmed) stopLiveSource();
 }
 
+const backingGraceExpiryCoordinator = createRelayBackingGraceExpiryCoordinator({
+  stopLiveSource: () => stopLiveSource(),
+  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
+  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  invalidateMicTiming: (message) => invalidateMicTiming(message),
+  reportStatus: () => broadcastStatus(),
+});
+
 function expireBackingGrace() {
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGrace.pending;
-  if (roomHasSong() || !micArmed) {
-    stopLiveSource();
-    return;
-  }
-
-  backingRuntime.retireRobotRoute();
-  clearRobotBackingBoundaryRequest();
-  invalidateMicTiming('Backing route ended while the room continued voice-only.');
-  broadcastStatus();
+  backingGraceExpiryCoordinator.expire({
+    roomHasSong: roomHasSong(),
+    micArmed,
+  });
 }
 
 

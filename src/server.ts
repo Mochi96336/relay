@@ -28,6 +28,7 @@ import {
   type CalibrationContext,
 } from './calibration-session.js';
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
+import { decideContentValidationBaselineSync } from './content-validation-baseline-policy.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicRuntime } from './mic-runtime.js';
@@ -838,19 +839,21 @@ function clearContentValidationBaseline() {
  */
 function syncContentValidationBaseline(nowMs: number) {
   const confirmed = calibration.confirmedResult;
-  if (
-    appliedCalibrationKind() !== 'content'
-    || confirmed === null
-    || calibrationIsStale()
-  ) {
-    if (contentCalibrationValidator.hasBaseline) clearContentValidationBaseline();
+  const decision = decideContentValidationBaselineSync({
+    appliedKind: appliedCalibrationKind(),
+    hasConfirmedResult: confirmed !== null,
+    calibrationStale: confirmed !== null && calibrationIsStale(),
+    hasBaseline: contentCalibrationValidator.hasBaseline,
+    baselineRevision: timingRuntime.contentValidationBaselineRevision,
+    confirmedRevision: calibration.confirmedRevision,
+  });
+
+  if (decision === 'none') return;
+  if (decision === 'clear') {
+    clearContentValidationBaseline();
     return;
   }
-
-  if (
-    timingRuntime.contentValidationBaselineRevision === calibration.confirmedRevision
-    && contentCalibrationValidator.hasBaseline
-  ) return;
+  if (confirmed === null) return;
 
   contentCalibrationValidator.setBaseline({
     micLagMs: confirmed.micLagMs,

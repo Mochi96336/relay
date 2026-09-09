@@ -4,25 +4,58 @@ import test from 'node:test';
 
 import {
   functionCode,
+  importSources,
   parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
 } from './support/source-contract.js';
 
 const server = parseTypeScriptSource(
   new URL('../src/server.ts', import.meta.url),
   readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
 );
+const coordinator = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-calibration-promotion-coordinator.ts', import.meta.url),
+  readFileSync(
+    new URL('../src/relay-boot-probe-calibration-promotion-coordinator.ts', import.meta.url),
+    'utf8',
+  ),
+);
 
-test('boot-probe promotion mutates probe authority before synchronous calibration settlement', () => {
+test('boot-probe promotion delegates synchronous ordering through the coordinator seam', () => {
   const promotion = functionCode(server, 'promoteBootProbeCalibration');
-  const mutate = promotion.indexOf('mutateProbe();');
-  const timingAuthority = promotion.indexOf('timingRuntime.markBootProbeAuthority();', mutate);
-  const apply = promotion.indexOf('calibration.applyExternalResult(result());', timingAuthority);
+  assert.match(
+    promotion,
+    /bootProbeCalibrationPromotionCoordinator\.promote\(mutateProbe, result\)/,
+  );
+  assert.doesNotMatch(promotion, /mutateProbe\(\)/);
+  assert.doesNotMatch(promotion, /timingRuntime\./);
+  assert.doesNotMatch(promotion, /calibration\.applyExternalResult\(/);
+  assert.doesNotMatch(promotion, /result\(\)/);
+});
 
-  assert.ok(mutate >= 0, 'boot-probe runtime mutation must stay explicit');
-  assert.ok(timingAuthority > mutate, 'timing authority must be marked after the probe runtime mutation');
+test('server composition retains Boot Probe timing and calibration authorities', () => {
   assert.ok(
-    apply > timingAuthority,
-    'external calibration must settle only after probe and timing authority are coherent',
+    importSources(server).includes('./relay-boot-probe-calibration-promotion-coordinator.js'),
+  );
+  const composition = variableInitializerCode(server, 'bootProbeCalibrationPromotionCoordinator');
+  assert.match(composition, /^createRelayBootProbeCalibrationPromotionCoordinator\(\{/);
+  assert.match(
+    composition,
+    /markBootProbeAuthority: \(\) => timingRuntime\.markBootProbeAuthority\(\)/,
+  );
+  assert.match(
+    composition,
+    /applyExternalResult: \(result\) => calibration\.applyExternalResult\(result\)/,
+  );
+});
+
+test('Boot Probe promotion coordinator owns ordering only, not runtime authority', () => {
+  const code = sourceCode(coordinator);
+  assert.doesNotMatch(code, /^import /m);
+  assert.doesNotMatch(
+    code,
+    /bootProbeRuntime\.|timingRuntime\.|calibration\.|BootProbeRuntime|TimingRuntime|CalibrationSession|AudioSession/,
   );
 });
 

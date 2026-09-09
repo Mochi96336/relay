@@ -48,6 +48,7 @@ import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
 import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
+import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
@@ -2272,13 +2273,17 @@ function handleProbeFailure(
   failProbeAttempt(pending.target, reason, nowMs);
 }
 
+const bootProbeCalibrationPromotionCoordinator =
+  createRelayBootProbeCalibrationPromotionCoordinator({
+    markBootProbeAuthority: () => timingRuntime.markBootProbeAuthority(),
+    applyExternalResult: (result) => calibration.applyExternalResult(result),
+  });
+
 function promoteBootProbeCalibration(
   mutateProbe: () => void,
   result: () => { micLagMs: number; confidence: number },
 ) {
-  mutateProbe();
-  timingRuntime.markBootProbeAuthority();
-  calibration.applyExternalResult(result());
+  bootProbeCalibrationPromotionCoordinator.promote(mutateProbe, result);
 }
 
 function maybeFinishProbeAnalysis(nowMs: number) {

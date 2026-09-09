@@ -39,20 +39,29 @@ test('boot-probe result cannot impersonate a confirmed content transition anchor
 });
 
 test('content provenance is read from applied authority, never the in-flight candidate', () => {
-  // `CalibrationSession.start()` deliberately keeps the previous confirmed
-  // result serving while a replacement is measured, so `candidate = content`
-  // alongside `confirmed = boot-probe` is an ordinary state. Reading the
-  // candidate for provenance installs a boot measurement as the baseline that
-  // content drift is judged against.
-  for (const name of ['syncContentValidationBaseline', 'contentValidationPathReady']) {
-    const block = functionBlock(name);
-    assert.match(block, /appliedCalibrationKind\(\) !== 'content'/, `${name} must read applied authority`);
-    assert.doesNotMatch(
-      block,
-      /timingRuntime\.calibrationKind !== 'content'/,
-      `${name} must not treat the in-flight candidate as provenance`,
-    );
-  }
+  // Baseline semantics now live in a pure policy. The server must sample the
+  // applied authority and confirmed-result facts, then delegate; candidate
+  // strategy metadata remains outside this provenance boundary.
+  const baseline = functionBlock('syncContentValidationBaseline');
+  assert.match(baseline, /decideContentValidationBaselineSync\(\{/);
+  assert.match(baseline, /appliedKind:\s*appliedCalibrationKind\(\)/);
+  assert.match(baseline, /hasConfirmedResult:\s*confirmed !== null/);
+  assert.match(baseline, /calibrationStale:\s*confirmed !== null && calibrationIsStale\(\)/);
+  assert.doesNotMatch(
+    baseline,
+    /timingRuntime\.calibrationKind/,
+    'baseline provenance must not read the in-flight candidate strategy',
+  );
+
+  // Path admission still samples applied authority directly; it must not use
+  // candidate kind either.
+  const path = functionBlock('contentValidationPathReady');
+  assert.match(path, /appliedCalibrationKind\(\) !== 'content'/);
+  assert.doesNotMatch(
+    path,
+    /timingRuntime\.calibrationKind !== 'content'/,
+    'path readiness must not treat the in-flight candidate as provenance',
+  );
 });
 
 test('content gates ask whether the boot probe settled, not whether it failed', () => {

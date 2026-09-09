@@ -14,6 +14,7 @@ import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
+import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
   CalibrationSession,
@@ -1335,70 +1336,21 @@ function syncAppliedCalibration() {
   if (robotRouteActive() && calibrationKind === 'boot-probe') {
     const nowMs = performance.now();
     const result = calibration.result;
-    const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
-
-    // With no Song there is no player-relative term to apply. The measured path
-    // difference is therefore the authoritative mixer correction regardless of
-    // any historical Robot offset that may have been folded into the stored
-    // boot result during an earlier playback session.
-    if (
-      !roomHasSong(nowMs)
-      && result !== null
-      && pathDifferenceMs !== null
-      && !calibrationIsStale()
-      && bootProbeRuntime.completedContextMatches(bootProbeContext())
-    ) {
-      if (active === pathDifferenceMs) return false;
-      session.setAlignment({ calibratedMicLagMs: pathDifferenceMs });
-      return true;
-    }
-
-    const applicability = calibrationApplicability(calibrationKind);
-    // `hold` means the measurement is intact and only a live input went quiet.
-    // Leaving the applied total in force is what keeps the room from hearing a
-    // step in the middle of a song.
-    if (applicability === 'hold') return false;
-    if (applicability === 'revoke') {
-      if (active === null) return false;
-      session.setAlignment({ calibratedMicLagMs: null });
-      return true;
-    }
-
-    const storedDeltaMs = bootProbeRuntime.calibrationResult?.deltaMs;
-    const currentDelta = currentDeltaMs(nowMs);
-    // A fresh player report moving away from the stored boot delta is not an
-    // authority failure. Keep the last applied total in force while
-    // maybeReapplyBootCalibration() decides whether the smoothed movement is
-    // large enough to cross BOOT_DELTA_REAPPLY_MS. Clearing here would turn
-    // every tiny delta jitter into a null/network fallback and then bypass the
-    // reapply threshold because the next step sees `applied === null`.
-    //
-    // Missing stored provenance is different: there is no safe boot total to
-    // retain, so keep the existing fail-closed behavior for that invariant.
-    if (storedDeltaMs === undefined) {
-      if (active === null) return false;
-      session.setAlignment({ calibratedMicLagMs: null });
-      return true;
-    }
-    if (Math.abs(storedDeltaMs - currentDelta) >= 0.001) {
-      return false;
-    }
-
-    if (active !== null) {
-      if (result !== null && active !== result.micLagMs) {
-        session.setAlignment({ calibratedMicLagMs: result.micLagMs });
-        return true;
-      }
-      return false;
-    }
-
-    if (result !== null) {
-      session.setAlignment({ calibratedMicLagMs: result.micLagMs });
-      return true;
-    }
-    return false;
+    const decision = decideBootProbeMixerApplication({
+      activeMicLagMs: active,
+      roomHasSong: roomHasSong(nowMs),
+      resultMicLagMs: result?.micLagMs ?? null,
+      pathDifferenceMs: bootProbeRuntime.pathDifferenceMs,
+      calibrationStale: calibrationIsStale(),
+      completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
+      applicability: calibrationApplicability(calibrationKind),
+      storedDeltaMs: bootProbeRuntime.calibrationResult?.deltaMs ?? null,
+      currentDeltaMs: currentDeltaMs(nowMs),
+    });
+    if (decision.kind === 'hold') return false;
+    session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
+    return true;
   }
-
   const applicability = calibrationApplicability(calibrationKind);
   if (applicability === 'hold') return false;
   let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;

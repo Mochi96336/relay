@@ -7,7 +7,7 @@ import {
   canRecoverPlayback,
   leaderHolding,
   playbackLeaderHealth,
-} from '../public/playback-policy.js';
+} from '../shared/playback-policy.js';
 
 function timeline(overrides: Record<string, unknown> = {}) {
   return {

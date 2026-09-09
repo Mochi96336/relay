@@ -1,7 +1,7 @@
 import type { RoomSongCommandBody, RoomSongCommandRequest } from './room-song-command.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import { LEGACY_PLAYBACK_PARTICIPANT_ID, type PlaybackIdentity } from './song-session.js';
-import { LEADER_HOLD_GRACE_MS } from '../public/playback-policy.js';
+import { LEADER_HOLD_GRACE_MS } from '../shared/playback-policy.js';
 import {
   ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
   ROOM_SONG_POSITION_TOLERANCE_SECONDS,

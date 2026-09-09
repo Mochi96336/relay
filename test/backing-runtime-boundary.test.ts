@@ -38,11 +38,13 @@ test('BackingRuntime owns transport lifecycle without absorbing domain authority
   assert.doesNotMatch(serverCode, /let lastBackingFrameAt =/);
   assert.doesNotMatch(serverCode, /backingAbsenceTimer/);
 
-  // Grace expiry still delegates product/domain policy back to server.ts.
+  // BackingRuntime owns only expiry timing; room-level consequences remain
+  // outside the transport runtime behind the server adapter.
   assert.match(backingRuntime, /onGraceExpired:\s*expireBackingGrace/);
   const expireBackingGrace = functionCode(server, 'expireBackingGrace');
-  assert.match(
-    expireBackingGrace,
-    /invalidateMicTiming\('Backing route ended while the room continued voice-only\.'\)/,
-  );
+  assert.match(expireBackingGrace, /backingGraceExpiryCoordinator\.expire\(\{/);
+  assert.doesNotMatch(expireBackingGrace, /backingRuntime\.retireRobotRoute\(\)/);
+  assert.doesNotMatch(expireBackingGrace, /clearRobotBackingBoundaryRequest\(\)/);
+  assert.doesNotMatch(expireBackingGrace, /invalidateMicTiming\(/);
+  assert.doesNotMatch(expireBackingGrace, /broadcastStatus\(\)/);
 });

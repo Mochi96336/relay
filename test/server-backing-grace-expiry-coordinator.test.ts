@@ -53,8 +53,11 @@ test('server composition supplies every Backing grace consequence without moving
 test('Backing grace coordinator owns policy without importing runtime authorities', () => {
   const code = sourceCode(coordinator);
   assert.doesNotMatch(code, /^import /m);
+  // Plain policy-input fact names such as `roomHasSong`/`micArmed` are expected
+  // here. What must stay out are the concrete runtime/read-side authorities
+  // that establish those facts and the server's publication mechanism.
   assert.doesNotMatch(
     code,
-    /BackingRuntime|MicRuntime|AudioSession|TimingRuntime|CalibrationSession|broadcastStatus|roomHasSong|webTransportMicConnected|micTransportGrace/,
+    /BackingRuntime|MicRuntime|AudioSession|TimingRuntime|CalibrationSession|broadcastStatus|webTransportMicConnected|micTransportGrace/,
   );
 });

@@ -157,8 +157,8 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   assert.doesNotMatch(sync, /if \(active !== null\) return false;/, 'an old active Robot lag must not block promotion');
   assert.match(
     sync,
-    /active !== result\.micLagMs/,
-    'successful Robot promotion must atomically replace the previously active lag',
+    /decideBootProbeMixerApplication\(\{/ ,
+    'Boot Probe mixer application must delegate to the pure decision policy',
   );
 
   const failProbe = source.match(/function failProbeAttempt\([\s\S]*?\n\}/)?.[0] ?? '';

@@ -59,23 +59,6 @@ test('Boot Probe promotion coordinator owns ordering only, not runtime authority
   );
 });
 
-test('terminal probe failure reconciles candidate provenance before synchronous settlement', () => {
-  const failure = functionCode(server, 'failProbeAttempt');
-  const mutate = failure.indexOf('bootProbeRuntime.failAttempt(target, reason, nowMs)');
-  const reconcile = failure.indexOf('timingRuntime.restoreCandidateKindToAuthority();', mutate);
-  const settle = failure.indexOf('calibration.failPreservingPrimed(failure.message);', reconcile);
-
-  assert.ok(mutate >= 0, 'terminal failure must begin with the authoritative probe mutation');
-  assert.ok(
-    reconcile > mutate,
-    'terminal failure must reconcile candidate provenance after the probe runtime mutation',
-  );
-  assert.ok(
-    settle > reconcile,
-    'failure settlement may synchronously publish only after candidate and retained authority provenance agree',
-  );
-});
-
 test('fresh two-leg probe result delegates ordered promotion without duplicating settlement effects', () => {
   const finish = functionCode(server, 'maybeFinishProbeAnalysis');
 

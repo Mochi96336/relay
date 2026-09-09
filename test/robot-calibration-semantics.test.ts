@@ -164,8 +164,8 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   const failProbe = source.match(/function failProbeAttempt\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(
     failProbe,
-    /timingRuntime\.restoreCandidateKindToAuthority\(\)[\s\S]*?calibration\.failPreservingPrimed/,
-    'failed replacement must restore orchestration provenance before rollback publishes',
+    /bootProbeRuntime\.failAttempt\(target, reason, nowMs\)[\s\S]*?bootProbeFailureSettlementCoordinator\.settle\(failure\)/,
+    'failed replacement must preserve probe authority mutation before delegated rollback settlement',
   );
   assert.doesNotMatch(
     failProbe,

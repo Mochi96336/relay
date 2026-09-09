@@ -49,6 +49,7 @@ import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coor
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
 import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
 import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
+import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
@@ -2135,18 +2136,16 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
     && sourceRuntime.connected();
 }
 
+const bootProbeFailureSettlementCoordinator =
+  createRelayBootProbeFailureSettlementCoordinator({
+    restoreCandidateKindToAuthority: () => timingRuntime.restoreCandidateKindToAuthority(),
+    failPreservingPrimed: (message) => calibration.failPreservingPrimed(message),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  });
+
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
   const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
-  if (failure) {
-    // The replacement candidate failed. `failPreservingPrimed()` synchronously
-    // publishes through onSettled, so restore orchestration provenance first;
-    // that callback must continue interpreting any retained confirmed result
-    // under the strategy that actually produced it.
-    timingRuntime.restoreCandidateKindToAuthority();
-    calibration.failPreservingPrimed(failure.message);
-    return;
-  }
-  broadcastJson(timingCalibrationStatusPayload());
+  bootProbeFailureSettlementCoordinator.settle(failure);
 }
 
 function sendProbeRequest(target: ProbeTarget, nowMs: number) {

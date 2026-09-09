@@ -9,7 +9,7 @@ import {
   roomSongCommandConvergence,
   roomSongCommandLocalDeltaEvidence,
   type RoomSongConvergenceStage,
-} from '../public/room-song-command-convergence.js';
+} from '../shared/room-song-command-convergence.js';
 import {
   roomSongObservedMutations,
   roomSongPendingOwnsMutation,

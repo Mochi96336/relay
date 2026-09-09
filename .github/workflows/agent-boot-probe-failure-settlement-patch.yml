@@ -1,0 +1,81 @@
+name: Agent boot probe failure settlement exact patch
+
+on:
+  push:
+    branches:
+      - agent/boot-probe-failure-settlement-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Apply exact server patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text()
+
+          import_anchor = "import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';\n"
+          import_line = "import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';\n"
+          if text.count(import_anchor) != 1:
+              raise SystemExit(f'import anchor count was {text.count(import_anchor)}, expected 1')
+          if import_line in text:
+              raise SystemExit('failure settlement coordinator import already present')
+          text = text.replace(import_anchor, import_anchor + import_line, 1)
+
+          old = "\n".join([
+              'function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {',
+              '  const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);',
+              '  if (failure) {',
+              '    // The replacement candidate failed. `failPreservingPrimed()` synchronously',
+              '    // publishes through onSettled, so restore orchestration provenance first;',
+              '    // that callback must continue interpreting any retained confirmed result',
+              '    // under the strategy that actually produced it.',
+              '    timingRuntime.restoreCandidateKindToAuthority();',
+              '    calibration.failPreservingPrimed(failure.message);',
+              '    return;',
+              '  }',
+              '  broadcastJson(timingCalibrationStatusPayload());',
+              '}',
+          ])
+          new = "\n".join([
+              'const bootProbeFailureSettlementCoordinator =',
+              '  createRelayBootProbeFailureSettlementCoordinator({',
+              '    restoreCandidateKindToAuthority: () => timingRuntime.restoreCandidateKindToAuthority(),',
+              '    failPreservingPrimed: (message) => calibration.failPreservingPrimed(message),',
+              '    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),',
+              '  });',
+              '',
+              'function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {',
+              '  const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);',
+              '  bootProbeFailureSettlementCoordinator.settle(failure);',
+              '}',
+          ])
+          if text.count(old) != 1:
+              raise SystemExit(f'old failProbeAttempt count was {text.count(old)}, expected 1')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "src/server.ts"
+          read additions deletions _ < <(git diff --numstat -- src/server.ts)
+          test "$additions" -le 15
+          test "$deletions" -le 15
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts
+          git commit -m 'refactor(probe): delegate failure settlement consequences'
+          git push origin HEAD:agent/boot-probe-failure-settlement-coordinator

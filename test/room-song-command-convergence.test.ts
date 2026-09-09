@@ -5,7 +5,7 @@ import {
   ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
   roomSongCommandConvergence,
   roomSongCommandLocalDeltaEvidence,
-} from '../public/room-song-command-convergence.js';
+} from '../shared/room-song-command-convergence.js';
 
 const desired = {
   videoId: 'dQw4w9WgXcQ',

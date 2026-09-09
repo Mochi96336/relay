@@ -55,6 +55,7 @@ import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-cap
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
+import { createRelayRobotContentMappingRevocationCoordinator } from './relay-robot-content-mapping-revocation-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
@@ -609,6 +610,22 @@ function clearRobotContentTransition() {
   robotContentTransitionRuntime.clear();
 }
 
+const robotContentMappingRevocationCoordinator =
+  createRelayRobotContentMappingRevocationCoordinator({
+    resetPlayerOffset: () => robotPlayerOffset.reset(),
+    resetContentTimeline: () => robotContentTimeline.reset(),
+    clearContentTransition: () => clearRobotContentTransition(),
+    invalidateSourceMapping: () => sourceRuntime.invalidateMapping(),
+    discardPrimedContent: () => calibration.discardPrimedContent(),
+    clearContentValidation: () => clearContentValidationBaseline(),
+    abortCalibrationIfCollecting: (reason) => {
+      if (calibration.collecting) calibration.fail(reason);
+    },
+    syncAppliedCalibration: () => { syncAppliedCalibration(); },
+    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  });
+
 /**
  * The single way to revoke Robot content mapping.
  *
@@ -621,34 +638,7 @@ function clearRobotContentTransition() {
  * write at the call site.
  */
 function revokeRobotContentMapping({ reason }: { reason: string }) {
-  robotPlayerOffset.reset();
-  robotContentTimeline.reset();
-  clearRobotContentTransition();
-  // The reference *frame* is void here, not merely the current mapping.
-  // Bumping the source generation is what fails an existing content authority
-  // closed: without it a confirmed result keeps matching the live calibration
-  // context, so it stays eligible to be re-applied the moment a new delta makes
-  // the mapper ready again.
-  sourceRuntime.invalidateMapping();
-
-  // Deliberately before the failure below: `discardPrimedContent()` is a no-op
-  // while a run is collecting, so this drops an *idle* primed backup only. A
-  // collecting run keeps its own working evidence and hands it to the retry;
-  // the primed content is context-fenced, so the generation bump above already
-  // stops it being reused in a frame it was not measured in.
-  calibration.discardPrimedContent();
-  clearContentValidationBaseline();
-
-  // A pending analyzer is the one piece of state that survives every other
-  // reset here. `CalibrationSession` stamps its promotion with the context that
-  // is live when the worker answers, so a run left alive across a revocation
-  // promotes evidence measured in a reference frame that no longer exists.
-  // Failing the run is what aborts it.
-  if (calibration.collecting) calibration.fail(reason);
-
-  syncAppliedCalibration();
-  broadcastJson(sourceStatusPayload());
-  broadcastJson(timingCalibrationStatusPayload());
+  robotContentMappingRevocationCoordinator.revoke(reason);
 }
 
 /**

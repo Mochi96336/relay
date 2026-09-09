@@ -6,7 +6,7 @@ import test from 'node:test';
 import {
   ROOM_SONG_RATE_TOLERANCE,
   roomSongCommandConvergence,
-} from '../public/room-song-command-convergence.js';
+} from '../shared/room-song-command-convergence.js';
 import { shouldSetPlaybackRate } from '../public/room-song-seek-policy.js';
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';

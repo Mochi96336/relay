@@ -26,10 +26,25 @@ export function createRelayRobotContentMappingRevocationCoordinator(
       dependencies.resetPlayerOffset();
       dependencies.resetContentTimeline();
       dependencies.clearContentTransition();
+
+      // Clearing the current mapping is not enough: the reference frame itself
+      // is void. The Source generation must advance before old content evidence
+      // can become eligible again, otherwise a previously confirmed result can
+      // still match the live context and be re-applied after a fresh delta.
       dependencies.invalidateSourceMapping();
+
+      // Discard an idle primed backup before aborting a collecting run. A
+      // collecting CalibrationSession keeps its own working evidence; the
+      // generation fence above already prevents any primed evidence from being
+      // reused in a reference frame where it was not measured.
       dependencies.discardPrimedContent();
       dependencies.clearContentValidation();
+
+      // Analysis is asynchronous. A worker that survives this generation change
+      // would otherwise promote evidence captured in the retired frame while
+      // stamping it with the context that is live when analysis completes.
       dependencies.abortCalibrationIfCollecting(reason);
+
       dependencies.syncAppliedCalibration();
       dependencies.reportSourceStatus();
       dependencies.reportTimingStatus();

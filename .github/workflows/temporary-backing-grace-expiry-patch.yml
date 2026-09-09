@@ -34,42 +34,44 @@ jobs:
               raise SystemExit('Backing grace expiry coordinator import already exists')
           text = text.replace(import_anchor, import_anchor + new_import, 1)
 
-          old_function = """function expireBackingGrace() {
-  const micArmed = micRuntime.controlConnected()
-    || webTransportMicConnected()
-    || micTransportGrace.pending;
-  if (roomHasSong() || !micArmed) {
-    stopLiveSource();
-    return;
-  }
-
-  backingRuntime.retireRobotRoute();
-  clearRobotBackingBoundaryRequest();
-  invalidateMicTiming('Backing route ended while the room continued voice-only.');
-  broadcastStatus();
-}
-"""
+          old_function = "\n".join([
+              "function expireBackingGrace() {",
+              "  const micArmed = micRuntime.controlConnected()",
+              "    || webTransportMicConnected()",
+              "    || micTransportGrace.pending;",
+              "  if (roomHasSong() || !micArmed) {",
+              "    stopLiveSource();",
+              "    return;",
+              "  }",
+              "",
+              "  backingRuntime.retireRobotRoute();",
+              "  clearRobotBackingBoundaryRequest();",
+              "  invalidateMicTiming('Backing route ended while the room continued voice-only.');",
+              "  broadcastStatus();",
+              "}",
+          ]) + "\n"
           if text.count(old_function) != 1:
               raise SystemExit(f'expected exact old expireBackingGrace once, found {text.count(old_function)}')
 
-          replacement = """const backingGraceExpiryCoordinator = createRelayBackingGraceExpiryCoordinator({
-  stopLiveSource: () => stopLiveSource(),
-  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
-  invalidateMicTiming: (message) => invalidateMicTiming(message),
-  reportStatus: () => broadcastStatus(),
-});
-
-function expireBackingGrace() {
-  const micArmed = micRuntime.controlConnected()
-    || webTransportMicConnected()
-    || micTransportGrace.pending;
-  backingGraceExpiryCoordinator.expire({
-    roomHasSong: roomHasSong(),
-    micArmed,
-  });
-}
-"""
+          replacement = "\n".join([
+              "const backingGraceExpiryCoordinator = createRelayBackingGraceExpiryCoordinator({",
+              "  stopLiveSource: () => stopLiveSource(),",
+              "  retireRobotRoute: () => backingRuntime.retireRobotRoute(),",
+              "  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),",
+              "  invalidateMicTiming: (message) => invalidateMicTiming(message),",
+              "  reportStatus: () => broadcastStatus(),",
+              "});",
+              "",
+              "function expireBackingGrace() {",
+              "  const micArmed = micRuntime.controlConnected()",
+              "    || webTransportMicConnected()",
+              "    || micTransportGrace.pending;",
+              "  backingGraceExpiryCoordinator.expire({",
+              "    roomHasSong: roomHasSong(),",
+              "    micArmed,",
+              "  });",
+              "}",
+          ]) + "\n"
           text = text.replace(old_function, replacement, 1)
 
           path.write_text(text, encoding='utf-8')

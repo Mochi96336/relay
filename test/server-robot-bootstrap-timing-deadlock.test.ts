@@ -80,25 +80,14 @@ test('content gates ask whether the boot probe settled, not whether it failed', 
 });
 
 test('every Robot mapping revocation goes through one teardown transaction', () => {
-  // This used to be an open-coded checklist repeated per event, and no two
-  // copies cleared the same subset - so fixing one path kept leaving the others
-  // holding state that had just been proven wrong.
+  // Cross-runtime teardown ordering is proved by the coordinator behavior test.
+  // The server adapter and every destructive caller must only delegate to that
+  // one transaction rather than re-spelling any subset of its effects.
   const revoke = functionBlock('revokeRobotContentMapping');
-  for (const step of [
-    /robotPlayerOffset\.reset\(\)/,
-    /robotContentTimeline\.reset\(\)/,
-    /clearRobotContentTransition\(\)/,
-    /sourceRuntime\.invalidateMapping\(\)/,
-    /calibration\.discardPrimedContent\(\)/,
-    /clearContentValidationBaseline\(\)/,
-    /syncAppliedCalibration\(\)/,
-  ]) {
-    assert.match(revoke, step, 'the revocation transaction must own every teardown step');
-  }
-  assert.match(
+  assert.match(revoke, /robotContentMappingRevocationCoordinator\.revoke\(reason\)/);
+  assert.doesNotMatch(
     revoke,
-    /if \(calibration\.collecting\) calibration\.fail\(reason\)/,
-    'a revocation must abort the pending analyzer, which is stamped with the context live at completion',
+    /robotPlayerOffset\.reset\(\)|robotContentTimeline\.reset\(\)|sourceRuntime\.invalidateMapping\(\)|calibration\.discardPrimedContent\(\)|clearContentValidationBaseline\(\)|calibration\.fail\(|syncAppliedCalibration\(\)|broadcastJson\(/,
   );
 
   // The two inline fences must delegate rather than re-spell the checklist.

@@ -1,0 +1,75 @@
+name: Temporary Robot content revocation patch
+
+on:
+  push:
+    branches:
+      - agent/robot-content-mapping-revocation-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  exact-server-patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/robot-content-mapping-revocation-coordinator
+          fetch-depth: 1
+      - name: Patch exact server revocation seam
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/server.ts')
+          text = path.read_text(encoding='utf-8')
+
+          import_anchor = "import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';\n"
+          new_import = "import { createRelayRobotContentMappingRevocationCoordinator } from './relay-robot-content-mapping-revocation-coordinator.js';\n"
+          if text.count(import_anchor) != 1:
+              raise SystemExit(f'expected one import anchor, found {text.count(import_anchor)}')
+          if text.count(new_import) != 0:
+              raise SystemExit('revocation coordinator import already exists')
+          text = text.replace(import_anchor, import_anchor + new_import, 1)
+
+          comment_anchor = "/**\n * The single way to revoke Robot content mapping.\n"
+          if text.count(comment_anchor) != 1:
+              raise SystemExit(f'expected one revocation comment anchor, found {text.count(comment_anchor)}')
+          composition = """const robotContentMappingRevocationCoordinator =\n  createRelayRobotContentMappingRevocationCoordinator({\n    resetPlayerOffset: () => robotPlayerOffset.reset(),\n    resetContentTimeline: () => robotContentTimeline.reset(),\n    clearContentTransition: () => clearRobotContentTransition(),\n    invalidateSourceMapping: () => sourceRuntime.invalidateMapping(),\n    discardPrimedContent: () => calibration.discardPrimedContent(),\n    clearContentValidation: () => clearContentValidationBaseline(),\n    abortCalibrationIfCollecting: (reason) => {\n      if (calibration.collecting) calibration.fail(reason);\n    },\n    syncAppliedCalibration: () => { syncAppliedCalibration(); },\n    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),\n    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),\n  });\n\n"""
+          text = text.replace(comment_anchor, composition + comment_anchor, 1)
+
+          function_start = "function revokeRobotContentMapping({ reason }: { reason: string }) {\n"
+          function_tail = "  syncAppliedCalibration();\n  broadcastJson(sourceStatusPayload());\n  broadcastJson(timingCalibrationStatusPayload());\n}\n"
+          if text.count(function_start) != 1:
+              raise SystemExit(f'expected one revoke function start, found {text.count(function_start)}')
+          start = text.index(function_start)
+          tail = text.find(function_tail, start)
+          if tail < 0:
+              raise SystemExit('could not find exact revoke function tail')
+          end = tail + len(function_tail)
+          old_function = text[start:end]
+          if old_function.count('robotPlayerOffset.reset();') != 1:
+              raise SystemExit('old revoke function shape changed: player reset')
+          if old_function.count('sourceRuntime.invalidateMapping();') != 1:
+              raise SystemExit('old revoke function shape changed: mapping invalidation')
+          if old_function.count('if (calibration.collecting) calibration.fail(reason);') != 1:
+              raise SystemExit('old revoke function shape changed: calibration abort')
+          replacement = "function revokeRobotContentMapping({ reason }: { reason: string }) {\n  robotContentMappingRevocationCoordinator.revoke(reason);\n}\n"
+          text = text[:start] + replacement + text[end:]
+
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+          test "$(git diff --name-only)" = "src/server.ts"
+          test "$(git diff --numstat src/server.ts | awk '{print $1}')" -lt 40
+          test "$(git diff --numstat src/server.ts | awk '{print $2}')" -lt 80
+          git diff -- src/server.ts
+      - name: Commit exact patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server.ts
+          git commit -m 'refactor(robot): delegate content mapping revocation ordering'
+          git push origin HEAD:agent/robot-content-mapping-revocation-coordinator

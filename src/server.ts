@@ -15,6 +15,7 @@ import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
+import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
   CalibrationSession,
@@ -1352,49 +1353,28 @@ function syncAppliedCalibration() {
     return true;
   }
   const applicability = calibrationApplicability(calibrationKind);
-  if (applicability === 'hold') return false;
   let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;
   const robotContentAuthority = robotRouteActive() && calibrationKind === 'content';
   if (nextMicLagMs !== null && robotContentAuthority) {
     nextMicLagMs = contentLiveLagMs(nextMicLagMs, performance.now());
   }
 
-  // The Robot offset tracker is deliberately smoothed, but its residual noise is
-  // still not a reason to splice the Mic read head every 250 ms. The same bounded
-  // threshold used by boot re-application keeps content mapping corrections real
-  // while ignoring sub-threshold player jitter.
-  if (
-    robotContentAuthority
-    && timingRuntime.contentValidationSlewRevision === null
-    && active !== null
-    && nextMicLagMs !== null
-    && Math.abs(nextMicLagMs - active) < BOOT_DELTA_REAPPLY_MS
-  ) return false;
-
-  if (active === nextMicLagMs) {
-    if (timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision)) {
-      timingRuntime.clearContentValidationSlew();
-    }
-    return false;
-  }
-
-  if (
-    calibrationKind === 'content'
-    && active !== null
-    && nextMicLagMs !== null
-    && timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision)
-  ) {
-    timingRuntime.clearContentValidationSlew();
-    return session.slewCalibratedMicLagTo(nextMicLagMs);
-  }
-
-  // The periodic synchronizer runs while a live validation slew is still in
-  // progress. Seeing a different applied value is expected; do not snap it to
-  // the already-known target on the next 250 ms tick.
-  if (nextMicLagMs !== null && session.calibratedMicLagTarget === nextMicLagMs) return false;
-
-  timingRuntime.clearContentValidationSlew();
-  session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
+  const decision = decideCalibrationMixerApplication({
+    applicability,
+    calibrationKind,
+    activeMicLagMs: active,
+    nextMicLagMs,
+    robotContentAuthority,
+    hasContentValidationSlew: timingRuntime.contentValidationSlewRevision !== null,
+    contentValidationSlewMatchesRevision:
+      timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision),
+    calibratedMicLagTarget: session.calibratedMicLagTarget,
+    jitterThresholdMs: BOOT_DELTA_REAPPLY_MS,
+  });
+  if (decision.clearContentValidationSlew) timingRuntime.clearContentValidationSlew();
+  if (decision.kind === 'none') return false;
+  if (decision.kind === 'slew') return session.slewCalibratedMicLagTo(decision.micLagMs);
+  session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
   return true;
 }
 

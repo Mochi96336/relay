@@ -5,7 +5,7 @@ import {
   ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
   ROOM_SONG_POSITION_TOLERANCE_SECONDS,
   ROOM_SONG_RATE_TOLERANCE,
-} from '../public/room-song-command-convergence.js';
+} from '../shared/room-song-command-convergence.js';
 import {
   roomSongObservedMutations,
   roomSongPendingOwnsMutation,

@@ -11,7 +11,7 @@ function functionBlock(name: string) {
   return server.slice(start, next === -1 ? server.length : next);
 }
 
-test('automatic content admission delegates policy without eagerly synchronizing authority', () => {
+test('automatic content admission samples applied authority only when needed', () => {
   const block = functionBlock('maybeAutoCalibrate');
   assert.match(block, /autoContentCalibrationPrerequisitesReady\(\{/);
   assert.match(block, /bootProbeSettled:\s*bootProbeSettled\(nowMs\)/);
@@ -22,7 +22,7 @@ test('automatic content admission delegates policy without eagerly synchronizing
   assert.match(
     block,
     /const appliedKind = freshConfirmedResult && robotRoute\s*\? appliedCalibrationKind\(\)\s*:\s*null/,
-    'the stateful applied-authority read must remain conditional on fresh Robot authority',
+    'the applied-authority query remains conditional on fresh Robot authority',
   );
   assert.match(block, /autoContentCalibrationAuthorityAllowsStart\(\{/);
 });

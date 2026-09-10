@@ -120,6 +120,9 @@ Keep these separate:
 Provenance decisions - which result a validator baselines against, which
 reference frame a media transition may carry forward - read applied authority.
 Reading the candidate there attributes one strategy's measurement to another.
+Applied-authority reads are queries, not settlement hooks: confirmed revision
+provenance is synchronized when the measurement settles, before mixer/status
+observers run. Reading provenance must never be required to mutate provenance.
 
 ### A measurement is a stage only if it occupies the room
 

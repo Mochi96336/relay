@@ -40,7 +40,7 @@ export function autoContentCalibrationPrerequisitesReady(
  * A fresh non-Robot result is terminal. On a Robot route, a fresh boot result
  * is intentionally replaceable by content authority, while fresh content is
  * already the desired terminal strategy. `appliedKind` is nullable so callers
- * can avoid the stateful applied-authority read unless fresh Robot authority
+ * can avoid even sampling applied authority unless fresh Robot authority
  * actually requires it; null in that required state fails closed.
  */
 export function autoContentCalibrationAuthorityAllowsStart(

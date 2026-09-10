@@ -25,9 +25,9 @@ export type ContentValidationLivePathInput = {
 };
 
 /**
- * Early admission facts that are safe to sample before applied authority is
- * synchronized. Keeping this phase explicit preserves the server's historical
- * short-circuit boundary around the lazy authority synchronization.
+ * Early admission facts that do not need applied-authority or live-transport
+ * sampling. Keeping this phase explicit preserves the server's cheap
+ * prerequisite short-circuit without making authority reads stateful.
  */
 export function contentValidationPathPrerequisitesReady(
   input: ContentValidationPathPrerequisiteInput,

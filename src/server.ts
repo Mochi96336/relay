@@ -807,6 +807,10 @@ const calibration = new CalibrationSession({
   maxLagMs: CALIBRATION_MAX_LAG_MS,
   analyze: analyzeTimingCalibrationInWorker,
   onSettled: () => {
+    timingRuntime.syncConfirmedAuthority({
+      confirmedRevision: calibration.confirmedRevision,
+      hasConfirmedResult: calibration.confirmedResult !== null,
+    });
     syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());
     broadcastJson(sourceStatusPayload());
@@ -1196,7 +1200,6 @@ function calibrationIsStale() {
 function appliedCalibrationKind() {
   const status = calibration.status();
   return timingRuntime.appliedCalibrationKind({
-    confirmedRevision: calibration.confirmedRevision,
     hasConfirmedResult: calibration.confirmedResult !== null,
     provisional: status.provisional,
   });

@@ -149,6 +149,9 @@ while a content run is collecting stands that run down, because confirming it
 would move the mixer's alignment into the middle of the recording. Standing
 down is not a failure and must not be reported as one. This is the same policy
 as refusing to *begin* content work during a Take, applied from the other side.
+A Take command that is rejected before recording admission must not stand down
+content calibration or content validation; rejected commands do not own those
+background timing transactions.
 
 ### Strategy preference is bounded and terminates both ways
 

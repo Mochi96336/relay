@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createRelayTakeCommandCoordinator } from '../src/relay-take-command-coordinator.js';
 
-test('Take start preserves boundary, validation, commit and acceptance ordering', () => {
+test('Take start admits recording before standing down background timing work', () => {
   const calls: string[] = [];
   const socket = { id: 'socket' };
   const coordinator = createRelayTakeCommandCoordinator({
@@ -43,23 +43,23 @@ test('Take start preserves boundary, validation, commit and acceptance ordering'
   assert.deepEqual(calls, [
     'boundary:100',
     'song:110',
+    'start:participant-1:video:480:1010',
     'cancel-validation:100',
     'timing-status',
-    'start:participant-1:video:480:1010',
     'stand-down-calibration',
     'timing-status',
     'accept-start:take-1',
   ]);
 });
 
-test('a rejected Take start leaves the background content measurement running', () => {
+test('a rejected Take start leaves all background timing work running', () => {
   const calls: string[] = [];
   const coordinator = createRelayTakeCommandCoordinator({
     frameBoundary: () => ({ atMs: 20, position: 30 }),
     songSnapshot: () => null,
     cancelActiveContentValidation: () => {
       calls.push('cancel-validation');
-      return false;
+      return true;
     },
     standDownContentCalibration: () => {
       calls.push('stand-down-calibration');
@@ -82,7 +82,7 @@ test('a rejected Take start leaves the background content measurement running', 
     commandWallClockMs: 100,
     nowMs: 10,
   }), false);
-  assert.deepEqual(calls, ['cancel-validation', 'start', 'reject:start:take-active']);
+  assert.deepEqual(calls, ['start', 'reject:start:take-active']);
 });
 
 test('Take stop preserves boundary, controller commit and duplicate acceptance', () => {

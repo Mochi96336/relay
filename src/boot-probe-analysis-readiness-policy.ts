@@ -1,3 +1,5 @@
+import { decideBootProbeRunIdentity } from './boot-probe-run-identity-policy.js';
+
 export type BootProbeAnalysisReadinessInput = {
   sessionCurrent: boolean;
   captureGenerationMatches: boolean;
@@ -25,12 +27,11 @@ export type BootProbeAnalysisReadinessDecision =
 export function decideBootProbeAnalysisReadiness(
   input: BootProbeAnalysisReadinessInput,
 ): BootProbeAnalysisReadinessDecision {
-  if (!input.sessionCurrent) {
-    return { kind: 'abandon', reason: 'session' };
-  }
-  if (!input.captureGenerationMatches) {
-    return { kind: 'abandon', reason: 'capture-generation' };
-  }
+  const identity = decideBootProbeRunIdentity({
+    sessionCurrent: input.sessionCurrent,
+    captureGenerationMatches: input.captureGenerationMatches,
+  });
+  if (identity.kind === 'abandon') return identity;
   if (input.nowMs > input.deadlineMs) return { kind: 'timeout' };
   if (input.reachedSamples < input.neededSamples) return { kind: 'wait' };
   return { kind: 'ready' };

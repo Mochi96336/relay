@@ -21,6 +21,7 @@ import {
   bootProbeStartLifecycleIdle,
   selectBootProbeStartTarget,
 } from './boot-probe-start-policy.js';
+import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import {
   decideCalibrationApplicability,
@@ -2260,21 +2261,30 @@ function maybeFinishProbeAnalysis(nowMs: number) {
 
   const reached = waiting.target === 'mic' ? session.micTotalSamples : session.backingTotalSamples;
   const needed = waiting.windowStart + waiting.windowSamples;
+  const sessionCurrent = session.active
+    && waiting.sessionGeneration === session.generation;
+  const captureGenerationMatches = sessionCurrent
+    ? probeGeneration(waiting.target) === waiting.generation
+    : false;
+  const readiness = decideBootProbeAnalysisReadiness({
+    sessionCurrent,
+    captureGenerationMatches,
+    nowMs,
+    deadlineMs: waiting.deadlineMs,
+    reachedSamples: reached,
+    neededSamples: needed,
+  });
 
-  if (!session.active || waiting.sessionGeneration !== session.generation) {
+  if (readiness.kind === 'abandon') {
+    if (readiness.reason === 'capture-generation' && PROBE_DEBUG) {
+      console.log(`[probe] ${waiting.target} analysis dropped: capture generation changed`);
+    }
     abandonProbeRun();
     broadcastJson(timingCalibrationStatusPayload());
     return;
   }
 
-  if (probeGeneration(waiting.target) !== waiting.generation) {
-    if (PROBE_DEBUG) console.log(`[probe] ${waiting.target} analysis dropped: capture generation changed`);
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  if (nowMs > waiting.deadlineMs) {
+  if (readiness.kind === 'timeout') {
     if (PROBE_DEBUG) {
       console.log(
         `[probe] ${waiting.target} analysis timed out: reached=${reached} needed=${needed}`,
@@ -2285,7 +2295,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     return;
   }
 
-  if (reached < needed) return;
+  if (readiness.kind === 'wait') return;
   const analysis = bootProbeRuntime.takeAnalysis();
   if (!analysis) return;
 

@@ -58,10 +58,26 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
 
   probe.abandonRun();
   assert.equal(probe.micLeg, null);
-  assert.equal(probe.pendingRequest, null);
+  assert.equal(probe.lifecycleIdle, true);
   assert.equal(probe.pendingAnalysis, null);
   assert.deepEqual(probe.correlations, { mic: 0.91, backing: null }, 'run abandonment preserves diagnostics');
   assert.equal(probe.nextRequestId(), 2, 'request ids remain monotonic across abandoned runs');
+});
+
+test('BootProbeRuntime exposes atomic request expiry without leaking pending request state', () => {
+  const probe = runtime();
+  const requestId = probe.nextRequestId();
+  assert.equal(probe.beginRequest({
+    target: 'mic',
+    requestId,
+    serverSentAtMs: 500,
+    sessionGeneration: context.sessionGeneration,
+    generation: context.micGeneration,
+  }), true);
+  assert.equal(probe.takeExpiredRequest(600, 100), null);
+  assert.equal(probe.lifecycleIdle, false, 'deadline equality retains the pending request');
+  assert.equal(probe.takeExpiredRequest(601, 100)?.requestId, requestId);
+  assert.equal(probe.lifecycleIdle, true, 'expired request is consumed by the aggregate');
 });
 
 test('Mic leg scheduler view owns presence and stale provenance without consuming evidence', () => {

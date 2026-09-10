@@ -116,6 +116,18 @@ export class ProbeLifecycle {
   }
 
   /**
+   * Atomically consume the request only after its acknowledgement deadline.
+   * Equality is still inside the allowed window; expiry is deliberately strict
+   * so this preserves the server's historical `elapsed > timeoutMs` boundary.
+   */
+  takeExpiredRequest(nowMs: number, timeoutMs: number) {
+    const request = this.request;
+    if (!request || nowMs - request.serverSentAtMs <= timeoutMs) return null;
+    this.request = null;
+    return request;
+  }
+
+  /**
    * Browser acknowledgements also have to prove the capture generation for the
    * phone-mic leg before they are allowed to consume the pending request.
    *

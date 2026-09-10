@@ -2518,10 +2518,9 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(mixHealthPayload());
   }
 
-  const pendingProbe = bootProbeRuntime.pendingRequest;
-  if (pendingProbe !== null && nowMs - pendingProbe.serverSentAtMs > PROBE_REPLY_TIMEOUT_MS) {
-    const expired = bootProbeRuntime.acceptReply(pendingProbe.requestId);
-    if (expired) failProbeAttempt(expired.target, 'playback acknowledgement timed out', nowMs);
+  const expiredProbe = bootProbeRuntime.takeExpiredRequest(nowMs, PROBE_REPLY_TIMEOUT_MS);
+  if (expiredProbe) {
+    failProbeAttempt(expiredProbe.target, 'playback acknowledgement timed out', nowMs);
   }
 
   dropLegacyCalibrationForRobot();

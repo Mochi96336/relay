@@ -30,9 +30,11 @@ test('priming, automatic calibration and content validation all require an evide
     functionBlock('robotContentFallbackPrimingActive'),
     /!robotContentEvidenceMappingReady\(nowMs\)/,
   );
+  const automatic = functionBlock('maybeAutoCalibrate');
+  assert.match(automatic, /autoContentCalibrationPrerequisitesReady\(\{/);
   assert.match(
-    functionBlock('maybeAutoCalibrate'),
-    /!robotContentEvidenceMappingReady\(nowMs\)/,
+    automatic,
+    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
   );
 
   // Content-validation admission now delegates its prerequisite decision to a

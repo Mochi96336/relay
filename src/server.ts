@@ -18,7 +18,6 @@ import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.
 import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
 import {
   bootProbeStartAuthorityAllowsAttempt,
-  bootProbeStartLifecycleIdle,
   selectBootProbeStartTarget,
 } from './boot-probe-start-policy.js';
 import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
@@ -2152,10 +2151,7 @@ function maybeStartProbeCalibration(nowMs: number) {
     calibrationTransactionActive: calibration.transactionActive,
   })) return;
 
-  if (!bootProbeStartLifecycleIdle({
-    pendingRequest: bootProbeRuntime.pendingRequest !== null,
-    pendingAnalysis: bootProbeRuntime.pendingAnalysis !== null,
-  })) return;
+  if (!bootProbeRuntime.lifecycleIdle) return;
 
   const probeErrored = probeStatus(nowMs).error !== null;
   const hasMicLeg = bootProbeRuntime.hasMicLeg;

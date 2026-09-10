@@ -45,6 +45,7 @@ test('BootProbeRuntime aggregates probe evidence without absorbing calibration o
   assert.ok(serverCode.includes('bootProbeRuntime.hasMicLeg'));
   assert.ok(serverCode.includes('bootProbeRuntime.micLegStaleForContext('));
   assert.ok(serverCode.includes('bootProbeRuntime.takeMicLegForContext('));
+  assert.ok(serverCode.includes('bootProbeRuntime.lifecycleIdle'));
 
   // Signal analysis, combination and application remain orchestration/domain work.
   assert.ok(serverCode.includes('locateProbe('));

@@ -92,6 +92,10 @@ export class ProbeLifecycle {
     return this.analysis;
   }
 
+  get idle() {
+    return this.request === null && this.analysis === null;
+  }
+
   beginRequest(request: ProbeRequest) {
     if (this.failure || this.request || this.analysis) return false;
     if (this.attemptCounts[request.target] >= this.maxAttempts) return false;

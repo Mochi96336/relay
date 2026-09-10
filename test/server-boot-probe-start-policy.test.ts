@@ -34,13 +34,18 @@ test('Boot Probe scheduler preserves lazy stale and lifecycle sampling order', (
     /calibrationStale:\s*candidateIsBootProbe && hasCalibrationResult\s*\? calibrationIsStale\(\)\s*:\s*false/,
   );
   const authority = block.indexOf('bootProbeStartAuthorityAllowsAttempt({');
-  const lifecycle = block.indexOf('bootProbeStartLifecycleIdle({');
+  const lifecycle = block.indexOf('if (!bootProbeRuntime.lifecycleIdle) return;');
   const status = block.indexOf('const probeErrored = probeStatus(nowMs).error !== null');
   const completed = block.indexOf('bootProbeRuntime.completedContextMatches(context)');
   const target = block.indexOf('selectBootProbeStartTarget({');
   assert.ok(authority >= 0);
-  assert.ok(lifecycle > authority, 'pending work is sampled only after authority admission');
+  assert.ok(lifecycle > authority, 'lifecycle slot is sampled only after authority admission');
   assert.ok(status > lifecycle, 'probe status is not sampled while request/analysis work is pending');
+  assert.doesNotMatch(
+    block,
+    /bootProbeRuntime\.pendingAnalysis|bootProbeStartLifecycleIdle/,
+    'scheduler must query aggregate lifecycle idleness instead of reconstructing it',
+  );
   assert.ok(completed > status, 'completed-context dedupe remains after probe error sampling');
   assert.ok(target > completed, 'logical target selection consumes the sampled facts');
 });

@@ -15,6 +15,7 @@ function runtime() {
 
 test('BootProbeRuntime keeps request state and measured Mic evidence in one reset domain', () => {
   const probe = runtime();
+  assert.equal(probe.lifecycleIdle, true);
   const firstId = probe.nextRequestId();
   assert.equal(firstId, 1);
   assert.equal(probe.beginRequest({
@@ -25,9 +26,11 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
     generation: context.micGeneration,
   }), true);
   assert.equal(probe.status(100).phase, 'mic-requested');
+  assert.equal(probe.lifecycleIdle, false);
 
   const accepted = probe.acceptClientReply(firstId, context.micGeneration);
   assert.ok(accepted);
+  assert.equal(probe.lifecycleIdle, true);
   assert.equal(probe.beginAnalysis({
     target: 'mic',
     targetSample: 1_000,
@@ -37,7 +40,9 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
     generation: context.micGeneration,
     deadlineMs: 1_000,
   }), true);
+  assert.equal(probe.lifecycleIdle, false);
   assert.equal(probe.takeAnalysis()?.target, 'mic');
+  assert.equal(probe.lifecycleIdle, true);
 
   probe.noteCorrelation('mic', 0.91);
   probe.setMicLeg({

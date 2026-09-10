@@ -53,13 +53,22 @@ test('content provenance is read from applied authority, never the in-flight can
     'baseline provenance must not read the in-flight candidate strategy',
   );
 
-  // Path admission still samples applied authority directly; it must not use
-  // candidate kind either.
+  // Path admission delegates staged decisions while preserving the historical
+  // short-circuit before appliedCalibrationKind(), whose lazy synchronization
+  // mutates authority metadata. Candidate strategy must remain outside this boundary.
   const path = functionBlock('contentValidationPathReady');
-  assert.match(path, /appliedCalibrationKind\(\) !== 'content'/);
+  const prerequisites = path.indexOf('contentValidationPathPrerequisitesReady({');
+  const authorityRead = path.indexOf('const appliedKind = appliedCalibrationKind()');
+  const authorityGate = path.indexOf('contentValidationAuthorityReady({');
+  const liveGate = path.indexOf('contentValidationLivePathReady({');
+  assert.ok(prerequisites >= 0, 'path readiness must delegate prerequisite admission');
+  assert.ok(authorityRead > prerequisites, 'applied authority must be sampled only after prerequisites');
+  assert.ok(authorityGate > authorityRead, 'authority policy must consume the synchronized applied authority');
+  assert.ok(liveGate > authorityGate, 'transport/media liveness must be checked after authority admission');
+  assert.match(path, /bootProbeSettled:\s*bootProbeSettled\(nowMs\)/);
   assert.doesNotMatch(
     path,
-    /timingRuntime\.calibrationKind !== 'content'/,
+    /timingRuntime\.calibrationKind/,
     'path readiness must not treat the in-flight candidate as provenance',
   );
 });

@@ -191,6 +191,33 @@ test('Mic failure clears only provisional Mic evidence while retaining bounded r
   assert.equal(probe.canStart('mic', 600), true);
 });
 
+test('Backing attempt failure preserves a measured Mic leg while scheduling only backing retry', () => {
+  const probe = runtime();
+  probe.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_050,
+    correlation: 0.9,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  const requestId = probe.nextRequestId();
+  assert.equal(probe.beginRequest({
+    target: 'backing',
+    requestId,
+    serverSentAtMs: 400,
+    sessionGeneration: context.sessionGeneration,
+    generation: context.backingGeneration,
+  }), true);
+
+  const failure = probe.failAttempt('backing', 'sparse capture window', 500);
+  assert.equal(failure, null);
+  assert.equal(probe.hasMicLeg, true, 'backing retry must not throw away the independent Mic leg');
+  assert.equal(probe.micLeg?.actualSample, 1_050);
+  assert.equal(probe.status(500).phase, 'backing-retry-wait');
+  assert.equal(probe.canStart('backing', 599), false);
+  assert.equal(probe.canStart('backing', 600), true);
+});
+
 test('completed boot evidence survives candidate reruns and can be re-applied against a new delta', () => {
   const probe = runtime();
   const result = {

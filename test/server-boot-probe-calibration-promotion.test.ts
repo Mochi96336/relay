@@ -70,6 +70,24 @@ test('fresh two-leg probe result delegates ordered promotion without duplicating
   assert.doesNotMatch(finish, /calibration\.applyExternalResult\(/);
 });
 
+test('backing completion consumes Mic evidence through the BootProbeRuntime context boundary', () => {
+  const finish = functionCode(server, 'maybeFinishProbeAnalysis');
+  const consume = finish.indexOf('bootProbeRuntime.takeMicLegForContext({');
+  const combine = finish.indexOf('combineBootCalibration({', consume);
+
+  assert.match(
+    finish,
+    /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*\}\)/,
+  );
+  assert.doesNotMatch(
+    finish,
+    /micLeg\.(?:sessionGeneration|micGeneration)/,
+    'Mic evidence provenance belongs to BootProbeRuntime rather than server field inspection',
+  );
+  assert.ok(consume >= 0);
+  assert.ok(combine > consume, 'context-validated Mic evidence must be consumed before calibration combination');
+});
+
 test('delta reapply reads probe confidence only through the ordered promotion seam', () => {
   const reapply = functionCode(server, 'maybeReapplyBootCalibration');
 

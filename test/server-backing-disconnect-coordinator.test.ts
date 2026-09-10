@@ -20,7 +20,7 @@ test('server delegates only Backing disconnect ordering through the coordinator 
 test('server composition retains Backing disconnect authority and domain effects', () => {
   assert.match(server, /isBacking: \(socket\) => backingRuntime\.isSocket\(socket\)/);
   assert.match(server, /noteDisconnected: \(\) => takeController\.noteQualityEvent\('backing-transport-disconnected'\)/);
-  assert.match(server, /clearRobotBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(server, /clearRobotContentTransition: \(\) => clearRobotContentTransition\(\)/);
   assert.match(server, /detach: \(socket\) => backingRuntime\.detach\(socket\)/);
   assert.match(server, /clearBackingExpectation: \(\) => session\.setBackingExpected\(false\)/);
   assert.match(server, /calibration\.collecting/);

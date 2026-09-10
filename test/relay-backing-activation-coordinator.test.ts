@@ -14,7 +14,7 @@ function coordinatorFixture(options: {
       events.push(`previous:${options.previous ?? 'none'}`);
       return options.previous;
     },
-    clearRobotBackingBoundaryRequest: () => events.push('clear-boundary'),
+    clearRobotContentTransition: () => events.push('clear-boundary'),
     noteQualityEvent: (event) => events.push(`quality:${event}`),
     retirePrevious: (previous, next) => events.push(`retire:${previous ?? 'none'}->${next}`),
     setSocketSampleRate: (socket, sampleRate) => events.push(`sample-rate:${socket}:${sampleRate}`),

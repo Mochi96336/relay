@@ -22,7 +22,7 @@ test('server still owns Robot source lifecycle authority and effects', () => {
   assert.match(server, /abandonProbeRun\(\)/);
   assert.match(server, /robotPlayerOffset\.reset\(\)/);
   assert.match(server, /robotContentTimeline\.reset\(\)/);
-  assert.match(server, /clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(server, /clearRobotContentTransition\(\)/);
   assert.match(server, /dropLegacyCalibrationForRobot\(\)/);
   assert.match(server, /syncAppliedCalibration\(\)/);
   assert.match(server, /broadcastJson\(sourceStatusPayload\(\)\)/);

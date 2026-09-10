@@ -31,7 +31,7 @@ test('expireBackingGrace retains live room facts and delegates the consequence p
 
   assert.doesNotMatch(expire, /stopLiveSource\(\)/);
   assert.doesNotMatch(expire, /backingRuntime\.retireRobotRoute\(\)/);
-  assert.doesNotMatch(expire, /clearRobotBackingBoundaryRequest\(\)/);
+  assert.doesNotMatch(expire, /clearRobotContentTransition\(\)/);
   assert.doesNotMatch(expire, /invalidateMicTiming\(/);
   assert.doesNotMatch(expire, /broadcastStatus\(\)/);
 });
@@ -44,7 +44,7 @@ test('server composition supplies every Backing grace consequence without moving
   assert.match(composition, /retireRobotRoute: \(\) => backingRuntime\.retireRobotRoute\(\)/);
   assert.match(
     composition,
-    /clearRobotBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/,
+    /clearRobotContentTransition: \(\) => clearRobotContentTransition\(\)/,
   );
   assert.match(composition, /invalidateMicTiming: \(message\) => invalidateMicTiming\(message\)/);
   assert.match(composition, /reportStatus: \(\) => broadcastStatus\(\)/);

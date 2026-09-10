@@ -6,7 +6,7 @@ export type RelayBackingGraceExpiryInput = {
 export type RelayBackingGraceExpiryDependencies = {
   stopLiveSource: () => void;
   retireRobotRoute: () => void;
-  clearRobotBackingBoundaryRequest: () => void;
+  clearRobotContentTransition: () => void;
   invalidateMicTiming: (message: string) => void;
   reportStatus: () => void;
 };
@@ -34,7 +34,7 @@ export function createRelayBackingGraceExpiryCoordinator(
       }
 
       dependencies.retireRobotRoute();
-      dependencies.clearRobotBackingBoundaryRequest();
+      dependencies.clearRobotContentTransition();
       dependencies.invalidateMicTiming(BACKING_GRACE_VOICE_ONLY_TIMING_REASON);
       dependencies.reportStatus();
       return 'voice-only' as const;

@@ -29,7 +29,7 @@ test('server delegates only confirmed Backing restart effects through the coordi
   const block = server.slice(start, end);
   assert.doesNotMatch(block, /takeController\.|bootProbeRuntime\.|contentCalibrationValidator\./);
   assert.doesNotMatch(block, /calibration\.(?:fail|reset|apply|begin)/);
-  assert.doesNotMatch(block, /clearRobotBackingBoundaryRequest\(|broadcastJson\(|(?:^|[^.])syncAppliedCalibration\(/m);
+  assert.doesNotMatch(block, /clearRobotContentTransition\(|broadcastJson\(|(?:^|[^.])syncAppliedCalibration\(/m);
 });
 
 test('server composition retains every Backing capture restart domain effect', () => {
@@ -41,7 +41,7 @@ test('server composition retains every Backing capture restart domain effect', (
     server,
     /const backingCaptureRestartCoordinator = createRelayBackingCaptureRestartCoordinator\(\{/,
   );
-  assert.match(server, /clearBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(server, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
   assert.match(server, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
   assert.match(server, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
   assert.match(server, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);

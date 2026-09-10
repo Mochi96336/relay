@@ -7,7 +7,7 @@ function coordinatorFor(events: string[]) {
   return createRelayBackingGraceExpiryCoordinator({
     stopLiveSource: () => events.push('stop-live-source'),
     retireRobotRoute: () => events.push('retire-robot-route'),
-    clearRobotBackingBoundaryRequest: () => events.push('clear-robot-backing-boundary'),
+    clearRobotContentTransition: () => events.push('clear-robot-backing-boundary'),
     invalidateMicTiming: (message) => events.push(`invalidate-mic-timing:${message}`),
     reportStatus: () => events.push('status'),
   });

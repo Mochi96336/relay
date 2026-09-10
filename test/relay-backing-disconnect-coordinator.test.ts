@@ -13,7 +13,7 @@ test('non-backing close is ignored without Backing disconnect effects', () => {
       return false;
     },
     noteDisconnected: () => calls.push('noteDisconnected'),
-    clearRobotBackingBoundaryRequest: () => calls.push('clearRobotBackingBoundaryRequest'),
+    clearRobotContentTransition: () => calls.push('clearRobotContentTransition'),
     detach: () => calls.push('detach'),
     clearBackingExpectation: () => calls.push('clearBackingExpectation'),
     failCalibrationIfCollecting: () => calls.push('failCalibrationIfCollecting'),
@@ -36,7 +36,7 @@ test('active Backing disconnect preserves server-owned effect order', () => {
       return true;
     },
     noteDisconnected: () => calls.push('noteDisconnected'),
-    clearRobotBackingBoundaryRequest: () => calls.push('clearRobotBackingBoundaryRequest'),
+    clearRobotContentTransition: () => calls.push('clearRobotContentTransition'),
     detach: (candidate) => {
       assert.equal(candidate, socket);
       calls.push('detach');
@@ -52,7 +52,7 @@ test('active Backing disconnect preserves server-owned effect order', () => {
   assert.deepEqual(calls, [
     'isBacking',
     'noteDisconnected',
-    'clearRobotBackingBoundaryRequest',
+    'clearRobotContentTransition',
     'detach',
     'clearBackingExpectation',
     'failCalibrationIfCollecting',

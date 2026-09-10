@@ -640,6 +640,13 @@ function robotFollowerSeekMayPreserveMapping(nowMs = performance.now()) {
   );
 }
 
+/**
+ * Retires the whole Robot content-transition transaction.
+ *
+ * This is intentionally stronger than `clearPendingBoundary()`: lifecycle
+ * discontinuities must abort any anchor/compare worker and discard quarantined
+ * transition state, not merely forget an outstanding sample-boundary request.
+ */
 function clearRobotContentTransition() {
   robotContentTransitionRuntime.clear();
 }
@@ -706,10 +713,6 @@ function robotContentTransitionStatus(nowMs = performance.now()) {
 
 function sweepRobotContentTransition(nowMs: number) {
   return robotContentTransitionRuntime.sweep(nowMs);
-}
-
-function clearRobotBackingBoundaryRequest() {
-  robotContentTransitionRuntime.clear();
 }
 
 function feedContentBackingEvidence(samples: Int16Array, start: number, nowMs: number) {
@@ -1864,7 +1867,7 @@ const liveSourceStopCoordinator = createRelayLiveSourceStopCoordinator({
   clearContentValidation: () => clearContentValidationBaseline(),
   resetRobotPlayerOffset: () => robotPlayerOffset.reset(),
   resetRobotContentTimeline: () => robotContentTimeline.reset(),
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
   stopSession: () => session.stop(),
   resetCalibration: () => calibration.reset(),
   clearTimingKind: () => timingRuntime.clearCalibrationKind(),
@@ -1894,7 +1897,7 @@ function maybeStopLiveSourceWhenUnarmed() {
 const backingGraceExpiryCoordinator = createRelayBackingGraceExpiryCoordinator({
   stopLiveSource: () => stopLiveSource(),
   retireRobotRoute: () => backingRuntime.retireRobotRoute(),
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
   invalidateMicTiming: (message) => invalidateMicTiming(message),
   reportStatus: () => broadcastStatus(),
 });
@@ -3333,7 +3336,7 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
 
 const backingActivationCoordinator = createRelayBackingActivationCoordinator<RelaySocket>({
   previousBacking: () => backingRuntime.socket,
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
   noteQualityEvent: (event) => takeController.noteQualityEvent(event),
   retirePrevious: (previous, next) => {
     replacePrevious(previous, next, 'Replaced by a newer tab capture.');
@@ -3531,7 +3534,7 @@ const robotActivationCoordinator = createRelayRobotActivationCoordinator<RelaySo
   sessionActive: () => session.active,
   resetPlayerOffset: () => robotPlayerOffset.reset(),
   resetContentTimeline: () => robotContentTimeline.reset(),
-  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearContentTransition: () => clearRobotContentTransition(),
   failCalibrationIfCollecting: () => {
     if (calibration.collecting) {
       calibration.fail('The Robot source changed during calibration. Start calibration again.');
@@ -3558,7 +3561,7 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
 });
 
 const backingCaptureRestartCoordinator = createRelayBackingCaptureRestartCoordinator({
-  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearContentTransition: () => clearRobotContentTransition(),
   noteQualityEvent: (event) => takeController.noteQualityEvent(event),
   abandonProbeRun: () => abandonProbeRun(),
   clearContentValidation: () => clearContentValidationBaseline(),
@@ -3605,7 +3608,7 @@ const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySo
   detach: (socket) => sourceRuntime.detachRobot(socket),
   resetPlayerOffset: () => robotPlayerOffset.reset(),
   resetContentTimeline: () => robotContentTimeline.reset(),
-  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearContentTransition: () => clearRobotContentTransition(),
   abandonProbeRun: () => abandonProbeRun(),
   failCalibrationIfCollecting: () => {
     if (calibration.collecting) {
@@ -3647,7 +3650,7 @@ const micDisconnectCoordinator = createRelayMicDisconnectCoordinator<RelaySocket
 const backingDisconnectCoordinator = createRelayBackingDisconnectCoordinator<RelaySocket>({
   isBacking: (socket) => backingRuntime.isSocket(socket),
   noteDisconnected: () => takeController.noteQualityEvent('backing-transport-disconnected'),
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
   detach: (socket) => backingRuntime.detach(socket),
   clearBackingExpectation: () => session.setBackingExpected(false),
   failCalibrationIfCollecting: () => {

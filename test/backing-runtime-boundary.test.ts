@@ -44,7 +44,7 @@ test('BackingRuntime owns transport lifecycle without absorbing domain authority
   const expireBackingGrace = functionCode(server, 'expireBackingGrace');
   assert.match(expireBackingGrace, /backingGraceExpiryCoordinator\.expire\(\{/);
   assert.doesNotMatch(expireBackingGrace, /backingRuntime\.retireRobotRoute\(\)/);
-  assert.doesNotMatch(expireBackingGrace, /clearRobotBackingBoundaryRequest\(\)/);
+  assert.doesNotMatch(expireBackingGrace, /clearRobotContentTransition\(\)/);
   assert.doesNotMatch(expireBackingGrace, /invalidateMicTiming\(/);
   assert.doesNotMatch(expireBackingGrace, /broadcastStatus\(\)/);
 });

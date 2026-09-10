@@ -22,6 +22,7 @@ import {
 } from './boot-probe-start-policy.js';
 import { bootProbeTopologyReady } from './boot-probe-topology-admission-policy.js';
 import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
+import { decideBootProbeAnalysisEvidence } from './boot-probe-analysis-evidence-policy.js';
 import { decideBootProbeRunIdentity } from './boot-probe-run-identity-policy.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import {
@@ -2313,6 +2314,23 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   if (readiness.kind === 'wait') return;
   const analysis = bootProbeRuntime.takeAnalysis();
   if (!analysis) return;
+
+  const rangeEvidence = analysis.target === 'mic'
+    ? session.readMicEvidence(analysis.windowStart, analysis.windowSamples)
+    : session.readBackingEvidence(analysis.windowStart, analysis.windowSamples);
+  const evidenceDecision = decideBootProbeAnalysisEvidence({
+    gapSamples: rangeEvidence.gapSamples,
+    frontierMissingSamples: rangeEvidence.frontierMissingSamples,
+    sampleRate: MIX_SAMPLE_RATE,
+    maxGapMs: MAX_CAPTURE_GAP_MS,
+  });
+  if (evidenceDecision.kind === 'reject') {
+    const reason = evidenceDecision.reason === 'frontier-missing'
+      ? `captured audio window was incomplete (${evidenceDecision.frontierMissingSamples} samples beyond the capture frontier)`
+      : `captured audio gap ${evidenceDecision.gapMs.toFixed(1)} ms exceeded ${MAX_CAPTURE_GAP_MS} ms`;
+    failProbeAttempt(analysis.target, reason, nowMs);
+    return;
+  }
 
   const window = analysis.target === 'mic'
     ? session.readMic(analysis.windowStart, analysis.windowSamples)

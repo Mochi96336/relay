@@ -58,6 +58,55 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
   assert.equal(probe.nextRequestId(), 2, 'request ids remain monotonic across abandoned runs');
 });
 
+test('Mic leg consumption owns its session/capture provenance and ignores backing generation', () => {
+  const matching = runtime();
+  matching.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  const sameMicDifferentBacking = { ...context, backingGeneration: 999 };
+  const consumed = matching.takeMicLegForContext(sameMicDifferentBacking);
+  assert.equal(consumed?.actualSample, 1_120);
+  assert.equal(matching.micLeg, null, 'matching evidence is consumed exactly once');
+
+  const staleSession = runtime();
+  staleSession.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  assert.equal(
+    staleSession.takeMicLegForContext({
+      sessionGeneration: context.sessionGeneration + 1,
+      micGeneration: context.micGeneration,
+    }),
+    null,
+  );
+  assert.equal(staleSession.micLeg, null, 'stale-session evidence is consumed rather than retained');
+
+  const staleCapture = runtime();
+  staleCapture.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  assert.equal(
+    staleCapture.takeMicLegForContext({
+      sessionGeneration: context.sessionGeneration,
+      micGeneration: (context.micGeneration ?? 0) + 1,
+    }),
+    null,
+  );
+  assert.equal(staleCapture.micLeg, null, 'stale-capture evidence is consumed rather than retained');
+});
+
 test('Mic failure clears only provisional Mic evidence while retaining bounded retry state', () => {
   const probe = runtime();
   const requestId = probe.nextRequestId();

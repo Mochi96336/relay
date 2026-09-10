@@ -2359,12 +2359,11 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     return;
   }
 
-  const micLeg = bootProbeRuntime.takeMicLeg();
-  if (
-    micLeg === null
-    || micLeg.sessionGeneration !== session.generation
-    || micLeg.micGeneration !== session.micGeneration
-  ) return;
+  const micLeg = bootProbeRuntime.takeMicLegForContext({
+    sessionGeneration: session.generation,
+    micGeneration: session.micGeneration,
+  });
+  if (micLeg === null) return;
 
   const result = combineBootCalibration({
     mic: micLeg,

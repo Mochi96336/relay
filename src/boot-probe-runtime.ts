@@ -120,9 +120,16 @@ export class BootProbeRuntime {
     this.lifecycle.setMicMeasured(true);
   }
 
-  takeMicLeg() {
+  takeMicLegForContext(
+    context: Pick<BootProbeContext, 'sessionGeneration' | 'micGeneration'>,
+  ) {
     const leg = this.micLeg;
     this.clearMicLeg();
+    if (
+      leg === null
+      || leg.sessionGeneration !== context.sessionGeneration
+      || leg.micGeneration !== context.micGeneration
+    ) return null;
     return leg;
   }
 

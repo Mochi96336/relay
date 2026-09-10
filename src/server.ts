@@ -20,6 +20,7 @@ import {
   bootProbeStartAuthorityAllowsAttempt,
   selectBootProbeStartTarget,
 } from './boot-probe-start-policy.js';
+import { bootProbeTopologyReady } from './boot-probe-topology-admission-policy.js';
 import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
 import { decideBootProbeRunIdentity } from './boot-probe-run-identity-policy.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
@@ -2082,7 +2083,10 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
   // never terminates. `decideCalibrationStart` already refuses this for manual
   // and product-advertised starts; the automatic scheduler needs the same rule
   // rather than a second, laxer policy.
-  if (robotRouteActive() && (!backingRuntime.isRobot || !sourceRuntime.connected())) {
+  if (robotRouteActive() && !bootProbeTopologyReady({
+    backingIsRobot: backingRuntime.isRobot,
+    robotSourceConnected: sourceRuntime.connected(),
+  })) {
     return false;
   }
   if (target === 'mic') {

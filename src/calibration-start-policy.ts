@@ -1,3 +1,4 @@
+import { bootProbeTopologyReady } from './boot-probe-topology-admission-policy.js';
 import type { TakeLifecycle } from './take-session.js';
 
 export type CalibrationStartMode = 'content' | 'boot-probe';
@@ -84,7 +85,10 @@ export function decideCalibrationStart(
     // Source for anyone to plug in, so telling the user to connect one names
     // something that does not exist on that deployment. The missing leg here
     // is infrastructure, and its recovery is restarting the route.
-    if (facts.backingIsRobot === false || facts.robotSourceConnected === false) {
+    if (!bootProbeTopologyReady({
+      backingIsRobot: facts.backingIsRobot,
+      robotSourceConnected: facts.robotSourceConnected,
+    })) {
       return { ok: false, mode, reason: 'robot-route-incomplete' };
     }
     return { ok: true, mode };

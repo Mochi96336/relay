@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   decideCalibrationStart,
   type CalibrationStartFacts,
 } from '../src/calibration-start-policy.js';
+
+const policySource = readFileSync(new URL('../src/calibration-start-policy.ts', import.meta.url), 'utf8');
 
 const READY: CalibrationStartFacts = {
   takeLifecycle: 'idle',
@@ -161,6 +164,14 @@ test('the audible boot probe still refuses a second run', () => {
  * where the user really has a transport missing produced a recovery
  * instruction pointing at something that does not exist on the deployment.
  */
+test('Robot topology admission delegates to the shared Boot Probe invariant', () => {
+  assert.match(policySource, /bootProbeTopologyReady\(\{/);
+  assert.doesNotMatch(
+    policySource,
+    /facts\.backingIsRobot === false \|\| facts\.robotSourceConnected === false/,
+  );
+});
+
 test('a missing Robot leg is not the user failing to connect a device', () => {
   assert.deepEqual(
     decideCalibrationStart({

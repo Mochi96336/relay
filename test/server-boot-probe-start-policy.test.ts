@@ -50,6 +50,19 @@ test('Boot Probe scheduler preserves lazy stale and lifecycle sampling order', (
   assert.ok(target > completed, 'logical target selection consumes the sampled facts');
 });
 
+test('automatic Boot Probe path readiness shares Robot topology admission without eager live-path sampling', () => {
+  const path = functionBlock('probePathReady');
+  const topology = path.indexOf('bootProbeTopologyReady({');
+  const target = path.indexOf("if (target === 'mic')");
+  assert.ok(topology >= 0, 'automatic scheduling must use the shared Robot topology invariant');
+  assert.ok(target > topology, 'topology is admitted before target-specific live-path sampling');
+  assert.doesNotMatch(
+    path,
+    /!backingRuntime\.isRobot \|\| !sourceRuntime\.connected\(\)/,
+    'server must not carry a second inline copy of Robot topology admission',
+  );
+});
+
 test('retry cadence and transport/request effects remain server-owned and ordered', () => {
   const block = functionBlock('maybeStartProbeCalibration');
   const target = block.indexOf('selectBootProbeStartTarget({');

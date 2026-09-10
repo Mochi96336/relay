@@ -42,8 +42,8 @@ test('candidate kind cannot reclassify a retained confirmed authority revision',
   const timing = runtime();
 
   timing.beginContentCalibration(1_000, false);
+  timing.syncConfirmedAuthority({ confirmedRevision: 1, hasConfirmedResult: true });
   assert.equal(timing.appliedCalibrationKind({
-    confirmedRevision: 1,
     hasConfirmedResult: true,
     provisional: false,
   }), 'content');
@@ -53,7 +53,6 @@ test('candidate kind cannot reclassify a retained confirmed authority revision',
   assert.equal(timing.calibrationKind, 'boot-probe', 'replacement candidate uses boot probes');
   assert.equal(
     timing.appliedCalibrationKind({
-      confirmedRevision: 1,
       hasConfirmedResult: true,
       provisional: false,
     }),
@@ -86,16 +85,12 @@ test('new confirmation revision atomically promotes candidate strategy to author
   const timing = runtime();
 
   timing.beginContentCalibration(1_000, false);
-  timing.appliedCalibrationKind({
-    confirmedRevision: 4,
-    hasConfirmedResult: true,
-    provisional: false,
-  });
+  timing.syncConfirmedAuthority({ confirmedRevision: 4, hasConfirmedResult: true });
 
   timing.beginBootProbe(false);
   assert.equal(timing.authorityKind, 'content');
+  timing.syncConfirmedAuthority({ confirmedRevision: 5, hasConfirmedResult: true });
   assert.equal(timing.appliedCalibrationKind({
-    confirmedRevision: 5,
     hasConfirmedResult: true,
     provisional: false,
   }), 'boot-probe');
@@ -108,7 +103,6 @@ test('provisional result belongs to the in-flight candidate without mutating con
 
   timing.beginBootProbe(false);
   assert.equal(timing.appliedCalibrationKind({
-    confirmedRevision: 0,
     hasConfirmedResult: false,
     provisional: true,
   }), 'boot-probe');
@@ -116,7 +110,6 @@ test('provisional result belongs to the in-flight candidate without mutating con
 
   timing.beginContentCalibration(2_000, false);
   assert.equal(timing.appliedCalibrationKind({
-    confirmedRevision: 0,
     hasConfirmedResult: false,
     provisional: true,
   }), 'content');
@@ -127,15 +120,11 @@ test('clearing a confirmed result clears active authority without rewinding mono
   const timing = runtime();
 
   timing.beginContentCalibration(1_000, false);
-  timing.appliedCalibrationKind({
-    confirmedRevision: 3,
-    hasConfirmedResult: true,
-    provisional: false,
-  });
+  timing.syncConfirmedAuthority({ confirmedRevision: 3, hasConfirmedResult: true });
   assert.equal(timing.authorityKind, 'content');
 
+  timing.syncConfirmedAuthority({ confirmedRevision: 3, hasConfirmedResult: false });
   assert.equal(timing.appliedCalibrationKind({
-    confirmedRevision: 3,
     hasConfirmedResult: false,
     provisional: false,
   }), 'none');
@@ -223,10 +212,9 @@ test('invalid confirmed authority revision fails closed', () => {
   timing.beginContentCalibration(0, false);
 
   assert.throws(
-    () => timing.appliedCalibrationKind({
+    () => timing.syncConfirmedAuthority({
       confirmedRevision: -1,
       hasConfirmedResult: true,
-      provisional: false,
     }),
     /confirmedRevision must be a non-negative safe integer/,
   );

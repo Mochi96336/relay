@@ -22,6 +22,7 @@ import {
   selectBootProbeStartTarget,
 } from './boot-probe-start-policy.js';
 import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
+import { decideBootProbeRunIdentity } from './boot-probe-run-identity-policy.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import {
   decideCalibrationApplicability,
@@ -2191,14 +2192,22 @@ function acceptCurrentProbeClientResult(
   const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
   if (!pending) return null;
 
-  if (!session.active || pending.sessionGeneration !== session.generation) {
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return null;
-  }
+  const sessionCurrent = session.active
+    && pending.sessionGeneration === session.generation;
+  const captureGenerationMatches = sessionCurrent
+    ? probeGeneration(pending.target) === pending.generation
+    : false;
+  const identity = decideBootProbeRunIdentity({
+    sessionCurrent,
+    captureGenerationMatches,
+  });
 
-  if (probeGeneration(pending.target) !== pending.generation) {
-    if (options.logCaptureGenerationMismatch && PROBE_DEBUG) {
+  if (identity.kind === 'abandon') {
+    if (
+      identity.reason === 'capture-generation'
+      && options.logCaptureGenerationMismatch
+      && PROBE_DEBUG
+    ) {
       console.log(`[probe] ${pending.target} dropped: capture generation changed`);
     }
     abandonProbeRun();

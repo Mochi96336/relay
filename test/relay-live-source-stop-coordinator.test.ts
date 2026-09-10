@@ -16,7 +16,7 @@ function coordinatorFor(events: string[], active: boolean) {
     clearContentValidation: () => events.push('clear-content-validation'),
     resetRobotPlayerOffset: () => events.push('reset-player-offset'),
     resetRobotContentTimeline: () => events.push('reset-content-timeline'),
-    clearRobotBackingBoundaryRequest: () => events.push('clear-backing-boundary'),
+    clearRobotContentTransition: () => events.push('clear-backing-boundary'),
     stopSession: () => events.push('stop-session'),
     resetCalibration: () => events.push('reset-calibration'),
     clearTimingKind: () => events.push('clear-timing-kind'),

@@ -30,7 +30,7 @@ test('Robot hello keeps infrastructure and SourceRuntime attach authority in ser
   assert.doesNotMatch(hello, /abandonProbeRun\(\)/);
   assert.doesNotMatch(hello, /robotPlayerOffset\.reset\(\)/);
   assert.doesNotMatch(hello, /robotContentTimeline\.reset\(\)/);
-  assert.doesNotMatch(hello, /clearRobotBackingBoundaryRequest\(\)/);
+  assert.doesNotMatch(hello, /clearRobotContentTransition\(\)/);
   assert.doesNotMatch(hello, /dropLegacyCalibrationForRobot\(\)/);
   assert.doesNotMatch(hello, /syncAppliedCalibration\(\)/);
   assert.doesNotMatch(hello, /broadcastJson\(/);
@@ -46,7 +46,7 @@ test('server composition retains Robot activation effects', () => {
   assert.match(composition, /sessionActive: \(\) => session\.active/);
   assert.match(composition, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
   assert.match(composition, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
-  assert.match(composition, /clearBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(composition, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
   assert.match(composition, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
   assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
   assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);

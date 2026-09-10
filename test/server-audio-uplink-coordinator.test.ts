@@ -65,6 +65,6 @@ test('uplink coordinator imports only the PCM frame type and owns no server runt
   assert.doesNotMatch(coordinator, /from '\.\/(?:mic-runtime|backing-runtime|audio-session|calibration-session|take-controller)\.js'/);
   assert.doesNotMatch(
     coordinator,
-    /micRuntime|backingRuntime|session\.ingestBacking|takeController|calibration\.(?:collecting|fail)|broadcastJson|broadcastStatus|clearRobotBackingBoundaryRequest|abandonProbeRun|clearContentValidationBaseline|syncAppliedCalibration/,
+    /micRuntime|backingRuntime|session\.ingestBacking|takeController|calibration\.(?:collecting|fail)|broadcastJson|broadcastStatus|clearRobotContentTransition|abandonProbeRun|clearContentValidationBaseline|syncAppliedCalibration/,
   );
 });

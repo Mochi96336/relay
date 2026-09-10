@@ -28,7 +28,7 @@ test('stopLiveSource delegates teardown ordering through the coordinator seam', 
   assert.doesNotMatch(stop, /clearContentValidationBaseline\(/);
   assert.doesNotMatch(stop, /robotPlayerOffset\./);
   assert.doesNotMatch(stop, /robotContentTimeline\./);
-  assert.doesNotMatch(stop, /clearRobotBackingBoundaryRequest\(/);
+  assert.doesNotMatch(stop, /clearRobotContentTransition\(/);
   assert.doesNotMatch(stop, /session\./);
   assert.doesNotMatch(stop, /calibration\./);
   assert.doesNotMatch(stop, /timingRuntime\./);
@@ -50,7 +50,7 @@ test('server composition retains every live source teardown domain effect', () =
   assert.match(composition, /resetRobotContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
   assert.match(
     composition,
-    /clearRobotBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/,
+    /clearRobotContentTransition: \(\) => clearRobotContentTransition\(\)/,
   );
   assert.match(composition, /stopSession: \(\) => session\.stop\(\)/);
   assert.match(composition, /resetCalibration: \(\) => calibration\.reset\(\)/);

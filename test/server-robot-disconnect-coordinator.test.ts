@@ -30,7 +30,7 @@ test('server composes Robot disconnect coordinator from existing authority/effec
   assert.match(server, /detach: \(socket\) => sourceRuntime\.detachRobot\(socket\)/);
   assert.match(server, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
   assert.match(server, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
-  assert.match(server, /clearBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(server, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
   assert.match(server, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
   assert.match(server, /syncAppliedCalibration: \(\) => syncAppliedCalibration\(\)/);
   assert.match(server, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);

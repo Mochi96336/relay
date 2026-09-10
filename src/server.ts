@@ -351,6 +351,7 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
   historySamples: ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES,
   windowSamples: ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES,
   maxLagMs: CALIBRATION_MAX_LAG_MS,
+  maxEvidenceGapMs: MAX_CAPTURE_GAP_MS,
   toleranceMs: CALIBRATION_TOLERANCE_MS,
   retentionSamples: BACKING_RETENTION_MS * MIX_SAMPLE_RATE / 1_000,
   bounds: ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG,
@@ -361,6 +362,8 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
     micTotalSamples: () => session.micTotalSamples,
     readBacking: (start, length) => session.readBacking(start, length),
     readMic: (start, length) => session.readMic(start, length),
+    readBackingEvidence: (start, length) => session.readBackingEvidence(start, length),
+    readMicEvidence: (start, length) => session.readMicEvidence(start, length),
     transitionEvidence: (maxSamples) => calibration.transitionEvidence(maxSamples),
     commit: (plan, nowMs) => robotContentTransitionCommitCoordinator.commit(plan, nowMs),
     onDegraded: (status) => {

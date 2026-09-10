@@ -40,6 +40,7 @@ test('compatible restart carries proven pre evidence and replays it at the prese
     historySamples: 3_000,
     windowSamples: 100,
     maxLagMs: 500,
+    maxEvidenceGapMs: 25,
     toleranceMs: 25,
     retentionSamples: 3_000,
     bounds: {
@@ -54,6 +55,8 @@ test('compatible restart carries proven pre evidence and replays it at the prese
       micTotalSamples: () => 2_000,
       readBacking: (_start, length) => new Int16Array(length).fill(10),
       readMic: (_start, length) => new Int16Array(length).fill(10),
+      readBackingEvidence: () => ({ gapSamples: 0, frontierMissingSamples: 0 }),
+      readMicEvidence: () => ({ gapSamples: 0, frontierMissingSamples: 0 }),
       transitionEvidence: () => null,
       commit: (plan) => {
         commitPlans.push(plan);
@@ -153,6 +156,7 @@ test('repeated compare-worker failure degrades fail-closed without committing ma
     historySamples: 3_000,
     windowSamples: 100,
     maxLagMs: 500,
+    maxEvidenceGapMs: 25,
     toleranceMs: 25,
     retentionSamples: 3_000,
     bounds: {
@@ -167,6 +171,8 @@ test('repeated compare-worker failure degrades fail-closed without committing ma
       micTotalSamples: () => 2_000,
       readBacking: (_start, length) => new Int16Array(length).fill(10),
       readMic: (_start, length) => new Int16Array(length).fill(10),
+      readBackingEvidence: () => ({ gapSamples: 0, frontierMissingSamples: 0 }),
+      readMicEvidence: () => ({ gapSamples: 0, frontierMissingSamples: 0 }),
       transitionEvidence: () => null,
       commit: () => {
         commitCalls += 1;

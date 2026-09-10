@@ -34,6 +34,12 @@ import {
   contentValidationLivePathReady,
   contentValidationPathPrerequisitesReady,
 } from './content-validation-path-policy.js';
+import {
+  autoContentCalibrationAuthorityAllowsStart,
+  autoContentCalibrationLivePathReady,
+  autoContentCalibrationPrerequisitesReady,
+  autoContentCalibrationStartMode,
+} from './auto-content-calibration-policy.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicRuntime } from './mic-runtime.js';
@@ -1949,34 +1955,51 @@ const mixerTimer = setInterval(() => {
 }, 5);
 
 function maybeAutoCalibrate(nowMs: number) {
+  // Feature enablement and Take ownership are outer scheduler concerns. The
+  // calibration policy below owns why an otherwise eligible automatic content
+  // attempt may proceed.
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
   const robotRoute = robotRouteActive();
-  // Boot probe is the fast baseline, not the terminal strategy. Before it has
-  // either completed or exhausted its bounded attempts, keep its preference.
-  // Once a baseline exists, a playing Song must be allowed to promote to
-  // content authority instead of being blocked forever by the boot result it
-  // is supposed to replace.
-  if (!bootProbeSettled(nowMs)) return;
-  if (robotRoute && !robotContentEvidenceMappingReady(nowMs)) return;
-  if (!session.active || calibration.collecting) return;
-  const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
-  if (
-    freshConfirmedResult
-    && (!robotRoute || appliedCalibrationKind() === 'content')
-  ) return;
-  if (!timingRuntime.autoCalibrationDue(nowMs)) return;
+  if (!autoContentCalibrationPrerequisitesReady({
+    bootProbeSettled: bootProbeSettled(nowMs),
+    robotRouteActive: robotRoute,
+    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
+    sessionActive: session.active,
+    calibrationCollecting: calibration.collecting,
+  })) return;
 
-  if (!backingRuntime.connected() || !micRuntime.controlConnected()) return;
-  if (!bothStreamsFlowing(nowMs)) return;
-  const timeline = currentTimelineStatus();
-  if (!timeline.connected || Number(timeline.state) !== 1) return;
+  const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
+  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
+  // Preserve the historical short-circuit: only fresh Robot authority needs
+  // that stateful read to distinguish replaceable Boot from terminal content.
+  const appliedKind = freshConfirmedResult && robotRoute
+    ? appliedCalibrationKind()
+    : null;
+  if (!autoContentCalibrationAuthorityAllowsStart({
+    freshConfirmedResult,
+    robotRouteActive: robotRoute,
+    appliedKind,
+  })) return;
+
+  // Preserve the old liveness read order even though the final decision is
+  // pure: a retry that is not due must not fan out into transport/timeline work.
+  const retryDue = timingRuntime.autoCalibrationDue(nowMs);
+  const backingConnected = retryDue && backingRuntime.connected();
+  const micControlConnected = backingConnected && micRuntime.controlConnected();
+  const streamsFlowing = micControlConnected && bothStreamsFlowing(nowMs);
+  const timeline = streamsFlowing ? currentTimelineStatus() : null;
+  if (!autoContentCalibrationLivePathReady({
+    retryDue,
+    backingConnected,
+    micControlConnected,
+    streamsFlowing,
+    timelineConnected: Boolean(timeline?.connected),
+    timelinePlaying: Number(timeline?.state) === 1,
+  })) return;
 
   timingRuntime.beginContentCalibration(nowMs, true);
-  // A failed probe hands its priming run straight over; a *successful* one
-  // still restarts collection from scratch. Reusing primed evidence there is a
-  // separate change with its own measurement risk, so keep it out of the policy
-  // fix.
-  if (probeCalibrationExhausted(nowMs)) calibration.startFromPrimed(nowMs);
+  const startMode = autoContentCalibrationStartMode(probeCalibrationExhausted(nowMs));
+  if (startMode === 'primed') calibration.startFromPrimed(nowMs);
   else calibration.start(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
 }

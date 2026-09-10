@@ -56,10 +56,6 @@ export class BootProbeRuntime {
     this.lifecycle = new ProbeLifecycle(options.maxAttempts, options.retryMs);
   }
 
-  get pendingRequest() {
-    return this.lifecycle.pendingRequest;
-  }
-
   get pendingAnalysis() {
     return this.lifecycle.pendingAnalysis;
   }
@@ -105,8 +101,8 @@ export class BootProbeRuntime {
     return this.lifecycle.beginRequest(request);
   }
 
-  acceptReply(requestId: unknown) {
-    return this.lifecycle.acceptReply(requestId);
+  takeExpiredRequest(nowMs: number, timeoutMs: number) {
+    return this.lifecycle.takeExpiredRequest(nowMs, timeoutMs);
   }
 
   acceptClientReply(requestId: unknown, generation: unknown) {

@@ -27,6 +27,13 @@ export type BootProbeRuntimeOptions = {
   retryMs: number;
 };
 
+type BootProbeMicLegContext = Pick<BootProbeContext, 'sessionGeneration' | 'micGeneration'>;
+
+function micLegMatchesContext(leg: BootProbeMicLeg, context: BootProbeMicLegContext) {
+  return leg.sessionGeneration === context.sessionGeneration
+    && leg.micGeneration === context.micGeneration;
+}
+
 /**
  * Aggregate state for the boot-probe measurement lifecycle.
  *
@@ -59,6 +66,10 @@ export class BootProbeRuntime {
 
   get micLeg() {
     return this.measuredMicLeg === null ? null : { ...this.measuredMicLeg };
+  }
+
+  get hasMicLeg() {
+    return this.measuredMicLeg !== null;
   }
 
   get correlations() {
@@ -120,23 +131,15 @@ export class BootProbeRuntime {
     this.lifecycle.setMicMeasured(true);
   }
 
-  takeMicLegForContext(
-    context: Pick<BootProbeContext, 'sessionGeneration' | 'micGeneration'>,
-  ) {
+  takeMicLegForContext(context: BootProbeMicLegContext) {
     const leg = this.micLeg;
     this.clearMicLeg();
-    if (
-      leg === null
-      || leg.sessionGeneration !== context.sessionGeneration
-      || leg.micGeneration !== context.micGeneration
-    ) return null;
-    return leg;
+    return leg !== null && micLegMatchesContext(leg, context) ? leg : null;
   }
 
-  micLegMatches(context: BootProbeContext) {
+  micLegStaleForContext(context: BootProbeMicLegContext) {
     return this.measuredMicLeg !== null
-      && this.measuredMicLeg.sessionGeneration === context.sessionGeneration
-      && this.measuredMicLeg.micGeneration === context.micGeneration;
+      && !micLegMatchesContext(this.measuredMicLeg, context);
   }
 
   completedContextMatches(context: BootProbeContext) {

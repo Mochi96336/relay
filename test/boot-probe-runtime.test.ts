@@ -48,7 +48,8 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
     micGeneration: context.micGeneration,
   });
   assert.equal(probe.status(200).phase, 'backing-waiting');
-  assert.equal(probe.micLegMatches(context), true);
+  assert.equal(probe.hasMicLeg, true);
+  assert.equal(probe.micLegStaleForContext(context), false);
 
   probe.abandonRun();
   assert.equal(probe.micLeg, null);
@@ -56,6 +57,43 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
   assert.equal(probe.pendingAnalysis, null);
   assert.deepEqual(probe.correlations, { mic: 0.91, backing: null }, 'run abandonment preserves diagnostics');
   assert.equal(probe.nextRequestId(), 2, 'request ids remain monotonic across abandoned runs');
+});
+
+test('Mic leg scheduler view owns presence and stale provenance without consuming evidence', () => {
+  const probe = runtime();
+  assert.equal(probe.hasMicLeg, false);
+  assert.equal(probe.micLegStaleForContext(context), false, 'missing evidence is not stale evidence');
+
+  probe.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  assert.equal(probe.hasMicLeg, true);
+  assert.equal(probe.micLegStaleForContext(context), false);
+  const sameMicDifferentBacking: BootProbeContext = { ...context, backingGeneration: 999 };
+  assert.equal(
+    probe.micLegStaleForContext(sameMicDifferentBacking),
+    false,
+    'backing generation does not belong to Mic evidence provenance',
+  );
+  assert.equal(
+    probe.micLegStaleForContext({
+      sessionGeneration: context.sessionGeneration + 1,
+      micGeneration: context.micGeneration,
+    }),
+    true,
+  );
+  assert.equal(
+    probe.micLegStaleForContext({
+      sessionGeneration: context.sessionGeneration,
+      micGeneration: (context.micGeneration ?? 0) + 1,
+    }),
+    true,
+  );
+  assert.equal(probe.hasMicLeg, true, 'stale inspection must not consume evidence');
 });
 
 test('Mic leg consumption owns its session/capture provenance and ignores backing generation', () => {

@@ -49,10 +49,6 @@ export function createRelayTakeCommandCoordinator<TSocket, TPosition, TSong>(
       const boundary = dependencies.frameBoundary(input.nowMs);
       const song = dependencies.songSnapshot(boundary.atMs);
 
-      if (dependencies.cancelActiveContentValidation(input.nowMs)) {
-        dependencies.reportTimingStatus();
-      }
-
       const result = dependencies.startTake(
         input.participantId,
         song,
@@ -64,14 +60,15 @@ export function createRelayTakeCommandCoordinator<TSocket, TPosition, TSong>(
         return false;
       }
 
-      // A background content measurement is a tap on the same audio this Take
-      // is about to record, and confirming it would move the mixer's alignment
-      // into the middle of the recording. Refusing to *begin* content work
-      // during a Take is already policy; this is its other half, now that a
-      // Take no longer waits for content calibration to finish.
-      //
-      // Deliberately after admission: a rejected command must not cost the room
-      // the seconds of collection it had already gathered.
+      // Background timing work may only be stood down after Take admission.
+      // A rejected command must not discard either a validator confirmation
+      // window or content-calibration evidence the room had already gathered.
+      // `startTake` is synchronous, so no analysis callback can interleave
+      // between admission and these stand-down effects.
+      if (dependencies.cancelActiveContentValidation(input.nowMs)) {
+        dependencies.reportTimingStatus();
+      }
+
       if (dependencies.standDownContentCalibration()) {
         dependencies.reportTimingStatus();
       }

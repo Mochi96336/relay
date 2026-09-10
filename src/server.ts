@@ -29,6 +29,11 @@ import {
 } from './calibration-session.js';
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
 import { decideContentValidationBaselineSync } from './content-validation-baseline-policy.js';
+import {
+  contentValidationAuthorityReady,
+  contentValidationLivePathReady,
+  contentValidationPathPrerequisitesReady,
+} from './content-validation-path-policy.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicRuntime } from './mic-runtime.js';
@@ -1977,21 +1982,37 @@ function maybeAutoCalibrate(nowMs: number) {
 }
 
 function contentValidationPathReady(nowMs: number) {
-  if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
-  if (!bootProbeSettled(nowMs)) return false;
-  if (robotRouteActive() && !robotContentEvidenceMappingReady(nowMs)) return false;
-  if (!session.active || calibration.collecting) return false;
-  // Same provenance rule as the baseline itself: validate the authority that is
-  // actually applied, not whichever candidate happens to be in flight.
-  if (
-    appliedCalibrationKind() !== 'content'
-    || calibration.confirmedResult === null
-    || calibrationIsStale()
-  ) return false;
-  if (!backingRuntime.connected() || !micRuntime.controlConnected()) return false;
-  if (!bothStreamsFlowing(nowMs)) return false;
+  const robotRoute = robotRouteActive();
+  if (!contentValidationPathPrerequisitesReady({
+    enabled: CONTENT_VALIDATION_ENABLED,
+    takeBlocked: takeBlocksCalibration(),
+    bootProbeSettled: bootProbeSettled(nowMs),
+    robotRouteActive: robotRoute,
+    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
+    sessionActive: session.active,
+    calibrationCollecting: calibration.collecting,
+  })) return false;
+
+  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
+  // Keep that stateful read after the prerequisite short-circuit, matching the
+  // historical admission ordering rather than sampling every fact eagerly.
+  const confirmed = calibration.confirmedResult;
+  const appliedKind = appliedCalibrationKind();
+  if (!contentValidationAuthorityReady({
+    appliedKind,
+    hasConfirmedResult: confirmed !== null,
+    calibrationStale:
+      appliedKind === 'content' && confirmed !== null && calibrationIsStale(),
+  })) return false;
+
   const timeline = currentTimelineStatus(nowMs);
-  return Boolean(timeline.connected) && Number(timeline.state) === 1;
+  return contentValidationLivePathReady({
+    backingConnected: backingRuntime.connected(),
+    micControlConnected: micRuntime.controlConnected(),
+    streamsFlowing: bothStreamsFlowing(nowMs),
+    timelineConnected: Boolean(timeline.connected),
+    timelinePlaying: Number(timeline.state) === 1,
+  });
 }
 
 function maybeValidateContentCalibration(nowMs: number) {

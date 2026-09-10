@@ -34,9 +34,16 @@ test('priming, automatic calibration and content validation all require an evide
     functionBlock('maybeAutoCalibrate'),
     /!robotContentEvidenceMappingReady\(nowMs\)/,
   );
+
+  // Content-validation admission now delegates its prerequisite decision to a
+  // pure policy. Preserve the evidence boundary rather than the old inline-if
+  // spelling: Robot routes must still sample the evidence-usable mapping fact,
+  // while non-Robot routes bypass that Robot-only requirement.
+  const validation = functionBlock('contentValidationPathReady');
+  assert.match(validation, /contentValidationPathPrerequisitesReady\(\{/);
   assert.match(
-    functionBlock('contentValidationPathReady'),
-    /!robotContentEvidenceMappingReady\(nowMs\)/,
+    validation,
+    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
   );
 });
 

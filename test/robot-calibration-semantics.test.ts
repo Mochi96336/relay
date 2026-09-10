@@ -104,8 +104,13 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   const startProbe = source.match(/function maybeStartProbeCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(
     startProbe,
-    /!calibration\.transactionActive/,
-    'an old confirmed result must not suppress the replacement probe while a transaction is open',
+    /bootProbeStartAuthorityAllowsAttempt\(\{/,
+    'Boot Probe authority admission must delegate to the shared start policy',
+  );
+  assert.match(
+    startProbe,
+    /calibrationTransactionActive: calibration\.transactionActive/,
+    'the replacement transaction fact must cross the policy boundary',
   );
 
   const reapply = source.match(/function maybeReapplyBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';

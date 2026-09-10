@@ -16,6 +16,11 @@ import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
 import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
 import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
+import {
+  bootProbeStartAuthorityAllowsAttempt,
+  bootProbeStartLifecycleIdle,
+  selectBootProbeStartTarget,
+} from './boot-probe-start-policy.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import {
   decideCalibrationApplicability,
@@ -2134,22 +2139,35 @@ function maybeStartProbeCalibration(nowMs: number) {
     abandonProbeRun();
   }
 
-  if (
-    timingRuntime.calibrationKind === 'boot-probe'
-    && calibration.result !== null
-    && !calibrationIsStale()
+  const candidateIsBootProbe = timingRuntime.calibrationKind === 'boot-probe';
+  const hasCalibrationResult = calibration.result !== null;
+  if (!bootProbeStartAuthorityAllowsAttempt({
+    candidateIsBootProbe,
+    hasCalibrationResult,
+    calibrationStale: candidateIsBootProbe && hasCalibrationResult
+      ? calibrationIsStale()
+      : false,
+    calibrationTransactionActive: calibration.transactionActive,
+  })) return;
+
+  if (!bootProbeStartLifecycleIdle({
+    pendingRequest: bootProbeRuntime.pendingRequest !== null,
+    pendingAnalysis: bootProbeRuntime.pendingAnalysis !== null,
+  })) return;
+
+  const probeErrored = probeStatus(nowMs).error !== null;
+  const hasMicLeg = bootProbeRuntime.micLeg !== null;
+  const completedContextMatches = !probeErrored
     && !calibration.transactionActive
-  ) return;
-  if (bootProbeRuntime.pendingRequest !== null || bootProbeRuntime.pendingAnalysis !== null) return;
-  if (probeStatus(nowMs).error !== null) return;
-
-  if (
-    !calibration.transactionActive
-    && bootProbeRuntime.micLeg === null
-    && bootProbeRuntime.completedContextMatches(context)
-  ) return;
-
-  const target: ProbeTarget = bootProbeRuntime.micLeg === null ? 'mic' : 'backing';
+    && !hasMicLeg
+    && bootProbeRuntime.completedContextMatches(context);
+  const target = selectBootProbeStartTarget({
+    probeErrored,
+    calibrationTransactionActive: calibration.transactionActive,
+    hasMicLeg,
+    completedContextMatches,
+  });
+  if (target === null) return;
   if (!bootProbeRuntime.canStart(target, nowMs)) return;
   if (!probePathReady(target, nowMs)) return;
   sendProbeRequest(target, nowMs);

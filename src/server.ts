@@ -2137,7 +2137,7 @@ function maybeStartProbeCalibration(nowMs: number) {
   if (!session.active || calibration.collecting) return;
 
   const context = bootProbeContext();
-  if (bootProbeRuntime.micLeg !== null && !bootProbeRuntime.micLegMatches(context)) {
+  if (bootProbeRuntime.micLegStaleForContext(context)) {
     abandonProbeRun();
   }
 
@@ -2158,7 +2158,7 @@ function maybeStartProbeCalibration(nowMs: number) {
   })) return;
 
   const probeErrored = probeStatus(nowMs).error !== null;
-  const hasMicLeg = bootProbeRuntime.micLeg !== null;
+  const hasMicLeg = bootProbeRuntime.hasMicLeg;
   const completedContextMatches = !probeErrored
     && !calibration.transactionActive
     && !hasMicLeg

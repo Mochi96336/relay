@@ -13,12 +13,18 @@ function functionBlock(name: string) {
 
 test('Boot Probe scheduler reconciles stale Mic leg before policy admission', () => {
   const block = functionBlock('maybeStartProbeCalibration');
-  const mismatch = block.indexOf('!bootProbeRuntime.micLegMatches(context)');
+  const stale = block.indexOf('bootProbeRuntime.micLegStaleForContext(context)');
   const abandon = block.indexOf('abandonProbeRun()');
   const authority = block.indexOf('bootProbeStartAuthorityAllowsAttempt({');
-  assert.ok(mismatch >= 0, 'stale Mic leg must still be detected');
-  assert.ok(abandon > mismatch, 'stale run must be abandoned after mismatch detection');
+  assert.ok(stale >= 0, 'stale Mic evidence must still be detected');
+  assert.ok(abandon > stale, 'stale run must be abandoned after stale-evidence detection');
   assert.ok(authority > abandon, 'policy must sample reconciled Boot Probe state');
+  assert.match(block, /const hasMicLeg = bootProbeRuntime\.hasMicLeg;/);
+  assert.doesNotMatch(
+    block,
+    /bootProbeRuntime\.micLeg/,
+    'scheduler decisions must not extract a Mic evidence copy from the aggregate',
+  );
 });
 
 test('Boot Probe scheduler preserves lazy stale and lifecycle sampling order', () => {

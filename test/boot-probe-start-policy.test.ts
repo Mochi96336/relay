@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import {
   bootProbeStartAuthorityAllowsAttempt,
-  bootProbeStartLifecycleIdle,
   selectBootProbeStartTarget,
 } from '../src/boot-probe-start-policy.js';
 
@@ -44,13 +43,6 @@ test('replacement transaction stays open despite a retained fresh result', () =>
     calibrationStale: false,
     calibrationTransactionActive: true,
   }), true);
-});
-
-test('pending request or analysis consumes the lifecycle slot', () => {
-  assert.equal(bootProbeStartLifecycleIdle({ pendingRequest: false, pendingAnalysis: false }), true);
-  assert.equal(bootProbeStartLifecycleIdle({ pendingRequest: true, pendingAnalysis: false }), false);
-  assert.equal(bootProbeStartLifecycleIdle({ pendingRequest: false, pendingAnalysis: true }), false);
-  assert.equal(bootProbeStartLifecycleIdle({ pendingRequest: true, pendingAnalysis: true }), false);
 });
 
 test('probe failure blocks a new logical target until lifecycle recovery', () => {

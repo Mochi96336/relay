@@ -5,11 +5,6 @@ export type BootProbeStartAuthorityInput = {
   calibrationTransactionActive: boolean;
 };
 
-export type BootProbeStartLifecycleInput = {
-  pendingRequest: boolean;
-  pendingAnalysis: boolean;
-};
-
 export type BootProbeStartTargetInput = {
   probeErrored: boolean;
   calibrationTransactionActive: boolean;
@@ -33,11 +28,6 @@ export function bootProbeStartAuthorityAllowsAttempt(
   if (!input.candidateIsBootProbe || !input.hasCalibrationResult) return true;
   if (input.calibrationTransactionActive) return true;
   return input.calibrationStale;
-}
-
-/** Pending request/analysis work owns the current lifecycle slot. */
-export function bootProbeStartLifecycleIdle(input: BootProbeStartLifecycleInput) {
-  return !input.pendingRequest && !input.pendingAnalysis;
 }
 
 /**

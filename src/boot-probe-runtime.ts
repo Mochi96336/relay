@@ -64,6 +64,10 @@ export class BootProbeRuntime {
     return this.lifecycle.pendingAnalysis;
   }
 
+  get lifecycleIdle() {
+    return this.lifecycle.idle;
+  }
+
   get micLeg() {
     return this.measuredMicLeg === null ? null : { ...this.measuredMicLeg };
   }

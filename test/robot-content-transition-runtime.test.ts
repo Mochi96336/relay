@@ -25,6 +25,8 @@ function runtimeHarness(overrides: {
   micTotalSamples?: () => number;
   transitionEvidence?: (maxSamples: number) => { mic: Int16Array; backing: Int16Array } | null;
   readMic?: (start: number, length: number) => Int16Array;
+  readBackingEvidence?: (start: number, length: number) => { gapSamples: number; frontierMissingSamples: number };
+  readMicEvidence?: (start: number, length: number) => { gapSamples: number; frontierMissingSamples: number };
   commit?: (plan: RobotContentTransitionCommitPlan, nowMs: number) => boolean;
   estimateRawLag?: ConstructorParameters<typeof RobotContentTransitionRuntime>[0]['estimateRawLag'];
   compareHypotheses?: ConstructorParameters<typeof RobotContentTransitionRuntime>[0]['compareHypotheses'];
@@ -35,6 +37,7 @@ function runtimeHarness(overrides: {
     historySamples: 3_000,
     windowSamples: 100,
     maxLagMs: 500,
+    maxEvidenceGapMs: 25,
     toleranceMs: 25,
     retentionSamples: 3_000,
     bounds: {
@@ -49,6 +52,10 @@ function runtimeHarness(overrides: {
       micTotalSamples: overrides.micTotalSamples ?? (() => 2_000),
       readBacking: (_start, length) => new Int16Array(length).fill(10),
       readMic: overrides.readMic ?? ((_start, length) => new Int16Array(length).fill(10)),
+      readBackingEvidence: overrides.readBackingEvidence
+        ?? (() => ({ gapSamples: 0, frontierMissingSamples: 0 })),
+      readMicEvidence: overrides.readMicEvidence
+        ?? (() => ({ gapSamples: 0, frontierMissingSamples: 0 })),
       transitionEvidence: overrides.transitionEvidence ?? (() => null),
       commit: overrides.commit ?? (() => true),
       onDegraded: (status) => {
@@ -282,6 +289,76 @@ test('Mic progress resumes a transition that already has enough backing evidence
   assert.equal(commitPlans.length, 1);
   assert.equal(commitPlans[0].boundarySample, 0);
   assert.equal(runtime.status(140).state, 'idle');
+});
+
+test('a compare window with too much missing PCM is skipped before worker analysis', async () => {
+  let compares = 0;
+  const commitPlans: RobotContentTransitionCommitPlan[] = [];
+  const { runtime } = runtimeHarness({
+    currentDeltaMs: () => 0,
+    backingTotalSamples: () => 200,
+    micTotalSamples: () => 2_000,
+    readBackingEvidence: (start) => ({
+      gapSamples: start === 0 ? 26 : 0,
+      frontierMissingSamples: 0,
+    }),
+    commit: (plan) => {
+      commitPlans.push(plan);
+      return true;
+    },
+    compareHypotheses: async () => {
+      compares += 1;
+      return {
+        verdict: 'post',
+        preScore: 0.1,
+        postScore: 0.9,
+        preSupportingBands: 3,
+        postSupportingBands: 5,
+      };
+    },
+  });
+  beginConfirmed(runtime);
+  const request = runtime.requestBackingBoundary(3)!;
+  assert.equal(runtime.acceptBackingBoundary({
+    requestId: request.requestId,
+    generation: 3,
+    firstSampleIndex: 0,
+    currentBackingGeneration: 3,
+    context,
+  }), true);
+
+  runtime.noteBackingFrame({
+    frameGeneration: 3,
+    firstSampleIndex: 0,
+    sourceSampleCount: 200,
+    sourceSampleRate: 1_000,
+    samples: new Int16Array(200).fill(7),
+    start: 0,
+    backingTotalSamples: 200,
+  }, 120);
+  await nextTurn();
+
+  assert.equal(compares, 0, 'a sparse window must never reach the correlator');
+  const skipped = runtime.status(125);
+  assert.equal(skipped.state, 'verifying');
+  assert.ok('windowsStarted' in skipped);
+  assert.ok('workerInvocations' in skipped);
+  assert.equal(skipped.windowsStarted, 0, 'rejected source evidence is not a compare attempt');
+  assert.equal(skipped.workerInvocations, 0, 'no worker ran for a rejected source range');
+
+  // The permanent bad range has advanced out of the way. A later progress event
+  // may classify the next clean window, but the unclassified working span makes
+  // replay unsafe even when the mapping boundary itself is proved.
+  runtime.noteMicProgress(130);
+  await nextTurn();
+  await nextTurn();
+
+  assert.equal(compares, 1);
+  assert.equal(commitPlans.length, 1);
+  assert.equal(commitPlans[0].boundarySample, 100);
+  assert.equal(commitPlans[0].discardWorkingEvidence, true);
+  assert.equal(commitPlans[0].confirmedPreChunks.length, 0);
+  assert.equal(commitPlans[0].postChunks.length, 0);
 });
 
 test('post evidence that disagrees with current mapping stays quarantined and is never replayed later', async () => {

@@ -586,9 +586,19 @@ export class AudioSession {
     return this.readRange(this.mic, startSample, count);
   }
 
+  /** Missing-source evidence for exactly the same microphone range `readMic` reads. */
+  readMicEvidence(startSample: number, count: number) {
+    return this.readEvidence(this.mic, startSample, count);
+  }
+
   /** The same window into the captured song, for locating a probe in it. */
   readBacking(startSample: number, count: number) {
     return this.readRange(this.backing, startSample, count);
+  }
+
+  /** Missing-source evidence for exactly the same backing range `readBacking` reads. */
+  readBackingEvidence(startSample: number, count: number) {
+    return this.readEvidence(this.backing, startSample, count);
   }
 
   /**

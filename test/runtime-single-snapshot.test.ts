@@ -52,7 +52,16 @@ test('Robot route identity stays separate from Robot player-delta timing depende
   assert.doesNotMatch(product, /timing\.robotRoute/);
 
   const status = functionBody('productStatusPayload');
-  assert.match(status, /requiresRobotPlayerDelta: robotRouteActive\(\)/);
+  assert.match(
+    status,
+    /requiresRobotPlayerDelta: robotRouteActive\(\) && appliedCalibrationKind\(\) === 'boot-probe'/,
+    'Robot player-delta dependency must follow the authority serving the mixer, not the replacement candidate',
+  );
+  assert.doesNotMatch(
+    status,
+    /requiresRobotPlayerDelta:[^\n]*timingRuntime\.calibrationKind/,
+    'starting a replacement strategy must not reclassify the applied alignment',
+  );
   assert.doesNotMatch(status, /robotRoute: robotProbeTimingActive\(\)/);
 });
 

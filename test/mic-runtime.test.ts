@@ -76,6 +76,7 @@ test('same-capture reconnect preserves receiver continuity while a new capture r
     nowMs: 100,
   });
   assert.equal(firstBind.preservedAudioTransport, false);
+  assert.equal(firstBind.captureReplaced, false);
   const firstTransport = mic.audioTransport;
   const firstTicket = mic.mediaTicket;
   assert.ok(firstTransport);
@@ -94,6 +95,7 @@ test('same-capture reconnect preserves receiver continuity while a new capture r
   assert.equal(reconnectBind.sameParticipantReplacement, true);
   assert.equal(reconnectBind.sameCapture, true);
   assert.equal(reconnectBind.preservedAudioTransport, true);
+  assert.equal(reconnectBind.captureReplaced, false);
   assert.equal(mic.audioTransport, firstTransport);
   assert.equal(mic.mediaTicket, firstTicket);
 
@@ -108,6 +110,7 @@ test('same-capture reconnect preserves receiver continuity while a new capture r
   assert.equal(freshBind.sameParticipantReplacement, true);
   assert.equal(freshBind.sameCapture, false);
   assert.equal(freshBind.preservedAudioTransport, false);
+  assert.equal(freshBind.captureReplaced, true);
   assert.notEqual(mic.audioTransport, firstTransport);
   assert.equal(mic.mediaGeneration, 8);
   assert.equal(mic.mediaTicket, 'ticket-2');
@@ -142,6 +145,7 @@ test('same generation with a different sample rate cannot inherit capture contin
   assert.equal(rebound.sameParticipantReplacement, true);
   assert.equal(rebound.sameCapture, false);
   assert.equal(rebound.preservedAudioTransport, false);
+  assert.equal(rebound.captureReplaced, true);
   assert.notEqual(mic.audioTransport, originalTransport);
   assert.equal(mic.sampleRate, 44_100);
   assert.equal(mic.mediaGeneration, 12);
@@ -171,6 +175,7 @@ test('same participant tab replacement preserves only the same v2 capture', () =
   assert.equal(same.sameParticipantReplacement, true);
   assert.equal(same.sameCapture, true);
   assert.equal(same.preservedAudioTransport, true);
+  assert.equal(same.captureReplaced, false);
   assert.equal(mic.audioTransport, original);
 
   const legacy = socket('participant-alice');
@@ -182,9 +187,38 @@ test('same participant tab replacement preserves only the same v2 capture', () =
     nowMs: 300,
   });
   assert.equal(downgraded.preservedAudioTransport, false);
+  assert.equal(downgraded.captureReplaced, true);
   assert.equal(mic.audioTransport?.packetVersion, 1);
   assert.equal(mic.mediaGeneration, null);
   assert.equal(mic.mediaTicket, null);
+});
+
+test('cross-participant bind reports capture replacement even after old control detached', () => {
+  const { mic } = runtime();
+  const first = socket('participant-alice');
+  mic.bindPublisher({
+    socket: first,
+    sampleRate: 48_000,
+    captureGeneration: 20,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+  assert.equal(mic.detachPublisher(first), true);
+
+  const takeover = socket('participant-bob');
+  const rebound = mic.bindPublisher({
+    socket: takeover,
+    sampleRate: 48_000,
+    captureGeneration: 1,
+    audioPacketVersion: 2,
+    nowMs: 200,
+  });
+
+  assert.equal(rebound.previousPublisher, null);
+  assert.equal(rebound.sameParticipantReplacement, false);
+  assert.equal(rebound.sameCapture, false);
+  assert.equal(rebound.captureReplaced, true);
+  assert.equal(rebound.preservedAudioTransport, false);
 });
 
 test('direct media can outlive the publisher control socket without inventing lease authority', () => {

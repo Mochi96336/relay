@@ -24,6 +24,8 @@ type PcmTimeline = {
   totalSamples: number;
   /** Capture session the current mapping was anchored to. */
   generation: number | null;
+  /** Source sample rate that gives this capture generation's indices their units. */
+  sourceRate: number | null;
   /** sessionSample = streamSample + originOffset. */
   originOffset: number;
   /** Samples the timeline is missing: drops, congestion, transport outages. */
@@ -190,6 +192,8 @@ export type IngestResult = {
   samples: Int16Array;
   /** Session sample index of the first sample, in mix-rate samples. */
   start: number;
+  /** An established capture clock was replaced before this batch was placed. */
+  captureRestarted: boolean;
 };
 
 export type AudioSessionOptions = {
@@ -220,6 +224,7 @@ function emptyTimeline(): PcmTimeline {
     chunks: [],
     totalSamples: 0,
     generation: null,
+    sourceRate: null,
     originOffset: 0,
     gapSamples: 0,
     unheadered: false,
@@ -288,6 +293,8 @@ export class AudioSession {
   /** Consecutive mixed frames in which no new microphone audio arrived. */
   private micFrontierIdleFrames = 0;
   private backingHeadroomMs = 0;
+  /** A media capture was replaced at publisher bind; consumed by its first real PCM. */
+  private micCaptureRestartPending = false;
 
   constructor(options: AudioSessionOptions) {
     this.sampleRate = options.sampleRate;
@@ -353,6 +360,7 @@ export class AudioSession {
     this.calibratedMicLagTargetMs = null;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
+    this.micCaptureRestartPending = false;
     this.resetHealth();
   }
 
@@ -366,6 +374,7 @@ export class AudioSession {
     this.sessionGeneration += 1;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
+    this.micCaptureRestartPending = false;
     // The frontier correction described the old timelines' positions.
     this.resetMicFrontierTracking();
     // A pending correction belongs to the old mix epoch. Preserve the value
@@ -567,9 +576,14 @@ export class AudioSession {
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
-    const result = this.ingest(this.mic, frame, sourceRate, nowMs);
+    const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
+    const pendingCaptureRestart = this.micCaptureRestartPending && result.samples.length > 0;
+    if (pendingCaptureRestart) this.micCaptureRestartPending = false;
     this.meterMic(result.samples);
-    return result;
+    return {
+      ...result,
+      captureRestarted: result.captureRestarted || pendingCaptureRestart,
+    };
   }
 
   ingestBacking(
@@ -616,9 +630,25 @@ export class AudioSession {
     this.trim(this.mic, beforeSample);
   }
 
+  /**
+   * Retires the capture that publisher activation has already replaced.
+   *
+   * This is intentionally source-local: an active Take keeps its mix generation
+   * and Backing timeline. Clearing immediately prevents buffered PCM from the
+   * retired singer/capture leaking into the bind-to-first-frame gap. The first
+   * real replacement batch then reports captureRestarted even when its wire
+   * generation and sample rate happen to equal the retired capture's values.
+   */
+  retireMicCapture() {
+    this.clearTimeline(this.mic);
+    this.resetMicFrontierTracking();
+    this.micCaptureRestartPending = true;
+  }
+
   clearMic() {
     this.clearTimeline(this.mic);
     this.resetMicFrontierTracking();
+    this.micCaptureRestartPending = false;
   }
 
   /** Emits every frame whose time has come. Returns how many were produced. */
@@ -694,6 +724,7 @@ export class AudioSession {
     timeline.chunks = [];
     timeline.totalSamples = 0;
     timeline.generation = null;
+    timeline.sourceRate = null;
     timeline.originOffset = 0;
     timeline.gapSamples = 0;
     timeline.unheadered = false;
@@ -713,11 +744,17 @@ export class AudioSession {
     sourceRate: number | null,
     nowMs: number,
     trackSourceClock = false,
+    sourceRateDefinesCapture = false,
   ): IngestResult {
-    if (!sourceRate) return { samples: new Int16Array(0), start: timeline.totalSamples };
+    if (!sourceRate) {
+      return { samples: new Int16Array(0), start: timeline.totalSamples, captureRestarted: false };
+    }
     let samples = this.resample(frame.pcm, sourceRate);
-    if (samples.length === 0) return { samples, start: timeline.totalSamples };
+    if (samples.length === 0) {
+      return { samples, start: timeline.totalSamples, captureRestarted: false };
+    }
 
+    let captureRestarted = false;
     let start: number;
     const positioned = frame.firstSampleIndex !== null;
 
@@ -733,25 +770,38 @@ export class AudioSession {
       // pulling everything after it earlier.
       const streamStart = Math.round((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
 
+      const hadCaptureClock = timeline.sourceRate !== null;
       const generationChanged = timeline.generation !== frame.generation;
-      if (generationChanged) {
-        // A fresh capture session. Anchor it to the session clock; the previous
-        // session's samples keep their own place and simply age out.
+      const sourceRateChanged = sourceRateDefinesCapture
+        && hadCaptureClock
+        && !generationChanged
+        && timeline.sourceRate !== sourceRate;
+      const captureClockChanged = generationChanged || sourceRateChanged;
+      captureRestarted = hadCaptureClock && captureClockChanged;
+      if (captureClockChanged) {
+        // A fresh capture clock. Anchor it to the session clock; the previous
+        // capture's samples keep their own place and simply age out. Mic source
+        // rate is part of that clock identity because firstSampleIndex is
+        // expressed in source-rate samples even when a client incorrectly
+        // reuses its wire generation after rebuilding the capture graph.
         timeline.generation = frame.generation;
+        timeline.sourceRate = sourceRate;
         timeline.originOffset = Math.max(0, this.currentSessionSample(nowMs) - samples.length) - streamStart;
         timeline.clockErrorSamples = 0;
         timeline.sourceFrontier = null;
-        // The new epoch is anchored to the current mix clock, so it starts with
-        // healthy headroom and owes nothing to the deficit the correction was
-        // covering. Carrying that forward would hold the read head a second
+        // The new capture is anchored to the current mix clock, so it starts
+        // with healthy headroom and owes nothing to the deficit the correction
+        // was covering. Carrying that forward would hold the read head a second
         // behind fresh audio and unwind only at the slew rate - most of a song.
         if (timeline === this.mic) this.resetMicFrontierTracking();
+      } else if (timeline.sourceRate === null) {
+        timeline.sourceRate = sourceRate;
       }
 
       start = streamStart + timeline.originOffset;
 
       const sourceSampleCount = Math.floor(frame.pcm.byteLength / 2);
-      const sourceContinuous = !generationChanged
+      const sourceContinuous = !captureClockChanged
         && timeline.sourceFrontier === frame.firstSampleIndex;
       if (trackSourceClock && sourceContinuous && start === timeline.totalSamples) {
         const predictedEnd = start + samples.length;
@@ -786,7 +836,11 @@ export class AudioSession {
       // genuinely new tail; a fully late packet contributes nothing.
       const overlap = timeline.totalSamples - start;
       if (overlap >= samples.length) {
-        return { samples: new Int16Array(0), start: timeline.totalSamples };
+        return {
+          samples: new Int16Array(0),
+          start: timeline.totalSamples,
+          captureRestarted,
+        };
       }
       samples = samples.slice(overlap);
       start = timeline.totalSamples;
@@ -794,10 +848,10 @@ export class AudioSession {
       timeline.gapSamples += start - timeline.totalSamples;
     }
 
-    if (samples.length === 0) return { samples, start };
+    if (samples.length === 0) return { samples, start, captureRestarted };
     timeline.chunks.push({ start, samples, positioned });
     timeline.totalSamples = start + samples.length;
-    return { samples, start };
+    return { samples, start, captureRestarted };
   }
 
   private resample(buffer: Buffer, sourceRate: number) {

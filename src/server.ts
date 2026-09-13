@@ -1934,13 +1934,11 @@ function processPublisherFrame(frame: PcmFrame) {
   if (!session.active) startLiveSource();
 
   if (session.active) {
-    const previousGeneration = session.micGeneration;
     noteMicFrame(performance.now());
-    const { samples, start } = session.ingestMic(frame, micRuntime.sampleRate);
+    const { samples, start, captureRestarted } = session.ingestMic(frame, micRuntime.sampleRate);
 
     if (session.active) {
-      const micRestarted = previousGeneration !== null && session.micGeneration !== previousGeneration;
-      if (micRestarted) {
+      if (captureRestarted) {
         micCaptureRestartCoordinator.restart({
           calibrationCollecting: calibration.collecting,
         });
@@ -3295,6 +3293,10 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
     });
   },
   bindPublisher: (registration) => micRuntime.bindPublisher(registration),
+  retireReplacedCapture: () => {
+    clearRobotContentTransition();
+    session.retireMicCapture();
+  },
   retirePrevious: (previousPublisher, nextPublisher, sameParticipantReplacement) => {
     const newOwnerName = nextPublisher.participantId
       ? participantPayload(nextPublisher.participantId)?.nickname ?? 'Another participant'

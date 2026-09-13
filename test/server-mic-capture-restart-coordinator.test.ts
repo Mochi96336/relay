@@ -19,20 +19,19 @@ const coordinator = parseTypeScriptSource(
   readFileSync(new URL('../src/relay-mic-capture-restart-coordinator.ts', import.meta.url), 'utf8'),
 );
 
-test('server keeps Mic generation authority and delegates only confirmed restart effects', () => {
+test('server delegates AudioSession capture-clock restarts before consuming new Mic PCM', () => {
   const block = functionCode(server, 'processPublisherFrame');
-  assert.match(block, /const previousGeneration = session\.micGeneration;/);
-  assert.match(block, /session\.ingestMic\(frame, micRuntime\.sampleRate\)/);
+  assert.doesNotMatch(block, /previousGeneration|micRestarted/);
   assert.match(
     block,
-    /const micRestarted = previousGeneration !== null && session\.micGeneration !== previousGeneration;/,
+    /const \{ samples, start, captureRestarted \} = session\.ingestMic\(frame, micRuntime\.sampleRate\);/,
   );
   assert.match(
     block,
     /micCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);/,
   );
 
-  const restartStart = block.indexOf('if (micRestarted) {');
+  const restartStart = block.indexOf('if (captureRestarted) {');
   const restartEnd = block.indexOf('\n      }', restartStart);
   assert.ok(restartStart >= 0 && restartEnd > restartStart);
   const restartBlock = block.slice(restartStart, restartEnd + '\n      }'.length);
@@ -42,7 +41,7 @@ test('server keeps Mic generation authority and delegates only confirmed restart
 
   const ingest = block.indexOf('session.ingestMic(frame, micRuntime.sampleRate)');
   const restart = block.indexOf('micCaptureRestartCoordinator.restart({');
-  assert.ok(ingest >= 0 && restart > ingest, 'AudioSession must establish the new capture generation first');
+  assert.ok(ingest >= 0 && restart > ingest, 'AudioSession must establish the new capture clock first');
 
   for (const consumer of [
     'calibration.primeMic(samples, start)',
@@ -53,7 +52,7 @@ test('server keeps Mic generation authority and delegates only confirmed restart
     const consumerIndex = block.indexOf(consumer);
     assert.ok(
       consumerIndex > restart,
-      `${consumer} must not observe new-generation PCM before restart effects settle`,
+      `${consumer} must not observe replacement-capture PCM before restart effects settle`,
     );
   }
 });

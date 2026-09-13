@@ -1,0 +1,76 @@
+name: Construct room song timeout settlement
+
+on:
+  push:
+    branches:
+      - agent/room-song-timeout-settlement
+
+permissions:
+  contents: write
+
+jobs:
+  construct:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    env:
+      BASE_SHA: e51a5df013d8fdb2c0e759144864c6f31d666c49
+      BRANCH: agent/room-song-timeout-settlement
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve construction patch
+        run: cp .github/scripts/construct-room-song-timeout-settlement.py /tmp/construct.py
+
+      - name: Rebuild from exact main
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$BASE_SHA"
+          git reset --hard "$BASE_SHA"
+          git clean -fdx
+          python /tmp/construct.py
+
+      - name: Verify exact product diff
+        run: |
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'src/room-song-command-session.ts',
+              'test/room-song-command-timeout-settlement.test.ts',
+          }
+          tracked = subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()
+          untracked = subprocess.check_output(
+              ['git', 'ls-files', '--others', '--exclude-standard'], text=True
+          ).splitlines()
+          actual = set(tracked) | set(untracked)
+          assert actual == expected, f'changed-path mismatch: actual={sorted(actual)} expected={sorted(expected)}'
+          PY
+          git add src/room-song-command-session.ts test/room-song-command-timeout-settlement.test.ts
+          git diff --cached --check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Targeted room-song timeout gates
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/room-song-command-timeout-settlement.test.ts
+          test/room-song-command.test.ts
+          test/room-song-command-settling.test.ts
+          test/room-song-command-runtime-boundary.test.ts
+          test/room-song-command-client.test.ts
+          test/room-song-command-server.test.ts
+          test/room-song-intent-authority-epoch-server.test.ts
+
+      - name: Publish one clean commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(room-song): preserve timeout settlement'
+          git push --force-with-lease=refs/heads/$BRANCH:$GITHUB_SHA origin HEAD:refs/heads/$BRANCH

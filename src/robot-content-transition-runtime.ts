@@ -450,6 +450,16 @@ export class RobotContentTransitionRuntime {
   }
 
   noteMicProgress(nowMs = this.now()) {
+    const state = this.state;
+    if (state !== null && !contextMatches(state.context, this.host.context())) {
+      // A Mic capture-generation change makes every pending hypothesis window
+      // belong to a retired acoustic timeline. Clearing here runs in the same
+      // publisher-frame call stack that established the new generation, so an
+      // already-started worker is aborted before its Promise callback can
+      // publish a stale verdict or keep post-seek PCM quarantined.
+      this.clear();
+      return;
+    }
     this.maybeAnalyze(nowMs);
   }
 

@@ -39,6 +39,23 @@ test('server keeps Mic generation authority and delegates only confirmed restart
   assert.doesNotMatch(restartBlock, /takeController\.|bootProbeRuntime\.|contentCalibrationValidator\./);
   assert.doesNotMatch(restartBlock, /calibration\.(?:fail|reset|apply|begin)/);
   assert.doesNotMatch(restartBlock, /broadcastJson\(|(?:^|[^.])syncAppliedCalibration\(/m);
+
+  const ingest = block.indexOf('session.ingestMic(frame, micRuntime.sampleRate)');
+  const restart = block.indexOf('micCaptureRestartCoordinator.restart({');
+  assert.ok(ingest >= 0 && restart > ingest, 'AudioSession must establish the new capture generation first');
+
+  for (const consumer of [
+    'calibration.primeMic(samples, start)',
+    'calibration.observeMic(samples, start)',
+    'contentCalibrationValidator.observeMic(samples, start)',
+    'robotContentTransitionRuntime.noteMicProgress()',
+  ]) {
+    const consumerIndex = block.indexOf(consumer);
+    assert.ok(
+      consumerIndex > restart,
+      `${consumer} must not observe new-generation PCM before restart effects settle`,
+    );
+  }
 });
 
 test('server composition retains all Mic capture restart domain effects', () => {

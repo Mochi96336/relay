@@ -56,6 +56,32 @@ test('reused Mic generation at a different source rate re-anchors without restar
   assert.equal(session.readBacking(0, 1)[0], 111);
 });
 
+test('reused Backing generation at a different source rate re-anchors without restarting the mix epoch', () => {
+  const session = makeSession();
+  session.start(0);
+
+  const firstBacking = session.ingestBacking(frame(21, 0, 480, 111), RATE, 0);
+  session.ingestMic(frame(12, 0, 480, 222), RATE, 0);
+  const mixGeneration = session.generation;
+
+  assert.equal(firstBacking.captureRestarted, false);
+  const replacement = session.ingestBacking(frame(21, 0, 441, 333), 44_100, 1_000);
+
+  assert.equal(replacement.captureRestarted, true);
+  assert.equal(session.generation, mixGeneration, 'Backing capture replacement must keep the mix epoch');
+  assert.equal(session.backingGeneration, 21, 'wire generation may be reused by the contradictory capture');
+  assert.equal(session.micGeneration, 12, 'the unrelated Mic timeline remains in the same mix epoch');
+  assert.equal(replacement.start, 47_520);
+  assert.equal(replacement.samples.length, 480);
+  assert.equal(session.readBacking(replacement.start, 1)[0], 333);
+  assert.equal(session.readMic(0, 1)[0], 222);
+
+  const continuation = session.ingestBacking(frame(21, 441, 441, 444), 44_100, 1_010);
+  assert.equal(continuation.captureRestarted, false, 'the source-rate restart signal is one-shot');
+  assert.equal(continuation.start, 48_000);
+  assert.equal(session.readBacking(48_000, 1)[0], 444);
+});
+
 test('a genuine Mic generation replacement reports the same capture restart signal', () => {
   const session = makeSession();
   session.start(0);

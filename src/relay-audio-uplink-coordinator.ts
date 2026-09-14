@@ -11,6 +11,7 @@ type RelayAudioUplinkCoordinatorOptions<TSocket> = {
   ingestBacking(frame: PcmFrame, nowMs: number): {
     samples: Int16Array;
     start: number;
+    captureRestarted: boolean;
   };
   onBackingCaptureRestarted(): void;
   noteRobotTransitionBackingFrame(
@@ -43,11 +44,14 @@ export function createRelayAudioUplinkCoordinator<TSocket>(
       const frame = options.decodeBacking(data);
       const previousGeneration = options.backingGeneration();
       const nowMs = options.now();
-      const { samples, start } = options.ingestBacking(frame, nowMs);
+      const { samples, start, captureRestarted } = options.ingestBacking(frame, nowMs);
       if (samples.length > 0) options.noteBackingFrame(socket, nowMs);
       if (
-        previousGeneration !== null
-        && options.backingGeneration() !== previousGeneration
+        captureRestarted
+        || (
+          previousGeneration !== null
+          && options.backingGeneration() !== previousGeneration
+        )
       ) {
         options.onBackingCaptureRestarted();
       }

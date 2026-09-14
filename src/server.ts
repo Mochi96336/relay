@@ -488,6 +488,8 @@ function calibrationContext(): CalibrationContext {
     sessionGeneration: session.generation,
     micGeneration: session.micGeneration,
     backingGeneration: session.backingGeneration,
+    micSourceRate: micRuntime.sampleRate,
+    backingSourceRate: backingRuntime.sampleRate,
     sourceGeneration: sourceRuntime.generation,
   };
 }
@@ -2087,6 +2089,8 @@ function bootProbeContext() {
     sessionGeneration: session.generation,
     micGeneration: session.micGeneration,
     backingGeneration: session.backingGeneration,
+    micSourceRate: micRuntime.sampleRate,
+    backingSourceRate: backingRuntime.sampleRate,
   };
 }
 
@@ -2386,6 +2390,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
       ...leg,
       sessionGeneration: session.generation,
       micGeneration: analysis.generation,
+      micSourceRate: micRuntime.sampleRate,
     });
     broadcastJson(timingCalibrationStatusPayload());
     return;
@@ -2394,6 +2399,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   const micLeg = bootProbeRuntime.takeMicLegForContext({
     sessionGeneration: session.generation,
     micGeneration: session.micGeneration,
+    micSourceRate: micRuntime.sampleRate,
   });
   if (micLeg === null) return;
 

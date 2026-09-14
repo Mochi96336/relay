@@ -5,6 +5,8 @@ function sameContext(left: CalibrationContext, right: CalibrationContext) {
   return left.sessionGeneration === right.sessionGeneration
     && left.micGeneration === right.micGeneration
     && left.backingGeneration === right.backingGeneration
+    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
     && left.sourceGeneration === right.sourceGeneration;
 }
 

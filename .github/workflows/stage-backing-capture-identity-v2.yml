@@ -1,0 +1,47 @@
+name: Stage backing capture identity v2
+
+on:
+  push:
+    branches:
+      - agent/backing-reconnect-capture-identity
+    paths:
+      - .github/workflows/stage-backing-capture-identity-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - name: Tighten patch harness
+        run: python3 .tmp/fix-backing-capture-harness.py
+      - name: Apply exact patch
+        run: python3 .tmp/apply-backing-capture-identity.py
+      - name: Check patch whitespace
+        run: git diff --check
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Targeted lifecycle tests
+        run: >-
+          node --import tsx --test --test-concurrency=1
+          test/backing-capture-registration.test.ts
+          test/backing-generation-recreation.test.ts
+          test/relay-backing-activation-coordinator.test.ts
+          test/server-backing-activation-coordinator.test.ts
+          test/server-registration-protocol-routing.test.ts
+      - name: Commit validated product patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/audio-session.ts src/relay-backing-activation-coordinator.ts src/server.ts src/backing-stdin.ts chrome-tab-audio-probe/offscreen.js test/relay-backing-activation-coordinator.test.ts test/backing-capture-registration.test.ts
+          git commit -m 'fix(backing): fence capture identity across reconnect'
+          git push

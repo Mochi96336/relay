@@ -17,6 +17,7 @@ function harness(input: {
   backing?: boolean;
   previousGeneration?: number | null;
   nextGeneration?: number | null;
+  captureRestarted?: boolean;
   mappedStart?: number | null;
   samples?: Int16Array;
 } = {}) {
@@ -56,7 +57,11 @@ function harness(input: {
       assert.equal(nowMs, 42);
       events.push('ingest');
       generation = input.nextGeneration ?? generation;
-      return { samples, start: 900 };
+      return {
+        samples,
+        start: 900,
+        captureRestarted: input.captureRestarted === true,
+      };
     },
     onBackingCaptureRestarted: () => events.push('restart'),
     noteRobotTransitionBackingFrame: (receivedFrame, receivedSamples, start, nowMs) => {
@@ -115,6 +120,19 @@ test('Backing uplink preserves ingest, restart, transition and content-evidence 
     'map-content',
     'feed-content',
   ]);
+});
+
+test('AudioSession restart signal survives same-generation Backing replacement', () => {
+  const { coordinator, events } = harness({
+    backing: true,
+    previousGeneration: 3,
+    nextGeneration: 3,
+    captureRestarted: true,
+  });
+  coordinator.handle({ id: 'backing' }, Buffer.from([0xaa, 0xbb]));
+  assert.equal(events.filter((event) => event === 'restart').length, 1);
+  assert.ok(events.indexOf('restart') > events.indexOf('ingest'));
+  assert.ok(events.indexOf('robot-transition') > events.indexOf('restart'));
 });
 
 test('Backing flow freshness advances only after ingest appends PCM', () => {

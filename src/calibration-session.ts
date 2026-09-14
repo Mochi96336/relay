@@ -55,6 +55,10 @@ export type CalibrationContext = {
   sessionGeneration: number;
   micGeneration: number | null;
   backingGeneration: number | null;
+  /** Source-clock units for the Mic capture generation. */
+  micSourceRate?: number | null;
+  /** Source-clock units for the Backing capture generation. */
+  backingSourceRate?: number | null;
   sourceGeneration: number;
 };
 
@@ -502,6 +506,8 @@ export class CalibrationSession {
     return this.measuredContext.sessionGeneration !== context.sessionGeneration
       || this.measuredContext.micGeneration !== context.micGeneration
       || this.measuredContext.backingGeneration !== context.backingGeneration
+      || (this.measuredContext.micSourceRate ?? null) !== (context.micSourceRate ?? null)
+      || (this.measuredContext.backingSourceRate ?? null) !== (context.backingSourceRate ?? null)
       || this.measuredContext.sourceGeneration !== context.sourceGeneration;
   }
 
@@ -556,6 +562,8 @@ export class CalibrationSession {
     return left.sessionGeneration === right.sessionGeneration
       && left.micGeneration === right.micGeneration
       && left.backingGeneration === right.backingGeneration
+      && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+      && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
       && left.sourceGeneration === right.sourceGeneration;
   }
 

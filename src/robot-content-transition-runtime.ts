@@ -24,6 +24,8 @@ export type RobotContentTransitionContext = {
   sessionGeneration: number;
   micGeneration: number | null;
   backingGeneration: number | null;
+  micSourceRate?: number | null;
+  backingSourceRate?: number | null;
   sourceGeneration: number;
 };
 
@@ -153,6 +155,8 @@ function contextMatches(left: RobotContentTransitionContext, right: RobotContent
   return left.sessionGeneration === right.sessionGeneration
     && left.micGeneration === right.micGeneration
     && left.backingGeneration === right.backingGeneration
+    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
     && left.sourceGeneration === right.sourceGeneration;
 }
 

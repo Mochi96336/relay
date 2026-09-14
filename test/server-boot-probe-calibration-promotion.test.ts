@@ -77,11 +77,11 @@ test('backing completion consumes Mic evidence through the BootProbeRuntime cont
 
   assert.match(
     finish,
-    /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*\}\)/,
+    /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*micSourceRate: micRuntime\.sampleRate,\s*\}\)/,
   );
   assert.doesNotMatch(
     finish,
-    /micLeg\.(?:sessionGeneration|micGeneration)/,
+    /micLeg\.(?:sessionGeneration|micGeneration|micSourceRate)/,
     'Mic evidence provenance belongs to BootProbeRuntime rather than server field inspection',
   );
   assert.ok(consume >= 0);

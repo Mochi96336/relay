@@ -48,12 +48,16 @@ replace_once(
     """    return left.sessionGeneration === right.sessionGeneration\n      && left.micGeneration === right.micGeneration\n      && left.backingGeneration === right.backingGeneration\n      && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)\n      && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)\n      && left.sourceGeneration === right.sourceGeneration;\n""",
 )
 
-for path in ['src/content-calibration-validator.ts', 'src/robot-content-timeline.ts']:
-    replace_once(
-        path,
-        """    && a.micGeneration === b.micGeneration\n    && a.backingGeneration === b.backingGeneration\n    && a.sourceGeneration === b.sourceGeneration;\n""" if 'content-calibration' in path else """    && left.micGeneration === right.micGeneration\n    && left.backingGeneration === right.backingGeneration\n    && left.sourceGeneration === right.sourceGeneration;\n""",
-        """    && a.micGeneration === b.micGeneration\n    && a.backingGeneration === b.backingGeneration\n    && (a.micSourceRate ?? null) === (b.micSourceRate ?? null)\n    && (a.backingSourceRate ?? null) === (b.backingSourceRate ?? null)\n    && a.sourceGeneration === b.sourceGeneration;\n""" if 'content-calibration' in path else """    && left.micGeneration === right.micGeneration\n    && left.backingGeneration === right.backingGeneration\n    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)\n    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)\n    && left.sourceGeneration === right.sourceGeneration;\n""",
-    )
+replace_once(
+    'src/content-calibration-validator.ts',
+    """  return a.sessionGeneration === b.sessionGeneration\n    && a.micGeneration === b.micGeneration\n    && a.backingGeneration === b.backingGeneration\n    && a.sourceGeneration === b.sourceGeneration;\n""",
+    """  return a.sessionGeneration === b.sessionGeneration\n    && a.micGeneration === b.micGeneration\n    && a.backingGeneration === b.backingGeneration\n    && (a.micSourceRate ?? null) === (b.micSourceRate ?? null)\n    && (a.backingSourceRate ?? null) === (b.backingSourceRate ?? null)\n    && a.sourceGeneration === b.sourceGeneration;\n""",
+)
+replace_once(
+    'src/robot-content-timeline.ts',
+    """  return left.sessionGeneration === right.sessionGeneration\n    && left.micGeneration === right.micGeneration\n    && left.backingGeneration === right.backingGeneration\n    && left.sourceGeneration === right.sourceGeneration;\n""",
+    """  return left.sessionGeneration === right.sessionGeneration\n    && left.micGeneration === right.micGeneration\n    && left.backingGeneration === right.backingGeneration\n    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)\n    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)\n    && left.sourceGeneration === right.sourceGeneration;\n""",
+)
 
 # Robot content transition has its own structurally-equivalent context type.
 replace_once(
@@ -100,6 +104,15 @@ replace_once(
     'src/server.ts',
     """      sessionGeneration: session.generation,\n      micGeneration: analysis.generation,\n    });\n""",
     """      sessionGeneration: session.generation,\n      micGeneration: analysis.generation,\n      micSourceRate: micRuntime.sampleRate,\n    });\n""",
+)
+
+# Staging-only TypeScript fixture adaptation. This file is deliberately not
+# committed by the staging workflow; the final PR uses a stronger regression
+# blob that can synthesize captureRestarted=true.
+replace_once(
+    'test/relay-audio-uplink-coordinator.test.ts',
+    """      return { samples, start: 900 };\n""",
+    """      return { samples, start: 900, captureRestarted: false };\n""",
 )
 
 print('patched capture rate into timing context identity')

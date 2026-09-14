@@ -2608,6 +2608,12 @@ function validCaptureGeneration(value: unknown) {
     : null;
 }
 
+function validSampleCursor(value: unknown) {
+  const cursor = Number(value);
+  if (!Number.isSafeInteger(cursor) || cursor < 0) return null;
+  return cursor;
+}
+
 function validAudioPacketVersion(value: unknown): 1 | 2 | null {
   if (value === undefined || value === null) return 1;
   const version = Number(value);
@@ -3352,6 +3358,7 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
 const backingActivationCoordinator = createRelayBackingActivationCoordinator<RelaySocket>({
   previousBacking: () => backingRuntime.socket,
   clearRobotContentTransition: () => clearRobotContentTransition(),
+  retireReplacedCapture: () => session.retireBackingCapture(),
   noteQualityEvent: (event) => takeController.noteQualityEvent(event),
   retirePrevious: (previous, next) => {
     replacePrevious(previous, next, 'Replaced by a newer tab capture.');
@@ -3492,12 +3499,38 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       return;
     }
 
+    const hasCaptureGeneration = Object.prototype.hasOwnProperty.call(payload, 'captureGeneration');
+    const hasCaptureSampleCursor = Object.prototype.hasOwnProperty.call(payload, 'captureSampleCursor');
+    if (hasCaptureGeneration !== hasCaptureSampleCursor) {
+      sendJson(socket, {
+        type: 'error',
+        message: 'Backing capture identity requires generation and sample cursor together.',
+      });
+      return;
+    }
+
+    let captureReplaced = false;
+    if (hasCaptureGeneration) {
+      const captureGeneration = validCaptureGeneration(payload.captureGeneration);
+      const captureSampleCursor = validSampleCursor(payload.captureSampleCursor);
+      if (captureGeneration === null || captureSampleCursor === null) {
+        sendJson(socket, { type: 'error', message: 'Invalid backing capture identity.' });
+        return;
+      }
+      captureReplaced = session.backingCaptureReplacedBy({
+        generation: captureGeneration,
+        sourceRate: sampleRate,
+        sampleCursor: captureSampleCursor,
+      });
+    }
+
     commitSocketRole(socket, 'backing');
 
     backingActivationCoordinator.activate({
       socket,
       sampleRate,
       robot: payload.robot === true,
+      captureReplaced,
     });
     return;
   },

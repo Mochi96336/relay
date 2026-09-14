@@ -15,6 +15,7 @@ function coordinatorFixture(options: {
       return options.previous;
     },
     clearRobotContentTransition: () => events.push('clear-boundary'),
+    retireReplacedCapture: () => events.push('retire-capture'),
     noteQualityEvent: (event) => events.push(`quality:${event}`),
     retirePrevious: (previous, next) => events.push(`retire:${previous ?? 'none'}->${next}`),
     setSocketSampleRate: (socket, sampleRate) => events.push(`sample-rate:${socket}:${sampleRate}`),
@@ -44,7 +45,7 @@ test('replacement activation preserves replacement quality and retirement before
     activeRobot: true,
   });
 
-  coordinator.activate({ socket: 'new', sampleRate: 48_000, robot: true });
+  coordinator.activate({ socket: 'new', sampleRate: 48_000, robot: true, captureReplaced: false });
 
   assert.deepEqual(events, [
     'previous:old',
@@ -68,7 +69,7 @@ test('first Backing transport records connection quality only after bind/expecte
     activeRobot: false,
   });
 
-  coordinator.activate({ socket: 'new', sampleRate: 44_100, robot: false });
+  coordinator.activate({ socket: 'new', sampleRate: 44_100, robot: false, captureReplaced: false });
 
   assert.deepEqual(events, [
     'previous:none',
@@ -93,7 +94,7 @@ test('re-registering the same active socket is neither replacement nor first con
     activeRobot: false,
   });
 
-  coordinator.activate({ socket: 'same', sampleRate: 48_000, robot: false });
+  coordinator.activate({ socket: 'same', sampleRate: 48_000, robot: false, captureReplaced: false });
 
   assert.equal(events.some((event) => event.startsWith('quality:')), false);
   assert.deepEqual(events.slice(0, 6), [
@@ -104,4 +105,24 @@ test('re-registering the same active socket is neither replacement nor first con
     'bind:same:48000:false',
     'expected',
   ]);
+});
+
+
+test('proven Backing capture replacement retires old PCM before transport retirement and bind', () => {
+  const { coordinator, events } = coordinatorFixture({
+    previous: 'old',
+    active: true,
+    activeRobot: false,
+  });
+
+  coordinator.activate({
+    socket: 'new',
+    sampleRate: 48_000,
+    robot: false,
+    captureReplaced: true,
+  });
+
+  assert.ok(events.indexOf('retire-capture') > events.indexOf('clear-boundary'));
+  assert.ok(events.indexOf('retire-capture') < events.indexOf('retire:old->new'));
+  assert.ok(events.indexOf('retire-capture') < events.indexOf('bind:new:48000:false'));
 });

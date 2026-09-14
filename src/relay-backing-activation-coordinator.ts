@@ -2,11 +2,13 @@ export type RelayBackingActivationInput<TSocket> = {
   socket: TSocket;
   sampleRate: number;
   robot: boolean;
+  captureReplaced: boolean;
 };
 
 export type RelayBackingActivationDependencies<TSocket> = {
   previousBacking: () => TSocket | null;
   clearRobotContentTransition: () => void;
+  retireReplacedCapture: () => void;
   noteQualityEvent: (
     event: 'backing-transport-replaced' | 'backing-transport-connected',
   ) => void;
@@ -42,6 +44,7 @@ export function createRelayBackingActivationCoordinator<TSocket>(
       const previousBacking = dependencies.previousBacking();
 
       dependencies.clearRobotContentTransition();
+      if (input.captureReplaced) dependencies.retireReplacedCapture();
       if (previousBacking && previousBacking !== input.socket) {
         dependencies.noteQualityEvent('backing-transport-replaced');
       }

@@ -160,6 +160,8 @@ function connect() {
         role: 'backing',
         sampleRate: SAMPLE_RATE,
         robot: ROBOT_BACKING,
+        captureGeneration: generation,
+        captureSampleCursor: sampleCursor,
       }));
       return;
     }

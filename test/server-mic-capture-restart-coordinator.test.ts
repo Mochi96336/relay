@@ -22,10 +22,12 @@ const coordinator = parseTypeScriptSource(
 test('server delegates AudioSession capture-clock restarts before consuming new Mic PCM', () => {
   const block = functionCode(server, 'processPublisherFrame');
   assert.doesNotMatch(block, /previousGeneration|micRestarted/);
+  assert.match(block, /const nowMs = performance\.now\(\);/);
   assert.match(
     block,
-    /const \{ samples, start, captureRestarted \} = session\.ingestMic\(frame, micRuntime\.sampleRate\);/,
+    /const \{ samples, start, captureRestarted \} = session\.ingestMic\(\s*frame,\s*micRuntime\.sampleRate,\s*nowMs,\s*\);/,
   );
+  assert.match(block, /if \(samples\.length > 0\) noteMicFrame\(nowMs\);/);
   assert.match(
     block,
     /micCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);/,
@@ -39,9 +41,11 @@ test('server delegates AudioSession capture-clock restarts before consuming new 
   assert.doesNotMatch(restartBlock, /calibration\.(?:fail|reset|apply|begin)/);
   assert.doesNotMatch(restartBlock, /broadcastJson\(|(?:^|[^.])syncAppliedCalibration\(/m);
 
-  const ingest = block.indexOf('session.ingestMic(frame, micRuntime.sampleRate)');
+  const ingest = block.indexOf('session.ingestMic(');
+  const noteFlow = block.indexOf('if (samples.length > 0) noteMicFrame(nowMs);');
   const restart = block.indexOf('micCaptureRestartCoordinator.restart({');
-  assert.ok(ingest >= 0 && restart > ingest, 'AudioSession must establish the new capture clock first');
+  assert.ok(ingest >= 0 && noteFlow > ingest, 'flow freshness must require accepted PCM progress');
+  assert.ok(restart > noteFlow, 'capture restart effects must follow ingest and flow classification');
 
   for (const consumer of [
     'calibration.primeMic(samples, start)',

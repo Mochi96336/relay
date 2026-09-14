@@ -43,8 +43,8 @@ export function createRelayAudioUplinkCoordinator<TSocket>(
       const frame = options.decodeBacking(data);
       const previousGeneration = options.backingGeneration();
       const nowMs = options.now();
-      options.noteBackingFrame(socket, nowMs);
       const { samples, start } = options.ingestBacking(frame, nowMs);
+      if (samples.length > 0) options.noteBackingFrame(socket, nowMs);
       if (
         previousGeneration !== null
         && options.backingGeneration() !== previousGeneration

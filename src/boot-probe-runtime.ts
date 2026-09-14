@@ -12,6 +12,8 @@ export type BootProbeContext = {
   sessionGeneration: number;
   micGeneration: number | null;
   backingGeneration: number | null;
+  micSourceRate?: number | null;
+  backingSourceRate?: number | null;
 };
 
 export type BootProbeMicLeg = {
@@ -20,6 +22,7 @@ export type BootProbeMicLeg = {
   correlation: number;
   sessionGeneration: number;
   micGeneration: number | null;
+  micSourceRate?: number | null;
 };
 
 export type BootProbeRuntimeOptions = {
@@ -27,11 +30,15 @@ export type BootProbeRuntimeOptions = {
   retryMs: number;
 };
 
-type BootProbeMicLegContext = Pick<BootProbeContext, 'sessionGeneration' | 'micGeneration'>;
+type BootProbeMicLegContext = Pick<
+  BootProbeContext,
+  'sessionGeneration' | 'micGeneration' | 'micSourceRate'
+>;
 
 function micLegMatchesContext(leg: BootProbeMicLeg, context: BootProbeMicLegContext) {
   return leg.sessionGeneration === context.sessionGeneration
-    && leg.micGeneration === context.micGeneration;
+    && leg.micGeneration === context.micGeneration
+    && (leg.micSourceRate ?? null) === (context.micSourceRate ?? null);
 }
 
 /**
@@ -146,7 +153,9 @@ export class BootProbeRuntime {
     return this.completedContext !== null
       && this.completedContext.sessionGeneration === context.sessionGeneration
       && this.completedContext.micGeneration === context.micGeneration
-      && this.completedContext.backingGeneration === context.backingGeneration;
+      && this.completedContext.backingGeneration === context.backingGeneration
+      && (this.completedContext.micSourceRate ?? null) === (context.micSourceRate ?? null)
+      && (this.completedContext.backingSourceRate ?? null) === (context.backingSourceRate ?? null);
   }
 
   noteCorrelation(target: ProbeTarget, correlation: number) {

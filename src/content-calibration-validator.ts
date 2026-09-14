@@ -70,6 +70,8 @@ function sameContext(a: CalibrationContext, b: CalibrationContext) {
   return a.sessionGeneration === b.sessionGeneration
     && a.micGeneration === b.micGeneration
     && a.backingGeneration === b.backingGeneration
+    && (a.micSourceRate ?? null) === (b.micSourceRate ?? null)
+    && (a.backingSourceRate ?? null) === (b.backingSourceRate ?? null)
     && a.sourceGeneration === b.sourceGeneration;
 }
 

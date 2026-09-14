@@ -592,7 +592,14 @@ export class AudioSession {
     nowMs = performance.now(),
     trackSourceClock = false,
   ) {
-    return this.ingest(this.backing, frame, sourceRate, nowMs, trackSourceClock);
+    return this.ingest(
+      this.backing,
+      frame,
+      sourceRate,
+      nowMs,
+      trackSourceClock,
+      true,
+    );
   }
 
   /** Exposed for the click diagnostic, which mixes against the microphone. */

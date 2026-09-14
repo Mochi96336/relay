@@ -28,6 +28,8 @@ export type MicPublisherBindResult = {
   previousPublisher: RelaySocket | null;
   sameParticipantReplacement: boolean;
   sameCapture: boolean;
+  /** An established media capture was replaced rather than continued. */
+  captureReplaced: boolean;
   preservedAudioTransport: boolean;
 };
 
@@ -119,6 +121,7 @@ export class MicRuntime {
     }
 
     const previousPublisher = this.currentPublisher;
+    const hadMediaCapture = this.currentAudioTransport !== null;
     // Media authority deliberately survives a short control-socket grace. Treat
     // a same-participant reconnect as a replacement even after the old control
     // pointer has detached, otherwise a changed capture can bypass the server's
@@ -145,6 +148,12 @@ export class MicRuntime {
     );
     const sameCapture = Boolean(sameParticipantReplacement && continuingV2Capture);
     const preservedAudioTransport = continuingV2Capture;
+    // This is deliberately independent of the control-socket pointer and
+    // participant identity. A cross-owner takeover, a reconnect after control
+    // grace, and a contradictory same-generation/sample-rate registration all
+    // replace the acoustic capture if an old media transport existed and was
+    // not explicitly preserved.
+    const captureReplaced = hadMediaCapture && !preservedAudioTransport;
 
     socket.sampleRate = sampleRate;
     socket.captureGeneration = captureGeneration ?? undefined;
@@ -181,6 +190,7 @@ export class MicRuntime {
       previousPublisher,
       sameParticipantReplacement,
       sameCapture,
+      captureReplaced,
       preservedAudioTransport,
     };
   }

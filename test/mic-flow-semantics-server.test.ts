@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { encodePcmFrame } from '../src/pcm-frame.js';
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
@@ -84,6 +85,40 @@ test('Mic state distinguishes starting, flowing, stalled and reconnecting', asyn
     assert.equal(reconnecting.health, 'degraded');
     assert.equal(reconnecting.attention?.code, 'mic-reconnecting');
 
+    observer.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('replayed legacy Mic PCM cannot keep streaming freshness alive', async () => {
+  const server = await startRelay(FAST);
+  try {
+    const observer = await RelayClient.connect(server, '?participant=observer-replay&name=Observer');
+    const singer = await RelayClient.connect(server, '?participant=singer-replay&name=Singer');
+    singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    await singer.waitForType('registered');
+
+    const first = pcm();
+    singer.sendPcm(first);
+    await sleep(40);
+    await requestProduct(observer, (message) => message.room?.mic?.state === 'live');
+
+    const replay = encodePcmFrame(singer.generationId, 0, first);
+    const replayTimer = setInterval(() => singer.sendBinary(replay), 100);
+    try {
+      await sleep(1_150);
+    } finally {
+      clearInterval(replayTimer);
+    }
+
+    const interrupted = await requestProduct(
+      observer,
+      (message) => message.room?.mic?.state === 'interrupted',
+    );
+    assert.equal(interrupted.attention?.code, 'mic-audio-stalled');
+
+    singer.close();
     observer.close();
   } finally {
     await server.stop();

@@ -18,10 +18,11 @@ function harness(input: {
   previousGeneration?: number | null;
   nextGeneration?: number | null;
   mappedStart?: number | null;
+  samples?: Int16Array;
 } = {}) {
   const events: string[] = [];
   let generation = input.previousGeneration === undefined ? 3 : input.previousGeneration;
-  const samples = new Int16Array([1000, -1000]);
+  const samples = input.samples ?? new Int16Array([1000, -1000]);
   const coordinator = createRelayAudioUplinkCoordinator<Socket>({
     isMicPublisher: () => {
       events.push('is-mic');
@@ -106,14 +107,24 @@ test('Backing uplink preserves ingest, restart, transition and content-evidence 
     'decode',
     'generation:3',
     'now',
-    'note-frame',
     'ingest',
+    'note-frame',
     'generation:4',
     'restart',
     'robot-transition',
     'map-content',
     'feed-content',
   ]);
+});
+
+test('Backing flow freshness advances only after ingest appends PCM', () => {
+  const { coordinator, events } = harness({
+    backing: true,
+    samples: new Int16Array(0),
+  });
+  coordinator.handle({ id: 'backing' }, Buffer.from([0xaa, 0xbb]));
+  assert.equal(events.includes('note-frame'), false);
+  assert.ok(events.includes('ingest'));
 });
 
 test('first Backing generation does not report a capture restart', () => {

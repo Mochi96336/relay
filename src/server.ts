@@ -1934,8 +1934,13 @@ function processPublisherFrame(frame: PcmFrame) {
   if (!session.active) startLiveSource();
 
   if (session.active) {
-    noteMicFrame(performance.now());
-    const { samples, start, captureRestarted } = session.ingestMic(frame, micRuntime.sampleRate);
+    const nowMs = performance.now();
+    const { samples, start, captureRestarted } = session.ingestMic(
+      frame,
+      micRuntime.sampleRate,
+      nowMs,
+    );
+    if (samples.length > 0) noteMicFrame(nowMs);
 
     if (session.active) {
       if (captureRestarted) {

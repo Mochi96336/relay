@@ -295,6 +295,8 @@ export class AudioSession {
   private backingHeadroomMs = 0;
   /** A media capture was replaced at publisher bind; consumed by its first real PCM. */
   private micCaptureRestartPending = false;
+  /** A Backing capture was proven replaced at registration; consumed by its first real PCM. */
+  private backingCaptureRestartPending = false;
 
   constructor(options: AudioSessionOptions) {
     this.sampleRate = options.sampleRate;
@@ -349,6 +351,29 @@ export class AudioSession {
     return this.backing.totalSamples;
   }
 
+  /**
+   * Classifies a metadata-capable Backing registration against the capture
+   * clock already retained by this mix. A reconnect may be ahead because the
+   * sender keeps its source clock running while transport is down; only a
+   * rewind, generation change or source-rate change proves replacement.
+   */
+  backingCaptureReplacedBy(input: {
+    generation: number;
+    sourceRate: number;
+    sampleCursor: number;
+  }) {
+    const established = this.backing.totalSamples > 0
+      || this.backing.generation !== null
+      || this.backing.sourceRate !== null
+      || this.backing.sourceFrontier !== null;
+    if (!established) return false;
+
+    return this.backing.generation !== input.generation
+      || this.backing.sourceRate !== input.sourceRate
+      || this.backing.sourceFrontier === null
+      || input.sampleCursor < this.backing.sourceFrontier;
+  }
+
   start(nowMs = performance.now()) {
     this.running = true;
     this.resetEpoch(nowMs);
@@ -361,6 +386,7 @@ export class AudioSession {
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     this.micCaptureRestartPending = false;
+    this.backingCaptureRestartPending = false;
     this.resetHealth();
   }
 
@@ -375,6 +401,7 @@ export class AudioSession {
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     this.micCaptureRestartPending = false;
+    this.backingCaptureRestartPending = false;
     // The frontier correction described the old timelines' positions.
     this.resetMicFrontierTracking();
     // A pending correction belongs to the old mix epoch. Preserve the value
@@ -592,7 +619,7 @@ export class AudioSession {
     nowMs = performance.now(),
     trackSourceClock = false,
   ) {
-    return this.ingest(
+    const result = this.ingest(
       this.backing,
       frame,
       sourceRate,
@@ -600,6 +627,12 @@ export class AudioSession {
       trackSourceClock,
       true,
     );
+    const pendingCaptureRestart = this.backingCaptureRestartPending && result.samples.length > 0;
+    if (pendingCaptureRestart) this.backingCaptureRestartPending = false;
+    return {
+      ...result,
+      captureRestarted: result.captureRestarted || pendingCaptureRestart,
+    };
   }
 
   /** Exposed for the click diagnostic, which mixes against the microphone. */
@@ -650,6 +683,16 @@ export class AudioSession {
     this.clearTimeline(this.mic);
     this.resetMicFrontierTracking();
     this.micCaptureRestartPending = true;
+  }
+
+  /**
+   * Retires only the captured-song clock once registration metadata has proven
+   * that the new Backing transport cannot be a continuation of the old capture.
+   * The shared mix epoch and Mic history remain intact.
+   */
+  retireBackingCapture() {
+    this.clearTimeline(this.backing);
+    this.backingCaptureRestartPending = true;
   }
 
   clearMic() {

@@ -1,0 +1,29 @@
+name: Capture-rate context patch staging
+on:
+  push:
+    branches:
+      - agent/backing-rate-context-staging
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/backing-rate-context-staging
+          fetch-depth: 0
+      - name: Apply source patch
+        run: python3 .tmp/apply-capture-rate-context.py
+      - name: Check TypeScript before publishing source blobs
+        run: |
+          npm ci
+          npm run check
+      - name: Commit patched source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/audio-session.ts src/relay-audio-uplink-coordinator.ts src/calibration-session.ts src/content-calibration-validator.ts src/robot-content-timeline.ts src/robot-content-transition-runtime.ts src/boot-probe-runtime.ts src/server.ts
+          git commit -m 'fix(audio): bind timing contexts to capture source rates'
+          git push origin HEAD:agent/backing-rate-context-staging

@@ -380,7 +380,8 @@ export class TakeController {
   }
 
   noteQualityEvent(kind: TakeQualityEventKind) {
-    if (!this.session.recordingTakeId) return false;
+    const takeId = this.session.recordingTakeId;
+    if (!takeId || this.pendingStop?.takeId === takeId) return false;
     this.quality?.noteEvent(kind);
     return true;
   }

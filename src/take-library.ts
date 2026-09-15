@@ -191,6 +191,23 @@ function cloneEntry(entry: TakeLibraryEntry): TakeLibraryEntry {
   };
 }
 
+function entryFromTake(take: TakeRecord, artifact: TakeArtifact): TakeLibraryEntry {
+  if (take.endedAtMs === null) throw new Error('Take metadata requires a settled end time.');
+  return {
+    takeId: take.takeId,
+    startedAtMs: take.startedAtMs,
+    endedAtMs: take.endedAtMs,
+    startedByParticipantId: take.startedByParticipantId,
+    stoppedByParticipantId: take.stoppedByParticipantId,
+    stopReason: take.stopReason,
+    song: { ...take.song },
+    artifact: { ...artifact },
+    mixSampleRange: take.mixSampleRange ? { ...take.mixSampleRange } : null,
+    quality: take.quality ? structuredClone(take.quality) : null,
+    recovered: false,
+  };
+}
+
 /**
  * Persistent history for finalized recordings.
  *
@@ -211,6 +228,73 @@ export class TakeLibrary {
     this.recoverLegacyArtifacts();
   }
 
+  /**
+   * Durably stages rich metadata before the corresponding WAV is published.
+   * A crash before WAV rename leaves an orphan partial that startup removes; a
+   * crash after WAV rename leaves a complete transaction candidate that startup
+   * can validate and promote without degrading to WAV-only recovery.
+   */
+  stageFinalizing(take: TakeRecord, audio: { sampleRate: number; sampleCount: number }) {
+    if (take.lifecycle !== 'finalizing' || take.artifact !== null || take.endedAtMs === null) {
+      throw new Error('Only a finalizing Take without an artifact can stage recording metadata.');
+    }
+    if (!TAKE_ID_PATTERN.test(take.takeId)) throw new Error('Take id is invalid.');
+    if (!Number.isInteger(audio.sampleRate) || audio.sampleRate <= 0) {
+      throw new Error('Take staged sample rate is invalid.');
+    }
+    if (!Number.isSafeInteger(audio.sampleCount) || audio.sampleCount < 0) {
+      throw new Error('Take staged sample count is invalid.');
+    }
+    if (!take.mixSampleRange || take.mixSampleRange.sampleCount !== audio.sampleCount) {
+      throw new Error('Take staged sample count does not match its authoritative mix range.');
+    }
+    const sizeBytes = WAV_HEADER_BYTES + audio.sampleCount * 2;
+    if (!Number.isSafeInteger(sizeBytes)) throw new Error('Take staged WAV size is invalid.');
+
+    const artifact: TakeArtifact = {
+      fileName: `${take.takeId}.wav`,
+      // Match TakeController's existing ready-artifact URL byte-for-byte. The
+      // recovery reader normalizes its fallback URL, but staged metadata must
+      // compare equal to the live Take without changing existing URL behavior.
+      url: `${this.artifactBaseUrl}/${encodeURIComponent(take.takeId)}.wav`,
+      mimeType: 'audio/wav',
+      sizeBytes,
+      sampleRate: audio.sampleRate,
+      channels: 1,
+      bitsPerSample: 16,
+      sampleCount: audio.sampleCount,
+      durationMs: (audio.sampleCount / audio.sampleRate) * 1000,
+    };
+    const entry = entryFromTake(take, artifact);
+    mkdirSync(this.options.directory, { recursive: true });
+    this.writeMetadataPartial(entry);
+    return cloneEntry(entry);
+  }
+
+  commitStaged(take: TakeRecord) {
+    if (take.lifecycle !== 'ready' || !take.artifact || take.endedAtMs === null) {
+      throw new Error('Only a finalized ready Take can commit staged recording metadata.');
+    }
+    if (!TAKE_ID_PATTERN.test(take.takeId)) throw new Error('Take id is invalid.');
+
+    const expected = entryFromTake(take, take.artifact);
+    const partialPath = path.join(this.options.directory, metadataPartFileName(take.takeId));
+    const finalPath = path.join(this.options.directory, metadataFileName(take.takeId));
+    const wavPath = path.join(this.options.directory, take.artifact.fileName);
+    const staged = readValidatedMetadata(partialPath, wavPath, take.takeId, this.artifactBaseUrl);
+    if (!staged || JSON.stringify(staged) !== JSON.stringify(expected)) {
+      throw new Error('Staged Take metadata does not match the finalized recording.');
+    }
+
+    durableRenameSync(partialPath, finalPath);
+    return cloneEntry(staged);
+  }
+
+  discardStaged(takeId: string) {
+    if (!TAKE_ID_PATTERN.test(takeId)) throw new Error('Take id is invalid.');
+    rmSync(path.join(this.options.directory, metadataPartFileName(takeId)), { force: true });
+  }
+
   record(take: TakeRecord) {
     if (take.lifecycle !== 'ready' || !take.artifact || take.endedAtMs === null) {
       throw new Error('Only finalized ready Takes can enter the recording library.');
@@ -224,19 +308,7 @@ export class TakeLibrary {
     const artifactInfo = statSync(path.join(this.options.directory, take.artifact.fileName));
     if (!artifactInfo.isFile()) throw new Error('Take artifact is not a file.');
 
-    const entry: TakeLibraryEntry = {
-      takeId: take.takeId,
-      startedAtMs: take.startedAtMs,
-      endedAtMs: take.endedAtMs,
-      startedByParticipantId: take.startedByParticipantId,
-      stoppedByParticipantId: take.stoppedByParticipantId,
-      stopReason: take.stopReason,
-      song: { ...take.song },
-      artifact: { ...take.artifact },
-      mixSampleRange: take.mixSampleRange ? { ...take.mixSampleRange } : null,
-      quality: take.quality ? structuredClone(take.quality) : null,
-      recovered: false,
-    };
+    const entry = entryFromTake(take, take.artifact);
     this.writeMetadata(entry);
     return cloneEntry(entry);
   }
@@ -386,11 +458,16 @@ export class TakeLibrary {
     }
   }
 
-  private writeMetadata(entry: TakeLibraryEntry) {
-    const finalPath = path.join(this.options.directory, metadataFileName(entry.takeId));
+  private writeMetadataPartial(entry: TakeLibraryEntry) {
     const partialPath = path.join(this.options.directory, metadataPartFileName(entry.takeId));
     const payload: TakeMetadataV1 = { version: 1, take: entry };
     writeFileSync(partialPath, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', flush: true });
+  }
+
+  private writeMetadata(entry: TakeLibraryEntry) {
+    const finalPath = path.join(this.options.directory, metadataFileName(entry.takeId));
+    const partialPath = path.join(this.options.directory, metadataPartFileName(entry.takeId));
+    this.writeMetadataPartial(entry);
     durableRenameSync(partialPath, finalPath);
   }
 }

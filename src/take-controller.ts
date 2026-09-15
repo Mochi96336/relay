@@ -493,7 +493,34 @@ export class TakeController {
   }
 
   private async finalizeWriter(writer: WavTakeWriter, takeId: string) {
+    let metadataStaged = false;
+    const discardStagedMetadata = () => {
+      if (!metadataStaged) return;
+      try {
+        this.library.discardStaged(takeId);
+        metadataStaged = false;
+      } catch (error) {
+        this.reportStorageError(error);
+      }
+    };
+
     try {
+      const finalizingTake = this.session.currentTake();
+      if (finalizingTake?.takeId === takeId && finalizingTake.lifecycle === 'finalizing') {
+        try {
+          this.library.stageFinalizing(finalizingTake, {
+            sampleRate: writer.sampleRate,
+            sampleCount: writer.sampleCount,
+          });
+          metadataStaged = true;
+        } catch (error) {
+          // Metadata staging is crash-resilience for the rich sidecar. The WAV
+          // remains the recording authority, so preserve the existing behavior:
+          // report the storage fault but still finalize recoverable audio.
+          this.reportStorageError(error);
+        }
+      }
+
       const file = await writer.finalize();
       const pendingTake = this.session.currentTake();
       const recordedSampleCount = pendingTake?.mixSampleRange?.sampleCount ?? 0;
@@ -503,6 +530,7 @@ export class TakeController {
           `Take sample metadata recorded ${recordedSampleCount} samples but WAV contains ${file.sampleCount}.`,
           Date.now(),
         )) this.emitChange();
+        discardStagedMetadata();
         await writer.discardFinalized();
         return;
       }
@@ -523,7 +551,14 @@ export class TakeController {
         const readyTake = this.session.currentTake();
         if (readyTake?.lifecycle === 'ready' && readyTake.artifact) {
           try {
-            const item = historyItem(this.library.record(readyTake));
+            let libraryEntry: TakeLibraryEntry;
+            if (metadataStaged) {
+              libraryEntry = this.library.commitStaged(readyTake);
+              metadataStaged = false;
+            } else {
+              libraryEntry = this.library.record(readyTake);
+            }
+            const item = historyItem(libraryEntry);
             this.historyCache = Object.freeze([
               structuredClone(item),
               ...this.historyCache
@@ -531,10 +566,9 @@ export class TakeController {
                 .map((candidate) => structuredClone(candidate)),
             ]);
           } catch (error) {
-            // The finalized WAV remains authoritative and recoverable. A
-            // metadata failure must not turn a successfully recorded Take
-            // into a failed one; the browser receives the ready Take beside
-            // the last durable history snapshot and can review it now.
+            // The finalized WAV remains authoritative and recoverable. When a
+            // staged sidecar exists, leave it in place so startup can validate
+            // and promote the complete rich metadata transaction.
             this.reportStorageError(error);
           }
         }
@@ -543,9 +577,11 @@ export class TakeController {
       } else {
         // A finalized file without a matching ready Take is not a valid
         // artifact and must not become an unreferenced disk leak.
+        discardStagedMetadata();
         await writer.discardFinalized();
       }
     } catch (error) {
+      discardStagedMetadata();
       if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();
       await writer.abort();
     }

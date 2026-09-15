@@ -1,5 +1,8 @@
 import type { MixFramePosition } from './audio-session.js';
-import type { TakeQualityAssessment } from './take-quality.js';
+import {
+  markTakeQualityInterrupted,
+  type TakeQualityAssessment,
+} from './take-quality.js';
 
 export type TakeLifecycle = 'idle' | 'recording' | 'finalizing' | 'ready' | 'failed';
 
@@ -249,7 +252,10 @@ export class TakeSession {
     take.endedAtMs = input.endedAtMs;
     take.stoppedByParticipantId = input.stoppedByParticipantId;
     take.stopReason = input.stopReason;
-    take.quality = cloneQuality(input.quality);
+    const settledQuality = input.stopReason === 'mix-ended'
+      ? markTakeQualityInterrupted(input.quality)
+      : input.quality;
+    take.quality = cloneQuality(settledQuality);
     return { ok: true, take: cloneTake(take), duplicate: false };
   }
 

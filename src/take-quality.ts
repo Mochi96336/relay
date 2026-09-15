@@ -87,6 +87,12 @@ export type TakeQualityEvidence = {
    * ran, and this says the one number that rule was parameterised by.
    */
   timingDivergenceToleranceMs: number;
+  /**
+   * Lifecycle witness for a Take whose live mix disappeared before a normal
+   * Stop boundary completed. Optional keeps previously stored v3 evidence
+   * readable; new tracker assessments always emit an explicit boolean.
+   */
+  recordingInterrupted?: boolean;
   events: TakeQualityEventCounts;
 };
 
@@ -308,7 +314,15 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     });
   }
 
-  if (evidence.events['server-shutdown'] > 0) {
+  if (evidence.recordingInterrupted) {
+    issues.push({
+      code: 'recording-interrupted',
+      severity: 'warning',
+      value: true,
+      unit: 'boolean',
+      message: 'The live mix ended while this Take was still recording; the WAV was finalized at the last committed mix boundary.',
+    });
+  } else if (evidence.events['server-shutdown'] > 0) {
     issues.push({
       code: 'recording-interrupted',
       severity: 'warning',
@@ -330,6 +344,15 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     evidence,
     issues,
   };
+}
+
+/** Adds lifecycle evidence and re-runs the same versioned policy. */
+export function markTakeQualityInterrupted(assessment: TakeQualityAssessment) {
+  if (assessment.evidence.recordingInterrupted) return assessment;
+  return assessTakeQuality({
+    ...assessment.evidence,
+    recordingInterrupted: true,
+  });
 }
 
 /**
@@ -460,6 +483,7 @@ export class TakeQualityTracker {
       timingDivergedMs: toMs(this.timingDivergedSamples),
       peakTimingDivergenceMs: this.peakTimingDivergenceMs,
       timingDivergenceToleranceMs: this.divergenceToleranceMs,
+      recordingInterrupted: false,
       events: { ...this.events },
     });
   }

@@ -38,19 +38,24 @@ const VOICE_ONLY_SONG = {
   playbackRate: null,
 } as const;
 
-test('accepted Stop closes Take quality events while buffered frames drain to the stop boundary', async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-stop-quality-window-'));
+function readyPromise(controllerFactory: (onReady: () => void) => TakeController) {
   let resolveReady: (() => void) | null = null;
   const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
-  const controller = new TakeController({
+  const controller = controllerFactory(() => resolveReady?.());
+  return { controller, ready };
+}
+
+test('accepted Stop closes Take quality events while buffered frames drain to the stop boundary', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-stop-quality-window-'));
+  const { controller, ready } = readyPromise((onReady) => new TakeController({
     directory,
     sampleRate: RATE,
     storagePolicy: { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 },
     onStorageError: (error) => { throw error; },
     onChange: (status) => {
-      if (status.lifecycle === 'ready') resolveReady?.();
+      if (status.lifecycle === 'ready') onReady();
     },
-  });
+  }));
 
   try {
     const started = controller.start(
@@ -105,9 +110,75 @@ test('accepted Stop closes Take quality events while buffered frames drain to th
     assert.ok(entry?.quality);
     assert.equal(entry.quality.evidence.events['mic-capture-restarted'], 1);
     assert.equal(entry.quality.evidence.events['mic-transport-disconnected'], 0);
+    assert.equal(entry.quality.evidence.recordingInterrupted, false);
+    assert.equal(entry.quality.issues.some((issue) => issue.code === 'recording-interrupted'), false);
     const range = entry.mixSampleRange;
     assert.ok(range);
     assert.equal(range.sampleCount, FRAME_SAMPLES * 2);
+  } finally {
+    await controller.shutdown();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('mix ending before an accepted Stop boundary records an interrupted Take', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-stop-mix-ended-'));
+  const { controller, ready } = readyPromise((onReady) => new TakeController({
+    directory,
+    sampleRate: RATE,
+    storagePolicy: { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 },
+    onStorageError: (error) => { throw error; },
+    onChange: (status) => {
+      if (status.lifecycle === 'ready') onReady();
+    },
+  }));
+
+  try {
+    const started = controller.start(
+      'participant-a',
+      VOICE_ONLY_SONG,
+      { generation: 8, firstSampleIndex: 0 },
+      1_000,
+    );
+    assert.equal(started.ok, true);
+    if (!started.ok) return;
+
+    assert.equal(
+      controller.append(
+        FRAME,
+        QUALITY_STATE,
+        FRAME_EVIDENCE,
+        { generation: 8, firstSampleIndex: 0 },
+      ),
+      true,
+    );
+
+    const stopped = controller.stop(
+      started.takeId,
+      'participant-a',
+      { generation: 8, firstSampleIndex: FRAME_SAMPLES * 3 },
+      'user',
+      2_000,
+    );
+    assert.equal(stopped.ok, true);
+    assert.equal(controller.lifecycle, 'recording');
+
+    assert.equal(controller.endMix(2_100), true);
+    await ready;
+
+    const entry = controller.historyEntry(started.takeId);
+    assert.ok(entry?.quality);
+    assert.equal(entry.stopReason, 'mix-ended');
+    assert.equal(entry.quality.verdict, 'review');
+    assert.equal(entry.quality.evidence.recordingInterrupted, true);
+    assert.equal(
+      entry.quality.issues.some((issue) => issue.code === 'recording-interrupted'),
+      true,
+    );
+    const range = entry.mixSampleRange;
+    assert.ok(range);
+    assert.equal(range.endSampleIndex, FRAME_SAMPLES);
+    assert.equal(range.sampleCount, FRAME_SAMPLES);
   } finally {
     await controller.shutdown();
     await rm(directory, { recursive: true, force: true });

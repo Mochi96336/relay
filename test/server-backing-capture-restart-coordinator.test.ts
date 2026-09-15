@@ -23,6 +23,10 @@ test('server delegates only confirmed Backing restart effects through the coordi
     server,
     /onBackingCaptureRestarted: \(\) => \{\s*backingCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);\s*\}/,
   );
+  assert.match(
+    server,
+    /onReplacedCaptureActivated: \(\) => \{\s*backingCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);\s*\}/,
+  );
   const start = server.indexOf('  onBackingCaptureRestarted: () => {');
   const end = server.indexOf('\n  },\n  noteRobotTransitionBackingFrame:', start);
   assert.ok(start >= 0 && end > start);

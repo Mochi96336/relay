@@ -9,6 +9,7 @@ export type RelayBackingActivationDependencies<TSocket> = {
   previousBacking: () => TSocket | null;
   clearRobotContentTransition: () => void;
   retireReplacedCapture: () => void;
+  onReplacedCaptureActivated: () => void;
   noteQualityEvent: (
     event: 'backing-transport-replaced' | 'backing-transport-connected',
   ) => void;
@@ -63,6 +64,7 @@ export function createRelayBackingActivationCoordinator<TSocket>(
       }
 
       dependencies.dropLegacyCalibrationForRobot();
+      if (input.captureReplaced) dependencies.onReplacedCaptureActivated();
       dependencies.sendRegistered(input.socket, dependencies.activeBackingIsRobot());
       dependencies.startLiveSource();
     },

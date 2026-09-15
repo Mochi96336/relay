@@ -58,7 +58,7 @@ test('Backing registration metadata preserves continuation but detects same-id c
   }), true);
 });
 
-test('proven Backing replacement retires only Backing and reports restart on first real PCM', () => {
+test('proven Backing replacement retires only Backing without deferring restart to first PCM', () => {
   const session = new AudioSession({
     sampleRate: RATE,
     frameMs: 20,
@@ -79,7 +79,7 @@ test('proven Backing replacement retires only Backing and reports restart on fir
 
   const replacement = session.ingestBacking(frame(7, 0, 333), RATE, 500);
   assert.equal(replacement.samples.length, 960);
-  assert.equal(replacement.captureRestarted, true);
+  assert.equal(replacement.captureRestarted, false, 'bind-time replacement effects must not be replayed by first PCM');
   assert.equal(session.generation, mixGeneration);
   assert.equal(session.micGeneration, 2);
 

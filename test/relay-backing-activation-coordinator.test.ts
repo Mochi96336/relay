@@ -16,6 +16,7 @@ function coordinatorFixture(options: {
     },
     clearRobotContentTransition: () => events.push('clear-boundary'),
     retireReplacedCapture: () => events.push('retire-capture'),
+    onReplacedCaptureActivated: () => events.push('capture-restart-effects'),
     noteQualityEvent: (event) => events.push(`quality:${event}`),
     retirePrevious: (previous, next) => events.push(`retire:${previous ?? 'none'}->${next}`),
     setSocketSampleRate: (socket, sampleRate) => events.push(`sample-rate:${socket}:${sampleRate}`),
@@ -125,4 +126,8 @@ test('proven Backing capture replacement retires old PCM before transport retire
   assert.ok(events.indexOf('retire-capture') > events.indexOf('clear-boundary'));
   assert.ok(events.indexOf('retire-capture') < events.indexOf('retire:old->new'));
   assert.ok(events.indexOf('retire-capture') < events.indexOf('bind:new:48000:false'));
+  assert.ok(events.indexOf('expected') < events.indexOf('capture-restart-effects'));
+  assert.ok(events.indexOf('drop-legacy-calibration') < events.indexOf('capture-restart-effects'));
+  assert.ok(events.indexOf('capture-restart-effects') < events.indexOf('registered:new:false'));
+  assert.equal(events.filter((event) => event === 'capture-restart-effects').length, 1);
 });

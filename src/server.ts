@@ -3313,6 +3313,7 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
   retireReplacedCapture: () => {
     clearRobotContentTransition();
     session.retireMicCapture();
+    takeController.noteQualityEvent('mic-capture-restarted');
   },
   retirePrevious: (previousPublisher, nextPublisher, sameParticipantReplacement) => {
     const newOwnerName = nextPublisher.participantId

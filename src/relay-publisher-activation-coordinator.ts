@@ -86,7 +86,6 @@ export function createRelayPublisherActivationCoordinator<TSocket, TOwnershipEff
       const {
         previousPublisher,
         sameParticipantReplacement,
-        sameCapture,
         captureReplaced,
       } = options.bindPublisher({
         socket: request.socket,
@@ -118,7 +117,9 @@ export function createRelayPublisherActivationCoordinator<TSocket, TOwnershipEff
 
       if (deferredOwnershipTimingReason) {
         options.invalidateTiming(deferredOwnershipTimingReason);
-      } else if (sameParticipantReplacement && !sameCapture) {
+      } else if (captureReplaced) {
+        // captureReplaced is deliberately independent of participant identity;
+        // an anonymous or cross-owner replacement is still a timing discontinuity.
         options.invalidateTiming('Microphone capture changed.');
       }
 

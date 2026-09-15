@@ -293,8 +293,6 @@ export class AudioSession {
   /** Consecutive mixed frames in which no new microphone audio arrived. */
   private micFrontierIdleFrames = 0;
   private backingHeadroomMs = 0;
-  /** A media capture was replaced at publisher bind; consumed by its first real PCM. */
-  private micCaptureRestartPending = false;
 
   constructor(options: AudioSessionOptions) {
     this.sampleRate = options.sampleRate;
@@ -383,7 +381,6 @@ export class AudioSession {
     this.calibratedMicLagTargetMs = null;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
-    this.micCaptureRestartPending = false;
     this.resetHealth();
   }
 
@@ -397,7 +394,6 @@ export class AudioSession {
     this.sessionGeneration += 1;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
-    this.micCaptureRestartPending = false;
     // The frontier correction described the old timelines' positions.
     this.resetMicFrontierTracking();
     // A pending correction belongs to the old mix epoch. Preserve the value
@@ -600,13 +596,8 @@ export class AudioSession {
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
-    const pendingCaptureRestart = this.micCaptureRestartPending && result.samples.length > 0;
-    if (pendingCaptureRestart) this.micCaptureRestartPending = false;
     this.meterMic(result.samples);
-    return {
-      ...result,
-      captureRestarted: result.captureRestarted || pendingCaptureRestart,
-    };
+    return result;
   }
 
   ingestBacking(
@@ -666,14 +657,13 @@ export class AudioSession {
    *
    * This is intentionally source-local: an active Take keeps its mix generation
    * and Backing timeline. Clearing immediately prevents buffered PCM from the
-   * retired singer/capture leaking into the bind-to-first-frame gap. The first
-   * real replacement batch then reports captureRestarted even when its wire
-   * generation and sample rate happen to equal the retired capture's values.
+   * retired singer/capture leaking into the bind-to-first-frame gap. Publisher
+   * activation owns the bind-proven restart event; PCM reports only a later
+   * capture-clock change that was not already known at bind.
    */
   retireMicCapture() {
     this.clearTimeline(this.mic);
     this.resetMicFrontierTracking();
-    this.micCaptureRestartPending = true;
   }
 
   /**
@@ -688,7 +678,6 @@ export class AudioSession {
   clearMic() {
     this.clearTimeline(this.mic);
     this.resetMicFrontierTracking();
-    this.micCaptureRestartPending = false;
   }
 
   /** Emits every frame whose time has come. Returns how many were produced. */

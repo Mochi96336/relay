@@ -153,6 +153,27 @@ test('same-participant replacement invalidates changed capture after bind', () =
   assert.equal(getRegistered()?.takeover, false);
 });
 
+test('capture replacement invalidates timing even without participant identity', () => {
+  const previous = { id: 'legacy-old', participantId: null };
+  const { coordinator, events, socket } = harness({
+    participantId: null,
+    previousPublisher: previous,
+    sameParticipantReplacement: false,
+    sameCapture: false,
+    captureReplaced: true,
+  });
+
+  coordinator.activate({
+    ...request(socket),
+    ownershipEffects: null,
+    previousOwnerId: null,
+    takeoverRequested: false,
+  });
+
+  assert.ok(events.indexOf('retire-capture') < events.indexOf('invalidate:Microphone capture changed.'));
+  assert.equal(events.includes('session-status'), false);
+});
+
 test('same capture replacement does not invalidate timing', () => {
   const previous = { id: 'old', participantId: 'participant-bob' };
   const { coordinator, events, socket } = harness({

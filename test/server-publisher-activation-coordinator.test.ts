@@ -46,7 +46,7 @@ test('server composition retains publisher activation domain effects', () => {
   assert.match(composition, /bindPublisher: \(registration\) => micRuntime\.bindPublisher\(registration\)/);
   assert.match(
     composition,
-    /retireReplacedCapture: \(\) => \{\s*clearRobotContentTransition\(\);\s*session\.retireMicCapture\(\);\s*\}/,
+    /retireReplacedCapture: \(\) => \{\s*clearRobotContentTransition\(\);\s*session\.retireMicCapture\(\);\s*takeController\.noteQualityEvent\('mic-capture-restarted'\);\s*\}/,
   );
   assert.match(composition, /retirePublisherTransport\(/);
   assert.match(composition, /micTransportGrace\.cancel\(\)/);

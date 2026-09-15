@@ -99,7 +99,7 @@ test('a genuine Mic generation replacement reports the same capture restart sign
 });
 
 
-test('explicit media replacement retires Mic PCM even when generation and rate are reused', () => {
+test('explicit media replacement retires Mic PCM without deferring a restart signal to PCM', () => {
   const session = makeSession();
   session.start(0);
 
@@ -112,7 +112,11 @@ test('explicit media replacement retires Mic PCM even when generation and rate a
   assert.equal(session.readBacking(0, 1)[0], 111, 'capture retirement must not disturb Backing');
 
   const replacement = session.ingestMic(frame(12, 0, 480, 333), RATE, 1_000);
-  assert.equal(replacement.captureRestarted, true, 'first real replacement PCM consumes the bind-time restart');
+  assert.equal(
+    replacement.captureRestarted,
+    false,
+    'bind-proven replacement is reported synchronously by publisher activation, not replayed by first PCM',
+  );
   assert.equal(session.generation, mixGeneration, 'capture replacement must not restart the mix epoch');
   assert.equal(session.micGeneration, 12);
   assert.equal(session.backingGeneration, 21);
@@ -120,5 +124,5 @@ test('explicit media replacement retires Mic PCM even when generation and rate a
   assert.equal(session.readMic(replacement.start, 1)[0], 333);
 
   const continuation = session.ingestMic(frame(12, 480, 480, 444), RATE, 1_010);
-  assert.equal(continuation.captureRestarted, false, 'the bind-time restart signal is one-shot');
+  assert.equal(continuation.captureRestarted, false);
 });

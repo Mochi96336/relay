@@ -155,6 +155,8 @@ export class CalibrationSession {
   // the server say the answer is stale instead of applying it to a setup it was
   // never measured against.
   private measuredContext: CalibrationContext | null = null;
+  /** Context that owns PCM already admitted to the active content collection. */
+  private collectionContext: CalibrationContext | null = null;
   /** Context that owns unpromoted content gathered while a preferred probe is viable. */
   private primedContext: CalibrationContext | null = null;
 
@@ -229,6 +231,9 @@ export class CalibrationSession {
     const revokedProvisional = this.rollbackProvisional();
     this.transactionActiveValue = true;
     this.phase = 'collecting';
+    // Context belongs to evidence, not to the Start command. A capture may
+    // legitimately restart before the first sample enters this empty collector.
+    this.collectionContext = null;
     this.startedAt = nowMs;
     this.candidates = [];
     this.error = null;
@@ -250,16 +255,14 @@ export class CalibrationSession {
     const currentContext = this.context();
     // Primed PCM is measurement evidence, not free-floating audio. Never adopt
     // it into a transaction whose session/capture/source identity has changed.
-    if (
-      this.primedContext === null
-      || !this.contextsEqual(this.primedContext, currentContext)
-    ) {
-      this.collector.reset();
-    }
+    const ownsPrimedEvidence = this.primedContext !== null
+      && this.contextsEqual(this.primedContext, currentContext);
+    if (!ownsPrimedEvidence) this.collector.reset();
     this.primedContext = null;
     const revokedProvisional = this.rollbackProvisional();
     this.transactionActiveValue = true;
     this.phase = 'collecting';
+    this.collectionContext = ownsPrimedEvidence ? this.cloneContext(currentContext) : null;
     this.startedAt = nowMs;
     this.candidates = [];
     this.error = null;
@@ -298,9 +301,12 @@ export class CalibrationSession {
    */
   transitionEvidence(maxSamples: number): TimingWindow | null {
     const currentContext = this.context();
+    const ownsCollectingEvidence = this.collecting
+      && this.collectionContext !== null
+      && this.contextsEqual(this.collectionContext, currentContext);
     const ownsPrimedEvidence = this.primedContext !== null
       && this.contextsEqual(this.primedContext, currentContext);
-    if (!this.collecting && !ownsPrimedEvidence) return null;
+    if (!ownsCollectingEvidence && !ownsPrimedEvidence) return null;
     return this.collector.peekRecentWindow(maxSamples);
   }
 
@@ -461,12 +467,14 @@ export class CalibrationSession {
   /** `startSample` is where `AudioSession` placed these samples on its timeline. */
   observeMic(samples: Int16Array, startSample: number) {
     if (!this.collecting || samples.length === 0) return;
+    if (!this.acceptCollectionContext()) return;
     this.collector.observeMic(samples, startSample);
     this.drainReadyWindows();
   }
 
   observeBacking(samples: Int16Array, startSample: number) {
     if (!this.collecting || samples.length === 0) return;
+    if (!this.acceptCollectionContext()) return;
     this.collector.observeBacking(samples, startSample);
     this.drainReadyWindows();
   }
@@ -481,7 +489,12 @@ export class CalibrationSession {
     const hadPrimedEvidence = this.primedContext !== null;
     this.collector.reset();
     this.primedContext = null;
-    if (wasCollecting) this.startedAt = nowMs;
+    if (wasCollecting) {
+      // No evidence remains after the reset, so the first post-transition PCM
+      // owns the next collection context just as it does after Start.
+      this.collectionContext = null;
+      this.startedAt = nowMs;
+    }
     if (wasCollecting || hadPrimedEvidence) this.onSettled();
   }
 
@@ -567,6 +580,21 @@ export class CalibrationSession {
       && left.sourceGeneration === right.sourceGeneration;
   }
 
+  private acceptCollectionContext() {
+    const currentContext = this.context();
+    if (this.collectionContext === null) {
+      this.collectionContext = this.cloneContext(currentContext);
+      return true;
+    }
+    if (this.contextsEqual(this.collectionContext, currentContext)) return true;
+
+    this.fail(
+      'The capture arrangement changed while calibration was being collected. '
+      + 'Start calibration again.',
+    );
+    return false;
+  }
+
   private preparePrimedContext() {
     const currentContext = this.context();
     if (
@@ -640,10 +668,10 @@ export class CalibrationSession {
   }
 
   private finish(window: TimingWindow) {
-    // The window's audio was captured under this setup. Everything downstream
-    // is stamped with it rather than with whatever is live when the worker
-    // answers, so provenance is a property of the evidence and not of timing.
-    const measurementContext = this.context();
+    // The window's audio was captured under the context locked by its first
+    // admitted evidence (or adopted primed evidence). Never stamp it with a
+    // later live context just because the final chunk arrived after a change.
+    const measurementContext = this.cloneContext(this.collectionContext) ?? this.context();
     try {
       // Holes displace nothing, but they remove evidence. Past a few percent the
       // answer is not worth trusting.

@@ -1,3 +1,5 @@
+import { MIC_CAPTURE_CHANGED_TIMING_REASON } from './relay-mic-timing-invalidation-coordinator.js';
+
 export type PublisherActivationRequest<TSocket, TOwnershipEffects> = {
   socket: TSocket;
   ownershipEffects: TOwnershipEffects | null;
@@ -120,7 +122,7 @@ export function createRelayPublisherActivationCoordinator<TSocket, TOwnershipEff
       } else if (captureReplaced) {
         // captureReplaced is deliberately independent of participant identity;
         // an anonymous or cross-owner replacement is still a timing discontinuity.
-        options.invalidateTiming('Microphone capture changed.');
+        options.invalidateTiming(MIC_CAPTURE_CHANGED_TIMING_REASON);
       }
 
       options.restartLiveSource();

@@ -39,6 +39,13 @@ test('Backing registration metadata preserves continuation but detects same-id c
     sourceRate: RATE,
     sampleCursor: 0,
   }), true, 'rewinding the same numeric capture identity proves a replacement at transport bind');
+  const lateReplay = session.ingestBacking(frame(7, 0, 999), RATE, 140);
+  assert.equal(lateReplay.samples.length, 0, 'fully late replay contributes no PCM');
+  assert.equal(session.backingCaptureReplacedBy({
+    generation: 7,
+    sourceRate: RATE,
+    sampleCursor: 960,
+  }), true, 'discarded replay must not rewind retained source frontier and hide a later capture rewind');
   assert.equal(session.backingCaptureReplacedBy({
     generation: 8,
     sourceRate: RATE,

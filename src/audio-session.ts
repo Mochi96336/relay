@@ -876,7 +876,10 @@ export class AudioSession {
           start = timeline.totalSamples;
         }
       }
-      timeline.sourceFrontier = frame.firstSampleIndex! + sourceSampleCount;
+      const sourceEnd = frame.firstSampleIndex! + sourceSampleCount;
+      timeline.sourceFrontier = captureClockChanged || timeline.sourceFrontier === null
+        ? sourceEnd
+        : Math.max(timeline.sourceFrontier, sourceEnd);
     }
 
     if (start < timeline.totalSamples) {

@@ -1,3 +1,5 @@
+export const MIC_CAPTURE_CHANGED_TIMING_REASON = 'Microphone capture changed.' as const;
+
 export type RelayMicTimingInvalidationDependencies = {
   clearBootCalibration: () => void;
   clearContentValidation: () => void;
@@ -8,8 +10,6 @@ export type RelayMicTimingInvalidationDependencies = {
   reportTimingStatus: () => void;
   reportSourceStatus: () => void;
 };
-
-const MIC_CAPTURE_CHANGED_REASON = 'Microphone capture changed.';
 
 /**
  * Orders adapter effects after the server has decided Mic timing authority is
@@ -27,7 +27,7 @@ export function createRelayMicTimingInvalidationCoordinator(
 ) {
   return {
     invalidate(message: string) {
-      if (message === MIC_CAPTURE_CHANGED_REASON) {
+      if (message === MIC_CAPTURE_CHANGED_TIMING_REASON) {
         dependencies.clearBootCalibration();
         dependencies.clearContentValidation();
         dependencies.syncAppliedCalibration();

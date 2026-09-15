@@ -12,6 +12,7 @@ import {
 import path from 'node:path';
 
 import { durableRenameSync } from './file-durability.js';
+import { normalizePersistedTakeRichFields } from './take-metadata-validation.js';
 import type {
   TakeArtifact,
   TakeMixSampleRange,
@@ -83,6 +84,7 @@ function isTakeLibraryEntry(value: unknown): value is TakeLibraryEntry {
   if (entry.stoppedByParticipantId !== null && typeof entry.stoppedByParticipantId !== 'string') return false;
   if (!entry.artifact || typeof entry.artifact !== 'object') return false;
   if (entry.artifact.fileName !== `${entry.takeId}.wav`) return false;
+  if (typeof entry.artifact.url !== 'string') return false;
   if (entry.artifact.mimeType !== 'audio/wav') return false;
   if (!finiteNumber(entry.artifact.durationMs) || !finiteNumber(entry.artifact.sampleCount)) return false;
   if (!finiteNumber(entry.artifact.sampleRate) || !finiteNumber(entry.artifact.sizeBytes)) return false;
@@ -94,10 +96,13 @@ function parseMetadata(bytes: Buffer, expectedTakeId: string) {
   if (decoded.version !== 1 || !isTakeLibraryEntry(decoded.take)) return null;
   if (decoded.take.takeId !== expectedTakeId) return null;
 
+  const rich = normalizePersistedTakeRichFields(decoded.take);
+  if (!rich) return null;
   const rawRange = (decoded.take as TakeLibraryEntry & { mixSampleRange?: unknown }).mixSampleRange;
   if (rawRange !== undefined && rawRange !== null && !isTakeMixSampleRange(rawRange)) return null;
   return {
     ...decoded.take,
+    ...rich,
     mixSampleRange: rawRange && isTakeMixSampleRange(rawRange) ? { ...rawRange } : null,
   } satisfies TakeLibraryEntry;
 }

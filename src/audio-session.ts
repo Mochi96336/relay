@@ -295,8 +295,6 @@ export class AudioSession {
   private backingHeadroomMs = 0;
   /** A media capture was replaced at publisher bind; consumed by its first real PCM. */
   private micCaptureRestartPending = false;
-  /** A Backing capture was proven replaced at registration; consumed by its first real PCM. */
-  private backingCaptureRestartPending = false;
 
   constructor(options: AudioSessionOptions) {
     this.sampleRate = options.sampleRate;
@@ -386,7 +384,6 @@ export class AudioSession {
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     this.micCaptureRestartPending = false;
-    this.backingCaptureRestartPending = false;
     this.resetHealth();
   }
 
@@ -401,7 +398,6 @@ export class AudioSession {
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     this.micCaptureRestartPending = false;
-    this.backingCaptureRestartPending = false;
     // The frontier correction described the old timelines' positions.
     this.resetMicFrontierTracking();
     // A pending correction belongs to the old mix epoch. Preserve the value
@@ -627,12 +623,7 @@ export class AudioSession {
       trackSourceClock,
       true,
     );
-    const pendingCaptureRestart = this.backingCaptureRestartPending && result.samples.length > 0;
-    if (pendingCaptureRestart) this.backingCaptureRestartPending = false;
-    return {
-      ...result,
-      captureRestarted: result.captureRestarted || pendingCaptureRestart,
-    };
+    return result;
   }
 
   /** Exposed for the click diagnostic, which mixes against the microphone. */
@@ -692,7 +683,6 @@ export class AudioSession {
    */
   retireBackingCapture() {
     this.clearTimeline(this.backing);
-    this.backingCaptureRestartPending = true;
   }
 
   clearMic() {

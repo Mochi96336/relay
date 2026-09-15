@@ -3370,6 +3370,11 @@ const backingActivationCoordinator = createRelayBackingActivationCoordinator<Rel
   setBackingExpected: () => session.setBackingExpected(true),
   sessionActive: () => session.active,
   dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
+  onReplacedCaptureActivated: () => {
+    backingCaptureRestartCoordinator.restart({
+      calibrationCollecting: calibration.collecting,
+    });
+  },
   activeBackingIsRobot: () => backingRuntime.isRobot,
   sendRegistered: (socket, robot) => {
     sendJson(socket, { type: 'registered', role: 'backing', robot });

@@ -185,6 +185,61 @@ test('normal staged commit publishes the exact fsynced metadata candidate withou
   }
 });
 
+test('staged commit is idempotent when a reader promotes the exact partial before commit', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-reader-promote-'));
+  try {
+    const library = new TakeLibrary({ directory });
+    library.stageFinalizing(finalizingTake(), {
+      sampleRate: 48_000,
+      sampleCount: 4_800,
+    });
+    const stagedBytes = await readFile(path.join(directory, `${TAKE_ID}.json.part`));
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+
+    const promoted = library.get(TAKE_ID);
+    assert.ok(promoted);
+    assert.equal(promoted.recovered, false);
+    const namesAfterPromotion = await readdir(directory);
+    assert.equal(namesAfterPromotion.includes(`${TAKE_ID}.json`), true);
+    assert.equal(namesAfterPromotion.includes(`${TAKE_ID}.json.part`), false);
+    assert.deepEqual(await readFile(path.join(directory, `${TAKE_ID}.json`)), stagedBytes);
+
+    const entry = library.commitStaged(readyTake());
+    assert.equal(entry.recovered, false);
+    assert.deepEqual(entry.quality, readyTake().quality);
+    assert.deepEqual(await readFile(path.join(directory, `${TAKE_ID}.json`)), stagedBytes);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('staged commit still rejects a promoted final sidecar that is not the exact expected metadata', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-reader-mismatch-'));
+  try {
+    const library = new TakeLibrary({ directory });
+    library.stageFinalizing(finalizingTake(), {
+      sampleRate: 48_000,
+      sampleCount: 4_800,
+    });
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    assert.ok(library.get(TAKE_ID), 'reader must promote the staged metadata before the commit attempt');
+
+    const metadataPath = path.join(directory, `${TAKE_ID}.json`);
+    const payload = JSON.parse(await readFile(metadataPath, 'utf8')) as {
+      take: { startedByParticipantId: string | null };
+    };
+    payload.take.startedByParticipantId = 'participant-other';
+    await writeFile(metadataPath, `${JSON.stringify(payload)}\n`);
+
+    assert.throws(
+      () => library.commitStaged(readyTake()),
+      /Staged Take metadata does not match the finalized recording/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('invalid metadata partial fails closed to WAV-only recovery', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-invalid-'));
   try {

@@ -317,7 +317,29 @@ export class TakeLibrary {
     const partialPath = path.join(this.options.directory, metadataPartFileName(take.takeId));
     const finalPath = path.join(this.options.directory, metadataFileName(take.takeId));
     const wavPath = path.join(this.options.directory, take.artifact.fileName);
-    const staged = readValidatedMetadata(partialPath, wavPath, take.takeId, this.artifactBaseUrl);
+
+    let staged: PersistedTakeLibraryEntry | null;
+    try {
+      staged = readValidatedMetadata(partialPath, wavPath, take.takeId, this.artifactBaseUrl);
+    } catch (error) {
+      const partialWasPromoted = Boolean(
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && error.code === 'ENOENT',
+      );
+      if (!partialWasPromoted) throw error;
+
+      let committed: PersistedTakeLibraryEntry | null = null;
+      try {
+        committed = readValidatedMetadata(finalPath, wavPath, take.takeId, this.artifactBaseUrl);
+      } catch {}
+      if (!committed || JSON.stringify(committed) !== JSON.stringify(expected)) {
+        throw new Error('Staged Take metadata does not match the finalized recording.');
+      }
+      return cloneEntry(expected);
+    }
+
     if (!staged || JSON.stringify(staged) !== JSON.stringify(expected)) {
       throw new Error('Staged Take metadata does not match the finalized recording.');
     }

@@ -254,6 +254,7 @@ function entryFromTake(take: TakeRecord, artifact: TakeArtifact): TakeLibraryEnt
  */
 export class TakeLibrary {
   private readonly artifactBaseUrl: string;
+  private readonly stagedTakeIds = new Set<string>();
 
   constructor(private readonly options: { directory: string; artifactBaseUrl?: string }) {
     this.artifactBaseUrl = options.artifactBaseUrl ?? '/takes';
@@ -304,6 +305,7 @@ export class TakeLibrary {
     const entry = entryFromTake(take, artifact);
     mkdirSync(this.options.directory, { recursive: true });
     this.writeMetadataPartial(entry);
+    this.stagedTakeIds.add(take.takeId);
     return cloneEntry(entry);
   }
 
@@ -337,6 +339,7 @@ export class TakeLibrary {
       if (!committed || JSON.stringify(committed) !== JSON.stringify(expected)) {
         throw new Error('Staged Take metadata does not match the finalized recording.');
       }
+      this.stagedTakeIds.delete(take.takeId);
       return cloneEntry(expected);
     }
 
@@ -345,11 +348,13 @@ export class TakeLibrary {
     }
 
     durableRenameSync(partialPath, finalPath);
+    this.stagedTakeIds.delete(take.takeId);
     return cloneEntry(expected);
   }
 
   discardStaged(takeId: string) {
     if (!TAKE_ID_PATTERN.test(takeId)) throw new Error('Take id is invalid.');
+    this.stagedTakeIds.delete(takeId);
     rmSync(path.join(this.options.directory, metadataPartFileName(takeId)), { force: true });
   }
 
@@ -424,6 +429,7 @@ export class TakeLibrary {
 
   remove(takeId: string) {
     if (!TAKE_ID_PATTERN.test(takeId)) return false;
+    this.stagedTakeIds.delete(takeId);
     const wavPath = path.join(this.options.directory, `${takeId}.wav`);
     const existed = (() => {
       try {
@@ -442,12 +448,16 @@ export class TakeLibrary {
   private recoverLegacyArtifacts() {
     const names = new Set(readdirSync(this.options.directory));
 
-    // A metadata partial without a finalized WAV can never describe a durable
-    // Take. Remove only those true orphans here; candidates beside a WAV are
-    // validated below before they are trusted.
+    // A metadata partial without a finalized WAV is an orphan after restart,
+    // but the current process deliberately stages rich metadata before WAV
+    // publication. Never let a concurrent history read erase that live stage.
     for (const name of [...names]) {
       const match = TAKE_METADATA_PART_PATTERN.exec(name);
-      if (!match || names.has(`${match[1]}.wav`)) continue;
+      if (
+        !match
+        || names.has(`${match[1]}.wav`)
+        || this.stagedTakeIds.has(match[1])
+      ) continue;
       rmSync(path.join(this.options.directory, name), { force: true });
       names.delete(name);
     }

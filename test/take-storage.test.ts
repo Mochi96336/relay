@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -89,6 +90,38 @@ test('asynchronous retention never removes the currently preserved Take or its m
     const names = await readdir(directory);
     assert.equal(names.includes(`${TAKE_1}.wav`), false);
     assert.equal(names.includes(`${TAKE_1}.json`), false);
+    assert.equal(names.includes(`${TAKE_2}.wav`), true);
+    assert.equal(names.includes(`${TAKE_2}.json`), true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('asynchronous retention freezes the finalized WAV namespace before yielding', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-retention-snapshot-'));
+  try {
+    await writeFile(path.join(directory, `${TAKE_1}.wav`), Buffer.alloc(100));
+    await writeFile(path.join(directory, `${TAKE_1}.json`), '{}');
+
+    const pruning = pruneTakeArtifacts(
+      directory,
+      { maxBytes: 50, maxAgeMs: 0, minFreeBytes: 0 },
+      `${TAKE_1}.wav`,
+    );
+
+    // A later Take can finish as soon as prune yields. It must not enter the
+    // already-planned retention pass just because the filesystem scan resumed
+    // after that publication.
+    writeFileSync(path.join(directory, `${TAKE_2}.wav`), Buffer.alloc(100));
+    writeFileSync(path.join(directory, `${TAKE_2}.json`), '{}');
+
+    const result = await pruning;
+    assert.equal(result.removedFiles, 0);
+    assert.equal(result.removedMetadataFiles, 0);
+
+    const names = await readdir(directory);
+    assert.equal(names.includes(`${TAKE_1}.wav`), true);
+    assert.equal(names.includes(`${TAKE_1}.json`), true);
     assert.equal(names.includes(`${TAKE_2}.wav`), true);
     assert.equal(names.includes(`${TAKE_2}.json`), true);
   } finally {

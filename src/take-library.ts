@@ -160,7 +160,7 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
     channels: 1,
     bitsPerSample: 16,
     sampleCount,
-    durationMs: Math.round((sampleCount * 1000) / sampleRate),
+    durationMs: (sampleCount / sampleRate) * 1000,
   };
 }
 
@@ -169,6 +169,7 @@ function readValidatedMetadata(
   wavPath: string,
   takeId: string,
   baseUrl: string,
+  useWavArtifact = false,
 ) {
   const metadata = parseMetadata(readFileSync(metadataPath), takeId);
   if (!metadata) return null;
@@ -183,7 +184,7 @@ function readValidatedMetadata(
     metadata.mixSampleRange !== null
     && metadata.mixSampleRange.sampleCount !== artifact.sampleCount
   ) return null;
-  return metadata;
+  return useWavArtifact ? { ...metadata, artifact } : metadata;
 }
 
 function cloneEntry(entry: TakeLibraryEntry): TakeLibraryEntry {
@@ -336,6 +337,7 @@ export class TakeLibrary {
           path.join(this.options.directory, `${takeId}.wav`),
           takeId,
           this.artifactBaseUrl,
+          true,
         );
         if (metadata) entries.push(metadata);
       } catch {
@@ -355,7 +357,13 @@ export class TakeLibrary {
     const metadataPath = path.join(this.options.directory, metadataFileName(takeId));
     const wavPath = path.join(this.options.directory, `${takeId}.wav`);
     try {
-      const entry = readValidatedMetadata(metadataPath, wavPath, takeId, this.artifactBaseUrl);
+      const entry = readValidatedMetadata(
+        metadataPath,
+        wavPath,
+        takeId,
+        this.artifactBaseUrl,
+        true,
+      );
       return entry ? cloneEntry(entry) : null;
     } catch {
       return null;

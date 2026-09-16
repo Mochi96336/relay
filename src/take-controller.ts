@@ -402,7 +402,7 @@ export class TakeController {
     this.writer = null;
     this.quality = null;
     this.pendingStop = null;
-    if (orphanWriter) await orphanWriter.abort();
+    if (orphanWriter) await this.abortWriter(orphanWriter);
     await this.pruneChain;
   }
 
@@ -583,7 +583,7 @@ export class TakeController {
     } catch (error) {
       discardStagedMetadata();
       if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();
-      await writer.abort();
+      await this.abortWriter(writer);
     }
   }
 
@@ -594,7 +594,15 @@ export class TakeController {
     const quality = this.quality?.assessment();
     this.quality = null;
     if (this.session.fail(writer.takeId, errorMessage(error), Date.now(), quality)) this.emitChange();
-    void writer.abort();
+    void this.abortWriter(writer);
+  }
+
+  private async abortWriter(writer: WavTakeWriter) {
+    try {
+      await writer.abort();
+    } catch (error) {
+      this.reportStorageError(error);
+    }
   }
 
   private scheduleRetentionPrune() {

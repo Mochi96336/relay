@@ -27,15 +27,18 @@ const FAST = {
   RELAY_CALIBRATION_VALIDATION_DEVIATION_MS: '30',
 };
 
-const playingTelemetry = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-  networkRttMs: 40,
-};
+const playingStartedAtMs = Date.now();
+function playingTelemetry() {
+  return {
+    type: 'youtube-telemetry',
+    videoId: 'dQw4w9WgXcQ',
+    state: 1,
+    currentTime: 42 + (Date.now() - playingStartedAtMs) / 1_000,
+    duration: 200,
+    playbackRate: 1,
+    networkRttMs: 40,
+  };
+}
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
@@ -82,7 +85,7 @@ async function primeStreams(backing: RelayClient, publisher: RelayClient) {
 }
 
 function refreshLivePath(backing: RelayClient, publisher: RelayClient) {
-  publisher.send(playingTelemetry);
+  publisher.send(playingTelemetry());
   const silence = Buffer.alloc(960 * 2);
   backing.sendPcm(silence);
   publisher.sendPcm(silence);
@@ -94,10 +97,10 @@ async function establishBaseline(
   monitor: RelayClient,
   lagMs = 260,
 ) {
-  publisher.send(playingTelemetry);
+  publisher.send(playingTelemetry());
   await primeStreams(backing, publisher);
   await startCalibrationCollecting(publisher, monitor, async () => {
-    publisher.send(playingTelemetry);
+    publisher.send(playingTelemetry());
     await primeStreams(backing, publisher);
   });
 

@@ -242,13 +242,22 @@ test('production recording presenter freezes last-known timer while Take authori
   assert.equal(stop.disabled, false);
 });
 
-test('status socket reconnect keeps System unknown until ProductStatus replay', () => {
+test('status transport and ProductStatus authority become stale independently', () => {
   assert.match(liveStatusSource, /function markProductAuthorityStale\(\)/);
-  assert.match(liveStatusSource, /systemRelay\.textContent = t\('system\.reconnecting'\)/);
+  assert.match(
+    liveStatusSource,
+    /systemRelay\.textContent = socket\?\.readyState === WebSocket\.OPEN\s*\? t\('system\.connected'\)\s*:\s*t\('system\.reconnecting'\)/,
+    'an OPEN transport must remain Connected even when its room snapshot is stale',
+  );
+  assert.match(
+    liveStatusSource,
+    /title\.textContent = transportOpen \? t\('system\.unknown'\) : t\('voice\.connecting'\)/,
+    'stale room truth must not be presented as a transport failure',
+  );
   assert.match(liveStatusSource, /for \(const node of \[systemPhones, systemRobot, systemAudio, systemTiming, systemRecording\]\)[\s\S]*t\('system\.unknown'\)/);
   assert.match(liveStatusSource, /const next = new WebSocket\(wsUrl\(\)\);[\s\S]*markProductAuthorityStale\(\);/);
   assert.match(liveStatusSource, /An open status socket is not enough to revive last-known truth/);
-  assert.match(liveStatusSource, /next\.addEventListener\('close'[\s\S]*markProductAuthorityStale\(\)/);
+  assert.match(liveStatusSource, /next\.addEventListener\('close'[\s\S]*socket = null;[\s\S]*markProductAuthorityStale\(\)/);
 });
 
 test('publisher command authority waits for registration and replayed control snapshots', () => {

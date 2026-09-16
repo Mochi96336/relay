@@ -1,0 +1,16 @@
+# Schedule semantic recovery only after the previous oneshot has fully stopped.
+# OnUnitInactiveSec avoids overlapping a long post-restart PCM verification with
+# another recovery evaluation or bunching a missed tick immediately afterward.
+
+[Unit]
+Description=Periodically evaluate Relay robot semantic recovery
+Documentation=https://github.com/Mochi96336/relay/blob/main/ROBOT_DEPLOYMENT.md
+
+[Timer]
+OnActiveSec=45s
+OnUnitInactiveSec=10s
+AccuracySec=1s
+Unit=relay-robot-semantic-recovery.service
+
+[Install]
+WantedBy=timers.target

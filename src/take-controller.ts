@@ -148,16 +148,40 @@ export class TakeController {
       directory: options.directory,
       artifactBaseUrl: options.artifactBaseUrl,
     });
+
+    let storagePreparationSucceeded = false;
     try {
       prepareTakeStorage(this.options.directory, this.storagePolicy);
-      this.library.prepare();
-      this.refreshHistoryCache();
-      this.storagePrepared = true;
+      storagePreparationSucceeded = true;
     } catch (error) {
-      // Keep the server alive so diagnostics and existing non-Take features
-      // still work; Start will retry the storage preparation and reject clearly
-      // if the directory or free-space reserve is still unavailable.
-      this.reportStorageError(error);
+      let startupError: unknown = error;
+      try {
+        // Recording admission can fail purely because the configured free-space
+        // reserve is unavailable. Existing finalized Takes are still readable,
+        // so recover history independently instead of turning a write-pressure
+        // condition into a false empty library.
+        this.library.prepare();
+        this.refreshHistoryCache();
+      } catch (historyError) {
+        startupError = new AggregateError(
+          [error, historyError],
+          'Take storage preparation and history recovery both failed.',
+        );
+      }
+      this.reportStorageError(startupError);
+    }
+
+    if (storagePreparationSucceeded) {
+      try {
+        this.library.prepare();
+        this.refreshHistoryCache();
+        this.storagePrepared = true;
+      } catch (error) {
+        // Keep the server alive so diagnostics and existing non-Take features
+        // still work; Start will retry the storage preparation and reject clearly
+        // if the directory or free-space reserve is still unavailable.
+        this.reportStorageError(error);
+      }
     }
   }
 

@@ -1082,7 +1082,7 @@ async function connectPublisherSocket(
     registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
   }
   ws.send(JSON.stringify(registration));
-  audioTransport.bind(ws);
+  audioTransport.bind(ws, { sampleRate: audioContext.sampleRate });
   publisherControlConnections += 1;
 
   ws.addEventListener('message', (event) => {

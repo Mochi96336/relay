@@ -90,11 +90,21 @@ export class WebSocketAudioTransport extends AudioTransport {
     if (!Number.isFinite(realtimeBufferedBytes) || realtimeBufferedBytes <= 0) {
       throw new RangeError('realtimeBufferedBytes must be positive');
     }
+    this.configuredMaxBufferedBytes = maxBufferedBytes;
+    this.realtimeBufferedBytes = realtimeBufferedBytes;
     this.maxBufferedBytes = Math.min(maxBufferedBytes, realtimeBufferedBytes);
     this.socket = null;
   }
 
-  bind(socket) {
+  setRealtimePcmSampleRate(sampleRate) {
+    const realtimeBufferedBytes = realtimeWebSocketBacklogBytes(sampleRate);
+    this.realtimeBufferedBytes = realtimeBufferedBytes;
+    this.maxBufferedBytes = Math.min(this.configuredMaxBufferedBytes, realtimeBufferedBytes);
+    return this.maxBufferedBytes;
+  }
+
+  bind(socket, { sampleRate } = {}) {
+    if (sampleRate !== undefined) this.setRealtimePcmSampleRate(sampleRate);
     this.socket = socket;
   }
 
@@ -304,8 +314,8 @@ export class PreferredAudioTransport extends AudioTransport {
     };
   }
 
-  bind(socket) {
-    this.fallback.bind(socket);
+  bind(socket, options) {
+    this.fallback.bind(socket, options);
   }
 
   unbind(socket) {

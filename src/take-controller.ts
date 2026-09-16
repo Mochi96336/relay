@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 import type { MixFrameEvidence, MixFramePosition } from './audio-session.js';
 import { TakeLibrary, type TakeLibraryEntry } from './take-library.js';
@@ -633,7 +635,10 @@ export class TakeController {
     this.pruneChain = this.pruneChain
       .then(async () => {
         const current = this.session.currentTake();
-        const preserveFileName = current ? `${current.takeId}.wav` : null;
+        const preserveFileName = current
+          && (current.lifecycle === 'recording' || current.lifecycle === 'finalizing')
+          ? `${current.takeId}.wav`
+          : null;
         let pruneFailure: { error: unknown } | null = null;
         try {
           await pruneTakeArtifacts(
@@ -646,14 +651,35 @@ export class TakeController {
         }
 
         let refreshFailure: { error: unknown } | null = null;
+        let historyChanged = false;
+        let historyRefreshed = false;
         try {
           // Retention can durably invalidate a WAV before a later sidecar
           // cleanup fails. Always re-read durable history so product status
           // cannot keep advertising an artifact that is already gone.
-          if (this.refreshHistoryCache()) this.emitChange();
+          historyChanged = this.refreshHistoryCache();
+          historyRefreshed = true;
         } catch (error) {
           refreshFailure = { error };
         }
+
+        let currentChanged = false;
+        if (historyRefreshed) {
+          const settled = this.session.currentTake();
+          const visibleInHistory = settled
+            ? this.historyCache.some((entry) => entry.takeId === settled.takeId)
+            : false;
+          if (
+            settled?.lifecycle === 'ready'
+            && settled.artifact
+            && !visibleInHistory
+            && !existsSync(path.join(this.options.directory, settled.artifact.fileName))
+          ) {
+            currentChanged = this.session.retireReady(settled.takeId);
+          }
+        }
+
+        if (historyChanged || currentChanged) this.emitChange();
 
         if (pruneFailure && refreshFailure) {
           throw new AggregateError(

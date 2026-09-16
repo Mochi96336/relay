@@ -281,6 +281,14 @@ export class TakeSession {
     return true;
   }
 
+  retireReady(takeId: string) {
+    if (!this.current || this.current.takeId !== takeId || this.current.lifecycle !== 'ready') {
+      return false;
+    }
+    this.current = null;
+    return true;
+  }
+
   currentTake() {
     return this.current ? cloneTake(this.current) : null;
   }

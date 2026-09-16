@@ -101,12 +101,93 @@ test('preferred transport reports websocket congestion without replaying the rej
   assert.equal(transport.stats().webSocketCongestedRejects, 1);
 });
 
+test('publisher control JSON shares the actual-rate websocket byte ceiling', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl);
+  const transport = new PreferredAudioTransport({
+    maxBufferedBytes: 256 * 1024,
+    WebTransportClass: null,
+  });
+  const socket = new FakeSocket();
+  transport.bind(socket, { sampleRate: 44_100 });
+
+  const payload = { type: 'audio-uplink-health', note: '漢' };
+  const encodedBytes = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+  socket.bufferedAmount = 17_640 - encodedBytes;
+  assert.equal(transport.sendControlJson(payload).sent, true, 'exact UTF-8 boundary remains admissible');
+
+  socket.bufferedAmount = 17_641 - encodedBytes;
+  const rejected = transport.sendControlJson(payload);
+  assert.equal(rejected.sent, false);
+  assert.equal(rejected.reason, 'congested');
+  assert.equal(socket.sent.length, 1, 'rejected control state is dropped instead of queued for stale replay');
+});
+
+test('publisher control JSON always uses websocket backlog authority while media is preferred elsewhere', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl);
+  const transport = new PreferredAudioTransport({
+    maxBufferedBytes: 256 * 1024,
+    WebTransportClass: null,
+  });
+  const socket = new FakeSocket();
+  transport.bind(socket, { sampleRate: 44_100 });
+
+  // Media preference is intentionally independent from the publisher control socket.
+  // A live datagram writer must never let control JSON bypass the socket's byte budget.
+  transport.datagramWriter = {};
+  transport.webTransport = {};
+  socket.bufferedAmount = 17_640;
+  const result = transport.sendControlJson({ type: 'set-mix', micGainDb: 24 });
+  assert.equal(result.sent, false);
+  assert.equal(result.reason, 'congested');
+  assert.equal(result.path, 'websocket');
+});
+
+test('publisher control telemetry is separate from media fallback telemetry', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl);
+  const transport = new PreferredAudioTransport({
+    maxBufferedBytes: 256 * 1024,
+    WebTransportClass: null,
+  });
+  const socket = new FakeSocket();
+  transport.bind(socket);
+
+  assert.equal(transport.sendControlJson({ type: 'audio-uplink-health' }).sent, true);
+  socket.bufferedAmount = 19_200;
+  assert.equal(transport.sendControlJson({ type: 'set-mix', micGainDb: 24 }).sent, false);
+
+  const stats = transport.stats();
+  assert.equal(stats.webSocketControlMessagesSent, 1);
+  assert.equal(stats.webSocketControlCongestedRejects, 1);
+  assert.equal(stats.webSocketPacketsSent, 0);
+  assert.equal(stats.webSocketCongestedRejects, 0);
+});
+
 test('publisher binds websocket media with the actual AudioContext sample rate', async () => {
   const app = await readFile(appUrl, 'utf8');
   assert.match(
     app,
     /audioTransport\.bind\(ws, \{ sampleRate: audioContext\.sampleRate \}\)/,
     'production publisher reconnects must preserve the active capture rate in the fallback budget',
+  );
+});
+
+test('active publisher JSON is bounded while admission and terminal release remain direct', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  assert.match(app, /sendAudioUplinkHealth\(\)[\s\S]*audioTransport\.sendControlJson\(audioUplinkHealthPayload\(\)\)/);
+  assert.match(app, /function sendVocalFineTune\(\)[\s\S]*audioTransport\.sendControlJson\(\{\s*type: 'set-vocal-fine-tune'/);
+  assert.match(app, /function sendMixSettings\(\)[\s\S]*audioTransport\.sendControlJson\(\{\s*type: 'set-mix'/);
+  assert.match(app, /audioTransport\.sendControlJson\(\{\s*type: 'calibration-probe-played'/);
+  assert.match(app, /audioTransport\.sendControlJson\(\{\s*type: 'calibration-probe-failed'/);
+  assert.match(app, /audioTransport\.sendControlJson\(\{ type: 'start-timing-calibration' \}\)/);
+  assert.match(
+    app,
+    /closingSocket\.send\(JSON\.stringify\(\{ type: 'release-mic' \}\)\)/,
+    'terminal Mic release stays direct so congestion cannot silently turn an explicit release into reconnect grace',
+  );
+  assert.match(
+    app,
+    /ws\.send\(JSON\.stringify\(registration\)\);\s*audioTransport\.bind\(ws, \{ sampleRate: audioContext\.sampleRate \}\)/,
+    'publisher registration stays an admission message before the bounded active transport is bound',
   );
 });
 

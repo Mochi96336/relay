@@ -180,6 +180,28 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
   };
 }
 
+function recoveredEntryFromWav(
+  wavPath: string,
+  takeId: string,
+  baseUrl: string,
+): TakeLibraryEntry {
+  const artifact = readWavArtifact(wavPath, takeId, baseUrl);
+  const endedAtMs = Math.min(MAX_JS_DATE_MS, Math.max(0, statSync(wavPath).mtimeMs));
+  return {
+    takeId,
+    startedAtMs: Math.max(0, endedAtMs - artifact.durationMs),
+    endedAtMs,
+    startedByParticipantId: null,
+    stoppedByParticipantId: null,
+    stopReason: null,
+    song: null,
+    artifact,
+    mixSampleRange: null,
+    quality: null,
+    recovered: true,
+  };
+}
+
 function readValidatedMetadata(
   metadataPath: string,
   wavPath: string,
@@ -378,8 +400,9 @@ export class TakeLibrary {
 
   list() {
     mkdirSync(this.options.directory, { recursive: true });
-    this.recoverLegacyArtifacts();
+    const recoveryFallbacks = this.recoverLegacyArtifacts();
     const entries: TakeLibraryEntry[] = [];
+    const seenTakeIds = new Set<string>();
     const names = new Set(readdirSync(this.options.directory));
 
     for (const item of readdirSync(this.options.directory, { withFileTypes: true })) {
@@ -396,10 +419,17 @@ export class TakeLibrary {
           this.artifactBaseUrl,
           true,
         );
-        if (metadata) entries.push(metadata);
+        if (metadata) {
+          entries.push(metadata);
+          seenTakeIds.add(takeId);
+        }
       } catch {
         // Recovery already repaired malformed/mismatched sidecars where possible.
       }
+    }
+
+    for (const [takeId, entry] of recoveryFallbacks) {
+      if (!seenTakeIds.has(takeId)) entries.push(entry);
     }
 
     return entries
@@ -410,7 +440,7 @@ export class TakeLibrary {
   get(takeId: string) {
     if (!TAKE_ID_PATTERN.test(takeId)) return null;
     mkdirSync(this.options.directory, { recursive: true });
-    this.recoverLegacyArtifacts();
+    const recoveryFallback = this.recoverLegacyArtifacts().get(takeId) ?? null;
     const metadataPath = path.join(this.options.directory, metadataFileName(takeId));
     const wavPath = path.join(this.options.directory, `${takeId}.wav`);
     try {
@@ -421,10 +451,9 @@ export class TakeLibrary {
         this.artifactBaseUrl,
         true,
       );
-      return entry ? cloneEntry(entry) : null;
-    } catch {
-      return null;
-    }
+      if (entry) return cloneEntry(entry);
+    } catch {}
+    return recoveryFallback ? cloneEntry(recoveryFallback) : null;
   }
 
   remove(takeId: string) {
@@ -447,6 +476,7 @@ export class TakeLibrary {
 
   private recoverLegacyArtifacts() {
     const names = new Set(readdirSync(this.options.directory));
+    const recoveryFallbacks = new Map<string, TakeLibraryEntry>();
 
     // A metadata partial without a finalized WAV is an orphan after restart,
     // but the current process deliberately stages rich metadata before WAV
@@ -509,28 +539,26 @@ export class TakeLibrary {
         names.delete(metadataPartName);
       }
 
+      let entry: TakeLibraryEntry;
       try {
-        const artifact = readWavArtifact(wavPath, takeId, this.artifactBaseUrl);
-        const endedAtMs = Math.min(MAX_JS_DATE_MS, Math.max(0, statSync(wavPath).mtimeMs));
-        const entry: TakeLibraryEntry = {
-          takeId,
-          startedAtMs: Math.max(0, endedAtMs - artifact.durationMs),
-          endedAtMs,
-          startedByParticipantId: null,
-          stoppedByParticipantId: null,
-          stopReason: null,
-          song: null,
-          artifact,
-          mixSampleRange: null,
-          quality: null,
-          recovered: true,
-        };
-        this.writeMetadata(entry);
+        entry = recoveredEntryFromWav(wavPath, takeId, this.artifactBaseUrl);
       } catch {
         // Corrupt or non-Relay WAVs matching the UUID pattern are ignored rather
         // than making the whole recording library unavailable.
+        continue;
+      }
+
+      try {
+        this.writeMetadata(entry);
+      } catch {
+        // Persisting recovered metadata is a repair optimization, not read
+        // authority. If the directory is read-only/full, keep the validated WAV
+        // visible for this read instead of misclassifying it as corrupt.
+        recoveryFallbacks.set(takeId, entry);
       }
     }
+
+    return recoveryFallbacks;
   }
 
   private writeMetadataPartial(entry: TakeLibraryEntry) {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { durableRename, durableRenameSync } from '../src/file-durability.js';
+import { durableRemove, durableRename, durableRenameSync } from '../src/file-durability.js';
 
 test('durableRename publishes a same-directory file', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-durable-rename-'));
@@ -52,6 +52,22 @@ test('durable rename refuses cross-directory use before mutating either path', a
       /same directory/,
     );
     assert.equal(await readFile(sourcePath, 'utf8'), 'keep');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('durableRemove removes a published file and remains idempotent', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-durable-remove-'));
+  try {
+    const filePath = path.join(directory, 'take.wav');
+    await writeFile(filePath, 'audio');
+
+    await durableRemove(filePath);
+    await assert.rejects(readFile(filePath), { code: 'ENOENT' });
+
+    await durableRemove(filePath);
+    await assert.rejects(readFile(filePath), { code: 'ENOENT' });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

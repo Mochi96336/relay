@@ -1,5 +1,5 @@
 import { closeSync, fsyncSync, openSync, renameSync } from 'node:fs';
-import { open, rename } from 'node:fs/promises';
+import { open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 function assertSameDirectory(sourcePath: string, targetPath: string) {
@@ -14,8 +14,9 @@ function assertSameDirectory(sourcePath: string, targetPath: string) {
 /**
  * Flush a directory entry update on POSIX filesystems. Relay production runs on
  * Linux/Pi, where syncing the parent directory is the durability barrier after
- * rename. Windows does not expose the same directory-fsync path through Node,
- * so local Windows development keeps atomic rename semantics without failing.
+ * rename or unlink. Windows does not expose the same directory-fsync path
+ * through Node, so local Windows development keeps the filesystem mutation
+ * semantics without failing.
  */
 async function syncDirectory(directory: string) {
   if (process.platform === 'win32') return;
@@ -47,4 +48,16 @@ export function durableRenameSync(sourcePath: string, targetPath: string) {
   const directory = assertSameDirectory(sourcePath, targetPath);
   renameSync(sourcePath, targetPath);
   syncDirectorySync(directory);
+}
+
+/**
+ * Make removal of a filesystem entry durable before returning. A successful
+ * unlink alone is not enough across sudden power loss on POSIX: the containing
+ * directory must be synced so a removed published artifact cannot reappear
+ * after restart.
+ */
+export async function durableRemove(filePath: string) {
+  const directory = path.resolve(path.dirname(filePath));
+  await rm(filePath, { force: true });
+  await syncDirectory(directory);
 }

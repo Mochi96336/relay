@@ -2,7 +2,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { open, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { durableRename } from './file-durability.js';
+import { durableRemove, durableRename } from './file-durability.js';
 
 const WAV_HEADER_BYTES = 44;
 const MAX_WAV_DATA_BYTES = 0xffff_ffff - 36;
@@ -178,7 +178,9 @@ export class WavTakeWriter {
       this.finalized = true;
       return artifact;
     } catch (error) {
-      await rm(this.filePath, { force: true }).catch(() => {});
+      // If publication cannot be validated, make removal of the stable path a
+      // durability boundary too; otherwise sudden power loss can resurrect it.
+      await durableRemove(this.filePath).catch(() => {});
       throw error;
     }
   }
@@ -201,12 +203,13 @@ export class WavTakeWriter {
     // durableRename() renames before syncing the parent directory. If that sync
     // fails, finalization rejects even though the stable `.wav` path may already
     // exist. A failed/aborted Take must not be resurrected as a legacy WAV after
-    // restart, while a fully successful finalize must remain published.
-    if (!this.finalized) await rm(this.filePath, { force: true }).catch(() => {});
+    // restart, while a fully successful finalize must remain published. Sync the
+    // unlink itself so completed cleanup survives sudden power loss.
+    if (!this.finalized) await durableRemove(this.filePath).catch(() => {});
   }
 
   async discardFinalized() {
-    await rm(this.filePath, { force: true }).catch(() => {});
+    await durableRemove(this.filePath).catch(() => {});
     await rm(this.partPath, { force: true }).catch(() => {});
   }
 }

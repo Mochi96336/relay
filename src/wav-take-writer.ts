@@ -180,7 +180,16 @@ export class WavTakeWriter {
     } catch (error) {
       // If publication cannot be validated, make removal of the stable path a
       // durability boundary too; otherwise sudden power loss can resurrect it.
-      await durableRemove(this.filePath).catch(() => {});
+      // Cleanup failure is intentionally preserved: TakeController will retry
+      // it through abort(), and a repeated failure must reach storage diagnostics.
+      try {
+        await durableRemove(this.filePath);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'Take WAV publication validation failed and published-file cleanup also failed.',
+        );
+      }
       throw error;
     }
   }
@@ -203,13 +212,20 @@ export class WavTakeWriter {
     // durableRename() renames before syncing the parent directory. If that sync
     // fails, finalization rejects even though the stable `.wav` path may already
     // exist. A failed/aborted Take must not be resurrected as a legacy WAV after
-    // restart, while a fully successful finalize must remain published. Sync the
-    // unlink itself so completed cleanup survives sudden power loss.
-    if (!this.finalized) await durableRemove(this.filePath).catch(() => {});
+    // restart, while a fully successful finalize must remain published. Stable
+    // cleanup errors are not best-effort: callers must observe/report them.
+    if (!this.finalized) await durableRemove(this.filePath);
   }
 
   async discardFinalized() {
-    await durableRemove(this.filePath).catch(() => {});
-    await rm(this.partPath, { force: true }).catch(() => {});
+    // Once a finalized artifact is rejected by lifecycle validation it is no
+    // longer authoritative. Clear the publication state before removal so a
+    // failed discard remains eligible for abort() to retry.
+    this.finalized = false;
+    try {
+      await durableRemove(this.filePath);
+    } finally {
+      await rm(this.partPath, { force: true }).catch(() => {});
+    }
   }
 }

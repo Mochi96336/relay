@@ -1,0 +1,34 @@
+# Bounded semantic recovery for a robot route whose process is still active but
+# whose Relay observation says usable Robot Backing PCM is not progressing.
+#
+# This is deliberately a oneshot. The companion timer invokes the same unit
+# again only after the previous invocation is fully inactive, so recovery runs
+# never overlap. The live runner itself owns restart grace, cooldown, budget,
+# operator-intent rechecks, and post-restart PCM proof.
+#
+# This unit is not enabled merely by being committed. See ROBOT_DEPLOYMENT.md.
+
+[Unit]
+Description=Relay robot semantic audio recovery
+Documentation=https://github.com/Mochi96336/relay/blob/main/ROBOT_DEPLOYMENT.md
+# Ordering only. Do not Requires=/Wants= either runtime unit: enabling recovery
+# must never bring a deliberately stopped server or robot source back to life.
+After=relay-server.service relay-robot-source.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/relay
+Environment=PORT=3100
+EnvironmentFile=-%h/.config/relay/robot.env
+# These are fail-closed intent gates, not recovery effects. Exit 1..254 from an
+# ExecCondition skips the oneshot without marking it failed. The live runner
+# rechecks relay-robot-source.service again immediately before any restart, so
+# an operator stop racing this gate is still respected.
+ExecCondition=/usr/bin/systemctl --user --quiet is-active relay-server.service
+ExecCondition=/usr/bin/systemctl --user --quiet is-active relay-robot-source.service
+ExecStart=/usr/bin/npm run robot:recovery-live
+# The CLI allows a 120 s verification timeout and 30 s request timeouts. A
+# verification iteration can already be in flight when its 120 s deadline is
+# crossed, so the service boundary must be wider than the inner logical bound.
+TimeoutStartSec=5min
+SyslogIdentifier=relay-robot-semantic-recovery

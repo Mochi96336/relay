@@ -206,7 +206,7 @@ test('one-shot rejects invalid monotonic time before reading or mutating state',
   assert.deepEqual(await readdir(path.dirname(stateFile)), []);
 });
 
-test('manual dry-run scope has no polling loop, restart effect, or supervisor unit', async () => {
+test('manual dry-run scope stays read-only when live recovery deployment exists', async () => {
   const source = await readFile(
     path.join(root, 'src', 'robot-semantic-recovery-dry-run.ts'),
     'utf8',
@@ -222,5 +222,5 @@ test('manual dry-run scope has no polling loop, restart effect, or supervisor un
   assert.doesNotMatch(source + entry, /\['--user',\s*'restart'/);
   assert.match(packageJson, /"robot:recovery-dry-run"/);
   assert.equal(deployFiles.includes('relay-robot-supervisor.service'), false);
-  assert.equal(deployFiles.includes('relay-robot-semantic-recovery.service'), false);
+  assert.equal(deployFiles.includes('relay-robot-semantic-recovery.service'), true);
 });

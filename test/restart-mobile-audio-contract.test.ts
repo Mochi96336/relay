@@ -203,7 +203,20 @@ test('a lost connection stops the page claiming the singer is live', () => {
     /addEventListener\('close', \(\) => \{[\s\S]*?\n {4}\}\);/,
   )?.[0] ?? '';
   assert.notEqual(closeHandler, '', 'live-status must handle its socket closing');
-  assert.match(closeHandler, /title\.textContent =/);
+  assert.match(
+    closeHandler,
+    /socket = null;[\s\S]*markProductAuthorityStale\(\)/,
+    'transport loss must pass through the same stale-authority boundary as freshness expiry',
+  );
+
+  const staleHero = liveStatusSource.match(
+    /function renderStaleHero\(\) \{[\s\S]*?\n  \}/,
+  )?.[0] ?? '';
+  assert.notEqual(staleHero, '', 'live-status must centralize stale hero withdrawal');
+  assert.match(staleHero, /transportOpen \? t\('system\.unknown'\) : t\('voice\.connecting'\)/);
+  assert.match(staleHero, /document\.body\.dataset\.roomMic = 'off'/);
+  assert.match(staleHero, /document\.body\.dataset\.selfMic = 'off'/);
+  assert.match(staleHero, /dispatchRoomMicPresence\(\{ active: false, ownerId: null \}\)/);
 });
 
 test('the capture context is restarted from every state Safari reports', () => {

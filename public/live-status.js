@@ -21,9 +21,13 @@ if (
   && systemAudio && systemTiming && systemRecording
 ) {
   const RECONNECT_MS = 1_000;
+  const PRODUCT_STATUS_REFRESH_MS = 1_000;
+  const PRODUCT_STATUS_FRESHNESS_TTL_MS = PRODUCT_STATUS_REFRESH_MS * 4;
   const MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80;
   let socket = null;
   let reconnectTimer = null;
+  let productStatusRefreshTimer = null;
+  let productStatusFreshnessTimer = null;
   let latestProductStatus = null;
   let productAuthorityFresh = false;
   let lastMicPresenceTelemetryAt = Number.NEGATIVE_INFINITY;
@@ -39,7 +43,7 @@ if (
     'mic-reconnecting': () => t('system.attention.mic-reconnecting'),
     'mic-audio-stalled': () => t('system.attention.mic-audio-stalled'),
     'timing-recovering': () => t('system.attention.timing-recovering'),
-    'timing-clamped': () => t('system.attention.timing-clamped'),
+    'timing-clamped': () => t('system.needsAttention'),
     'take-failed': () => t('system.attention.take-failed'),
   };
 
@@ -108,20 +112,71 @@ if (
 
   function renderStaleSystem() {
     systemPanel.dataset.authorityFresh = 'false';
-    systemRelay.textContent = t('system.reconnecting');
+    systemRelay.textContent = socket?.readyState === WebSocket.OPEN
+      ? t('system.connected')
+      : t('system.reconnecting');
     for (const node of [systemPhones, systemRobot, systemAudio, systemTiming, systemRecording]) {
       node.textContent = t('system.unknown');
     }
   }
 
+  function dispatchRoomMicPresence(detail) {
+    window.dispatchEvent(new CustomEvent('relay-room-mic-presence', { detail }));
+  }
+
+  function renderStaleHero() {
+    const transportOpen = socket?.readyState === WebSocket.OPEN;
+    title.textContent = transportOpen ? t('system.unknown') : t('voice.connecting');
+    detail.textContent = transportOpen ? t('system.connected') : '';
+    roomMicLive = false;
+    roomMicOwnerId = null;
+    document.body.dataset.lifecycle = 'unknown';
+    document.body.dataset.health = 'unknown';
+    document.body.dataset.timing = 'unknown';
+    document.body.dataset.roomMic = 'off';
+    document.body.dataset.selfMic = 'off';
+    attentionRegion.hidden = true;
+    attentionCopy.textContent = '';
+    dispatchRoomMicPresence({ active: false, ownerId: null });
+  }
+
   function markProductAuthorityStale() {
     productAuthorityFresh = false;
+    renderStaleHero();
     renderStaleSystem();
     publishProductAuthority();
   }
 
-  function dispatchRoomMicPresence(detail) {
-    window.dispatchEvent(new CustomEvent('relay-room-mic-presence', { detail }));
+  function stopProductStatusRefresh() {
+    if (productStatusRefreshTimer === null) return;
+    clearInterval(productStatusRefreshTimer);
+    productStatusRefreshTimer = null;
+  }
+
+  function stopProductStatusFreshnessDeadline() {
+    if (productStatusFreshnessTimer === null) return;
+    clearTimeout(productStatusFreshnessTimer);
+    productStatusFreshnessTimer = null;
+  }
+
+  function observeProductStatus() {
+    stopProductStatusFreshnessDeadline();
+    productStatusFreshnessTimer = setTimeout(() => {
+      productStatusFreshnessTimer = null;
+      markProductAuthorityStale();
+    }, PRODUCT_STATUS_FRESHNESS_TTL_MS);
+    productStatusFreshnessTimer?.unref?.();
+  }
+
+  function requestProductStatus() {
+    if (socket?.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'product-status-request' }));
+  }
+
+  function startProductStatusRefresh() {
+    if (productStatusRefreshTimer !== null) return;
+    productStatusRefreshTimer = setInterval(requestProductStatus, PRODUCT_STATUS_REFRESH_MS);
+    productStatusRefreshTimer?.unref?.();
   }
 
   function renderRoomMicState(status) {
@@ -254,10 +309,13 @@ if (
     attentionRegion.dataset.severity = attention.severity || 'warning';
   }
 
-  function render(status) {
+  function render(status, observed = true) {
     if (!status || status.type !== 'product-status') return;
-    latestProductStatus = status;
-    productAuthorityFresh = true;
+    if (observed) {
+      latestProductStatus = status;
+      productAuthorityFresh = true;
+      observeProductStatus();
+    }
     const copy = liveCopy(status);
     title.textContent = copy.title;
     detail.textContent = copy.detail;
@@ -272,7 +330,7 @@ if (
     renderAttention(status);
     renderSystem(status);
     publishProductAuthority();
-    window.dispatchEvent(new CustomEvent('relay-product-status', { detail: status }));
+    if (observed) window.dispatchEvent(new CustomEvent('relay-product-status', { detail: status }));
   }
 
   function clearReconnect() {
@@ -337,6 +395,8 @@ if (
   async function connect() {
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
     clearReconnect();
+    stopProductStatusRefresh();
+    stopProductStatusFreshnessDeadline();
     markProductAuthorityStale();
     const next = new WebSocket(wsUrl());
     socket = next;
@@ -368,20 +428,10 @@ if (
 
     next.addEventListener('close', () => {
       if (socket !== next) return;
+      stopProductStatusRefresh();
+      stopProductStatusFreshnessDeadline();
       socket = null;
       markProductAuthorityStale();
-      // Stop asserting what the room was doing when the connection went away.
-      // "You're live" is the most consequential line on this page - it is the
-      // singer's only evidence that anyone can hear them - and a backgrounded
-      // phone kept showing it while its microphone had actually stopped. State
-      // this page can no longer observe must not keep being reported.
-      title.textContent = t('voice.connecting');
-      detail.textContent = '';
-      roomMicLive = false;
-      roomMicOwnerId = null;
-      document.body.dataset.roomMic = 'off';
-      document.body.dataset.selfMic = 'off';
-      dispatchRoomMicPresence({ active: false, ownerId: null });
       scheduleReconnect();
     });
     next.addEventListener('error', () => {
@@ -389,7 +439,8 @@ if (
     });
 
     sendParticipantAuthentication(next);
-    next.send(JSON.stringify({ type: 'product-status-request' }));
+    requestProductStatus();
+    startProductStatusRefresh();
   }
 
   window.addEventListener('relay-local-mic-level', (event) => {
@@ -448,8 +499,11 @@ if (
   });
 
   window.addEventListener('relay-locale-changed', () => {
-    if (productAuthorityFresh && latestProductStatus) render(latestProductStatus);
-    else renderStaleSystem();
+    if (productAuthorityFresh && latestProductStatus) render(latestProductStatus, false);
+    else {
+      renderStaleHero();
+      renderStaleSystem();
+    }
   });
 
   publishProductAuthority();

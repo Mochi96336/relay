@@ -36,13 +36,15 @@ test('singer state uses production forced Room sound and Mic ownership projectio
   await expect(page.locator('.youtube-player-shell')).toBeVisible();
 });
 
-test('recording and reconnecting states come from the recording presenter', async ({ page }) => {
+test('recording reconnect stays distinct from stale room truth on an OPEN status transport', async ({ page }) => {
   await openState(page, 'recording');
   await expect(page.locator('#stop-recording')).toBeVisible();
   await expect(page.locator('#recording-status')).toContainText('● 0:18');
 
   await openState(page, 'reconnecting');
-  await expect(page.locator('#live-state-title')).toHaveText('連線中…');
+  await expect(page.locator('#live-state-title')).toHaveText('未知');
+  await expect(page.locator('#live-state-detail')).toHaveText('已連線');
+  await expect(page.locator('#system-relay')).toHaveText('已連線');
   await expect(page.locator('#recording-status')).toHaveText('重新連線中…');
 });
 

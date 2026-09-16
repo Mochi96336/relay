@@ -20,9 +20,30 @@ const execFileAsync = promisify(execFile) as RobotSemanticRecoveryExec;
 export const ROBOT_ROUTE_SERVICE = 'relay-robot-source.service';
 export const SYSTEMCTL = '/usr/bin/systemctl';
 
+/**
+ * Recovery-decision fields plus the existing audio evidence needed to prove
+ * that a restarted route is moving PCM rather than merely reconnecting.
+ *
+ * These extra fields do not grant restart authority. `decideRobotSemanticRecovery`
+ * still consumes only the narrow RobotSemanticRecoveryObservation subset.
+ */
+export type RobotSemanticRecoveryObservationSnapshot = RobotSemanticRecoveryObservation & {
+  workload: {
+    uptimeMs: number;
+  };
+  sources: RobotSemanticRecoveryObservation['sources'] & {
+    backing: RobotSemanticRecoveryObservation['sources']['backing'] & {
+      frameAgeMs: number | null;
+    };
+  };
+  mix: {
+    backingStarvedFrames: number;
+  };
+};
+
 export type RobotSemanticRecoveryEvidence = {
   routeServiceActive: boolean;
-  observation: RobotSemanticRecoveryObservation;
+  observation: RobotSemanticRecoveryObservationSnapshot;
 };
 
 export type RobotSemanticRecoveryAdapterResult =
@@ -37,48 +58,138 @@ export type RobotSemanticRecoveryAdapterResult =
       state: RobotSemanticRecoveryState;
     };
 
+export type RobotBackingPcmProgressResult = {
+  progressing: boolean;
+  cause:
+    | 'progressing'
+    | 'source-not-ready'
+    | 'observation-not-advancing'
+    | 'missing-frame-evidence'
+    | 'no-new-frame'
+    | 'mixer-starved';
+  previousFrameObservedAtMs: number | null;
+  currentFrameObservedAtMs: number | null;
+};
+
 function objectRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
 }
 
+function finiteNonNegative(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 /**
- * Parse only the status-v1 fields that are allowed to influence automatic Robot
- * restart authority. Additive/unrelated v1 fields are intentionally ignored.
+ * Parse only the status-v1 fields used by Robot recovery decisions and
+ * post-restart PCM proof. Additive/unrelated v1 fields are intentionally ignored.
  */
 export function parseRobotSemanticRecoveryObservationPayload(
   value: unknown,
-): RobotSemanticRecoveryObservation | null {
+): RobotSemanticRecoveryObservationSnapshot | null {
   const root = objectRecord(value);
   if (!root || root.schema !== 'relay.observation.v1') return null;
+
+  const workload = objectRecord(root.workload);
   const sources = objectRecord(root.sources);
   const backing = objectRecord(sources?.backing);
   const robot = objectRecord(sources?.robot);
-  if (!sources || !backing || !robot) return null;
+  const mix = objectRecord(root.mix);
+  if (!workload || !sources || !backing || !robot || !mix) return null;
 
+  const uptimeMs = workload.uptimeMs;
   const connected = backing.connected;
   const streaming = backing.streaming;
   const backingRobot = backing.robot;
+  const frameAgeMs = backing.frameAgeMs;
   const sourceConnected = robot.sourceConnected;
+  const backingStarvedFrames = mix.backingStarvedFrames;
   if (
-    typeof connected !== 'boolean'
+    !finiteNonNegative(uptimeMs)
+    || typeof connected !== 'boolean'
     || typeof streaming !== 'boolean'
     || typeof backingRobot !== 'boolean'
+    || (frameAgeMs !== null && !finiteNonNegative(frameAgeMs))
     || typeof sourceConnected !== 'boolean'
+    || !Number.isInteger(backingStarvedFrames)
+    || Number(backingStarvedFrames) < 0
   ) return null;
 
   return {
+    workload: {
+      uptimeMs,
+    },
     sources: {
       backing: {
         connected,
         streaming,
         robot: backingRobot,
+        frameAgeMs: frameAgeMs as number | null,
       },
       robot: {
         sourceConnected,
       },
     },
+    mix: {
+      backingStarvedFrames: Number(backingStarvedFrames),
+    },
   };
+}
+
+function robotBackingSourceReady(observation: RobotSemanticRecoveryObservationSnapshot) {
+  return observation.sources.backing.connected
+    && observation.sources.backing.streaming
+    && observation.sources.backing.robot
+    && observation.sources.robot.sourceConnected;
+}
+
+function backingFrameObservedAtMs(
+  observation: RobotSemanticRecoveryObservationSnapshot,
+): number | null {
+  const frameAgeMs = observation.sources.backing.frameAgeMs;
+  if (frameAgeMs === null) return null;
+  return observation.workload.uptimeMs - frameAgeMs;
+}
+
+/**
+ * Proves continued post-restart PCM progress from two authoritative snapshots.
+ *
+ * `connected`/`streaming` alone can become true after a socket or process comes
+ * back while audio immediately stalls again. A successful proof therefore needs
+ * a later Backing frame timestamp and no newly accumulated mixer starvation.
+ * Both the observation clock and frame age come from Relay's monotonic runtime,
+ * so NTP/wall-clock corrections cannot mint fake PCM progress. A Relay restart
+ * resets uptime and deliberately invalidates the comparison.
+ */
+export function proveRobotBackingPcmProgress(
+  previous: RobotSemanticRecoveryObservationSnapshot,
+  current: RobotSemanticRecoveryObservationSnapshot,
+): RobotBackingPcmProgressResult {
+  const previousFrameObservedAtMs = backingFrameObservedAtMs(previous);
+  const currentFrameObservedAtMs = backingFrameObservedAtMs(current);
+  const base = { previousFrameObservedAtMs, currentFrameObservedAtMs };
+
+  if (!robotBackingSourceReady(previous) || !robotBackingSourceReady(current)) {
+    return { progressing: false, cause: 'source-not-ready', ...base };
+  }
+
+  if (current.workload.uptimeMs <= previous.workload.uptimeMs) {
+    return { progressing: false, cause: 'observation-not-advancing', ...base };
+  }
+
+  if (previousFrameObservedAtMs === null || currentFrameObservedAtMs === null) {
+    return { progressing: false, cause: 'missing-frame-evidence', ...base };
+  }
+
+  if (currentFrameObservedAtMs <= previousFrameObservedAtMs) {
+    return { progressing: false, cause: 'no-new-frame', ...base };
+  }
+
+  if (current.mix.backingStarvedFrames > previous.mix.backingStarvedFrames) {
+    return { progressing: false, cause: 'mixer-starved', ...base };
+  }
+
+  return { progressing: true, cause: 'progressing', ...base };
 }
 
 export function clearRobotSemanticRecoveryFaultEvidence(
@@ -102,7 +213,7 @@ export async function fetchRobotSemanticRecoveryObservation(
   port: number,
   requestTimeoutMs: number,
   fetchImpl: typeof fetch = fetch,
-): Promise<RobotSemanticRecoveryObservation> {
+): Promise<RobotSemanticRecoveryObservationSnapshot> {
   const response = await fetchImpl(robotSemanticRecoveryObservationUrl(port), {
     cache: 'no-store',
     signal: AbortSignal.timeout(requestTimeoutMs),

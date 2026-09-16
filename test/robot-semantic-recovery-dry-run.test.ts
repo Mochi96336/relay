@@ -34,15 +34,26 @@ function status(overrides: {
 } = {}) {
   return {
     schema: 'relay.observation.v1',
+    generatedAt: '2026-09-08T00:00:00.000Z',
+    workload: {
+      id: 'relay',
+      state: 'live',
+      ok: true,
+      uptimeMs: 100_000,
+    },
     sources: {
       backing: {
         connected: overrides.connected ?? true,
         streaming: overrides.streaming ?? true,
         robot: overrides.robot ?? true,
+        frameAgeMs: 20,
       },
       robot: {
         sourceConnected: overrides.sourceConnected ?? true,
       },
+    },
+    mix: {
+      backingStarvedFrames: 0,
     },
   };
 }

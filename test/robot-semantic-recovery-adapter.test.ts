@@ -8,6 +8,7 @@ import {
   evaluateRobotSemanticRecoveryDryRun,
   fetchRobotSemanticRecoveryObservation,
   parseRobotSemanticRecoveryObservationPayload,
+  proveRobotBackingPcmProgress,
   readRobotRouteServiceActive,
   robotSemanticRecoveryObservationUrl,
   type RobotSemanticRecoveryExec,
@@ -26,19 +27,29 @@ const config: RobotSemanticRecoveryConfig = {
 };
 
 function status(overrides: {
+  uptimeMs?: number;
   connected?: boolean;
   streaming?: boolean;
   robot?: boolean;
+  frameAgeMs?: number | null;
   sourceConnected?: boolean;
+  backingStarvedFrames?: number;
 } = {}) {
   return {
     schema: 'relay.observation.v1',
     generatedAt: '2026-09-08T00:00:00.000Z',
+    workload: {
+      id: 'relay',
+      state: 'live',
+      ok: true,
+      uptimeMs: overrides.uptimeMs ?? 100_000,
+    },
     sources: {
       backing: {
         connected: overrides.connected ?? true,
         streaming: overrides.streaming ?? true,
         robot: overrides.robot ?? true,
+        frameAgeMs: overrides.frameAgeMs === undefined ? 20 : overrides.frameAgeMs,
         sampleRate: 48_000,
         unrelatedFutureField: 'ignored',
       },
@@ -48,6 +59,10 @@ function status(overrides: {
         playerDeltaFresh: false,
       },
       microphone: { connected: false },
+    },
+    mix: {
+      backingStarvedFrames: overrides.backingStarvedFrames ?? 12,
+      unrelatedFutureField: 'ignored',
     },
     issues: { faults: ['future-fault-that-must-not-grant-authority'], warnings: [] },
   };
@@ -74,22 +89,117 @@ function execActive(activeState = 'active', calls: Array<{ file: string; args: s
   };
 }
 
-test('parser validates only the narrow status-v1 fields that can grant recovery authority', () => {
+test('parser validates only the status-v1 fields used for recovery authority and PCM proof', () => {
   assert.deepEqual(parseRobotSemanticRecoveryObservationPayload(status()), {
+    workload: { uptimeMs: 100_000 },
     sources: {
-      backing: { connected: true, streaming: true, robot: true },
+      backing: { connected: true, streaming: true, robot: true, frameAgeMs: 20 },
       robot: { sourceConnected: true },
     },
+    mix: { backingStarvedFrames: 12 },
   });
 
   assert.equal(parseRobotSemanticRecoveryObservationPayload({ ...status(), schema: 'relay.observation.v2' }), null);
+  assert.equal(parseRobotSemanticRecoveryObservationPayload(status({ uptimeMs: -1 })), null);
   assert.equal(parseRobotSemanticRecoveryObservationPayload({
     ...status(),
     sources: {
       ...status().sources,
-      backing: { connected: true, streaming: true, robot: 'yes' },
+      backing: { connected: true, streaming: true, robot: 'yes', frameAgeMs: 20 },
     },
   }), null);
+  assert.equal(parseRobotSemanticRecoveryObservationPayload(status({ frameAgeMs: -1 })), null);
+  assert.equal(parseRobotSemanticRecoveryObservationPayload(status({ backingStarvedFrames: 1.5 })), null);
+});
+
+test('post-restart proof requires continuing Backing frames without new mixer starvation', () => {
+  const previous = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 100_000,
+    frameAgeMs: 20,
+    backingStarvedFrames: 40,
+  }));
+  const current = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 101_000,
+    frameAgeMs: 10,
+    backingStarvedFrames: 40,
+  }));
+  assert.ok(previous && current);
+
+  const proof = proveRobotBackingPcmProgress(previous, current);
+  assert.equal(proof.progressing, true);
+  assert.equal(proof.cause, 'progressing');
+  assert.equal(proof.previousFrameObservedAtMs, 99_980);
+  assert.equal(proof.currentFrameObservedAtMs, 100_990);
+});
+
+test('one reconnect frame followed by silence is not accepted as recovered PCM', () => {
+  const previous = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 100_000,
+    frameAgeMs: 20,
+    backingStarvedFrames: 40,
+  }));
+  const current = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 101_000,
+    frameAgeMs: 1_020,
+    backingStarvedFrames: 40,
+  }));
+  assert.ok(previous && current);
+
+  const proof = proveRobotBackingPcmProgress(previous, current);
+  assert.equal(proof.progressing, false);
+  assert.equal(proof.cause, 'no-new-frame');
+  assert.equal(proof.currentFrameObservedAtMs, proof.previousFrameObservedAtMs);
+});
+
+test('Relay restart invalidates cross-incarnation PCM comparison', () => {
+  const previous = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 100_000,
+    frameAgeMs: 20,
+  }));
+  const current = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 500,
+    frameAgeMs: 10,
+  }));
+  assert.ok(previous && current);
+
+  const proof = proveRobotBackingPcmProgress(previous, current);
+  assert.equal(proof.progressing, false);
+  assert.equal(proof.cause, 'observation-not-advancing');
+});
+
+test('fresh packet timestamps do not hide a mixer that is still starving', () => {
+  const previous = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 100_000,
+    frameAgeMs: 20,
+    backingStarvedFrames: 40,
+  }));
+  const current = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 101_000,
+    frameAgeMs: 10,
+    backingStarvedFrames: 41,
+  }));
+  assert.ok(previous && current);
+
+  const proof = proveRobotBackingPcmProgress(previous, current);
+  assert.equal(proof.progressing, false);
+  assert.equal(proof.cause, 'mixer-starved');
+});
+
+test('progress proof rejects transport flags that are not fully Robot-ready', () => {
+  const previous = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 100_000,
+    frameAgeMs: 20,
+  }));
+  const current = parseRobotSemanticRecoveryObservationPayload(status({
+    uptimeMs: 101_000,
+    frameAgeMs: 10,
+    sourceConnected: false,
+  }));
+  assert.ok(previous && current);
+
+  const proof = proveRobotBackingPcmProgress(previous, current);
+  assert.equal(proof.progressing, false);
+  assert.equal(proof.cause, 'source-not-ready');
 });
 
 test('observation URL is pinned to IPv4 loopback and the versioned contract', () => {
@@ -102,7 +212,10 @@ test('observation URL is pinned to IPv4 loopback and the versioned contract', ()
 test('observation fetch cannot be redirected away from local Relay', async () => {
   const calls: string[] = [];
   const observation = await fetchRobotSemanticRecoveryObservation(3100, 1000, fetchJson(status(), 200, calls));
+  assert.equal(observation.workload.uptimeMs, 100_000);
   assert.equal(observation.sources.backing.connected, true);
+  assert.equal(observation.sources.backing.frameAgeMs, 20);
+  assert.equal(observation.mix.backingStarvedFrames, 12);
   assert.deepEqual(calls, ['http://127.0.0.1:3100/api/status/v1']);
 });
 

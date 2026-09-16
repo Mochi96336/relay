@@ -6,6 +6,16 @@ type TimingCalibrationWorkerMessage =
   | { ok: true; result: TimingCalibrationAnalysis }
   | { ok: false; error: string };
 
+/**
+ * Maximum wall time for one CPU-heavy timing analysis.
+ *
+ * Capture collection has its own timeout in CalibrationSession. This bound is
+ * deliberately separate: once a complete window has been handed to a worker,
+ * a worker that never posts a result must not leave the product permanently at
+ * 100% collecting or retain CPU/resources forever.
+ */
+export const DEFAULT_TIMING_CALIBRATION_ANALYSIS_TIMEOUT_MS = 20_000;
+
 /** Runs the CPU-heavy matcher away from the mixer and transport timers. */
 export function analyzeTimingCalibrationInWorker(
   micSamples: Int16Array,
@@ -13,7 +23,12 @@ export function analyzeTimingCalibrationInWorker(
   sampleRate: number,
   maxLagMs?: number,
   signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMING_CALIBRATION_ANALYSIS_TIMEOUT_MS,
 ): Promise<TimingCalibrationAnalysis> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return Promise.reject(new RangeError('Timing calibration analysis timeout must be positive.'));
+  }
+
   // These copies are transferred, not cloned again by structured clone. The
   // caller retains its own views while the worker owns these disposable buffers.
   const mic = new Int16Array(micSamples);
@@ -36,7 +51,19 @@ export function analyzeTimingCalibrationInWorker(
     });
     let settled = false;
 
-    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void worker.terminate();
+      reject(new Error(`Timing calibration analysis timed out after ${timeoutMs} ms.`));
+    }, timeoutMs);
+    timeout.unref?.();
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
+    };
     const abort = () => {
       if (settled) return;
       settled = true;
@@ -47,6 +74,7 @@ export function analyzeTimingCalibrationInWorker(
     signal?.addEventListener('abort', abort, { once: true });
 
     worker.once('message', (message: TimingCalibrationWorkerMessage) => {
+      if (settled) return;
       settled = true;
       cleanup();
       void worker.terminate();

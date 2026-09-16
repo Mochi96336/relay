@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, openSync, renameSync } from 'node:fs';
+import { closeSync, fsyncSync, openSync, renameSync, rmSync } from 'node:fs';
 import { open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -60,4 +60,10 @@ export async function durableRemove(filePath: string) {
   const directory = path.resolve(path.dirname(filePath));
   await rm(filePath, { force: true });
   await syncDirectory(directory);
+}
+
+export function durableRemoveSync(filePath: string) {
+  const directory = path.resolve(path.dirname(filePath));
+  rmSync(filePath, { force: true });
+  syncDirectorySync(directory);
 }

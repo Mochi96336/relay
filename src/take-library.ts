@@ -23,6 +23,7 @@ import type {
 import type { TakeQualityAssessment } from './take-quality.js';
 
 const WAV_HEADER_BYTES = 44;
+const MAX_JS_DATE_MS = 8_640_000_000_000_000;
 const TAKE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TAKE_WAV_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.wav$/i;
 const TAKE_METADATA_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/i;
@@ -72,6 +73,13 @@ function finiteNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function validWallClockMs(value: unknown) {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_JS_DATE_MS;
+}
+
 function isTakeMixSampleRange(value: unknown): value is TakeMixSampleRange {
   if (!value || typeof value !== 'object') return false;
   const range = value as Partial<TakeMixSampleRange>;
@@ -88,7 +96,7 @@ function isPersistedTakeLibraryEntry(value: unknown): value is PersistedTakeLibr
   if (!value || typeof value !== 'object') return false;
   const entry = value as Partial<PersistedTakeLibraryEntry>;
   if (typeof entry.takeId !== 'string' || !TAKE_ID_PATTERN.test(entry.takeId)) return false;
-  if (!finiteNumber(entry.startedAtMs) || !finiteNumber(entry.endedAtMs)) return false;
+  if (!validWallClockMs(entry.startedAtMs) || !validWallClockMs(entry.endedAtMs)) return false;
   if (entry.startedByParticipantId !== null && typeof entry.startedByParticipantId !== 'string') return false;
   if (entry.stoppedByParticipantId !== null && typeof entry.stoppedByParticipantId !== 'string') return false;
   if (!entry.artifact || typeof entry.artifact !== 'object') return false;
@@ -471,7 +479,7 @@ export class TakeLibrary {
 
       try {
         const artifact = readWavArtifact(wavPath, takeId, this.artifactBaseUrl);
-        const endedAtMs = statSync(wavPath).mtimeMs;
+        const endedAtMs = Math.min(MAX_JS_DATE_MS, Math.max(0, statSync(wavPath).mtimeMs));
         const entry: TakeLibraryEntry = {
           takeId,
           startedAtMs: Math.max(0, endedAtMs - artifact.durationMs),

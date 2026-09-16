@@ -8,6 +8,15 @@ const WAV_HEADER_BYTES = 44;
 const MAX_WAV_DATA_BYTES = 0xffff_ffff - 36;
 const DEFAULT_MAX_PENDING_BYTES = 8 * 1024 * 1024;
 
+type PositionedWriter = {
+  write(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ bytesWritten: number }>;
+};
+
 export type WavFileArtifact = {
   fileName: string;
   filePath: string;
@@ -46,6 +55,22 @@ export function encodePcm16WavHeader(sampleRate: number, dataBytes: number) {
   header.write('data', 36, 'ascii');
   header.writeUInt32LE(dataBytes, 40);
   return header;
+}
+
+export async function writeBufferFullyAt(
+  writer: PositionedWriter,
+  buffer: Buffer,
+  position: number,
+) {
+  let offset = 0;
+  while (offset < buffer.byteLength) {
+    const remaining = buffer.byteLength - offset;
+    const { bytesWritten } = await writer.write(buffer, offset, remaining, position + offset);
+    if (!Number.isSafeInteger(bytesWritten) || bytesWritten <= 0 || bytesWritten > remaining) {
+      throw new Error('Take WAV header write did not make valid forward progress.');
+    }
+    offset += bytesWritten;
+  }
 }
 
 /**
@@ -156,7 +181,7 @@ export class WavTakeWriter {
     const handle = await open(this.partPath, 'r+');
     try {
       const header = encodePcm16WavHeader(this.sampleRate, this.dataBytes);
-      await handle.write(header, 0, header.byteLength, 0);
+      await writeBufferFullyAt(handle, header, 0);
       await handle.sync();
     } finally {
       await handle.close();
@@ -165,6 +190,12 @@ export class WavTakeWriter {
     await durableRename(this.partPath, this.filePath);
     try {
       const info = await stat(this.filePath);
+      const expectedSizeBytes = WAV_HEADER_BYTES + this.dataBytes;
+      if (info.size !== expectedSizeBytes) {
+        throw new Error(
+          `Take WAV publication size mismatch: expected ${expectedSizeBytes} bytes, found ${info.size}.`,
+        );
+      }
       const artifact = {
         fileName: this.fileName,
         filePath: this.filePath,

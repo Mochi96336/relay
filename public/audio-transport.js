@@ -21,6 +21,19 @@ export const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
  */
 export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
 
+/**
+ * Longest an accepted WebTransport datagram write may stay unresolved before
+ * that media path is considered stalled. A realtime capture keeps producing
+ * new packets, so the next packet after this deadline demotes the stalled path
+ * and continues over WebSocket without replaying already-submitted datagrams.
+ */
+export const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
+
+function monotonicNowMs() {
+  const value = globalThis.performance?.now?.();
+  return Number.isFinite(value) ? value : Date.now();
+}
+
 function base64Bytes(value) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -126,7 +139,9 @@ export class PreferredAudioTransport extends AudioTransport {
     minimumPacketBytes = 1,
     datagramPacketBytesCeiling = DEFAULT_DATAGRAM_PACKET_BYTES_CEILING,
     datagramQueuePackets = DEFAULT_DATAGRAM_QUEUE_PACKETS,
+    datagramWriteTimeoutMs = DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS,
     WebTransportClass = globalThis.WebTransport,
+    nowMs = monotonicNowMs,
   } = {}) {
     super();
     if (!Number.isInteger(minimumPacketBytes) || minimumPacketBytes < 1) {
@@ -141,11 +156,21 @@ export class PreferredAudioTransport extends AudioTransport {
     if (!Number.isInteger(datagramQueuePackets) || datagramQueuePackets < 1) {
       throw new RangeError('datagramQueuePackets must be a positive integer');
     }
+    if (!Number.isFinite(datagramWriteTimeoutMs) || datagramWriteTimeoutMs <= 0) {
+      throw new RangeError('datagramWriteTimeoutMs must be positive');
+    }
+    if (typeof nowMs !== 'function') {
+      throw new TypeError('nowMs must be a function');
+    }
     this.fallback = new WebSocketAudioTransport({ maxBufferedBytes });
     this.minimumPacketBytes = minimumPacketBytes;
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.datagramQueuePackets = datagramQueuePackets;
+    this.datagramWriteTimeoutMs = datagramWriteTimeoutMs;
+    this.nowMs = nowMs;
     this.outstandingDatagramWrites = 0;
+    this.pendingDatagramWrites = new Map();
+    this.nextDatagramWriteId = 1;
     this.WebTransportClass = WebTransportClass;
     this.webTransport = null;
     this.datagramWriter = null;
@@ -171,6 +196,29 @@ export class PreferredAudioTransport extends AudioTransport {
     };
     this.minWebTransportMaxPacketBytes = null;
     this.maxWebTransportMaxPacketBytes = null;
+  }
+
+  resetOutstandingDatagramWrites() {
+    this.pendingDatagramWrites.clear();
+    this.outstandingDatagramWrites = 0;
+  }
+
+  oldestOutstandingDatagramWriteAgeMs() {
+    if (this.pendingDatagramWrites.size === 0) return null;
+    let oldestStartedAt = Number.POSITIVE_INFINITY;
+    for (const startedAt of this.pendingDatagramWrites.values()) {
+      oldestStartedAt = Math.min(oldestStartedAt, startedAt);
+    }
+    if (!Number.isFinite(oldestStartedAt)) return null;
+    return Math.max(0, Number(this.nowMs()) - oldestStartedAt);
+  }
+
+  demoteStalledWebTransport() {
+    if (!this.datagramWriter) return false;
+    const oldestAgeMs = this.oldestOutstandingDatagramWriteAgeMs();
+    if (oldestAgeMs === null || oldestAgeMs < this.datagramWriteTimeoutMs) return false;
+    this.demoteWebTransport();
+    return true;
   }
 
   observeWebTransportPacketBudget(value) {
@@ -207,6 +255,7 @@ export class PreferredAudioTransport extends AudioTransport {
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
       datagramQueuePackets: this.datagramQueuePackets,
+      datagramWriteTimeoutMs: this.datagramWriteTimeoutMs,
       ...this.telemetry,
     };
   }
@@ -245,6 +294,7 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   maxPacketBytes() {
+    if (this.demoteStalledWebTransport()) return this.fallback.maxPacketBytes();
     if (!this.datagramWriter) return this.fallback.maxPacketBytes();
     const maxPacketBytes = this.currentWebTransportMaxPacketBytes();
     if (maxPacketBytes < this.minimumPacketBytes) {
@@ -255,6 +305,7 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   state() {
+    if (this.demoteStalledWebTransport()) return this.fallback.state();
     if (this.datagramWriter) {
       const maxPacketBytes = this.maxPacketBytes();
       if (!this.datagramWriter) return this.fallback.state();
@@ -342,7 +393,7 @@ export class PreferredAudioTransport extends AudioTransport {
       const writer = writable.getWriter();
       this.webTransport = transport;
       this.datagramWriter = writer;
-      this.outstandingDatagramWrites = 0;
+      this.resetOutstandingDatagramWrites();
       this.preferredUrl = offer.url;
       this.lastWebTransportMaxPacketBytes = maxPacketBytes;
       this.observeWebTransportPacketBudget(maxPacketBytes);
@@ -374,7 +425,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
-    this.outstandingDatagramWrites = 0;
+    this.resetOutstandingDatagramWrites();
     if (wasActive) this.telemetry.webTransportDemotions += 1;
     if (writer) {
       try { writer.releaseLock(); } catch {}
@@ -396,6 +447,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
+    this.resetOutstandingDatagramWrites();
     if (writer) {
       try { writer.releaseLock(); } catch {}
     }
@@ -410,6 +462,12 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   send(packet) {
+    if (this.demoteStalledWebTransport()) {
+      const result = this.fallback.send(packet);
+      this.recordFallbackResult(result);
+      return result;
+    }
+
     const writer = this.datagramWriter;
     if (!writer) {
       const result = this.fallback.send(packet);
@@ -460,8 +518,10 @@ export class PreferredAudioTransport extends AudioTransport {
       const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
       const transport = this.webTransport;
       const generation = this.preferenceGeneration;
+      const writeId = this.nextDatagramWriteId++;
       this.telemetry.webTransportPacketsSubmitted += 1;
-      this.outstandingDatagramWrites += 1;
+      this.pendingDatagramWrites.set(writeId, Number(this.nowMs()));
+      this.outstandingDatagramWrites = this.pendingDatagramWrites.size;
       // A write belongs to the transport generation that submitted it. The
       // promise may settle after Mic teardown/restart has already installed a
       // newer WebTransport; that stale completion must not demote the new
@@ -472,7 +532,8 @@ export class PreferredAudioTransport extends AudioTransport {
         && transport === this.webTransport;
       const settle = () => {
         if (!ownsCapture()) return;
-        this.outstandingDatagramWrites = Math.max(0, this.outstandingDatagramWrites - 1);
+        this.pendingDatagramWrites.delete(writeId);
+        this.outstandingDatagramWrites = this.pendingDatagramWrites.size;
       };
       Promise.resolve(writer.write(bytes)).then(settle, () => {
         if (!ownsCapture()) return;

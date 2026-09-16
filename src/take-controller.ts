@@ -610,12 +610,35 @@ export class TakeController {
       .then(async () => {
         const current = this.session.currentTake();
         const preserveFileName = current ? `${current.takeId}.wav` : null;
-        await pruneTakeArtifacts(
-          this.options.directory,
-          this.storagePolicy,
-          preserveFileName,
-        );
-        if (this.refreshHistoryCache()) this.emitChange();
+        let pruneFailure: { error: unknown } | null = null;
+        try {
+          await pruneTakeArtifacts(
+            this.options.directory,
+            this.storagePolicy,
+            preserveFileName,
+          );
+        } catch (error) {
+          pruneFailure = { error };
+        }
+
+        let refreshFailure: { error: unknown } | null = null;
+        try {
+          // Retention can durably invalidate a WAV before a later sidecar
+          // cleanup fails. Always re-read durable history so product status
+          // cannot keep advertising an artifact that is already gone.
+          if (this.refreshHistoryCache()) this.emitChange();
+        } catch (error) {
+          refreshFailure = { error };
+        }
+
+        if (pruneFailure && refreshFailure) {
+          throw new AggregateError(
+            [pruneFailure.error, refreshFailure.error],
+            'Take retention cleanup and history refresh both failed.',
+          );
+        }
+        if (pruneFailure) throw pruneFailure.error;
+        if (refreshFailure) throw refreshFailure.error;
       })
       .catch((error) => {
         this.reportStorageError(error);

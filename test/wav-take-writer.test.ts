@@ -138,3 +138,18 @@ test('abort after a successful finalize does not delete the published WAV', asyn
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('discardFinalized removes a published WAV through the durable cleanup path', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-discard-ready-'));
+  try {
+    const writer = new WavTakeWriter({ directory, takeId: 'take-discard', sampleRate: 48_000 });
+    writer.append(Buffer.alloc(1_920));
+    await writer.finalize();
+
+    await writer.discardFinalized();
+
+    assert.deepEqual(await readdir(directory), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -24,6 +24,9 @@ import { TimingWindowCollector, type TimingWindow } from './timing-window-collec
  */
 export const MAX_CAPTURE_GAP_MS = 300;
 
+/** Maximum time one asynchronous calibration analysis may remain unresolved. */
+export const DEFAULT_CALIBRATION_ANALYSIS_TIMEOUT_MS = 20_000;
+
 export type CalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
 
 export type CalibrationStatus = {
@@ -66,6 +69,8 @@ export type CalibrationSessionOptions = {
   sampleRate: number;
   durationMs: number;
   timeoutMs: number;
+  /** Independent deadline for asynchronous analyzer execution. */
+  analysisTimeoutMs?: number;
   /**
    * The setup a measurement would describe if taken now.
    *
@@ -115,6 +120,7 @@ export class CalibrationSession {
 
   private readonly sampleRate: number;
   private readonly timeoutMs: number;
+  private readonly analysisTimeoutMs: number;
   private readonly analyze: NonNullable<CalibrationSessionOptions['analyze']>;
   private readonly context: () => CalibrationContext;
   private readonly onSettled: () => void;
@@ -147,6 +153,7 @@ export class CalibrationSession {
   /** Monotonic identity for newly confirmed timing authority. Retries do not change it. */
   private confirmedRevisionValue = 0;
   private analysisPending = false;
+  private analysisStartedAt: number | null = null;
   private analysisAbortController: AbortController | null = null;
   /** Invalidates an answer when its collection is restarted or cancelled. */
   private analysisRevision = 0;
@@ -164,6 +171,11 @@ export class CalibrationSession {
     this.sampleRate = options.sampleRate;
     this.durationMs = options.durationMs;
     this.timeoutMs = options.timeoutMs;
+    const analysisTimeoutMs = options.analysisTimeoutMs ?? DEFAULT_CALIBRATION_ANALYSIS_TIMEOUT_MS;
+    if (!Number.isFinite(analysisTimeoutMs) || analysisTimeoutMs <= 0) {
+      throw new RangeError('analysisTimeoutMs must be positive.');
+    }
+    this.analysisTimeoutMs = analysisTimeoutMs;
     this.requiredSamples = Math.round((options.sampleRate * options.durationMs) / 1000);
     this.analyze = options.analyze ?? analyzeTimingCalibration;
     this.context = options.context;
@@ -498,11 +510,22 @@ export class CalibrationSession {
     if (wasCollecting || hadPrimedEvidence) this.onSettled();
   }
 
-  /** Gives up on a collection that stopped making progress. */
+  /** Gives up on a collection or analysis phase that stopped making progress. */
   tick(nowMs = performance.now()) {
-    if (!this.collecting || this.analysisPending || nowMs - this.startedAt <= this.timeoutMs) {
-      return false;
+    if (!this.collecting) return false;
+
+    if (this.analysisPending) {
+      const analysisStartedAt = this.analysisStartedAt;
+      const analysisAgeMs = analysisStartedAt === null ? 0 : this.now() - analysisStartedAt;
+      if (analysisStartedAt === null || analysisAgeMs < this.analysisTimeoutMs) return false;
+      this.fail(
+        `Calibration analysis timed out after ${this.analysisTimeoutMs} ms. `
+        + 'Start calibration again; any previously confirmed alignment remains in use.',
+      );
+      return true;
     }
+
+    if (nowMs - this.startedAt <= this.timeoutMs) return false;
 
     const micMs = Math.round((this.collector.micSpanSamples / this.sampleRate) * 1000);
     const backingMs = Math.round((this.collector.backingSpanSamples / this.sampleRate) * 1000);
@@ -635,6 +658,7 @@ export class CalibrationSession {
   private invalidatePendingAnalysis() {
     this.analysisAbortController?.abort();
     this.analysisAbortController = null;
+    this.analysisStartedAt = null;
     this.analysisRevision += 1;
     this.analysisPending = false;
   }
@@ -698,6 +722,7 @@ export class CalibrationSession {
       if (isPromiseLikeAnalysis(result)) {
         const revision = ++this.analysisRevision;
         this.analysisPending = true;
+        this.analysisStartedAt = this.now();
         void Promise.resolve(result).then(
           (analysis) => this.settlePendingAnalysis(revision, measurementContext, analysis),
           (error: unknown) => this.rejectPendingAnalysis(revision, error),
@@ -706,9 +731,11 @@ export class CalibrationSession {
       }
 
       this.analysisAbortController = null;
+      this.analysisStartedAt = null;
       this.applyAnalysis(result, measurementContext);
     } catch (error) {
       this.analysisAbortController = null;
+      this.analysisStartedAt = null;
       this.rejectAnalysis(error);
     }
   }
@@ -720,6 +747,7 @@ export class CalibrationSession {
   ) {
     if (revision !== this.analysisRevision || !this.analysisPending) return;
     this.analysisPending = false;
+    this.analysisStartedAt = null;
     this.analysisAbortController = null;
 
     // Callers that move the setup are expected to abort the run themselves, and
@@ -742,6 +770,7 @@ export class CalibrationSession {
   private rejectPendingAnalysis(revision: number, error: unknown) {
     if (revision !== this.analysisRevision || !this.analysisPending) return;
     this.analysisPending = false;
+    this.analysisStartedAt = null;
     this.analysisAbortController = null;
     this.rejectAnalysis(error);
   }

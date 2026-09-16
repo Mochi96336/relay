@@ -42,6 +42,15 @@ export type TakeLibraryEntry = {
   recovered: boolean;
 };
 
+type PersistedTakeArtifact = Omit<TakeArtifact, 'url' | 'durationMs'> & {
+  url?: unknown;
+  durationMs?: unknown;
+};
+
+type PersistedTakeLibraryEntry = Omit<TakeLibraryEntry, 'artifact'> & {
+  artifact: PersistedTakeArtifact;
+};
+
 type TakeMetadataV1 = {
   version: 1;
   take: TakeLibraryEntry;
@@ -75,36 +84,35 @@ function isTakeMixSampleRange(value: unknown): value is TakeMixSampleRange {
   return Number(range.sampleCount) <= Number(range.endSampleIndex) - Number(range.startSampleIndex);
 }
 
-function isTakeLibraryEntry(value: unknown): value is TakeLibraryEntry {
+function isPersistedTakeLibraryEntry(value: unknown): value is PersistedTakeLibraryEntry {
   if (!value || typeof value !== 'object') return false;
-  const entry = value as Partial<TakeLibraryEntry>;
+  const entry = value as Partial<PersistedTakeLibraryEntry>;
   if (typeof entry.takeId !== 'string' || !TAKE_ID_PATTERN.test(entry.takeId)) return false;
   if (!finiteNumber(entry.startedAtMs) || !finiteNumber(entry.endedAtMs)) return false;
   if (entry.startedByParticipantId !== null && typeof entry.startedByParticipantId !== 'string') return false;
   if (entry.stoppedByParticipantId !== null && typeof entry.stoppedByParticipantId !== 'string') return false;
   if (!entry.artifact || typeof entry.artifact !== 'object') return false;
   if (entry.artifact.fileName !== `${entry.takeId}.wav`) return false;
-  if (typeof entry.artifact.url !== 'string') return false;
   if (entry.artifact.mimeType !== 'audio/wav') return false;
-  if (!finiteNumber(entry.artifact.durationMs) || !finiteNumber(entry.artifact.sampleCount)) return false;
+  if (!finiteNumber(entry.artifact.sampleCount)) return false;
   if (!finiteNumber(entry.artifact.sampleRate) || !finiteNumber(entry.artifact.sizeBytes)) return false;
   return entry.artifact.channels === 1 && entry.artifact.bitsPerSample === 16;
 }
 
 function parseMetadata(bytes: Buffer, expectedTakeId: string) {
-  const decoded = JSON.parse(bytes.toString('utf8')) as Partial<TakeMetadataV1>;
-  if (decoded.version !== 1 || !isTakeLibraryEntry(decoded.take)) return null;
+  const decoded = JSON.parse(bytes.toString('utf8')) as { version?: unknown; take?: unknown };
+  if (decoded.version !== 1 || !isPersistedTakeLibraryEntry(decoded.take)) return null;
   if (decoded.take.takeId !== expectedTakeId) return null;
 
   const rich = normalizePersistedTakeRichFields(decoded.take);
   if (!rich) return null;
-  const rawRange = (decoded.take as TakeLibraryEntry & { mixSampleRange?: unknown }).mixSampleRange;
+  const rawRange = (decoded.take as PersistedTakeLibraryEntry & { mixSampleRange?: unknown }).mixSampleRange;
   if (rawRange !== undefined && rawRange !== null && !isTakeMixSampleRange(rawRange)) return null;
   return {
     ...decoded.take,
     ...rich,
     mixSampleRange: rawRange && isTakeMixSampleRange(rawRange) ? { ...rawRange } : null,
-  } satisfies TakeLibraryEntry;
+  } satisfies PersistedTakeLibraryEntry;
 }
 
 function readWavArtifact(filePath: string, takeId: string, baseUrl: string): TakeArtifact {
@@ -164,6 +172,20 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
   };
 }
 
+function readValidatedMetadata(
+  metadataPath: string,
+  wavPath: string,
+  takeId: string,
+  baseUrl: string,
+  useWavArtifact: true,
+): TakeLibraryEntry | null;
+function readValidatedMetadata(
+  metadataPath: string,
+  wavPath: string,
+  takeId: string,
+  baseUrl: string,
+  useWavArtifact?: false,
+): PersistedTakeLibraryEntry | null;
 function readValidatedMetadata(
   metadataPath: string,
   wavPath: string,
@@ -293,7 +315,7 @@ export class TakeLibrary {
     }
 
     durableRenameSync(partialPath, finalPath);
-    return cloneEntry(staged);
+    return cloneEntry(expected);
   }
 
   discardStaged(takeId: string) {

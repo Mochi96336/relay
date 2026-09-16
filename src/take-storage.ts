@@ -9,6 +9,8 @@ import {
 import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { durableRemove, durableRemoveSync } from './file-durability.js';
+
 const GIB = 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WAV_HEADER_BYTES = 44;
@@ -174,10 +176,12 @@ export function prepareTakeStorage(
   let removedMetadataFiles = 0;
   for (const record of artifacts) {
     if (!removals.has(record.fileName)) continue;
-    rmSync(path.join(directory, record.fileName), { force: true });
+    // The WAV is the recovery authority. Make its deletion durable before
+    // touching metadata so a crash cannot resurrect a retention-pruned Take.
+    durableRemoveSync(path.join(directory, record.fileName));
     const metadataPath = path.join(directory, pairedMetadataFileName(record.takeId));
     if (existsSync(metadataPath)) {
-      rmSync(metadataPath, { force: true });
+      durableRemoveSync(metadataPath);
       removedMetadataFiles += 1;
     }
   }
@@ -239,12 +243,14 @@ export async function pruneTakeArtifacts(
   let removedMetadataFiles = 0;
   for (const record of artifacts) {
     if (!removals.has(record.fileName)) continue;
-    await rm(path.join(directory, record.fileName), { force: true });
+    // Invalidate the recoverable artifact durably before metadata cleanup. Once
+    // this await resolves, restart recovery cannot legitimately revive the Take.
+    await durableRemove(path.join(directory, record.fileName));
     removedBytes += record.sizeBytes;
     const metadataPath = path.join(directory, pairedMetadataFileName(record.takeId));
     try {
       await stat(metadataPath);
-      await rm(metadataPath, { force: true });
+      await durableRemove(metadataPath);
       removedMetadataFiles += 1;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;

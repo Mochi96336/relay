@@ -72,6 +72,7 @@ export class WavTakeWriter {
   private readonly maxDataBytes: number;
   private dataBytes = 0;
   private closed = false;
+  private finalized = false;
   private failure: Error | null = null;
 
   constructor(options: {
@@ -164,16 +165,18 @@ export class WavTakeWriter {
     await durableRename(this.partPath, this.filePath);
     try {
       const info = await stat(this.filePath);
-      return {
+      const artifact = {
         fileName: this.fileName,
         filePath: this.filePath,
         sizeBytes: info.size,
         sampleRate: this.sampleRate,
-        channels: 1,
-        bitsPerSample: 16,
+        channels: 1 as const,
+        bitsPerSample: 16 as const,
         sampleCount: this.sampleCount,
         durationMs: (this.sampleCount / this.sampleRate) * 1000,
       };
+      this.finalized = true;
+      return artifact;
     } catch (error) {
       await rm(this.filePath, { force: true }).catch(() => {});
       throw error;
@@ -195,6 +198,11 @@ export class WavTakeWriter {
     }
 
     await rm(this.partPath, { force: true }).catch(() => {});
+    // durableRename() renames before syncing the parent directory. If that sync
+    // fails, finalization rejects even though the stable `.wav` path may already
+    // exist. A failed/aborted Take must not be resurrected as a legacy WAV after
+    // restart, while a fully successful finalize must remain published.
+    if (!this.finalized) await rm(this.filePath, { force: true }).catch(() => {});
   }
 
   async discardFinalized() {

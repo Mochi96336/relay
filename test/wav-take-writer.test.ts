@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -91,6 +91,49 @@ test('aborting a Take removes its partial artifact', async () => {
     writer.append(Buffer.alloc(1_920));
     await writer.abort();
     assert.deepEqual(await readdir(directory), [], 'abort owns stream closure and partial cleanup');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('abort removes a stable WAV left by a failed publication', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-abort-published-'));
+  try {
+    const writer = new WavTakeWriter({
+      directory,
+      takeId: 'take-abort-published',
+      sampleRate: 48_000,
+    });
+    writer.append(Buffer.alloc(1_920));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Model durableRename() after rename succeeded but before the parent
+    // directory sync completed: finalization will be treated as failed, yet a
+    // stable path can already be visible and must not survive abort/restart.
+    await writeFile(writer.filePath, Buffer.from('ambiguous-published-wav'));
+    await writer.abort();
+
+    assert.deepEqual(
+      await readdir(directory),
+      [],
+      'failed publication cleanup must remove both partial and stable WAV paths',
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('abort after a successful finalize does not delete the published WAV', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-abort-ready-'));
+  try {
+    const writer = new WavTakeWriter({ directory, takeId: 'take-ready', sampleRate: 48_000 });
+    writer.append(Buffer.alloc(1_920));
+    const artifact = await writer.finalize();
+
+    await writer.abort();
+
+    assert.deepEqual(await readdir(directory), ['take-ready.wav']);
+    assert.equal((await readFile(artifact.filePath)).byteLength, 44 + 1_920);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

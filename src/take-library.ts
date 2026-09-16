@@ -477,6 +477,18 @@ export class TakeLibrary {
   private recoverLegacyArtifacts() {
     const names = new Set(readdirSync(this.options.directory));
     const recoveryFallbacks = new Map<string, TakeLibraryEntry>();
+    const removeRepairPath = (fileName: string) => {
+      try {
+        rmSync(path.join(this.options.directory, fileName), { force: true });
+        names.delete(fileName);
+        return true;
+      } catch {
+        // Recovery cleanup is maintenance, not read authority. A read-only/full
+        // directory may leave stale repair paths in place without hiding a
+        // validated WAV or committed metadata entry.
+        return false;
+      }
+    };
 
     // A metadata partial without a finalized WAV is an orphan after restart,
     // but the current process deliberately stages rich metadata before WAV
@@ -488,8 +500,7 @@ export class TakeLibrary {
         || names.has(`${match[1]}.wav`)
         || this.stagedTakeIds.has(match[1])
       ) continue;
-      rmSync(path.join(this.options.directory, name), { force: true });
-      names.delete(name);
+      removeRepairPath(name);
     }
 
     for (const name of [...names]) {
@@ -503,40 +514,48 @@ export class TakeLibrary {
       const wavPath = path.join(this.options.directory, name);
 
       if (names.has(metadataName)) {
+        let committed: TakeLibraryEntry | null = null;
         try {
-          if (readValidatedMetadata(
+          committed = readValidatedMetadata(
             metadataPath,
             wavPath,
             takeId,
             this.artifactBaseUrl,
-          )) {
-            if (names.has(metadataPartName)) {
-              rmSync(metadataPartPath, { force: true });
-              names.delete(metadataPartName);
-            }
-            continue;
-          }
+            true,
+          );
         } catch {}
-        rmSync(metadataPath, { force: true });
-        names.delete(metadataName);
+        if (committed) {
+          if (names.has(metadataPartName)) removeRepairPath(metadataPartName);
+          continue;
+        }
+        removeRepairPath(metadataName);
       }
 
       if (names.has(metadataPartName)) {
+        let staged: TakeLibraryEntry | null = null;
         try {
-          if (readValidatedMetadata(
+          staged = readValidatedMetadata(
             metadataPartPath,
             wavPath,
             takeId,
             this.artifactBaseUrl,
-          )) {
+            true,
+          );
+        } catch {}
+        if (staged) {
+          try {
             durableRenameSync(metadataPartPath, metadataPath);
             names.delete(metadataPartName);
             names.add(metadataName);
             continue;
+          } catch {
+            // A complete staged transaction paired with its validated WAV is
+            // readable even when the filesystem cannot persist its promotion.
+            recoveryFallbacks.set(takeId, staged);
+            continue;
           }
-        } catch {}
-        rmSync(metadataPartPath, { force: true });
-        names.delete(metadataPartName);
+        }
+        removeRepairPath(metadataPartName);
       }
 
       let entry: TakeLibraryEntry;

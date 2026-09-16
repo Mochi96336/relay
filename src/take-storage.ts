@@ -6,7 +6,7 @@ import {
   statSync,
   statfsSync,
 } from 'node:fs';
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 const GIB = 1024 ** 3;
@@ -204,7 +204,9 @@ export function takeStorageBudget(directory: string, policy: TakeStoragePolicy) 
 /**
  * Prunes only finalized WAVs and their finalized metadata sidecars. It
  * deliberately ignores `.part` files so this asynchronous maintenance can
- * never race a newly started Take writer or an atomic metadata write.
+ * never race a newly started Take writer or an atomic metadata write. The
+ * finalized WAV namespace is captured before the first await so a later Take
+ * cannot publish into an already-planned prune.
  */
 export async function pruneTakeArtifacts(
   directory: string,
@@ -212,15 +214,15 @@ export async function pruneTakeArtifacts(
   preserveFileName: string | null,
   nowMs = Date.now(),
 ) {
-  await mkdir(directory, { recursive: true });
+  mkdirSync(directory, { recursive: true });
   const artifacts: ArtifactRecord[] = [];
 
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
     const match = TAKE_WAV_PATTERN.exec(entry.name);
     if (!match) continue;
     try {
-      const info = await stat(path.join(directory, entry.name));
+      const info = statSync(path.join(directory, entry.name));
       artifacts.push({
         takeId: match[1],
         fileName: entry.name,

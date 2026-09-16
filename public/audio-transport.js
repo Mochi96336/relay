@@ -29,6 +29,30 @@ export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
  */
 export const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
 
+/**
+ * WebSocket fallback must stay a realtime path too. 256 KiB at 48 kHz mono
+ * PCM16 is about 2.7 seconds of stale voice, so keep a hard duration-derived
+ * ceiling even when a legacy caller supplies a much larger byte threshold.
+ */
+export const DEFAULT_WEBSOCKET_BACKLOG_MS = 200;
+export const DEFAULT_WEBSOCKET_PCM_SAMPLE_RATE = 48_000;
+const PCM16_BYTES_PER_SAMPLE = 2;
+
+export function realtimeWebSocketBacklogBytes(
+  sampleRate = DEFAULT_WEBSOCKET_PCM_SAMPLE_RATE,
+  backlogMs = DEFAULT_WEBSOCKET_BACKLOG_MS,
+) {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new RangeError('sampleRate must be positive');
+  }
+  if (!Number.isFinite(backlogMs) || backlogMs <= 0) {
+    throw new RangeError('backlogMs must be positive');
+  }
+  return Math.max(1, Math.round(
+    (sampleRate * PCM16_BYTES_PER_SAMPLE * backlogMs) / 1000,
+  ));
+}
+
 function monotonicNowMs() {
   const value = globalThis.performance?.now?.();
   return Number.isFinite(value) ? value : Date.now();
@@ -55,12 +79,18 @@ export class AudioTransport {
 }
 
 export class WebSocketAudioTransport extends AudioTransport {
-  constructor({ maxBufferedBytes = 256 * 1024 } = {}) {
+  constructor({
+    maxBufferedBytes = 256 * 1024,
+    realtimeBufferedBytes = realtimeWebSocketBacklogBytes(),
+  } = {}) {
     super();
     if (!Number.isFinite(maxBufferedBytes) || maxBufferedBytes < 0) {
       throw new RangeError('maxBufferedBytes must be non-negative');
     }
-    this.maxBufferedBytes = maxBufferedBytes;
+    if (!Number.isFinite(realtimeBufferedBytes) || realtimeBufferedBytes <= 0) {
+      throw new RangeError('realtimeBufferedBytes must be positive');
+    }
+    this.maxBufferedBytes = Math.min(maxBufferedBytes, realtimeBufferedBytes);
     this.socket = null;
   }
 
@@ -107,6 +137,20 @@ export class WebSocketAudioTransport extends AudioTransport {
   send(packet) {
     const state = this.state();
     if (!state.ready) return { ...state, sent: false };
+
+    const packetBytes = Number(packet?.byteLength);
+    if (
+      Number.isFinite(packetBytes)
+      && packetBytes > 0
+      && state.bufferedAmount + packetBytes > this.maxBufferedBytes
+    ) {
+      return {
+        ...state,
+        ready: false,
+        sent: false,
+        reason: 'congested',
+      };
+    }
 
     try {
       this.socket.send(packet);

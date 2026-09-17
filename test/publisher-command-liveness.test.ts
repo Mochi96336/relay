@@ -69,9 +69,11 @@ test('same-generation command epoch reset cannot reuse an old health request id'
   const retiredRequestId = liveness.beginHealthRequest(100);
   assert.notEqual(retiredRequestId, null);
 
-  // Semantic command-authority reset can happen while the same physical socket
-  // and capture generation remain current. A delayed ACK from the retired epoch
-  // must therefore be distinguishable from every request in the replacement epoch.
+  // A physical command-route replacement clears current authority and pending
+  // evidence before beginning the replacement epoch. A delayed ACK from the
+  // retired route must therefore stay distinguishable even at the same capture
+  // generation.
+  liveness.reset();
   liveness.begin(23, 200);
   const currentRequestId = liveness.beginHealthRequest(250);
   assert.notEqual(currentRequestId, null);

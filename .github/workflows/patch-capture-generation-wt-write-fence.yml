@@ -1,0 +1,53 @@
+name: Temporary capture-generation WT write fence patch
+
+on:
+  push:
+    branches:
+      - agent/capture-generation-wt-write-fence
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/capture-generation-wt-write-fence
+          fetch-depth: 0
+      - name: Apply exact capture-boundary write fence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('public/audio-transport.js')
+          text = path.read_text()
+          old = "  resetStats() {\n    this.telemetry = {\n"
+          new = (
+              "  resetStats() {\n"
+              "    // app.js calls this at the capture-generation boundary. Keep the\n"
+              "    // healthy physical WT session, but retire every write submitted by\n"
+              "    // the previous capture so its late age/rejection cannot become new-\n"
+              "    // generation stall evidence or telemetry.\n"
+              "    this.preferenceGeneration += 1;\n"
+              "    this.resetOutstandingDatagramWrites();\n"
+              "    this.telemetry = {\n"
+          )
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one resetStats seam, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Verify focused runtime delta
+        run: |
+          git diff --check
+          test "$(git diff --name-only | grep -v '^public/audio-transport.js$' | wc -l)" -eq 0
+      - name: Commit runtime fix and retire temporary workflow
+        run: |
+          rm .github/workflows/patch-capture-generation-wt-write-fence.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add public/audio-transport.js .github/workflows/patch-capture-generation-wt-write-fence.yml
+          git commit -m "fix(audio): retire WT writes at capture generation boundary"
+          git push origin HEAD:agent/capture-generation-wt-write-fence

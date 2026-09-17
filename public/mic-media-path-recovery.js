@@ -70,6 +70,7 @@ export class MicMediaPathRecovery {
     this.lastSenderFailedPackets = null;
     this.lastServerReceivedPacketSerial = null;
     this.lastPacketCoverage = null;
+    this.incompletePacketSemanticStalls = 0;
     this.staleCount = 0;
     this.phase = 'observing';
     this.proofBaselineSerial = null;
@@ -113,6 +114,7 @@ export class MicMediaPathRecovery {
     senderFailedPackets,
     serverReceivedPacketSerial,
   } = {}) {
+    this.incompletePacketSemanticStalls = 0;
     const submitted = optionalNonNegativeInteger(senderSubmittedPackets);
     const failed = optionalNonNegativeInteger(senderFailedPackets);
     const received = optionalNonNegativeInteger(serverReceivedPacketSerial);
@@ -159,6 +161,7 @@ export class MicMediaPathRecovery {
     const failed = optionalNonNegativeInteger(senderFailedPackets);
     const received = optionalNonNegativeInteger(serverReceivedPacketSerial);
     if (submitted === null || failed === null || received === null) {
+      this.incompletePacketSemanticStalls = 0;
       return { available: false, ready: false, healthy: null, coverage: null, submittedDelta: null };
     }
 
@@ -197,6 +200,7 @@ export class MicMediaPathRecovery {
     this.lastSenderFailedPackets = failed;
     this.lastServerReceivedPacketSerial = received;
     this.lastPacketCoverage = coverage;
+    this.incompletePacketSemanticStalls = 0;
     return {
       available: true,
       ready: true,
@@ -204,6 +208,18 @@ export class MicMediaPathRecovery {
       coverage,
       submittedDelta,
     };
+  }
+
+  shouldDeferIncompletePacketWindow(semanticAdvanced) {
+    if (semanticAdvanced) {
+      this.incompletePacketSemanticStalls = 0;
+      return true;
+    }
+    this.incompletePacketSemanticStalls += 1;
+    if (this.incompletePacketSemanticStalls < this.staleObservations) return true;
+    this.incompletePacketSemanticStalls = 0;
+    this.staleCount = Math.max(this.staleCount, this.staleObservations - 1);
+    return false;
   }
 
   beginWebSocketProof(serverPath, acceptedFrameSerial, packetCounters = {}) {
@@ -357,7 +373,11 @@ export class MicMediaPathRecovery {
         this.staleCount = 0;
         return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
       }
-      if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {
+      if (
+        packetEvidence.available
+        && !packetEvidence.ready
+        && this.shouldDeferIncompletePacketWindow(serverAdvanced)
+      ) {
         return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
       }
       this.staleCount += 1;
@@ -380,7 +400,11 @@ export class MicMediaPathRecovery {
           this.staleCount = 0;
           return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
         }
-        if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {
+        if (
+          packetEvidence.available
+          && !packetEvidence.ready
+          && this.shouldDeferIncompletePacketWindow(serverAdvanced)
+        ) {
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
         this.staleCount += 1;
@@ -394,7 +418,10 @@ export class MicMediaPathRecovery {
       if (packetEvidence.available) {
         const semanticProofAdvanced = this.proofBaselineSerial !== null
           && acceptedSerial > this.proofBaselineSerial;
-        if (!packetEvidence.ready && semanticProofAdvanced) {
+        if (
+          !packetEvidence.ready
+          && this.shouldDeferIncompletePacketWindow(semanticProofAdvanced)
+        ) {
           if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
@@ -432,7 +459,10 @@ export class MicMediaPathRecovery {
 
     const packetEvidence = this.packetCoverageEvidence(packetCounters);
     if (packetEvidence.available) {
-      if (!packetEvidence.ready && serverAdvanced) {
+      if (
+        !packetEvidence.ready
+        && this.shouldDeferIncompletePacketWindow(serverAdvanced)
+      ) {
         if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
         return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
       }

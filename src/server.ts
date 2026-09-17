@@ -1745,6 +1745,8 @@ function productStatusPayload(nowMs = performance.now()) {
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
+    micMediaRecoveryDegraded:
+      micUplinkHealthPayload(nowMs)?.transport.mediaRecoveryDegraded === true,
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),

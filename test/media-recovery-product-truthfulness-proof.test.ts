@@ -137,6 +137,7 @@ test('terminal media under-delivery can remain product-live when sparse PCM keep
 
   const status = buildProductViewModel({
     readiness: buildReadiness(VOICE_ONLY),
+    micMediaRecoveryDegraded: decision?.degraded === true,
     participantCount: 1,
     micOwnerId: 'participant-a',
     micOwnerNickname: 'A',
@@ -163,12 +164,14 @@ test('terminal media under-delivery can remain product-live when sparse PCM keep
   });
 
   assert.equal(status.lifecycle, 'live');
-  assert.equal(status.room.mic.state, 'live');
-  assert.equal(status.health, 'healthy');
-  assert.equal(status.attention, null);
+  assert.equal(status.room.mic.state, 'live', 'server flow freshness remains the Mic state authority');
+  assert.equal(status.health, 'degraded');
+  assert.equal(status.attention?.code, 'mic-audio-stalled');
+  assert.equal(status.actions.canStartTake, false);
+  assert.equal(status.actions.startTakeBlockedReason, 'mic-audio-stalled');
   assert.equal(
     status.issues.some((issue) => issue.code === 'mic-audio-stalled'),
-    false,
-    'server flow freshness alone cannot expose the browser terminal media verdict',
+    true,
+    'terminal browser media recovery must be composed into product truthfulness',
   );
 });

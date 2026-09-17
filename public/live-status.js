@@ -201,6 +201,8 @@ if (
     const mic = status.room?.mic ?? {};
     const song = status.room?.song ?? {};
     const selfOwner = isSelfOwner(status);
+    const micAudioStalled = status.issues?.some((issue) => issue?.code === 'mic-audio-stalled')
+      || status.attention?.code === 'mic-audio-stalled';
 
     if (status.lifecycle === 'preparing') {
       if (selfOwner && status.timing?.state === 'calibrating') {
@@ -232,6 +234,9 @@ if (
     }
 
     if (selfOwner) {
+      if (micAudioStalled) {
+        return { title: t('voice.interruptedYours'), detail: t('voice.mediaConnectedAudioStopped') };
+      }
       if (mic.state === 'starting') {
         return { title: t('voice.startingYours'), detail: t('voice.waitingFirstAudio') };
       }
@@ -251,6 +256,9 @@ if (
     }
 
     const owner = mic.ownerNickname || t('voice.someone');
+    if (micAudioStalled) {
+      return { title: owner, detail: t('voice.interruptedOther') };
+    }
     if (mic.state === 'starting') {
       return { title: owner, detail: t('voice.startingOther') };
     }
@@ -266,7 +274,9 @@ if (
   function renderSystem(status) {
     const attention = status.attention;
     const robotProblem = attention?.scope === 'robot';
-    const audioProblem = attention?.scope === 'audio' || attention?.scope === 'song';
+    const audioProblem = attention?.scope === 'audio'
+      || attention?.scope === 'song'
+      || attention?.scope === 'mic';
     const songState = status.room?.song?.state;
     const micState = status.room?.mic?.state;
 

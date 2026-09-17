@@ -22,6 +22,18 @@ test('current-generation ACK expires before reconnect deadline', () => {
   assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
 });
 
+test('a delayed health ACK cannot renew command freshness from its arrival time', () => {
+  const liveness = new PublisherCommandLiveness();
+  liveness.begin(17, 0);
+
+  // The health request left this capture at t=0, but a one-way downstream
+  // backlog delays the matching ACK until t=3500. Arrival itself is not fresh
+  // evidence: the command channel has not proven a recent round trip.
+  assert.equal(liveness.noteAck(17, 3_500, 0), true);
+  assert.equal(liveness.status(3_500).fresh, false);
+  assert.equal(liveness.status(DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
+});
+
 test('wrong-generation ACK cannot revive a replacement capture', () => {
   const liveness = new PublisherCommandLiveness();
   liveness.begin(21, 1_000);

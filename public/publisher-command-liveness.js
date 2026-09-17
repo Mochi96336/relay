@@ -39,15 +39,18 @@ export class PublisherCommandLiveness {
     this.lastAckAtMs = -Infinity;
   }
 
-  noteAck(generation, nowMs) {
+  noteAck(generation, nowMs, requestSentAtMs = nowMs) {
     const normalizedGeneration = uint32(generation);
     if (
       this.generation === null
       || normalizedGeneration === null
       || normalizedGeneration !== this.generation
       || !Number.isFinite(nowMs)
+      || !Number.isFinite(requestSentAtMs)
+      || requestSentAtMs < this.startedAtMs
+      || requestSentAtMs > nowMs
     ) return false;
-    this.lastAckAtMs = nowMs;
+    this.lastAckAtMs = Math.max(this.lastAckAtMs, requestSentAtMs);
     return true;
   }
 

@@ -301,6 +301,16 @@ export class MicRuntime {
     };
   }
 
+  freshUplinkHealthPayload(nowMs: number) {
+    const payload = this.uplinkHealthPayload(nowMs);
+    if (
+      !payload
+      || payload.reportAgeMs === null
+      || payload.reportAgeMs > this.uplinkHealthTimeoutMs
+    ) return null;
+    return payload;
+  }
+
   private clearUplinkHealthDeadline() {
     if (this.uplinkHealthDeadline !== null) clearTimeout(this.uplinkHealthDeadline);
     this.uplinkHealthDeadline = null;

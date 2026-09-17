@@ -67,7 +67,7 @@ test('terminal browser media degradation is composed without rewriting server Mi
   const productStatus = functionCode(server, 'productStatusPayload');
   assert.match(
     productStatus,
-    /micUplinkHealthPayload\(nowMs\)\?\.transport\.mediaRecoveryDegraded === true/,
+    /micRuntime\.freshUplinkHealthPayload\(nowMs\)\?\.transport\.mediaRecoveryDegraded === true/,
   );
 
   const liveCopy = functionCode(liveStatus, 'liveCopy');

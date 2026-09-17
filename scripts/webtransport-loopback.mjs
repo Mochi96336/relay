@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { WebTransport, quicheLoaded } from '@fails-components/webtransport';
 import { encodeAudioPacket } from '../src/audio-packet.ts';
+import { AudioSession } from '../src/audio-session.ts';
 import { MicRuntime } from '../src/mic-runtime.ts';
 import {
   startWebTransportMediaServer,
@@ -69,6 +70,17 @@ try {
     directMediaConnected: (candidate) => Boolean(server?.hasSession(candidate)),
     offerDirectMedia: (candidate) => server?.offer(candidate),
   });
+  const session = new AudioSession({
+    sampleRate: 48_000,
+    frameMs: 20,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+  session.setMicGainDb(0);
+  session.start(0);
+  session.setMicExpected(true);
+
   mic.bindPublisher({
     socket: publisherSocket,
     sampleRate: 48_000,
@@ -114,14 +126,19 @@ try {
       }
 
       const frames = mic.receiveDirectMedia(candidate, packet, nowMs);
+      const ingestResults = [];
       for (const frame of frames) {
-        acceptedPackets += 1;
-        acceptedEndSampleIndex = frame.firstSampleIndex + frame.pcm.byteLength / 2;
-        if (frame.pcm.byteLength > 0) mic.noteFrame(nowMs);
+        const ingested = session.ingestMic(frame, mic.sampleRate, nowMs);
+        ingestResults.push(ingested);
+        if (ingested.samples.length > 0) {
+          acceptedPackets += 1;
+          acceptedEndSampleIndex = frame.firstSampleIndex + frame.pcm.byteLength / 2;
+          mic.noteFrame(nowMs);
+        }
       }
       const resolve = nextAccepted;
       nextAccepted = null;
-      resolve?.({ candidate, frames, nowMs });
+      resolve?.({ candidate, frames, ingestResults, nowMs });
     },
   });
 
@@ -159,7 +176,8 @@ try {
   assert.equal(server.hasSession(ticket), true);
 
   // Then prove an ordinary current-generation AudioPacket reaches Relay's
-  // receiver and establishes an accepted sample frontier.
+  // receiver and contributes novel PCM through the same AudioSession boundary
+  // production uses before it renews Mic flow freshness.
   ingressMode = 'accept';
   const firstAccepted = accepted();
   const firstPacket = encodeAudioPacket({
@@ -174,9 +192,12 @@ try {
   if (first instanceof Error) throw first;
   assert.equal(first.candidate, ticket);
   assert.equal(first.frames.length, 1);
+  assert.equal(first.ingestResults.length, 1);
+  assert.equal(first.ingestResults[0].samples.length, 2);
   assert.equal(acceptedPackets, 1);
   assert.equal(acceptedEndSampleIndex, 2);
   assert.equal(mic.receiverStats()?.emittedPackets, 1);
+  assert.equal(mic.frameAgeMs(first.nowMs), 0);
 
   // Model the missing fault class. QUIC/WebTransport accepts the datagram and
   // writer.write() resolves, but the test-only ingress gate swallows the packet
@@ -197,12 +218,12 @@ try {
 
   assert.equal(lost.candidate, ticket);
   assert.equal(lost.packet.byteLength, secondPacket.byteLength);
-  assert.equal(acceptedPackets, 1, 'resolved writer must not imply a Relay-accepted PCM packet');
-  assert.equal(acceptedEndSampleIndex, 2, 'current-generation accepted sample frontier must remain unchanged');
+  assert.equal(acceptedPackets, 1, 'resolved writer must not imply Relay-accepted PCM progress');
+  assert.equal(acceptedEndSampleIndex, 2, 'last post-session source contribution must remain unchanged');
   assert.equal(mic.receiverStats()?.receivedPackets, 1, 'dropped datagram never reaches the AudioPacket receiver');
   assert.equal(mic.receiverStats()?.emittedPackets, 1);
 
-  console.log('native WebTransport 1200-byte loopback + writer-resolve PCM ingress-drop proof passed');
+  console.log('native WebTransport 1200-byte loopback + post-session writer-resolve ingress-drop proof passed');
   mic.clearMediaAuthority(0);
 } finally {
   if (timeout) clearTimeout(timeout);

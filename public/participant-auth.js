@@ -1,3 +1,5 @@
+import { observePublisherControlLiveness } from './publisher-control-liveness.js';
+
 /**
  * Sends the private browser capability inside the established WebSocket rather
  * than in its request URL. Reverse proxies and tunnel access logs commonly
@@ -25,6 +27,7 @@ export function participantAuthenticationPayload() {
 export function sendParticipantAuthentication(socket) {
   const payload = participantAuthenticationPayload();
   if (!payload || !socket || typeof socket.send !== 'function') return false;
+  observePublisherControlLiveness(socket);
   socket.send(JSON.stringify(payload));
   return true;
 }

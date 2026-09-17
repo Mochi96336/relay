@@ -1,0 +1,87 @@
+name: Temporary incomplete packet-window semantic hysteresis patch
+
+on:
+  push:
+    branches:
+      - agent/media-coverage-semantic-fence
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/media-coverage-semantic-fence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply exact incomplete-window hysteresis replacements
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('public/mic-media-path-recovery.js')
+          text = path.read_text()
+          replacements = [
+              (
+                  """    this.lastPacketCoverage = null;\n    this.staleCount = 0;\n    this.phase = 'observing';""",
+                  """    this.lastPacketCoverage = null;\n    this.incompletePacketSemanticStalls = 0;\n    this.staleCount = 0;\n    this.phase = 'observing';""",
+              ),
+              (
+                  """  } = {}) {\n    const submitted = optionalNonNegativeInteger(senderSubmittedPackets);\n    const failed = optionalNonNegativeInteger(senderFailedPackets);\n    const received = optionalNonNegativeInteger(serverReceivedPacketSerial);""",
+                  """  } = {}) {\n    this.incompletePacketSemanticStalls = 0;\n    const submitted = optionalNonNegativeInteger(senderSubmittedPackets);\n    const failed = optionalNonNegativeInteger(senderFailedPackets);\n    const received = optionalNonNegativeInteger(serverReceivedPacketSerial);""",
+              ),
+              (
+                  """    if (submitted === null || failed === null || received === null) {\n      return { available: false, ready: false, healthy: null, coverage: null, submittedDelta: null };\n    }""",
+                  """    if (submitted === null || failed === null || received === null) {\n      this.incompletePacketSemanticStalls = 0;\n      return { available: false, ready: false, healthy: null, coverage: null, submittedDelta: null };\n    }""",
+              ),
+              (
+                  """    this.lastServerReceivedPacketSerial = received;\n    this.lastPacketCoverage = coverage;\n    return {""",
+                  """    this.lastServerReceivedPacketSerial = received;\n    this.lastPacketCoverage = coverage;\n    this.incompletePacketSemanticStalls = 0;\n    return {""",
+              ),
+              (
+                  """  }\n\n  beginWebSocketProof(serverPath, acceptedFrameSerial, packetCounters = {}) {""",
+                  """  }\n\n  shouldDeferIncompletePacketWindow(semanticAdvanced) {\n    if (semanticAdvanced) {\n      this.incompletePacketSemanticStalls = 0;\n      return true;\n    }\n    this.incompletePacketSemanticStalls += 1;\n    if (this.incompletePacketSemanticStalls < this.staleObservations) return true;\n    this.incompletePacketSemanticStalls = 0;\n    this.staleCount = Math.max(this.staleCount, this.staleObservations - 1);\n    return false;\n  }\n\n  beginWebSocketProof(serverPath, acceptedFrameSerial, packetCounters = {}) {""",
+              ),
+              (
+                  """      if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }""",
+                  """      if (\n        packetEvidence.available\n        && !packetEvidence.ready\n        && this.shouldDeferIncompletePacketWindow(serverAdvanced)\n      ) {\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }""",
+              ),
+              (
+                  """        if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }""",
+                  """        if (\n          packetEvidence.available\n          && !packetEvidence.ready\n          && this.shouldDeferIncompletePacketWindow(serverAdvanced)\n        ) {\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }""",
+              ),
+              (
+                  """        if (!packetEvidence.ready && semanticProofAdvanced) {\n          if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }""",
+                  """        if (\n          !packetEvidence.ready\n          && this.shouldDeferIncompletePacketWindow(semanticProofAdvanced)\n        ) {\n          if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }""",
+              ),
+              (
+                  """      if (!packetEvidence.ready && serverAdvanced) {\n        if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }""",
+                  """      if (\n        !packetEvidence.ready\n        && this.shouldDeferIncompletePacketWindow(serverAdvanced)\n      ) {\n        if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }""",
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match, found {count}: {old[:140]!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+      - name: Verify focused policy diff
+        run: |
+          git diff --check
+          git diff -- public/mic-media-path-recovery.js
+          test "$(git diff --name-only | grep -v '^public/mic-media-path-recovery.js$' | wc -l)" -eq 0
+      - name: Commit patch and retire temporary workflow
+        run: |
+          rm .github/workflows/patch-incomplete-window-hysteresis.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add public/mic-media-path-recovery.js .github/workflows/patch-incomplete-window-hysteresis.yml
+          git commit -m "fix(audio): bound semantic stalls during packet accumulation"
+          git push origin HEAD:agent/media-coverage-semantic-fence

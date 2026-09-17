@@ -290,6 +290,7 @@ test('capture-generation advance clears recovery/FIFO authority and fences every
   assert.equal(mic.acceptedFrameSerial, 1);
   assert.deepEqual(sendHealth(generation7, PACKET_SAMPLES).pcm, {
     acceptedFrameSerial: 1,
+    receivedPacketSerial: 1,
     mediaPath: 'webtransport',
   });
 
@@ -389,6 +390,7 @@ test('capture-generation advance clears recovery/FIFO authority and fences every
   assert.equal(generation8Ack.captureGeneration, 8);
   assert.deepEqual(generation8Ack.pcm, {
     acceptedFrameSerial: 1,
+    receivedPacketSerial: 1,
     mediaPath: 'webtransport',
   });
   assert.equal((transport as any).lastMediaRecoveryDecision?.captureGeneration, 8);

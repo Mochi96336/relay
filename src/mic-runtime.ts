@@ -282,6 +282,7 @@ export class MicRuntime {
           ...(health.healthRequestId === undefined ? {} : { healthRequestId: health.healthRequestId }),
           pcm: {
             acceptedFrameSerial: this.currentAcceptedFrameSerial,
+            receivedPacketSerial: this.currentAudioTransport?.stats().emittedPackets ?? 0,
             mediaPath: this.mediaPath(),
           },
         }));

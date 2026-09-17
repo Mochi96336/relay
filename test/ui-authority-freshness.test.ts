@@ -275,7 +275,18 @@ test('publisher command authority waits for registration and replayed control sn
   );
   assert.match(
     publisherSource,
-    /message\.type === 'audio-uplink-health-ack'[\s\S]*publisherCommandLiveness\.noteAck\(ackGeneration, performance\.now\(\)\)[\s\S]*refreshPublisherCommandChannel\(\)/,
+    /function sendAudioUplinkHealth\(\) \{[\s\S]*publisherCommandLiveness\.beginHealthRequest\(sentAtMs\)[\s\S]*audioUplinkHealthPayload\(healthRequestId\)[\s\S]*publisherCommandLiveness\.cancelHealthRequest\(healthRequestId\)/,
+    'only a successfully sent, correlated health request may become command freshness evidence',
+  );
+  assert.match(
+    publisherSource,
+    /function audioUplinkHealthPayload\(healthRequestId\)[\s\S]*healthRequestId,/,
+    'publisher health must carry the correlation token on the wire',
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'audio-uplink-health-ack'[\s\S]*const healthRequestId = message\.healthRequestId[\s\S]*Number\.isInteger\(healthRequestId\)[\s\S]*publisherCommandLiveness\.noteAck\(ackGeneration, healthRequestId, performance\.now\(\)\)[\s\S]*refreshPublisherCommandChannel\(\)/,
+    'ACK arrival alone must not refresh command authority without the matching request token',
   );
   assert.match(
     publisherSource,

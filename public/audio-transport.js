@@ -243,7 +243,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.mediaPathRecovery = new MicMediaPathRecovery();
     this.publisherSocketEpoch = 0;
     this.publisherSocketListener = null;
-    this.latestPublisherHealth = null;
+    this.pendingPublisherHealth = [];
     this.lastMediaRecoveryDecision = null;
     this.resetStats();
   }
@@ -269,7 +269,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.minWebTransportMaxPacketBytes = null;
     this.maxWebTransportMaxPacketBytes = null;
     this.mediaPathRecovery?.reset();
-    this.latestPublisherHealth = null;
+    this.pendingPublisherHealth = [];
     this.lastMediaRecoveryDecision = null;
   }
 
@@ -356,6 +356,7 @@ export class PreferredAudioTransport extends AudioTransport {
 
   bind(socket, options) {
     this.detachPublisherSocketListener();
+    this.pendingPublisherHealth = [];
     this.fallback.bind(socket, options);
     const epoch = ++this.publisherSocketEpoch;
     if (typeof socket?.addEventListener === 'function') {
@@ -366,7 +367,10 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   unbind(socket) {
-    if (this.publisherSocketListener?.socket === socket) this.detachPublisherSocketListener();
+    if (this.publisherSocketListener?.socket === socket) {
+      this.detachPublisherSocketListener();
+      this.pendingPublisherHealth = [];
+    }
     this.fallback.unbind(socket);
   }
 
@@ -375,7 +379,7 @@ export class PreferredAudioTransport extends AudioTransport {
       epoch !== this.publisherSocketEpoch
       || this.fallback.socket !== socket
       || typeof event?.data !== 'string'
-      || !this.latestPublisherHealth
+      || this.pendingPublisherHealth.length < 1
     ) return;
 
     let message;
@@ -386,14 +390,17 @@ export class PreferredAudioTransport extends AudioTransport {
     }
     if (message?.type !== 'audio-uplink-health-ack' || message?.version !== 1) return;
 
+    const publisherHealth = this.pendingPublisherHealth[0];
     const ackGeneration = nonNegativeSafeInteger(message.captureGeneration);
     const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
     if (
       ackGeneration === null
       || ackGeneration > 0xffff_ffff
       || acceptedFrameSerial === null
-      || ackGeneration !== this.latestPublisherHealth.captureGeneration
+      || ackGeneration !== publisherHealth.captureGeneration
+      || publisherHealth.socketEpoch !== epoch
     ) return;
+    this.pendingPublisherHealth.shift();
 
     const serverMediaPath = message.pcm?.mediaPath === 'webtransport'
       || message.pcm?.mediaPath === 'websocket'
@@ -401,12 +408,12 @@ export class PreferredAudioTransport extends AudioTransport {
       : null;
     const decision = this.mediaPathRecovery.observe({
       captureGeneration: ackGeneration,
-      capturedSamples: this.latestPublisherHealth.capturedSamples,
+      capturedSamples: publisherHealth.capturedSamples,
       serverAcceptedFrameSerial: acceptedFrameSerial,
       serverMediaPath,
-      path: this.datagramWriter ? 'webtransport' : 'websocket',
+      path: publisherHealth.path,
       socketEpoch: epoch,
-      eligible: globalThis.document?.visibilityState !== 'hidden',
+      eligible: publisherHealth.eligible,
     });
     this.lastMediaRecoveryDecision = decision;
 
@@ -434,12 +441,22 @@ export class PreferredAudioTransport extends AudioTransport {
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
       const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
+      const payloadPath = payload.transport?.path;
+      const path = payloadPath === 'webtransport' || payloadPath === 'websocket'
+        ? payloadPath
+        : this.datagramWriter ? 'webtransport' : 'websocket';
       if (
         captureGeneration !== null
         && captureGeneration <= 0xffff_ffff
         && capturedSamples !== null
       ) {
-        this.latestPublisherHealth = { captureGeneration, capturedSamples };
+        this.pendingPublisherHealth.push({
+          captureGeneration,
+          capturedSamples,
+          path,
+          socketEpoch: this.publisherSocketEpoch,
+          eligible: globalThis.document?.visibilityState !== 'hidden',
+        });
       }
     }
     return result;
@@ -641,7 +658,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.detachPublisherSocketListener();
     this.publisherSocketEpoch += 1;
     this.mediaPathRecovery.reset();
-    this.latestPublisherHealth = null;
+    this.pendingPublisherHealth = [];
     this.lastMediaRecoveryDecision = null;
     this.closeWebTransport();
     this.fallback.unbind();

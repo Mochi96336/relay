@@ -126,7 +126,7 @@ test('server-stale accepted PCM demotes WT once and quarantines it for the captu
   assert.equal(FakeWebTransport.instances.length, 2);
 });
 
-test('delayed ordered health ACKs cannot manufacture stale recovery from one latest local frontier', async () => {
+test('delayed ordered health ACKs preserve per-report local frontiers when detecting stale server PCM', async () => {
   FakeWebTransport.instances.length = 0;
   const { PreferredAudioTransport } = await import(moduleUrl.href);
   const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
@@ -135,28 +135,21 @@ test('delayed ordered health ACKs cannot manufacture stale recovery from one lat
   await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
 
   // Model several health reports already in flight before their ordered
-  // WebSocket ACKs drain. PreferredAudioTransport intentionally observes the
-  // latest local capture snapshot rather than pretending an ACK contains a
-  // request-correlated capturedSamples frontier.
+  // WebSocket ACKs drain. Each report has a distinct local capture frontier,
+  // and the control socket preserves request/ACK order.
   for (const capturedSamples of [1_000, 1_100, 1_200, 1_300]) {
     assert.equal(transport.sendControlJson(health(7, capturedSamples)).sent, true);
   }
 
-  // Every delayed ACK is paired with the same latest local frontier. The first
-  // observation establishes a baseline and the rest must not spend the stale
-  // budget merely because multiple old ACKs arrive together.
+  // Every delayed ACK reports the same accepted PCM serial. Request-correlated
+  // send-time snapshots must preserve the advancing local frontier, so control
+  // latency cannot hide a real server-side media stall.
   for (let index = 0; index < 4; index += 1) {
     socket.emitJson(ack(7, 10, 'webtransport'));
   }
-  assert.equal(transport.stats().path, 'webtransport');
-  assert.equal(FakeWebTransport.instances[0].closeCalls, 0);
-
-  // A later ordered ACK carrying real server PCM progress is independent of
-  // the earlier control latency and keeps the healthy WT path selected.
-  transport.sendControlJson(health(7, 1_400));
-  socket.emitJson(ack(7, 11, 'webtransport'));
-  assert.equal(transport.stats().path, 'webtransport');
-  assert.equal(FakeWebTransport.instances[0].closeCalls, 0);
+  assert.equal(transport.stats().path, 'websocket');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
+  assert.equal(socket.closeCalls.length, 0);
 });
 
 test('late WT acceptance cannot prove fallback before the server reports WS and then accepts another frame', async () => {

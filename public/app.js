@@ -214,8 +214,8 @@ function audioUplinkHealthPayload() {
 }
 
 function sendAudioUplinkHealth() {
-  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(audioUplinkHealthPayload()));
+  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return false;
+  return audioTransport.sendControlJson(audioUplinkHealthPayload()).sent;
 }
 
 function startAudioUplinkHealthReporting() {
@@ -552,10 +552,15 @@ function sendVocalFineTune() {
     return false;
   }
   try {
-    socket.send(JSON.stringify({
+    const result = audioTransport.sendControlJson({
       type: 'set-vocal-fine-tune',
       valueMs: Number(vocalFineTune.value),
-    }));
+    });
+    if (!result.sent) {
+      restoreLastKnownControl('set-vocal-fine-tune');
+      if (result.reason === 'disconnected') markPublisherAuthorityStale();
+      return false;
+    }
   } catch {
     restoreLastKnownControl('set-vocal-fine-tune');
     markPublisherAuthorityStale();
@@ -571,13 +576,18 @@ function sendMixSettings() {
     return false;
   }
   try {
-    socket.send(JSON.stringify({
+    const result = audioTransport.sendControlJson({
       type: 'set-mix',
       micGainDb: Number(micGain.value),
       // Retain the old field on the wire while the server owns its only valid
       // value. It is no longer a second product control.
       songLevel: FIXED_SONG_LEVEL,
-    }));
+    });
+    if (!result.sent) {
+      restoreLastKnownControl('set-mix');
+      if (result.reason === 'disconnected') markPublisherAuthorityStale();
+      return false;
+    }
   } catch {
     restoreLastKnownControl('set-mix');
     markPublisherAuthorityStale();
@@ -763,7 +773,7 @@ async function playCalibrationProbe(requestId, leadMs) {
     if (activeCalibrationProbeRequestId !== requestId) return;
     activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({
+    const result = audioTransport.sendControlJson({
       type: 'calibration-probe-played',
       target: 'mic',
       requestId,
@@ -771,19 +781,21 @@ async function playCalibrationProbe(requestId, leadMs) {
       // the generation it read off a PCM frame header, which is a uint32, so
       // sending the untruncated clock seed here never matches.
       generation: captureGeneration >>> 0,
-    }));
+    });
+    if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
   } catch (error) {
     console.warn('phone calibration probe failed', error);
     if (activeCalibrationProbeRequestId !== requestId) return;
     activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({
+    const result = audioTransport.sendControlJson({
       type: 'calibration-probe-failed',
       target: 'mic',
       requestId,
       generation: captureGeneration >>> 0,
       reason: error instanceof Error ? error.message : String(error),
-    }));
+    });
+    if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
   }
 }
 
@@ -1493,7 +1505,13 @@ calibrateButton.addEventListener('click', () => {
   if (!publisherCommandAuthority(
     roomSongAvailable === true && roomCanStartCalibration === true,
   ).actionable) return;
-  socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
+  const result = audioTransport.sendControlJson({ type: 'start-timing-calibration' });
+  if (!result.sent) {
+    if (result.reason === 'disconnected') markPublisherAuthorityStale();
+    calibrateStatus.textContent = result.reason === 'congested'
+      ? 'Calibration not started: microphone uplink congested.'
+      : 'Calibration not started: Relay is disconnected.';
+  }
 });
 
 updateMixLabels();

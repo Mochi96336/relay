@@ -65,6 +65,12 @@ function base64Bytes(value) {
   return bytes;
 }
 
+function outgoingByteLength(value) {
+  if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
+  const byteLength = Number(value?.byteLength);
+  return Number.isFinite(byteLength) && byteLength > 0 ? byteLength : 0;
+}
+
 /**
  * Media-plane boundary used by microphone capture.
  */
@@ -148,12 +154,8 @@ export class WebSocketAudioTransport extends AudioTransport {
     const state = this.state();
     if (!state.ready) return { ...state, sent: false };
 
-    const packetBytes = Number(packet?.byteLength);
-    if (
-      Number.isFinite(packetBytes)
-      && packetBytes > 0
-      && state.bufferedAmount + packetBytes > this.maxBufferedBytes
-    ) {
+    const packetBytes = outgoingByteLength(packet);
+    if (packetBytes > 0 && state.bufferedAmount + packetBytes > this.maxBufferedBytes) {
       return {
         ...state,
         ready: false,
@@ -247,6 +249,10 @@ export class PreferredAudioTransport extends AudioTransport {
       webSocketCongestedRejects: 0,
       webSocketDisconnectedRejects: 0,
       webSocketSendFailures: 0,
+      webSocketControlMessagesSent: 0,
+      webSocketControlCongestedRejects: 0,
+      webSocketControlDisconnectedRejects: 0,
+      webSocketControlSendFailures: 0,
     };
     this.minWebTransportMaxPacketBytes = null;
     this.maxWebTransportMaxPacketBytes = null;
@@ -295,6 +301,16 @@ export class PreferredAudioTransport extends AudioTransport {
     else this.telemetry.webSocketSendFailures += 1;
   }
 
+  recordControlFallbackResult(result) {
+    if (result.sent) {
+      this.telemetry.webSocketControlMessagesSent += 1;
+      return;
+    }
+    if (result.reason === 'congested') this.telemetry.webSocketControlCongestedRejects += 1;
+    else if (result.reason === 'disconnected') this.telemetry.webSocketControlDisconnectedRejects += 1;
+    else this.telemetry.webSocketControlSendFailures += 1;
+  }
+
   stats() {
     const path = this.datagramWriter ? 'webtransport' : 'websocket';
     const maxPacketBytes = this.datagramWriter
@@ -320,6 +336,12 @@ export class PreferredAudioTransport extends AudioTransport {
 
   unbind(socket) {
     this.fallback.unbind(socket);
+  }
+
+  sendControlJson(payload) {
+    const result = this.fallback.send(JSON.stringify(payload));
+    this.recordControlFallbackResult(result);
+    return result;
   }
 
   /**

@@ -371,6 +371,10 @@ function handleCaptureWorkletMessage(event, graph) {
         'quanta padded with silence',
         event.data.recovered ? '(recovered)' : '(continuing)',
       );
+      if (event.data.recovered !== true) {
+        const recovery = micCaptureRecovery.noteInputGap(captureSnapshot());
+        if (recovery.rebuild) void rebuildPublisherCaptureGraph('input-gap');
+      }
     }
     return;
   }

@@ -99,6 +99,17 @@ export class MicCaptureRecoveryWatchdog {
     return { discontinuity };
   }
 
+  noteInputGap(snapshot) {
+    if (!this.active) return { rebuild: false };
+    const current = normalizeSnapshot(snapshot);
+    this.beginRecovery(current, 'input-gap');
+    const rebuild = current.visible
+      && current.contextState === 'running'
+      && !this.rebuildRequested;
+    if (rebuild) this.rebuildRequested = true;
+    return { rebuild };
+  }
+
   noteGraphRebuilt(snapshot) {
     if (!this.active) return;
     this.rebuildRequested = false;

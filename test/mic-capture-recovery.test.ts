@@ -5,6 +5,7 @@ import test from 'node:test';
 import { MicCaptureRecoveryWatchdog } from '../public/mic-capture-recovery.js';
 
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+const captureWorklet = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
 
 function snap(
   nowMs: number,
@@ -73,6 +74,42 @@ test('running AudioContext without PCM requests one graph rebuild', () => {
   assert.equal(watchdog.observe(snap(140, 1.14, 0)).rebuild, false);
 });
 
+test('worklet reports only sustained active input gaps to recovery', () => {
+  assert.match(
+    captureWorklet,
+    /activeGapQuanta - this\.reportedActiveGapQuanta >= 400[\s\S]*reportInputGap\(false\)/,
+  );
+});
+
+test('sustained input gap requests one capture rebuild even while padded PCM advances', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 1_500 });
+  watchdog.start(snap(0, 1, 0));
+
+  // Worklet-padded silence currently travels as normal PCM chunks, so the old
+  // sample-cursor watchdog sees healthy progress and cannot own this failure.
+  const padded = watchdog.observe(snap(1_000, 2, 48_000), { freshPcm: true });
+  assert.equal(padded.sampleAdvanced, true);
+  assert.equal(padded.rebuild, false);
+
+  const gap = watchdog.noteInputGap(snap(1_100, 2.1, 52_800));
+  assert.equal(gap.rebuild, true);
+  assert.equal(watchdog.status().recovering, true);
+  assert.equal(watchdog.status().recoveryReason, 'input-gap');
+  assert.equal(watchdog.status().rebuildRequested, true);
+
+  // Repeated gap evidence from the same graph cannot spend another rebuild.
+  assert.equal(watchdog.noteInputGap(snap(1_200, 2.2, 57_600)).rebuild, false);
+});
+
+test('hidden sustained input gap does not force a graph rebuild', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog();
+  watchdog.start(snap(0, 1, 0));
+  const gap = watchdog.noteInputGap(snap(1_100, 2.1, 52_800, 'running', false));
+  assert.equal(gap.rebuild, false);
+  assert.equal(watchdog.status().recovering, true);
+  assert.equal(watchdog.status().recoveryReason, 'input-gap');
+});
+
 test('suspended or interrupted context requests resume without generation-storm rebuilds', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   watchdog.start(snap(0, 1, 0));
@@ -108,6 +145,17 @@ test('socket reconnect cannot count as capture recovery evidence', () => {
     /WebSocket|publisherActive|socket/,
     'the liveness state machine must remain sample/clock driven',
   );
+});
+
+test('sustained worklet input gaps are owned by capture recovery, not media recovery', () => {
+  const gapAt = app.indexOf("if (event.data?.type === 'input-gap')");
+  const pcmAt = app.indexOf('// Capture time advances once for the complete worklet chunk.', gapAt);
+  assert.ok(gapAt >= 0 && pcmAt > gapAt);
+  const gapBlock = app.slice(gapAt, pcmAt);
+  assert.match(gapBlock, /event\.data\.recovered !== true/);
+  assert.match(gapBlock, /micCaptureRecovery\.noteInputGap\(captureSnapshot\(\)\)/);
+  assert.match(gapBlock, /if \(recovery\.rebuild\) void rebuildPublisherCaptureGraph\('input-gap'\)/);
+  assert.doesNotMatch(gapBlock, /mediaPathRecovery|demoteWebTransport|replace-websocket/);
 });
 
 test('app rebuild path advances generation and replaces the graph instead of splicing sample clocks', () => {

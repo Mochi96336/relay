@@ -1,4 +1,8 @@
 import { MicMediaPathRecovery } from './mic-media-path-recovery.js';
+import {
+  recordPublisherHealthAckProof,
+  resetPublisherHealthAckProof,
+} from './publisher-health-ack-correlation.js';
 
 const WEB_SOCKET_OPEN = 1;
 
@@ -270,6 +274,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.maxWebTransportMaxPacketBytes = null;
     this.mediaPathRecovery?.reset();
     this.pendingPublisherHealth = [];
+    resetPublisherHealthAckProof();
     this.lastMediaRecoveryDecision = null;
   }
 
@@ -357,6 +362,7 @@ export class PreferredAudioTransport extends AudioTransport {
   bind(socket, options) {
     this.detachPublisherSocketListener();
     this.pendingPublisherHealth = [];
+    resetPublisherHealthAckProof();
     this.fallback.bind(socket, options);
     const epoch = ++this.publisherSocketEpoch;
     if (typeof socket?.addEventListener === 'function') {
@@ -370,6 +376,7 @@ export class PreferredAudioTransport extends AudioTransport {
     if (this.publisherSocketListener?.socket === socket) {
       this.detachPublisherSocketListener();
       this.pendingPublisherHealth = [];
+      resetPublisherHealthAckProof();
     }
     this.fallback.unbind(socket);
   }
@@ -393,15 +400,17 @@ export class PreferredAudioTransport extends AudioTransport {
 
     const publisherHealth = this.pendingPublisherHealth[0];
     const ackGeneration = nonNegativeSafeInteger(message.captureGeneration);
-    const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
     if (
       ackGeneration === null
       || ackGeneration > 0xffff_ffff
-      || acceptedFrameSerial === null
       || ackGeneration !== publisherHealth.captureGeneration
       || publisherHealth.socketEpoch !== epoch
     ) return;
     this.pendingPublisherHealth.shift();
+    recordPublisherHealthAckProof(ackGeneration, publisherHealth.requestSentAtMs);
+
+    const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
+    if (acceptedFrameSerial === null) return;
 
     const serverMediaPath = message.pcm?.mediaPath === 'webtransport'
       || message.pcm?.mediaPath === 'websocket'
@@ -429,6 +438,7 @@ export class PreferredAudioTransport extends AudioTransport {
     // registration that follows; media recovery only requests that one bounded
     // replacement and never touches the capture graph.
     this.publisherSocketEpoch += 1;
+    resetPublisherHealthAckProof();
     try {
       socket.close(4001, 'server PCM stalled');
     } catch {
@@ -437,6 +447,7 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   sendControlJson(payload) {
+    const requestSentAtMs = Number(this.nowMs());
     const result = this.fallback.send(JSON.stringify(payload));
     this.recordControlFallbackResult(result);
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
@@ -450,6 +461,7 @@ export class PreferredAudioTransport extends AudioTransport {
         captureGeneration !== null
         && captureGeneration <= 0xffff_ffff
         && capturedSamples !== null
+        && Number.isFinite(requestSentAtMs)
       ) {
         this.pendingPublisherHealth.push({
           captureGeneration,
@@ -457,6 +469,7 @@ export class PreferredAudioTransport extends AudioTransport {
           path,
           socketEpoch: this.publisherSocketEpoch,
           eligible: globalThis.document?.visibilityState !== 'hidden',
+          requestSentAtMs,
         });
       }
     }
@@ -660,6 +673,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.publisherSocketEpoch += 1;
     this.mediaPathRecovery.reset();
     this.pendingPublisherHealth = [];
+    resetPublisherHealthAckProof();
     this.lastMediaRecoveryDecision = null;
     this.closeWebTransport();
     this.fallback.unbind();
@@ -761,7 +775,7 @@ export class PreferredAudioTransport extends AudioTransport {
         sent: false,
         reason: 'disconnected',
         bufferedAmount: 0,
-        maxPacketBytes,
+        maxPacketBytes: 0,
         path: 'webtransport',
       };
     }

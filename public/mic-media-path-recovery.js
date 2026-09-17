@@ -357,7 +357,7 @@ export class MicMediaPathRecovery {
         this.staleCount = 0;
         return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
       }
-      if (packetEvidence.available && !packetEvidence.ready) {
+      if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {
         return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
       }
       this.staleCount += 1;
@@ -380,7 +380,7 @@ export class MicMediaPathRecovery {
           this.staleCount = 0;
           return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
         }
-        if (packetEvidence.available && !packetEvidence.ready) {
+        if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
         this.staleCount += 1;
@@ -392,15 +392,13 @@ export class MicMediaPathRecovery {
 
       const packetEvidence = this.packetCoverageEvidence(packetCounters);
       if (packetEvidence.available) {
-        if (!packetEvidence.ready) {
+        const semanticProofAdvanced = this.proofBaselineSerial !== null
+          && acceptedSerial > this.proofBaselineSerial;
+        if (!packetEvidence.ready && semanticProofAdvanced) {
           if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
-        if (
-          packetEvidence.healthy
-          && this.proofBaselineSerial !== null
-          && acceptedSerial > this.proofBaselineSerial
-        ) {
+        if (packetEvidence.healthy && semanticProofAdvanced) {
           this.phase = 'observing';
           this.staleCount = 0;
           this.proofBaselineSerial = null;
@@ -434,7 +432,7 @@ export class MicMediaPathRecovery {
 
     const packetEvidence = this.packetCoverageEvidence(packetCounters);
     if (packetEvidence.available) {
-      if (!packetEvidence.ready) {
+      if (!packetEvidence.ready && serverAdvanced) {
         if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
         return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
       }

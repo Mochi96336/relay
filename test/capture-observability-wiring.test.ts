@@ -11,7 +11,7 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
   );
   assert.match(source, /captureAppliedSettings = readCaptureSettings\(captureStream\);/);
 
-  const payloadStart = source.indexOf('function audioUplinkHealthPayload()');
+  const payloadStart = source.indexOf('function audioUplinkHealthPayload(');
   const payloadEnd = source.indexOf('function sendAudioUplinkHealth()', payloadStart);
   assert.ok(payloadStart >= 0 && payloadEnd > payloadStart, 'uplink health payload boundary is missing');
   const payload = source.slice(payloadStart, payloadEnd);

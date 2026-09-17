@@ -90,7 +90,7 @@ test('capture-generation reset retires old unresolved WT write from the stall wa
   value.close();
 });
 
-test('late rejection from the retired capture cannot contaminate replacement telemetry or demote WT', async () => {
+test('late rejection from the retired capture cannot contaminate replacement telemetry or demote reused WT', async () => {
   const value = await transport(() => 0);
   assert.equal(value.send(new Uint8Array(100)).sent, true);
   const oldWriter = DeferredWebTransport.instances[0].writer;
@@ -99,6 +99,12 @@ test('late rejection from the retired capture cannot contaminate replacement tel
   assert.equal(value.stats().webTransportPacketsSubmitted, 0);
   assert.equal(value.stats().webTransportSendFailures, 0);
   assert.equal(value.stats().webTransportDemotions, 0);
+
+  // The replacement capture intentionally reuses the healthy physical WT
+  // session. Its new write belongs to the new logical write epoch even though
+  // the writer object itself is unchanged.
+  assert.equal(value.send(new Uint8Array(100)).sent, true);
+  assert.equal(value.stats().webTransportPacketsSubmitted, 1);
 
   oldWriter.rejectOne();
   await Promise.resolve();
@@ -109,6 +115,8 @@ test('late rejection from the retired capture cannot contaminate replacement tel
   assert.equal(value.stats().webTransportDemotions, 0,
     'retired-generation async failure must not spend the replacement capture media path');
   assert.equal(value.stats().path, 'webtransport');
+  assert.equal(DeferredWebTransport.instances[0].closeCalls, 0,
+    'capture boundary must not tear down the healthy physical WT session');
 
   value.close();
 });

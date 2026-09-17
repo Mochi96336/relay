@@ -21,6 +21,8 @@ export class PublisherCommandLiveness {
     }
     this.freshMs = freshMs;
     this.reconnectMs = reconnectMs;
+    this.nextHealthRequestId = 0;
+    this.pendingHealthRequests = new Map();
     this.reset();
   }
 
@@ -28,8 +30,7 @@ export class PublisherCommandLiveness {
     this.generation = null;
     this.startedAtMs = -Infinity;
     this.lastAckAtMs = -Infinity;
-    this.nextHealthRequestId = 0;
-    this.pendingHealthRequests = new Map();
+    this.pendingHealthRequests.clear();
   }
 
   begin(generation, nowMs) {
@@ -39,7 +40,6 @@ export class PublisherCommandLiveness {
     this.generation = normalizedGeneration;
     this.startedAtMs = nowMs;
     this.lastAckAtMs = -Infinity;
-    this.nextHealthRequestId = 0;
     this.pendingHealthRequests.clear();
   }
 

@@ -39,6 +39,7 @@ export const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
 export const DEFAULT_WEBSOCKET_BACKLOG_MS = 200;
 export const DEFAULT_WEBSOCKET_PCM_SAMPLE_RATE = 48_000;
 const PCM16_BYTES_PER_SAMPLE = 2;
+const MEDIA_PATH_PACKET_COVERAGE_MIN_TOTAL = 32;
 
 export function realtimeWebSocketBacklogBytes(
   sampleRate = DEFAULT_WEBSOCKET_PCM_SAMPLE_RATE,
@@ -446,16 +447,12 @@ export class PreferredAudioTransport extends AudioTransport {
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
       const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
-      const webSocketPacketsSent = nonNegativeSafeInteger(payload.transport?.webSocketPacketsSent);
-      const webTransportPacketsSubmitted = nonNegativeSafeInteger(payload.transport?.webTransportPacketsSubmitted);
-      const webTransportSendFailures = nonNegativeSafeInteger(payload.transport?.webTransportSendFailures);
-      const submittedPacketTotal = webSocketPacketsSent !== null && webTransportPacketsSubmitted !== null
-        ? webSocketPacketsSent + webTransportPacketsSubmitted
-        : Number.NaN;
-      const senderSubmittedPackets = Number.isSafeInteger(submittedPacketTotal)
-        ? submittedPacketTotal
-        : null;
-      const senderFailedPackets = webTransportSendFailures;
+      const submittedPacketTotal = this.telemetry.webSocketPacketsSent
+        + this.telemetry.webTransportPacketsSubmitted;
+      const quantitativeReady = Number.isSafeInteger(submittedPacketTotal)
+        && submittedPacketTotal >= MEDIA_PATH_PACKET_COVERAGE_MIN_TOTAL;
+      const senderSubmittedPackets = quantitativeReady ? submittedPacketTotal : null;
+      const senderFailedPackets = quantitativeReady ? this.telemetry.webTransportSendFailures : null;
       const payloadPath = payload.transport?.path;
       const path = payloadPath === 'webtransport' || payloadPath === 'websocket'
         ? payloadPath

@@ -73,6 +73,37 @@ test('running AudioContext without PCM requests one graph rebuild', () => {
   assert.equal(watchdog.observe(snap(140, 1.14, 0)).rebuild, false);
 });
 
+test('sustained worklet input gap requests one bounded graph rebuild even while padded PCM advances', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  // The worklet preserves sample time by emitting silence, so both the context
+  // clock and sample cursor keep moving. Cursor-stall recovery alone therefore
+  // cannot detect a physically missing input channel.
+  assert.equal(
+    watchdog.observe(snap(1_050, 2.05, 50_400), { freshPcm: true }).rebuild,
+    false,
+  );
+
+  const first = watchdog.noteInputGap(snap(1_070, 2.07, 51_456), { recovered: false });
+  assert.equal(first.rebuild, true);
+  assert.equal(first.reason, 'input-gap');
+  assert.equal(watchdog.status().recovering, true);
+
+  // The worklet can report another 400-quanta tranche while the same gap
+  // continues. That evidence must not create a rebuild storm.
+  const repeated = watchdog.noteInputGap(snap(2_140, 3.14, 102_912), { recovered: false });
+  assert.equal(repeated.rebuild, false);
+});
+
+test('app promotes current-graph input-gap evidence into capture-graph recovery', () => {
+  const gapAt = app.indexOf("if (event.data?.type === 'input-gap')");
+  assert.ok(gapAt >= 0);
+  const gapHandler = app.slice(gapAt, gapAt + 1_200);
+  assert.match(gapHandler, /micCaptureRecovery\.noteInputGap\(captureSnapshot\(\), \{ recovered:/);
+  assert.match(gapHandler, /rebuildPublisherCaptureGraph\('input-gap'\)/);
+});
+
 test('suspended or interrupted context requests resume without generation-storm rebuilds', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   watchdog.start(snap(0, 1, 0));

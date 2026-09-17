@@ -40,6 +40,7 @@ export class MicCaptureRecoveryWatchdog {
     this.lastSampleProgressAtMs = 0;
     this.hiddenSnapshot = null;
     this.rebuildRequested = false;
+    this.inputGapActive = false;
   }
 
   start(snapshot, reason = 'startup') {
@@ -102,11 +103,41 @@ export class MicCaptureRecoveryWatchdog {
   noteGraphRebuilt(snapshot) {
     if (!this.active) return;
     this.rebuildRequested = false;
+    // input-gap evidence is graph-scoped. A replacement worklet starts a new
+    // observation generation and must earn recovery from its own fresh PCM.
+    this.inputGapActive = false;
     this.beginRecovery(snapshot, 'graph-rebuild');
   }
 
   rearmRebuild() {
     this.rebuildRequested = false;
+  }
+
+  noteInputGap(snapshot, { recovered = false } = {}) {
+    if (!this.active) return { rebuild: false, recovered: false, reason: null };
+    const current = normalizeSnapshot(snapshot);
+
+    if (recovered) {
+      const wasActive = this.inputGapActive;
+      this.inputGapActive = false;
+      return { rebuild: false, recovered: wasActive, reason: null };
+    }
+
+    if (!this.inputGapActive) {
+      this.inputGapActive = true;
+      this.beginRecovery(current, 'input-gap');
+    }
+
+    const rebuild = current.visible
+      && current.contextState === 'running'
+      && !this.rebuildRequested;
+    if (rebuild) this.rebuildRequested = true;
+
+    return {
+      rebuild,
+      recovered: false,
+      reason: rebuild ? 'input-gap' : null,
+    };
   }
 
   status() {
@@ -115,6 +146,7 @@ export class MicCaptureRecoveryWatchdog {
       recovering: this.recovering,
       recoveryReason: this.recoveryReason,
       rebuildRequested: this.rebuildRequested,
+      inputGapActive: this.inputGapActive,
     };
   }
 
@@ -126,11 +158,15 @@ export class MicCaptureRecoveryWatchdog {
 
     const contextAdvanced = current.contextTime > this.lastContextTime;
     const sampleAdvanced = current.sampleCursor > this.lastSampleCursor;
-    if (sampleAdvanced || freshPcm) this.lastSampleProgressAtMs = current.nowMs;
+    // Once the worklet has positively reported a sustained source gap, its
+    // silence padding is timeline continuity, not microphone liveness.
+    const sourceProgress = !this.inputGapActive && (sampleAdvanced || freshPcm);
+    if (sourceProgress) this.lastSampleProgressAtMs = current.nowMs;
 
     let recovered = false;
     if (
       this.recovering
+      && !this.inputGapActive
       && freshPcm
       && current.contextTime > this.recoveryContextTime
       && current.sampleCursor > this.recoverySampleCursor

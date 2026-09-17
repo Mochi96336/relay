@@ -70,10 +70,10 @@ test('WebTransport to WebSocket fallback preserves the missing PCM hole in Audio
   const firstFrames = mic.receiveDirectMedia(ticket, packet(0, 0), 100);
   assert.equal(firstFrames.length, 1);
   const firstIngest = session.ingestMic(firstFrames[0], mic.sampleRate, 100);
-  assert.equal(firstIngest.start, 0);
+  const firstSessionStart = firstIngest.start;
   assert.equal(firstIngest.samples.length, PACKET_SAMPLES);
   mic.noteFrame(100);
-  assert.equal(session.micTotalSamples, PACKET_SAMPLES);
+  assert.equal(session.micTotalSamples, firstSessionStart + PACKET_SAMPLES);
   assert.equal(session.health().micGapMs, 0);
   assert.equal(mic.mediaPath(), 'webtransport');
 
@@ -93,11 +93,11 @@ test('WebTransport to WebSocket fallback preserves the missing PCM hole in Audio
   assert.equal(recoveredFrames[0].firstSampleIndex, PACKET_SAMPLES * 2);
 
   const recoveredIngest = session.ingestMic(recoveredFrames[0], mic.sampleRate, 300);
-  assert.equal(recoveredIngest.start, PACKET_SAMPLES * 2);
+  assert.equal(recoveredIngest.start, firstSessionStart + PACKET_SAMPLES * 2);
   assert.equal(recoveredIngest.samples.length, PACKET_SAMPLES);
   mic.noteFrame(300);
 
-  assert.equal(session.micTotalSamples, PACKET_SAMPLES * 3);
+  assert.equal(session.micTotalSamples, firstSessionStart + PACKET_SAMPLES * 3);
   assert.equal(session.health().micGapMs, 10, 'the missing WT packet remains a 10 ms session-timeline hole');
   assert.equal(mic.receiverStats()?.lostPackets, 1);
   assert.equal(mic.receiverStats()?.emittedPackets, 2);

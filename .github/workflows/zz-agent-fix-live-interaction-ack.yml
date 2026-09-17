@@ -1,0 +1,32 @@
+name: Agent fix Live interaction ACK fixture
+
+on:
+  push:
+    branches:
+      - agent/correctness-publisher-command-freshness
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/correctness-publisher-command-freshness
+          fetch-depth: 0
+      - name: Apply fixture repair and remove scaffolding
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .agent-fix-live-interaction-ack.py
+          rm -f .agent-fix-live-interaction-ack.py
+          rm -f .github/workflows/zz-agent-fix-live-interaction-ack.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'test(browser): acknowledge publisher health round trips'
+          git push origin HEAD:agent/correctness-publisher-command-freshness

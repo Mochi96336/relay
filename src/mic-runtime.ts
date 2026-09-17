@@ -6,10 +6,13 @@ import type { AudioUplinkHealth } from './audio-uplink-health.js';
 import type { PcmFrame } from './pcm-frame.js';
 import type { RelaySocket } from './relay-socket-server.js';
 
+export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
+
 export type MicRuntimeOptions = {
   audioTransportConfig: AudioTransportConfig;
   firstFrameTimeoutMs: number;
   streamLiveMs: number;
+  uplinkHealthTimeoutMs?: number;
   createDirectMediaTicket?: () => string | null;
   directMediaConnected?: (ticket: string | null) => boolean;
   offerDirectMedia?: (ticket: string) => unknown;
@@ -44,6 +47,7 @@ export type MicPublisherBindResult = {
  */
 export class MicRuntime {
   private readonly options: MicRuntimeOptions;
+  private readonly uplinkHealthTimeoutMs: number;
   private currentPublisher: RelaySocket | null = null;
   private currentSampleRate: number | null = null;
   private currentAudioTransport: AudioTransport | null = null;
@@ -52,6 +56,7 @@ export class MicRuntime {
   private currentMediaGeneration: number | null = null;
   private currentUplinkHealth: AudioUplinkHealth | null = null;
   private currentUplinkHealthAt = -Infinity;
+  private uplinkHealthDeadline: ReturnType<typeof setTimeout> | null = null;
   private lastFrameAt = -Infinity;
   private lastFrameOwnerId: string | null = null;
   private lastFrameGeneration: number | null = null;
@@ -59,6 +64,11 @@ export class MicRuntime {
 
   constructor(options: MicRuntimeOptions) {
     this.options = options;
+    const uplinkHealthTimeoutMs = options.uplinkHealthTimeoutMs ?? DEFAULT_UPLINK_HEALTH_TIMEOUT_MS;
+    if (!Number.isFinite(uplinkHealthTimeoutMs) || uplinkHealthTimeoutMs <= 0) {
+      throw new Error('MicRuntime uplinkHealthTimeoutMs must be positive.');
+    }
+    this.uplinkHealthTimeoutMs = uplinkHealthTimeoutMs;
   }
 
   get publisher() {
@@ -160,6 +170,7 @@ export class MicRuntime {
     socket.audioPacketVersion = audioPacketVersion;
     this.currentPublisher = socket;
     this.currentSampleRate = sampleRate;
+    this.armUplinkHealthDeadline(socket, captureGeneration, audioPacketVersion);
 
     if (!preservedAudioTransport) {
       this.currentUplinkHealth = null;
@@ -198,6 +209,7 @@ export class MicRuntime {
   detachPublisher(socket: RelaySocket) {
     if (this.currentPublisher !== socket) return false;
     this.currentPublisher = null;
+    this.clearUplinkHealthDeadline();
     return true;
   }
 
@@ -209,6 +221,7 @@ export class MicRuntime {
     this.currentUplinkHealth = null;
     this.currentUplinkHealthAt = -Infinity;
     this.currentSampleRate = null;
+    this.clearUplinkHealthDeadline();
     this.resetFlowEvidence(nowMs);
   }
 
@@ -247,6 +260,16 @@ export class MicRuntime {
     ) return false;
     this.currentUplinkHealth = health;
     this.currentUplinkHealthAt = nowMs;
+    this.armUplinkHealthDeadline(socket, health.captureGeneration, 2);
+    if (socket.readyState === WebSocket.OPEN && typeof socket.send === 'function') {
+      try {
+        socket.send(JSON.stringify({
+          type: 'audio-uplink-health-ack',
+          version: 1,
+          captureGeneration: health.captureGeneration,
+        }));
+      } catch {}
+    }
     return true;
   }
 
@@ -258,6 +281,40 @@ export class MicRuntime {
         ? Math.max(0, Math.round(nowMs - this.currentUplinkHealthAt))
         : null,
     };
+  }
+
+  private clearUplinkHealthDeadline() {
+    if (this.uplinkHealthDeadline !== null) clearTimeout(this.uplinkHealthDeadline);
+    this.uplinkHealthDeadline = null;
+  }
+
+  private armUplinkHealthDeadline(
+    socket: RelaySocket,
+    captureGeneration: number | null,
+    audioPacketVersion: AudioPacketVersion,
+  ) {
+    this.clearUplinkHealthDeadline();
+    if (audioPacketVersion !== 2 || captureGeneration === null) return;
+
+    const timer = setTimeout(() => {
+      if (this.uplinkHealthDeadline !== timer) return;
+      this.uplinkHealthDeadline = null;
+      if (
+        this.currentPublisher !== socket
+        || socket.role !== 'publisher'
+        || socket.audioPacketVersion !== 2
+        || socket.captureGeneration !== captureGeneration
+      ) return;
+      try {
+        socket.close(4000, 'publisher uplink health stale');
+      } catch {
+        try {
+          socket.terminate();
+        } catch {}
+      }
+    }, this.uplinkHealthTimeoutMs);
+    timer.unref?.();
+    this.uplinkHealthDeadline = timer;
   }
 
   resetFlowEvidence(nowMs: number) {

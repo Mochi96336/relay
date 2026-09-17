@@ -267,6 +267,28 @@ test('publisher command authority waits for registration and replayed control sn
     publisherSource,
     /authorityFresh: publisherAuthorityFresh\s*&& publisherMixSettingsFresh\s*&& publisherSourceStatusFresh/,
   );
+  assert.match(publisherSource, /commandChannelFresh: publisherCommandChannelFresh\(\)/);
+  assert.doesNotMatch(
+    publisherSource,
+    /commandChannelFresh: socket\?\.readyState === WebSocket\.OPEN/,
+    'OPEN alone must never be publisher command freshness',
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'audio-uplink-health-ack'[\s\S]*publisherCommandLiveness\.noteAck\(ackGeneration, performance\.now\(\)\)[\s\S]*refreshPublisherCommandChannel\(\)/,
+  );
+  assert.match(
+    publisherSource,
+    /publisherCommandLiveness\.begin\(expectedGeneration, performance\.now\(\)\)/,
+  );
+  assert.match(
+    publisherSource,
+    /function sendAudioUplinkHealth\(\) \{[\s\S]*maintainPublisherCommandChannel\(\)/,
+  );
+  assert.match(
+    publisherSource,
+    /state\.reconnect[\s\S]*staleSocket\.close\(4000, 'publisher command ack stale'\)/,
+  );
   assert.match(
     publisherSource,
     /message\.type === 'registered'[\s\S]*publisherAuthorityFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,

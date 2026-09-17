@@ -1,4 +1,5 @@
 import { authorityState } from './authority-freshness.js';
+import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
@@ -55,6 +56,8 @@ let publisherStartRequest = null;
 const micStartup = new MicStartupGate();
 const micCaptureRecovery = new MicCaptureRecoveryWatchdog();
 const micLifecycle = new MicLifecycleTransaction();
+const publisherCommandLiveness = new PublisherCommandLiveness();
+let publishedPublisherCommandChannelFresh = false;
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestLocalMicLevel = null;
@@ -214,6 +217,7 @@ function audioUplinkHealthPayload() {
 }
 
 function sendAudioUplinkHealth() {
+  maintainPublisherCommandChannel();
   if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return false;
   return audioTransport.sendControlJson(audioUplinkHealthPayload()).sent;
 }
@@ -463,13 +467,18 @@ const COMMAND_LABELS = {
   'start-timing-calibration': 'Calibration is controlled by the singer',
 };
 
+function publisherCommandChannelFresh(nowMs = performance.now()) {
+  return socket?.readyState === WebSocket.OPEN
+    && publisherCommandLiveness.status(nowMs).fresh;
+}
+
 function publisherCommandAuthority(serverAllowed = true) {
   return authorityState({
     authorityFresh: publisherAuthorityFresh
       && publisherMixSettingsFresh
       && publisherSourceStatusFresh,
     lastKnownSnapshot: lastKnownControlSnapshot,
-    commandChannelFresh: socket?.readyState === WebSocket.OPEN,
+    commandChannelFresh: publisherCommandChannelFresh(),
     authorized: publisherActive,
     serverAllowed,
   });
@@ -477,9 +486,42 @@ function publisherCommandAuthority(serverAllowed = true) {
 
 function publishPublisherCommandAuthority() {
   const detail = publisherCommandAuthority();
+  publishedPublisherCommandChannelFresh = detail.commandChannelFresh;
   window.relayCommandAuthority = detail;
   dispatchRelayEvent('relay-command-authority', detail);
   return detail;
+}
+
+function refreshPublisherCommandChannel() {
+  const fresh = publisherCommandChannelFresh();
+  if (fresh === publishedPublisherCommandChannelFresh) return fresh;
+  publishPublisherCommandAuthority();
+  updateSingerControls();
+  return fresh;
+}
+
+function maintainPublisherCommandChannel() {
+  const state = publisherCommandLiveness.status(performance.now());
+  if (
+    state.reconnect
+    && publisherActive
+    && socket?.readyState === WebSocket.OPEN
+  ) {
+    publishPublisherCommandAuthority();
+    updateSingerControls();
+    setStatus(
+      'Reconnecting microphone…',
+      'Relay control acknowledgement stopped; restarting the control connection.',
+    );
+    const staleSocket = socket;
+    try {
+      staleSocket.close(4000, 'publisher command ack stale');
+    } catch {
+      try { staleSocket.close(); } catch {}
+    }
+    return false;
+  }
+  return refreshPublisherCommandChannel();
 }
 
 function restoreLastKnownControl(command = null) {
@@ -826,6 +868,21 @@ function handleServerMessage(
     return;
   }
 
+  if (message.type === 'audio-uplink-health-ack') {
+    const ackGeneration = message.captureGeneration;
+    if (
+      message.version !== 1
+      || !Number.isInteger(ackGeneration)
+      || ackGeneration < 0
+      || ackGeneration > 0xffff_ffff
+      || (ackGeneration >>> 0) !== (expectedGeneration >>> 0)
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+      || !publisherCommandLiveness.noteAck(ackGeneration, performance.now())
+    ) return;
+    refreshPublisherCommandChannel();
+    return;
+  }
+
   if (message.type === 'command-rejected') {
     // The rejection is visible, and it also invalidates the local claim that
     // this socket is currently authorized to mutate server-owned controls.
@@ -1057,6 +1114,7 @@ function schedulePublisherReconnect(
 function adoptSocket(ws) {
   const previous = socket;
   socket = ws;
+  publisherCommandLiveness.reset();
   resetPublisherCommandFreshness();
   publishPublisherCommandAuthority();
   updateSingerControls();
@@ -1095,6 +1153,8 @@ async function connectPublisherSocket(
   }
   ws.send(JSON.stringify(registration));
   audioTransport.bind(ws, { sampleRate: audioContext.sampleRate });
+  publisherCommandLiveness.begin(expectedGeneration, performance.now());
+  refreshPublisherCommandChannel();
   publisherControlConnections += 1;
 
   ws.addEventListener('message', (event) => {
@@ -1111,6 +1171,7 @@ async function connectPublisherSocket(
     activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
+    publisherCommandLiveness.reset();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
@@ -1133,6 +1194,7 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   if (previous) {
     audioTransport.unbind(previous);
     socket = null;
+    publisherCommandLiveness.reset();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
@@ -1217,6 +1279,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   const wasPublisherActive = publisherActive;
 
   socket = null;
+  publisherCommandLiveness.reset();
   resetPublisherCommandFreshness();
   mediaStream = null;
   activeCaptureGraph = null;

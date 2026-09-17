@@ -24,18 +24,20 @@ jobs:
           from pathlib import Path
           path = Path('public/audio-transport.js')
           text = path.read_text()
-          old = """      const submittedPacketTotal = this.telemetry.webSocketPacketsSent
-        + this.telemetry.webTransportPacketsSubmitted;"""
-          new = """      // Coverage starts at the browser transport decision boundary. A media
-      // packet rejected by the bounded realtime queue is a final timeline hole,
-      // not an in-flight packet: app.js never replays congestion rejects.
-      // Control-message congestion has separate counters and is not included.
-      const submittedPacketTotal = this.telemetry.webSocketPacketsSent
-        + this.telemetry.webTransportPacketsSubmitted
-        + this.telemetry.webSocketCongestedRejects
-        + this.telemetry.webTransportCongestedRejects;"""
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one denominator hunk, found {text.count(old)}')
+          old = "      const submittedPacketTotal = this.telemetry.webSocketPacketsSent\n        + this.telemetry.webTransportPacketsSubmitted;"
+          new = "\n".join([
+              "      // Coverage starts at the browser transport decision boundary. A media",
+              "      // packet rejected by the bounded realtime queue is a final timeline hole,",
+              "      // not an in-flight packet: app.js never replays congestion rejects.",
+              "      // Control-message congestion has separate counters and is not included.",
+              "      const submittedPacketTotal = this.telemetry.webSocketPacketsSent",
+              "        + this.telemetry.webTransportPacketsSubmitted",
+              "        + this.telemetry.webSocketCongestedRejects",
+              "        + this.telemetry.webTransportCongestedRejects;",
+          ])
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one denominator hunk, found {count}')
           path.write_text(text.replace(old, new, 1))
           PY
           git diff --check

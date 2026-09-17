@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { PreferredAudioTransport } from '../public/audio-transport.js';
-
+const moduleUrl = new URL('../public/audio-transport.js', import.meta.url);
 const GENERATION = 11;
 const ATTEMPTS_PER_WINDOW = 99;
 const MEDIA_PACKET_BYTES = 1_000;
@@ -42,7 +41,8 @@ class BrowserSocket {
   }
 }
 
-test('severe local WebSocket media congestion spends exactly one bounded socket replacement', () => {
+test('severe local WebSocket media congestion spends exactly one bounded socket replacement', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
   const socket = new BrowserSocket();
   const transport = new PreferredAudioTransport();
   transport.bind(socket);

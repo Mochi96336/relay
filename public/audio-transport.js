@@ -376,7 +376,8 @@ export class PreferredAudioTransport extends AudioTransport {
 
   observePublisherSocketMessage(socket, epoch, event) {
     if (
-      epoch !== this.publisherSocketEpoch
+      socket?.readyState !== WEB_SOCKET_OPEN
+      || epoch !== this.publisherSocketEpoch
       || this.fallback.socket !== socket
       || typeof event?.data !== 'string'
       || this.pendingPublisherHealth.length < 1

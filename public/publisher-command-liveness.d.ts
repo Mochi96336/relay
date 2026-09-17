@@ -16,6 +16,6 @@ export class PublisherCommandLiveness {
   constructor(options?: PublisherCommandLivenessOptions);
   reset(): void;
   begin(generation: number, nowMs: number): void;
-  noteAck(generation: number, nowMs: number): boolean;
+  noteAck(generation: number, nowMs: number, requestSentAtMs?: number): boolean;
   status(nowMs: number): PublisherCommandLivenessStatus;
 }

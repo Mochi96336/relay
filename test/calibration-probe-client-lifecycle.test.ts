@@ -47,8 +47,18 @@ test('phone calibration probe stays capture-scoped before and after future playb
   );
   assert.match(
     source,
+    /activeCalibrationProbeRequestId = null;[\s\S]*if \(socket\?\.readyState !== WebSocket\.OPEN\) \{[\s\S]*retireCalibrationProbePlayback\(\);[\s\S]*return;[\s\S]*\}[\s\S]*const result = audioTransport\.sendControlJson\(/,
+    'a control socket that closes after scheduling must retire playback before returning',
+  );
+  assert.match(
+    source,
     /type: 'calibration-probe-played',[\s\S]*requestId,[\s\S]*generation: expectedGeneration/,
     'a successful probe reply must report the immutable generation that authorized playback',
+  );
+  assert.match(
+    source,
+    /type: 'calibration-probe-played',[\s\S]*generation: expectedGeneration[\s\S]*if \(!result\.sent\) \{[\s\S]*retireCalibrationProbePlayback\(\)/,
+    'scheduled playback must be retired if its played acknowledgement cannot be sent',
   );
   assert.match(
     source,

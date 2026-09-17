@@ -250,6 +250,12 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   resetStats() {
+    // app.js calls this at the capture-generation boundary. Keep the
+    // healthy physical WT session, but retire every write submitted by
+    // the previous capture so its late age/rejection cannot become new-
+    // generation stall evidence or telemetry.
+    this.preferenceGeneration += 1;
+    this.resetOutstandingDatagramWrites();
     this.telemetry = {
       webTransportAttempts: 0,
       webTransportConnections: 0,

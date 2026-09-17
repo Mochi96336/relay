@@ -63,6 +63,26 @@ test('a newer correlated ACK supersedes older pending freshness evidence', () =>
   assert.equal(liveness.status(1_200).ackAgeMs, 200);
 });
 
+test('same-generation command epoch reset cannot reuse an old health request id', () => {
+  const liveness = new PublisherCommandLiveness();
+  liveness.begin(23, 0);
+  const retiredRequestId = liveness.beginHealthRequest(100);
+  assert.notEqual(retiredRequestId, null);
+
+  // Semantic command-authority reset can happen while the same physical socket
+  // and capture generation remain current. A delayed ACK from the retired epoch
+  // must therefore be distinguishable from every request in the replacement epoch.
+  liveness.begin(23, 200);
+  const currentRequestId = liveness.beginHealthRequest(250);
+  assert.notEqual(currentRequestId, null);
+  assert.notEqual(currentRequestId, retiredRequestId,
+    'request ids must remain monotonic across same-generation liveness epochs');
+  assert.equal(liveness.noteAck(23, retiredRequestId!, 300), false,
+    'a delayed ACK from the retired command epoch must stay retired');
+  assert.equal(liveness.noteAck(23, currentRequestId!, 300), true);
+  assert.equal(liveness.status(300).fresh, true);
+});
+
 test('wrong-generation ACK cannot revive a replacement capture', () => {
   const liveness = new PublisherCommandLiveness();
   liveness.begin(21, 1_000);

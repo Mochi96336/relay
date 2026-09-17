@@ -365,12 +365,16 @@ function handleCaptureWorkletMessage(event, graph) {
     if (event.data?.type === 'input-gap') {
       const samples = Number(event.data.samples);
       if (Number.isSafeInteger(samples) && samples > 0) captureInputGapSamples += samples;
+      const decision = micCaptureRecovery.noteInputGap(captureSnapshot(), {
+        recovered: event.data.recovered === true,
+      });
       console.warn(
         'Microphone input gap',
         event.data.quanta,
         'quanta padded with silence',
         event.data.recovered ? '(recovered)' : '(continuing)',
       );
+      if (decision.rebuild) void rebuildPublisherCaptureGraph('input-gap');
     }
     return;
   }

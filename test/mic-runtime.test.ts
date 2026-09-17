@@ -76,14 +76,18 @@ test('product uplink health expires after the existing health authority window',
     nowMs: 100,
   });
 
-  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(6, false), 200), true);
+  const degraded = uplinkHealth(6, false);
+  degraded.transport.mediaRecoveryDegraded = true;
+  assert.equal(mic.noteUplinkHealth(publisher, degraded, 200), true);
   assert.equal(mic.freshUplinkHealthPayload(4_200)?.reportAgeMs, 4_000);
+  assert.equal(mic.freshUplinkHealthPayload(4_200)?.transport.mediaRecoveryDegraded, true);
 
   // Same-capture media authority can survive a short control reconnect, so the
   // diagnostic snapshot remains available. Product authority must not retain
-  // that verdict forever once health reporting stops.
+  // that degraded verdict forever once health reporting stops.
   assert.equal(mic.detachPublisher(publisher), true);
   assert.equal(mic.uplinkHealthPayload(4_201)?.reportAgeMs, 4_001);
+  assert.equal(mic.uplinkHealthPayload(4_201)?.transport.mediaRecoveryDegraded, true);
   assert.equal(mic.freshUplinkHealthPayload(4_201), null);
 });
 

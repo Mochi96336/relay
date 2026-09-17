@@ -447,8 +447,14 @@ export class PreferredAudioTransport extends AudioTransport {
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
       const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
+      // Coverage starts at the browser transport decision boundary. A media
+      // packet rejected by the bounded realtime queue is a final timeline hole,
+      // not an in-flight packet: app.js never replays congestion rejects.
+      // Control-message congestion has separate counters and is not included.
       const submittedPacketTotal = this.telemetry.webSocketPacketsSent
-        + this.telemetry.webTransportPacketsSubmitted;
+        + this.telemetry.webTransportPacketsSubmitted
+        + this.telemetry.webSocketCongestedRejects
+        + this.telemetry.webTransportCongestedRejects;
       const quantitativeReady = Number.isSafeInteger(submittedPacketTotal)
         && submittedPacketTotal >= MEDIA_PATH_PACKET_COVERAGE_MIN_TOTAL;
       const senderSubmittedPackets = quantitativeReady ? submittedPacketTotal : null;

@@ -1,3 +1,5 @@
+import { MicMediaPathRecovery } from './mic-media-path-recovery.js';
+
 const WEB_SOCKET_OPEN = 1;
 
 /**
@@ -69,6 +71,11 @@ function outgoingByteLength(value) {
   if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
   const byteLength = Number(value?.byteLength);
   return Number.isFinite(byteLength) && byteLength > 0 ? byteLength : 0;
+}
+
+function nonNegativeSafeInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
 /**
@@ -233,6 +240,11 @@ export class PreferredAudioTransport extends AudioTransport {
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
     this.preferenceGeneration = 0;
+    this.mediaPathRecovery = new MicMediaPathRecovery();
+    this.publisherSocketEpoch = 0;
+    this.publisherSocketListener = null;
+    this.latestPublisherHealth = null;
+    this.lastMediaRecoveryDecision = null;
     this.resetStats();
   }
 
@@ -256,6 +268,9 @@ export class PreferredAudioTransport extends AudioTransport {
     };
     this.minWebTransportMaxPacketBytes = null;
     this.maxWebTransportMaxPacketBytes = null;
+    this.mediaPathRecovery?.reset();
+    this.latestPublisherHealth = null;
+    this.lastMediaRecoveryDecision = null;
   }
 
   resetOutstandingDatagramWrites() {
@@ -330,17 +345,103 @@ export class PreferredAudioTransport extends AudioTransport {
     };
   }
 
+  detachPublisherSocketListener() {
+    const listener = this.publisherSocketListener;
+    this.publisherSocketListener = null;
+    if (!listener) return;
+    try {
+      listener.socket.removeEventListener?.('message', listener.handler);
+    } catch {}
+  }
+
   bind(socket, options) {
+    this.detachPublisherSocketListener();
     this.fallback.bind(socket, options);
+    const epoch = ++this.publisherSocketEpoch;
+    if (typeof socket?.addEventListener === 'function') {
+      const handler = (event) => this.observePublisherSocketMessage(socket, epoch, event);
+      socket.addEventListener('message', handler);
+      this.publisherSocketListener = { socket, handler };
+    }
   }
 
   unbind(socket) {
+    if (this.publisherSocketListener?.socket === socket) this.detachPublisherSocketListener();
     this.fallback.unbind(socket);
+  }
+
+  observePublisherSocketMessage(socket, epoch, event) {
+    if (
+      epoch !== this.publisherSocketEpoch
+      || this.fallback.socket !== socket
+      || typeof event?.data !== 'string'
+      || !this.latestPublisherHealth
+    ) return;
+
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (message?.type !== 'audio-uplink-health-ack' || message?.version !== 1) return;
+
+    const ackGeneration = nonNegativeSafeInteger(message.captureGeneration);
+    const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
+    if (
+      ackGeneration === null
+      || ackGeneration > 0xffff_ffff
+      || acceptedFrameSerial === null
+      || ackGeneration !== this.latestPublisherHealth.captureGeneration
+    ) return;
+
+    const serverMediaPath = message.pcm?.mediaPath === 'webtransport'
+      || message.pcm?.mediaPath === 'websocket'
+      ? message.pcm.mediaPath
+      : null;
+    const decision = this.mediaPathRecovery.observe({
+      captureGeneration: ackGeneration,
+      capturedSamples: this.latestPublisherHealth.capturedSamples,
+      serverAcceptedFrameSerial: acceptedFrameSerial,
+      serverMediaPath,
+      path: this.datagramWriter ? 'webtransport' : 'websocket',
+      socketEpoch: epoch,
+      eligible: globalThis.document?.visibilityState !== 'hidden',
+    });
+    this.lastMediaRecoveryDecision = decision;
+
+    if (decision.action === 'demote-webtransport') {
+      this.demoteWebTransport();
+      return;
+    }
+    if (decision.action !== 'replace-websocket') return;
+
+    // Fence every late ACK from the retiring physical socket immediately. The
+    // existing app close/reconnect lifecycle owns the actual same-generation
+    // registration that follows; media recovery only requests that one bounded
+    // replacement and never touches the capture graph.
+    this.publisherSocketEpoch += 1;
+    try {
+      socket.close(4001, 'server PCM stalled');
+    } catch {
+      try { socket.close(); } catch {}
+    }
   }
 
   sendControlJson(payload) {
     const result = this.fallback.send(JSON.stringify(payload));
     this.recordControlFallbackResult(result);
+    if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
+      const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
+      const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
+      if (
+        captureGeneration !== null
+        && captureGeneration <= 0xffff_ffff
+        && capturedSamples !== null
+      ) {
+        this.latestPublisherHealth = { captureGeneration, capturedSamples };
+      }
+    }
     return result;
   }
 
@@ -398,6 +499,10 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   async prefer(offer) {
+    if (this.mediaPathRecovery.quarantineWebTransport()) {
+      this.closeWebTransport();
+      return false;
+    }
     if (!offer || offer.preferred !== 'webtransport' || !offer.url) {
       this.closeWebTransport();
       return false;
@@ -533,6 +638,11 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   close() {
+    this.detachPublisherSocketListener();
+    this.publisherSocketEpoch += 1;
+    this.mediaPathRecovery.reset();
+    this.latestPublisherHealth = null;
+    this.lastMediaRecoveryDecision = null;
     this.closeWebTransport();
     this.fallback.unbind();
   }

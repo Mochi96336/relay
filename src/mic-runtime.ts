@@ -60,6 +60,14 @@ export class MicRuntime {
   private lastFrameAt = -Infinity;
   private lastFrameOwnerId: string | null = null;
   private lastFrameGeneration: number | null = null;
+  /**
+   * Monotonic accepted-PCM evidence for the current capture generation.
+   *
+   * This advances only through noteFrame(), whose server caller is downstream
+   * of AudioSession.ingestMic(...).samples.length > 0. It therefore proves
+   * application-level PCM intake rather than socket/datagram/write activity.
+   */
+  private currentAcceptedFrameSerial = 0;
   private firstFrameWaitStartedAt = -Infinity;
 
   constructor(options: MicRuntimeOptions) {
@@ -93,6 +101,10 @@ export class MicRuntime {
 
   get mediaGeneration() {
     return this.currentMediaGeneration;
+  }
+
+  get acceptedFrameSerial() {
+    return this.currentAcceptedFrameSerial;
   }
 
   isPublisher(socket: RelaySocket) {
@@ -267,6 +279,10 @@ export class MicRuntime {
           type: 'audio-uplink-health-ack',
           version: 1,
           captureGeneration: health.captureGeneration,
+          pcm: {
+            acceptedFrameSerial: this.currentAcceptedFrameSerial,
+            mediaPath: this.mediaPath(),
+          },
         }));
       } catch {}
     }
@@ -321,6 +337,7 @@ export class MicRuntime {
     this.lastFrameAt = -Infinity;
     this.lastFrameOwnerId = this.currentMediaOwnerId;
     this.lastFrameGeneration = this.currentMediaGeneration;
+    this.currentAcceptedFrameSerial = 0;
     this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs;
   }
 
@@ -328,6 +345,9 @@ export class MicRuntime {
     this.lastFrameAt = nowMs;
     this.lastFrameOwnerId = this.currentMediaOwnerId;
     this.lastFrameGeneration = this.currentMediaGeneration;
+    if (this.currentAcceptedFrameSerial < Number.MAX_SAFE_INTEGER) {
+      this.currentAcceptedFrameSerial += 1;
+    }
   }
 
   flowObserved() {

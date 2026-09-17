@@ -93,6 +93,10 @@ test('accepted current-generation uplink health renews the lease and gets an app
     type: 'audio-uplink-health-ack',
     version: 1,
     captureGeneration: 7,
+    pcm: {
+      acceptedFrameSerial: 0,
+      mediaPath: 'websocket',
+    },
   });
 
   assert.equal(mic.noteUplinkHealth(current.socket, health(6), 250), false);

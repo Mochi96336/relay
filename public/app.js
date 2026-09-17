@@ -805,6 +805,7 @@ async function playCalibrationProbe(requestId, leadMs) {
     if (
       activeCalibrationProbeRequestId !== requestId
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+      || socket?.readyState !== WebSocket.OPEN
     ) return;
     if (
       audioContext !== context

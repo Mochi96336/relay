@@ -55,6 +55,28 @@ test('healthy receiver packet coverage cannot mask a stalled AudioSession accept
   assert.equal(decision?.webSocketReplacementUsed, true);
 });
 
+test('an incomplete packet window cannot postpone an established semantic PCM stall', () => {
+  const recovery = new MicMediaPathRecovery({ staleObservations: 2, minPacketWindow: 8 });
+  recovery.observe(observation());
+
+  let decision;
+  for (let index = 1; index <= 2; index += 1) {
+    decision = recovery.observe(observation({
+      capturedSamples: 48_000 * (index + 1),
+      serverAcceptedFrameSerial: 10,
+      // Quantitative evidence exists but remains below its minimum window.
+      // That uncertainty may defer an under-delivery verdict, but it cannot
+      // erase the independent accepted-PCM stall authority.
+      senderSubmittedPackets: 100 + index,
+      serverReceivedPacketSerial: 100 + index,
+    }));
+  }
+
+  assert.equal(decision?.action, 'replace-websocket');
+  assert.equal(decision?.reason, 'server-pcm-stale');
+  assert.equal(decision?.webSocketReplacementUsed, true);
+});
+
 test('healthy fallback packet coverage cannot prove recovery without novel accepted PCM', () => {
   const recovery = new MicMediaPathRecovery({ staleObservations: 1 });
   recovery.observe(observation({

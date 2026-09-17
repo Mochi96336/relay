@@ -11,10 +11,8 @@ export type MicMediaPathRecoveryAction =
 export type MicMediaPathRecoveryObservation = {
   captureGeneration: number;
   capturedSamples: number;
-  captureSampleRate?: number;
   serverAcceptedFrameSerial: number;
-  serverAcceptedSampleCount?: number;
-  serverAcceptedSampleRate?: number;
+  serverAcceptedCaptureSamples?: number;
   serverMediaPath?: 'webtransport' | 'websocket' | null;
   path: 'webtransport' | 'websocket';
   socketEpoch: number;
@@ -51,10 +49,8 @@ export class MicMediaPathRecovery {
   beginGeneration(generation: number): boolean;
   rebaseline(input?: {
     capturedSamples?: number | null;
-    captureSampleRate?: number | null;
     serverAcceptedFrameSerial?: number | null;
-    serverAcceptedSampleCount?: number | null;
-    serverAcceptedSampleRate?: number | null;
+    serverAcceptedCaptureSamples?: number | null;
     socketEpoch?: number | null;
   }): void;
   observe(input: MicMediaPathRecoveryObservation): MicMediaPathRecoveryDecision;

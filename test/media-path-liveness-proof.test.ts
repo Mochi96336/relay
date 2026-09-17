@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { MicCaptureRecoveryWatchdog } from '../public/mic-capture-recovery.js';
 import { PublisherCommandLiveness } from '../public/publisher-command-liveness.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
+import { AudioSession } from '../src/audio-session.js';
 import type { AudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { MicRuntime } from '../src/mic-runtime.js';
 import type { RelaySocket } from '../src/relay-socket-server.js';
@@ -101,7 +102,17 @@ function runtime({ streamLiveMs = 1_000 } = {}) {
     directMediaConnected: (ticket) => Boolean(ticket && activeTickets.has(ticket)),
     offerDirectMedia: (ticket) => ({ ticket }),
   });
-  return { mic, activeTickets };
+  const session = new AudioSession({
+    sampleRate: SAMPLE_RATE,
+    frameMs: 20,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+  session.setMicGainDb(0);
+  session.start(0);
+  session.setMicExpected(true);
+  return { mic, session, activeTickets };
 }
 
 function bind(
@@ -109,10 +120,11 @@ function bind(
   socket: RelaySocket,
   captureGeneration: number,
   nowMs = 0,
+  sampleRate = SAMPLE_RATE,
 ) {
   return mic.bindPublisher({
     socket,
-    sampleRate: SAMPLE_RATE,
+    sampleRate,
     captureGeneration,
     audioPacketVersion: 2,
     nowMs,
@@ -121,11 +133,13 @@ function bind(
 
 function acceptServerFrames(
   mic: MicRuntime,
+  session: AudioSession,
   frames: ReturnType<MicRuntime['receivePublisher']>,
   nowMs: number,
 ) {
   for (const frame of frames) {
-    if (frame.pcm.byteLength > 0) mic.noteFrame(nowMs);
+    const ingested = session.ingestMic(frame, mic.sampleRate, nowMs);
+    if (ingested.samples.length > 0) mic.noteFrame(nowMs);
   }
   return frames;
 }
@@ -141,7 +155,7 @@ function captureSnapshot(nowMs: number, contextTime: number, sampleCursor: numbe
 }
 
 test('control ACK and local capture progress cannot freshen a stale server PCM frontier', () => {
-  const { mic, activeTickets } = runtime({ streamLiveMs: 500 });
+  const { mic, session, activeTickets } = runtime({ streamLiveMs: 500 });
   const publisher = fakeSocket();
   bind(mic, publisher.socket, 7, 0);
   const ticket = mic.mediaTicket!;
@@ -149,6 +163,7 @@ test('control ACK and local capture progress cannot freshen a stale server PCM f
 
   const initial = acceptServerFrames(
     mic,
+    session,
     mic.receiveDirectMedia(ticket, packet(7, 0, 0), 100),
     100,
   );
@@ -185,8 +200,49 @@ test('control ACK and local capture progress cannot freshen a stale server PCM f
   mic.clearMediaAuthority(2_100);
 });
 
+test('receiver-emitted PCM cannot renew liveness without AudioSession sample progress', () => {
+  const { mic, session } = runtime({ streamLiveMs: 500 });
+  const publisher = fakeSocket('participant-session-acceptance');
+  bind(mic, publisher.socket, 8, 0, 96_000);
+
+  const first = acceptServerFrames(
+    mic,
+    session,
+    mic.receivePublisher(publisher.socket, packet(8, 0, 0, 1), 100),
+    100,
+  );
+  assert.equal(first.length, 1);
+  assert.equal(mic.frameAgeMs(100), 0);
+
+  const second = acceptServerFrames(
+    mic,
+    session,
+    mic.receivePublisher(publisher.socket, packet(8, 1, 1, 1), 200),
+    200,
+  );
+  assert.equal(second.length, 1);
+  assert.equal(mic.frameAgeMs(200), 0);
+
+  // At 96 kHz, this next one-sample source frame is still valid and monotonic
+  // to the receiver, but both source indices 1 and 2 quantize onto the same
+  // 48 kHz session index. The AudioSession boundary therefore proves that the
+  // third receiver emission contributes no new PCM to the live timeline.
+  const overlap = mic.receivePublisher(publisher.socket, packet(8, 2, 2, 1), 300);
+  assert.equal(overlap.length, 1, 'transport receiver accepts the monotonic source frame');
+  assert.equal(mic.receiverStats()?.emittedPackets, 3);
+  const ingested = session.ingestMic(overlap[0], mic.sampleRate, 300);
+  assert.equal(ingested.samples.length, 0, 'fully overlapped session placement contributes no PCM');
+  if (ingested.samples.length > 0) mic.noteFrame(300);
+
+  assert.equal(mic.frameAgeMs(300), 100, 'receiver emission alone must not renew server PCM freshness');
+  assert.equal(mic.frameAgeMs(800), 600);
+  assert.equal(mic.streaming(800), false, 'post-session freshness expires without novel PCM contribution');
+
+  mic.clearMediaAuthority(800);
+});
+
 test('manual WebTransport to WebSocket recovery preserves capture identity and leaves the loss hole', () => {
-  const { mic, activeTickets } = runtime();
+  const { mic, session, activeTickets } = runtime();
   const publisher = fakeSocket('participant-fallback');
   bind(mic, publisher.socket, 11, 0);
   const transport = mic.audioTransport;
@@ -195,6 +251,7 @@ test('manual WebTransport to WebSocket recovery preserves capture identity and l
 
   const first = acceptServerFrames(
     mic,
+    session,
     mic.receiveDirectMedia(ticket, packet(11, 0, 0), 100),
     100,
   );
@@ -211,6 +268,7 @@ test('manual WebTransport to WebSocket recovery preserves capture identity and l
 
   const recovered = acceptServerFrames(
     mic,
+    session,
     mic.receivePublisher(publisher.socket, packet(11, 2, 4), 300),
     300,
   );
@@ -234,7 +292,7 @@ test('manual WebTransport to WebSocket recovery preserves capture identity and l
 });
 
 test('late generation-A media, health and ACK evidence cannot revive generation B', () => {
-  const { mic, activeTickets } = runtime();
+  const { mic, session, activeTickets } = runtime();
   const generationA = fakeSocket('participant-generation');
   bind(mic, generationA.socket, 20, 0);
   const ticketA = mic.mediaTicket!;
@@ -242,6 +300,7 @@ test('late generation-A media, health and ACK evidence cannot revive generation 
 
   const aFrames = acceptServerFrames(
     mic,
+    session,
     mic.receiveDirectMedia(ticketA, packet(20, 0, 0), 100),
     100,
   );
@@ -273,7 +332,7 @@ test('late generation-A media, health and ACK evidence cannot revive generation 
 });
 
 test('fresh PCM cannot revive stale control authority', () => {
-  const { mic } = runtime({ streamLiveMs: 500 });
+  const { mic, session } = runtime({ streamLiveMs: 500 });
   const publisher = fakeSocket('participant-control-independent');
   bind(mic, publisher.socket, 30, 0);
 
@@ -282,7 +341,7 @@ test('fresh PCM cannot revive stale control authority', () => {
   assert.equal(command.noteAck(30, 100), true);
   assert.equal(command.status(200).fresh, true);
 
-  acceptServerFrames(mic, mic.receivePublisher(publisher.socket, packet(30, 0, 0), 100), 100);
+  acceptServerFrames(mic, session, mic.receivePublisher(publisher.socket, packet(30, 0, 0), 100), 100);
 
   const staleAt = 3_100;
   assert.equal(command.status(staleAt).fresh, false, '#304 command authority expires without ACK progress');
@@ -290,6 +349,7 @@ test('fresh PCM cannot revive stale control authority', () => {
 
   const freshPcm = acceptServerFrames(
     mic,
+    session,
     mic.receivePublisher(publisher.socket, packet(30, 1, 2), staleAt),
     staleAt,
   );
@@ -302,10 +362,10 @@ test('fresh PCM cannot revive stale control authority', () => {
 });
 
 test('capture sample-clock failure is detectable before media transport freshness expires', () => {
-  const { mic } = runtime({ streamLiveMs: 500 });
+  const { mic, session } = runtime({ streamLiveMs: 500 });
   const publisher = fakeSocket('participant-capture-independent');
   bind(mic, publisher.socket, 40, 0);
-  acceptServerFrames(mic, mic.receivePublisher(publisher.socket, packet(40, 0, 0), 0), 0);
+  acceptServerFrames(mic, session, mic.receivePublisher(publisher.socket, packet(40, 0, 0), 0), 0);
 
   const command = new PublisherCommandLiveness();
   command.begin(40, 0);

@@ -394,6 +394,28 @@ export class PreferredAudioTransport extends AudioTransport {
     const publisherHealth = this.pendingPublisherHealth[0];
     const ackGeneration = nonNegativeSafeInteger(message.captureGeneration);
     const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
+    const pcm = message.pcm && typeof message.pcm === 'object' ? message.pcm : {};
+    const hasSampleCoverage = Object.hasOwn(pcm, 'acceptedSampleCount')
+      || Object.hasOwn(pcm, 'acceptedSampleRate')
+      || Object.hasOwn(pcm, 'captureSampleRate');
+    let sampleCoverage = {};
+    if (hasSampleCoverage) {
+      const acceptedSampleCount = nonNegativeSafeInteger(pcm.acceptedSampleCount);
+      const acceptedSampleRate = nonNegativeSafeInteger(pcm.acceptedSampleRate);
+      const captureSampleRate = nonNegativeSafeInteger(pcm.captureSampleRate);
+      if (
+        acceptedSampleCount === null
+        || acceptedSampleRate === null
+        || acceptedSampleRate <= 0
+        || captureSampleRate === null
+        || captureSampleRate <= 0
+      ) return;
+      sampleCoverage = {
+        captureSampleRate,
+        serverAcceptedSampleCount: acceptedSampleCount,
+        serverAcceptedSampleRate: acceptedSampleRate,
+      };
+    }
     if (
       ackGeneration === null
       || ackGeneration > 0xffff_ffff
@@ -411,6 +433,7 @@ export class PreferredAudioTransport extends AudioTransport {
       captureGeneration: ackGeneration,
       capturedSamples: publisherHealth.capturedSamples,
       serverAcceptedFrameSerial: acceptedFrameSerial,
+      ...sampleCoverage,
       serverMediaPath,
       path: publisherHealth.path,
       socketEpoch: epoch,

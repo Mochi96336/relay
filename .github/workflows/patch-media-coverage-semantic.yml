@@ -1,0 +1,79 @@
+name: Temporary media coverage semantic authority patch
+
+on:
+  push:
+    branches:
+      - agent/media-coverage-semantic-fence
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/media-coverage-semantic-fence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply exact policy replacements
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('public/mic-media-path-recovery.js')
+          text = path.read_text()
+          replacements = [
+              (
+                  """      const packetEvidence = this.packetCoverageEvidence(packetCounters);\n      const recovered = packetEvidence.available\n        ? packetEvidence.ready && packetEvidence.healthy === true\n        : this.lastServerAcceptedFrameSerial !== null\n          && acceptedSerial > this.lastServerAcceptedFrameSerial;""",
+                  """      const packetEvidence = this.packetCoverageEvidence(packetCounters);\n      const semanticAdvanced = this.lastServerAcceptedFrameSerial !== null\n        && acceptedSerial > this.lastServerAcceptedFrameSerial;\n      const recovered = semanticAdvanced && (\n        !packetEvidence.available\n        || (packetEvidence.ready && packetEvidence.healthy === true)\n      );""",
+              ),
+              (
+                  """      const serverHealthy = packetEvidence.available\n        ? packetEvidence.ready && packetEvidence.healthy === true\n        : serverAdvanced;""",
+                  """      const serverHealthy = serverAdvanced && (\n        !packetEvidence.available\n        || (packetEvidence.ready && packetEvidence.healthy === true)\n      );""",
+              ),
+              (
+                  """        const serverHealthy = packetEvidence.available\n          ? packetEvidence.ready && packetEvidence.healthy === true\n          : serverAdvanced;""",
+                  """        const serverHealthy = serverAdvanced && (\n          !packetEvidence.available\n          || (packetEvidence.ready && packetEvidence.healthy === true)\n        );""",
+              ),
+              (
+                  """        if (packetEvidence.healthy) {\n          this.phase = 'observing';\n          this.staleCount = 0;\n          this.proofBaselineSerial = null;\n          this.proofServerWebSocketReady = false;\n          return { action: 'recovered', reason: 'server-pcm-coverage-healthy-on-websocket', ...this.status() };\n        }""",
+                  """        if (\n          packetEvidence.healthy\n          && this.proofBaselineSerial !== null\n          && acceptedSerial > this.proofBaselineSerial\n        ) {\n          this.phase = 'observing';\n          this.staleCount = 0;\n          this.proofBaselineSerial = null;\n          this.proofServerWebSocketReady = false;\n          return { action: 'recovered', reason: 'server-pcm-coverage-healthy-on-websocket', ...this.status() };\n        }""",
+              ),
+              (
+                  """      return this.escalateProofFailure(\n        packetEvidence.available\n          ? 'server-pcm-underdelivery-after-fallback'\n          : 'server-pcm-stale-after-fallback',\n      );""",
+                  """      const underDelivered = packetEvidence.available\n        && packetEvidence.ready\n        && packetEvidence.healthy === false;\n      return this.escalateProofFailure(\n        underDelivered\n          ? 'server-pcm-underdelivery-after-fallback'\n          : 'server-pcm-stale-after-fallback',\n      );""",
+              ),
+              (
+                  """      if (packetEvidence.healthy) {\n        this.staleCount = 0;\n        return { action: 'none', reason: 'server-pcm-coverage-healthy', ...this.status() };\n      }""",
+                  """      if (packetEvidence.healthy && serverAdvanced) {\n        this.staleCount = 0;\n        return { action: 'none', reason: 'server-pcm-coverage-healthy', ...this.status() };\n      }""",
+              ),
+              (
+                  """    this.staleCount += 1;\n    if (this.staleCount < this.staleObservations) {\n      return {\n        action: 'none',\n        reason: packetEvidence.available\n          ? 'server-pcm-underdelivery-observation'\n          : 'server-pcm-stale-observation',\n        ...this.status(),\n      };\n    }\n\n    this.staleCount = 0;\n    const reason = packetEvidence.available ? 'server-pcm-underdelivery' : 'server-pcm-stale';""",
+                  """    const underDelivered = packetEvidence.available\n      && packetEvidence.ready\n      && packetEvidence.healthy === false;\n    this.staleCount += 1;\n    if (this.staleCount < this.staleObservations) {\n      return {\n        action: 'none',\n        reason: underDelivered\n          ? 'server-pcm-underdelivery-observation'\n          : 'server-pcm-stale-observation',\n        ...this.status(),\n      };\n    }\n\n    this.staleCount = 0;\n    const reason = underDelivered ? 'server-pcm-underdelivery' : 'server-pcm-stale';""",
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+      - name: Verify focused policy diff
+        run: |
+          git diff --check
+          git diff -- public/mic-media-path-recovery.js
+          test "$(git diff --name-only | grep -v '^public/mic-media-path-recovery.js$' | wc -l)" -eq 0
+      - name: Commit patch and retire temporary workflow
+        run: |
+          rm .github/workflows/patch-media-coverage-semantic.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add public/mic-media-path-recovery.js .github/workflows/patch-media-coverage-semantic.yml
+          git commit -m "fix(audio): require semantic PCM progress with packet coverage"
+          git push origin HEAD:agent/media-coverage-semantic-fence

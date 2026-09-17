@@ -394,6 +394,7 @@ export class PreferredAudioTransport extends AudioTransport {
     const publisherHealth = this.pendingPublisherHealth[0];
     const ackGeneration = nonNegativeSafeInteger(message.captureGeneration);
     const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
+    const receivedPacketSerial = nonNegativeSafeInteger(message.pcm?.receivedPacketSerial);
     if (
       ackGeneration === null
       || ackGeneration > 0xffff_ffff
@@ -411,6 +412,9 @@ export class PreferredAudioTransport extends AudioTransport {
       captureGeneration: ackGeneration,
       capturedSamples: publisherHealth.capturedSamples,
       serverAcceptedFrameSerial: acceptedFrameSerial,
+      senderSubmittedPackets: publisherHealth.senderSubmittedPackets,
+      senderFailedPackets: publisherHealth.senderFailedPackets,
+      serverReceivedPacketSerial: receivedPacketSerial,
       serverMediaPath,
       path: publisherHealth.path,
       socketEpoch: epoch,
@@ -442,6 +446,16 @@ export class PreferredAudioTransport extends AudioTransport {
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
       const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
+      const webSocketPacketsSent = nonNegativeSafeInteger(payload.transport?.webSocketPacketsSent);
+      const webTransportPacketsSubmitted = nonNegativeSafeInteger(payload.transport?.webTransportPacketsSubmitted);
+      const webTransportSendFailures = nonNegativeSafeInteger(payload.transport?.webTransportSendFailures);
+      const submittedPacketTotal = webSocketPacketsSent !== null && webTransportPacketsSubmitted !== null
+        ? webSocketPacketsSent + webTransportPacketsSubmitted
+        : Number.NaN;
+      const senderSubmittedPackets = Number.isSafeInteger(submittedPacketTotal)
+        ? submittedPacketTotal
+        : null;
+      const senderFailedPackets = webTransportSendFailures;
       const payloadPath = payload.transport?.path;
       const path = payloadPath === 'webtransport' || payloadPath === 'websocket'
         ? payloadPath
@@ -454,6 +468,8 @@ export class PreferredAudioTransport extends AudioTransport {
         this.pendingPublisherHealth.push({
           captureGeneration,
           capturedSamples,
+          senderSubmittedPackets,
+          senderFailedPackets,
           path,
           socketEpoch: this.publisherSocketEpoch,
           eligible: globalThis.document?.visibilityState !== 'hidden',

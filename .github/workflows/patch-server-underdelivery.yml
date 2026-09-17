@@ -52,7 +52,7 @@ jobs:
         run: |
           git diff --check
           git diff -- src/server.ts
-          test "$(git diff --numstat -- src/server.ts | awk '{print $1+$2}')" -eq 5
+          test "$(git diff --numstat -- src/server.ts | awk '{print $1+$2}')" -eq 7
       - name: Commit patch and retire temporary workflow
         run: |
           rm .github/workflows/patch-server-underdelivery.yml

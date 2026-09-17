@@ -8,10 +8,8 @@ type Path = 'webtransport' | 'websocket';
 type CoverageObservation = {
   captureGeneration: number;
   capturedSamples: number;
-  captureSampleRate: number;
   serverAcceptedFrameSerial: number;
-  serverAcceptedSampleCount: number;
-  serverAcceptedSampleRate: number;
+  serverAcceptedCaptureSamples: number;
   serverMediaPath: Path | null;
   path: Path;
   socketEpoch: number;
@@ -22,10 +20,8 @@ function observation(overrides: Partial<CoverageObservation> = {}): CoverageObse
   return {
     captureGeneration: 7,
     capturedSamples: 0,
-    captureSampleRate: 48_000,
     serverAcceptedFrameSerial: 0,
-    serverAcceptedSampleCount: 0,
-    serverAcceptedSampleRate: 48_000,
+    serverAcceptedCaptureSamples: 0,
     serverMediaPath: 'webtransport',
     path: 'webtransport',
     socketEpoch: 1,
@@ -49,7 +45,7 @@ test('three correlated majority-loss windows demote WebTransport even while acce
       serverAcceptedFrameSerial: second,
       // ~3.3% of the captured second reaches AudioSession. The serial still
       // advances, which is exactly the trickle failure class proven by #314.
-      serverAcceptedSampleCount: second * 1_600,
+      serverAcceptedCaptureSamples: second * 1_600,
     }));
   }
 
@@ -58,20 +54,15 @@ test('three correlated majority-loss windows demote WebTransport even while acce
   assert.equal(decision?.webTransportQuarantined, true);
 });
 
-test('coverage compares durations so healthy 44.1 kHz capture is not penalized by the 48 kHz mix rate', () => {
+test('capture-clock equivalent progress stays healthy after server-side 44.1 kHz to 48 kHz normalization', () => {
   const recovery = new MicMediaPathRecovery();
-  observe(recovery, observation({
-    captureSampleRate: 44_100,
-    serverAcceptedSampleRate: 48_000,
-  }));
+  observe(recovery, observation());
 
   for (let second = 1; second <= 5; second += 1) {
     const decision = observe(recovery, observation({
-      captureSampleRate: 44_100,
       capturedSamples: second * 44_100,
       serverAcceptedFrameSerial: second,
-      serverAcceptedSampleRate: 48_000,
-      serverAcceptedSampleCount: second * 48_000,
+      serverAcceptedCaptureSamples: second * 44_100,
     }));
     assert.equal(decision.action, 'none');
     assert.equal(decision.reason, 'server-pcm-advancing');
@@ -87,7 +78,7 @@ test('exactly half delivery stays inside the conservative floor', () => {
     const decision = observe(recovery, observation({
       capturedSamples: second * 48_000,
       serverAcceptedFrameSerial: second,
-      serverAcceptedSampleCount: second * 24_000,
+      serverAcceptedCaptureSamples: second * 24_000,
     }));
     assert.equal(decision.action, 'none');
     assert.equal(decision.staleObservations, 0);
@@ -108,7 +99,7 @@ test('sparse WebSocket trickle cannot prove recovery after WebTransport demotion
     const decision = observe(recovery, observation({
       capturedSamples: captured,
       serverAcceptedFrameSerial: serial,
-      serverAcceptedSampleCount: accepted,
+      serverAcceptedCaptureSamples: accepted,
     }));
     if (second < 3) assert.equal(decision.action, 'none');
     else assert.equal(decision.action, 'demote-webtransport');
@@ -120,7 +111,7 @@ test('sparse WebSocket trickle cannot prove recovery after WebTransport demotion
   const baseline = observe(recovery, observation({
     capturedSamples: captured,
     serverAcceptedFrameSerial: serial,
-    serverAcceptedSampleCount: accepted,
+    serverAcceptedCaptureSamples: accepted,
     serverMediaPath: 'websocket',
     path: 'websocket',
   }));
@@ -134,7 +125,7 @@ test('sparse WebSocket trickle cannot prove recovery after WebTransport demotion
     decision = observe(recovery, observation({
       capturedSamples: captured,
       serverAcceptedFrameSerial: serial,
-      serverAcceptedSampleCount: accepted,
+      serverAcceptedCaptureSamples: accepted,
       serverMediaPath: 'websocket',
       path: 'websocket',
     }));
@@ -150,13 +141,13 @@ test('a healthy WebSocket coverage window proves recovery after the server-path 
   assert.equal(observe(recovery, observation({
     capturedSamples: 48_000,
     serverAcceptedFrameSerial: 1,
-    serverAcceptedSampleCount: 1_600,
+    serverAcceptedCaptureSamples: 1_600,
   })).action, 'demote-webtransport');
 
   assert.equal(observe(recovery, observation({
     capturedSamples: 96_000,
     serverAcceptedFrameSerial: 2,
-    serverAcceptedSampleCount: 3_200,
+    serverAcceptedCaptureSamples: 3_200,
     serverMediaPath: 'websocket',
     path: 'websocket',
   })).reason, 'server-websocket-rebaseline');
@@ -164,7 +155,7 @@ test('a healthy WebSocket coverage window proves recovery after the server-path 
   const recovered = observe(recovery, observation({
     capturedSamples: 144_000,
     serverAcceptedFrameSerial: 3,
-    serverAcceptedSampleCount: 51_200,
+    serverAcceptedCaptureSamples: 51_200,
     serverMediaPath: 'websocket',
     path: 'websocket',
   }));

@@ -857,7 +857,10 @@ async function playCalibrationProbe(requestId, leadMs) {
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
     ) return;
     activeCalibrationProbeRequestId = null;
-    if (socket?.readyState !== WebSocket.OPEN) return;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      retireCalibrationProbePlayback();
+      return;
+    }
     const result = audioTransport.sendControlJson({
       type: 'calibration-probe-played',
       target: 'mic',
@@ -866,7 +869,10 @@ async function playCalibrationProbe(requestId, leadMs) {
       // the generation it read off a PCM frame header, which is a uint32.
       generation: expectedGeneration,
     });
-    if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
+    if (!result.sent) {
+      retireCalibrationProbePlayback();
+      if (result.reason === 'disconnected') markPublisherAuthorityStale();
+    }
   } catch (error) {
     console.warn('phone calibration probe failed', error);
     if (

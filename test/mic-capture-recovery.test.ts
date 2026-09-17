@@ -159,6 +159,56 @@ test('graph rebuild requires fresh PCM before recovery is accepted', () => {
   assert.equal(watchdog.observe(snap(150, 1.15, 128), { freshPcm: true }).recovered, true);
 });
 
+test('replacement graph cannot spend another rebuild before fresh PCM proves recovery', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  const firstGap = watchdog.noteInputGap(
+    snap(1_070, 2.07, 51_456),
+    { recovered: false },
+  );
+  assert.equal(firstGap.rebuild, true);
+
+  // The action succeeded in replacing the graph, but the replacement has not
+  // produced any real microphone PCM yet.
+  watchdog.noteGraphRebuilt(snap(1_080, 2.08, 0));
+
+  // A permanently broken source can make the replacement worklet prove the
+  // same sustained gap again. Bounded recovery must not turn that into an
+  // unbounded generation/reconnect loop.
+  const secondGap = watchdog.noteInputGap(
+    snap(2_150, 3.15, 51_456),
+    { recovered: false },
+  );
+  assert.equal(
+    secondGap.rebuild,
+    false,
+    'a successful graph replacement must spend the rebuild budget until fresh PCM recovers',
+  );
+});
+
+test('fresh PCM recovery rearms one future graph rebuild budget', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(
+    watchdog.noteInputGap(snap(1_070, 2.07, 51_456), { recovered: false }).rebuild,
+    true,
+  );
+  watchdog.noteGraphRebuilt(snap(1_080, 2.08, 0));
+
+  // Real PCM from the replacement graph proves recovery and begins a new fault
+  // epoch. A later independent sustained gap may then spend one rebuild again.
+  assert.equal(
+    watchdog.observe(snap(1_100, 2.10, 128), { freshPcm: true }).recovered,
+    true,
+  );
+  assert.equal(
+    watchdog.noteInputGap(snap(2_170, 3.17, 51_584), { recovered: false }).rebuild,
+    true,
+  );
+});
+
 test('socket reconnect cannot count as capture recovery evidence', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   watchdog.start(snap(0, 1, 0));

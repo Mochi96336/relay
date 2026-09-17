@@ -117,6 +117,45 @@ test('healthy fallback packet coverage cannot prove recovery without novel accep
   assert.equal(stalled.packetCoverage, 1);
 });
 
+test('an incomplete fallback packet window cannot postpone a semantic PCM stall', () => {
+  const recovery = new MicMediaPathRecovery({ staleObservations: 1, minPacketWindow: 8 });
+  recovery.observe(observation({
+    path: 'webtransport',
+    serverMediaPath: 'webtransport',
+  }));
+
+  const demoted = recovery.observe(observation({
+    capturedSamples: 96_000,
+    serverAcceptedFrameSerial: 11,
+    senderSubmittedPackets: 200,
+    serverReceivedPacketSerial: 110,
+    path: 'webtransport',
+    serverMediaPath: 'webtransport',
+  }));
+  assert.equal(demoted.action, 'demote-webtransport');
+
+  const baseline = recovery.observe(observation({
+    capturedSamples: 144_000,
+    serverAcceptedFrameSerial: 12,
+    senderSubmittedPackets: 300,
+    serverReceivedPacketSerial: 120,
+    path: 'websocket',
+    serverMediaPath: 'websocket',
+  }));
+  assert.equal(baseline.reason, 'server-websocket-rebaseline');
+
+  const stalled = recovery.observe(observation({
+    capturedSamples: 192_000,
+    serverAcceptedFrameSerial: 12,
+    senderSubmittedPackets: 301,
+    serverReceivedPacketSerial: 121,
+    path: 'websocket',
+    serverMediaPath: 'websocket',
+  }));
+  assert.equal(stalled.action, 'replace-websocket');
+  assert.equal(stalled.reason, 'server-pcm-stale-after-fallback');
+});
+
 test('degraded latch cannot clear from packet delivery alone while accepted PCM remains stalled', () => {
   const recovery = new MicMediaPathRecovery({ staleObservations: 1 });
   recovery.observe(observation());

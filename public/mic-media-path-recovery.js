@@ -70,6 +70,7 @@ export class MicMediaPathRecovery {
     this.lastSenderFailedPackets = null;
     this.lastServerReceivedPacketSerial = null;
     this.lastPacketCoverage = null;
+    this.incompletePacketSemanticStalls = 0;
     this.staleCount = 0;
     this.phase = 'observing';
     this.proofBaselineSerial = null;
@@ -113,6 +114,7 @@ export class MicMediaPathRecovery {
     senderFailedPackets,
     serverReceivedPacketSerial,
   } = {}) {
+    this.incompletePacketSemanticStalls = 0;
     const submitted = optionalNonNegativeInteger(senderSubmittedPackets);
     const failed = optionalNonNegativeInteger(senderFailedPackets);
     const received = optionalNonNegativeInteger(serverReceivedPacketSerial);
@@ -159,6 +161,7 @@ export class MicMediaPathRecovery {
     const failed = optionalNonNegativeInteger(senderFailedPackets);
     const received = optionalNonNegativeInteger(serverReceivedPacketSerial);
     if (submitted === null || failed === null || received === null) {
+      this.incompletePacketSemanticStalls = 0;
       return { available: false, ready: false, healthy: null, coverage: null, submittedDelta: null };
     }
 
@@ -197,6 +200,7 @@ export class MicMediaPathRecovery {
     this.lastSenderFailedPackets = failed;
     this.lastServerReceivedPacketSerial = received;
     this.lastPacketCoverage = coverage;
+    this.incompletePacketSemanticStalls = 0;
     return {
       available: true,
       ready: true,
@@ -204,6 +208,18 @@ export class MicMediaPathRecovery {
       coverage,
       submittedDelta,
     };
+  }
+
+  shouldDeferIncompletePacketWindow(semanticAdvanced) {
+    if (semanticAdvanced) {
+      this.incompletePacketSemanticStalls = 0;
+      return true;
+    }
+    this.incompletePacketSemanticStalls += 1;
+    if (this.incompletePacketSemanticStalls < this.staleObservations) return true;
+    this.incompletePacketSemanticStalls = 0;
+    this.staleCount = Math.max(this.staleCount, this.staleObservations - 1);
+    return false;
   }
 
   beginWebSocketProof(serverPath, acceptedFrameSerial, packetCounters = {}) {
@@ -302,10 +318,12 @@ export class MicMediaPathRecovery {
 
     if (this.phase === 'degraded-latched') {
       const packetEvidence = this.packetCoverageEvidence(packetCounters);
-      const recovered = packetEvidence.available
-        ? packetEvidence.ready && packetEvidence.healthy === true
-        : this.lastServerAcceptedFrameSerial !== null
-          && acceptedSerial > this.lastServerAcceptedFrameSerial;
+      const semanticAdvanced = this.lastServerAcceptedFrameSerial !== null
+        && acceptedSerial > this.lastServerAcceptedFrameSerial;
+      const recovered = semanticAdvanced && (
+        !packetEvidence.available
+        || (packetEvidence.ready && packetEvidence.healthy === true)
+      );
       this.lastCapturedSamples = captured;
       this.lastServerAcceptedFrameSerial = acceptedSerial;
       if (recovered) {
@@ -347,14 +365,19 @@ export class MicMediaPathRecovery {
         return { action: 'none', reason: 'server-websocket-rebaseline', ...this.status() };
       }
       const packetEvidence = this.packetCoverageEvidence(packetCounters);
-      const serverHealthy = packetEvidence.available
-        ? packetEvidence.ready && packetEvidence.healthy === true
-        : serverAdvanced;
+      const serverHealthy = serverAdvanced && (
+        !packetEvidence.available
+        || (packetEvidence.ready && packetEvidence.healthy === true)
+      );
       if (serverHealthy) {
         this.staleCount = 0;
         return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
       }
-      if (packetEvidence.available && !packetEvidence.ready) {
+      if (
+        packetEvidence.available
+        && !packetEvidence.ready
+        && this.shouldDeferIncompletePacketWindow(serverAdvanced)
+      ) {
         return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
       }
       this.staleCount += 1;
@@ -369,14 +392,19 @@ export class MicMediaPathRecovery {
         this.proofServerWebSocketReady = false;
         this.proofBaselineSerial = null;
         const packetEvidence = this.packetCoverageEvidence(packetCounters);
-        const serverHealthy = packetEvidence.available
-          ? packetEvidence.ready && packetEvidence.healthy === true
-          : serverAdvanced;
+        const serverHealthy = serverAdvanced && (
+          !packetEvidence.available
+          || (packetEvidence.ready && packetEvidence.healthy === true)
+        );
         if (serverHealthy) {
           this.staleCount = 0;
           return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
         }
-        if (packetEvidence.available && !packetEvidence.ready) {
+        if (
+          packetEvidence.available
+          && !packetEvidence.ready
+          && this.shouldDeferIncompletePacketWindow(serverAdvanced)
+        ) {
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
         this.staleCount += 1;
@@ -388,11 +416,16 @@ export class MicMediaPathRecovery {
 
       const packetEvidence = this.packetCoverageEvidence(packetCounters);
       if (packetEvidence.available) {
-        if (!packetEvidence.ready) {
+        const semanticProofAdvanced = this.proofBaselineSerial !== null
+          && acceptedSerial > this.proofBaselineSerial;
+        if (
+          !packetEvidence.ready
+          && this.shouldDeferIncompletePacketWindow(semanticProofAdvanced)
+        ) {
           if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
-        if (packetEvidence.healthy) {
+        if (packetEvidence.healthy && semanticProofAdvanced) {
           this.phase = 'observing';
           this.staleCount = 0;
           this.proofBaselineSerial = null;
@@ -414,8 +447,11 @@ export class MicMediaPathRecovery {
       if (this.staleCount < this.staleObservations) {
         return { action: 'none', reason: 'proving-recovery', ...this.status() };
       }
+      const underDelivered = packetEvidence.available
+        && packetEvidence.ready
+        && packetEvidence.healthy === false;
       return this.escalateProofFailure(
-        packetEvidence.available
+        underDelivered
           ? 'server-pcm-underdelivery-after-fallback'
           : 'server-pcm-stale-after-fallback',
       );
@@ -423,11 +459,14 @@ export class MicMediaPathRecovery {
 
     const packetEvidence = this.packetCoverageEvidence(packetCounters);
     if (packetEvidence.available) {
-      if (!packetEvidence.ready) {
+      if (
+        !packetEvidence.ready
+        && this.shouldDeferIncompletePacketWindow(serverAdvanced)
+      ) {
         if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
         return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
       }
-      if (packetEvidence.healthy) {
+      if (packetEvidence.healthy && serverAdvanced) {
         this.staleCount = 0;
         return { action: 'none', reason: 'server-pcm-coverage-healthy', ...this.status() };
       }
@@ -436,11 +475,14 @@ export class MicMediaPathRecovery {
       return { action: 'none', reason: 'server-pcm-advancing', ...this.status() };
     }
 
+    const underDelivered = packetEvidence.available
+      && packetEvidence.ready
+      && packetEvidence.healthy === false;
     this.staleCount += 1;
     if (this.staleCount < this.staleObservations) {
       return {
         action: 'none',
-        reason: packetEvidence.available
+        reason: underDelivered
           ? 'server-pcm-underdelivery-observation'
           : 'server-pcm-stale-observation',
         ...this.status(),
@@ -448,7 +490,7 @@ export class MicMediaPathRecovery {
     }
 
     this.staleCount = 0;
-    const reason = packetEvidence.available ? 'server-pcm-underdelivery' : 'server-pcm-stale';
+    const reason = underDelivered ? 'server-pcm-underdelivery' : 'server-pcm-stale';
     if (localPath === 'webtransport' && !this.webTransportDemotionUsed) {
       this.webTransportDemotionUsed = true;
       this.webTransportQuarantined = true;

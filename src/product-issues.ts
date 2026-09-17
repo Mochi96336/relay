@@ -71,6 +71,8 @@ export type ProductIssueFacts = {
   mic: {
     ownerId: string | null;
     state: RoomMicState;
+    /** Browser bounded media recovery exhausted while server PCM can still trickle. */
+    mediaRecoveryDegraded?: boolean;
   };
   takeLifecycle: TakeLifecycle;
   performanceActive: boolean;
@@ -163,7 +165,13 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
     });
   }
 
-  if (facts.mic.ownerId !== null && facts.mic.state === 'interrupted') {
+  if (
+    facts.mic.ownerId !== null
+    && (
+      facts.mic.state === 'interrupted'
+      || (facts.mic.state === 'live' && facts.mic.mediaRecoveryDegraded === true)
+    )
+  ) {
     issues.push({
       code: 'mic-audio-stalled',
       scope: 'mic',

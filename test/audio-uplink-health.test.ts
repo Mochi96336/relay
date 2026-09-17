@@ -79,6 +79,22 @@ describe('audio uplink health', () => {
     assert.equal(health.healthRequestId, undefined);
   });
 
+  it('keeps terminal media-recovery telemetry backward-compatible with older v1 pages', () => {
+    const legacy = parseAudioUplinkHealth(validHealth());
+    assert.ok(legacy);
+    assert.equal(legacy.transport.mediaRecoveryDegraded, false);
+
+    const degraded: any = validHealth();
+    degraded.transport.mediaRecoveryDegraded = true;
+    const parsed = parseAudioUplinkHealth(degraded);
+    assert.ok(parsed);
+    assert.equal(parsed.transport.mediaRecoveryDegraded, true);
+
+    const malformed: any = validHealth();
+    malformed.transport.mediaRecoveryDegraded = 'true';
+    assert.equal(parseAudioUplinkHealth(malformed), null);
+  });
+
   it('rejects malformed supplied health request correlation tokens', () => {
     for (const healthRequestId of [-1, 0x1_0000_0000, 1.5, '7']) {
       const input: any = validHealth();

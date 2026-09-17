@@ -65,6 +65,32 @@ function runtime() {
   return { mic, activeTickets };
 }
 
+test('product uplink health expires after the existing health authority window', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 6,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+
+  const degraded = uplinkHealth(6, false);
+  degraded.transport.mediaRecoveryDegraded = true;
+  assert.equal(mic.noteUplinkHealth(publisher, degraded, 200), true);
+  assert.equal(mic.freshUplinkHealthPayload(4_200)?.reportAgeMs, 4_000);
+  assert.equal(mic.freshUplinkHealthPayload(4_200)?.transport.mediaRecoveryDegraded, true);
+
+  // Same-capture media authority can survive a short control reconnect, so the
+  // diagnostic snapshot remains available. Product authority must not retain
+  // that degraded verdict forever once health reporting stops.
+  assert.equal(mic.detachPublisher(publisher), true);
+  assert.equal(mic.uplinkHealthPayload(4_201)?.reportAgeMs, 4_001);
+  assert.equal(mic.uplinkHealthPayload(4_201)?.transport.mediaRecoveryDegraded, true);
+  assert.equal(mic.freshUplinkHealthPayload(4_201), null);
+});
+
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {
   const { mic } = runtime();
   const first = socket('participant-alice');

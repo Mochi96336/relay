@@ -341,6 +341,9 @@ export class PreferredAudioTransport extends AudioTransport {
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
       datagramQueuePackets: this.datagramQueuePackets,
+      // ProductStatus may surface the terminal bounded-recovery verdict while
+      // keeping server flow freshness as the room Mic state authority.
+      mediaRecoveryDegraded: this.mediaPathRecovery.status().degraded,
       datagramWriteTimeoutMs: this.datagramWriteTimeoutMs,
       ...this.telemetry,
     };

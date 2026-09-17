@@ -49,6 +49,8 @@ export type ProductViewModelInput = {
   micOwnerNickname: string | null;
   /** Manual calibration needs the publisher control socket, not only Mic media. */
   publisherControlConnected?: boolean;
+  /** Capture-scoped browser verdict after bounded media recovery is exhausted. */
+  micMediaRecoveryDegraded?: boolean;
   roomSong: ProductRoomSongInput;
   take: ProductTakeInput;
   timing: {
@@ -237,6 +239,9 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
   const timing = timingState(input, lifecycle);
   const mic = micState(input);
   const performanceActive = lifecycle === 'live' || lifecycle === 'recording';
+  // Keep room Mic state server-owned: sparse accepted PCM can legitimately keep
+  // it live. The browser verdict is a separate quality fact composed here.
+  const micMediaRecoveryDegraded = mic === 'live' && input.micMediaRecoveryDegraded === true;
   const issues = buildProductIssues({
     routeMode: input.readiness.components.route.mode,
     backing: {
@@ -249,6 +254,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     mic: {
       ownerId: input.micOwnerId,
       state: mic,
+      mediaRecoveryDegraded: micMediaRecoveryDegraded,
     },
     takeLifecycle: input.take.lifecycle,
     performanceActive,
@@ -266,6 +272,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     bootProbeCalibrationActive: preparingCalibrationActive(input),
     songLoaded: input.roomSong.videoId !== null,
     voiceOnlyMicState: mic,
+    micMediaRecoveryDegraded,
     roomBlocked: health === 'blocked',
     takeLifecycle: input.take.lifecycle,
   });

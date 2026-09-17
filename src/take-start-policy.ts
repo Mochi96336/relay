@@ -26,6 +26,8 @@ export type TakeStartFacts = {
   songLoaded: boolean;
   /** Product-semantic Mic state for the voice-only Take path. */
   voiceOnlyMicState: RoomMicState;
+  /** Terminal browser media recovery is a Mic-audio stall even if sparse PCM remains fresh. */
+  micMediaRecoveryDegraded?: boolean;
   roomBlocked: boolean;
   takeLifecycle: TakeLifecycle;
 };
@@ -52,6 +54,9 @@ function voiceOnlyMicBlockReason(state: RoomMicState): TakeStartBlockReason | nu
  * has not become active yet.
  */
 export function decideTakeStart(facts: TakeStartFacts): TakeStartDecision {
+  if (facts.micMediaRecoveryDegraded === true) {
+    return { ok: false, reason: 'mic-audio-stalled' };
+  }
   if (!facts.songLoaded) {
     const micBlockReason = voiceOnlyMicBlockReason(facts.voiceOnlyMicState);
     if (micBlockReason) return { ok: false, reason: micBlockReason };

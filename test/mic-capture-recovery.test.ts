@@ -90,6 +90,13 @@ test('sustained worklet input gap requests one bounded graph rebuild even while 
   assert.equal(first.reason, 'input-gap');
   assert.equal(watchdog.status().recovering, true);
 
+  // Silence padding keeps producing ArrayBuffers. Once the worklet has
+  // positively identified the source gap, those buffers must not satisfy the
+  // fresh-PCM recovery gate.
+  const padded = watchdog.observe(snap(1_100, 2.10, 52_416), { freshPcm: true });
+  assert.equal(padded.recovered, false);
+  assert.equal(watchdog.status().recovering, true);
+
   // The worklet can report another 400-quanta tranche while the same gap
   // continues. That evidence must not create a rebuild storm.
   const repeated = watchdog.noteInputGap(snap(2_140, 3.14, 102_912), { recovered: false });

@@ -67,6 +67,7 @@ let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
 let activeCalibrationProbeRequestId = null;
+let activeCalibrationProbePlayback = null;
 let publisherSessionEpoch = 0;
 let lastKnownControlSnapshot = {
   micGainDb: Number(micGain.value) || 24,
@@ -261,6 +262,11 @@ function startCaptureWatchdog(
 }
 
 function advanceCaptureGeneration(reason) {
+  // Calibration probe playback is capture-scoped. Retire both a pending
+  // AudioContext.resume() continuation and nodes already scheduled into the
+  // future before changing the capture-clock identity.
+  activeCalibrationProbeRequestId = null;
+  retireCalibrationProbePlayback();
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
   captureSampleCursor = 0;
   capturePacketSequence = 0;
@@ -762,6 +768,17 @@ const PROBE_NOTES = [
 ];
 const PROBE_NOTE_SECONDS = 0.105;
 
+function retireCalibrationProbePlayback() {
+  const playback = activeCalibrationProbePlayback;
+  activeCalibrationProbePlayback = null;
+  if (!playback) return;
+  for (const { oscillator, gain } of playback.nodes) {
+    try { oscillator?.disconnect(); } catch {}
+    try { gain?.disconnect(); } catch {}
+    try { oscillator?.stop(); } catch {}
+  }
+}
+
 /**
  * Plays the probe out of the phone speaker so the phone's own microphone hears
  * it. The reply says only that it played and for which request - the server
@@ -771,9 +788,11 @@ const PROBE_NOTE_SECONDS = 0.105;
  */
 async function playCalibrationProbe(requestId, leadMs) {
   const context = audioContext;
+  const sessionEpoch = publisherSessionEpoch;
+  const expectedGeneration = captureGeneration >>> 0;
   if (
     !context
-    || !publisherActive
+    || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
     || document.visibilityState === 'hidden'
     || activeCalibrationProbeRequestId !== requestId
   ) return;
@@ -781,19 +800,32 @@ async function playCalibrationProbe(requestId, leadMs) {
   try {
     // Mobile Safari may leave resume() pending while a page is suspended. The
     // server can retire this request meanwhile, so every continuation has to
-    // re-prove request ownership before it is allowed to create audible nodes.
+    // re-prove request and capture ownership before it may create audible nodes.
     await context.resume();
-    if (activeCalibrationProbeRequestId !== requestId) return;
     if (
-      !publisherActive
-      || audioContext !== context
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+      || socket?.readyState !== WebSocket.OPEN
+    ) return;
+    if (
+      audioContext !== context
       || document.visibilityState === 'hidden'
       || context.state !== 'running'
     ) {
       throw new Error(`Phone probe AudioContext is ${context.state}.`);
     }
 
+    retireCalibrationProbePlayback();
     const startTime = context.currentTime + leadMs / 1000;
+    const playback = {
+      requestId,
+      sessionEpoch,
+      generation: expectedGeneration,
+      context,
+      nodes: [],
+    };
+    activeCalibrationProbePlayback = playback;
+    let remainingNotes = PROBE_NOTES.length;
     for (const note of PROBE_NOTES) {
       const at = startTime + note.offsetMs / 1000;
       const oscillator = context.createOscillator();
@@ -805,36 +837,63 @@ async function playCalibrationProbe(requestId, leadMs) {
       gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
       gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
       oscillator.connect(gain).connect(context.destination);
+      playback.nodes.push({ oscillator, gain });
+      oscillator.addEventListener('ended', () => {
+        remainingNotes -= 1;
+        if (remainingNotes === 0 && activeCalibrationProbePlayback === playback) {
+          activeCalibrationProbePlayback = null;
+        }
+      }, { once: true });
       oscillator.start(at);
       oscillator.stop(at + PROBE_NOTE_SECONDS);
     }
 
     // Scheduling the nodes is the irreversible side effect. Retire the local
     // request before acknowledging it so a later status/retry cannot revive the
-    // same identity on this page.
-    if (activeCalibrationProbeRequestId !== requestId) return;
+    // same identity on this page. The separate playback owner remains live
+    // until every scheduled node ends or a capture/session boundary retires it.
+    if (
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    ) return;
     activeCalibrationProbeRequestId = null;
-    if (socket?.readyState !== WebSocket.OPEN) return;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      retireCalibrationProbePlayback();
+      return;
+    }
     const result = audioTransport.sendControlJson({
       type: 'calibration-probe-played',
       target: 'mic',
       requestId,
       // The same truncation framePcm applies. The server compares this against
-      // the generation it read off a PCM frame header, which is a uint32, so
-      // sending the untruncated clock seed here never matches.
-      generation: captureGeneration >>> 0,
+      // the generation it read off a PCM frame header, which is a uint32.
+      generation: expectedGeneration,
     });
-    if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
+    if (!result.sent) {
+      retireCalibrationProbePlayback();
+      if (result.reason === 'disconnected') markPublisherAuthorityStale();
+    }
   } catch (error) {
     console.warn('phone calibration probe failed', error);
-    if (activeCalibrationProbeRequestId !== requestId) return;
+    if (
+      activeCalibrationProbePlayback?.requestId === requestId
+      && activeCalibrationProbePlayback?.sessionEpoch === sessionEpoch
+      && activeCalibrationProbePlayback?.generation === expectedGeneration
+      && activeCalibrationProbePlayback?.context === context
+    ) {
+      retireCalibrationProbePlayback();
+    }
+    if (
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    ) return;
     activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
     const result = audioTransport.sendControlJson({
       type: 'calibration-probe-failed',
       target: 'mic',
       requestId,
-      generation: captureGeneration >>> 0,
+      generation: expectedGeneration,
       reason: error instanceof Error ? error.message : String(error),
     });
     if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
@@ -1020,6 +1079,10 @@ function handleServerMessage(
     if (message.target === undefined || message.target === 'mic') {
       const requestId = Number(message.requestId);
       if (!Number.isSafeInteger(requestId) || requestId < 0) return;
+      // A new authoritative request supersedes any future playback left by an
+      // older request in this same capture; overlapping probe waveforms are not
+      // valid calibration evidence.
+      retireCalibrationProbePlayback();
       activeCalibrationProbeRequestId = requestId;
       void playCalibrationProbe(requestId, Number(message.leadMs) || 200);
     }
@@ -1266,6 +1329,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   micStartup.cancel();
   publisherStarting = false;
   activeCalibrationProbeRequestId = null;
+  retireCalibrationProbePlayback();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
   stopCaptureWatchdog();
@@ -1520,6 +1584,7 @@ window.addEventListener('relay-request-microphone', (event) => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     activeCalibrationProbeRequestId = null;
+    retireCalibrationProbePlayback();
     if (publisherActive) micCaptureRecovery.noteHidden(captureSnapshot());
     return;
   }

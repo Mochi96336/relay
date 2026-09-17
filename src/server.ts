@@ -404,6 +404,7 @@ const micRuntime = new MicRuntime({
   audioTransportConfig: AUDIO_TRANSPORT_CONFIG,
   firstFrameTimeoutMs: MIC_FIRST_FRAME_TIMEOUT_MS,
   streamLiveMs: STREAM_LIVE_MS,
+  acceptedSampleRate: MIX_SAMPLE_RATE,
   createDirectMediaTicket: () => webTransportMedia.createTicket(),
   directMediaConnected: (ticket) => webTransportMedia.hasSession(ticket),
   offerDirectMedia: (ticket) => webTransportMedia.offer(ticket),
@@ -414,8 +415,8 @@ const micTransportGrace = new MicTransportGraceRuntime({
   onExpired: expireMicTransportGrace,
 });
 
-function noteMicFrame(nowMs: number) {
-  micRuntime.noteFrame(nowMs);
+function noteMicFrame(nowMs: number, acceptedSamples: number) {
+  micRuntime.noteFrame(nowMs, acceptedSamples);
 }
 
 function micFlowObserved() {
@@ -1942,7 +1943,7 @@ function processPublisherFrame(frame: PcmFrame) {
       micRuntime.sampleRate,
       nowMs,
     );
-    if (samples.length > 0) noteMicFrame(nowMs);
+    if (samples.length > 0) noteMicFrame(nowMs, samples.length);
 
     if (session.active) {
       if (captureRestarted) {

@@ -275,7 +275,7 @@ test('publisher command authority waits for registration and replayed control sn
   );
   assert.match(
     publisherSource,
-    /message\.type === 'audio-uplink-health-ack'[\s\S]*publisherCommandLiveness\.noteAck\(ackGeneration, performance\.now\(\)\)[\s\S]*refreshPublisherCommandChannel\(\)/,
+    /message\.type === 'audio-uplink-health-ack'[\s\S]*publisherHealthCorrelation\.consume\([\s\S]*requestSentAtMs[\s\S]*publisherCommandLiveness\.noteAck\(ackGeneration, ackAtMs, requestSentAtMs\)[\s\S]*refreshPublisherCommandChannel\(\)/,
   );
   assert.match(
     publisherSource,

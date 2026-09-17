@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import WebSocket from 'ws';
 
+import { encodeAudioPacket } from '../src/audio-packet.js';
 import { DEFAULT_AUDIO_TRANSPORT_CONFIG } from '../src/audio-transport-config.js';
 import type { AudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { MicRuntime } from '../src/mic-runtime.js';
@@ -94,6 +95,7 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
     'current-generation ACK must echo the browser health request correlation token');
   assert.deepEqual(lastAck(first).pcm, {
     acceptedFrameSerial: 0,
+    receivedPacketSerial: 0,
     mediaPath: 'websocket',
   });
 
@@ -103,6 +105,8 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.equal(mic.noteUplinkHealth(first, health(7, 2_000, 42), 140), true);
   assert.equal(lastAck(first).healthRequestId, 42);
   assert.equal(lastAck(first).pcm.acceptedFrameSerial, 2);
+  assert.equal(lastAck(first).pcm.receivedPacketSerial, 0,
+    'semantic AudioSession progress must not fabricate receiver packet coverage');
 
   const ticket = mic.mediaTicket;
   assert.ok(ticket);
@@ -129,6 +133,7 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.equal(lastAck(replacement).healthRequestId, 1);
   assert.deepEqual(lastAck(replacement).pcm, {
     acceptedFrameSerial: 2,
+    receivedPacketSerial: 0,
     mediaPath: 'websocket',
   });
 
@@ -147,6 +152,41 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.equal(mic.noteUplinkHealth(fresh, health(8, 100, 0), 310), true);
   assert.equal(lastAck(fresh).healthRequestId, 0);
   assert.equal(lastAck(fresh).pcm.acceptedFrameSerial, 0);
+  assert.equal(lastAck(fresh).pcm.receivedPacketSerial, 0);
+});
+
+test('receiver packet progress is distinct from AudioSession accepted-frame progress', () => {
+  const mic = new MicRuntime({
+    audioTransportConfig: DEFAULT_AUDIO_TRANSPORT_CONFIG,
+    firstFrameTimeoutMs: 3_000,
+    streamLiveMs: 1_000,
+  });
+  const current = socket('alice');
+  mic.bindPublisher({
+    socket: current,
+    sampleRate: 48_000,
+    captureGeneration: 7,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+
+  const frames = mic.receivePublisher(current, encodeAudioPacket({
+    source: 'mic',
+    generation: 7,
+    sequence: 0,
+    firstSampleIndex: 0,
+    pcm: Buffer.alloc(480 * 2),
+  }), 120);
+  assert.equal(frames.length, 1);
+  assert.equal(mic.acceptedFrameSerial, 0,
+    'receiver emission alone is not AudioSession semantic acceptance');
+
+  assert.equal(mic.noteUplinkHealth(current, health(7, 480), 130), true);
+  assert.deepEqual(lastAck(current).pcm, {
+    acceptedFrameSerial: 0,
+    receivedPacketSerial: 1,
+    mediaPath: 'websocket',
+  });
 });
 
 test('older v1 health without a request token still receives a compatible ACK', () => {
@@ -189,4 +229,5 @@ test('old-generation health cannot receive current accepted-frame authority', ()
   assert.equal(mic.noteUplinkHealth(current, health(9, 1_100, 91), 130), true);
   assert.equal(lastAck(current).healthRequestId, 91);
   assert.equal(lastAck(current).pcm.acceptedFrameSerial, 1);
+  assert.equal(lastAck(current).pcm.receivedPacketSerial, 0);
 });

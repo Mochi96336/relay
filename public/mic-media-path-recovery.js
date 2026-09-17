@@ -217,11 +217,17 @@ export class MicMediaPathRecovery {
       // A late WT frame can be accepted after the browser has demoted locally.
       // Do not establish the fallback proof baseline until the server agrees
       // that the direct-media session is gone and WebSocket is the live path.
-      // Waiting for that agreement is itself bounded: a server that never
-      // retires the WT session is also a failed recovery, not an infinite wait.
+      // If the old WT session label lingers while accepted PCM is still moving,
+      // the failure class is no longer "server PCM stalled". Keep quarantine
+      // and wait for the server path label to converge instead of spending the
+      // next physical-reconnect budget against a healthy fallback.
       if (!this.proofServerWebSocketReady) {
         if (this.beginWebSocketProof(serverPath, acceptedSerial)) {
           return { action: 'none', reason: 'server-websocket-rebaseline', ...this.status() };
+        }
+        if (serverAdvanced) {
+          this.staleCount = 0;
+          return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
         }
         this.staleCount += 1;
         if (this.staleCount < this.staleObservations) {
@@ -233,6 +239,10 @@ export class MicMediaPathRecovery {
       if (serverPath !== 'websocket') {
         this.proofServerWebSocketReady = false;
         this.proofBaselineSerial = null;
+        if (serverAdvanced) {
+          this.staleCount = 0;
+          return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
+        }
         this.staleCount = 1;
         if (this.staleCount < this.staleObservations) {
           return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };

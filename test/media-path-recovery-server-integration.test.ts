@@ -58,7 +58,7 @@ function health(capturedSamples: number, path: 'webtransport' | 'websocket') {
 }
 
 class BrowserSocket {
-  readyState = WebSocket.OPEN;
+  readyState: number = WebSocket.OPEN;
   bufferedAmount = 0;
   closeCalls: Array<{ code?: number; reason?: string }> = [];
   private readonly listeners = new Map<string, Set<(event: { data: string }) => void>>();
@@ -145,6 +145,10 @@ class ServerBridge {
     for (const frame of frames) {
       const ingested = this.session.ingestMic(frame, this.mic.sampleRate, this.nowMs);
       if (ingested.samples.length < 1) continue;
+      assert.ok(
+        typeof frame.generation === 'number' && typeof frame.firstSampleIndex === 'number',
+        'accepted v2 proof frames must retain generation and sample frontier identity',
+      );
       this.mic.noteFrame(this.nowMs);
       this.acceptedFrames.push({
         generation: frame.generation,

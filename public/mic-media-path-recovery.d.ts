@@ -1,4 +1,5 @@
 export const DEFAULT_MEDIA_PATH_STALE_OBSERVATIONS: number;
+export const DEFAULT_MEDIA_PATH_MIN_DELIVERY_RATIO: number;
 
 export type MicMediaPathRecoveryAction =
   | 'none'
@@ -10,7 +11,10 @@ export type MicMediaPathRecoveryAction =
 export type MicMediaPathRecoveryObservation = {
   captureGeneration: number;
   capturedSamples: number;
+  captureSampleRate?: number;
   serverAcceptedFrameSerial: number;
+  serverAcceptedSampleCount?: number;
+  serverAcceptedSampleRate?: number;
   serverMediaPath?: 'webtransport' | 'websocket' | null;
   path: 'webtransport' | 'websocket';
   socketEpoch: number;
@@ -22,6 +26,7 @@ export type MicMediaPathRecoveryStatus = {
   socketEpoch: number | null;
   phase: string;
   staleObservations: number;
+  deliveryRatio: number | null;
   proofBaselineSerial: number | null;
   proofServerWebSocketReady: boolean;
   webTransportDemotionUsed: boolean;
@@ -36,14 +41,20 @@ export type MicMediaPathRecoveryDecision = MicMediaPathRecoveryStatus & {
 };
 
 export class MicMediaPathRecovery {
-  constructor(options?: { staleObservations?: number });
+  constructor(options?: {
+    staleObservations?: number;
+    minimumDeliveryRatio?: number;
+  });
   reset(): void;
   status(): MicMediaPathRecoveryStatus;
   quarantineWebTransport(): boolean;
   beginGeneration(generation: number): boolean;
   rebaseline(input?: {
     capturedSamples?: number | null;
+    captureSampleRate?: number | null;
     serverAcceptedFrameSerial?: number | null;
+    serverAcceptedSampleCount?: number | null;
+    serverAcceptedSampleRate?: number | null;
     socketEpoch?: number | null;
   }): void;
   observe(input: MicMediaPathRecoveryObservation): MicMediaPathRecoveryDecision;

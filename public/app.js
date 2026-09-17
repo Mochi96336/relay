@@ -1,5 +1,6 @@
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
+import { PublisherHealthRequestCorrelation } from './publisher-health-correlation.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
@@ -57,6 +58,7 @@ const micStartup = new MicStartupGate();
 const micCaptureRecovery = new MicCaptureRecoveryWatchdog();
 const micLifecycle = new MicLifecycleTransaction();
 const publisherCommandLiveness = new PublisherCommandLiveness();
+const publisherHealthCorrelation = new PublisherHealthRequestCorrelation();
 let publishedPublisherCommandChannelFresh = false;
 let liveMixActive = false;
 let latestMixHealth = null;
@@ -200,11 +202,12 @@ function recordUplinkDrop(sampleCount, reason) {
   );
 }
 
-function audioUplinkHealthPayload() {
+function audioUplinkHealthPayload(healthRequestId) {
   return {
     type: 'audio-uplink-health',
     version: 1,
     captureGeneration: captureGeneration >>> 0,
+    healthRequestId,
     capturedSamples: captureSampleCursor,
     inputGapSamples: captureInputGapSamples,
     inputMuted: captureInputMuted,
@@ -219,8 +222,20 @@ function audioUplinkHealthPayload() {
 
 function sendAudioUplinkHealth() {
   maintainPublisherCommandChannel();
-  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return false;
-  return audioTransport.sendControlJson(audioUplinkHealthPayload()).sent;
+  const currentSocket = socket;
+  if (!publisherActive || currentSocket?.readyState !== WebSocket.OPEN) return false;
+  const generation = captureGeneration >>> 0;
+  const sessionEpoch = publisherSessionEpoch;
+  const sentAtMs = performance.now();
+  const healthRequestId = publisherHealthCorrelation.issue({
+    socket: currentSocket,
+    sessionEpoch,
+    generation,
+    sentAtMs,
+  });
+  const result = audioTransport.sendControlJson(audioUplinkHealthPayload(healthRequestId));
+  if (!result.sent) publisherHealthCorrelation.forget(healthRequestId);
+  return result.sent;
 }
 
 function startAudioUplinkHealthReporting() {
@@ -929,14 +944,28 @@ function handleServerMessage(
 
   if (message.type === 'audio-uplink-health-ack') {
     const ackGeneration = message.captureGeneration;
+    const healthRequestId = message.healthRequestId;
+    const ackAtMs = performance.now();
     if (
       message.version !== 1
       || !Number.isInteger(ackGeneration)
       || ackGeneration < 0
       || ackGeneration > 0xffff_ffff
+      || !Number.isInteger(healthRequestId)
+      || healthRequestId < 0
+      || healthRequestId > 0xffff_ffff
       || (ackGeneration >>> 0) !== (expectedGeneration >>> 0)
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-      || !publisherCommandLiveness.noteAck(ackGeneration, performance.now())
+    ) return;
+    const requestSentAtMs = publisherHealthCorrelation.consume({
+      requestId: healthRequestId,
+      socket,
+      sessionEpoch,
+      generation: ackGeneration,
+    });
+    if (
+      requestSentAtMs === null
+      || !publisherCommandLiveness.noteAck(ackGeneration, ackAtMs, requestSentAtMs)
     ) return;
     refreshPublisherCommandChannel();
     return;

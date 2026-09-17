@@ -78,15 +78,18 @@ try {
   });
   assert.equal(mic.mediaTicket, ticket);
 
-  let dropBeforeRelayIngress = false;
+  let ingressMode = 'raw';
   let acceptedPackets = 0;
   let acceptedEndSampleIndex = null;
+  let nextRaw = null;
   let nextAccepted = null;
   let nextDropped = null;
+  const rawReceived = () => new Promise((resolve) => { nextRaw = resolve; });
   const accepted = () => new Promise((resolve) => { nextAccepted = resolve; });
   const dropped = () => new Promise((resolve) => { nextDropped = resolve; });
 
   timeout = setTimeout(() => {
+    nextRaw?.(new Error('timed out waiting for raw WebTransport datagram'));
     nextAccepted?.(new Error('timed out waiting for accepted WebTransport datagram'));
     nextDropped?.(new Error('timed out waiting for dropped WebTransport datagram'));
   }, 5000);
@@ -96,7 +99,14 @@ try {
       return mic.authorizeDirectMedia(candidate);
     },
     onDatagram(candidate, packet, nowMs) {
-      if (dropBeforeRelayIngress) {
+      if (ingressMode === 'raw') {
+        const resolve = nextRaw;
+        nextRaw = null;
+        resolve?.(Buffer.from(packet));
+        return;
+      }
+
+      if (ingressMode === 'drop') {
         const resolve = nextDropped;
         nextDropped = null;
         resolve?.({ candidate, packet: Buffer.from(packet), nowMs });
@@ -137,8 +147,20 @@ try {
   writer = client.datagrams.createWritable().getWriter();
   await writer.ready;
 
-  // First prove the ordinary native HTTP/3 path reaches Relay's current
-  // generation receiver and establishes an accepted sample frontier.
+  // Preserve the original native HTTP/3 coverage: the endpoint must carry a
+  // full 1200-byte datagram intact before any media-specific fault injection.
+  const rawPromise = rawReceived();
+  const payload = Uint8Array.from({ length: 1200 }, (_, index) => index & 0xff);
+  await writer.write(payload);
+  const rawPacket = await rawPromise;
+  if (rawPacket instanceof Error) throw rawPacket;
+  assert.equal(rawPacket.byteLength, 1200);
+  assert.deepEqual([...rawPacket.subarray(0, 8)], [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(server.hasSession(ticket), true);
+
+  // Then prove an ordinary current-generation AudioPacket reaches Relay's
+  // receiver and establishes an accepted sample frontier.
+  ingressMode = 'accept';
   const firstAccepted = accepted();
   const firstPacket = encodeAudioPacket({
     source: 'mic',
@@ -155,13 +177,12 @@ try {
   assert.equal(acceptedPackets, 1);
   assert.equal(acceptedEndSampleIndex, 2);
   assert.equal(mic.receiverStats()?.emittedPackets, 1);
-  assert.equal(server.hasSession(ticket), true);
 
-  // Now model the missing fault class. QUIC/WebTransport accepts the datagram
-  // and writer.write() resolves, but the test-only ingress gate swallows the
-  // packet before MicRuntime receives it. This is deliberately outside
-  // production runtime: it proves sender completion is not server PCM proof.
-  dropBeforeRelayIngress = true;
+  // Model the missing fault class. QUIC/WebTransport accepts the datagram and
+  // writer.write() resolves, but the test-only ingress gate swallows the packet
+  // before MicRuntime receives it. This is deliberately outside production
+  // runtime: sender completion is not server PCM proof.
+  ingressMode = 'drop';
   const secondDropped = dropped();
   const secondPacket = encodeAudioPacket({
     source: 'mic',
@@ -181,7 +202,7 @@ try {
   assert.equal(mic.receiverStats()?.receivedPackets, 1, 'dropped datagram never reaches the AudioPacket receiver');
   assert.equal(mic.receiverStats()?.emittedPackets, 1);
 
-  console.log('native WebTransport HTTP/3 writer resolve + Relay PCM ingress-drop proof passed');
+  console.log('native WebTransport 1200-byte loopback + writer-resolve PCM ingress-drop proof passed');
   mic.clearMediaAuthority(0);
 } finally {
   if (timeout) clearTimeout(timeout);

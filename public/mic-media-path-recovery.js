@@ -1,4 +1,6 @@
 export const DEFAULT_MEDIA_PATH_STALE_OBSERVATIONS = 3;
+export const DEFAULT_MEDIA_PATH_MIN_PACKET_COVERAGE = 0.5;
+export const DEFAULT_MEDIA_PATH_MIN_PACKET_WINDOW = 8;
 
 function uint32(value) {
   const number = Number(value);
@@ -12,6 +14,11 @@ function nonNegativeInteger(value) {
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
+function optionalNonNegativeInteger(value) {
+  if (value === undefined || value === null) return null;
+  return nonNegativeInteger(value);
+}
+
 function mediaPath(value) {
   return value === 'webtransport' || value === 'websocket' ? value : null;
 }
@@ -19,11 +26,14 @@ function mediaPath(value) {
 /**
  * Pure policy for the failure class where the local capture clock still moves
  * and the publisher control round-trip still succeeds, but the server does not
- * accept new microphone PCM.
+ * receive enough new microphone PCM.
  *
  * `serverAcceptedFrameSerial` is incremented only at the server's accepted-PCM
- * authority boundary (AudioSession ingest produced samples). It is deliberately
- * not a socket/datagram/write counter.
+ * authority boundary (AudioSession ingest produced samples). Quantitative media
+ * coverage uses sender-submitted packet counters against the server receiver's
+ * emitted-packet counter, keeping network delivery separate from later timeline
+ * acceptance. Older peers can omit those counters and retain the event-progress
+ * fallback semantics.
  *
  * This policy cannot rebuild capture. Its bounded actions are media-only: one
  * semantic WebTransport demotion, then at most one same-capture physical
@@ -31,11 +41,23 @@ function mediaPath(value) {
  * budget for a new capture generation.
  */
 export class MicMediaPathRecovery {
-  constructor({ staleObservations = DEFAULT_MEDIA_PATH_STALE_OBSERVATIONS } = {}) {
+  constructor({
+    staleObservations = DEFAULT_MEDIA_PATH_STALE_OBSERVATIONS,
+    minPacketCoverage = DEFAULT_MEDIA_PATH_MIN_PACKET_COVERAGE,
+    minPacketWindow = DEFAULT_MEDIA_PATH_MIN_PACKET_WINDOW,
+  } = {}) {
     if (!Number.isInteger(staleObservations) || staleObservations < 1) {
       throw new Error('Mic media-path staleObservations must be a positive integer.');
     }
+    if (!Number.isFinite(minPacketCoverage) || minPacketCoverage <= 0 || minPacketCoverage > 1) {
+      throw new Error('Mic media-path minPacketCoverage must be in (0, 1].');
+    }
+    if (!Number.isInteger(minPacketWindow) || minPacketWindow < 1) {
+      throw new Error('Mic media-path minPacketWindow must be a positive integer.');
+    }
     this.staleObservations = staleObservations;
+    this.minPacketCoverage = minPacketCoverage;
+    this.minPacketWindow = minPacketWindow;
     this.reset();
   }
 
@@ -44,6 +66,10 @@ export class MicMediaPathRecovery {
     this.currentSocketEpoch = null;
     this.lastCapturedSamples = null;
     this.lastServerAcceptedFrameSerial = null;
+    this.lastSenderSubmittedPackets = null;
+    this.lastSenderFailedPackets = null;
+    this.lastServerReceivedPacketSerial = null;
+    this.lastPacketCoverage = null;
     this.staleCount = 0;
     this.phase = 'observing';
     this.proofBaselineSerial = null;
@@ -59,6 +85,7 @@ export class MicMediaPathRecovery {
       socketEpoch: this.currentSocketEpoch,
       phase: this.phase,
       staleObservations: this.staleCount,
+      packetCoverage: this.lastPacketCoverage,
       proofBaselineSerial: this.proofBaselineSerial,
       proofServerWebSocketReady: this.proofServerWebSocketReady,
       webTransportDemotionUsed: this.webTransportDemotionUsed,
@@ -81,19 +108,105 @@ export class MicMediaPathRecovery {
     return true;
   }
 
+  rebaselinePacketCoverage({
+    senderSubmittedPackets,
+    senderFailedPackets,
+    serverReceivedPacketSerial,
+  } = {}) {
+    const submitted = optionalNonNegativeInteger(senderSubmittedPackets);
+    const failed = optionalNonNegativeInteger(senderFailedPackets);
+    const received = optionalNonNegativeInteger(serverReceivedPacketSerial);
+    if (submitted === null || failed === null || received === null) {
+      this.lastSenderSubmittedPackets = null;
+      this.lastSenderFailedPackets = null;
+      this.lastServerReceivedPacketSerial = null;
+      this.lastPacketCoverage = null;
+      return false;
+    }
+    this.lastSenderSubmittedPackets = submitted;
+    this.lastSenderFailedPackets = failed;
+    this.lastServerReceivedPacketSerial = received;
+    this.lastPacketCoverage = null;
+    return true;
+  }
+
   rebaseline({
     capturedSamples,
     serverAcceptedFrameSerial,
     socketEpoch,
+    senderSubmittedPackets,
+    senderFailedPackets,
+    serverReceivedPacketSerial,
   } = {}) {
     this.lastCapturedSamples = nonNegativeInteger(capturedSamples);
     this.lastServerAcceptedFrameSerial = nonNegativeInteger(serverAcceptedFrameSerial);
     const normalizedEpoch = nonNegativeInteger(socketEpoch);
     if (normalizedEpoch !== null) this.currentSocketEpoch = normalizedEpoch;
+    this.rebaselinePacketCoverage({
+      senderSubmittedPackets,
+      senderFailedPackets,
+      serverReceivedPacketSerial,
+    });
     this.staleCount = 0;
   }
 
-  beginWebSocketProof(serverPath, acceptedFrameSerial) {
+  packetCoverageEvidence({
+    senderSubmittedPackets,
+    senderFailedPackets,
+    serverReceivedPacketSerial,
+  }) {
+    const submitted = optionalNonNegativeInteger(senderSubmittedPackets);
+    const failed = optionalNonNegativeInteger(senderFailedPackets);
+    const received = optionalNonNegativeInteger(serverReceivedPacketSerial);
+    if (submitted === null || failed === null || received === null) {
+      return { available: false, ready: false, healthy: null, coverage: null, submittedDelta: null };
+    }
+
+    if (
+      this.lastSenderSubmittedPackets === null
+      || this.lastSenderFailedPackets === null
+      || this.lastServerReceivedPacketSerial === null
+      || submitted < this.lastSenderSubmittedPackets
+      || failed < this.lastSenderFailedPackets
+      || received < this.lastServerReceivedPacketSerial
+    ) {
+      this.rebaselinePacketCoverage({
+        senderSubmittedPackets: submitted,
+        senderFailedPackets: failed,
+        serverReceivedPacketSerial: received,
+      });
+      return { available: true, ready: false, healthy: null, coverage: null, submittedDelta: 0 };
+    }
+
+    const submittedDelta = submitted - this.lastSenderSubmittedPackets;
+    const failedDelta = failed - this.lastSenderFailedPackets;
+    const receivedDelta = received - this.lastServerReceivedPacketSerial;
+    const deliverableDelta = Math.max(0, submittedDelta - failedDelta);
+    if (deliverableDelta < this.minPacketWindow) {
+      return {
+        available: true,
+        ready: false,
+        healthy: null,
+        coverage: null,
+        submittedDelta,
+      };
+    }
+
+    const coverage = Math.max(0, Math.min(1, receivedDelta / deliverableDelta));
+    this.lastSenderSubmittedPackets = submitted;
+    this.lastSenderFailedPackets = failed;
+    this.lastServerReceivedPacketSerial = received;
+    this.lastPacketCoverage = coverage;
+    return {
+      available: true,
+      ready: true,
+      healthy: coverage >= this.minPacketCoverage,
+      coverage,
+      submittedDelta,
+    };
+  }
+
+  beginWebSocketProof(serverPath, acceptedFrameSerial, packetCounters = {}) {
     if (serverPath !== 'websocket') {
       this.proofServerWebSocketReady = false;
       this.proofBaselineSerial = null;
@@ -101,6 +214,7 @@ export class MicMediaPathRecovery {
     }
     this.proofServerWebSocketReady = true;
     this.proofBaselineSerial = acceptedFrameSerial;
+    this.rebaselinePacketCoverage(packetCounters);
     this.staleCount = 0;
     return true;
   }
@@ -126,6 +240,9 @@ export class MicMediaPathRecovery {
     captureGeneration,
     capturedSamples,
     serverAcceptedFrameSerial,
+    senderSubmittedPackets,
+    senderFailedPackets,
+    serverReceivedPacketSerial,
     serverMediaPath,
     path,
     socketEpoch,
@@ -137,6 +254,11 @@ export class MicMediaPathRecovery {
     const localPath = mediaPath(path);
     const serverPath = mediaPath(serverMediaPath);
     const normalizedEpoch = nonNegativeInteger(socketEpoch);
+    const packetCounters = {
+      senderSubmittedPackets,
+      senderFailedPackets,
+      serverReceivedPacketSerial,
+    };
 
     if (
       generation === null
@@ -159,9 +281,10 @@ export class MicMediaPathRecovery {
         capturedSamples: captured,
         serverAcceptedFrameSerial: acceptedSerial,
         socketEpoch: normalizedEpoch,
+        ...packetCounters,
       });
       if (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving') {
-        this.beginWebSocketProof(serverPath, acceptedSerial);
+        this.beginWebSocketProof(serverPath, acceptedSerial, packetCounters);
       }
       return { action: 'none', reason: 'socket-rebaseline', ...this.status() };
     }
@@ -172,16 +295,17 @@ export class MicMediaPathRecovery {
         capturedSamples: captured,
         serverAcceptedFrameSerial: acceptedSerial,
         socketEpoch: normalizedEpoch,
+        ...packetCounters,
       });
       return { action: 'none', reason: 'ineligible', ...this.status() };
     }
 
     if (this.phase === 'degraded-latched') {
-      // Do not spend any more recovery actions. If PCM starts advancing on its
-      // own, clear only the visible degraded verdict; the action budget and WT
-      // quarantine remain consumed for this capture generation.
-      const recovered = this.lastServerAcceptedFrameSerial !== null
-        && acceptedSerial > this.lastServerAcceptedFrameSerial;
+      const packetEvidence = this.packetCoverageEvidence(packetCounters);
+      const recovered = packetEvidence.available
+        ? packetEvidence.ready && packetEvidence.healthy === true
+        : this.lastServerAcceptedFrameSerial !== null
+          && acceptedSerial > this.lastServerAcceptedFrameSerial;
       this.lastCapturedSamples = captured;
       this.lastServerAcceptedFrameSerial = acceptedSerial;
       if (recovered) {
@@ -197,6 +321,7 @@ export class MicMediaPathRecovery {
         capturedSamples: captured,
         serverAcceptedFrameSerial: acceptedSerial,
         socketEpoch: normalizedEpoch,
+        ...packetCounters,
       });
       return { action: 'none', reason: 'baseline', ...this.status() };
     }
@@ -209,25 +334,50 @@ export class MicMediaPathRecovery {
     if (!localAdvanced) {
       // Capture-clock stalls belong to the existing capture watchdog. Media
       // recovery must never manufacture a transport diagnosis from them.
+      this.rebaselinePacketCoverage(packetCounters);
       this.staleCount = 0;
       return { action: 'none', reason: 'local-capture-not-advancing', ...this.status() };
     }
 
+    if (
+      (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving')
+      && !this.proofServerWebSocketReady
+    ) {
+      if (this.beginWebSocketProof(serverPath, acceptedSerial, packetCounters)) {
+        return { action: 'none', reason: 'server-websocket-rebaseline', ...this.status() };
+      }
+      const packetEvidence = this.packetCoverageEvidence(packetCounters);
+      const serverHealthy = packetEvidence.available
+        ? packetEvidence.ready && packetEvidence.healthy === true
+        : serverAdvanced;
+      if (serverHealthy) {
+        this.staleCount = 0;
+        return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
+      }
+      if (packetEvidence.available && !packetEvidence.ready) {
+        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
+      }
+      this.staleCount += 1;
+      if (this.staleCount < this.staleObservations) {
+        return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
+      }
+      return this.escalateProofFailure('server-media-path-stale-after-fallback');
+    }
+
     if (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving') {
-      // A late WT frame can be accepted after the browser has demoted locally.
-      // Do not establish the fallback proof baseline until the server agrees
-      // that the direct-media session is gone and WebSocket is the live path.
-      // If the old WT session label lingers while accepted PCM is still moving,
-      // the failure class is no longer "server PCM stalled". Keep quarantine
-      // and wait for the server path label to converge instead of spending the
-      // next physical-reconnect budget against a healthy fallback.
-      if (!this.proofServerWebSocketReady) {
-        if (this.beginWebSocketProof(serverPath, acceptedSerial)) {
-          return { action: 'none', reason: 'server-websocket-rebaseline', ...this.status() };
-        }
-        if (serverAdvanced) {
+      if (serverPath !== 'websocket') {
+        this.proofServerWebSocketReady = false;
+        this.proofBaselineSerial = null;
+        const packetEvidence = this.packetCoverageEvidence(packetCounters);
+        const serverHealthy = packetEvidence.available
+          ? packetEvidence.ready && packetEvidence.healthy === true
+          : serverAdvanced;
+        if (serverHealthy) {
           this.staleCount = 0;
           return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
+        }
+        if (packetEvidence.available && !packetEvidence.ready) {
+          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
         this.staleCount += 1;
         if (this.staleCount < this.staleObservations) {
@@ -236,21 +386,20 @@ export class MicMediaPathRecovery {
         return this.escalateProofFailure('server-media-path-stale-after-fallback');
       }
 
-      if (serverPath !== 'websocket') {
-        this.proofServerWebSocketReady = false;
-        this.proofBaselineSerial = null;
-        if (serverAdvanced) {
+      const packetEvidence = this.packetCoverageEvidence(packetCounters);
+      if (packetEvidence.available) {
+        if (!packetEvidence.ready) {
+          if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
+          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
+        }
+        if (packetEvidence.healthy) {
+          this.phase = 'observing';
           this.staleCount = 0;
-          return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
+          this.proofBaselineSerial = null;
+          this.proofServerWebSocketReady = false;
+          return { action: 'recovered', reason: 'server-pcm-coverage-healthy-on-websocket', ...this.status() };
         }
-        this.staleCount = 1;
-        if (this.staleCount < this.staleObservations) {
-          return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
-        }
-        return this.escalateProofFailure('server-media-path-stale-after-fallback');
-      }
-
-      if (
+      } else if (
         this.proofBaselineSerial !== null
         && acceptedSerial > this.proofBaselineSerial
       ) {
@@ -265,27 +414,48 @@ export class MicMediaPathRecovery {
       if (this.staleCount < this.staleObservations) {
         return { action: 'none', reason: 'proving-recovery', ...this.status() };
       }
-      return this.escalateProofFailure('server-pcm-stale-after-fallback');
+      return this.escalateProofFailure(
+        packetEvidence.available
+          ? 'server-pcm-underdelivery-after-fallback'
+          : 'server-pcm-stale-after-fallback',
+      );
     }
 
-    if (serverAdvanced) {
+    const packetEvidence = this.packetCoverageEvidence(packetCounters);
+    if (packetEvidence.available) {
+      if (!packetEvidence.ready) {
+        if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
+        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
+      }
+      if (packetEvidence.healthy) {
+        this.staleCount = 0;
+        return { action: 'none', reason: 'server-pcm-coverage-healthy', ...this.status() };
+      }
+    } else if (serverAdvanced) {
       this.staleCount = 0;
       return { action: 'none', reason: 'server-pcm-advancing', ...this.status() };
     }
 
     this.staleCount += 1;
     if (this.staleCount < this.staleObservations) {
-      return { action: 'none', reason: 'server-pcm-stale-observation', ...this.status() };
+      return {
+        action: 'none',
+        reason: packetEvidence.available
+          ? 'server-pcm-underdelivery-observation'
+          : 'server-pcm-stale-observation',
+        ...this.status(),
+      };
     }
 
     this.staleCount = 0;
+    const reason = packetEvidence.available ? 'server-pcm-underdelivery' : 'server-pcm-stale';
     if (localPath === 'webtransport' && !this.webTransportDemotionUsed) {
       this.webTransportDemotionUsed = true;
       this.webTransportQuarantined = true;
       this.phase = 'fallback-proving';
       this.proofBaselineSerial = null;
       this.proofServerWebSocketReady = false;
-      return { action: 'demote-webtransport', reason: 'server-pcm-stale', ...this.status() };
+      return { action: 'demote-webtransport', reason, ...this.status() };
     }
 
     if (localPath === 'websocket' && !this.webSocketReplacementUsed) {
@@ -296,7 +466,7 @@ export class MicMediaPathRecovery {
       this.phase = 'reconnect-proving';
       this.proofBaselineSerial = null;
       this.proofServerWebSocketReady = false;
-      return { action: 'replace-websocket', reason: 'server-pcm-stale', ...this.status() };
+      return { action: 'replace-websocket', reason, ...this.status() };
     }
 
     this.phase = 'degraded-latched';

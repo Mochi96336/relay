@@ -22,6 +22,11 @@ test('phone calibration probe stays capture-scoped before and after future playb
   );
   assert.match(
     source,
+    /await context\.resume\(\);[\s\S]*socket\?\.readyState !== WebSocket\.OPEN[\s\S]*const startTime/,
+    'a control socket already entering CLOSING must not schedule a probe the server cannot acknowledge',
+  );
+  assert.match(
+    source,
     /function retireCalibrationProbePlayback\(\)[\s\S]*activeCalibrationProbePlayback = null;[\s\S]*oscillator\?\.disconnect\(\)[\s\S]*gain\?\.disconnect\(\)[\s\S]*oscillator\?\.stop\(\)/,
     'retiring a scheduled probe must make already-created future nodes inaudible',
   );

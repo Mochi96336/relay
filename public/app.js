@@ -261,6 +261,10 @@ function startCaptureWatchdog(
 }
 
 function advanceCaptureGeneration(reason) {
+  // Calibration probe playback is capture-scoped. Retire it synchronously at
+  // the capture-clock boundary so a pending AudioContext.resume() continuation
+  // cannot schedule an old probe into the replacement generation.
+  activeCalibrationProbeRequestId = null;
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
   captureSampleCursor = 0;
   capturePacketSequence = 0;
@@ -771,9 +775,11 @@ const PROBE_NOTE_SECONDS = 0.105;
  */
 async function playCalibrationProbe(requestId, leadMs) {
   const context = audioContext;
+  const sessionEpoch = publisherSessionEpoch;
+  const expectedGeneration = captureGeneration >>> 0;
   if (
     !context
-    || !publisherActive
+    || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
     || document.visibilityState === 'hidden'
     || activeCalibrationProbeRequestId !== requestId
   ) return;
@@ -781,12 +787,14 @@ async function playCalibrationProbe(requestId, leadMs) {
   try {
     // Mobile Safari may leave resume() pending while a page is suspended. The
     // server can retire this request meanwhile, so every continuation has to
-    // re-prove request ownership before it is allowed to create audible nodes.
+    // re-prove request and capture ownership before it may create audible nodes.
     await context.resume();
-    if (activeCalibrationProbeRequestId !== requestId) return;
     if (
-      !publisherActive
-      || audioContext !== context
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    ) return;
+    if (
+      audioContext !== context
       || document.visibilityState === 'hidden'
       || context.state !== 'running'
     ) {
@@ -812,7 +820,10 @@ async function playCalibrationProbe(requestId, leadMs) {
     // Scheduling the nodes is the irreversible side effect. Retire the local
     // request before acknowledging it so a later status/retry cannot revive the
     // same identity on this page.
-    if (activeCalibrationProbeRequestId !== requestId) return;
+    if (
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    ) return;
     activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
     const result = audioTransport.sendControlJson({
@@ -820,21 +831,23 @@ async function playCalibrationProbe(requestId, leadMs) {
       target: 'mic',
       requestId,
       // The same truncation framePcm applies. The server compares this against
-      // the generation it read off a PCM frame header, which is a uint32, so
-      // sending the untruncated clock seed here never matches.
-      generation: captureGeneration >>> 0,
+      // the generation it read off a PCM frame header, which is a uint32.
+      generation: expectedGeneration,
     });
     if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
   } catch (error) {
     console.warn('phone calibration probe failed', error);
-    if (activeCalibrationProbeRequestId !== requestId) return;
+    if (
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    ) return;
     activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
     const result = audioTransport.sendControlJson({
       type: 'calibration-probe-failed',
       target: 'mic',
       requestId,
-      generation: captureGeneration >>> 0,
+      generation: expectedGeneration,
       reason: error instanceof Error ? error.message : String(error),
     });
     if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();

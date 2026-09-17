@@ -13,6 +13,7 @@ export type MicRuntimeOptions = {
   firstFrameTimeoutMs: number;
   streamLiveMs: number;
   uplinkHealthTimeoutMs?: number;
+  acceptedSampleRate?: number;
   createDirectMediaTicket?: () => string | null;
   directMediaConnected?: (ticket: string | null) => boolean;
   offerDirectMedia?: (ticket: string) => unknown;
@@ -48,6 +49,7 @@ export type MicPublisherBindResult = {
 export class MicRuntime {
   private readonly options: MicRuntimeOptions;
   private readonly uplinkHealthTimeoutMs: number;
+  private readonly acceptedSampleRate: number | null;
   private currentPublisher: RelaySocket | null = null;
   private currentSampleRate: number | null = null;
   private currentAudioTransport: AudioTransport | null = null;
@@ -68,6 +70,8 @@ export class MicRuntime {
    * application-level PCM intake rather than socket/datagram/write activity.
    */
   private currentAcceptedFrameSerial = 0;
+  /** Novel AudioSession samples accepted for the current Mic capture. */
+  private currentAcceptedSampleCount = 0;
   private firstFrameWaitStartedAt = -Infinity;
 
   constructor(options: MicRuntimeOptions) {
@@ -76,7 +80,12 @@ export class MicRuntime {
     if (!Number.isFinite(uplinkHealthTimeoutMs) || uplinkHealthTimeoutMs <= 0) {
       throw new Error('MicRuntime uplinkHealthTimeoutMs must be positive.');
     }
+    const acceptedSampleRate = options.acceptedSampleRate;
+    if (acceptedSampleRate !== undefined && (!Number.isFinite(acceptedSampleRate) || acceptedSampleRate <= 0)) {
+      throw new Error('MicRuntime acceptedSampleRate must be positive when configured.');
+    }
     this.uplinkHealthTimeoutMs = uplinkHealthTimeoutMs;
+    this.acceptedSampleRate = acceptedSampleRate ?? null;
   }
 
   get publisher() {
@@ -105,6 +114,10 @@ export class MicRuntime {
 
   get acceptedFrameSerial() {
     return this.currentAcceptedFrameSerial;
+  }
+
+  get acceptedSampleCount() {
+    return this.currentAcceptedSampleCount;
   }
 
   isPublisher(socket: RelaySocket) {
@@ -144,18 +157,11 @@ export class MicRuntime {
 
     const previousPublisher = this.currentPublisher;
     const hadMediaCapture = this.currentAudioTransport !== null;
-    // Media authority deliberately survives a short control-socket grace. Treat
-    // a same-participant reconnect as a replacement even after the old control
-    // pointer has detached, otherwise a changed capture can bypass the server's
-    // timing-invalidation boundary merely by disconnecting first.
     const sameParticipantMedia = Boolean(
       socket.participantId
       && this.currentMediaOwnerId === socket.participantId
       && this.currentAudioTransport,
     );
-    // A capture generation names one capture clock, not just a packet epoch.
-    // Reusing it with a different sample rate is contradictory identity and
-    // must not inherit receiver sequence state, media tickets, or calibration.
     const continuingV2Capture = Boolean(
       sameParticipantMedia
       && captureGeneration !== null
@@ -170,11 +176,6 @@ export class MicRuntime {
     );
     const sameCapture = Boolean(sameParticipantReplacement && continuingV2Capture);
     const preservedAudioTransport = continuingV2Capture;
-    // This is deliberately independent of the control-socket pointer and
-    // participant identity. A cross-owner takeover, a reconnect after control
-    // grace, and a contradictory same-generation/sample-rate registration all
-    // replace the acoustic capture if an old media transport existed and was
-    // not explicitly preserved.
     const captureReplaced = hadMediaCapture && !preservedAudioTransport;
 
     socket.sampleRate = sampleRate;
@@ -282,6 +283,10 @@ export class MicRuntime {
           ...(health.healthRequestId === undefined ? {} : { healthRequestId: health.healthRequestId }),
           pcm: {
             acceptedFrameSerial: this.currentAcceptedFrameSerial,
+            ...(this.acceptedSampleRate === null ? {} : {
+              acceptedSampleCount: this.currentAcceptedSampleCount,
+              acceptedSampleRate: this.acceptedSampleRate,
+            }),
             mediaPath: this.mediaPath(),
           },
         }));
@@ -339,15 +344,25 @@ export class MicRuntime {
     this.lastFrameOwnerId = this.currentMediaOwnerId;
     this.lastFrameGeneration = this.currentMediaGeneration;
     this.currentAcceptedFrameSerial = 0;
+    this.currentAcceptedSampleCount = 0;
     this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs;
   }
 
-  noteFrame(nowMs: number) {
+  noteFrame(nowMs: number, acceptedSamples?: number) {
     this.lastFrameAt = nowMs;
     this.lastFrameOwnerId = this.currentMediaOwnerId;
     this.lastFrameGeneration = this.currentMediaGeneration;
     if (this.currentAcceptedFrameSerial < Number.MAX_SAFE_INTEGER) {
       this.currentAcceptedFrameSerial += 1;
+    }
+    if (this.acceptedSampleRate !== null) {
+      if (!Number.isSafeInteger(acceptedSamples) || acceptedSamples! <= 0) {
+        throw new Error('MicRuntime noteFrame requires positive acceptedSamples when sample progress is configured.');
+      }
+      this.currentAcceptedSampleCount = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        this.currentAcceptedSampleCount + acceptedSamples!,
+      );
     }
   }
 

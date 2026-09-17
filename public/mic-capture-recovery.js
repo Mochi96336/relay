@@ -83,7 +83,11 @@ export class MicCaptureRecoveryWatchdog {
     const hidden = this.hiddenSnapshot;
     this.hiddenSnapshot = null;
 
-    let discontinuity = false;
+    // A sustained worklet input gap is already positive capture-failure
+    // evidence. Hidden pages defer rebuilding, but foregrounding must consume
+    // that existing authority immediately rather than wait for another 400
+    // render-quanta report.
+    let discontinuity = this.inputGapActive;
     if (hidden) {
       const hiddenForMs = Math.max(0, current.nowMs - hidden.nowMs);
       // Hidden capture can advance briefly and then stall for seconds. Comparing
@@ -92,8 +96,10 @@ export class MicCaptureRecoveryWatchdog {
       // every real sample advance (including while hidden), so freshness of the
       // last progress is the continuity evidence we actually need here.
       const stalledForMs = Math.max(0, current.nowMs - this.lastSampleProgressAtMs);
-      discontinuity = hiddenForMs >= this.hiddenDiscontinuityMs
-        && stalledForMs >= this.hiddenDiscontinuityMs;
+      discontinuity = discontinuity || (
+        hiddenForMs >= this.hiddenDiscontinuityMs
+        && stalledForMs >= this.hiddenDiscontinuityMs
+      );
     }
 
     this.beginRecovery(current, 'foreground');

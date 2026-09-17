@@ -51,6 +51,30 @@ test('background partial progress followed by a long stall becomes a capture dis
   assert.equal(foreground.discontinuity, true);
 });
 
+test('foreground immediately rebuilds a sustained input gap already proven while hidden', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
+  watchdog.start(snap(0, 1, 0));
+  watchdog.noteHidden(snap(100, 1.1, 0, 'running', false));
+
+  // Before the worklet's sustained-gap hysteresis fires, padded silence still
+  // looks like sample progress to the generic watchdog.
+  watchdog.observe(snap(1_000, 2.0, 48_000, 'running', false), { freshPcm: true });
+
+  // The explicit gap report is authoritative, but hidden pages do not rebuild.
+  const gap = watchdog.noteInputGap(
+    snap(1_070, 2.07, 51_456, 'running', false),
+    { recovered: false },
+  );
+  assert.equal(gap.rebuild, false);
+  assert.equal(watchdog.status().inputGapActive, true);
+
+  // Foregrounding only 100 ms after the report is below the generic 250 ms
+  // discontinuity window. We must still rebuild immediately instead of waiting
+  // for another 400 render-quanta gap report.
+  const foreground = watchdog.noteForeground(snap(1_170, 2.17, 56_256, 'running', true));
+  assert.equal(foreground.discontinuity, true);
+});
+
 test('background capture that keeps producing fresh PCM stays on the same generation', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
   watchdog.start(snap(0, 1, 128));

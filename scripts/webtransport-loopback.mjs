@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { WebTransport, quicheLoaded } from '@fails-components/webtransport';
+import { encodeAudioPacket } from '../src/audio-packet.ts';
+import { AudioSession } from '../src/audio-session.ts';
+import { MicRuntime } from '../src/mic-runtime.ts';
 import {
   startWebTransportMediaServer,
   webTransportMediaConfig,
@@ -19,6 +22,7 @@ const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'relay-webtransport-l
 const keyPath = path.join(tempDirectory, 'key.pem');
 const certPath = path.join(tempDirectory, 'cert.pem');
 const ticket = 'loopback-ticket';
+const generation = 7;
 let server = null;
 let client = null;
 let writer = null;
@@ -44,20 +48,97 @@ try {
   });
   assert.ok(config);
 
-  let resolveDatagram;
-  let rejectDatagram;
-  const received = new Promise((resolve, reject) => {
-    resolveDatagram = resolve;
-    rejectDatagram = reject;
+  const publisherSocket = {
+    readyState: 1,
+    role: 'publisher',
+    isAlive: true,
+    participantId: 'loopback-publisher',
+    send() {},
+    close() {},
+    terminate() {},
+  };
+  const mic = new MicRuntime({
+    audioTransportConfig: {
+      reorderWindowPackets: 0,
+      reorderDeadlineMs: 0,
+      maxForwardJumpPackets: 32,
+    },
+    firstFrameTimeoutMs: 3_000,
+    streamLiveMs: 1_000,
+    uplinkHealthTimeoutMs: 60_000,
+    createDirectMediaTicket: () => ticket,
+    directMediaConnected: (candidate) => Boolean(server?.hasSession(candidate)),
+    offerDirectMedia: (candidate) => server?.offer(candidate),
   });
-  timeout = setTimeout(() => rejectDatagram(new Error('timed out waiting for WebTransport datagram')), 5000);
+  const session = new AudioSession({
+    sampleRate: 48_000,
+    frameMs: 20,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+  session.setMicGainDb(0);
+  session.start(0);
+  session.setMicExpected(true);
+
+  mic.bindPublisher({
+    socket: publisherSocket,
+    sampleRate: 48_000,
+    captureGeneration: generation,
+    audioPacketVersion: 2,
+    nowMs: 0,
+  });
+  assert.equal(mic.mediaTicket, ticket);
+
+  let ingressMode = 'raw';
+  let acceptedPackets = 0;
+  let acceptedEndSampleIndex = null;
+  let nextRaw = null;
+  let nextAccepted = null;
+  let nextDropped = null;
+  const rawReceived = () => new Promise((resolve) => { nextRaw = resolve; });
+  const accepted = () => new Promise((resolve) => { nextAccepted = resolve; });
+  const dropped = () => new Promise((resolve) => { nextDropped = resolve; });
+
+  timeout = setTimeout(() => {
+    nextRaw?.(new Error('timed out waiting for raw WebTransport datagram'));
+    nextAccepted?.(new Error('timed out waiting for accepted WebTransport datagram'));
+    nextDropped?.(new Error('timed out waiting for dropped WebTransport datagram'));
+  }, 5000);
 
   server = await startWebTransportMediaServer(config, {
     authorize(candidate) {
-      return candidate === ticket;
+      return mic.authorizeDirectMedia(candidate);
     },
-    onDatagram(candidate, packet) {
-      if (candidate === ticket) resolveDatagram(packet);
+    onDatagram(candidate, packet, nowMs) {
+      if (ingressMode === 'raw') {
+        const resolve = nextRaw;
+        nextRaw = null;
+        resolve?.(Buffer.from(packet));
+        return;
+      }
+
+      if (ingressMode === 'drop') {
+        const resolve = nextDropped;
+        nextDropped = null;
+        resolve?.({ candidate, packet: Buffer.from(packet), nowMs });
+        return;
+      }
+
+      const frames = mic.receiveDirectMedia(candidate, packet, nowMs);
+      const ingestResults = [];
+      for (const frame of frames) {
+        const ingested = session.ingestMic(frame, mic.sampleRate, nowMs);
+        ingestResults.push(ingested);
+        if (ingested.samples.length > 0) {
+          acceptedPackets += 1;
+          acceptedEndSampleIndex = frame.firstSampleIndex + frame.pcm.byteLength / 2;
+          mic.noteFrame(nowMs);
+        }
+      }
+      const resolve = nextAccepted;
+      nextAccepted = null;
+      resolve?.({ candidate, frames, ingestResults, nowMs });
     },
   });
 
@@ -83,13 +164,67 @@ try {
   writer = client.datagrams.createWritable().getWriter();
   await writer.ready;
 
+  // Preserve the original native HTTP/3 coverage: the endpoint must carry a
+  // full 1200-byte datagram intact before any media-specific fault injection.
+  const rawPromise = rawReceived();
   const payload = Uint8Array.from({ length: 1200 }, (_, index) => index & 0xff);
   await writer.write(payload);
-  const packet = await received;
-  assert.equal(packet.byteLength, 1200);
-  assert.deepEqual([...packet.subarray(0, 8)], [0, 1, 2, 3, 4, 5, 6, 7]);
+  const rawPacket = await rawPromise;
+  if (rawPacket instanceof Error) throw rawPacket;
+  assert.equal(rawPacket.byteLength, 1200);
+  assert.deepEqual([...rawPacket.subarray(0, 8)], [0, 1, 2, 3, 4, 5, 6, 7]);
   assert.equal(server.hasSession(ticket), true);
-  console.log('native WebTransport HTTP/3 handshake + 1200-byte datagram loopback passed');
+
+  // Then prove an ordinary current-generation AudioPacket reaches Relay's
+  // receiver and contributes novel PCM through the same AudioSession boundary
+  // production uses before it renews Mic flow freshness.
+  ingressMode = 'accept';
+  const firstAccepted = accepted();
+  const firstPacket = encodeAudioPacket({
+    source: 'mic',
+    generation,
+    sequence: 0,
+    firstSampleIndex: 0,
+    pcm: Buffer.alloc(4, 1),
+  });
+  await writer.write(new Uint8Array(firstPacket));
+  const first = await firstAccepted;
+  if (first instanceof Error) throw first;
+  assert.equal(first.candidate, ticket);
+  assert.equal(first.frames.length, 1);
+  assert.equal(first.ingestResults.length, 1);
+  assert.equal(first.ingestResults[0].samples.length, 2);
+  assert.equal(acceptedPackets, 1);
+  assert.equal(acceptedEndSampleIndex, 2);
+  assert.equal(mic.receiverStats()?.emittedPackets, 1);
+  assert.equal(mic.frameAgeMs(first.nowMs), 0);
+
+  // Model the missing fault class. QUIC/WebTransport accepts the datagram and
+  // writer.write() resolves, but the test-only ingress gate swallows the packet
+  // before MicRuntime receives it. This is deliberately outside production
+  // runtime: sender completion is not server PCM proof.
+  ingressMode = 'drop';
+  const secondDropped = dropped();
+  const secondPacket = encodeAudioPacket({
+    source: 'mic',
+    generation,
+    sequence: 1,
+    firstSampleIndex: 2,
+    pcm: Buffer.alloc(4, 2),
+  });
+  await writer.write(new Uint8Array(secondPacket));
+  const lost = await secondDropped;
+  if (lost instanceof Error) throw lost;
+
+  assert.equal(lost.candidate, ticket);
+  assert.equal(lost.packet.byteLength, secondPacket.byteLength);
+  assert.equal(acceptedPackets, 1, 'resolved writer must not imply Relay-accepted PCM progress');
+  assert.equal(acceptedEndSampleIndex, 2, 'last post-session source contribution must remain unchanged');
+  assert.equal(mic.receiverStats()?.receivedPackets, 1, 'dropped datagram never reaches the AudioPacket receiver');
+  assert.equal(mic.receiverStats()?.emittedPackets, 1);
+
+  console.log('native WebTransport 1200-byte loopback + post-session writer-resolve ingress-drop proof passed');
+  mic.clearMediaAuthority(0);
 } finally {
   if (timeout) clearTimeout(timeout);
   try { writer?.releaseLock(); } catch {}

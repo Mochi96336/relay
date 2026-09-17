@@ -107,7 +107,7 @@ test('app promotes current-graph input-gap evidence into capture-graph recovery'
   const gapAt = app.indexOf("if (event.data?.type === 'input-gap')");
   assert.ok(gapAt >= 0);
   const gapHandler = app.slice(gapAt, gapAt + 1_200);
-  assert.match(gapHandler, /micCaptureRecovery\.noteInputGap\(captureSnapshot\(\), \{ recovered:/);
+  assert.match(gapHandler, /micCaptureRecovery\.noteInputGap\(captureSnapshot\(\), \{\s*recovered:/);
   assert.match(gapHandler, /rebuildPublisherCaptureGraph\('input-gap'\)/);
 });
 

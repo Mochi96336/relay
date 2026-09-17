@@ -64,6 +64,7 @@ export class MicMediaPathRecovery {
   reset() {
     this.captureGeneration = null;
     this.currentSocketEpoch = null;
+    this.lastLocalPath = null;
     this.lastCapturedSamples = null;
     this.lastServerAcceptedFrameSerial = null;
     this.lastSenderSubmittedPackets = null;
@@ -299,6 +300,7 @@ export class MicMediaPathRecovery {
         socketEpoch: normalizedEpoch,
         ...packetCounters,
       });
+      this.lastLocalPath = localPath;
       if (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving') {
         this.beginWebSocketProof(serverPath, acceptedSerial, packetCounters);
       }
@@ -313,7 +315,31 @@ export class MicMediaPathRecovery {
         socketEpoch: normalizedEpoch,
         ...packetCounters,
       });
+      this.lastLocalPath = localPath;
       return { action: 'none', reason: 'ineligible', ...this.status() };
+    }
+
+    const localPathChanged = this.lastLocalPath !== null && localPath !== this.lastLocalPath;
+    this.lastLocalPath = localPath;
+    if (localPathChanged) {
+      if (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving') {
+        // Semantic recovery already owns this WT→WS transition. Fence packet
+        // attribution at the local path boundary without disturbing the proof
+        // phase or its already-spent action budget.
+        this.rebaselinePacketCoverage(packetCounters);
+        this.staleCount = 0;
+      } else {
+        // #287 or another transport owner can change the local path between two
+        // health observations. Cumulative counters across that interval describe
+        // two different transports, so they cannot be charged to the new path.
+        this.rebaseline({
+          capturedSamples: captured,
+          serverAcceptedFrameSerial: acceptedSerial,
+          socketEpoch: normalizedEpoch,
+          ...packetCounters,
+        });
+        return { action: 'none', reason: 'media-path-rebaseline', ...this.status() };
+      }
     }
 
     if (this.phase === 'degraded-latched') {

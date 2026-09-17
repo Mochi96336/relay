@@ -152,7 +152,7 @@ class ServerBridge {
   }
 }
 
-test('sparse accepted PCM can keep freshness/recovery alive while the session accumulates severe holes', async () => {
+test('severe sparse PCM spends one bounded media recovery action even while freshness keeps advancing', async () => {
   const mic = new MicRuntime({
     audioTransportConfig: {
       reorderWindowPackets: 0,
@@ -188,6 +188,7 @@ test('sparse accepted PCM can keep freshness/recovery alive while the session ac
   transport.bind(bridge.browserSocket);
 
   const serialAtHealth: number[] = [];
+  const receivedPacketsAtHealth: number[] = [];
   for (let sequence = 0; sequence < TOTAL_PACKETS; sequence += 1) {
     bridge.nowMs = sequence * 10;
     const result = transport.send(packet(sequence));
@@ -201,6 +202,7 @@ test('sparse accepted PCM can keep freshness/recovery alive while the session ac
     const ack = messages.find((message) => message?.type === 'audio-uplink-health-ack');
     assert.ok(ack, 'real MicRuntime must ACK each accepted current-generation health report');
     serialAtHealth.push(ack.pcm.acceptedFrameSerial);
+    receivedPacketsAtHealth.push(ack.pcm.receivedPacketSerial);
 
     assert.equal(
       mic.streaming(bridge.nowMs),
@@ -209,12 +211,19 @@ test('sparse accepted PCM can keep freshness/recovery alive while the session ac
     );
   }
 
+  assert.deepEqual(serialAtHealth, [4, 7, 10, 14]);
+  assert.deepEqual(receivedPacketsAtHealth, [4, 7, 10, 14]);
   assert.equal(
     serialAtHealth.every((serial, index) => index === 0 || serial > serialAtHealth[index - 1]),
     true,
     'accepted-frame serial keeps advancing at every health observation despite extreme loss',
   );
-  assert.equal(bridge.browserSocket.closeCalls.length, 0, 'event-progress recovery never spends a socket action');
+  assert.deepEqual(bridge.browserSocket.closeCalls, [
+    { code: 4001, reason: 'server PCM stalled' },
+  ], 'three severe coverage windows spend exactly one same-capture WebSocket replacement');
+  assert.equal((transport as any).lastMediaRecoveryDecision?.action, 'replace-websocket');
+  assert.equal((transport as any).lastMediaRecoveryDecision?.reason, 'server-pcm-underdelivery');
+  assert.equal((transport as any).lastMediaRecoveryDecision?.packetCoverage, 0.04);
   assert.equal(transport.stats().path, 'websocket');
 
   const receiver = mic.receiverStats();

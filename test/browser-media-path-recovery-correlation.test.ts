@@ -184,3 +184,37 @@ test('WT-era ACKs cannot spend the WebSocket replacement budget after another ow
   assert.equal(socket.closeCalls.length, 0);
   assert.equal(transport.stats().path, 'websocket');
 });
+
+test('ACKs queued on a closing control socket cannot spend media recovery budget', async () => {
+  const { transport, socket } = await webTransportFixture();
+
+  // These reports are valid and advancing, but their ACKs have not arrived yet.
+  // #304 can independently decide that this physical control socket is stale and
+  // start its close handshake before already-queued message events drain.
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300]) {
+    assert.equal(transport.sendControlJson(health(capturedSamples)).sent, true);
+  }
+  socket.readyState = 2; // WebSocket.CLOSING: command authority is already retired.
+
+  for (let index = 0; index < 4; index += 1) socket.emitJson(ack(10));
+
+  assert.equal(
+    transport.stats().path,
+    'webtransport',
+    'late ACKs from a command-retired socket must not demote the live media path',
+  );
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 0);
+
+  // The same capture may reconnect its physical control socket. That current
+  // socket gets a fresh evidence epoch and must still have the complete bounded
+  // media-recovery budget available.
+  const replacement = new EventSocket();
+  transport.bind(replacement);
+  for (const capturedSamples of [1_400, 1_500, 1_600, 1_700]) {
+    assert.equal(transport.sendControlJson(health(capturedSamples)).sent, true);
+    replacement.emitJson(ack(10));
+  }
+
+  assert.equal(transport.stats().path, 'websocket');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
+});

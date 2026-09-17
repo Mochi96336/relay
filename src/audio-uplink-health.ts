@@ -35,6 +35,8 @@ export type AudioUplinkTransportHealth = {
 export type AudioUplinkHealth = {
   version: 1;
   captureGeneration: number;
+  /** Optional browser-generated correlation token. Older v1 pages omit it. */
+  healthRequestId?: number;
   capturedSamples: number;
   inputGapSamples: number;
   inputMuted: boolean;
@@ -58,6 +60,15 @@ function uint32(value: unknown): number | null {
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 && number <= 0xffff_ffff
     ? number >>> 0
+    : null;
+}
+
+function strictUint32(value: unknown): number | null {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= 0
+    && value <= 0xffff_ffff
+    ? value >>> 0
     : null;
 }
 
@@ -134,6 +145,9 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   if (!payload || Number(payload.version) !== 1) return null;
 
   const captureGeneration = uint32(payload.captureGeneration);
+  const healthRequestId = payload.healthRequestId === undefined
+    ? undefined
+    : strictUint32(payload.healthRequestId);
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   const controlReconnects = nonNegativeSafeInteger(payload.controlReconnects);
@@ -143,6 +157,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const transport = record(payload.transport);
   if (
     captureGeneration === null
+    || healthRequestId === null
     || capturedSamples === null
     || inputGapSamples === null
     || controlReconnects === null
@@ -212,6 +227,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   return {
     version: 1,
     captureGeneration,
+    ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     inputGapSamples,
     inputMuted: payload.inputMuted === true,

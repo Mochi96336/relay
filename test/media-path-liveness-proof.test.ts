@@ -35,11 +35,17 @@ function health(
   {
     path = 'webtransport',
     submitted = 0,
-  }: { path?: 'websocket' | 'webtransport'; submitted?: number } = {},
+    healthRequestId,
+  }: {
+    path?: 'websocket' | 'webtransport';
+    submitted?: number;
+    healthRequestId?: number;
+  } = {},
 ): AudioUplinkHealth {
   return {
     version: 1,
     captureGeneration,
+    ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     inputGapSamples: 0,
     inputMuted: false,
@@ -187,9 +193,16 @@ test('control ACK and local capture progress cannot freshen a stale server PCM f
     { freshPcm: true },
   );
   assert.equal(local.rebuild, false);
-  assert.equal(mic.noteUplinkHealth(publisher.socket, health(7, 96_002, { submitted: 100 }), 2_000), true);
+  const healthRequestId = command.beginHealthRequest(2_000);
+  assert.notEqual(healthRequestId, null);
+  assert.equal(mic.noteUplinkHealth(
+    publisher.socket,
+    health(7, 96_002, { submitted: 100, healthRequestId: healthRequestId! }),
+    2_000,
+  ), true);
   const ack = JSON.parse(publisher.sent.at(-1)!);
-  assert.equal(command.noteAck(ack.captureGeneration, 2_000), true);
+  assert.equal(ack.healthRequestId, healthRequestId);
+  assert.equal(command.noteAck(ack.captureGeneration, ack.healthRequestId, 2_000), true);
 
   assert.equal(command.status(2_100).fresh, true, 'control round trip remains fresh');
   assert.equal(mic.uplinkHealthPayload(2_100)?.capturedSamples, 96_002, 'local capture keeps advancing');
@@ -314,6 +327,8 @@ test('late generation-A media, health and ACK evidence cannot revive generation 
 
   const commandB = new PublisherCommandLiveness();
   commandB.begin(21, 200);
+  const requestB = commandB.beginHealthRequest(225);
+  assert.notEqual(requestB, null);
 
   assert.equal(mic.flowObserved(), false, 'B starts without inheriting A media freshness');
   assert.equal(mic.frameAgeMs(200), null);
@@ -321,7 +336,7 @@ test('late generation-A media, health and ACK evidence cannot revive generation 
   assert.deepEqual(mic.receiveDirectMedia(ticketA, packet(20, 1, 2), 250), []);
   assert.deepEqual(mic.receivePublisher(generationA.socket, packet(20, 1, 2), 250), []);
   assert.equal(mic.noteUplinkHealth(generationA.socket, health(20, 4), 250), false);
-  assert.equal(commandB.noteAck(20, 250), false, 'A ACK cannot satisfy B command liveness');
+  assert.equal(commandB.noteAck(20, requestB!, 250), false, 'A ACK cannot satisfy B command liveness');
 
   assert.equal(commandB.status(250).fresh, false);
   assert.equal(mic.mediaGeneration, 21);
@@ -338,7 +353,9 @@ test('fresh PCM cannot revive stale control authority', () => {
 
   const command = new PublisherCommandLiveness();
   command.begin(30, 0);
-  assert.equal(command.noteAck(30, 100), true);
+  const commandRequestId = command.beginHealthRequest(100);
+  assert.notEqual(commandRequestId, null);
+  assert.equal(command.noteAck(30, commandRequestId!, 100), true);
   assert.equal(command.status(200).fresh, true);
 
   acceptServerFrames(mic, session, mic.receivePublisher(publisher.socket, packet(30, 0, 0), 100), 100);
@@ -369,7 +386,9 @@ test('capture sample-clock failure is detectable before media transport freshnes
 
   const command = new PublisherCommandLiveness();
   command.begin(40, 0);
-  command.noteAck(40, 100);
+  const commandRequestId = command.beginHealthRequest(100);
+  assert.notEqual(commandRequestId, null);
+  assert.equal(command.noteAck(40, commandRequestId!, 100), true);
 
   const capture = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   capture.start(captureSnapshot(0, 1, 2));

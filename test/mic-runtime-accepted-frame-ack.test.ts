@@ -24,10 +24,15 @@ function socket(participantId: string): AckSocket {
   } as AckSocket;
 }
 
-function health(captureGeneration: number, capturedSamples: number): AudioUplinkHealth {
+function health(
+  captureGeneration: number,
+  capturedSamples: number,
+  healthRequestId?: number,
+): AudioUplinkHealth {
   return {
     version: 1,
     captureGeneration,
+    ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     inputGapSamples: 0,
     inputMuted: false,
@@ -84,7 +89,9 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   });
   assert.equal(mic.acceptedFrameSerial, 0);
 
-  assert.equal(mic.noteUplinkHealth(first, health(7, 1_000), 110), true);
+  assert.equal(mic.noteUplinkHealth(first, health(7, 1_000, 41), 110), true);
+  assert.equal(lastAck(first).healthRequestId, 41,
+    'current-generation ACK must echo the browser health request correlation token');
   assert.deepEqual(lastAck(first).pcm, {
     acceptedFrameSerial: 0,
     mediaPath: 'websocket',
@@ -93,13 +100,15 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   mic.noteFrame(120);
   mic.noteFrame(130);
   assert.equal(mic.acceptedFrameSerial, 2);
-  assert.equal(mic.noteUplinkHealth(first, health(7, 2_000), 140), true);
+  assert.equal(mic.noteUplinkHealth(first, health(7, 2_000, 42), 140), true);
+  assert.equal(lastAck(first).healthRequestId, 42);
   assert.equal(lastAck(first).pcm.acceptedFrameSerial, 2);
 
   const ticket = mic.mediaTicket;
   assert.ok(ticket);
   connectedTickets.add(ticket);
-  assert.equal(mic.noteUplinkHealth(first, health(7, 3_000), 150), true);
+  assert.equal(mic.noteUplinkHealth(first, health(7, 3_000, 43), 150), true);
+  assert.equal(lastAck(first).healthRequestId, 43);
   assert.equal(lastAck(first).pcm.mediaPath, 'webtransport');
 
   // Same participant + generation + sample rate preserves the accepted-frame
@@ -116,7 +125,8 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   });
   assert.equal(rebound.preservedAudioTransport, true);
   assert.equal(mic.acceptedFrameSerial, 2);
-  assert.equal(mic.noteUplinkHealth(replacement, health(7, 4_000), 210), true);
+  assert.equal(mic.noteUplinkHealth(replacement, health(7, 4_000, 1), 210), true);
+  assert.equal(lastAck(replacement).healthRequestId, 1);
   assert.deepEqual(lastAck(replacement).pcm, {
     acceptedFrameSerial: 2,
     mediaPath: 'websocket',
@@ -134,8 +144,28 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.equal(freshBind.preservedAudioTransport, false);
   assert.equal(freshBind.captureReplaced, true);
   assert.equal(mic.acceptedFrameSerial, 0);
-  assert.equal(mic.noteUplinkHealth(fresh, health(8, 100), 310), true);
+  assert.equal(mic.noteUplinkHealth(fresh, health(8, 100, 0), 310), true);
+  assert.equal(lastAck(fresh).healthRequestId, 0);
   assert.equal(lastAck(fresh).pcm.acceptedFrameSerial, 0);
+});
+
+test('older v1 health without a request token still receives a compatible ACK', () => {
+  const mic = new MicRuntime({
+    audioTransportConfig: DEFAULT_AUDIO_TRANSPORT_CONFIG,
+    firstFrameTimeoutMs: 3_000,
+    streamLiveMs: 1_000,
+  });
+  const current = socket('alice');
+  mic.bindPublisher({
+    socket: current,
+    sampleRate: 48_000,
+    captureGeneration: 7,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+
+  assert.equal(mic.noteUplinkHealth(current, health(7, 1_000), 110), true);
+  assert.equal(Object.hasOwn(lastAck(current), 'healthRequestId'), false);
 });
 
 test('old-generation health cannot receive current accepted-frame authority', () => {
@@ -154,8 +184,9 @@ test('old-generation health cannot receive current accepted-frame authority', ()
   });
   mic.noteFrame(110);
 
-  assert.equal(mic.noteUplinkHealth(current, health(8, 1_000), 120), false);
+  assert.equal(mic.noteUplinkHealth(current, health(8, 1_000, 90), 120), false);
   assert.equal(current.sent.length, 0);
-  assert.equal(mic.noteUplinkHealth(current, health(9, 1_100), 130), true);
+  assert.equal(mic.noteUplinkHealth(current, health(9, 1_100, 91), 130), true);
+  assert.equal(lastAck(current).healthRequestId, 91);
   assert.equal(lastAck(current).pcm.acceptedFrameSerial, 1);
 });

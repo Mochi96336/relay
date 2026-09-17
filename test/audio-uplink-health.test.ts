@@ -65,6 +65,28 @@ describe('audio uplink health', () => {
     assert.deepEqual(health.captureLevel, { peakDbfs: -18, rmsDbfs: -31 });
   });
 
+  it('preserves an optional uint32 health request correlation token', () => {
+    const input: any = validHealth();
+    input.healthRequestId = 0xffff_ffff;
+    const health = parseAudioUplinkHealth(input);
+    assert.ok(health);
+    assert.equal(health.healthRequestId, 0xffff_ffff);
+  });
+
+  it('keeps health request correlation backward-compatible with older v1 pages', () => {
+    const health = parseAudioUplinkHealth(validHealth());
+    assert.ok(health);
+    assert.equal(health.healthRequestId, undefined);
+  });
+
+  it('rejects malformed supplied health request correlation tokens', () => {
+    for (const healthRequestId of [-1, 0x1_0000_0000, 1.5, '7']) {
+      const input: any = validHealth();
+      input.healthRequestId = healthRequestId;
+      assert.equal(parseAudioUplinkHealth(input), null);
+    }
+  });
+
   it('keeps the added capture facts backward-compatible with older v1 pages', () => {
     const input: any = validHealth();
     delete input.capture;

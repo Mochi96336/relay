@@ -279,6 +279,7 @@ export class MicRuntime {
           type: 'audio-uplink-health-ack',
           version: 1,
           captureGeneration: health.captureGeneration,
+          ...(health.healthRequestId === undefined ? {} : { healthRequestId: health.healthRequestId }),
           pcm: {
             acceptedFrameSerial: this.currentAcceptedFrameSerial,
             mediaPath: this.mediaPath(),

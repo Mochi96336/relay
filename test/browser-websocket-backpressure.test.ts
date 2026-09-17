@@ -173,7 +173,7 @@ test('publisher binds websocket media with the actual AudioContext sample rate',
 
 test('active publisher JSON is bounded while admission and terminal release remain direct', async () => {
   const app = await readFile(appUrl, 'utf8');
-  assert.match(app, /sendAudioUplinkHealth\(\)[\s\S]*audioTransport\.sendControlJson\(audioUplinkHealthPayload\(\)\)/);
+  assert.match(app, /sendAudioUplinkHealth\(\)[\s\S]*audioTransport\.sendControlJson\(audioUplinkHealthPayload\(healthRequestId\)\)/);
   assert.match(app, /function sendVocalFineTune\(\)[\s\S]*audioTransport\.sendControlJson\(\{\s*type: 'set-vocal-fine-tune'/);
   assert.match(app, /function sendMixSettings\(\)[\s\S]*audioTransport\.sendControlJson\(\{\s*type: 'set-mix'/);
   assert.match(app, /audioTransport\.sendControlJson\(\{\s*type: 'calibration-probe-played'/);

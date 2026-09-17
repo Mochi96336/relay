@@ -16,6 +16,8 @@ export class PublisherCommandLiveness {
   constructor(options?: PublisherCommandLivenessOptions);
   reset(): void;
   begin(generation: number, nowMs: number): void;
-  noteAck(generation: number, nowMs: number): boolean;
+  beginHealthRequest(nowMs: number): number | null;
+  cancelHealthRequest(requestId: number): boolean;
+  noteAck(generation: number, requestId: number, nowMs: number): boolean;
   status(nowMs: number): PublisherCommandLivenessStatus;
 }

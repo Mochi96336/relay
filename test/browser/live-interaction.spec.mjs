@@ -189,6 +189,7 @@ async function installProductionDomHarness(page) {
             type: 'audio-uplink-health-ack',
             version: 1,
             captureGeneration: message.captureGeneration,
+            healthRequestId: message.healthRequestId,
           }));
           return;
         }

@@ -36,10 +36,11 @@ export class PublisherCommandLiveness {
     const normalizedGeneration = uint32(generation);
     if (normalizedGeneration === null) throw new Error('Publisher command generation must be a uint32.');
     if (!Number.isFinite(nowMs)) throw new Error('Publisher command begin time must be finite.');
+    const generationChanged = this.generation !== normalizedGeneration;
     this.generation = normalizedGeneration;
     this.startedAtMs = nowMs;
     this.lastAckAtMs = -Infinity;
-    this.nextHealthRequestId = 0;
+    if (generationChanged) this.nextHealthRequestId = 0;
     this.pendingHealthRequests.clear();
   }
 

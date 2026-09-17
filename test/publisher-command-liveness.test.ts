@@ -6,17 +6,19 @@ import {
   PublisherCommandLiveness,
 } from '../public/publisher-command-liveness.js';
 
-test('publisher command channel stays stale until a current-generation ACK', () => {
+test('publisher command channel stays stale until a correlated current-generation ACK', () => {
   const liveness = new PublisherCommandLiveness();
   liveness.begin(7, 1_000);
   assert.deepEqual(liveness.status(1_000), { fresh: false, reconnect: false, ackAgeMs: null });
   assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
 });
 
-test('current-generation ACK expires before reconnect deadline', () => {
+test('current-generation ACK freshness is measured from the request send time', () => {
   const liveness = new PublisherCommandLiveness();
   liveness.begin(11, 500);
-  assert.equal(liveness.noteAck(11, 1_000), true);
+  const requestId = liveness.beginHealthRequest(1_000);
+  assert.notEqual(requestId, null);
+  assert.equal(liveness.noteAck(11, requestId!, 1_200), true);
   assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS - 1).fresh, true);
   assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS).fresh, false);
   assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
@@ -25,31 +27,66 @@ test('current-generation ACK expires before reconnect deadline', () => {
 test('a delayed health ACK cannot renew command freshness from its arrival time', () => {
   const liveness = new PublisherCommandLiveness();
   liveness.begin(17, 0);
+  const requestId = liveness.beginHealthRequest(0);
+  assert.notEqual(requestId, null);
 
   // The health request left this capture at t=0, but a one-way downstream
   // backlog delays the matching ACK until t=3500. Arrival itself is not fresh
   // evidence: the command channel has not proven a recent round trip.
-  assert.equal(liveness.noteAck(17, 3_500, 0), true);
+  assert.equal(liveness.noteAck(17, requestId!, 3_500), true);
   assert.equal(liveness.status(3_500).fresh, false);
   assert.equal(liveness.status(DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
+});
+
+test('failed health sends cannot later become command freshness evidence', () => {
+  const liveness = new PublisherCommandLiveness();
+  liveness.begin(19, 0);
+  const requestId = liveness.beginHealthRequest(500);
+  assert.notEqual(requestId, null);
+  assert.equal(liveness.cancelHealthRequest(requestId!), true);
+  assert.equal(liveness.noteAck(19, requestId!, 600), false);
+  assert.equal(liveness.status(600).fresh, false);
+});
+
+test('a newer correlated ACK supersedes older pending freshness evidence', () => {
+  const liveness = new PublisherCommandLiveness();
+  liveness.begin(20, 0);
+  const oldRequestId = liveness.beginHealthRequest(100);
+  const newRequestId = liveness.beginHealthRequest(1_000);
+  assert.notEqual(oldRequestId, null);
+  assert.notEqual(newRequestId, null);
+
+  assert.equal(liveness.noteAck(20, newRequestId!, 1_100), true);
+  assert.equal(liveness.status(1_100).fresh, true);
+  assert.equal(liveness.noteAck(20, oldRequestId!, 1_200), false,
+    'an older delayed ACK must not survive after a newer request advanced the proven frontier');
+  assert.equal(liveness.status(1_200).ackAgeMs, 200);
 });
 
 test('wrong-generation ACK cannot revive a replacement capture', () => {
   const liveness = new PublisherCommandLiveness();
   liveness.begin(21, 1_000);
-  assert.equal(liveness.noteAck(20, 1_100), false);
+  const requestId = liveness.beginHealthRequest(1_050);
+  assert.notEqual(requestId, null);
+  assert.equal(liveness.noteAck(20, requestId!, 1_100), false);
   assert.equal(liveness.status(1_100).fresh, false);
-  assert.equal(liveness.noteAck(21, 1_200), true);
+  assert.equal(liveness.noteAck(21, requestId!, 1_200), true);
   assert.equal(liveness.status(1_200).fresh, true);
+
   liveness.begin(22, 1_300);
-  assert.equal(liveness.noteAck(21, 1_400), false);
+  assert.equal(liveness.noteAck(21, requestId!, 1_400), false);
   assert.equal(liveness.status(1_400).fresh, false);
 });
 
-test('reset revokes command freshness without creating a reconnect', () => {
+test('reset revokes command freshness and pending correlation without creating a reconnect', () => {
   const liveness = new PublisherCommandLiveness();
   liveness.begin(3, 100);
-  liveness.noteAck(3, 150);
+  const requestId = liveness.beginHealthRequest(150);
+  assert.notEqual(requestId, null);
+  assert.equal(liveness.noteAck(3, requestId!, 175), true);
+  const pendingRequestId = liveness.beginHealthRequest(200);
+  assert.notEqual(pendingRequestId, null);
   liveness.reset();
+  assert.equal(liveness.noteAck(3, pendingRequestId!, 250), false);
   assert.deepEqual(liveness.status(100_000), { fresh: false, reconnect: false, ackAgeMs: null });
 });

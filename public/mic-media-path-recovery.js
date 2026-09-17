@@ -13,11 +13,6 @@ function nonNegativeInteger(value) {
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
-function positiveFinite(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : null;
-}
-
 function mediaPath(value) {
   return value === 'webtransport' || value === 'websocket' ? value : null;
 }
@@ -29,9 +24,10 @@ function mediaPath(value) {
  *
  * `serverAcceptedFrameSerial` is incremented only at the server's accepted-PCM
  * authority boundary (AudioSession ingest produced samples). When available,
- * `serverAcceptedSampleCount` measures the amount of novel PCM accepted at that
- * same boundary. Delivery coverage compares duration, not raw sample counts, so
- * a 44.1 kHz capture and Relay's 48 kHz mix clock remain commensurate.
+ * `serverAcceptedCaptureSamples` is the cumulative accepted AudioSession
+ * duration projected back onto the current capture clock, so it can be compared
+ * directly with browser `capturedSamples` without mixing 44.1 kHz and 48 kHz
+ * sample-count units.
  *
  * This policy cannot rebuild capture. Its bounded actions are media-only: one
  * semantic WebTransport demotion, then at most one same-capture physical
@@ -58,10 +54,8 @@ export class MicMediaPathRecovery {
     this.captureGeneration = null;
     this.currentSocketEpoch = null;
     this.lastCapturedSamples = null;
-    this.lastCaptureSampleRate = null;
     this.lastServerAcceptedFrameSerial = null;
-    this.lastServerAcceptedSampleCount = null;
-    this.lastServerAcceptedSampleRate = null;
+    this.lastServerAcceptedCaptureSamples = null;
     this.lastDeliveryRatio = null;
     this.staleCount = 0;
     this.phase = 'observing';
@@ -103,17 +97,13 @@ export class MicMediaPathRecovery {
 
   rebaseline({
     capturedSamples,
-    captureSampleRate,
     serverAcceptedFrameSerial,
-    serverAcceptedSampleCount,
-    serverAcceptedSampleRate,
+    serverAcceptedCaptureSamples,
     socketEpoch,
   } = {}) {
     this.lastCapturedSamples = nonNegativeInteger(capturedSamples);
-    this.lastCaptureSampleRate = positiveFinite(captureSampleRate);
     this.lastServerAcceptedFrameSerial = nonNegativeInteger(serverAcceptedFrameSerial);
-    this.lastServerAcceptedSampleCount = nonNegativeInteger(serverAcceptedSampleCount);
-    this.lastServerAcceptedSampleRate = positiveFinite(serverAcceptedSampleRate);
+    this.lastServerAcceptedCaptureSamples = nonNegativeInteger(serverAcceptedCaptureSamples);
     this.lastDeliveryRatio = null;
     const normalizedEpoch = nonNegativeInteger(socketEpoch);
     if (normalizedEpoch !== null) this.currentSocketEpoch = normalizedEpoch;
@@ -152,10 +142,8 @@ export class MicMediaPathRecovery {
   observe({
     captureGeneration,
     capturedSamples,
-    captureSampleRate,
     serverAcceptedFrameSerial,
-    serverAcceptedSampleCount,
-    serverAcceptedSampleRate,
+    serverAcceptedCaptureSamples,
     serverMediaPath,
     path,
     socketEpoch,
@@ -167,16 +155,10 @@ export class MicMediaPathRecovery {
     const localPath = mediaPath(path);
     const serverPath = mediaPath(serverMediaPath);
     const normalizedEpoch = nonNegativeInteger(socketEpoch);
-    const coverageFieldsPresent = captureSampleRate !== undefined
-      || serverAcceptedSampleCount !== undefined
-      || serverAcceptedSampleRate !== undefined;
-    const captureRate = captureSampleRate === undefined ? null : positiveFinite(captureSampleRate);
-    const acceptedSamples = serverAcceptedSampleCount === undefined
-      ? null
-      : nonNegativeInteger(serverAcceptedSampleCount);
-    const acceptedRate = serverAcceptedSampleRate === undefined
-      ? null
-      : positiveFinite(serverAcceptedSampleRate);
+    const coveragePresent = serverAcceptedCaptureSamples !== undefined;
+    const acceptedCaptureSamples = coveragePresent
+      ? nonNegativeInteger(serverAcceptedCaptureSamples)
+      : null;
 
     if (
       generation === null
@@ -184,7 +166,7 @@ export class MicMediaPathRecovery {
       || acceptedSerial === null
       || normalizedEpoch === null
       || localPath === null
-      || (coverageFieldsPresent && (captureRate === null || acceptedSamples === null || acceptedRate === null))
+      || (coveragePresent && acceptedCaptureSamples === null)
     ) {
       return { action: 'none', reason: 'invalid-observation', ...this.status() };
     }
@@ -193,13 +175,7 @@ export class MicMediaPathRecovery {
       return { action: 'none', reason: 'invalid-generation', ...this.status() };
     }
 
-    const coverageInput = coverageFieldsPresent
-      ? {
-          captureSampleRate: captureRate,
-          serverAcceptedSampleCount: acceptedSamples,
-          serverAcceptedSampleRate: acceptedRate,
-        }
-      : {};
+    const coverageInput = coveragePresent ? { serverAcceptedCaptureSamples: acceptedCaptureSamples } : {};
 
     if (this.currentSocketEpoch !== null && normalizedEpoch !== this.currentSocketEpoch) {
       // #304/control lifecycle owns physical socket replacement. Never let ACK
@@ -237,14 +213,7 @@ export class MicMediaPathRecovery {
       return { action: 'none', reason: 'baseline', ...this.status() };
     }
 
-    if (
-      coverageFieldsPresent
-      && (
-        this.lastCaptureSampleRate === null
-        || this.lastServerAcceptedSampleCount === null
-        || this.lastServerAcceptedSampleRate === null
-      )
-    ) {
+    if (coveragePresent && this.lastServerAcceptedCaptureSamples === null) {
       this.rebaseline({
         capturedSamples: captured,
         serverAcceptedFrameSerial: acceptedSerial,
@@ -255,12 +224,8 @@ export class MicMediaPathRecovery {
     }
 
     if (
-      coverageFieldsPresent
-      && (
-        captureRate !== this.lastCaptureSampleRate
-        || acceptedRate !== this.lastServerAcceptedSampleRate
-        || acceptedSamples < this.lastServerAcceptedSampleCount
-      )
+      coveragePresent
+      && acceptedCaptureSamples < this.lastServerAcceptedCaptureSamples
     ) {
       this.rebaseline({
         capturedSamples: captured,
@@ -273,25 +238,19 @@ export class MicMediaPathRecovery {
 
     const previousCaptured = this.lastCapturedSamples;
     const previousSerial = this.lastServerAcceptedFrameSerial;
-    const previousAcceptedSamples = this.lastServerAcceptedSampleCount;
+    const previousAcceptedCaptureSamples = this.lastServerAcceptedCaptureSamples;
     const localAdvanced = captured > previousCaptured;
     const serverAdvanced = acceptedSerial > previousSerial;
     let deliveryRatio = null;
-    if (coverageFieldsPresent && localAdvanced) {
+    if (coveragePresent && localAdvanced) {
       const capturedDelta = captured - previousCaptured;
-      const acceptedDelta = acceptedSamples - previousAcceptedSamples;
-      const capturedDuration = capturedDelta / captureRate;
-      const acceptedDuration = acceptedDelta / acceptedRate;
-      deliveryRatio = capturedDuration > 0 ? acceptedDuration / capturedDuration : null;
+      const acceptedDelta = acceptedCaptureSamples - previousAcceptedCaptureSamples;
+      deliveryRatio = capturedDelta > 0 ? acceptedDelta / capturedDelta : null;
     }
 
     this.lastCapturedSamples = captured;
     this.lastServerAcceptedFrameSerial = acceptedSerial;
-    if (coverageFieldsPresent) {
-      this.lastCaptureSampleRate = captureRate;
-      this.lastServerAcceptedSampleCount = acceptedSamples;
-      this.lastServerAcceptedSampleRate = acceptedRate;
-    }
+    if (coveragePresent) this.lastServerAcceptedCaptureSamples = acceptedCaptureSamples;
     this.lastDeliveryRatio = deliveryRatio;
 
     if (!localAdvanced) {

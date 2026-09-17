@@ -298,6 +298,7 @@ export class MicRuntime {
             ...(this.acceptedSampleRate === null ? {} : {
               acceptedSampleCount: this.currentAcceptedSampleCount,
               acceptedSampleRate: this.acceptedSampleRate,
+              captureSampleRate: this.currentSampleRate,
             }),
             mediaPath: this.mediaPath(),
           },

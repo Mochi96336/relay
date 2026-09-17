@@ -302,10 +302,12 @@ export class MicMediaPathRecovery {
 
     if (this.phase === 'degraded-latched') {
       const packetEvidence = this.packetCoverageEvidence(packetCounters);
-      const recovered = packetEvidence.available
-        ? packetEvidence.ready && packetEvidence.healthy === true
-        : this.lastServerAcceptedFrameSerial !== null
-          && acceptedSerial > this.lastServerAcceptedFrameSerial;
+      const semanticAdvanced = this.lastServerAcceptedFrameSerial !== null
+        && acceptedSerial > this.lastServerAcceptedFrameSerial;
+      const recovered = semanticAdvanced && (
+        !packetEvidence.available
+        || (packetEvidence.ready && packetEvidence.healthy === true)
+      );
       this.lastCapturedSamples = captured;
       this.lastServerAcceptedFrameSerial = acceptedSerial;
       if (recovered) {
@@ -347,9 +349,10 @@ export class MicMediaPathRecovery {
         return { action: 'none', reason: 'server-websocket-rebaseline', ...this.status() };
       }
       const packetEvidence = this.packetCoverageEvidence(packetCounters);
-      const serverHealthy = packetEvidence.available
-        ? packetEvidence.ready && packetEvidence.healthy === true
-        : serverAdvanced;
+      const serverHealthy = serverAdvanced && (
+        !packetEvidence.available
+        || (packetEvidence.ready && packetEvidence.healthy === true)
+      );
       if (serverHealthy) {
         this.staleCount = 0;
         return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
@@ -369,9 +372,10 @@ export class MicMediaPathRecovery {
         this.proofServerWebSocketReady = false;
         this.proofBaselineSerial = null;
         const packetEvidence = this.packetCoverageEvidence(packetCounters);
-        const serverHealthy = packetEvidence.available
-          ? packetEvidence.ready && packetEvidence.healthy === true
-          : serverAdvanced;
+        const serverHealthy = serverAdvanced && (
+          !packetEvidence.available
+          || (packetEvidence.ready && packetEvidence.healthy === true)
+        );
         if (serverHealthy) {
           this.staleCount = 0;
           return { action: 'none', reason: 'waiting-server-websocket', ...this.status() };
@@ -392,7 +396,11 @@ export class MicMediaPathRecovery {
           if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
-        if (packetEvidence.healthy) {
+        if (
+          packetEvidence.healthy
+          && this.proofBaselineSerial !== null
+          && acceptedSerial > this.proofBaselineSerial
+        ) {
           this.phase = 'observing';
           this.staleCount = 0;
           this.proofBaselineSerial = null;
@@ -414,8 +422,11 @@ export class MicMediaPathRecovery {
       if (this.staleCount < this.staleObservations) {
         return { action: 'none', reason: 'proving-recovery', ...this.status() };
       }
+      const underDelivered = packetEvidence.available
+        && packetEvidence.ready
+        && packetEvidence.healthy === false;
       return this.escalateProofFailure(
-        packetEvidence.available
+        underDelivered
           ? 'server-pcm-underdelivery-after-fallback'
           : 'server-pcm-stale-after-fallback',
       );
@@ -427,7 +438,7 @@ export class MicMediaPathRecovery {
         if (packetEvidence.submittedDelta === 0) this.staleCount = 0;
         return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
       }
-      if (packetEvidence.healthy) {
+      if (packetEvidence.healthy && serverAdvanced) {
         this.staleCount = 0;
         return { action: 'none', reason: 'server-pcm-coverage-healthy', ...this.status() };
       }
@@ -436,11 +447,14 @@ export class MicMediaPathRecovery {
       return { action: 'none', reason: 'server-pcm-advancing', ...this.status() };
     }
 
+    const underDelivered = packetEvidence.available
+      && packetEvidence.ready
+      && packetEvidence.healthy === false;
     this.staleCount += 1;
     if (this.staleCount < this.staleObservations) {
       return {
         action: 'none',
-        reason: packetEvidence.available
+        reason: underDelivered
           ? 'server-pcm-underdelivery-observation'
           : 'server-pcm-stale-observation',
         ...this.status(),
@@ -448,7 +462,7 @@ export class MicMediaPathRecovery {
     }
 
     this.staleCount = 0;
-    const reason = packetEvidence.available ? 'server-pcm-underdelivery' : 'server-pcm-stale';
+    const reason = underDelivered ? 'server-pcm-underdelivery' : 'server-pcm-stale';
     if (localPath === 'webtransport' && !this.webTransportDemotionUsed) {
       this.webTransportDemotionUsed = true;
       this.webTransportQuarantined = true;

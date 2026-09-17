@@ -157,11 +157,18 @@ export class MicRuntime {
 
     const previousPublisher = this.currentPublisher;
     const hadMediaCapture = this.currentAudioTransport !== null;
+    // Media authority deliberately survives a short control-socket grace. Treat
+    // a same-participant reconnect as a replacement even after the old control
+    // pointer has detached, otherwise a changed capture can bypass the server's
+    // timing-invalidation boundary merely by disconnecting first.
     const sameParticipantMedia = Boolean(
       socket.participantId
       && this.currentMediaOwnerId === socket.participantId
       && this.currentAudioTransport,
     );
+    // A capture generation names one capture clock, not just a packet epoch.
+    // Reusing it with a different sample rate is contradictory identity and
+    // must not inherit receiver sequence state, media tickets, or calibration.
     const continuingV2Capture = Boolean(
       sameParticipantMedia
       && captureGeneration !== null
@@ -176,6 +183,11 @@ export class MicRuntime {
     );
     const sameCapture = Boolean(sameParticipantReplacement && continuingV2Capture);
     const preservedAudioTransport = continuingV2Capture;
+    // This is deliberately independent of the control-socket pointer and
+    // participant identity. A cross-owner takeover, a reconnect after control
+    // grace, and a contradictory same-generation/sample-rate registration all
+    // replace the acoustic capture if an old media transport existed and was
+    // not explicitly preserved.
     const captureReplaced = hadMediaCapture && !preservedAudioTransport;
 
     socket.sampleRate = sampleRate;

@@ -1,0 +1,34 @@
+name: Agent patch publisher ACK age
+
+on:
+  push:
+    branches:
+      - agent/publisher-ack-age-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+      - name: Apply exact app patch
+        run: node scripts/agent-patch-publisher-ack-age.mjs
+      - name: Commit app patch
+        run: |
+          if git diff --quiet -- public/app.js; then
+            echo 'No app patch needed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add public/app.js
+          git commit -m 'fix(audio): correlate publisher health ACK request age'
+          git push origin HEAD:${GITHUB_REF_NAME}

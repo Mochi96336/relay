@@ -63,6 +63,15 @@ function uint32(value: unknown): number | null {
     : null;
 }
 
+function strictUint32(value: unknown): number | null {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= 0
+    && value <= 0xffff_ffff
+    ? value >>> 0
+    : null;
+}
+
 function nonNegativeSafeInteger(value: unknown): number | null {
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
@@ -136,7 +145,9 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   if (!payload || Number(payload.version) !== 1) return null;
 
   const captureGeneration = uint32(payload.captureGeneration);
-  const healthRequestId = payload.healthRequestId === undefined ? undefined : uint32(payload.healthRequestId);
+  const healthRequestId = payload.healthRequestId === undefined
+    ? undefined
+    : strictUint32(payload.healthRequestId);
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   const controlReconnects = nonNegativeSafeInteger(payload.controlReconnects);

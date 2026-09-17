@@ -1,0 +1,71 @@
+name: Temporary semantic window authority patch
+
+on:
+  push:
+    branches:
+      - agent/media-coverage-semantic-fence
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/media-coverage-semantic-fence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply exact semantic-window replacements
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('public/mic-media-path-recovery.js')
+          text = path.read_text()
+          replacements = [
+              (
+                  """      if (packetEvidence.available && !packetEvidence.ready) {\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }""",
+                  """      if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }""",
+                  1,
+              ),
+              (
+                  """        if (packetEvidence.available && !packetEvidence.ready) {\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }""",
+                  """        if (packetEvidence.available && !packetEvidence.ready && serverAdvanced) {\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }""",
+                  1,
+              ),
+              (
+                  """      if (packetEvidence.available) {\n        if (!packetEvidence.ready) {\n          if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }\n        if (\n          packetEvidence.healthy\n          && this.proofBaselineSerial !== null\n          && acceptedSerial > this.proofBaselineSerial\n        ) {""",
+                  """      if (packetEvidence.available) {\n        const semanticProofAdvanced = this.proofBaselineSerial !== null\n          && acceptedSerial > this.proofBaselineSerial;\n        if (!packetEvidence.ready && semanticProofAdvanced) {\n          if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n          return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n        }\n        if (packetEvidence.healthy && semanticProofAdvanced) {""",
+                  1,
+              ),
+              (
+                  """    if (packetEvidence.available) {\n      if (!packetEvidence.ready) {\n        if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }\n      if (packetEvidence.healthy && serverAdvanced) {""",
+                  """    if (packetEvidence.available) {\n      if (!packetEvidence.ready && serverAdvanced) {\n        if (packetEvidence.submittedDelta === 0) this.staleCount = 0;\n        return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };\n      }\n      if (packetEvidence.healthy && serverAdvanced) {""",
+                  1,
+              ),
+          ]
+          for old, new, expected in replacements:
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f'expected {expected} match, found {count}: {old[:120]!r}')
+              text = text.replace(old, new, expected)
+          path.write_text(text)
+          PY
+      - name: Verify focused policy diff
+        run: |
+          git diff --check
+          git diff -- public/mic-media-path-recovery.js
+          test "$(git diff --name-only | grep -v '^public/mic-media-path-recovery.js$' | wc -l)" -eq 0
+      - name: Commit patch and retire temporary workflow
+        run: |
+          rm .github/workflows/patch-semantic-window-authority.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add public/mic-media-path-recovery.js .github/workflows/patch-semantic-window-authority.yml
+          git commit -m "fix(audio): keep semantic stall authority during packet accumulation"
+          git push origin HEAD:agent/media-coverage-semantic-fence

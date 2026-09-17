@@ -73,6 +73,7 @@ test('foreground immediately rebuilds a sustained input gap already proven while
   // for another 400 render-quanta gap report.
   const foreground = watchdog.noteForeground(snap(1_170, 2.17, 56_256, 'running', true));
   assert.equal(foreground.discontinuity, true);
+  assert.equal(foreground.rebuild, true);
 });
 
 test('background capture that keeps producing fresh PCM stays on the same generation', () => {
@@ -187,6 +188,33 @@ test('replacement graph cannot spend another rebuild before fresh PCM proves rec
   );
 });
 
+test('foreground discontinuity cannot bypass a spent rebuild budget', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(
+    watchdog.noteInputGap(snap(1_070, 2.07, 51_456), { recovered: false }).rebuild,
+    true,
+  );
+  watchdog.noteGraphRebuilt(snap(1_080, 2.08, 0));
+
+  watchdog.noteHidden(snap(1_100, 2.10, 0, 'running', false));
+  watchdog.noteInputGap(
+    snap(2_170, 3.17, 51_456, 'running', false),
+    { recovered: false },
+  );
+  const foreground = watchdog.noteForeground(
+    snap(2_270, 3.27, 56_256, 'running', true),
+  );
+
+  assert.equal(foreground.discontinuity, true);
+  assert.equal(
+    foreground.rebuild,
+    false,
+    'foreground recovery must consume the same bounded rebuild authority',
+  );
+});
+
 test('fresh PCM recovery rearms one future graph rebuild budget', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   watchdog.start(snap(0, 1, 0));
@@ -207,6 +235,15 @@ test('fresh PCM recovery rearms one future graph rebuild budget', () => {
     watchdog.noteInputGap(snap(2_170, 3.17, 51_584), { recovered: false }).rebuild,
     true,
   );
+});
+
+test('foreground recovery consumes the watchdog rebuild decision instead of bypassing its budget', () => {
+  const start = app.indexOf('function recoverPublisherAudio()');
+  const end = app.indexOf('function schedulePublisherReconnect', start);
+  assert.ok(start >= 0 && end > start);
+  const foreground = app.slice(start, end);
+  assert.match(foreground, /if \(foreground\.rebuild\) void rebuildPublisherCaptureGraph\('foreground-discontinuity'\)/);
+  assert.doesNotMatch(foreground, /if \(foreground\.discontinuity\) void rebuildPublisherCaptureGraph/);
 });
 
 test('socket reconnect cannot count as capture recovery evidence', () => {

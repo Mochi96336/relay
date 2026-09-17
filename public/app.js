@@ -1166,7 +1166,7 @@ function recoverPublisherAudio() {
     'Foregrounded; waiting for the audio clock and fresh microphone samples.',
   );
   resumePublisherAudioContext();
-  if (foreground.discontinuity) void rebuildPublisherCaptureGraph('foreground-discontinuity');
+  if (foreground.rebuild) void rebuildPublisherCaptureGraph('foreground-discontinuity');
 }
 
 function schedulePublisherReconnect(

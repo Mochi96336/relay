@@ -28,6 +28,8 @@ export class PublisherCommandLiveness {
     this.generation = null;
     this.startedAtMs = -Infinity;
     this.lastAckAtMs = -Infinity;
+    this.nextHealthRequestId = 0;
+    this.pendingHealthRequests = new Map();
   }
 
   begin(generation, nowMs) {
@@ -37,19 +39,48 @@ export class PublisherCommandLiveness {
     this.generation = normalizedGeneration;
     this.startedAtMs = nowMs;
     this.lastAckAtMs = -Infinity;
+    this.nextHealthRequestId = 0;
+    this.pendingHealthRequests.clear();
   }
 
-  noteAck(generation, nowMs, requestSentAtMs = nowMs) {
+  beginHealthRequest(nowMs) {
+    if (this.generation === null || !Number.isFinite(nowMs)) return null;
+    const requestId = this.nextHealthRequestId >>> 0;
+    this.nextHealthRequestId = (requestId + 1) >>> 0;
+    this.pendingHealthRequests.set(requestId, nowMs);
+    return requestId;
+  }
+
+  cancelHealthRequest(requestId) {
+    const normalizedRequestId = uint32(requestId);
+    if (normalizedRequestId === null) return false;
+    return this.pendingHealthRequests.delete(normalizedRequestId);
+  }
+
+  noteAck(generation, requestId, nowMs) {
     const normalizedGeneration = uint32(generation);
+    const normalizedRequestId = uint32(requestId);
     if (
       this.generation === null
       || normalizedGeneration === null
       || normalizedGeneration !== this.generation
+      || normalizedRequestId === null
       || !Number.isFinite(nowMs)
-      || !Number.isFinite(requestSentAtMs)
+    ) return false;
+
+    const requestSentAtMs = this.pendingHealthRequests.get(normalizedRequestId);
+    if (
+      !Number.isFinite(requestSentAtMs)
       || requestSentAtMs < this.startedAtMs
       || requestSentAtMs > nowMs
     ) return false;
+
+    // Older requests are superseded for command freshness once a newer send
+    // has been acknowledged. This also bounds correlation state if a server
+    // rejects or loses an earlier report but later requests keep succeeding.
+    for (const [pendingRequestId, sentAtMs] of this.pendingHealthRequests) {
+      if (sentAtMs <= requestSentAtMs) this.pendingHealthRequests.delete(pendingRequestId);
+    }
     this.lastAckAtMs = Math.max(this.lastAckAtMs, requestSentAtMs);
     return true;
   }

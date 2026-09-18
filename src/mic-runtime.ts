@@ -442,7 +442,10 @@ export class MicRuntime {
       // never carried this health contract and retains its PCM-only behavior.
       && (
         this.currentAudioTransport?.packetVersion !== 2
-        || this.freshUplinkHealthPayload(nowMs) !== null
+        || (
+          this.freshUplinkHealthPayload(nowMs) !== null
+          && this.currentUplinkHealth?.inputMutedObserved !== false
+        )
       )
       && this.currentUplinkHealth?.inputMuted !== true
       && this.postUnmuteSampleBarrier === null

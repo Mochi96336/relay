@@ -138,6 +138,12 @@ class ReadonlyQueueWebTransport {
   close() {}
 }
 
+class StalledReadyWebTransport {
+  readonly ready = new Promise<void>(() => {});
+  readonly closed = new Promise<void>(() => {});
+  close() {}
+}
+
 class TooSmallWebTransport {
   readonly writer = new FakeDatagramWriter();
   readonly ready = Promise.resolve();
@@ -226,6 +232,34 @@ describe('browser AudioTransport', () => {
       false,
       'a true transport close/new capture re-arms startup negotiation hold',
     );
+  });
+
+  it('bounds startup hold when WebTransport readiness never resolves', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    let nowMs = 0;
+    const transport = new PreferredAudioTransport({
+      holdMediaUntilPreference: true,
+      initialPreferenceHoldMs: 1_500,
+      WebTransportClass: StalledReadyWebTransport,
+      nowMs: () => nowMs,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+
+    void transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=stalled-ready',
+    });
+
+    nowMs = 1_499;
+    assert.equal(transport.send('still-held').sent, false);
+    assert.deepEqual(socket.sent, []);
+
+    nowMs = 1_500;
+    const fallback = transport.send('bounded-fallback');
+    assert.equal(fallback.sent, true);
+    assert.equal(fallback.path, 'websocket');
+    assert.deepEqual(socket.sent, ['bounded-fallback']);
   });
 
   it('releases startup hold to WebSocket when no preferred path is available', async () => {
@@ -528,6 +562,7 @@ describe('browser AudioTransport', () => {
     const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
     assert.match(app, /new PreferredAudioTransport/);
     assert.match(app, /holdMediaUntilPreference:\s*true/);
+    assert.match(app, /initialPreferenceHoldMs:\s*1_500/);
     assert.match(app, /splitPcmForPacketLimit/);
     assert.match(app, /audioTransport\.maxPacketBytes\(\)/);
     assert.match(app, /audioTransport\.send\(/);

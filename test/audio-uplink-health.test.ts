@@ -83,6 +83,25 @@ describe('audio uplink health', () => {
     }
   });
 
+  it('tracks explicit mute-state provenance without changing the serialized health shape', () => {
+    const current = parseAudioUplinkHealth(validHealth());
+    assert.ok(current);
+    assert.equal(current.inputMutedObserved, true);
+    assert.equal(
+      Object.prototype.propertyIsEnumerable.call(current, 'inputMutedObserved'),
+      false,
+    );
+    assert.equal(JSON.stringify(current).includes('inputMutedObserved'), false);
+
+    const legacy: any = validHealth();
+    delete legacy.inputMuted;
+    const parsedLegacy = parseAudioUplinkHealth(legacy);
+    assert.ok(parsedLegacy);
+    assert.equal(parsedLegacy.inputMuted, false);
+    assert.equal(parsedLegacy.inputMutedObserved, false);
+    assert.equal(JSON.stringify(parsedLegacy).includes('inputMutedObserved'), false);
+  });
+
   it('preserves an optional uint32 health request correlation token', () => {
     const input: any = validHealth();
     input.healthRequestId = 0xffff_ffff;

@@ -5,7 +5,7 @@ import WebSocket from 'ws';
 
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import { DEFAULT_AUDIO_TRANSPORT_CONFIG } from '../src/audio-transport-config.js';
-import type { AudioUplinkHealth } from '../src/audio-uplink-health.js';
+import { parseAudioUplinkHealth, type AudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { MicRuntime } from '../src/mic-runtime.js';
 import type { RelaySocket } from '../src/relay-socket-server.js';
 
@@ -248,6 +248,46 @@ test('same-generation uplink health cannot move capturedSamples backward', () =>
     'a genuinely new capture generation owns a new cursor origin',
   );
   assert.equal(mic.uplinkHealthPayload(3_071)?.capturedSamples, 128);
+});
+
+test('legacy v2 health without explicit mute state cannot authorize Mic live', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 34,
+    audioPacketVersion: 2,
+    nowMs: 4_000,
+  });
+
+  const rawLegacyHealth: any = uplinkHealth(34, false, 128);
+  delete rawLegacyHealth.inputMuted;
+  const legacyHealth = parseAudioUplinkHealth(rawLegacyHealth);
+  assert.ok(legacyHealth, 'older health v1 without inputMuted remains parse-compatible');
+
+  assert.equal(mic.noteUplinkHealth(publisher, legacyHealth, 4_010), true);
+  mic.noteFrame(4_020, {
+    generation: 34,
+    firstSampleIndex: 0,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(4_021),
+    false,
+    'fresh legacy health without explicit source mute evidence cannot authorize v2 live',
+  );
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(34, false, 256), 4_030),
+    true,
+  );
+  mic.noteFrame(4_040, {
+    generation: 34,
+    firstSampleIndex: 128,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.streaming(4_041), true, 'explicit current unmuted health restores v2 live');
 });
 
 test('direct media cannot keep Mic live after source health authority expires', () => {

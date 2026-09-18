@@ -153,6 +153,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   const controlReconnects = nonNegativeSafeInteger(payload.controlReconnects);
+  const inputMuted = payload.inputMuted === undefined ? false : payload.inputMuted;
   const capture = payload.capture === undefined ? null : parseCaptureAppliedSettings(payload.capture);
   const captureLevel = payload.captureLevel === undefined ? null : parseCaptureLevel(payload.captureLevel);
   const dropped = record(payload.droppedSamples);
@@ -163,6 +164,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     || capturedSamples === null
     || inputGapSamples === null
     || controlReconnects === null
+    || typeof inputMuted !== 'boolean'
     || capture === undefined
     || captureLevel === undefined
     || !dropped
@@ -238,7 +240,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     inputGapSamples,
-    inputMuted: payload.inputMuted === true,
+    inputMuted,
     capture,
     captureLevel,
     droppedSamples: { total, disconnected, congested, packetTooLarge },

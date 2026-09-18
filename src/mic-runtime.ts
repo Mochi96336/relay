@@ -61,6 +61,13 @@ export class MicRuntime {
   private lastFrameOwnerId: string | null = null;
   private lastFrameGeneration: number | null = null;
   /**
+   * Source-sample cursor reported by the browser at the most recent muted ->
+   * unmuted transition. Control health and media can travel on different paths,
+   * so frames at or before this cursor are allowed to arrive but cannot prove
+   * post-unmute live flow.
+   */
+  private postUnmuteSampleBarrier: number | null = null;
+  /**
    * Monotonic accepted-PCM evidence for the current capture generation.
    *
    * This advances only through noteFrame(), whose server caller is downstream
@@ -270,6 +277,10 @@ export class MicRuntime {
       || socket.captureGeneration === undefined
       || health.captureGeneration !== socket.captureGeneration
     ) return false;
+    const wasMuted = this.currentUplinkHealth?.inputMuted === true;
+    if (wasMuted && health.inputMuted !== true) {
+      this.postUnmuteSampleBarrier = health.capturedSamples;
+    }
     this.currentUplinkHealth = health;
     this.currentUplinkHealthAt = nowMs;
     this.armUplinkHealthDeadline(socket, health.captureGeneration, 2);
@@ -350,16 +361,33 @@ export class MicRuntime {
     this.lastFrameOwnerId = this.currentMediaOwnerId;
     this.lastFrameGeneration = this.currentMediaGeneration;
     this.currentAcceptedFrameSerial = 0;
+    this.postUnmuteSampleBarrier = null;
     this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs;
   }
 
-  noteFrame(nowMs: number) {
-    this.lastFrameAt = nowMs;
-    this.lastFrameOwnerId = this.currentMediaOwnerId;
-    this.lastFrameGeneration = this.currentMediaGeneration;
+  noteFrame(nowMs: number, frame: PcmFrame | null = null) {
+    // acceptedFrameSerial remains transport/application intake evidence even
+    // when the accepted frame belongs to the muted side of an unmute barrier.
     if (this.currentAcceptedFrameSerial < Number.MAX_SAFE_INTEGER) {
       this.currentAcceptedFrameSerial += 1;
     }
+
+    const barrier = this.postUnmuteSampleBarrier;
+    if (barrier !== null) {
+      const firstSampleIndex = frame?.firstSampleIndex;
+      const sourceSampleCount = frame ? Math.floor(frame.pcm.byteLength / 2) : 0;
+      const frameEnd = firstSampleIndex === null || firstSampleIndex === undefined
+        ? null
+        : firstSampleIndex + sourceSampleCount;
+      if (frameEnd === null || !Number.isFinite(frameEnd) || frameEnd <= barrier) {
+        return;
+      }
+      this.postUnmuteSampleBarrier = null;
+    }
+
+    this.lastFrameAt = nowMs;
+    this.lastFrameOwnerId = this.currentMediaOwnerId;
+    this.lastFrameGeneration = this.currentMediaGeneration;
   }
 
   flowObserved() {
@@ -383,6 +411,7 @@ export class MicRuntime {
     return this.connected()
       && this.flowObserved()
       && this.currentUplinkHealth?.inputMuted !== true
+      && this.postUnmuteSampleBarrier === null
       && nowMs - this.lastFrameAt < this.options.streamLiveMs;
   }
 

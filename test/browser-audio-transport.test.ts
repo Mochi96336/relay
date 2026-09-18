@@ -138,6 +138,12 @@ class ReadonlyQueueWebTransport {
   close() {}
 }
 
+class StalledReadyWebTransport {
+  readonly ready = new Promise<void>(() => {});
+  readonly closed = new Promise<void>(() => {});
+  close() {}
+}
+
 class TooSmallWebTransport {
   readonly writer = new FakeDatagramWriter();
   readonly ready = Promise.resolve();
@@ -181,6 +187,94 @@ describe('browser AudioTransport', () => {
     transport.unbind(previous);
     assert.equal(transport.send('live').sent, true);
     assert.deepEqual(replacement.sent, ['live']);
+  });
+
+  it('can hold startup media until the first transport preference resolves', async () => {
+    FakeWebTransport.instances.length = 0;
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({
+      holdMediaUntilPreference: true,
+      WebTransportClass: FakeWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+
+    const beforePreference = transport.send(new Uint8Array([1]).buffer);
+    assert.equal(beforePreference.sent, false);
+    assert.equal(beforePreference.reason, 'disconnected');
+    assert.deepEqual(socket.sent, [], 'startup PCM must not race onto WebSocket before media negotiation');
+
+    assert.equal(await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=startup-hold',
+    }), true);
+
+    const afterPreference = transport.send(new Uint8Array([2]).buffer);
+    await Promise.resolve();
+    assert.equal(afterPreference.sent, true);
+    assert.equal(afterPreference.path, 'webtransport');
+    assert.deepEqual(socket.sent, []);
+
+    const replacement = new FakeSocket();
+    transport.unbind(socket);
+    transport.bind(replacement);
+    assert.equal(
+      transport.send(new Uint8Array([3]).buffer).sent,
+      true,
+      'same-capture control reconnect must not re-arm the startup hold',
+    );
+
+    transport.close();
+    const nextCapture = new FakeSocket();
+    transport.bind(nextCapture);
+    assert.equal(
+      transport.send(new Uint8Array([4]).buffer).sent,
+      false,
+      'a true transport close/new capture re-arms startup negotiation hold',
+    );
+  });
+
+  it('bounds startup hold when WebTransport readiness never resolves', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    let nowMs = 0;
+    const transport = new PreferredAudioTransport({
+      holdMediaUntilPreference: true,
+      initialPreferenceHoldMs: 1_500,
+      WebTransportClass: StalledReadyWebTransport,
+      nowMs: () => nowMs,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+
+    void transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=stalled-ready',
+    });
+
+    nowMs = 1_499;
+    assert.equal(transport.send('still-held').sent, false);
+    assert.deepEqual(socket.sent, []);
+
+    nowMs = 1_500;
+    const fallback = transport.send('bounded-fallback');
+    assert.equal(fallback.sent, true);
+    assert.equal(fallback.path, 'websocket');
+    assert.deepEqual(socket.sent, ['bounded-fallback']);
+  });
+
+  it('releases startup hold to WebSocket when no preferred path is available', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({
+      holdMediaUntilPreference: true,
+      WebTransportClass: null,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+
+    assert.equal(transport.send('early').sent, false);
+    assert.equal(await transport.prefer(null), false);
+    assert.equal(transport.send('fallback').sent, true);
+    assert.deepEqual(socket.sent, ['fallback']);
   });
 
   it('prefers one unreliable WebTransport datagram path without duplicating onto WebSocket', async () => {
@@ -467,6 +561,8 @@ describe('browser AudioTransport', () => {
   it('keeps control WebSocket sends separate from media sends in app.js', () => {
     const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
     assert.match(app, /new PreferredAudioTransport/);
+    assert.match(app, /holdMediaUntilPreference:\s*true/);
+    assert.match(app, /initialPreferenceHoldMs:\s*1_500/);
     assert.match(app, /splitPcmForPacketLimit/);
     assert.match(app, /audioTransport\.maxPacketBytes\(\)/);
     assert.match(app, /audioTransport\.send\(/);

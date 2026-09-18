@@ -211,6 +211,43 @@ test('same-generation uplink health cannot move capturedSamples backward', () =>
   );
   assert.equal(mic.uplinkHealthPayload(3_021)?.capturedSamples, 4_000);
   assert.equal(mic.uplinkHealthPayload(3_021)?.inputMuted, true);
+
+  assert.equal(mic.detachPublisher(publisher), true);
+  const reconnect = socket('participant-alice');
+  const sameCapture = mic.bindPublisher({
+    socket: reconnect,
+    sampleRate: 48_000,
+    captureGeneration: 33,
+    audioPacketVersion: 2,
+    nowMs: 3_030,
+  });
+  assert.equal(sameCapture.sameCapture, true);
+  assert.equal(
+    mic.noteUplinkHealth(reconnect, uplinkHealth(33, true, 3_500), 3_040),
+    false,
+    'same-capture control reconnect cannot reset the accepted cursor frontier',
+  );
+  assert.equal(
+    mic.noteUplinkHealth(reconnect, uplinkHealth(33, true, 4_000), 3_050),
+    true,
+    'equal cursor remains a valid idempotent health observation',
+  );
+
+  const replacement = socket('participant-alice');
+  const newCapture = mic.bindPublisher({
+    socket: replacement,
+    sampleRate: 48_000,
+    captureGeneration: 34,
+    audioPacketVersion: 2,
+    nowMs: 3_060,
+  });
+  assert.equal(newCapture.captureReplaced, true);
+  assert.equal(
+    mic.noteUplinkHealth(replacement, uplinkHealth(34, false, 128), 3_070),
+    true,
+    'a genuinely new capture generation owns a new cursor origin',
+  );
+  assert.equal(mic.uplinkHealthPayload(3_071)?.capturedSamples, 128);
 });
 
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {

@@ -185,6 +185,34 @@ test('post-unmute media arriving before control health can satisfy the same samp
   assert.equal(mic.streaming(2_031), true);
 });
 
+test('same-generation uplink health cannot move capturedSamples backward', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 33,
+    audioPacketVersion: 2,
+    nowMs: 3_000,
+  });
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(33, true, 4_000), 3_010),
+    true,
+  );
+  assert.equal(mic.uplinkHealthPayload(3_011)?.capturedSamples, 4_000);
+
+  // captureSampleCursor is monotonic inside one capture generation. Accepting
+  // a lower cursor would let a malformed/stale unmute report shrink the
+  // post-unmute source barrier and reclassify muted-period PCM as live.
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(33, false, 3_000), 3_020),
+    false,
+  );
+  assert.equal(mic.uplinkHealthPayload(3_021)?.capturedSamples, 4_000);
+  assert.equal(mic.uplinkHealthPayload(3_021)?.inputMuted, true);
+});
+
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {
   const { mic } = runtime();
   const first = socket('participant-alice');

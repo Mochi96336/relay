@@ -165,6 +165,9 @@ const audioTransport = new PreferredAudioTransport({
   // Keep those samples as timeline holes rather than racing one startup packet
   // onto WebSocket before WebTransport preference has a chance to resolve.
   holdMediaUntilPreference: true,
+  // Half the server's default 3 s first-frame deadline: enough for normal WT
+  // setup, but bounded so a stuck handshake still reaches WS fallback in time.
+  initialPreferenceHoldMs: 1_500,
 });
 
 function framePcm(pcm, generation, sequence, firstSampleIndex) {

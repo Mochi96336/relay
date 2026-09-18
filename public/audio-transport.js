@@ -291,6 +291,11 @@ export class PreferredAudioTransport extends AudioTransport {
     this.lastMediaRecoveryDecision = null;
   }
 
+  resolveInitialPreference() {
+    this.initialPreferenceResolved = true;
+    this.initialPreferenceHoldStartedAt = null;
+  }
+
   resetOutstandingDatagramWrites() {
     this.pendingDatagramWrites.clear();
     this.outstandingDatagramWrites = 0;
@@ -565,20 +570,17 @@ export class PreferredAudioTransport extends AudioTransport {
   async prefer(offer) {
     if (this.mediaPathRecovery.quarantineWebTransport()) {
       this.closeWebTransport();
-      this.initialPreferenceResolved = true;
-    this.initialPreferenceHoldStartedAt = null;
+      this.resolveInitialPreference();
       return false;
     }
     if (!offer || offer.preferred !== 'webtransport' || !offer.url) {
       this.closeWebTransport();
-      this.initialPreferenceResolved = true;
-      this.initialPreferenceHoldStartedAt = null;
+      this.resolveInitialPreference();
       return false;
     }
     if (!this.WebTransportClass) {
       this.closeWebTransport();
-      this.initialPreferenceResolved = true;
-      this.initialPreferenceHoldStartedAt = null;
+      this.resolveInitialPreference();
       return false;
     }
     // A control WebSocket reconnect for the same capture re-advertises the
@@ -590,8 +592,7 @@ export class PreferredAudioTransport extends AudioTransport {
       && this.webTransport
       && this.preferredUrl === offer.url
     ) {
-      this.initialPreferenceResolved = true;
-      this.initialPreferenceHoldStartedAt = null;
+      this.resolveInitialPreference();
       return true;
     }
 
@@ -622,8 +623,7 @@ export class PreferredAudioTransport extends AudioTransport {
       const maxPacketBytes = Number(transport.datagrams?.maxDatagramSize);
       if (!Number.isInteger(maxPacketBytes) || maxPacketBytes < this.minimumPacketBytes) {
         try { transport.close(); } catch {}
-        if (generation === this.preferenceGeneration) this.initialPreferenceResolved = true;
-      this.initialPreferenceHoldStartedAt = null;
+        if (generation === this.preferenceGeneration) this.resolveInitialPreference();
         return false;
       }
 
@@ -655,8 +655,7 @@ export class PreferredAudioTransport extends AudioTransport {
       this.lastWebTransportMaxPacketBytes = maxPacketBytes;
       this.observeWebTransportPacketBudget(maxPacketBytes);
       this.telemetry.webTransportConnections += 1;
-      this.initialPreferenceResolved = true;
-      this.initialPreferenceHoldStartedAt = null;
+      this.resolveInitialPreference();
       Promise.resolve(transport.closed).then(
         () => this.demoteWebTransport(transport),
         () => this.demoteWebTransport(transport),
@@ -672,8 +671,7 @@ export class PreferredAudioTransport extends AudioTransport {
       }
       if (generation === this.preferenceGeneration) {
         this.demoteWebTransport();
-        this.initialPreferenceResolved = true;
-      this.initialPreferenceHoldStartedAt = null;
+        this.resolveInitialPreference();
       }
       return false;
     }
@@ -738,9 +736,7 @@ export class PreferredAudioTransport extends AudioTransport {
         ? 0
         : Math.max(0, Number(this.nowMs()) - startedAt);
       if (holdAgeMs >= this.initialPreferenceHoldMs) {
-        this.initialPreferenceResolved = true;
-      this.initialPreferenceHoldStartedAt = null;
-        this.initialPreferenceHoldStartedAt = null;
+        this.resolveInitialPreference();
       } else {
         return {
           ready: false,

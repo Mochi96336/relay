@@ -385,7 +385,7 @@ function handleCaptureWorkletMessage(event, graph) {
   const chunkFirstSampleIndex = captureSampleCursor;
   captureSampleCursor += event.data.byteLength / 2;
 
-  const recovery = micCaptureRecovery.observe(captureSnapshot(), { freshPcm: true });
+  const recovery = micCaptureRecovery.observe(captureSnapshot(), { freshPcm: captureInputMuted !== true });
   if (recovery.recovered) announceCaptureRecovered();
 
   const pending = splitPcmForPacketLimit(

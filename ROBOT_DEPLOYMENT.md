@@ -215,11 +215,17 @@ systemctl --user enable relay-server.service relay-robot-source.service
   `ExecStartPre` polls `/healthz` the way `robot:doctor` does, so a boot race
   cannot leave the source page on an error screen while every process in the
   unit looks healthy.
-- **Failure that stays still.** `Restart=on-failure` uses the exit status the
-  launcher already reports, and `StartLimitBurst` stops the retrying after five
-  attempts in two minutes rather than respawning Chromium indefinitely. A
-  stopped unit reads the same on every `/statusz` poll; a thrashing one does
-  not.
+- **A server stop that does not stick.** `relay-server` uses
+  `Restart=always`, so it comes back from a clean `SIGTERM` as well as from a
+  crash. `on-failure` was the earlier choice and it read well until
+  2026-09-06, when something sent the server a TERM and the unit, having
+  exited zero, stayed down for a day while the phone and the tunnel both saw a
+  refused port. `relay-robot-source` deliberately keeps `on-failure`: stopping
+  it by hand is how the sink and Chromium are released, and `always` would
+  fight that. `StartLimitBurst` bounds both: five attempts in two minutes,
+  then systemd gives up and leaves a failed unit behind rather than
+  respawning Chromium indefinitely. A stopped unit reads the same on every
+  `/statusz` poll; a thrashing one does not.
 - **Cleanup that survives SIGKILL.** The launcher's own trap handles signals,
   and systemd's cgroup sweep handles the case where the trap never runs.
 

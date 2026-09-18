@@ -161,6 +161,10 @@ const AUDIO_PACKET_SOURCE_MIC = 1;
 const audioTransport = new PreferredAudioTransport({
   maxBufferedBytes: 256 * 1024,
   minimumPacketBytes: AUDIO_PACKET_HEADER_BYTES + 2,
+  // The capture graph can emit before Relay returns its registered/media offer.
+  // Keep those samples as timeline holes rather than racing one startup packet
+  // onto WebSocket before WebTransport preference has a chance to resolve.
+  holdMediaUntilPreference: true,
 });
 
 function framePcm(pcm, generation, sequence, firstSampleIndex) {

@@ -27,7 +27,7 @@ test('server delegates AudioSession capture-clock restarts before consuming new 
     block,
     /const \{ samples, start, captureRestarted \} = session\.ingestMic\(\s*frame,\s*micRuntime\.sampleRate,\s*nowMs,\s*\);/,
   );
-  assert.match(block, /if \(samples\.length > 0\) noteMicFrame\(nowMs\);/);
+  assert.match(block, /if \(samples\.length > 0\) noteMicFrame\(nowMs, frame\);/);
   assert.match(
     block,
     /micCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);/,

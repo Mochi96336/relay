@@ -188,6 +188,36 @@ test('replacement graph cannot spend another rebuild before fresh PCM proves rec
   );
 });
 
+test('replacement graph cannot repeat a generic PCM-stall rebuild before fresh PCM', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(watchdog.observe(snap(120, 1.12, 0)).rebuild, true);
+  watchdog.noteGraphRebuilt(snap(130, 1.13, 0));
+
+  const repeated = watchdog.observe(snap(260, 1.26, 0));
+  assert.equal(
+    repeated.rebuild,
+    false,
+    'cursor-stall recovery must share the same spent cross-graph action budget',
+  );
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+});
+
+test('failed physical graph replacement returns the rebuild budget', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(watchdog.observe(snap(120, 1.12, 0)).rebuild, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+
+  // app.js calls this only from rebuildPublisherCaptureGraph()'s failure path:
+  // no replacement graph was successfully installed, so retry authority is safe.
+  watchdog.rearmRebuild();
+  assert.equal(watchdog.status().rebuildBudgetSpent, false);
+  assert.equal(watchdog.observe(snap(240, 1.24, 0)).rebuild, true);
+});
+
 test('foreground discontinuity cannot bypass a spent rebuild budget', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
   watchdog.start(snap(0, 1, 0));

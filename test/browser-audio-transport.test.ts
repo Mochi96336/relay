@@ -208,6 +208,24 @@ describe('browser AudioTransport', () => {
     assert.equal(afterPreference.sent, true);
     assert.equal(afterPreference.path, 'webtransport');
     assert.deepEqual(socket.sent, []);
+
+    const replacement = new FakeSocket();
+    transport.unbind(socket);
+    transport.bind(replacement);
+    assert.equal(
+      transport.send(new Uint8Array([3]).buffer).sent,
+      true,
+      'same-capture control reconnect must not re-arm the startup hold',
+    );
+
+    transport.close();
+    const nextCapture = new FakeSocket();
+    transport.bind(nextCapture);
+    assert.equal(
+      transport.send(new Uint8Array([4]).buffer).sent,
+      false,
+      'a true transport close/new capture re-arms startup negotiation hold',
+    );
   });
 
   it('releases startup hold to WebSocket when no preferred path is available', async () => {
@@ -509,6 +527,7 @@ describe('browser AudioTransport', () => {
   it('keeps control WebSocket sends separate from media sends in app.js', () => {
     const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
     assert.match(app, /new PreferredAudioTransport/);
+    assert.match(app, /holdMediaUntilPreference:\s*true/);
     assert.match(app, /splitPcmForPacketLimit/);
     assert.match(app, /audioTransport\.maxPacketBytes\(\)/);
     assert.match(app, /audioTransport\.send\(/);

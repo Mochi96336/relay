@@ -42,6 +42,13 @@ export type AudioUplinkHealth = {
   capturedSamples: number;
   inputGapSamples: number;
   inputMuted: boolean;
+  /**
+   * Parser provenance only: false means this v1 snapshot predates explicit
+   * source mute telemetry and inputMuted is the legacy compatibility default.
+   * The parser defines this property non-enumerably so wire/status shapes stay
+   * unchanged. Hand-constructed typed health fixtures may omit it.
+   */
+  inputMutedObserved?: boolean;
   /** Browser-reported facts about the applied MediaStreamTrack. Diagnostic only. */
   capture: AudioCaptureAppliedSettings | null;
   /** Capture-worklet level before packetization/transport. Diagnostic only. */
@@ -234,7 +241,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   ) as Record<(typeof counterNames)[number], number | null>;
   if (counterNames.some((name) => counters[name] === null)) return null;
 
-  return {
+  const parsed: AudioUplinkHealth = {
     version: 1,
     captureGeneration,
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
@@ -256,4 +263,11 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       ...counters as Record<(typeof counterNames)[number], number>,
     },
   };
+  Object.defineProperty(parsed, 'inputMutedObserved', {
+    value: payload.inputMuted !== undefined,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return parsed;
 }

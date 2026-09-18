@@ -327,6 +327,52 @@ test('foreground recovery consumes the watchdog rebuild decision instead of bypa
   assert.doesNotMatch(foreground, /if \(foreground\.discontinuity\) void rebuildPublisherCaptureGraph/);
 });
 
+test('muted track PCM advances time but cannot prove capture recovery', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+  assert.equal(
+    watchdog.observe(snap(20, 1.02, 128), { freshPcm: true }).recovered,
+    true,
+  );
+
+  watchdog.beginRecovery(snap(30, 1.03, 128), 'input-muted');
+
+  const mutedPcm = watchdog.observe(
+    snap(50, 1.05, 256),
+    { freshPcm: false },
+  );
+  assert.equal(mutedPcm.sampleAdvanced, true);
+  assert.equal(
+    mutedPcm.recovered,
+    false,
+    'timeline progress from a muted track is not fresh microphone evidence',
+  );
+  assert.equal(watchdog.status().recovering, true);
+
+  const unmutedPcm = watchdog.observe(
+    snap(70, 1.07, 384),
+    { freshPcm: true },
+  );
+  assert.equal(unmutedPcm.recovered, true);
+  assert.equal(watchdog.status().recovering, false);
+});
+
+test('app excludes muted-track buffers from fresh PCM recovery evidence', () => {
+  const bufferAt = app.indexOf('const chunkFirstSampleIndex = captureSampleCursor;');
+  const packetizeAt = app.indexOf('const pending = splitPcmForPacketLimit(', bufferAt);
+  assert.ok(bufferAt >= 0 && packetizeAt > bufferAt);
+  const bufferHandler = app.slice(bufferAt, packetizeAt);
+
+  assert.match(
+    bufferHandler,
+    /micCaptureRecovery\.observe\(captureSnapshot\(\), \{ freshPcm: captureInputMuted !== true \}\)/,
+  );
+  assert.doesNotMatch(
+    bufferHandler,
+    /micCaptureRecovery\.observe\(captureSnapshot\(\), \{ freshPcm: true \}\)/,
+  );
+});
+
 test('socket reconnect cannot count as capture recovery evidence', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   watchdog.start(snap(0, 1, 0));

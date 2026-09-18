@@ -124,6 +124,34 @@ test('unmute health cannot reuse muted-period frame freshness as live Mic eviden
     false,
     'unmute requires new PCM beyond the browser-reported capture cursor',
   );
+
+  const serialAtBoundary = mic.acceptedFrameSerial;
+  mic.noteFrame(1_160, {
+    generation: 31,
+    firstSampleIndex: 2_500,
+    pcm: Buffer.alloc(400 * 2),
+  });
+  assert.equal(
+    mic.acceptedFrameSerial,
+    serialAtBoundary + 1,
+    'delayed muted PCM is still accepted intake evidence',
+  );
+  assert.equal(
+    mic.streaming(1_161),
+    false,
+    'a delayed frame ending before the unmute cursor cannot clear the barrier',
+  );
+
+  mic.noteFrame(1_170, {
+    generation: 31,
+    firstSampleIndex: 3_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(1_171),
+    true,
+    'the first accepted frame extending beyond the unmute cursor restores live flow',
+  );
 });
 
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {

@@ -18,11 +18,15 @@ function socket(participantId: string): RelaySocket {
   } as RelaySocket;
 }
 
-function uplinkHealth(captureGeneration: number, inputMuted = false): AudioUplinkHealth {
+function uplinkHealth(
+  captureGeneration: number,
+  inputMuted = false,
+  capturedSamples = 1_000,
+): AudioUplinkHealth {
   return {
     version: 1,
     captureGeneration,
-    capturedSamples: 1_000,
+    capturedSamples,
     inputGapSamples: 0,
     inputMuted,
     capture: null,
@@ -89,6 +93,37 @@ test('product uplink health expires after the existing health authority window',
   assert.equal(mic.uplinkHealthPayload(4_201)?.reportAgeMs, 4_001);
   assert.equal(mic.uplinkHealthPayload(4_201)?.transport.mediaRecoveryDegraded, true);
   assert.equal(mic.freshUplinkHealthPayload(4_201), null);
+});
+
+test('unmute health cannot reuse muted-period frame freshness as live Mic evidence', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 31,
+    audioPacketVersion: 2,
+    nowMs: 1_000,
+  });
+
+  mic.noteFrame(1_100);
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(31, true, 2_000), 1_110), true);
+  assert.equal(mic.streaming(1_120), false);
+
+  // A muted track can keep producing zero PCM, so transport/frame freshness
+  // may remain current while explicit track authority is fail-closed.
+  mic.noteFrame(1_130);
+  assert.equal(mic.streaming(1_140), false);
+
+  // The browser reports the source cursor at the unmute boundary. Merely
+  // clearing inputMuted must not resurrect the last muted zero frame as live
+  // microphone evidence; a post-boundary frame has to arrive first.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(31, false, 3_000), 1_150), true);
+  assert.equal(
+    mic.streaming(1_151),
+    false,
+    'unmute requires new PCM beyond the browser-reported capture cursor',
+  );
 });
 
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {

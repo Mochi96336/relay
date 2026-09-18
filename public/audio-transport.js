@@ -204,6 +204,7 @@ export class PreferredAudioTransport extends AudioTransport {
     datagramPacketBytesCeiling = DEFAULT_DATAGRAM_PACKET_BYTES_CEILING,
     datagramQueuePackets = DEFAULT_DATAGRAM_QUEUE_PACKETS,
     datagramWriteTimeoutMs = DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS,
+    holdMediaUntilPreference = false,
     WebTransportClass = globalThis.WebTransport,
     nowMs = monotonicNowMs,
   } = {}) {
@@ -223,6 +224,9 @@ export class PreferredAudioTransport extends AudioTransport {
     if (!Number.isFinite(datagramWriteTimeoutMs) || datagramWriteTimeoutMs <= 0) {
       throw new RangeError('datagramWriteTimeoutMs must be positive');
     }
+    if (typeof holdMediaUntilPreference !== 'boolean') {
+      throw new TypeError('holdMediaUntilPreference must be boolean');
+    }
     if (typeof nowMs !== 'function') {
       throw new TypeError('nowMs must be a function');
     }
@@ -231,6 +235,11 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.datagramQueuePackets = datagramQueuePackets;
     this.datagramWriteTimeoutMs = datagramWriteTimeoutMs;
+    this.holdMediaUntilPreference = holdMediaUntilPreference;
+    // Phone publisher capture starts before Relay's registered/media offer can
+    // return. In opt-in mode, preserve the sample timeline but do not let that
+    // negotiation window leak PCM onto WebSocket before the first path choice.
+    this.initialPreferenceResolved = !holdMediaUntilPreference;
     this.nowMs = nowMs;
     this.outstandingDatagramWrites = 0;
     this.pendingDatagramWrites = new Map();
@@ -541,14 +550,17 @@ export class PreferredAudioTransport extends AudioTransport {
   async prefer(offer) {
     if (this.mediaPathRecovery.quarantineWebTransport()) {
       this.closeWebTransport();
+      this.initialPreferenceResolved = true;
       return false;
     }
     if (!offer || offer.preferred !== 'webtransport' || !offer.url) {
       this.closeWebTransport();
+      this.initialPreferenceResolved = true;
       return false;
     }
     if (!this.WebTransportClass) {
       this.closeWebTransport();
+      this.initialPreferenceResolved = true;
       return false;
     }
     // A control WebSocket reconnect for the same capture re-advertises the
@@ -559,7 +571,10 @@ export class PreferredAudioTransport extends AudioTransport {
       this.datagramWriter
       && this.webTransport
       && this.preferredUrl === offer.url
-    ) return true;
+    ) {
+      this.initialPreferenceResolved = true;
+      return true;
+    }
 
     const generation = ++this.preferenceGeneration;
     this.closeWebTransport(false);
@@ -588,6 +603,7 @@ export class PreferredAudioTransport extends AudioTransport {
       const maxPacketBytes = Number(transport.datagrams?.maxDatagramSize);
       if (!Number.isInteger(maxPacketBytes) || maxPacketBytes < this.minimumPacketBytes) {
         try { transport.close(); } catch {}
+        if (generation === this.preferenceGeneration) this.initialPreferenceResolved = true;
         return false;
       }
 
@@ -619,6 +635,7 @@ export class PreferredAudioTransport extends AudioTransport {
       this.lastWebTransportMaxPacketBytes = maxPacketBytes;
       this.observeWebTransportPacketBudget(maxPacketBytes);
       this.telemetry.webTransportConnections += 1;
+      this.initialPreferenceResolved = true;
       Promise.resolve(transport.closed).then(
         () => this.demoteWebTransport(transport),
         () => this.demoteWebTransport(transport),
@@ -632,7 +649,10 @@ export class PreferredAudioTransport extends AudioTransport {
       if (transport && transport !== this.webTransport) {
         try { transport.close(); } catch {}
       }
-      if (generation === this.preferenceGeneration) this.demoteWebTransport();
+      if (generation === this.preferenceGeneration) {
+        this.demoteWebTransport();
+        this.initialPreferenceResolved = true;
+      }
       return false;
     }
   }
@@ -679,6 +699,7 @@ export class PreferredAudioTransport extends AudioTransport {
 
   close() {
     this.detachPublisherSocketListener();
+    this.initialPreferenceResolved = !this.holdMediaUntilPreference;
     this.publisherSocketEpoch += 1;
     this.mediaPathRecovery.reset();
     this.pendingPublisherHealth = [];
@@ -688,6 +709,17 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   send(packet) {
+    if (!this.initialPreferenceResolved && !this.datagramWriter) {
+      return {
+        ready: false,
+        sent: false,
+        reason: 'disconnected',
+        bufferedAmount: 0,
+        maxPacketBytes: this.fallback.maxPacketBytes(),
+        path: 'websocket',
+      };
+    }
+
     if (this.demoteStalledWebTransport()) {
       const result = this.fallback.send(packet);
       this.recordFallbackResult(result);

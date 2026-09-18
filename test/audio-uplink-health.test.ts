@@ -65,6 +65,24 @@ describe('audio uplink health', () => {
     assert.deepEqual(health.captureLevel, { peakDbfs: -18, rmsDbfs: -31 });
   });
 
+  it('keeps missing legacy inputMuted compatible but rejects malformed supplied values', () => {
+    const legacy: any = validHealth();
+    delete legacy.inputMuted;
+    const parsedLegacy = parseAudioUplinkHealth(legacy);
+    assert.ok(parsedLegacy);
+    assert.equal(parsedLegacy.inputMuted, false);
+
+    for (const inputMuted of ['false', 'true', 0, 1, null, {}, []]) {
+      const malformed: any = validHealth();
+      malformed.inputMuted = inputMuted;
+      assert.equal(
+        parseAudioUplinkHealth(malformed),
+        null,
+        `supplied inputMuted must be boolean, got ${JSON.stringify(inputMuted)}`,
+      );
+    }
+  });
+
   it('preserves an optional uint32 health request correlation token', () => {
     const input: any = validHealth();
     input.healthRequestId = 0xffff_ffff;

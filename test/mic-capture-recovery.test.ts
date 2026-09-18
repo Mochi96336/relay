@@ -218,6 +218,45 @@ test('failed physical graph replacement returns the rebuild budget', () => {
   assert.equal(watchdog.observe(snap(240, 1.24, 0)).rebuild, true);
 });
 
+test('old graph PCM cannot rearm the rebuild budget while replacement is in flight', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(
+    watchdog.noteInputGap(snap(1_070, 2.07, 51_456), { recovered: false }).rebuild,
+    true,
+  );
+  assert.equal(watchdog.status().rebuildRequested, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+
+  // rebuildPublisherCaptureGraph() starts from a Promise microtask. The old
+  // worklet can therefore queue a source-recovered event and one final real
+  // PCM chunk after the rebuild decision but before graph replacement runs.
+  watchdog.noteInputGap(snap(1_080, 2.08, 51_456), { recovered: true });
+  const oldGraphPcm = watchdog.observe(
+    snap(1_090, 2.09, 51_584),
+    { freshPcm: true },
+  );
+  assert.equal(
+    oldGraphPcm.recovered,
+    false,
+    'PCM from the graph being retired cannot prove its replacement recovered',
+  );
+  assert.equal(watchdog.status().rebuildRequested, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+
+  // Only PCM that arrives after the successful replacement has reset the
+  // recovery baseline may begin the next independent fault epoch.
+  watchdog.noteGraphRebuilt(snap(1_100, 2.10, 0));
+  assert.equal(watchdog.status().rebuildRequested, false);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+  assert.equal(
+    watchdog.observe(snap(1_120, 2.12, 128), { freshPcm: true }).recovered,
+    true,
+  );
+  assert.equal(watchdog.status().rebuildBudgetSpent, false);
+});
+
 test('foreground discontinuity cannot bypass a spent rebuild budget', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
   watchdog.start(snap(0, 1, 0));

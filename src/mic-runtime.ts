@@ -68,6 +68,8 @@ export class MicRuntime {
    */
   private postUnmuteSampleBarrier: number | null = null;
   private latestAcceptedFrameEndSample: number | null = null;
+  /** Highest browser capture cursor accepted for the current capture clock. */
+  private latestUplinkHealthCapturedSamples: number | null = null;
   /**
    * Monotonic accepted-PCM evidence for the current capture generation.
    *
@@ -278,6 +280,11 @@ export class MicRuntime {
       || socket.captureGeneration === undefined
       || health.captureGeneration !== socket.captureGeneration
     ) return false;
+    if (
+      this.latestUplinkHealthCapturedSamples !== null
+      && health.capturedSamples < this.latestUplinkHealthCapturedSamples
+    ) return false;
+
     const wasMuted = this.currentUplinkHealth?.inputMuted === true;
     if (wasMuted && health.inputMuted !== true) {
       const barrier = health.capturedSamples;
@@ -290,6 +297,7 @@ export class MicRuntime {
         ? null
         : barrier;
     }
+    this.latestUplinkHealthCapturedSamples = health.capturedSamples;
     this.currentUplinkHealth = health;
     this.currentUplinkHealthAt = nowMs;
     this.armUplinkHealthDeadline(socket, health.captureGeneration, 2);
@@ -372,6 +380,7 @@ export class MicRuntime {
     this.currentAcceptedFrameSerial = 0;
     this.postUnmuteSampleBarrier = null;
     this.latestAcceptedFrameEndSample = null;
+    this.latestUplinkHealthCapturedSamples = null;
     this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs;
   }
 

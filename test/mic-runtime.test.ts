@@ -185,6 +185,71 @@ test('post-unmute media arriving before control health can satisfy the same samp
   assert.equal(mic.streaming(2_031), true);
 });
 
+test('same-generation uplink health cannot move capturedSamples backward', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 33,
+    audioPacketVersion: 2,
+    nowMs: 3_000,
+  });
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(33, true, 4_000), 3_010),
+    true,
+  );
+  assert.equal(mic.uplinkHealthPayload(3_011)?.capturedSamples, 4_000);
+
+  // captureSampleCursor is monotonic inside one capture generation. Accepting
+  // a lower cursor would let a malformed/stale unmute report shrink the
+  // post-unmute source barrier and reclassify muted-period PCM as live.
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(33, false, 3_000), 3_020),
+    false,
+  );
+  assert.equal(mic.uplinkHealthPayload(3_021)?.capturedSamples, 4_000);
+  assert.equal(mic.uplinkHealthPayload(3_021)?.inputMuted, true);
+
+  assert.equal(mic.detachPublisher(publisher), true);
+  const reconnect = socket('participant-alice');
+  const sameCapture = mic.bindPublisher({
+    socket: reconnect,
+    sampleRate: 48_000,
+    captureGeneration: 33,
+    audioPacketVersion: 2,
+    nowMs: 3_030,
+  });
+  assert.equal(sameCapture.sameCapture, true);
+  assert.equal(
+    mic.noteUplinkHealth(reconnect, uplinkHealth(33, true, 3_500), 3_040),
+    false,
+    'same-capture control reconnect cannot reset the accepted cursor frontier',
+  );
+  assert.equal(
+    mic.noteUplinkHealth(reconnect, uplinkHealth(33, true, 4_000), 3_050),
+    true,
+    'equal cursor remains a valid idempotent health observation',
+  );
+
+  const replacement = socket('participant-alice');
+  const newCapture = mic.bindPublisher({
+    socket: replacement,
+    sampleRate: 48_000,
+    captureGeneration: 34,
+    audioPacketVersion: 2,
+    nowMs: 3_060,
+  });
+  assert.equal(newCapture.captureReplaced, true);
+  assert.equal(
+    mic.noteUplinkHealth(replacement, uplinkHealth(34, false, 128), 3_070),
+    true,
+    'a genuinely new capture generation owns a new cursor origin',
+  );
+  assert.equal(mic.uplinkHealthPayload(3_071)?.capturedSamples, 128);
+});
+
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {
   const { mic } = runtime();
   const first = socket('participant-alice');

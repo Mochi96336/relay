@@ -121,10 +121,11 @@ export class MicCaptureRecoveryWatchdog {
   noteGraphRebuilt(snapshot) {
     if (!this.active) return;
     // The physical graph replacement completed, so the in-flight request is
-    // clear. Its action budget stays spent until fresh real PCM proves that
-    // replacement recovered capture; otherwise a permanent source failure
-    // could advance generations and reconnect forever.
+    // clear. Its action budget stays spent until fresh real PCM from this
+    // replacement graph proves recovery; otherwise old-graph PCM racing the
+    // replacement could accidentally rearm another generation advance.
     this.rebuildRequested = false;
+    this.rebuildBudgetSpent = true;
     // input-gap evidence is graph-scoped. A replacement worklet starts a new
     // observation generation and must earn recovery from its own fresh PCM.
     this.inputGapActive = false;
@@ -192,6 +193,9 @@ export class MicCaptureRecoveryWatchdog {
     if (
       this.recovering
       && !this.inputGapActive
+      // A rebuild decision schedules graph replacement asynchronously. PCM
+      // from the graph being retired is not evidence about its replacement.
+      && !this.rebuildRequested
       && freshPcm
       && current.contextTime > this.recoveryContextTime
       && current.sampleCursor > this.recoverySampleCursor

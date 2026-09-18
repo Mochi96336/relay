@@ -34,8 +34,14 @@ test('background foreground without sample progress becomes a capture discontinu
 
   const foreground = watchdog.noteForeground(snap(500, 1.1, 256, 'running', true));
   assert.equal(foreground.discontinuity, true);
-  assert.equal(watchdog.observe(snap(510, 1.11, 256)).recovered, false);
-  assert.equal(watchdog.observe(snap(520, 1.12, 384), { freshPcm: true }).recovered, true);
+  assert.equal(foreground.rebuild, true);
+
+  // app.js consumes the rebuild decision and starts a new capture generation.
+  // Old-generation PCM cannot recover it; only fresh PCM from the installed
+  // replacement graph may close this fault epoch.
+  watchdog.noteGraphRebuilt(snap(505, 1.1, 0));
+  assert.equal(watchdog.observe(snap(510, 1.11, 0)).recovered, false);
+  assert.equal(watchdog.observe(snap(520, 1.12, 128), { freshPcm: true }).recovered, true);
 });
 
 test('background partial progress followed by a long stall becomes a capture discontinuity', () => {
@@ -73,6 +79,7 @@ test('foreground immediately rebuilds a sustained input gap already proven while
   // for another 400 render-quanta gap report.
   const foreground = watchdog.noteForeground(snap(1_170, 2.17, 56_256, 'running', true));
   assert.equal(foreground.discontinuity, true);
+  assert.equal(foreground.rebuild, true);
 });
 
 test('background capture that keeps producing fresh PCM stays on the same generation', () => {
@@ -157,6 +164,167 @@ test('graph rebuild requires fresh PCM before recovery is accepted', () => {
   assert.equal(watchdog.status().rebuildRequested, false);
   assert.equal(watchdog.observe(snap(140, 1.14, 0)).recovered, false);
   assert.equal(watchdog.observe(snap(150, 1.15, 128), { freshPcm: true }).recovered, true);
+});
+
+test('replacement graph cannot spend another rebuild before fresh PCM proves recovery', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  const firstGap = watchdog.noteInputGap(
+    snap(1_070, 2.07, 51_456),
+    { recovered: false },
+  );
+  assert.equal(firstGap.rebuild, true);
+
+  // The action succeeded in replacing the graph, but the replacement has not
+  // produced any real microphone PCM yet.
+  watchdog.noteGraphRebuilt(snap(1_080, 2.08, 0));
+
+  // A permanently broken source can make the replacement worklet prove the
+  // same sustained gap again. Bounded recovery must not turn that into an
+  // unbounded generation/reconnect loop.
+  const secondGap = watchdog.noteInputGap(
+    snap(2_150, 3.15, 51_456),
+    { recovered: false },
+  );
+  assert.equal(
+    secondGap.rebuild,
+    false,
+    'a successful graph replacement must spend the rebuild budget until fresh PCM recovers',
+  );
+});
+
+test('replacement graph cannot repeat a generic PCM-stall rebuild before fresh PCM', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(watchdog.observe(snap(120, 1.12, 0)).rebuild, true);
+  watchdog.noteGraphRebuilt(snap(130, 1.13, 0));
+
+  const repeated = watchdog.observe(snap(260, 1.26, 0));
+  assert.equal(
+    repeated.rebuild,
+    false,
+    'cursor-stall recovery must share the same spent cross-graph action budget',
+  );
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+});
+
+test('app rebuild failure terminates the damaged Mic session instead of retrying the graph', () => {
+  const start = app.indexOf('function rebuildPublisherCaptureGraph(reason)');
+  const end = app.indexOf('async function stop(', start);
+  assert.ok(start >= 0 && end > start);
+  const rebuild = app.slice(start, end);
+  assert.match(
+    rebuild,
+    /finishMicrophoneSession\('capture-rebuild-failed', \{[\s\S]*releaseMic: true/,
+  );
+  assert.doesNotMatch(rebuild, /noteGraphRebuildFailed|rearmRebuild/);
+  assert.match(rebuild, /Press Microphone again to start a new capture session/);
+
+  const stopStart = app.indexOf('async function stop(');
+  const stopEnd = app.indexOf('async function startPublisher', stopStart);
+  assert.ok(stopStart >= 0 && stopEnd > stopStart);
+  const stop = app.slice(stopStart, stopEnd);
+  assert.match(stop, /const stoppedEpoch = \+\+publisherSessionEpoch/);
+  assert.match(stop, /micCaptureRecovery\.stop\(\)/);
+});
+
+test('old graph PCM cannot rearm the rebuild budget while replacement is in flight', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(
+    watchdog.noteInputGap(snap(1_070, 2.07, 51_456), { recovered: false }).rebuild,
+    true,
+  );
+  assert.equal(watchdog.status().rebuildRequested, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+
+  // rebuildPublisherCaptureGraph() starts from a Promise microtask. The old
+  // worklet can therefore queue a source-recovered event and one final real
+  // PCM chunk after the rebuild decision but before graph replacement runs.
+  watchdog.noteInputGap(snap(1_080, 2.08, 51_456), { recovered: true });
+  const oldGraphPcm = watchdog.observe(
+    snap(1_090, 2.09, 51_584),
+    { freshPcm: true },
+  );
+  assert.equal(
+    oldGraphPcm.recovered,
+    false,
+    'PCM from the graph being retired cannot prove its replacement recovered',
+  );
+  assert.equal(watchdog.status().rebuildRequested, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+
+  // Only PCM that arrives after the successful replacement has reset the
+  // recovery baseline may begin the next independent fault epoch.
+  watchdog.noteGraphRebuilt(snap(1_100, 2.10, 0));
+  assert.equal(watchdog.status().rebuildRequested, false);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+  assert.equal(
+    watchdog.observe(snap(1_120, 2.12, 128), { freshPcm: true }).recovered,
+    true,
+  );
+  assert.equal(watchdog.status().rebuildBudgetSpent, false);
+});
+
+test('foreground discontinuity cannot bypass a spent rebuild budget', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(
+    watchdog.noteInputGap(snap(1_070, 2.07, 51_456), { recovered: false }).rebuild,
+    true,
+  );
+  watchdog.noteGraphRebuilt(snap(1_080, 2.08, 0));
+
+  watchdog.noteHidden(snap(1_100, 2.10, 0, 'running', false));
+  watchdog.noteInputGap(
+    snap(2_170, 3.17, 51_456, 'running', false),
+    { recovered: false },
+  );
+  const foreground = watchdog.noteForeground(
+    snap(2_270, 3.27, 56_256, 'running', true),
+  );
+
+  assert.equal(foreground.discontinuity, true);
+  assert.equal(
+    foreground.rebuild,
+    false,
+    'foreground recovery must consume the same bounded rebuild authority',
+  );
+});
+
+test('fresh PCM recovery rearms one future graph rebuild budget', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
+  watchdog.start(snap(0, 1, 0));
+
+  assert.equal(
+    watchdog.noteInputGap(snap(1_070, 2.07, 51_456), { recovered: false }).rebuild,
+    true,
+  );
+  watchdog.noteGraphRebuilt(snap(1_080, 2.08, 0));
+
+  // Real PCM from the replacement graph proves recovery and begins a new fault
+  // epoch. A later independent sustained gap may then spend one rebuild again.
+  assert.equal(
+    watchdog.observe(snap(1_100, 2.10, 128), { freshPcm: true }).recovered,
+    true,
+  );
+  assert.equal(
+    watchdog.noteInputGap(snap(2_170, 3.17, 51_584), { recovered: false }).rebuild,
+    true,
+  );
+});
+
+test('foreground recovery consumes the watchdog rebuild decision instead of bypassing its budget', () => {
+  const start = app.indexOf('function recoverPublisherAudio()');
+  const end = app.indexOf('function schedulePublisherReconnect', start);
+  assert.ok(start >= 0 && end > start);
+  const foreground = app.slice(start, end);
+  assert.match(foreground, /if \(foreground\.rebuild\) void rebuildPublisherCaptureGraph\('foreground-discontinuity'\)/);
+  assert.doesNotMatch(foreground, /if \(foreground\.discontinuity\) void rebuildPublisherCaptureGraph/);
 });
 
 test('socket reconnect cannot count as capture recovery evidence', () => {

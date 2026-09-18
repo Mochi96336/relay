@@ -31,9 +31,8 @@ export class MicCaptureRecoveryWatchdog {
   stop(): void;
   beginRecovery(snapshot: MicCaptureSnapshot, reason?: string): void;
   noteHidden(snapshot: MicCaptureSnapshot): void;
-  noteForeground(snapshot: MicCaptureSnapshot): { discontinuity: boolean };
+  noteForeground(snapshot: MicCaptureSnapshot): { discontinuity: boolean; rebuild: boolean };
   noteGraphRebuilt(snapshot: MicCaptureSnapshot): void;
-  rearmRebuild(): void;
   noteInputGap(
     snapshot: MicCaptureSnapshot,
     options?: { recovered?: boolean },
@@ -43,6 +42,7 @@ export class MicCaptureRecoveryWatchdog {
     recovering: boolean;
     recoveryReason: string | null;
     rebuildRequested: boolean;
+    rebuildBudgetSpent: boolean;
     inputGapActive: boolean;
   };
   observe(

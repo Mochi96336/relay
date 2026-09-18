@@ -1166,7 +1166,7 @@ function recoverPublisherAudio() {
     'Foregrounded; waiting for the audio clock and fresh microphone samples.',
   );
   resumePublisherAudioContext();
-  if (foreground.discontinuity) void rebuildPublisherCaptureGraph('foreground-discontinuity');
+  if (foreground.rebuild) void rebuildPublisherCaptureGraph('foreground-discontinuity');
 }
 
 function schedulePublisherReconnect(
@@ -1322,10 +1322,16 @@ function rebuildPublisherCaptureGraph(reason) {
     return true;
   }).catch((error) => {
     console.warn('Microphone capture graph rebuild failed', error);
-    micCaptureRecovery.rearmRebuild();
     if (isCurrentPublisherSession(sessionEpoch)) {
-      startCaptureWatchdog(sessionEpoch, captureGeneration >>> 0);
-      setStatus('Recovering microphone…', 'Capture graph rebuild failed; retrying from live evidence.');
+      void finishMicrophoneSession('capture-rebuild-failed', {
+        releaseMic: true,
+        afterEnded: () => {
+          setStatus(
+            'Microphone stopped',
+            'Capture recovery failed. Press Microphone again to start a new capture session.',
+          );
+        },
+      }).catch(console.error);
     }
     return false;
   }).finally(() => {

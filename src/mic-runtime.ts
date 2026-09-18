@@ -67,6 +67,7 @@ export class MicRuntime {
    * post-unmute live flow.
    */
   private postUnmuteSampleBarrier: number | null = null;
+  private latestAcceptedFrameEndSample: number | null = null;
   /**
    * Monotonic accepted-PCM evidence for the current capture generation.
    *
@@ -279,7 +280,15 @@ export class MicRuntime {
     ) return false;
     const wasMuted = this.currentUplinkHealth?.inputMuted === true;
     if (wasMuted && health.inputMuted !== true) {
-      this.postUnmuteSampleBarrier = health.capturedSamples;
+      const barrier = health.capturedSamples;
+      // WebTransport media may beat the control WebSocket health message to
+      // Relay. A frame already accepted beyond the browser's unmute cursor is
+      // valid post-unmute evidence; otherwise retain the cursor as a barrier
+      // for late muted-period frames arriving after control.
+      this.postUnmuteSampleBarrier = this.latestAcceptedFrameEndSample !== null
+        && this.latestAcceptedFrameEndSample > barrier
+        ? null
+        : barrier;
     }
     this.currentUplinkHealth = health;
     this.currentUplinkHealthAt = nowMs;
@@ -362,6 +371,7 @@ export class MicRuntime {
     this.lastFrameGeneration = this.currentMediaGeneration;
     this.currentAcceptedFrameSerial = 0;
     this.postUnmuteSampleBarrier = null;
+    this.latestAcceptedFrameEndSample = null;
     this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs;
   }
 
@@ -372,18 +382,25 @@ export class MicRuntime {
       this.currentAcceptedFrameSerial += 1;
     }
 
-    const barrier = this.postUnmuteSampleBarrier;
-    if (barrier !== null) {
-      const firstSampleIndex = frame?.firstSampleIndex;
-      const sourceSampleCount = frame ? Math.floor(frame.pcm.byteLength / 2) : 0;
-      const frameEnd = firstSampleIndex === null || firstSampleIndex === undefined
-        ? null
-        : firstSampleIndex + sourceSampleCount;
-      if (frameEnd === null || !Number.isFinite(frameEnd) || frameEnd <= barrier) {
-        return;
-      }
-      this.postUnmuteSampleBarrier = null;
+    const firstSampleIndex = frame?.firstSampleIndex;
+    const sourceSampleCount = frame ? Math.floor(frame.pcm.byteLength / 2) : 0;
+    const frameEnd = firstSampleIndex === null || firstSampleIndex === undefined
+      ? null
+      : firstSampleIndex + sourceSampleCount;
+    if (frameEnd !== null && Number.isFinite(frameEnd)) {
+      this.latestAcceptedFrameEndSample = this.latestAcceptedFrameEndSample === null
+        ? frameEnd
+        : Math.max(this.latestAcceptedFrameEndSample, frameEnd);
     }
+
+    const barrier = this.postUnmuteSampleBarrier;
+    if (
+      barrier !== null
+      && (frameEnd === null || !Number.isFinite(frameEnd) || frameEnd <= barrier)
+    ) {
+      return;
+    }
+    if (barrier !== null) this.postUnmuteSampleBarrier = null;
 
     this.lastFrameAt = nowMs;
     this.lastFrameOwnerId = this.currentMediaOwnerId;

@@ -14,6 +14,40 @@ function pcm(ms = 40) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
 
+function uplinkHealth(captureGeneration: number, capturedSamples: number) {
+  return {
+    type: 'audio-uplink-health',
+    version: 1,
+    captureGeneration,
+    capturedSamples,
+    inputGapSamples: 0,
+    inputMuted: false,
+    capture: null,
+    captureLevel: null,
+    droppedSamples: { total: 0, disconnected: 0, congested: 0, packetTooLarge: 0 },
+    controlReconnects: 0,
+    transport: {
+      path: 'websocket',
+      maxPacketBytes: null,
+      minWebTransportMaxPacketBytes: null,
+      maxWebTransportMaxPacketBytes: null,
+      datagramPacketBytesCeiling: null,
+      datagramQueuePackets: null,
+      webTransportAttempts: 0,
+      webTransportConnections: 0,
+      webTransportDemotions: 0,
+      webTransportPacketsSubmitted: 0,
+      webTransportCongestedRejects: 0,
+      webTransportPacketTooLargeRejects: 0,
+      webTransportSendFailures: 0,
+      webSocketPacketsSent: 1,
+      webSocketCongestedRejects: 0,
+      webSocketDisconnectedRejects: 0,
+      webSocketSendFailures: 0,
+    },
+  };
+}
+
 function evidence(captureGeneration: number) {
   return {
     type: 'mic-presence-telemetry',
@@ -42,7 +76,9 @@ test('only the authoritative singer and current capture generation can relay tru
       audioPacketVersion: 2,
     });
     await singerMedia.waitForType('registered');
-    singerMedia.sendAudioPacket(pcm());
+    const firstPcm = pcm();
+    singerMedia.sendAudioPacket(firstPcm);
+    singerMedia.send(uplinkHealth(singerMedia.generationId, firstPcm.byteLength / 2));
     await sleep(60);
 
     const beforeForgery = observer.messages.length;

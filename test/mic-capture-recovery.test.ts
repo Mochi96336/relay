@@ -223,9 +223,10 @@ test('app rebuild failure terminates the damaged Mic session instead of retrying
   assert.match(rebuild, /Press Microphone again to start a new capture session/);
 
   const stopStart = app.indexOf('async function stop(');
-  const stopEnd = app.indexOf('function finishMicrophoneSession', stopStart);
+  const stopEnd = app.indexOf('async function startPublisher', stopStart);
   assert.ok(stopStart >= 0 && stopEnd > stopStart);
   const stop = app.slice(stopStart, stopEnd);
+  assert.match(stop, /const stoppedEpoch = \+\+publisherSessionEpoch/);
   assert.match(stop, /micCaptureRecovery\.stop\(\)/);
 });
 

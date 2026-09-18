@@ -27,7 +27,7 @@ test('server delegates AudioSession capture-clock restarts before consuming new 
     block,
     /const \{ samples, start, captureRestarted \} = session\.ingestMic\(\s*frame,\s*micRuntime\.sampleRate,\s*nowMs,\s*\);/,
   );
-  assert.match(block, /if \(samples\.length > 0\) noteMicFrame\(nowMs\);/);
+  assert.match(block, /if \(samples\.length > 0\) noteMicFrame\(nowMs, frame\);/);
   assert.match(
     block,
     /micCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);/,
@@ -42,7 +42,7 @@ test('server delegates AudioSession capture-clock restarts before consuming new 
   assert.doesNotMatch(restartBlock, /broadcastJson\(|(?:^|[^.])syncAppliedCalibration\(/m);
 
   const ingest = block.indexOf('session.ingestMic(');
-  const noteFlow = block.indexOf('if (samples.length > 0) noteMicFrame(nowMs);');
+  const noteFlow = block.indexOf('if (samples.length > 0) noteMicFrame(nowMs, frame);');
   const restart = block.indexOf('micCaptureRestartCoordinator.restart({');
   assert.ok(ingest >= 0 && noteFlow > ingest, 'flow freshness must require accepted PCM progress');
   assert.ok(restart > noteFlow, 'capture restart effects must follow ingest and flow classification');

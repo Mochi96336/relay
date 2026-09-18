@@ -414,8 +414,8 @@ const micTransportGrace = new MicTransportGraceRuntime({
   onExpired: expireMicTransportGrace,
 });
 
-function noteMicFrame(nowMs: number) {
-  micRuntime.noteFrame(nowMs);
+function noteMicFrame(nowMs: number, frame: PcmFrame) {
+  micRuntime.noteFrame(nowMs, frame);
 }
 
 function micFlowObserved() {
@@ -1944,7 +1944,7 @@ function processPublisherFrame(frame: PcmFrame) {
       micRuntime.sampleRate,
       nowMs,
     );
-    if (samples.length > 0) noteMicFrame(nowMs);
+    if (samples.length > 0) noteMicFrame(nowMs, frame);
 
     if (session.active) {
       if (captureRestarted) {

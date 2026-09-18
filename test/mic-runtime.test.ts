@@ -18,11 +18,15 @@ function socket(participantId: string): RelaySocket {
   } as RelaySocket;
 }
 
-function uplinkHealth(captureGeneration: number, inputMuted = false): AudioUplinkHealth {
+function uplinkHealth(
+  captureGeneration: number,
+  inputMuted = false,
+  capturedSamples = 1_000,
+): AudioUplinkHealth {
   return {
     version: 1,
     captureGeneration,
-    capturedSamples: 1_000,
+    capturedSamples,
     inputGapSamples: 0,
     inputMuted,
     capture: null,
@@ -89,6 +93,96 @@ test('product uplink health expires after the existing health authority window',
   assert.equal(mic.uplinkHealthPayload(4_201)?.reportAgeMs, 4_001);
   assert.equal(mic.uplinkHealthPayload(4_201)?.transport.mediaRecoveryDegraded, true);
   assert.equal(mic.freshUplinkHealthPayload(4_201), null);
+});
+
+test('unmute health cannot reuse muted-period frame freshness as live Mic evidence', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 31,
+    audioPacketVersion: 2,
+    nowMs: 1_000,
+  });
+
+  mic.noteFrame(1_100);
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(31, true, 2_000), 1_110), true);
+  assert.equal(mic.streaming(1_120), false);
+
+  // A muted track can keep producing zero PCM, so transport/frame freshness
+  // may remain current while explicit track authority is fail-closed.
+  mic.noteFrame(1_130);
+  assert.equal(mic.streaming(1_140), false);
+
+  // The browser reports the source cursor at the unmute boundary. Merely
+  // clearing inputMuted must not resurrect the last muted zero frame as live
+  // microphone evidence; a post-boundary frame has to arrive first.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(31, false, 3_000), 1_150), true);
+  assert.equal(
+    mic.streaming(1_151),
+    false,
+    'unmute requires new PCM beyond the browser-reported capture cursor',
+  );
+
+  const serialAtBoundary = mic.acceptedFrameSerial;
+  mic.noteFrame(1_160, {
+    generation: 31,
+    firstSampleIndex: 2_500,
+    pcm: Buffer.alloc(400 * 2),
+  });
+  assert.equal(
+    mic.acceptedFrameSerial,
+    serialAtBoundary + 1,
+    'delayed muted PCM is still accepted intake evidence',
+  );
+  assert.equal(
+    mic.streaming(1_161),
+    false,
+    'a delayed frame ending before the unmute cursor cannot clear the barrier',
+  );
+
+  mic.noteFrame(1_170, {
+    generation: 31,
+    firstSampleIndex: 3_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(1_171),
+    true,
+    'the first accepted frame extending beyond the unmute cursor restores live flow',
+  );
+});
+
+test('post-unmute media arriving before control health can satisfy the same sample barrier', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 32,
+    audioPacketVersion: 2,
+    nowMs: 2_000,
+  });
+
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(32, true, 2_000), 2_010), true);
+
+  // The browser sent its unmute health at source cursor 3_000, but native
+  // WebTransport can deliver later source PCM before that control message
+  // reaches Relay. While the last received health still says muted, streaming
+  // remains fail-closed.
+  mic.noteFrame(2_020, {
+    generation: 32,
+    firstSampleIndex: 3_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.streaming(2_021), false);
+
+  // Once the delayed control health arrives, the already-accepted frame end
+  // (3_128) proves PCM beyond the unmute cursor (3_000), so no second frame is
+  // required merely because media/control took different network paths.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(32, false, 3_000), 2_030), true);
+  assert.equal(mic.streaming(2_031), true);
 });
 
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {

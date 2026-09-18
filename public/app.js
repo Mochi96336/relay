@@ -1322,10 +1322,13 @@ function rebuildPublisherCaptureGraph(reason) {
     return true;
   }).catch((error) => {
     console.warn('Microphone capture graph rebuild failed', error);
-    micCaptureRecovery.rearmRebuild();
+    micCaptureRecovery.noteGraphRebuildFailed();
     if (isCurrentPublisherSession(sessionEpoch)) {
       startCaptureWatchdog(sessionEpoch, captureGeneration >>> 0);
-      setStatus('Recovering microphone…', 'Capture graph rebuild failed; retrying from live evidence.');
+      setStatus(
+        'Microphone recovery stopped',
+        'Capture graph replacement failed. Release and take the microphone again to start a new capture session.',
+      );
     }
     return false;
   }).finally(() => {

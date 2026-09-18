@@ -33,7 +33,7 @@ export class MicCaptureRecoveryWatchdog {
   noteHidden(snapshot: MicCaptureSnapshot): void;
   noteForeground(snapshot: MicCaptureSnapshot): { discontinuity: boolean; rebuild: boolean };
   noteGraphRebuilt(snapshot: MicCaptureSnapshot): void;
-  rearmRebuild(): void;
+  noteGraphRebuildFailed(): void;
   noteInputGap(
     snapshot: MicCaptureSnapshot,
     options?: { recovered?: boolean },

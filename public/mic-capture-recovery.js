@@ -132,11 +132,11 @@ export class MicCaptureRecoveryWatchdog {
     this.beginRecovery(snapshot, 'graph-rebuild');
   }
 
-  rearmRebuild() {
-    // The graph replacement itself failed, so no recovery action was actually
-    // completed. Return both the in-flight fence and its budget.
+  noteGraphRebuildFailed() {
+    // The destructive replacement attempt already spent this fault epoch's
+    // action budget. Clear only the in-flight fence: returning the budget here
+    // would allow a persistent graph-construction failure to churn generations.
     this.rebuildRequested = false;
-    this.rebuildBudgetSpent = false;
   }
 
   noteInputGap(snapshot, { recovered = false } = {}) {

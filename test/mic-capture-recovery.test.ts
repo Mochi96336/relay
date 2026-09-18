@@ -204,18 +204,32 @@ test('replacement graph cannot repeat a generic PCM-stall rebuild before fresh P
   assert.equal(watchdog.status().rebuildBudgetSpent, true);
 });
 
-test('failed physical graph replacement returns the rebuild budget', () => {
+test('failed physical graph replacement clears in-flight state but keeps the fault budget spent', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
   watchdog.start(snap(0, 1, 0));
 
   assert.equal(watchdog.observe(snap(120, 1.12, 0)).rebuild, true);
+  assert.equal(watchdog.status().rebuildRequested, true);
   assert.equal(watchdog.status().rebuildBudgetSpent, true);
 
-  // app.js calls this only from rebuildPublisherCaptureGraph()'s failure path:
-  // no replacement graph was successfully installed, so retry authority is safe.
-  watchdog.rearmRebuild();
-  assert.equal(watchdog.status().rebuildBudgetSpent, false);
-  assert.equal(watchdog.observe(snap(240, 1.24, 0)).rebuild, true);
+  watchdog.noteGraphRebuildFailed();
+  assert.equal(watchdog.status().rebuildRequested, false);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+  assert.equal(
+    watchdog.observe(snap(240, 1.24, 0)).rebuild,
+    false,
+    'a persistent graph-construction failure must not churn capture generations',
+  );
+});
+
+test('app failure path preserves the spent rebuild budget and asks for a new Mic session', () => {
+  const start = app.indexOf('function rebuildPublisherCaptureGraph(reason)');
+  const end = app.indexOf('async function stop(', start);
+  assert.ok(start >= 0 && end > start);
+  const rebuild = app.slice(start, end);
+  assert.match(rebuild, /micCaptureRecovery\.noteGraphRebuildFailed\(\)/);
+  assert.doesNotMatch(rebuild, /rearmRebuild/);
+  assert.match(rebuild, /Release and take the microphone again/);
 });
 
 test('old graph PCM cannot rearm the rebuild budget while replacement is in flight', () => {

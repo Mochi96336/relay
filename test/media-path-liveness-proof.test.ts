@@ -364,6 +364,10 @@ test('fresh PCM cannot revive stale control authority', () => {
   assert.equal(command.status(staleAt).fresh, false, '#304 command authority expires without ACK progress');
   assert.equal(command.status(staleAt).reconnect, false);
 
+  // Source-state health is a separate v2 authority from command ACK liveness.
+  // Keep it current so this proof isolates stale command authority only.
+  assert.equal(mic.noteUplinkHealth(publisher.socket, health(30, 4), staleAt - 10), true);
+
   const freshPcm = acceptServerFrames(
     mic,
     session,
@@ -383,6 +387,11 @@ test('capture sample-clock failure is detectable before media transport freshnes
   const publisher = fakeSocket('participant-capture-independent');
   bind(mic, publisher.socket, 40, 0);
   acceptServerFrames(mic, session, mic.receivePublisher(publisher.socket, packet(40, 0, 0), 0), 0);
+  assert.equal(
+    mic.noteUplinkHealth(publisher.socket, health(40, 2), 0),
+    true,
+    'source-state health stays authoritative while the local capture clock stalls',
+  );
 
   const command = new PublisherCommandLiveness();
   command.begin(40, 0);

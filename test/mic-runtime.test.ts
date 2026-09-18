@@ -250,6 +250,89 @@ test('same-generation uplink health cannot move capturedSamples backward', () =>
   assert.equal(mic.uplinkHealthPayload(3_071)?.capturedSamples, 128);
 });
 
+test('direct media cannot keep Mic live after source health authority expires', () => {
+  const { mic, activeTickets } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 35,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(35, false, 1_000), 200),
+    true,
+  );
+  activeTickets.add('ticket-1');
+  assert.equal(mic.mediaPath(), 'webtransport');
+
+  // Direct media may bridge a short control outage while the last source-state
+  // report is still authoritative.
+  assert.equal(mic.detachPublisher(publisher), true);
+  mic.noteFrame(4_090, {
+    generation: 35,
+    firstSampleIndex: 1_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.freshUplinkHealthPayload(4_100)?.reportAgeMs, 3_900);
+  assert.equal(mic.streaming(4_100), true);
+
+  // Once health freshness expires, fresh PCM alone cannot prove that the
+  // browser track is not OS-muted. Old inputMuted=false must fail closed.
+  mic.noteFrame(4_202, {
+    generation: 35,
+    firstSampleIndex: 1_128,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.freshUplinkHealthPayload(4_202), null);
+  assert.equal(
+    mic.streaming(4_202),
+    false,
+    'stale source-state telemetry cannot authorize live Mic indefinitely',
+  );
+});
+
+test('v2 waits for current source health while legacy v1 remains PCM-only', () => {
+  const { mic } = runtime();
+  const v2 = socket('participant-alice');
+  mic.bindPublisher({
+    socket: v2,
+    sampleRate: 48_000,
+    captureGeneration: 36,
+    audioPacketVersion: 2,
+    nowMs: 5_000,
+  });
+
+  mic.noteFrame(5_100);
+  assert.equal(
+    mic.streaming(5_101),
+    false,
+    'v2 PCM cannot prove the browser source is unmuted before current health arrives',
+  );
+  assert.equal(
+    mic.noteUplinkHealth(v2, uplinkHealth(36, false, 128), 5_110),
+    true,
+  );
+  assert.equal(mic.streaming(5_111), true);
+
+  const legacy = socket('participant-alice');
+  mic.bindPublisher({
+    socket: legacy,
+    sampleRate: 48_000,
+    captureGeneration: null,
+    audioPacketVersion: 1,
+    nowMs: 6_000,
+  });
+  mic.noteFrame(6_100);
+  assert.equal(
+    mic.streaming(6_101),
+    true,
+    'legacy v1 keeps its existing PCM-only streaming contract',
+  );
+});
+
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {
   const { mic } = runtime();
   const first = socket('participant-alice');
@@ -470,12 +553,21 @@ test('flow evidence is fenced to the canonical media owner and generation', () =
   mic.noteFrame(4_100);
   assert.equal(mic.flowObserved(), true);
   assert.equal(mic.frameAgeMs(4_450), 350);
-  assert.equal(mic.streaming(4_999), true);
-  assert.equal(mic.streaming(5_100), false);
+  assert.equal(
+    mic.streaming(4_101),
+    false,
+    'v2 flow waits for current browser source-state health',
+  );
 
-  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(4, true), 4_200), true);
-  assert.equal(mic.streaming(4_300), false, 'browser mute telemetry suppresses streaming');
-  assert.equal(mic.uplinkHealthPayload(4_450)?.reportAgeMs, 250);
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(4, false), 4_110), true);
+  assert.equal(mic.streaming(4_150), true);
+  assert.equal(mic.streaming(5_100), false, 'stale PCM still fails independently of health');
+
+  mic.noteFrame(5_200);
+  assert.equal(mic.streaming(5_201), true);
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(4, true), 5_210), true);
+  assert.equal(mic.streaming(5_220), false, 'browser mute telemetry suppresses streaming');
+  assert.equal(mic.uplinkHealthPayload(5_460)?.reportAgeMs, 250);
 
   const wrongGeneration = uplinkHealth(3, false);
   assert.equal(mic.noteUplinkHealth(publisher, wrongGeneration, 4_500), false);

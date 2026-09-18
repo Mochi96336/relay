@@ -204,32 +204,23 @@ test('replacement graph cannot repeat a generic PCM-stall rebuild before fresh P
   assert.equal(watchdog.status().rebuildBudgetSpent, true);
 });
 
-test('failed physical graph replacement clears in-flight state but keeps the fault budget spent', () => {
-  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 100 });
-  watchdog.start(snap(0, 1, 0));
-
-  assert.equal(watchdog.observe(snap(120, 1.12, 0)).rebuild, true);
-  assert.equal(watchdog.status().rebuildRequested, true);
-  assert.equal(watchdog.status().rebuildBudgetSpent, true);
-
-  watchdog.noteGraphRebuildFailed();
-  assert.equal(watchdog.status().rebuildRequested, false);
-  assert.equal(watchdog.status().rebuildBudgetSpent, true);
-  assert.equal(
-    watchdog.observe(snap(240, 1.24, 0)).rebuild,
-    false,
-    'a persistent graph-construction failure must not churn capture generations',
-  );
-});
-
-test('app failure path preserves the spent rebuild budget and asks for a new Mic session', () => {
+test('app rebuild failure terminates the damaged Mic session instead of retrying the graph', () => {
   const start = app.indexOf('function rebuildPublisherCaptureGraph(reason)');
   const end = app.indexOf('async function stop(', start);
   assert.ok(start >= 0 && end > start);
   const rebuild = app.slice(start, end);
-  assert.match(rebuild, /micCaptureRecovery\.noteGraphRebuildFailed\(\)/);
-  assert.doesNotMatch(rebuild, /rearmRebuild/);
-  assert.match(rebuild, /Release and take the microphone again/);
+  assert.match(
+    rebuild,
+    /finishMicrophoneSession\('capture-rebuild-failed', \{[\s\S]*releaseMic: true/,
+  );
+  assert.doesNotMatch(rebuild, /noteGraphRebuildFailed|rearmRebuild/);
+  assert.match(rebuild, /Press Microphone again to start a new capture session/);
+
+  const stopStart = app.indexOf('async function stop(');
+  const stopEnd = app.indexOf('function finishMicrophoneSession', stopStart);
+  assert.ok(stopStart >= 0 && stopEnd > stopStart);
+  const stop = app.slice(stopStart, stopEnd);
+  assert.match(stop, /micCaptureRecovery\.stop\(\)/);
 });
 
 test('old graph PCM cannot rearm the rebuild budget while replacement is in flight', () => {

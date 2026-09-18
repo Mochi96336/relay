@@ -154,6 +154,37 @@ test('unmute health cannot reuse muted-period frame freshness as live Mic eviden
   );
 });
 
+test('post-unmute media arriving before control health can satisfy the same sample barrier', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 32,
+    audioPacketVersion: 2,
+    nowMs: 2_000,
+  });
+
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(32, true, 2_000), 2_010), true);
+
+  // The browser sent its unmute health at source cursor 3_000, but native
+  // WebTransport can deliver later source PCM before that control message
+  // reaches Relay. While the last received health still says muted, streaming
+  // remains fail-closed.
+  mic.noteFrame(2_020, {
+    generation: 32,
+    firstSampleIndex: 3_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.streaming(2_021), false);
+
+  // Once the delayed control health arrives, the already-accepted frame end
+  // (3_128) proves PCM beyond the unmute cursor (3_000), so no second frame is
+  // required merely because media/control took different network paths.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(32, false, 3_000), 2_030), true);
+  assert.equal(mic.streaming(2_031), true);
+});
+
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {
   const { mic } = runtime();
   const first = socket('participant-alice');

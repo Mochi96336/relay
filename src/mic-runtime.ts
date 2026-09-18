@@ -436,6 +436,14 @@ export class MicRuntime {
   streaming(nowMs: number) {
     return this.connected()
       && this.flowObserved()
+      // AudioPacket v2 makes browser source-state health mandatory from
+      // registration onward. Direct media may bridge control reconnects only
+      // while that last source-state report is still authoritative. Legacy v1
+      // never carried this health contract and retains its PCM-only behavior.
+      && (
+        this.currentAudioTransport?.packetVersion !== 2
+        || this.freshUplinkHealthPayload(nowMs) !== null
+      )
       && this.currentUplinkHealth?.inputMuted !== true
       && this.postUnmuteSampleBarrier === null
       && nowMs - this.lastFrameAt < this.options.streamLiveMs;

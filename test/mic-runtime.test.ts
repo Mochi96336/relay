@@ -250,6 +250,50 @@ test('same-generation uplink health cannot move capturedSamples backward', () =>
   assert.equal(mic.uplinkHealthPayload(3_071)?.capturedSamples, 128);
 });
 
+test('direct media cannot keep Mic live after source health authority expires', () => {
+  const { mic, activeTickets } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 35,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(35, false, 1_000), 200),
+    true,
+  );
+  activeTickets.add('ticket-1');
+  assert.equal(mic.mediaPath(), 'webtransport');
+
+  // Direct media may bridge a short control outage while the last source-state
+  // report is still authoritative.
+  assert.equal(mic.detachPublisher(publisher), true);
+  mic.noteFrame(4_090, {
+    generation: 35,
+    firstSampleIndex: 1_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.freshUplinkHealthPayload(4_100)?.reportAgeMs, 3_900);
+  assert.equal(mic.streaming(4_100), true);
+
+  // Once health freshness expires, fresh PCM alone cannot prove that the
+  // browser track is not OS-muted. Old inputMuted=false must fail closed.
+  mic.noteFrame(4_202, {
+    generation: 35,
+    firstSampleIndex: 1_128,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.freshUplinkHealthPayload(4_202), null);
+  assert.equal(
+    mic.streaming(4_202),
+    false,
+    'stale source-state telemetry cannot authorize live Mic indefinitely',
+  );
+});
+
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {
   const { mic } = runtime();
   const first = socket('participant-alice');

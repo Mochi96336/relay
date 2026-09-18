@@ -183,6 +183,48 @@ describe('browser AudioTransport', () => {
     assert.deepEqual(replacement.sent, ['live']);
   });
 
+  it('can hold startup media until the first transport preference resolves', async () => {
+    FakeWebTransport.instances.length = 0;
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({
+      holdMediaUntilPreference: true,
+      WebTransportClass: FakeWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+
+    const beforePreference = transport.send(new Uint8Array([1]).buffer);
+    assert.equal(beforePreference.sent, false);
+    assert.equal(beforePreference.reason, 'disconnected');
+    assert.deepEqual(socket.sent, [], 'startup PCM must not race onto WebSocket before media negotiation');
+
+    assert.equal(await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=startup-hold',
+    }), true);
+
+    const afterPreference = transport.send(new Uint8Array([2]).buffer);
+    await Promise.resolve();
+    assert.equal(afterPreference.sent, true);
+    assert.equal(afterPreference.path, 'webtransport');
+    assert.deepEqual(socket.sent, []);
+  });
+
+  it('releases startup hold to WebSocket when no preferred path is available', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({
+      holdMediaUntilPreference: true,
+      WebTransportClass: null,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+
+    assert.equal(transport.send('early').sent, false);
+    assert.equal(await transport.prefer(null), false);
+    assert.equal(transport.send('fallback').sent, true);
+    assert.deepEqual(socket.sent, ['fallback']);
+  });
+
   it('prefers one unreliable WebTransport datagram path without duplicating onto WebSocket', async () => {
     FakeWebTransport.instances.length = 0;
     const { PreferredAudioTransport } = await import(moduleUrl.href);

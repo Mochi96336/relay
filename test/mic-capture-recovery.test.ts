@@ -34,8 +34,14 @@ test('background foreground without sample progress becomes a capture discontinu
 
   const foreground = watchdog.noteForeground(snap(500, 1.1, 256, 'running', true));
   assert.equal(foreground.discontinuity, true);
-  assert.equal(watchdog.observe(snap(510, 1.11, 256)).recovered, false);
-  assert.equal(watchdog.observe(snap(520, 1.12, 384), { freshPcm: true }).recovered, true);
+  assert.equal(foreground.rebuild, true);
+
+  // app.js consumes the rebuild decision and starts a new capture generation.
+  // Old-generation PCM cannot recover it; only fresh PCM from the installed
+  // replacement graph may close this fault epoch.
+  watchdog.noteGraphRebuilt(snap(505, 1.1, 0));
+  assert.equal(watchdog.observe(snap(510, 1.11, 0)).recovered, false);
+  assert.equal(watchdog.observe(snap(520, 1.12, 128), { freshPcm: true }).recovered, true);
 });
 
 test('background partial progress followed by a long stall becomes a capture discontinuity', () => {

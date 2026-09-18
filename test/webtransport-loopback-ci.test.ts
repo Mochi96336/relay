@@ -15,5 +15,7 @@ test('real WebTransport loopback is a permanent CI boundary', () => {
   assert.match(ci, /npm run test:webtransport-loopback/);
   assert.match(loopback, /startWebTransportMediaServer/);
   assert.match(loopback, /length: 1200/);
-  assert.match(loopback, /packet\.byteLength, 1200/);
+  assert.match(loopback, /rawPacket\.byteLength, 1200/);
+  assert.match(loopback, /session\.ingestMic\(/);
+  assert.match(loopback, /if \(ingested\.samples\.length > 0\)/);
 });

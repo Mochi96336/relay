@@ -1,3 +1,5 @@
+import { MIC_CAPTURE_CHANGED_TIMING_REASON } from './relay-mic-timing-invalidation-coordinator.js';
+
 export type PublisherActivationRequest<TSocket, TOwnershipEffects> = {
   socket: TSocket;
   ownershipEffects: TOwnershipEffects | null;
@@ -13,6 +15,7 @@ type PublisherBindResult<TSocket> = {
   previousPublisher: TSocket | null;
   sameParticipantReplacement: boolean;
   sameCapture: boolean;
+  captureReplaced: boolean;
 };
 
 type PublisherActivationOptions<TSocket, TOwnershipEffects> = {
@@ -38,6 +41,8 @@ type PublisherActivationOptions<TSocket, TOwnershipEffects> = {
     nextPublisher: TSocket,
     sameParticipantReplacement: boolean,
   ): void;
+  /** Abort work that is scoped to the media capture the bind just replaced. */
+  retireReplacedCapture(): void;
   cancelTransportGrace(): void;
   setMicExpected(): void;
   sessionActive(): boolean;
@@ -83,7 +88,7 @@ export function createRelayPublisherActivationCoordinator<TSocket, TOwnershipEff
       const {
         previousPublisher,
         sameParticipantReplacement,
-        sameCapture,
+        captureReplaced,
       } = options.bindPublisher({
         socket: request.socket,
         sampleRate: request.sampleRate,
@@ -92,6 +97,11 @@ export function createRelayPublisherActivationCoordinator<TSocket, TOwnershipEff
         audioPacketVersion: request.audioPacketVersion,
         nowMs: options.now(),
       });
+
+      // bindPublisher is the canonical point where media authority changes.
+      // Retire capture-scoped async work in the same synchronous call stack,
+      // before an old worker completion can be observed under the new capture.
+      if (captureReplaced) options.retireReplacedCapture();
 
       if (previousPublisher && previousPublisher !== request.socket) {
         options.retirePrevious(
@@ -109,8 +119,10 @@ export function createRelayPublisherActivationCoordinator<TSocket, TOwnershipEff
 
       if (deferredOwnershipTimingReason) {
         options.invalidateTiming(deferredOwnershipTimingReason);
-      } else if (sameParticipantReplacement && !sameCapture) {
-        options.invalidateTiming('Microphone capture changed.');
+      } else if (captureReplaced) {
+        // captureReplaced is deliberately independent of participant identity;
+        // an anonymous or cross-owner replacement is still a timing discontinuity.
+        options.invalidateTiming(MIC_CAPTURE_CHANGED_TIMING_REASON);
       }
 
       options.restartLiveSource();

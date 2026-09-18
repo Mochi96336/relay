@@ -242,21 +242,59 @@ test('production recording presenter freezes last-known timer while Take authori
   assert.equal(stop.disabled, false);
 });
 
-test('status socket reconnect keeps System unknown until ProductStatus replay', () => {
+test('status transport and ProductStatus authority become stale independently', () => {
   assert.match(liveStatusSource, /function markProductAuthorityStale\(\)/);
-  assert.match(liveStatusSource, /systemRelay\.textContent = t\('system\.reconnecting'\)/);
+  assert.match(
+    liveStatusSource,
+    /systemRelay\.textContent = socket\?\.readyState === WebSocket\.OPEN\s*\? t\('system\.connected'\)\s*:\s*t\('system\.reconnecting'\)/,
+    'an OPEN transport must remain Connected even when its room snapshot is stale',
+  );
+  assert.match(
+    liveStatusSource,
+    /title\.textContent = transportOpen \? t\('system\.unknown'\) : t\('voice\.connecting'\)/,
+    'stale room truth must not be presented as a transport failure',
+  );
   assert.match(liveStatusSource, /for \(const node of \[systemPhones, systemRobot, systemAudio, systemTiming, systemRecording\]\)[\s\S]*t\('system\.unknown'\)/);
   assert.match(liveStatusSource, /const next = new WebSocket\(wsUrl\(\)\);[\s\S]*markProductAuthorityStale\(\);/);
   assert.match(liveStatusSource, /An open status socket is not enough to revive last-known truth/);
-  assert.match(liveStatusSource, /next\.addEventListener\('close'[\s\S]*markProductAuthorityStale\(\)/);
+  assert.match(liveStatusSource, /next\.addEventListener\('close'[\s\S]*socket = null;[\s\S]*markProductAuthorityStale\(\)/);
 });
 
-test('publisher command authority waits for registration and replayed control snapshots', () => {
+test('publisher command authority waits for correlated ACKs plus registration and replayed control snapshots', () => {
   assert.match(publisherSource, /let publisherMixSettingsFresh = false/);
   assert.match(publisherSource, /let publisherSourceStatusFresh = false/);
   assert.match(
     publisherSource,
     /authorityFresh: publisherAuthorityFresh\s*&& publisherMixSettingsFresh\s*&& publisherSourceStatusFresh/,
+  );
+  assert.match(publisherSource, /commandChannelFresh: publisherCommandChannelFresh\(\)/);
+  assert.doesNotMatch(
+    publisherSource,
+    /commandChannelFresh: socket\?\.readyState === WebSocket\.OPEN/,
+    'OPEN alone must never be publisher command freshness',
+  );
+  assert.match(
+    publisherSource,
+    /function sendAudioUplinkHealth\(\) \{[\s\S]*const sentAtMs = performance\.now\(\);[\s\S]*publisherCommandLiveness\.beginHealthRequest\(sentAtMs\)[\s\S]*audioUplinkHealthPayload\(healthRequestId\)[\s\S]*if \(!result\.sent\) publisherCommandLiveness\.cancelHealthRequest\(healthRequestId\)/,
+    'only successfully-sent health requests may become command freshness evidence',
+  );
+  assert.match(
+    publisherSource,
+    /message\.type === 'audio-uplink-health-ack'[\s\S]*const healthRequestId = message\.healthRequestId[\s\S]*publisherCommandLiveness\.noteAck\(ackGeneration, healthRequestId, performance\.now\(\)\)[\s\S]*refreshPublisherCommandChannel\(\)/,
+    'ACK authority must consume the echoed request id instead of using arrival time alone',
+  );
+  assert.doesNotMatch(
+    publisherSource,
+    /publisherCommandLiveness\.noteAck\(ackGeneration, performance\.now\(\)\)/,
+    'arrival-time-only ACK freshness must not return',
+  );
+  assert.match(
+    publisherSource,
+    /publisherCommandLiveness\.begin\(expectedGeneration, performance\.now\(\)\)/,
+  );
+  assert.match(
+    publisherSource,
+    /state\.reconnect[\s\S]*staleSocket\.close\(4000, 'publisher command ack stale'\)/,
   );
   assert.match(
     publisherSource,
@@ -270,6 +308,8 @@ test('publisher command authority waits for registration and replayed control sn
     publisherSource,
     /message\.type === 'mix-settings'[\s\S]*publisherMixSettingsFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
   );
+  assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*publisherCommandLiveness\.reset\(\)/);
+  assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*publisherCommandLiveness\.reset\(\)/);
   assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /function sendMixSettings\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-mix'\)/);

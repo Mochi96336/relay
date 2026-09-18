@@ -3,7 +3,7 @@ export type RelayBackingCaptureRestartInput = {
 };
 
 export type RelayBackingCaptureRestartDependencies = {
-  clearBackingBoundaryRequest: () => void;
+  clearContentTransition: () => void;
   noteQualityEvent: (event: 'backing-capture-restarted') => void;
   abandonProbeRun: () => void;
   clearContentValidation: () => void;
@@ -26,7 +26,7 @@ export function createRelayBackingCaptureRestartCoordinator(
 ) {
   return {
     restart(input: RelayBackingCaptureRestartInput) {
-      dependencies.clearBackingBoundaryRequest();
+      dependencies.clearContentTransition();
       dependencies.noteQualityEvent('backing-capture-restarted');
       dependencies.abandonProbeRun();
       dependencies.clearContentValidation();

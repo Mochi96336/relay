@@ -6,10 +6,13 @@ import type { AudioUplinkHealth } from './audio-uplink-health.js';
 import type { PcmFrame } from './pcm-frame.js';
 import type { RelaySocket } from './relay-socket-server.js';
 
+export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
+
 export type MicRuntimeOptions = {
   audioTransportConfig: AudioTransportConfig;
   firstFrameTimeoutMs: number;
   streamLiveMs: number;
+  uplinkHealthTimeoutMs?: number;
   createDirectMediaTicket?: () => string | null;
   directMediaConnected?: (ticket: string | null) => boolean;
   offerDirectMedia?: (ticket: string) => unknown;
@@ -28,6 +31,8 @@ export type MicPublisherBindResult = {
   previousPublisher: RelaySocket | null;
   sameParticipantReplacement: boolean;
   sameCapture: boolean;
+  /** An established media capture was replaced rather than continued. */
+  captureReplaced: boolean;
   preservedAudioTransport: boolean;
 };
 
@@ -42,6 +47,7 @@ export type MicPublisherBindResult = {
  */
 export class MicRuntime {
   private readonly options: MicRuntimeOptions;
+  private readonly uplinkHealthTimeoutMs: number;
   private currentPublisher: RelaySocket | null = null;
   private currentSampleRate: number | null = null;
   private currentAudioTransport: AudioTransport | null = null;
@@ -50,13 +56,37 @@ export class MicRuntime {
   private currentMediaGeneration: number | null = null;
   private currentUplinkHealth: AudioUplinkHealth | null = null;
   private currentUplinkHealthAt = -Infinity;
+  private uplinkHealthDeadline: ReturnType<typeof setTimeout> | null = null;
   private lastFrameAt = -Infinity;
   private lastFrameOwnerId: string | null = null;
   private lastFrameGeneration: number | null = null;
+  /**
+   * Source-sample cursor reported by the browser at the most recent muted ->
+   * unmuted transition. Control health and media can travel on different paths,
+   * so frames at or before this cursor are allowed to arrive but cannot prove
+   * post-unmute live flow.
+   */
+  private postUnmuteSampleBarrier: number | null = null;
+  private latestAcceptedFrameEndSample: number | null = null;
+  /** Highest browser capture cursor accepted for the current capture clock. */
+  private latestUplinkHealthCapturedSamples: number | null = null;
+  /**
+   * Monotonic accepted-PCM evidence for the current capture generation.
+   *
+   * This advances only through noteFrame(), whose server caller is downstream
+   * of AudioSession.ingestMic(...).samples.length > 0. It therefore proves
+   * application-level PCM intake rather than socket/datagram/write activity.
+   */
+  private currentAcceptedFrameSerial = 0;
   private firstFrameWaitStartedAt = -Infinity;
 
   constructor(options: MicRuntimeOptions) {
     this.options = options;
+    const uplinkHealthTimeoutMs = options.uplinkHealthTimeoutMs ?? DEFAULT_UPLINK_HEALTH_TIMEOUT_MS;
+    if (!Number.isFinite(uplinkHealthTimeoutMs) || uplinkHealthTimeoutMs <= 0) {
+      throw new Error('MicRuntime uplinkHealthTimeoutMs must be positive.');
+    }
+    this.uplinkHealthTimeoutMs = uplinkHealthTimeoutMs;
   }
 
   get publisher() {
@@ -81,6 +111,10 @@ export class MicRuntime {
 
   get mediaGeneration() {
     return this.currentMediaGeneration;
+  }
+
+  get acceptedFrameSerial() {
+    return this.currentAcceptedFrameSerial;
   }
 
   isPublisher(socket: RelaySocket) {
@@ -119,6 +153,7 @@ export class MicRuntime {
     }
 
     const previousPublisher = this.currentPublisher;
+    const hadMediaCapture = this.currentAudioTransport !== null;
     // Media authority deliberately survives a short control-socket grace. Treat
     // a same-participant reconnect as a replacement even after the old control
     // pointer has detached, otherwise a changed capture can bypass the server's
@@ -145,12 +180,19 @@ export class MicRuntime {
     );
     const sameCapture = Boolean(sameParticipantReplacement && continuingV2Capture);
     const preservedAudioTransport = continuingV2Capture;
+    // This is deliberately independent of the control-socket pointer and
+    // participant identity. A cross-owner takeover, a reconnect after control
+    // grace, and a contradictory same-generation/sample-rate registration all
+    // replace the acoustic capture if an old media transport existed and was
+    // not explicitly preserved.
+    const captureReplaced = hadMediaCapture && !preservedAudioTransport;
 
     socket.sampleRate = sampleRate;
     socket.captureGeneration = captureGeneration ?? undefined;
     socket.audioPacketVersion = audioPacketVersion;
     this.currentPublisher = socket;
     this.currentSampleRate = sampleRate;
+    this.armUplinkHealthDeadline(socket, captureGeneration, audioPacketVersion);
 
     if (!preservedAudioTransport) {
       this.currentUplinkHealth = null;
@@ -181,6 +223,7 @@ export class MicRuntime {
       previousPublisher,
       sameParticipantReplacement,
       sameCapture,
+      captureReplaced,
       preservedAudioTransport,
     };
   }
@@ -188,6 +231,7 @@ export class MicRuntime {
   detachPublisher(socket: RelaySocket) {
     if (this.currentPublisher !== socket) return false;
     this.currentPublisher = null;
+    this.clearUplinkHealthDeadline();
     return true;
   }
 
@@ -199,6 +243,7 @@ export class MicRuntime {
     this.currentUplinkHealth = null;
     this.currentUplinkHealthAt = -Infinity;
     this.currentSampleRate = null;
+    this.clearUplinkHealthDeadline();
     this.resetFlowEvidence(nowMs);
   }
 
@@ -235,8 +280,42 @@ export class MicRuntime {
       || socket.captureGeneration === undefined
       || health.captureGeneration !== socket.captureGeneration
     ) return false;
+    if (
+      this.latestUplinkHealthCapturedSamples !== null
+      && health.capturedSamples < this.latestUplinkHealthCapturedSamples
+    ) return false;
+
+    const wasMuted = this.currentUplinkHealth?.inputMuted === true;
+    if (wasMuted && health.inputMuted !== true) {
+      const barrier = health.capturedSamples;
+      // WebTransport media may beat the control WebSocket health message to
+      // Relay. A frame already accepted beyond the browser's unmute cursor is
+      // valid post-unmute evidence; otherwise retain the cursor as a barrier
+      // for late muted-period frames arriving after control.
+      this.postUnmuteSampleBarrier = this.latestAcceptedFrameEndSample !== null
+        && this.latestAcceptedFrameEndSample > barrier
+        ? null
+        : barrier;
+    }
+    this.latestUplinkHealthCapturedSamples = health.capturedSamples;
     this.currentUplinkHealth = health;
     this.currentUplinkHealthAt = nowMs;
+    this.armUplinkHealthDeadline(socket, health.captureGeneration, 2);
+    if (socket.readyState === WebSocket.OPEN && typeof socket.send === 'function') {
+      try {
+        socket.send(JSON.stringify({
+          type: 'audio-uplink-health-ack',
+          version: 1,
+          captureGeneration: health.captureGeneration,
+          ...(health.healthRequestId === undefined ? {} : { healthRequestId: health.healthRequestId }),
+          pcm: {
+            acceptedFrameSerial: this.currentAcceptedFrameSerial,
+            receivedPacketSerial: this.currentAudioTransport?.stats()?.emittedPackets ?? 0,
+            mediaPath: this.mediaPath(),
+          },
+        }));
+      } catch {}
+    }
     return true;
   }
 
@@ -250,14 +329,88 @@ export class MicRuntime {
     };
   }
 
+  freshUplinkHealthPayload(nowMs: number) {
+    const payload = this.uplinkHealthPayload(nowMs);
+    if (
+      !payload
+      || payload.reportAgeMs === null
+      || payload.reportAgeMs > this.uplinkHealthTimeoutMs
+    ) return null;
+    return payload;
+  }
+
+  private clearUplinkHealthDeadline() {
+    if (this.uplinkHealthDeadline !== null) clearTimeout(this.uplinkHealthDeadline);
+    this.uplinkHealthDeadline = null;
+  }
+
+  private armUplinkHealthDeadline(
+    socket: RelaySocket,
+    captureGeneration: number | null,
+    audioPacketVersion: AudioPacketVersion,
+  ) {
+    this.clearUplinkHealthDeadline();
+    if (audioPacketVersion !== 2 || captureGeneration === null) return;
+
+    const timer = setTimeout(() => {
+      if (this.uplinkHealthDeadline !== timer) return;
+      this.uplinkHealthDeadline = null;
+      if (
+        this.currentPublisher !== socket
+        || socket.role !== 'publisher'
+        || socket.audioPacketVersion !== 2
+        || socket.captureGeneration !== captureGeneration
+      ) return;
+      try {
+        socket.close(4000, 'publisher uplink health stale');
+      } catch {
+        try {
+          socket.terminate();
+        } catch {}
+      }
+    }, this.uplinkHealthTimeoutMs);
+    timer.unref?.();
+    this.uplinkHealthDeadline = timer;
+  }
+
   resetFlowEvidence(nowMs: number) {
     this.lastFrameAt = -Infinity;
     this.lastFrameOwnerId = this.currentMediaOwnerId;
     this.lastFrameGeneration = this.currentMediaGeneration;
+    this.currentAcceptedFrameSerial = 0;
+    this.postUnmuteSampleBarrier = null;
+    this.latestAcceptedFrameEndSample = null;
+    this.latestUplinkHealthCapturedSamples = null;
     this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs;
   }
 
-  noteFrame(nowMs: number) {
+  noteFrame(nowMs: number, frame: PcmFrame | null = null) {
+    // acceptedFrameSerial remains transport/application intake evidence even
+    // when the accepted frame belongs to the muted side of an unmute barrier.
+    if (this.currentAcceptedFrameSerial < Number.MAX_SAFE_INTEGER) {
+      this.currentAcceptedFrameSerial += 1;
+    }
+
+    const firstSampleIndex = frame?.firstSampleIndex;
+    const sourceSampleCount = frame ? Math.floor(frame.pcm.byteLength / 2) : 0;
+    const frameEnd = firstSampleIndex === null || firstSampleIndex === undefined
+      ? null
+      : firstSampleIndex + sourceSampleCount;
+    if (frameEnd !== null && Number.isFinite(frameEnd)) {
+      this.latestAcceptedFrameEndSample = this.latestAcceptedFrameEndSample === null
+        ? frameEnd
+        : Math.max(this.latestAcceptedFrameEndSample, frameEnd);
+    }
+
+    const barrier = this.postUnmuteSampleBarrier;
+    if (
+      barrier !== null
+      && (frameEnd === null || !Number.isFinite(frameEnd) || frameEnd <= barrier)
+    ) {
+      return;
+    }
+    if (barrier !== null) this.postUnmuteSampleBarrier = null;
+
     this.lastFrameAt = nowMs;
     this.lastFrameOwnerId = this.currentMediaOwnerId;
     this.lastFrameGeneration = this.currentMediaGeneration;
@@ -284,6 +437,7 @@ export class MicRuntime {
     return this.connected()
       && this.flowObserved()
       && this.currentUplinkHealth?.inputMuted !== true
+      && this.postUnmuteSampleBarrier === null
       && nowMs - this.lastFrameAt < this.options.streamLiveMs;
   }
 

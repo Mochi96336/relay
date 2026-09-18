@@ -4,8 +4,12 @@ export type TimingRuntimeOptions = {
   autoCalibrationRetryMs: number;
 };
 
-export type AppliedCalibrationKindFacts = {
+export type ConfirmedAuthorityFacts = {
   confirmedRevision: number;
+  hasConfirmedResult: boolean;
+};
+
+export type AppliedCalibrationKindFacts = {
   hasConfirmedResult: boolean;
   provisional: boolean;
 };
@@ -98,13 +102,12 @@ export class TimingRuntime {
    * Returns the strategy that owns the value currently exposed by
    * `CalibrationSession.result`.
    *
-   * A provisional value belongs to the in-flight candidate. A non-provisional
-   * value belongs to the last confirmed revision, whose kind changes only when
-   * that monotonic revision changes. Merely beginning a different retry cannot
-   * mutate confirmed provenance.
+   * This is deliberately a pure query. Confirmed revision provenance is
+   * synchronized when `CalibrationSession` settles, before observers read it.
+   * A provisional value belongs to the in-flight candidate; otherwise the
+   * already-synchronized confirmed authority owns the applied result.
    */
   appliedCalibrationKind(facts: AppliedCalibrationKindFacts): TimingCalibrationKind {
-    this.syncConfirmedAuthority(facts.confirmedRevision, facts.hasConfirmedResult);
     if (facts.provisional) return this.calibrationKindValue;
     return facts.hasConfirmedResult ? this.authorityKindValue : 'none';
   }
@@ -149,7 +152,14 @@ export class TimingRuntime {
     this.contentValidationSlewRevisionValue = null;
   }
 
-  private syncConfirmedAuthority(confirmedRevision: number, hasConfirmedResult: boolean) {
+  /**
+   * Commits confirmed-result provenance at the CalibrationSession settlement
+   * boundary. The candidate strategy must already name the strategy that
+   * produced a newly promoted revision. Re-reading applied authority must never
+   * be required to make this mutation happen.
+   */
+  syncConfirmedAuthority(facts: ConfirmedAuthorityFacts) {
+    const { confirmedRevision, hasConfirmedResult } = facts;
     if (!Number.isSafeInteger(confirmedRevision) || confirmedRevision < 0) {
       throw new Error('confirmedRevision must be a non-negative safe integer.');
     }

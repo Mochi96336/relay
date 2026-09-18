@@ -184,6 +184,16 @@ async function installProductionDomHarness(page) {
           return;
         }
 
+        if (message.type === 'audio-uplink-health' && this.kind === 'publisher') {
+          queueMicrotask(() => deliver(this, {
+            type: 'audio-uplink-health-ack',
+            version: 1,
+            captureGeneration: message.captureGeneration,
+            healthRequestId: message.healthRequestId,
+          }));
+          return;
+        }
+
         if (message.type === 'register' && message.role === 'publisher') {
           this.kind = 'publisher';
           mark('T3');

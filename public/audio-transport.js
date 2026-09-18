@@ -1,3 +1,5 @@
+import { MicMediaPathRecovery } from './mic-media-path-recovery.js';
+
 const WEB_SOCKET_OPEN = 1;
 
 /**
@@ -21,11 +23,60 @@ export const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
  */
 export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
 
+/**
+ * Longest an accepted WebTransport datagram write may stay unresolved before
+ * that media path is considered stalled. A realtime capture keeps producing
+ * new packets, so the next packet after this deadline demotes the stalled path
+ * and continues over WebSocket without replaying already-submitted datagrams.
+ */
+export const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
+
+/**
+ * WebSocket fallback must stay a realtime path too. 256 KiB at 48 kHz mono
+ * PCM16 is about 2.7 seconds of stale voice, so keep a hard duration-derived
+ * ceiling even when a legacy caller supplies a much larger byte threshold.
+ */
+export const DEFAULT_WEBSOCKET_BACKLOG_MS = 200;
+export const DEFAULT_WEBSOCKET_PCM_SAMPLE_RATE = 48_000;
+const PCM16_BYTES_PER_SAMPLE = 2;
+const MEDIA_PATH_PACKET_COVERAGE_MIN_TOTAL = 32;
+
+export function realtimeWebSocketBacklogBytes(
+  sampleRate = DEFAULT_WEBSOCKET_PCM_SAMPLE_RATE,
+  backlogMs = DEFAULT_WEBSOCKET_BACKLOG_MS,
+) {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new RangeError('sampleRate must be positive');
+  }
+  if (!Number.isFinite(backlogMs) || backlogMs <= 0) {
+    throw new RangeError('backlogMs must be positive');
+  }
+  return Math.max(1, Math.round(
+    (sampleRate * PCM16_BYTES_PER_SAMPLE * backlogMs) / 1000,
+  ));
+}
+
+function monotonicNowMs() {
+  const value = globalThis.performance?.now?.();
+  return Number.isFinite(value) ? value : Date.now();
+}
+
 function base64Bytes(value) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+function outgoingByteLength(value) {
+  if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
+  const byteLength = Number(value?.byteLength);
+  return Number.isFinite(byteLength) && byteLength > 0 ? byteLength : 0;
+}
+
+function nonNegativeSafeInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
 /**
@@ -42,16 +93,32 @@ export class AudioTransport {
 }
 
 export class WebSocketAudioTransport extends AudioTransport {
-  constructor({ maxBufferedBytes = 256 * 1024 } = {}) {
+  constructor({
+    maxBufferedBytes = 256 * 1024,
+    realtimeBufferedBytes = realtimeWebSocketBacklogBytes(),
+  } = {}) {
     super();
     if (!Number.isFinite(maxBufferedBytes) || maxBufferedBytes < 0) {
       throw new RangeError('maxBufferedBytes must be non-negative');
     }
-    this.maxBufferedBytes = maxBufferedBytes;
+    if (!Number.isFinite(realtimeBufferedBytes) || realtimeBufferedBytes <= 0) {
+      throw new RangeError('realtimeBufferedBytes must be positive');
+    }
+    this.configuredMaxBufferedBytes = maxBufferedBytes;
+    this.realtimeBufferedBytes = realtimeBufferedBytes;
+    this.maxBufferedBytes = Math.min(maxBufferedBytes, realtimeBufferedBytes);
     this.socket = null;
   }
 
-  bind(socket) {
+  setRealtimePcmSampleRate(sampleRate) {
+    const realtimeBufferedBytes = realtimeWebSocketBacklogBytes(sampleRate);
+    this.realtimeBufferedBytes = realtimeBufferedBytes;
+    this.maxBufferedBytes = Math.min(this.configuredMaxBufferedBytes, realtimeBufferedBytes);
+    return this.maxBufferedBytes;
+  }
+
+  bind(socket, { sampleRate } = {}) {
+    if (sampleRate !== undefined) this.setRealtimePcmSampleRate(sampleRate);
     this.socket = socket;
   }
 
@@ -95,6 +162,16 @@ export class WebSocketAudioTransport extends AudioTransport {
     const state = this.state();
     if (!state.ready) return { ...state, sent: false };
 
+    const packetBytes = outgoingByteLength(packet);
+    if (packetBytes > 0 && state.bufferedAmount + packetBytes > this.maxBufferedBytes) {
+      return {
+        ...state,
+        ready: false,
+        sent: false,
+        reason: 'congested',
+      };
+    }
+
     try {
       this.socket.send(packet);
       return { ...state, sent: true };
@@ -126,7 +203,9 @@ export class PreferredAudioTransport extends AudioTransport {
     minimumPacketBytes = 1,
     datagramPacketBytesCeiling = DEFAULT_DATAGRAM_PACKET_BYTES_CEILING,
     datagramQueuePackets = DEFAULT_DATAGRAM_QUEUE_PACKETS,
+    datagramWriteTimeoutMs = DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS,
     WebTransportClass = globalThis.WebTransport,
+    nowMs = monotonicNowMs,
   } = {}) {
     super();
     if (!Number.isInteger(minimumPacketBytes) || minimumPacketBytes < 1) {
@@ -141,17 +220,32 @@ export class PreferredAudioTransport extends AudioTransport {
     if (!Number.isInteger(datagramQueuePackets) || datagramQueuePackets < 1) {
       throw new RangeError('datagramQueuePackets must be a positive integer');
     }
+    if (!Number.isFinite(datagramWriteTimeoutMs) || datagramWriteTimeoutMs <= 0) {
+      throw new RangeError('datagramWriteTimeoutMs must be positive');
+    }
+    if (typeof nowMs !== 'function') {
+      throw new TypeError('nowMs must be a function');
+    }
     this.fallback = new WebSocketAudioTransport({ maxBufferedBytes });
     this.minimumPacketBytes = minimumPacketBytes;
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.datagramQueuePackets = datagramQueuePackets;
+    this.datagramWriteTimeoutMs = datagramWriteTimeoutMs;
+    this.nowMs = nowMs;
     this.outstandingDatagramWrites = 0;
+    this.pendingDatagramWrites = new Map();
+    this.nextDatagramWriteId = 1;
     this.WebTransportClass = WebTransportClass;
     this.webTransport = null;
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
     this.preferenceGeneration = 0;
+    this.mediaPathRecovery = new MicMediaPathRecovery();
+    this.publisherSocketEpoch = 0;
+    this.publisherSocketListener = null;
+    this.pendingPublisherHealth = [];
+    this.lastMediaRecoveryDecision = null;
     this.resetStats();
   }
 
@@ -168,9 +262,39 @@ export class PreferredAudioTransport extends AudioTransport {
       webSocketCongestedRejects: 0,
       webSocketDisconnectedRejects: 0,
       webSocketSendFailures: 0,
+      webSocketControlMessagesSent: 0,
+      webSocketControlCongestedRejects: 0,
+      webSocketControlDisconnectedRejects: 0,
+      webSocketControlSendFailures: 0,
     };
     this.minWebTransportMaxPacketBytes = null;
     this.maxWebTransportMaxPacketBytes = null;
+    this.mediaPathRecovery?.reset();
+    this.pendingPublisherHealth = [];
+    this.lastMediaRecoveryDecision = null;
+  }
+
+  resetOutstandingDatagramWrites() {
+    this.pendingDatagramWrites.clear();
+    this.outstandingDatagramWrites = 0;
+  }
+
+  oldestOutstandingDatagramWriteAgeMs() {
+    if (this.pendingDatagramWrites.size === 0) return null;
+    let oldestStartedAt = Number.POSITIVE_INFINITY;
+    for (const startedAt of this.pendingDatagramWrites.values()) {
+      oldestStartedAt = Math.min(oldestStartedAt, startedAt);
+    }
+    if (!Number.isFinite(oldestStartedAt)) return null;
+    return Math.max(0, Number(this.nowMs()) - oldestStartedAt);
+  }
+
+  demoteStalledWebTransport() {
+    if (!this.datagramWriter) return false;
+    const oldestAgeMs = this.oldestOutstandingDatagramWriteAgeMs();
+    if (oldestAgeMs === null || oldestAgeMs < this.datagramWriteTimeoutMs) return false;
+    this.demoteWebTransport();
+    return true;
   }
 
   observeWebTransportPacketBudget(value) {
@@ -193,6 +317,16 @@ export class PreferredAudioTransport extends AudioTransport {
     else this.telemetry.webSocketSendFailures += 1;
   }
 
+  recordControlFallbackResult(result) {
+    if (result.sent) {
+      this.telemetry.webSocketControlMessagesSent += 1;
+      return;
+    }
+    if (result.reason === 'congested') this.telemetry.webSocketControlCongestedRejects += 1;
+    else if (result.reason === 'disconnected') this.telemetry.webSocketControlDisconnectedRejects += 1;
+    else this.telemetry.webSocketControlSendFailures += 1;
+  }
+
   stats() {
     const path = this.datagramWriter ? 'webtransport' : 'websocket';
     const maxPacketBytes = this.datagramWriter
@@ -207,16 +341,148 @@ export class PreferredAudioTransport extends AudioTransport {
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
       datagramQueuePackets: this.datagramQueuePackets,
+      // ProductStatus may surface the terminal bounded-recovery verdict while
+      // keeping server flow freshness as the room Mic state authority.
+      mediaRecoveryDegraded: this.mediaPathRecovery.status().degraded,
+      datagramWriteTimeoutMs: this.datagramWriteTimeoutMs,
       ...this.telemetry,
     };
   }
 
-  bind(socket) {
-    this.fallback.bind(socket);
+  detachPublisherSocketListener() {
+    const listener = this.publisherSocketListener;
+    this.publisherSocketListener = null;
+    if (!listener) return;
+    try {
+      listener.socket.removeEventListener?.('message', listener.handler);
+    } catch {}
+  }
+
+  bind(socket, options) {
+    this.detachPublisherSocketListener();
+    this.pendingPublisherHealth = [];
+    this.fallback.bind(socket, options);
+    const epoch = ++this.publisherSocketEpoch;
+    if (typeof socket?.addEventListener === 'function') {
+      const handler = (event) => this.observePublisherSocketMessage(socket, epoch, event);
+      socket.addEventListener('message', handler);
+      this.publisherSocketListener = { socket, handler };
+    }
   }
 
   unbind(socket) {
+    if (this.publisherSocketListener?.socket === socket) {
+      this.detachPublisherSocketListener();
+      this.pendingPublisherHealth = [];
+    }
     this.fallback.unbind(socket);
+  }
+
+  observePublisherSocketMessage(socket, epoch, event) {
+    if (
+      socket?.readyState !== WEB_SOCKET_OPEN
+      || epoch !== this.publisherSocketEpoch
+      || this.fallback.socket !== socket
+      || typeof event?.data !== 'string'
+      || this.pendingPublisherHealth.length < 1
+    ) return;
+
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (message?.type !== 'audio-uplink-health-ack' || message?.version !== 1) return;
+
+    const publisherHealth = this.pendingPublisherHealth[0];
+    const ackGeneration = nonNegativeSafeInteger(message.captureGeneration);
+    const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
+    const receivedPacketSerial = nonNegativeSafeInteger(message.pcm?.receivedPacketSerial);
+    if (
+      ackGeneration === null
+      || ackGeneration > 0xffff_ffff
+      || acceptedFrameSerial === null
+      || ackGeneration !== publisherHealth.captureGeneration
+      || publisherHealth.socketEpoch !== epoch
+    ) return;
+    this.pendingPublisherHealth.shift();
+
+    const serverMediaPath = message.pcm?.mediaPath === 'webtransport'
+      || message.pcm?.mediaPath === 'websocket'
+      ? message.pcm.mediaPath
+      : null;
+    const decision = this.mediaPathRecovery.observe({
+      captureGeneration: ackGeneration,
+      capturedSamples: publisherHealth.capturedSamples,
+      serverAcceptedFrameSerial: acceptedFrameSerial,
+      senderSubmittedPackets: publisherHealth.senderSubmittedPackets,
+      senderFailedPackets: publisherHealth.senderFailedPackets,
+      serverReceivedPacketSerial: receivedPacketSerial,
+      serverMediaPath,
+      path: publisherHealth.path,
+      socketEpoch: epoch,
+      eligible: publisherHealth.eligible,
+    });
+    this.lastMediaRecoveryDecision = decision;
+
+    if (decision.action === 'demote-webtransport') {
+      this.demoteWebTransport();
+      return;
+    }
+    if (decision.action !== 'replace-websocket') return;
+
+    // Fence every late ACK from the retiring physical socket immediately. The
+    // existing app close/reconnect lifecycle owns the actual same-generation
+    // registration that follows; media recovery only requests that one bounded
+    // replacement and never touches the capture graph.
+    this.publisherSocketEpoch += 1;
+    try {
+      socket.close(4001, 'server PCM stalled');
+    } catch {
+      try { socket.close(); } catch {}
+    }
+  }
+
+  sendControlJson(payload) {
+    const result = this.fallback.send(JSON.stringify(payload));
+    this.recordControlFallbackResult(result);
+    if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
+      const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
+      const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
+      // Coverage starts at the browser transport decision boundary. A media
+      // packet rejected by the bounded realtime queue is a final timeline hole,
+      // not an in-flight packet: app.js never replays congestion rejects.
+      // Control-message congestion has separate counters and is not included.
+      const submittedPacketTotal = this.telemetry.webSocketPacketsSent
+        + this.telemetry.webTransportPacketsSubmitted
+        + this.telemetry.webSocketCongestedRejects
+        + this.telemetry.webTransportCongestedRejects;
+      const quantitativeReady = Number.isSafeInteger(submittedPacketTotal)
+        && submittedPacketTotal >= MEDIA_PATH_PACKET_COVERAGE_MIN_TOTAL;
+      const senderSubmittedPackets = quantitativeReady ? submittedPacketTotal : null;
+      const senderFailedPackets = quantitativeReady ? this.telemetry.webTransportSendFailures : null;
+      const payloadPath = payload.transport?.path;
+      const path = payloadPath === 'webtransport' || payloadPath === 'websocket'
+        ? payloadPath
+        : this.datagramWriter ? 'webtransport' : 'websocket';
+      if (
+        captureGeneration !== null
+        && captureGeneration <= 0xffff_ffff
+        && capturedSamples !== null
+      ) {
+        this.pendingPublisherHealth.push({
+          captureGeneration,
+          capturedSamples,
+          senderSubmittedPackets,
+          senderFailedPackets,
+          path,
+          socketEpoch: this.publisherSocketEpoch,
+          eligible: globalThis.document?.visibilityState !== 'hidden',
+        });
+      }
+    }
+    return result;
   }
 
   /**
@@ -245,6 +511,7 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   maxPacketBytes() {
+    if (this.demoteStalledWebTransport()) return this.fallback.maxPacketBytes();
     if (!this.datagramWriter) return this.fallback.maxPacketBytes();
     const maxPacketBytes = this.currentWebTransportMaxPacketBytes();
     if (maxPacketBytes < this.minimumPacketBytes) {
@@ -255,6 +522,7 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   state() {
+    if (this.demoteStalledWebTransport()) return this.fallback.state();
     if (this.datagramWriter) {
       const maxPacketBytes = this.maxPacketBytes();
       if (!this.datagramWriter) return this.fallback.state();
@@ -271,6 +539,10 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   async prefer(offer) {
+    if (this.mediaPathRecovery.quarantineWebTransport()) {
+      this.closeWebTransport();
+      return false;
+    }
     if (!offer || offer.preferred !== 'webtransport' || !offer.url) {
       this.closeWebTransport();
       return false;
@@ -342,7 +614,7 @@ export class PreferredAudioTransport extends AudioTransport {
       const writer = writable.getWriter();
       this.webTransport = transport;
       this.datagramWriter = writer;
-      this.outstandingDatagramWrites = 0;
+      this.resetOutstandingDatagramWrites();
       this.preferredUrl = offer.url;
       this.lastWebTransportMaxPacketBytes = maxPacketBytes;
       this.observeWebTransportPacketBudget(maxPacketBytes);
@@ -374,7 +646,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
-    this.outstandingDatagramWrites = 0;
+    this.resetOutstandingDatagramWrites();
     if (wasActive) this.telemetry.webTransportDemotions += 1;
     if (writer) {
       try { writer.releaseLock(); } catch {}
@@ -396,6 +668,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriter = null;
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
+    this.resetOutstandingDatagramWrites();
     if (writer) {
       try { writer.releaseLock(); } catch {}
     }
@@ -405,11 +678,22 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   close() {
+    this.detachPublisherSocketListener();
+    this.publisherSocketEpoch += 1;
+    this.mediaPathRecovery.reset();
+    this.pendingPublisherHealth = [];
+    this.lastMediaRecoveryDecision = null;
     this.closeWebTransport();
     this.fallback.unbind();
   }
 
   send(packet) {
+    if (this.demoteStalledWebTransport()) {
+      const result = this.fallback.send(packet);
+      this.recordFallbackResult(result);
+      return result;
+    }
+
     const writer = this.datagramWriter;
     if (!writer) {
       const result = this.fallback.send(packet);
@@ -460,8 +744,10 @@ export class PreferredAudioTransport extends AudioTransport {
       const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
       const transport = this.webTransport;
       const generation = this.preferenceGeneration;
+      const writeId = this.nextDatagramWriteId++;
       this.telemetry.webTransportPacketsSubmitted += 1;
-      this.outstandingDatagramWrites += 1;
+      this.pendingDatagramWrites.set(writeId, Number(this.nowMs()));
+      this.outstandingDatagramWrites = this.pendingDatagramWrites.size;
       // A write belongs to the transport generation that submitted it. The
       // promise may settle after Mic teardown/restart has already installed a
       // newer WebTransport; that stale completion must not demote the new
@@ -472,7 +758,8 @@ export class PreferredAudioTransport extends AudioTransport {
         && transport === this.webTransport;
       const settle = () => {
         if (!ownsCapture()) return;
-        this.outstandingDatagramWrites = Math.max(0, this.outstandingDatagramWrites - 1);
+        this.pendingDatagramWrites.delete(writeId);
+        this.outstandingDatagramWrites = this.pendingDatagramWrites.size;
       };
       Promise.resolve(writer.write(bytes)).then(settle, () => {
         if (!ownsCapture()) return;

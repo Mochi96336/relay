@@ -39,20 +39,38 @@ test('boot-probe result cannot impersonate a confirmed content transition anchor
 });
 
 test('content provenance is read from applied authority, never the in-flight candidate', () => {
-  // `CalibrationSession.start()` deliberately keeps the previous confirmed
-  // result serving while a replacement is measured, so `candidate = content`
-  // alongside `confirmed = boot-probe` is an ordinary state. Reading the
-  // candidate for provenance installs a boot measurement as the baseline that
-  // content drift is judged against.
-  for (const name of ['syncContentValidationBaseline', 'contentValidationPathReady']) {
-    const block = functionBlock(name);
-    assert.match(block, /appliedCalibrationKind\(\) !== 'content'/, `${name} must read applied authority`);
-    assert.doesNotMatch(
-      block,
-      /timingRuntime\.calibrationKind !== 'content'/,
-      `${name} must not treat the in-flight candidate as provenance`,
-    );
-  }
+  // Baseline semantics now live in a pure policy. The server must sample the
+  // applied authority and confirmed-result facts, then delegate; candidate
+  // strategy metadata remains outside this provenance boundary.
+  const baseline = functionBlock('syncContentValidationBaseline');
+  assert.match(baseline, /decideContentValidationBaselineSync\(\{/);
+  assert.match(baseline, /appliedKind:\s*appliedCalibrationKind\(\)/);
+  assert.match(baseline, /hasConfirmedResult:\s*confirmed !== null/);
+  assert.match(baseline, /calibrationStale:\s*confirmed !== null && calibrationIsStale\(\)/);
+  assert.doesNotMatch(
+    baseline,
+    /timingRuntime\.calibrationKind/,
+    'baseline provenance must not read the in-flight candidate strategy',
+  );
+
+  // Path admission delegates staged decisions so cheap prerequisites reject
+  // before applied-authority and live-path facts are sampled. The authority
+  // read is now pure; candidate strategy still remains outside this boundary.
+  const path = functionBlock('contentValidationPathReady');
+  const prerequisites = path.indexOf('contentValidationPathPrerequisitesReady({');
+  const authorityRead = path.indexOf('const appliedKind = appliedCalibrationKind()');
+  const authorityGate = path.indexOf('contentValidationAuthorityReady({');
+  const liveGate = path.indexOf('contentValidationLivePathReady({');
+  assert.ok(prerequisites >= 0, 'path readiness must delegate prerequisite admission');
+  assert.ok(authorityRead > prerequisites, 'applied authority must be sampled only after prerequisites');
+  assert.ok(authorityGate > authorityRead, 'authority policy must consume the applied authority query');
+  assert.ok(liveGate > authorityGate, 'transport/media liveness must be checked after authority admission');
+  assert.match(path, /bootProbeSettled:\s*bootProbeSettled\(nowMs\)/);
+  assert.doesNotMatch(
+    path,
+    /timingRuntime\.calibrationKind/,
+    'path readiness must not treat the in-flight candidate as provenance',
+  );
 });
 
 test('content gates ask whether the boot probe settled, not whether it failed', () => {
@@ -63,7 +81,6 @@ test('content gates ask whether the boot probe settled, not whether it failed', 
     'maybeAutoCalibrate',
     'calibrationApplicability',
     'contentValidationPathReady',
-    'dropLegacyCalibrationForRobot',
   ]) {
     const block = functionBlock(name);
     assert.match(block, /bootProbeSettled\(/, `${name} must gate on boot probe settlement`);
@@ -80,25 +97,14 @@ test('content gates ask whether the boot probe settled, not whether it failed', 
 });
 
 test('every Robot mapping revocation goes through one teardown transaction', () => {
-  // This used to be an open-coded checklist repeated per event, and no two
-  // copies cleared the same subset - so fixing one path kept leaving the others
-  // holding state that had just been proven wrong.
+  // Cross-runtime teardown ordering is proved by the coordinator behavior test.
+  // The server adapter and every destructive caller must only delegate to that
+  // one transaction rather than re-spelling any subset of its effects.
   const revoke = functionBlock('revokeRobotContentMapping');
-  for (const step of [
-    /robotPlayerOffset\.reset\(\)/,
-    /robotContentTimeline\.reset\(\)/,
-    /clearRobotContentTransition\(\)/,
-    /sourceRuntime\.invalidateMapping\(\)/,
-    /calibration\.discardPrimedContent\(\)/,
-    /clearContentValidationBaseline\(\)/,
-    /syncAppliedCalibration\(\)/,
-  ]) {
-    assert.match(revoke, step, 'the revocation transaction must own every teardown step');
-  }
-  assert.match(
+  assert.match(revoke, /robotContentMappingRevocationCoordinator\.revoke\(reason\)/);
+  assert.doesNotMatch(
     revoke,
-    /if \(calibration\.collecting\) calibration\.fail\(reason\)/,
-    'a revocation must abort the pending analyzer, which is stamped with the context live at completion',
+    /robotPlayerOffset\.reset\(\)|robotContentTimeline\.reset\(\)|sourceRuntime\.invalidateMapping\(\)|calibration\.discardPrimedContent\(\)|clearContentValidationBaseline\(\)|calibration\.fail\(|syncAppliedCalibration\(\)|broadcastJson\(/,
   );
 
   // The two inline fences must delegate rather than re-spell the checklist.

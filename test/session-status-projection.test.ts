@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { canChangeRoomSong } from '../public/playback-policy.js';
+import { canChangeRoomSong } from '../shared/playback-policy.js';
 import { reduceSessionOwnership } from '../public/session-status-projection.js';
 
 const playingRoom = {

@@ -104,8 +104,13 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   const startProbe = source.match(/function maybeStartProbeCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(
     startProbe,
-    /!calibration\.transactionActive/,
-    'an old confirmed result must not suppress the replacement probe while a transaction is open',
+    /bootProbeStartAuthorityAllowsAttempt\(\{/,
+    'Boot Probe authority admission must delegate to the shared start policy',
+  );
+  assert.match(
+    startProbe,
+    /calibrationTransactionActive: calibration\.transactionActive/,
+    'the replacement transaction fact must cross the policy boundary',
   );
 
   const reapply = source.match(/function maybeReapplyBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
@@ -131,16 +136,31 @@ test('Robot recalibration adapter preserves old authority until candidate promot
 
   const appliedKind = source.match(/function appliedCalibrationKind\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(appliedKind, /timingRuntime\.appliedCalibrationKind/);
-  assert.match(appliedKind, /confirmedRevision: calibration\.confirmedRevision/);
   assert.match(appliedKind, /hasConfirmedResult: calibration\.confirmedResult !== null/);
+  assert.match(appliedKind, /provisional: status\.provisional/);
+  assert.doesNotMatch(
+    appliedKind,
+    /confirmedRevision/,
+    'reading applied provenance must not synchronize or advance confirmed authority',
+  );
+
+  const settlementStart = source.indexOf('onSettled: () => {');
+  const settlementEnd = source.indexOf('\n  },', settlementStart);
+  assert.ok(settlementStart >= 0 && settlementEnd > settlementStart);
+  const settlement = source.slice(settlementStart, settlementEnd);
+  const authoritySync = settlement.indexOf('timingRuntime.syncConfirmedAuthority({');
+  const mixerSync = settlement.indexOf('syncAppliedCalibration()');
+  assert.ok(authoritySync >= 0 && mixerSync > authoritySync, 'confirmed provenance must settle before mixer observers run');
+  assert.match(settlement, /confirmedRevision: calibration\.confirmedRevision/);
+  assert.match(settlement, /hasConfirmedResult: calibration\.confirmedResult !== null/);
 
   const canApply = source.match(/function calibrationApplicability\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(canApply, /retainingConfirmedAuthority/);
-  assert.match(
-    canApply,
-    /&& !retainingConfirmedAuthority/,
-    'preferred replacement probes must not revoke a still-valid retained authority',
-  );
+assert.match(canApply, /decideCalibrationApplicability\(\{/);
+assert.match(canApply, /calibrationTransactionActive: calibration\.transactionActive/);
+assert.match(canApply, /calibrationProvisional: status\.provisional/);
+assert.match(canApply, /hasConfirmedResult: calibration\.confirmedResult !== null/);
+assert.match(canApply, /bootProbeSettled: bootProbeSettled\(nowMs\)/);
+assert.doesNotMatch(canApply, /retainingConfirmedAuthority/);
 
   const sync = source.match(/function syncAppliedCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(sync, /const calibrationKind = appliedCalibrationKind\(\)/);
@@ -157,15 +177,15 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   assert.doesNotMatch(sync, /if \(active !== null\) return false;/, 'an old active Robot lag must not block promotion');
   assert.match(
     sync,
-    /active !== result\.micLagMs/,
-    'successful Robot promotion must atomically replace the previously active lag',
+    /decideBootProbeMixerApplication\(\{/ ,
+    'Boot Probe mixer application must delegate to the pure decision policy',
   );
 
   const failProbe = source.match(/function failProbeAttempt\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(
     failProbe,
-    /timingRuntime\.restoreCandidateKindToAuthority\(\)[\s\S]*?calibration\.failPreservingPrimed/,
-    'failed replacement must restore orchestration provenance before rollback publishes',
+    /bootProbeRuntime\.failAttempt\(target, reason, nowMs\)[\s\S]*?bootProbeFailureSettlementCoordinator\.settle\(failure\)/,
+    'failed replacement must preserve probe authority mutation before delegated rollback settlement',
   );
   assert.doesNotMatch(
     failProbe,

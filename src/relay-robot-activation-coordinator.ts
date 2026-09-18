@@ -12,7 +12,7 @@ export type RelayRobotActivationDependencies<TSocket> = {
   sessionActive: () => boolean;
   resetPlayerOffset: () => void;
   resetContentTimeline: () => void;
-  clearBackingBoundaryRequest: () => void;
+  clearContentTransition: () => void;
   /**
    * Replacing the active Robot source bumps the source generation, so a
    * calibration still in flight belongs to a reference frame that is gone. Its
@@ -51,7 +51,7 @@ export function createRelayRobotActivationCoordinator<TSocket>(
 
       dependencies.resetPlayerOffset();
       dependencies.resetContentTimeline();
-      dependencies.clearBackingBoundaryRequest();
+      dependencies.clearContentTransition();
       dependencies.dropLegacyCalibrationForRobot();
       dependencies.syncAppliedCalibration();
       dependencies.reportSourceStatus();

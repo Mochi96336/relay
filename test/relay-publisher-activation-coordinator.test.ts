@@ -11,6 +11,7 @@ function harness(input: {
   previousPublisher?: Socket | null;
   sameParticipantReplacement?: boolean;
   sameCapture?: boolean;
+  captureReplaced?: boolean;
   sessionActive?: boolean;
   deferredTimingReason?: string | null;
   deferredHandoffParticipantId?: string | null;
@@ -51,8 +52,10 @@ function harness(input: {
         previousPublisher,
         sameParticipantReplacement: input.sameParticipantReplacement === true,
         sameCapture: input.sameCapture === true,
+        captureReplaced: input.captureReplaced === true,
       };
     },
+    retireReplacedCapture: () => events.push('retire-capture'),
     retirePrevious: (previous, next, sameParticipantReplacement) => {
       assert.equal(previous, previousPublisher);
       assert.equal(next, socket);
@@ -98,6 +101,7 @@ test('confirmed cross-participant takeover preserves effect, bind, retirement an
   const { coordinator, events, socket, getRegistered } = harness({
     deferredTimingReason: 'Microphone owner changed.',
     deferredHandoffParticipantId: 'participant-bob',
+    captureReplaced: true,
     mediaTransport: { kind: 'webtransport' },
   });
 
@@ -107,6 +111,7 @@ test('confirmed cross-participant takeover preserves effect, bind, retirement an
     'ownership-effects',
     'now',
     'bind',
+    'retire-capture',
     'retire:revoked',
     'cancel-grace',
     'mic-expected',
@@ -131,6 +136,7 @@ test('same-participant replacement invalidates changed capture after bind', () =
     previousPublisher: previous,
     sameParticipantReplacement: true,
     sameCapture: false,
+    captureReplaced: true,
   });
 
   coordinator.activate({
@@ -140,10 +146,32 @@ test('same-participant replacement invalidates changed capture after bind', () =
     takeoverRequested: false,
   });
 
-  assert.ok(events.indexOf('bind') < events.indexOf('retire:superseded'));
+  assert.ok(events.indexOf('bind') < events.indexOf('retire-capture'));
+  assert.ok(events.indexOf('retire-capture') < events.indexOf('retire:superseded'));
   assert.ok(events.indexOf('retire:superseded') < events.indexOf('invalidate:Microphone capture changed.'));
   assert.equal(events.includes('ownership-effects'), false);
   assert.equal(getRegistered()?.takeover, false);
+});
+
+test('capture replacement invalidates timing even without participant identity', () => {
+  const previous = { id: 'legacy-old', participantId: null };
+  const { coordinator, events, socket } = harness({
+    participantId: null,
+    previousPublisher: previous,
+    sameParticipantReplacement: false,
+    sameCapture: false,
+    captureReplaced: true,
+  });
+
+  coordinator.activate({
+    ...request(socket),
+    ownershipEffects: null,
+    previousOwnerId: null,
+    takeoverRequested: false,
+  });
+
+  assert.ok(events.indexOf('retire-capture') < events.indexOf('invalidate:Microphone capture changed.'));
+  assert.equal(events.includes('session-status'), false);
 });
 
 test('same capture replacement does not invalidate timing', () => {
@@ -152,6 +180,7 @@ test('same capture replacement does not invalidate timing', () => {
     previousPublisher: previous,
     sameParticipantReplacement: true,
     sameCapture: true,
+    captureReplaced: false,
   });
 
   coordinator.activate({
@@ -162,6 +191,7 @@ test('same capture replacement does not invalidate timing', () => {
   });
 
   assert.equal(events.some((event) => event.startsWith('invalidate:')), false);
+  assert.equal(events.includes('retire-capture'), false);
 });
 
 test('first publisher during an active session records transport connection', () => {

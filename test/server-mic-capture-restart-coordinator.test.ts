@@ -19,26 +19,46 @@ const coordinator = parseTypeScriptSource(
   readFileSync(new URL('../src/relay-mic-capture-restart-coordinator.ts', import.meta.url), 'utf8'),
 );
 
-test('server keeps Mic generation authority and delegates only confirmed restart effects', () => {
+test('server delegates AudioSession capture-clock restarts before consuming new Mic PCM', () => {
   const block = functionCode(server, 'processPublisherFrame');
-  assert.match(block, /const previousGeneration = session\.micGeneration;/);
-  assert.match(block, /session\.ingestMic\(frame, micRuntime\.sampleRate\)/);
+  assert.doesNotMatch(block, /previousGeneration|micRestarted/);
+  assert.match(block, /const nowMs = performance\.now\(\);/);
   assert.match(
     block,
-    /const micRestarted = previousGeneration !== null && session\.micGeneration !== previousGeneration;/,
+    /const \{ samples, start, captureRestarted \} = session\.ingestMic\(\s*frame,\s*micRuntime\.sampleRate,\s*nowMs,\s*\);/,
   );
+  assert.match(block, /if \(samples\.length > 0\) noteMicFrame\(nowMs, frame\);/);
   assert.match(
     block,
     /micCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);/,
   );
 
-  const restartStart = block.indexOf('if (micRestarted) {');
+  const restartStart = block.indexOf('if (captureRestarted) {');
   const restartEnd = block.indexOf('\n      }', restartStart);
   assert.ok(restartStart >= 0 && restartEnd > restartStart);
   const restartBlock = block.slice(restartStart, restartEnd + '\n      }'.length);
   assert.doesNotMatch(restartBlock, /takeController\.|bootProbeRuntime\.|contentCalibrationValidator\./);
   assert.doesNotMatch(restartBlock, /calibration\.(?:fail|reset|apply|begin)/);
   assert.doesNotMatch(restartBlock, /broadcastJson\(|(?:^|[^.])syncAppliedCalibration\(/m);
+
+  const ingest = block.indexOf('session.ingestMic(');
+  const noteFlow = block.indexOf('if (samples.length > 0) noteMicFrame(nowMs, frame);');
+  const restart = block.indexOf('micCaptureRestartCoordinator.restart({');
+  assert.ok(ingest >= 0 && noteFlow > ingest, 'flow freshness must require accepted PCM progress');
+  assert.ok(restart > noteFlow, 'capture restart effects must follow ingest and flow classification');
+
+  for (const consumer of [
+    'calibration.primeMic(samples, start)',
+    'calibration.observeMic(samples, start)',
+    'contentCalibrationValidator.observeMic(samples, start)',
+    'robotContentTransitionRuntime.noteMicProgress()',
+  ]) {
+    const consumerIndex = block.indexOf(consumer);
+    assert.ok(
+      consumerIndex > restart,
+      `${consumer} must not observe replacement-capture PCM before restart effects settle`,
+    );
+  }
 });
 
 test('server composition retains all Mic capture restart domain effects', () => {

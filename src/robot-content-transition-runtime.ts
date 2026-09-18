@@ -24,6 +24,8 @@ export type RobotContentTransitionContext = {
   sessionGeneration: number;
   micGeneration: number | null;
   backingGeneration: number | null;
+  micSourceRate?: number | null;
+  backingSourceRate?: number | null;
   sourceGeneration: number;
 };
 
@@ -45,6 +47,11 @@ type RobotContentTransitionEvidence = {
   backing: Int16Array;
 };
 
+type RobotContentTransitionRangeEvidence = {
+  gapSamples: number;
+  frontierMissingSamples: number;
+};
+
 export type RobotContentTransitionRuntimeHost = {
   context: () => RobotContentTransitionContext;
   currentDeltaMs: () => number | null;
@@ -52,6 +59,8 @@ export type RobotContentTransitionRuntimeHost = {
   micTotalSamples: () => number;
   readBacking: (start: number, length: number) => Int16Array;
   readMic: (start: number, length: number) => Int16Array;
+  readBackingEvidence: (start: number, length: number) => RobotContentTransitionRangeEvidence;
+  readMicEvidence: (start: number, length: number) => RobotContentTransitionRangeEvidence;
   transitionEvidence: (maxSamples: number) => RobotContentTransitionEvidence | null;
   commit: (plan: RobotContentTransitionCommitPlan, nowMs: number) => boolean;
   onDegraded?: (status: ReturnType<typeof robotContentTransitionBoundsStatus>) => void;
@@ -62,6 +71,8 @@ export type RobotContentTransitionRuntimeOptions = {
   historySamples: number;
   windowSamples: number;
   maxLagMs: number;
+  /** Same missing-audio bound used by calibration windows. */
+  maxEvidenceGapMs: number;
   toleranceMs: number;
   retentionSamples: number;
   bounds: RobotContentTransitionBoundsConfig;
@@ -144,6 +155,8 @@ function contextMatches(left: RobotContentTransitionContext, right: RobotContent
   return left.sessionGeneration === right.sessionGeneration
     && left.micGeneration === right.micGeneration
     && left.backingGeneration === right.backingGeneration
+    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
     && left.sourceGeneration === right.sourceGeneration;
 }
 
@@ -152,6 +165,7 @@ export class RobotContentTransitionRuntime {
   private readonly historySamples: number;
   private readonly windowSamples: number;
   private readonly maxLagMs: number;
+  private readonly maxEvidenceGapSamples: number;
   private readonly toleranceMs: number;
   private readonly retentionSamples: number;
   private readonly boundsConfig: RobotContentTransitionBoundsConfig;
@@ -171,6 +185,8 @@ export class RobotContentTransitionRuntime {
     this.historySamples = validPositiveInt(options.historySamples, 'historySamples');
     this.windowSamples = validPositiveInt(options.windowSamples, 'windowSamples');
     this.maxLagMs = validPositive(options.maxLagMs, 'maxLagMs');
+    const maxEvidenceGapMs = validPositive(options.maxEvidenceGapMs, 'maxEvidenceGapMs');
+    this.maxEvidenceGapSamples = Math.round((maxEvidenceGapMs * this.sampleRate) / 1_000);
     this.toleranceMs = validPositive(options.toleranceMs, 'toleranceMs');
     this.retentionSamples = validPositive(options.retentionSamples, 'retentionSamples');
     this.boundsConfig = { ...options.bounds };
@@ -438,6 +454,16 @@ export class RobotContentTransitionRuntime {
   }
 
   noteMicProgress(nowMs = this.now()) {
+    const state = this.state;
+    if (state !== null && !contextMatches(state.context, this.host.context())) {
+      // A Mic capture-generation change makes every pending hypothesis window
+      // belong to a retired acoustic timeline. Clearing here runs in the same
+      // publisher-frame call stack that established the new generation, so an
+      // already-started worker is aborted before its Promise callback can
+      // publish a stale verdict or keep post-seek PCM quarantined.
+      this.clear();
+      return;
+    }
     this.maybeAnalyze(nowMs);
   }
 
@@ -548,6 +574,30 @@ export class RobotContentTransitionRuntime {
       || this.host.micTotalSamples() < preMicStart + this.windowSamples
       || this.host.micTotalSamples() < postMicStart + this.windowSamples
     ) return;
+
+    // `totalSamples` proves only that the frontier passed the requested range.
+    // Positioned packet loss leaves sparse holes behind that frontier and
+    // `AudioSession.readRange()` renders those holes as zeros. A correlator must
+    // not mistake that span for evidence, so reject a window whose exact source
+    // ranges exceed the same missing-audio bound used by calibration.
+    const rangeEvidence = [
+      this.host.readBackingEvidence(start, this.windowSamples),
+      this.host.readMicEvidence(preMicStart, this.windowSamples),
+      this.host.readMicEvidence(postMicStart, this.windowSamples),
+    ];
+    const evidenceUsable = rangeEvidence.every((evidence) => (
+      evidence.frontierMissingSamples === 0
+      && evidence.gapSamples <= this.maxEvidenceGapSamples
+    ));
+    if (!evidenceUsable) {
+      // This range can never become more complete once its frontier has passed.
+      // Skip it without charging a worker invocation, but never replay working
+      // evidence across a range we could not classify. A later clean window may
+      // still prove the boundary before the transaction's existing deadline.
+      state.discardWorkingEvidenceOnCommit = true;
+      state.nextWindowStart = end;
+      return;
+    }
 
     if (!beginRobotContentTransitionWorker(state.bounds, 'compare', nowMs)) {
       this.settleDegraded(state, nowMs);

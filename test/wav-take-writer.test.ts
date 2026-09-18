@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { WavTakeWriter, encodePcm16WavHeader } from '../src/wav-take-writer.js';
+import {
+  WavTakeWriter,
+  encodePcm16WavHeader,
+  writeBufferFullyAt,
+} from '../src/wav-take-writer.js';
 
 test('PCM16 WAV header describes one-channel 48 kHz audio', () => {
   const header = encodePcm16WavHeader(48_000, 1_920);
@@ -20,6 +24,38 @@ test('PCM16 WAV header describes one-channel 48 kHz audio', () => {
   assert.equal(header.readUInt16LE(34), 16);
   assert.equal(header.toString('ascii', 36, 40), 'data');
   assert.equal(header.readUInt32LE(40), 1_920);
+});
+
+test('WAV header publication retries short positioned writes until all bytes land', async () => {
+  const source = encodePcm16WavHeader(48_000, 1_920);
+  const target = Buffer.alloc(source.byteLength);
+  const writes: Array<{ offset: number; length: number; position: number }> = [];
+  const writer = {
+    async write(buffer: Buffer, offset: number, length: number, position: number) {
+      const bytesWritten = Math.min(7, length);
+      buffer.copy(target, position, offset, offset + bytesWritten);
+      writes.push({ offset, length, position });
+      return { bytesWritten };
+    },
+  };
+
+  await writeBufferFullyAt(writer, source, 0);
+
+  assert.deepEqual(target, source);
+  assert.ok(writes.length > 1, 'the regression must exercise repeated short writes');
+  assert.equal(writes[0].offset, 0);
+  assert.equal(writes.at(-1)?.position, 42);
+});
+
+test('WAV header publication fails rather than looping when a write makes no progress', async () => {
+  await assert.rejects(
+    writeBufferFullyAt({
+      async write() {
+        return { bytesWritten: 0 };
+      },
+    }, Buffer.alloc(44), 0),
+    /did not make valid forward progress/,
+  );
 });
 
 test('WavTakeWriter streams PCM into a hidden partial file and publishes only after finalization', async () => {
@@ -91,6 +127,64 @@ test('aborting a Take removes its partial artifact', async () => {
     writer.append(Buffer.alloc(1_920));
     await writer.abort();
     assert.deepEqual(await readdir(directory), [], 'abort owns stream closure and partial cleanup');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('abort removes a stable WAV left by a failed publication', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-abort-published-'));
+  try {
+    const writer = new WavTakeWriter({
+      directory,
+      takeId: 'take-abort-published',
+      sampleRate: 48_000,
+    });
+    writer.append(Buffer.alloc(1_920));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Model durableRename() after rename succeeded but before the parent
+    // directory sync completed: finalization will be treated as failed, yet a
+    // stable path can already be visible and must not survive abort/restart.
+    await writeFile(writer.filePath, Buffer.from('ambiguous-published-wav'));
+    await writer.abort();
+
+    assert.deepEqual(
+      await readdir(directory),
+      [],
+      'failed publication cleanup must remove both partial and stable WAV paths',
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('abort after a successful finalize does not delete the published WAV', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-abort-ready-'));
+  try {
+    const writer = new WavTakeWriter({ directory, takeId: 'take-ready', sampleRate: 48_000 });
+    writer.append(Buffer.alloc(1_920));
+    const artifact = await writer.finalize();
+
+    await writer.abort();
+
+    assert.deepEqual(await readdir(directory), ['take-ready.wav']);
+    assert.equal((await readFile(artifact.filePath)).byteLength, 44 + 1_920);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('discardFinalized removes a published WAV through the durable cleanup path', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-discard-ready-'));
+  try {
+    const writer = new WavTakeWriter({ directory, takeId: 'take-discard', sampleRate: 48_000 });
+    writer.append(Buffer.alloc(1_920));
+    await writer.finalize();
+
+    await writer.discardFinalized();
+
+    assert.deepEqual(await readdir(directory), []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

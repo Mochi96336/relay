@@ -14,6 +14,21 @@ import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
+import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
+import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
+import {
+  bootProbeStartAuthorityAllowsAttempt,
+  selectBootProbeStartTarget,
+} from './boot-probe-start-policy.js';
+import { bootProbeTopologyReady } from './boot-probe-topology-admission-policy.js';
+import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
+import { decideBootProbeAnalysisEvidence } from './boot-probe-analysis-evidence-policy.js';
+import { decideBootProbeRunIdentity } from './boot-probe-run-identity-policy.js';
+import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
+import {
+  decideCalibrationApplicability,
+  type CalibrationApplicability,
+} from './calibration-applicability.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
   CalibrationSession,
@@ -21,6 +36,18 @@ import {
   type CalibrationContext,
 } from './calibration-session.js';
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
+import { decideContentValidationBaselineSync } from './content-validation-baseline-policy.js';
+import {
+  contentValidationAuthorityReady,
+  contentValidationLivePathReady,
+  contentValidationPathPrerequisitesReady,
+} from './content-validation-path-policy.js';
+import {
+  autoContentCalibrationAuthorityAllowsStart,
+  autoContentCalibrationLivePathReady,
+  autoContentCalibrationPrerequisitesReady,
+  autoContentCalibrationStartMode,
+} from './auto-content-calibration-policy.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicRuntime } from './mic-runtime.js';
@@ -47,6 +74,10 @@ import { createRelayRobotActivationCoordinator } from './relay-robot-activation-
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
 import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
+import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
+import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
+import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
+import { createRelayRobotLegacyCalibrationDropCoordinator } from './relay-robot-legacy-calibration-drop-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
@@ -55,6 +86,7 @@ import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-cap
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
+import { createRelayRobotContentMappingRevocationCoordinator } from './relay-robot-content-mapping-revocation-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
@@ -320,6 +352,7 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
   historySamples: ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES,
   windowSamples: ROBOT_CONTENT_TRANSITION_WINDOW_SAMPLES,
   maxLagMs: CALIBRATION_MAX_LAG_MS,
+  maxEvidenceGapMs: MAX_CAPTURE_GAP_MS,
   toleranceMs: CALIBRATION_TOLERANCE_MS,
   retentionSamples: BACKING_RETENTION_MS * MIX_SAMPLE_RATE / 1_000,
   bounds: ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG,
@@ -330,6 +363,8 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
     micTotalSamples: () => session.micTotalSamples,
     readBacking: (start, length) => session.readBacking(start, length),
     readMic: (start, length) => session.readMic(start, length),
+    readBackingEvidence: (start, length) => session.readBackingEvidence(start, length),
+    readMicEvidence: (start, length) => session.readMicEvidence(start, length),
     transitionEvidence: (maxSamples) => calibration.transitionEvidence(maxSamples),
     commit: (plan, nowMs) => robotContentTransitionCommitCoordinator.commit(plan, nowMs),
     onDegraded: (status) => {
@@ -379,8 +414,8 @@ const micTransportGrace = new MicTransportGraceRuntime({
   onExpired: expireMicTransportGrace,
 });
 
-function noteMicFrame(nowMs: number) {
-  micRuntime.noteFrame(nowMs);
+function noteMicFrame(nowMs: number, frame: PcmFrame) {
+  micRuntime.noteFrame(nowMs, frame);
 }
 
 function micFlowObserved() {
@@ -453,6 +488,8 @@ function calibrationContext(): CalibrationContext {
     sessionGeneration: session.generation,
     micGeneration: session.micGeneration,
     backingGeneration: session.backingGeneration,
+    micSourceRate: micRuntime.sampleRate,
+    backingSourceRate: backingRuntime.sampleRate,
     sourceGeneration: sourceRuntime.generation,
   };
 }
@@ -605,9 +642,32 @@ function robotFollowerSeekMayPreserveMapping(nowMs = performance.now()) {
   );
 }
 
+/**
+ * Retires the whole Robot content-transition transaction.
+ *
+ * This is intentionally stronger than `clearPendingBoundary()`: lifecycle
+ * discontinuities must abort any anchor/compare worker and discard quarantined
+ * transition state, not merely forget an outstanding sample-boundary request.
+ */
 function clearRobotContentTransition() {
   robotContentTransitionRuntime.clear();
 }
+
+const robotContentMappingRevocationCoordinator =
+  createRelayRobotContentMappingRevocationCoordinator({
+    resetPlayerOffset: () => robotPlayerOffset.reset(),
+    resetContentTimeline: () => robotContentTimeline.reset(),
+    clearContentTransition: () => clearRobotContentTransition(),
+    invalidateSourceMapping: () => sourceRuntime.invalidateMapping(),
+    discardPrimedContent: () => calibration.discardPrimedContent(),
+    clearContentValidation: () => clearContentValidationBaseline(),
+    abortCalibrationIfCollecting: (reason) => {
+      if (calibration.collecting) calibration.fail(reason);
+    },
+    syncAppliedCalibration: () => { syncAppliedCalibration(); },
+    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  });
 
 /**
  * The single way to revoke Robot content mapping.
@@ -621,34 +681,7 @@ function clearRobotContentTransition() {
  * write at the call site.
  */
 function revokeRobotContentMapping({ reason }: { reason: string }) {
-  robotPlayerOffset.reset();
-  robotContentTimeline.reset();
-  clearRobotContentTransition();
-  // The reference *frame* is void here, not merely the current mapping.
-  // Bumping the source generation is what fails an existing content authority
-  // closed: without it a confirmed result keeps matching the live calibration
-  // context, so it stays eligible to be re-applied the moment a new delta makes
-  // the mapper ready again.
-  sourceRuntime.invalidateMapping();
-
-  // Deliberately before the failure below: `discardPrimedContent()` is a no-op
-  // while a run is collecting, so this drops an *idle* primed backup only. A
-  // collecting run keeps its own working evidence and hands it to the retry;
-  // the primed content is context-fenced, so the generation bump above already
-  // stops it being reused in a frame it was not measured in.
-  calibration.discardPrimedContent();
-  clearContentValidationBaseline();
-
-  // A pending analyzer is the one piece of state that survives every other
-  // reset here. `CalibrationSession` stamps its promotion with the context that
-  // is live when the worker answers, so a run left alive across a revocation
-  // promotes evidence measured in a reference frame that no longer exists.
-  // Failing the run is what aborts it.
-  if (calibration.collecting) calibration.fail(reason);
-
-  syncAppliedCalibration();
-  broadcastJson(sourceStatusPayload());
-  broadcastJson(timingCalibrationStatusPayload());
+  robotContentMappingRevocationCoordinator.revoke(reason);
 }
 
 /**
@@ -682,10 +715,6 @@ function robotContentTransitionStatus(nowMs = performance.now()) {
 
 function sweepRobotContentTransition(nowMs: number) {
   return robotContentTransitionRuntime.sweep(nowMs);
-}
-
-function clearRobotBackingBoundaryRequest() {
-  robotContentTransitionRuntime.clear();
 }
 
 function feedContentBackingEvidence(samples: Int16Array, start: number, nowMs: number) {
@@ -787,6 +816,10 @@ const calibration = new CalibrationSession({
   maxLagMs: CALIBRATION_MAX_LAG_MS,
   analyze: analyzeTimingCalibrationInWorker,
   onSettled: () => {
+    timingRuntime.syncConfirmedAuthority({
+      confirmedRevision: calibration.confirmedRevision,
+      hasConfirmedResult: calibration.confirmedResult !== null,
+    });
     syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());
     broadcastJson(sourceStatusPayload());
@@ -837,19 +870,21 @@ function clearContentValidationBaseline() {
  */
 function syncContentValidationBaseline(nowMs: number) {
   const confirmed = calibration.confirmedResult;
-  if (
-    appliedCalibrationKind() !== 'content'
-    || confirmed === null
-    || calibrationIsStale()
-  ) {
-    if (contentCalibrationValidator.hasBaseline) clearContentValidationBaseline();
+  const decision = decideContentValidationBaselineSync({
+    appliedKind: appliedCalibrationKind(),
+    hasConfirmedResult: confirmed !== null,
+    calibrationStale: confirmed !== null && calibrationIsStale(),
+    hasBaseline: contentCalibrationValidator.hasBaseline,
+    baselineRevision: timingRuntime.contentValidationBaselineRevision,
+    confirmedRevision: calibration.confirmedRevision,
+  });
+
+  if (decision === 'none') return;
+  if (decision === 'clear') {
+    clearContentValidationBaseline();
     return;
   }
-
-  if (
-    timingRuntime.contentValidationBaselineRevision === calibration.confirmedRevision
-    && contentCalibrationValidator.hasBaseline
-  ) return;
+  if (confirmed === null) return;
 
   contentCalibrationValidator.setBaseline({
     micLagMs: confirmed.micLagMs,
@@ -1174,7 +1209,6 @@ function calibrationIsStale() {
 function appliedCalibrationKind() {
   const status = calibration.status();
   return timingRuntime.appliedCalibrationKind({
-    confirmedRevision: calibration.confirmedRevision,
     hasConfirmedResult: calibration.confirmedResult !== null,
     provisional: status.provisional,
   });
@@ -1196,60 +1230,26 @@ function appliedCalibrationKind() {
  * invalidates the mapping - a disconnect, a capture epoch, a gross jump - each
  * of which revokes through its own path.
  */
-type CalibrationApplicability = 'apply' | 'hold' | 'revoke';
-
 function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationApplicability {
+  const nowMs = performance.now();
   const result = calibration.result;
-  if (result === null || calibrationIsStale()) return 'revoke';
-
   const status = calibration.status();
-  const retainingConfirmedAuthority = calibration.transactionActive
-    && !status.provisional
-    && calibration.confirmedResult !== null;
-
-  // Probe preference chooses which *candidate* may promote. It must not revoke
-  // an independently valid confirmed content authority merely because a boot
-  // replacement transaction has started.
-  //
-  // Preference lasts only until the boot probe settles. A settled baseline is
-  // the thing content is meant to replace, so keying this on probe *failure*
-  // would leave a successfully measured content result permanently parked
-  // behind the boot result it improves on.
-  if (
-    robotProbeTimingActive()
-    && kind !== 'boot-probe'
-    && !bootProbeSettled()
-    && !retainingConfirmedAuthority
-  ) return 'revoke';
-
-  // A Robot that is gone is a real invalidation; one that has merely not spoken
-  // for a moment is not.
-  const robotGone = robotRouteActive() && !sourceRuntime.connected();
-  if (robotGone) return 'revoke';
-
-  // Player-relative delta matters only while a Song exists. In a no-Song room
-  // the two measured path legs are already the complete correction the mixer
-  // can use.
-  //
-  // A delta that has *never* been established is not the same as one that has
-  // gone quiet. Before the first report the applied total does not contain a
-  // player-relative term at all, so it answers a different question than the
-  // room is now asking and must be revoked. After one, the total already
-  // includes that term and the Robot has simply stopped talking.
-  if (
-    robotRouteActive()
-    && kind === 'boot-probe'
-    && roomHasSong()
-    && !robotDeltaIsFresh()
-  ) return robotDeltaEverEstablished() ? 'hold' : 'revoke';
-  // A Robot content result is expressed in the mapper's stable reference frame.
-  // It can own the live mixer only while the current media mapping is known.
-  if (
-    robotRouteActive()
-    && kind === 'content'
-    && !robotContentMappingReady()
-  ) return robotDeltaEverEstablished() ? 'hold' : 'revoke';
-  return 'apply';
+  return decideCalibrationApplicability({
+    kind,
+    hasResult: result !== null,
+    stale: result !== null && calibrationIsStale(),
+    calibrationTransactionActive: calibration.transactionActive,
+    calibrationProvisional: status.provisional,
+    hasConfirmedResult: calibration.confirmedResult !== null,
+    robotProbeTimingActive: robotProbeTimingActive(),
+    bootProbeSettled: bootProbeSettled(nowMs),
+    robotRouteActive: robotRouteActive(),
+    robotSourceConnected: sourceRuntime.connected(),
+    roomHasSong: roomHasSong(nowMs),
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    robotDeltaEverEstablished: robotDeltaEverEstablished(),
+    robotContentMappingReady: robotContentMappingReady(nowMs),
+  });
 }
 
 /**
@@ -1341,114 +1341,44 @@ function syncAppliedCalibration() {
   if (robotRouteActive() && calibrationKind === 'boot-probe') {
     const nowMs = performance.now();
     const result = calibration.result;
-    const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
-
-    // With no Song there is no player-relative term to apply. The measured path
-    // difference is therefore the authoritative mixer correction regardless of
-    // any historical Robot offset that may have been folded into the stored
-    // boot result during an earlier playback session.
-    if (
-      !roomHasSong(nowMs)
-      && result !== null
-      && pathDifferenceMs !== null
-      && !calibrationIsStale()
-      && bootProbeRuntime.completedContextMatches(bootProbeContext())
-    ) {
-      if (active === pathDifferenceMs) return false;
-      session.setAlignment({ calibratedMicLagMs: pathDifferenceMs });
-      return true;
-    }
-
-    const applicability = calibrationApplicability(calibrationKind);
-    // `hold` means the measurement is intact and only a live input went quiet.
-    // Leaving the applied total in force is what keeps the room from hearing a
-    // step in the middle of a song.
-    if (applicability === 'hold') return false;
-    if (applicability === 'revoke') {
-      if (active === null) return false;
-      session.setAlignment({ calibratedMicLagMs: null });
-      return true;
-    }
-
-    const storedDeltaMs = bootProbeRuntime.calibrationResult?.deltaMs;
-    const currentDelta = currentDeltaMs(nowMs);
-    // A fresh player report moving away from the stored boot delta is not an
-    // authority failure. Keep the last applied total in force while
-    // maybeReapplyBootCalibration() decides whether the smoothed movement is
-    // large enough to cross BOOT_DELTA_REAPPLY_MS. Clearing here would turn
-    // every tiny delta jitter into a null/network fallback and then bypass the
-    // reapply threshold because the next step sees `applied === null`.
-    //
-    // Missing stored provenance is different: there is no safe boot total to
-    // retain, so keep the existing fail-closed behavior for that invariant.
-    if (storedDeltaMs === undefined) {
-      if (active === null) return false;
-      session.setAlignment({ calibratedMicLagMs: null });
-      return true;
-    }
-    if (Math.abs(storedDeltaMs - currentDelta) >= 0.001) {
-      return false;
-    }
-
-    if (active !== null) {
-      if (result !== null && active !== result.micLagMs) {
-        session.setAlignment({ calibratedMicLagMs: result.micLagMs });
-        return true;
-      }
-      return false;
-    }
-
-    if (result !== null) {
-      session.setAlignment({ calibratedMicLagMs: result.micLagMs });
-      return true;
-    }
-    return false;
+    const decision = decideBootProbeMixerApplication({
+      activeMicLagMs: active,
+      roomHasSong: roomHasSong(nowMs),
+      resultMicLagMs: result?.micLagMs ?? null,
+      pathDifferenceMs: bootProbeRuntime.pathDifferenceMs,
+      calibrationStale: calibrationIsStale(),
+      completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
+      applicability: calibrationApplicability(calibrationKind),
+      storedDeltaMs: bootProbeRuntime.calibrationResult?.deltaMs ?? null,
+      currentDeltaMs: currentDeltaMs(nowMs),
+    });
+    if (decision.kind === 'hold') return false;
+    session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
+    return true;
   }
-
   const applicability = calibrationApplicability(calibrationKind);
-  if (applicability === 'hold') return false;
   let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;
   const robotContentAuthority = robotRouteActive() && calibrationKind === 'content';
   if (nextMicLagMs !== null && robotContentAuthority) {
     nextMicLagMs = contentLiveLagMs(nextMicLagMs, performance.now());
   }
 
-  // The Robot offset tracker is deliberately smoothed, but its residual noise is
-  // still not a reason to splice the Mic read head every 250 ms. The same bounded
-  // threshold used by boot re-application keeps content mapping corrections real
-  // while ignoring sub-threshold player jitter.
-  if (
-    robotContentAuthority
-    && timingRuntime.contentValidationSlewRevision === null
-    && active !== null
-    && nextMicLagMs !== null
-    && Math.abs(nextMicLagMs - active) < BOOT_DELTA_REAPPLY_MS
-  ) return false;
-
-  if (active === nextMicLagMs) {
-    if (timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision)) {
-      timingRuntime.clearContentValidationSlew();
-    }
-    return false;
-  }
-
-  if (
-    calibrationKind === 'content'
-    && active !== null
-    && nextMicLagMs !== null
-    && timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision)
-  ) {
-    timingRuntime.clearContentValidationSlew();
-    return session.slewCalibratedMicLagTo(nextMicLagMs);
-  }
-
-  // The periodic synchronizer runs while a live validation slew is still in
-  // progress. Seeing a different applied value is expected; do not snap it to
-  // the already-known target on the next 250 ms tick.
-  if (nextMicLagMs !== null && session.calibratedMicLagTarget === nextMicLagMs) return false;
-
-  timingRuntime.clearContentValidationSlew();
-  session.setAlignment({ calibratedMicLagMs: nextMicLagMs });
+  const decision = decideCalibrationMixerApplication({
+    applicability,
+    calibrationKind,
+    activeMicLagMs: active,
+    nextMicLagMs,
+    robotContentAuthority,
+    hasContentValidationSlew: timingRuntime.contentValidationSlewRevision !== null,
+    contentValidationSlewMatchesRevision:
+      timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision),
+    calibratedMicLagTarget: session.calibratedMicLagTarget,
+    jitterThresholdMs: BOOT_DELTA_REAPPLY_MS,
+  });
+  if (decision.clearContentValidationSlew) timingRuntime.clearContentValidationSlew();
+  if (decision.kind === 'none') return false;
+  if (decision.kind === 'slew') return session.slewCalibratedMicLagTo(decision.micLagMs);
+  session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
   return true;
 }
 
@@ -1815,6 +1745,8 @@ function productStatusPayload(nowMs = performance.now()) {
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
+    micMediaRecoveryDegraded:
+      micRuntime.freshUplinkHealthPayload(nowMs)?.transport.mediaRecoveryDegraded === true,
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),
@@ -1833,7 +1765,9 @@ function productStatusPayload(nowMs = performance.now()) {
       calibrationActive: timingCalibrationInProgress(nowMs),
       calibrationStale: calibrationIsStale(),
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
-      requiresRobotPlayerDelta: robotRouteActive() && timingRuntime.calibrationKind === 'boot-probe',
+      // Product timing describes the alignment actually serving the mixer, not a
+      // replacement strategy that may be measuring in the background.
+      requiresRobotPlayerDelta: robotRouteActive() && appliedCalibrationKind() === 'boot-probe',
       robotProbeTimingActive: robotProbeTimingActive(),
       bootProbeActive: bootProbeInProgress(nowMs),
       contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
@@ -1939,7 +1873,7 @@ const liveSourceStopCoordinator = createRelayLiveSourceStopCoordinator({
   clearContentValidation: () => clearContentValidationBaseline(),
   resetRobotPlayerOffset: () => robotPlayerOffset.reset(),
   resetRobotContentTimeline: () => robotContentTimeline.reset(),
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
   stopSession: () => session.stop(),
   resetCalibration: () => calibration.reset(),
   clearTimingKind: () => timingRuntime.clearCalibrationKind(),
@@ -1966,19 +1900,22 @@ function maybeStopLiveSourceWhenUnarmed() {
   if (!micArmed && !backingArmed) stopLiveSource();
 }
 
+const backingGraceExpiryCoordinator = createRelayBackingGraceExpiryCoordinator({
+  stopLiveSource: () => stopLiveSource(),
+  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
+  invalidateMicTiming: (message) => invalidateMicTiming(message),
+  reportStatus: () => broadcastStatus(),
+});
+
 function expireBackingGrace() {
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGrace.pending;
-  if (roomHasSong() || !micArmed) {
-    stopLiveSource();
-    return;
-  }
-
-  backingRuntime.retireRobotRoute();
-  clearRobotBackingBoundaryRequest();
-  invalidateMicTiming('Backing route ended while the room continued voice-only.');
-  broadcastStatus();
+  backingGraceExpiryCoordinator.expire({
+    roomHasSong: roomHasSong(),
+    micArmed,
+  });
 }
 
 
@@ -2001,13 +1938,16 @@ function processPublisherFrame(frame: PcmFrame) {
   if (!session.active) startLiveSource();
 
   if (session.active) {
-    const previousGeneration = session.micGeneration;
-    noteMicFrame(performance.now());
-    const { samples, start } = session.ingestMic(frame, micRuntime.sampleRate);
+    const nowMs = performance.now();
+    const { samples, start, captureRestarted } = session.ingestMic(
+      frame,
+      micRuntime.sampleRate,
+      nowMs,
+    );
+    if (samples.length > 0) noteMicFrame(nowMs, frame);
 
     if (session.active) {
-      const micRestarted = previousGeneration !== null && session.micGeneration !== previousGeneration;
-      if (micRestarted) {
+      if (captureRestarted) {
         micCaptureRestartCoordinator.restart({
           calibrationCollecting: calibration.collecting,
         });
@@ -2041,54 +1981,87 @@ const mixerTimer = setInterval(() => {
 }, 5);
 
 function maybeAutoCalibrate(nowMs: number) {
+  // Feature enablement and Take ownership are outer scheduler concerns. The
+  // calibration policy below owns why an otherwise eligible automatic content
+  // attempt may proceed.
   if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
   const robotRoute = robotRouteActive();
-  // Boot probe is the fast baseline, not the terminal strategy. Before it has
-  // either completed or exhausted its bounded attempts, keep its preference.
-  // Once a baseline exists, a playing Song must be allowed to promote to
-  // content authority instead of being blocked forever by the boot result it
-  // is supposed to replace.
-  if (!bootProbeSettled(nowMs)) return;
-  if (robotRoute && !robotContentEvidenceMappingReady(nowMs)) return;
-  if (!session.active || calibration.collecting) return;
-  const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
-  if (
-    freshConfirmedResult
-    && (!robotRoute || appliedCalibrationKind() === 'content')
-  ) return;
-  if (!timingRuntime.autoCalibrationDue(nowMs)) return;
+  if (!autoContentCalibrationPrerequisitesReady({
+    bootProbeSettled: bootProbeSettled(nowMs),
+    robotRouteActive: robotRoute,
+    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
+    sessionActive: session.active,
+    calibrationCollecting: calibration.collecting,
+  })) return;
 
-  if (!backingRuntime.connected() || !micRuntime.controlConnected()) return;
-  if (!bothStreamsFlowing(nowMs)) return;
-  const timeline = currentTimelineStatus();
-  if (!timeline.connected || Number(timeline.state) !== 1) return;
+  const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
+  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
+  // Preserve the historical short-circuit: only fresh Robot authority needs
+  // that stateful read to distinguish replaceable Boot from terminal content.
+  const appliedKind = freshConfirmedResult && robotRoute
+    ? appliedCalibrationKind()
+    : null;
+  if (!autoContentCalibrationAuthorityAllowsStart({
+    freshConfirmedResult,
+    robotRouteActive: robotRoute,
+    appliedKind,
+  })) return;
+
+  // Preserve the old liveness read order even though the final decision is
+  // pure: a retry that is not due must not fan out into transport/timeline work.
+  const retryDue = timingRuntime.autoCalibrationDue(nowMs);
+  const backingConnected = retryDue && backingRuntime.connected();
+  const micControlConnected = backingConnected && micRuntime.controlConnected();
+  const streamsFlowing = micControlConnected && bothStreamsFlowing(nowMs);
+  const timeline = streamsFlowing ? currentTimelineStatus() : null;
+  if (!autoContentCalibrationLivePathReady({
+    retryDue,
+    backingConnected,
+    micControlConnected,
+    streamsFlowing,
+    timelineConnected: Boolean(timeline?.connected),
+    timelinePlaying: Number(timeline?.state) === 1,
+  })) return;
 
   timingRuntime.beginContentCalibration(nowMs, true);
-  // A failed probe hands its priming run straight over; a *successful* one
-  // still restarts collection from scratch. Reusing primed evidence there is a
-  // separate change with its own measurement risk, so keep it out of the policy
-  // fix.
-  if (probeCalibrationExhausted(nowMs)) calibration.startFromPrimed(nowMs);
+  const startMode = autoContentCalibrationStartMode(probeCalibrationExhausted(nowMs));
+  if (startMode === 'primed') calibration.startFromPrimed(nowMs);
   else calibration.start(nowMs);
   broadcastJson(timingCalibrationStatusPayload());
 }
 
 function contentValidationPathReady(nowMs: number) {
-  if (!CONTENT_VALIDATION_ENABLED || takeBlocksCalibration()) return false;
-  if (!bootProbeSettled(nowMs)) return false;
-  if (robotRouteActive() && !robotContentEvidenceMappingReady(nowMs)) return false;
-  if (!session.active || calibration.collecting) return false;
-  // Same provenance rule as the baseline itself: validate the authority that is
-  // actually applied, not whichever candidate happens to be in flight.
-  if (
-    appliedCalibrationKind() !== 'content'
-    || calibration.confirmedResult === null
-    || calibrationIsStale()
-  ) return false;
-  if (!backingRuntime.connected() || !micRuntime.controlConnected()) return false;
-  if (!bothStreamsFlowing(nowMs)) return false;
+  const robotRoute = robotRouteActive();
+  if (!contentValidationPathPrerequisitesReady({
+    enabled: CONTENT_VALIDATION_ENABLED,
+    takeBlocked: takeBlocksCalibration(),
+    bootProbeSettled: bootProbeSettled(nowMs),
+    robotRouteActive: robotRoute,
+    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
+    sessionActive: session.active,
+    calibrationCollecting: calibration.collecting,
+  })) return false;
+
+  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
+  // Keep that stateful read after the prerequisite short-circuit, matching the
+  // historical admission ordering rather than sampling every fact eagerly.
+  const confirmed = calibration.confirmedResult;
+  const appliedKind = appliedCalibrationKind();
+  if (!contentValidationAuthorityReady({
+    appliedKind,
+    hasConfirmedResult: confirmed !== null,
+    calibrationStale:
+      appliedKind === 'content' && confirmed !== null && calibrationIsStale(),
+  })) return false;
+
   const timeline = currentTimelineStatus(nowMs);
-  return Boolean(timeline.connected) && Number(timeline.state) === 1;
+  return contentValidationLivePathReady({
+    backingConnected: backingRuntime.connected(),
+    micControlConnected: micRuntime.controlConnected(),
+    streamsFlowing: bothStreamsFlowing(nowMs),
+    timelineConnected: Boolean(timeline.connected),
+    timelinePlaying: Number(timeline.state) === 1,
+  });
 }
 
 function maybeValidateContentCalibration(nowMs: number) {
@@ -2118,6 +2091,8 @@ function bootProbeContext() {
     sessionGeneration: session.generation,
     micGeneration: session.micGeneration,
     backingGeneration: session.backingGeneration,
+    micSourceRate: micRuntime.sampleRate,
+    backingSourceRate: backingRuntime.sampleRate,
   };
 }
 
@@ -2129,7 +2104,10 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
   // never terminates. `decideCalibrationStart` already refuses this for manual
   // and product-advertised starts; the automatic scheduler needs the same rule
   // rather than a second, laxer policy.
-  if (robotRouteActive() && (!backingRuntime.isRobot || !sourceRuntime.connected())) {
+  if (robotRouteActive() && !bootProbeTopologyReady({
+    backingIsRobot: backingRuntime.isRobot,
+    robotSourceConnected: sourceRuntime.connected(),
+  })) {
     return false;
   }
   if (target === 'mic') {
@@ -2140,18 +2118,16 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
     && sourceRuntime.connected();
 }
 
+const bootProbeFailureSettlementCoordinator =
+  createRelayBootProbeFailureSettlementCoordinator({
+    restoreCandidateKindToAuthority: () => timingRuntime.restoreCandidateKindToAuthority(),
+    failPreservingPrimed: (message) => calibration.failPreservingPrimed(message),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+  });
+
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
   const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
-  if (failure) {
-    // The replacement candidate failed. `failPreservingPrimed()` synchronously
-    // publishes through onSettled, so restore orchestration provenance first;
-    // that callback must continue interpreting any retained confirmed result
-    // under the strategy that actually produced it.
-    timingRuntime.restoreCandidateKindToAuthority();
-    calibration.failPreservingPrimed(failure.message);
-    return;
-  }
-  broadcastJson(timingCalibrationStatusPayload());
+  bootProbeFailureSettlementCoordinator.settle(failure);
 }
 
 function sendProbeRequest(target: ProbeTarget, nowMs: number) {
@@ -2185,26 +2161,36 @@ function maybeStartProbeCalibration(nowMs: number) {
   if (!session.active || calibration.collecting) return;
 
   const context = bootProbeContext();
-  if (bootProbeRuntime.micLeg !== null && !bootProbeRuntime.micLegMatches(context)) {
+  if (bootProbeRuntime.micLegStaleForContext(context)) {
     abandonProbeRun();
   }
 
-  if (
-    timingRuntime.calibrationKind === 'boot-probe'
-    && calibration.result !== null
-    && !calibrationIsStale()
+  const candidateIsBootProbe = timingRuntime.calibrationKind === 'boot-probe';
+  const hasCalibrationResult = calibration.result !== null;
+  if (!bootProbeStartAuthorityAllowsAttempt({
+    candidateIsBootProbe,
+    hasCalibrationResult,
+    calibrationStale: candidateIsBootProbe && hasCalibrationResult
+      ? calibrationIsStale()
+      : false,
+    calibrationTransactionActive: calibration.transactionActive,
+  })) return;
+
+  if (!bootProbeRuntime.lifecycleIdle) return;
+
+  const probeErrored = probeStatus(nowMs).error !== null;
+  const hasMicLeg = bootProbeRuntime.hasMicLeg;
+  const completedContextMatches = !probeErrored
     && !calibration.transactionActive
-  ) return;
-  if (bootProbeRuntime.pendingRequest !== null || bootProbeRuntime.pendingAnalysis !== null) return;
-  if (probeStatus(nowMs).error !== null) return;
-
-  if (
-    !calibration.transactionActive
-    && bootProbeRuntime.micLeg === null
-    && bootProbeRuntime.completedContextMatches(context)
-  ) return;
-
-  const target: ProbeTarget = bootProbeRuntime.micLeg === null ? 'mic' : 'backing';
+    && !hasMicLeg
+    && bootProbeRuntime.completedContextMatches(context);
+  const target = selectBootProbeStartTarget({
+    probeErrored,
+    calibrationTransactionActive: calibration.transactionActive,
+    hasMicLeg,
+    completedContextMatches,
+  });
+  if (target === null) return;
   if (!bootProbeRuntime.canStart(target, nowMs)) return;
   if (!probePathReady(target, nowMs)) return;
   sendProbeRequest(target, nowMs);
@@ -2227,14 +2213,22 @@ function acceptCurrentProbeClientResult(
   const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
   if (!pending) return null;
 
-  if (!session.active || pending.sessionGeneration !== session.generation) {
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return null;
-  }
+  const sessionCurrent = session.active
+    && pending.sessionGeneration === session.generation;
+  const captureGenerationMatches = sessionCurrent
+    ? probeGeneration(pending.target) === pending.generation
+    : false;
+  const identity = decideBootProbeRunIdentity({
+    sessionCurrent,
+    captureGenerationMatches,
+  });
 
-  if (probeGeneration(pending.target) !== pending.generation) {
-    if (options.logCaptureGenerationMismatch && PROBE_DEBUG) {
+  if (identity.kind === 'abandon') {
+    if (
+      identity.reason === 'capture-generation'
+      && options.logCaptureGenerationMismatch
+      && PROBE_DEBUG
+    ) {
       console.log(`[probe] ${pending.target} dropped: capture generation changed`);
     }
     abandonProbeRun();
@@ -2278,13 +2272,17 @@ function handleProbeFailure(
   failProbeAttempt(pending.target, reason, nowMs);
 }
 
+const bootProbeCalibrationPromotionCoordinator =
+  createRelayBootProbeCalibrationPromotionCoordinator({
+    markBootProbeAuthority: () => timingRuntime.markBootProbeAuthority(),
+    applyExternalResult: (result) => calibration.applyExternalResult(result),
+  });
+
 function promoteBootProbeCalibration(
   mutateProbe: () => void,
   result: () => { micLagMs: number; confidence: number },
 ) {
-  mutateProbe();
-  timingRuntime.markBootProbeAuthority();
-  calibration.applyExternalResult(result());
+  bootProbeCalibrationPromotionCoordinator.promote(mutateProbe, result);
 }
 
 function maybeFinishProbeAnalysis(nowMs: number) {
@@ -2293,21 +2291,30 @@ function maybeFinishProbeAnalysis(nowMs: number) {
 
   const reached = waiting.target === 'mic' ? session.micTotalSamples : session.backingTotalSamples;
   const needed = waiting.windowStart + waiting.windowSamples;
+  const sessionCurrent = session.active
+    && waiting.sessionGeneration === session.generation;
+  const captureGenerationMatches = sessionCurrent
+    ? probeGeneration(waiting.target) === waiting.generation
+    : false;
+  const readiness = decideBootProbeAnalysisReadiness({
+    sessionCurrent,
+    captureGenerationMatches,
+    nowMs,
+    deadlineMs: waiting.deadlineMs,
+    reachedSamples: reached,
+    neededSamples: needed,
+  });
 
-  if (!session.active || waiting.sessionGeneration !== session.generation) {
+  if (readiness.kind === 'abandon') {
+    if (readiness.reason === 'capture-generation' && PROBE_DEBUG) {
+      console.log(`[probe] ${waiting.target} analysis dropped: capture generation changed`);
+    }
     abandonProbeRun();
     broadcastJson(timingCalibrationStatusPayload());
     return;
   }
 
-  if (probeGeneration(waiting.target) !== waiting.generation) {
-    if (PROBE_DEBUG) console.log(`[probe] ${waiting.target} analysis dropped: capture generation changed`);
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  if (nowMs > waiting.deadlineMs) {
+  if (readiness.kind === 'timeout') {
     if (PROBE_DEBUG) {
       console.log(
         `[probe] ${waiting.target} analysis timed out: reached=${reached} needed=${needed}`,
@@ -2318,9 +2325,26 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     return;
   }
 
-  if (reached < needed) return;
+  if (readiness.kind === 'wait') return;
   const analysis = bootProbeRuntime.takeAnalysis();
   if (!analysis) return;
+
+  const rangeEvidence = analysis.target === 'mic'
+    ? session.readMicEvidence(analysis.windowStart, analysis.windowSamples)
+    : session.readBackingEvidence(analysis.windowStart, analysis.windowSamples);
+  const evidenceDecision = decideBootProbeAnalysisEvidence({
+    gapSamples: rangeEvidence.gapSamples,
+    frontierMissingSamples: rangeEvidence.frontierMissingSamples,
+    sampleRate: MIX_SAMPLE_RATE,
+    maxGapMs: MAX_CAPTURE_GAP_MS,
+  });
+  if (evidenceDecision.kind === 'reject') {
+    const reason = evidenceDecision.reason === 'frontier-missing'
+      ? `captured audio window was incomplete (${evidenceDecision.frontierMissingSamples} samples beyond the capture frontier)`
+      : `captured audio gap ${evidenceDecision.gapMs.toFixed(1)} ms exceeded ${MAX_CAPTURE_GAP_MS} ms`;
+    failProbeAttempt(analysis.target, reason, nowMs);
+    return;
+  }
 
   const window = analysis.target === 'mic'
     ? session.readMic(analysis.windowStart, analysis.windowSamples)
@@ -2368,17 +2392,18 @@ function maybeFinishProbeAnalysis(nowMs: number) {
       ...leg,
       sessionGeneration: session.generation,
       micGeneration: analysis.generation,
+      micSourceRate: micRuntime.sampleRate,
     });
     broadcastJson(timingCalibrationStatusPayload());
     return;
   }
 
-  const micLeg = bootProbeRuntime.takeMicLeg();
-  if (
-    micLeg === null
-    || micLeg.sessionGeneration !== session.generation
-    || micLeg.micGeneration !== session.micGeneration
-  ) return;
+  const micLeg = bootProbeRuntime.takeMicLegForContext({
+    sessionGeneration: session.generation,
+    micGeneration: session.micGeneration,
+    micSourceRate: micRuntime.sampleRate,
+  });
+  if (micLeg === null) return;
 
   const result = combineBootCalibration({
     mic: micLeg,
@@ -2433,21 +2458,27 @@ function maybeReapplyBootCalibration(nowMs: number) {
   if (takeBlocksCalibration()) return;
   if (!robotRouteActive()) return;
   const appliedKind = appliedCalibrationKind();
-  const reclaiming = appliedKind !== 'boot-probe'
-    && calibrationApplicability(appliedKind) === 'revoke';
-  if (appliedKind !== 'boot-probe' && !reclaiming) return;
-  if (!roomHasSong(nowMs)) return;
-  if (bootProbeRuntime.pathDifferenceMs === null || calibration.collecting || calibration.transactionActive) return;
-  if (!robotDeltaIsFresh(nowMs)) return;
-  if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return;
-
-  const advanceMs = bootProbeAdvanceMs(nowMs);
-  if (advanceMs === null) return;
   const applied = session.alignment.calibratedMicLagMs;
-  if (applied !== null && Math.abs(advanceMs - applied) < BOOT_DELTA_REAPPLY_MS) return;
+  const decision = decideBootProbeReapplication({
+    appliedKind,
+    replacementApplicability: appliedKind === 'boot-probe'
+      ? null
+      : calibrationApplicability(appliedKind),
+    roomHasSong: roomHasSong(nowMs),
+    pathDifferenceReady: bootProbeRuntime.pathDifferenceMs !== null,
+    calibrationCollecting: calibration.collecting,
+    calibrationTransactionActive: calibration.transactionActive,
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
+    advanceMs: bootProbeAdvanceMs(nowMs),
+    appliedMicLagMs: applied,
+    reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS,
+  });
+  if (decision.kind === 'none') return;
 
+  const advanceMs = decision.advanceMs;
   if (PROBE_DEBUG) {
-    const why = reclaiming ? 'reclaimed by boot baseline' : 'delta moved';
+    const why = decision.reason === 'reclaim' ? 'reclaimed by boot baseline' : 'delta moved';
     console.log(`[probe] ${why}; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
   }
   promoteBootProbeCalibration(
@@ -2466,14 +2497,19 @@ function maybeReapplyBootCalibration(nowMs: number) {
  * discards the confirmed boot result, dropping the live mixer to its network
  * estimate mid-upgrade.
  */
+const robotLegacyCalibrationDropCoordinator = createRelayRobotLegacyCalibrationDropCoordinator({
+  robotRouteActive: () => robotRouteActive(),
+  calibrationKind: () => timingRuntime.calibrationKind,
+  bootProbeSettled: () => bootProbeSettled(),
+  clearContentValidationBaseline: () => clearContentValidationBaseline(),
+  resetCalibration: () => calibration.reset(),
+  clearCalibrationKind: () => timingRuntime.clearCalibrationKind(),
+  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
+  syncAppliedCalibration: () => { syncAppliedCalibration(); },
+});
+
 function dropLegacyCalibrationForRobot() {
-  if (!robotRouteActive() || timingRuntime.calibrationKind !== 'content') return;
-  if (bootProbeSettled()) return;
-  clearContentValidationBaseline();
-  calibration.reset();
-  timingRuntime.clearCalibrationKind();
-  timingRuntime.resetAutoCalibrationSchedule();
-  syncAppliedCalibration();
+  robotLegacyCalibrationDropCoordinator.drop();
 }
 
 // Command authority and product action availability stay in the command handler.
@@ -2526,10 +2562,9 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(mixHealthPayload());
   }
 
-  const pendingProbe = bootProbeRuntime.pendingRequest;
-  if (pendingProbe !== null && nowMs - pendingProbe.serverSentAtMs > PROBE_REPLY_TIMEOUT_MS) {
-    const expired = bootProbeRuntime.acceptReply(pendingProbe.requestId);
-    if (expired) failProbeAttempt(expired.target, 'playback acknowledgement timed out', nowMs);
+  const expiredProbe = bootProbeRuntime.takeExpiredRequest(nowMs, PROBE_REPLY_TIMEOUT_MS);
+  if (expiredProbe) {
+    failProbeAttempt(expiredProbe.target, 'playback acknowledgement timed out', nowMs);
   }
 
   dropLegacyCalibrationForRobot();
@@ -2573,6 +2608,12 @@ function validCaptureGeneration(value: unknown) {
   return Number.isInteger(generation) && generation >= 0 && generation <= 0xffff_ffff
     ? generation >>> 0
     : null;
+}
+
+function validSampleCursor(value: unknown) {
+  const cursor = Number(value);
+  if (!Number.isSafeInteger(cursor) || cursor < 0) return null;
+  return cursor;
 }
 
 function validAudioPacketVersion(value: unknown): 1 | 2 | null {
@@ -3271,6 +3312,11 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
     });
   },
   bindPublisher: (registration) => micRuntime.bindPublisher(registration),
+  retireReplacedCapture: () => {
+    clearRobotContentTransition();
+    session.retireMicCapture();
+    takeController.noteQualityEvent('mic-capture-restarted');
+  },
   retirePrevious: (previousPublisher, nextPublisher, sameParticipantReplacement) => {
     const newOwnerName = nextPublisher.participantId
       ? participantPayload(nextPublisher.participantId)?.nickname ?? 'Another participant'
@@ -3314,7 +3360,8 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
 
 const backingActivationCoordinator = createRelayBackingActivationCoordinator<RelaySocket>({
   previousBacking: () => backingRuntime.socket,
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
+  retireReplacedCapture: () => session.retireBackingCapture(),
   noteQualityEvent: (event) => takeController.noteQualityEvent(event),
   retirePrevious: (previous, next) => {
     replacePrevious(previous, next, 'Replaced by a newer tab capture.');
@@ -3326,6 +3373,11 @@ const backingActivationCoordinator = createRelayBackingActivationCoordinator<Rel
   setBackingExpected: () => session.setBackingExpected(true),
   sessionActive: () => session.active,
   dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
+  onReplacedCaptureActivated: () => {
+    backingCaptureRestartCoordinator.restart({
+      calibrationCollecting: calibration.collecting,
+    });
+  },
   activeBackingIsRobot: () => backingRuntime.isRobot,
   sendRegistered: (socket, robot) => {
     sendJson(socket, { type: 'registered', role: 'backing', robot });
@@ -3455,12 +3507,38 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       return;
     }
 
+    const hasCaptureGeneration = Object.prototype.hasOwnProperty.call(payload, 'captureGeneration');
+    const hasCaptureSampleCursor = Object.prototype.hasOwnProperty.call(payload, 'captureSampleCursor');
+    if (hasCaptureGeneration !== hasCaptureSampleCursor) {
+      sendJson(socket, {
+        type: 'error',
+        message: 'Backing capture identity requires generation and sample cursor together.',
+      });
+      return;
+    }
+
+    let captureReplaced = false;
+    if (hasCaptureGeneration) {
+      const captureGeneration = validCaptureGeneration(payload.captureGeneration);
+      const captureSampleCursor = validSampleCursor(payload.captureSampleCursor);
+      if (captureGeneration === null || captureSampleCursor === null) {
+        sendJson(socket, { type: 'error', message: 'Invalid backing capture identity.' });
+        return;
+      }
+      captureReplaced = session.backingCaptureReplacedBy({
+        generation: captureGeneration,
+        sourceRate: sampleRate,
+        sampleCursor: captureSampleCursor,
+      });
+    }
+
     commitSocketRole(socket, 'backing');
 
     backingActivationCoordinator.activate({
       socket,
       sampleRate,
       robot: payload.robot === true,
+      captureReplaced,
     });
     return;
   },
@@ -3512,7 +3590,7 @@ const robotActivationCoordinator = createRelayRobotActivationCoordinator<RelaySo
   sessionActive: () => session.active,
   resetPlayerOffset: () => robotPlayerOffset.reset(),
   resetContentTimeline: () => robotContentTimeline.reset(),
-  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearContentTransition: () => clearRobotContentTransition(),
   failCalibrationIfCollecting: () => {
     if (calibration.collecting) {
       calibration.fail('The Robot source changed during calibration. Start calibration again.');
@@ -3539,7 +3617,7 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
 });
 
 const backingCaptureRestartCoordinator = createRelayBackingCaptureRestartCoordinator({
-  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearContentTransition: () => clearRobotContentTransition(),
   noteQualityEvent: (event) => takeController.noteQualityEvent(event),
   abandonProbeRun: () => abandonProbeRun(),
   clearContentValidation: () => clearContentValidationBaseline(),
@@ -3586,7 +3664,7 @@ const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySo
   detach: (socket) => sourceRuntime.detachRobot(socket),
   resetPlayerOffset: () => robotPlayerOffset.reset(),
   resetContentTimeline: () => robotContentTimeline.reset(),
-  clearBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearContentTransition: () => clearRobotContentTransition(),
   abandonProbeRun: () => abandonProbeRun(),
   failCalibrationIfCollecting: () => {
     if (calibration.collecting) {
@@ -3628,7 +3706,7 @@ const micDisconnectCoordinator = createRelayMicDisconnectCoordinator<RelaySocket
 const backingDisconnectCoordinator = createRelayBackingDisconnectCoordinator<RelaySocket>({
   isBacking: (socket) => backingRuntime.isSocket(socket),
   noteDisconnected: () => takeController.noteQualityEvent('backing-transport-disconnected'),
-  clearRobotBackingBoundaryRequest: () => clearRobotBackingBoundaryRequest(),
+  clearRobotContentTransition: () => clearRobotContentTransition(),
   detach: (socket) => backingRuntime.detach(socket),
   clearBackingExpectation: () => session.setBackingExpected(false),
   failCalibrationIfCollecting: () => {

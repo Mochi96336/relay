@@ -40,6 +40,8 @@ export class MicCaptureRecoveryWatchdog {
     this.lastSampleProgressAtMs = 0;
     this.hiddenSnapshot = null;
     this.rebuildRequested = false;
+    this.rebuildBudgetSpent = false;
+    this.inputGapActive = false;
   }
 
   start(snapshot, reason = 'startup') {
@@ -50,6 +52,7 @@ export class MicCaptureRecoveryWatchdog {
     this.lastSampleProgressAtMs = current.nowMs;
     this.hiddenSnapshot = null;
     this.rebuildRequested = false;
+    this.rebuildBudgetSpent = false;
     this.beginRecovery(current, reason);
   }
 
@@ -69,6 +72,13 @@ export class MicCaptureRecoveryWatchdog {
     this.lastSampleProgressAtMs = current.nowMs;
   }
 
+  claimRebuild() {
+    if (this.rebuildRequested || this.rebuildBudgetSpent) return false;
+    this.rebuildRequested = true;
+    this.rebuildBudgetSpent = true;
+    return true;
+  }
+
   noteHidden(snapshot) {
     if (!this.active) return;
     const current = normalizeSnapshot(snapshot);
@@ -77,12 +87,16 @@ export class MicCaptureRecoveryWatchdog {
   }
 
   noteForeground(snapshot) {
-    if (!this.active) return { discontinuity: false };
+    if (!this.active) return { discontinuity: false, rebuild: false };
     const current = normalizeSnapshot(snapshot);
     const hidden = this.hiddenSnapshot;
     this.hiddenSnapshot = null;
 
-    let discontinuity = false;
+    // A sustained worklet input gap is already positive capture-failure
+    // evidence. Hidden pages defer rebuilding, but foregrounding must consume
+    // that existing authority immediately rather than wait for another 400
+    // render-quanta report.
+    let discontinuity = this.inputGapActive;
     if (hidden) {
       const hiddenForMs = Math.max(0, current.nowMs - hidden.nowMs);
       // Hidden capture can advance briefly and then stall for seconds. Comparing
@@ -91,22 +105,57 @@ export class MicCaptureRecoveryWatchdog {
       // every real sample advance (including while hidden), so freshness of the
       // last progress is the continuity evidence we actually need here.
       const stalledForMs = Math.max(0, current.nowMs - this.lastSampleProgressAtMs);
-      discontinuity = hiddenForMs >= this.hiddenDiscontinuityMs
-        && stalledForMs >= this.hiddenDiscontinuityMs;
+      discontinuity = discontinuity || (
+        hiddenForMs >= this.hiddenDiscontinuityMs
+        && stalledForMs >= this.hiddenDiscontinuityMs
+      );
     }
 
     this.beginRecovery(current, 'foreground');
-    return { discontinuity };
+    return {
+      discontinuity,
+      rebuild: discontinuity && this.claimRebuild(),
+    };
   }
 
   noteGraphRebuilt(snapshot) {
     if (!this.active) return;
+    // The physical graph replacement completed, so the in-flight request is
+    // clear. Its action budget stays spent until fresh real PCM from this
+    // replacement graph proves recovery; otherwise old-graph PCM racing the
+    // replacement could accidentally rearm another generation advance.
     this.rebuildRequested = false;
+    this.rebuildBudgetSpent = true;
+    // input-gap evidence is graph-scoped. A replacement worklet starts a new
+    // observation generation and must earn recovery from its own fresh PCM.
+    this.inputGapActive = false;
     this.beginRecovery(snapshot, 'graph-rebuild');
   }
 
-  rearmRebuild() {
-    this.rebuildRequested = false;
+  noteInputGap(snapshot, { recovered = false } = {}) {
+    if (!this.active) return { rebuild: false, recovered: false, reason: null };
+    const current = normalizeSnapshot(snapshot);
+
+    if (recovered) {
+      const wasActive = this.inputGapActive;
+      this.inputGapActive = false;
+      return { rebuild: false, recovered: wasActive, reason: null };
+    }
+
+    if (!this.inputGapActive) {
+      this.inputGapActive = true;
+      this.beginRecovery(current, 'input-gap');
+    }
+
+    const rebuild = current.visible
+      && current.contextState === 'running'
+      && this.claimRebuild();
+
+    return {
+      rebuild,
+      recovered: false,
+      reason: rebuild ? 'input-gap' : null,
+    };
   }
 
   status() {
@@ -115,6 +164,8 @@ export class MicCaptureRecoveryWatchdog {
       recovering: this.recovering,
       recoveryReason: this.recoveryReason,
       rebuildRequested: this.rebuildRequested,
+      rebuildBudgetSpent: this.rebuildBudgetSpent,
+      inputGapActive: this.inputGapActive,
     };
   }
 
@@ -126,17 +177,26 @@ export class MicCaptureRecoveryWatchdog {
 
     const contextAdvanced = current.contextTime > this.lastContextTime;
     const sampleAdvanced = current.sampleCursor > this.lastSampleCursor;
-    if (sampleAdvanced || freshPcm) this.lastSampleProgressAtMs = current.nowMs;
+    // Once the worklet has positively reported a sustained source gap, its
+    // silence padding is timeline continuity, not microphone liveness.
+    const sourceProgress = !this.inputGapActive && (sampleAdvanced || freshPcm);
+    if (sourceProgress) this.lastSampleProgressAtMs = current.nowMs;
 
     let recovered = false;
     if (
       this.recovering
+      && !this.inputGapActive
+      // A rebuild decision schedules graph replacement asynchronously. PCM
+      // from the graph being retired is not evidence about its replacement.
+      && !this.rebuildRequested
       && freshPcm
       && current.contextTime > this.recoveryContextTime
       && current.sampleCursor > this.recoverySampleCursor
     ) {
       this.recovering = false;
       this.recoveryReason = null;
+      this.rebuildRequested = false;
+      this.rebuildBudgetSpent = false;
       recovered = true;
     }
 
@@ -151,9 +211,7 @@ export class MicCaptureRecoveryWatchdog {
       && current.contextState === 'running'
       && !sampleAdvanced
       && stalledForMs >= this.stallAfterMs
-      && !this.rebuildRequested;
-
-    if (rebuild) this.rebuildRequested = true;
+      && this.claimRebuild();
     this.lastContextTime = current.contextTime;
     this.lastSampleCursor = current.sampleCursor;
 

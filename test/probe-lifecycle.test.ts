@@ -24,6 +24,34 @@ test('a stale probe reply cannot clear the current request', () => {
   assert.equal(lifecycle.pendingRequest, null);
 });
 
+test('request expiry preserves the strict deadline and atomically consumes current ownership', () => {
+  const lifecycle = new ProbeLifecycle(3, 100);
+  assert.equal(lifecycle.takeExpiredRequest(1_000, 100), null, 'no request is a no-op');
+
+  assert.equal(lifecycle.beginRequest(request('mic', 7, 1_000)), true);
+  assert.equal(
+    lifecycle.takeExpiredRequest(1_100, 100),
+    null,
+    'elapsed === timeout remains inside the acknowledgement window',
+  );
+  assert.equal(lifecycle.pendingRequest?.requestId, 7, 'deadline equality must retain ownership');
+
+  const expired = lifecycle.takeExpiredRequest(1_101, 100);
+  assert.equal(expired?.requestId, 7);
+  assert.equal(expired?.target, 'mic');
+  assert.equal(lifecycle.idle, true, 'expired request is consumed exactly once');
+  assert.equal(lifecycle.takeExpiredRequest(2_000, 100), null);
+
+  const newer = new ProbeLifecycle(3, 100);
+  assert.equal(newer.beginRequest(request('backing', 8, 2_000)), true);
+  assert.equal(
+    newer.takeExpiredRequest(2_050, 100),
+    null,
+    'a newer current request is judged from its own send time, not a stale snapshot',
+  );
+  assert.equal(newer.pendingRequest?.requestId, 8);
+});
+
 test('a wrong Mic generation cannot consume the current browser acknowledgement', () => {
   const lifecycle = new ProbeLifecycle(3, 100);
   assert.equal(lifecycle.beginRequest(request('mic', 2)), true);

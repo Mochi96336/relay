@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 const PLAYING = 1;
 const STALE_AFTER_MS = 1_500;
 const DISCONTINUITY_THRESHOLD_MS = 750;
+const MIN_PLAYING_PROGRESS_SECONDS = 0.005;
 const DRIFT_WINDOW_MS = 30_000;
 const MIN_DRIFT_SPAN_MS = 8_000;
 
@@ -62,6 +63,16 @@ export class YouTubeTimelineTracker {
   private reanchors = 0;
   private corrections = 0;
   private lastReason = 'waiting';
+  /**
+   * Last evidence that a PLAYING media clock itself moved.
+   *
+   * Packet freshness and clock freshness are different facts. A wedged iframe
+   * can keep emitting PLAYING telemetry every 250 ms while getCurrentTime()
+   * remains frozen forever. That transport is alive, but it no longer owns a
+   * trustworthy room clock.
+   */
+  private playingProgressAtMs = Number.NEGATIVE_INFINITY;
+  private playingProgressPositionSeconds: number | null = null;
 
   get hasTelemetry() {
     return this.latest !== null;
@@ -136,6 +147,21 @@ export class YouTubeTimelineTracker {
 
     const discontinuity = continuityErrorMs !== null && Math.abs(continuityErrorMs) > DISCONTINUITY_THRESHOLD_MS;
     const correction = explicitJump || discontinuity;
+    const mediaPositionChanged = previous === null
+      || Math.abs(currentTime - previous.currentTime) >= MIN_PLAYING_PROGRESS_SECONDS;
+    this.trackClockProgress({
+      state,
+      currentTime,
+      nowMs,
+      // A long browser-timer gap can make a frozen PLAYING report look like a
+      // discontinuity. Correction classification alone is therefore not proof
+      // of clock progress: the media position itself must have changed.
+      reset: videoChanged
+        || stateChanged
+        || rateChanged
+        || (correction && mediaPositionChanged)
+        || phaseErrorMs === null,
+    });
 
     if (videoChanged || stateChanged || rateChanged || correction || phaseErrorMs === null) {
       if (this.anchor) {
@@ -183,13 +209,19 @@ export class YouTubeTimelineTracker {
     const youtubeTime = this.projectTelemetry(this.latest, nowMs);
     const serverTime = projected?.positionSeconds ?? youtubeTime;
     const differenceMs = (youtubeTime - serverTime) * 1000;
-    const ageMs = Math.max(0, nowMs - this.latest.receivedAtServerMs);
+    const telemetryAgeMs = Math.max(0, nowMs - this.latest.receivedAtServerMs);
+    const progressAgeMs = Number.isFinite(this.playingProgressAtMs)
+      ? Math.max(0, nowMs - this.playingProgressAtMs)
+      : telemetryAgeMs;
+    const clockAgeMs = this.latest.state === PLAYING
+      ? Math.max(telemetryAgeMs, progressAgeMs)
+      : telemetryAgeMs;
     const transportEstimateMs = Math.max(0, this.latest.receivedAtServerMs - this.latest.estimatedSampleAtServerMs);
     const driftStats = this.estimateDriftStats();
 
     return {
       type: 'youtube-timeline-status',
-      connected: ageMs <= STALE_AFTER_MS,
+      connected: clockAgeMs <= STALE_AFTER_MS,
       measurementMode: 'media-vs-server-monotonic',
       videoId: this.latest.videoId,
       videoTitle: this.latest.videoTitle,
@@ -206,12 +238,40 @@ export class YouTubeTimelineTracker {
       networkRttMs: this.latest.networkRttMs,
       clockRttMs: this.latest.networkRttMs,
       transportEstimateMs,
-      ageMs,
+      // Compatibility age is clock-authority age. Keep raw packet freshness
+      // separately so diagnostics can distinguish a dead transport from a live
+      // transport publishing a frozen PLAYING clock.
+      ageMs: clockAgeMs,
+      clockAgeMs,
+      telemetryAgeMs,
       reanchors: this.reanchors,
       corrections: this.corrections,
       hardResyncs: this.corrections,
       lastReason: this.lastReason,
     };
+  }
+
+  private trackClockProgress(input: {
+    state: number;
+    currentTime: number;
+    nowMs: number;
+    reset: boolean;
+  }) {
+    if (input.state !== PLAYING) {
+      this.playingProgressAtMs = input.nowMs;
+      this.playingProgressPositionSeconds = input.currentTime;
+      return;
+    }
+
+    if (
+      input.reset
+      || this.playingProgressPositionSeconds === null
+      || !Number.isFinite(this.playingProgressAtMs)
+      || input.currentTime - this.playingProgressPositionSeconds >= MIN_PLAYING_PROGRESS_SECONDS
+    ) {
+      this.playingProgressAtMs = input.nowMs;
+      this.playingProgressPositionSeconds = input.currentTime;
+    }
   }
 
   private project(atMs: number) {

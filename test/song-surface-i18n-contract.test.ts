@@ -29,7 +29,7 @@ test('recoverable Song copy is owned by the Live i18n provider', () => {
 
 test('Song recovery policy stays outside copy ownership', () => {
   const song = read('public/song-surface.js');
-  const policy = read('public/playback-policy.js');
+  const policy = read('shared/playback-policy.js');
 
   assert.match(song, /canRecoverPlayback\(\{ role: nextRole, timeline: room \}\)/);
   assert.match(policy, /health === 'missing' \|\| health === 'disconnected' \|\| health === 'stale'/);

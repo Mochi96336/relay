@@ -3,7 +3,11 @@ import process from 'node:process';
 
 import WebSocket from 'ws';
 
-import { encodePcmFrame } from './pcm-frame.js';
+import { encodePcmFrame, FRAME_HEADER_BYTES } from './pcm-frame.js';
+import {
+  realtimeFrameWouldExceedBacklog,
+  realtimePcmBacklogBudgetBytes,
+} from './realtime-uplink-backpressure.js';
 
 function envNumber(name: string, fallback: number, minimum: number) {
   const raw = process.env[name];
@@ -38,8 +42,26 @@ const SAMPLE_RATE = Math.round(envNumber('RELAY_BACKING_SAMPLE_RATE', 48_000, 8_
 const FRAME_MS = envNumber('RELAY_BACKING_FRAME_MS', 20, 1);
 const FRAME_SAMPLES = Math.max(1, Math.round((SAMPLE_RATE * FRAME_MS) / 1000));
 const FRAME_BYTES = FRAME_SAMPLES * 2;
+const FRAMED_BYTES = FRAME_HEADER_BYTES + FRAME_BYTES;
 const RECONNECT_MS = envNumber('RELAY_BACKING_RECONNECT_MS', 1_000, 50);
-const MAX_BUFFERED_BYTES = envNumber('RELAY_BACKING_MAX_BUFFERED_BYTES', 512 * 1024, 1_024);
+const CONFIGURED_MAX_BUFFERED_BYTES = envNumber(
+  'RELAY_BACKING_MAX_BUFFERED_BYTES',
+  512 * 1024,
+  1_024,
+);
+const REALTIME_BACKLOG_MS = 200;
+const REALTIME_BACKLOG_BYTES = realtimePcmBacklogBudgetBytes(
+  SAMPLE_RATE,
+  REALTIME_BACKLOG_MS,
+  FRAMED_BYTES,
+);
+// The legacy byte setting may tighten the limit, but it may no longer authorize
+// seconds of stale PCM. Keep one complete frame admissible so an accidentally
+// tiny legacy ceiling cannot turn the route into permanent zero-output.
+const MAX_BUFFERED_BYTES = Math.max(
+  FRAMED_BYTES,
+  Math.min(CONFIGURED_MAX_BUFFERED_BYTES, REALTIME_BACKLOG_BYTES),
+);
 /**
  * Explicit deployment identity for the stdin bridge.
  *
@@ -71,7 +93,7 @@ const INFRASTRUCTURE_KEY = process.env.RELAY_INFRA_KEY?.trim() ?? '';
 const STARTUP_FLUSH_MS = envNumber('RELAY_BACKING_STARTUP_FLUSH_MS', 250, 0);
 
 if (process.argv.includes('--help')) {
-  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_INFRA_KEY                   64-hex infrastructure capability (required)\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  drop threshold (default 524288)\n  RELAY_BACKING_STARTUP_FLUSH_MS    discard startup backlog (default 250)\n  RELAY_BACKING_ROBOT               declare this backing stream as the robot route (1 enables)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
+  process.stdout.write(`Relay robot backing source\n\nReads raw mono signed 16-bit little-endian PCM from stdin and forwards it\nto Relay as the normal framed \"backing\" source.\n\nEnvironment:\n  RELAY_URL                         WebSocket URL (default ws://127.0.0.1:3000/ws)\n  RELAY_KEY                         optional shared Relay key\n  RELAY_INFRA_KEY                   64-hex infrastructure capability (required)\n  RELAY_BACKING_SAMPLE_RATE         input sample rate (default 48000)\n  RELAY_BACKING_FRAME_MS            frame size (default 20)\n  RELAY_BACKING_RECONNECT_MS        reconnect delay (default 1000)\n  RELAY_BACKING_MAX_BUFFERED_BYTES  optional tighter drop ceiling; realtime cap is 200 ms of PCM\n  RELAY_BACKING_STARTUP_FLUSH_MS    discard startup backlog (default 250)\n  RELAY_BACKING_ROBOT               declare this backing stream as the robot route (1 enables)\n\nExample:\n  audio-capture-command | npm run backing:stdin\n`);
   process.exit(0);
 }
 
@@ -160,6 +182,8 @@ function connect() {
         role: 'backing',
         sampleRate: SAMPLE_RATE,
         robot: ROBOT_BACKING,
+        captureGeneration: generation,
+        captureSampleCursor: sampleCursor,
       }));
       return;
     }
@@ -223,7 +247,12 @@ function sendPcm(pcm: Buffer) {
   // everything that follows earlier on the timeline.
   if (!registered || socket?.readyState !== WebSocket.OPEN) return;
 
-  if (socket.bufferedAmount >= MAX_BUFFERED_BYTES) {
+  const frame = encodePcmFrame(generation, firstSampleIndex, pcm);
+  if (realtimeFrameWouldExceedBacklog(
+    socket.bufferedAmount,
+    frame.byteLength,
+    MAX_BUFFERED_BYTES,
+  )) {
     droppedFrames += 1;
     const now = Date.now();
     if (now - lastDropLogAt >= 2_000) {
@@ -246,7 +275,7 @@ function sendPcm(pcm: Buffer) {
     }
   }
 
-  socket.send(encodePcmFrame(generation, firstSampleIndex, pcm));
+  socket.send(frame);
 }
 
 function consume(chunk: Buffer) {

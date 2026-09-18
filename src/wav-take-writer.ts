@@ -2,11 +2,20 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { open, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { durableRename } from './file-durability.js';
+import { durableRemove, durableRename } from './file-durability.js';
 
 const WAV_HEADER_BYTES = 44;
 const MAX_WAV_DATA_BYTES = 0xffff_ffff - 36;
 const DEFAULT_MAX_PENDING_BYTES = 8 * 1024 * 1024;
+
+type PositionedWriter = {
+  write(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ bytesWritten: number }>;
+};
 
 export type WavFileArtifact = {
   fileName: string;
@@ -48,6 +57,22 @@ export function encodePcm16WavHeader(sampleRate: number, dataBytes: number) {
   return header;
 }
 
+export async function writeBufferFullyAt(
+  writer: PositionedWriter,
+  buffer: Buffer,
+  position: number,
+) {
+  let offset = 0;
+  while (offset < buffer.byteLength) {
+    const remaining = buffer.byteLength - offset;
+    const { bytesWritten } = await writer.write(buffer, offset, remaining, position + offset);
+    if (!Number.isSafeInteger(bytesWritten) || bytesWritten <= 0 || bytesWritten > remaining) {
+      throw new Error('Take WAV header write did not make valid forward progress.');
+    }
+    offset += bytesWritten;
+  }
+}
+
 /**
  * Streams the already-authoritative server mix directly to disk.
  *
@@ -72,6 +97,7 @@ export class WavTakeWriter {
   private readonly maxDataBytes: number;
   private dataBytes = 0;
   private closed = false;
+  private finalized = false;
   private failure: Error | null = null;
 
   constructor(options: {
@@ -155,7 +181,7 @@ export class WavTakeWriter {
     const handle = await open(this.partPath, 'r+');
     try {
       const header = encodePcm16WavHeader(this.sampleRate, this.dataBytes);
-      await handle.write(header, 0, header.byteLength, 0);
+      await writeBufferFullyAt(handle, header, 0);
       await handle.sync();
     } finally {
       await handle.close();
@@ -164,18 +190,37 @@ export class WavTakeWriter {
     await durableRename(this.partPath, this.filePath);
     try {
       const info = await stat(this.filePath);
-      return {
+      const expectedSizeBytes = WAV_HEADER_BYTES + this.dataBytes;
+      if (info.size !== expectedSizeBytes) {
+        throw new Error(
+          `Take WAV publication size mismatch: expected ${expectedSizeBytes} bytes, found ${info.size}.`,
+        );
+      }
+      const artifact = {
         fileName: this.fileName,
         filePath: this.filePath,
         sizeBytes: info.size,
         sampleRate: this.sampleRate,
-        channels: 1,
-        bitsPerSample: 16,
+        channels: 1 as const,
+        bitsPerSample: 16 as const,
         sampleCount: this.sampleCount,
         durationMs: (this.sampleCount / this.sampleRate) * 1000,
       };
+      this.finalized = true;
+      return artifact;
     } catch (error) {
-      await rm(this.filePath, { force: true }).catch(() => {});
+      // If publication cannot be validated, make removal of the stable path a
+      // durability boundary too; otherwise sudden power loss can resurrect it.
+      // Cleanup failure is intentionally preserved: TakeController will retry
+      // it through abort(), and a repeated failure must reach storage diagnostics.
+      try {
+        await durableRemove(this.filePath);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'Take WAV publication validation failed and published-file cleanup also failed.',
+        );
+      }
       throw error;
     }
   }
@@ -195,10 +240,23 @@ export class WavTakeWriter {
     }
 
     await rm(this.partPath, { force: true }).catch(() => {});
+    // durableRename() renames before syncing the parent directory. If that sync
+    // fails, finalization rejects even though the stable `.wav` path may already
+    // exist. A failed/aborted Take must not be resurrected as a legacy WAV after
+    // restart, while a fully successful finalize must remain published. Stable
+    // cleanup errors are not best-effort: callers must observe/report them.
+    if (!this.finalized) await durableRemove(this.filePath);
   }
 
   async discardFinalized() {
-    await rm(this.filePath, { force: true }).catch(() => {});
-    await rm(this.partPath, { force: true }).catch(() => {});
+    // Once a finalized artifact is rejected by lifecycle validation it is no
+    // longer authoritative. Clear the publication state before removal so a
+    // failed discard remains eligible for abort() to retry.
+    this.finalized = false;
+    try {
+      await durableRemove(this.filePath);
+    } finally {
+      await rm(this.partPath, { force: true }).catch(() => {});
+    }
   }
 }

@@ -148,16 +148,40 @@ export class TakeController {
       directory: options.directory,
       artifactBaseUrl: options.artifactBaseUrl,
     });
+
+    let storagePreparationSucceeded = false;
     try {
       prepareTakeStorage(this.options.directory, this.storagePolicy);
-      this.library.prepare();
-      this.refreshHistoryCache();
-      this.storagePrepared = true;
+      storagePreparationSucceeded = true;
     } catch (error) {
-      // Keep the server alive so diagnostics and existing non-Take features
-      // still work; Start will retry the storage preparation and reject clearly
-      // if the directory or free-space reserve is still unavailable.
-      this.reportStorageError(error);
+      let startupError: unknown = error;
+      try {
+        // Recording admission can fail purely because the configured free-space
+        // reserve is unavailable. Existing finalized Takes are still readable,
+        // so recover history independently instead of turning a write-pressure
+        // condition into a false empty library.
+        this.library.prepare();
+        this.refreshHistoryCache();
+      } catch (historyError) {
+        startupError = new AggregateError(
+          [error, historyError],
+          'Take storage preparation and history recovery both failed.',
+        );
+      }
+      this.reportStorageError(startupError);
+    }
+
+    if (storagePreparationSucceeded) {
+      try {
+        this.library.prepare();
+        this.refreshHistoryCache();
+        this.storagePrepared = true;
+      } catch (error) {
+        // Keep the server alive so diagnostics and existing non-Take features
+        // still work; Start will retry the storage preparation and reject clearly
+        // if the directory or free-space reserve is still unavailable.
+        this.reportStorageError(error);
+      }
     }
   }
 
@@ -380,7 +404,8 @@ export class TakeController {
   }
 
   noteQualityEvent(kind: TakeQualityEventKind) {
-    if (!this.session.recordingTakeId) return false;
+    const takeId = this.session.recordingTakeId;
+    if (!takeId || this.pendingStop?.takeId === takeId) return false;
     this.quality?.noteEvent(kind);
     return true;
   }
@@ -401,7 +426,7 @@ export class TakeController {
     this.writer = null;
     this.quality = null;
     this.pendingStop = null;
-    if (orphanWriter) await orphanWriter.abort();
+    if (orphanWriter) await this.abortWriter(orphanWriter);
     await this.pruneChain;
   }
 
@@ -492,7 +517,34 @@ export class TakeController {
   }
 
   private async finalizeWriter(writer: WavTakeWriter, takeId: string) {
+    let metadataStaged = false;
+    const discardStagedMetadata = () => {
+      if (!metadataStaged) return;
+      try {
+        this.library.discardStaged(takeId);
+        metadataStaged = false;
+      } catch (error) {
+        this.reportStorageError(error);
+      }
+    };
+
     try {
+      const finalizingTake = this.session.currentTake();
+      if (finalizingTake?.takeId === takeId && finalizingTake.lifecycle === 'finalizing') {
+        try {
+          this.library.stageFinalizing(finalizingTake, {
+            sampleRate: writer.sampleRate,
+            sampleCount: writer.sampleCount,
+          });
+          metadataStaged = true;
+        } catch (error) {
+          // Metadata staging is crash-resilience for the rich sidecar. The WAV
+          // remains the recording authority, so preserve the existing behavior:
+          // report the storage fault but still finalize recoverable audio.
+          this.reportStorageError(error);
+        }
+      }
+
       const file = await writer.finalize();
       const pendingTake = this.session.currentTake();
       const recordedSampleCount = pendingTake?.mixSampleRange?.sampleCount ?? 0;
@@ -502,6 +554,7 @@ export class TakeController {
           `Take sample metadata recorded ${recordedSampleCount} samples but WAV contains ${file.sampleCount}.`,
           Date.now(),
         )) this.emitChange();
+        discardStagedMetadata();
         await writer.discardFinalized();
         return;
       }
@@ -522,7 +575,14 @@ export class TakeController {
         const readyTake = this.session.currentTake();
         if (readyTake?.lifecycle === 'ready' && readyTake.artifact) {
           try {
-            const item = historyItem(this.library.record(readyTake));
+            let libraryEntry: TakeLibraryEntry;
+            if (metadataStaged) {
+              libraryEntry = this.library.commitStaged(readyTake);
+              metadataStaged = false;
+            } else {
+              libraryEntry = this.library.record(readyTake);
+            }
+            const item = historyItem(libraryEntry);
             this.historyCache = Object.freeze([
               structuredClone(item),
               ...this.historyCache
@@ -530,10 +590,9 @@ export class TakeController {
                 .map((candidate) => structuredClone(candidate)),
             ]);
           } catch (error) {
-            // The finalized WAV remains authoritative and recoverable. A
-            // metadata failure must not turn a successfully recorded Take
-            // into a failed one; the browser receives the ready Take beside
-            // the last durable history snapshot and can review it now.
+            // The finalized WAV remains authoritative and recoverable. When a
+            // staged sidecar exists, leave it in place so startup can validate
+            // and promote the complete rich metadata transaction.
             this.reportStorageError(error);
           }
         }
@@ -542,11 +601,13 @@ export class TakeController {
       } else {
         // A finalized file without a matching ready Take is not a valid
         // artifact and must not become an unreferenced disk leak.
+        discardStagedMetadata();
         await writer.discardFinalized();
       }
     } catch (error) {
+      discardStagedMetadata();
       if (this.session.fail(takeId, errorMessage(error), Date.now())) this.emitChange();
-      await writer.abort();
+      await this.abortWriter(writer);
     }
   }
 
@@ -557,7 +618,15 @@ export class TakeController {
     const quality = this.quality?.assessment();
     this.quality = null;
     if (this.session.fail(writer.takeId, errorMessage(error), Date.now(), quality)) this.emitChange();
-    void writer.abort();
+    void this.abortWriter(writer);
+  }
+
+  private async abortWriter(writer: WavTakeWriter) {
+    try {
+      await writer.abort();
+    } catch (error) {
+      this.reportStorageError(error);
+    }
   }
 
   private scheduleRetentionPrune() {
@@ -565,12 +634,35 @@ export class TakeController {
       .then(async () => {
         const current = this.session.currentTake();
         const preserveFileName = current ? `${current.takeId}.wav` : null;
-        await pruneTakeArtifacts(
-          this.options.directory,
-          this.storagePolicy,
-          preserveFileName,
-        );
-        if (this.refreshHistoryCache()) this.emitChange();
+        let pruneFailure: { error: unknown } | null = null;
+        try {
+          await pruneTakeArtifacts(
+            this.options.directory,
+            this.storagePolicy,
+            preserveFileName,
+          );
+        } catch (error) {
+          pruneFailure = { error };
+        }
+
+        let refreshFailure: { error: unknown } | null = null;
+        try {
+          // Retention can durably invalidate a WAV before a later sidecar
+          // cleanup fails. Always re-read durable history so product status
+          // cannot keep advertising an artifact that is already gone.
+          if (this.refreshHistoryCache()) this.emitChange();
+        } catch (error) {
+          refreshFailure = { error };
+        }
+
+        if (pruneFailure && refreshFailure) {
+          throw new AggregateError(
+            [pruneFailure.error, refreshFailure.error],
+            'Take retention cleanup and history refresh both failed.',
+          );
+        }
+        if (pruneFailure) throw pruneFailure.error;
+        if (refreshFailure) throw refreshFailure.error;
       })
       .catch((error) => {
         this.reportStorageError(error);

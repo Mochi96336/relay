@@ -19,6 +19,8 @@ export type AudioUplinkTransportHealth = {
   datagramPacketBytesCeiling: number | null;
   /** Relay's bounded local outstanding-write budget, in packets. */
   datagramQueuePackets: number | null;
+  /** Browser media recovery exhausted its bounded same-capture actions. Older v1 pages omit it. */
+  mediaRecoveryDegraded?: boolean;
   webTransportAttempts: number;
   webTransportConnections: number;
   webTransportDemotions: number;
@@ -35,6 +37,8 @@ export type AudioUplinkTransportHealth = {
 export type AudioUplinkHealth = {
   version: 1;
   captureGeneration: number;
+  /** Optional browser-generated correlation token. Older v1 pages omit it. */
+  healthRequestId?: number;
   capturedSamples: number;
   inputGapSamples: number;
   inputMuted: boolean;
@@ -58,6 +62,15 @@ function uint32(value: unknown): number | null {
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 && number <= 0xffff_ffff
     ? number >>> 0
+    : null;
+}
+
+function strictUint32(value: unknown): number | null {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= 0
+    && value <= 0xffff_ffff
+    ? value >>> 0
     : null;
 }
 
@@ -134,18 +147,24 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   if (!payload || Number(payload.version) !== 1) return null;
 
   const captureGeneration = uint32(payload.captureGeneration);
+  const healthRequestId = payload.healthRequestId === undefined
+    ? undefined
+    : strictUint32(payload.healthRequestId);
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   const controlReconnects = nonNegativeSafeInteger(payload.controlReconnects);
+  const inputMuted = payload.inputMuted === undefined ? false : payload.inputMuted;
   const capture = payload.capture === undefined ? null : parseCaptureAppliedSettings(payload.capture);
   const captureLevel = payload.captureLevel === undefined ? null : parseCaptureLevel(payload.captureLevel);
   const dropped = record(payload.droppedSamples);
   const transport = record(payload.transport);
   if (
     captureGeneration === null
+    || healthRequestId === null
     || capturedSamples === null
     || inputGapSamples === null
     || controlReconnects === null
+    || typeof inputMuted !== 'boolean'
     || capture === undefined
     || captureLevel === undefined
     || !dropped
@@ -178,12 +197,18 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const datagramQueuePackets = transport.datagramQueuePackets === undefined
     ? null
     : positiveSafeIntegerOrNull(transport.datagramQueuePackets);
+  // Added after v1 shipped. Older pages omit it and are healthy by default;
+  // a supplied non-boolean value is malformed rather than truthy telemetry.
+  const mediaRecoveryDegraded = transport.mediaRecoveryDegraded === undefined
+    ? false
+    : transport.mediaRecoveryDegraded;
   if (
     maxPacketBytes === undefined
     || minWebTransportMaxPacketBytes === undefined
     || maxWebTransportMaxPacketBytes === undefined
     || datagramPacketBytesCeiling === undefined
     || datagramQueuePackets === undefined
+    || typeof mediaRecoveryDegraded !== 'boolean'
   ) return null;
   if (
     minWebTransportMaxPacketBytes !== null
@@ -212,9 +237,10 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   return {
     version: 1,
     captureGeneration,
+    ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     inputGapSamples,
-    inputMuted: payload.inputMuted === true,
+    inputMuted,
     capture,
     captureLevel,
     droppedSamples: { total, disconnected, congested, packetTooLarge },
@@ -226,6 +252,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling,
       datagramQueuePackets,
+      mediaRecoveryDegraded,
       ...counters as Record<(typeof counterNames)[number], number>,
     },
   };

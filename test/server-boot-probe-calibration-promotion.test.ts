@@ -4,42 +4,58 @@ import test from 'node:test';
 
 import {
   functionCode,
+  importSources,
   parseTypeScriptSource,
+  sourceCode,
+  variableInitializerCode,
 } from './support/source-contract.js';
 
 const server = parseTypeScriptSource(
   new URL('../src/server.ts', import.meta.url),
   readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
 );
+const coordinator = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-calibration-promotion-coordinator.ts', import.meta.url),
+  readFileSync(
+    new URL('../src/relay-boot-probe-calibration-promotion-coordinator.ts', import.meta.url),
+    'utf8',
+  ),
+);
 
-test('boot-probe promotion mutates probe authority before synchronous calibration settlement', () => {
+test('boot-probe promotion delegates synchronous ordering through the coordinator seam', () => {
   const promotion = functionCode(server, 'promoteBootProbeCalibration');
-  const mutate = promotion.indexOf('mutateProbe();');
-  const timingAuthority = promotion.indexOf('timingRuntime.markBootProbeAuthority();', mutate);
-  const apply = promotion.indexOf('calibration.applyExternalResult(result());', timingAuthority);
+  assert.match(
+    promotion,
+    /bootProbeCalibrationPromotionCoordinator\.promote\(mutateProbe, result\)/,
+  );
+  assert.doesNotMatch(promotion, /mutateProbe\(\)/);
+  assert.doesNotMatch(promotion, /timingRuntime\./);
+  assert.doesNotMatch(promotion, /calibration\.applyExternalResult\(/);
+  assert.doesNotMatch(promotion, /result\(\)/);
+});
 
-  assert.ok(mutate >= 0, 'boot-probe runtime mutation must stay explicit');
-  assert.ok(timingAuthority > mutate, 'timing authority must be marked after the probe runtime mutation');
+test('server composition retains Boot Probe timing and calibration authorities', () => {
   assert.ok(
-    apply > timingAuthority,
-    'external calibration must settle only after probe and timing authority are coherent',
+    importSources(server).includes('./relay-boot-probe-calibration-promotion-coordinator.js'),
+  );
+  const composition = variableInitializerCode(server, 'bootProbeCalibrationPromotionCoordinator');
+  assert.match(composition, /^createRelayBootProbeCalibrationPromotionCoordinator\(\{/);
+  assert.match(
+    composition,
+    /markBootProbeAuthority: \(\) => timingRuntime\.markBootProbeAuthority\(\)/,
+  );
+  assert.match(
+    composition,
+    /applyExternalResult: \(result\) => calibration\.applyExternalResult\(result\)/,
   );
 });
 
-test('terminal probe failure reconciles candidate provenance before synchronous settlement', () => {
-  const failure = functionCode(server, 'failProbeAttempt');
-  const mutate = failure.indexOf('bootProbeRuntime.failAttempt(target, reason, nowMs)');
-  const reconcile = failure.indexOf('timingRuntime.restoreCandidateKindToAuthority();', mutate);
-  const settle = failure.indexOf('calibration.failPreservingPrimed(failure.message);', reconcile);
-
-  assert.ok(mutate >= 0, 'terminal failure must begin with the authoritative probe mutation');
-  assert.ok(
-    reconcile > mutate,
-    'terminal failure must reconcile candidate provenance after the probe runtime mutation',
-  );
-  assert.ok(
-    settle > reconcile,
-    'failure settlement may synchronously publish only after candidate and retained authority provenance agree',
+test('Boot Probe promotion coordinator owns ordering only, not runtime authority', () => {
+  const code = sourceCode(coordinator);
+  assert.doesNotMatch(code, /^import /m);
+  assert.doesNotMatch(
+    code,
+    /bootProbeRuntime\.|timingRuntime\.|calibration\.|BootProbeRuntime|TimingRuntime|CalibrationSession|AudioSession/,
   );
 });
 
@@ -52,6 +68,24 @@ test('fresh two-leg probe result delegates ordered promotion without duplicating
   );
   assert.doesNotMatch(finish, /timingRuntime\.markBootProbeAuthority\(\)/);
   assert.doesNotMatch(finish, /calibration\.applyExternalResult\(/);
+});
+
+test('backing completion consumes Mic evidence through the BootProbeRuntime context boundary', () => {
+  const finish = functionCode(server, 'maybeFinishProbeAnalysis');
+  const consume = finish.indexOf('bootProbeRuntime.takeMicLegForContext({');
+  const combine = finish.indexOf('combineBootCalibration({', consume);
+
+  assert.match(
+    finish,
+    /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*micSourceRate: micRuntime\.sampleRate,\s*\}\)/,
+  );
+  assert.doesNotMatch(
+    finish,
+    /micLeg\.(?:sessionGeneration|micGeneration|micSourceRate)/,
+    'Mic evidence provenance belongs to BootProbeRuntime rather than server field inspection',
+  );
+  assert.ok(consume >= 0);
+  assert.ok(combine > consume, 'context-validated Mic evidence must be consumed before calibration combination');
 });
 
 test('delta reapply reads probe confidence only through the ordered promotion seam', () => {

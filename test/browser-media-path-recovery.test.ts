@@ -1,0 +1,245 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+const moduleUrl = new URL('../public/audio-transport.js', import.meta.url);
+
+class EventSocket {
+  readyState = 1;
+  bufferedAmount = 0;
+  sent: unknown[] = [];
+  closeCalls: Array<{ code?: number; reason?: string }> = [];
+  private readonly listeners = new Map<string, Set<(event: { data: string }) => void>>();
+
+  send(payload: unknown) {
+    this.sent.push(payload);
+  }
+
+  close(code?: number, reason?: string) {
+    this.closeCalls.push({ code, reason });
+    this.readyState = 3;
+  }
+
+  addEventListener(type: string, listener: (event: { data: string }) => void) {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: (event: { data: string }) => void) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  emitJson(payload: unknown) {
+    const event = { data: JSON.stringify(payload) };
+    for (const listener of this.listeners.get('message') ?? []) listener(event);
+  }
+}
+
+class FakeDatagramWriter {
+  released = false;
+  writes: Uint8Array[] = [];
+
+  async write(value: Uint8Array) {
+    this.writes.push(new Uint8Array(value));
+  }
+
+  releaseLock() {
+    this.released = true;
+  }
+}
+
+class FakeWebTransport {
+  static instances: FakeWebTransport[] = [];
+  readonly writer = new FakeDatagramWriter();
+  readonly ready = Promise.resolve();
+  readonly datagrams = {
+    maxDatagramSize: 1_200,
+    writable: { getWriter: () => this.writer },
+  };
+  readonly closed: Promise<void>;
+  closeCalls = 0;
+  private resolveClosed!: () => void;
+
+  constructor(readonly url: string) {
+    this.closed = new Promise((resolve) => {
+      this.resolveClosed = resolve;
+    });
+    FakeWebTransport.instances.push(this);
+  }
+
+  close() {
+    this.closeCalls += 1;
+    this.resolveClosed();
+  }
+}
+
+function health(captureGeneration: number, capturedSamples: number) {
+  return {
+    type: 'audio-uplink-health',
+    version: 1,
+    captureGeneration,
+    capturedSamples,
+  };
+}
+
+function ack(
+  captureGeneration: number,
+  acceptedFrameSerial: number,
+  mediaPath: 'webtransport' | 'websocket' | null,
+) {
+  return {
+    type: 'audio-uplink-health-ack',
+    version: 1,
+    captureGeneration,
+    pcm: { acceptedFrameSerial, mediaPath },
+  };
+}
+
+test('server-stale accepted PCM demotes WT once and quarantines it for the capture generation', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+
+  assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), true);
+  assert.equal(transport.stats().path, 'webtransport');
+  assert.equal(FakeWebTransport.instances.length, 1);
+
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300]) {
+    assert.equal(transport.sendControlJson(health(7, capturedSamples)).sent, true);
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+
+  assert.equal(transport.stats().path, 'websocket');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
+
+  // A same-generation control reconnect can advertise the same WT ticket, but
+  // semantic failure quarantines WT until the capture generation changes.
+  assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), false);
+  assert.equal(FakeWebTransport.instances.length, 1);
+  assert.equal(transport.stats().path, 'websocket');
+
+  // app.js calls resetStats() only when it advances the capture generation.
+  transport.resetStats();
+  assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media-next' }), true);
+  assert.equal(FakeWebTransport.instances.length, 2);
+});
+
+test('delayed ordered health ACKs preserve per-report local frontiers when detecting stale server PCM', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  // Model several health reports already in flight before their ordered
+  // WebSocket ACKs drain. Each report has a distinct local capture frontier,
+  // and the control socket preserves request/ACK order.
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300]) {
+    assert.equal(transport.sendControlJson(health(7, capturedSamples)).sent, true);
+  }
+
+  // Every delayed ACK reports the same accepted PCM serial. Request-correlated
+  // send-time snapshots must preserve the advancing local frontier, so control
+  // latency cannot hide a real server-side media stall.
+  for (let index = 0; index < 4; index += 1) {
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+  assert.equal(transport.stats().path, 'websocket');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
+  assert.equal(socket.closeCalls.length, 0);
+});
+
+test('late WT acceptance cannot prove fallback before the server reports WS and then accepts another frame', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300]) {
+    transport.sendControlJson(health(7, capturedSamples));
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+  assert.equal(transport.stats().path, 'websocket');
+
+  // This serial advancement may be a WT datagram already in flight when local
+  // demotion happened. Server still says WT, so it is not recovery evidence.
+  transport.sendControlJson(health(7, 1_400));
+  socket.emitJson(ack(7, 11, 'webtransport'));
+  assert.equal(socket.closeCalls.length, 0);
+
+  // First server-WS observation is only a fresh baseline.
+  transport.sendControlJson(health(7, 1_500));
+  socket.emitJson(ack(7, 11, 'websocket'));
+  assert.equal(socket.closeCalls.length, 0);
+
+  // A later accepted frame on the now-confirmed WS path proves recovery.
+  transport.sendControlJson(health(7, 1_600));
+  socket.emitJson(ack(7, 12, 'websocket'));
+  assert.equal(socket.closeCalls.length, 0);
+
+  // The successful fallback remains generation-scoped: do not re-promote WT.
+  assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), false);
+});
+
+test('stalled WS recovery requests exactly one physical replacement and fences late old-socket ACKs', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const first = new EventSocket();
+  transport.bind(first);
+
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300]) {
+    transport.sendControlJson(health(7, capturedSamples));
+    first.emitJson(ack(7, 10, 'websocket'));
+  }
+
+  assert.equal(first.closeCalls.length, 1);
+  assert.equal(first.closeCalls[0].code, 4001);
+
+  // The close request increments the transport's socket epoch immediately, so
+  // an ACK queued on the retired socket cannot spend another recovery action.
+  first.emitJson(ack(7, 99, 'websocket'));
+  assert.equal(first.closeCalls.length, 1);
+
+  const replacement = new EventSocket();
+  transport.bind(replacement);
+  transport.sendControlJson(health(7, 1_400));
+  replacement.emitJson(ack(7, 10, 'websocket'));
+  assert.equal(replacement.closeCalls.length, 0);
+
+  // No same-generation WT promotion is allowed while the WS proof is active.
+  assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), false);
+});
+
+test('hidden-page health ACKs rebaseline and never trigger semantic media recovery', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  const previousDocument = (globalThis as { document?: unknown }).document;
+  Object.defineProperty(globalThis, 'document', {
+    value: { visibilityState: 'hidden' },
+    configurable: true,
+  });
+  try {
+    for (const capturedSamples of [1_000, 1_100, 1_200, 1_300, 1_400, 1_500]) {
+      transport.sendControlJson(health(7, capturedSamples));
+      socket.emitJson(ack(7, 10, 'webtransport'));
+    }
+    assert.equal(transport.stats().path, 'webtransport');
+    assert.equal(socket.closeCalls.length, 0);
+  } finally {
+    if (previousDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else Object.defineProperty(globalThis, 'document', {
+      value: previousDocument,
+      configurable: true,
+    });
+  }
+});

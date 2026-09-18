@@ -15,6 +15,7 @@ function runtime() {
 
 test('BootProbeRuntime keeps request state and measured Mic evidence in one reset domain', () => {
   const probe = runtime();
+  assert.equal(probe.lifecycleIdle, true);
   const firstId = probe.nextRequestId();
   assert.equal(firstId, 1);
   assert.equal(probe.beginRequest({
@@ -25,9 +26,11 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
     generation: context.micGeneration,
   }), true);
   assert.equal(probe.status(100).phase, 'mic-requested');
+  assert.equal(probe.lifecycleIdle, false);
 
   const accepted = probe.acceptClientReply(firstId, context.micGeneration);
   assert.ok(accepted);
+  assert.equal(probe.lifecycleIdle, true);
   assert.equal(probe.beginAnalysis({
     target: 'mic',
     targetSample: 1_000,
@@ -37,7 +40,9 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
     generation: context.micGeneration,
     deadlineMs: 1_000,
   }), true);
+  assert.equal(probe.lifecycleIdle, false);
   assert.equal(probe.takeAnalysis()?.target, 'mic');
+  assert.equal(probe.lifecycleIdle, true);
 
   probe.noteCorrelation('mic', 0.91);
   probe.setMicLeg({
@@ -48,14 +53,117 @@ test('BootProbeRuntime keeps request state and measured Mic evidence in one rese
     micGeneration: context.micGeneration,
   });
   assert.equal(probe.status(200).phase, 'backing-waiting');
-  assert.equal(probe.micLegMatches(context), true);
+  assert.equal(probe.hasMicLeg, true);
+  assert.equal(probe.micLegStaleForContext(context), false);
 
   probe.abandonRun();
   assert.equal(probe.micLeg, null);
-  assert.equal(probe.pendingRequest, null);
+  assert.equal(probe.lifecycleIdle, true);
   assert.equal(probe.pendingAnalysis, null);
   assert.deepEqual(probe.correlations, { mic: 0.91, backing: null }, 'run abandonment preserves diagnostics');
   assert.equal(probe.nextRequestId(), 2, 'request ids remain monotonic across abandoned runs');
+});
+
+test('BootProbeRuntime exposes atomic request expiry without leaking pending request state', () => {
+  const probe = runtime();
+  const requestId = probe.nextRequestId();
+  assert.equal(probe.beginRequest({
+    target: 'mic',
+    requestId,
+    serverSentAtMs: 500,
+    sessionGeneration: context.sessionGeneration,
+    generation: context.micGeneration,
+  }), true);
+  assert.equal(probe.takeExpiredRequest(600, 100), null);
+  assert.equal(probe.lifecycleIdle, false, 'deadline equality retains the pending request');
+  assert.equal(probe.takeExpiredRequest(601, 100)?.requestId, requestId);
+  assert.equal(probe.lifecycleIdle, true, 'expired request is consumed by the aggregate');
+});
+
+test('Mic leg scheduler view owns presence and stale provenance without consuming evidence', () => {
+  const probe = runtime();
+  assert.equal(probe.hasMicLeg, false);
+  assert.equal(probe.micLegStaleForContext(context), false, 'missing evidence is not stale evidence');
+
+  probe.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  assert.equal(probe.hasMicLeg, true);
+  assert.equal(probe.micLegStaleForContext(context), false);
+  const sameMicDifferentBacking: BootProbeContext = { ...context, backingGeneration: 999 };
+  assert.equal(
+    probe.micLegStaleForContext(sameMicDifferentBacking),
+    false,
+    'backing generation does not belong to Mic evidence provenance',
+  );
+  assert.equal(
+    probe.micLegStaleForContext({
+      sessionGeneration: context.sessionGeneration + 1,
+      micGeneration: context.micGeneration,
+    }),
+    true,
+  );
+  assert.equal(
+    probe.micLegStaleForContext({
+      sessionGeneration: context.sessionGeneration,
+      micGeneration: (context.micGeneration ?? 0) + 1,
+    }),
+    true,
+  );
+  assert.equal(probe.hasMicLeg, true, 'stale inspection must not consume evidence');
+});
+
+test('Mic leg consumption owns its session/capture provenance and ignores backing generation', () => {
+  const matching = runtime();
+  matching.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  const sameMicDifferentBacking = { ...context, backingGeneration: 999 };
+  const consumed = matching.takeMicLegForContext(sameMicDifferentBacking);
+  assert.equal(consumed?.actualSample, 1_120);
+  assert.equal(matching.micLeg, null, 'matching evidence is consumed exactly once');
+
+  const staleSession = runtime();
+  staleSession.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  assert.equal(
+    staleSession.takeMicLegForContext({
+      sessionGeneration: context.sessionGeneration + 1,
+      micGeneration: context.micGeneration,
+    }),
+    null,
+  );
+  assert.equal(staleSession.micLeg, null, 'stale-session evidence is consumed rather than retained');
+
+  const staleCapture = runtime();
+  staleCapture.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_120,
+    correlation: 0.91,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  assert.equal(
+    staleCapture.takeMicLegForContext({
+      sessionGeneration: context.sessionGeneration,
+      micGeneration: (context.micGeneration ?? 0) + 1,
+    }),
+    null,
+  );
+  assert.equal(staleCapture.micLeg, null, 'stale-capture evidence is consumed rather than retained');
 });
 
 test('Mic failure clears only provisional Mic evidence while retaining bounded retry state', () => {
@@ -81,6 +189,33 @@ test('Mic failure clears only provisional Mic evidence while retaining bounded r
   assert.equal(probe.status(500).phase, 'mic-retry-wait');
   assert.equal(probe.canStart('mic', 599), false);
   assert.equal(probe.canStart('mic', 600), true);
+});
+
+test('Backing attempt failure preserves a measured Mic leg while scheduling only backing retry', () => {
+  const probe = runtime();
+  probe.setMicLeg({
+    targetSample: 1_000,
+    actualSample: 1_050,
+    correlation: 0.9,
+    sessionGeneration: context.sessionGeneration,
+    micGeneration: context.micGeneration,
+  });
+  const requestId = probe.nextRequestId();
+  assert.equal(probe.beginRequest({
+    target: 'backing',
+    requestId,
+    serverSentAtMs: 400,
+    sessionGeneration: context.sessionGeneration,
+    generation: context.backingGeneration,
+  }), true);
+
+  const failure = probe.failAttempt('backing', 'sparse capture window', 500);
+  assert.equal(failure, null);
+  assert.equal(probe.hasMicLeg, true, 'backing retry must not throw away the independent Mic leg');
+  assert.equal(probe.micLeg?.actualSample, 1_050);
+  assert.equal(probe.status(500).phase, 'backing-retry-wait');
+  assert.equal(probe.canStart('backing', 599), false);
+  assert.equal(probe.canStart('backing', 600), true);
 });
 
 test('completed boot evidence survives candidate reruns and can be re-applied against a new delta', () => {

@@ -7,7 +7,7 @@ export type RelayLiveSourceStopDependencies = {
   clearContentValidation: () => void;
   resetRobotPlayerOffset: () => void;
   resetRobotContentTimeline: () => void;
-  clearRobotBackingBoundaryRequest: () => void;
+  clearRobotContentTransition: () => void;
   stopSession: () => void;
   resetCalibration: () => void;
   clearTimingKind: () => void;
@@ -40,7 +40,7 @@ export function createRelayLiveSourceStopCoordinator(
       dependencies.clearContentValidation();
       dependencies.resetRobotPlayerOffset();
       dependencies.resetRobotContentTimeline();
-      dependencies.clearRobotBackingBoundaryRequest();
+      dependencies.clearRobotContentTransition();
       dependencies.stopSession();
       dependencies.resetCalibration();
       dependencies.clearTimingKind();

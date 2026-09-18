@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import test, { describe } from 'node:test';
 
-import { analyzeTimingCalibrationInWorker } from '../src/timing-calibration-worker-client.js';
+import {
+  DEFAULT_TIMING_CALIBRATION_ANALYSIS_TIMEOUT_MS,
+  analyzeTimingCalibrationInWorker,
+} from '../src/timing-calibration-worker-client.js';
 import { laggedPair } from './helpers/harness.js';
 
 const RATE = 48_000;
@@ -12,6 +15,10 @@ function int16View(buffer: Buffer) {
 }
 
 describe('timing calibration worker', () => {
+  test('has a bounded analysis runtime independent from capture collection', () => {
+    assert.equal(DEFAULT_TIMING_CALIBRATION_ANALYSIS_TIMEOUT_MS, 20_000);
+  });
+
   test('finds the lag without blocking main-thread timers', async () => {
     const { mic, backing } = laggedPair(6, RATE, 340);
     const analysis = analyzeTimingCalibrationInWorker(
@@ -51,5 +58,27 @@ describe('timing calibration worker', () => {
 
     controller.abort();
     await assert.rejects(analysis, /was cancelled/);
+  });
+
+  test('terminates a worker that does not finish before the analysis deadline', async () => {
+    const { mic, backing } = laggedPair(6, RATE, 340);
+    const analysis = analyzeTimingCalibrationInWorker(
+      int16View(mic),
+      int16View(backing),
+      RATE,
+      2_500,
+      undefined,
+      1,
+    );
+
+    await assert.rejects(analysis, /timed out after 1 ms/);
+  });
+
+  test('rejects an invalid analysis deadline before starting work', async () => {
+    const samples = new Int16Array(1);
+    await assert.rejects(
+      analyzeTimingCalibrationInWorker(samples, samples, RATE, undefined, undefined, 0),
+      /timeout must be positive/,
+    );
   });
 });

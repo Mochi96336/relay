@@ -42,6 +42,10 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
     res.sendFile(path.join(options.takeDir, takeId + '.wav'));
   });
 
+  // Browser and server policy can share pure modules without making src depend
+  // on browser-static public/. The production public directory is always the
+  // repository's public/ directory, so the shared layer is its explicit sibling.
+  app.use('/shared', express.static(path.resolve(options.publicDir, '../shared')));
   app.use(express.static(options.publicDir));
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true });

@@ -1,5 +1,5 @@
 import './playback-transport-identity.js';
-import { leaderHolding } from './playback-policy.js';
+import { leaderHolding } from '../shared/playback-policy.js';
 
 function samePlaybackTransport(status, participantId, transportId, keys) {
   if (!status || typeof status !== 'object' || !participantId || !transportId) return false;

@@ -24,6 +24,9 @@ import { TimingWindowCollector, type TimingWindow } from './timing-window-collec
  */
 export const MAX_CAPTURE_GAP_MS = 300;
 
+/** Maximum time one asynchronous calibration analysis may remain unresolved. */
+export const DEFAULT_CALIBRATION_ANALYSIS_TIMEOUT_MS = 20_000;
+
 export type CalibrationPhase = 'idle' | 'collecting' | 'complete' | 'failed';
 
 export type CalibrationStatus = {
@@ -55,6 +58,10 @@ export type CalibrationContext = {
   sessionGeneration: number;
   micGeneration: number | null;
   backingGeneration: number | null;
+  /** Source-clock units for the Mic capture generation. */
+  micSourceRate?: number | null;
+  /** Source-clock units for the Backing capture generation. */
+  backingSourceRate?: number | null;
   sourceGeneration: number;
 };
 
@@ -62,6 +69,8 @@ export type CalibrationSessionOptions = {
   sampleRate: number;
   durationMs: number;
   timeoutMs: number;
+  /** Independent deadline for asynchronous analyzer execution. */
+  analysisTimeoutMs?: number;
   /**
    * The setup a measurement would describe if taken now.
    *
@@ -111,6 +120,7 @@ export class CalibrationSession {
 
   private readonly sampleRate: number;
   private readonly timeoutMs: number;
+  private readonly analysisTimeoutMs: number;
   private readonly analyze: NonNullable<CalibrationSessionOptions['analyze']>;
   private readonly context: () => CalibrationContext;
   private readonly onSettled: () => void;
@@ -143,6 +153,7 @@ export class CalibrationSession {
   /** Monotonic identity for newly confirmed timing authority. Retries do not change it. */
   private confirmedRevisionValue = 0;
   private analysisPending = false;
+  private analysisStartedAt: number | null = null;
   private analysisAbortController: AbortController | null = null;
   /** Invalidates an answer when its collection is restarted or cancelled. */
   private analysisRevision = 0;
@@ -151,6 +162,8 @@ export class CalibrationSession {
   // the server say the answer is stale instead of applying it to a setup it was
   // never measured against.
   private measuredContext: CalibrationContext | null = null;
+  /** Context that owns PCM already admitted to the active content collection. */
+  private collectionContext: CalibrationContext | null = null;
   /** Context that owns unpromoted content gathered while a preferred probe is viable. */
   private primedContext: CalibrationContext | null = null;
 
@@ -158,6 +171,11 @@ export class CalibrationSession {
     this.sampleRate = options.sampleRate;
     this.durationMs = options.durationMs;
     this.timeoutMs = options.timeoutMs;
+    const analysisTimeoutMs = options.analysisTimeoutMs ?? DEFAULT_CALIBRATION_ANALYSIS_TIMEOUT_MS;
+    if (!Number.isFinite(analysisTimeoutMs) || analysisTimeoutMs <= 0) {
+      throw new RangeError('analysisTimeoutMs must be positive.');
+    }
+    this.analysisTimeoutMs = analysisTimeoutMs;
     this.requiredSamples = Math.round((options.sampleRate * options.durationMs) / 1000);
     this.analyze = options.analyze ?? analyzeTimingCalibration;
     this.context = options.context;
@@ -225,6 +243,9 @@ export class CalibrationSession {
     const revokedProvisional = this.rollbackProvisional();
     this.transactionActiveValue = true;
     this.phase = 'collecting';
+    // Context belongs to evidence, not to the Start command. A capture may
+    // legitimately restart before the first sample enters this empty collector.
+    this.collectionContext = null;
     this.startedAt = nowMs;
     this.candidates = [];
     this.error = null;
@@ -246,16 +267,14 @@ export class CalibrationSession {
     const currentContext = this.context();
     // Primed PCM is measurement evidence, not free-floating audio. Never adopt
     // it into a transaction whose session/capture/source identity has changed.
-    if (
-      this.primedContext === null
-      || !this.contextsEqual(this.primedContext, currentContext)
-    ) {
-      this.collector.reset();
-    }
+    const ownsPrimedEvidence = this.primedContext !== null
+      && this.contextsEqual(this.primedContext, currentContext);
+    if (!ownsPrimedEvidence) this.collector.reset();
     this.primedContext = null;
     const revokedProvisional = this.rollbackProvisional();
     this.transactionActiveValue = true;
     this.phase = 'collecting';
+    this.collectionContext = ownsPrimedEvidence ? this.cloneContext(currentContext) : null;
     this.startedAt = nowMs;
     this.candidates = [];
     this.error = null;
@@ -294,9 +313,12 @@ export class CalibrationSession {
    */
   transitionEvidence(maxSamples: number): TimingWindow | null {
     const currentContext = this.context();
+    const ownsCollectingEvidence = this.collecting
+      && this.collectionContext !== null
+      && this.contextsEqual(this.collectionContext, currentContext);
     const ownsPrimedEvidence = this.primedContext !== null
       && this.contextsEqual(this.primedContext, currentContext);
-    if (!this.collecting && !ownsPrimedEvidence) return null;
+    if (!ownsCollectingEvidence && !ownsPrimedEvidence) return null;
     return this.collector.peekRecentWindow(maxSamples);
   }
 
@@ -457,12 +479,14 @@ export class CalibrationSession {
   /** `startSample` is where `AudioSession` placed these samples on its timeline. */
   observeMic(samples: Int16Array, startSample: number) {
     if (!this.collecting || samples.length === 0) return;
+    if (!this.acceptCollectionContext()) return;
     this.collector.observeMic(samples, startSample);
     this.drainReadyWindows();
   }
 
   observeBacking(samples: Int16Array, startSample: number) {
     if (!this.collecting || samples.length === 0) return;
+    if (!this.acceptCollectionContext()) return;
     this.collector.observeBacking(samples, startSample);
     this.drainReadyWindows();
   }
@@ -477,15 +501,31 @@ export class CalibrationSession {
     const hadPrimedEvidence = this.primedContext !== null;
     this.collector.reset();
     this.primedContext = null;
-    if (wasCollecting) this.startedAt = nowMs;
+    if (wasCollecting) {
+      // No evidence remains after the reset, so the first post-transition PCM
+      // owns the next collection context just as it does after Start.
+      this.collectionContext = null;
+      this.startedAt = nowMs;
+    }
     if (wasCollecting || hadPrimedEvidence) this.onSettled();
   }
 
-  /** Gives up on a collection that stopped making progress. */
+  /** Gives up on a collection or analysis phase that stopped making progress. */
   tick(nowMs = performance.now()) {
-    if (!this.collecting || this.analysisPending || nowMs - this.startedAt <= this.timeoutMs) {
-      return false;
+    if (!this.collecting) return false;
+
+    if (this.analysisPending) {
+      const analysisStartedAt = this.analysisStartedAt;
+      const analysisAgeMs = analysisStartedAt === null ? 0 : this.now() - analysisStartedAt;
+      if (analysisStartedAt === null || analysisAgeMs < this.analysisTimeoutMs) return false;
+      this.fail(
+        `Calibration analysis timed out after ${this.analysisTimeoutMs} ms. `
+        + 'Start calibration again; any previously confirmed alignment remains in use.',
+      );
+      return true;
     }
+
+    if (nowMs - this.startedAt <= this.timeoutMs) return false;
 
     const micMs = Math.round((this.collector.micSpanSamples / this.sampleRate) * 1000);
     const backingMs = Math.round((this.collector.backingSpanSamples / this.sampleRate) * 1000);
@@ -502,6 +542,8 @@ export class CalibrationSession {
     return this.measuredContext.sessionGeneration !== context.sessionGeneration
       || this.measuredContext.micGeneration !== context.micGeneration
       || this.measuredContext.backingGeneration !== context.backingGeneration
+      || (this.measuredContext.micSourceRate ?? null) !== (context.micSourceRate ?? null)
+      || (this.measuredContext.backingSourceRate ?? null) !== (context.backingSourceRate ?? null)
       || this.measuredContext.sourceGeneration !== context.sourceGeneration;
   }
 
@@ -556,7 +598,24 @@ export class CalibrationSession {
     return left.sessionGeneration === right.sessionGeneration
       && left.micGeneration === right.micGeneration
       && left.backingGeneration === right.backingGeneration
+      && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+      && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
       && left.sourceGeneration === right.sourceGeneration;
+  }
+
+  private acceptCollectionContext() {
+    const currentContext = this.context();
+    if (this.collectionContext === null) {
+      this.collectionContext = this.cloneContext(currentContext);
+      return true;
+    }
+    if (this.contextsEqual(this.collectionContext, currentContext)) return true;
+
+    this.fail(
+      'The capture arrangement changed while calibration was being collected. '
+      + 'Start calibration again.',
+    );
+    return false;
   }
 
   private preparePrimedContext() {
@@ -599,6 +658,7 @@ export class CalibrationSession {
   private invalidatePendingAnalysis() {
     this.analysisAbortController?.abort();
     this.analysisAbortController = null;
+    this.analysisStartedAt = null;
     this.analysisRevision += 1;
     this.analysisPending = false;
   }
@@ -632,10 +692,10 @@ export class CalibrationSession {
   }
 
   private finish(window: TimingWindow) {
-    // The window's audio was captured under this setup. Everything downstream
-    // is stamped with it rather than with whatever is live when the worker
-    // answers, so provenance is a property of the evidence and not of timing.
-    const measurementContext = this.context();
+    // The window's audio was captured under the context locked by its first
+    // admitted evidence (or adopted primed evidence). Never stamp it with a
+    // later live context just because the final chunk arrived after a change.
+    const measurementContext = this.cloneContext(this.collectionContext) ?? this.context();
     try {
       // Holes displace nothing, but they remove evidence. Past a few percent the
       // answer is not worth trusting.
@@ -662,6 +722,7 @@ export class CalibrationSession {
       if (isPromiseLikeAnalysis(result)) {
         const revision = ++this.analysisRevision;
         this.analysisPending = true;
+        this.analysisStartedAt = this.now();
         void Promise.resolve(result).then(
           (analysis) => this.settlePendingAnalysis(revision, measurementContext, analysis),
           (error: unknown) => this.rejectPendingAnalysis(revision, error),
@@ -670,9 +731,11 @@ export class CalibrationSession {
       }
 
       this.analysisAbortController = null;
+      this.analysisStartedAt = null;
       this.applyAnalysis(result, measurementContext);
     } catch (error) {
       this.analysisAbortController = null;
+      this.analysisStartedAt = null;
       this.rejectAnalysis(error);
     }
   }
@@ -684,6 +747,7 @@ export class CalibrationSession {
   ) {
     if (revision !== this.analysisRevision || !this.analysisPending) return;
     this.analysisPending = false;
+    this.analysisStartedAt = null;
     this.analysisAbortController = null;
 
     // Callers that move the setup are expected to abort the run themselves, and
@@ -706,6 +770,7 @@ export class CalibrationSession {
   private rejectPendingAnalysis(revision: number, error: unknown) {
     if (revision !== this.analysisRevision || !this.analysisPending) return;
     this.analysisPending = false;
+    this.analysisStartedAt = null;
     this.analysisAbortController = null;
     this.rejectAnalysis(error);
   }

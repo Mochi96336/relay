@@ -1,8 +1,29 @@
-import {
-  ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
-  ROOM_SONG_POSITION_TOLERANCE_SECONDS,
-  ROOM_SONG_RATE_TOLERANCE,
-} from './room-song-command-convergence.js';
+export type RoomSongMutation = 'load' | 'play' | 'pause' | 'seek' | 'rate';
+
+export type RoomSongMutationThresholds = {
+  localJumpToleranceSeconds: number;
+  positionToleranceSeconds: number;
+  rateTolerance: number;
+};
+
+export type RoomSongObservedMutationsInput = {
+  observed: Record<string, unknown> | null | undefined;
+  room: Record<string, unknown> | null | undefined;
+  thresholds: RoomSongMutationThresholds;
+};
+
+export type RoomSongPendingOwnsMutationInput = {
+  mutation: RoomSongMutation;
+  commandAction?: RoomSongMutation;
+  commandActions?: readonly RoomSongMutation[];
+  desired: {
+    positionSeconds: number;
+    mustApplyPosition?: boolean;
+  } | null | undefined;
+  currentTime: number;
+  projectedPositionSeconds: number;
+  thresholds: RoomSongMutationThresholds;
+};
 
 /**
  * Report every semantic dimension an observation changes relative to the room.
@@ -11,9 +32,16 @@ import {
  * That allowed a state change to hide a simultaneous seek in the same packet.
  * Authority is dimensional: a pending Play owns the state transition, not an
  * arbitrary scrub that happened at the same time.
+ *
+ * Convergence thresholds are injected by the caller so this server policy does
+ * not depend on browser-static modules or duplicate the canonical values.
  */
-export function roomSongObservedMutations({ observed, room }) {
-  const mutations = new Set();
+export function roomSongObservedMutations({
+  observed,
+  room,
+  thresholds,
+}: RoomSongObservedMutationsInput) {
+  const mutations = new Set<RoomSongMutation>();
   if (!observed || !room) return mutations;
 
   const incomingVideoId = typeof observed.videoId === 'string' ? observed.videoId : null;
@@ -32,7 +60,7 @@ export function roomSongObservedMutations({ observed, room }) {
   if (
     Number.isFinite(roomRate)
     && Number.isFinite(incomingRate)
-    && Math.abs(roomRate - incomingRate) > ROOM_SONG_RATE_TOLERANCE
+    && Math.abs(roomRate - incomingRate) > thresholds.rateTolerance
   ) mutations.add('rate');
 
   const roomState = Number(room.state);
@@ -49,8 +77,8 @@ export function roomSongObservedMutations({ observed, room }) {
   if (Number.isFinite(reportedTime) && Number.isFinite(incomingTime)) {
     const delta = incomingTime - reportedTime;
     if (
-      delta > ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS
-      || delta < -(elapsedSeconds + ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS)
+      delta > thresholds.localJumpToleranceSeconds
+      || delta < -(elapsedSeconds + thresholds.localJumpToleranceSeconds)
     ) mutations.add('seek');
   }
 
@@ -71,7 +99,8 @@ export function roomSongPendingOwnsMutation({
   desired,
   currentTime,
   projectedPositionSeconds,
-}) {
+  thresholds,
+}: RoomSongPendingOwnsMutationInput) {
   const actions = Array.isArray(commandActions) ? commandActions : [commandAction];
   if (actions.includes(mutation)) return true;
   if (mutation !== 'seek') return false;
@@ -84,7 +113,7 @@ export function roomSongPendingOwnsMutation({
     return false;
   }
 
-  const lower = Math.min(accepted, projected) - ROOM_SONG_POSITION_TOLERANCE_SECONDS;
-  const upper = Math.max(accepted, projected) + ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS;
+  const lower = Math.min(accepted, projected) - thresholds.positionToleranceSeconds;
+  const upper = Math.max(accepted, projected) + thresholds.localJumpToleranceSeconds;
   return current >= lower && current <= upper;
 }

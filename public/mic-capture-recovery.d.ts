@@ -18,6 +18,12 @@ export type MicCaptureRecoveryDecision = {
   stalledForMs?: number;
 };
 
+export type MicCaptureInputGapDecision = {
+  rebuild: boolean;
+  recovered: boolean;
+  reason: 'input-gap' | null;
+};
+
 export class MicCaptureRecoveryWatchdog {
   constructor(options?: { stallAfterMs?: number; hiddenDiscontinuityMs?: number });
   reset(): void;
@@ -25,14 +31,19 @@ export class MicCaptureRecoveryWatchdog {
   stop(): void;
   beginRecovery(snapshot: MicCaptureSnapshot, reason?: string): void;
   noteHidden(snapshot: MicCaptureSnapshot): void;
-  noteForeground(snapshot: MicCaptureSnapshot): { discontinuity: boolean };
+  noteForeground(snapshot: MicCaptureSnapshot): { discontinuity: boolean; rebuild: boolean };
   noteGraphRebuilt(snapshot: MicCaptureSnapshot): void;
-  rearmRebuild(): void;
+  noteInputGap(
+    snapshot: MicCaptureSnapshot,
+    options?: { recovered?: boolean },
+  ): MicCaptureInputGapDecision;
   status(): {
     active: boolean;
     recovering: boolean;
     recoveryReason: string | null;
     rebuildRequested: boolean;
+    rebuildBudgetSpent: boolean;
+    inputGapActive: boolean;
   };
   observe(
     snapshot: MicCaptureSnapshot,

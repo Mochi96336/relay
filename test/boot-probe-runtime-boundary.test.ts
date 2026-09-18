@@ -37,6 +37,18 @@ test('BootProbeRuntime aggregates probe evidence without absorbing calibration o
   assert.doesNotMatch(serverCode, /let lastBootCalibration:/);
   assert.doesNotMatch(serverCode, /let bootPathDifferenceMs:/);
   assert.doesNotMatch(serverCode, /let bootConfidence:/);
+  assert.doesNotMatch(
+    serverCode,
+    /bootProbeRuntime\.micLeg/,
+    'server scheduler/composition code must not extract provisional Mic evidence directly',
+  );
+  assert.ok(serverCode.includes('bootProbeRuntime.hasMicLeg'));
+  assert.ok(serverCode.includes('bootProbeRuntime.micLegStaleForContext('));
+  assert.ok(serverCode.includes('bootProbeRuntime.takeMicLegForContext('));
+  assert.ok(serverCode.includes('bootProbeRuntime.lifecycleIdle'));
+  assert.ok(serverCode.includes('bootProbeRuntime.takeExpiredRequest('));
+  assert.doesNotMatch(serverCode, /bootProbeRuntime\.pendingRequest/);
+  assert.doesNotMatch(serverCode, /bootProbeRuntime\.acceptReply\(/);
 
   // Signal analysis, combination and application remain orchestration/domain work.
   assert.ok(serverCode.includes('locateProbe('));

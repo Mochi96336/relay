@@ -30,13 +30,22 @@ test('priming, automatic calibration and content validation all require an evide
     functionBlock('robotContentFallbackPrimingActive'),
     /!robotContentEvidenceMappingReady\(nowMs\)/,
   );
+  const automatic = functionBlock('maybeAutoCalibrate');
+  assert.match(automatic, /autoContentCalibrationPrerequisitesReady\(\{/);
   assert.match(
-    functionBlock('maybeAutoCalibrate'),
-    /!robotContentEvidenceMappingReady\(nowMs\)/,
+    automatic,
+    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
   );
+
+  // Content-validation admission now delegates its prerequisite decision to a
+  // pure policy. Preserve the evidence boundary rather than the old inline-if
+  // spelling: Robot routes must still sample the evidence-usable mapping fact,
+  // while non-Robot routes bypass that Robot-only requirement.
+  const validation = functionBlock('contentValidationPathReady');
+  assert.match(validation, /contentValidationPathPrerequisitesReady\(\{/);
   assert.match(
-    functionBlock('contentValidationPathReady'),
-    /!robotContentEvidenceMappingReady\(nowMs\)/,
+    validation,
+    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
   );
 });
 
@@ -56,18 +65,16 @@ test('ProductStatus and command rejection share the content mapping pending poli
   );
 });
 
-test('a degraded Robot content transition ends a stuck content calibration instead of waiting for its own timeout', () => {
-  // The teardown itself now lives in one revocation transaction, so a degraded
-  // transition ends the run by delegating to it rather than by re-spelling the
-  // checklist. Leaving the run alive would let Mic evidence keep growing
-  // against quarantined backing PCM until the calibration timeout.
+test('a degraded Robot content transition ends a stuck content calibration through shared revocation', () => {
+  // A degraded transition delegates to the single mapping-revocation transaction.
+  // The coordinator behavior/composition tests prove that transaction aborts a
+  // collecting calibration before alignment/status publication.
   assert.match(
     server,
     /onDegraded: \(status\) => \{[\s\S]*?revokeRobotContentMapping\(\{[\s\S]*?could not be verified\./,
   );
   assert.match(
     functionBlock('revokeRobotContentMapping'),
-    /if \(calibration\.collecting\) calibration\.fail\(reason\)/,
-    'the revocation transaction is what ends a run that can no longer be completed',
+    /robotContentMappingRevocationCoordinator\.revoke\(reason\)/,
   );
 });

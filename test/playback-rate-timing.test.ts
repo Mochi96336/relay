@@ -89,12 +89,11 @@ test('a playback-rate change revokes the content mapping through the one transac
     'a rate change must not re-spell the teardown the shared revocation owns',
   );
 
-  // An unreadable rate is not evidence of a change.
-  assert.match(revoke, /if \(!Number\.isFinite\(rate\) \|\| rate <= 0\) return false;/);
-
   // The boot baseline is a wall-time pipeline measurement and deliberately
-  // survives: `revokeRobotContentMapping` never clears it.
-  assert.doesNotMatch(body('revokeRobotContentMapping'), /bootProbeRuntime\.clear\(\)/);
+  // survives media mapping revocation. The ordering-only coordinator must not
+  // grow boot-probe authority or a callback that clears it.
+  const revocation = readRepositoryTextFile('src/relay-robot-content-mapping-revocation-coordinator.ts');
+  assert.doesNotMatch(revocation, /bootProbe/i);
 });
 
 test('the telemetry seam checks the rate before anything reads the mapping', () => {

@@ -128,6 +128,17 @@ describe('AudioSession timelines', () => {
     assert.equal(read[0], 1000);
     assert.equal(read[chunk], 0, 'the hole reads as the silence that actually happened');
     assert.equal(read[chunk * 2], 2000, 'later audio keeps its original position');
+
+    assert.deepEqual(session.readMicEvidence(0, chunk * 3), {
+      gapSamples: chunk,
+      frontierMissingSamples: 0,
+      unheaderedSamples: 0,
+    }, 'range evidence distinguishes a hole behind the frontier from complete PCM');
+    assert.deepEqual(session.readMicEvidence(0, chunk * 4), {
+      gapSamples: chunk,
+      frontierMissingSamples: chunk,
+      unheaderedSamples: 0,
+    }, 'range evidence separately reports audio requested beyond the frontier');
   });
 
   test('a new capture session re-anchors to the session clock', () => {

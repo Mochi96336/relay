@@ -155,6 +155,7 @@ describe('live WebTransport runtime hardening', () => {
     assert.equal(stats.maxWebTransportMaxPacketBytes, 65_535);
     assert.equal(stats.datagramPacketBytesCeiling, 1000);
     assert.equal(stats.datagramQueuePackets, 4);
+    assert.equal(stats.datagramWriteTimeoutMs, 1000);
     assert.equal(stats.webTransportPacketsSubmitted, 2);
     assert.equal(stats.webTransportCongestedRejects, 0);
   });
@@ -179,6 +180,59 @@ describe('live WebTransport runtime hardening', () => {
     assert.equal(rejected.reason, 'congested');
     assert.equal(OverstatedBudgetWebTransport.instances.at(-1)!.writer.writes.length, 2);
     assert.equal(transport.stats().webTransportCongestedRejects, 1);
+  });
+
+  it('demotes an unresolved write stall at its deadline and sends only the new packet over WebSocket', async () => {
+    OverstatedBudgetWebTransport.instances.length = 0;
+    const { PreferredAudioTransport } = await import(transportModuleUrl.href);
+    let nowMs = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      datagramWriteTimeoutMs: 1000,
+      WebTransportClass: OverstatedBudgetWebTransport,
+      nowMs: () => nowMs,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=stall',
+    });
+
+    const webTransport = OverstatedBudgetWebTransport.instances.at(-1)!;
+    const submitted = Array.from({ length: 4 }, (_, index) => new Uint8Array([index + 1]).buffer);
+    for (const packet of submitted) assert.equal(transport.send(packet).sent, true);
+    assert.equal(webTransport.writer.writes.length, 4);
+    assert.equal(socket.sent.length, 0);
+
+    nowMs = 999;
+    const beforeDeadline = transport.send(new Uint8Array([5]).buffer);
+    assert.equal(beforeDeadline.sent, false);
+    assert.equal(beforeDeadline.reason, 'congested');
+    assert.equal(webTransport.writer.writes.length, 4);
+    assert.equal(socket.sent.length, 0);
+
+    nowMs = 1000;
+    const fallbackPacket = new Uint8Array([6]).buffer;
+    const recovered = transport.send(fallbackPacket);
+    assert.equal(recovered.sent, true);
+    assert.equal(recovered.path, 'websocket');
+    assert.equal(webTransport.closeCalls, 1);
+    assert.equal(webTransport.writer.writes.length, 4, 'already-submitted datagrams are never replayed');
+    assert.deepEqual(socket.sent, [fallbackPacket]);
+
+    const stats = transport.stats();
+    assert.equal(stats.path, 'websocket');
+    assert.equal(stats.webTransportPacketsSubmitted, 4);
+    assert.equal(stats.webTransportCongestedRejects, 1);
+    assert.equal(stats.webTransportDemotions, 1);
+    assert.equal(stats.webSocketPacketsSent, 1);
+
+    webTransport.writer.resolve(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(transport.stats().path, 'websocket',
+      'a late completion from the demoted writer cannot revive or mutate the active path');
   });
 
   it('fences an old asynchronous write failure from a replacement WebTransport generation', async () => {

@@ -5,7 +5,7 @@ import { createRelayBackingCaptureRestartCoordinator } from '../src/relay-backin
 
 function coordinatorFor(calls: string[]) {
   return createRelayBackingCaptureRestartCoordinator({
-    clearBackingBoundaryRequest: () => calls.push('clear-boundary'),
+    clearContentTransition: () => calls.push('clear-boundary'),
     noteQualityEvent: (event) => calls.push(`quality:${event}`),
     abandonProbeRun: () => calls.push('abandon-probe'),
     clearContentValidation: () => calls.push('clear-content-validation'),

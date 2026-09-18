@@ -92,6 +92,10 @@ export class ProbeLifecycle {
     return this.analysis;
   }
 
+  get idle() {
+    return this.request === null && this.analysis === null;
+  }
+
   beginRequest(request: ProbeRequest) {
     if (this.failure || this.request || this.analysis) return false;
     if (this.attemptCounts[request.target] >= this.maxAttempts) return false;
@@ -107,6 +111,18 @@ export class ProbeLifecycle {
   acceptReply(requestId: unknown) {
     if (!this.request || Number(requestId) !== this.request.requestId) return null;
     const request = this.request;
+    this.request = null;
+    return request;
+  }
+
+  /**
+   * Atomically consume the request only after its acknowledgement deadline.
+   * Equality is still inside the allowed window; expiry is deliberately strict
+   * so this preserves the server's historical `elapsed > timeoutMs` boundary.
+   */
+  takeExpiredRequest(nowMs: number, timeoutMs: number) {
+    const request = this.request;
+    if (!request || nowMs - request.serverSentAtMs <= timeoutMs) return null;
     this.request = null;
     return request;
   }

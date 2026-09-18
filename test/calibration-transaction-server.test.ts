@@ -23,15 +23,18 @@ const FAST = {
   RELAY_CALIBRATION_VALIDATION: '0',
 };
 
-const playingTelemetry = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-  networkRttMs: 40,
-};
+const playingStartedAtMs = Date.now();
+function playingTelemetry() {
+  return {
+    type: 'youtube-telemetry',
+    videoId: 'dQw4w9WgXcQ',
+    state: 1,
+    currentTime: 42 + (Date.now() - playingStartedAtMs) / 1_000,
+    duration: 200,
+    playbackRate: 1,
+    networkRttMs: 40,
+  };
+}
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
@@ -67,10 +70,10 @@ async function completeCalibration(
   monitor: RelayClient,
   lagMs: number,
 ) {
-  publisher.send(playingTelemetry);
+  publisher.send(playingTelemetry());
   await primeStreams(backing, publisher);
   await startCalibrationCollecting(publisher, monitor, async () => {
-    publisher.send(playingTelemetry);
+    publisher.send(playingTelemetry());
     await primeStreams(backing, publisher);
   });
 
@@ -110,10 +113,10 @@ test('server keeps old confirmed alignment through failed retry and replaces it 
     assert.ok(Math.abs(oldLag - 260) <= 25, `expected first calibration near 260 ms, got ${oldLag}`);
     assert.equal(first.activeMicLagMs, oldLag, 'confirmed result must already be mixer authority');
 
-    publisher.send(playingTelemetry);
+    publisher.send(playingTelemetry());
     await primeStreams(backing, publisher);
     const retryCollecting = await startCalibrationCollecting(publisher, monitor, async () => {
-      publisher.send(playingTelemetry);
+      publisher.send(playingTelemetry());
       await primeStreams(backing, publisher);
     });
     assert.equal(retryCollecting.micLagMs, oldLag, 'retry keeps the old confirmed result applied');

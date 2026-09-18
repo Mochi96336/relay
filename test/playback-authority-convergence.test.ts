@@ -70,3 +70,55 @@ test('browser and server both release authority after leader freshness expires',
   assert.equal(replacement.accepted, true);
   assert.equal(replacement.leaderChanged, true);
 });
+
+test('fresh packets from a frozen PLAYING clock release browser and server authority together', () => {
+  const songs = new SongSession();
+  assert.equal(songs.update(telemetry(), A, null, 0).accepted, true);
+
+  for (let nowMs = 250; nowMs <= 2_000; nowMs += 250) {
+    assert.equal(
+      songs.update(telemetry({ timelineDeltaSeconds: -0.25 }), A, null, nowMs).accepted,
+      true,
+    );
+  }
+
+  const stalled = songs.statusPayload(2_000) as Record<string, any>;
+  assert.equal(stalled.telemetryAgeMs, 0, 'the old leader transport is still reporting');
+  assert.equal(stalled.clockAgeMs, 2_000, 'the PLAYING media clock itself has not moved');
+  assert.equal(stalled.connected, false, 'room clock authority is stale');
+  assert.equal(stalled.leaderFresh, false, 'leader authority must follow media-clock freshness');
+  assert.deepEqual(observerCanRecover(songs, 2_000), {
+    health: 'stale',
+    recoverable: true,
+  });
+
+  const replacement = songs.update(
+    telemetry({ currentTime: 12, timelineDeltaSeconds: 0 }),
+    B,
+    null,
+    2_000,
+  );
+  assert.equal(replacement.accepted, true, 'server must release the same stale authority');
+  assert.equal(replacement.leaderChanged, true);
+});
+
+test('fresh PAUSED telemetry keeps leader authority without media-position progress', () => {
+  const songs = new SongSession();
+  assert.equal(songs.update(telemetry({ state: 2 }), A, null, 0).accepted, true);
+
+  for (let nowMs = 250; nowMs <= 2_000; nowMs += 250) {
+    assert.equal(songs.update(telemetry({ state: 2 }), A, null, nowMs).accepted, true);
+  }
+
+  const paused = songs.statusPayload(2_000) as Record<string, any>;
+  assert.equal(paused.connected, true);
+  assert.equal(paused.leaderFresh, true);
+  assert.deepEqual(observerCanRecover(songs, 2_000), {
+    health: 'healthy',
+    recoverable: false,
+  });
+
+  const replacement = songs.update(telemetry({ state: 2, currentTime: 30 }), B, null, 2_000);
+  assert.equal(replacement.accepted, false);
+  assert.equal(replacement.reason, 'leader-busy');
+});

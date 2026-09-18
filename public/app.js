@@ -1,4 +1,5 @@
 import { authorityState } from './authority-freshness.js';
+import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
@@ -55,6 +56,8 @@ let publisherStartRequest = null;
 const micStartup = new MicStartupGate();
 const micCaptureRecovery = new MicCaptureRecoveryWatchdog();
 const micLifecycle = new MicLifecycleTransaction();
+const publisherCommandLiveness = new PublisherCommandLiveness();
+let publishedPublisherCommandChannelFresh = false;
 let liveMixActive = false;
 let latestMixHealth = null;
 let latestLocalMicLevel = null;
@@ -64,6 +67,7 @@ let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
 let activeCalibrationProbeRequestId = null;
+let activeCalibrationProbePlayback = null;
 let publisherSessionEpoch = 0;
 let lastKnownControlSnapshot = {
   micGainDb: Number(micGain.value) || 24,
@@ -196,11 +200,12 @@ function recordUplinkDrop(sampleCount, reason) {
   );
 }
 
-function audioUplinkHealthPayload() {
+function audioUplinkHealthPayload(healthRequestId) {
   return {
     type: 'audio-uplink-health',
     version: 1,
     captureGeneration: captureGeneration >>> 0,
+    healthRequestId,
     capturedSamples: captureSampleCursor,
     inputGapSamples: captureInputGapSamples,
     inputMuted: captureInputMuted,
@@ -214,8 +219,14 @@ function audioUplinkHealthPayload() {
 }
 
 function sendAudioUplinkHealth() {
-  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(audioUplinkHealthPayload()));
+  maintainPublisherCommandChannel();
+  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return false;
+  const sentAtMs = performance.now();
+  const healthRequestId = publisherCommandLiveness.beginHealthRequest(sentAtMs);
+  if (healthRequestId === null) return false;
+  const result = audioTransport.sendControlJson(audioUplinkHealthPayload(healthRequestId));
+  if (!result.sent) publisherCommandLiveness.cancelHealthRequest(healthRequestId);
+  return result.sent;
 }
 
 function startAudioUplinkHealthReporting() {
@@ -257,6 +268,11 @@ function startCaptureWatchdog(
 }
 
 function advanceCaptureGeneration(reason) {
+  // Calibration probe playback is capture-scoped. Retire both a pending
+  // AudioContext.resume() continuation and nodes already scheduled into the
+  // future before changing the capture-clock identity.
+  activeCalibrationProbeRequestId = null;
+  retireCalibrationProbePlayback();
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
   captureSampleCursor = 0;
   capturePacketSequence = 0;
@@ -349,12 +365,16 @@ function handleCaptureWorkletMessage(event, graph) {
     if (event.data?.type === 'input-gap') {
       const samples = Number(event.data.samples);
       if (Number.isSafeInteger(samples) && samples > 0) captureInputGapSamples += samples;
+      const decision = micCaptureRecovery.noteInputGap(captureSnapshot(), {
+        recovered: event.data.recovered === true,
+      });
       console.warn(
         'Microphone input gap',
         event.data.quanta,
         'quanta padded with silence',
         event.data.recovered ? '(recovered)' : '(continuing)',
       );
+      if (decision.rebuild) void rebuildPublisherCaptureGraph('input-gap');
     }
     return;
   }
@@ -365,7 +385,7 @@ function handleCaptureWorkletMessage(event, graph) {
   const chunkFirstSampleIndex = captureSampleCursor;
   captureSampleCursor += event.data.byteLength / 2;
 
-  const recovery = micCaptureRecovery.observe(captureSnapshot(), { freshPcm: true });
+  const recovery = micCaptureRecovery.observe(captureSnapshot(), { freshPcm: captureInputMuted !== true });
   if (recovery.recovered) announceCaptureRecovered();
 
   const pending = splitPcmForPacketLimit(
@@ -463,13 +483,18 @@ const COMMAND_LABELS = {
   'start-timing-calibration': 'Calibration is controlled by the singer',
 };
 
+function publisherCommandChannelFresh(nowMs = performance.now()) {
+  return socket?.readyState === WebSocket.OPEN
+    && publisherCommandLiveness.status(nowMs).fresh;
+}
+
 function publisherCommandAuthority(serverAllowed = true) {
   return authorityState({
     authorityFresh: publisherAuthorityFresh
       && publisherMixSettingsFresh
       && publisherSourceStatusFresh,
     lastKnownSnapshot: lastKnownControlSnapshot,
-    commandChannelFresh: socket?.readyState === WebSocket.OPEN,
+    commandChannelFresh: publisherCommandChannelFresh(),
     authorized: publisherActive,
     serverAllowed,
   });
@@ -477,9 +502,42 @@ function publisherCommandAuthority(serverAllowed = true) {
 
 function publishPublisherCommandAuthority() {
   const detail = publisherCommandAuthority();
+  publishedPublisherCommandChannelFresh = detail.commandChannelFresh;
   window.relayCommandAuthority = detail;
   dispatchRelayEvent('relay-command-authority', detail);
   return detail;
+}
+
+function refreshPublisherCommandChannel() {
+  const fresh = publisherCommandChannelFresh();
+  if (fresh === publishedPublisherCommandChannelFresh) return fresh;
+  publishPublisherCommandAuthority();
+  updateSingerControls();
+  return fresh;
+}
+
+function maintainPublisherCommandChannel() {
+  const state = publisherCommandLiveness.status(performance.now());
+  if (
+    state.reconnect
+    && publisherActive
+    && socket?.readyState === WebSocket.OPEN
+  ) {
+    publishPublisherCommandAuthority();
+    updateSingerControls();
+    setStatus(
+      'Reconnecting microphone…',
+      'Relay control acknowledgement stopped; restarting the control connection.',
+    );
+    const staleSocket = socket;
+    try {
+      staleSocket.close(4000, 'publisher command ack stale');
+    } catch {
+      try { staleSocket.close(); } catch {}
+    }
+    return false;
+  }
+  return refreshPublisherCommandChannel();
 }
 
 function restoreLastKnownControl(command = null) {
@@ -552,10 +610,15 @@ function sendVocalFineTune() {
     return false;
   }
   try {
-    socket.send(JSON.stringify({
+    const result = audioTransport.sendControlJson({
       type: 'set-vocal-fine-tune',
       valueMs: Number(vocalFineTune.value),
-    }));
+    });
+    if (!result.sent) {
+      restoreLastKnownControl('set-vocal-fine-tune');
+      if (result.reason === 'disconnected') markPublisherAuthorityStale();
+      return false;
+    }
   } catch {
     restoreLastKnownControl('set-vocal-fine-tune');
     markPublisherAuthorityStale();
@@ -571,13 +634,18 @@ function sendMixSettings() {
     return false;
   }
   try {
-    socket.send(JSON.stringify({
+    const result = audioTransport.sendControlJson({
       type: 'set-mix',
       micGainDb: Number(micGain.value),
       // Retain the old field on the wire while the server owns its only valid
       // value. It is no longer a second product control.
       songLevel: FIXED_SONG_LEVEL,
-    }));
+    });
+    if (!result.sent) {
+      restoreLastKnownControl('set-mix');
+      if (result.reason === 'disconnected') markPublisherAuthorityStale();
+      return false;
+    }
   } catch {
     restoreLastKnownControl('set-mix');
     markPublisherAuthorityStale();
@@ -710,6 +778,17 @@ const PROBE_NOTES = [
 ];
 const PROBE_NOTE_SECONDS = 0.105;
 
+function retireCalibrationProbePlayback() {
+  const playback = activeCalibrationProbePlayback;
+  activeCalibrationProbePlayback = null;
+  if (!playback) return;
+  for (const { oscillator, gain } of playback.nodes) {
+    try { oscillator?.disconnect(); } catch {}
+    try { gain?.disconnect(); } catch {}
+    try { oscillator?.stop(); } catch {}
+  }
+}
+
 /**
  * Plays the probe out of the phone speaker so the phone's own microphone hears
  * it. The reply says only that it played and for which request - the server
@@ -719,9 +798,11 @@ const PROBE_NOTE_SECONDS = 0.105;
  */
 async function playCalibrationProbe(requestId, leadMs) {
   const context = audioContext;
+  const sessionEpoch = publisherSessionEpoch;
+  const expectedGeneration = captureGeneration >>> 0;
   if (
     !context
-    || !publisherActive
+    || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
     || document.visibilityState === 'hidden'
     || activeCalibrationProbeRequestId !== requestId
   ) return;
@@ -729,19 +810,32 @@ async function playCalibrationProbe(requestId, leadMs) {
   try {
     // Mobile Safari may leave resume() pending while a page is suspended. The
     // server can retire this request meanwhile, so every continuation has to
-    // re-prove request ownership before it is allowed to create audible nodes.
+    // re-prove request and capture ownership before it may create audible nodes.
     await context.resume();
-    if (activeCalibrationProbeRequestId !== requestId) return;
     if (
-      !publisherActive
-      || audioContext !== context
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+      || socket?.readyState !== WebSocket.OPEN
+    ) return;
+    if (
+      audioContext !== context
       || document.visibilityState === 'hidden'
       || context.state !== 'running'
     ) {
       throw new Error(`Phone probe AudioContext is ${context.state}.`);
     }
 
+    retireCalibrationProbePlayback();
     const startTime = context.currentTime + leadMs / 1000;
+    const playback = {
+      requestId,
+      sessionEpoch,
+      generation: expectedGeneration,
+      context,
+      nodes: [],
+    };
+    activeCalibrationProbePlayback = playback;
+    let remainingNotes = PROBE_NOTES.length;
     for (const note of PROBE_NOTES) {
       const at = startTime + note.offsetMs / 1000;
       const oscillator = context.createOscillator();
@@ -753,37 +847,66 @@ async function playCalibrationProbe(requestId, leadMs) {
       gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
       gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
       oscillator.connect(gain).connect(context.destination);
+      playback.nodes.push({ oscillator, gain });
+      oscillator.addEventListener('ended', () => {
+        remainingNotes -= 1;
+        if (remainingNotes === 0 && activeCalibrationProbePlayback === playback) {
+          activeCalibrationProbePlayback = null;
+        }
+      }, { once: true });
       oscillator.start(at);
       oscillator.stop(at + PROBE_NOTE_SECONDS);
     }
 
     // Scheduling the nodes is the irreversible side effect. Retire the local
     // request before acknowledging it so a later status/retry cannot revive the
-    // same identity on this page.
-    if (activeCalibrationProbeRequestId !== requestId) return;
+    // same identity on this page. The separate playback owner remains live
+    // until every scheduled node ends or a capture/session boundary retires it.
+    if (
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    ) return;
     activeCalibrationProbeRequestId = null;
-    if (socket?.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({
+    if (socket?.readyState !== WebSocket.OPEN) {
+      retireCalibrationProbePlayback();
+      return;
+    }
+    const result = audioTransport.sendControlJson({
       type: 'calibration-probe-played',
       target: 'mic',
       requestId,
       // The same truncation framePcm applies. The server compares this against
-      // the generation it read off a PCM frame header, which is a uint32, so
-      // sending the untruncated clock seed here never matches.
-      generation: captureGeneration >>> 0,
-    }));
+      // the generation it read off a PCM frame header, which is a uint32.
+      generation: expectedGeneration,
+    });
+    if (!result.sent) {
+      retireCalibrationProbePlayback();
+      if (result.reason === 'disconnected') markPublisherAuthorityStale();
+    }
   } catch (error) {
     console.warn('phone calibration probe failed', error);
-    if (activeCalibrationProbeRequestId !== requestId) return;
+    if (
+      activeCalibrationProbePlayback?.requestId === requestId
+      && activeCalibrationProbePlayback?.sessionEpoch === sessionEpoch
+      && activeCalibrationProbePlayback?.generation === expectedGeneration
+      && activeCalibrationProbePlayback?.context === context
+    ) {
+      retireCalibrationProbePlayback();
+    }
+    if (
+      activeCalibrationProbeRequestId !== requestId
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    ) return;
     activeCalibrationProbeRequestId = null;
     if (socket?.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({
+    const result = audioTransport.sendControlJson({
       type: 'calibration-probe-failed',
       target: 'mic',
       requestId,
-      generation: captureGeneration >>> 0,
+      generation: expectedGeneration,
       reason: error instanceof Error ? error.message : String(error),
-    }));
+    });
+    if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
   }
 }
 
@@ -811,6 +934,25 @@ function handleServerMessage(
     setStatus('Error', message.message);
     // Protocol errors are not transport failures. Retrying the publisher after
     // a semantic rejection used to make superseded tabs fight forever.
+    return;
+  }
+
+  if (message.type === 'audio-uplink-health-ack') {
+    const ackGeneration = message.captureGeneration;
+    const healthRequestId = message.healthRequestId;
+    if (
+      message.version !== 1
+      || !Number.isInteger(ackGeneration)
+      || ackGeneration < 0
+      || ackGeneration > 0xffff_ffff
+      || !Number.isInteger(healthRequestId)
+      || healthRequestId < 0
+      || healthRequestId > 0xffff_ffff
+      || (ackGeneration >>> 0) !== (expectedGeneration >>> 0)
+      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+      || !publisherCommandLiveness.noteAck(ackGeneration, healthRequestId, performance.now())
+    ) return;
+    refreshPublisherCommandChannel();
     return;
   }
 
@@ -951,6 +1093,10 @@ function handleServerMessage(
     if (message.target === undefined || message.target === 'mic') {
       const requestId = Number(message.requestId);
       if (!Number.isSafeInteger(requestId) || requestId < 0) return;
+      // A new authoritative request supersedes any future playback left by an
+      // older request in this same capture; overlapping probe waveforms are not
+      // valid calibration evidence.
+      retireCalibrationProbePlayback();
       activeCalibrationProbeRequestId = requestId;
       void playCalibrationProbe(requestId, Number(message.leadMs) || 200);
     }
@@ -1020,7 +1166,7 @@ function recoverPublisherAudio() {
     'Foregrounded; waiting for the audio clock and fresh microphone samples.',
   );
   resumePublisherAudioContext();
-  if (foreground.discontinuity) void rebuildPublisherCaptureGraph('foreground-discontinuity');
+  if (foreground.rebuild) void rebuildPublisherCaptureGraph('foreground-discontinuity');
 }
 
 function schedulePublisherReconnect(
@@ -1045,6 +1191,7 @@ function schedulePublisherReconnect(
 function adoptSocket(ws) {
   const previous = socket;
   socket = ws;
+  publisherCommandLiveness.reset();
   resetPublisherCommandFreshness();
   publishPublisherCommandAuthority();
   updateSingerControls();
@@ -1082,7 +1229,9 @@ async function connectPublisherSocket(
     registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
   }
   ws.send(JSON.stringify(registration));
-  audioTransport.bind(ws);
+  audioTransport.bind(ws, { sampleRate: audioContext.sampleRate });
+  publisherCommandLiveness.begin(expectedGeneration, performance.now());
+  refreshPublisherCommandChannel();
   publisherControlConnections += 1;
 
   ws.addEventListener('message', (event) => {
@@ -1099,6 +1248,7 @@ async function connectPublisherSocket(
     activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
+    publisherCommandLiveness.reset();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
@@ -1121,6 +1271,7 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   if (previous) {
     audioTransport.unbind(previous);
     socket = null;
+    publisherCommandLiveness.reset();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
@@ -1171,10 +1322,16 @@ function rebuildPublisherCaptureGraph(reason) {
     return true;
   }).catch((error) => {
     console.warn('Microphone capture graph rebuild failed', error);
-    micCaptureRecovery.rearmRebuild();
     if (isCurrentPublisherSession(sessionEpoch)) {
-      startCaptureWatchdog(sessionEpoch, captureGeneration >>> 0);
-      setStatus('Recovering microphone…', 'Capture graph rebuild failed; retrying from live evidence.');
+      void finishMicrophoneSession('capture-rebuild-failed', {
+        releaseMic: true,
+        afterEnded: () => {
+          setStatus(
+            'Microphone stopped',
+            'Capture recovery failed. Press Microphone again to start a new capture session.',
+          );
+        },
+      }).catch(console.error);
     }
     return false;
   }).finally(() => {
@@ -1192,6 +1349,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   micStartup.cancel();
   publisherStarting = false;
   activeCalibrationProbeRequestId = null;
+  retireCalibrationProbePlayback();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
   stopCaptureWatchdog();
@@ -1205,6 +1363,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   const wasPublisherActive = publisherActive;
 
   socket = null;
+  publisherCommandLiveness.reset();
   resetPublisherCommandFreshness();
   mediaStream = null;
   activeCaptureGraph = null;
@@ -1445,6 +1604,7 @@ window.addEventListener('relay-request-microphone', (event) => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     activeCalibrationProbeRequestId = null;
+    retireCalibrationProbePlayback();
     if (publisherActive) micCaptureRecovery.noteHidden(captureSnapshot());
     return;
   }
@@ -1493,7 +1653,13 @@ calibrateButton.addEventListener('click', () => {
   if (!publisherCommandAuthority(
     roomSongAvailable === true && roomCanStartCalibration === true,
   ).actionable) return;
-  socket.send(JSON.stringify({ type: 'start-timing-calibration' }));
+  const result = audioTransport.sendControlJson({ type: 'start-timing-calibration' });
+  if (!result.sent) {
+    if (result.reason === 'disconnected') markPublisherAuthorityStale();
+    calibrateStatus.textContent = result.reason === 'congested'
+      ? 'Calibration not started: microphone uplink congested.'
+      : 'Calibration not started: Relay is disconnected.';
+  }
 });
 
 updateMixLabels();

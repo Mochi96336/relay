@@ -390,8 +390,7 @@ export class SongSession {
 
   statusPayload(nowMs = performance.now()) {
     const timeline = this.timeline.statusPayload(nowMs);
-    const leaderFresh = this.leader !== null
-      && nowMs - this.leader.lastTelemetryAtMs <= LEADER_STALE_AFTER_MS;
+    const leaderFresh = this.leaderAuthorityFresh(nowMs, timeline);
 
     return {
       ...timeline,
@@ -495,8 +494,7 @@ export class SongSession {
       return { ok: true };
     }
 
-    const fresh = nowMs - this.leader.lastTelemetryAtMs <= LEADER_STALE_AFTER_MS;
-    if (!this.leader.connected || !fresh) return { ok: true };
+    if (!this.leader.connected || !this.leaderAuthorityFresh(nowMs)) return { ok: true };
 
     // A page reload keeps its transport identity but increments generation.
     // That may replace the previous incarnation immediately. A second live tab
@@ -686,6 +684,15 @@ export class SongSession {
       && a.transportId === b.transportId
       && a.generation === b.generation,
     );
+  }
+
+  private leaderAuthorityFresh(
+    nowMs: number,
+    timeline: { connected?: boolean } = this.timeline.statusPayload(nowMs),
+  ) {
+    return this.leader !== null
+      && nowMs - this.leader.lastTelemetryAtMs <= LEADER_STALE_AFTER_MS
+      && timeline.connected === true;
   }
 
   private leaderIdentity(): PlaybackIdentity | null {

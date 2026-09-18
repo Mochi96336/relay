@@ -29,7 +29,7 @@ test('Backing registration keeps infrastructure admission, validation and role c
 
   assert.doesNotMatch(backing, /backingRuntime\.bind\(/);
   assert.doesNotMatch(backing, /replacePrevious\(/);
-  assert.doesNotMatch(backing, /clearRobotBackingBoundaryRequest\(/);
+  assert.doesNotMatch(backing, /clearRobotContentTransition\(/);
   assert.doesNotMatch(backing, /takeController\.noteQualityEvent\('backing-transport/);
   assert.doesNotMatch(backing, /session\.setBackingExpected\(/);
   assert.doesNotMatch(backing, /dropLegacyCalibrationForRobot\(/);
@@ -41,7 +41,7 @@ test('server composition retains Backing activation domain effects', () => {
   const composition = variableInitializerCode(server, 'backingActivationCoordinator');
   assert.match(composition, /^createRelayBackingActivationCoordinator<RelaySocket>/);
   assert.match(composition, /previousBacking: \(\) => backingRuntime\.socket/);
-  assert.match(composition, /clearRobotBackingBoundaryRequest: \(\) => clearRobotBackingBoundaryRequest\(\)/);
+  assert.match(composition, /clearRobotContentTransition: \(\) => clearRobotContentTransition\(\)/);
   assert.match(composition, /takeController\.noteQualityEvent\(event\)/);
   assert.match(composition, /replacePrevious\(previous, next, 'Replaced by a newer tab capture\.'\)/);
   assert.match(composition, /socket\.sampleRate = sampleRate/);
@@ -49,6 +49,10 @@ test('server composition retains Backing activation domain effects', () => {
   assert.match(composition, /session\.setBackingExpected\(true\)/);
   assert.match(composition, /sessionActive: \(\) => session\.active/);
   assert.match(composition, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
+  assert.match(
+    composition,
+    /onReplacedCaptureActivated: \(\) => \{[\s\S]*backingCaptureRestartCoordinator\.restart\(\{[\s\S]*calibrationCollecting: calibration\.collecting/ ,
+  );
   assert.match(composition, /activeBackingIsRobot: \(\) => backingRuntime\.isRobot/);
   assert.match(composition, /type: 'registered', role: 'backing', robot/);
   assert.match(composition, /startLiveSource: \(\) => startLiveSource\(\)/);

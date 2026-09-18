@@ -1,15 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import { TakeLibrary } from '../src/take-library.js';
+import { TakeQualityTracker } from '../src/take-quality.js';
 import type { TakeRecord } from '../src/take-session.js';
 import { prepareTakeStorage, type TakeStoragePolicy } from '../src/take-storage.js';
 
 const TAKE_ID = '55555555-5555-4555-8555-555555555555';
 const policy: TakeStoragePolicy = { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 };
+const QUALITY = new TakeQualityTracker({
+  sampleRate: 48_000,
+  backingExpected: false,
+  timingExpected: false,
+}).assessment();
 
 function wav(sampleRate = 48_000, sampleCount = 4_800) {
   const dataBytes = sampleCount * 2;
@@ -64,8 +70,17 @@ function readyTake(): TakeRecord {
       endSampleIndex: 14_400,
       sampleCount: 4_800,
     },
-    quality: null,
+    quality: structuredClone(QUALITY),
     error: null,
+  };
+}
+
+function finalizingTake(): TakeRecord {
+  const take = readyTake();
+  return {
+    ...take,
+    lifecycle: 'finalizing',
+    artifact: null,
   };
 }
 
@@ -94,10 +109,132 @@ test('startup promotes a complete metadata partial beside its finalized WAV', as
     assert.equal(entry.stopReason, 'user');
     assert.equal(entry.song?.videoId, 'video-a');
     assert.deepEqual(entry.mixSampleRange, readyTake().mixSampleRange);
-    assert.equal(entry.quality, null);
+    assert.deepEqual(entry.quality, readyTake().quality);
     const names = await readdir(directory);
     assert.equal(names.includes(`${TAKE_ID}.json`), true);
     assert.equal(names.includes(`${TAKE_ID}.json.part`), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('rich metadata can be staged before WAV publication and recovered after the publish crash window', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-staged-before-wav-'));
+  try {
+    const library = new TakeLibrary({ directory });
+    const staged = library.stageFinalizing(finalizingTake(), {
+      sampleRate: 48_000,
+      sampleCount: 4_800,
+    });
+
+    assert.equal(staged.recovered, false);
+    assert.deepEqual(staged.quality, readyTake().quality);
+    let names = await readdir(directory);
+    assert.equal(names.includes(`${TAKE_ID}.json.part`), true);
+    assert.equal(names.includes(`${TAKE_ID}.json`), false);
+    assert.equal(names.includes(`${TAKE_ID}.wav`), false);
+
+    // Simulate WavTakeWriter's durable publish followed by an immediate process
+    // death before TakeController can commit the staged metadata sidecar.
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+
+    const prepared = prepareTakeStorage(directory, policy);
+    assert.equal(prepared.removedPartialFiles, 0, 'staged metadata beside a published WAV must survive startup cleanup');
+
+    const restarted = new TakeLibrary({ directory });
+    restarted.prepare();
+    const entry = restarted.get(TAKE_ID);
+
+    assert.ok(entry);
+    assert.equal(entry.recovered, false);
+    assert.equal(entry.startedByParticipantId, 'participant-a');
+    assert.equal(entry.stoppedByParticipantId, 'participant-b');
+    assert.equal(entry.stopReason, 'user');
+    assert.equal(entry.song?.videoId, 'video-a');
+    assert.deepEqual(entry.mixSampleRange, readyTake().mixSampleRange);
+    assert.deepEqual(entry.quality, readyTake().quality);
+    names = await readdir(directory);
+    assert.equal(names.includes(`${TAKE_ID}.json`), true);
+    assert.equal(names.includes(`${TAKE_ID}.json.part`), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('normal staged commit publishes the exact fsynced metadata candidate without rewriting it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-commit-'));
+  try {
+    const library = new TakeLibrary({ directory });
+    library.stageFinalizing(finalizingTake(), {
+      sampleRate: 48_000,
+      sampleCount: 4_800,
+    });
+    const stagedBytes = await readFile(path.join(directory, `${TAKE_ID}.json.part`));
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+
+    const entry = library.commitStaged(readyTake());
+    const committedBytes = await readFile(path.join(directory, `${TAKE_ID}.json`));
+
+    assert.equal(entry.recovered, false);
+    assert.deepEqual(entry.quality, readyTake().quality);
+    assert.deepEqual(committedBytes, stagedBytes);
+    const names = await readdir(directory);
+    assert.equal(names.includes(`${TAKE_ID}.json.part`), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('staged commit is idempotent when a reader promotes the exact partial before commit', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-reader-promote-'));
+  try {
+    const library = new TakeLibrary({ directory });
+    library.stageFinalizing(finalizingTake(), {
+      sampleRate: 48_000,
+      sampleCount: 4_800,
+    });
+    const stagedBytes = await readFile(path.join(directory, `${TAKE_ID}.json.part`));
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+
+    const promoted = library.get(TAKE_ID);
+    assert.ok(promoted);
+    assert.equal(promoted.recovered, false);
+    const namesAfterPromotion = await readdir(directory);
+    assert.equal(namesAfterPromotion.includes(`${TAKE_ID}.json`), true);
+    assert.equal(namesAfterPromotion.includes(`${TAKE_ID}.json.part`), false);
+    assert.deepEqual(await readFile(path.join(directory, `${TAKE_ID}.json`)), stagedBytes);
+
+    const entry = library.commitStaged(readyTake());
+    assert.equal(entry.recovered, false);
+    assert.deepEqual(entry.quality, readyTake().quality);
+    assert.deepEqual(await readFile(path.join(directory, `${TAKE_ID}.json`)), stagedBytes);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('staged commit still rejects a promoted final sidecar that is not the exact expected metadata', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-reader-mismatch-'));
+  try {
+    const library = new TakeLibrary({ directory });
+    library.stageFinalizing(finalizingTake(), {
+      sampleRate: 48_000,
+      sampleCount: 4_800,
+    });
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    assert.ok(library.get(TAKE_ID), 'reader must promote the staged metadata before the commit attempt');
+
+    const metadataPath = path.join(directory, `${TAKE_ID}.json`);
+    const payload = JSON.parse(await readFile(metadataPath, 'utf8')) as {
+      take: { startedByParticipantId: string | null };
+    };
+    payload.take.startedByParticipantId = 'participant-other';
+    await writeFile(metadataPath, `${JSON.stringify(payload)}\n`);
+
+    assert.throws(
+      () => library.commitStaged(readyTake()),
+      /Staged Take metadata does not match the finalized recording/,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -119,6 +256,7 @@ test('invalid metadata partial fails closed to WAV-only recovery', async () => {
     assert.equal(entry.startedByParticipantId, null);
     assert.equal(entry.song, null);
     assert.equal(entry.mixSampleRange, null);
+    assert.equal(entry.quality, null);
     const names = await readdir(directory);
     assert.equal(names.includes(`${TAKE_ID}.json.part`), false);
     assert.equal(names.includes(`${TAKE_ID}.json`), true);

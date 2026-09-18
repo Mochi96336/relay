@@ -4,7 +4,7 @@ type RelayRobotDisconnectCoordinatorOptions<TSocket> = {
   detach(socket: TSocket): void;
   resetPlayerOffset(): void;
   resetContentTimeline(): void;
-  clearBackingBoundaryRequest(): void;
+  clearContentTransition(): void;
   abandonProbeRun(): void;
   /**
    * Detaching the Robot source bumps the source generation, so any calibration
@@ -35,7 +35,7 @@ export function createRelayRobotDisconnectCoordinator<TSocket>(
       options.detach(socket);
       options.resetPlayerOffset();
       options.resetContentTimeline();
-      options.clearBackingBoundaryRequest();
+      options.clearContentTransition();
       options.abandonProbeRun();
       options.failCalibrationIfCollecting();
       options.syncAppliedCalibration();

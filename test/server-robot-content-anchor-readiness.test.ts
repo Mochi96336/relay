@@ -31,6 +31,22 @@ test('Robot follower preservation requires proven content authority or enough in
   );
 });
 
+test('Robot transition compare windows use AudioSession range evidence and the calibration gap bound', () => {
+  const construction = server.slice(
+    server.indexOf('const robotContentTransitionRuntime = new RobotContentTransitionRuntime({'),
+    server.indexOf('function robotFollowerSeekMayPreserveMapping'),
+  );
+  assert.match(construction, /maxEvidenceGapMs: MAX_CAPTURE_GAP_MS/);
+  assert.match(
+    construction,
+    /readBackingEvidence: \(start, length\) => session\.readBackingEvidence\(start, length\)/,
+  );
+  assert.match(
+    construction,
+    /readMicEvidence: \(start, length\) => session\.readMicEvidence\(start, length\)/,
+  );
+});
+
 test('server uses content anchor authority only to preserve a follower seek, not to permit the seek itself', () => {
   assert.match(
     server,

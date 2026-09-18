@@ -61,3 +61,30 @@ test('Mic presence follows media availability and direct WebTransport can retain
   assert.ok(freshPcm > webTransport, 'direct media retention must require fresh PCM evidence');
   assert.ok(retainLease > freshPcm, 'fresh WebTransport PCM must retain the Mic lease through grace');
 });
+
+
+test('terminal browser media degradation is composed without rewriting server Mic state', () => {
+  const productStatus = functionCode(server, 'productStatusPayload');
+  assert.match(
+    productStatus,
+    /micRuntime\.freshUplinkHealthPayload\(nowMs\)\?\.transport\.mediaRecoveryDegraded === true/,
+  );
+
+  const liveCopy = functionCode(liveStatus, 'liveCopy');
+  const stalledFact = liveCopy.indexOf("issue?.code === 'mic-audio-stalled'");
+  const selfOwner = liveCopy.indexOf('if (selfOwner)');
+  const interruptedSelf = liveCopy.indexOf('if (micAudioStalled)', selfOwner);
+  const ordinaryLive = liveCopy.indexOf("return { title: t('voice.live')", interruptedSelf);
+  assert.ok(stalledFact >= 0, 'Live UI must consume the ProductStatus Mic stall issue');
+  assert.ok(
+    interruptedSelf > selfOwner,
+    'self-owned terminal media degradation must override the ordinary live copy',
+  );
+  assert.ok(
+    ordinaryLive > interruptedSelf,
+    'ordinary Live copy must be lower priority than terminal media degradation',
+  );
+
+  const renderSystem = functionCode(liveStatus, 'renderSystem');
+  assert.match(renderSystem, /attention\?\.scope === 'mic'/);
+});

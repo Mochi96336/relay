@@ -65,6 +65,62 @@ describe('audio uplink health', () => {
     assert.deepEqual(health.captureLevel, { peakDbfs: -18, rmsDbfs: -31 });
   });
 
+  it('keeps missing legacy inputMuted compatible but rejects malformed supplied values', () => {
+    const legacy: any = validHealth();
+    delete legacy.inputMuted;
+    const parsedLegacy = parseAudioUplinkHealth(legacy);
+    assert.ok(parsedLegacy);
+    assert.equal(parsedLegacy.inputMuted, false);
+
+    for (const inputMuted of ['false', 'true', 0, 1, null, {}, []]) {
+      const malformed: any = validHealth();
+      malformed.inputMuted = inputMuted;
+      assert.equal(
+        parseAudioUplinkHealth(malformed),
+        null,
+        `supplied inputMuted must be boolean, got ${JSON.stringify(inputMuted)}`,
+      );
+    }
+  });
+
+  it('preserves an optional uint32 health request correlation token', () => {
+    const input: any = validHealth();
+    input.healthRequestId = 0xffff_ffff;
+    const health = parseAudioUplinkHealth(input);
+    assert.ok(health);
+    assert.equal(health.healthRequestId, 0xffff_ffff);
+  });
+
+  it('keeps health request correlation backward-compatible with older v1 pages', () => {
+    const health = parseAudioUplinkHealth(validHealth());
+    assert.ok(health);
+    assert.equal(health.healthRequestId, undefined);
+  });
+
+  it('keeps terminal media-recovery telemetry backward-compatible with older v1 pages', () => {
+    const legacy = parseAudioUplinkHealth(validHealth());
+    assert.ok(legacy);
+    assert.equal(legacy.transport.mediaRecoveryDegraded, false);
+
+    const degraded: any = validHealth();
+    degraded.transport.mediaRecoveryDegraded = true;
+    const parsed = parseAudioUplinkHealth(degraded);
+    assert.ok(parsed);
+    assert.equal(parsed.transport.mediaRecoveryDegraded, true);
+
+    const malformed: any = validHealth();
+    malformed.transport.mediaRecoveryDegraded = 'true';
+    assert.equal(parseAudioUplinkHealth(malformed), null);
+  });
+
+  it('rejects malformed supplied health request correlation tokens', () => {
+    for (const healthRequestId of [-1, 0x1_0000_0000, 1.5, '7']) {
+      const input: any = validHealth();
+      input.healthRequestId = healthRequestId;
+      assert.equal(parseAudioUplinkHealth(input), null);
+    }
+  });
+
   it('keeps the added capture facts backward-compatible with older v1 pages', () => {
     const input: any = validHealth();
     delete input.capture;

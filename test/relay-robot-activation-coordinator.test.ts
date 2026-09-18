@@ -15,7 +15,7 @@ function fixture(active = true) {
     },
     resetPlayerOffset: () => events.push('reset-player-offset'),
     resetContentTimeline: () => events.push('reset-content-timeline'),
-    clearBackingBoundaryRequest: () => events.push('clear-backing-boundary'),
+    clearContentTransition: () => events.push('clear-backing-boundary'),
     failCalibrationIfCollecting: () => events.push('fail-calibration'),
     dropLegacyCalibrationForRobot: () => events.push('drop-legacy-calibration'),
     syncAppliedCalibration: () => events.push('sync-calibration'),

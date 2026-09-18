@@ -60,7 +60,7 @@ test('ProductStatus stays live while readiness refresh belongs only to Technical
 
 test('legacy backing attention remains a compatibility projection outside normal System', () => {
   assert.match(liveStatus, /'audio-unavailable': \(\) => t\('system\.attention\.audio-unavailable'\)/);
-  assert.match(liveStatus, /const audioProblem = attention\?\.scope === 'audio' \|\| attention\?\.scope === 'song'/);
+  assert.match(liveStatus, /const audioProblem = attention\?\.scope === 'audio'[\s\S]*attention\?\.scope === 'song'[\s\S]*attention\?\.scope === 'mic'/);
 
   assert.doesNotMatch(system, /product\.attention/);
   assert.match(system, /const titleKey = issueTitleKeys\[issue\?\.code\]/);

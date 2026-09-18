@@ -1,7 +1,7 @@
 type RelayBackingDisconnectCoordinatorOptions<TSocket> = {
   isBacking(socket: TSocket): boolean;
   noteDisconnected(): void;
-  clearRobotBackingBoundaryRequest(): void;
+  clearRobotContentTransition(): void;
   detach(socket: TSocket): void;
   clearBackingExpectation(): void;
   failCalibrationIfCollecting(): void;
@@ -24,7 +24,7 @@ export function createRelayBackingDisconnectCoordinator<TSocket>(
       if (!options.isBacking(socket)) return false;
 
       options.noteDisconnected();
-      options.clearRobotBackingBoundaryRequest();
+      options.clearRobotContentTransition();
       options.detach(socket);
       options.clearBackingExpectation();
       options.failCalibrationIfCollecting();

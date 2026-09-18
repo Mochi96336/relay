@@ -36,7 +36,7 @@ jobs:
           retention-days: 7
       - name: Check browser JavaScript syntax
         id: browser-js
-        run: bash scripts/ci-run.sh test browser-js "browser JavaScript syntax" -- bash -o pipefail -c "find public chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check"
+        run: bash scripts/ci-run.sh test browser-js "browser JavaScript syntax" -- bash -o pipefail -c "find public shared chrome-tab-audio-probe -name '*.js' -print0 | xargs -0 -n1 node --check"
       - name: Upload browser JavaScript failure summary
         if: failure() && steps.browser-js.outcome == 'failure'
         uses: actions/upload-artifact@v4
@@ -95,13 +95,15 @@ jobs:
           cp test/fixtures/live-p0-layout.html public/__live-p0-layout.html
           cp test/fixtures/room-sound-geometry.html public/__room-sound-geometry.html
           cp test/fixtures/listener-debug.html public/__listener-debug.html
+          ln -s ../shared public/shared
           python3 -m http.server 4173 --bind 127.0.0.1 --directory public > /tmp/relay-visual-http.log 2>&1 &
           echo $! > /tmp/relay-visual-http.pid
           for attempt in {1..20}; do
             if curl --fail --silent http://127.0.0.1:4173/__live-visual.html > /dev/null \
               && curl --fail --silent http://127.0.0.1:4173/__live-p0-layout.html > /dev/null \
               && curl --fail --silent http://127.0.0.1:4173/__room-sound-geometry.html > /dev/null \
-              && curl --fail --silent http://127.0.0.1:4173/__listener-debug.html > /dev/null; then
+              && curl --fail --silent http://127.0.0.1:4173/__listener-debug.html > /dev/null \
+              && curl --fail --silent http://127.0.0.1:4173/shared/playback-policy.js > /dev/null; then
               exit 0
             fi
             sleep 0.25

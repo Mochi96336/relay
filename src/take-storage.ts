@@ -6,8 +6,10 @@ import {
   statSync,
   statfsSync,
 } from 'node:fs';
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+import { durableRemove, durableRemoveSync } from './file-durability.js';
 
 const GIB = 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -174,10 +176,12 @@ export function prepareTakeStorage(
   let removedMetadataFiles = 0;
   for (const record of artifacts) {
     if (!removals.has(record.fileName)) continue;
-    rmSync(path.join(directory, record.fileName), { force: true });
+    // The WAV is the recovery authority. Make its deletion durable before
+    // touching metadata so a crash cannot resurrect a retention-pruned Take.
+    durableRemoveSync(path.join(directory, record.fileName));
     const metadataPath = path.join(directory, pairedMetadataFileName(record.takeId));
     if (existsSync(metadataPath)) {
-      rmSync(metadataPath, { force: true });
+      durableRemoveSync(metadataPath);
       removedMetadataFiles += 1;
     }
   }
@@ -204,7 +208,9 @@ export function takeStorageBudget(directory: string, policy: TakeStoragePolicy) 
 /**
  * Prunes only finalized WAVs and their finalized metadata sidecars. It
  * deliberately ignores `.part` files so this asynchronous maintenance can
- * never race a newly started Take writer or an atomic metadata write.
+ * never race a newly started Take writer or an atomic metadata write. The
+ * finalized WAV namespace is captured before the first await so a later Take
+ * cannot publish into an already-planned prune.
  */
 export async function pruneTakeArtifacts(
   directory: string,
@@ -212,15 +218,15 @@ export async function pruneTakeArtifacts(
   preserveFileName: string | null,
   nowMs = Date.now(),
 ) {
-  await mkdir(directory, { recursive: true });
+  mkdirSync(directory, { recursive: true });
   const artifacts: ArtifactRecord[] = [];
 
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
     const match = TAKE_WAV_PATTERN.exec(entry.name);
     if (!match) continue;
     try {
-      const info = await stat(path.join(directory, entry.name));
+      const info = statSync(path.join(directory, entry.name));
       artifacts.push({
         takeId: match[1],
         fileName: entry.name,
@@ -237,12 +243,14 @@ export async function pruneTakeArtifacts(
   let removedMetadataFiles = 0;
   for (const record of artifacts) {
     if (!removals.has(record.fileName)) continue;
-    await rm(path.join(directory, record.fileName), { force: true });
+    // Invalidate the recoverable artifact durably before metadata cleanup. Once
+    // this await resolves, restart recovery cannot legitimately revive the Take.
+    await durableRemove(path.join(directory, record.fileName));
     removedBytes += record.sizeBytes;
     const metadataPath = path.join(directory, pairedMetadataFileName(record.takeId));
     try {
       await stat(metadataPath);
-      await rm(metadataPath, { force: true });
+      await durableRemove(metadataPath);
       removedMetadataFiles += 1;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;

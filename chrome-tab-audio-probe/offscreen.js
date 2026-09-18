@@ -115,6 +115,8 @@ function connectRelay() {
         type: 'register',
         role: 'backing',
         sampleRate: audioContext.sampleRate,
+        captureGeneration,
+        captureSampleCursor,
       }));
       return;
     }

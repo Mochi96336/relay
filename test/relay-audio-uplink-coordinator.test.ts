@@ -17,11 +17,13 @@ function harness(input: {
   backing?: boolean;
   previousGeneration?: number | null;
   nextGeneration?: number | null;
+  captureRestarted?: boolean;
   mappedStart?: number | null;
+  samples?: Int16Array;
 } = {}) {
   const events: string[] = [];
   let generation = input.previousGeneration === undefined ? 3 : input.previousGeneration;
-  const samples = new Int16Array([1000, -1000]);
+  const samples = input.samples ?? new Int16Array([1000, -1000]);
   const coordinator = createRelayAudioUplinkCoordinator<Socket>({
     isMicPublisher: () => {
       events.push('is-mic');
@@ -55,7 +57,11 @@ function harness(input: {
       assert.equal(nowMs, 42);
       events.push('ingest');
       generation = input.nextGeneration ?? generation;
-      return { samples, start: 900 };
+      return {
+        samples,
+        start: 900,
+        captureRestarted: input.captureRestarted === true,
+      };
     },
     onBackingCaptureRestarted: () => events.push('restart'),
     noteRobotTransitionBackingFrame: (receivedFrame, receivedSamples, start, nowMs) => {
@@ -106,14 +112,37 @@ test('Backing uplink preserves ingest, restart, transition and content-evidence 
     'decode',
     'generation:3',
     'now',
-    'note-frame',
     'ingest',
+    'note-frame',
     'generation:4',
     'restart',
     'robot-transition',
     'map-content',
     'feed-content',
   ]);
+});
+
+test('AudioSession restart signal survives same-generation Backing replacement', () => {
+  const { coordinator, events } = harness({
+    backing: true,
+    previousGeneration: 3,
+    nextGeneration: 3,
+    captureRestarted: true,
+  });
+  coordinator.handle({ id: 'backing' }, Buffer.from([0xaa, 0xbb]));
+  assert.equal(events.filter((event) => event === 'restart').length, 1);
+  assert.ok(events.indexOf('restart') > events.indexOf('ingest'));
+  assert.ok(events.indexOf('robot-transition') > events.indexOf('restart'));
+});
+
+test('Backing flow freshness advances only after ingest appends PCM', () => {
+  const { coordinator, events } = harness({
+    backing: true,
+    samples: new Int16Array(0),
+  });
+  coordinator.handle({ id: 'backing' }, Buffer.from([0xaa, 0xbb]));
+  assert.equal(events.includes('note-frame'), false);
+  assert.ok(events.includes('ingest'));
 });
 
 test('first Backing generation does not report a capture restart', () => {

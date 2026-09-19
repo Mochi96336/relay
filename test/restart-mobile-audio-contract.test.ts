@@ -130,6 +130,11 @@ test('Phone capture dispatch trims stale worklet PCM without shifting later capt
   assert.match(appSource, /classifyCaptureDispatch/);
   assert.match(
     appSource,
+    /capture\.port\.postMessage\(\{ type: 'capture-protocol', pcmEnvelope: true \}\)/,
+    'new app must explicitly opt into timestamp envelopes so a new worklet stays compatible with an old open page',
+  );
+  assert.match(
+    appSource,
     /const chunkFirstSampleIndex = captureSampleCursor;\s*captureSampleCursor \+= pcm\.byteLength \/ 2;[\s\S]*if \(dispatch\.stale\) \{[\s\S]*recordUplinkDrop\(pcm\.byteLength \/ 2, 'capture-backlog'\);[\s\S]*return;[\s\S]*splitPcmForPacketLimit\(\s*pcm,/,
     'stale worklet PCM must advance the sample clock, become a hole, and return before packetization',
   );

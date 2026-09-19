@@ -515,6 +515,12 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     silent,
   };
   capture.port.onmessage = (event) => handleCaptureWorkletMessage(event, graph);
+  // New app + new worklet opts into timestamped PCM. Old worklets ignore this
+  // message and keep sending raw ArrayBuffer, which this app still accepts.
+  // More importantly, a newly deployed worklet defaults to raw PCM until it
+  // sees this, so a page whose old app.js stayed open across a deploy remains
+  // able to publish audio.
+  capture.port.postMessage({ type: 'capture-protocol', pcmEnvelope: true });
   source.connect(capture).connect(silent).connect(captureContext.destination);
   activeCaptureGraph = graph;
   activeNode = capture;

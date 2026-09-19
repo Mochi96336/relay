@@ -767,7 +767,16 @@ describe('AudioSession microphone frontier', () => {
     );
     assert.ok(
       session.health().micHeadroomMs < 0,
-      'stale backlog remains starvation until the capture catches back up',
+      'stale backlog remains starvation instead of being relabeled as latency',
+    );
+
+    // Let the bounded resume guard expire with no further Mic progress. There
+    // must not be a one-frame gap between "guard ended" and "stalled again"
+    // where the full outage can still be captured as a frontier correction.
+    drainAll(session, 3_400);
+    assert.ok(
+      Math.abs(session.appliedMicAdvanceMs - beforeResume) < 50,
+      `an isolated stale packet must stay starvation after guard expiry: ${beforeResume} -> ${session.appliedMicAdvanceMs} ms`,
     );
   });
 

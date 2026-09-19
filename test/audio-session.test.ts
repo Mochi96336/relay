@@ -727,6 +727,50 @@ describe('AudioSession microphone frontier', () => {
     );
   });
 
+  test('resuming one stale frame after a stall cannot jump to the retention clamp', () => {
+    const session = makeSession({ prebufferMs: 400, retentionMs: 3_000 });
+    session.start(0);
+    session.setMicExpected(true);
+    session.setBackingExpected(true);
+    session.setAlignment({ networkCompensationMs: 140 });
+
+    const frameSamples = Math.round(RATE * 0.02);
+    const backingSamples = Math.round(RATE * 5);
+    session.ingestBacking(
+      frame(0, pcmOf(new Array(backingSamples).fill(1_000))),
+      RATE,
+      0,
+    );
+
+    // The capture starts normally, then its delivery path stops long enough to
+    // become a true stall. The mixer must starve rather than chase a frozen
+    // frontier backwards through retained history.
+    session.ingestMic(frame(0, pcmOf(new Array(frameSamples).fill(8_000))), RATE, 0);
+    drainAll(session, 3_000);
+    const beforeResume = session.appliedMicAdvanceMs;
+    assert.ok(beforeResume > -1_000, `fixture should not already be pinned, saw ${beforeResume} ms`);
+
+    // A queued old frame arrives after the stall. One stale packet is not proof
+    // that this is now a stable multi-second-late live stream. The old code
+    // reset idleFrames on this packet and immediately drove the 3 s retention
+    // budget to its -2.8 s safety boundary.
+    session.ingestMic(
+      frame(frameSamples, pcmOf(new Array(frameSamples).fill(8_000))),
+      RATE,
+      3_000,
+    );
+    drainAll(session, 3_020);
+
+    assert.ok(
+      Math.abs(session.appliedMicAdvanceMs - beforeResume) < 50,
+      `a single stale resume packet must not deepen frontier correction: ${beforeResume} -> ${session.appliedMicAdvanceMs} ms`,
+    );
+    assert.ok(
+      session.health().micHeadroomMs < 0,
+      'stale backlog remains starvation until the capture catches back up',
+    );
+  });
+
   test('restarting the capture drops the correction instead of unwinding it for a song', () => {
     // A new capture epoch is anchored to the current mix clock, so it starts
     // with healthy headroom and owes nothing to the old deficit. Carrying the

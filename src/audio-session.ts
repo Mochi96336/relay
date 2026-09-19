@@ -292,6 +292,12 @@ export class AudioSession {
   private micFrontierAtLastFrame = 0;
   /** Consecutive mixed frames in which no new microphone audio arrived. */
   private micFrontierIdleFrames = 0;
+  /**
+   * A true stall has resumed, but the arriving capture clock has not caught
+   * back up to the live read head yet. Packets in this phase are stale backlog,
+   * not proof of a stable multi-second-late live stream.
+   */
+  private micFrontierCatchingUp = false;
   private backingHeadroomMs = 0;
 
   constructor(options: AudioSessionOptions) {
@@ -526,12 +532,22 @@ export class AudioSession {
     this.micFrontierCorrectionSamples = 0;
     this.micFrontierAtLastFrame = 0;
     this.micFrontierIdleFrames = 0;
+    this.micFrontierCatchingUp = false;
   }
 
   private trackMicFrontierProgress() {
+    const wasStalled = this.micFrontierStalled();
     const advanced = this.mic.totalSamples - this.micFrontierAtLastFrame;
     this.micFrontierAtLastFrame = this.mic.totalSamples;
-    this.micFrontierIdleFrames = advanced > 0 ? 0 : this.micFrontierIdleFrames + 1;
+    if (advanced > 0) {
+      // One queued packet after a real delivery stall must not turn the whole
+      // missing interval into a new live latency. Keep the existing correction
+      // fixed until the source frontier actually reaches the read head again.
+      if (wasStalled) this.micFrontierCatchingUp = true;
+      this.micFrontierIdleFrames = 0;
+      return;
+    }
+    this.micFrontierIdleFrames += 1;
   }
 
   /**
@@ -560,6 +576,18 @@ export class AudioSession {
     const frontierLimit = this.mic.totalSamples - span - startSample;
     const applied = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
     const overrun = applied - frontierLimit;
+
+    // A source that was truly stalled can resume by draining queued, old PCM.
+    // Arrival alone is not evidence that those samples are live. Deepening the
+    // correction on that first packet used to reinterpret a ~3 s delivery gap
+    // as stable latency and jump straight to the retention floor (-2.8 s with
+    // the default 3 s history). Starve truthfully until the capture clock has
+    // caught back up to the read window; only then may ordinary frontier
+    // correction grow again.
+    if (this.micFrontierCatchingUp) {
+      if (overrun > 0) return;
+      this.micFrontierCatchingUp = false;
+    }
 
     // Only worth holding back when there is arrived audio to hold back *to*.
     // A microphone that has delivered nothing, or whose whole window predates

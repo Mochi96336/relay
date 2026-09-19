@@ -6,7 +6,10 @@ import vm from 'node:vm';
 
 type CapturedProcessor = {
   process(inputs: unknown[]): boolean;
-  port: { messages: unknown[] };
+  port: {
+    messages: unknown[];
+    onmessage?: ((event: { data: unknown }) => void) | null;
+  };
   measureF0(rms: number): void;
 };
 
@@ -33,6 +36,7 @@ function loadCaptureProcessor() {
   class FakeAudioWorkletProcessor {
     port = {
       messages: [] as unknown[],
+      onmessage: null as ((event: { data: unknown }) => void) | null,
       postMessage: (message: unknown) => {
         this.port.messages.push(message);
       },
@@ -69,8 +73,33 @@ function latestLevel(processor: CapturedProcessor) {
   )).at(-1) as InputLevel | undefined;
 }
 
+function enablePcmEnvelope(processor: CapturedProcessor) {
+  processor.port.onmessage?.({
+    data: { type: 'capture-protocol', pcmEnvelope: true },
+  });
+}
+
+test('capture worklet defaults to raw PCM until a new app opts into the envelope', async () => {
+  const legacyPage = await loadCaptureProcessor();
+  legacyPage.process([[new Float32Array(960).fill(0.25)]]);
+  assert.equal(
+    Object.prototype.toString.call(legacyPage.port.messages[0]),
+    '[object ArrayBuffer]',
+    'an old app kept open across deploy must still receive the raw PCM shape it understands',
+  );
+
+  const newPage = await loadCaptureProcessor();
+  enablePcmEnvelope(newPage);
+  newPage.process([[new Float32Array(960).fill(0.25)]]);
+  const pcm = newPage.port.messages[0] as PcmMessage;
+  assert.equal(pcm.type, 'pcm');
+  assert.equal(Object.prototype.toString.call(pcm.buffer), '[object ArrayBuffer]');
+  assert.equal(pcm.capturedAtContextTime, 12.5);
+});
+
 test('capture worklet publishes local RMS, five-band spectrum and F0 evidence beside untouched PCM', async () => {
   const processor = await loadCaptureProcessor();
+  enablePcmEnvelope(processor);
   const input = new Float32Array(960).fill(0.5);
   assert.equal(processor.process([[input]]), true);
   assert.equal(processor.port.messages.length, 2);
@@ -90,6 +119,7 @@ test('capture worklet publishes local RMS, five-band spectrum and F0 evidence be
 
 test('capture worklet transfers each PCM chunk before entering F0 visual analysis', async () => {
   const processor = await loadCaptureProcessor();
+  enablePcmEnvelope(processor);
   const originalMeasureF0 = processor.measureF0.bind(processor);
   processor.measureF0 = (rms) => {
     processor.port.messages.push('f0-analysis');

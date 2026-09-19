@@ -1386,11 +1386,14 @@ function sourceStatusPayload() {
   const alignment = session.alignment;
   const calibrationStatus = calibration.status();
   const nowMs = performance.now();
+  const micUplink = micRuntime.freshUplinkHealthPayload(nowMs);
   return {
     type: 'source-status',
     connected: backingRuntime.connected(),
     micConnected: micMediaConnected(),
     micMediaPath: micMediaPath(),
+    micCaptureDispatch: micUplink?.captureDispatch ?? null,
+    micCaptureBacklogSamples: micUplink?.droppedSamples.captureBacklog ?? 0,
     backingStreaming: backingRuntime.streaming(nowMs, STREAM_LIVE_MS),
     micStreaming: micStreaming(nowMs),
     sampleRate: backingRuntime.sampleRate,

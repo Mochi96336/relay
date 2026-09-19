@@ -126,6 +126,20 @@ test('Listen treats OS interruption as recovery, not a user transport teardown',
   assert.match(listenSource, /playbackNode\?\.port\.postMessage\(\{ type: 'reset' \}\)/);
 });
 
+test('Phone capture dispatch trims stale worklet PCM without shifting later capture time', () => {
+  assert.match(appSource, /classifyCaptureDispatch/);
+  assert.match(
+    appSource,
+    /const chunkFirstSampleIndex = captureSampleCursor;\s*captureSampleCursor \+= pcm\.byteLength \/ 2;[\s\S]*if \(dispatch\.stale\) \{[\s\S]*recordUplinkDrop\(pcm\.byteLength \/ 2, 'capture-backlog'\);[\s\S]*return;[\s\S]*splitPcmForPacketLimit\(\s*pcm,/,
+    'stale worklet PCM must advance the sample clock, become a hole, and return before packetization',
+  );
+  assert.match(
+    appSource,
+    /captureDispatch: latestCaptureDispatchLagMs === null \? null : \{[\s\S]*backlogActive: captureDispatchBacklogActive/,
+    'capture dispatch freshness must be exported in uplink health',
+  );
+});
+
 test('Listen uses playback and play-and-record AudioSession claims at user intent boundaries', () => {
   assert.match(listenSource, /claimPlaybackAudio\(true\);\n      const context = new AudioContext/);
   assert.match(listenSource, /userMuted = !userMuted;\n    claimPlaybackAudio\(!userMuted\);/);

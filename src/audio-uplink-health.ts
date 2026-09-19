@@ -61,13 +61,13 @@ export type AudioUplinkHealth = {
   /** Capture-worklet level before packetization/transport. Diagnostic only. */
   captureLevel: AudioCaptureLevel | null;
   /** Main-thread dispatch freshness for worklet PCM. Diagnostic only. */
-  captureDispatch: AudioCaptureDispatchHealth | null;
+  captureDispatch?: AudioCaptureDispatchHealth | null;
   droppedSamples: {
     total: number;
     disconnected: number;
     congested: number;
     packetTooLarge: number;
-    captureBacklog: number;
+    captureBacklog?: number;
   };
   controlReconnects: number;
   transport: AudioUplinkTransportHealth;

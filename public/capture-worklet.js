@@ -40,6 +40,20 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.levelSquareSum = 0;
     this.levelSampleCount = 0;
 
+    // Rollout compatibility is deliberately asymmetric: a newly deployed
+    // worklet can be loaded by a page whose old app.js has been open across the
+    // deploy. That app only understands raw ArrayBuffer PCM. Stay on the legacy
+    // wire shape until a new app explicitly opts into the timestamp envelope.
+    this.pcmEnvelopeEnabled = false;
+    this.port.onmessage = (event) => {
+      if (
+        event.data?.type === 'capture-protocol'
+        && event.data.pcmEnvelope === true
+      ) {
+        this.pcmEnvelopeEnabled = true;
+      }
+    };
+
     // Visual spectrum evidence stays inside the capture worklet so the main
     // thread never needs a second copy of live PCM just to draw the Mic. The
     // ring stores the most recent 512 source samples (about 10.7 ms at 48 kHz)
@@ -308,18 +322,21 @@ class CaptureProcessor extends AudioWorkletProcessor {
     // PCM delivery is the critical path. Transfer the completed chunk before
     // any visual-only FFT/F0 work so pitch analysis cannot delay this uplink.
     const buffer = this.chunk.buffer;
-    this.port.postMessage({
-      type: 'pcm',
-      buffer,
-      // AudioContext time is shared across the worklet and main thread. This
-      // lets the receiver distinguish fresh capture from MessagePort backlog
-      // without comparing unrelated wall clocks.
-      capturedAtContextTime: (
-        typeof currentTime === 'number' && Number.isFinite(currentTime)
-          ? currentTime
-          : null
-      ),
-    }, [buffer]);
+    const pcmMessage = this.pcmEnvelopeEnabled
+      ? {
+          type: 'pcm',
+          buffer,
+          // AudioContext time is shared across the worklet and main thread. This
+          // lets the receiver distinguish fresh capture from MessagePort backlog
+          // without comparing unrelated wall clocks.
+          capturedAtContextTime: (
+            typeof currentTime === 'number' && Number.isFinite(currentTime)
+              ? currentTime
+              : null
+          ),
+        }
+      : buffer;
+    this.port.postMessage(pcmMessage, [buffer]);
     this.chunk = new Int16Array(this.chunkSize);
     this.offset = 0;
     this.levelPeak = 0;

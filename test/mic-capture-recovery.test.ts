@@ -365,11 +365,13 @@ test('app excludes muted-track buffers from fresh PCM recovery evidence', () => 
 
   assert.match(
     bufferHandler,
-    /micCaptureRecovery\.observe\(captureSnapshot\(\), \{ freshPcm: captureInputMuted !== true \}\)/,
+    /micCaptureRecovery\.observe\(captureSnapshot\(\), \{\s*freshPcm: !dispatch\.stale && captureInputMuted !== true,?\s*\}\)/,
+    'only fresh dispatch from an unmuted input can prove capture recovery',
   );
   assert.doesNotMatch(
     bufferHandler,
-    /micCaptureRecovery\.observe\(captureSnapshot\(\), \{ freshPcm: true \}\)/,
+    /freshPcm:\s*(?:true|captureInputMuted !== true)[,}]/,
+    'neither muted PCM nor stale MessagePort backlog may count as fresh capture evidence',
   );
 });
 

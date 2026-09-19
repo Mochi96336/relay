@@ -8,13 +8,13 @@ import {
 
 test('capture dispatch shares the 200 ms realtime backlog budget', () => {
   assert.equal(DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS, 200);
-  assert.deepEqual(
-    classifyCaptureDispatch({
-      currentContextTimeSeconds: 10.18,
-      capturedAtContextTimeSeconds: 10,
-    }),
-    { measurable: true, lagMs: 179.99999999999972, stale: false },
-  );
+  const fresh = classifyCaptureDispatch({
+    currentContextTimeSeconds: 10.18,
+    capturedAtContextTimeSeconds: 10,
+  });
+  assert.equal(fresh.measurable, true);
+  assert.ok(fresh.lagMs !== null && Math.abs(fresh.lagMs - 180) < 0.001);
+  assert.equal(fresh.stale, false);
   assert.equal(
     classifyCaptureDispatch({
       currentContextTimeSeconds: 10.25,

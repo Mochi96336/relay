@@ -292,6 +292,12 @@ export class AudioSession {
   private micFrontierAtLastFrame = 0;
   /** Consecutive mixed frames in which no new microphone audio arrived. */
   private micFrontierIdleFrames = 0;
+  /**
+   * Bounded settling window after a truly stalled frontier starts moving again.
+   * A queued stale packet must not instantly redefine seconds of outage as live
+   * latency, but a genuinely steady late stream must regain frontier correction.
+   */
+  private micFrontierResumeGuardFrames = 0;
   private backingHeadroomMs = 0;
 
   constructor(options: AudioSessionOptions) {
@@ -526,12 +532,32 @@ export class AudioSession {
     this.micFrontierCorrectionSamples = 0;
     this.micFrontierAtLastFrame = 0;
     this.micFrontierIdleFrames = 0;
+    this.micFrontierResumeGuardFrames = 0;
   }
 
   private trackMicFrontierProgress() {
+    const wasStalled = this.micFrontierStalled();
     const advanced = this.mic.totalSamples - this.micFrontierAtLastFrame;
     this.micFrontierAtLastFrame = this.mic.totalSamples;
-    this.micFrontierIdleFrames = advanced > 0 ? 0 : this.micFrontierIdleFrames + 1;
+
+    if (advanced > 0) {
+      if (wasStalled) {
+        // Keep the guard one frame longer than the stall threshold. If this was
+        // only one queued stale packet, the guard then expires on the same frame
+        // the frontier becomes stalled again, leaving no one-frame gap in which
+        // a multi-second deficit can be mistaken for stable latency.
+        this.micFrontierResumeGuardFrames = Math.ceil(ADVANCE_SAFETY_MS / this.frameMs) + 1;
+      } else if (this.micFrontierResumeGuardFrames > 0) {
+        this.micFrontierResumeGuardFrames -= 1;
+      }
+      this.micFrontierIdleFrames = 0;
+      return;
+    }
+
+    this.micFrontierIdleFrames += 1;
+    if (this.micFrontierResumeGuardFrames > 0) {
+      this.micFrontierResumeGuardFrames -= 1;
+    }
   }
 
   /**
@@ -560,6 +586,15 @@ export class AudioSession {
     const frontierLimit = this.mic.totalSamples - span - startSample;
     const applied = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
     const overrun = applied - frontierLimit;
+
+    // A true stall can resume by draining queued old PCM. Do not let the first
+    // such packet reinterpret the whole outage as stable live latency: with the
+    // default 3 s retention that can pin the read head at -2.8 s. The guard is
+    // deliberately bounded, though. If the frontier keeps moving for a full
+    // safety window while remaining late, that is exactly the steady-late
+    // stream this correction was introduced to keep audible.
+    if (this.micFrontierResumeGuardFrames > 0 && overrun > 0) return;
+    if (overrun <= 0) this.micFrontierResumeGuardFrames = 0;
 
     // Only worth holding back when there is arrived audio to hold back *to*.
     // A microphone that has delivered nothing, or whose whole window predates

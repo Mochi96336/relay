@@ -26,11 +26,18 @@ function uplinkHealth(generation: number) {
       peakDbfs: -18,
       rmsDbfs: -31,
     },
+    captureDispatch: {
+      lagMs: 240,
+      maxLagMs: 620,
+      backlogMs: 200,
+      backlogActive: true,
+    },
     droppedSamples: {
-      total: 960,
+      total: 1_920,
       disconnected: 480,
       congested: 480,
       packetTooLarge: 0,
+      captureBacklog: 960,
     },
     controlReconnects: 1,
     transport: {
@@ -51,6 +58,20 @@ function uplinkHealth(generation: number) {
       webSocketSendFailures: 0,
     },
   };
+}
+
+async function requestSourceStatus(client: RelayClient) {
+  const fromIndex = client.messages.length;
+  client.send({ type: 'source-status-request' });
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const status = client.messages
+      .slice(fromIndex)
+      .find((message) => message.type === 'source-status');
+    if (status) return status;
+    await sleep(10);
+  }
+  throw new Error('Timed out waiting for source-status.');
 }
 
 async function requestCalibrationStatus(client: RelayClient) {
@@ -118,6 +139,13 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     assert.equal(status.audio.captureAndSender.captureGeneration, 7);
     assert.equal(status.audio.captureAndSender.inputGapSamples, 128);
     assert.equal(status.audio.captureAndSender.droppedSamples.disconnected, 480);
+    assert.equal(status.audio.captureAndSender.droppedSamples.captureBacklog, 960);
+    assert.deepEqual(status.audio.captureAndSender.captureDispatch, {
+      lagMs: 240,
+      maxLagMs: 620,
+      backlogMs: 200,
+      backlogActive: true,
+    });
     assert.equal(status.audio.captureAndSender.transport.webSocketPacketsSent, 100);
     assert.deepEqual(status.audio.captureAndSender.capture, {
       echoCancellation: false,
@@ -132,6 +160,15 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     assert.ok(status.audio.captureAndSender.reportAgeMs >= 0);
     assert.equal(typeof status.audio.receiverTransport.receivedPackets, 'number');
     assert.equal(typeof status.audio.timeline.micGapMs, 'number');
+
+    const source = await requestSourceStatus(publisher);
+    assert.deepEqual(source.micCaptureDispatch, {
+      lagMs: 240,
+      maxLagMs: 620,
+      backlogMs: 200,
+      backlogActive: true,
+    });
+    assert.equal(source.micCaptureBacklogSamples, 960);
 
     const malformed: any = uplinkHealth(7);
     malformed.capturedSamples = 999_999;

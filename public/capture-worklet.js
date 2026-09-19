@@ -308,7 +308,18 @@ class CaptureProcessor extends AudioWorkletProcessor {
     // PCM delivery is the critical path. Transfer the completed chunk before
     // any visual-only FFT/F0 work so pitch analysis cannot delay this uplink.
     const buffer = this.chunk.buffer;
-    this.port.postMessage(buffer, [buffer]);
+    this.port.postMessage({
+      type: 'pcm',
+      buffer,
+      // AudioContext time is shared across the worklet and main thread. This
+      // lets the receiver distinguish fresh capture from MessagePort backlog
+      // without comparing unrelated wall clocks.
+      capturedAtContextTime: (
+        typeof currentTime === 'number' && Number.isFinite(currentTime)
+          ? currentTime
+          : null
+      ),
+    }, [buffer]);
     this.chunk = new Int16Array(this.chunkSize);
     this.offset = 0;
     this.levelPeak = 0;

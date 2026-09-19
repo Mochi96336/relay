@@ -10,6 +10,12 @@ type CapturedProcessor = {
   measureF0(rms: number): void;
 };
 
+type PcmMessage = {
+  type: 'pcm';
+  buffer: ArrayBuffer;
+  capturedAtContextTime: number | null;
+};
+
 type InputLevel = {
   type: string;
   peakDbfs: number;
@@ -37,6 +43,7 @@ function loadCaptureProcessor() {
     vm.runInNewContext(source, {
       AudioWorkletProcessor: FakeAudioWorkletProcessor,
       sampleRate: 48_000,
+      currentTime: 12.5,
       registerProcessor: (name: string, processor: new () => CapturedProcessor) => {
         registeredName = name;
         RegisteredProcessor = processor;
@@ -67,7 +74,10 @@ test('capture worklet publishes local RMS, five-band spectrum and F0 evidence be
   const input = new Float32Array(960).fill(0.5);
   assert.equal(processor.process([[input]]), true);
   assert.equal(processor.port.messages.length, 2);
-  assert.equal(Object.prototype.toString.call(processor.port.messages[0]), '[object ArrayBuffer]');
+  const pcm = processor.port.messages[0] as PcmMessage;
+  assert.equal(pcm.type, 'pcm');
+  assert.equal(Object.prototype.toString.call(pcm.buffer), '[object ArrayBuffer]');
+  assert.equal(pcm.capturedAtContextTime, 12.5);
   const level = processor.port.messages[1] as InputLevel;
   assert.equal(level.type, 'input-level');
   assert.equal(level.samples, 960);
@@ -87,10 +97,12 @@ test('capture worklet transfers each PCM chunk before entering F0 visual analysi
   };
 
   processor.process([[sine(220, 40)]]);
-  assert.equal(Object.prototype.toString.call(processor.port.messages[0]), '[object ArrayBuffer]');
+  assert.equal((processor.port.messages[0] as PcmMessage).type, 'pcm');
+  assert.equal(Object.prototype.toString.call((processor.port.messages[0] as PcmMessage).buffer), '[object ArrayBuffer]');
   assert.equal(processor.port.messages[1], 'f0-analysis');
   assert.equal((processor.port.messages[2] as InputLevel).type, 'input-level');
-  assert.equal(Object.prototype.toString.call(processor.port.messages[3]), '[object ArrayBuffer]');
+  assert.equal((processor.port.messages[3] as PcmMessage).type, 'pcm');
+  assert.equal(Object.prototype.toString.call((processor.port.messages[3] as PcmMessage).buffer), '[object ArrayBuffer]');
   assert.equal(processor.port.messages[4], 'f0-analysis');
   assert.equal((processor.port.messages[5] as InputLevel).type, 'input-level');
 });

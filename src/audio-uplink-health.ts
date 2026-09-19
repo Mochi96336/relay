@@ -10,6 +10,13 @@ export type AudioCaptureLevel = {
   rmsDbfs: number;
 };
 
+export type AudioCaptureDispatchHealth = {
+  lagMs: number;
+  maxLagMs: number;
+  backlogMs: number;
+  backlogActive: boolean;
+};
+
 export type AudioUplinkTransportHealth = {
   path: 'websocket' | 'webtransport';
   maxPacketBytes: number | null;
@@ -53,11 +60,14 @@ export type AudioUplinkHealth = {
   capture: AudioCaptureAppliedSettings | null;
   /** Capture-worklet level before packetization/transport. Diagnostic only. */
   captureLevel: AudioCaptureLevel | null;
+  /** Main-thread dispatch freshness for worklet PCM. Diagnostic only. */
+  captureDispatch: AudioCaptureDispatchHealth | null;
   droppedSamples: {
     total: number;
     disconnected: number;
     congested: number;
     packetTooLarge: number;
+    captureBacklog: number;
   };
   controlReconnects: number;
   transport: AudioUplinkTransportHealth;
@@ -149,6 +159,27 @@ function parseCaptureLevel(value: unknown): AudioCaptureLevel | null | undefined
   return { peakDbfs, rmsDbfs };
 }
 
+function parseCaptureDispatch(value: unknown): AudioCaptureDispatchHealth | null | undefined {
+  if (value === null) return null;
+  const dispatch = record(value);
+  if (!dispatch) return undefined;
+
+  const lagMs = nonNegativeSafeInteger(dispatch.lagMs);
+  const maxLagMs = nonNegativeSafeInteger(dispatch.maxLagMs);
+  const backlogMs = nonNegativeSafeInteger(dispatch.backlogMs);
+  const backlogActive = dispatch.backlogActive;
+  if (
+    lagMs === null
+    || maxLagMs === null
+    || backlogMs === null
+    || backlogMs <= 0
+    || typeof backlogActive !== 'boolean'
+    || maxLagMs < lagMs
+  ) return undefined;
+
+  return { lagMs, maxLagMs, backlogMs, backlogActive };
+}
+
 export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null {
   const payload = record(value);
   if (!payload || Number(payload.version) !== 1) return null;
@@ -163,6 +194,9 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const inputMuted = payload.inputMuted === undefined ? false : payload.inputMuted;
   const capture = payload.capture === undefined ? null : parseCaptureAppliedSettings(payload.capture);
   const captureLevel = payload.captureLevel === undefined ? null : parseCaptureLevel(payload.captureLevel);
+  const captureDispatch = payload.captureDispatch === undefined
+    ? null
+    : parseCaptureDispatch(payload.captureDispatch);
   const dropped = record(payload.droppedSamples);
   const transport = record(payload.transport);
   if (
@@ -174,6 +208,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     || typeof inputMuted !== 'boolean'
     || capture === undefined
     || captureLevel === undefined
+    || captureDispatch === undefined
     || !dropped
     || !transport
   ) return null;
@@ -182,12 +217,18 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const disconnected = nonNegativeSafeInteger(dropped.disconnected);
   const congested = nonNegativeSafeInteger(dropped.congested);
   const packetTooLarge = nonNegativeSafeInteger(dropped.packetTooLarge);
+  // Added after v1 shipped. Older pages omit it and therefore contributed zero
+  // pre-transport capture-backlog drops to the cumulative total.
+  const captureBacklog = dropped.captureBacklog === undefined
+    ? 0
+    : nonNegativeSafeInteger(dropped.captureBacklog);
   if (
     total === null
     || disconnected === null
     || congested === null
     || packetTooLarge === null
-    || total !== disconnected + congested + packetTooLarge
+    || captureBacklog === null
+    || total !== disconnected + congested + packetTooLarge + captureBacklog
   ) return null;
 
   const path = transport.path;
@@ -250,7 +291,8 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     inputMuted,
     capture,
     captureLevel,
-    droppedSamples: { total, disconnected, congested, packetTooLarge },
+    captureDispatch,
+    droppedSamples: { total, disconnected, congested, packetTooLarge, captureBacklog },
     controlReconnects,
     transport: {
       path,

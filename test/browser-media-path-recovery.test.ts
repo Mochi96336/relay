@@ -215,6 +215,49 @@ test('stalled WS recovery requests exactly one physical replacement and fences l
   assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), false);
 });
 
+test('capture-dispatch backlog rebaselines media recovery instead of blaming WT', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300, 1_400, 1_500]) {
+    transport.sendControlJson({
+      ...health(7, capturedSamples),
+      captureDispatch: {
+        lagMs: 600,
+        maxLagMs: 900,
+        backlogMs: 200,
+        backlogActive: true,
+      },
+    });
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+
+  assert.equal(
+    transport.stats().path,
+    'webtransport',
+    'intentional pre-transport stale drops are not WT underdelivery',
+  );
+
+  // Once fresh capture resumes, ordinary media-path diagnosis is re-armed.
+  for (const capturedSamples of [1_600, 1_700, 1_800, 1_900]) {
+    transport.sendControlJson({
+      ...health(7, capturedSamples),
+      captureDispatch: {
+        lagMs: 20,
+        maxLagMs: 900,
+        backlogMs: 200,
+        backlogActive: false,
+      },
+    });
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+  assert.equal(transport.stats().path, 'websocket');
+});
+
 test('hidden-page health ACKs rebaseline and never trigger semantic media recovery', async () => {
   FakeWebTransport.instances.length = 0;
   const { PreferredAudioTransport } = await import(moduleUrl.href);

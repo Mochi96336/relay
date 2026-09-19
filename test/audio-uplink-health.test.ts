@@ -65,6 +65,27 @@ describe('audio uplink health', () => {
     assert.deepEqual(health.captureLevel, { peakDbfs: -18, rmsDbfs: -31 });
   });
 
+  it('accepts capture dispatch evidence and cumulative pre-transport drops', () => {
+    const input: any = validHealth();
+    input.captureDispatch = {
+      lagMs: 240,
+      maxLagMs: 620,
+      backlogMs: 200,
+      backlogActive: true,
+    };
+    input.droppedSamples.captureBacklog = 960;
+    input.droppedSamples.total += 960;
+
+    const health = parseAudioUplinkHealth(input);
+    assert.ok(health);
+    assert.deepEqual(health.captureDispatch, input.captureDispatch);
+    assert.equal(health.droppedSamples.captureBacklog, 960);
+
+    const malformed: any = structuredClone(input);
+    malformed.captureDispatch.maxLagMs = 100;
+    assert.equal(parseAudioUplinkHealth(malformed), null);
+  });
+
   it('keeps missing legacy inputMuted compatible but rejects malformed supplied values', () => {
     const legacy: any = validHealth();
     delete legacy.inputMuted;

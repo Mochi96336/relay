@@ -3,6 +3,7 @@ import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
+import { DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS, classifyCaptureDispatch } from './capture-dispatch.js';
 import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
@@ -134,7 +135,10 @@ function renderGainAdvice() {
   useMicGainSuggestion.textContent = t('adjust.useGain', { gain: suggested });
 }
 let uplinkDroppedSamples = 0;
-let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
+let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0, captureBacklog: 0 };
+let latestCaptureDispatchLagMs = null;
+let maxCaptureDispatchLagMs = null;
+let captureDispatchBacklogActive = false;
 let captureInputGapSamples = 0;
 let captureInputMuted = false;
 let publisherControlConnections = 0;
@@ -190,6 +194,7 @@ function recordUplinkDrop(sampleCount, reason) {
   if (reason === 'disconnected') uplinkDroppedSamplesByReason.disconnected += sampleCount;
   else if (reason === 'congested') uplinkDroppedSamplesByReason.congested += sampleCount;
   else if (reason === 'packet-too-large') uplinkDroppedSamplesByReason.packetTooLarge += sampleCount;
+  else if (reason === 'capture-backlog') uplinkDroppedSamplesByReason.captureBacklog += sampleCount;
   if (reason === 'disconnected') return;
 
   const now = performance.now();
@@ -199,7 +204,9 @@ function recordUplinkDrop(sampleCount, reason) {
   const droppedMs = Math.round((uplinkDroppedSamples * 1000) / sampleRate);
   const title = reason === 'packet-too-large'
     ? 'Microphone datagram budget changed'
-    : 'Microphone uplink congested';
+    : reason === 'capture-backlog'
+      ? 'Microphone capture caught up to live audio'
+      : 'Microphone uplink congested';
   setStatus(
     title,
     `Dropped about ${droppedMs} ms of microphone audio. ` +
@@ -219,6 +226,12 @@ function audioUplinkHealthPayload(healthRequestId) {
     // Browser/worklet observations only; neither field is a calibration gate.
     capture: captureAppliedSettings,
     captureLevel: captureLevelSnapshot(latestLocalMicLevel),
+    captureDispatch: latestCaptureDispatchLagMs === null ? null : {
+      lagMs: latestCaptureDispatchLagMs,
+      maxLagMs: maxCaptureDispatchLagMs,
+      backlogMs: DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS,
+      backlogActive: captureDispatchBacklogActive,
+    },
     droppedSamples: { total: uplinkDroppedSamples, ...uplinkDroppedSamplesByReason },
     controlReconnects: Math.max(0, publisherControlConnections - 1),
     transport: audioTransport.stats(),
@@ -287,7 +300,10 @@ function advanceCaptureGeneration(reason) {
   captureInputMuted = mediaStream?.getAudioTracks?.()[0]?.muted === true;
   latestLocalMicLevel = null;
   uplinkDroppedSamples = 0;
-  uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
+  uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0, captureBacklog: 0 };
+  latestCaptureDispatchLagMs = null;
+  maxCaptureDispatchLagMs = null;
+  captureDispatchBacklogActive = false;
   audioTransport.resetStats();
   dispatchRelayEvent('relay-microphone-capture-generation', {
     captureGeneration: captureGeneration >>> 0,
@@ -337,7 +353,16 @@ function handleCaptureWorkletMessage(event, graph) {
   // MessagePort delivery is asynchronous. A chunk queued by an old worklet
   // must never be reframed with a replacement graph's generation/cursor.
   if (!captureGraphIsCurrent(graph)) return;
-  if (!(event.data instanceof ArrayBuffer)) {
+  const pcmMessage = event.data instanceof ArrayBuffer
+    ? { buffer: event.data, capturedAtContextTime: null }
+    : event.data?.type === 'pcm' && event.data.buffer instanceof ArrayBuffer
+      ? {
+          buffer: event.data.buffer,
+          capturedAtContextTime: event.data.capturedAtContextTime,
+        }
+      : null;
+
+  if (!pcmMessage) {
     if (event.data?.type === 'input-level') {
       const peakDbfs = Number(event.data.peakDbfs);
       const rmsDbfs = Number(event.data.rmsDbfs);
@@ -386,17 +411,38 @@ function handleCaptureWorkletMessage(event, graph) {
     return;
   }
 
-  // Capture time advances once for the complete worklet chunk. Packetization
-  // may split the PCM to the live datagram budget, but each segment keeps its
-  // exact firstSampleIndex on the same capture timeline.
+  // Capture time advances even when a stale main-thread dispatch is dropped.
+  // The next fresh packet therefore exposes the skipped interval as a real
+  // firstSampleIndex hole instead of pulling old voice forward in time.
+  const pcm = pcmMessage.buffer;
   const chunkFirstSampleIndex = captureSampleCursor;
-  captureSampleCursor += event.data.byteLength / 2;
+  captureSampleCursor += pcm.byteLength / 2;
 
-  const recovery = micCaptureRecovery.observe(captureSnapshot(), { freshPcm: captureInputMuted !== true });
+  const dispatch = classifyCaptureDispatch({
+    currentContextTimeSeconds: graph.context.currentTime,
+    capturedAtContextTimeSeconds: pcmMessage.capturedAtContextTime,
+  });
+  if (dispatch.measurable) {
+    latestCaptureDispatchLagMs = Math.round(dispatch.lagMs);
+    maxCaptureDispatchLagMs = Math.max(
+      maxCaptureDispatchLagMs ?? 0,
+      latestCaptureDispatchLagMs,
+    );
+    captureDispatchBacklogActive = dispatch.stale;
+  }
+
+  const recovery = micCaptureRecovery.observe(captureSnapshot(), {
+    freshPcm: !dispatch.stale && captureInputMuted !== true,
+  });
   if (recovery.recovered) announceCaptureRecovered();
 
+  if (dispatch.stale) {
+    recordUplinkDrop(pcm.byteLength / 2, 'capture-backlog');
+    return;
+  }
+
   const pending = splitPcmForPacketLimit(
-    event.data,
+    pcm,
     audioTransport.maxPacketBytes(),
     AUDIO_PACKET_HEADER_BYTES,
   ).map((segment) => ({

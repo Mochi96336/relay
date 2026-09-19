@@ -507,7 +507,12 @@ export class PreferredAudioTransport extends AudioTransport {
           senderFailedPackets,
           path,
           socketEpoch: this.publisherSocketEpoch,
-          eligible: globalThis.document?.visibilityState !== 'hidden',
+          // Capture-dispatch backlog is a local pre-transport failure. While
+          // the page is intentionally dropping stale worklet PCM, a rising
+          // capture cursor with flat server PCM is not evidence that WT/WS is
+          // broken, so fence media-path recovery at the same health boundary.
+          eligible: globalThis.document?.visibilityState !== 'hidden'
+            && payload.captureDispatch?.backlogActive !== true,
         });
       }
     }

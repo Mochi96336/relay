@@ -32,7 +32,8 @@ const liveStatusCode = sourceCode(liveStatus);
 const presenceCode = sourceCode(presence);
 
 test('local capture telemetry remains available without owning the visible waveform', () => {
-  assert.match(appCode, /event\.data\.f0Hz/);
+  assert.match(appCode, /mic-visual-analysis-worker\.js/);
+  assert.match(appCode, /parseMicVisualAnalysis/);
   assert.match(appCode, /pitchConfidence/);
   assert.match(appCode, /dispatchRelayEvent\('relay-local-mic-level'/);
   assert.doesNotMatch(presenceCode, /relay-local-mic-level/);

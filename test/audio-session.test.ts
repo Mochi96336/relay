@@ -665,6 +665,53 @@ describe('AudioSession microphone frontier', () => {
     return session;
   }
 
+  test('playability tolerates brief packet jitter but fails after sustained live-frontier starvation', () => {
+    const session = makeSession({ prebufferMs: 0, retentionMs: 3_000 });
+    session.start(0);
+    session.setMicExpected(true);
+    session.setBackingExpected(true);
+
+    const frameSamples = Math.round(RATE * 0.02);
+    session.ingestBacking(
+      frame(0, pcmOf(new Array(RATE).fill(1_000))),
+      RATE,
+      0,
+    );
+    session.ingestMic(
+      frame(0, pcmOf(new Array(frameSamples).fill(8_000))),
+      RATE,
+      0,
+    );
+
+    drainAll(session, 180);
+    assert.equal(
+      session.micPlayable,
+      true,
+      'sub-safety-window packet starvation should not flap product health',
+    );
+
+    drainAll(session, 260);
+    assert.equal(
+      session.micPlayable,
+      false,
+      'sustained missing live-frontier samples must stop being called playable',
+    );
+    assert.equal(session.backingPlayable, true);
+
+    const freshAt = Math.round(RATE * 0.26);
+    session.ingestMic(
+      frame(freshAt, pcmOf(new Array(frameSamples * 2).fill(8_000))),
+      RATE,
+      260,
+    );
+    drainAll(session, 280);
+    assert.equal(
+      session.micPlayable,
+      true,
+      'fresh positioned PCM at the live frontier must restore playability immediately',
+    );
+  });
+
   test('a microphone timeline behind the mix clock is still audible, not silence', () => {
     const session = laggingMicSession(900);
 

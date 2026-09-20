@@ -1406,6 +1406,8 @@ function sourceStatusPayload() {
   const micUplink = micRuntime.freshUplinkHealthPayload(nowMs);
   return {
     type: 'source-status',
+    observedAtMs: nowMs,
+    sessionGeneration: session.generation,
     connected: backingRuntime.connected(),
     micConnected: micMediaConnected(),
     micMediaPath: micMediaPath(),
@@ -1651,6 +1653,8 @@ function timingCalibrationStatusPayload() {
   const probe = probeStatus(nowMs);
   return {
     type: 'timing-calibration-status',
+    observedAtMs: nowMs,
+    sessionGeneration: session.generation,
     ...status,
     activeMicLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',

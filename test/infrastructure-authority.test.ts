@@ -93,9 +93,21 @@ test('the infrastructure capability authenticates backing and Robot source after
     await authenticateInfrastructure(observer);
     observer.send({ type: 'register', role: 'monitor' });
     await observer.waitForType('registered');
-    observer.send({ type: 'timing-calibration-status-request' });
-    const status = await observer.waitForType('timing-calibration-status');
-    assert.equal(Math.round(status.robotPlayerOffsetMs), 35);
+    const sourceSnapshot = await observer.waitForType('source-status');
+    const timingSnapshot = await observer.waitForType('timing-calibration-status');
+
+    assert.equal(Math.round(timingSnapshot.robotPlayerOffsetMs), 35);
+    assert.equal(
+      timingSnapshot.sessionGeneration,
+      sourceSnapshot.sessionGeneration,
+      'source and timing snapshots from one live session must identify the same session generation',
+    );
+    assert.ok(Number.isFinite(sourceSnapshot.observedAtMs));
+    assert.ok(Number.isFinite(timingSnapshot.observedAtMs));
+    assert.ok(
+      timingSnapshot.observedAtMs >= sourceSnapshot.observedAtMs,
+      'the later initial timing snapshot must not look older than source-status',
+    );
 
     backing.close();
     robot.close();

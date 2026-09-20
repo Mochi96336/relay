@@ -39,6 +39,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.levelPeak = 0;
     this.levelSquareSum = 0;
     this.levelSampleCount = 0;
+    this.chunkStartedAtContextTime = null;
 
     // Rollout compatibility is deliberately asymmetric: a newly deployed
     // worklet can be loaded by a page whose old app.js has been open across the
@@ -118,7 +119,15 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
   writeSilence(count) {
     let remaining = count;
+    let written = 0;
     while (remaining > 0) {
+      if (this.offset === 0) {
+        this.chunkStartedAtContextTime = (
+          typeof currentTime === 'number' && Number.isFinite(currentTime)
+            ? currentTime + (written / sampleRate)
+            : null
+        );
+      }
       const room = this.chunkSize - this.offset;
       const step = Math.min(room, remaining);
       this.chunk.fill(0, this.offset, this.offset + step);
@@ -129,6 +138,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
       this.offset += step;
       this.levelSampleCount += step;
       remaining -= step;
+      written += step;
       this.flushIfFull();
     }
   }
@@ -326,19 +336,16 @@ class CaptureProcessor extends AudioWorkletProcessor {
       ? {
           type: 'pcm',
           buffer,
-          // AudioContext time is shared across the worklet and main thread. This
-          // lets the receiver distinguish fresh capture from MessagePort backlog
-          // without comparing unrelated wall clocks.
-          capturedAtContextTime: (
-            typeof currentTime === 'number' && Number.isFinite(currentTime)
-              ? currentTime
-              : null
-          ),
+          // Timestamp the oldest sample in this chunk, not the flush point.
+          // Otherwise a 20 ms chunk can be almost 20 ms older than its reported
+          // age, quietly widening the 200 ms realtime backlog budget.
+          capturedAtContextTime: this.chunkStartedAtContextTime,
         }
       : buffer;
     this.port.postMessage(pcmMessage, [buffer]);
     this.chunk = new Int16Array(this.chunkSize);
     this.offset = 0;
+    this.chunkStartedAtContextTime = null;
     this.levelPeak = 0;
     this.levelSquareSum = 0;
     this.levelSampleCount = 0;
@@ -381,6 +388,13 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.started = true;
     let sourceOffset = 0;
     while (sourceOffset < input.length) {
+      if (this.offset === 0) {
+        this.chunkStartedAtContextTime = (
+          typeof currentTime === 'number' && Number.isFinite(currentTime)
+            ? currentTime + (sourceOffset / sampleRate)
+            : null
+        );
+      }
       const remaining = this.chunkSize - this.offset;
       const count = Math.min(remaining, input.length - sourceOffset);
 

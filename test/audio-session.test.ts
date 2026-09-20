@@ -727,6 +727,67 @@ describe('AudioSession microphone frontier', () => {
     );
   });
 
+  test('a Phone capture-dispatch hole stays a gap instead of becoming -2.8 s latency', () => {
+    const session = makeSession({ prebufferMs: 400, retentionMs: 3_000 });
+    session.start(0);
+    session.setMicExpected(true);
+    session.setBackingExpected(true);
+    session.setAlignment({ networkCompensationMs: 140 });
+
+    const initialMicSamples = Math.round(RATE * 0.5);
+    const droppedBacklogSamples = Math.round(RATE * 3);
+    const freshFrameSamples = Math.round(RATE * 0.02);
+    session.ingestBacking(
+      frame(0, pcmOf(new Array(RATE * 5).fill(1_000))),
+      RATE,
+      0,
+    );
+    session.ingestMic(
+      frame(0, pcmOf(new Array(initialMicSamples).fill(8_000))),
+      RATE,
+      0,
+    );
+
+    // The Phone main thread is unavailable for three seconds. #344 drops those
+    // stale AudioWorklet chunks before WT/WS but still advances the capture
+    // cursor, so the server receives no old voice to mistake for live latency.
+    drainAll(session, 3_500);
+    assert.equal(
+      session.appliedMicAdvanceMs,
+      140,
+      'a stopped frontier must remain starvation, not grow a latency correction',
+    );
+
+    // The first fresh chunk carries the capture position after all stale local
+    // chunks that were intentionally dropped. AudioSession must preserve that
+    // skipped interval as a hole and put fresh PCM back near the live frontier.
+    const freshFirstSampleIndex = initialMicSamples + droppedBacklogSamples;
+    session.ingestMic(
+      frame(
+        freshFirstSampleIndex,
+        pcmOf(new Array(freshFrameSamples).fill(8_000)),
+      ),
+      RATE,
+      3_500,
+    );
+    drainAll(session, 3_520);
+
+    assert.equal(
+      session.health().micGapMs,
+      3_000,
+      'pre-transport backlog drops remain a truthful three-second sample hole',
+    );
+    assert.equal(
+      session.appliedMicAdvanceMs,
+      140,
+      'fresh positioned PCM must not reinterpret the dropped backlog as the -2.8 s retention floor',
+    );
+    assert.ok(
+      session.health().micHeadroomMs >= 0,
+      `fresh PCM should restore live frontier headroom, saw ${session.health().micHeadroomMs} ms`,
+    );
+  });
+
   test('resuming one stale frame after a stall cannot jump to the retention clamp', () => {
     const session = makeSession({ prebufferMs: 400, retentionMs: 3_000 });
     session.start(0);

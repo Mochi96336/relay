@@ -48,7 +48,8 @@ async function loadProcessor() {
 
   assert.equal(registeredName, 'relay-tab-capture');
   if (!RegisteredProcessor) throw new Error('relay-tab-capture was not registered');
-  return new RegisteredProcessor();
+  const Processor = RegisteredProcessor as unknown as new () => CapturedProcessor;
+  return new Processor();
 }
 
 function enableEnvelope(processor: CapturedProcessor) {

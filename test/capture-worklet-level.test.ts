@@ -10,7 +10,6 @@ type CapturedProcessor = {
     messages: unknown[];
     onmessage?: ((event: { data: unknown }) => void) | null;
   };
-  measureF0(rms: number): void;
 };
 
 type PcmMessage = {
@@ -29,6 +28,10 @@ type InputLevel = {
   samples: number;
 };
 
+async function captureWorkletSource() {
+  return readFile(path.resolve('public/capture-worklet.js'), 'utf8');
+}
+
 function loadCaptureProcessor() {
   let registeredName: string | null = null;
   let RegisteredProcessor: (new () => CapturedProcessor) | null = null;
@@ -43,7 +46,7 @@ function loadCaptureProcessor() {
     };
   }
 
-  return readFile(path.resolve('public/capture-worklet.js'), 'utf8').then((source) => {
+  return captureWorkletSource().then((source) => {
     vm.runInNewContext(source, {
       AudioWorkletProcessor: FakeAudioWorkletProcessor,
       sampleRate: 48_000,
@@ -58,13 +61,6 @@ function loadCaptureProcessor() {
     if (!RegisteredProcessor) throw new Error('capture-processor was not registered');
     return new RegisteredProcessor();
   });
-}
-
-function sine(frequencyHz: number, durationMs = 120, amplitude = 0.4) {
-  const length = Math.round((48_000 * durationMs) / 1000);
-  return Float32Array.from({ length }, (_, index) => (
-    Math.sin((2 * Math.PI * frequencyHz * index) / 48_000) * amplitude
-  ));
 }
 
 function latestLevel(processor: CapturedProcessor) {
@@ -97,7 +93,7 @@ test('capture worklet defaults to raw PCM until a new app opts into the envelope
   assert.equal(pcm.capturedAtContextTime, 12.5);
 });
 
-test('capture worklet publishes local RMS, five-band spectrum and F0 evidence beside untouched PCM', async () => {
+test('capture worklet publishes level evidence beside untouched PCM with rollout-safe visual placeholders', async () => {
   const processor = await loadCaptureProcessor();
   enablePcmEnvelope(processor);
   const input = new Float32Array(960).fill(0.5);
@@ -107,95 +103,38 @@ test('capture worklet publishes local RMS, five-band spectrum and F0 evidence be
   assert.equal(pcm.type, 'pcm');
   assert.equal(Object.prototype.toString.call(pcm.buffer), '[object ArrayBuffer]');
   assert.equal(pcm.capturedAtContextTime, 12.5);
+
   const level = processor.port.messages[1] as InputLevel;
   assert.equal(level.type, 'input-level');
   assert.equal(level.samples, 960);
   assert.ok(Math.abs(level.peakDbfs - (-6.020599913279624)) < 0.0001);
   assert.ok(Math.abs(level.rmsDbfs - (-6.020599913279624)) < 0.0001);
-  assert.equal(level.spectrumBands.length, 5);
-  assert.equal(level.f0Hz, null, 'DC must not be guessed as a pitch');
+  assert.deepEqual(Array.from(level.spectrumBands), [0, 0, 0, 0, 0]);
+  assert.equal(level.f0Hz, null);
   assert.equal(level.pitchConfidence, 0);
 });
 
-test('capture worklet transfers each PCM chunk before entering F0 visual analysis', async () => {
+test('realtime capture worklet contains no FFT or pitch detector', async () => {
+  const source = await captureWorkletSource();
+  assert.doesNotMatch(source, /runFft|measureSpectrumBands|measureF0|F0_YIN_THRESHOLD|F0_RING_SIZE/);
+  assert.match(source, /visual DSP can never consume an audio render deadline/);
+  assert.match(source, /VISUAL_ANALYSIS_PLACEHOLDER/);
+});
+
+test('capture worklet posts every PCM chunk before its lightweight level message', async () => {
   const processor = await loadCaptureProcessor();
   enablePcmEnvelope(processor);
-  const originalMeasureF0 = processor.measureF0.bind(processor);
-  processor.measureF0 = (rms) => {
-    processor.port.messages.push('f0-analysis');
-    originalMeasureF0(rms);
-  };
 
-  processor.process([[sine(220, 40)]]);
-  const firstPcm = processor.port.messages[0] as PcmMessage;
-  const secondPcm = processor.port.messages[3] as PcmMessage;
-  assert.equal(firstPcm.type, 'pcm');
-  assert.equal(Object.prototype.toString.call(firstPcm.buffer), '[object ArrayBuffer]');
-  assert.equal(firstPcm.capturedAtContextTime, 12.5);
-  assert.equal(processor.port.messages[1], 'f0-analysis');
-  assert.equal((processor.port.messages[2] as InputLevel).type, 'input-level');
-  assert.equal(secondPcm.type, 'pcm');
-  assert.equal(Object.prototype.toString.call(secondPcm.buffer), '[object ArrayBuffer]');
-  assert.ok(
-    Math.abs((secondPcm.capturedAtContextTime ?? 0) - 12.52) < 1e-9,
-    `second 20 ms chunk must be timestamped at its first sample, got ${secondPcm.capturedAtContextTime}`,
-  );
-  assert.equal(processor.port.messages[4], 'f0-analysis');
-  assert.equal((processor.port.messages[5] as InputLevel).type, 'input-level');
-});
-
-test('capture spectrum remains frequency-shape evidence, separate from pitch', async () => {
-  const lowProcessor = await loadCaptureProcessor();
-  lowProcessor.process([[sine(187.5, 20)]]);
-  const low = latestLevel(lowProcessor)!;
-  assert.ok(low.spectrumBands[0] > low.spectrumBands[4]);
-  const highProcessor = await loadCaptureProcessor();
-  highProcessor.process([[sine(3000, 20)]]);
-  const high = latestLevel(highProcessor)!;
-  assert.ok(high.spectrumBands[4] > high.spectrumBands[0]);
-});
-
-for (const frequencyHz of [100, 220, 440]) {
-  test(`F0 detector tracks a ${frequencyHz} Hz sine`, async () => {
-    const processor = await loadCaptureProcessor();
-    processor.process([[sine(frequencyHz)]]);
-    const level = latestLevel(processor)!;
-    assert.ok(level.f0Hz !== null);
-    assert.ok(Math.abs(level.f0Hz - frequencyHz) < 2, `expected ~${frequencyHz} Hz, got ${level.f0Hz}`);
-    assert.ok(level.pitchConfidence >= 0.8);
-  });
-}
-
-test('F0 detector returns null for silence and low confidence for noise', async () => {
-  const silence = await loadCaptureProcessor();
-  silence.process([[new Float32Array(5_760)]]);
-  const silentLevel = latestLevel(silence)!;
-  assert.equal(silentLevel.f0Hz, null);
-  assert.equal(silentLevel.pitchConfidence, 0);
-  const noise = await loadCaptureProcessor();
-  const random = new Float32Array(5_760);
-  let state = 0x1234_5678;
-  for (let index = 0; index < random.length; index += 1) {
-    state = (Math.imul(1_664_525, state) + 1_013_904_223) >>> 0;
-    random[index] = ((state / 0x1_0000_0000) * 2 - 1) * 0.4;
-  }
-  noise.process([[random]]);
-  const noiseLevel = latestLevel(noise)!;
-  assert.equal(noiseLevel.f0Hz, null);
-  assert.ok(noiseLevel.pitchConfidence < 0.6);
-});
-
-test('F0 detector prefers the fundamental in a harmonic-rich singing signal', async () => {
-  const processor = await loadCaptureProcessor();
-  const fundamentalHz = 110;
-  const input = Float32Array.from({ length: 5_760 }, (_, index) => {
-    const phase = (2 * Math.PI * fundamentalHz * index) / 48_000;
-    return 0.12 * Math.sin(phase) + 0.35 * Math.sin(phase * 2) + 0.2 * Math.sin(phase * 3);
-  });
+  const input = new Float32Array(1_920).fill(0.25);
   processor.process([[input]]);
-  const level = latestLevel(processor)!;
-  assert.ok(level.f0Hz !== null);
-  assert.ok(Math.abs(level.f0Hz - fundamentalHz) < 2, `expected ~110 Hz, got ${level.f0Hz}`);
+
+  assert.equal((processor.port.messages[0] as PcmMessage).type, 'pcm');
+  assert.equal((processor.port.messages[1] as InputLevel).type, 'input-level');
+  assert.equal((processor.port.messages[2] as PcmMessage).type, 'pcm');
+  assert.equal((processor.port.messages[3] as InputLevel).type, 'input-level');
+  assert.ok(
+    Math.abs(((processor.port.messages[2] as PcmMessage).capturedAtContextTime ?? 0) - 12.52) < 1e-9,
+  );
 });
 
 test('capture worklet includes padded input gaps in local level timing', async () => {
@@ -206,7 +145,7 @@ test('capture worklet includes padded input gaps in local level timing', async (
   const level = latestLevel(processor);
   assert.ok(level);
   assert.equal(level.samples, 960);
-  assert.equal(level.spectrumBands.length, 5);
+  assert.deepEqual(Array.from(level.spectrumBands), [0, 0, 0, 0, 0]);
   assert.ok(Math.abs(level.peakDbfs - (-12.041199826559248)) < 0.0001);
   assert.ok(level.rmsDbfs < level.peakDbfs);
 });

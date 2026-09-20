@@ -77,6 +77,8 @@ export type ProductIssueFacts = {
   takeLifecycle: TakeLifecycle;
   performanceActive: boolean;
   timingState: 'idle' | 'calibrating' | 'aligned' | 'fallback' | 'stale' | 'clamped';
+  /** The serving alignment is being held back by the live Mic frontier, not only by buffer affordability. */
+  timingFrontierCorrectionActive?: boolean;
 };
 
 function hostIssues(facts: ProductIssueFacts) {
@@ -209,7 +211,11 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       severity: 'warning',
       cause: 'timing-clamped',
       affects: ['timing', 'recording'],
-      recovery: 'recalibrate',
+      // A live frontier correction is capture/runtime damage: recalibrating
+      // cannot move the samples that have actually arrived. Restarting the Mic
+      // creates a fresh capture epoch and deliberately clears that correction.
+      // A pure buffer/calibration clamp still belongs to timing calibration.
+      recovery: facts.timingFrontierCorrectionActive === true ? 'retry-mic' : 'recalibrate',
     });
   } else if (facts.performanceActive && ['calibrating', 'fallback', 'stale'].includes(facts.timingState)) {
     const cause = facts.timingState === 'calibrating'

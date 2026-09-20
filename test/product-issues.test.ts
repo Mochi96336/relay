@@ -169,6 +169,34 @@ describe('product issue contract', () => {
     assert.equal(issues[2].recovery, 'recalibrate');
   });
 
+  test('frontier-limited timing asks to retry Mic while a pure clamp asks to recalibrate', () => {
+    const bufferClamp = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      timingState: 'clamped',
+    });
+    assert.equal(bufferClamp.at(-1)?.code, 'timing-clamped');
+    assert.equal(bufferClamp.at(-1)?.recovery, 'recalibrate');
+
+    const frontierClamp = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      timingState: 'clamped',
+      timingFrontierCorrectionActive: true,
+    });
+    assert.equal(frontierClamp.at(-1)?.code, 'timing-clamped');
+    assert.equal(frontierClamp.at(-1)?.recovery, 'retry-mic');
+  });
+
+  test('ProductViewModel carries frontier recovery evidence into the timing issue', () => {
+    const input = productInput();
+    input.timing.alignmentClamped = true;
+    input.timing.frontierCorrectionActive = true;
+    const model = buildProductViewModel(input);
+
+    assert.equal(model.timing.state, 'clamped');
+    assert.equal(model.issues.at(-1)?.code, 'timing-clamped');
+    assert.equal(model.issues.at(-1)?.recovery, 'retry-mic');
+  });
+
   test('ProductStatus exposes rich issues while attention preserves the legacy three-field shape', () => {
     const model = buildProductViewModel(productInput({
       ...READY,

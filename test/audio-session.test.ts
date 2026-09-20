@@ -673,6 +673,10 @@ describe('AudioSession microphone frontier', () => {
       `the read head must be held behind the frontier that exists, saw ${session.appliedMicAdvanceMs} ms`,
     );
     assert.ok(
+      session.micFrontierCorrectionMs > 0,
+      `the product must be able to distinguish runtime frontier correction, saw ${session.micFrontierCorrectionMs} ms`,
+    );
+    assert.ok(
       session.health().micHeadroomMs >= 0,
       `the mixer must not keep reading past arrived audio, saw ${session.health().micHeadroomMs} ms`,
     );
@@ -781,6 +785,11 @@ describe('AudioSession microphone frontier', () => {
       session.appliedMicAdvanceMs,
       140,
       'fresh positioned PCM must not reinterpret the dropped backlog as the -2.8 s retention floor',
+    );
+    assert.equal(
+      session.micFrontierCorrectionMs,
+      0,
+      'a truthful capture-dispatch hole must not leave a runtime frontier correction behind',
     );
     assert.ok(
       session.health().micHeadroomMs >= 0,

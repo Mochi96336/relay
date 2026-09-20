@@ -122,6 +122,52 @@ test('a legacy backing route stays healthy without Robot identity or player delt
   }
 });
 
+test('stale Backing catch-up stays transport-streaming but is not product-playable', async () => {
+  const server = await startRelay(FAST);
+  try {
+    const backing = await RelayClient.connect(server);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+    await backing.waitForType('registered');
+
+    // Establish the capture clock, then let the mixer run far beyond its
+    // frontier while the socket itself remains connected.
+    backing.sendPcm(pcm(40));
+    await sleep(750);
+
+    // One queued old frame arrives now. Transport freshness is real, but this
+    // frame still belongs near the beginning of the capture and cannot cover
+    // the current mix read head.
+    backing.sendPcm(pcm(20));
+    await sleep(30);
+
+    const observer = await RelayClient.connect(
+      server,
+      '?participant=stale-backing-observer&name=Observer',
+    );
+
+    observer.send({ type: 'source-status-request' });
+    const source = await observer.waitForType('source-status');
+    assert.equal(source.backingStreaming, true, 'packet transport is fresh');
+    assert.equal(source.backingPlayable, false, 'live mix frontier is still starved');
+
+    const readyResponse = await fetch(server.httpUrl('/readyz'));
+    assert.equal(readyResponse.status, 503);
+    const readiness = await readyResponse.json() as any;
+    assert.ok(readiness.reasons.includes('backing-not-streaming'));
+
+    observer.send({ type: 'product-status-request' });
+    const product = await observer.waitForType('product-status');
+    assert.equal(product.health, 'blocked');
+    assert.equal(product.issues[0]?.code, 'audio-unavailable');
+    assert.equal(product.issues[0]?.cause, 'backing-stalled');
+
+    observer.close();
+    backing.close();
+  } finally {
+    await server.stop();
+  }
+});
+
 test('legacy route expectation survives backing grace instead of collapsing to idle', async () => {
   const server = await startRelay({
     ...FAST,

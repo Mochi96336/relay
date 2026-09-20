@@ -169,6 +169,11 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
       backlogActive: true,
     });
     assert.equal(source.micCaptureBacklogSamples, 960);
+    assert.equal(
+      source.micFrontierCorrectionMs,
+      0,
+      'source-status exposes whether timing is being constrained by the live Mic frontier',
+    );
 
     const malformed: any = uplinkHealth(7);
     malformed.capturedSamples = 999_999;

@@ -1768,6 +1768,7 @@ function productStatusPayload(nowMs = performance.now()) {
       calibrationActive: timingCalibrationInProgress(nowMs),
       calibrationStale: calibrationIsStale(),
       alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
+      frontierCorrectionActive: session.micFrontierCorrectionMs >= 0.5,
       // Product timing describes the alignment actually serving the mixer, not a
       // replacement strategy that may be measuring in the background.
       requiresRobotPlayerDelta: robotRouteActive() && appliedCalibrationKind() === 'boot-probe',

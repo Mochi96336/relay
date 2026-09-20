@@ -11,6 +11,7 @@ const state = readFileSync(new URL('../public/live-state.css', import.meta.url),
 const presence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 const model = readFileSync(new URL('../public/mic-presence-model.js', import.meta.url), 'utf8');
 const capture = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
+const micAnalysis = readFileSync(new URL('../public/mic-visual-analysis-worker.js', import.meta.url), 'utf8');
 const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
 const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const actions = readFileSync(new URL('../public/action-language.css', import.meta.url), 'utf8');
@@ -74,10 +75,11 @@ test('Room Mic evidence expires when authoritative telemetry stops instead of fr
 });
 
 test('frequency evidence remains truthful timbre data and is not painted as fake pitch', () => {
-  assert.match(capture, /SPECTRUM_FFT_SIZE = 512/);
-  assert.match(capture, /\[80, 250\]/);
-  assert.match(capture, /\[2000, 4000\]/);
-  assert.match(capture, /spectrumBands: this\.measureSpectrumBands\(\)/);
+  assert.match(micAnalysis, /SPECTRUM_FFT_SIZE = 512/);
+  assert.match(micAnalysis, /\[80, 250\]/);
+  assert.match(micAnalysis, /\[2000, 4000\]/);
+  assert.match(micAnalysis, /function measureSpectrumBands\(\)/);
+  assert.doesNotMatch(capture, /runFft|measureSpectrumBands|measureF0|F0_YIN_THRESHOLD/);
   assert.match(composition, /not[\s\S]*presented as musical pitch until a real F0 estimate exists/);
   assert.doesNotMatch(presence, /WebSocket|mix-health|requestAnimationFrame/);
   assert.doesNotMatch(state, /@keyframes|voice-breathe|preparing-pulse/);

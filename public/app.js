@@ -317,6 +317,10 @@ function disposeCaptureGraph(graph) {
   try {
     graph.capture.port.onmessage = null;
   } catch {}
+  try {
+    graph.visualAnalysisWorker?.terminate();
+  } catch {}
+  graph.visualAnalysisWorker = null;
   for (const node of [graph.source, graph.capture, graph.silent]) {
     try {
       node?.disconnect();
@@ -349,6 +353,67 @@ function announceCaptureRecovered() {
   sendAudioUplinkHealth();
 }
 
+function parseMicVisualAnalysis(payload) {
+  const rawSpectrumBands = Array.isArray(payload?.spectrumBands)
+    ? payload.spectrumBands.slice(0, 5).map(Number)
+    : [];
+  const spectrumBands = rawSpectrumBands.length === 5 && rawSpectrumBands.every(Number.isFinite)
+    ? rawSpectrumBands
+    : null;
+  const rawF0Hz = payload?.f0Hz;
+  const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
+  const pitchConfidence = Number(payload?.pitchConfidence);
+  if (
+    spectrumBands === null
+    || (f0Hz !== null && !Number.isFinite(f0Hz))
+    || !Number.isFinite(pitchConfidence)
+    || pitchConfidence < 0
+    || pitchConfidence > 1
+  ) return null;
+  return { spectrumBands, f0Hz, pitchConfidence };
+}
+
+function attachMicVisualAnalysisWorker(graph) {
+  if (typeof Worker !== 'function') return;
+  try {
+    const worker = new Worker('/mic-visual-analysis-worker.js', {
+      name: 'relay-mic-visual-analysis',
+    });
+    graph.visualAnalysisWorker = worker;
+    worker.onmessage = (event) => {
+      if (!captureGraphIsCurrent(graph) || event.data?.type !== 'analysis') return;
+      const analysis = parseMicVisualAnalysis(event.data);
+      if (analysis) graph.visualAnalysis = analysis;
+    };
+    worker.onerror = () => {
+      if (graph.visualAnalysisWorker !== worker) return;
+      try { worker.terminate(); } catch {}
+      graph.visualAnalysisWorker = null;
+    };
+    worker.postMessage({
+      type: 'configure',
+      sampleRate: graph.context.sampleRate,
+    });
+  } catch {
+    graph.visualAnalysisWorker = null;
+  }
+}
+
+function submitMicVisualAnalysis(graph, pcm) {
+  const worker = graph.visualAnalysisWorker;
+  if (!worker) return;
+  try {
+    // PCM transport owns the original buffer. Visual analysis gets a tiny
+    // bounded copy on the page thread, then all FFT/YIN work happens in its own
+    // Worker so no visual computation can consume an AudioWorklet deadline.
+    const analysisBuffer = pcm.slice(0);
+    worker.postMessage({ type: 'pcm', buffer: analysisBuffer }, [analysisBuffer]);
+  } catch {
+    try { worker.terminate(); } catch {}
+    graph.visualAnalysisWorker = null;
+  }
+}
+
 function handleCaptureWorkletMessage(event, graph) {
   // MessagePort delivery is asynchronous. A chunk queued by an old worklet
   // must never be reframed with a replacement graph's generation/cursor.
@@ -366,20 +431,12 @@ function handleCaptureWorkletMessage(event, graph) {
     if (event.data?.type === 'input-level') {
       const peakDbfs = Number(event.data.peakDbfs);
       const rmsDbfs = Number(event.data.rmsDbfs);
-      const rawSpectrumBands = Array.isArray(event.data.spectrumBands)
-        ? event.data.spectrumBands.slice(0, 5).map(Number)
-        : [];
-      const spectrumBands = rawSpectrumBands.length === 5 && rawSpectrumBands.every(Number.isFinite)
-        ? rawSpectrumBands
-        : null;
-      const rawF0Hz = event.data.f0Hz;
-      const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
-      const pitchConfidence = Number(event.data.pitchConfidence);
-      const pitchValid = (f0Hz === null || Number.isFinite(f0Hz))
-        && Number.isFinite(pitchConfidence)
-        && pitchConfidence >= 0
-        && pitchConfidence <= 1;
-      if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs) && pitchValid) {
+      // A cached old worklet still carries real visual analysis in this message.
+      // A current worklet carries neutral compatibility fields and the dedicated
+      // Worker below replaces them as soon as its first result arrives.
+      const analysis = graph.visualAnalysis ?? parseMicVisualAnalysis(event.data);
+      if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs) && analysis) {
+        const { spectrumBands, f0Hz, pitchConfidence } = analysis;
         latestLocalMicLevel = { peakDbfs, rmsDbfs, spectrumBands, f0Hz, pitchConfidence };
         dispatchRelayEvent('relay-local-mic-level', {
           active: true,
@@ -440,6 +497,8 @@ function handleCaptureWorkletMessage(event, graph) {
     recordUplinkDrop(pcm.byteLength / 2, 'capture-backlog');
     return;
   }
+
+  submitMicVisualAnalysis(graph, pcm);
 
   const pending = splitPcmForPacketLimit(
     pcm,
@@ -513,8 +572,11 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     source,
     capture,
     silent,
+    visualAnalysisWorker: null,
+    visualAnalysis: null,
   };
   capture.port.onmessage = (event) => handleCaptureWorkletMessage(event, graph);
+  attachMicVisualAnalysisWorker(graph);
   // New app + new worklet opts into timestamped PCM. Old worklets ignore this
   // message and keep sending raw ArrayBuffer, which this app still accepts.
   // More importantly, a newly deployed worklet defaults to raw PCM until it

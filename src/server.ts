@@ -1414,6 +1414,7 @@ function sourceStatusPayload() {
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
+    micFrontierCorrectionMs: session.micFrontierCorrectionMs,
   };
 }
 

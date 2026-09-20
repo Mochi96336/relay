@@ -127,12 +127,19 @@ test('capture worklet transfers each PCM chunk before entering F0 visual analysi
   };
 
   processor.process([[sine(220, 40)]]);
-  assert.equal((processor.port.messages[0] as PcmMessage).type, 'pcm');
-  assert.equal(Object.prototype.toString.call((processor.port.messages[0] as PcmMessage).buffer), '[object ArrayBuffer]');
+  const firstPcm = processor.port.messages[0] as PcmMessage;
+  const secondPcm = processor.port.messages[3] as PcmMessage;
+  assert.equal(firstPcm.type, 'pcm');
+  assert.equal(Object.prototype.toString.call(firstPcm.buffer), '[object ArrayBuffer]');
+  assert.equal(firstPcm.capturedAtContextTime, 12.5);
   assert.equal(processor.port.messages[1], 'f0-analysis');
   assert.equal((processor.port.messages[2] as InputLevel).type, 'input-level');
-  assert.equal((processor.port.messages[3] as PcmMessage).type, 'pcm');
-  assert.equal(Object.prototype.toString.call((processor.port.messages[3] as PcmMessage).buffer), '[object ArrayBuffer]');
+  assert.equal(secondPcm.type, 'pcm');
+  assert.equal(Object.prototype.toString.call(secondPcm.buffer), '[object ArrayBuffer]');
+  assert.ok(
+    Math.abs((secondPcm.capturedAtContextTime ?? 0) - 12.52) < 1e-9,
+    `second 20 ms chunk must be timestamped at its first sample, got ${secondPcm.capturedAtContextTime}`,
+  );
   assert.equal(processor.port.messages[4], 'f0-analysis');
   assert.equal((processor.port.messages[5] as InputLevel).type, 'input-level');
 });

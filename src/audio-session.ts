@@ -511,6 +511,15 @@ export class AudioSession {
   }
 
   /**
+   * Runtime hold-back needed only because the live Mic frontier is behind the
+   * mix clock. This is separate from a requested alignment exceeding the
+   * configured prebuffer/retention budget.
+   */
+  get micFrontierCorrectionMs() {
+    return (this.micFrontierCorrectionSamples / this.sampleRate) * 1000;
+  }
+
+  /**
    * Whether the microphone frontier has stopped keeping up with the mix clock.
    *
    * This is the difference between a capture that is *behind* and one that has

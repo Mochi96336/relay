@@ -430,14 +430,31 @@ function micStreaming(nowMs = performance.now()) {
   return micRuntime.streaming(nowMs);
 }
 
+function backingStreaming(nowMs = performance.now()) {
+  return backingRuntime.streaming(nowMs, STREAM_LIVE_MS);
+}
+
+/**
+ * Packet freshness answers whether transport is moving. Product/calibration
+ * freshness additionally requires the live mixer frontier to have caught up:
+ * stale queued PCM can arrive continuously while the emitted frame is silence.
+ */
+function micPlayable(nowMs = performance.now()) {
+  return micStreaming(nowMs) && session.micPlayable;
+}
+
+function backingPlayable(nowMs = performance.now()) {
+  return backingStreaming(nowMs) && session.backingPlayable;
+}
+
 function bothStreamsFlowing(nowMs: number) {
   return silentSides(nowMs).length === 0;
 }
 
 function silentSides(nowMs: number) {
   const silent: string[] = [];
-  if (!micStreaming(nowMs)) silent.push('phone microphone');
-  if (!backingRuntime.streaming(nowMs, STREAM_LIVE_MS)) silent.push('desktop capture');
+  if (!micPlayable(nowMs)) silent.push('phone microphone');
+  if (!backingPlayable(nowMs)) silent.push('desktop capture');
   return silent;
 }
 
@@ -1394,8 +1411,10 @@ function sourceStatusPayload() {
     micMediaPath: micMediaPath(),
     micCaptureDispatch: micUplink?.captureDispatch ?? null,
     micCaptureBacklogSamples: micUplink?.droppedSamples.captureBacklog ?? 0,
-    backingStreaming: backingRuntime.streaming(nowMs, STREAM_LIVE_MS),
+    backingStreaming: backingStreaming(nowMs),
+    backingPlayable: backingPlayable(nowMs),
     micStreaming: micStreaming(nowMs),
+    micPlayable: micPlayable(nowMs),
     sampleRate: backingRuntime.sampleRate,
     active: session.active,
     prebufferMs: session.prebufferMs,
@@ -1697,11 +1716,12 @@ function readinessPayload(nowMs = performance.now()) {
   return buildReadiness({
     routeMode: readinessRouteMode(nowMs),
     backingConnected: backingRuntime.connected(),
-    backingStreaming: backingRuntime.streaming(nowMs, STREAM_LIVE_MS),
+    // Readiness is a product/media fact, not merely a socket-arrival fact.
+    backingStreaming: backingPlayable(nowMs),
     backingSampleRate: backingRuntime.sampleRate,
     backingIsRobot: backingRuntime.isRobot,
     micConnected: micMediaConnected(),
-    micStreaming: micStreaming(nowMs),
+    micStreaming: micPlayable(nowMs),
     micFlowObserved: micFlowObserved(),
     micStartupTimedOut: micStartupTimedOut(nowMs),
     robotSourceConnected: sourceRuntime.connected(),
@@ -2116,10 +2136,10 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
     return false;
   }
   if (target === 'mic') {
-    return micRuntime.controlConnected() && micStreaming(nowMs);
+    return micRuntime.controlConnected() && micPlayable(nowMs);
   }
   return backingRuntime.connected()
-    && backingRuntime.streaming(nowMs, STREAM_LIVE_MS)
+    && backingPlayable(nowMs)
     && sourceRuntime.connected();
 }
 

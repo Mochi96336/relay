@@ -9,14 +9,13 @@ import {
 test('Chrome tab capture dispatch uses the shared 200 ms realtime budget', () => {
   assert.equal(TAB_CAPTURE_DISPATCH_BACKLOG_MS, 200);
 
-  assert.deepEqual(classifyTabCaptureDispatch({
+  const boundary = classifyTabCaptureDispatch({
     currentContextTimeSeconds: 10.2,
     capturedAtContextTimeSeconds: 10,
-  }), {
-    measurable: true,
-    lagMs: 199.9999999999993,
-    stale: false,
   });
+  assert.equal(boundary.measurable, true);
+  assert.ok(Math.abs((boundary.lagMs ?? 0) - 200) < 1e-9);
+  assert.equal(boundary.stale, false);
 
   const stale = classifyTabCaptureDispatch({
     currentContextTimeSeconds: 10.201,

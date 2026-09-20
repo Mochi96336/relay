@@ -60,6 +60,8 @@ export type ProductViewModelInput = {
     calibrationActive?: boolean;
     calibrationStale: boolean;
     alignmentClamped: boolean;
+    /** Live frontier, rather than buffer affordability, is constraining the serving alignment. */
+    frontierCorrectionActive?: boolean;
     /**
      * Whether the active timing strategy needs a fresh Robot player delta to
      * make an acoustic calibration applicable. Route identity remains in
@@ -259,6 +261,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     takeLifecycle: input.take.lifecycle,
     performanceActive,
     timingState: timing,
+    timingFrontierCorrectionActive: input.timing.frontierCorrectionActive === true,
   });
   const attention = primaryAttention(issues);
   const health: ProductHealth = issues.some((issue) => issue.severity === 'critical')

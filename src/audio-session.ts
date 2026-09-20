@@ -272,6 +272,9 @@ export class AudioSession {
 
   private micStarvedFrames = 0;
   private backingStarvedFrames = 0;
+  /** Consecutive emitted frames whose source frontier could not cover the frame. */
+  private micFrontierStarvedRunFrames = 0;
+  private backingFrontierStarvedRunFrames = 0;
   private clippedSamples = 0;
   private limitedSamples = 0;
 
@@ -351,6 +354,21 @@ export class AudioSession {
   /** The same frontier for the captured song. See `micTotalSamples`. */
   get backingTotalSamples() {
     return this.backing.totalSamples;
+  }
+
+  /**
+   * Whether the mixer has had real source samples at its live read frontier
+   * within the same safety window used for Mic frontier recovery.
+   *
+   * Transport freshness is deliberately separate: a socket can be receiving a
+   * burst of stale backlog while the current mix frame is still silence.
+   */
+  get micPlayable() {
+    return this.micFrontierStarvedRunFrames <= Math.ceil(ADVANCE_SAFETY_MS / this.frameMs);
+  }
+
+  get backingPlayable() {
+    return this.backingFrontierStarvedRunFrames <= Math.ceil(ADVANCE_SAFETY_MS / this.frameMs);
   }
 
   /**
@@ -782,6 +800,8 @@ export class AudioSession {
   resetHealth() {
     this.micStarvedFrames = 0;
     this.backingStarvedFrames = 0;
+    this.micFrontierStarvedRunFrames = 0;
+    this.backingFrontierStarvedRunFrames = 0;
     this.clippedSamples = 0;
     this.limitedSamples = 0;
     this.micMeterPeak = 0;
@@ -1185,6 +1205,16 @@ export class AudioSession {
     // emitted vocal sample being missing, so it is deliberately excluded here.
     const micReadEvidence = this.readEvidence(this.mic, micReadStart, this.frameSamples);
     const backingReadEvidence = this.readEvidence(this.backing, startSample, this.frameSamples);
+
+    this.micFrontierStarvedRunFrames = this.micExpected
+      && micReadEvidence.frontierMissingSamples > 0
+      ? this.micFrontierStarvedRunFrames + 1
+      : 0;
+    this.backingFrontierStarvedRunFrames = this.backingExpected
+      && backingReadEvidence.frontierMissingSamples > 0
+      ? this.backingFrontierStarvedRunFrames + 1
+      : 0;
+
     const clippedBefore = this.clippedSamples;
     const limitedBefore = this.limitedSamples;
 

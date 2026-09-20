@@ -522,9 +522,12 @@ export class AudioSession {
    * `micFrontierCorrectionSamples` is what keeps the read head behind the
    * frontier that actually exists.
    */
-  private appliedMicAdvanceForRequestedMs(requestedMicAdvanceMs: number) {
+  private appliedMicAdvanceForRequestedMs(
+    requestedMicAdvanceMs: number,
+    frontierCorrectionSamples = this.micFrontierCorrectionSamples,
+  ) {
     const corrected = this.budgetedMicAdvanceMs(requestedMicAdvanceMs)
-      - (this.micFrontierCorrectionSamples / this.sampleRate) * 1000;
+      - (frontierCorrectionSamples / this.sampleRate) * 1000;
     return Math.max(-this.maximumMicReadBehindMs(), corrected);
   }
 
@@ -1055,20 +1058,22 @@ export class AudioSession {
   }
 
   /**
-   * Reads one microphone frame while a runtime calibration correction is in
-   * flight.
+   * Reads one microphone frame while a bounded runtime timing correction moves
+   * the live read head.
    *
-   * The slew policy is a read-rate policy: at one percent, a 20 ms output frame
-   * should consume about 19.8-20.2 ms of microphone audio. The old
-   * implementation instead changed an integer read start once per frame. At
-   * 48 kHz that skips/repeats about ten samples every 20 ms, putting a 50 Hz
-   * train of waveform discontinuities into the vocal. On voiced harmonics that
-   * is plainly audible as zipper/buzz.
+   * Both content-validation slew and frontier-correction release are explicitly
+   * limited to about one percent per 20 ms frame. That is a read-rate policy:
+   * the frame should consume about 19.8-20.2 ms of microphone audio. Changing
+   * only the integer frame start instead skips/repeats about ten samples every
+   * 20 ms at 48 kHz, a 50 Hz train of waveform discontinuities that voiced
+   * harmonics expose as zipper/buzz.
    *
    * Interpolate a continuous source position across the emitted frame, landing
    * exactly on the new advance at the next frame boundary. Limiter look-ahead
    * then continues at unity rate from that landing point, so it observes the
-   * same future waveform the emitted frame is moving toward.
+   * same future waveform the emitted frame is moving toward. Large authority or
+   * frontier-acquisition jumps remain deliberate discontinuities and do not use
+   * this bounded-rate path.
    */
   private readMicSlewedRange(
     startSample: number,
@@ -1239,8 +1244,18 @@ export class AudioSession {
 
   private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
     const previousCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
+    const previousFrontierCorrectionSamples = this.micFrontierCorrectionSamples;
+    const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
+      ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
+      : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;
+    const previousAdvanceSamplesExact = (
+      this.appliedMicAdvanceForRequestedMs(
+        previousRequestedMicAdvanceMs,
+        previousFrontierCorrectionSamples,
+      ) * this.sampleRate
+    ) / 1000;
+
     this.advanceCalibrationSlew();
-    const currentCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
     const startSample = frameIndex * this.frameSamples;
     this.updateMicFrontierCorrection(startSample);
 
@@ -1249,22 +1264,21 @@ export class AudioSession {
     const advanceSamples = Math.round(advanceSamplesExact);
     const micReadStart = startSample + advanceSamples;
 
-    const calibrationSlewMoved = previousCalibratedMicLagMs !== null
-      && currentCalibratedMicLagMs !== null
-      && previousCalibratedMicLagMs !== currentCalibratedMicLagMs;
-    const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
-      ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
-      : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;
-    const previousAdvanceSamplesExact = (
-      this.appliedMicAdvanceForRequestedMs(previousRequestedMicAdvanceMs) * this.sampleRate
-    ) / 1000;
+    // Calibration and frontier release can each move at the one-percent bound
+    // in the same frame. Smooth that combined bounded motion, but never turn a
+    // large authority/frontier acquisition jump into an accidental time-stretch.
+    const maximumBoundedRuntimeDeltaSamples =
+      (2 * this.frameSamples * RUNTIME_CALIBRATION_SLEW_FRACTION) + 1;
+    const runtimeAdvanceDeltaSamples = advanceSamplesExact - previousAdvanceSamplesExact;
+    const boundedRuntimeAdvanceMoved = Math.abs(runtimeAdvanceDeltaSamples) > 1e-9
+      && Math.abs(runtimeAdvanceDeltaSamples) <= maximumBoundedRuntimeDeltaSamples;
 
     // Reading ahead can outrun what has actually arrived. readRange pads with
     // zeros when that happens, so without this the vocal simply disappears in
     // chunks and nothing anywhere says why.
     // The limiter's look-ahead reads past the frame, so it is part of what has
     // to have arrived for this frame to be complete.
-    const furthestAdvanceSamples = calibrationSlewMoved
+    const furthestAdvanceSamples = boundedRuntimeAdvanceMoved
       ? Math.max(previousAdvanceSamplesExact, advanceSamplesExact)
       : advanceSamplesExact;
     const micReadEnd = Math.ceil(
@@ -1295,7 +1309,7 @@ export class AudioSession {
 
     // The extra tail is the limiter's look-ahead, not audio to be emitted.
     const lookahead = this.limiterLookaheadSamples;
-    const mic = calibrationSlewMoved
+    const mic = boundedRuntimeAdvanceMoved
       ? this.readMicSlewedRange(
           startSample,
           previousAdvanceSamplesExact,

@@ -556,7 +556,14 @@ export class AudioSession {
         // the frontier becomes stalled again, leaving no one-frame gap in which
         // a multi-second deficit can be mistaken for stable latency.
         this.micFrontierResumeGuardFrames = Math.ceil(ADVANCE_SAFETY_MS / this.frameMs) + 1;
-      } else if (this.micFrontierResumeGuardFrames > 0) {
+      } else if (
+        this.micFrontierResumeGuardFrames > 0
+        && advanced <= this.frameSamples
+      ) {
+        // A frontier advancing faster than the mix clock is catching up queued
+        // history, not proving a stable late-live offset. Keep the resume guard
+        // armed until that burst has either reached the live read window or
+        // settled back to roughly realtime progress.
         this.micFrontierResumeGuardFrames -= 1;
       }
       this.micFrontierIdleFrames = 0;

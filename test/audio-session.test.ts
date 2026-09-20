@@ -797,6 +797,58 @@ describe('AudioSession microphone frontier', () => {
     );
   });
 
+  test('fast backlog catch-up after a stall is not promoted into stable live latency', () => {
+    const session = makeSession({ prebufferMs: 400, retentionMs: 3_000 });
+    session.start(0);
+    session.setMicExpected(true);
+    session.setBackingExpected(true);
+    session.setAlignment({ networkCompensationMs: 140 });
+
+    const frameSamples = Math.round(RATE * 0.02);
+    const doubleFrameSamples = frameSamples * 2;
+    session.ingestBacking(
+      frame(0, pcmOf(new Array(RATE * 8).fill(1_000))),
+      RATE,
+      0,
+    );
+    session.ingestMic(frame(0, pcmOf(new Array(frameSamples).fill(8_000))), RATE, 0);
+
+    // Delivery stalls for three seconds. This is the legacy-page rollout case:
+    // there is no worklet-age fence, so once the main thread recovers it drains
+    // the queued PCM faster than realtime instead of dropping it locally.
+    drainAll(session, 3_000);
+    assert.equal(session.micFrontierCorrectionMs, 0);
+
+    let micAt = frameSamples;
+    let maxCorrectionMs = 0;
+    for (let elapsed = 3_000; elapsed < 6_000; elapsed += 20) {
+      // Consume 40 ms of queued capture for every 20 ms of mix time: the
+      // frontier is visibly catching up rather than establishing a steady
+      // multi-second-late live clock.
+      session.ingestMic(
+        frame(micAt, pcmOf(new Array(doubleFrameSamples).fill(8_000))),
+        RATE,
+        elapsed,
+      );
+      micAt += doubleFrameSamples;
+      drainAll(session, elapsed + 20);
+      maxCorrectionMs = Math.max(maxCorrectionMs, session.micFrontierCorrectionMs);
+    }
+
+    assert.ok(
+      maxCorrectionMs < 50,
+      `fast catch-up must not be promoted into a retention-floor correction, saw ${maxCorrectionMs} ms`,
+    );
+    assert.ok(
+      Math.abs(session.appliedMicAdvanceMs - 140) < 1,
+      `once backlog catches up the requested +140 ms alignment should still serve, saw ${session.appliedMicAdvanceMs} ms`,
+    );
+    assert.ok(
+      session.health().micHeadroomMs >= 0,
+      `catch-up should restore live frontier headroom, saw ${session.health().micHeadroomMs} ms`,
+    );
+  });
+
   test('resuming one stale frame after a stall cannot jump to the retention clamp', () => {
     const session = makeSession({ prebufferMs: 400, retentionMs: 3_000 });
     session.start(0);

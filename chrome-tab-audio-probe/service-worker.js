@@ -3,6 +3,8 @@ const OFFSCREEN_URL = 'offscreen.html';
 let activeTabId = null;
 let creatingOffscreen = null;
 let droppedChunks = 0;
+let captureBacklogDroppedChunks = 0;
+let captureBacklogMaxLagMs = 0;
 
 async function ensureOffscreenDocument() {
   const documentUrl = chrome.runtime.getURL(OFFSCREEN_URL);
@@ -51,6 +53,8 @@ async function stopCapture() {
   const tabId = activeTabId;
   activeTabId = null;
   droppedChunks = 0;
+  captureBacklogDroppedChunks = 0;
+  captureBacklogMaxLagMs = 0;
   chrome.runtime.sendMessage({ target: 'offscreen', type: 'stop-capture' }).catch(() => {});
   await clearBadge(tabId);
 }
@@ -117,18 +121,31 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
 
+  if (message.type === 'capture-backlog' && message.tabId === activeTabId) {
+    captureBacklogDroppedChunks = Number(message.droppedChunks) || 0;
+    captureBacklogMaxLagMs = Number(message.maxLagMs) || 0;
+    return;
+  }
+
   if (message.type === 'audio-level' && message.tabId === activeTabId) {
     const db = Number(message.dbfs);
     const text = Number.isFinite(db) && db > -80 ? String(Math.round(db)) : '--';
-    const congestion = droppedChunks > 0
-      ? ` · ⚠ dropped ${droppedChunks} chunks (~${droppedChunks * 20} ms)`
-      : '';
+    const warnings = [];
+    if (captureBacklogDroppedChunks > 0) {
+      warnings.push(
+        `capture backlog: dropped ${captureBacklogDroppedChunks} chunks · max ${Math.round(captureBacklogMaxLagMs)} ms old`,
+      );
+    }
+    if (droppedChunks > 0) {
+      warnings.push(`uplink congestion: dropped ${droppedChunks} chunks (~${droppedChunks * 20} ms)`);
+    }
+    const warningText = warnings.length > 0 ? ` · ⚠ ${warnings.join(' · ')}` : '';
     chrome.action.setBadgeText({ tabId: activeTabId, text }).catch(() => {});
     chrome.action.setTitle({
       tabId: activeTabId,
       title: Number.isFinite(db)
-        ? `Relay tab source · ${message.sending ? 'sending' : 'not connected'} · ${db.toFixed(1)} dBFS${congestion}`
-        : `Relay tab source · silence${congestion}`,
+        ? `Relay tab source · ${message.sending ? 'sending' : 'not connected'} · ${db.toFixed(1)} dBFS${warningText}`
+        : `Relay tab source · silence${warningText}`,
     }).catch(() => {});
     return;
   }
@@ -137,6 +154,8 @@ chrome.runtime.onMessage.addListener((message) => {
     const tabId = activeTabId;
     activeTabId = null;
     droppedChunks = 0;
+    captureBacklogDroppedChunks = 0;
+    captureBacklogMaxLagMs = 0;
     clearBadge(tabId).catch(() => {});
   }
 });

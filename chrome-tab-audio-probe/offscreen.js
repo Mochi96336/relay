@@ -1,3 +1,5 @@
+import { classifyTabCaptureDispatch } from './capture-dispatch.js';
+
 let stream = null;
 let audioContext = null;
 let source = null;
@@ -13,6 +15,9 @@ let meterSamples = 0;
 let lastMeterAt = 0;
 let droppedChunks = 0;
 let lastDropWarningAt = 0;
+let captureBacklogDroppedChunks = 0;
+let captureBacklogMaxLagMs = 0;
+let lastCaptureBacklogWarningAt = 0;
 // The offscreen document is disposable: Chrome may tear it down and later
 // recreate it while Relay still retains the previous backing timeline. A
 // module-local zero would therefore reuse generation 1 with sample cursor 0,
@@ -152,15 +157,63 @@ function connectRelay() {
   socket.addEventListener('error', () => socket.close());
 }
 
-function handlePcm(buffer) {
-  if (!(buffer instanceof ArrayBuffer)) {
-    if (buffer?.type === 'input-gap') {
-      console.warn('Relay tab capture gap:', buffer.quanta, 'quanta padded with silence');
+function reportCaptureBacklog(lagMs) {
+  captureBacklogDroppedChunks += 1;
+  captureBacklogMaxLagMs = Math.max(captureBacklogMaxLagMs, lagMs ?? 0);
+  const now = performance.now();
+  if (now - lastCaptureBacklogWarningAt <= 2_000) return;
+
+  lastCaptureBacklogWarningAt = now;
+  console.warn(
+    `Relay capture dispatch stale: dropped ${captureBacklogDroppedChunks} chunks · max ${Math.round(captureBacklogMaxLagMs)} ms old.`,
+  );
+  if (Number.isInteger(activeTabId)) {
+    chrome.runtime.sendMessage({
+      target: 'service-worker',
+      type: 'capture-backlog',
+      tabId: activeTabId,
+      droppedChunks: captureBacklogDroppedChunks,
+      maxLagMs: captureBacklogMaxLagMs,
+    }).catch(() => {});
+  }
+}
+
+function handlePcm(message) {
+  let buffer = null;
+  let capturedAtContextTime = null;
+
+  if (message instanceof ArrayBuffer) {
+    // Rollout compatibility with an old worklet.
+    buffer = message;
+  } else if (
+    message?.type === 'pcm'
+    && message.buffer instanceof ArrayBuffer
+  ) {
+    buffer = message.buffer;
+    capturedAtContextTime = message.capturedAtContextTime;
+  } else {
+    if (message?.type === 'input-gap') {
+      console.warn('Relay tab capture gap:', message.quanta, 'quanta padded with silence');
     }
     return;
   }
 
   const samples = new Int16Array(buffer);
+
+  // Advance for every captured chunk, sent or not. A stale dispatch must become
+  // a positioned hole on Relay's backing timeline, never compressed time.
+  const firstSampleIndex = captureSampleCursor;
+  captureSampleCursor += samples.length;
+
+  const dispatch = classifyTabCaptureDispatch({
+    currentContextTimeSeconds: audioContext?.currentTime,
+    capturedAtContextTimeSeconds: capturedAtContextTime,
+  });
+  if (dispatch.stale) {
+    reportCaptureBacklog(dispatch.lagMs);
+    return;
+  }
+
   for (let i = 0; i < samples.length; i += 1) {
     const normalized = samples[i] / (samples[i] < 0 ? 32768 : 32767);
     meterSumSquares += normalized * normalized;
@@ -182,11 +235,6 @@ function handlePcm(buffer) {
     meterSamples = 0;
     lastMeterAt = now;
   }
-
-  // Advance for every captured chunk, sent or not, and keep counting across a
-  // relay reconnect so the stream rejoins the timeline it already had.
-  const firstSampleIndex = captureSampleCursor;
-  captureSampleCursor += samples.length;
 
   if (!relayReady || relaySocket?.readyState !== WebSocket.OPEN) return;
 
@@ -250,6 +298,9 @@ async function stopCapture(notify = false) {
   meterSamples = 0;
   droppedChunks = 0;
   lastDropWarningAt = 0;
+  captureBacklogDroppedChunks = 0;
+  captureBacklogMaxLagMs = 0;
+  lastCaptureBacklogWarningAt = 0;
   activeTabId = null;
 }
 
@@ -288,6 +339,7 @@ async function startCapture(streamId, tabId, pageUrl) {
   silentGain = audioContext.createGain();
   silentGain.gain.value = 0;
   captureNode.port.onmessage = (event) => handlePcm(event.data);
+  captureNode.port.postMessage({ type: 'capture-protocol', pcmEnvelope: true });
 
   // tabCapture removes this tab from Chrome's normal output. Route the captured
   // stream back to the speakers while a second silent branch produces PCM.

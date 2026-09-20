@@ -29,6 +29,7 @@ export type ProductIssueCause =
   | 'timing-fallback'
   | 'timing-stale'
   | 'timing-clamped'
+  | 'mic-frontier-lagging'
   | 'recording-failed';
 
 export type ProductImpact = 'song' | 'voice' | 'recording' | 'timing';
@@ -209,7 +210,9 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       code: 'timing-clamped',
       scope: 'timing',
       severity: 'warning',
-      cause: 'timing-clamped',
+      cause: facts.timingFrontierCorrectionActive === true
+        ? 'mic-frontier-lagging'
+        : 'timing-clamped',
       affects: ['timing', 'recording'],
       // A live frontier correction is capture/runtime damage: recalibrating
       // cannot move the samples that have actually arrived. Restarting the Mic

@@ -59,6 +59,7 @@ if (
     'timing-fallback': 'system.issue.cause.timing-fallback',
     'timing-stale': 'system.issue.cause.timing-stale',
     'timing-clamped': 'system.issue.cause.timing-clamped',
+    'mic-frontier-lagging': 'system.issue.cause.mic-frontier-lagging',
     'recording-failed': 'system.issue.cause.recording-failed',
   };
 

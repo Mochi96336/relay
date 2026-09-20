@@ -183,6 +183,7 @@ describe('product issue contract', () => {
       timingFrontierCorrectionActive: true,
     });
     assert.equal(frontierClamp.at(-1)?.code, 'timing-clamped');
+    assert.equal(frontierClamp.at(-1)?.cause, 'mic-frontier-lagging');
     assert.equal(frontierClamp.at(-1)?.recovery, 'retry-mic');
   });
 
@@ -194,6 +195,7 @@ describe('product issue contract', () => {
 
     assert.equal(model.timing.state, 'clamped');
     assert.equal(model.issues.at(-1)?.code, 'timing-clamped');
+    assert.equal(model.issues.at(-1)?.cause, 'mic-frontier-lagging');
     assert.equal(model.issues.at(-1)?.recovery, 'retry-mic');
   });
 

@@ -11,6 +11,7 @@ const liveComposition = readFileSync(new URL('../public/live-composition.css', i
 const liveIa = readFileSync(new URL('../public/live-ia.js', import.meta.url), 'utf8');
 const micPresence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 const capture = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
+const micAnalysis = readFileSync(new URL('../public/mic-visual-analysis-worker.js', import.meta.url), 'utf8');
 const songSurface = readFileSync(new URL('../public/song-surface.js', import.meta.url), 'utf8');
 const songCss = readFileSync(new URL('../public/song-surface.css', import.meta.url), 'utf8');
 
@@ -64,7 +65,8 @@ test('input ribbon follows the authoritative Room Mic without fabricated animati
   assert.match(liveComposition, /\.voice-presence-wave/);
   assert.match(micPresence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
   assert.match(micPresence, /envelopePath\(\)/);
-  assert.match(capture, /spectrumBands: this\.measureSpectrumBands\(\)/);
+  assert.match(micAnalysis, /function measureSpectrumBands\(\)/);
+  assert.doesNotMatch(capture, /measureSpectrumBands|measureF0|runFft/);
   assert.doesNotMatch(micPresence, /voice-presence-slice|voice-presence-shape|voice-presence-band/);
   assert.doesNotMatch(liveState, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(liveComposition, /@keyframes|voice-breathe|preparing-pulse/);

@@ -773,6 +773,48 @@ describe('AudioSession microphone frontier', () => {
     assert.ok(evidence.some((v) => v !== 0), 'the microphone history must still hold real audio');
   });
 
+  test('releasing a held frontier correction does not splice the Mic every 20 ms', () => {
+    const session = makeSession({ prebufferMs: 400, retentionMs: 3_000 });
+    session.setMicGainDb(0);
+    session.start(0);
+    session.setMicExpected(true);
+    session.setAlignment({ networkCompensationMs: 200 });
+
+    const samples = RATE * 2;
+    const tone = new Array(samples);
+    for (let sample = 0; sample < samples; sample += 1) {
+      tone[sample] = Math.round(
+        10_000 * Math.sin((2 * Math.PI * 1_000 * sample) / RATE),
+      );
+    }
+    session.ingestMic(frame(0, pcmOf(tone)), RATE, 0);
+
+    // Isolate release DSP from acquisition policy: the neighbouring tests prove
+    // how this held correction is acquired. With ample fresh frontier ahead,
+    // updateMicFrontierCorrection() now gives it back at the documented 1%
+    // rate, about 9.6 samples per 20 ms frame at 48 kHz.
+    (session as any).micFrontierCorrectionSamples = Math.round(RATE * 0.02);
+
+    const mixed: Buffer[] = [];
+    session.drain((pcm) => mixed.push(pcm), 400, 1);
+    session.drain((pcm) => mixed.push(pcm), 420, 1);
+    assert.equal(mixed.length, 2);
+
+    const frameSamples = Math.round(RATE * 0.02);
+    const before = mixed[0].readInt16LE((frameSamples - 1) * 2);
+    const after = mixed[1].readInt16LE(0);
+    const boundaryStep = Math.abs(after - before);
+
+    assert.ok(
+      boundaryStep < 3_000,
+      `frontier correction release spliced the Mic waveform at the frame boundary: ${boundaryStep}`,
+    );
+    assert.ok(
+      session.micFrontierCorrectionMs < 20,
+      'the correction must still release; continuity cannot freeze recovery',
+    );
+  });
+
   test('the correction is held, so the read head keeps advancing between packets', () => {
     // Re-deriving the bound every frame would pin the read position to arrival
     // and replay the same samples whenever a packet was late.

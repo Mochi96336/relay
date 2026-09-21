@@ -51,6 +51,31 @@ type PcmTimeline = {
   resampleNextTargetSample: number | null;
 };
 
+/**
+ * Lengthen a proven-contiguous PCM span by exactly one sample without creating
+ * a zero-order hold at the frame tail.
+ *
+ * The endpoints are preserved and the added time is distributed across the
+ * whole span with linear interpolation. This is a tiny sample-rate trim, not a
+ * content splice.
+ */
+function stretchPcmSpanByOne(input: Int16Array) {
+  if (input.length === 0) return new Int16Array(0);
+  if (input.length === 1) return Int16Array.of(input[0], input[0]);
+
+  const output = new Int16Array(input.length + 1);
+  const sourceScale = (input.length - 1) / input.length;
+  for (let index = 0; index < output.length; index += 1) {
+    const position = index * sourceScale;
+    const left = Math.floor(position);
+    const fraction = position - left;
+    const a = input[left];
+    const b = input[Math.min(left + 1, input.length - 1)];
+    output[index] = Math.round(a + (b - a) * fraction);
+  }
+  return output;
+}
+
 export type AlignmentState = {
   /** RTT/2 fallback used until an acoustic calibration succeeds. */
   networkCompensationMs: number;
@@ -1052,11 +1077,18 @@ export class AudioSession {
         );
         const correction = timeline.clockErrorSamples > deadbandSamples ? 1 : 0;
 
-        if (correction > 0 && samples.length > 0) {
+        if (correction > 0 && samples.length > sourceAlignedSampleOffset) {
+          // Keep any deferred previous-frame interpolation prefix byte-for-byte
+          // intact. Only the portion attributable to this source frame is the
+          // clock-trim authority for this correction.
+          const prefix = samples.subarray(0, sourceAlignedSampleOffset);
+          const currentFrame = samples.subarray(sourceAlignedSampleOffset);
+          const stretchedCurrentFrame = stretchPcmSpanByOne(currentFrame);
           const stretched = new Int16Array(samples.length + 1);
-          stretched.set(samples);
-          stretched[stretched.length - 1] = samples[samples.length - 1];
+          stretched.set(prefix, 0);
+          stretched.set(stretchedCurrentFrame, sourceAlignedSampleOffset);
           samples = stretched;
+
           timeline.originOffset += 1;
           timeline.clockErrorSamples -= 1;
           timeline.clockCorrectionSamples += 1;

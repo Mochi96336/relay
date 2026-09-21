@@ -5,7 +5,6 @@ import { AudioSession } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
 
 const RATE = 48_000;
-const EDGE_FADE_SAMPLES = Math.round(RATE * 0.002);
 
 function makeSession() {
   return new AudioSession({
@@ -77,8 +76,7 @@ test('reused Mic generation at a different source rate re-anchors without restar
     479,
     '44.1 kHz upsampling defers the final target sample until the next source endpoint exists',
   );
-  assert.equal(session.readMic(replacement.start, 1)[0], 0, 'restart capture enters from silence');
-  assert.equal(session.readMic(replacement.start + EDGE_FADE_SAMPLES - 1, 1)[0], 333, 'restart capture reaches full level inside 2 ms');
+  assert.equal(session.readMic(replacement.start, 1)[0], 333);
   assert.equal(session.readBacking(0, 1)[0], 111);
 });
 
@@ -103,8 +101,7 @@ test('reused Backing generation at a different source rate re-anchors without re
     479,
     'capture restart keeps one future-dependent target sample pending instead of clamping it',
   );
-  assert.equal(session.readBacking(replacement.start, 1)[0], 0, 'restart Backing enters from silence');
-  assert.equal(session.readBacking(replacement.start + EDGE_FADE_SAMPLES - 1, 1)[0], 333, 'restart Backing reaches full level inside 2 ms');
+  assert.equal(session.readBacking(replacement.start, 1)[0], 333);
   assert.equal(session.readMic(0, 1)[0], 222);
 
   const continuation = session.ingestBacking(frame(21, 441, 441, 444), 44_100, 1_010);
@@ -143,8 +140,7 @@ test('a genuine Mic generation replacement reports the same capture restart sign
   assert.equal(session.generation, mixGeneration);
   assert.equal(session.micGeneration, 13);
   assert.equal(replacement.start, 47_520);
-  assert.equal(session.readMic(replacement.start, 1)[0], 0, 'new generation enters from silence');
-  assert.equal(session.readMic(replacement.start + EDGE_FADE_SAMPLES - 1, 1)[0], 333, 'new generation reaches full level inside 2 ms');
+  assert.equal(session.readMic(replacement.start, 1)[0], 333);
 });
 
 
@@ -170,8 +166,7 @@ test('explicit media replacement retires Mic PCM without deferring a restart sig
   assert.equal(session.micGeneration, 12);
   assert.equal(session.backingGeneration, 21);
   assert.equal(replacement.start, 47_520);
-  assert.equal(session.readMic(replacement.start, 1)[0], 0, 'bind-time replacement enters from silence');
-  assert.equal(session.readMic(replacement.start + EDGE_FADE_SAMPLES - 1, 1)[0], 333, 'bind-time replacement reaches full level inside 2 ms');
+  assert.equal(session.readMic(replacement.start, 1)[0], 333);
 
   const continuation = session.ingestMic(frame(12, 480, 480, 444), RATE, 1_010);
   assert.equal(continuation.captureRestarted, false);

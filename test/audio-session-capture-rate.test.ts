@@ -31,6 +31,26 @@ function frame(
   return { generation, firstSampleIndex, pcm: pcm(samples, value) };
 }
 
+function makeTransitionSession() {
+  return new AudioSession({
+    sampleRate: RATE,
+    frameMs: 20,
+    prebufferMs: 40,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+}
+
+function drainOne(session: AudioSession, nowMs: number) {
+  let mixed: Buffer | null = null;
+  const drained = session.drain((output) => {
+    mixed = output;
+  }, nowMs, 1);
+  assert.equal(drained, 1);
+  assert.ok(mixed);
+  return mixed;
+}
+
 test('reused Mic generation at a different source rate re-anchors without restarting the mix epoch', () => {
   const session = makeSession();
   session.start(0);
@@ -150,4 +170,64 @@ test('explicit media replacement retires Mic PCM without deferring a restart sig
 
   const continuation = session.ingestMic(frame(12, 480, 480, 444), RATE, 1_010);
   assert.equal(continuation.captureRestarted, false);
+});
+
+
+test('bind-time Mic retirement de-clicks both sides without retaining retired PCM', () => {
+  const session = makeTransitionSession();
+  const chunk = Math.round(RATE * 0.02);
+  const fadeSamples = Math.round(RATE * 0.002);
+  const amplitude = 12_000;
+
+  session.setMicGainDb(0);
+  session.setMicExpected(true);
+  session.start(0);
+  session.ingestMic(frame(12, 0, chunk, amplitude), RATE, 20);
+
+  const before = drainOne(session, 40);
+  assert.equal(before.readInt16LE((chunk - 1) * 2), amplitude);
+
+  session.retireMicCapture();
+  assert.equal(session.readMic(0, 1)[0], 0, 'retired Mic PCM still disappears synchronously at bind time');
+
+  const replacement = session.ingestMic(frame(13, 0, chunk, amplitude), RATE, 60);
+  assert.equal(replacement.captureRestarted, false, 'bind-time retirement still owns the restart signal');
+
+  const gap = drainOne(session, 60);
+  assert.equal(gap.readInt16LE(0), amplitude, 'the first post-retirement sample continues the audible Mic edge');
+  assert.equal(gap.readInt16LE((fadeSamples - 1) * 2), 0, 'the retired Mic contribution reaches silence inside 2 ms');
+  assert.equal(gap.readInt16LE(fadeSamples * 2), 0, 'no retired Mic PCM survives the bounded taper');
+
+  const resumed = drainOne(session, 80);
+  assert.equal(resumed.readInt16LE(0), 0, 'replacement Mic PCM enters from silence');
+  assert.equal(resumed.readInt16LE((fadeSamples - 1) * 2), amplitude, 'replacement Mic reaches full level inside 2 ms');
+});
+
+test('bind-time Backing retirement de-clicks both sides without retaining retired PCM', () => {
+  const session = makeTransitionSession();
+  const chunk = Math.round(RATE * 0.02);
+  const fadeSamples = Math.round(RATE * 0.002);
+  const amplitude = 12_000;
+
+  session.setBackingExpected(true);
+  session.start(0);
+  session.ingestBacking(frame(21, 0, chunk, amplitude), RATE, 20);
+
+  const before = drainOne(session, 40);
+  assert.equal(before.readInt16LE((chunk - 1) * 2), amplitude);
+
+  session.retireBackingCapture();
+  assert.equal(session.readBacking(0, 1)[0], 0, 'retired Backing PCM still disappears synchronously at bind time');
+
+  const replacement = session.ingestBacking(frame(22, 0, chunk, amplitude), RATE, 60);
+  assert.equal(replacement.captureRestarted, false, 'bind-time retirement still owns the Backing restart signal');
+
+  const gap = drainOne(session, 60);
+  assert.equal(gap.readInt16LE(0), amplitude, 'the first post-retirement sample continues the audible Backing edge');
+  assert.equal(gap.readInt16LE((fadeSamples - 1) * 2), 0, 'the retired Backing contribution reaches silence inside 2 ms');
+  assert.equal(gap.readInt16LE(fadeSamples * 2), 0, 'no retired Backing PCM survives the bounded taper');
+
+  const resumed = drainOne(session, 80);
+  assert.equal(resumed.readInt16LE(0), 0, 'replacement Backing PCM enters from silence');
+  assert.equal(resumed.readInt16LE((fadeSamples - 1) * 2), amplitude, 'replacement Backing reaches full level inside 2 ms');
 });

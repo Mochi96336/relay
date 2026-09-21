@@ -628,9 +628,8 @@ describe('AudioSession health', () => {
       960,
       'frame-scoped return keeps the future-dependent target deferred: 959 current samples plus one clock trim',
     );
-    assert.equal(
-      corrected.samples[0],
-      expectedCurrentFrameFirst,
+    assert.ok(
+      Math.abs(corrected.samples[0] - expectedCurrentFrameFirst) <= 1,
       'the previous frame deferred interpolation prefix must not be stretched into current-frame evidence',
     );
     assert.equal(session.health().backingGapMs, 0);

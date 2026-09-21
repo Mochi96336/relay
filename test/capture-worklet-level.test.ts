@@ -183,6 +183,78 @@ test('capture worklet posts every PCM chunk before its lightweight level message
   );
 });
 
+test('capture worklet de-clicks a local input gap across a flushed PCM boundary', async () => {
+  const processor = await loadCaptureProcessor();
+  enablePcmEnvelope(processor);
+
+  // Flush one complete real-audio chunk first. The gap therefore begins after
+  // the previous PCM has already left the worklet and cannot be edited in place.
+  processor.process([[new Float32Array(960).fill(0.5)]]);
+  processor.process([]);
+  processor.process([[new Float32Array(832).fill(0.5)]]);
+
+  const pcm = processor.port.messages.filter((message) => (
+    typeof message === 'object'
+    && message !== null
+    && (message as { type?: string }).type === 'pcm'
+  )) as PcmMessage[];
+  assert.equal(pcm.length, 2);
+
+  const previous = new Int16Array(pcm[0].buffer);
+  const recovered = new Int16Array(pcm[1].buffer);
+  const full = previous[previous.length - 1];
+  const fadeSamples = Math.round(48_000 * 0.002);
+
+  assert.ok(
+    Math.abs(recovered[0] - full) <= 1,
+    'the first missing sample continues the already-flushed waveform instead of stepping to zero',
+  );
+  assert.equal(recovered[fadeSamples - 1], 0, 'the synthetic gap edge reaches silence within 2 ms');
+  assert.ok(
+    recovered.slice(fadeSamples, 128).every((sample) => sample === 0),
+    'the remainder of the missing render quantum stays literal silence',
+  );
+
+  assert.equal(recovered[128], 0, 'recovered real input fades in from silence');
+  assert.ok(
+    Math.abs(recovered[128 + fadeSamples - 1] - full) <= 1,
+    'the recovered input reaches its original level within 2 ms',
+  );
+  assert.ok(
+    recovered.slice(128 + fadeSamples).every((sample) => Math.abs(sample - full) <= 1),
+    'real input outside the bounded recovery edge stays untouched',
+  );
+
+  let maximumEdgeStep = 0;
+  for (let index = 1; index < fadeSamples; index += 1) {
+    maximumEdgeStep = Math.max(
+      maximumEdgeStep,
+      Math.abs(recovered[index] - recovered[index - 1]),
+      Math.abs(recovered[128 + index] - recovered[128 + index - 1]),
+    );
+  }
+  assert.ok(maximumEdgeStep < 250, `de-click edge stepped by ${maximumEdgeStep} PCM counts`);
+
+  const gap = processor.port.messages.find((message) => (
+    typeof message === 'object'
+    && message !== null
+    && (message as { type?: string }).type === 'input-gap'
+  )) as { samples?: number; recovered?: boolean } | undefined;
+  assert.deepEqual(
+    { samples: gap?.samples, recovered: gap?.recovered },
+    { samples: 128, recovered: true },
+    'audio tapering must not shrink or hide the raw missing-input evidence',
+  );
+
+  const level = latestLevel(processor);
+  assert.ok(level);
+  const expectedRms = 0.5 * Math.sqrt(832 / 960);
+  assert.ok(
+    Math.abs(level.rmsDbfs - (20 * Math.log10(expectedRms))) < 0.0001,
+    'level evidence must describe raw recovered input plus the real missing silence, not the synthetic taper',
+  );
+});
+
 test('capture worklet includes padded input gaps in local level timing', async () => {
   const processor = await loadCaptureProcessor();
   const input = new Float32Array(896).fill(0.25);

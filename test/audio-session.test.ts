@@ -625,8 +625,8 @@ describe('AudioSession health', () => {
     assert.ok(corrected, 'test mismatch must trigger a correction');
     assert.equal(
       corrected.samples.length,
-      961,
-      'current 20 ms source frame still owns 960 target samples plus exactly one clock trim',
+      960,
+      'frame-scoped return keeps the future-dependent target deferred: 959 current samples plus one clock trim',
     );
     assert.equal(
       corrected.samples[0],

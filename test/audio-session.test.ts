@@ -535,6 +535,55 @@ describe('AudioSession microphone limiter', () => {
     assert.equal(session.health().micRmsDbfs, null);
   });
 
+  test('ramps a live Mic gain change instead of stepping at the frame boundary', () => {
+    const session = makeSession({ backingGain: 1 });
+    session.setMicGainDb(0);
+    session.start(0);
+
+    const frameSamples = Math.round(RATE * 0.02);
+    const amplitude = 2_000;
+    session.ingestMic(
+      frame(0, pcmOf(new Array(frameSamples * 3).fill(amplitude))),
+      RATE,
+      0,
+    );
+
+    const firstFrames: Buffer[] = [];
+    assert.equal(session.drain((mixed) => firstFrames.push(mixed), 0, 1), 1);
+    const first = firstFrames[0];
+    const before = first.readInt16LE(first.byteLength - 2);
+
+    session.setMicGainDb(12);
+    assert.equal(session.micGainDb, 12, 'command authority exposes the new target immediately');
+
+    const secondFrames: Buffer[] = [];
+    assert.equal(session.drain((mixed) => secondFrames.push(mixed), 20, 1), 1);
+    const second = secondFrames[0];
+    const firstAfter = second.readInt16LE(0);
+    const lastAfter = second.readInt16LE(second.byteLength - 2);
+    const expectedTarget = Math.round(amplitude * (10 ** (12 / 20)));
+
+    assert.ok(
+      Math.abs(firstAfter - before) < 50,
+      `gain change stepped at the frame boundary: ${before} -> ${firstAfter}`,
+    );
+
+    let maximumStep = 0;
+    let previous = firstAfter;
+    for (let offset = 2; offset < second.byteLength; offset += 2) {
+      const current = second.readInt16LE(offset);
+      maximumStep = Math.max(maximumStep, Math.abs(current - previous));
+      previous = current;
+    }
+    assert.ok(maximumStep < 50, `gain ramp contained a ${maximumStep}-count sample step`);
+    assert.ok(
+      Math.abs(lastAfter - expectedTarget) < 30,
+      `20 ms ramp did not settle near +12 dB: got ${lastAfter}, expected ${expectedTarget}`,
+    );
+    assert.equal(session.health().clippedSamples, 0);
+    assert.equal(session.health().limitedSamples, 0);
+  });
+
   test('leaves a signal that already fits alone', () => {
     const session = makeSession();
     session.setMicGainDb(0);

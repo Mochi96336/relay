@@ -51,7 +51,11 @@ test('reused Mic generation at a different source rate re-anchors without restar
   assert.equal(session.micGeneration, 12, 'wire generation may be reused by the contradictory capture');
   assert.equal(session.backingGeneration, 21, 'the unrelated backing timeline remains in the same mix epoch');
   assert.equal(replacement.start, 47_520);
-  assert.equal(replacement.samples.length, 480);
+  assert.equal(
+    replacement.samples.length,
+    479,
+    '44.1 kHz upsampling defers the final target sample until the next source endpoint exists',
+  );
   assert.equal(session.readMic(replacement.start, 1)[0], 333);
   assert.equal(session.readBacking(0, 1)[0], 111);
 });
@@ -72,13 +76,34 @@ test('reused Backing generation at a different source rate re-anchors without re
   assert.equal(session.backingGeneration, 21, 'wire generation may be reused by the contradictory capture');
   assert.equal(session.micGeneration, 12, 'the unrelated Mic timeline remains in the same mix epoch');
   assert.equal(replacement.start, 47_520);
-  assert.equal(replacement.samples.length, 480);
+  assert.equal(
+    replacement.samples.length,
+    479,
+    'capture restart keeps one future-dependent target sample pending instead of clamping it',
+  );
   assert.equal(session.readBacking(replacement.start, 1)[0], 333);
   assert.equal(session.readMic(0, 1)[0], 222);
 
   const continuation = session.ingestBacking(frame(21, 441, 441, 444), 44_100, 1_010);
   assert.equal(continuation.captureRestarted, false, 'the source-rate restart signal is one-shot');
-  assert.equal(continuation.start, 48_000);
+  assert.equal(
+    continuation.start,
+    48_000,
+    'frame-scoped evidence still begins where the current source frame begins',
+  );
+  assert.equal(
+    continuation.samples[0],
+    444,
+    'the deferred previous-frame prefix is not mislabeled as current-frame evidence',
+  );
+  const deferredSourcePosition = (479 * 44_100) / RATE;
+  const deferredFraction = deferredSourcePosition - Math.floor(deferredSourcePosition);
+  const expectedDeferred = Math.round(333 + (444 - 333) * deferredFraction);
+  assert.equal(
+    session.readBacking(47_999, 1)[0],
+    expectedDeferred,
+    'the timeline still keeps the deferred boundary interpolation at its true session position',
+  );
   assert.equal(session.readBacking(48_000, 1)[0], 444);
 });
 

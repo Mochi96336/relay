@@ -242,6 +242,107 @@ describe('AudioSession timelines', () => {
     assert.equal(session.health().unheadered, false);
   });
 
+  test('deferred 44.1 kHz tail does not shift a fresh capture clock by one sample', () => {
+    const sourceRate = 44_100;
+    const chunkSamples = 882;
+    const session = makeSession();
+    session.start(0);
+
+    session.ingestMic(
+      frame(0, pcmOf(new Array(chunkSamples).fill(500))),
+      sourceRate,
+      1_000,
+    );
+
+    const nominalTargetSamples = 960;
+    const expectedStart = RATE - nominalTargetSamples;
+    assert.equal(
+      session.readMic(expectedStart, 1)[0],
+      500,
+      'the 20 ms source interval still anchors 20 ms before the arrival clock',
+    );
+    assert.equal(session.readMic(expectedStart - 1, 1)[0], 0);
+    assert.equal(
+      session.micTotalSamples,
+      RATE - 1,
+      'only the future-dependent tail sample is deferred; the capture origin does not move',
+    );
+  });
+
+  test('44.1 kHz resampling is independent of 20 ms capture chunk boundaries', () => {
+    const sourceRate = 44_100;
+    const chunkSamples = 882; // exactly 20 ms
+    const sourceSamples = chunkSamples * 2;
+    const frequencyHz = 8_000;
+    const input = Array.from({ length: sourceSamples }, (_, index) => (
+      Math.round(10_000 * Math.sin((2 * Math.PI * frequencyHz * index) / sourceRate))
+    ));
+
+    const whole = makeSession();
+    whole.start(0);
+    whole.ingestMic(frame(0, pcmOf(input)), sourceRate, 0);
+
+    const chunked = makeSession();
+    chunked.start(0);
+    chunked.ingestMic(frame(0, pcmOf(input.slice(0, chunkSamples))), sourceRate, 0);
+    chunked.ingestMic(
+      frame(chunkSamples, pcmOf(input.slice(chunkSamples))),
+      sourceRate,
+      20,
+    );
+
+    assert.equal(
+      chunked.micTotalSamples,
+      whole.micTotalSamples,
+      'capture chunking must not change the resampled frontier',
+    );
+    const count = whole.micTotalSamples;
+    const wholeOutput = whole.readMic(0, count);
+    const chunkedOutput = chunked.readMic(0, count);
+
+    let maximumDifference = 0;
+    for (let index = 0; index < count; index += 1) {
+      maximumDifference = Math.max(
+        maximumDifference,
+        Math.abs(wholeOutput[index] - chunkedOutput[index]),
+      );
+    }
+
+    assert.ok(
+      maximumDifference <= 1,
+      `20 ms capture chunking changed the resampled waveform by ${maximumDifference} PCM counts`,
+    );
+    assert.ok(
+      Math.abs(chunkedOutput[959]) > 100,
+      'the deferred boundary sample is real interpolated audio, not a padded zero',
+    );
+    assert.equal(chunked.health().micGapMs, 0);
+  });
+
+  test('44.1 kHz streaming resampling never interpolates across a real source gap', () => {
+    const sourceRate = 44_100;
+    const chunkSamples = 882;
+    const first = new Array(chunkSamples).fill(8_000);
+    const recovered = new Array(chunkSamples).fill(8_000);
+
+    const session = makeSession();
+    session.start(0);
+    session.ingestMic(frame(0, pcmOf(first)), sourceRate, 0);
+    // One complete 20 ms source chunk was never delivered.
+    session.ingestMic(
+      frame(chunkSamples * 2, pcmOf(recovered)),
+      sourceRate,
+      40,
+    );
+
+    assert.equal(session.health().micGapMs, 20);
+    assert.equal(
+      session.readMic(959, 1)[0],
+      0,
+      'a target sample waiting for source look-ahead becomes part of the gap, not interpolation across it',
+    );
+  });
+
   test('44.1 kHz resampling is independent of WebTransport packet splits', () => {
     const sourceRate = 44_100;
     const sourceSamples = 882; // exactly 20 ms

@@ -227,31 +227,63 @@ test('receiver-emitted PCM cannot renew liveness without AudioSession sample pro
   assert.equal(first.length, 1);
   assert.equal(mic.frameAgeMs(100), 0);
 
-  const second = acceptServerFrames(
-    mic,
-    session,
-    mic.receivePublisher(publisher.socket, packet(8, 1, 1, 1), 200),
+  // At 96 kHz -> 48 kHz, absolute target sample 1 lives at source index 2.
+  // A valid one-sample packet containing source index 1 advances the transport
+  // receiver but contributes no target-rate PCM yet.
+  const betweenTargets = mic.receivePublisher(
+    publisher.socket,
+    packet(8, 1, 1, 1),
     200,
   );
-  assert.equal(second.length, 1);
-  assert.equal(mic.frameAgeMs(200), 0);
+  assert.equal(betweenTargets.length, 1, 'transport accepts the monotonic source frame');
+  assert.equal(mic.receiverStats()?.emittedPackets, 2);
+  const betweenIngest = session.ingestMic(betweenTargets[0], mic.sampleRate, 200);
+  assert.equal(
+    betweenIngest.samples.length,
+    0,
+    'a source sample between target instants contributes no new session PCM',
+  );
+  if (betweenIngest.samples.length > 0) mic.noteFrame(200);
 
-  // At 96 kHz, this next one-sample source frame is still valid and monotonic
-  // to the receiver, but both source indices 1 and 2 quantize onto the same
-  // 48 kHz session index. The AudioSession boundary therefore proves that the
-  // third receiver emission contributes no new PCM to the live timeline.
-  const overlap = mic.receivePublisher(publisher.socket, packet(8, 2, 2, 1), 300);
-  assert.equal(overlap.length, 1, 'transport receiver accepts the monotonic source frame');
-  assert.equal(mic.receiverStats()?.emittedPackets, 3);
-  const ingested = session.ingestMic(overlap[0], mic.sampleRate, 300);
-  assert.equal(ingested.samples.length, 0, 'fully overlapped session placement contributes no PCM');
-  if (ingested.samples.length > 0) mic.noteFrame(300);
+  assert.equal(
+    mic.frameAgeMs(200),
+    100,
+    'receiver emission alone must not renew server PCM freshness',
+  );
 
-  assert.equal(mic.frameAgeMs(300), 100, 'receiver emission alone must not renew server PCM freshness');
-  assert.equal(mic.frameAgeMs(800), 600);
-  assert.equal(mic.streaming(800), false, 'post-session freshness expires without novel PCM contribution');
+  // Source index 2 is the next exact 48 kHz target instant, so real AudioSession
+  // progress resumes liveness.
+  const target = acceptServerFrames(
+    mic,
+    session,
+    mic.receivePublisher(publisher.socket, packet(8, 2, 2, 1), 300),
+    300,
+  );
+  assert.equal(target.length, 1);
+  assert.equal(mic.frameAgeMs(300), 0);
 
-  mic.clearMediaAuthority(800);
+  // And the same rule repeats for source index 3: accepted transport without a
+  // new target-rate sample does not keep the server media frontier fresh.
+  const secondBetweenTargets = mic.receivePublisher(
+    publisher.socket,
+    packet(8, 3, 3, 1),
+    400,
+  );
+  assert.equal(secondBetweenTargets.length, 1);
+  assert.equal(mic.receiverStats()?.emittedPackets, 4);
+  const secondBetweenIngest = session.ingestMic(
+    secondBetweenTargets[0],
+    mic.sampleRate,
+    400,
+  );
+  assert.equal(secondBetweenIngest.samples.length, 0);
+  if (secondBetweenIngest.samples.length > 0) mic.noteFrame(400);
+
+  assert.equal(mic.frameAgeMs(400), 100);
+  assert.equal(mic.frameAgeMs(900), 600);
+  assert.equal(mic.streaming(900), false, 'post-session freshness expires without novel PCM contribution');
+
+  mic.clearMediaAuthority(900);
 });
 
 test('manual WebTransport to WebSocket recovery preserves capture identity and leaves the loss hole', () => {

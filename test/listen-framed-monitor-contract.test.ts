@@ -74,20 +74,28 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
 
 test('transport boundaries reset both positioned continuity and the AudioWorklet queue', async () => {
   const source = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
-  const resetSection = section(source, 'function resetPlaybackTemporalState()', 'function abandonTransportConnection()');
-  const abandonSection = section(source, 'function abandonTransportConnection()', 'function closeTransport()');
+  const resetSection = section(
+    source,
+    'function resetPlaybackTemporalState(deClick = false)',
+    'function abandonTransportConnection(deClickPlayback = false)',
+  );
+  const abandonSection = section(
+    source,
+    'function abandonTransportConnection(deClickPlayback = false)',
+    'function closeTransport()',
+  );
   const closeSection = section(source, 'function closeTransport()', 'function scheduleReconnect()');
   const connectSection = section(source, 'async function connect()', '/**\n   * Requests a resume');
 
   assert.match(
     resetSection,
-    /monitorPcmReceiver\.reset\(\)[\s\S]*listenResampler\.reset\(\)[\s\S]*type: 'reset'/,
-    'one helper must clear positioned continuity, resampler history and queued worklet audio together',
+    /monitorPcmReceiver\.reset\(\)[\s\S]*listenResampler\.reset\(\)[\s\S]*postMessage\(\{ type: 'reset', deClick \}\)/,
+    'one helper must clear positioned continuity, resampler history and queued worklet audio together while preserving the requested de-click policy',
   );
-  assert.match(abandonSection, /transportEpoch \+= 1;[\s\S]*resetPlaybackTemporalState\(\)/,
-    'abandoning a transport connection must invalidate its epoch and temporal state');
-  assert.match(closeSection, /transportEnabled = false;[\s\S]*abandonTransportConnection\(\)/,
-    'an explicit transport close must revoke transport intent before abandoning the connection');
+  assert.match(abandonSection, /transportEpoch \+= 1;[\s\S]*resetPlaybackTemporalState\(deClickPlayback\)/,
+    'abandoning a transport connection must invalidate its epoch and forward the audible reset policy');
+  assert.match(closeSection, /transportEnabled = false;[\s\S]*abandonTransportConnection\(audioRendering\(\)\)/,
+    'an audible explicit transport close must discard queued PCM with the worklet de-click path');
   assert.match(connectSection, /resetPlaybackTemporalState\(\)[\s\S]*sendParticipantAuthentication\(next\)/,
-    'a reconnect may join mid-generation and therefore needs a fresh continuity anchor before registration');
+    'a quiet reconnect anchor must still use a plain temporal reset before registration');
 });

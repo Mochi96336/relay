@@ -9,11 +9,11 @@ test('Listen retires an opening monitor socket when transport authority changes'
   assert.match(listenSource, /let transportEpoch = 0;/);
   assert.match(
     listenSource,
-    /function abandonTransportConnection\(\)[\s\S]*transportEpoch \+= 1;[\s\S]*const opening = pendingSocket;[\s\S]*pendingSocket = null;[\s\S]*opening\.close\(\)/,
+    /function abandonTransportConnection\(deClickPlayback = false\)[\s\S]*transportEpoch \+= 1;[\s\S]*const opening = pendingSocket;[\s\S]*pendingSocket = null;[\s\S]*opening\.close\(\)/,
   );
   assert.match(
     listenSource,
-    /function closeTransport\(\)[\s\S]*transportEnabled = false;[\s\S]*abandonTransportConnection\(\)/,
+    /function closeTransport\(\)[\s\S]*transportEnabled = false;[\s\S]*abandonTransportConnection\(audioRendering\(\)\)/,
     'explicit shutdown must revoke transport intent and abandon any opening or active connection',
   );
   assert.match(

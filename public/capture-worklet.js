@@ -3,6 +3,7 @@ const SILENCE_DBFS = -120;
 // Narrow enough that an unclipped voice peak normally touches it for at most
 // one sample. A flat-topped capture instead produces a run of rail samples.
 const INPUT_RAIL_THRESHOLD = 0x7fff / 0x8000;
+const INPUT_GAP_DECLICK_MS = 2;
 const VISUAL_ANALYSIS_PLACEHOLDER = Object.freeze({
   spectrumBands: Object.freeze([0, 0, 0, 0, 0]),
   f0Hz: null,
@@ -31,6 +32,12 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.railSamples = 0;
     this.currentRailRunSamples = 0;
     this.maxConsecutiveRailSamples = 0;
+    this.inputGapFadeSamples = Math.max(1, Math.round(sampleRate * (INPUT_GAP_DECLICK_MS / 1000)));
+    this.gapFadeRemainingSamples = 0;
+    this.gapFadeStartSample = 0;
+    this.recoveryFadeRemainingSamples = 0;
+    this.recoveryFadeStartSample = 0;
+    this.lastOutputSample = 0;
     this.chunkStartedAtContextTime = null;
 
     // Rollout compatibility is deliberately asymmetric: a newly deployed
@@ -61,7 +68,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     });
   }
 
-  writeSilence(count) {
+  writeInputGap(count) {
     let remaining = count;
     let written = 0;
     while (remaining > 0) {
@@ -72,13 +79,29 @@ class CaptureProcessor extends AudioWorkletProcessor {
             : null
         );
       }
+
       const room = this.chunkSize - this.offset;
       const step = Math.min(room, remaining);
-      this.chunk.fill(0, this.offset, this.offset + step);
+      for (let i = 0; i < step; i += 1) {
+        let outputSample = 0;
+        if (this.gapFadeRemainingSamples > 0) {
+          const total = this.inputGapFadeSamples;
+          const weight = total <= 1
+            ? 0
+            : (this.gapFadeRemainingSamples - 1) / (total - 1);
+          outputSample = this.gapFadeStartSample * weight;
+          this.gapFadeRemainingSamples -= 1;
+        }
+        this.chunk[this.offset + i] = outputSample < 0
+          ? outputSample * 0x8000
+          : outputSample * 0x7fff;
+        this.lastOutputSample = outputSample;
+      }
+
       this.offset += step;
+      // Input-gap samples remain raw-silence evidence for the meter even though
+      // the emitted PCM edge gets a tiny synthetic taper to suppress a click.
       this.levelSampleCount += step;
-      // A real input gap is silence, not clipping, and terminates any preceding
-      // rail run so two unrelated peaks cannot be joined across missing input.
       this.currentRailRunSamples = 0;
       remaining -= step;
       written += step;
@@ -143,7 +166,12 @@ class CaptureProcessor extends AudioWorkletProcessor {
       if (this.started) {
         this.silenceQuanta += 1;
         this.activeGapQuanta += 1;
-        this.writeSilence(RENDER_QUANTUM);
+        if (this.activeGapQuanta === 1) {
+          this.gapFadeStartSample = this.lastOutputSample;
+          this.gapFadeRemainingSamples = this.inputGapFadeSamples;
+          this.recoveryFadeRemainingSamples = 0;
+        }
+        this.writeInputGap(RENDER_QUANTUM);
         if (this.activeGapQuanta - this.reportedActiveGapQuanta >= 400) {
           this.reportInputGap(false);
         }
@@ -155,6 +183,8 @@ class CaptureProcessor extends AudioWorkletProcessor {
       this.reportInputGap(true);
       this.activeGapQuanta = 0;
       this.reportedActiveGapQuanta = 0;
+      this.recoveryFadeStartSample = this.lastOutputSample;
+      this.recoveryFadeRemainingSamples = this.inputGapFadeSamples;
     }
     this.started = true;
     let sourceOffset = 0;
@@ -188,7 +218,19 @@ class CaptureProcessor extends AudioWorkletProcessor {
           this.currentRailRunSamples = 0;
         }
 
-        this.chunk[this.offset + i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        let outputSample = sample;
+        if (this.recoveryFadeRemainingSamples > 0) {
+          const total = this.inputGapFadeSamples;
+          const progress = total - this.recoveryFadeRemainingSamples;
+          const weight = total <= 1 ? 1 : progress / (total - 1);
+          outputSample = this.recoveryFadeStartSample * (1 - weight) + sample * weight;
+          this.recoveryFadeRemainingSamples -= 1;
+        }
+
+        this.chunk[this.offset + i] = outputSample < 0
+          ? outputSample * 0x8000
+          : outputSample * 0x7fff;
+        this.lastOutputSample = outputSample;
       }
 
       this.offset += count;

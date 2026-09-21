@@ -88,8 +88,13 @@ test('reused Backing generation at a different source rate re-anchors without re
   assert.equal(continuation.captureRestarted, false, 'the source-rate restart signal is one-shot');
   assert.equal(
     continuation.start,
-    47_999,
-    'the continuation first supplies the deferred target sample at its true session position',
+    48_000,
+    'frame-scoped evidence still begins where the current source frame begins',
+  );
+  assert.equal(
+    continuation.samples[0],
+    444,
+    'the deferred previous-frame prefix is not mislabeled as current-frame evidence',
   );
   const deferredSourcePosition = (479 * 44_100) / RATE;
   const deferredFraction = deferredSourcePosition - Math.floor(deferredSourcePosition);
@@ -97,7 +102,7 @@ test('reused Backing generation at a different source rate re-anchors without re
   assert.equal(
     session.readBacking(47_999, 1)[0],
     expectedDeferred,
-    'the deferred boundary sample interpolates the old tail into the new packet instead of clamping or becoming a hole',
+    'the timeline still keeps the deferred boundary interpolation at its true session position',
   );
   assert.equal(session.readBacking(48_000, 1)[0], 444);
 });

@@ -790,11 +790,12 @@ export class AudioSession {
     // packet boundary in capture diagnostics.
     this.meterMic(result.samples);
 
-    // A capture-generation replacement is included here when it re-anchors
-    // ahead of retained PCM: that interval is still a proven positioned hole,
-    // and smoothing its real-audio edges does not conceal the restart or gap.
+    // Only same-capture positioned holes are edited in the retained timeline.
+    // A capture-clock restart is an authority boundary whose raw replacement
+    // samples stay exact; bind-time replacement edges are tapered at mix output.
     const startsAfterGap = Boolean(
-      previousChunk
+      !result.captureRestarted
+      && previousChunk
       && currentChunk
       && currentChunk !== previousChunk
       && currentChunk.samples.length > 0
@@ -836,11 +837,12 @@ export class AudioSession {
     // A positioned transport/backlog hole is truthful silence, but the abrupt
     // song -> zero -> song waveform splice is not. Taper only the real PCM
     // adjacent to the proven hole; keep its position and evidence unchanged.
-    // Capture restart is not an exemption: if the new clock lands ahead of the
-    // retained song, the missing interval remains literal silence while only
-    // the two real-audio edges are tapered.
+    // Keep capture-clock restarts byte-exact in retained source history.
+    // Same-capture transport holes use the in-timeline taper; bind-time
+    // replacement edges are handled separately at the mix output boundary.
     const startsAfterGap = Boolean(
-      previousChunk
+      !result.captureRestarted
+      && previousChunk
       && currentChunk
       && currentChunk !== previousChunk
       && currentChunk.samples.length > 0

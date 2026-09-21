@@ -105,6 +105,14 @@ function nonNegativeSafeInteger(value: unknown): number | null {
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
+function strictNonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+    ? value
+    : null;
+}
+
 function positiveSafeIntegerOrNull(value: unknown): number | null | undefined {
   if (value === null) return null;
   const number = Number(value);
@@ -173,8 +181,8 @@ function parseCaptureClipping(value: unknown): AudioCaptureClipping | null | und
   const clipping = record(value);
   if (!clipping) return undefined;
 
-  const railSamples = nonNegativeSafeInteger(clipping.railSamples);
-  const maxConsecutiveRailSamples = nonNegativeSafeInteger(clipping.maxConsecutiveRailSamples);
+  const railSamples = strictNonNegativeSafeInteger(clipping.railSamples);
+  const maxConsecutiveRailSamples = strictNonNegativeSafeInteger(clipping.maxConsecutiveRailSamples);
   if (
     railSamples === null
     || maxConsecutiveRailSamples === null

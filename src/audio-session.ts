@@ -741,18 +741,23 @@ export class AudioSession {
     const previousTotalSamples = this.mic.totalSamples;
     const previousChunk = this.mic.chunks.at(-1) ?? null;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
+    const currentChunk = this.mic.chunks.at(-1) ?? null;
 
-    // Raw input metering must describe what the phone actually sent. De-clicking
-    // below is an output-continuity treatment, not a new gain measurement.
+    // Meter only samples attributable to this source frame. A streaming
+    // resampler may prepend one completed target sample that belongs to the
+    // previous source packet; counting it again here would double-charge the
+    // packet boundary in capture diagnostics.
     this.meterMic(result.samples);
 
     if (
       !result.captureRestarted
       && previousChunk
-      && result.samples.length > 0
-      && result.start > previousTotalSamples
+      && currentChunk
+      && currentChunk !== previousChunk
+      && currentChunk.samples.length > 0
+      && currentChunk.start > previousTotalSamples
     ) {
-      this.declickMicGap(previousChunk.samples, result.samples);
+      this.declickMicGap(previousChunk.samples, currentChunk.samples);
     }
     return result;
   }
@@ -985,6 +990,7 @@ export class AudioSession {
       sourceContinuous ? timeline.resampleNextTargetSample : null,
     );
     let samples = resampled.samples;
+    let sourceAlignedSampleOffset = resampled.sourceAlignedSampleOffset;
     if (samples.length === 0 && !positioned) {
       return { samples, start: timeline.totalSamples, captureRestarted: false };
     }
@@ -1085,6 +1091,7 @@ export class AudioSession {
         };
       }
       samples = samples.slice(overlap);
+      sourceAlignedSampleOffset = Math.max(0, sourceAlignedSampleOffset - overlap);
       start = timeline.totalSamples;
     } else if (start > timeline.totalSamples && timeline.chunks.length > 0) {
       timeline.gapSamples += start - timeline.totalSamples;
@@ -1093,7 +1100,16 @@ export class AudioSession {
     if (samples.length === 0) return { samples, start, captureRestarted };
     timeline.chunks.push({ start, samples, positioned });
     timeline.totalSamples = start + samples.length;
-    return { samples, start, captureRestarted };
+
+    // Frame-scoped consumers combine this return value with the current wire
+    // frame metadata. Keep a completed deferred prefix on the timeline, but do
+    // not attribute that prefix to the new frame whose source clock starts later.
+    const consumerOffset = Math.min(samples.length, sourceAlignedSampleOffset);
+    return {
+      samples: samples.subarray(consumerOffset),
+      start: start + consumerOffset,
+      captureRestarted,
+    };
   }
 
   private resample(
@@ -1106,6 +1122,7 @@ export class AudioSession {
     samples: Int16Array;
     targetStart: number | null;
     nextTargetSample: number | null;
+    sourceAlignedSampleOffset: number;
   } {
     const inputLength = Math.floor(buffer.byteLength / 2);
     if (inputLength <= 0) {
@@ -1113,6 +1130,7 @@ export class AudioSession {
         samples: new Int16Array(0),
         targetStart: sourceFirstSampleIndex,
         nextTargetSample,
+        sourceAlignedSampleOffset: 0,
       };
     }
 
@@ -1124,6 +1142,7 @@ export class AudioSession {
         samples: output,
         targetStart: positioned ? sourceFirstSampleIndex : null,
         nextTargetSample: positioned ? sourceFirstSampleIndex + inputLength : null,
+        sourceAlignedSampleOffset: 0,
       };
     }
 
@@ -1142,7 +1161,12 @@ export class AudioSession {
         const b = buffer.readInt16LE(Math.min(index + 1, inputLength - 1) * 2);
         output[i] = Math.round(a + (b - a) * fraction);
       }
-      return { samples: output, targetStart: null, nextTargetSample: null };
+      return {
+        samples: output,
+        targetStart: null,
+        nextTargetSample: null,
+        sourceAlignedSampleOffset: 0,
+      };
     }
 
     const sourceStart = sourceFirstSampleIndex;
@@ -1150,6 +1174,8 @@ export class AudioSession {
     let targetIndex = nextTargetSample
       ?? Math.ceil((sourceStart * this.sampleRate) / sourceRate);
     let firstEmittedTarget: number | null = null;
+    const firstCurrentFrameTarget = Math.ceil((sourceStart * this.sampleRate) / sourceRate);
+    let sourceAlignedSampleOffset = 0;
     const emitted: number[] = [];
 
     const readAbsoluteSourceSample = (index: number) => {
@@ -1187,6 +1213,7 @@ export class AudioSession {
       }
 
       if (firstEmittedTarget === null) firstEmittedTarget = targetIndex;
+      if (targetIndex < firstCurrentFrameTarget) sourceAlignedSampleOffset += 1;
       emitted.push(Math.round(value));
       targetIndex += 1;
     }
@@ -1195,6 +1222,7 @@ export class AudioSession {
       samples: Int16Array.from(emitted),
       targetStart: firstEmittedTarget ?? targetIndex,
       nextTargetSample: targetIndex,
+      sourceAlignedSampleOffset,
     };
   }
 

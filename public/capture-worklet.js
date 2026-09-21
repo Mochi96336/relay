@@ -36,6 +36,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.gapFadeRemainingSamples = 0;
     this.gapFadeStartSample = 0;
     this.recoveryFadeRemainingSamples = 0;
+    this.recoveryFadeStartSample = 0;
     this.lastOutputSample = 0;
     this.chunkStartedAtContextTime = null;
 
@@ -182,6 +183,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
       this.reportInputGap(true);
       this.activeGapQuanta = 0;
       this.reportedActiveGapQuanta = 0;
+      this.recoveryFadeStartSample = this.lastOutputSample;
       this.recoveryFadeRemainingSamples = this.inputGapFadeSamples;
     }
     this.started = true;
@@ -221,7 +223,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
           const total = this.inputGapFadeSamples;
           const progress = total - this.recoveryFadeRemainingSamples;
           const weight = total <= 1 ? 1 : progress / (total - 1);
-          outputSample *= weight;
+          outputSample = this.recoveryFadeStartSample * (1 - weight) + sample * weight;
           this.recoveryFadeRemainingSamples -= 1;
         }
 

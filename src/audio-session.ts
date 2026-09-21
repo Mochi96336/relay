@@ -170,7 +170,7 @@ const MIC_READ_HEAD_CROSSFADE_MS = 5;
 /**
  * A real packet hole is silence, but entering or leaving that silence in one
  * sample creates a click that was not present in either source segment.
- * Preserve the hole itself and its evidence; taper only the real microphone
+ * Preserve the hole itself and its evidence; taper only the real source
  * samples immediately adjacent to it.
  */
 const SOURCE_GAP_DECLICK_MS = 2;
@@ -774,9 +774,11 @@ export class AudioSession {
     // packet boundary in capture diagnostics.
     this.meterMic(result.samples);
 
+    // A capture-generation replacement is included here when it re-anchors
+    // ahead of retained PCM: that interval is still a proven positioned hole,
+    // and smoothing its real-audio edges does not conceal the restart or gap.
     if (
-      !result.captureRestarted
-      && previousChunk
+      previousChunk
       && currentChunk
       && currentChunk !== previousChunk
       && currentChunk.samples.length > 0
@@ -808,9 +810,11 @@ export class AudioSession {
     // A positioned transport/backlog hole is truthful silence, but the abrupt
     // song -> zero -> song waveform splice is not. Taper only the real PCM
     // adjacent to the proven hole; keep its position and evidence unchanged.
+    // Capture restart is not an exemption: if the new clock lands ahead of the
+    // retained song, the missing interval remains literal silence while only
+    // the two real-audio edges are tapered.
     if (
-      !result.captureRestarted
-      && previousChunk
+      previousChunk
       && currentChunk
       && currentChunk !== previousChunk
       && currentChunk.samples.length > 0

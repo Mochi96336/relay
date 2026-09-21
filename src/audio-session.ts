@@ -345,6 +345,18 @@ export class AudioSession {
   private lastEmittedMicAdvanceSamples: number | null = null;
   /** Whether the preceding emitted Mic frame was backed by real source PCM. */
   private lastEmittedMicFrameComplete = false;
+  /** Last per-source contributions that actually reached the mix output. */
+  private lastEmittedMicContribution = 0;
+  private lastEmittedBackingContribution = 0;
+  /** Bounded output-edge taper after bind-time capture retirement. */
+  private micRetirementFadeStart = 0;
+  private micRetirementFadeRemainingSamples = 0;
+  private backingRetirementFadeStart = 0;
+  private backingRetirementFadeRemainingSamples = 0;
+  /** The replacement capture's first real PCM must enter from silence. */
+  private micReplacementNeedsFadeIn = false;
+  private backingReplacementNeedsFadeIn = false;
+  private readonly sourceEdgeFadeSamples: number;
 
   private micStarvedFrames = 0;
   private backingStarvedFrames = 0;
@@ -393,6 +405,10 @@ export class AudioSession {
     this.micGainRampSamples = Math.max(
       1,
       Math.round((MIC_GAIN_RAMP_MS / 1000) * options.sampleRate),
+    );
+    this.sourceEdgeFadeSamples = Math.max(
+      1,
+      Math.round((SOURCE_GAP_DECLICK_MS * options.sampleRate) / 1000),
     );
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
@@ -777,14 +793,24 @@ export class AudioSession {
     // A capture-generation replacement is included here when it re-anchors
     // ahead of retained PCM: that interval is still a proven positioned hole,
     // and smoothing its real-audio edges does not conceal the restart or gap.
-    if (
+    const startsAfterGap = Boolean(
       previousChunk
       && currentChunk
       && currentChunk !== previousChunk
       && currentChunk.samples.length > 0
       && currentChunk.start > previousTotalSamples
-    ) {
+    );
+    if (startsAfterGap && previousChunk && currentChunk) {
       this.declickSourceGap(previousChunk.samples, currentChunk.samples);
+      this.micReplacementNeedsFadeIn = false;
+    } else if (
+      this.micReplacementNeedsFadeIn
+      && currentChunk
+      && currentChunk !== previousChunk
+      && currentChunk.samples.length > 0
+    ) {
+      this.fadeInSourceEdge(currentChunk.samples);
+      this.micReplacementNeedsFadeIn = false;
     }
     return result;
   }
@@ -813,14 +839,24 @@ export class AudioSession {
     // Capture restart is not an exemption: if the new clock lands ahead of the
     // retained song, the missing interval remains literal silence while only
     // the two real-audio edges are tapered.
-    if (
+    const startsAfterGap = Boolean(
       previousChunk
       && currentChunk
       && currentChunk !== previousChunk
       && currentChunk.samples.length > 0
       && currentChunk.start > previousTotalSamples
-    ) {
+    );
+    if (startsAfterGap && previousChunk && currentChunk) {
       this.declickSourceGap(previousChunk.samples, currentChunk.samples);
+      this.backingReplacementNeedsFadeIn = false;
+    } else if (
+      this.backingReplacementNeedsFadeIn
+      && currentChunk
+      && currentChunk !== previousChunk
+      && currentChunk.samples.length > 0
+    ) {
+      this.fadeInSourceEdge(currentChunk.samples);
+      this.backingReplacementNeedsFadeIn = false;
     }
     return result;
   }
@@ -870,6 +906,14 @@ export class AudioSession {
    * capture-clock change that was not already known at bind.
    */
   retireMicCapture() {
+    // Bind-time retirement has no old chunk left for declickSourceGap() to edit.
+    // Preserve only the last contribution that was already audible, then taper
+    // that value to whatever the next frame contains. No retired PCM survives.
+    if (this.running) {
+      this.micRetirementFadeStart = this.lastEmittedMicContribution;
+      this.micRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
+      this.micReplacementNeedsFadeIn = true;
+    }
     this.clearTimeline(this.mic);
     this.resetMicFrontierTracking();
   }
@@ -880,6 +924,11 @@ export class AudioSession {
    * The shared mix epoch and Mic history remain intact.
    */
   retireBackingCapture() {
+    if (this.running) {
+      this.backingRetirementFadeStart = this.lastEmittedBackingContribution;
+      this.backingRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
+      this.backingReplacementNeedsFadeIn = true;
+    }
     this.clearTimeline(this.backing);
   }
 
@@ -953,6 +1002,14 @@ export class AudioSession {
     // singer's last transient and can attenuate it for hundreds of milliseconds.
     this.limiterEnvelope = 0;
     this.limiterGain = 1;
+    this.lastEmittedMicContribution = 0;
+    this.lastEmittedBackingContribution = 0;
+    this.micRetirementFadeStart = 0;
+    this.micRetirementFadeRemainingSamples = 0;
+    this.backingRetirementFadeStart = 0;
+    this.backingRetirementFadeRemainingSamples = 0;
+    this.micReplacementNeedsFadeIn = false;
+    this.backingReplacementNeedsFadeIn = false;
     this.mic.gapSamples = 0;
     this.backing.gapSamples = 0;
   }
@@ -1508,10 +1565,8 @@ export class AudioSession {
    * deliberately not packet-loss concealment: no old sample is stretched or
    * copied across the missing capture.
    */
-  private declickSourceGap(previous: Int16Array, next: Int16Array) {
-    const maximum = Math.max(1, Math.round((SOURCE_GAP_DECLICK_MS * this.sampleRate) / 1000));
-
-    const fadeOutSamples = Math.min(maximum, previous.length);
+  private fadeOutSourceEdge(previous: Int16Array) {
+    const fadeOutSamples = Math.min(this.sourceEdgeFadeSamples, previous.length);
     for (let offset = 0; offset < fadeOutSamples; offset += 1) {
       const index = previous.length - fadeOutSamples + offset;
       const weight = fadeOutSamples <= 1
@@ -1519,12 +1574,41 @@ export class AudioSession {
         : (fadeOutSamples - 1 - offset) / (fadeOutSamples - 1);
       previous[index] = Math.round(previous[index] * weight);
     }
+  }
 
-    const fadeInSamples = Math.min(maximum, next.length);
+  private fadeInSourceEdge(next: Int16Array) {
+    const fadeInSamples = Math.min(this.sourceEdgeFadeSamples, next.length);
     for (let index = 0; index < fadeInSamples; index += 1) {
       const weight = fadeInSamples <= 1 ? 0 : index / (fadeInSamples - 1);
       next[index] = Math.round(next[index] * weight);
     }
+  }
+
+  private declickSourceGap(previous: Int16Array, next: Int16Array) {
+    this.fadeOutSourceEdge(previous);
+    this.fadeInSourceEdge(next);
+  }
+
+  private applyMicRetirementFade(current: number) {
+    if (this.micRetirementFadeRemainingSamples <= 0) return current;
+    const progress = this.sourceEdgeFadeSamples - this.micRetirementFadeRemainingSamples;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 1
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    const value = this.micRetirementFadeStart * (1 - weight) + current * weight;
+    this.micRetirementFadeRemainingSamples -= 1;
+    return value;
+  }
+
+  private applyBackingRetirementFade(current: number) {
+    if (this.backingRetirementFadeRemainingSamples <= 0) return current;
+    const progress = this.sourceEdgeFadeSamples - this.backingRetirementFadeRemainingSamples;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 1
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    const value = this.backingRetirementFadeStart * (1 - weight) + current * weight;
+    this.backingRetirementFadeRemainingSamples -= 1;
+    return value;
   }
 
   /**
@@ -1770,11 +1854,16 @@ export class AudioSession {
       // The limiter detector looks ahead in source samples, so it must also see
       // the gain that will apply when that future sample reaches the output.
       const detectMicGain = 10 ** (this.projectedMicGainDb(lookahead) / 20);
-      const voice = this.limit(
+      let voice = this.limit(
         (mic[i] / 32768) * micGain,
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
-      const summed = voice + (song[i] / 32768) * songGain;
+      voice = this.applyMicRetirementFade(voice);
+      let songContribution = (song[i] / 32768) * songGain;
+      songContribution = this.applyBackingRetirementFade(songContribution);
+      this.lastEmittedMicContribution = voice;
+      this.lastEmittedBackingContribution = songContribution;
+      const summed = voice + songContribution;
       const value = summed * mixHeadroomGain;
       // Normal two-source peaks have already had deterministic summing headroom
       // reserved. Keep this clamp as an invariant/backstop for unexpected future

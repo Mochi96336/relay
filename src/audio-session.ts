@@ -43,6 +43,12 @@ type PcmTimeline = {
    * packet begins between two target-rate sample positions.
    */
   resampleTailSample: number | null;
+  /**
+   * Next absolute mix-rate sample on the source clock that still needs to be
+   * emitted. Upsampling may defer one target sample until the following source
+   * packet supplies the interpolation endpoint.
+   */
+  resampleNextTargetSample: number | null;
 };
 
 export type AlignmentState = {
@@ -262,6 +268,7 @@ function emptyTimeline(): PcmTimeline {
     sourceFrontier: null,
     clockCorrectionSamples: 0,
     resampleTailSample: null,
+    resampleNextTargetSample: null,
   };
 }
 
@@ -914,6 +921,7 @@ export class AudioSession {
     timeline.sourceFrontier = null;
     timeline.clockCorrectionSamples = 0;
     timeline.resampleTailSample = null;
+    timeline.resampleNextTargetSample = null;
   }
 
   /** Where the session clock is now, in session samples since the epoch. */
@@ -961,13 +969,15 @@ export class AudioSession {
     const sourceContinuous = positioned
       && !captureClockChanged
       && timeline.sourceFrontier === frame.firstSampleIndex;
-    let samples = this.resample(
+    const resampled = this.resample(
       frame.pcm,
       sourceRate,
       positioned ? frame.firstSampleIndex : null,
       sourceContinuous ? timeline.resampleTailSample : null,
+      sourceContinuous ? timeline.resampleNextTargetSample : null,
     );
-    if (samples.length === 0) {
+    let samples = resampled.samples;
+    if (samples.length === 0 && !positioned) {
       return { samples, start: timeline.totalSamples, captureRestarted: false };
     }
 
@@ -978,12 +988,14 @@ export class AudioSession {
       // unknowable, so it also breaks positioned resampler continuity.
       timeline.unheadered = true;
       timeline.resampleTailSample = null;
+      timeline.resampleNextTargetSample = null;
       start = timeline.totalSamples;
     } else {
       // Each frame states its own position, so rounding never accumulates and a
       // missing frame leaves a hole of exactly the right length instead of
       // pulling everything after it earlier.
-      const streamStart = Math.round((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
+      const streamStart = resampled.targetStart
+        ?? Math.ceil((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
 
       captureRestarted = hadCaptureClock && captureClockChanged;
       if (captureClockChanged) {
@@ -1044,6 +1056,7 @@ export class AudioSession {
         : Math.max(previousSourceFrontier, sourceEnd);
       if (advancesSourceFrontier) {
         timeline.resampleTailSample = frame.pcm.readInt16LE((sourceSampleCount - 1) * 2);
+        timeline.resampleNextTargetSample = resampled.nextTargetSample;
       }
     }
 
@@ -1077,49 +1090,101 @@ export class AudioSession {
     sourceRate: number,
     sourceFirstSampleIndex: number | null = null,
     previousSourceSample: number | null = null,
-  ) {
+    nextTargetSample: number | null = null,
+  ): {
+    samples: Int16Array;
+    targetStart: number | null;
+    nextTargetSample: number | null;
+  } {
     const inputLength = Math.floor(buffer.byteLength / 2);
-    if (inputLength <= 0) return new Int16Array(0);
-    if (sourceRate === this.sampleRate) {
-      const output = new Int16Array(inputLength);
-      for (let i = 0; i < inputLength; i += 1) output[i] = buffer.readInt16LE(i * 2);
-      return output;
+    if (inputLength <= 0) {
+      return {
+        samples: new Int16Array(0),
+        targetStart: sourceFirstSampleIndex,
+        nextTargetSample,
+      };
     }
 
     const positioned = sourceFirstSampleIndex !== null;
-    const targetStart = positioned
-      ? Math.round((sourceFirstSampleIndex * this.sampleRate) / sourceRate)
-      : 0;
-    const targetEnd = positioned
-      ? Math.round(((sourceFirstSampleIndex + inputLength) * this.sampleRate) / sourceRate)
-      : Math.round((inputLength * this.sampleRate) / sourceRate);
-    const outputLength = Math.max(1, targetEnd - targetStart);
-    const output = new Int16Array(outputLength);
-    const sourcePerTargetSample = sourceRate / this.sampleRate;
-
-    const readSample = (index: number) => {
-      if (index === -1 && previousSourceSample !== null) return previousSourceSample;
-      const bounded = Math.max(0, Math.min(inputLength - 1, index));
-      return buffer.readInt16LE(bounded * 2);
-    };
-
-    for (let i = 0; i < outputLength; i += 1) {
-      // Positioned packets all live on one source clock. Anchor interpolation
-      // to that absolute clock so transport packetization cannot reset phase.
-      // This matters for WebTransport, which splits one 20 ms Mic chunk into
-      // multiple datagrams under the 1000-byte media budget.
-      const targetSampleIndex = targetStart + i;
-      const position = positioned
-        ? targetSampleIndex * sourcePerTargetSample - sourceFirstSampleIndex
-        : i * sourcePerTargetSample;
-      const index = Math.floor(position);
-      const fraction = position - index;
-      const a = readSample(index);
-      const b = readSample(index + 1);
-      output[i] = Math.round(a + (b - a) * fraction);
+    if (sourceRate === this.sampleRate) {
+      const output = new Int16Array(inputLength);
+      for (let i = 0; i < inputLength; i += 1) output[i] = buffer.readInt16LE(i * 2);
+      return {
+        samples: output,
+        targetStart: positioned ? sourceFirstSampleIndex : null,
+        nextTargetSample: positioned ? sourceFirstSampleIndex + inputLength : null,
+      };
     }
 
-    return output;
+    if (!positioned) {
+      // Legacy headerless PCM has no source-clock position, so there is no
+      // cross-packet interpolation authority. Preserve its old packet-local
+      // best effort rather than pretending continuity we cannot prove.
+      const outputLength = Math.max(1, Math.round((inputLength * this.sampleRate) / sourceRate));
+      const output = new Int16Array(outputLength);
+      const sourcePerTargetSample = sourceRate / this.sampleRate;
+      for (let i = 0; i < outputLength; i += 1) {
+        const position = i * sourcePerTargetSample;
+        const index = Math.floor(position);
+        const fraction = position - index;
+        const a = buffer.readInt16LE(Math.min(index, inputLength - 1) * 2);
+        const b = buffer.readInt16LE(Math.min(index + 1, inputLength - 1) * 2);
+        output[i] = Math.round(a + (b - a) * fraction);
+      }
+      return { samples: output, targetStart: null, nextTargetSample: null };
+    }
+
+    const sourceStart = sourceFirstSampleIndex;
+    const sourceEnd = sourceStart + inputLength;
+    let targetIndex = nextTargetSample
+      ?? Math.ceil((sourceStart * this.sampleRate) / sourceRate);
+    let firstEmittedTarget: number | null = null;
+    const emitted: number[] = [];
+
+    const readAbsoluteSourceSample = (index: number) => {
+      if (index === sourceStart - 1 && previousSourceSample !== null) {
+        return previousSourceSample;
+      }
+      if (index < sourceStart || index >= sourceEnd) return null;
+      return buffer.readInt16LE((index - sourceStart) * 2);
+    };
+
+    // A target sample t represents source position t * sourceRate / mixRate.
+    // Emit it only when both interpolation endpoints are actually available.
+    // If the second endpoint is the next packet's first source sample, leave t
+    // pending; the contiguous next packet will emit it using resampleTailSample
+    // plus its own first sample. This removes the 20 ms sample-hold seam without
+    // inventing audio across a real source gap.
+    const safetyEnd = Math.ceil((sourceEnd * this.sampleRate) / sourceRate) + 2;
+    while (targetIndex <= safetyEnd) {
+      const numerator = targetIndex * sourceRate;
+      const sourceIndex = Math.floor(numerator / this.sampleRate);
+      const remainder = numerator - sourceIndex * this.sampleRate;
+      const a = readAbsoluteSourceSample(sourceIndex);
+
+      if (a === null) {
+        if (sourceIndex >= sourceEnd) break;
+        targetIndex += 1;
+        continue;
+      }
+
+      let value = a;
+      if (remainder !== 0) {
+        const b = readAbsoluteSourceSample(sourceIndex + 1);
+        if (b === null) break;
+        value = a + (b - a) * (remainder / this.sampleRate);
+      }
+
+      if (firstEmittedTarget === null) firstEmittedTarget = targetIndex;
+      emitted.push(Math.round(value));
+      targetIndex += 1;
+    }
+
+    return {
+      samples: Int16Array.from(emitted),
+      targetStart: firstEmittedTarget ?? targetIndex,
+      nextTargetSample: targetIndex,
+    };
   }
 
   private firstChunkAtOrBefore(timeline: PcmTimeline, sampleIndex: number) {

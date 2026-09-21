@@ -40,15 +40,18 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
     /if \(finishAudioInterruptionEvidence\(\)\) \{[\s\S]*restartMonitorAtLiveEdge\(\);[\s\S]*return;/,
     'a recovered PCM frame must settle interruption evidence before it can reach the AudioWorklet',
   );
-  assert.match(messageSection, /if \(received\.reset\) playbackNode\.port\.postMessage\(\{ type: 'reset' \}\)/,
-    'a forward gap or generation boundary must discard queued stale audio');
+  assert.match(
+    messageSection,
+    /if \(received\.reset\) \{[\s\S]*type: 'reset', deClick: true[\s\S]*\}/,
+    'a forward gap or generation boundary must discard queued stale audio with an audible-edge de-click',
+  );
   assert.match(messageSection, /int16ToFloat32\(received\.frame\.pcm\)/,
     'the transport header must be stripped before PCM conversion');
   assert.doesNotMatch(messageSection, /int16ToFloat32\(event\.data\)/,
     'framed bytes must never fall back to raw PCM');
 
   const recoveryIndex = messageSection.indexOf('if (finishAudioInterruptionEvidence())');
-  const resetIndex = messageSection.indexOf("if (received.reset) playbackNode.port.postMessage({ type: 'reset' });");
+  const resetIndex = messageSection.indexOf('if (received.reset) {');
   const pcmIndex = messageSection.indexOf('int16ToFloat32(received.frame.pcm)');
   const pushIndex = messageSection.indexOf('playbackNode.port.postMessage(samples.buffer');
   assert.ok(

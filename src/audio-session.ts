@@ -37,6 +37,12 @@ type PcmTimeline = {
   sourceFrontier: number | null;
   /** Samples inserted to keep a slower continuous local source on time. */
   clockCorrectionSamples: number;
+  /**
+   * Last raw source sample from the furthest accepted positioned packet.
+   * A phase-correct resampler may need this one sample when the next transport
+   * packet begins between two target-rate sample positions.
+   */
+  resampleTailSample: number | null;
 };
 
 export type AlignmentState = {
@@ -240,6 +246,7 @@ function emptyTimeline(): PcmTimeline {
     clockErrorSamples: 0,
     sourceFrontier: null,
     clockCorrectionSamples: 0,
+    resampleTailSample: null,
   };
 }
 
@@ -857,6 +864,7 @@ export class AudioSession {
     timeline.clockErrorSamples = 0;
     timeline.sourceFrontier = null;
     timeline.clockCorrectionSamples = 0;
+    timeline.resampleTailSample = null;
   }
 
   /** Where the session clock is now, in session samples since the epoch. */
@@ -880,20 +888,47 @@ export class AudioSession {
     if (!sourceRate) {
       return { samples: new Int16Array(0), start: timeline.totalSamples, captureRestarted: false };
     }
-    let samples = this.resample(frame.pcm, sourceRate);
-    if (samples.length === 0) {
-      return { samples, start: timeline.totalSamples, captureRestarted: false };
+
+    const sourceSampleCount = Math.floor(frame.pcm.byteLength / 2);
+    if (sourceSampleCount <= 0) {
+      return {
+        samples: new Int16Array(0),
+        start: timeline.totalSamples,
+        captureRestarted: false,
+      };
     }
 
     let captureRestarted = false;
     let start: number;
     const positioned = frame.firstSampleIndex !== null;
+    const hadCaptureClock = timeline.sourceRate !== null;
+    const generationChanged = positioned && timeline.generation !== frame.generation;
+    const sourceRateChanged = positioned
+      && sourceRateDefinesCapture
+      && hadCaptureClock
+      && !generationChanged
+      && timeline.sourceRate !== sourceRate;
+    const captureClockChanged = positioned && (generationChanged || sourceRateChanged);
+    const sourceContinuous = positioned
+      && !captureClockChanged
+      && timeline.sourceFrontier === frame.firstSampleIndex;
+    let samples = this.resample(
+      frame.pcm,
+      sourceRate,
+      positioned ? frame.firstSampleIndex : null,
+      sourceContinuous ? timeline.resampleTailSample : null,
+    );
+    if (samples.length === 0) {
+      return { samples, start: timeline.totalSamples, captureRestarted: false };
+    }
 
     if (!positioned) {
       // No header: the only thing left to do is append at the frontier, which
       // is the old lossy behaviour. Flag it so the UI can say the client is
-      // stale rather than letting it degrade invisibly.
+      // stale rather than letting it degrade invisibly. Its source position is
+      // unknowable, so it also breaks positioned resampler continuity.
       timeline.unheadered = true;
+      timeline.resampleTailSample = null;
       start = timeline.totalSamples;
     } else {
       // Each frame states its own position, so rounding never accumulates and a
@@ -901,13 +936,6 @@ export class AudioSession {
       // pulling everything after it earlier.
       const streamStart = Math.round((frame.firstSampleIndex! * this.sampleRate) / sourceRate);
 
-      const hadCaptureClock = timeline.sourceRate !== null;
-      const generationChanged = timeline.generation !== frame.generation;
-      const sourceRateChanged = sourceRateDefinesCapture
-        && hadCaptureClock
-        && !generationChanged
-        && timeline.sourceRate !== sourceRate;
-      const captureClockChanged = generationChanged || sourceRateChanged;
       captureRestarted = hadCaptureClock && captureClockChanged;
       if (captureClockChanged) {
         // A fresh capture clock. Anchor it to the session clock; the previous
@@ -934,9 +962,6 @@ export class AudioSession {
 
       start = streamStart + timeline.originOffset;
 
-      const sourceSampleCount = Math.floor(frame.pcm.byteLength / 2);
-      const sourceContinuous = !captureClockChanged
-        && timeline.sourceFrontier === frame.firstSampleIndex;
       if (trackSourceClock && sourceContinuous && start === timeline.totalSamples) {
         const predictedEnd = start + samples.length;
         const rawError = Math.max(0, this.currentSessionSample(nowMs) - predictedEnd);
@@ -961,9 +986,16 @@ export class AudioSession {
         }
       }
       const sourceEnd = frame.firstSampleIndex! + sourceSampleCount;
-      timeline.sourceFrontier = captureClockChanged || timeline.sourceFrontier === null
+      const previousSourceFrontier = timeline.sourceFrontier;
+      const advancesSourceFrontier = captureClockChanged
+        || previousSourceFrontier === null
+        || sourceEnd > previousSourceFrontier;
+      timeline.sourceFrontier = captureClockChanged || previousSourceFrontier === null
         ? sourceEnd
-        : Math.max(timeline.sourceFrontier, sourceEnd);
+        : Math.max(previousSourceFrontier, sourceEnd);
+      if (advancesSourceFrontier) {
+        timeline.resampleTailSample = frame.pcm.readInt16LE((sourceSampleCount - 1) * 2);
+      }
     }
 
     if (start < timeline.totalSamples) {
@@ -991,7 +1023,12 @@ export class AudioSession {
     return { samples, start, captureRestarted };
   }
 
-  private resample(buffer: Buffer, sourceRate: number) {
+  private resample(
+    buffer: Buffer,
+    sourceRate: number,
+    sourceFirstSampleIndex: number | null = null,
+    previousSourceSample: number | null = null,
+  ) {
     const inputLength = Math.floor(buffer.byteLength / 2);
     if (inputLength <= 0) return new Int16Array(0);
     if (sourceRate === this.sampleRate) {
@@ -1000,17 +1037,32 @@ export class AudioSession {
       return output;
     }
 
-    const outputLength = Math.max(1, Math.round((inputLength * this.sampleRate) / sourceRate));
+    const positioned = sourceFirstSampleIndex !== null;
+    const targetStart = positioned
+      ? Math.round((sourceFirstSampleIndex * this.sampleRate) / sourceRate)
+      : 0;
+    const targetEnd = positioned
+      ? Math.round(((sourceFirstSampleIndex + inputLength) * this.sampleRate) / sourceRate)
+      : Math.round((inputLength * this.sampleRate) / sourceRate);
+    const outputLength = Math.max(1, targetEnd - targetStart);
     const output = new Int16Array(outputLength);
-    const ratio = sourceRate / this.sampleRate;
+    const sourcePerTargetSample = sourceRate / this.sampleRate;
 
     const readSample = (index: number) => {
+      if (index === -1 && previousSourceSample !== null) return previousSourceSample;
       const bounded = Math.max(0, Math.min(inputLength - 1, index));
       return buffer.readInt16LE(bounded * 2);
     };
 
     for (let i = 0; i < outputLength; i += 1) {
-      const position = i * ratio;
+      // Positioned packets all live on one source clock. Anchor interpolation
+      // to that absolute clock so transport packetization cannot reset phase.
+      // This matters for WebTransport, which splits one 20 ms Mic chunk into
+      // multiple datagrams under the 1000-byte media budget.
+      const targetSampleIndex = targetStart + i;
+      const position = positioned
+        ? targetSampleIndex * sourcePerTargetSample - sourceFirstSampleIndex
+        : i * sourcePerTargetSample;
       const index = Math.floor(position);
       const fraction = position - index;
       const a = readSample(index);

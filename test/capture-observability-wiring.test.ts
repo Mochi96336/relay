@@ -7,9 +7,11 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
 
   assert.match(
     source,
-    /import \{ captureLevelSnapshot, readCaptureSettings \} from '\.\/capture-observability\.js';/,
+    /captureLevelSnapshot,[\s\S]*captureVoiceProcessingActive,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
   );
+  assert.match(source, /enforceUnprocessedCapture\(preparedStream\)/);
   assert.match(source, /captureAppliedSettings = readCaptureSettings\(captureStream\);/);
+  assert.match(source, /captureVoiceProcessingActive\(captureAppliedSettings\)/);
 
   const payloadStart = source.indexOf('function audioUplinkHealthPayload(');
   const payloadEnd = source.indexOf('function sendAudioUplinkHealth()', payloadStart);

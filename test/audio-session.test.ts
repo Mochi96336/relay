@@ -211,6 +211,70 @@ describe('AudioSession timelines', () => {
     }, 'Backing de-clicking must not reduce or hide packet-loss evidence');
   });
 
+  test('de-clicks a Mic capture-restart hole without concealing restart downtime', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const amplitude = 12_000;
+    session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(amplitude)), 1), RATE, 0);
+    const restarted = session.ingestMic(
+      frame(0, pcmOf(new Array(chunk).fill(amplitude)), 2),
+      RATE,
+      60,
+    );
+
+    assert.equal(restarted.captureRestarted, true);
+    const read = session.readMic(0, chunk * 3);
+    const gapStart = chunk;
+    const gapEnd = chunk * 2;
+
+    assert.equal(read[gapStart - 1], 0, 'the old capture tapers to silence before restart downtime');
+    assert.equal(read[gapStart], 0, 'restart downtime remains literal silence');
+    assert.equal(read[gapEnd - 1], 0, 'restart downtime remains silent through its final sample');
+    assert.equal(read[gapEnd], 0, 'the replacement capture fades in from silence');
+    assert.equal(read[gapEnd + Math.round(RATE * 0.002)], amplitude);
+
+    assert.equal(session.health().micGapMs, 20);
+    assert.deepEqual(session.readMicEvidence(0, chunk * 3), {
+      gapSamples: chunk,
+      frontierMissingSamples: 0,
+      unheaderedSamples: 0,
+    }, 'de-clicking must not erase capture-restart gap evidence');
+  });
+
+  test('de-clicks a Backing capture-restart hole without concealing restart downtime', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const amplitude = 12_000;
+    session.ingestBacking(frame(0, pcmOf(new Array(chunk).fill(amplitude)), 1), RATE, 0);
+    const restarted = session.ingestBacking(
+      frame(0, pcmOf(new Array(chunk).fill(amplitude)), 2),
+      RATE,
+      60,
+    );
+
+    assert.equal(restarted.captureRestarted, true);
+    const read = session.readBacking(0, chunk * 3);
+    const gapStart = chunk;
+    const gapEnd = chunk * 2;
+
+    assert.equal(read[gapStart - 1], 0, 'the old Backing capture tapers to silence before restart downtime');
+    assert.equal(read[gapStart], 0, 'Backing restart downtime remains literal silence');
+    assert.equal(read[gapEnd - 1], 0, 'Backing restart downtime remains silent through its final sample');
+    assert.equal(read[gapEnd], 0, 'the replacement Backing capture fades in from silence');
+    assert.equal(read[gapEnd + Math.round(RATE * 0.002)], amplitude);
+
+    assert.equal(session.health().backingGapMs, 20);
+    assert.deepEqual(session.readBackingEvidence(0, chunk * 3), {
+      gapSamples: chunk,
+      frontierMissingSamples: 0,
+      unheaderedSamples: 0,
+    }, 'de-clicking must not erase Backing capture-restart gap evidence');
+  });
+
   test('does not fade a continuous Backing packet boundary', () => {
     const session = makeSession();
     session.start(0);

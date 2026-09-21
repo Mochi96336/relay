@@ -242,6 +242,33 @@ describe('AudioSession timelines', () => {
     assert.equal(session.health().unheadered, false);
   });
 
+  test('deferred 44.1 kHz tail does not shift a fresh capture clock by one sample', () => {
+    const sourceRate = 44_100;
+    const chunkSamples = 882;
+    const session = makeSession();
+    session.start(0);
+
+    session.ingestMic(
+      frame(0, pcmOf(new Array(chunkSamples).fill(500))),
+      sourceRate,
+      1_000,
+    );
+
+    const nominalTargetSamples = 960;
+    const expectedStart = RATE - nominalTargetSamples;
+    assert.equal(
+      session.readMic(expectedStart, 1)[0],
+      500,
+      'the 20 ms source interval still anchors 20 ms before the arrival clock',
+    );
+    assert.equal(session.readMic(expectedStart - 1, 1)[0], 0);
+    assert.equal(
+      session.micTotalSamples,
+      RATE - 1,
+      'only the future-dependent tail sample is deferred; the capture origin does not move',
+    );
+  });
+
   test('44.1 kHz resampling is independent of 20 ms capture chunk boundaries', () => {
     const sourceRate = 44_100;
     const chunkSamples = 882; // exactly 20 ms

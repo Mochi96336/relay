@@ -2,7 +2,7 @@ const RENDER_QUANTUM = 128;
 const SILENCE_DBFS = -120;
 // Narrow enough that an unclipped voice peak normally touches it for at most
 // one sample. A flat-topped capture instead produces a run of rail samples.
-const INPUT_RAIL_THRESHOLD = 1 - 1e-6;
+const INPUT_RAIL_THRESHOLD = 0x7fff / 0x8000;
 const VISUAL_ANALYSIS_PLACEHOLDER = Object.freeze({
   spectrumBands: Object.freeze([0, 0, 0, 0, 0]),
   f0Hz: null,

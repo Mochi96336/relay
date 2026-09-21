@@ -91,10 +91,13 @@ test('reused Backing generation at a different source rate re-anchors without re
     47_999,
     'the continuation first supplies the deferred target sample at its true session position',
   );
+  const deferredSourcePosition = (479 * 44_100) / RATE;
+  const deferredFraction = deferredSourcePosition - Math.floor(deferredSourcePosition);
+  const expectedDeferred = Math.round(333 + (444 - 333) * deferredFraction);
   assert.equal(
     session.readBacking(47_999, 1)[0],
-    333,
-    'the deferred boundary sample interpolates the old tail into the new packet instead of becoming a hole',
+    expectedDeferred,
+    'the deferred boundary sample interpolates the old tail into the new packet instead of clamping or becoming a hole',
   );
   assert.equal(session.readBacking(48_000, 1)[0], 444);
 });

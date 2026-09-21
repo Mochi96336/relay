@@ -64,7 +64,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       }
 
       if (data?.type === 'reset') {
-        this.reset();
+        this.reset(data.deClick === true);
         return;
       }
 
@@ -157,7 +157,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.lastArrivalDeviationSamples = 0;
   }
 
-  reset() {
+  reset(deClick = false) {
     this.queue = [];
     this.offset = 0;
     this.queuedSamples = 0;
@@ -165,12 +165,26 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
-    this.silenceFadeRemainingSamples = 0;
-    this.silenceFadeStartSample = 0;
-    this.recoveryFadeRemainingSamples = 0;
-    this.recoveryFadeStartSample = 0;
-    this.needsOutputRecoveryFade = false;
-    this.lastOutputSample = 0;
+
+    if (deClick) {
+      // A positioned monitor gap/generation jump must discard queued stale
+      // audio immediately, but that does not require a one-sample jump to zero.
+      // Preserve only the last emitted value long enough to taper the audible
+      // edge; no queued PCM survives the reset.
+      this.silenceFadeStartSample = this.lastOutputSample;
+      this.silenceFadeRemainingSamples = this.outputGapFadeSamples;
+      this.recoveryFadeRemainingSamples = 0;
+      this.recoveryFadeStartSample = 0;
+      this.needsOutputRecoveryFade = true;
+    } else {
+      this.silenceFadeRemainingSamples = 0;
+      this.silenceFadeStartSample = 0;
+      this.recoveryFadeRemainingSamples = 0;
+      this.recoveryFadeStartSample = 0;
+      this.needsOutputRecoveryFade = false;
+      this.lastOutputSample = 0;
+    }
+
     this.resetArrivalObservation();
     // Keep the learned target across a reconnect, but throw away raw timing
     // anchors so the first packet on a new transport cannot look like a huge gap.

@@ -7,7 +7,12 @@ import { DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS, classifyCaptureDispatch } from './
 import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
-import { captureLevelSnapshot, readCaptureSettings } from './capture-observability.js';
+import {
+  captureLevelSnapshot,
+  captureVoiceProcessingActive,
+  enforceUnprocessedCapture,
+  readCaptureSettings,
+} from './capture-observability.js';
 import { MicLifecycleTransaction } from './mic-lifecycle-transaction.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
@@ -102,6 +107,14 @@ function renderGainAdvice() {
   } else {
     micInputMeter.style.setProperty('--input-level', '0%');
     micInputValue.value = t('adjust.listening');
+  }
+
+  if (captureVoiceProcessingActive(captureAppliedSettings)) {
+    micGainRecommendationMarker.hidden = true;
+    micGainRecommendation.textContent = t('adjust.processingActive');
+    micGainAdvice.textContent = t('adjust.processingActiveHelp');
+    useMicGainSuggestion.hidden = true;
+    return;
   }
 
   const current = Math.round(Number(micGain.value) || 0);
@@ -1579,6 +1592,15 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         stage: 'waiting for microphone permission',
         dispose: (stream) => stream.getTracks().forEach((track) => track.stop()),
       },
+    );
+
+    // Plain false values in getUserMedia are preferences. If the live track
+    // reports that browser voice processing is still on, tighten only features
+    // whose own capability list proves exact false is available.
+    await micStartup.wait(
+      startup,
+      enforceUnprocessedCapture(preparedStream),
+      { stage: 'configuring clean microphone input' },
     );
 
     preparedContext = new AudioContext({ latencyHint: 'interactive' });

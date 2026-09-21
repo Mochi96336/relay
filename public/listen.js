@@ -174,13 +174,13 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     return recovery.requiresLiveEdge;
   }
 
-  function resetPlaybackTemporalState() {
+  function resetPlaybackTemporalState(deClick = false) {
     monitorPcmReceiver.reset();
     listenResampler.reset();
-    playbackNode?.port.postMessage({ type: 'reset' });
+    playbackNode?.port.postMessage({ type: 'reset', deClick });
   }
 
-  function abandonTransportConnection() {
+  function abandonTransportConnection(deClickPlayback = false) {
     transportEpoch += 1;
     clearReconnect();
     const opening = pendingSocket;
@@ -193,14 +193,18 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     if (closing) {
       try { closing.close(); } catch {}
     }
-    resetPlaybackTemporalState();
+    resetPlaybackTemporalState(deClickPlayback);
   }
 
   function closeTransport() {
     transportEnabled = false;
     liveEdgeRecoveryRequired = false;
     audioInterruption.reset();
-    abandonTransportConnection();
+    // Mute/ownership teardown discards queued PCM immediately, but the worklet
+    // may still be audible while the local gain is ramping down. Preserve only
+    // the last emitted sample for the existing 2 ms fade so this temporal reset
+    // cannot create a one-sample cut to zero.
+    abandonTransportConnection(audioRendering());
   }
 
   function scheduleReconnect() {
@@ -349,7 +353,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   function restartMonitorAtLiveEdge() {
     liveEdgeRecoveryRequired = false;
     audioInterruption.reset();
-    abandonTransportConnection();
+    // A foreground recovery can resume the AudioContext before stale monitor
+    // PCM has been discarded. De-click that immediate live-edge reset without
+    // retaining any queued audio from the old transport.
+    abandonTransportConnection(audioRendering());
     if (!monitorTransportWanted()) return;
     transportEnabled = true;
     ensureTransport('reconnecting');

@@ -585,6 +585,57 @@ describe('AudioSession health', () => {
     assert.equal(session.health().backingGapMs, 0);
   });
 
+  test('backing clock stretch preserves a deferred resampler prefix outside current-frame evidence', () => {
+    const sourceRate = 44_100;
+    const sourceFrameSamples = 882; // exactly 20 ms
+    const frequencyHz = 6_050; // integer 121 cycles per frame, but a sharp frame-boundary slope
+    const amplitude = 10_000;
+
+    const session = makeSession({ prebufferMs: 100 });
+    session.setBackingExpected(true);
+    session.start(0);
+
+    let corrected: ReturnType<typeof session.ingestBacking> | null = null;
+    let expectedCurrentFrameFirst = 0;
+
+    for (let frameIndex = 0; frameIndex < 500 && corrected === null; frameIndex += 1) {
+      const firstSourceSample = frameIndex * sourceFrameSamples;
+      const input = Array.from({ length: sourceFrameSamples }, (_, offset) => (
+        Math.round(
+          amplitude
+          * Math.sin((2 * Math.PI * frequencyHz * (firstSourceSample + offset)) / sourceRate)
+        )
+      ));
+      const before = session.health().backingClockCorrectionSamples;
+      const nowMs = (frameIndex + 1) * 21; // intentionally large test-only clock mismatch
+      const result = session.ingestBacking(
+        frame(firstSourceSample, pcmOf(input)),
+        sourceRate,
+        nowMs,
+        true,
+      );
+      while (session.drain(() => {}, nowMs) > 0) { /* drain due frames */ }
+
+      if (session.health().backingClockCorrectionSamples > before) {
+        corrected = result;
+        expectedCurrentFrameFirst = input[0];
+      }
+    }
+
+    assert.ok(corrected, 'test mismatch must trigger a correction');
+    assert.equal(
+      corrected.samples.length,
+      961,
+      'current 20 ms source frame still owns 960 target samples plus exactly one clock trim',
+    );
+    assert.equal(
+      corrected.samples[0],
+      expectedCurrentFrameFirst,
+      'the previous frame deferred interpolation prefix must not be stretched into current-frame evidence',
+    );
+    assert.equal(session.health().backingGapMs, 0);
+  });
+
   test('Robot clock tracking preserves a real missing backing frame as a gap', () => {
     const session = makeSession({ prebufferMs: 100 });
     session.start(0);

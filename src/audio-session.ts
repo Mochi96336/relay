@@ -199,6 +199,13 @@ function sumHeadroomGain(backingGain: number) {
 const SONG_DUCK_RAMP_MS = 150;
 
 /**
+ * Live Mic gain is user-controlled and may change while voiced audio is
+ * non-zero. Apply a short perceptual (dB-domain) ramp instead of stepping the
+ * multiplier at a 20 ms frame boundary.
+ */
+const MIC_GAIN_RAMP_MS = 20;
+
+/**
  * How fast the raw microphone meter forgets. Long enough that a breath between
  * phrases does not read as a quiet microphone, short enough to follow a singer
  * moving nearer or further from the phone.
@@ -286,6 +293,10 @@ export class AudioSession {
   private backingExpected = false;
 
   private micGainDbValue = 24;
+  /** Gain actually applied to the current emitted sample. */
+  private micGainDbApplied = 24;
+  private micGainRampRemainingSamples = 0;
+  private readonly micGainRampSamples: number;
   private alignmentState: AlignmentState = {
     networkCompensationMs: 0,
     calibratedMicLagMs: null,
@@ -346,6 +357,10 @@ export class AudioSession {
     this.songDuckStep = 1 / Math.max(
       1,
       Math.round((SONG_DUCK_RAMP_MS / 1000) * options.sampleRate),
+    );
+    this.micGainRampSamples = Math.max(
+      1,
+      Math.round((MIC_GAIN_RAMP_MS / 1000) * options.sampleRate),
     );
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
@@ -459,6 +474,8 @@ export class AudioSession {
     // A new session starts from what the room currently is, not from wherever
     // the previous one's ramp happened to stop.
     this.songDuck = this.backingExpected && this.micExpected ? 1 : 0;
+    this.micGainDbApplied = this.micGainDbValue;
+    this.micGainRampRemainingSamples = 0;
     this.resetHealth();
   }
 
@@ -479,7 +496,17 @@ export class AudioSession {
   }
 
   setMicGainDb(value: number) {
+    const changed = value !== this.micGainDbValue;
     this.micGainDbValue = value;
+    if (!this.running) {
+      this.micGainDbApplied = value;
+      this.micGainRampRemainingSamples = 0;
+    } else if (changed) {
+      // Restart from the gain that is actually audible now. If a later command
+      // arrives before a longer-than-frame test configuration has settled, it
+      // bends from the current trajectory instead of jumping to either target.
+      this.micGainRampRemainingSamples = this.micGainRampSamples;
+    }
   }
 
   get alignment(): AlignmentState {
@@ -1397,6 +1424,33 @@ export class AudioSession {
     return value * this.limiterGain;
   }
 
+  private advanceMicGainDb() {
+    if (this.micGainRampRemainingSamples <= 0) {
+      this.micGainDbApplied = this.micGainDbValue;
+      return this.micGainDbApplied;
+    }
+
+    this.micGainDbApplied += (
+      this.micGainDbValue - this.micGainDbApplied
+    ) / this.micGainRampRemainingSamples;
+    this.micGainRampRemainingSamples -= 1;
+    if (this.micGainRampRemainingSamples === 0) {
+      this.micGainDbApplied = this.micGainDbValue;
+    }
+    return this.micGainDbApplied;
+  }
+
+  private projectedMicGainDb(samplesAhead: number) {
+    if (this.micGainRampRemainingSamples <= 0) return this.micGainDbValue;
+    const steps = Math.min(
+      this.micGainRampRemainingSamples,
+      Math.max(0, Math.round(samplesAhead)),
+    );
+    return this.micGainDbApplied + (
+      this.micGainDbValue - this.micGainDbApplied
+    ) * (steps / this.micGainRampRemainingSamples);
+  }
+
   private advanceCalibrationSlew() {
     const target = this.calibratedMicLagTargetMs;
     const current = this.alignmentState.calibratedMicLagMs;
@@ -1528,7 +1582,6 @@ export class AudioSession {
       );
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
-    const micGain = 10 ** (this.micGainDbValue / 20);
     // `backingExpected` and `micExpected` are the room's semantic signals for
     // which sources this mix has. Both must hold: the reservation is headroom
     // for a sum, so a room with only one source has nothing to reserve against.
@@ -1555,7 +1608,15 @@ export class AudioSession {
       const songGain = 1 + this.songDuck * (this.backingGain - 1);
       const mixHeadroomGain = 1 + this.songDuck * (this.backingSumHeadroomGain - 1);
 
-      const voice = this.limit((mic[i] / 32768) * micGain, (mic[i + lookahead] / 32768) * micGain);
+      const micGainDb = this.advanceMicGainDb();
+      const micGain = 10 ** (micGainDb / 20);
+      // The limiter detector looks ahead in source samples, so it must also see
+      // the gain that will apply when that future sample reaches the output.
+      const detectMicGain = 10 ** (this.projectedMicGainDb(lookahead) / 20);
+      const voice = this.limit(
+        (mic[i] / 32768) * micGain,
+        (mic[i + lookahead] / 32768) * detectMicGain,
+      );
       const summed = voice + (song[i] / 32768) * songGain;
       const value = summed * mixHeadroomGain;
       // Normal two-source peaks have already had deterministic summing headroom

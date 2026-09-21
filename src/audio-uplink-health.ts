@@ -10,6 +10,13 @@ export type AudioCaptureLevel = {
   rmsDbfs: number;
 };
 
+export type AudioCaptureClipping = {
+  /** Capture-generation cumulative samples at the near-full-scale input rail. */
+  railSamples: number;
+  /** Longest capture-generation run of consecutive near-full-scale samples. */
+  maxConsecutiveRailSamples: number;
+};
+
 export type AudioCaptureDispatchHealth = {
   lagMs: number;
   maxLagMs: number;
@@ -60,6 +67,8 @@ export type AudioUplinkHealth = {
   capture: AudioCaptureAppliedSettings | null;
   /** Capture-worklet level before packetization/transport. Diagnostic only. */
   captureLevel: AudioCaptureLevel | null;
+  /** Raw capture flat-top evidence. Optional for older v1 pages. Diagnostic only. */
+  captureClipping?: AudioCaptureClipping | null;
   /** Main-thread dispatch freshness for worklet PCM. Diagnostic only. */
   captureDispatch?: AudioCaptureDispatchHealth | null;
   droppedSamples: {
@@ -94,6 +103,14 @@ function strictUint32(value: unknown): number | null {
 function nonNegativeSafeInteger(value: unknown): number | null {
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+function strictNonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+    ? value
+    : null;
 }
 
 function positiveSafeIntegerOrNull(value: unknown): number | null | undefined {
@@ -159,6 +176,22 @@ function parseCaptureLevel(value: unknown): AudioCaptureLevel | null | undefined
   return { peakDbfs, rmsDbfs };
 }
 
+function parseCaptureClipping(value: unknown): AudioCaptureClipping | null | undefined {
+  if (value === null) return null;
+  const clipping = record(value);
+  if (!clipping) return undefined;
+
+  const railSamples = strictNonNegativeSafeInteger(clipping.railSamples);
+  const maxConsecutiveRailSamples = strictNonNegativeSafeInteger(clipping.maxConsecutiveRailSamples);
+  if (
+    railSamples === null
+    || maxConsecutiveRailSamples === null
+    || maxConsecutiveRailSamples > railSamples
+  ) return undefined;
+
+  return { railSamples, maxConsecutiveRailSamples };
+}
+
 function parseCaptureDispatch(value: unknown): AudioCaptureDispatchHealth | null | undefined {
   if (value === null) return null;
   const dispatch = record(value);
@@ -194,6 +227,9 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const inputMuted = payload.inputMuted === undefined ? false : payload.inputMuted;
   const capture = payload.capture === undefined ? null : parseCaptureAppliedSettings(payload.capture);
   const captureLevel = payload.captureLevel === undefined ? null : parseCaptureLevel(payload.captureLevel);
+  const captureClipping = payload.captureClipping === undefined
+    ? null
+    : parseCaptureClipping(payload.captureClipping);
   const captureDispatch = payload.captureDispatch === undefined
     ? null
     : parseCaptureDispatch(payload.captureDispatch);
@@ -208,6 +244,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     || typeof inputMuted !== 'boolean'
     || capture === undefined
     || captureLevel === undefined
+    || captureClipping === undefined
     || captureDispatch === undefined
     || !dropped
     || !transport
@@ -291,6 +328,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     inputMuted,
     capture,
     captureLevel,
+    captureClipping,
     captureDispatch,
     droppedSamples: { total, disconnected, congested, packetTooLarge, captureBacklog },
     controlReconnects,

@@ -26,6 +26,8 @@ type InputLevel = {
   f0Hz: number | null;
   pitchConfidence: number;
   samples: number;
+  railSamples: number;
+  maxConsecutiveRailSamples: number;
 };
 
 async function captureWorkletSource() {
@@ -112,6 +114,50 @@ test('capture worklet publishes level evidence beside untouched PCM with rollout
   assert.deepEqual(Array.from(level.spectrumBands), [0, 0, 0, 0, 0]);
   assert.equal(level.f0Hz, null);
   assert.equal(level.pitchConfidence, 0);
+});
+
+test('capture rail evidence distinguishes isolated full-scale peaks from flat-top clipping', async () => {
+  const clean = await loadCaptureProcessor();
+  const sine = new Float32Array(960);
+  for (let index = 0; index < sine.length; index += 1) {
+    sine[index] = Math.sin((2 * Math.PI * 1_000 * index) / 48_000);
+  }
+  clean.process([[sine]]);
+  const cleanLevel = latestLevel(clean);
+  assert.ok(cleanLevel);
+  assert.ok(cleanLevel.railSamples > 0, 'the regression should include exact full-scale sine peaks');
+  assert.ok(
+    cleanLevel.maxConsecutiveRailSamples <= 1,
+    `an unclipped sine should not flatten at the rail, got run ${cleanLevel.maxConsecutiveRailSamples}`,
+  );
+
+  const clipped = await loadCaptureProcessor();
+  const flatTop = new Float32Array(960).fill(0.25);
+  flatTop.fill(1, 200, 208);
+  clipped.process([[flatTop]]);
+  const clippedLevel = latestLevel(clipped);
+  assert.ok(clippedLevel);
+  assert.equal(clippedLevel.railSamples, 8);
+  assert.equal(clippedLevel.maxConsecutiveRailSamples, 8);
+});
+
+test('capture rail runs remain continuous across 20 ms level-message boundaries', async () => {
+  const processor = await loadCaptureProcessor();
+  const input = new Float32Array(1_920).fill(0.25);
+  input.fill(1, 958, 964);
+  processor.process([[input]]);
+
+  const levels = processor.port.messages.filter((message) => (
+    typeof message === 'object' && message !== null && (message as { type?: string }).type === 'input-level'
+  )) as InputLevel[];
+  assert.equal(levels.length, 2);
+  assert.equal(levels[0].maxConsecutiveRailSamples, 2);
+  assert.equal(levels[1].railSamples, 6, 'rail sample count is capture-lifetime cumulative');
+  assert.equal(
+    levels[1].maxConsecutiveRailSamples,
+    6,
+    'a flat top crossing a chunk boundary must remain one continuous run',
+  );
 });
 
 test('realtime capture worklet contains no FFT or pitch detector', async () => {

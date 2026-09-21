@@ -108,6 +108,38 @@ export function readCaptureSettings(stream, navigatorLike = globalThis.navigator
   }
 }
 
+function nonNegativeSafeInteger(value) {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+    ? value
+    : null;
+}
+
+export function captureClippingSnapshot(level) {
+  const railSamples = nonNegativeSafeInteger(level?.railSamples);
+  const maxConsecutiveRailSamples = nonNegativeSafeInteger(level?.maxConsecutiveRailSamples);
+  if (
+    railSamples === null
+    || maxConsecutiveRailSamples === null
+    || maxConsecutiveRailSamples > railSamples
+  ) return null;
+  return { railSamples, maxConsecutiveRailSamples };
+}
+
+/**
+ * Four consecutive near-full-scale raw samples are strong evidence of a
+ * flattened input rail, rather than one ordinary full-scale waveform peak.
+ * This is diagnostic/product guidance only; it never enters timing authority.
+ */
+export function captureInputClippingDetected(clipping) {
+  return Boolean(
+    clipping
+    && Number.isSafeInteger(clipping.maxConsecutiveRailSamples)
+    && clipping.maxConsecutiveRailSamples >= 4
+  );
+}
+
 /** Bounded worklet-level diagnostic projection; never a calibration gate. */
 export function captureLevelSnapshot(level) {
   const peakDbfs = level?.peakDbfs;

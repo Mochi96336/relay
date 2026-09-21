@@ -21,6 +21,10 @@ function validHealth() {
       peakDbfs: -18,
       rmsDbfs: -31,
     },
+    captureClipping: {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
+    },
     droppedSamples: {
       total: 960,
       disconnected: 480,
@@ -63,6 +67,10 @@ describe('audio uplink health', () => {
       audioSessionType: 'play-and-record',
     });
     assert.deepEqual(health.captureLevel, { peakDbfs: -18, rmsDbfs: -31 });
+    assert.deepEqual(health.captureClipping, {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
+    });
   });
 
   it('accepts capture dispatch evidence and cumulative pre-transport drops', () => {
@@ -161,14 +169,51 @@ describe('audio uplink health', () => {
     }
   });
 
+  it('keeps capture clipping optional for older v1 pages and rejects malformed rail evidence', () => {
+    const legacy: any = validHealth();
+    delete legacy.captureClipping;
+    const parsedLegacy = parseAudioUplinkHealth(legacy);
+    assert.ok(parsedLegacy);
+    assert.equal(parsedLegacy.captureClipping, null);
+
+    const explicitNull: any = validHealth();
+    explicitNull.captureClipping = null;
+    const parsedNull = parseAudioUplinkHealth(explicitNull);
+    assert.ok(parsedNull);
+    assert.equal(parsedNull.captureClipping, null);
+
+    const impossible: any = validHealth();
+    impossible.captureClipping = {
+      railSamples: 2,
+      maxConsecutiveRailSamples: 3,
+    };
+    assert.equal(parseAudioUplinkHealth(impossible), null);
+
+    const negative: any = validHealth();
+    negative.captureClipping = {
+      railSamples: -1,
+      maxConsecutiveRailSamples: 0,
+    };
+    assert.equal(parseAudioUplinkHealth(negative), null);
+
+    const coerced: any = validHealth();
+    coerced.captureClipping = {
+      railSamples: '12',
+      maxConsecutiveRailSamples: 6,
+    };
+    assert.equal(parseAudioUplinkHealth(coerced), null);
+  });
+
   it('keeps the added capture facts backward-compatible with older v1 pages', () => {
     const input: any = validHealth();
     delete input.capture;
     delete input.captureLevel;
+    delete input.captureClipping;
     const health = parseAudioUplinkHealth(input);
     assert.ok(health);
     assert.equal(health.capture, null);
     assert.equal(health.captureLevel, null);
+    assert.equal(health.captureClipping, null);
   });
 
   it('accepts explicit nulls for unsupported browser capture facts', () => {

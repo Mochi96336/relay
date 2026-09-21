@@ -8,6 +8,8 @@ import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 import {
+  captureClippingSnapshot,
+  captureInputClippingDetected,
   captureLevelSnapshot,
   captureVoiceProcessingActive,
   enforceUnprocessedCapture,
@@ -107,6 +109,15 @@ function renderGainAdvice() {
   } else {
     micInputMeter.style.setProperty('--input-level', '0%');
     micInputValue.value = t('adjust.listening');
+  }
+
+  const clipping = captureClippingSnapshot(latestLocalMicLevel);
+  if (captureInputClippingDetected(clipping)) {
+    micGainRecommendationMarker.hidden = true;
+    micGainRecommendation.textContent = t('adjust.inputClipping');
+    micGainAdvice.textContent = t('adjust.inputClippingHelp');
+    useMicGainSuggestion.hidden = true;
+    return;
   }
 
   if (captureVoiceProcessingActive(captureAppliedSettings)) {
@@ -236,9 +247,10 @@ function audioUplinkHealthPayload(healthRequestId) {
     capturedSamples: captureSampleCursor,
     inputGapSamples: captureInputGapSamples,
     inputMuted: captureInputMuted,
-    // Browser/worklet observations only; neither field is a calibration gate.
+    // Browser/worklet observations only; none of these fields is a calibration gate.
     capture: captureAppliedSettings,
     captureLevel: captureLevelSnapshot(latestLocalMicLevel),
+    captureClipping: captureClippingSnapshot(latestLocalMicLevel),
     captureDispatch: latestCaptureDispatchLagMs === null ? null : {
       lagMs: latestCaptureDispatchLagMs,
       maxLagMs: maxCaptureDispatchLagMs,
@@ -450,7 +462,15 @@ function handleCaptureWorkletMessage(event, graph) {
       const analysis = graph.visualAnalysis ?? parseMicVisualAnalysis(event.data);
       if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs) && analysis) {
         const { spectrumBands, f0Hz, pitchConfidence } = analysis;
-        latestLocalMicLevel = { peakDbfs, rmsDbfs, spectrumBands, f0Hz, pitchConfidence };
+        const clipping = captureClippingSnapshot(event.data);
+        latestLocalMicLevel = {
+          peakDbfs,
+          rmsDbfs,
+          spectrumBands,
+          f0Hz,
+          pitchConfidence,
+          ...(clipping ?? {}),
+        };
         dispatchRelayEvent('relay-local-mic-level', {
           active: true,
           captureGeneration: captureGeneration >>> 0,
@@ -459,6 +479,8 @@ function handleCaptureWorkletMessage(event, graph) {
           spectrumBands,
           f0Hz,
           pitchConfidence,
+          railSamples: clipping?.railSamples ?? null,
+          maxConsecutiveRailSamples: clipping?.maxConsecutiveRailSamples ?? null,
         });
         renderGainAdvice();
       }

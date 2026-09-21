@@ -1,5 +1,8 @@
 const RENDER_QUANTUM = 128;
 const SILENCE_DBFS = -120;
+// Narrow enough that an unclipped voice peak normally touches it for at most
+// one sample. A flat-topped capture instead produces a run of rail samples.
+const INPUT_RAIL_THRESHOLD = 0x7fff / 0x8000;
 const VISUAL_ANALYSIS_PLACEHOLDER = Object.freeze({
   spectrumBands: Object.freeze([0, 0, 0, 0, 0]),
   f0Hz: null,
@@ -23,6 +26,11 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.levelPeak = 0;
     this.levelSquareSum = 0;
     this.levelSampleCount = 0;
+    // Capture-lifetime evidence, not a one-frame alarm. A 1 Hz health snapshot
+    // must not miss a short clipped syllable that happened between reports.
+    this.railSamples = 0;
+    this.currentRailRunSamples = 0;
+    this.maxConsecutiveRailSamples = 0;
     this.chunkStartedAtContextTime = null;
 
     // Rollout compatibility is deliberately asymmetric: a newly deployed
@@ -69,6 +77,9 @@ class CaptureProcessor extends AudioWorkletProcessor {
       this.chunk.fill(0, this.offset, this.offset + step);
       this.offset += step;
       this.levelSampleCount += step;
+      // A real input gap is silence, not clipping, and terminates any preceding
+      // rail run so two unrelated peaks cannot be joined across missing input.
+      this.currentRailRunSamples = 0;
       remaining -= step;
       written += step;
       this.flushIfFull();
@@ -117,6 +128,8 @@ class CaptureProcessor extends AudioWorkletProcessor {
       f0Hz: VISUAL_ANALYSIS_PLACEHOLDER.f0Hz,
       pitchConfidence: VISUAL_ANALYSIS_PLACEHOLDER.pitchConfidence,
       samples,
+      railSamples: this.railSamples,
+      maxConsecutiveRailSamples: this.maxConsecutiveRailSamples,
     });
   }
 
@@ -157,11 +170,24 @@ class CaptureProcessor extends AudioWorkletProcessor {
       const count = Math.min(remaining, input.length - sourceOffset);
 
       for (let i = 0; i < count; i += 1) {
-        const sample = Math.max(-1, Math.min(1, input[sourceOffset + i]));
+        const rawSample = input[sourceOffset + i];
+        const sample = Math.max(-1, Math.min(1, rawSample));
         const magnitude = Math.abs(sample);
         this.levelPeak = Math.max(this.levelPeak, magnitude);
         this.levelSquareSum += sample * sample;
         this.levelSampleCount += 1;
+
+        if (Math.abs(rawSample) >= INPUT_RAIL_THRESHOLD) {
+          this.railSamples += 1;
+          this.currentRailRunSamples += 1;
+          this.maxConsecutiveRailSamples = Math.max(
+            this.maxConsecutiveRailSamples,
+            this.currentRailRunSamples,
+          );
+        } else {
+          this.currentRailRunSamples = 0;
+        }
+
         this.chunk[this.offset + i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
       }
 

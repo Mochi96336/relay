@@ -26,6 +26,10 @@ function uplinkHealth(generation: number) {
       peakDbfs: -18,
       rmsDbfs: -31,
     },
+    captureClipping: {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
+    },
     captureDispatch: {
       lagMs: 240,
       maxLagMs: 620,
@@ -157,6 +161,10 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
       peakDbfs: -18,
       rmsDbfs: -31,
     });
+    assert.deepEqual(status.audio.captureAndSender.captureClipping, {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
+    });
     assert.ok(status.audio.captureAndSender.reportAgeMs >= 0);
     assert.equal(typeof status.audio.receiverTransport.receivedPackets, 'number');
     assert.equal(typeof status.audio.timeline.micGapMs, 'number');
@@ -189,6 +197,10 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     assert.deepEqual(afterMalformed.audio.captureAndSender.captureLevel, {
       peakDbfs: -18,
       rmsDbfs: -31,
+    });
+    assert.deepEqual(afterMalformed.audio.captureAndSender.captureClipping, {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
     });
 
     publisher.send(uplinkHealth(6));

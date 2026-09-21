@@ -280,7 +280,8 @@ describe('AudioSession timelines', () => {
     session.ingestMic(frame(0, pcmOf([2, 2, 2, 2]), 2), RATE, 1_000);
     assert.equal(session.micGeneration, 2);
     assert.equal(session.readMic(0, 1)[0], 1, 'the earlier session keeps its place');
-    assert.equal(session.readMic(RATE - 4, 1)[0], 2, 'the new one lands at the clock');
+    assert.equal(session.readMic(RATE - 4, 1)[0], 0, 'the new capture lands at the clock and enters from silence');
+    assert.equal(session.readMic(RATE - 1, 1)[0], 2, 'the short replacement reaches its full level by its final sample');
   });
 
   test('flags a stream that arrives without a header', () => {

@@ -10,6 +10,7 @@ const DEFAULT_JITTER_SPIKE_FACTOR = 1.5;
 const DEFAULT_JITTER_SPIKE_CAP_MS = 60;
 const DEFAULT_MAX_QUEUE_MS = 2_000;
 const REPORT_INTERVAL_MS = 500;
+const OUTPUT_GAP_DECLICK_MS = 2;
 
 // Listen starts with a small buffer and continuously measures PCM arrival
 // variation. The estimator is RTP-like: compare each observed inter-arrival
@@ -32,6 +33,16 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
+
+    this.outputGapFadeSamples = Math.max(
+      1,
+      Math.round((sampleRate * OUTPUT_GAP_DECLICK_MS) / 1000),
+    );
+    this.silenceFadeRemainingSamples = 0;
+    this.silenceFadeStartSample = 0;
+    this.recoveryFadeRemainingSamples = 0;
+    this.recoveryFadeStartSample = 0;
+    this.lastOutputSample = 0;
 
     // AudioWorklet has a reliable render cadence even when message delivery is
     // bursty. Count render samples locally so tests and browsers share one clock.
@@ -153,6 +164,11 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
+    this.silenceFadeRemainingSamples = 0;
+    this.silenceFadeStartSample = 0;
+    this.recoveryFadeRemainingSamples = 0;
+    this.recoveryFadeStartSample = 0;
+    this.lastOutputSample = 0;
     this.resetArrivalObservation();
     // Keep the learned target across a reconnect, but throw away raw timing
     // anchors so the first packet on a new transport cannot look like a huge gap.
@@ -253,6 +269,51 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
   }
 
+  beginSilenceFade() {
+    this.silenceFadeStartSample = this.lastOutputSample;
+    this.silenceFadeRemainingSamples = this.outputGapFadeSamples;
+    this.recoveryFadeRemainingSamples = 0;
+  }
+
+  writeSilenceFade(output, start) {
+    const total = this.outputGapFadeSamples;
+    let index = start;
+    while (index < output.length && this.silenceFadeRemainingSamples > 0) {
+      const progress = total - this.silenceFadeRemainingSamples;
+      const weight = total <= 1 ? 0 : 1 - (progress / (total - 1));
+      output[index] = this.silenceFadeStartSample * weight;
+      this.silenceFadeRemainingSamples -= 1;
+      index += 1;
+    }
+    this.lastOutputSample = output.length > 0 ? output[output.length - 1] : 0;
+  }
+
+  beginRecoveryFade() {
+    this.recoveryFadeStartSample = this.lastOutputSample;
+    this.recoveryFadeRemainingSamples = this.outputGapFadeSamples;
+    this.silenceFadeRemainingSamples = 0;
+  }
+
+  writeQueuedSamples(output, written, chunk, sourceOffset, count) {
+    if (this.recoveryFadeRemainingSamples <= 0) {
+      output.set(chunk.subarray(sourceOffset, sourceOffset + count), written);
+      return;
+    }
+
+    const total = this.outputGapFadeSamples;
+    for (let i = 0; i < count; i += 1) {
+      const sample = chunk[sourceOffset + i];
+      if (this.recoveryFadeRemainingSamples > 0) {
+        const progress = total - this.recoveryFadeRemainingSamples;
+        const weight = total <= 1 ? 1 : progress / (total - 1);
+        output[written + i] = this.recoveryFadeStartSample * (1 - weight) + sample * weight;
+        this.recoveryFadeRemainingSamples -= 1;
+      } else {
+        output[written + i] = sample;
+      }
+    }
+  }
+
   process(_inputs, outputs) {
     const output = outputs[0][0];
     output.fill(0);
@@ -261,10 +322,13 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     if (!this.playing) {
       if (this.pendingRecovery) this.recoveryWaitSamples += output.length;
       if (this.queuedSamples < this.prebufferSamples) {
+        if (this.silenceFadeRemainingSamples > 0) this.writeSilenceFade(output, 0);
+        else this.lastOutputSample = 0;
         this.report(output.length);
         return true;
       }
       this.playing = true;
+      this.beginRecoveryFade();
       this.port.postMessage({ type: 'playing' });
     }
 
@@ -273,7 +337,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       const chunk = this.queue[0];
       const available = chunk.length - this.offset;
       const count = Math.min(available, output.length - written);
-      output.set(chunk.subarray(this.offset, this.offset + count), written);
+      this.writeQueuedSamples(output, written, chunk, this.offset, count);
 
       written += count;
       this.offset += count;
@@ -286,6 +350,10 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     }
 
     if (written < output.length) {
+      if (written > 0) this.lastOutputSample = output[written - 1];
+      this.beginSilenceFade();
+      this.writeSilenceFade(output, written);
+
       this.playing = false;
       this.underruns += 1;
       this.starvedSamples += output.length - written;
@@ -294,6 +362,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       this.recoveryWaitSamples = output.length - written;
       this.port.postMessage({ type: 'buffering' });
     } else {
+      this.lastOutputSample = output[output.length - 1] ?? 0;
       this.noteStablePlayback(output.length);
     }
 

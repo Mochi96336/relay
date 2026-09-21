@@ -178,6 +178,42 @@ describe('AudioSession timelines', () => {
     assert.equal(session.health().unheadered, false);
   });
 
+  test('44.1 kHz resampling is independent of WebTransport packet splits', () => {
+    const sourceRate = 44_100;
+    const sourceSamples = 882; // exactly 20 ms
+    const frequencyHz = 8_000;
+    const input = Array.from({ length: sourceSamples }, (_, index) => (
+      Math.round(10_000 * Math.sin((2 * Math.PI * frequencyHz * index) / sourceRate))
+    ));
+
+    const whole = makeSession();
+    whole.start(0);
+    whole.ingestMic(frame(0, pcmOf(input)), sourceRate, 0);
+    const wholeOutput = whole.readMic(0, 960);
+
+    const split = makeSession();
+    split.start(0);
+    // A 1000-byte WebTransport media budget leaves 976 PCM bytes after the
+    // 24-byte packet envelope: 488 Int16 samples, then the remaining 394.
+    split.ingestMic(frame(0, pcmOf(input.slice(0, 488))), sourceRate, 0);
+    split.ingestMic(frame(488, pcmOf(input.slice(488))), sourceRate, 0);
+    const splitOutput = split.readMic(0, 960);
+
+    let maximumDifference = 0;
+    for (let index = 0; index < wholeOutput.length; index += 1) {
+      maximumDifference = Math.max(
+        maximumDifference,
+        Math.abs(wholeOutput[index] - splitOutput[index]),
+      );
+    }
+
+    assert.ok(
+      maximumDifference <= 1,
+      `transport packetization changed the resampled waveform by ${maximumDifference} PCM counts`,
+    );
+    assert.equal(split.health().micGapMs, 0, 'packetization must not invent a timeline gap');
+  });
+
   test('resamples a source running at a different rate', () => {
     const session = makeSession();
     session.start(0);

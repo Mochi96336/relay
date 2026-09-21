@@ -7,11 +7,13 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
 
   assert.match(
     source,
-    /captureLevelSnapshot,[\s\S]*captureVoiceProcessingActive,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
+    /captureClippingSnapshot,[\s\S]*captureInputClippingDetected,[\s\S]*captureLevelSnapshot,[\s\S]*captureVoiceProcessingActive,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
   );
   assert.match(source, /enforceUnprocessedCapture\(preparedStream\)/);
   assert.match(source, /captureAppliedSettings = readCaptureSettings\(captureStream\);/);
   assert.match(source, /captureVoiceProcessingActive\(captureAppliedSettings\)/);
+  assert.match(source, /captureInputClippingDetected\(clipping\)/);
+  assert.match(source, /adjust\.inputClipping/);
   assert.match(
     source,
     /addEventListener\('configurationchange', refreshCaptureConfiguration\)/,
@@ -28,16 +30,17 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
   const payload = source.slice(payloadStart, payloadEnd);
   assert.match(payload, /capture:\s*captureAppliedSettings/);
   assert.match(payload, /captureLevel:\s*captureLevelSnapshot\(latestLocalMicLevel\)/);
+  assert.match(payload, /captureClipping:\s*captureClippingSnapshot\(latestLocalMicLevel\)/);
   assert.doesNotMatch(payload, /start-timing-calibration|micLagMs|confidence/);
 
   assert.match(source, /captureAppliedSettings = null;/, 'stopping capture must clear applied facts');
 });
 
-test('server authority code does not consume capture level telemetry', async () => {
+test('server authority code does not consume capture level or clipping telemetry', async () => {
   const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(
     serverSource,
-    /\bcaptureLevel\b/,
-    'captureLevel may be parsed/projected as uplink health but must not enter server calibration policy',
+    /\bcapture(?:Level|Clipping)\b/,
+    'capture diagnostics may be parsed/projected as uplink health but must not enter server calibration policy',
   );
 });

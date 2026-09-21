@@ -1,4 +1,5 @@
 const RENDER_QUANTUM = 128;
+const INPUT_GAP_DECLICK_MS = 2;
 
 class RelayTabCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -10,6 +11,17 @@ class RelayTabCaptureProcessor extends AudioWorkletProcessor {
     this.silenceQuanta = 0;
     this.pcmEnvelopeEnabled = false;
     this.chunkStartedAtContextTime = null;
+
+    this.inputGapFadeSamples = Math.max(
+      1,
+      Math.round((sampleRate * INPUT_GAP_DECLICK_MS) / 1000),
+    );
+    this.inputGapActive = false;
+    this.gapFadeRemainingSamples = 0;
+    this.gapFadeStartSample = 0;
+    this.recoveryFadeRemainingSamples = 0;
+    this.recoveryFadeStartSample = 0;
+    this.lastOutputSample = 0;
 
     // Extension updates can leave an old offscreen document alive briefly
     // while a new worklet file is loaded. Stay on the legacy raw ArrayBuffer
@@ -33,6 +45,7 @@ class RelayTabCaptureProcessor extends AudioWorkletProcessor {
     this.chunk[this.offset] = sample < 0
       ? Math.round(sample * 32768)
       : Math.round(sample * 32767);
+    this.lastOutputSample = sample;
     this.offset += 1;
 
     if (this.offset >= this.chunk.length) {
@@ -52,6 +65,37 @@ class RelayTabCaptureProcessor extends AudioWorkletProcessor {
     }
   }
 
+  beginInputGap() {
+    this.inputGapActive = true;
+    this.gapFadeStartSample = this.lastOutputSample;
+    this.gapFadeRemainingSamples = this.inputGapFadeSamples;
+    this.recoveryFadeRemainingSamples = 0;
+  }
+
+  gapSample() {
+    if (this.gapFadeRemainingSamples <= 0) return 0;
+    const total = this.inputGapFadeSamples;
+    const progress = total - this.gapFadeRemainingSamples;
+    const weight = total <= 1 ? 0 : 1 - (progress / (total - 1));
+    this.gapFadeRemainingSamples -= 1;
+    return this.gapFadeStartSample * weight;
+  }
+
+  beginInputRecovery() {
+    this.inputGapActive = false;
+    this.recoveryFadeStartSample = this.lastOutputSample;
+    this.recoveryFadeRemainingSamples = this.inputGapFadeSamples;
+  }
+
+  recoverySample(sample) {
+    if (this.recoveryFadeRemainingSamples <= 0) return sample;
+    const total = this.inputGapFadeSamples;
+    const progress = total - this.recoveryFadeRemainingSamples;
+    const weight = total <= 1 ? 1 : progress / (total - 1);
+    this.recoveryFadeRemainingSamples -= 1;
+    return this.recoveryFadeStartSample * (1 - weight) + sample * weight;
+  }
+
   process(inputs, outputs) {
     const input = inputs[0];
     const output = outputs[0];
@@ -62,8 +106,9 @@ class RelayTabCaptureProcessor extends AudioWorkletProcessor {
     if (!input || input.length === 0) {
       if (this.started) {
         this.silenceQuanta += 1;
+        if (!this.inputGapActive) this.beginInputGap();
         for (let i = 0; i < RENDER_QUANTUM; i += 1) {
-          this.writeSample(0, currentTime + (i / sampleRate));
+          this.writeSample(this.gapSample(), currentTime + (i / sampleRate));
         }
         if (this.silenceQuanta % 400 === 0) {
           this.port.postMessage({ type: 'input-gap', quanta: this.silenceQuanta });
@@ -74,14 +119,16 @@ class RelayTabCaptureProcessor extends AudioWorkletProcessor {
     }
 
     this.started = true;
+    if (this.inputGapActive) this.beginInputRecovery();
     const frameCount = input[0]?.length ?? 0;
     for (let frame = 0; frame < frameCount; frame += 1) {
       let sum = 0;
       for (let channel = 0; channel < input.length; channel += 1) {
         sum += input[channel][frame] ?? 0;
       }
+      const realSample = Math.max(-1, Math.min(1, sum / input.length));
       this.writeSample(
-        Math.max(-1, Math.min(1, sum / input.length)),
+        this.recoverySample(realSample),
         currentTime + (frame / sampleRate),
       );
     }

@@ -162,6 +162,69 @@ describe('AudioSession timelines', () => {
     }, 'de-clicking must not reduce or hide packet-loss evidence');
   });
 
+  test('de-clicks Backing packet-hole edges without concealing the missing interval', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const amplitude = 12_000;
+    session.ingestBacking(frame(0, pcmOf(new Array(chunk).fill(amplitude))), RATE, 0);
+    session.ingestBacking(
+      frame(chunk * 2, pcmOf(new Array(chunk).fill(amplitude))),
+      RATE,
+      40,
+    );
+
+    const read = session.readBacking(0, chunk * 3);
+    const fadeSamples = Math.round(RATE * 0.002);
+    const gapStart = chunk;
+    const gapEnd = chunk * 2;
+
+    assert.equal(read[gapStart], 0, 'the missing Backing packet still begins as literal silence');
+    assert.equal(read[gapEnd - 1], 0, 'the Backing hole remains silence through its final sample');
+    assert.equal(read[gapEnd], 0, 'the first recovered song sample starts at silence instead of clicking in');
+
+    assert.ok(
+      Math.abs(read[gapStart - 2] - read[gapStart - 1]) <= 200,
+      'Backing fade-out approaches the hole without a full-scale one-sample step',
+    );
+    assert.ok(
+      Math.abs(read[gapEnd + 1] - read[gapEnd]) <= 200,
+      'Backing fade-in leaves the hole without a full-scale one-sample step',
+    );
+    assert.equal(
+      read[gapStart - fadeSamples - 1],
+      amplitude,
+      'song audio before the bounded de-click window stays untouched',
+    );
+    assert.equal(
+      read[gapEnd + fadeSamples],
+      amplitude,
+      'song audio after the bounded de-click window returns to the original level',
+    );
+
+    assert.equal(session.health().backingGapMs, 20);
+    assert.deepEqual(session.readBackingEvidence(0, chunk * 3), {
+      gapSamples: chunk,
+      frontierMissingSamples: 0,
+      unheaderedSamples: 0,
+    }, 'Backing de-clicking must not reduce or hide packet-loss evidence');
+  });
+
+  test('does not fade a continuous Backing packet boundary', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    session.ingestBacking(frame(0, pcmOf(new Array(chunk).fill(7_000))), RATE, 0);
+    session.ingestBacking(frame(chunk, pcmOf(new Array(chunk).fill(11_000))), RATE, 20);
+
+    const read = session.readBacking(0, chunk * 2);
+    assert.equal(read[chunk - 1], 7_000);
+    assert.equal(read[chunk], 11_000);
+    assert.equal(session.health().backingGapMs, 0);
+  });
+
   test('does not fade a continuous Mic packet boundary', () => {
     const session = makeSession();
     session.start(0);

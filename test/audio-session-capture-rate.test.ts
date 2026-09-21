@@ -42,13 +42,13 @@ function makeTransitionSession() {
 }
 
 function drainOne(session: AudioSession, nowMs: number) {
-  let mixed: Buffer | null = null;
+  const outputs: Buffer[] = [];
   const drained = session.drain((output) => {
-    mixed = output;
+    outputs.push(output);
   }, nowMs, 1);
   assert.equal(drained, 1);
-  assert.ok(mixed);
-  return mixed;
+  assert.equal(outputs.length, 1);
+  return outputs[0]!;
 }
 
 test('reused Mic generation at a different source rate re-anchors without restarting the mix epoch', () => {

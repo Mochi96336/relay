@@ -158,8 +158,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
   }
 
   reset(deClick = false) {
-    const resetFromAudibleOutput = deClick && this.lastOutputSample !== 0;
-
     this.queue = [];
     this.offset = 0;
     this.queuedSamples = 0;
@@ -168,7 +166,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
 
-    if (resetFromAudibleOutput) {
+    if (deClick) {
       // A positioned monitor gap/generation jump must discard queued stale
       // audio immediately, but that does not require a one-sample jump to zero.
       // Preserve only the last emitted value long enough to taper the audible

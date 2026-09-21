@@ -1148,8 +1148,8 @@ export class AudioSession {
   private crossfadeMicReadHeadJump(
     startSample: number,
     fromAdvanceSamples: number,
-    current: Int16Array,
-  ) {
+    current: Int16Array<ArrayBuffer>,
+  ): Int16Array<ArrayBuffer> {
     const crossfadeSamples = Math.min(
       this.frameSamples,
       Math.max(2, Math.round((MIC_READ_HEAD_CROSSFADE_MS * this.sampleRate) / 1000)),

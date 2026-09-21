@@ -3,10 +3,114 @@ import test, { describe } from 'node:test';
 
 import {
   captureLevelSnapshot,
+  captureVoiceProcessingActive,
+  enforceUnprocessedCapture,
   readCaptureSettings,
 } from '../public/capture-observability.js';
 
 describe('capture observability', () => {
+
+  test('exactly disables only browser voice processing proven controllable', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const track = {
+      getSettings: () => ({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+      }),
+      getCapabilities: () => ({
+        echoCancellation: [true, false],
+        noiseSuppression: [true],
+        autoGainControl: [true, false],
+      }),
+      getConstraints: () => ({
+        channelCount: 1,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      }),
+      applyConstraints: async (constraints: Record<string, unknown>) => {
+        calls.push(constraints);
+      },
+    };
+    const changed = await enforceUnprocessedCapture({ getAudioTracks: () => [track] });
+
+    assert.equal(changed, true);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      channelCount: 1,
+      echoCancellation: { exact: false },
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
+  });
+
+  test('capture cleanup is fail-open when capabilities cannot prove false', async () => {
+    let called = false;
+    const changed = await enforceUnprocessedCapture({
+      getAudioTracks: () => [{
+        getSettings: () => ({ echoCancellation: true }),
+        getCapabilities: () => ({ echoCancellation: [true] }),
+        applyConstraints: async () => { called = true; },
+      }],
+    });
+    assert.equal(changed, false);
+    assert.equal(called, false);
+  });
+
+  test('capture cleanup keeps earlier successful exact constraints when a later one fails', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const track = {
+      getSettings: () => ({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+      }),
+      getCapabilities: () => ({
+        echoCancellation: [true, false],
+        noiseSuppression: [true, false],
+      }),
+      getConstraints: () => ({ channelCount: 1 }),
+      applyConstraints: async (constraints: Record<string, unknown>) => {
+        calls.push(constraints);
+        if ('noiseSuppression' in constraints) throw new Error('not jointly available');
+      },
+    };
+    const changed = await enforceUnprocessedCapture({ getAudioTracks: () => [track] });
+
+    assert.equal(changed, true);
+    assert.deepEqual(calls, [
+      { channelCount: 1, echoCancellation: { exact: false } },
+      {
+        channelCount: 1,
+        echoCancellation: { exact: false },
+        noiseSuppression: { exact: false },
+      },
+    ]);
+  });
+
+  test('voice-processing warning is driven only by browser-applied true settings', () => {
+    assert.equal(captureVoiceProcessingActive({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      audioSessionType: 'play-and-record',
+    }), false);
+    assert.equal(captureVoiceProcessingActive({
+      echoCancellation: false,
+      noiseSuppression: true,
+      autoGainControl: false,
+      audioSessionType: null,
+    }), true);
+    assert.equal(captureVoiceProcessingActive({
+      echoCancellation: null,
+      noiseSuppression: null,
+      autoGainControl: null,
+      audioSessionType: null,
+    }), false);
+    assert.equal(captureVoiceProcessingActive(null), false);
+  });
+
   test('reports the settings the browser actually applied', () => {
     const stream = {
       getAudioTracks: () => [{

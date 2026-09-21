@@ -122,6 +122,15 @@ const BACKING_CLOCK_DEADBAND_MS = 2;
 const RUNTIME_CALIBRATION_SLEW_FRACTION = 0.01;
 
 /**
+ * Immediate authority changes must take effect immediately, but changing the
+ * Mic read head by tens or hundreds of milliseconds in one sample is a splice.
+ * Fade from the previously-emitted trajectory into the new one over only a few
+ * milliseconds: long enough to remove the discontinuity, short enough that the
+ * timing authority is not audibly delayed.
+ */
+const MIC_READ_HEAD_CROSSFADE_MS = 5;
+
+/**
  * Peak limiter on the microphone, between its gain and the sum.
  *
  * One static gain cannot serve both ends of a voice: peaks run some 16 dB above
@@ -269,6 +278,15 @@ export class AudioSession {
   };
   /** Desired live drift correction while the currently applied lag slews there. */
   private calibratedMicLagTargetMs: number | null = null;
+  /**
+   * Actual Mic advance trajectory emitted at the end of the previous frame.
+   * This is deliberately separate from alignmentState: an immediate authority
+   * update can replace alignmentState between frames, but continuity still has
+   * to know where the audible read head came from.
+   */
+  private lastEmittedMicAdvanceSamples: number | null = null;
+  /** Whether the preceding emitted Mic frame was backed by real source PCM. */
+  private lastEmittedMicFrameComplete = false;
 
   private micStarvedFrames = 0;
   private backingStarvedFrames = 0;
@@ -828,6 +846,7 @@ export class AudioSession {
   // ---------------------------------------------------------------- internals
 
   private clearTimeline(timeline: PcmTimeline) {
+    if (timeline === this.mic) this.resetMicReadContinuity();
     timeline.chunks = [];
     timeline.totalSamples = 0;
     timeline.generation = null;
@@ -841,6 +860,11 @@ export class AudioSession {
   }
 
   /** Where the session clock is now, in session samples since the epoch. */
+  private resetMicReadContinuity() {
+    this.lastEmittedMicAdvanceSamples = null;
+    this.lastEmittedMicFrameComplete = false;
+  }
+
   private currentSessionSample(nowMs = performance.now()) {
     return Math.round(((nowMs - this.startedAt) * this.sampleRate) / 1000);
   }
@@ -900,7 +924,10 @@ export class AudioSession {
         // with healthy headroom and owes nothing to the deficit the correction
         // was covering. Carrying that forward would hold the read head a second
         // behind fresh audio and unwind only at the slew rate - most of a song.
-        if (timeline === this.mic) this.resetMicFrontierTracking();
+        if (timeline === this.mic) {
+          this.resetMicFrontierTracking();
+          this.resetMicReadContinuity();
+        }
       } else if (timeline.sourceRate === null) {
         timeline.sourceRate = sourceRate;
       }
@@ -1111,6 +1138,45 @@ export class AudioSession {
   }
 
   /**
+   * Crossfades an immediate Mic read-head jump without delaying its authority.
+   *
+   * The first sample continues the previously-emitted trajectory; by the end of
+   * this short window the output is entirely the newly-authoritative trajectory.
+   * Callers must prove both source windows contain real PCM before using this:
+   * a crossfade must never disguise a gap or frontier miss by replaying history.
+   */
+  private crossfadeMicReadHeadJump(
+    startSample: number,
+    fromAdvanceSamples: number,
+    current: Int16Array<ArrayBuffer>,
+  ): Int16Array<ArrayBuffer> {
+    const crossfadeSamples = Math.min(
+      this.frameSamples,
+      Math.max(2, Math.round((MIC_READ_HEAD_CROSSFADE_MS * this.sampleRate) / 1000)),
+    );
+    const firstPosition = startSample + fromAdvanceSamples;
+    const sourceStart = Math.floor(firstPosition);
+    const source = this.readRange(this.mic, sourceStart, crossfadeSamples + 2);
+
+    const interpolate = (position: number) => {
+      const index = Math.floor(position);
+      const fraction = position - index;
+      const offset = index - sourceStart;
+      const a = source[offset] ?? 0;
+      const b = source[offset + 1] ?? a;
+      return a + (b - a) * fraction;
+    };
+
+    for (let i = 0; i < crossfadeSamples; i += 1) {
+      const newWeight = crossfadeSamples === 1 ? 1 : i / (crossfadeSamples - 1);
+      const oldWeight = 1 - newWeight;
+      const oldSample = interpolate(firstPosition + i);
+      current[i] = Math.round(oldSample * oldWeight + current[i] * newWeight);
+    }
+    return current;
+  }
+
+  /**
    * Describes missing/legacy source samples for exactly the requested output
    * range. Silence before session sample zero is structural pre-roll and is not
    * counted as a source failure. Missing samples inside an established frontier
@@ -1263,6 +1329,7 @@ export class AudioSession {
     const advanceSamplesExact = (appliedAdvanceMs * this.sampleRate) / 1000;
     const advanceSamples = Math.round(advanceSamplesExact);
     const micReadStart = startSample + advanceSamples;
+    const previouslyEmittedAdvanceSamples = this.lastEmittedMicAdvanceSamples;
 
     // Calibration and frontier release can each move at the one-percent bound
     // in the same frame. Smooth that combined bounded motion, but never turn a
@@ -1272,6 +1339,33 @@ export class AudioSession {
     const runtimeAdvanceDeltaSamples = advanceSamplesExact - previousAdvanceSamplesExact;
     const boundedRuntimeAdvanceMoved = Math.abs(runtimeAdvanceDeltaSamples) > 1e-9
       && Math.abs(runtimeAdvanceDeltaSamples) <= maximumBoundedRuntimeDeltaSamples;
+    const immediateReadHeadJump =
+      previouslyEmittedAdvanceSamples !== null
+      && this.lastEmittedMicFrameComplete
+      && Math.abs(advanceSamples - previouslyEmittedAdvanceSamples)
+        > maximumBoundedRuntimeDeltaSamples;
+    const crossfadeSamples = Math.min(
+      this.frameSamples,
+      Math.max(2, Math.round((MIC_READ_HEAD_CROSSFADE_MS * this.sampleRate) / 1000)),
+    );
+    const previousTransitionStart = previouslyEmittedAdvanceSamples === null
+      ? 0
+      : Math.floor(startSample + previouslyEmittedAdvanceSamples);
+    const previousTransitionEvidence = immediateReadHeadJump
+      ? this.readEvidence(this.mic, previousTransitionStart, crossfadeSamples + 2)
+      : null;
+    const nextTransitionEvidence = immediateReadHeadJump
+      ? this.readEvidence(this.mic, micReadStart, crossfadeSamples)
+      : null;
+    const canCrossfadeReadHeadJump = Boolean(
+      immediateReadHeadJump
+      && previousTransitionEvidence
+      && nextTransitionEvidence
+      && previousTransitionEvidence.gapSamples === 0
+      && previousTransitionEvidence.frontierMissingSamples === 0
+      && nextTransitionEvidence.gapSamples === 0
+      && nextTransitionEvidence.frontierMissingSamples === 0
+    );
 
     // Reading ahead can outrun what has actually arrived. readRange pads with
     // zeros when that happens, so without this the vocal simply disappears in
@@ -1281,9 +1375,13 @@ export class AudioSession {
     const furthestAdvanceSamples = boundedRuntimeAdvanceMoved
       ? Math.max(previousAdvanceSamplesExact, advanceSamplesExact)
       : advanceSamplesExact;
-    const micReadEnd = Math.ceil(
-      startSample + furthestAdvanceSamples + this.frameSamples + this.limiterLookaheadSamples,
-    );
+    const ordinaryMicReadEnd =
+      startSample + furthestAdvanceSamples + this.frameSamples + this.limiterLookaheadSamples;
+    const crossfadeOldReadEnd = canCrossfadeReadHeadJump
+      && previouslyEmittedAdvanceSamples !== null
+      ? startSample + previouslyEmittedAdvanceSamples + crossfadeSamples + 2
+      : Number.NEGATIVE_INFINITY;
+    const micReadEnd = Math.ceil(Math.max(ordinaryMicReadEnd, crossfadeOldReadEnd));
     this.micHeadroomMs = ((this.mic.totalSamples - micReadEnd) / this.sampleRate) * 1000;
     this.backingHeadroomMs = ((this.backing.totalSamples - (startSample + this.frameSamples)) / this.sampleRate) * 1000;
     if (this.micHeadroomMs < 0 && this.micExpected) this.micStarvedFrames += 1;
@@ -1309,7 +1407,7 @@ export class AudioSession {
 
     // The extra tail is the limiter's look-ahead, not audio to be emitted.
     const lookahead = this.limiterLookaheadSamples;
-    const mic = boundedRuntimeAdvanceMoved
+    let mic = boundedRuntimeAdvanceMoved
       ? this.readMicSlewedRange(
           startSample,
           previousAdvanceSamplesExact,
@@ -1317,6 +1415,17 @@ export class AudioSession {
           lookahead,
         )
       : this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
+    if (
+      canCrossfadeReadHeadJump
+      && previouslyEmittedAdvanceSamples !== null
+      && !boundedRuntimeAdvanceMoved
+    ) {
+      mic = this.crossfadeMicReadHeadJump(
+        startSample,
+        previouslyEmittedAdvanceSamples,
+        mic,
+      );
+    }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     const micGain = 10 ** (this.micGainDbValue / 20);
     // `backingExpected` and `micExpected` are the room's semantic signals for
@@ -1365,8 +1474,28 @@ export class AudioSession {
       backingUnavailableSamples: this.backingExpected ? 0 : backingReadEvidence.frontierMissingSamples,
       clippedSamples: this.clippedSamples - clippedBefore,
       limitedSamples: this.limitedSamples - limitedBefore,
-      unheaderedSamples: micReadEvidence.unheaderedSamples + backingReadEvidence.unheaderedSamples,
+      unheaderedSamples:
+        micReadEvidence.unheaderedSamples
+        + backingReadEvidence.unheaderedSamples
+        + (
+          canCrossfadeReadHeadJump
+          && previousTransitionEvidence
+          && nextTransitionEvidence
+            ? Math.max(
+                0,
+                previousTransitionEvidence.unheaderedSamples
+                  - nextTransitionEvidence.unheaderedSamples,
+              )
+            : 0
+        ),
     };
+
+    this.lastEmittedMicAdvanceSamples = boundedRuntimeAdvanceMoved
+      ? advanceSamplesExact
+      : advanceSamples;
+    this.lastEmittedMicFrameComplete =
+      micReadEvidence.gapSamples === 0
+      && micReadEvidence.frontierMissingSamples === 0;
 
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);

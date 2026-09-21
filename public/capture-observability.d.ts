@@ -5,6 +5,11 @@ export type CaptureAppliedSettings = {
   audioSessionType: string | null;
 };
 
+export type CaptureClippingSnapshot = {
+  railSamples: number;
+  maxConsecutiveRailSamples: number;
+};
+
 export type CaptureLevelSnapshot = {
   peakDbfs: number;
   rmsDbfs: number;
@@ -33,4 +38,15 @@ export function enforceUnprocessedCapture(
 
 export function captureVoiceProcessingActive(
   settings: CaptureAppliedSettings | null | undefined,
+): boolean;
+
+export function captureClippingSnapshot(
+  level: {
+    railSamples?: unknown;
+    maxConsecutiveRailSamples?: unknown;
+  } | null | undefined,
+): CaptureClippingSnapshot | null;
+
+export function captureInputClippingDetected(
+  clipping: CaptureClippingSnapshot | null | undefined,
 ): boolean;

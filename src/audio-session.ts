@@ -1372,15 +1372,16 @@ export class AudioSession {
     // chunks and nothing anywhere says why.
     // The limiter's look-ahead reads past the frame, so it is part of what has
     // to have arrived for this frame to be complete.
-    const furthestAdvanceSamples = canCrossfadeReadHeadJump
+    const furthestAdvanceSamples = boundedRuntimeAdvanceMoved
+      ? Math.max(previousAdvanceSamplesExact, advanceSamplesExact)
+      : advanceSamplesExact;
+    const ordinaryMicReadEnd =
+      startSample + furthestAdvanceSamples + this.frameSamples + this.limiterLookaheadSamples;
+    const crossfadeOldReadEnd = canCrossfadeReadHeadJump
       && previouslyEmittedAdvanceSamples !== null
-      ? Math.max(previouslyEmittedAdvanceSamples, advanceSamplesExact)
-      : boundedRuntimeAdvanceMoved
-        ? Math.max(previousAdvanceSamplesExact, advanceSamplesExact)
-        : advanceSamplesExact;
-    const micReadEnd = Math.ceil(
-      startSample + furthestAdvanceSamples + this.frameSamples + this.limiterLookaheadSamples,
-    );
+      ? startSample + previouslyEmittedAdvanceSamples + crossfadeSamples + 2
+      : Number.NEGATIVE_INFINITY;
+    const micReadEnd = Math.ceil(Math.max(ordinaryMicReadEnd, crossfadeOldReadEnd));
     this.micHeadroomMs = ((this.mic.totalSamples - micReadEnd) / this.sampleRate) * 1000;
     this.backingHeadroomMs = ((this.backing.totalSamples - (startSample + this.frameSamples)) / this.sampleRate) * 1000;
     if (this.micHeadroomMs < 0 && this.micExpected) this.micStarvedFrames += 1;

@@ -18,3 +18,19 @@ export function readCaptureSettings(
 export function captureLevelSnapshot(
   level: { peakDbfs?: unknown; rmsDbfs?: unknown } | null | undefined,
 ): CaptureLevelSnapshot | null;
+
+
+export function enforceUnprocessedCapture(
+  stream: {
+    getAudioTracks?: () => Array<{
+      getSettings?: () => Record<string, unknown>;
+      getCapabilities?: () => Record<string, unknown>;
+      getConstraints?: () => Record<string, unknown>;
+      applyConstraints?: (constraints: Record<string, unknown>) => Promise<void>;
+    }>;
+  } | null | undefined,
+): Promise<boolean>;
+
+export function captureVoiceProcessingActive(
+  settings: CaptureAppliedSettings | null | undefined,
+): boolean;

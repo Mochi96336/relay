@@ -12,6 +12,15 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
   assert.match(source, /enforceUnprocessedCapture\(preparedStream\)/);
   assert.match(source, /captureAppliedSettings = readCaptureSettings\(captureStream\);/);
   assert.match(source, /captureVoiceProcessingActive\(captureAppliedSettings\)/);
+  assert.match(
+    source,
+    /addEventListener\('configurationchange', refreshCaptureConfiguration\)/,
+    'browser capture-unit changes must refresh the applied processing truth',
+  );
+  assert.match(
+    source,
+    /refreshCaptureConfiguration[\s\S]*enforceUnprocessedCapture\(captureStream\)[\s\S]*captureAppliedSettings = readCaptureSettings\(captureStream\)[\s\S]*sendAudioUplinkHealth\(\)/,
+  );
 
   const payloadStart = source.indexOf('function audioUplinkHealthPayload(');
   const payloadEnd = source.indexOf('function sendAudioUplinkHealth()', payloadStart);

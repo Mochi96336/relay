@@ -120,6 +120,114 @@ test('starts at 100 ms instead of the legacy 250 ms ceiling', async () => {
   assert.equal(processor.prebufferSamples, SAMPLE_RATE * 0.1);
 });
 
+test('de-clicks Listen underrun and recovery edges without hiding starvation', async () => {
+  const processor = await makeProcessor({
+    minPrebufferMs: 1,
+    initialPrebufferMs: 1,
+    maxPrebufferMs: 10,
+  });
+
+  processor.push(new Float32Array(160).fill(0.5));
+
+  const first = outputBlock();
+  processor.process([], first);
+  const firstOutput = first[0][0];
+  assert.ok(Math.abs(firstOutput[firstOutput.length - 1] - 0.5) < 1e-6);
+
+  const second = outputBlock();
+  processor.process([], second);
+  const secondOutput = second[0][0];
+
+  assert.equal(processor.underruns, 1);
+  assert.equal(
+    processor.starvedSamples,
+    96,
+    'de-click audio must not reduce the exact starvation sample count',
+  );
+  assert.ok(
+    Math.abs(secondOutput[32] - secondOutput[31]) < 1e-6,
+    'the first missing output sample continues the last real sample instead of jumping to zero',
+  );
+  assert.ok(
+    Math.abs(secondOutput[127]) < 1e-6,
+    'a 2 ms starvation tail reaches literal silence by the end of the quantum',
+  );
+
+  let maxFadeOutStep = 0;
+  for (let index = 33; index < secondOutput.length; index += 1) {
+    maxFadeOutStep = Math.max(
+      maxFadeOutStep,
+      Math.abs(secondOutput[index] - secondOutput[index - 1]),
+    );
+  }
+  assert.ok(maxFadeOutStep < 0.01, `fade-out stepped by ${maxFadeOutStep}`);
+
+  // The underrun raises this tiny test target to its configured 10 ms ceiling.
+  processor.push(new Float32Array(samplesFromMs(10)).fill(0.5));
+  const recovered = outputBlock();
+  processor.process([], recovered);
+  const recoveredOutput = recovered[0][0];
+
+  assert.ok(Math.abs(recoveredOutput[0]) < 1e-6, 'recovery starts from the emitted silence');
+  assert.ok(
+    Math.abs(recoveredOutput[95] - 0.5) < 1e-6,
+    'recovery reaches the real PCM level within the bounded 2 ms window',
+  );
+  assert.ok(
+    Math.abs(recoveredOutput[96] - 0.5) < 1e-6,
+    'PCM after the recovery edge is untouched',
+  );
+  assert.equal(
+    processor.starvedSamples,
+    96,
+    'synthetic recovery fade is output-only and does not invent delivered media',
+  );
+});
+
+test('continues a short Listen fade-out across the next render quantum', async () => {
+  const processor = await makeProcessor({
+    minPrebufferMs: 1,
+    initialPrebufferMs: 1,
+    maxPrebufferMs: 10,
+  });
+
+  // After one full render block, leave 100 real samples in the queue. The next
+  // quantum therefore has only 28 missing samples: shorter than the 96-sample
+  // 2 ms de-click window.
+  processor.push(new Float32Array(RENDER_QUANTUM + 100).fill(0.5));
+  processor.process([], outputBlock());
+
+  const partial = outputBlock();
+  processor.process([], partial);
+  const partialOutput = partial[0][0];
+  assert.equal(processor.starvedSamples, 28);
+  assert.ok(
+    partialOutput[127] > 0,
+    'the short starvation tail cannot reach silence inside the same render quantum',
+  );
+
+  const waiting = outputBlock();
+  processor.process([], waiting);
+  const waitingOutput = waiting[0][0];
+  assert.ok(
+    Math.abs(waitingOutput[0] - partialOutput[127]) < 0.01,
+    'the next render quantum continues the same fade instead of stepping to zero',
+  );
+  assert.ok(
+    Math.abs(waitingOutput[67]) < 1e-6,
+    'the remaining 68 fade samples reach silence before the quantum ends',
+  );
+  assert.ok(
+    waitingOutput.slice(68).every((sample) => sample === 0),
+    'output stays literal silence after the bounded fade completes',
+  );
+  assert.equal(
+    processor.starvedSamples,
+    28 + RENDER_QUANTUM,
+    'waiting output remains fully charged as starvation even while its edge is de-clicked',
+  );
+});
+
 test('raises the next rebuffer target after short underruns and caps at 250 ms', async () => {
   const processor = await makeProcessor();
 

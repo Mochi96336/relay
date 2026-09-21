@@ -92,6 +92,51 @@ describe('AudioSession runtime calibration slew', () => {
     );
   });
 
+  test('immediate live alignment jump crossfades instead of splicing the Mic', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100 });
+    session.ingestMic(frame(tone(3, 997, 10_000)), RATE, 0);
+
+    const mixed: Buffer[] = [];
+    session.drain((pcm) => mixed.push(pcm), 600, 1);
+    assert.equal(mixed.length, 1);
+
+    // Robot/content authority can legitimately replace the live lag in one
+    // transaction. Keep that authority immediate, but do not splice the old
+    // waveform directly to a source point 137 ms away.
+    session.setAlignment({ calibratedMicLagMs: 237 });
+    assert.equal(session.alignment.calibratedMicLagMs, 237);
+    session.drain((pcm) => mixed.push(pcm), 620, 1);
+    assert.equal(mixed.length, 2);
+
+    const frameSamples = Math.round(RATE * 0.02);
+    const before = mixed[0].readInt16LE((frameSamples - 1) * 2);
+    const after = mixed[1].readInt16LE(0);
+    const boundaryStep = Math.abs(after - before);
+
+    // Without the transition the 997 Hz fixture jumps by roughly 16.7k PCM
+    // counts here. Continuing the old trajectory for the first crossfade sample
+    // keeps the boundary inside the tone's ordinary one-sample derivative.
+    assert.ok(
+      boundaryStep < 3_000,
+      `immediate alignment spliced the Mic waveform at the frame boundary: ${boundaryStep}`,
+    );
+    assert.equal(
+      session.appliedMicAdvanceMs,
+      237,
+      'crossfade must not turn immediate authority into a slow timing slew',
+    );
+  });
+
   test('ordinary setAlignment remains immediate and cancels a pending runtime target', () => {
     const session = makeSession();
     session.start(0);

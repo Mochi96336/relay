@@ -228,6 +228,81 @@ test('continues a short Listen fade-out across the next render quantum', async (
   );
 });
 
+test('live timeline reset de-clicks queue discard and recovered Listen PCM', async () => {
+  const processor = await makeProcessor({
+    minPrebufferMs: 1,
+    initialPrebufferMs: 1,
+    maxPrebufferMs: 10,
+  });
+
+  // Leave stale positive PCM queued after one rendered block.
+  processor.push(new Float32Array(256).fill(0.5));
+  const beforeReset = outputBlock();
+  processor.process([], beforeReset);
+  assert.ok(
+    beforeReset[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6),
+    'pre-reset output establishes an audible +0.5 trajectory',
+  );
+  assert.equal(processor.queuedSamples, 128);
+
+  processor.port.onmessage?.({
+    data: { type: 'reset', deClick: true },
+  });
+  assert.equal(processor.queuedSamples, 0, 'timeline reset discards queued stale PCM immediately');
+  assert.equal(processor.playing, false);
+
+  const fadeOut = outputBlock();
+  processor.process([], fadeOut);
+  const fadeOutSamples = fadeOut[0][0];
+  assert.ok(
+    Math.abs(fadeOutSamples[0] - 0.5) < 1e-6,
+    'first post-reset sample continues the last emitted trajectory',
+  );
+  assert.ok(
+    Math.abs(fadeOutSamples[95]) < 1e-6,
+    'live reset reaches silence within the bounded 2 ms de-click window',
+  );
+  assert.ok(
+    fadeOutSamples.slice(96).every((sample) => sample === 0),
+    'output remains literal silence after the reset fade completes',
+  );
+
+  // New live-edge PCM has the opposite sign so stale +0.5 queue leakage is
+  // immediately visible. Rebuffer target is capped to 10 ms in this test.
+  processor.push(new Float32Array(samplesFromMs(10)).fill(-0.5));
+  const recovered = outputBlock();
+  processor.process([], recovered);
+  const recoveredSamples = recovered[0][0];
+
+  assert.ok(Math.abs(recoveredSamples[0]) < 1e-6, 'recovery begins at emitted silence');
+  assert.ok(
+    Math.abs(recoveredSamples[95] + 0.5) < 1e-6,
+    'new live-edge PCM fades fully in over 2 ms',
+  );
+  assert.ok(
+    recoveredSamples.slice(96).every((sample) => Math.abs(sample + 0.5) < 1e-6),
+    'only the new live-edge PCM survives the queue reset',
+  );
+});
+
+test('ordinary playback reset remains a hard temporal reset', async () => {
+  const processor = await makeProcessor({
+    minPrebufferMs: 1,
+    initialPrebufferMs: 1,
+    maxPrebufferMs: 10,
+  });
+
+  processor.push(new Float32Array(128).fill(0.5));
+  processor.process([], outputBlock());
+  processor.port.onmessage?.({ data: { type: 'reset' } });
+
+  assert.equal(processor.queuedSamples, 0);
+  assert.equal(processor.silenceFadeRemainingSamples, 0);
+  assert.equal(processor.recoveryFadeRemainingSamples, 0);
+  assert.equal(processor.needsOutputRecoveryFade, false);
+  assert.equal(processor.lastOutputSample, 0);
+});
+
 test('raises the next rebuffer target after short underruns and caps at 250 ms', async () => {
   const processor = await makeProcessor();
 

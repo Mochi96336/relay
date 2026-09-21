@@ -42,6 +42,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.silenceFadeStartSample = 0;
     this.recoveryFadeRemainingSamples = 0;
     this.recoveryFadeStartSample = 0;
+    this.needsOutputRecoveryFade = false;
     this.lastOutputSample = 0;
 
     // AudioWorklet has a reliable render cadence even when message delivery is
@@ -168,6 +169,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.silenceFadeStartSample = 0;
     this.recoveryFadeRemainingSamples = 0;
     this.recoveryFadeStartSample = 0;
+    this.needsOutputRecoveryFade = false;
     this.lastOutputSample = 0;
     this.resetArrivalObservation();
     // Keep the learned target across a reconnect, but throw away raw timing
@@ -328,7 +330,10 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         return true;
       }
       this.playing = true;
-      this.beginRecoveryFade();
+      if (this.needsOutputRecoveryFade) {
+        this.beginRecoveryFade();
+        this.needsOutputRecoveryFade = false;
+      }
       this.port.postMessage({ type: 'playing' });
     }
 
@@ -360,6 +365,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       this.stablePlaybackSamples = 0;
       this.pendingRecovery = true;
       this.recoveryWaitSamples = output.length - written;
+      this.needsOutputRecoveryFade = true;
       this.port.postMessage({ type: 'buffering' });
     } else {
       this.lastOutputSample = output[output.length - 1] ?? 0;

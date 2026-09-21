@@ -925,8 +925,10 @@ export class AudioSession {
     if (!positioned) {
       // No header: the only thing left to do is append at the frontier, which
       // is the old lossy behaviour. Flag it so the UI can say the client is
-      // stale rather than letting it degrade invisibly.
+      // stale rather than letting it degrade invisibly. Its source position is
+      // unknowable, so it also breaks positioned resampler continuity.
       timeline.unheadered = true;
+      timeline.resampleTailSample = null;
       start = timeline.totalSamples;
     } else {
       // Each frame states its own position, so rounding never accumulates and a

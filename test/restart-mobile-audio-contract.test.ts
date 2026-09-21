@@ -108,7 +108,7 @@ test('Listen treats OS interruption as recovery, not a user transport teardown',
   assert.match(listenSource, /function audioRendering\(\)/);
   assert.match(listenSource, /function monitorTransportWanted\(\)[\s\S]*audioEverRunning/);
   assert.match(listenSource, /createAudioInterruptionTracker\(\{ staleAfterMs: PREBUFFER_MS \}\)/);
-  assert.match(listenSource, /function restartMonitorAtLiveEdge\(\)[\s\S]*abandonTransportConnection\(\)[\s\S]*ensureTransport\('reconnecting'\)/);
+  assert.match(listenSource, /function restartMonitorAtLiveEdge\(\)[\s\S]*abandonTransportConnection\(audioRendering\(\)\)[\s\S]*ensureTransport\('reconnecting'\)/);
 
   const reconcile = listenSource.match(/function reconcile\(phase = ''\) \{[\s\S]*?\n  \}\n\n  function forceMicMute/)?.[0] ?? '';
   assert.notEqual(reconcile, '', 'Listen must expose a readable reconciliation boundary');
@@ -121,9 +121,14 @@ test('Listen treats OS interruption as recovery, not a user transport teardown',
 
   assert.match(listenSource, /if \(!audioRendering\(\)\) \{[\s\S]*audioInterruption\.noteDroppedPlayback\(\)[\s\S]*return;/);
   assert.match(listenSource, /audioInterruption\.finish\(\)[\s\S]*recovery\.requiresLiveEdge[\s\S]*liveEdgeRecoveryRequired = true/);
-  assert.match(listenSource, /resetPlaybackTemporalState\(\)/);
+  assert.match(listenSource, /resetPlaybackTemporalState\(deClick = false\)/);
   assert.match(listenSource, /monitorPcmReceiver\.reset\(\)/);
-  assert.match(listenSource, /playbackNode\?\.port\.postMessage\(\{ type: 'reset' \}\)/);
+  assert.match(listenSource, /playbackNode\?\.port\.postMessage\(\{ type: 'reset', deClick \}\)/);
+  assert.match(
+    listenSource,
+    /function closeTransport\(\)[\s\S]*abandonTransportConnection\(audioRendering\(\)\)/,
+    'audible mute/ownership teardown must use the worklet de-click path while discarding queued PCM',
+  );
 });
 
 test('Phone capture dispatch trims stale worklet PCM without shifting later capture time', () => {

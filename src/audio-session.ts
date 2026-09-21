@@ -954,6 +954,14 @@ export class AudioSession {
         captureRestarted: false,
       };
     }
+    // Preserve capture-clock anchoring by the source interval's nominal target
+    // span, not by how many samples the streaming resampler can emit before it
+    // receives the next interpolation endpoint. An upsampled packet may defer
+    // one target sample without that sample ceasing to belong to this 20 ms
+    // capture interval.
+    const nominalResampledSampleCount = sourceRate === this.sampleRate
+      ? sourceSampleCount
+      : Math.max(1, Math.round((sourceSampleCount * this.sampleRate) / sourceRate));
 
     let captureRestarted = false;
     let start: number;
@@ -1006,7 +1014,10 @@ export class AudioSession {
         // reuses its wire generation after rebuilding the capture graph.
         timeline.generation = frame.generation;
         timeline.sourceRate = sourceRate;
-        timeline.originOffset = Math.max(0, this.currentSessionSample(nowMs) - samples.length) - streamStart;
+        timeline.originOffset = Math.max(
+          0,
+          this.currentSessionSample(nowMs) - nominalResampledSampleCount,
+        ) - streamStart;
         timeline.clockErrorSamples = 0;
         timeline.sourceFrontier = null;
         // The new capture is anchored to the current mix clock, so it starts

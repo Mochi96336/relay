@@ -252,6 +252,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.queue.push(samples);
     this.queuedSamples += samples.length;
 
+    let droppedForCatchUp = 0;
     while (this.queuedSamples > this.maxQueueSamples && this.queue.length > 1) {
       const oldest = this.queue[0];
       const usable = oldest.length - this.offset;
@@ -259,6 +260,15 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       this.offset = 0;
       this.queuedSamples -= usable;
       this.droppedSamples += usable;
+      droppedForCatchUp += usable;
+    }
+
+    if (droppedForCatchUp > 0 && this.playing) {
+      // Queue overflow is an intentional live-edge catch-up, but jumping from
+      // the last emitted sample straight into the newer queue creates a click.
+      // Keep the exact same drop policy and latency bound; smooth only the next
+      // audible edge over the existing bounded recovery window.
+      this.beginRecoveryFade();
     }
   }
 

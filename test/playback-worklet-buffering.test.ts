@@ -228,6 +228,62 @@ test('continues a short Listen fade-out across the next render quantum', async (
   );
 });
 
+test('de-clicks Listen queue-overflow catch-up without hiding dropped PCM', async () => {
+  const processor = await makeProcessor({
+    minPrebufferMs: 1,
+    initialPrebufferMs: 1,
+    maxPrebufferMs: 10,
+    maxQueueMs: 20,
+  });
+
+  // Start on +0.5 and leave 128 stale samples from that chunk queued.
+  processor.push(new Float32Array(256).fill(0.5));
+  const beforeOverflow = outputBlock();
+  processor.process([], beforeOverflow);
+  assert.ok(
+    beforeOverflow[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6),
+  );
+  assert.equal(processor.queuedSamples, 128);
+  assert.equal(processor.playing, true);
+
+  // A 20 ms -0.5 live-edge chunk makes the queue 1,088 samples. The 20 ms cap
+  // is 960 samples here, so the remaining 128 stale +0.5 samples are dropped.
+  processor.push(new Float32Array(samplesFromMs(20)).fill(-0.5));
+
+  assert.equal(
+    processor.droppedSamples,
+    128,
+    'catch-up still drops the exact same stale media span',
+  );
+  assert.equal(processor.queuedSamples, samplesFromMs(20));
+  assert.equal(processor.playing, true, 'overflow catch-up does not force a rebuffer');
+
+  const caughtUp = outputBlock();
+  processor.process([], caughtUp);
+  const output = caughtUp[0][0];
+
+  assert.ok(
+    Math.abs(output[0] - 0.5) < 1e-6,
+    'the first catch-up sample continues the previously emitted waveform',
+  );
+  assert.ok(
+    Math.abs(output[95] + 0.5) < 1e-6,
+    'the bounded 2 ms crossfade reaches the new live edge',
+  );
+  assert.ok(
+    output.slice(96).every((sample) => Math.abs(sample + 0.5) < 1e-6),
+    'PCM after the catch-up edge is the untouched new live-edge audio',
+  );
+
+  let maximumStep = 0;
+  for (let index = 1; index < 96; index += 1) {
+    maximumStep = Math.max(maximumStep, Math.abs(output[index] - output[index - 1]));
+  }
+  assert.ok(maximumStep < 0.02, `overflow crossfade stepped by ${maximumStep}`);
+  assert.equal(processor.underruns, 0);
+  assert.equal(processor.starvedSamples, 0);
+});
+
 test('live timeline reset de-clicks queue discard and recovered Listen PCM', async () => {
   const processor = await makeProcessor({
     minPrebufferMs: 1,

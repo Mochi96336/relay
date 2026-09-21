@@ -173,7 +173,7 @@ const MIC_READ_HEAD_CROSSFADE_MS = 5;
  * Preserve the hole itself and its evidence; taper only the real microphone
  * samples immediately adjacent to it.
  */
-const MIC_GAP_DECLICK_MS = 2;
+const SOURCE_GAP_DECLICK_MS = 2;
 
 /**
  * Peak limiter on the microphone, between its gain and the sum.
@@ -782,7 +782,7 @@ export class AudioSession {
       && currentChunk.samples.length > 0
       && currentChunk.start > previousTotalSamples
     ) {
-      this.declickMicGap(previousChunk.samples, currentChunk.samples);
+      this.declickSourceGap(previousChunk.samples, currentChunk.samples);
     }
     return result;
   }
@@ -793,6 +793,8 @@ export class AudioSession {
     nowMs = performance.now(),
     trackSourceClock = false,
   ) {
+    const previousTotalSamples = this.backing.totalSamples;
+    const previousChunk = this.backing.chunks.at(-1) ?? null;
     const result = this.ingest(
       this.backing,
       frame,
@@ -801,6 +803,21 @@ export class AudioSession {
       trackSourceClock,
       true,
     );
+    const currentChunk = this.backing.chunks.at(-1) ?? null;
+
+    // A positioned transport/backlog hole is truthful silence, but the abrupt
+    // song -> zero -> song waveform splice is not. Taper only the real PCM
+    // adjacent to the proven hole; keep its position and evidence unchanged.
+    if (
+      !result.captureRestarted
+      && previousChunk
+      && currentChunk
+      && currentChunk !== previousChunk
+      && currentChunk.samples.length > 0
+      && currentChunk.start > previousTotalSamples
+    ) {
+      this.declickSourceGap(previousChunk.samples, currentChunk.samples);
+    }
     return result;
   }
 
@@ -1480,15 +1497,15 @@ export class AudioSession {
   }
 
   /**
-   * Removes only the artificial edge click around a proven microphone hole.
+   * Removes only the artificial edge click around a proven positioned hole.
    *
    * The missing interval stays untouched silence on the timeline, and
    * `gapSamples` / per-frame evidence still report its full duration. This is
    * deliberately not packet-loss concealment: no old sample is stretched or
    * copied across the missing capture.
    */
-  private declickMicGap(previous: Int16Array, next: Int16Array) {
-    const maximum = Math.max(1, Math.round((MIC_GAP_DECLICK_MS * this.sampleRate) / 1000));
+  private declickSourceGap(previous: Int16Array, next: Int16Array) {
+    const maximum = Math.max(1, Math.round((SOURCE_GAP_DECLICK_MS * this.sampleRate) / 1000));
 
     const fadeOutSamples = Math.min(maximum, previous.length);
     for (let offset = 0; offset < fadeOutSamples; offset += 1) {

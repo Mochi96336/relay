@@ -34,7 +34,7 @@ async function captureWorkletSource() {
   return readFile(path.resolve('public/capture-worklet.js'), 'utf8');
 }
 
-function loadCaptureProcessor() {
+function loadCaptureProcessor(workletSampleRate = 48_000) {
   let registeredName: string | null = null;
   let RegisteredProcessor: (new () => CapturedProcessor) | null = null;
 
@@ -51,7 +51,7 @@ function loadCaptureProcessor() {
   return captureWorkletSource().then((source) => {
     vm.runInNewContext(source, {
       AudioWorkletProcessor: FakeAudioWorkletProcessor,
-      sampleRate: 48_000,
+      sampleRate: workletSampleRate,
       currentTime: 12.5,
       registerProcessor: (name: string, processor: new () => CapturedProcessor) => {
         registeredName = name;
@@ -252,6 +252,45 @@ test('capture worklet de-clicks a local input gap across a flushed PCM boundary'
   assert.ok(
     Math.abs(level.rmsDbfs - (20 * Math.log10(expectedRms))) < 0.0001,
     'level evidence must describe raw recovered input plus the real missing silence, not the synthetic taper',
+  );
+});
+
+test('capture worklet keeps a sub-2 ms high-rate input gap continuous on recovery', async () => {
+  const processor = await loadCaptureProcessor(96_000);
+  enablePcmEnvelope(processor);
+
+  processor.process([[new Float32Array(1_920).fill(0.5)]]);
+  processor.process([]);
+  processor.process([[new Float32Array(1_792).fill(0.5)]]);
+
+  const pcm = processor.port.messages.filter((message) => (
+    typeof message === 'object'
+    && message !== null
+    && (message as { type?: string }).type === 'pcm'
+  )) as PcmMessage[];
+  assert.equal(pcm.length, 2);
+
+  const previous = new Int16Array(pcm[0].buffer);
+  const next = new Int16Array(pcm[1].buffer);
+  const gapSamples = 128;
+  const fadeSamples = Math.round(96_000 * 0.002);
+
+  assert.ok(
+    Math.abs(next[0] - previous[previous.length - 1]) <= 1,
+    'the short high-rate gap must begin continuously',
+  );
+  assert.notEqual(
+    next[gapSamples - 1],
+    0,
+    'a 1.33 ms gap at 96 kHz ends before a 2 ms fade can reach zero',
+  );
+  assert.ok(
+    Math.abs(next[gapSamples] - next[gapSamples - 1]) < 250,
+    'recovery must continue from the partially faded edge instead of jumping to zero',
+  );
+  assert.ok(
+    Math.abs(next[gapSamples + fadeSamples - 1] - previous[previous.length - 1]) <= 1,
+    'recovery crossfade returns to the real waveform over the bounded 2 ms window',
   );
 });
 

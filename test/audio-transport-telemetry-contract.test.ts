@@ -8,7 +8,7 @@ import {
   sourceCode,
 } from './support/source-contract.js';
 
-test('capture gaps are reported as exact sample deltas without changing the padded timeline', () => {
+test('capture gaps are reported as exact sample deltas without changing the padded sample count', () => {
   const worklet = parseTypeScriptSource(
     new URL('../public/capture-worklet.js', import.meta.url),
     readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8'),
@@ -21,7 +21,7 @@ test('capture gaps are reported as exact sample deltas without changing the padd
   const appCode = sourceCode(app);
 
   assert.match(workletCode, /samples: unreported \* RENDER_QUANTUM/);
-  assert.match(workletCode, /this\.writeSilence\(RENDER_QUANTUM\)/);
+  assert.match(workletCode, /this\.writeInputGap\(RENDER_QUANTUM\)/);
   assert.match(workletCode, /this\.reportInputGap\(true\)/);
   assert.match(appCode, /captureInputGapSamples \+= samples/);
   assert.match(appCode, /type: 'audio-uplink-health'/);

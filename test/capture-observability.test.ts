@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import {
+  captureClippingSnapshot,
+  captureInputClippingDetected,
   captureLevelSnapshot,
   captureVoiceProcessingActive,
   enforceUnprocessedCapture,
@@ -170,6 +172,35 @@ describe('capture observability', () => {
       getAudioTracks: () => [{ getSettings: () => { throw new Error('unsupported'); } }],
     }, {}), null);
     assert.equal(readCaptureSettings(null, {}), null);
+  });
+
+  test('projects cumulative rail evidence and classifies only sustained rail runs', () => {
+    assert.deepEqual(captureClippingSnapshot({
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
+    }), {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
+    });
+    assert.equal(captureInputClippingDetected({
+      railSamples: 12,
+      maxConsecutiveRailSamples: 3,
+    }), false);
+    assert.equal(captureInputClippingDetected({
+      railSamples: 12,
+      maxConsecutiveRailSamples: 4,
+    }), true);
+
+    assert.equal(captureClippingSnapshot({
+      railSamples: 2,
+      maxConsecutiveRailSamples: 3,
+    }), null, 'a run cannot be longer than the cumulative rail count');
+    assert.equal(captureClippingSnapshot({
+      railSamples: -1,
+      maxConsecutiveRailSamples: 0,
+    }), null);
+    assert.equal(captureClippingSnapshot({}), null);
+    assert.equal(captureInputClippingDetected(null), false);
   });
 
   test('projects only physically valid finite worklet levels', () => {

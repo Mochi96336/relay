@@ -315,7 +315,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       }
       if (liveEdgeRecoveryRequired) return;
 
-      if (received.reset) playbackNode.port.postMessage({ type: 'reset' });
+      if (received.reset) {
+        playbackNode.port.postMessage({ type: 'reset', deClick: true });
+      }
       const pcm = int16ToFloat32(received.frame.pcm);
       const samples = linearResample(pcm, sourceSampleRate, audioContext.sampleRate);
       playbackNode.port.postMessage(samples.buffer, [samples.buffer]);

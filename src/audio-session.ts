@@ -137,6 +137,14 @@ const RUNTIME_CALIBRATION_SLEW_FRACTION = 0.01;
 const MIC_READ_HEAD_CROSSFADE_MS = 5;
 
 /**
+ * A real packet hole is silence, but entering or leaving that silence in one
+ * sample creates a click that was not present in either source segment.
+ * Preserve the hole itself and its evidence; taper only the real microphone
+ * samples immediately adjacent to it.
+ */
+const MIC_GAP_DECLICK_MS = 2;
+
+/**
  * Peak limiter on the microphone, between its gain and the sum.
  *
  * One static gain cannot serve both ends of a voice: peaks run some 16 dB above
@@ -696,8 +704,22 @@ export class AudioSession {
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
+    const previousTotalSamples = this.mic.totalSamples;
+    const previousChunk = this.mic.chunks.at(-1) ?? null;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
+
+    // Raw input metering must describe what the phone actually sent. De-clicking
+    // below is an output-continuity treatment, not a new gain measurement.
     this.meterMic(result.samples);
+
+    if (
+      !result.captureRestarted
+      && previousChunk
+      && result.samples.length > 0
+      && result.start > previousTotalSamples
+    ) {
+      this.declickMicGap(previousChunk.samples, result.samples);
+    }
     return result;
   }
 
@@ -1291,6 +1313,33 @@ export class AudioSession {
       const chunk = timeline.chunks[0];
       if (chunk.start + chunk.samples.length >= beforeSample) break;
       timeline.chunks.shift();
+    }
+  }
+
+  /**
+   * Removes only the artificial edge click around a proven microphone hole.
+   *
+   * The missing interval stays untouched silence on the timeline, and
+   * `gapSamples` / per-frame evidence still report its full duration. This is
+   * deliberately not packet-loss concealment: no old sample is stretched or
+   * copied across the missing capture.
+   */
+  private declickMicGap(previous: Int16Array, next: Int16Array) {
+    const maximum = Math.max(1, Math.round((MIC_GAP_DECLICK_MS * this.sampleRate) / 1000));
+
+    const fadeOutSamples = Math.min(maximum, previous.length);
+    for (let offset = 0; offset < fadeOutSamples; offset += 1) {
+      const index = previous.length - fadeOutSamples + offset;
+      const weight = fadeOutSamples <= 1
+        ? 0
+        : (fadeOutSamples - 1 - offset) / (fadeOutSamples - 1);
+      previous[index] = Math.round(previous[index] * weight);
+    }
+
+    const fadeInSamples = Math.min(maximum, next.length);
+    for (let index = 0; index < fadeInSamples; index += 1) {
+      const weight = fadeInSamples <= 1 ? 0 : index / (fadeInSamples - 1);
+      next[index] = Math.round(next[index] * weight);
     }
   }
 

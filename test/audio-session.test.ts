@@ -113,6 +113,69 @@ describe('AudioSession timelines', () => {
     );
   });
 
+  test('de-clicks Mic packet-hole edges without concealing the missing interval', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const amplitude = 12_000;
+    session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(amplitude))), RATE, 0);
+    session.ingestMic(
+      frame(chunk * 2, pcmOf(new Array(chunk).fill(amplitude))),
+      RATE,
+      0,
+    );
+
+    const read = session.readMic(0, chunk * 3);
+    const fadeSamples = Math.round(RATE * 0.002);
+    const gapStart = chunk;
+    const gapEnd = chunk * 2;
+
+    assert.equal(read[gapStart], 0, 'the missing packet still begins as literal silence');
+    assert.equal(read[gapEnd - 1], 0, 'the missing packet remains silence through its final sample');
+    assert.equal(read[gapEnd], 0, 'the first recovered sample starts at silence instead of clicking in');
+
+    assert.ok(
+      Math.abs(read[gapStart - 2] - read[gapStart - 1]) <= 200,
+      'fade-out approaches the hole without a full-scale one-sample step',
+    );
+    assert.ok(
+      Math.abs(read[gapEnd + 1] - read[gapEnd]) <= 200,
+      'fade-in leaves the hole without a full-scale one-sample step',
+    );
+    assert.equal(
+      read[gapStart - fadeSamples - 1],
+      amplitude,
+      'audio before the bounded de-click window stays untouched',
+    );
+    assert.equal(
+      read[gapEnd + fadeSamples],
+      amplitude,
+      'audio after the bounded de-click window returns to the original level',
+    );
+
+    assert.equal(session.health().micGapMs, 20);
+    assert.deepEqual(session.readMicEvidence(0, chunk * 3), {
+      gapSamples: chunk,
+      frontierMissingSamples: 0,
+      unheaderedSamples: 0,
+    }, 'de-clicking must not reduce or hide packet-loss evidence');
+  });
+
+  test('does not fade a continuous Mic packet boundary', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(7_000))), RATE, 0);
+    session.ingestMic(frame(chunk, pcmOf(new Array(chunk).fill(11_000))), RATE, 0);
+
+    const read = session.readMic(0, chunk * 2);
+    assert.equal(read[chunk - 1], 7_000);
+    assert.equal(read[chunk], 11_000);
+    assert.equal(session.health().micGapMs, 0);
+  });
+
   test('a skipped frame leaves a hole of exactly the right length', () => {
     const session = makeSession();
     session.start(0);
@@ -127,7 +190,8 @@ describe('AudioSession timelines', () => {
     const read = session.readMic(0, chunk * 3);
     assert.equal(read[0], 1000);
     assert.equal(read[chunk], 0, 'the hole reads as the silence that actually happened');
-    assert.equal(read[chunk * 2], 2000, 'later audio keeps its original position');
+    assert.equal(read[chunk * 2], 0, 'the recovered edge is de-clicked at the original position');
+    assert.equal(read[chunk * 2 + Math.round(RATE * 0.002)], 2000, 'later audio keeps its original position');
 
     assert.deepEqual(session.readMicEvidence(0, chunk * 3), {
       gapSamples: chunk,

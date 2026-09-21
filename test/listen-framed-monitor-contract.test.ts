@@ -19,6 +19,11 @@ test('Listen explicitly negotiates positioned monitor PCM', async () => {
   );
   assert.match(
     source,
+    /import \{ createStreamingLinearResampler \} from '\.\/streaming-linear-resampler\.js';/,
+    'Listen must use the stateful positioned resampler instead of packet-local interpolation',
+  );
+  assert.match(
+    source,
     /type: 'register',[\s\S]*role: 'monitor',[\s\S]*monitorPacketVersion: MONITOR_PCM_PACKET_VERSION/,
     'Listen must opt in explicitly so legacy raw monitor clients remain compatible',
   );
@@ -42,11 +47,18 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
   );
   assert.match(
     messageSection,
-    /if \(received\.reset\) \{[\s\S]*type: 'reset', deClick: true[\s\S]*\}/,
-    'a forward gap or generation boundary must discard queued stale audio with an audible-edge de-click',
+    /if \(received\.reset\) \{[\s\S]*listenResampler\.reset\(\)[\s\S]*type: 'reset', deClick: true[\s\S]*\}/,
+    'a forward gap or generation boundary must fence resampler history before discarding queued stale audio',
   );
   assert.match(messageSection, /int16ToFloat32\(received\.frame\.pcm\)/,
     'the transport header must be stripped before PCM conversion');
+  assert.match(
+    messageSection,
+    /listenResampler\.resample\(pcm, \{[\s\S]*sourceRate: sourceSampleRate,[\s\S]*targetRate: audioContext\.sampleRate,[\s\S]*firstSampleIndex: received\.frame\.firstSampleIndex,[\s\S]*\}\)/,
+    'Listen resampling must stay anchored to the positioned monitor frame clock',
+  );
+  assert.doesNotMatch(source, /function linearResample\(/,
+    'packet-local resampling must not remain beside the streaming resampler');
   assert.doesNotMatch(messageSection, /int16ToFloat32\(event\.data\)/,
     'framed bytes must never fall back to raw PCM');
 
@@ -67,8 +79,11 @@ test('transport boundaries reset both positioned continuity and the AudioWorklet
   const closeSection = section(source, 'function closeTransport()', 'function scheduleReconnect()');
   const connectSection = section(source, 'async function connect()', '/**\n   * Requests a resume');
 
-  assert.match(resetSection, /monitorPcmReceiver\.reset\(\)[\s\S]*type: 'reset'/,
-    'one helper must clear positioned continuity and queued worklet audio together');
+  assert.match(
+    resetSection,
+    /monitorPcmReceiver\.reset\(\)[\s\S]*listenResampler\.reset\(\)[\s\S]*type: 'reset'/,
+    'one helper must clear positioned continuity, resampler history and queued worklet audio together',
+  );
   assert.match(abandonSection, /transportEpoch \+= 1;[\s\S]*resetPlaybackTemporalState\(\)/,
     'abandoning a transport connection must invalidate its epoch and temporal state');
   assert.match(closeSection, /transportEnabled = false;[\s\S]*abandonTransportConnection\(\)/,

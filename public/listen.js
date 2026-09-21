@@ -12,6 +12,7 @@ import {
   MONITOR_PCM_PACKET_VERSION,
   createMonitorPcmReceiver,
 } from './monitor-pcm-continuity.js';
+import { createStreamingLinearResampler } from './streaming-linear-resampler.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 
@@ -26,6 +27,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
   const monitorPcmReceiver = createMonitorPcmReceiver();
+  const listenResampler = createStreamingLinearResampler();
   const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
   const iosAudioDestinationRecovery = new IosAudioDestinationRecovery();
 
@@ -67,22 +69,6 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
     const query = params.toString();
     return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-  }
-
-  function linearResample(input, sourceRate, targetRate) {
-    if (sourceRate === targetRate) return input;
-    const ratio = targetRate / sourceRate;
-    const outputLength = Math.max(1, Math.round(input.length * ratio));
-    const output = new Float32Array(outputLength);
-    for (let i = 0; i < outputLength; i += 1) {
-      const sourcePosition = i / ratio;
-      const index = Math.floor(sourcePosition);
-      const fraction = sourcePosition - index;
-      const a = input[Math.min(index, input.length - 1)];
-      const b = input[Math.min(index + 1, input.length - 1)];
-      output[i] = a + (b - a) * fraction;
-    }
-    return output;
   }
 
   function int16ToFloat32(buffer) {
@@ -190,6 +176,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
   function resetPlaybackTemporalState() {
     monitorPcmReceiver.reset();
+    listenResampler.reset();
     playbackNode?.port.postMessage({ type: 'reset' });
   }
 
@@ -237,7 +224,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       return;
     }
     if (message.type === 'source-status') {
-      sourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;
+      const nextSourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;
+      if (nextSourceSampleRate !== sourceSampleRate) listenResampler.reset();
+      sourceSampleRate = nextSourceSampleRate;
     }
   }
 
@@ -316,11 +305,18 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       if (liveEdgeRecoveryRequired) return;
 
       if (received.reset) {
+        listenResampler.reset();
         playbackNode.port.postMessage({ type: 'reset', deClick: true });
       }
       const pcm = int16ToFloat32(received.frame.pcm);
-      const samples = linearResample(pcm, sourceSampleRate, audioContext.sampleRate);
-      playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
+      const samples = listenResampler.resample(pcm, {
+        sourceRate: sourceSampleRate,
+        targetRate: audioContext.sampleRate,
+        firstSampleIndex: received.frame.firstSampleIndex,
+      });
+      if (samples.length > 0) {
+        playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
+      }
     });
 
     next.addEventListener('close', () => {

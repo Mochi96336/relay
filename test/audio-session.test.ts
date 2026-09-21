@@ -534,6 +534,57 @@ describe('AudioSession health', () => {
     assert.ok(health.backingClockCorrectionSamples > 0, 'the slower source must be stretched');
   });
 
+  test('backing clock correction stretches one frame instead of duplicating its tail sample', () => {
+    const session = makeSession({ prebufferMs: 100 });
+    session.setBackingExpected(true);
+    session.start(0);
+
+    const frequencyHz = 997;
+    const amplitude = 12_000;
+    let corrected: ReturnType<typeof session.ingestBacking> | null = null;
+    let correctedInput: number[] | null = null;
+
+    for (let frameIndex = 0; frameIndex < 6_000 && corrected === null; frameIndex += 1) {
+      const firstSourceSample = frameIndex * 960;
+      const input = Array.from({ length: 960 }, (_, offset) => (
+        Math.round(
+          amplitude
+          * Math.sin((2 * Math.PI * frequencyHz * (firstSourceSample + offset)) / RATE)
+        )
+      ));
+      const before = session.health().backingClockCorrectionSamples;
+      const result = session.ingestBacking(
+        frame(firstSourceSample, pcmOf(input)),
+        RATE,
+        (frameIndex + 1) * 20.02,
+        true,
+      );
+      while (session.drain(() => {}, (frameIndex + 1) * 20.02) > 0) { /* drain due frames */ }
+
+      if (session.health().backingClockCorrectionSamples > before) {
+        corrected = result;
+        correctedInput = input;
+      }
+    }
+
+    assert.ok(corrected, 'test clock mismatch must eventually request a +1 sample correction');
+    assert.ok(correctedInput);
+    assert.equal(corrected.samples.length, 961);
+    assert.equal(corrected.samples[0], correctedInput[0], 'stretch preserves the frame start');
+    assert.equal(
+      corrected.samples[corrected.samples.length - 1],
+      correctedInput[correctedInput.length - 1],
+      'stretch preserves the frame end',
+    );
+    assert.notEqual(
+      corrected.samples[corrected.samples.length - 2],
+      corrected.samples[corrected.samples.length - 1],
+      'the added clock sample is distributed across the frame instead of duplicating the tail',
+    );
+    assert.ok(session.health().backingClockCorrectionSamples > 0);
+    assert.equal(session.health().backingGapMs, 0);
+  });
+
   test('Robot clock tracking preserves a real missing backing frame as a gap', () => {
     const session = makeSession({ prebufferMs: 100 });
     session.start(0);

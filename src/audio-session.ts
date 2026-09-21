@@ -353,9 +353,11 @@ export class AudioSession {
   private micRetirementFadeRemainingSamples = 0;
   private backingRetirementFadeStart = 0;
   private backingRetirementFadeRemainingSamples = 0;
-  /** The replacement capture's first real PCM must enter from silence. */
+  /** The replacement capture's first audible contribution must enter from silence. */
   private micReplacementNeedsFadeIn = false;
   private backingReplacementNeedsFadeIn = false;
+  private micReplacementFadeInRemainingSamples = 0;
+  private backingReplacementFadeInRemainingSamples = 0;
   private readonly sourceEdgeFadeSamples: number;
 
   private micStarvedFrames = 0;
@@ -803,15 +805,6 @@ export class AudioSession {
     );
     if (startsAfterGap && previousChunk && currentChunk) {
       this.declickSourceGap(previousChunk.samples, currentChunk.samples);
-      this.micReplacementNeedsFadeIn = false;
-    } else if (
-      this.micReplacementNeedsFadeIn
-      && currentChunk
-      && currentChunk !== previousChunk
-      && currentChunk.samples.length > 0
-    ) {
-      this.fadeInSourceEdge(currentChunk.samples);
-      this.micReplacementNeedsFadeIn = false;
     }
     return result;
   }
@@ -850,15 +843,6 @@ export class AudioSession {
     );
     if (startsAfterGap && previousChunk && currentChunk) {
       this.declickSourceGap(previousChunk.samples, currentChunk.samples);
-      this.backingReplacementNeedsFadeIn = false;
-    } else if (
-      this.backingReplacementNeedsFadeIn
-      && currentChunk
-      && currentChunk !== previousChunk
-      && currentChunk.samples.length > 0
-    ) {
-      this.fadeInSourceEdge(currentChunk.samples);
-      this.backingReplacementNeedsFadeIn = false;
     }
     return result;
   }
@@ -915,6 +899,7 @@ export class AudioSession {
       this.micRetirementFadeStart = this.lastEmittedMicContribution;
       this.micRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
       this.micReplacementNeedsFadeIn = true;
+      this.micReplacementFadeInRemainingSamples = 0;
     }
     this.clearTimeline(this.mic);
     this.resetMicFrontierTracking();
@@ -930,6 +915,7 @@ export class AudioSession {
       this.backingRetirementFadeStart = this.lastEmittedBackingContribution;
       this.backingRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
       this.backingReplacementNeedsFadeIn = true;
+      this.backingReplacementFadeInRemainingSamples = 0;
     }
     this.clearTimeline(this.backing);
   }
@@ -1012,6 +998,8 @@ export class AudioSession {
     this.backingRetirementFadeRemainingSamples = 0;
     this.micReplacementNeedsFadeIn = false;
     this.backingReplacementNeedsFadeIn = false;
+    this.micReplacementFadeInRemainingSamples = 0;
+    this.backingReplacementFadeInRemainingSamples = 0;
     this.mic.gapSamples = 0;
     this.backing.gapSamples = 0;
   }
@@ -1613,6 +1601,35 @@ export class AudioSession {
     return value;
   }
 
+
+  private applyMicReplacementFadeIn(current: number) {
+    if (this.micReplacementFadeInRemainingSamples <= 0) {
+      if (!this.micReplacementNeedsFadeIn || current === 0) return current;
+      this.micReplacementNeedsFadeIn = false;
+      this.micReplacementFadeInRemainingSamples = this.sourceEdgeFadeSamples;
+    }
+    const progress = this.sourceEdgeFadeSamples - this.micReplacementFadeInRemainingSamples;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 0
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    this.micReplacementFadeInRemainingSamples -= 1;
+    return current * weight;
+  }
+
+  private applyBackingReplacementFadeIn(current: number) {
+    if (this.backingReplacementFadeInRemainingSamples <= 0) {
+      if (!this.backingReplacementNeedsFadeIn || current === 0) return current;
+      this.backingReplacementNeedsFadeIn = false;
+      this.backingReplacementFadeInRemainingSamples = this.sourceEdgeFadeSamples;
+    }
+    const progress = this.sourceEdgeFadeSamples - this.backingReplacementFadeInRemainingSamples;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 0
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    this.backingReplacementFadeInRemainingSamples -= 1;
+    return current * weight;
+  }
+
   /**
    * Tracks the raw microphone so the gain can be set from what the phone is
    * actually sending. This has to watch the live stream: the only other
@@ -1860,9 +1877,28 @@ export class AudioSession {
         (mic[i] / 32768) * micGain,
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
-      voice = this.applyMicRetirementFade(voice);
+      if (this.micRetirementFadeRemainingSamples > 0) {
+        const replacementAudible = voice !== 0;
+        voice = this.applyMicRetirementFade(voice);
+        if (replacementAudible) {
+          this.micReplacementNeedsFadeIn = false;
+          this.micReplacementFadeInRemainingSamples = 0;
+        }
+      } else {
+        voice = this.applyMicReplacementFadeIn(voice);
+      }
+
       let songContribution = (song[i] / 32768) * songGain;
-      songContribution = this.applyBackingRetirementFade(songContribution);
+      if (this.backingRetirementFadeRemainingSamples > 0) {
+        const replacementAudible = songContribution !== 0;
+        songContribution = this.applyBackingRetirementFade(songContribution);
+        if (replacementAudible) {
+          this.backingReplacementNeedsFadeIn = false;
+          this.backingReplacementFadeInRemainingSamples = 0;
+        }
+      } else {
+        songContribution = this.applyBackingReplacementFadeIn(songContribution);
+      }
       this.lastEmittedMicContribution = voice;
       this.lastEmittedBackingContribution = songContribution;
       const summed = voice + songContribution;

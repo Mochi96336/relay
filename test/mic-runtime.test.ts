@@ -22,12 +22,14 @@ function uplinkHealth(
   captureGeneration: number,
   inputMuted = false,
   capturedSamples = 1_000,
+  inputGapActive = false,
 ): AudioUplinkHealth {
   return {
     version: 1,
     captureGeneration,
     capturedSamples,
     inputGapSamples: 0,
+    inputGapActive,
     inputMuted,
     capture: null,
     captureLevel: null,
@@ -93,6 +95,234 @@ test('product uplink health expires after the existing health authority window',
   assert.equal(mic.uplinkHealthPayload(4_201)?.reportAgeMs, 4_001);
   assert.equal(mic.uplinkHealthPayload(4_201)?.transport.mediaRecoveryDegraded, true);
   assert.equal(mic.freshUplinkHealthPayload(4_201), null);
+});
+
+test('active worklet input gap fails Mic live closed despite continuous padded PCM', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 30,
+    audioPacketVersion: 2,
+    nowMs: 900,
+  });
+
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(30, false, 1_000), 910), true);
+  mic.noteFrame(920, {
+    generation: 30,
+    firstSampleIndex: 0,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.streaming(921), true);
+
+  // AudioWorklet keeps the capture timeline continuous with padded zero PCM.
+  // Once it positively reports a sustained missing input channel, that flow is
+  // no longer microphone liveness even though packets continue arriving.
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(30, false, 2_000, true), 930),
+    true,
+  );
+  mic.noteFrame(940, {
+    generation: 30,
+    firstSampleIndex: 1_872,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(941),
+    false,
+    'padded silence cannot keep an active input gap live',
+  );
+});
+
+test('input-gap recovery requires PCM beyond the reported recovery cursor', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 30,
+    audioPacketVersion: 2,
+    nowMs: 950,
+  });
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(30, false, 2_000, true), 960),
+    true,
+  );
+  mic.noteFrame(970, {
+    generation: 30,
+    firstSampleIndex: 1_872,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.streaming(971), false);
+
+  // Clearing the active-gap flag is only a source-state transition. The last
+  // padded zero frame is still fresh, so it must not resurrect the Mic.
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(30, false, 3_000, false), 980),
+    true,
+  );
+  assert.equal(mic.streaming(981), false);
+
+  mic.noteFrame(990, {
+    generation: 30,
+    firstSampleIndex: 2_500,
+    pcm: Buffer.alloc(400 * 2),
+  });
+  assert.equal(
+    mic.streaming(991),
+    false,
+    'late padded PCM ending before the recovery cursor cannot clear the gap barrier',
+  );
+
+  mic.noteFrame(1_000, {
+    generation: 30,
+    firstSampleIndex: 3_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(1_001),
+    true,
+    'real post-recovery PCM beyond the capture cursor restores Mic live',
+  );
+});
+
+test('post-gap PCM arriving before recovery health satisfies the same cursor barrier', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 30,
+    audioPacketVersion: 2,
+    nowMs: 1_020,
+  });
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(30, false, 2_000, true), 1_030),
+    true,
+  );
+
+  // Native WT media can outrun the recovery health on the control WebSocket.
+  mic.noteFrame(1_040, {
+    generation: 30,
+    firstSampleIndex: 3_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.streaming(1_041), false);
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(30, false, 3_000, false), 1_050),
+    true,
+  );
+  assert.equal(
+    mic.streaming(1_051),
+    true,
+    'an already-accepted frame beyond the recovery cursor is valid post-gap evidence',
+  );
+});
+
+test('unmute before input-gap recovery keeps both source barriers independent', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 40,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(40, false, 1_000, false), 110), true);
+  mic.noteFrame(120, {
+    generation: 40,
+    firstSampleIndex: 872,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(mic.streaming(121), true);
+
+  // Source becomes both OS-muted and worklet-gap active.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(40, true, 3_000, true), 130), true);
+  assert.equal(mic.streaming(131), false);
+
+  // Unmute happens first, but the proven worklet gap is still active. This
+  // creates an unmute barrier without authorizing live source flow.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(40, false, 4_000, true), 140), true);
+  assert.equal(mic.streaming(141), false);
+
+  // Gap recovery later adds a second, later barrier. Neither transition may
+  // reuse the padded/zero PCM freshness accumulated before its own cursor.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(40, false, 5_000, false), 150), true);
+  assert.equal(mic.streaming(151), false);
+
+  mic.noteFrame(160, {
+    generation: 40,
+    firstSampleIndex: 4_500,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(161),
+    false,
+    'PCM beyond the unmute cursor but before the later gap-recovery cursor clears only one barrier',
+  );
+
+  mic.noteFrame(170, {
+    generation: 40,
+    firstSampleIndex: 5_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(171),
+    true,
+    'only PCM beyond the later gap-recovery cursor can restore live',
+  );
+});
+
+test('input-gap recovery before unmute keeps both source barriers independent', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 41,
+    audioPacketVersion: 2,
+    nowMs: 200,
+  });
+
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(41, false, 1_000, true), 210), true);
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(41, true, 3_000, true), 220), true);
+
+  // The worklet recovers first, but the OS track is still muted. Its recovery
+  // cursor must survive until real post-gap PCM arrives.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(41, true, 4_000, false), 230), true);
+  assert.equal(mic.streaming(231), false);
+
+  // Unmute later creates the second, later barrier.
+  assert.equal(mic.noteUplinkHealth(publisher, uplinkHealth(41, false, 5_000, false), 240), true);
+  assert.equal(mic.streaming(241), false);
+
+  mic.noteFrame(250, {
+    generation: 41,
+    firstSampleIndex: 4_500,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(251),
+    false,
+    'PCM beyond gap recovery but before the later unmute cursor clears only the gap barrier',
+  );
+
+  mic.noteFrame(260, {
+    generation: 41,
+    firstSampleIndex: 5_000,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(261),
+    true,
+    'only PCM beyond the later unmute cursor can restore live',
+  );
 });
 
 test('unmute health cannot reuse muted-period frame freshness as live Mic evidence', () => {
@@ -248,6 +478,51 @@ test('same-generation uplink health cannot move capturedSamples backward', () =>
     'a genuinely new capture generation owns a new cursor origin',
   );
   assert.equal(mic.uplinkHealthPayload(3_071)?.capturedSamples, 128);
+});
+
+test('legacy v2 health without explicit active-gap state cannot authorize Mic live', () => {
+  const { mic } = runtime();
+  const publisher = socket('participant-alice');
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 42,
+    audioPacketVersion: 2,
+    nowMs: 3_500,
+  });
+
+  const rawLegacyHealth: any = uplinkHealth(42, false, 128, false);
+  delete rawLegacyHealth.inputGapActive;
+  const legacyHealth = parseAudioUplinkHealth(rawLegacyHealth);
+  assert.ok(legacyHealth, 'older health v1 without inputGapActive remains parse-compatible');
+  assert.equal(legacyHealth.inputGapActiveObserved, false);
+
+  assert.equal(mic.noteUplinkHealth(publisher, legacyHealth, 3_510), true);
+  mic.noteFrame(3_520, {
+    generation: 42,
+    firstSampleIndex: 0,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(3_521),
+    false,
+    'fresh PCM plus a compatibility default cannot prove that sustained input loss is absent',
+  );
+
+  assert.equal(
+    mic.noteUplinkHealth(publisher, uplinkHealth(42, false, 256, false), 3_530),
+    true,
+  );
+  mic.noteFrame(3_540, {
+    generation: 42,
+    firstSampleIndex: 128,
+    pcm: Buffer.alloc(128 * 2),
+  });
+  assert.equal(
+    mic.streaming(3_541),
+    true,
+    'explicit current active-gap authority plus fresh PCM restores v2 live',
+  );
 });
 
 test('legacy v2 health without explicit mute state cannot authorize Mic live', () => {

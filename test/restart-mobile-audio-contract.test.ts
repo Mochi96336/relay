@@ -192,6 +192,7 @@ test('Mic recovery exposes OS input mute to server liveness', () => {
     captureGeneration: 7,
     capturedSamples: 1,
     inputGapSamples: 0,
+    inputGapActive: false,
     inputMuted: true,
     droppedSamples: { total: 0, disconnected: 0, congested: 0, packetTooLarge: 0 },
     controlReconnects: 0,

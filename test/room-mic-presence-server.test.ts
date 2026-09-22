@@ -21,6 +21,7 @@ function uplinkHealth(captureGeneration: number, capturedSamples: number) {
     captureGeneration,
     capturedSamples,
     inputGapSamples: 0,
+    inputGapActive: false,
     inputMuted: false,
     capture: null,
     captureLevel: null,

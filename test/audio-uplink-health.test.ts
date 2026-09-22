@@ -10,6 +10,7 @@ function validHealth() {
     captureGeneration: 7,
     capturedSamples: 48_000,
     inputGapSamples: 128,
+    inputGapActive: false,
     inputMuted: false,
     capture: {
       echoCancellation: false,
@@ -92,6 +93,44 @@ describe('audio uplink health', () => {
     const malformed: any = structuredClone(input);
     malformed.captureDispatch.maxLagMs = 100;
     assert.equal(parseAudioUplinkHealth(malformed), null);
+  });
+
+  it('keeps active input-gap state rollout-compatible and strict when supplied', () => {
+    const current = parseAudioUplinkHealth(validHealth());
+    assert.ok(current);
+    assert.equal(current.inputGapActive, false);
+    assert.equal(current.inputGapActiveObserved, true);
+    assert.equal(
+      Object.prototype.propertyIsEnumerable.call(current, 'inputGapActiveObserved'),
+      false,
+    );
+    assert.equal(JSON.stringify(current).includes('inputGapActiveObserved'), false);
+
+    const active: any = validHealth();
+    active.inputGapActive = true;
+    assert.equal(parseAudioUplinkHealth(active)?.inputGapActive, true);
+
+    const legacy: any = validHealth();
+    delete legacy.inputGapActive;
+    const parsedLegacy = parseAudioUplinkHealth(legacy);
+    assert.ok(parsedLegacy);
+    assert.equal(
+      parsedLegacy.inputGapActive,
+      false,
+      'older health v1 remains parse-compatible until its page reloads onto active-gap telemetry',
+    );
+    assert.equal(parsedLegacy.inputGapActiveObserved, false);
+    assert.equal(JSON.stringify(parsedLegacy).includes('inputGapActiveObserved'), false);
+
+    for (const inputGapActive of ['false', 'true', 0, 1, null, {}, []]) {
+      const malformed: any = validHealth();
+      malformed.inputGapActive = inputGapActive;
+      assert.equal(
+        parseAudioUplinkHealth(malformed),
+        null,
+        `supplied inputGapActive must be boolean, got ${JSON.stringify(inputGapActive)}`,
+      );
+    }
   });
 
   it('keeps missing legacy inputMuted compatible but rejects malformed supplied values', () => {

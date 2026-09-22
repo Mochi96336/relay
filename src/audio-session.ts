@@ -358,6 +358,22 @@ export class AudioSession {
   private backingReplacementNeedsFadeIn = false;
   private micReplacementFadeInRemainingSamples = 0;
   private backingReplacementFadeInRemainingSamples = 0;
+  /**
+   * Mixer-output frontier continuity.
+   *
+   * A timeline can be perfectly contiguous once late PCM arrives even though an
+   * earlier mix frame already exhausted the then-known frontier and emitted
+   * silence. Track that audible state separately from raw timeline evidence so
+   * starvation/recovery can be de-clicked without rewriting source history.
+   */
+  private micFrontierOutputMissing = false;
+  private backingFrontierOutputMissing = false;
+  private micFrontierFadeStart = 0;
+  private backingFrontierFadeStart = 0;
+  private micFrontierFadeRemainingSamples = 0;
+  private backingFrontierFadeRemainingSamples = 0;
+  private micFrontierRecoveryFadeRemainingSamples = 0;
+  private backingFrontierRecoveryFadeRemainingSamples = 0;
   private readonly sourceEdgeFadeSamples: number;
 
   private micStarvedFrames = 0;
@@ -1000,6 +1016,14 @@ export class AudioSession {
     this.backingReplacementNeedsFadeIn = false;
     this.micReplacementFadeInRemainingSamples = 0;
     this.backingReplacementFadeInRemainingSamples = 0;
+    this.micFrontierOutputMissing = false;
+    this.backingFrontierOutputMissing = false;
+    this.micFrontierFadeStart = 0;
+    this.backingFrontierFadeStart = 0;
+    this.micFrontierFadeRemainingSamples = 0;
+    this.backingFrontierFadeRemainingSamples = 0;
+    this.micFrontierRecoveryFadeRemainingSamples = 0;
+    this.backingFrontierRecoveryFadeRemainingSamples = 0;
     this.mic.gapSamples = 0;
     this.backing.gapSamples = 0;
   }
@@ -1630,6 +1654,91 @@ export class AudioSession {
     return current * weight;
   }
 
+  private resetMicFrontierEdge() {
+    this.micFrontierOutputMissing = false;
+    this.micFrontierFadeStart = 0;
+    this.micFrontierFadeRemainingSamples = 0;
+    this.micFrontierRecoveryFadeRemainingSamples = 0;
+  }
+
+  private resetBackingFrontierEdge() {
+    this.backingFrontierOutputMissing = false;
+    this.backingFrontierFadeStart = 0;
+    this.backingFrontierFadeRemainingSamples = 0;
+    this.backingFrontierRecoveryFadeRemainingSamples = 0;
+  }
+
+  /**
+   * De-clicks only the already-emitted boundary around frontier starvation.
+   *
+   * Raw timeline PCM and readEvidence() remain untouched. In particular, late
+   * contiguous PCM can later make the stored timeline look gap-free; this state
+   * remembers that the mixer had already emitted silence while waiting for it.
+   */
+  private applyMicFrontierEdge(current: number, frontierMissing: boolean) {
+    if (frontierMissing) {
+      if (!this.micFrontierOutputMissing) {
+        this.micFrontierOutputMissing = true;
+        this.micFrontierFadeStart = this.lastEmittedMicContribution;
+        this.micFrontierFadeRemainingSamples = this.sourceEdgeFadeSamples;
+        this.micFrontierRecoveryFadeRemainingSamples = 0;
+      }
+      if (this.micFrontierFadeRemainingSamples <= 0) return current;
+      const progress = this.sourceEdgeFadeSamples - this.micFrontierFadeRemainingSamples;
+      const weight = this.sourceEdgeFadeSamples <= 1
+        ? 1
+        : progress / (this.sourceEdgeFadeSamples - 1);
+      const value = this.micFrontierFadeStart * (1 - weight) + current * weight;
+      this.micFrontierFadeRemainingSamples -= 1;
+      return value;
+    }
+
+    if (this.micFrontierOutputMissing) {
+      this.micFrontierOutputMissing = false;
+      this.micFrontierFadeRemainingSamples = 0;
+      this.micFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;
+    }
+    if (this.micFrontierRecoveryFadeRemainingSamples <= 0) return current;
+    const progress = this.sourceEdgeFadeSamples - this.micFrontierRecoveryFadeRemainingSamples;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 1
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    this.micFrontierRecoveryFadeRemainingSamples -= 1;
+    return current * weight;
+  }
+
+  private applyBackingFrontierEdge(current: number, frontierMissing: boolean) {
+    if (frontierMissing) {
+      if (!this.backingFrontierOutputMissing) {
+        this.backingFrontierOutputMissing = true;
+        this.backingFrontierFadeStart = this.lastEmittedBackingContribution;
+        this.backingFrontierFadeRemainingSamples = this.sourceEdgeFadeSamples;
+        this.backingFrontierRecoveryFadeRemainingSamples = 0;
+      }
+      if (this.backingFrontierFadeRemainingSamples <= 0) return current;
+      const progress = this.sourceEdgeFadeSamples - this.backingFrontierFadeRemainingSamples;
+      const weight = this.sourceEdgeFadeSamples <= 1
+        ? 1
+        : progress / (this.sourceEdgeFadeSamples - 1);
+      const value = this.backingFrontierFadeStart * (1 - weight) + current * weight;
+      this.backingFrontierFadeRemainingSamples -= 1;
+      return value;
+    }
+
+    if (this.backingFrontierOutputMissing) {
+      this.backingFrontierOutputMissing = false;
+      this.backingFrontierFadeRemainingSamples = 0;
+      this.backingFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;
+    }
+    if (this.backingFrontierRecoveryFadeRemainingSamples <= 0) return current;
+    const progress = this.sourceEdgeFadeSamples - this.backingFrontierRecoveryFadeRemainingSamples;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 1
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    this.backingFrontierRecoveryFadeRemainingSamples -= 1;
+    return current * weight;
+  }
+
   /**
    * Tracks the raw microphone so the gain can be set from what the phone is
    * actually sending. This has to watch the live stream: the only other
@@ -1807,6 +1916,13 @@ export class AudioSession {
     // emitted vocal sample being missing, so it is deliberately excluded here.
     const micReadEvidence = this.readEvidence(this.mic, micReadStart, this.frameSamples);
     const backingReadEvidence = this.readEvidence(this.backing, startSample, this.frameSamples);
+    // Frontier misses are always the trailing portion of readEvidence(): unlike
+    // an internal positioned gap there cannot be later retained PCM beyond the
+    // known frontier. Convert the counts into output-frame boundaries once,
+    // rather than re-running evidence lookup for every sample.
+    const micFrontierMissingStart = this.frameSamples - micReadEvidence.frontierMissingSamples;
+    const backingFrontierMissingStart =
+      this.frameSamples - backingReadEvidence.frontierMissingSamples;
 
     this.micUnplayableRunFrames = this.micExpected
       && micReadEvidence.gapSamples + micReadEvidence.frontierMissingSamples > 0
@@ -1887,6 +2003,18 @@ export class AudioSession {
       } else {
         voice = this.applyMicReplacementFadeIn(voice);
       }
+      const micReplacementEdgeActive =
+        this.micRetirementFadeRemainingSamples > 0
+        || this.micReplacementNeedsFadeIn
+        || this.micReplacementFadeInRemainingSamples > 0;
+      if (micReplacementEdgeActive) {
+        // Bind-time retirement owns this semantic boundary. Do not stack a
+        // starvation taper on top of the replacement taper simply because the
+        // cleared timeline also reads as frontier-missing.
+        this.resetMicFrontierEdge();
+      } else {
+        voice = this.applyMicFrontierEdge(voice, i >= micFrontierMissingStart);
+      }
 
       let songContribution = (song[i] / 32768) * songGain;
       if (this.backingRetirementFadeRemainingSamples > 0) {
@@ -1898,6 +2026,18 @@ export class AudioSession {
         }
       } else {
         songContribution = this.applyBackingReplacementFadeIn(songContribution);
+      }
+      const backingReplacementEdgeActive =
+        this.backingRetirementFadeRemainingSamples > 0
+        || this.backingReplacementNeedsFadeIn
+        || this.backingReplacementFadeInRemainingSamples > 0;
+      if (backingReplacementEdgeActive) {
+        this.resetBackingFrontierEdge();
+      } else {
+        songContribution = this.applyBackingFrontierEdge(
+          songContribution,
+          i >= backingFrontierMissingStart,
+        );
       }
       this.lastEmittedMicContribution = voice;
       this.lastEmittedBackingContribution = songContribution;

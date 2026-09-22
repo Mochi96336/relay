@@ -50,6 +50,7 @@ export class MicMediaPathRecovery {
   reset(): void;
   status(): MicMediaPathRecoveryStatus;
   quarantineWebTransport(): boolean;
+  noteSourceIneligibleBoundary(): void;
   beginGeneration(generation: number): boolean;
   rebaseline(input?: {
     capturedSamples?: number | null;

@@ -523,6 +523,30 @@ test('track callbacks survive graph-generation changes but stay fenced to the Mi
   assert.doesNotMatch(app, /const captureIsCurrent = \(\) => isCurrentPublisherCapture\(sessionEpoch, generation\)/);
 });
 
+test('background lifecycle fences media recovery before timers can freeze', () => {
+  const helperAt = app.indexOf('function notePublisherBackgrounded()');
+  const visibilityAt = app.indexOf("document.addEventListener('visibilitychange'", helperAt);
+  const pageshowAt = app.indexOf("window.addEventListener('pageshow'", visibilityAt);
+  assert.ok(helperAt >= 0 && visibilityAt > helperAt && pageshowAt > visibilityAt);
+
+  const helper = app.slice(helperAt, visibilityAt);
+  const boundaryAt = helper.indexOf('audioTransport.noteSourceIneligibleBoundary()');
+  const captureHiddenAt = helper.indexOf('micCaptureRecovery.noteHidden(captureSnapshot())');
+  assert.ok(boundaryAt >= 0, 'background lifecycle must synchronously fence media-path diagnostics');
+  assert.ok(
+    captureHiddenAt > boundaryAt,
+    'media-path boundary must be recorded before hidden-page timer suspension can intervene',
+  );
+
+  const lifecycle = app.slice(visibilityAt, pageshowAt);
+  assert.match(lifecycle, /notePublisherBackgrounded\(\)/);
+  assert.match(
+    lifecycle,
+    /window\.addEventListener\('pagehide', notePublisherBackgrounded\)/,
+    'pagehide/BFCache suspension must share the same synchronous source fence',
+  );
+});
+
 test('foreground and unmute do not claim recovery before fresh PCM', () => {
   const unmuteAt = app.indexOf("track?.addEventListener('unmute'");
   const endedAt = app.indexOf("track?.addEventListener('ended'", unmuteAt);

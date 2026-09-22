@@ -262,6 +262,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.publisherSocketEpoch = 0;
     this.publisherSocketListener = null;
     this.pendingPublisherHealth = [];
+    this.sourceEligibilityEpoch = 0;
     this.lastMediaRecoveryDecision = null;
     this.resetStats();
   }
@@ -294,6 +295,14 @@ export class PreferredAudioTransport extends AudioTransport {
   resolveInitialPreference() {
     this.initialPreferenceResolved = true;
     this.initialPreferenceHoldStartedAt = null;
+  }
+
+  noteSourceIneligibleBoundary() {
+    // Health ACKs are request-ordered but may arrive after a visibility edge.
+    // Advance a local epoch so any snapshot sent before this source boundary is
+    // consumed from the FIFO without being allowed to re-open diagnosis.
+    this.sourceEligibilityEpoch += 1;
+    this.mediaPathRecovery.noteSourceIneligibleBoundary();
   }
 
   resetOutstandingDatagramWrites() {
@@ -437,6 +446,14 @@ export class PreferredAudioTransport extends AudioTransport {
     ) return;
     this.pendingPublisherHealth.shift();
 
+    if (publisherHealth.sourceEligibilityEpoch !== this.sourceEligibilityEpoch) {
+      // This ACK describes a health snapshot captured before a synchronous
+      // source-suspension boundary (for example visibilitychange:hidden).
+      // It is still valid control traffic, but it cannot consume the new
+      // media-diagnosis baseline.
+      return;
+    }
+
     const serverMediaPath = message.pcm?.mediaPath === 'webtransport'
       || message.pcm?.mediaPath === 'websocket'
       ? message.pcm.mediaPath
@@ -507,6 +524,7 @@ export class PreferredAudioTransport extends AudioTransport {
           senderFailedPackets,
           path,
           socketEpoch: this.publisherSocketEpoch,
+          sourceEligibilityEpoch: this.sourceEligibilityEpoch,
           // Local source/capture failures are not media-path evidence. A muted
           // MediaStreamTrack or a sustained worklet input gap can keep sample
           // time advancing with zero PCM, just as capture-dispatch backlog

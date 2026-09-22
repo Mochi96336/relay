@@ -352,6 +352,53 @@ test('active input-gap health rebaselines media recovery instead of blaming WT',
   assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
 });
 
+test('background freeze with zero hidden health still makes foreground baseline-only', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  transport.sendControlJson(health(7, 1_000));
+  socket.emitJson(ack(7, 10, 'webtransport'));
+  transport.sendControlJson(health(7, 1_100));
+  socket.emitJson(ack(7, 10, 'webtransport'));
+  assert.equal((transport as any).mediaPathRecovery.status().staleObservations, 1);
+
+  // One more visible-state health is already in flight when the page hides.
+  // Its delayed ACK must not consume the just-created background boundary.
+  transport.sendControlJson(health(7, 1_200));
+
+  // visibilitychange:hidden fires, then iOS freezes the page before any hidden
+  // health interval can run.
+  transport.noteSourceIneligibleBoundary();
+  socket.emitJson(ack(7, 10, 'webtransport'));
+  assert.equal(
+    (transport as any).mediaPathRecovery.status().staleObservations,
+    0,
+    'a delayed pre-hide ACK cannot reopen media diagnosis after the boundary',
+  );
+
+  // First health after foreground spans the entire frozen interval. It must
+  // only establish a new baseline, not count as stale observation #1.
+  transport.sendControlJson(health(7, 5_000));
+  socket.emitJson(ack(7, 10, 'webtransport'));
+  assert.equal((transport as any).lastMediaRecoveryDecision?.reason, 'eligible-rebaseline');
+  assert.equal((transport as any).mediaPathRecovery.status().staleObservations, 0);
+  assert.equal(transport.stats().path, 'webtransport');
+
+  for (const capturedSamples of [5_100, 5_200]) {
+    transport.sendControlJson(health(7, capturedSamples));
+    socket.emitJson(ack(7, 10, 'webtransport'));
+    assert.equal(transport.stats().path, 'webtransport');
+  }
+  transport.sendControlJson(health(7, 5_300));
+  socket.emitJson(ack(7, 10, 'webtransport'));
+  assert.equal(transport.stats().path, 'websocket');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
+});
+
 test('hidden-page health ACKs rebaseline and never trigger semantic media recovery', async () => {
   FakeWebTransport.instances.length = 0;
   const { PreferredAudioTransport } = await import(moduleUrl.href);

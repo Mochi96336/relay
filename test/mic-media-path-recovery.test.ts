@@ -139,7 +139,90 @@ test('ineligible observations rebaseline instead of diagnosing background suspen
     eligible: true,
   }));
   assert.equal(foreground.action, 'none');
-  assert.equal(foreground.staleObservations, 1);
+  assert.equal(foreground.reason, 'eligible-rebaseline');
+  assert.equal(
+    foreground.staleObservations,
+    0,
+    'the source-return edge itself cannot inherit stale evidence from the ineligible interval',
+  );
+
+  const firstDiagnostic = recovery.observe(observation({
+    capturedSamples: 1_800,
+    eligible: true,
+  }));
+  assert.equal(firstDiagnostic.action, 'none');
+  assert.equal(firstDiagnostic.staleObservations, 1);
+});
+
+test('source failure restarts an in-flight fallback proof from post-recovery evidence', () => {
+  const recovery = new MicMediaPathRecovery();
+  assert.equal(
+    advanceStale(recovery, { fromCaptured: 1_000, count: 3 }).action,
+    'demote-webtransport',
+  );
+
+  const wsBaseline = recovery.observe(observation({
+    capturedSamples: 1_400,
+    serverAcceptedFrameSerial: 10,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+  }));
+  assert.equal(wsBaseline.reason, 'server-websocket-rebaseline');
+  assert.equal(wsBaseline.proofBaselineSerial, 10);
+
+  const staleProof = recovery.observe(observation({
+    capturedSamples: 1_500,
+    serverAcceptedFrameSerial: 10,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+  }));
+  assert.equal(staleProof.action, 'none');
+  assert.equal(staleProof.staleObservations, 1);
+
+  // Padded/source-failure PCM may advance the server serial, but it is not
+  // evidence that the fallback transport recovered the microphone.
+  const blocked = recovery.observe(observation({
+    capturedSamples: 1_600,
+    serverAcceptedFrameSerial: 20,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+    eligible: false,
+  }));
+  assert.equal(blocked.reason, 'ineligible');
+  assert.equal(blocked.staleObservations, 0);
+  assert.equal(blocked.proofBaselineSerial, null);
+
+  const returned = recovery.observe(observation({
+    capturedSamples: 1_700,
+    serverAcceptedFrameSerial: 21,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+    eligible: true,
+  }));
+  assert.equal(returned.reason, 'eligible-rebaseline');
+  assert.equal(returned.staleObservations, 0);
+  assert.equal(
+    returned.proofBaselineSerial,
+    21,
+    'fallback proof must restart from the first post-source-failure eligible snapshot',
+  );
+
+  for (const capturedSamples of [1_800, 1_900]) {
+    const decision = recovery.observe(observation({
+      capturedSamples,
+      serverAcceptedFrameSerial: 21,
+      serverMediaPath: 'websocket',
+      path: 'websocket',
+    }));
+    assert.equal(decision.action, 'none');
+  }
+  const replace = recovery.observe(observation({
+    capturedSamples: 2_000,
+    serverAcceptedFrameSerial: 21,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+  }));
+  assert.equal(replace.action, 'replace-websocket');
 });
 
 test('late WT acceptance cannot prove fallback until server has switched to WebSocket and PCM advances after that baseline', () => {

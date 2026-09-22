@@ -742,6 +742,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     claimMicrophoneAudio(true);
     forceMicMute('handoff-starting');
   }, { capture: true });
+  window.addEventListener('relay-retry-microphone', () => {
+    claimMicrophoneAudio(true);
+    forceMicMute('mic-starting');
+  }, { capture: true });
   window.addEventListener('relay-microphone-started', () => {
     claimMicrophoneAudio(true);
     forceMicMute('mic-owned');

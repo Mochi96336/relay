@@ -2177,12 +2177,6 @@ export class AudioSession {
       );
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
-    const micOutputSourceStart = boundedRuntimeAdvanceMoved
-      ? startSample + previousAdvanceSamplesExact
-      : micReadStart;
-    const micOutputSourceRate = boundedRuntimeAdvanceMoved
-      ? 1 + ((advanceSamplesExact - previousAdvanceSamplesExact) / this.frameSamples)
-      : 1;
     // `backingExpected` and `micExpected` are the room's semantic signals for
     // which sources this mix has. Both must hold: the reservation is headroom
     // for a sum, so a room with only one source has nothing to reserve against.
@@ -2218,7 +2212,7 @@ export class AudioSession {
         (mic[i] / 32768) * micGain,
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
-      const micSourceSample = micOutputSourceStart + i * micOutputSourceRate;
+      const micSourceSample = micReadStart + i;
       const micEvidenceMissing = micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
       // Negative session positions are structural pre-roll, not source failure,
       // so they stay out of MixFrameEvidence. They are still literal silence at

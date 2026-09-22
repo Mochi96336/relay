@@ -14,6 +14,7 @@ function health(captureGeneration: number): AudioUplinkHealth {
     captureGeneration,
     capturedSamples: 96_000,
     inputGapSamples: 0,
+    inputGapActive: false,
     inputMuted: false,
     capture: null,
     captureLevel: null,

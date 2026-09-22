@@ -183,6 +183,47 @@ test('Mic recovery keeps its fade pending across structural or source silence', 
   );
 });
 
+test('late-discovered positioned gap tapers from already-emitted Backing into silence', () => {
+  const session = makeSession();
+  session.setBackingExpected(true);
+  session.ingestBacking(frame(0), RATE, 0);
+
+  const before = drainOne(session, 0);
+  const beforeLast = sample(before.output, CHUNK - 1);
+  assert.ok(Math.abs(beforeLast - AMPLITUDE) <= 1);
+
+  // Frame 0 is already audible before this later packet proves that frame 1
+  // never arrived. Raw previous-chunk editing is now too late to fix what the
+  // listener heard, so the mix-output edge must own the transition to silence.
+  session.ingestBacking(frame(CHUNK * 2), RATE, 20);
+  assert.deepEqual(session.readBackingEvidence(CHUNK, CHUNK), {
+    gapSamples: CHUNK,
+    frontierMissingSamples: 0,
+    unheaderedSamples: 0,
+  });
+
+  const missing = drainOne(session, 20);
+  assert.ok(
+    Math.abs(sample(missing.output, 0) - beforeLast) <= 1,
+    'first newly-proven gap sample must continue the already-emitted song edge',
+  );
+  assert.equal(
+    sample(missing.output, FADE - 1),
+    0,
+    'late-discovered gap must reach literal silence inside the existing 2 ms budget',
+  );
+  assert.equal(sample(missing.output, FADE), 0);
+  assert.equal(missing.evidence.backingGapSamples, CHUNK);
+  assert.equal(missing.evidence.backingStarvedSamples, 0);
+
+  const recovered = drainOne(session, 40);
+  assert.equal(sample(recovered.output, 0), 0, 'recovered packet still enters from silence');
+  assert.ok(
+    Math.abs(sample(recovered.output, FADE) - AMPLITUDE) <= 1,
+    'combined raw/output recovery smoothing remains bounded to about 2 ms',
+  );
+});
+
 test('Backing starvation and late contiguous recovery use the same bounded output edge', () => {
   const session = makeSession();
   session.setBackingExpected(true);

@@ -183,6 +183,53 @@ test('Mic recovery keeps its fade pending across structural or source silence', 
   );
 });
 
+for (const source of ['mic', 'backing'] as const) {
+  test(`${source} one-sample late-discovered gap recovers from the audible fade, not assumed silence`, () => {
+    const session = makeSession();
+    if (source === 'mic') session.setMicExpected(true);
+    else session.setBackingExpected(true);
+
+    const ingest = source === 'mic'
+      ? (frameValue: PcmFrame, nowMs: number) => session.ingestMic(frameValue, RATE, nowMs)
+      : (frameValue: PcmFrame, nowMs: number) => session.ingestBacking(frameValue, RATE, nowMs);
+
+    ingest(frame(0), 0);
+    const before = drainOne(session, 0);
+    const beforeLast = sample(before.output, CHUNK - 1);
+    assert.ok(Math.abs(beforeLast - AMPLITUDE) <= 1);
+
+    // The next packet arrives only after frame 0 was emitted and proves exactly
+    // one missing positioned sample. The missing fade therefore has only one
+    // sample to run before real source PCM returns.
+    ingest(frame(CHUNK + 1), 20);
+    const evidence = source === 'mic'
+      ? session.readMicEvidence(CHUNK, CHUNK)
+      : session.readBackingEvidence(CHUNK, CHUNK);
+    assert.equal(evidence.gapSamples, 1);
+
+    const recovered = drainOne(session, 20);
+    const firstMissing = sample(recovered.output, 0);
+    const firstRecovered = sample(recovered.output, 1);
+    assert.ok(
+      Math.abs(firstMissing - beforeLast) <= 1,
+      'the single missing sample must continue the already-emitted edge',
+    );
+    assert.ok(
+      Math.abs(firstRecovered - firstMissing) < 1_518,
+      `short-gap recovery must continue from the audible edge: ${firstMissing} -> ${firstRecovered}`,
+    );
+
+    let maxStep = 0;
+    for (let index = 1; index < Math.min(CHUNK, FADE * 2); index += 1) {
+      maxStep = Math.max(
+        maxStep,
+        Math.abs(sample(recovered.output, index) - sample(recovered.output, index - 1)),
+      );
+    }
+    assert.ok(maxStep < 1_518, `short-gap recovery emitted a hard splice: ${maxStep}`);
+  });
+}
+
 test('late-discovered positioned gap tapers from already-emitted Mic into silence', () => {
   const session = makeSession();
   session.setMicExpected(true);

@@ -1537,6 +1537,67 @@ export class AudioSession {
    * counted as a source failure. Missing samples inside an established frontier
    * are gaps; samples beyond the frontier are starvation/unavailability.
    */
+  /**
+   * Marks only proven internal positioned holes for the requested source range.
+   * Frontier starvation is intentionally left unmarked: mixFrame already knows
+   * that trailing boundary from readEvidence(). Structural pre-roll is neither.
+   *
+   * This is allocated only for frames whose aggregate evidence contains a gap,
+   * keeping the ordinary hot path allocation-free.
+   */
+  private readGapMask(timeline: PcmTimeline, startSample: number, count: number) {
+    const mask = new Uint8Array(Math.max(0, count));
+    let cursor = startSample;
+    let remaining = count;
+    let outputOffset = 0;
+
+    if (remaining <= 0) return mask;
+    if (cursor < 0) {
+      const preRoll = Math.min(remaining, -cursor);
+      cursor += preRoll;
+      remaining -= preRoll;
+      outputOffset += preRoll;
+    }
+    if (
+      remaining <= 0
+      || timeline.chunks.length === 0
+      || cursor >= timeline.totalSamples
+    ) return mask;
+
+    let chunkIndex = this.firstChunkAtOrBefore(timeline, cursor);
+    while (remaining > 0 && cursor < timeline.totalSamples) {
+      if (chunkIndex >= timeline.chunks.length) break;
+
+      const chunk = timeline.chunks[chunkIndex];
+      const chunkEnd = chunk.start + chunk.samples.length;
+      if (cursor >= chunkEnd) {
+        chunkIndex += 1;
+        continue;
+      }
+
+      if (cursor < chunk.start) {
+        const missing = Math.min(
+          remaining,
+          chunk.start - cursor,
+          timeline.totalSamples - cursor,
+        );
+        mask.fill(1, outputOffset, outputOffset + missing);
+        cursor += missing;
+        remaining -= missing;
+        outputOffset += missing;
+        continue;
+      }
+
+      const available = Math.min(remaining, chunkEnd - cursor);
+      cursor += available;
+      remaining -= available;
+      outputOffset += available;
+      chunkIndex += 1;
+    }
+
+    return mask;
+  }
+
   private readEvidence(timeline: PcmTimeline, startSample: number, count: number) {
     let cursor = startSample;
     let remaining = count;
@@ -1741,14 +1802,16 @@ export class AudioSession {
   }
 
   /**
-   * De-clicks only the already-emitted boundary around frontier starvation.
+   * De-clicks already-emitted boundaries around any proven missing source span.
    *
-   * Raw timeline PCM and readEvidence() remain untouched. In particular, late
-   * contiguous PCM can later make the stored timeline look gap-free; this state
-   * remembers that the mixer had already emitted silence while waiting for it.
+   * This state originally covered only live-frontier starvation. A positioned
+   * packet arriving after the preceding frame was already emitted can reveal an
+   * internal hole too late for declickSourceGap() to rewrite that audible edge.
+   * Treat both kinds of missing sample the same at mix output while leaving raw
+   * timeline positions and evidence untouched.
    */
-  private applyMicFrontierEdge(current: number, frontierMissing: boolean) {
-    if (frontierMissing) {
+  private applyMicFrontierEdge(current: number, sourceMissing: boolean) {
+    if (sourceMissing) {
       if (!this.micFrontierOutputMissing) {
         this.micFrontierOutputMissing = true;
         this.micFrontierFadeStart = this.lastEmittedMicContribution;
@@ -1785,8 +1848,8 @@ export class AudioSession {
     return current * weight;
   }
 
-  private applyBackingFrontierEdge(current: number, frontierMissing: boolean) {
-    if (frontierMissing) {
+  private applyBackingFrontierEdge(current: number, sourceMissing: boolean) {
+    if (sourceMissing) {
       if (!this.backingFrontierOutputMissing) {
         this.backingFrontierOutputMissing = true;
         this.backingFrontierFadeStart = this.lastEmittedBackingContribution;
@@ -2004,6 +2067,12 @@ export class AudioSession {
     const micFrontierMissingStart = this.frameSamples - micReadEvidence.frontierMissingSamples;
     const backingFrontierMissingStart =
       this.frameSamples - backingReadEvidence.frontierMissingSamples;
+    const micGapMask = micReadEvidence.gapSamples > 0
+      ? this.readGapMask(this.mic, micReadStart, this.frameSamples)
+      : null;
+    const backingGapMask = backingReadEvidence.gapSamples > 0
+      ? this.readGapMask(this.backing, startSample, this.frameSamples)
+      : null;
 
     this.micUnplayableRunFrames = this.micExpected
       && micReadEvidence.gapSamples + micReadEvidence.frontierMissingSamples > 0
@@ -2096,7 +2165,10 @@ export class AudioSession {
         // because the same output sample also reads as frontier-missing.
         this.resetMicFrontierEdge();
       } else {
-        voice = this.applyMicFrontierEdge(voice, i >= micFrontierMissingStart);
+        voice = this.applyMicFrontierEdge(
+          voice,
+          micGapMask?.[i] === 1 || i >= micFrontierMissingStart,
+        );
       }
 
       let songContribution = (song[i] / 32768) * songGain;
@@ -2121,7 +2193,7 @@ export class AudioSession {
       } else {
         songContribution = this.applyBackingFrontierEdge(
           songContribution,
-          i >= backingFrontierMissingStart,
+          backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart,
         );
       }
       this.lastEmittedMicContribution = voice;

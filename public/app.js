@@ -1739,12 +1739,18 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   }
 }
 
-async function requestPublisherStart(takeoverExpectedOwnerId = null) {
+async function requestPublisherStart(
+  takeoverExpectedOwnerId = null,
+  { preserveMicOwnership = false } = {},
+) {
   if (publisherStartRequest) return publisherStartRequest;
 
   const request = (async () => {
     try {
-      await stop(false, { releaseMic: true });
+      // A self-owner recovery must replace the damaged local capture without
+      // opening a room-ownership race. Ordinary Take Mic/takeover still releases
+      // any prior local Mic before acquiring through the normal server path.
+      await stop(false, { releaseMic: !preserveMicOwnership });
       await startPublisher(takeoverExpectedOwnerId);
     } catch (error) {
       if (error?.code === 'mic-startup-cancelled') return;
@@ -1783,6 +1789,10 @@ window.addEventListener('relay-request-microphone', (event) => {
     ? event.detail.takeoverExpectedOwnerId
     : null;
   requestPublisherStart(expectedOwnerId).catch(console.error);
+});
+
+window.addEventListener('relay-retry-microphone', () => {
+  requestPublisherStart(null, { preserveMicOwnership: true }).catch(console.error);
 });
 
 document.addEventListener('visibilitychange', () => {

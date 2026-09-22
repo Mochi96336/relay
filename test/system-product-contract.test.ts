@@ -99,3 +99,55 @@ test('Technical details retains raw operational evidence as a separate developer
   assert.match(html, />Technical details</);
   assert.match(css, /\.diagnostics-panel > summary \{[\s\S]*?min-height: 44px;/);
 });
+
+
+test('retry-mic recovery becomes a self-owner user-gesture action without widening other recoveries', () => {
+  const system = read('public/system-details.js');
+  const liveCopy = read('public/live-i18n.js');
+  const css = read('public/system-details.css');
+  const app = read('public/app.js');
+  const listen = read('public/listen.js');
+  const youtubeSync = read('public/youtube-sync.js');
+
+  assert.match(
+    system,
+    /function canRetryMicHere\(issue\)[\s\S]*issue\?\.recovery === 'retry-mic'[\s\S]*latestProduct\?\.room\?\.mic\?\.ownerId === participantId/,
+    'Retry Mic must be actionable only on the device that authoritatively owns the Mic',
+  );
+  assert.match(
+    system,
+    /retryMic\.addEventListener\('click',[\s\S]*dispatchEvent\(new CustomEvent\('relay-retry-microphone'\)\)/,
+    'the recovery action must use a dedicated self-recovery user gesture',
+  );
+  assert.match(
+    app,
+    /relay-retry-microphone'[\s\S]*requestPublisherStart\(null, \{ preserveMicOwnership: true \}\)/,
+    'self retry must preserve room Mic ownership while replacing the local capture',
+  );
+  assert.match(
+    app,
+    /stop\(false, \{ releaseMic: !preserveMicOwnership \}\)/,
+    'ordinary Mic starts and self retry must share one lifecycle with explicit ownership semantics',
+  );
+  assert.match(
+    listen,
+    /relay-retry-microphone'[\s\S]*claimMicrophoneAudio\(true\)/,
+    'Retry Mic must still synchronously claim the iOS play-and-record AudioSession',
+  );
+  assert.doesNotMatch(
+    youtubeSync,
+    /relay-retry-microphone/,
+    'capture recovery must not mint a new playback Mic intent or move Song playback between tabs',
+  );
+  assert.doesNotMatch(
+    system,
+    /issue\?\.recovery === '(?:automatic|retry-recording|recalibrate|host-service)'[\s\S]{0,240}createElement\('button'\)/,
+    'this focused recovery action must not turn unrelated guidance into buttons',
+  );
+  assert.equal(
+    (liveCopy.match(/'system\.issue\.action\.retry-mic':/g) ?? []).length,
+    2,
+    'Retry Mic action copy must exist in both supported Live locales',
+  );
+  assert.match(css, /\.system-issue-retry-mic \{[\s\S]*min-height: 44px;/);
+});

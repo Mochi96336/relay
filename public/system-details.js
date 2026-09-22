@@ -106,6 +106,15 @@ if (
   productSurface.append(healthyNode, issuesNode);
   systemSheet.insertBefore(productSurface, diagnosticsPanel);
 
+  function canRetryMicHere(issue) {
+    const participantId = typeof window.relayParticipantId === 'string'
+      ? window.relayParticipantId
+      : null;
+    return issue?.recovery === 'retry-mic'
+      && participantId !== null
+      && latestProduct?.room?.mic?.ownerId === participantId;
+  }
+
   function issueCard(issue) {
     const card = document.createElement('article');
     card.className = 'system-issue';
@@ -131,6 +140,20 @@ if (
     recovery.className = 'system-issue-recovery';
     recovery.textContent = recoveryCopy(issue?.recovery);
     meta.append(affected, recovery);
+
+    if (canRetryMicHere(issue)) {
+      const retryMic = document.createElement('button');
+      retryMic.type = 'button';
+      retryMic.className = 'system-issue-retry-mic text-action';
+      retryMic.textContent = t('system.issue.action.retry-mic');
+      retryMic.addEventListener('click', () => {
+        // This stays a real user gesture. listen.js claims iOS play-and-record
+        // synchronously before app.js replaces the old stream through the
+        // ordinary Mic lifecycle.
+        window.dispatchEvent(new CustomEvent('relay-retry-microphone'));
+      });
+      meta.append(retryMic);
+    }
 
     card.append(heading, detail, meta);
     return card;

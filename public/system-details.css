@@ -59,6 +59,17 @@
 .system-issue-recovery {
   color: #aaaeb5;
 }
+.system-issue-retry-mic {
+  min-height: 44px;
+  justify-self: end;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #c6c8cd;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
 
 .diagnostics-panel { margin-top: 18px; }
 .diagnostics-panel > summary {

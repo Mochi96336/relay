@@ -2222,16 +2222,17 @@ export class AudioSession {
       this.beginMicCaptureRestartEdgeIfDue(micSourceSample);
 
       if (
-        micAudibleMissing
+        micEvidenceMissing
         && (
           this.micRetirementFadeRemainingSamples > 0
           || this.micReplacementNeedsFadeIn
           || this.micReplacementFadeInRemainingSamples > 0
         )
       ) {
-        // A short replacement can end before its 2 ms transition does. Missing
-        // source is a new semantic edge, not a zero-valued replacement target:
-        // hand ownership to the source-missing taper from the exact last output.
+        // A proven source gap/frontier is a new semantic edge and takes over
+        // from a capture replacement. Structural pre-roll is different: it is
+        // not source failure, and an already-active restart transition keeps
+        // ownership until real replacement PCM becomes audible.
         this.cancelMicReplacementEdgeForMissingSource();
       }
 

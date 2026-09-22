@@ -154,6 +154,64 @@ test('ineligible observations rebaseline instead of diagnosing background suspen
   assert.equal(firstDiagnostic.staleObservations, 1);
 });
 
+test('explicit source suspension boundary makes a timer-free return baseline-only', () => {
+  const recovery = new MicMediaPathRecovery();
+  recovery.observe(observation({ capturedSamples: 1_000 }));
+  const stale = recovery.observe(observation({ capturedSamples: 1_100 }));
+  assert.equal(stale.staleObservations, 1);
+
+  // Model iOS freezing the page immediately after visibilitychange:hidden:
+  // there are no ineligible health observations at all during the suspension.
+  recovery.noteSourceIneligibleBoundary();
+  assert.equal(recovery.status().staleObservations, 0);
+  assert.equal(recovery.status().webTransportDemotionUsed, false);
+
+  const returned = recovery.observe(observation({ capturedSamples: 5_000 }));
+  assert.equal(returned.action, 'none');
+  assert.equal(returned.reason, 'eligible-rebaseline');
+  assert.equal(returned.staleObservations, 0);
+
+  for (const capturedSamples of [5_100, 5_200]) {
+    const decision = recovery.observe(observation({ capturedSamples }));
+    assert.equal(decision.action, 'none');
+  }
+  const demoted = recovery.observe(observation({ capturedSamples: 5_300 }));
+  assert.equal(demoted.action, 'demote-webtransport');
+});
+
+test('explicit source suspension boundary restarts an in-flight fallback proof', () => {
+  const recovery = new MicMediaPathRecovery();
+  assert.equal(
+    advanceStale(recovery, { fromCaptured: 1_000, count: 3 }).action,
+    'demote-webtransport',
+  );
+
+  const wsBaseline = recovery.observe(observation({
+    capturedSamples: 1_400,
+    serverAcceptedFrameSerial: 10,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+  }));
+  assert.equal(wsBaseline.reason, 'server-websocket-rebaseline');
+  assert.equal(wsBaseline.proofBaselineSerial, 10);
+
+  recovery.noteSourceIneligibleBoundary();
+  assert.equal(recovery.status().proofBaselineSerial, null);
+  assert.equal(recovery.status().staleObservations, 0);
+  assert.equal(recovery.status().webTransportDemotionUsed, true);
+
+  const returned = recovery.observe(observation({
+    capturedSamples: 5_000,
+    serverAcceptedFrameSerial: 20,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+  }));
+  assert.equal(returned.reason, 'eligible-rebaseline');
+  assert.equal(returned.proofBaselineSerial, 20);
+  assert.equal(returned.webTransportDemotionUsed, true);
+  assert.equal(returned.webSocketReplacementUsed, false);
+});
+
 test('source failure restarts an in-flight fallback proof from post-recovery evidence', () => {
   const recovery = new MicMediaPathRecovery();
   assert.equal(

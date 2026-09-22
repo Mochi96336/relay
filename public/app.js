@@ -1801,15 +1801,25 @@ window.addEventListener('relay-retry-microphone', () => {
   requestPublisherStart(null, { preserveMicOwnership: true }).catch(console.error);
 });
 
+function notePublisherBackgrounded() {
+  activeCalibrationProbeRequestId = null;
+  retireCalibrationProbePlayback();
+  if (!publisherActive) return;
+
+  // iOS may freeze timers immediately after the lifecycle edge, so do not
+  // rely on a later hidden-state health report to fence media-path diagnosis.
+  audioTransport.noteSourceIneligibleBoundary();
+  micCaptureRecovery.noteHidden(captureSnapshot());
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
-    activeCalibrationProbeRequestId = null;
-    retireCalibrationProbePlayback();
-    if (publisherActive) micCaptureRecovery.noteHidden(captureSnapshot());
+    notePublisherBackgrounded();
     return;
   }
   recoverPublisherAudio();
 });
+window.addEventListener('pagehide', notePublisherBackgrounded);
 window.addEventListener('pageshow', recoverPublisherAudio);
 
 window.addEventListener('relay-release-microphone', () => {

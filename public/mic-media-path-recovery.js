@@ -102,6 +102,20 @@ export class MicMediaPathRecovery {
     return this.webTransportQuarantined;
   }
 
+  noteSourceIneligibleBoundary() {
+    // Browser lifecycle can suspend health timers entirely while the page is
+    // hidden. Record the source-failure boundary synchronously so the first
+    // later eligible health snapshot cannot score deltas spanning that freeze.
+    //
+    // This intentionally preserves generation-scoped bounded action budgets
+    // and WT quarantine. Only the diagnostic evidence window is invalidated.
+    this.sourceEligibilityBlocked = true;
+    this.incompletePacketSemanticStalls = 0;
+    this.staleCount = 0;
+    this.proofBaselineSerial = null;
+    this.proofServerWebSocketReady = false;
+  }
+
   beginGeneration(generation) {
     const normalized = uint32(generation);
     if (normalized === null) return false;

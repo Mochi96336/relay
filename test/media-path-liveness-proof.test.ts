@@ -48,6 +48,7 @@ function health(
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     inputGapSamples: 0,
+    inputGapActive: false,
     inputMuted: false,
     capture: null,
     captureLevel: null,

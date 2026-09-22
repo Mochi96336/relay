@@ -82,6 +82,66 @@ test('Mic frontier exhaustion inside a frame tapers at the emitted boundary with
   }, 'the audible taper must not rewrite raw frontier evidence');
 });
 
+test('Mic frontier hold de-clicks structural pre-roll when the read head crosses session zero', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: 20,
+    prebufferMs: 40,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+  session.setMicGainDb(0);
+  session.setMicExpected(true);
+  session.start(0);
+
+  // Leave the live frontier 145 samples short of frame 9 + limiter look-ahead.
+  // Frontier safety therefore acquires its 200 ms margin and holds frame 9
+  // entirely in negative session-position pre-roll.
+  const totalRealSamples = CHUNK * 10 - 1;
+  session.ingestMic(frame(0, totalRealSamples), RATE, 0);
+
+  for (let nowMs = 40; nowMs <= 200; nowMs += 20) {
+    drainOne(session, nowMs);
+  }
+  const held = drainOne(session, 220);
+  assert.equal(sample(held.output, CHUNK - 1), 0);
+  assert.equal(held.evidence.micGapSamples, 0);
+  assert.equal(held.evidence.micStarvedSamples, 0);
+
+  const correctionSamples = Math.round((session.micFrontierCorrectionMs * RATE) / 1000);
+  assert.equal(correctionSamples, 9_745, 'fixture must hold the Mic read head across session zero');
+
+  const recovered = drainOne(session, 240);
+  const readStart = CHUNK * 10 - correctionSamples;
+  const firstRealOutput = -readStart;
+  assert.equal(firstRealOutput, 145);
+  assert.equal(sample(recovered.output, firstRealOutput - 1), 0);
+  assert.equal(
+    sample(recovered.output, firstRealOutput),
+    0,
+    'first real PCM after structural pre-roll must continue emitted silence',
+  );
+  assert.ok(
+    Math.abs(sample(recovered.output, firstRealOutput + FADE - 1) - AMPLITUDE) <= 1,
+    'Mic returns from structural pre-roll to the real waveform inside 2 ms',
+  );
+  assert.equal(
+    recovered.evidence.micGapSamples,
+    0,
+    'structural pre-roll must stay out of source-failure evidence',
+  );
+  assert.equal(recovered.evidence.micStarvedSamples, 0);
+
+  let maxStep = 0;
+  for (let index = firstRealOutput; index < firstRealOutput + FADE + 2; index += 1) {
+    maxStep = Math.max(
+      maxStep,
+      Math.abs(sample(recovered.output, index) - sample(recovered.output, index - 1)),
+    );
+  }
+  assert.ok(maxStep < 1_518, `pre-roll recovery emitted a hard splice: ${maxStep}`);
+});
+
 test('Mic ownership release de-clicks the eventual frontier without reclassifying unavailable PCM', () => {
   const session = makeSession();
   session.setMicExpected(true);

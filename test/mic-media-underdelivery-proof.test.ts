@@ -26,13 +26,17 @@ function packet(sequence: number) {
   });
 }
 
-function health(capturedSamples: number): AudioUplinkHealth & { type: 'audio-uplink-health' } {
+function health(
+  capturedSamples: number,
+  { inputGapActive = false }: { inputGapActive?: boolean } = {},
+): AudioUplinkHealth & { type: 'audio-uplink-health' } {
   return {
     type: 'audio-uplink-health',
     version: 1,
     captureGeneration: GENERATION,
     capturedSamples,
     inputGapSamples: 0,
+    inputGapActive,
     inputMuted: false,
     capture: null,
     captureLevel: null,
@@ -141,7 +145,7 @@ class ServerBridge {
     );
     for (const frame of frames) {
       const ingested = this.session.ingestMic(frame, this.mic.sampleRate, this.nowMs);
-      if (ingested.samples.length > 0) this.mic.noteFrame(this.nowMs);
+      if (ingested.samples.length > 0) this.mic.noteFrame(this.nowMs, frame);
     }
   }
 
@@ -151,6 +155,105 @@ class ServerBridge {
     return messages.map((message) => JSON.parse(message));
   }
 }
+
+test('source-gap return rebaselines before sparse PCM can spend WebSocket recovery', async () => {
+  const mic = new MicRuntime({
+    audioTransportConfig: {
+      reorderWindowPackets: 0,
+      reorderDeadlineMs: 0,
+      maxForwardJumpPackets: 32,
+    },
+    firstFrameTimeoutMs: 3_000,
+    streamLiveMs: 1_000,
+    uplinkHealthTimeoutMs: 60_000,
+  });
+  const session = new AudioSession({
+    sampleRate: SAMPLE_RATE,
+    frameMs: 20,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 8_000,
+  });
+  session.setMicGainDb(0);
+  session.start(0);
+  session.setMicExpected(true);
+
+  const bridge = new ServerBridge(mic, session);
+  mic.bindPublisher({
+    socket: bridge.serverSocket,
+    sampleRate: SAMPLE_RATE,
+    captureGeneration: GENERATION,
+    audioPacketVersion: 2,
+    nowMs: 0,
+  });
+
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport();
+  transport.bind(bridge.browserSocket);
+
+  let sequence = 0;
+  const runWindow = (inputGapActive: boolean) => {
+    const end = sequence + 100;
+    for (; sequence < end; sequence += 1) {
+      bridge.nowMs = sequence * 10;
+      const result = transport.send(packet(sequence));
+      assert.equal(result.sent, true);
+      assert.equal(result.path, 'websocket');
+    }
+
+    const capturedSamples = sequence * PACKET_SAMPLES;
+    assert.equal(
+      transport.sendControlJson(health(capturedSamples, { inputGapActive })).sent,
+      true,
+    );
+    const messages = bridge.flushServerMessages();
+    const ack = messages.find((message) => message?.type === 'audio-uplink-health-ack');
+    assert.ok(ack, 'real MicRuntime must ACK current-generation health');
+    return (transport as any).lastMediaRecoveryDecision;
+  };
+
+  // Sparse PCM is objectively poor transport coverage, but while the worklet
+  // positively owns a source failure it must not consume the independent
+  // same-generation WebSocket recovery action.
+  for (let index = 0; index < 3; index += 1) {
+    const decision = runWindow(true);
+    assert.equal(decision?.reason, 'ineligible');
+    assert.equal(bridge.browserSocket.closeCalls.length, 0);
+    assert.equal(mic.streaming(bridge.nowMs), false);
+  }
+
+  // The first source-healthy report still spans the preceding gap interval.
+  // It is a boundary snapshot, not the first transport-quality observation.
+  const returned = runWindow(false);
+  assert.equal(returned?.reason, 'eligible-rebaseline');
+  assert.equal(returned?.staleObservations, 0);
+  assert.equal(bridge.browserSocket.closeCalls.length, 0);
+  assert.equal(
+    mic.streaming(bridge.nowMs),
+    false,
+    'gap recovery health alone cannot bypass the post-gap PCM cursor barrier',
+  );
+
+  // After real post-gap PCM crosses the server barrier, source liveness can
+  // return. Sparse delivery remains a separate fault and gets a full three
+  // eligible observations before the one bounded WebSocket replacement.
+  for (let index = 0; index < 2; index += 1) {
+    const decision = runWindow(false);
+    assert.equal(decision?.action, 'none');
+    assert.equal(bridge.browserSocket.closeCalls.length, 0);
+    assert.equal(mic.streaming(bridge.nowMs), true);
+  }
+
+  const replace = runWindow(false);
+  assert.equal(replace?.action, 'replace-websocket');
+  assert.equal(replace?.reason, 'server-pcm-underdelivery');
+  assert.deepEqual(bridge.browserSocket.closeCalls, [
+    { code: 4001, reason: 'server PCM stalled' },
+  ]);
+
+  transport.close();
+  mic.clearMediaAuthority(bridge.nowMs);
+});
 
 test('severe sparse PCM spends one bounded media recovery action even while freshness keeps advancing', async () => {
   const mic = new MicRuntime({

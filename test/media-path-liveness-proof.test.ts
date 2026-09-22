@@ -146,7 +146,7 @@ function acceptServerFrames(
 ) {
   for (const frame of frames) {
     const ingested = session.ingestMic(frame, mic.sampleRate, nowMs);
-    if (ingested.samples.length > 0) mic.noteFrame(nowMs);
+    if (ingested.samples.length > 0) mic.noteFrame(nowMs, frame);
   }
   return frames;
 }

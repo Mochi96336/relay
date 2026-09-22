@@ -73,6 +73,7 @@ export class MicMediaPathRecovery {
     this.lastPacketCoverage = null;
     this.incompletePacketSemanticStalls = 0;
     this.staleCount = 0;
+    this.sourceEligibilityBlocked = false;
     this.phase = 'observing';
     this.proofBaselineSerial = null;
     this.proofServerWebSocketReady = false;
@@ -291,9 +292,65 @@ export class MicMediaPathRecovery {
       return { action: 'none', reason: 'invalid-generation', ...this.status() };
     }
 
-    if (this.currentSocketEpoch !== null && normalizedEpoch !== this.currentSocketEpoch) {
+    const socketEpochChanged = this.currentSocketEpoch !== null
+      && normalizedEpoch !== this.currentSocketEpoch;
+    if (socketEpochChanged) {
       // #304/control lifecycle owns physical socket replacement. Never let ACK
       // cadence from the retired socket count toward a media verdict.
+      this.rebaseline({
+        capturedSamples: captured,
+        serverAcceptedFrameSerial: acceptedSerial,
+        socketEpoch: normalizedEpoch,
+        ...packetCounters,
+      });
+      this.lastLocalPath = localPath;
+
+      if (!eligible) {
+        // A source/capture failure remains authoritative across physical socket
+        // replacement. Keep the bounded media action budget, but any recovery
+        // proof gathered before this boundary is no longer diagnostic.
+        this.sourceEligibilityBlocked = true;
+        this.proofBaselineSerial = null;
+        this.proofServerWebSocketReady = false;
+        return { action: 'none', reason: 'ineligible', ...this.status() };
+      }
+
+      const returningFromIneligible = this.sourceEligibilityBlocked;
+      this.sourceEligibilityBlocked = false;
+      if (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving') {
+        this.beginWebSocketProof(serverPath, acceptedSerial, packetCounters);
+      }
+      return {
+        action: 'none',
+        reason: returningFromIneligible ? 'eligible-rebaseline' : 'socket-rebaseline',
+        ...this.status(),
+      };
+    }
+    this.currentSocketEpoch = normalizedEpoch;
+
+    if (!eligible) {
+      this.sourceEligibilityBlocked = true;
+      this.rebaseline({
+        capturedSamples: captured,
+        serverAcceptedFrameSerial: acceptedSerial,
+        socketEpoch: normalizedEpoch,
+        ...packetCounters,
+      });
+      this.lastLocalPath = localPath;
+      // A source failure pauses, rather than satisfies or fails, any in-flight
+      // WT→WS proof. Restart that proof from fresh server evidence on return.
+      if (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving') {
+        this.proofBaselineSerial = null;
+        this.proofServerWebSocketReady = false;
+      }
+      return { action: 'none', reason: 'ineligible', ...this.status() };
+    }
+
+    if (this.sourceEligibilityBlocked) {
+      // The recovery-edge health snapshot describes the boundary at which the
+      // source became diagnosable again; its deltas still span the preceding
+      // ineligible interval. Baseline it without scoring stale/coverage evidence.
+      this.sourceEligibilityBlocked = false;
       this.rebaseline({
         capturedSamples: captured,
         serverAcceptedFrameSerial: acceptedSerial,
@@ -304,19 +361,7 @@ export class MicMediaPathRecovery {
       if (this.phase === 'fallback-proving' || this.phase === 'reconnect-proving') {
         this.beginWebSocketProof(serverPath, acceptedSerial, packetCounters);
       }
-      return { action: 'none', reason: 'socket-rebaseline', ...this.status() };
-    }
-    this.currentSocketEpoch = normalizedEpoch;
-
-    if (!eligible) {
-      this.rebaseline({
-        capturedSamples: captured,
-        serverAcceptedFrameSerial: acceptedSerial,
-        socketEpoch: normalizedEpoch,
-        ...packetCounters,
-      });
-      this.lastLocalPath = localPath;
-      return { action: 'none', reason: 'ineligible', ...this.status() };
+      return { action: 'none', reason: 'eligible-rebaseline', ...this.status() };
     }
 
     const localPathChanged = this.lastLocalPath !== null && localPath !== this.lastLocalPath;

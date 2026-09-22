@@ -118,8 +118,13 @@ test('Mic late contiguous recovery fades in even when the raw timeline later has
   // These packets are source-contiguous. They arrive only after frame 1 was
   // already emitted as starvation, so the stored timeline becomes gap-free even
   // though the listener actually heard silence during that frame.
-  session.ingestMic(frame(CHUNK), RATE, 40);
-  session.ingestMic(frame(CHUNK * 2), RATE, 40);
+  // Catch-up can arrive as a burst. Give the Mic enough real headroom that its
+  // independent 200 ms frontier-safety correction does not deliberately keep
+  // the read head in older/pre-roll audio; this test isolates the audible
+  // starvation edge rather than that latency policy.
+  for (let index = 1; index < 16; index += 1) {
+    session.ingestMic(frame(CHUNK * index), RATE, 40);
+  }
 
   assert.equal(session.health().micGapMs, 0);
   assert.equal(session.readMic(CHUNK * 2, 1)[0], AMPLITUDE);
@@ -133,6 +138,49 @@ test('Mic late contiguous recovery fades in even when the raw timeline later has
     'recovered Mic reaches the real waveform inside 2 ms',
   );
   assert.ok(Math.abs(sample(recovered.output, FADE) - AMPLITUDE) <= 1);
+});
+
+test('Mic recovery keeps its fade pending across structural or source silence', () => {
+  const session = makeSession();
+  session.setMicExpected(true);
+  session.ingestMic(frame(0), RATE, 0);
+
+  drainOne(session, 0);
+  drainOne(session, 20);
+
+  // A catch-up burst is contiguous but resumes with 1 ms of actual source
+  // silence. The recovery edge must not be consumed by those zero samples.
+  const silentThenTone = Buffer.alloc(CHUNK * 2);
+  for (let i = RATE / 1000; i < CHUNK; i += 1) {
+    silentThenTone.writeInt16LE(AMPLITUDE, i * 2);
+  }
+  session.ingestMic({
+    generation: 1,
+    firstSampleIndex: CHUNK,
+    pcm: pcm(CHUNK),
+  }, RATE, 40);
+  session.ingestMic({
+    generation: 1,
+    firstSampleIndex: CHUNK * 2,
+    pcm: silentThenTone,
+  }, RATE, 40);
+  for (let index = 3; index < 16; index += 1) {
+    session.ingestMic(frame(CHUNK * index), RATE, 40);
+  }
+
+  const recovered = drainOne(session, 40);
+  const toneStart = RATE / 1000;
+  assert.equal(sample(recovered.output, 0), 0);
+  assert.equal(sample(recovered.output, toneStart - 1), 0);
+  assert.equal(
+    sample(recovered.output, toneStart),
+    0,
+    'the first audible sample after real source silence must still enter from silence',
+  );
+  assert.ok(
+    Math.abs(sample(recovered.output, toneStart + FADE - 1) - AMPLITUDE) <= 1,
+    'the pending recovery edge reaches the real waveform within 2 ms of first sound',
+  );
 });
 
 test('Backing starvation and late contiguous recovery use the same bounded output edge', () => {

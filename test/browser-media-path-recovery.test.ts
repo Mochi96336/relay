@@ -320,15 +320,33 @@ test('active input-gap health rebaselines media recovery instead of blaming WT',
   assert.equal((transport as any).mediaPathRecovery.status().webTransportDemotionUsed, false);
 
   // Gap recovery is a fresh diagnosis boundary. Do not charge the synthetic
-  // silence interval retroactively; later real underdelivery remains actionable.
-  for (const capturedSamples of [1_600, 1_700, 1_800, 1_900]) {
+  // silence interval retroactively; the recovery-edge ACK is baseline-only.
+  transport.sendControlJson({
+    ...health(7, 1_600),
+    inputMuted: false,
+    inputGapActive: false,
+  });
+  socket.emitJson(ack(7, 10, 'webtransport'));
+  assert.equal((transport as any).lastMediaRecoveryDecision?.reason, 'eligible-rebaseline');
+  assert.equal((transport as any).mediaPathRecovery.status().staleObservations, 0);
+  assert.equal(transport.stats().path, 'webtransport');
+
+  // Only three subsequent stale live-source observations may spend the WT action.
+  for (const capturedSamples of [1_700, 1_800]) {
     transport.sendControlJson({
       ...health(7, capturedSamples),
       inputMuted: false,
       inputGapActive: false,
     });
     socket.emitJson(ack(7, 10, 'webtransport'));
+    assert.equal(transport.stats().path, 'webtransport');
   }
+  transport.sendControlJson({
+    ...health(7, 1_900),
+    inputMuted: false,
+    inputGapActive: false,
+  });
+  socket.emitJson(ack(7, 10, 'webtransport'));
 
   assert.equal(transport.stats().path, 'websocket');
   assert.equal(FakeWebTransport.instances[0].closeCalls, 1);

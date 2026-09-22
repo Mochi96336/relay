@@ -507,11 +507,15 @@ export class PreferredAudioTransport extends AudioTransport {
           senderFailedPackets,
           path,
           socketEpoch: this.publisherSocketEpoch,
-          // Capture-dispatch backlog is a local pre-transport failure. While
-          // the page is intentionally dropping stale worklet PCM, a rising
-          // capture cursor with flat server PCM is not evidence that WT/WS is
-          // broken, so fence media-path recovery at the same health boundary.
+          // Local source/capture failures are not media-path evidence. A muted
+          // MediaStreamTrack or a sustained worklet input gap can keep sample
+          // time advancing with zero PCM, just as capture-dispatch backlog
+          // advances the source cursor while intentionally dropping stale
+          // chunks. Rebaseline WT/WS recovery across these boundaries instead
+          // of spending bounded transport actions on a known non-live source.
           eligible: globalThis.document?.visibilityState !== 'hidden'
+            && payload.inputMuted !== true
+            && payload.inputGapActive !== true
             && payload.captureDispatch?.backlogActive !== true,
         });
       }

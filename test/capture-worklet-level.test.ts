@@ -18,6 +18,14 @@ type PcmMessage = {
   capturedAtContextTime: number | null;
 };
 
+type InputGap = {
+  type: 'input-gap';
+  quanta: number;
+  samples: number;
+  totalQuanta: number;
+  recovered: boolean;
+};
+
 type InputLevel = {
   type: string;
   peakDbfs: number;
@@ -69,6 +77,14 @@ function latestLevel(processor: CapturedProcessor) {
   return processor.port.messages.filter((message) => (
     typeof message === 'object' && message !== null && (message as { type?: string }).type === 'input-level'
   )).at(-1) as InputLevel | undefined;
+}
+
+function inputGapMessages(processor: CapturedProcessor) {
+  return processor.port.messages.filter((message) => (
+    typeof message === 'object'
+    && message !== null
+    && (message as { type?: string }).type === 'input-gap'
+  )) as InputGap[];
 }
 
 function enablePcmEnvelope(processor: CapturedProcessor) {
@@ -305,4 +321,43 @@ test('capture worklet includes padded input gaps in local level timing', async (
   assert.deepEqual(Array.from(level.spectrumBands), [0, 0, 0, 0, 0]);
   assert.ok(Math.abs(level.peakDbfs - (-12.041199826559248)) < 0.0001);
   assert.ok(level.rmsDbfs < level.peakDbfs);
+});
+
+
+test('capture input-gap hysteresis stays time-equivalent across sample rates', async () => {
+  const referenceRate = 48_000;
+  const referenceQuanta = 400;
+  const renderQuantum = 128;
+  const referenceMs = (referenceQuanta * renderQuantum * 1000) / referenceRate;
+
+  for (const workletSampleRate of [44_100, 48_000, 96_000]) {
+    const processor = await loadCaptureProcessor(workletSampleRate);
+    // Establish real input first; missing input before startup is intentionally ignored.
+    processor.process([[new Float32Array(renderQuantum).fill(0.25)]]);
+
+    const reportQuanta = Math.max(
+      1,
+      Math.round((referenceQuanta * workletSampleRate) / referenceRate),
+    );
+    for (let quantum = 1; quantum < reportQuanta; quantum += 1) processor.process([]);
+    assert.equal(
+      inputGapMessages(processor).length,
+      0,
+      `${workletSampleRate} Hz reported a sustained gap before the time budget elapsed`,
+    );
+
+    processor.process([]);
+    const [gap] = inputGapMessages(processor);
+    assert.ok(gap, `${workletSampleRate} Hz did not report the sustained input gap`);
+    assert.equal(gap.quanta, reportQuanta);
+    assert.equal(gap.samples, reportQuanta * renderQuantum);
+    assert.equal(gap.recovered, false);
+
+    const elapsedMs = (reportQuanta * renderQuantum * 1000) / workletSampleRate;
+    const oneQuantumMs = (renderQuantum * 1000) / workletSampleRate;
+    assert.ok(
+      Math.abs(elapsedMs - referenceMs) <= oneQuantumMs,
+      `${workletSampleRate} Hz hysteresis drifted to ${elapsedMs.toFixed(3)} ms`,
+    );
+  }
 });

@@ -348,6 +348,13 @@ export class AudioSession {
   /** Last per-source contributions that actually reached the mix output. */
   private lastEmittedMicContribution = 0;
   private lastEmittedBackingContribution = 0;
+  /**
+   * Mic frontier safety can deliberately move the read head backwards through
+   * retained history. Remember the actual source position last emitted so a
+   * capture-clock seam is de-clicked every time the audible trajectory crosses
+   * it, not only the first time the mixer ever encountered that position.
+   */
+  private lastEmittedMicSourceSample: number | null = null;
   /** Bounded output-edge taper after bind-time capture retirement. */
   private micRetirementFadeStart = 0;
   private micRetirementFadeRemainingSamples = 0;
@@ -1027,6 +1034,7 @@ export class AudioSession {
     this.limiterGain = 1;
     this.lastEmittedMicContribution = 0;
     this.lastEmittedBackingContribution = 0;
+    this.lastEmittedMicSourceSample = null;
     this.micRetirementFadeStart = 0;
     this.micRetirementFadeRemainingSamples = 0;
     this.backingRetirementFadeStart = 0;
@@ -1054,6 +1062,7 @@ export class AudioSession {
   private clearTimeline(timeline: PcmTimeline) {
     if (timeline === this.mic) {
       this.resetMicReadContinuity();
+      this.lastEmittedMicSourceSample = null;
       this.micCaptureRestartBoundarySamples.length = 0;
     } else if (timeline === this.backing) {
       this.backingCaptureRestartBoundarySamples.length = 0;
@@ -1656,6 +1665,17 @@ export class AudioSession {
       if (chunk.start + chunk.samples.length >= beforeSample) break;
       timeline.chunks.shift();
     }
+
+    if (timeline === this.mic) {
+      // Restart seams are output state only while either side can still be
+      // revisited by the retained Mic read head.
+      while (
+        this.micCaptureRestartBoundarySamples.length > 0
+        && this.micCaptureRestartBoundarySamples[0]! < beforeSample
+      ) {
+        this.micCaptureRestartBoundarySamples.shift();
+      }
+    }
   }
 
   /**
@@ -1785,11 +1805,22 @@ export class AudioSession {
     return due;
   }
 
+  private crossedRetainedMicRestartBoundary(sourceSample: number) {
+    const previous = this.lastEmittedMicSourceSample;
+    if (previous === null || previous === sourceSample) return false;
+
+    if (sourceSample > previous) {
+      return this.micCaptureRestartBoundarySamples.some(
+        (boundary) => previous < boundary && boundary <= sourceSample,
+      );
+    }
+    return this.micCaptureRestartBoundarySamples.some(
+      (boundary) => sourceSample < boundary && boundary <= previous,
+    );
+  }
+
   private beginMicCaptureRestartEdgeIfDue(sourceSample: number) {
-    if (!this.consumeCaptureRestartBoundaryIfDue(
-      this.micCaptureRestartBoundarySamples,
-      sourceSample,
-    )) return;
+    if (!this.crossedRetainedMicRestartBoundary(sourceSample)) return;
     this.micRetirementFadeStart = this.lastEmittedMicContribution;
     this.micRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
     this.micReplacementNeedsFadeIn = true;
@@ -2260,6 +2291,7 @@ export class AudioSession {
       }
       this.lastEmittedMicContribution = voice;
       this.lastEmittedBackingContribution = songContribution;
+      this.lastEmittedMicSourceSample = micSourceSample;
       const summed = voice + songContribution;
       const value = summed * mixHeadroomGain;
       // Normal two-source peaks have already had deterministic summing headroom

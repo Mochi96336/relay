@@ -12,8 +12,9 @@ function snap(
   sampleCursor: number,
   contextState = 'running',
   visible = true,
+  inputMuted = false,
 ) {
-  return { nowMs, contextTime, sampleCursor, contextState, visible };
+  return { nowMs, contextTime, sampleCursor, contextState, visible, inputMuted };
 }
 
 test('normal capture becomes healthy only after context clock and fresh PCM advance', () => {
@@ -355,6 +356,109 @@ test('muted track PCM advances time but cannot prove capture recovery', () => {
   );
   assert.equal(unmutedPcm.recovered, true);
   assert.equal(watchdog.status().recovering, false);
+});
+
+test('explicit source mute fences every graph-rebuild path without spending the rebuild budget', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({
+    stallAfterMs: 100,
+    hiddenDiscontinuityMs: 100,
+  });
+  watchdog.start(snap(0, 1, 0));
+
+  const gap = watchdog.noteInputGap(
+    snap(120, 1.12, 128, 'running', true, true),
+    { recovered: false },
+  );
+  assert.equal(gap.rebuild, false);
+  assert.equal(watchdog.status().inputGapActive, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, false);
+
+  watchdog.noteHidden(snap(130, 1.13, 128, 'running', false, true));
+  const foreground = watchdog.noteForeground(
+    snap(300, 1.30, 128, 'running', true, true),
+  );
+  assert.equal(foreground.discontinuity, true);
+  assert.equal(foreground.rebuild, false);
+  assert.equal(watchdog.status().rebuildBudgetSpent, false);
+
+  const stalled = watchdog.observe(
+    snap(500, 1.50, 128, 'running', true, true),
+  );
+  assert.equal(stalled.rebuild, false);
+  assert.equal(watchdog.status().rebuildBudgetSpent, false);
+
+  watchdog.beginRecovery(
+    snap(520, 1.52, 128, 'running', true, false),
+    'input-unmuted',
+  );
+  const unmutedGap = watchdog.observe(
+    snap(770, 1.77, 12_128, 'running', true, false),
+    { freshPcm: true },
+  );
+  assert.equal(unmutedGap.rebuild, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+});
+
+test('unmute gives natural recovery one watchdog tick before consuming retained gap authority', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({
+    stallAfterMs: 1_500,
+    hiddenDiscontinuityMs: 250,
+  });
+  watchdog.start(snap(0, 1, 0));
+  watchdog.noteInputGap(
+    snap(1_070, 2.07, 51_456, 'running', true, true),
+    { recovered: false },
+  );
+  assert.equal(watchdog.status().inputGapActive, true);
+  assert.equal(watchdog.status().rebuildBudgetSpent, false);
+
+  const naturallyRecovered = new MicCaptureRecoveryWatchdog({
+    stallAfterMs: 1_500,
+    hiddenDiscontinuityMs: 250,
+  });
+  naturallyRecovered.start(snap(0, 1, 0));
+  naturallyRecovered.noteInputGap(
+    snap(1_070, 2.07, 51_456, 'running', true, true),
+    { recovered: false },
+  );
+  naturallyRecovered.beginRecovery(
+    snap(1_100, 2.10, 52_896, 'running', true, false),
+    'input-unmuted',
+  );
+  naturallyRecovered.noteInputGap(
+    snap(1_110, 2.11, 53_376, 'running', true, false),
+    { recovered: true },
+  );
+  const recovered = naturallyRecovered.observe(
+    snap(1_250, 2.25, 60_096, 'running', true, false),
+    { freshPcm: true },
+  );
+  assert.equal(recovered.rebuild, false);
+  assert.equal(recovered.recovered, true);
+  assert.equal(naturallyRecovered.status().rebuildBudgetSpent, false);
+
+  watchdog.beginRecovery(
+    snap(1_100, 2.10, 52_896, 'running', true, false),
+    'input-unmuted',
+  );
+  const persistentGap = watchdog.observe(
+    snap(1_250, 2.25, 60_096, 'running', true, false),
+    { freshPcm: true },
+  );
+  assert.equal(
+    persistentGap.rebuild,
+    true,
+    'a gap surviving unmute until the next watchdog tick must consume the preserved rebuild budget',
+  );
+  assert.equal(watchdog.status().rebuildBudgetSpent, true);
+});
+
+test('app includes explicit track mute in every capture-recovery snapshot', () => {
+  const snapshotAt = app.indexOf('function captureSnapshot()');
+  const watchdogAt = app.indexOf('function stopCaptureWatchdog()', snapshotAt);
+  assert.ok(snapshotAt >= 0 && watchdogAt > snapshotAt);
+  const snapshot = app.slice(snapshotAt, watchdogAt);
+  assert.match(snapshot, /inputMuted:\s*captureInputMuted/);
 });
 
 test('app excludes muted-track buffers from fresh PCM recovery evidence', () => {

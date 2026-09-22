@@ -291,6 +291,7 @@ function captureSnapshot() {
     contextState: audioContext?.state ?? 'closed',
     contextTime: audioContext?.currentTime ?? 0,
     sampleCursor: captureSampleCursor,
+    inputMuted: captureInputMuted,
   };
 }
 

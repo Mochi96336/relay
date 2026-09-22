@@ -13,6 +13,7 @@ function normalizeSnapshot(snapshot = {}) {
     contextState: String(snapshot.contextState ?? 'closed'),
     contextTime: finite(snapshot.contextTime),
     sampleCursor: Math.max(0, finite(snapshot.sampleCursor)),
+    inputMuted: snapshot.inputMuted === true,
   };
 }
 
@@ -114,7 +115,7 @@ export class MicCaptureRecoveryWatchdog {
     this.beginRecovery(current, 'foreground');
     return {
       discontinuity,
-      rebuild: discontinuity && this.claimRebuild(),
+      rebuild: discontinuity && !current.inputMuted && this.claimRebuild(),
     };
   }
 
@@ -149,6 +150,7 @@ export class MicCaptureRecoveryWatchdog {
 
     const rebuild = current.visible
       && current.contextState === 'running'
+      && !current.inputMuted
       && this.claimRebuild();
 
     return {
@@ -209,8 +211,11 @@ export class MicCaptureRecoveryWatchdog {
     // a running context while the PCM/sample cursor still fails to move.
     const rebuild = current.visible
       && current.contextState === 'running'
-      && !sampleAdvanced
-      && stalledForMs >= this.stallAfterMs
+      && !current.inputMuted
+      && (
+        this.inputGapActive
+        || (!sampleAdvanced && stalledForMs >= this.stallAfterMs)
+      )
       && this.claimRebuild();
     this.lastContextTime = current.contextTime;
     this.lastSampleCursor = current.sampleCursor;

@@ -144,6 +144,160 @@ test('a genuine Mic generation replacement reports the same capture restart sign
 });
 
 
+test('Mic generation restart de-clicks the audible old/new capture splice without rewriting PCM', () => {
+  const session = makeTransitionSession();
+  const chunk = Math.round(RATE * 0.02);
+  const fadeSamples = Math.round(RATE * 0.002);
+  const amplitude = 12_000;
+
+  session.setMicGainDb(0);
+  session.setMicExpected(true);
+  session.start(0);
+  session.ingestMic(frame(12, 0, chunk, amplitude), RATE, 20);
+  session.ingestMic(frame(12, chunk, chunk, amplitude), RATE, 40);
+  session.ingestMic(frame(12, chunk * 2, chunk, amplitude), RATE, 60);
+
+  // Queue replacement PCM before any drain so Mic frontier correction never
+  // enters this seam-only fixture. One continuation frame gives the restart
+  // output frame real source headroom beyond the boundary.
+  const replacement = session.ingestMic(frame(13, 0, chunk, -amplitude), RATE, 80);
+  assert.equal(replacement.captureRestarted, true);
+  assert.equal(replacement.start, chunk * 3);
+  session.ingestMic(frame(13, chunk, chunk, -amplitude), RATE, 81);
+  assert.equal(
+    session.readMic(replacement.start, 1)[0],
+    -amplitude,
+    'restart smoothing must not rewrite raw replacement PCM',
+  );
+
+  drainOne(session, 40);
+  drainOne(session, 60);
+  const before = drainOne(session, 80);
+  const beforeLast = before.readInt16LE((chunk - 1) * 2);
+  assert.ok(Math.abs(beforeLast - amplitude) <= 1);
+
+  const resumed = drainOne(session, 100);
+  assert.ok(
+    Math.abs(resumed.readInt16LE(0) - beforeLast) <= 1,
+    'the first new-generation Mic sample continues the last audible old-generation edge',
+  );
+  assert.ok(
+    Math.abs(resumed.readInt16LE((fadeSamples - 1) * 2) + amplitude) <= 1,
+    'the new-generation Mic waveform is reached inside the 2 ms output-only transition',
+  );
+  assert.ok(Math.abs(resumed.readInt16LE(fadeSamples * 2) + amplitude) <= 1);
+});
+
+test('multiple queued Mic capture restarts keep every unread audible boundary', () => {
+  const session = makeTransitionSession();
+  const chunk = Math.round(RATE * 0.02);
+  const fadeSamples = Math.round(RATE * 0.002);
+  const amplitude = 12_000;
+
+  session.setMicGainDb(0);
+  session.setMicExpected(true);
+  session.start(0);
+  session.ingestMic(frame(12, 0, chunk, amplitude), RATE, 20);
+  session.ingestMic(frame(12, chunk, chunk, amplitude), RATE, 40);
+  session.ingestMic(frame(12, chunk * 2, chunk, amplitude), RATE, 60);
+
+  const firstRestart = session.ingestMic(frame(13, 0, chunk, -amplitude), RATE, 80);
+  assert.equal(firstRestart.captureRestarted, true);
+  assert.equal(firstRestart.start, chunk * 3);
+  session.ingestMic(frame(13, chunk, chunk, -amplitude), RATE, 81);
+
+  // A second capture clock arrives before the mixer reaches the first boundary.
+  // Both seams must remain pending instead of the later restart overwriting A.
+  const secondRestart = session.ingestMic(frame(14, 0, chunk, amplitude / 2), RATE, 82);
+  assert.equal(secondRestart.captureRestarted, true);
+  assert.equal(secondRestart.start, chunk * 5);
+  assert.equal(
+    secondRestart.samples.length,
+    0,
+    'a fast restart may be fully overlapped by still-queued old-capture PCM',
+  );
+  session.ingestMic(frame(14, chunk, chunk, amplitude / 2), RATE, 83);
+  session.ingestMic(frame(14, chunk * 2, chunk, amplitude / 2), RATE, 84);
+  session.ingestMic(frame(14, chunk * 3, chunk, amplitude / 2), RATE, 85);
+
+  // Both restart boundaries are now queued before the mixer emits anything.
+  // The extended frontier keeps Mic read-head safety out of this regression.
+  drainOne(session, 40);
+  drainOne(session, 60);
+  const oldTail = drainOne(session, 80);
+  const oldLast = oldTail.readInt16LE((chunk - 1) * 2);
+  assert.ok(Math.abs(oldLast - amplitude) <= 1);
+
+  const first = drainOne(session, 100);
+  assert.ok(
+    Math.abs(first.readInt16LE(0) - oldLast) <= 1,
+    'first queued restart must continue the old audible edge',
+  );
+  assert.ok(
+    Math.abs(first.readInt16LE((fadeSamples - 1) * 2) + amplitude) <= 1,
+    'first queued restart must reach generation 13 inside 2 ms',
+  );
+
+  const between = drainOne(session, 120);
+  assert.ok(Math.abs(between.readInt16LE((chunk - 1) * 2) + amplitude) <= 1);
+
+  const second = drainOne(session, 140);
+  assert.ok(
+    Math.abs(second.readInt16LE(0) + amplitude) <= 1,
+    'second queued restart must continue generation 13 rather than being lost',
+  );
+  assert.ok(
+    Math.abs(second.readInt16LE((fadeSamples - 1) * 2) - amplitude / 2) <= 1,
+    'second queued restart must reach generation 14 inside 2 ms',
+  );
+});
+
+test('Backing source-rate restart de-clicks the audible splice while keeping resampled history exact', () => {
+  const session = makeTransitionSession();
+  const chunk = Math.round(RATE * 0.02);
+  const sourceChunk = Math.round(44_100 * 0.02);
+  const fadeSamples = Math.round(RATE * 0.002);
+  const amplitude = 12_000;
+
+  session.setBackingExpected(true);
+  session.start(0);
+  session.ingestBacking(frame(21, 0, chunk, amplitude), RATE, 20);
+  session.ingestBacking(frame(21, chunk, chunk, amplitude), RATE, 40);
+  session.ingestBacking(frame(21, chunk * 2, chunk, amplitude), RATE, 60);
+
+  drainOne(session, 40);
+  drainOne(session, 60);
+  const before = drainOne(session, 80);
+  const beforeLast = before.readInt16LE((chunk - 1) * 2);
+  assert.ok(Math.abs(beforeLast - amplitude) <= 1);
+
+  const replacement = session.ingestBacking(frame(21, 0, sourceChunk, -amplitude), 44_100, 80);
+  assert.equal(replacement.captureRestarted, true);
+  assert.equal(replacement.start, chunk * 3);
+  session.ingestBacking(
+    frame(21, sourceChunk, sourceChunk, -amplitude),
+    44_100,
+    81,
+  );
+  assert.equal(
+    session.readBacking(replacement.start, 1)[0],
+    -amplitude,
+    'restart smoothing must not rewrite raw resampled Backing PCM',
+  );
+
+  const resumed = drainOne(session, 100);
+  assert.ok(
+    Math.abs(resumed.readInt16LE(0) - beforeLast) <= 1,
+    'the first new-rate Backing sample continues the last audible old-rate edge',
+  );
+  assert.ok(
+    Math.abs(resumed.readInt16LE((fadeSamples - 1) * 2) + amplitude) <= 1,
+    'the new-rate Backing waveform is reached inside the 2 ms output-only transition',
+  );
+  assert.ok(Math.abs(resumed.readInt16LE(fadeSamples * 2) + amplitude) <= 1);
+});
+
+
 test('explicit media replacement retires Mic PCM without deferring a restart signal to PCM', () => {
   const session = makeSession();
   session.start(0);

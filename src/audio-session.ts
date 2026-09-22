@@ -359,6 +359,13 @@ export class AudioSession {
   private micReplacementFadeInRemainingSamples = 0;
   private backingReplacementFadeInRemainingSamples = 0;
   /**
+   * In-band capture-clock restarts cannot retire queued old PCM at ingest time.
+   * Keep every unread old-capture frontier in order: more than one restart can
+   * arrive before the mix read head reaches the first boundary.
+   */
+  private readonly micCaptureRestartBoundarySamples: number[] = [];
+  private readonly backingCaptureRestartBoundarySamples: number[] = [];
+  /**
    * Mixer-output frontier continuity.
    *
    * A timeline can be perfectly contiguous once late PCM arrives even though an
@@ -801,6 +808,12 @@ export class AudioSession {
     const previousChunk = this.mic.chunks.at(-1) ?? null;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
     const currentChunk = this.mic.chunks.at(-1) ?? null;
+    if (result.captureRestarted && this.running) {
+      this.queueCaptureRestartBoundary(
+        this.micCaptureRestartBoundarySamples,
+        previousTotalSamples,
+      );
+    }
 
     // Meter only samples attributable to this source frame. A streaming
     // resampler may prepend one completed target sample that belongs to the
@@ -842,6 +855,12 @@ export class AudioSession {
       true,
     );
     const currentChunk = this.backing.chunks.at(-1) ?? null;
+    if (result.captureRestarted && this.running) {
+      this.queueCaptureRestartBoundary(
+        this.backingCaptureRestartBoundarySamples,
+        previousTotalSamples,
+      );
+    }
 
     // A positioned transport/backlog hole is truthful silence, but the abrupt
     // song -> zero -> song waveform splice is not. Taper only the real PCM
@@ -1016,6 +1035,8 @@ export class AudioSession {
     this.backingReplacementNeedsFadeIn = false;
     this.micReplacementFadeInRemainingSamples = 0;
     this.backingReplacementFadeInRemainingSamples = 0;
+    this.micCaptureRestartBoundarySamples.length = 0;
+    this.backingCaptureRestartBoundarySamples.length = 0;
     this.micFrontierOutputMissing = false;
     this.backingFrontierOutputMissing = false;
     this.micFrontierFadeStart = 0;
@@ -1031,7 +1052,12 @@ export class AudioSession {
   // ---------------------------------------------------------------- internals
 
   private clearTimeline(timeline: PcmTimeline) {
-    if (timeline === this.mic) this.resetMicReadContinuity();
+    if (timeline === this.mic) {
+      this.resetMicReadContinuity();
+      this.micCaptureRestartBoundarySamples.length = 0;
+    } else if (timeline === this.backing) {
+      this.backingCaptureRestartBoundarySamples.length = 0;
+    }
     timeline.chunks = [];
     timeline.totalSamples = 0;
     timeline.generation = null;
@@ -1654,6 +1680,52 @@ export class AudioSession {
     return current * weight;
   }
 
+  private queueCaptureRestartBoundary(boundaries: number[], boundary: number) {
+    const last = boundaries.at(-1);
+    if (last === boundary) return;
+    if (last === undefined || boundary > last) {
+      boundaries.push(boundary);
+      return;
+    }
+
+    // totalSamples is normally monotonic, but keep the queue ordered even if a
+    // future re-anchor policy places a boundary behind a later observed one.
+    const index = boundaries.findIndex((candidate) => candidate > boundary);
+    if (index < 0) boundaries.push(boundary);
+    else boundaries.splice(index, 0, boundary);
+  }
+
+  private consumeCaptureRestartBoundaryIfDue(boundaries: number[], sourceSample: number) {
+    let due = false;
+    while (boundaries.length > 0 && sourceSample >= boundaries[0]!) {
+      boundaries.shift();
+      due = true;
+    }
+    return due;
+  }
+
+  private beginMicCaptureRestartEdgeIfDue(sourceSample: number) {
+    if (!this.consumeCaptureRestartBoundaryIfDue(
+      this.micCaptureRestartBoundarySamples,
+      sourceSample,
+    )) return;
+    this.micRetirementFadeStart = this.lastEmittedMicContribution;
+    this.micRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
+    this.micReplacementNeedsFadeIn = true;
+    this.micReplacementFadeInRemainingSamples = 0;
+  }
+
+  private beginBackingCaptureRestartEdgeIfDue(sourceSample: number) {
+    if (!this.consumeCaptureRestartBoundaryIfDue(
+      this.backingCaptureRestartBoundarySamples,
+      sourceSample,
+    )) return;
+    this.backingRetirementFadeStart = this.lastEmittedBackingContribution;
+    this.backingRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
+    this.backingReplacementNeedsFadeIn = true;
+    this.backingReplacementFadeInRemainingSamples = 0;
+  }
+
   private resetMicFrontierEdge() {
     this.micFrontierOutputMissing = false;
     this.micFrontierFadeStart = 0;
@@ -2002,6 +2074,8 @@ export class AudioSession {
         (mic[i] / 32768) * micGain,
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
+      const micSourceSample = micReadStart + i;
+      this.beginMicCaptureRestartEdgeIfDue(micSourceSample);
       if (this.micRetirementFadeRemainingSamples > 0) {
         const replacementAudible = voice !== 0;
         voice = this.applyMicRetirementFade(voice);
@@ -2017,15 +2091,17 @@ export class AudioSession {
         || this.micReplacementNeedsFadeIn
         || this.micReplacementFadeInRemainingSamples > 0;
       if (micReplacementEdgeActive) {
-        // Bind-time retirement owns this semantic boundary. Do not stack a
-        // starvation taper on top of the replacement taper simply because the
-        // cleared timeline also reads as frontier-missing.
+        // Explicit capture replacement/restart owns this semantic boundary. Do
+        // not stack a starvation taper on top of the source transition simply
+        // because the same output sample also reads as frontier-missing.
         this.resetMicFrontierEdge();
       } else {
         voice = this.applyMicFrontierEdge(voice, i >= micFrontierMissingStart);
       }
 
       let songContribution = (song[i] / 32768) * songGain;
+      const backingSourceSample = startSample + i;
+      this.beginBackingCaptureRestartEdgeIfDue(backingSourceSample);
       if (this.backingRetirementFadeRemainingSamples > 0) {
         const replacementAudible = songContribution !== 0;
         songContribution = this.applyBackingRetirementFade(songContribution);

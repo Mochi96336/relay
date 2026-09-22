@@ -246,6 +246,7 @@ function audioUplinkHealthPayload(healthRequestId) {
     healthRequestId,
     capturedSamples: captureSampleCursor,
     inputGapSamples: captureInputGapSamples,
+    inputGapActive: micCaptureRecovery.status().inputGapActive,
     inputMuted: captureInputMuted,
     // Browser/worklet observations only; none of these fields is a calibration gate.
     capture: captureAppliedSettings,
@@ -493,6 +494,10 @@ function handleCaptureWorkletMessage(event, graph) {
       const decision = micCaptureRecovery.noteInputGap(captureSnapshot(), {
         recovered: event.data.recovered === true,
       });
+      // Active input loss is source authority, not merely diagnostics. Publish
+      // both edges immediately so Relay can fail closed and later require PCM
+      // beyond the exact recovery cursor before declaring the Mic live again.
+      sendAudioUplinkHealth();
       console.warn(
         'Microphone input gap',
         event.data.quanta,

@@ -19,11 +19,18 @@ test('capture gaps are reported as exact sample deltas without changing the padd
   );
   const workletCode = sourceCode(worklet);
   const appCode = sourceCode(app);
+  const workletHandler = functionCode(app, 'handleCaptureWorkletMessage');
 
   assert.match(workletCode, /samples: unreported \* RENDER_QUANTUM/);
   assert.match(workletCode, /this\.writeInputGap\(RENDER_QUANTUM\)/);
   assert.match(workletCode, /this\.reportInputGap\(true\)/);
   assert.match(appCode, /captureInputGapSamples \+= samples/);
+  assert.match(appCode, /inputGapActive:\s*micCaptureRecovery\.status\(\)\.inputGapActive/);
+  assert.match(
+    workletHandler,
+    /if \(event\.data\?\.type === 'input-gap'\)[\s\S]*?noteInputGap\(captureSnapshot\(\),[\s\S]*?sendAudioUplinkHealth\(\)/,
+    'both sustained-gap and recovery edges must reach server source authority immediately',
+  );
   assert.match(appCode, /type: 'audio-uplink-health'/);
   assert.match(appCode, /transport: audioTransport\.stats\(\)/);
 });

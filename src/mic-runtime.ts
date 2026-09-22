@@ -67,6 +67,12 @@ export class MicRuntime {
    * post-unmute live flow.
    */
   private postUnmuteSampleBarrier: number | null = null;
+  /**
+   * Source cursor reported when a sustained worklet input gap recovers.
+   * Padded zero PCM before this boundary is valid timeline intake but cannot
+   * prove that real microphone input has returned.
+   */
+  private postInputGapSampleBarrier: number | null = null;
   private latestAcceptedFrameEndSample: number | null = null;
   /** Highest browser capture cursor accepted for the current capture clock. */
   private latestUplinkHealthCapturedSamples: number | null = null;
@@ -297,6 +303,17 @@ export class MicRuntime {
         ? null
         : barrier;
     }
+    const wasInputGapActive = this.currentUplinkHealth?.inputGapActive === true;
+    if (wasInputGapActive && health.inputGapActive !== true) {
+      const barrier = health.capturedSamples;
+      // The worklet reports recovery before subsequent real input is packetized.
+      // Media may then beat this control health over WebTransport, so accept an
+      // already-arrived frame only when it extends beyond the recovery cursor.
+      this.postInputGapSampleBarrier = this.latestAcceptedFrameEndSample !== null
+        && this.latestAcceptedFrameEndSample > barrier
+        ? null
+        : barrier;
+    }
     this.latestUplinkHealthCapturedSamples = health.capturedSamples;
     this.currentUplinkHealth = health;
     this.currentUplinkHealthAt = nowMs;
@@ -379,6 +396,7 @@ export class MicRuntime {
     this.lastFrameGeneration = this.currentMediaGeneration;
     this.currentAcceptedFrameSerial = 0;
     this.postUnmuteSampleBarrier = null;
+    this.postInputGapSampleBarrier = null;
     this.latestAcceptedFrameEndSample = null;
     this.latestUplinkHealthCapturedSamples = null;
     this.firstFrameWaitStartedAt = this.currentMediaOwnerId === null ? -Infinity : nowMs;
@@ -402,14 +420,18 @@ export class MicRuntime {
         : Math.max(this.latestAcceptedFrameEndSample, frameEnd);
     }
 
-    const barrier = this.postUnmuteSampleBarrier;
-    if (
-      barrier !== null
-      && (frameEnd === null || !Number.isFinite(frameEnd) || frameEnd <= barrier)
-    ) {
-      return;
-    }
-    if (barrier !== null) this.postUnmuteSampleBarrier = null;
+    const unmuteBarrier = this.postUnmuteSampleBarrier;
+    const inputGapBarrier = this.postInputGapSampleBarrier;
+    const blockedByUnmute = unmuteBarrier !== null
+      && (frameEnd === null || !Number.isFinite(frameEnd) || frameEnd <= unmuteBarrier);
+    const blockedByInputGap = inputGapBarrier !== null
+      && (frameEnd === null || !Number.isFinite(frameEnd) || frameEnd <= inputGapBarrier);
+
+    // A frame that clears one source-recovery boundary should retire that
+    // boundary even if another, later boundary still keeps the source closed.
+    if (unmuteBarrier !== null && !blockedByUnmute) this.postUnmuteSampleBarrier = null;
+    if (inputGapBarrier !== null && !blockedByInputGap) this.postInputGapSampleBarrier = null;
+    if (blockedByUnmute || blockedByInputGap) return;
 
     this.lastFrameAt = nowMs;
     this.lastFrameOwnerId = this.currentMediaOwnerId;
@@ -445,10 +467,13 @@ export class MicRuntime {
         || (
           this.freshUplinkHealthPayload(nowMs) !== null
           && this.currentUplinkHealth?.inputMutedObserved !== false
+          && this.currentUplinkHealth?.inputGapActiveObserved !== false
         )
       )
       && this.currentUplinkHealth?.inputMuted !== true
+      && this.currentUplinkHealth?.inputGapActive !== true
       && this.postUnmuteSampleBarrier === null
+      && this.postInputGapSampleBarrier === null
       && nowMs - this.lastFrameAt < this.options.streamLiveMs;
   }
 

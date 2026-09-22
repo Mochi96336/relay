@@ -55,6 +55,14 @@ export type AudioUplinkHealth = {
   healthRequestId?: number;
   capturedSamples: number;
   inputGapSamples: number;
+  /** True while the capture worklet has positively identified a sustained missing input channel. */
+  inputGapActive?: boolean;
+  /**
+   * Parser provenance only: false means this v1 snapshot predates explicit
+   * active-gap telemetry and inputGapActive is the compatibility default.
+   * Defined non-enumerably so wire/status shapes stay unchanged.
+   */
+  inputGapActiveObserved?: boolean;
   inputMuted: boolean;
   /**
    * Parser provenance only: false means this v1 snapshot predates explicit
@@ -223,6 +231,9 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     : strictUint32(payload.healthRequestId);
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
+  // Added after health v1 shipped. Missing means an older page that cannot
+  // publish this source-level failure fact; a supplied value must be boolean.
+  const inputGapActive = payload.inputGapActive === undefined ? false : payload.inputGapActive;
   const controlReconnects = nonNegativeSafeInteger(payload.controlReconnects);
   const inputMuted = payload.inputMuted === undefined ? false : payload.inputMuted;
   const capture = payload.capture === undefined ? null : parseCaptureAppliedSettings(payload.capture);
@@ -240,6 +251,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     || healthRequestId === null
     || capturedSamples === null
     || inputGapSamples === null
+    || typeof inputGapActive !== 'boolean'
     || controlReconnects === null
     || typeof inputMuted !== 'boolean'
     || capture === undefined
@@ -325,6 +337,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     inputGapSamples,
+    inputGapActive,
     inputMuted,
     capture,
     captureLevel,
@@ -343,6 +356,12 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       ...counters as Record<(typeof counterNames)[number], number>,
     },
   };
+  Object.defineProperty(parsed, 'inputGapActiveObserved', {
+    value: payload.inputGapActive !== undefined,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
   Object.defineProperty(parsed, 'inputMutedObserved', {
     value: payload.inputMuted !== undefined,
     enumerable: false,

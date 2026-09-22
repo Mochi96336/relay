@@ -76,7 +76,7 @@ test('foreground immediately rebuilds a sustained input gap already proven while
 
   // Foregrounding only 100 ms after the report is below the generic 250 ms
   // discontinuity window. We must still rebuild immediately instead of waiting
-  // for another 400 render-quanta gap report.
+  // for the next sustained-gap report.
   const foreground = watchdog.noteForeground(snap(1_170, 2.17, 56_256, 'running', true));
   assert.equal(foreground.discontinuity, true);
   assert.equal(foreground.rebuild, true);
@@ -128,7 +128,7 @@ test('sustained worklet input gap requests one bounded graph rebuild even while 
   assert.equal(padded.recovered, false);
   assert.equal(watchdog.status().recovering, true);
 
-  // The worklet can report another 400-quanta tranche while the same gap
+  // The worklet can report another sustained-gap tranche while the same gap
   // continues. That evidence must not create a rebuild storm.
   const repeated = watchdog.noteInputGap(snap(2_140, 3.14, 102_912), { recovered: false });
   assert.equal(repeated.rebuild, false);

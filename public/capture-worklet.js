@@ -4,6 +4,8 @@ const SILENCE_DBFS = -120;
 // one sample. A flat-topped capture instead produces a run of rail samples.
 const INPUT_RAIL_THRESHOLD = 0x7fff / 0x8000;
 const INPUT_GAP_DECLICK_MS = 2;
+const INPUT_GAP_REPORT_REFERENCE_RATE = 48_000;
+const INPUT_GAP_REPORT_REFERENCE_QUANTA = 400;
 const VISUAL_ANALYSIS_PLACEHOLDER = Object.freeze({
   spectrumBands: Object.freeze([0, 0, 0, 0, 0]),
   f0Hz: null,
@@ -24,6 +26,16 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.silenceQuanta = 0;
     this.activeGapQuanta = 0;
     this.reportedActiveGapQuanta = 0;
+    // Preserve the existing ~1.067 s 48 kHz hysteresis in wall-clock time.
+    // A fixed render-quantum count would diagnose the same physical outage
+    // roughly twice as fast at 96 kHz as at 48 kHz.
+    this.inputGapReportQuanta = Math.max(
+      1,
+      Math.round(
+        (INPUT_GAP_REPORT_REFERENCE_QUANTA * sampleRate)
+          / INPUT_GAP_REPORT_REFERENCE_RATE,
+      ),
+    );
     this.levelPeak = 0;
     this.levelSquareSum = 0;
     this.levelSampleCount = 0;
@@ -172,7 +184,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
           this.recoveryFadeRemainingSamples = 0;
         }
         this.writeInputGap(RENDER_QUANTUM);
-        if (this.activeGapQuanta - this.reportedActiveGapQuanta >= 400) {
+        if (
+          this.activeGapQuanta - this.reportedActiveGapQuanta
+            >= this.inputGapReportQuanta
+        ) {
           this.reportInputGap(false);
         }
       }

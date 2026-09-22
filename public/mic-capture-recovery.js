@@ -94,8 +94,8 @@ export class MicCaptureRecoveryWatchdog {
 
     // A sustained worklet input gap is already positive capture-failure
     // evidence. Hidden pages defer rebuilding, but foregrounding must consume
-    // that existing authority immediately rather than wait for another 400
-    // render-quanta report.
+    // that existing authority immediately rather than wait for the next
+    // sustained-gap report.
     let discontinuity = this.inputGapActive;
     if (hidden) {
       const hiddenForMs = Math.max(0, current.nowMs - hidden.nowMs);

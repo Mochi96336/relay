@@ -1694,6 +1694,12 @@ export class AudioSession {
     }
 
     if (this.micFrontierOutputMissing) {
+      // Frontier correction can temporarily read structural pre-roll after PCM
+      // resumes, and a real source can legitimately resume with silence. Keep
+      // the audible state at silence until there is an actual contribution to
+      // fade in; otherwise the 2 ms recovery budget can be spent entirely on
+      // zeros and the later first sound can still arrive as a step.
+      if (current === 0) return current;
       this.micFrontierOutputMissing = false;
       this.micFrontierFadeRemainingSamples = 0;
       this.micFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;
@@ -1726,6 +1732,9 @@ export class AudioSession {
     }
 
     if (this.backingFrontierOutputMissing) {
+      // Source silence needs no transition. Preserve the pending recovery edge
+      // until the first contribution that could actually create a click.
+      if (current === 0) return current;
       this.backingFrontierOutputMissing = false;
       this.backingFrontierFadeRemainingSamples = 0;
       this.backingFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;

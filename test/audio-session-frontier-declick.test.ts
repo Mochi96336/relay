@@ -82,6 +82,66 @@ test('Mic frontier exhaustion inside a frame tapers at the emitted boundary with
   }, 'the audible taper must not rewrite raw frontier evidence');
 });
 
+test('Mic frontier hold de-clicks structural pre-roll when the read head crosses session zero', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: 20,
+    prebufferMs: 40,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+  session.setMicGainDb(0);
+  session.setMicExpected(true);
+  session.start(0);
+
+  // Leave the live frontier 145 samples short of frame 9 + limiter look-ahead.
+  // Frontier safety therefore acquires its 200 ms margin and holds frame 9
+  // entirely in negative session-position pre-roll.
+  const totalRealSamples = CHUNK * 10 - 1;
+  session.ingestMic(frame(0, totalRealSamples), RATE, 0);
+
+  for (let nowMs = 40; nowMs <= 200; nowMs += 20) {
+    drainOne(session, nowMs);
+  }
+  const held = drainOne(session, 220);
+  assert.equal(sample(held.output, CHUNK - 1), 0);
+  assert.equal(held.evidence.micGapSamples, 0);
+  assert.equal(held.evidence.micStarvedSamples, 0);
+
+  const correctionSamples = Math.round((session.micFrontierCorrectionMs * RATE) / 1000);
+  assert.equal(correctionSamples, 9_745, 'fixture must hold the Mic read head across session zero');
+
+  const recovered = drainOne(session, 240);
+  const readStart = CHUNK * 10 - correctionSamples;
+  const firstRealOutput = -readStart;
+  assert.equal(firstRealOutput, 145);
+  assert.equal(sample(recovered.output, firstRealOutput - 1), 0);
+  assert.equal(
+    sample(recovered.output, firstRealOutput),
+    0,
+    'first real PCM after structural pre-roll must continue emitted silence',
+  );
+  assert.ok(
+    Math.abs(sample(recovered.output, firstRealOutput + FADE - 1) - AMPLITUDE) <= 1,
+    'Mic returns from structural pre-roll to the real waveform inside 2 ms',
+  );
+  assert.equal(
+    recovered.evidence.micGapSamples,
+    0,
+    'structural pre-roll must stay out of source-failure evidence',
+  );
+  assert.equal(recovered.evidence.micStarvedSamples, 0);
+
+  let maxStep = 0;
+  for (let index = firstRealOutput; index < firstRealOutput + FADE + 2; index += 1) {
+    maxStep = Math.max(
+      maxStep,
+      Math.abs(sample(recovered.output, index) - sample(recovered.output, index - 1)),
+    );
+  }
+  assert.ok(maxStep < 1_518, `pre-roll recovery emitted a hard splice: ${maxStep}`);
+});
+
 test('Mic ownership release de-clicks the eventual frontier without reclassifying unavailable PCM', () => {
   const session = makeSession();
   session.setMicExpected(true);
@@ -182,6 +242,61 @@ test('Mic recovery keeps its fade pending across structural or source silence', 
     'the pending recovery edge reaches the real waveform within 2 ms of first sound',
   );
 });
+
+for (const source of ['mic', 'backing'] as const) {
+  test(`${source} one-sample late-discovered gap recovers from the audible fade, not assumed silence`, () => {
+    const session = makeSession();
+    if (source === 'mic') session.setMicExpected(true);
+    else session.setBackingExpected(true);
+
+    const ingest = source === 'mic'
+      ? (frameValue: PcmFrame, nowMs: number) => session.ingestMic(frameValue, RATE, nowMs)
+      : (frameValue: PcmFrame, nowMs: number) => session.ingestBacking(frameValue, RATE, nowMs);
+
+    ingest(frame(0), 0);
+    const before = drainOne(session, 0);
+    const beforeLast = sample(before.output, CHUNK - 1);
+    assert.ok(Math.abs(beforeLast - AMPLITUDE) <= 1);
+
+    // The next packet arrives only after frame 0 was emitted and proves exactly
+    // one missing positioned sample. The missing fade therefore has only one
+    // sample to run before real source PCM returns.
+    ingest(frame(CHUNK + 1), 20);
+    if (source === 'mic') {
+      // Give Mic frontier safety enough real future PCM that the read head stays
+      // on this exact one-sample hole. Backing has no independent hold-back
+      // policy, so it needs no extra fixture headroom.
+      for (let index = 1; index < 16; index += 1) {
+        ingest(frame(CHUNK + 1 + CHUNK * index), 20);
+      }
+    }
+    const evidence = source === 'mic'
+      ? session.readMicEvidence(CHUNK, CHUNK)
+      : session.readBackingEvidence(CHUNK, CHUNK);
+    assert.equal(evidence.gapSamples, 1);
+
+    const recovered = drainOne(session, 20);
+    const firstMissing = sample(recovered.output, 0);
+    const firstRecovered = sample(recovered.output, 1);
+    assert.ok(
+      Math.abs(firstMissing - beforeLast) <= 1,
+      'the single missing sample must continue the already-emitted edge',
+    );
+    assert.ok(
+      Math.abs(firstRecovered - firstMissing) < 1_518,
+      `short-gap recovery must continue from the audible edge: ${firstMissing} -> ${firstRecovered}`,
+    );
+
+    let maxStep = 0;
+    for (let index = 1; index < Math.min(CHUNK, FADE * 2); index += 1) {
+      maxStep = Math.max(
+        maxStep,
+        Math.abs(sample(recovered.output, index) - sample(recovered.output, index - 1)),
+      );
+    }
+    assert.ok(maxStep < 1_518, `short-gap recovery emitted a hard splice: ${maxStep}`);
+  });
+}
 
 test('late-discovered positioned gap tapers from already-emitted Mic into silence', () => {
   const session = makeSession();

@@ -348,6 +348,13 @@ export class AudioSession {
   /** Last per-source contributions that actually reached the mix output. */
   private lastEmittedMicContribution = 0;
   private lastEmittedBackingContribution = 0;
+  /**
+   * Mic frontier safety can deliberately move the read head backwards through
+   * retained history. Remember the actual source position last emitted so a
+   * capture-clock seam is de-clicked every time the audible trajectory crosses
+   * it, not only the first time the mixer ever encountered that position.
+   */
+  private lastEmittedMicSourceSample: number | null = null;
   /** Bounded output-edge taper after bind-time capture retirement. */
   private micRetirementFadeStart = 0;
   private micRetirementFadeRemainingSamples = 0;
@@ -1027,6 +1034,7 @@ export class AudioSession {
     this.limiterGain = 1;
     this.lastEmittedMicContribution = 0;
     this.lastEmittedBackingContribution = 0;
+    this.lastEmittedMicSourceSample = null;
     this.micRetirementFadeStart = 0;
     this.micRetirementFadeRemainingSamples = 0;
     this.backingRetirementFadeStart = 0;
@@ -1054,6 +1062,7 @@ export class AudioSession {
   private clearTimeline(timeline: PcmTimeline) {
     if (timeline === this.mic) {
       this.resetMicReadContinuity();
+      this.lastEmittedMicSourceSample = null;
       this.micCaptureRestartBoundarySamples.length = 0;
     } else if (timeline === this.backing) {
       this.backingCaptureRestartBoundarySamples.length = 0;
@@ -1656,6 +1665,17 @@ export class AudioSession {
       if (chunk.start + chunk.samples.length >= beforeSample) break;
       timeline.chunks.shift();
     }
+
+    if (timeline === this.mic) {
+      // Restart seams are output state only while either side can still be
+      // revisited by the retained Mic read head.
+      while (
+        this.micCaptureRestartBoundarySamples.length > 0
+        && this.micCaptureRestartBoundarySamples[0]! < beforeSample
+      ) {
+        this.micCaptureRestartBoundarySamples.shift();
+      }
+    }
   }
 
   /**
@@ -1691,27 +1711,47 @@ export class AudioSession {
   }
 
   private applyMicRetirementFade(current: number) {
-    if (this.micRetirementFadeRemainingSamples <= 0) return current;
-    const progress = this.sourceEdgeFadeSamples - this.micRetirementFadeRemainingSamples;
-    const weight = this.sourceEdgeFadeSamples <= 1
-      ? 1
-      : progress / (this.sourceEdgeFadeSamples - 1);
-    const value = this.micRetirementFadeStart * (1 - weight) + current * weight;
+    const remaining = this.micRetirementFadeRemainingSamples;
+    if (remaining <= 0) return current;
+
+    // The first sample of every semantic replacement continues the exact last
+    // audible contribution. Afterwards converge from what was *actually*
+    // emitted toward the target that exists now. A second restart can replace
+    // that target before 2 ms has elapsed; using a fixed original fade curve
+    // would then jump to a different trajectory mid-transition.
+    const progress = this.sourceEdgeFadeSamples - remaining;
+    const value = progress === 0
+      ? this.micRetirementFadeStart
+      : this.lastEmittedMicContribution
+        + (current - this.lastEmittedMicContribution) / remaining;
     this.micRetirementFadeRemainingSamples -= 1;
     return value;
   }
 
   private applyBackingRetirementFade(current: number) {
-    if (this.backingRetirementFadeRemainingSamples <= 0) return current;
-    const progress = this.sourceEdgeFadeSamples - this.backingRetirementFadeRemainingSamples;
-    const weight = this.sourceEdgeFadeSamples <= 1
-      ? 1
-      : progress / (this.sourceEdgeFadeSamples - 1);
-    const value = this.backingRetirementFadeStart * (1 - weight) + current * weight;
+    const remaining = this.backingRetirementFadeRemainingSamples;
+    if (remaining <= 0) return current;
+
+    const progress = this.sourceEdgeFadeSamples - remaining;
+    const value = progress === 0
+      ? this.backingRetirementFadeStart
+      : this.lastEmittedBackingContribution
+        + (current - this.lastEmittedBackingContribution) / remaining;
     this.backingRetirementFadeRemainingSamples -= 1;
     return value;
   }
 
+  private cancelMicReplacementEdgeForMissingSource() {
+    this.micRetirementFadeRemainingSamples = 0;
+    this.micReplacementNeedsFadeIn = false;
+    this.micReplacementFadeInRemainingSamples = 0;
+  }
+
+  private cancelBackingReplacementEdgeForMissingSource() {
+    this.backingRetirementFadeRemainingSamples = 0;
+    this.backingReplacementNeedsFadeIn = false;
+    this.backingReplacementFadeInRemainingSamples = 0;
+  }
 
   private applyMicReplacementFadeIn(current: number) {
     if (this.micReplacementFadeInRemainingSamples <= 0) {
@@ -1765,11 +1805,22 @@ export class AudioSession {
     return due;
   }
 
+  private crossedRetainedMicRestartBoundary(sourceSample: number) {
+    const previous = this.lastEmittedMicSourceSample;
+    if (previous === null || previous === sourceSample) return false;
+
+    if (sourceSample > previous) {
+      return this.micCaptureRestartBoundarySamples.some(
+        (boundary) => previous < boundary && boundary <= sourceSample,
+      );
+    }
+    return this.micCaptureRestartBoundarySamples.some(
+      (boundary) => sourceSample < boundary && boundary <= previous,
+    );
+  }
+
   private beginMicCaptureRestartEdgeIfDue(sourceSample: number) {
-    if (!this.consumeCaptureRestartBoundaryIfDue(
-      this.micCaptureRestartBoundarySamples,
-      sourceSample,
-    )) return;
+    if (!this.crossedRetainedMicRestartBoundary(sourceSample)) return;
     this.micRetirementFadeStart = this.lastEmittedMicContribution;
     this.micRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
     this.micReplacementNeedsFadeIn = true;
@@ -1829,23 +1880,32 @@ export class AudioSession {
     }
 
     if (this.micFrontierOutputMissing) {
-      // Frontier correction can temporarily read structural pre-roll after PCM
-      // resumes, and a real source can legitimately resume with silence. Keep
-      // the audible state at silence until there is an actual contribution to
-      // fade in; otherwise the 2 ms recovery budget can be spent entirely on
-      // zeros and the later first sound can still arrive as a step.
-      if (current === 0) return current;
+      // A very short positioned hole can end before the fade-out has reached
+      // silence. Source recovery must continue from the contribution that was
+      // actually emitted, not from an assumed zero baseline.
+      if (current === 0) {
+        if (this.micFrontierFadeRemainingSamples <= 0) return current;
+        const progress = this.sourceEdgeFadeSamples - this.micFrontierFadeRemainingSamples;
+        const weight = this.sourceEdgeFadeSamples <= 1
+          ? 1
+          : progress / (this.sourceEdgeFadeSamples - 1);
+        const value = this.micFrontierFadeStart * (1 - weight);
+        this.micFrontierFadeRemainingSamples -= 1;
+        return value;
+      }
       this.micFrontierOutputMissing = false;
       this.micFrontierFadeRemainingSamples = 0;
       this.micFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;
     }
-    if (this.micFrontierRecoveryFadeRemainingSamples <= 0) return current;
-    const progress = this.sourceEdgeFadeSamples - this.micFrontierRecoveryFadeRemainingSamples;
-    const weight = this.sourceEdgeFadeSamples <= 1
-      ? 1
-      : progress / (this.sourceEdgeFadeSamples - 1);
+    const remaining = this.micFrontierRecoveryFadeRemainingSamples;
+    if (remaining <= 0) return current;
+    const progress = this.sourceEdgeFadeSamples - remaining;
+    const value = progress === 0
+      ? this.lastEmittedMicContribution
+      : this.lastEmittedMicContribution
+        + (current - this.lastEmittedMicContribution) / remaining;
     this.micFrontierRecoveryFadeRemainingSamples -= 1;
-    return current * weight;
+    return value;
   }
 
   private applyBackingFrontierEdge(current: number, sourceMissing: boolean) {
@@ -1867,20 +1927,29 @@ export class AudioSession {
     }
 
     if (this.backingFrontierOutputMissing) {
-      // Source silence needs no transition. Preserve the pending recovery edge
-      // until the first contribution that could actually create a click.
-      if (current === 0) return current;
+      if (current === 0) {
+        if (this.backingFrontierFadeRemainingSamples <= 0) return current;
+        const progress = this.sourceEdgeFadeSamples - this.backingFrontierFadeRemainingSamples;
+        const weight = this.sourceEdgeFadeSamples <= 1
+          ? 1
+          : progress / (this.sourceEdgeFadeSamples - 1);
+        const value = this.backingFrontierFadeStart * (1 - weight);
+        this.backingFrontierFadeRemainingSamples -= 1;
+        return value;
+      }
       this.backingFrontierOutputMissing = false;
       this.backingFrontierFadeRemainingSamples = 0;
       this.backingFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;
     }
-    if (this.backingFrontierRecoveryFadeRemainingSamples <= 0) return current;
-    const progress = this.sourceEdgeFadeSamples - this.backingFrontierRecoveryFadeRemainingSamples;
-    const weight = this.sourceEdgeFadeSamples <= 1
-      ? 1
-      : progress / (this.sourceEdgeFadeSamples - 1);
+    const remaining = this.backingFrontierRecoveryFadeRemainingSamples;
+    if (remaining <= 0) return current;
+    const progress = this.sourceEdgeFadeSamples - remaining;
+    const value = progress === 0
+      ? this.lastEmittedBackingContribution
+      : this.lastEmittedBackingContribution
+        + (current - this.lastEmittedBackingContribution) / remaining;
     this.backingFrontierRecoveryFadeRemainingSamples -= 1;
-    return current * weight;
+    return value;
   }
 
   /**
@@ -2144,7 +2213,29 @@ export class AudioSession {
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
       const micSourceSample = micReadStart + i;
+      const micEvidenceMissing = micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
+      // Negative session positions are structural pre-roll, not source failure,
+      // so they stay out of MixFrameEvidence. They are still literal silence at
+      // the output, though, and crossing from that silence back into real PCM
+      // must own the same bounded de-click edge as any other audible absence.
+      const micAudibleMissing = micSourceSample < 0 || micEvidenceMissing;
       this.beginMicCaptureRestartEdgeIfDue(micSourceSample);
+
+      if (
+        micEvidenceMissing
+        && (
+          this.micRetirementFadeRemainingSamples > 0
+          || this.micReplacementNeedsFadeIn
+          || this.micReplacementFadeInRemainingSamples > 0
+        )
+      ) {
+        // A proven source gap/frontier is a new semantic edge and takes over
+        // from a capture replacement. Structural pre-roll is different: it is
+        // not source failure, and an already-active restart transition keeps
+        // ownership until real replacement PCM becomes audible.
+        this.cancelMicReplacementEdgeForMissingSource();
+      }
+
       if (this.micRetirementFadeRemainingSamples > 0) {
         const replacementAudible = voice !== 0;
         voice = this.applyMicRetirementFade(voice);
@@ -2165,15 +2256,26 @@ export class AudioSession {
         // because the same output sample also reads as frontier-missing.
         this.resetMicFrontierEdge();
       } else {
-        voice = this.applyMicFrontierEdge(
-          voice,
-          micGapMask?.[i] === 1 || i >= micFrontierMissingStart,
-        );
+        voice = this.applyMicFrontierEdge(voice, micAudibleMissing);
       }
 
       let songContribution = (song[i] / 32768) * songGain;
       const backingSourceSample = startSample + i;
+      const backingSourceMissing =
+        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
       this.beginBackingCaptureRestartEdgeIfDue(backingSourceSample);
+
+      if (
+        backingSourceMissing
+        && (
+          this.backingRetirementFadeRemainingSamples > 0
+          || this.backingReplacementNeedsFadeIn
+          || this.backingReplacementFadeInRemainingSamples > 0
+        )
+      ) {
+        this.cancelBackingReplacementEdgeForMissingSource();
+      }
+
       if (this.backingRetirementFadeRemainingSamples > 0) {
         const replacementAudible = songContribution !== 0;
         songContribution = this.applyBackingRetirementFade(songContribution);
@@ -2191,13 +2293,11 @@ export class AudioSession {
       if (backingReplacementEdgeActive) {
         this.resetBackingFrontierEdge();
       } else {
-        songContribution = this.applyBackingFrontierEdge(
-          songContribution,
-          backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart,
-        );
+        songContribution = this.applyBackingFrontierEdge(songContribution, backingSourceMissing);
       }
       this.lastEmittedMicContribution = voice;
       this.lastEmittedBackingContribution = songContribution;
+      this.lastEmittedMicSourceSample = micSourceSample;
       const summed = voice + songContribution;
       const value = summed * mixHeadroomGain;
       // Normal two-source peaks have already had deterministic summing headroom

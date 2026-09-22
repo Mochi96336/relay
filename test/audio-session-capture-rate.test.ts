@@ -252,6 +252,86 @@ test('multiple queued Mic capture restarts keep every unread audible boundary', 
   );
 });
 
+test('sub-2ms Mic restart chains stay continuous when the replacement target changes mid-fade', () => {
+  const session = makeTransitionSession();
+  const chunk = Math.round(RATE * 0.02);
+  const sourceChunk = Math.round(44_100 * 0.02);
+
+  session.setMicGainDb(0);
+  session.setMicExpected(true);
+  session.start(0);
+
+  // Build exactly 160 ms of stable capture so the three following re-anchors
+  // reproduce the 959 -> 48 -> 912 sample restart chain found by the seeded
+  // invariant. The middle capture is shorter than the production 2 ms fade.
+  for (let index = 0; index < 8; index += 1) {
+    session.ingestMic(frame(1, index * chunk, chunk, 12_000), RATE, index * 20);
+  }
+  const a = session.ingestMic(frame(2, 0, sourceChunk, -6_000), 44_100, 180);
+  const b = session.ingestMic(frame(3, 0, sourceChunk, 6_000), 44_100, 181);
+  const d = session.ingestMic(frame(4, 0, sourceChunk, -6_000), 44_100, 200);
+  assert.equal(a.captureRestarted, true);
+  assert.equal(b.captureRestarted, true);
+  assert.equal(d.captureRestarted, true);
+  assert.equal(b.samples.length, 48, 'fixture must keep the sub-2ms intermediate capture');
+  assert.equal(d.start, 8_687, 'fixture must reproduce the overlapping restart frontier');
+
+  const outputs: Buffer[] = [];
+  for (let nowMs = 40; nowMs <= 220; nowMs += 20) {
+    outputs.push(drainOne(session, nowMs));
+  }
+
+  let maxStep = 0;
+  let previous: number | null = null;
+  for (const output of outputs) {
+    for (let index = 0; index < output.byteLength / 2; index += 1) {
+      const value = output.readInt16LE(index * 2);
+      if (previous !== null) maxStep = Math.max(maxStep, Math.abs(value - previous));
+      previous = value;
+    }
+  }
+  assert.ok(
+    maxStep < 1_518,
+    `overlapping Mic restart transitions emitted a hard splice: ${maxStep}`,
+  );
+});
+
+test('a short Backing replacement hands an unfinished restart fade to source-missing continuity', () => {
+  const session = makeTransitionSession();
+  const chunk = Math.round(RATE * 0.02);
+  const sourceChunk = Math.round(44_100 * 0.02);
+
+  session.setBackingExpected(true);
+  session.start(0);
+  for (let index = 0; index < 8; index += 1) {
+    session.ingestBacking(frame(1, index * chunk, chunk, -6_000), RATE, index * 20);
+  }
+
+  session.ingestBacking(frame(2, 0, sourceChunk, 6_000), 44_100, 180);
+  const short = session.ingestBacking(frame(3, 0, sourceChunk, -6_000), 44_100, 181);
+  assert.equal(short.captureRestarted, true);
+  assert.equal(short.samples.length, 48, 'fixture must end the replacement before the 2 ms fade finishes');
+
+  const outputs: Buffer[] = [];
+  for (let nowMs = 40; nowMs <= 220; nowMs += 20) {
+    outputs.push(drainOne(session, nowMs));
+  }
+
+  let maxStep = 0;
+  let previous: number | null = null;
+  for (const output of outputs) {
+    for (let index = 0; index < output.byteLength / 2; index += 1) {
+      const value = output.readInt16LE(index * 2);
+      if (previous !== null) maxStep = Math.max(maxStep, Math.abs(value - previous));
+      previous = value;
+    }
+  }
+  assert.ok(
+    maxStep < 1_518,
+    `short Backing replacement fell into missing source with a hard splice: ${maxStep}`,
+  );
+});
+
 test('Backing source-rate restart de-clicks the audible splice while keeping resampled history exact', () => {
   const session = makeTransitionSession();
   const chunk = Math.round(RATE * 0.02);

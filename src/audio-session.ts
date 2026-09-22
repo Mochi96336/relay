@@ -2177,6 +2177,12 @@ export class AudioSession {
       );
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
+    const micOutputSourceStart = boundedRuntimeAdvanceMoved
+      ? startSample + previousAdvanceSamplesExact
+      : micReadStart;
+    const micOutputSourceRate = boundedRuntimeAdvanceMoved
+      ? 1 + ((advanceSamplesExact - previousAdvanceSamplesExact) / this.frameSamples)
+      : 1;
     // `backingExpected` and `micExpected` are the room's semantic signals for
     // which sources this mix has. Both must hold: the reservation is headroom
     // for a sum, so a room with only one source has nothing to reserve against.
@@ -2212,12 +2218,17 @@ export class AudioSession {
         (mic[i] / 32768) * micGain,
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
-      const micSourceSample = micReadStart + i;
-      const micSourceMissing = micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
+      const micSourceSample = micOutputSourceStart + i * micOutputSourceRate;
+      const micEvidenceMissing = micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
+      // Negative session positions are structural pre-roll, not source failure,
+      // so they stay out of MixFrameEvidence. They are still literal silence at
+      // the output, though, and crossing from that silence back into real PCM
+      // must own the same bounded de-click edge as any other audible absence.
+      const micAudibleMissing = micSourceSample < 0 || micEvidenceMissing;
       this.beginMicCaptureRestartEdgeIfDue(micSourceSample);
 
       if (
-        micSourceMissing
+        micAudibleMissing
         && (
           this.micRetirementFadeRemainingSamples > 0
           || this.micReplacementNeedsFadeIn
@@ -2250,7 +2261,7 @@ export class AudioSession {
         // because the same output sample also reads as frontier-missing.
         this.resetMicFrontierEdge();
       } else {
-        voice = this.applyMicFrontierEdge(voice, micSourceMissing);
+        voice = this.applyMicFrontierEdge(voice, micAudibleMissing);
       }
 
       let songContribution = (song[i] / 32768) * songGain;

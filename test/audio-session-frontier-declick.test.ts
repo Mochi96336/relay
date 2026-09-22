@@ -202,6 +202,14 @@ for (const source of ['mic', 'backing'] as const) {
     // one missing positioned sample. The missing fade therefore has only one
     // sample to run before real source PCM returns.
     ingest(frame(CHUNK + 1), 20);
+    if (source === 'mic') {
+      // Give Mic frontier safety enough real future PCM that the read head stays
+      // on this exact one-sample hole. Backing has no independent hold-back
+      // policy, so it needs no extra fixture headroom.
+      for (let index = 1; index < 16; index += 1) {
+        ingest(frame(CHUNK + 1 + CHUNK * index), 20);
+      }
+    }
     const evidence = source === 'mic'
       ? session.readMicEvidence(CHUNK, CHUNK)
       : session.readBackingEvidence(CHUNK, CHUNK);

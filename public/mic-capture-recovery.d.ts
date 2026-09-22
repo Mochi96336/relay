@@ -7,6 +7,7 @@ export type MicCaptureSnapshot = {
   contextState?: string;
   contextTime: number;
   sampleCursor: number;
+  inputMuted?: boolean;
 };
 
 export type MicCaptureRecoveryDecision = {

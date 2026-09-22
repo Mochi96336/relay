@@ -183,6 +183,35 @@ test('Mic recovery keeps its fade pending across structural or source silence', 
   );
 });
 
+test('late-discovered positioned gap tapers from already-emitted Mic into silence', () => {
+  const session = makeSession();
+  session.setMicExpected(true);
+  session.ingestMic(frame(0), RATE, 0);
+
+  const before = drainOne(session, 0);
+  const beforeLast = sample(before.output, CHUNK - 1);
+  assert.ok(Math.abs(beforeLast - AMPLITUDE) <= 1);
+
+  // The previous Mic frame is already audible when this later positioned
+  // packet proves a complete 20 ms hole immediately after it.
+  session.ingestMic(frame(CHUNK * 2), RATE, 20);
+  assert.deepEqual(session.readMicEvidence(CHUNK, CHUNK), {
+    gapSamples: CHUNK,
+    frontierMissingSamples: 0,
+    unheaderedSamples: 0,
+  });
+
+  const missing = drainOne(session, 20);
+  assert.ok(
+    Math.abs(sample(missing.output, 0) - beforeLast) <= 1,
+    'first newly-proven Mic gap sample must continue the already-emitted vocal edge',
+  );
+  assert.equal(sample(missing.output, FADE - 1), 0);
+  assert.equal(sample(missing.output, FADE), 0);
+  assert.equal(missing.evidence.micGapSamples, CHUNK);
+  assert.equal(missing.evidence.micStarvedSamples, 0);
+});
+
 test('late-discovered positioned gap tapers from already-emitted Backing into silence', () => {
   const session = makeSession();
   session.setBackingExpected(true);

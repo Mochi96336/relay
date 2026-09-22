@@ -258,6 +258,82 @@ test('capture-dispatch backlog rebaselines media recovery instead of blaming WT'
   assert.equal(transport.stats().path, 'websocket');
 });
 
+test('muted-source health rebaselines media recovery instead of spending WT recovery', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  // A muted MediaStreamTrack may keep WebAudio and the capture cursor moving
+  // with zero PCM. Even if the server acceptance serial is flat, this is
+  // already a known source failure and must not consume WT/WS recovery budget.
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300, 1_400, 1_500]) {
+    transport.sendControlJson({
+      ...health(7, capturedSamples),
+      inputMuted: true,
+    });
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+
+  assert.equal(transport.stats().path, 'webtransport');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 0);
+  assert.equal((transport as any).mediaPathRecovery.status().webTransportDemotionUsed, false);
+
+  // Unmute is a fresh diagnosis boundary. The muted interval is not charged
+  // retroactively; only subsequent stale live-source observations may demote WT.
+  for (const capturedSamples of [1_600, 1_700, 1_800, 1_900]) {
+    transport.sendControlJson({
+      ...health(7, capturedSamples),
+      inputMuted: false,
+    });
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+
+  assert.equal(transport.stats().path, 'websocket');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
+});
+
+test('active input-gap health rebaselines media recovery instead of blaming WT', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  // #378 promotes sustained worklet input loss into explicit source authority.
+  // Padded zero PCM can still advance capturedSamples, so that interval must
+  // not consume the independent WT/WS recovery budget.
+  for (const capturedSamples of [1_000, 1_100, 1_200, 1_300, 1_400, 1_500]) {
+    transport.sendControlJson({
+      ...health(7, capturedSamples),
+      inputMuted: false,
+      inputGapActive: true,
+    });
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+
+  assert.equal(transport.stats().path, 'webtransport');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 0);
+  assert.equal((transport as any).mediaPathRecovery.status().webTransportDemotionUsed, false);
+
+  // Gap recovery is a fresh diagnosis boundary. Do not charge the synthetic
+  // silence interval retroactively; later real underdelivery remains actionable.
+  for (const capturedSamples of [1_600, 1_700, 1_800, 1_900]) {
+    transport.sendControlJson({
+      ...health(7, capturedSamples),
+      inputMuted: false,
+      inputGapActive: false,
+    });
+    socket.emitJson(ack(7, 10, 'webtransport'));
+  }
+
+  assert.equal(transport.stats().path, 'websocket');
+  assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
+});
+
 test('hidden-page health ACKs rebaseline and never trigger semantic media recovery', async () => {
   FakeWebTransport.instances.length = 0;
   const { PreferredAudioTransport } = await import(moduleUrl.href);

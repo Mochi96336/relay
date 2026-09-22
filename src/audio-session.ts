@@ -1691,27 +1691,47 @@ export class AudioSession {
   }
 
   private applyMicRetirementFade(current: number) {
-    if (this.micRetirementFadeRemainingSamples <= 0) return current;
-    const progress = this.sourceEdgeFadeSamples - this.micRetirementFadeRemainingSamples;
-    const weight = this.sourceEdgeFadeSamples <= 1
-      ? 1
-      : progress / (this.sourceEdgeFadeSamples - 1);
-    const value = this.micRetirementFadeStart * (1 - weight) + current * weight;
+    const remaining = this.micRetirementFadeRemainingSamples;
+    if (remaining <= 0) return current;
+
+    // The first sample of every semantic replacement continues the exact last
+    // audible contribution. Afterwards converge from what was *actually*
+    // emitted toward the target that exists now. A second restart can replace
+    // that target before 2 ms has elapsed; using a fixed original fade curve
+    // would then jump to a different trajectory mid-transition.
+    const progress = this.sourceEdgeFadeSamples - remaining;
+    const value = progress === 0
+      ? this.micRetirementFadeStart
+      : this.lastEmittedMicContribution
+        + (current - this.lastEmittedMicContribution) / remaining;
     this.micRetirementFadeRemainingSamples -= 1;
     return value;
   }
 
   private applyBackingRetirementFade(current: number) {
-    if (this.backingRetirementFadeRemainingSamples <= 0) return current;
-    const progress = this.sourceEdgeFadeSamples - this.backingRetirementFadeRemainingSamples;
-    const weight = this.sourceEdgeFadeSamples <= 1
-      ? 1
-      : progress / (this.sourceEdgeFadeSamples - 1);
-    const value = this.backingRetirementFadeStart * (1 - weight) + current * weight;
+    const remaining = this.backingRetirementFadeRemainingSamples;
+    if (remaining <= 0) return current;
+
+    const progress = this.sourceEdgeFadeSamples - remaining;
+    const value = progress === 0
+      ? this.backingRetirementFadeStart
+      : this.lastEmittedBackingContribution
+        + (current - this.lastEmittedBackingContribution) / remaining;
     this.backingRetirementFadeRemainingSamples -= 1;
     return value;
   }
 
+  private cancelMicReplacementEdgeForMissingSource() {
+    this.micRetirementFadeRemainingSamples = 0;
+    this.micReplacementNeedsFadeIn = false;
+    this.micReplacementFadeInRemainingSamples = 0;
+  }
+
+  private cancelBackingReplacementEdgeForMissingSource() {
+    this.backingRetirementFadeRemainingSamples = 0;
+    this.backingReplacementNeedsFadeIn = false;
+    this.backingReplacementFadeInRemainingSamples = 0;
+  }
 
   private applyMicReplacementFadeIn(current: number) {
     if (this.micReplacementFadeInRemainingSamples <= 0) {
@@ -2144,7 +2164,23 @@ export class AudioSession {
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
       const micSourceSample = micReadStart + i;
+      const micSourceMissing = micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
       this.beginMicCaptureRestartEdgeIfDue(micSourceSample);
+
+      if (
+        micSourceMissing
+        && (
+          this.micRetirementFadeRemainingSamples > 0
+          || this.micReplacementNeedsFadeIn
+          || this.micReplacementFadeInRemainingSamples > 0
+        )
+      ) {
+        // A short replacement can end before its 2 ms transition does. Missing
+        // source is a new semantic edge, not a zero-valued replacement target:
+        // hand ownership to the source-missing taper from the exact last output.
+        this.cancelMicReplacementEdgeForMissingSource();
+      }
+
       if (this.micRetirementFadeRemainingSamples > 0) {
         const replacementAudible = voice !== 0;
         voice = this.applyMicRetirementFade(voice);
@@ -2165,15 +2201,26 @@ export class AudioSession {
         // because the same output sample also reads as frontier-missing.
         this.resetMicFrontierEdge();
       } else {
-        voice = this.applyMicFrontierEdge(
-          voice,
-          micGapMask?.[i] === 1 || i >= micFrontierMissingStart,
-        );
+        voice = this.applyMicFrontierEdge(voice, micSourceMissing);
       }
 
       let songContribution = (song[i] / 32768) * songGain;
       const backingSourceSample = startSample + i;
+      const backingSourceMissing =
+        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
       this.beginBackingCaptureRestartEdgeIfDue(backingSourceSample);
+
+      if (
+        backingSourceMissing
+        && (
+          this.backingRetirementFadeRemainingSamples > 0
+          || this.backingReplacementNeedsFadeIn
+          || this.backingReplacementFadeInRemainingSamples > 0
+        )
+      ) {
+        this.cancelBackingReplacementEdgeForMissingSource();
+      }
+
       if (this.backingRetirementFadeRemainingSamples > 0) {
         const replacementAudible = songContribution !== 0;
         songContribution = this.applyBackingRetirementFade(songContribution);
@@ -2191,10 +2238,7 @@ export class AudioSession {
       if (backingReplacementEdgeActive) {
         this.resetBackingFrontierEdge();
       } else {
-        songContribution = this.applyBackingFrontierEdge(
-          songContribution,
-          backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart,
-        );
+        songContribution = this.applyBackingFrontierEdge(songContribution, backingSourceMissing);
       }
       this.lastEmittedMicContribution = voice;
       this.lastEmittedBackingContribution = songContribution;

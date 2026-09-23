@@ -13,6 +13,7 @@ type CoverageObservation = {
   senderFailedPackets: number;
   serverReceivedPacketSerial: number;
   serverReceivedSampleSerial?: number;
+  localCaptureBacklogDroppedSamples: number;
   serverMediaPath: Path | null;
   path: Path;
   socketEpoch: number;
@@ -27,6 +28,7 @@ function observation(overrides: Partial<CoverageObservation> = {}): CoverageObse
     senderSubmittedPackets: 100,
     senderFailedPackets: 0,
     serverReceivedPacketSerial: 100,
+    localCaptureBacklogDroppedSamples: 0,
     serverMediaPath: 'websocket',
     path: 'websocket',
     socketEpoch: 1,
@@ -74,6 +76,32 @@ test('healthy packet counts cannot mask severe source-sample under-delivery', ()
   assert.equal(decision!.action, 'replace-websocket');
   assert.equal(decision!.reason, 'server-pcm-underdelivery');
   assert.equal(decision!.webSocketReplacementUsed, true);
+});
+
+test('pre-transport capture backlog is excluded from source-sample under-delivery', () => {
+  const recovery = new MicMediaPathRecovery();
+  recovery.observe(observation({
+    serverReceivedSampleSerial: 48_000,
+  }));
+
+  const decision = recovery.observe(observation({
+    capturedSamples: 96_000,
+    serverAcceptedFrameSerial: 101,
+    senderSubmittedPackets: 200,
+    serverReceivedPacketSerial: 200,
+    serverReceivedSampleSerial: 52_800,
+    localCaptureBacklogDroppedSamples: 43_200,
+  }));
+
+  assert.equal(decision.action, 'none');
+  assert.equal(decision.reason, 'server-pcm-coverage-healthy');
+  assert.equal(decision.packetCoverage, 1);
+  assert.equal(
+    decision.sampleCoverage,
+    1,
+    '48k captured - 43.2k intentionally stale = 4.8k deliverable, all of which arrived',
+  );
+  assert.equal(decision.staleObservations, 0);
 });
 
 test('accepted-frame progress cannot mask three severe packet under-delivery windows', () => {

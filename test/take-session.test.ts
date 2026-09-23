@@ -47,6 +47,8 @@ function cleanQuality() {
     backingStarvedMs: 0,
     clippedSamples: 0,
     clippedMs: 0,
+    micInputClippedSamples: 0,
+    micInputClippedMs: 0,
     limitedSamples: 0,
     limitedMs: 0,
     unheaderedSamples: 0,

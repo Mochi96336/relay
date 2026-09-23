@@ -171,6 +171,8 @@ let captureInputGapSamples = 0;
  * windows since the last successfully sent uplink-health report.
  */
 let captureInputClippingSinceHealth = null;
+let captureInputClippingRevision = 0;
+const pendingCaptureClippingHealth = new Map();
 let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
@@ -260,6 +262,27 @@ function captureClippingHealthSnapshot() {
   };
 }
 
+function settleCaptureClippingHealth(healthRequestId) {
+  const accepted = pendingCaptureClippingHealth.get(healthRequestId);
+  if (!accepted) return false;
+
+  // Mirror PublisherCommandLiveness supersession: once this request is
+  // acknowledged, any older clipping snapshot can never become authoritative.
+  for (const [requestId, pending] of pendingCaptureClippingHealth) {
+    if (pending.sentAtMs <= accepted.sentAtMs) pendingCaptureClippingHealth.delete(requestId);
+  }
+
+  // Do not let an older ACK erase a clipped window that occurred after that
+  // request was sent.
+  if (
+    captureInputClippingSinceHealth !== null
+    && accepted.revision === captureInputClippingRevision
+  ) {
+    captureInputClippingSinceHealth = false;
+  }
+  return true;
+}
+
 function audioUplinkHealthPayload(healthRequestId) {
   return {
     type: 'audio-uplink-health',
@@ -295,11 +318,14 @@ function sendAudioUplinkHealth() {
   const result = audioTransport.sendControlJson(audioUplinkHealthPayload(healthRequestId));
   if (!result.sent) {
     publisherCommandLiveness.cancelHealthRequest(healthRequestId);
-  } else if (captureInputClippingSinceHealth !== null) {
-    // The accepted report now owns that interval. Start a fresh window rather
-    // than letting one clipped syllable keep room/product status degraded for
-    // the lifetime of this capture generation.
-    captureInputClippingSinceHealth = false;
+  } else {
+    // Keep interval evidence until the server ACK proves this exact health
+    // report was accepted. The revision prevents a late ACK from clearing
+    // clipping that happened after this request left the page.
+    pendingCaptureClippingHealth.set(healthRequestId, {
+      revision: captureInputClippingRevision,
+      sentAtMs,
+    });
   }
   return result.sent;
 }
@@ -354,6 +380,8 @@ function advanceCaptureGeneration(reason) {
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
   captureInputClippingSinceHealth = null;
+  captureInputClippingRevision = 0;
+  pendingCaptureClippingHealth.clear();
   captureInputMuted = mediaStream?.getAudioTracks?.()[0]?.muted === true;
   latestLocalMicLevel = null;
   uplinkDroppedSamples = 0;
@@ -541,7 +569,10 @@ function handleCaptureWorkletMessage(event, graph) {
         const clipping = captureClippingSnapshot(event.data);
         if (clipping?.windowMaxConsecutiveRailSamples !== undefined) {
           if (captureInputClippingSinceHealth === null) captureInputClippingSinceHealth = false;
-          if (captureRecentInputClippingDetected(clipping)) captureInputClippingSinceHealth = true;
+          if (captureRecentInputClippingDetected(clipping)) {
+            captureInputClippingSinceHealth = true;
+            captureInputClippingRevision += 1;
+          }
         }
         latestLocalMicLevel = {
           peakDbfs,
@@ -1303,6 +1334,7 @@ function handleServerMessage(
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
       || !publisherCommandLiveness.noteAck(ackGeneration, healthRequestId, performance.now())
     ) return;
+    settleCaptureClippingHealth(healthRequestId);
     refreshPublisherCommandChannel();
     return;
   }

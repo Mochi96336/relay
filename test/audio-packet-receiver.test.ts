@@ -226,6 +226,11 @@ describe('AudioPacketReceiver', () => {
     );
     assert.equal(replacement.stats().lostPackets, 0);
     assert.equal(replacement.stats().replayPackets, 0);
+    assert.equal(
+      replacement.stats().emittedSamples,
+      6,
+      'same-capture receiver replacement must preserve cumulative source-sample authority',
+    );
   });
 
   test('same-generation reconnect can explicitly re-anchor after a large gap', () => {

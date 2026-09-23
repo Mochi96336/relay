@@ -51,6 +51,8 @@ export type ProductViewModelInput = {
   publisherControlConnected?: boolean;
   /** Capture-scoped browser verdict after bounded media recovery is exhausted. */
   micMediaRecoveryDegraded?: boolean;
+  /** Recent raw-input flat-top evidence from the active Mic capture. */
+  micInputClipping?: boolean;
   roomSong: ProductRoomSongInput;
   take: ProductTakeInput;
   timing: {
@@ -257,6 +259,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       ownerId: input.micOwnerId,
       state: mic,
       mediaRecoveryDegraded: micMediaRecoveryDegraded,
+      inputClipping: mic === 'live' && input.micInputClipping === true,
     },
     takeLifecycle: input.take.lifecycle,
     performanceActive,

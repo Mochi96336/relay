@@ -1300,21 +1300,33 @@ export class AudioSession {
     }
   }
 
-  private micInputClippingAt(position: number) {
-    for (const range of this.micInputClippingRanges) {
-      if (position < range.start) return false;
-      if (position < range.end) return true;
+  /** First sorted clipping range whose end is strictly after position. */
+  private firstMicInputClippingRangeAfter(position: number) {
+    let low = 0;
+    let high = this.micInputClippingRanges.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (this.micInputClippingRanges[mid]!.end <= position) low = mid + 1;
+      else high = mid;
     }
-    return false;
+    return low;
+  }
+
+  private micInputClippingAt(position: number) {
+    const range = this.micInputClippingRanges[
+      this.firstMicInputClippingRangeAfter(position)
+    ];
+    return Boolean(range && range.start <= position && position < range.end);
   }
 
   private readMicInputClippingMask(startSample: number, count: number) {
     if (count <= 0 || this.micInputClippingRanges.length === 0) return null;
     const mask = new Uint8Array(count);
     const endSample = startSample + count;
+    let rangeIndex = this.firstMicInputClippingRangeAfter(startSample);
 
-    for (const range of this.micInputClippingRanges) {
-      if (range.end <= startSample) continue;
+    for (; rangeIndex < this.micInputClippingRanges.length; rangeIndex += 1) {
+      const range = this.micInputClippingRanges[rangeIndex]!;
       if (range.start >= endSample) break;
       const start = Math.max(startSample, range.start);
       const end = Math.min(endSample, range.end);

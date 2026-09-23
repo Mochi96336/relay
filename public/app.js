@@ -669,9 +669,28 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     graph.processorErrorListener = () => {
       if (!captureGraphIsCurrent(graph)) return;
       // Per Web Audio, a processorerror leaves this AudioWorkletNode producing
-      // silence for the rest of its lifetime. Do not wait for the generic
-      // sample-cursor watchdog to infer that terminal state.
-      void rebuildPublisherCaptureGraph('processor-error');
+      // silence for the rest of its lifetime. Spend the same one-shot rebuild
+      // budget as the generic watchdog so a deterministic worklet bug cannot
+      // create an unbounded generation/rebuild loop.
+      const decision = micCaptureRecovery.noteProcessorError(captureSnapshot());
+      if (decision.rebuild) {
+        void rebuildPublisherCaptureGraph('processor-error');
+        return;
+      }
+      if (!decision.exhausted) return;
+
+      // A replacement processor failed again before fresh PCM could re-arm the
+      // budget. Stop local capture into the bounded server reconnect grace and
+      // require the existing user-gesture Retry Mic path.
+      void finishMicrophoneSession('processor-error-repeated', {
+        releaseMic: false,
+        afterEnded: () => {
+          setStatus(
+            'Microphone interrupted',
+            'The microphone processor failed repeatedly. Retry Mic to reconnect it.',
+          );
+        },
+      }).catch(console.error);
     };
     capture.addEventListener('processorerror', graph.processorErrorListener);
   }

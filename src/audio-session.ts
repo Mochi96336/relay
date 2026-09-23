@@ -939,7 +939,11 @@ export class AudioSession {
       && sourceRate
       && result.samples.length > 0
     ) {
-      this.observeMicInputClippingFrame(frame, sourceRate);
+      this.observeMicInputClippingFrame(
+        frame,
+        sourceRate,
+        sourceContinuous ? null : result.start,
+      );
     }
     if (result.captureRestarted && this.running) {
       this.queueCaptureRestartBoundary(
@@ -1236,7 +1240,11 @@ export class AudioSession {
    * that is >= +32766 or <= -32767. Four consecutive source samples match the
    * product-side clipping policy from capture-observability.js.
    */
-  private observeMicInputClippingFrame(frame: PcmFrame, sourceRate: number) {
+  private observeMicInputClippingFrame(
+    frame: PcmFrame,
+    sourceRate: number,
+    minimumSessionSample: number | null,
+  ) {
     if (frame.firstSampleIndex === null) return;
     const sourceStart = frame.firstSampleIndex;
     const sampleCount = Math.floor(frame.pcm.byteLength / 2);
@@ -1259,10 +1267,16 @@ export class AudioSession {
         this.micInputRailRunSamples >= 4
         && this.micInputRailRunStartSourceSample !== null
       ) {
-        const start = this.micSourceSampleToSessionSample(
+        const mappedStart = this.micSourceSampleToSessionSample(
           this.micInputRailRunStartSourceSample,
           sourceRate,
         );
+        // A discontinuous/new capture may initially map behind retained old
+        // PCM and be overlap-trimmed by ingest(). Its clipping authority starts
+        // only where that new capture was actually accepted onto the timeline.
+        const start = minimumSessionSample === null
+          ? mappedStart
+          : Math.max(mappedStart, minimumSessionSample);
         const mappedEnd = this.micSourceSampleToSessionSample(sourceSample + 1, sourceRate);
         const end = Math.max(start + 1, mappedEnd);
 
@@ -3045,7 +3059,13 @@ export class AudioSession {
 
     let micInputClippedSamples = 0;
     if (micInputClippingMask) {
-      for (const clipped of micInputClippingMask) micInputClippedSamples += clipped;
+      for (let i = 0; i < micInputClippingMask.length; i += 1) {
+        if (micInputClippingMask[i] !== 1) continue;
+        const missing = micSlew
+          ? micSlew.missingMask[i] === 1
+          : micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
+        if (!missing) micInputClippedSamples += 1;
+      }
     }
     micInputClippedSamples += crossfadeMicInputClippedSamplesDelta;
 

@@ -235,7 +235,7 @@ const SONG_DUCK_RAMP_MS = 150;
  * already-safe two-source bus instead of asking the final hard clamp to absorb
  * that semantic join.
  */
-const MIC_JOIN_SAFETY_CROSSFADE_MS = 10;
+const SOURCE_JOIN_SAFETY_CROSSFADE_MS = 10;
 
 /**
  * Live Mic gain is user-controlled and may change while voiced audio is
@@ -319,14 +319,15 @@ export class AudioSession {
   /** 0 while the song has the room to itself, 1 once it is out of a voice's way. */
   private songDuck = 0;
   /**
-   * A mid-song Mic claim is a source join, not merely a slow gain change.
-   * Until the normal 150 ms duck reaches its steady state, blend from the
-   * previous song-only bus into a mathematically safe two-source bus.
+   * A source joining an already-audible peer is not merely a slow gain change.
+   * Until the normal 150 ms duck reaches its steady state, crossfade from the
+   * previously audible single-source bus into a mathematically safe two-source
+   * bus. Track which source joined so the old endpoint is unambiguous.
    */
-  private micJoinSafetyPending = false;
-  private micJoinSafetyActive = false;
-  private micJoinSafetyBlend = 0;
-  private readonly micJoinSafetyStep: number;
+  private sourceJoinSafetyPending: 'mic' | 'backing' | null = null;
+  private sourceJoinSafetyActive: 'mic' | 'backing' | null = null;
+  private sourceJoinSafetyBlend = 0;
+  private readonly sourceJoinSafetyStep: number;
   /**
    * Expectation is transport/product intent, not proof that retained source PCM
    * has stopped reaching the bus. Keep two-source duck/headroom ownership until
@@ -464,9 +465,9 @@ export class AudioSession {
       1,
       Math.round((SONG_DUCK_RAMP_MS / 1000) * options.sampleRate),
     );
-    this.micJoinSafetyStep = 1 / Math.max(
+    this.sourceJoinSafetyStep = 1 / Math.max(
       1,
-      Math.round((MIC_JOIN_SAFETY_CROSSFADE_MS / 1000) * options.sampleRate),
+      Math.round((SOURCE_JOIN_SAFETY_CROSSFADE_MS / 1000) * options.sampleRate),
     );
     this.micGainRampSamples = Math.max(
       1,
@@ -588,9 +589,9 @@ export class AudioSession {
     // A new session starts from what the room currently is, not from wherever
     // the previous one's ramp happened to stop.
     this.songDuck = this.backingExpected && this.micExpected ? 1 : 0;
-    this.micJoinSafetyPending = false;
-    this.micJoinSafetyActive = false;
-    this.micJoinSafetyBlend = 0;
+    this.sourceJoinSafetyPending = null;
+    this.sourceJoinSafetyActive = null;
+    this.sourceJoinSafetyBlend = 0;
     this.micExpectationReleaseHold = false;
     this.backingExpectationReleaseHold = false;
     this.micGainDbApplied = this.micGainDbValue;

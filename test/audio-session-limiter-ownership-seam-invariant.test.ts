@@ -158,6 +158,57 @@ test('a newly audible Mic cannot outrun two-source summing headroom', () => {
   );
 });
 
+test('retained Backing cannot lose two-source headroom before it becomes silent', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setBackingExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  session.ingestMic(
+    constantMicFrame(1, 0, RATE * 2, 1_000),
+    RATE,
+    0,
+  );
+  session.ingestBacking(
+    constantMicFrame(1, 0, RATE * 2, 20_000),
+    RATE,
+    0,
+  );
+
+  // Settle the ordinary two-source bus, then revoke Backing expectation while
+  // retained Backing PCM still spans far beyond the current read head.
+  session.drain(() => {}, 180, 100);
+  session.setBackingExpected(false);
+
+  const whileRetained: MixFrameEvidence[] = [];
+  for (let nowMs = 200; nowMs <= 380; nowMs += 20) {
+    session.drain((_pcm, evidence) => whileRetained.push(evidence), nowMs, 1);
+  }
+
+  assert.ok(whileRetained.length > 0);
+  assert.equal(
+    whileRetained.reduce((sum, evidence) => sum + evidence.clippedSamples, 0),
+    0,
+    'expectation loss must not release sum headroom while retained Backing is still audible',
+  );
+
+  // Re-arming the same still-audible capture is continuity, not a new source
+  // join. It must not create a fresh bus transition or final-clamp burst.
+  session.setBackingExpected(true);
+  const rearmed: MixFrameEvidence[] = [];
+  session.drain((_pcm, evidence) => rearmed.push(evidence), 400, 1);
+  assert.equal(rearmed.length, 1);
+  assert.equal(rearmed[0]!.clippedSamples, 0);
+});
+
 test('bind-time Mic replacement does not inherit old capture limiter reduction', () => {
   const session = new AudioSession({
     sampleRate: RATE,

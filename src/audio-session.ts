@@ -18,6 +18,11 @@ type PcmChunk = {
   positioned: boolean;
 };
 
+type SampleRange = {
+  start: number;
+  end: number;
+};
+
 type PcmTimeline = {
   chunks: PcmChunk[];
   /** Write frontier on the session timeline, not a count of samples received. */
@@ -99,6 +104,8 @@ export type MixFrameEvidence = {
   micUnavailableSamples: number;
   backingUnavailableSamples: number;
   clippedSamples: number;
+  /** Emitted Mic samples derived from a proven raw-input flat-top run. */
+  micInputClippedSamples: number;
   limitedSamples: number;
   unheaderedSamples: number;
 };
@@ -397,6 +404,16 @@ export class AudioSession {
    */
   private readonly micCaptureRestartBoundarySamples: number[] = [];
   private readonly backingCaptureRestartBoundarySamples: number[] = [];
+  /**
+   * Proven raw-input flat-top ranges mapped onto the retained Mic session
+   * timeline. Detection runs on original source PCM before sample-rate
+   * conversion; attribution happens only when the mixer actually reads one of
+   * these ranges into an emitted frame.
+   */
+  private readonly micInputClippingRanges: SampleRange[] = [];
+  private micInputRailRunStartSourceSample: number | null = null;
+  private micInputRailRunSamples = 0;
+  private micInputRailRunRangeIndex: number | null = null;
   /**
    * Mixer-output frontier continuity.
    *
@@ -902,8 +919,29 @@ export class AudioSession {
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
     const previousTotalSamples = this.mic.totalSamples;
     const previousChunk = this.mic.chunks.at(-1) ?? null;
+    const previousGeneration = this.mic.generation;
+    const previousSourceRate = this.mic.sourceRate;
+    const previousSourceFrontier = this.mic.sourceFrontier;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
     const currentChunk = this.mic.chunks.at(-1) ?? null;
+
+    const positioned = frame.firstSampleIndex !== null;
+    const sourceContinuous = Boolean(
+      positioned
+      && sourceRate
+      && !result.captureRestarted
+      && previousGeneration === frame.generation
+      && previousSourceRate === sourceRate
+      && previousSourceFrontier === frame.firstSampleIndex
+    );
+    if (!sourceContinuous) this.resetMicInputRailRun();
+    if (
+      positioned
+      && sourceRate
+      && result.samples.length > 0
+    ) {
+      this.observeMicInputClippingFrame(frame, sourceRate);
+    }
     if (result.captureRestarted && this.running) {
       this.queueCaptureRestartBoundary(
         this.micCaptureRestartBoundarySamples,
@@ -1163,6 +1201,8 @@ export class AudioSession {
       this.resetMicReadContinuity();
       this.lastEmittedMicSourceSample = null;
       this.micCaptureRestartBoundarySamples.length = 0;
+      this.micInputClippingRanges.length = 0;
+      this.resetMicInputRailRun();
     } else if (timeline === this.backing) {
       this.backingCaptureRestartBoundarySamples.length = 0;
     }
@@ -2031,6 +2071,12 @@ export class AudioSession {
         && this.micCaptureRestartBoundarySamples[0]! < beforeSample
       ) {
         this.micCaptureRestartBoundarySamples.shift();
+      }
+      while (
+        this.micInputClippingRanges.length > 0
+        && this.micInputClippingRanges[0]!.end <= beforeSample
+      ) {
+        this.micInputClippingRanges.shift();
       }
     }
   }

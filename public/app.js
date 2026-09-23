@@ -352,6 +352,12 @@ function disposeCaptureGraph(graph) {
   graph.deviceChangeListener = null;
   graph.deviceChangeCheckPending = false;
   try {
+    if (graph.processorErrorListener) {
+      graph.capture?.removeEventListener?.('processorerror', graph.processorErrorListener);
+    }
+  } catch {}
+  graph.processorErrorListener = null;
+  try {
     graph.visualAnalysisWorker?.terminate();
   } catch {}
   graph.visualAnalysisWorker = null;
@@ -655,8 +661,39 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     visualAnalysis: null,
     deviceChangeListener: null,
     deviceChangeCheckPending: false,
+    processorErrorListener: null,
     inputDeviceId: captureTrackDeviceId(captureStream.getAudioTracks?.()[0] ?? null),
   };
+
+  if (typeof capture.addEventListener === 'function') {
+    graph.processorErrorListener = () => {
+      if (!captureGraphIsCurrent(graph)) return;
+      // Per Web Audio, a processorerror leaves this AudioWorkletNode producing
+      // silence for the rest of its lifetime. Spend the same one-shot rebuild
+      // budget as the generic watchdog so a deterministic worklet bug cannot
+      // create an unbounded generation/rebuild loop.
+      const decision = micCaptureRecovery.noteProcessorError(captureSnapshot());
+      if (decision.rebuild) {
+        void rebuildPublisherCaptureGraph('processor-error');
+        return;
+      }
+      if (!decision.exhausted) return;
+
+      // A replacement processor failed again before fresh PCM could re-arm the
+      // budget. Stop local capture into the bounded server reconnect grace and
+      // require the existing user-gesture Retry Mic path.
+      void finishMicrophoneSession('processor-error-repeated', {
+        releaseMic: false,
+        afterEnded: () => {
+          setStatus(
+            'Microphone interrupted',
+            'The microphone processor failed repeatedly. Retry Mic to reconnect it.',
+          );
+        },
+      }).catch(console.error);
+    };
+    capture.addEventListener('processorerror', graph.processorErrorListener);
+  }
 
   const mediaDevices = navigator.mediaDevices;
   if (

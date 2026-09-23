@@ -114,6 +114,52 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
     'forced room ownership cannot be bypassed by the Listen toggle');
 });
 
+test('capture AudioWorklet processorerror uses one bounded current-graph rebuild before grace fallback', () => {
+  const installAt = app.indexOf('function installCaptureGraph');
+  const roleAt = app.indexOf('// recorder.js reads this', installAt);
+  assert.ok(installAt >= 0 && roleAt > installAt);
+  const install = app.slice(installAt, roleAt);
+
+  assert.match(install, /processorErrorListener: null/);
+  assert.match(install, /capture\.addEventListener\('processorerror', graph\.processorErrorListener\)/);
+  assert.match(
+    install,
+    /graph\.processorErrorListener = \(\) => \{[\s\S]*if \(!captureGraphIsCurrent\(graph\)\) return;[\s\S]*micCaptureRecovery\.noteProcessorError\(captureSnapshot\(\)\)/,
+    'only the currently authoritative capture graph may spend processor-error recovery authority',
+  );
+  assert.match(
+    install,
+    /if \(decision\.rebuild\) \{[\s\S]*rebuildPublisherCaptureGraph\('processor-error'\)/,
+    'the first terminal processor error reuses the existing graph replacement path',
+  );
+  assert.match(
+    install,
+    /if \(!decision\.exhausted\) return;[\s\S]*finishMicrophoneSession\('processor-error-repeated', \{[\s\S]*releaseMic: false/,
+    'a replacement processor that crashes again before fresh PCM must enter bounded reconnect grace instead of looping generations',
+  );
+  assert.match(install, /Retry Mic to reconnect it/);
+
+  const disposeAt = app.indexOf('function disposeCaptureGraph');
+  const currentAt = app.indexOf('function captureGraphIsCurrent', disposeAt);
+  assert.ok(disposeAt >= 0 && currentAt > disposeAt);
+  const dispose = app.slice(disposeAt, currentAt);
+  assert.match(
+    dispose,
+    /removeEventListener\?\.\('processorerror', graph\.processorErrorListener\)/,
+    'retired AudioWorklet nodes must lose processorerror authority',
+  );
+
+  const rebuildAt = app.indexOf('function rebuildPublisherCaptureGraph');
+  const stopAt = app.indexOf('async function stop(', rebuildAt);
+  assert.ok(rebuildAt >= 0 && stopAt > rebuildAt);
+  const rebuild = app.slice(rebuildAt, stopAt);
+  assert.match(
+    rebuild,
+    /if \(captureGraphRebuildPromise\) return captureGraphRebuildPromise/,
+    'processorerror recovery must still share the physical single-flight rebuild',
+  );
+});
+
 test('unexpected capture AudioContext closure enters bounded Mic reconnect grace', () => {
   const startAt = app.indexOf('async function startPublisher');
   const streamAt = app.indexOf('mediaStream = preparedStream', startAt);

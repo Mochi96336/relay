@@ -33,6 +33,12 @@ export class MicCaptureRecoveryWatchdog {
   beginRecovery(snapshot: MicCaptureSnapshot, reason?: string): void;
   noteHidden(snapshot: MicCaptureSnapshot): void;
   noteForeground(snapshot: MicCaptureSnapshot): { discontinuity: boolean; rebuild: boolean };
+  noteProcessorError(snapshot: MicCaptureSnapshot): {
+    rebuild: boolean;
+    inFlight: boolean;
+    exhausted: boolean;
+    reason: 'processor-error' | null;
+  };
   noteGraphRebuilt(snapshot: MicCaptureSnapshot): void;
   noteInputGap(
     snapshot: MicCaptureSnapshot,

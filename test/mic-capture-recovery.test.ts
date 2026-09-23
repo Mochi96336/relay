@@ -27,6 +27,40 @@ test('normal capture becomes healthy only after context clock and fresh PCM adva
   assert.equal(watchdog.status().recovering, false);
 });
 
+test('processor errors share the one-shot graph-rebuild budget and re-arm only after fresh replacement PCM', () => {
+  const watchdog = new MicCaptureRecoveryWatchdog({ stallAfterMs: 1_000 });
+  watchdog.start(snap(0, 1, 0));
+
+  const first = watchdog.noteProcessorError(snap(10, 1.01, 0));
+  assert.deepEqual(first, {
+    rebuild: true,
+    inFlight: false,
+    exhausted: false,
+    reason: 'processor-error',
+  });
+
+  const duplicate = watchdog.noteProcessorError(snap(11, 1.011, 0));
+  assert.equal(duplicate.rebuild, false);
+  assert.equal(duplicate.inFlight, true);
+  assert.equal(duplicate.exhausted, false);
+
+  watchdog.noteGraphRebuilt(snap(20, 1.02, 0));
+  const replacementFailed = watchdog.noteProcessorError(snap(30, 1.03, 0));
+  assert.equal(replacementFailed.rebuild, false);
+  assert.equal(replacementFailed.inFlight, false);
+  assert.equal(replacementFailed.exhausted, true);
+
+  // Only fresh PCM from the replacement graph may close the recovery epoch and
+  // re-arm a later, independent processor-error rebuild.
+  assert.equal(
+    watchdog.observe(snap(40, 1.04, 128), { freshPcm: true }).recovered,
+    true,
+  );
+  const later = watchdog.noteProcessorError(snap(50, 1.05, 128));
+  assert.equal(later.rebuild, true);
+  assert.equal(later.exhausted, false);
+});
+
 test('background foreground without sample progress becomes a capture discontinuity', () => {
   const watchdog = new MicCaptureRecoveryWatchdog({ hiddenDiscontinuityMs: 250 });
   watchdog.start(snap(0, 1, 128));

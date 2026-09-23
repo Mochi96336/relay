@@ -77,7 +77,7 @@ export type AudioUplinkHealth = {
   capture: AudioCaptureAppliedSettings | null;
   /** Capture-worklet level before packetization/transport. Diagnostic only. */
   captureLevel: AudioCaptureLevel | null;
-  /** Raw capture flat-top evidence. Optional for older v1 pages. Diagnostic only. */
+  /** Raw capture flat-top evidence. Optional for older v1 pages; quality guidance only, never timing authority. */
   captureClipping?: AudioCaptureClipping | null;
   /** Main-thread dispatch freshness for worklet PCM. Diagnostic only. */
   captureDispatch?: AudioCaptureDispatchHealth | null;

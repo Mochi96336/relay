@@ -53,7 +53,10 @@ function render(state = latestState) {
   // The room may still lease Mic ownership to this participant during the
   // bounded transport grace even though the local capture is gone. Keep the
   // primary surface visible in that state so the same user gesture can retry.
-  publisherButton.hidden = takeoverOpen || state.localPublisherActive === true;
+  publisherButton.hidden =
+    takeoverOpen
+    || state.localPublisherActive === true
+    || (state.mine === true && !retryMode);
   takeoverPanel.hidden = !takeoverOpen;
   confirmTakeoverButton.disabled = state.takeoverConfirmActionable !== true;
   confirmTakeoverButton.textContent = t('mic.takeover');

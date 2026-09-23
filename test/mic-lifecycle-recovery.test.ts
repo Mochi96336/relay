@@ -131,7 +131,7 @@ test('hardware input ending uses Mic reconnect grace instead of explicit release
 });
 
 test('capture rebuild failure also falls back to bounded Mic reconnect grace', () => {
-  const rebuildAt = app.indexOf('async function rebuildPublisherCaptureGraph');
+  const rebuildAt = app.indexOf('function rebuildPublisherCaptureGraph');
   const stopAt = app.indexOf('async function stop(', rebuildAt);
   assert.ok(rebuildAt >= 0 && stopAt > rebuildAt);
   const rebuild = app.slice(rebuildAt, stopAt);

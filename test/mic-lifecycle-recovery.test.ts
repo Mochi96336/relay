@@ -114,15 +114,69 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
     'forced room ownership cannot be bypassed by the Listen toggle');
 });
 
-test('hardware input ending completes the same Mic lifecycle', () => {
+test('hardware input ending uses Mic reconnect grace instead of explicit release', () => {
   const trackStart = app.indexOf("track?.addEventListener('ended'");
   const watchdogStart = app.indexOf("micCaptureRecovery.start(captureSnapshot(), 'startup')", trackStart);
   assert.ok(trackStart >= 0 && watchdogStart > trackStart);
   const handler = app.slice(trackStart, watchdogStart);
   assert.match(handler, /if \(!captureIsCurrent\(\)\) return/,
     'a stale track callback must not terminate a replacement Mic session');
-  assert.match(handler, /finishMicrophoneSession\('input-ended', \{[\s\S]*releaseMic: true/);
+  assert.match(
+    handler,
+    /finishMicrophoneSession\('input-ended', \{[\s\S]*releaseMic: false/,
+    'unexpected hardware/route loss must close transport into reconnect grace, not send terminal release',
+  );
+  assert.match(handler, /Retry Mic to reconnect it/);
   assert.doesNotMatch(handler, /dispatchRelayEvent\('relay-microphone-ended'/);
+});
+
+test('capture rebuild failure also falls back to bounded Mic reconnect grace', () => {
+  const rebuildAt = app.indexOf('function rebuildPublisherCaptureGraph');
+  const stopAt = app.indexOf('async function stop(', rebuildAt);
+  assert.ok(rebuildAt >= 0 && stopAt > rebuildAt);
+  const rebuild = app.slice(rebuildAt, stopAt);
+
+  assert.match(
+    rebuild,
+    /finishMicrophoneSession\('capture-rebuild-failed', \{[\s\S]*releaseMic: false/,
+    'local capture recovery failure must preserve server grace instead of explicitly releasing room ownership',
+  );
+  assert.match(rebuild, /Retry Mic to start a fresh capture/);
+});
+
+test('reconnecting self owner gets a user-gesture Retry Mic without minting playback intent', () => {
+  assert.match(
+    presence,
+    /const selfRetry =[\s\S]*mine[\s\S]*!localPublisherActive[\s\S]*latestSession\?\.micConnected === false/,
+    'Retry mode exists only for the local-disconnected reconnect-grace state',
+  );
+  assert.match(
+    presence,
+    /primaryMode: selfRetry \? 'retry' : currentOwner && !mine \? 'takeover' : 'take'/,
+  );
+
+  const clickAt = presence.indexOf("publisherButton.addEventListener('click'");
+  const confirmAt = presence.indexOf("confirmTakeoverButton.addEventListener('click'", clickAt);
+  assert.ok(clickAt >= 0 && confirmAt > clickAt);
+  const click = presence.slice(clickAt, confirmAt);
+  assert.match(click, /state\.primaryMode === 'retry'/);
+  assert.match(click, /event\.stopImmediatePropagation\(\)/);
+  assert.match(click, /relay-retry-microphone/,
+    'self retry must stay in the original click gesture while bypassing ordinary Mic intent listeners');
+
+  assert.match(micActions, /retryMode = state\.primaryMode === 'retry'/);
+  assert.match(micActions, /t\('system\.issue\.action\.retry-mic'\)/);
+  assert.match(
+    micActions,
+    /state\.mine === true && !retryMode/,
+    'healthy Mic ownership in a sibling tab remains hidden rather than becoming retryable',
+  );
+
+  assert.doesNotMatch(
+    youtubeSync,
+    /relay-retry-microphone/,
+    'self recovery must not create a new playback Mic intent or move Song playback between tabs',
+  );
 });
 
 test('Mic startup is single-flight, deadline-bound, and disposes late permission capture', () => {

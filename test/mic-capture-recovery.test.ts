@@ -211,17 +211,18 @@ test('replacement graph cannot repeat a generic PCM-stall rebuild before fresh P
   assert.equal(watchdog.status().rebuildBudgetSpent, true);
 });
 
-test('app rebuild failure terminates the damaged Mic session instead of retrying the graph', () => {
+test('app rebuild failure terminates local capture into bounded Mic reconnect grace', () => {
   const start = app.indexOf('function rebuildPublisherCaptureGraph(reason)');
   const end = app.indexOf('async function stop(', start);
   assert.ok(start >= 0 && end > start);
   const rebuild = app.slice(start, end);
   assert.match(
     rebuild,
-    /finishMicrophoneSession\('capture-rebuild-failed', \{[\s\S]*releaseMic: true/,
+    /finishMicrophoneSession\('capture-rebuild-failed', \{[\s\S]*releaseMic: false/,
+    'damaged local capture must close its publisher transport without bypassing server Mic reconnect grace',
   );
   assert.doesNotMatch(rebuild, /noteGraphRebuildFailed|rearmRebuild/);
-  assert.match(rebuild, /Press Microphone again to start a new capture session/);
+  assert.match(rebuild, /Retry Mic to start a fresh capture/);
 
   const stopStart = app.indexOf('async function stop(');
   const stopEnd = app.indexOf('async function startPublisher', stopStart);
@@ -229,6 +230,16 @@ test('app rebuild failure terminates the damaged Mic session instead of retrying
   const stop = app.slice(stopStart, stopEnd);
   assert.match(stop, /const stoppedEpoch = \+\+publisherSessionEpoch/);
   assert.match(stop, /micCaptureRecovery\.stop\(\)/);
+
+  const releaseStart = app.indexOf("window.addEventListener('relay-release-microphone'");
+  const sliderStart = app.indexOf('for (const slider', releaseStart);
+  assert.ok(releaseStart >= 0 && sliderStart > releaseStart);
+  const explicitRelease = app.slice(releaseStart, sliderStart);
+  assert.match(
+    explicitRelease,
+    /finishMicrophoneSession\('released', \{[\s\S]*releaseMic: true/,
+    'an intentional Release Mic must remain terminal and bypass reconnect grace',
+  );
 });
 
 test('old graph PCM cannot rearm the rebuild budget while replacement is in flight', () => {

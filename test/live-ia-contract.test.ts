@@ -201,6 +201,10 @@ test('P0 Live states remove retired presenters instead of masking them later', (
 
   assert.match(presence, /relay-mic-action-state/);
   assert.doesNotMatch(presence, /publisherButton\.textContent|takeoverPanel|takeoverCopy/);
-  assert.match(micActions, /publisherButton\.hidden = takeoverOpen/);
+  assert.match(
+    micActions,
+    /publisherButton\.hidden =[\s\S]*takeoverOpen[\s\S]*state\.localPublisherActive === true[\s\S]*state\.mine === true && !retryMode/,
+    'Mic action presenter may show only the bounded self-retry exception; healthy ownership remains hidden',
+  );
   assert.match(micActions, /takeoverPanel\.hidden = !takeoverOpen/);
 });

@@ -1486,11 +1486,14 @@ function rebuildPublisherCaptureGraph(reason) {
     console.warn('Microphone capture graph rebuild failed', error);
     if (isCurrentPublisherSession(sessionEpoch)) {
       void finishMicrophoneSession('capture-rebuild-failed', {
-        releaseMic: true,
+        // Rebuild failure is the same recoverable local-source class as a
+        // hardware-ended track. Do not bypass the server reconnect grace with
+        // an explicit room-Mic release.
+        releaseMic: false,
         afterEnded: () => {
           setStatus(
-            'Microphone stopped',
-            'Capture recovery failed. Press Microphone again to start a new capture session.',
+            'Microphone interrupted',
+            'Capture recovery failed. Retry Mic to start a fresh capture.',
           );
         },
       }).catch(console.error);
@@ -1710,9 +1713,13 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     track?.addEventListener('ended', () => {
       if (!captureIsCurrent()) return;
       finishMicrophoneSession('input-ended', {
-        releaseMic: true,
+        // A hardware/route loss is not an explicit user release. Close the
+        // publisher transport and let the server's Mic reconnect grace preserve
+        // ownership briefly, so a user-gesture Retry Mic can restore the local
+        // capture without another participant racing into the lease.
+        releaseMic: false,
         afterEnded: () => {
-          setStatus('Microphone stopped', 'The audio input ended. Press Microphone again to restart it.');
+          setStatus('Microphone interrupted', 'The audio input ended. Retry Mic to reconnect it.');
         },
       }).catch(console.error);
     });

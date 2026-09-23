@@ -41,6 +41,7 @@ if (
     'song-clock-unavailable': 'system.attention.song-clock-unavailable',
     'mic-reconnecting': 'system.attention.mic-reconnecting',
     'mic-audio-stalled': 'system.attention.mic-audio-stalled',
+    'mic-input-clipping': 'system.attention.mic-input-clipping',
     'timing-recovering': 'system.attention.timing-recovering',
     'timing-clamped': 'system.attention.timing-clamped',
     'take-failed': 'system.attention.take-failed',
@@ -55,6 +56,7 @@ if (
     'song-clock-unavailable': 'system.issue.cause.song-clock-unavailable',
     'mic-transport-disconnected': 'system.issue.cause.mic-transport-disconnected',
     'mic-audio-stalled': 'system.issue.cause.mic-audio-stalled',
+    'mic-input-clipping': 'system.issue.cause.mic-input-clipping',
     'timing-calibrating': 'system.issue.cause.timing-calibrating',
     'timing-fallback': 'system.issue.cause.timing-fallback',
     'timing-stale': 'system.issue.cause.timing-stale',
@@ -66,6 +68,7 @@ if (
   const issueRecoveryKeys = {
     automatic: 'system.issue.recovery.automatic',
     'retry-mic': 'system.issue.recovery.retry-mic',
+    'adjust-input': 'system.issue.recovery.adjust-input',
     'retry-recording': 'system.issue.recovery.retry-recording',
     recalibrate: 'system.issue.recovery.recalibrate',
     'host-service': 'system.issue.recovery.host-service',

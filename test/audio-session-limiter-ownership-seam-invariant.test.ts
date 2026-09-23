@@ -108,9 +108,9 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     );
 
     let micGeneration = 1;
-    let micGenerationFirstSample = 0;
+    let micCaptureCursor = RATE * 2;
     session.ingestMic(
-      micFrame(micGeneration, 0, RATE * 2),
+      micFrame(micGeneration, 0, micCaptureCursor),
       RATE,
       0,
     );
@@ -134,9 +134,9 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
         // retain the last audible contribution and de-click the new generation.
         session.retireMicCapture();
         micGeneration += 1;
-        micGenerationFirstSample = 0;
+        micCaptureCursor = RATE;
         session.ingestMic(
-          micFrame(micGeneration, micGenerationFirstSample, RATE),
+          micFrame(micGeneration, 0, micCaptureCursor),
           RATE,
           nowMs,
         );
@@ -145,23 +145,28 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
         // generation. This composes limiter release with source-edge recovery.
         session.retireMicCapture();
         micGeneration += 1;
-        micGenerationFirstSample = 0;
+        micCaptureCursor = 0;
       } else if (action < 0.62 && micExpected && session.micTotalSamples === 0) {
         session.ingestMic(
-          micFrame(micGeneration, micGenerationFirstSample, RATE),
+          micFrame(micGeneration, micCaptureCursor, RATE),
           RATE,
           nowMs,
         );
+        micCaptureCursor += RATE;
       }
 
       // Keep live captures comfortably ahead without changing generation.
-      if (micExpected && session.micTotalSamples > 0 && session.micHeadroomMs < 500) {
-        const appendAt = session.micTotalSamples;
+      if (
+        micExpected
+        && session.micTotalSamples > 0
+        && session.health().micHeadroomMs < 500
+      ) {
         session.ingestMic(
-          micFrame(micGeneration, appendAt, RATE),
+          micFrame(micGeneration, micCaptureCursor, RATE),
           RATE,
           nowMs,
         );
+        micCaptureCursor += RATE;
       }
 
       session.drain((pcm) => outputs.push(pcm), nowMs, 1);

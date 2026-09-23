@@ -1635,15 +1635,48 @@ export class AudioSession {
       Math.max(2, Math.round((MIC_READ_HEAD_CROSSFADE_MS * this.sampleRate) / 1000)),
     );
     const firstPosition = startSample + fromAdvanceSamples;
-    const sourceStart = Math.floor(firstPosition);
-    const source = this.readRange(this.mic, sourceStart, crossfadeSamples + 2);
+    const previousSourceSample = this.lastEmittedMicSourceSample;
+    const oldLegEnd = firstPosition + crossfadeSamples + 1;
+    const restartBoundary = previousSourceSample === null
+      ? null
+      : this.micCaptureRestartBoundarySamples.find(
+          (boundary) => previousSourceSample < boundary && boundary <= oldLegEnd,
+        ) ?? null;
+    const holdSourceSample = restartBoundary === null ? null : restartBoundary - 1;
+    const sourceStart = Math.floor(Math.min(
+      firstPosition,
+      holdSourceSample ?? firstPosition,
+    ));
+    const sourceEnd = Math.ceil(oldLegEnd) + 1;
+    const source = this.readRange(this.mic, sourceStart, Math.max(0, sourceEnd - sourceStart));
+    const heldOldSample = holdSourceSample === null
+      ? null
+      : source[holdSourceSample - sourceStart] ?? 0;
 
     const interpolate = (position: number) => {
+      if (
+        restartBoundary !== null
+        && heldOldSample !== null
+        && position >= restartBoundary
+      ) {
+        // The old crossfade leg has reached a semantic capture boundary. It is
+        // only continuity history for fading out the previous read trajectory,
+        // so never let it enter the replacement capture. Hold the last old
+        // sample while its weight falls to zero; the authoritative new
+        // trajectory will cross that boundary later under the normal
+        // replacement-edge state machine if it actually needs to.
+        return heldOldSample;
+      }
+
       const index = Math.floor(position);
       const fraction = position - index;
       const offset = index - sourceStart;
       const a = source[offset] ?? 0;
-      const b = source[offset + 1] ?? a;
+      const b = restartBoundary !== null
+        && index < restartBoundary
+        && restartBoundary <= index + 1
+        ? a
+        : source[offset + 1] ?? a;
       return a + (b - a) * fraction;
     };
 

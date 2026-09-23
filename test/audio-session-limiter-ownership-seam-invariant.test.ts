@@ -63,6 +63,8 @@ function seeded(seed: number) {
 function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
   let maximum = 0;
   let maximumAt = -1;
+  let maximumFrom = 0;
+  let maximumTo = 0;
   let previous: number | null = null;
   let sampleAt = 0;
 
@@ -74,6 +76,8 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
         if (step > maximum) {
           maximum = step;
           maximumAt = sampleAt;
+          maximumFrom = previous;
+          maximumTo = current;
         }
       }
       previous = current;
@@ -81,7 +85,7 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
     }
   }
 
-  return { maximum, maximumAt };
+  return { maximum, maximumAt, maximumFrom, maximumTo };
 }
 
 test('seeded limiter and Mic ownership transitions stay output-continuous', () => {
@@ -116,6 +120,7 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     );
 
     const outputs: Buffer[] = [];
+    const recentActions: string[] = [];
     let micExpected = true;
 
     // The fixture intentionally starts with an already-hot sine. Its first
@@ -127,20 +132,25 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     for (let outputFrame = 1; outputFrame < 180; outputFrame += 1) {
       const nowMs = outputFrame * FRAME_MS;
       const action = random();
+      let actionLabel = 'none';
 
       if (action < 0.20) {
         // Force both limiter attack and release while the gain ramp itself must
         // remain continuous.
-        session.setMicGainDb(-6 + Math.round(random() * 42));
+        const gainDb = -6 + Math.round(random() * 42);
+        session.setMicGainDb(gainDb);
+        actionLabel = `gain:${gainDb}`;
       } else if (action < 0.32) {
         micExpected = !micExpected;
         session.setMicExpected(micExpected);
+        actionLabel = `expected:${micExpected}`;
       } else if (action < 0.42 && micExpected) {
         // A semantic capture replacement clears old PCM, but the mixer must
         // retain the last audible contribution and de-click the new generation.
         session.retireMicCapture();
         micGeneration += 1;
         micCaptureCursor = RATE;
+        actionLabel = `replace:g${micGeneration}`;
         session.ingestMic(
           micFrame(micGeneration, 0, micCaptureCursor),
           RATE,
@@ -152,6 +162,7 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
         session.retireMicCapture();
         micGeneration += 1;
         micCaptureCursor = 0;
+        actionLabel = `retire:g${micGeneration}`;
       } else if (action < 0.62 && micExpected && session.micTotalSamples === 0) {
         session.ingestMic(
           micFrame(micGeneration, micCaptureCursor, RATE),
@@ -159,6 +170,7 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
           nowMs,
         );
         micCaptureCursor += RATE;
+        actionLabel = `restore:g${micGeneration}`;
       }
 
       // Keep live captures comfortably ahead without changing generation.
@@ -175,6 +187,8 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
         micCaptureCursor += RATE;
       }
 
+      recentActions.push(`f${outputFrame}:${actionLabel}`);
+      if (recentActions.length > 180) recentActions.shift();
       session.drain((pcm) => outputs.push(pcm), nowMs, 1);
     }
 
@@ -184,10 +198,18 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
       `seed 0x${seed.toString(16)} never exercised the limiter`,
     );
 
-    const { maximum, maximumAt } = maxAdjacentStep(outputs, FRAME_SAMPLES);
+    const {
+      maximum,
+      maximumAt,
+      maximumFrom,
+      maximumTo,
+    } = maxAdjacentStep(outputs, FRAME_SAMPLES);
+    const maximumFrame = Math.floor(maximumAt / FRAME_SAMPLES);
+    const actionStart = Math.max(0, maximumFrame - 12);
+    const actionTrace = recentActions.slice(actionStart, maximumFrame + 1).join(' ');
     assert.ok(
       maximum < MAX_AUDIBLE_STEP,
-      `limiter/ownership seed 0x${seed.toString(16)} emitted a ${maximum}-sample splice at ${maximumAt}`,
+      `limiter/ownership seed 0x${seed.toString(16)} emitted ${maximumFrom} -> ${maximumTo} (step ${maximum}) at sample ${maximumAt}, frame ${maximumFrame}, offset ${maximumAt % FRAME_SAMPLES}; recent ${actionTrace}`,
     );
   }
 });

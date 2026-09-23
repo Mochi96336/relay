@@ -221,13 +221,21 @@ function sumHeadroomGain(backingGain: number) {
 /**
  * How long the song takes to duck out of a singer's way, and to come back.
  *
- * The song gain and the summing headroom both exist to leave room for a voice,
- * so both follow whether a microphone is expected. Switched instantly that is a
- * step of several dB in the middle of a song - plainly audible, and a worse
- * fault than the level it corrects. A microphone registers before any audio
- * flows, so this ramp is finished long before the first note.
+ * The song gain and its steady summing headroom both follow whether a
+ * microphone is expected. Switched instantly that is a step of several dB in
+ * the middle of a song - plainly audible, and a worse fault than the level it
+ * corrects. Registration often leads real PCM, but correctness must not depend
+ * on that race: the Mic-join safety crossfade below owns any audio that arrives
+ * before this musical ramp settles.
  */
 const SONG_DUCK_RAMP_MS = 150;
+/**
+ * A Mic can become audible before the slower musical duck has established
+ * two-source headroom. Crossfade from the existing song-only bus into the
+ * already-safe two-source bus instead of asking the final hard clamp to absorb
+ * that semantic join.
+ */
+const SOURCE_JOIN_SAFETY_CROSSFADE_MS = 10;
 
 /**
  * Live Mic gain is user-controlled and may change while voiced audio is
@@ -310,6 +318,23 @@ export class AudioSession {
   private readonly songDuckStep: number;
   /** 0 while the song has the room to itself, 1 once it is out of a voice's way. */
   private songDuck = 0;
+  /**
+   * A source joining an already-audible peer is not merely a slow gain change.
+   * Until the normal 150 ms duck reaches its steady state, crossfade from the
+   * previously audible single-source bus into a mathematically safe two-source
+   * bus. Track which source joined so the old endpoint is unambiguous.
+   */
+  private sourceJoinSafetyPending: 'mic' | 'backing' | null = null;
+  private sourceJoinSafetyActive: 'mic' | 'backing' | null = null;
+  private sourceJoinSafetyBlend = 0;
+  private readonly sourceJoinSafetyStep: number;
+  /**
+   * Expectation is transport/product intent, not proof that retained source PCM
+   * has stopped reaching the bus. Keep two-source duck/headroom ownership until
+   * the mixer itself has completed that source's audible fade to silence.
+   */
+  private micExpectationReleaseHold = false;
+  private backingExpectationReleaseHold = false;
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
@@ -440,6 +465,10 @@ export class AudioSession {
       1,
       Math.round((SONG_DUCK_RAMP_MS / 1000) * options.sampleRate),
     );
+    this.sourceJoinSafetyStep = 1 / Math.max(
+      1,
+      Math.round((SOURCE_JOIN_SAFETY_CROSSFADE_MS / 1000) * options.sampleRate),
+    );
     this.micGainRampSamples = Math.max(
       1,
       Math.round((MIC_GAIN_RAMP_MS / 1000) * options.sampleRate),
@@ -560,6 +589,11 @@ export class AudioSession {
     // A new session starts from what the room currently is, not from wherever
     // the previous one's ramp happened to stop.
     this.songDuck = this.backingExpected && this.micExpected ? 1 : 0;
+    this.sourceJoinSafetyPending = null;
+    this.sourceJoinSafetyActive = null;
+    this.sourceJoinSafetyBlend = 0;
+    this.micExpectationReleaseHold = false;
+    this.backingExpectationReleaseHold = false;
     this.micGainDbApplied = this.micGainDbValue;
     this.micGainRampRemainingSamples = 0;
     this.resetHealth();
@@ -570,11 +604,60 @@ export class AudioSession {
    * for a source that is supposed to be there; an absent phone is not a fault.
    */
   setMicExpected(expected: boolean) {
+    const changed = expected !== this.micExpected;
+    const wasReleaseHeld = this.micExpectationReleaseHold;
+    const joiningExistingBacking = Boolean(
+      changed
+      && expected
+      && this.running
+      && (this.backingExpected || this.backingExpectationReleaseHold)
+      && !wasReleaseHeld
+    );
+
     this.micExpected = expected;
+
+    if (changed && !expected && this.running) {
+      // The old capture may still own retained/fading PCM. Do not release bus
+      // safety until mix output proves that source has actually reached silence.
+      this.micExpectationReleaseHold = true;
+      if (this.sourceJoinSafetyPending === 'mic') this.sourceJoinSafetyPending = null;
+    } else if (changed && expected) {
+      // If false -> true happened while the release was still held, listeners
+      // never heard a source disappearance. Continuing the existing bus is the
+      // seamless path; starting a new source join would itself create a seam.
+      this.micExpectationReleaseHold = false;
+      if (joiningExistingBacking && this.sourceJoinSafetyActive === null) {
+        // Registration can precede first real PCM by an arbitrary amount. Arm
+        // now, but do not move the audible bus until both sources are real.
+        this.sourceJoinSafetyPending = 'mic';
+        this.sourceJoinSafetyBlend = 0;
+      }
+    }
   }
 
   setBackingExpected(expected: boolean) {
+    const changed = expected !== this.backingExpected;
+    const wasReleaseHeld = this.backingExpectationReleaseHold;
+    const joiningExistingMic = Boolean(
+      changed
+      && expected
+      && this.running
+      && (this.micExpected || this.micExpectationReleaseHold)
+      && !wasReleaseHeld
+    );
+
     this.backingExpected = expected;
+
+    if (changed && !expected && this.running) {
+      this.backingExpectationReleaseHold = true;
+      if (this.sourceJoinSafetyPending === 'backing') this.sourceJoinSafetyPending = null;
+    } else if (changed && expected) {
+      this.backingExpectationReleaseHold = false;
+      if (joiningExistingMic && this.sourceJoinSafetyActive === null) {
+        this.sourceJoinSafetyPending = 'backing';
+        this.sourceJoinSafetyBlend = 0;
+      }
+    }
   }
 
   get micGainDb() {
@@ -2493,7 +2576,10 @@ export class AudioSession {
     // voice can actually arrive: a song playing to a room where nobody has
     // taken the microphone was being quietened for a singer who was not there,
     // and the balance a real performance was tuned against is unchanged.
-    const duckTarget = this.backingExpected && this.micExpected ? 1 : 0;
+    const duckTarget = (
+      (this.backingExpected || this.backingExpectationReleaseHold)
+      && (this.micExpected || this.micExpectationReleaseHold)
+    ) ? 1 : 0;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
     const micSlewFrameEndPosition = micSlew
       ? micSlew.firstPosition + this.frameSamples * micSlew.rate
@@ -2529,6 +2615,25 @@ export class AudioSession {
       // the output, though, and crossing from that silence back into real PCM
       // must own the same bounded de-click edge as any other audible absence.
       const micAudibleMissing = micSourceSample < 0 || micEvidenceMissing;
+      const backingSourceSample = startSample + i;
+      const backingSourceMissing =
+        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
+      const effectiveTwoSourceOwnership = Boolean(
+        (this.micExpected || this.micExpectationReleaseHold)
+        && (this.backingExpected || this.backingExpectationReleaseHold)
+      );
+
+      if (
+        this.sourceJoinSafetyPending !== null
+        && this.sourceJoinSafetyActive === null
+        && effectiveTwoSourceOwnership
+        && !micAudibleMissing
+        && !backingSourceMissing
+      ) {
+        this.sourceJoinSafetyActive = this.sourceJoinSafetyPending;
+        this.sourceJoinSafetyPending = null;
+        this.sourceJoinSafetyBlend = 0;
+      }
 
       const micGainDb = this.advanceMicGainDb();
       const micGain = 10 ** (micGainDb / 20);
@@ -2636,11 +2741,17 @@ export class AudioSession {
       } else {
         voice = this.applyMicFrontierEdge(voice, micAudibleMissing);
       }
+      if (
+        this.micExpectationReleaseHold
+        && !this.micExpected
+        && this.micFrontierOutputMissing
+        && this.micFrontierFadeRemainingSamples <= 0
+        && !micReplacementEdgeActive
+      ) {
+        this.micExpectationReleaseHold = false;
+      }
 
       let songContribution = (song[i] / 32768) * songGain;
-      const backingSourceSample = startSample + i;
-      const backingSourceMissing =
-        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
       this.beginBackingCaptureRestartEdgeIfDue(backingSourceSample);
 
       if (
@@ -2673,11 +2784,85 @@ export class AudioSession {
       } else {
         songContribution = this.applyBackingFrontierEdge(songContribution, backingSourceMissing);
       }
+      if (
+        this.backingExpectationReleaseHold
+        && !this.backingExpected
+        && this.backingFrontierOutputMissing
+        && this.backingFrontierFadeRemainingSamples <= 0
+        && !backingReplacementEdgeActive
+      ) {
+        this.backingExpectationReleaseHold = false;
+      }
       this.lastEmittedMicContribution = voice;
       this.lastEmittedBackingContribution = songContribution;
       this.lastEmittedMicSourceSample = micSourceSample;
       const summed = voice + songContribution;
-      const value = summed * mixHeadroomGain;
+
+      let value = summed * mixHeadroomGain;
+      if (this.sourceJoinSafetyActive !== null) {
+        const targetBlend = effectiveTwoSourceOwnership ? 1 : 0;
+        if (this.sourceJoinSafetyBlend < targetBlend) {
+          this.sourceJoinSafetyBlend = Math.min(
+            targetBlend,
+            this.sourceJoinSafetyBlend + this.sourceJoinSafetyStep,
+          );
+        } else if (this.sourceJoinSafetyBlend > targetBlend) {
+          this.sourceJoinSafetyBlend = Math.max(
+            targetBlend,
+            this.sourceJoinSafetyBlend - this.sourceJoinSafetyStep,
+          );
+        }
+
+        // While entering a two-source bus, the zero-blend endpoint is the peer
+        // that was already audible before the recorded joining source arrived.
+        // While leaving, expectation release holds ensure targetBlend stays at 1
+        // until one source is actually missing; then the zero-blend endpoint is
+        // whichever real source remains. Both endpoints are bounded, so their
+        // convex crossfade never needs the final hard clamp.
+        let singleSourceValue: number;
+        if (targetBlend === 1) {
+          singleSourceValue = this.sourceJoinSafetyActive === 'mic'
+            ? songContribution * mixHeadroomGain
+            : voice * mixHeadroomGain;
+        } else if (!micAudibleMissing && backingSourceMissing) {
+          singleSourceValue = voice * mixHeadroomGain;
+        } else if (micAudibleMissing && !backingSourceMissing) {
+          singleSourceValue = songContribution * mixHeadroomGain;
+        } else if (micAudibleMissing && backingSourceMissing) {
+          singleSourceValue = 0;
+        } else {
+          // Defensive fallback: effective ownership should not release while
+          // both sources remain real, but preserve the original pre-join peer
+          // if a future policy change violates that assumption.
+          singleSourceValue = this.sourceJoinSafetyActive === 'mic'
+            ? songContribution * mixHeadroomGain
+            : voice * mixHeadroomGain;
+        }
+
+        const safeTwoSourceGain = sumHeadroomGain(songGain);
+        const safeTwoSourceValue = summed * safeTwoSourceGain;
+        const blend = this.sourceJoinSafetyBlend;
+        value = singleSourceValue * (1 - blend) + safeTwoSourceValue * blend;
+
+        if (
+          targetBlend === 1
+          && blend === 1
+          && this.songDuck === 1
+        ) {
+          // At steady duck the safe endpoint is byte-for-byte the ordinary
+          // two-source path, so safety ownership can return without a seam.
+          this.sourceJoinSafetyActive = null;
+          this.sourceJoinSafetyBlend = 0;
+        } else if (
+          targetBlend === 0
+          && blend === 0
+          && (micAudibleMissing || backingSourceMissing)
+        ) {
+          this.sourceJoinSafetyActive = null;
+          this.sourceJoinSafetyBlend = 0;
+        }
+      }
+
       // Normal two-source peaks have already had deterministic summing headroom
       // reserved. Keep this clamp as an invariant/backstop for unexpected future
       // inputs or limiter overshoot, and keep counting it as audible distortion.

@@ -10,6 +10,7 @@ import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 import {
   captureClippingSnapshot,
   captureInputClippingDetected,
+  captureRecentInputClippingDetected,
   captureLevelSnapshot,
   captureVoiceProcessingActive,
   enforceUnprocessedCapture,
@@ -164,6 +165,12 @@ let latestCaptureDispatchLagMs = null;
 let maxCaptureDispatchLagMs = null;
 let captureDispatchBacklogActive = false;
 let captureInputGapSamples = 0;
+/**
+ * Null means the active worklet does not expose interval clipping evidence
+ * (rollout-compatible legacy). Once observed, this is the OR of clipped 20 ms
+ * windows since the last successfully sent uplink-health report.
+ */
+let captureInputClippingSinceHealth = null;
 let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
@@ -238,6 +245,21 @@ function recordUplinkDrop(sampleCount, reason) {
   );
 }
 
+function captureClippingHealthSnapshot() {
+  const clipping = captureClippingSnapshot(latestLocalMicLevel);
+  if (!clipping) return null;
+  const {
+    windowMaxConsecutiveRailSamples: _windowMaxConsecutiveRailSamples,
+    ...lifetime
+  } = clipping;
+  return {
+    ...lifetime,
+    ...(captureInputClippingSinceHealth === null
+      ? {}
+      : { recentDetected: captureInputClippingSinceHealth }),
+  };
+}
+
 function audioUplinkHealthPayload(healthRequestId) {
   return {
     type: 'audio-uplink-health',
@@ -251,7 +273,7 @@ function audioUplinkHealthPayload(healthRequestId) {
     // Browser/worklet observations only; none of these fields is a calibration gate.
     capture: captureAppliedSettings,
     captureLevel: captureLevelSnapshot(latestLocalMicLevel),
-    captureClipping: captureClippingSnapshot(latestLocalMicLevel),
+    captureClipping: captureClippingHealthSnapshot(),
     captureDispatch: latestCaptureDispatchLagMs === null ? null : {
       lagMs: latestCaptureDispatchLagMs,
       maxLagMs: maxCaptureDispatchLagMs,
@@ -271,7 +293,14 @@ function sendAudioUplinkHealth() {
   const healthRequestId = publisherCommandLiveness.beginHealthRequest(sentAtMs);
   if (healthRequestId === null) return false;
   const result = audioTransport.sendControlJson(audioUplinkHealthPayload(healthRequestId));
-  if (!result.sent) publisherCommandLiveness.cancelHealthRequest(healthRequestId);
+  if (!result.sent) {
+    publisherCommandLiveness.cancelHealthRequest(healthRequestId);
+  } else if (captureInputClippingSinceHealth !== null) {
+    // The accepted report now owns that interval. Start a fresh window rather
+    // than letting one clipped syllable keep room/product status degraded for
+    // the lifetime of this capture generation.
+    captureInputClippingSinceHealth = false;
+  }
   return result.sent;
 }
 
@@ -324,6 +353,7 @@ function advanceCaptureGeneration(reason) {
   captureSampleCursor = 0;
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
+  captureInputClippingSinceHealth = null;
   captureInputMuted = mediaStream?.getAudioTracks?.()[0]?.muted === true;
   latestLocalMicLevel = null;
   uplinkDroppedSamples = 0;
@@ -509,6 +539,10 @@ function handleCaptureWorkletMessage(event, graph) {
       if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs) && analysis) {
         const { spectrumBands, f0Hz, pitchConfidence } = analysis;
         const clipping = captureClippingSnapshot(event.data);
+        if (clipping?.windowMaxConsecutiveRailSamples !== undefined) {
+          if (captureInputClippingSinceHealth === null) captureInputClippingSinceHealth = false;
+          if (captureRecentInputClippingDetected(clipping)) captureInputClippingSinceHealth = true;
+        }
         latestLocalMicLevel = {
           peakDbfs,
           rmsDbfs,
@@ -527,6 +561,7 @@ function handleCaptureWorkletMessage(event, graph) {
           pitchConfidence,
           railSamples: clipping?.railSamples ?? null,
           maxConsecutiveRailSamples: clipping?.maxConsecutiveRailSamples ?? null,
+          windowMaxConsecutiveRailSamples: clipping?.windowMaxConsecutiveRailSamples ?? null,
         });
         renderGainAdvice();
       }

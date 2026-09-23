@@ -1628,8 +1628,9 @@ export class AudioSession {
   private crossfadeMicReadHeadJump(
     startSample: number,
     fromAdvanceSamples: number,
+    toStartSample: number,
     current: Int16Array<ArrayBuffer>,
-  ): Int16Array<ArrayBuffer> {
+  ) {
     const crossfadeSamples = Math.min(
       this.frameSamples,
       Math.max(2, Math.round((MIC_READ_HEAD_CROSSFADE_MS * this.sampleRate) / 1000)),
@@ -1648,10 +1649,41 @@ export class AudioSession {
       holdSourceSample ?? firstPosition,
     ));
     const sourceEnd = Math.ceil(oldLegEnd) + 1;
-    const source = this.readRange(this.mic, sourceStart, Math.max(0, sourceEnd - sourceStart));
+    const sourceCount = Math.max(0, sourceEnd - sourceStart);
+    const source = this.readRange(this.mic, sourceStart, sourceCount);
+    const sourceEvidence = this.readSourceEvidenceMask(this.mic, sourceStart, sourceCount);
+    const newLegEvidence = this.readSourceEvidenceMask(this.mic, toStartSample, crossfadeSamples);
     const heldOldSample = holdSourceSample === null
       ? null
       : source[holdSourceSample - sourceStart] ?? 0;
+    const heldOldEvidence = holdSourceSample === null
+      ? 0
+      : sourceEvidence[holdSourceSample - sourceStart] ?? 0;
+    const UNHEADERED = 4;
+
+    const evidenceAt = (position: number) => {
+      if (
+        restartBoundary !== null
+        && position >= restartBoundary
+      ) {
+        return heldOldEvidence;
+      }
+      const index = Math.floor(position);
+      const fraction = position - index;
+      const offset = index - sourceStart;
+      let evidence = sourceEvidence[offset] ?? 0;
+      if (
+        fraction !== 0
+        && !(
+          restartBoundary !== null
+          && index < restartBoundary
+          && restartBoundary <= index + 1
+        )
+      ) {
+        evidence |= sourceEvidence[offset + 1] ?? 0;
+      }
+      return evidence;
+    };
 
     const interpolate = (position: number) => {
       if (
@@ -1680,13 +1712,29 @@ export class AudioSession {
       return a + (b - a) * fraction;
     };
 
+    let actualCrossfadeUnheaderedSamples = 0;
+    let newLegCrossfadeUnheaderedSamples = 0;
     for (let i = 0; i < crossfadeSamples; i += 1) {
       const newWeight = crossfadeSamples === 1 ? 1 : i / (crossfadeSamples - 1);
       const oldWeight = 1 - newWeight;
-      const oldSample = interpolate(firstPosition + i);
+      const oldPosition = firstPosition + i;
+      const oldSample = interpolate(oldPosition);
+      const oldUnheadered = (evidenceAt(oldPosition) & UNHEADERED) !== 0;
+      const newUnheadered = ((newLegEvidence[i] ?? 0) & UNHEADERED) !== 0;
+      if (newUnheadered) newLegCrossfadeUnheaderedSamples += 1;
+      if (
+        (oldWeight > 0 && oldUnheadered)
+        || (newWeight > 0 && newUnheadered)
+      ) {
+        actualCrossfadeUnheaderedSamples += 1;
+      }
       current[i] = Math.round(oldSample * oldWeight + current[i] * newWeight);
     }
-    return current;
+    return {
+      samples: current,
+      unheaderedSamplesDelta:
+        actualCrossfadeUnheaderedSamples - newLegCrossfadeUnheaderedSamples,
+    };
   }
 
   /**
@@ -2332,16 +2380,20 @@ export class AudioSession {
 
     let mic = micSlew?.samples
       ?? this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
+    let crossfadeUnheaderedSamplesDelta = 0;
     if (
       canCrossfadeReadHeadJump
       && previouslyEmittedAdvanceSamples !== null
       && !boundedRuntimeAdvanceMoved
     ) {
-      mic = this.crossfadeMicReadHeadJump(
+      const crossfade = this.crossfadeMicReadHeadJump(
         startSample,
         previouslyEmittedAdvanceSamples,
+        micReadStart,
         mic,
       );
+      mic = crossfade.samples;
+      crossfadeUnheaderedSamplesDelta = crossfade.unheaderedSamplesDelta;
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     // `backingExpected` and `micExpected` are the room's semantic signals for
@@ -2491,17 +2543,7 @@ export class AudioSession {
       unheaderedSamples:
         micReadEvidence.unheaderedSamples
         + backingReadEvidence.unheaderedSamples
-        + (
-          canCrossfadeReadHeadJump
-          && previousTransitionEvidence
-          && nextTransitionEvidence
-            ? Math.max(
-                0,
-                previousTransitionEvidence.unheaderedSamples
-                  - nextTransitionEvidence.unheaderedSamples,
-              )
-            : 0
-        ),
+        + crossfadeUnheaderedSamplesDelta,
     };
 
     this.lastEmittedMicAdvanceSamples = boundedRuntimeAdvanceMoved

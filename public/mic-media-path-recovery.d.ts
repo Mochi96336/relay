@@ -16,6 +16,7 @@ export type MicMediaPathRecoveryObservation = {
   senderSubmittedPackets?: number | null;
   senderFailedPackets?: number | null;
   serverReceivedPacketSerial?: number | null;
+  serverReceivedSampleSerial?: number | null;
   serverMediaPath?: 'webtransport' | 'websocket' | null;
   path: 'webtransport' | 'websocket';
   socketEpoch: number;
@@ -28,6 +29,7 @@ export type MicMediaPathRecoveryStatus = {
   phase: string;
   staleObservations: number;
   packetCoverage: number | null;
+  sampleCoverage: number | null;
   proofBaselineSerial: number | null;
   proofServerWebSocketReady: boolean;
   webTransportDemotionUsed: boolean;
@@ -59,6 +61,7 @@ export class MicMediaPathRecovery {
     senderSubmittedPackets?: number | null;
     senderFailedPackets?: number | null;
     serverReceivedPacketSerial?: number | null;
+    serverReceivedSampleSerial?: number | null;
   }): void;
   observe(input: MicMediaPathRecoveryObservation): MicMediaPathRecoveryDecision;
 }

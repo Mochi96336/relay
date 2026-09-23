@@ -50,6 +50,19 @@ function backingFrame(firstSampleIndex: number, count: number): PcmFrame {
   };
 }
 
+function constantMicFrame(
+  generation: number,
+  firstSampleIndex: number,
+  count: number,
+  value: number,
+): PcmFrame {
+  const pcm = Buffer.alloc(count * 2);
+  for (let index = 0; index < count; index += 1) {
+    pcm.writeInt16LE(value, index * 2);
+  }
+  return { generation, firstSampleIndex, pcm };
+}
+
 function seeded(seed: number) {
   let state = seed >>> 0;
   return () => {
@@ -88,6 +101,146 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
 
   return { maximum, maximumAt, maximumFrom, maximumTo };
 }
+
+test('bind-time Mic replacement does not inherit old capture limiter reduction', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  // Drive the old capture hard enough that the limiter settles far below unity.
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES * 12, 12_000),
+    RATE,
+    0,
+  );
+  session.drain(() => {}, 180, 100);
+  assert.ok(session.health().limitedSamples > 0, 'fixture must establish old-capture gain reduction');
+
+  // Publisher activation has already proven a different capture. Its first
+  // 20 ms packet spans session 200..220 ms and therefore owns the next output
+  // frame; a second packet provides limiter look-ahead beyond that frame.
+  session.retireMicCapture();
+  session.ingestMic(
+    constantMicFrame(2, 0, FRAME_SAMPLES, 400),
+    RATE,
+    220,
+  );
+  session.ingestMic(
+    constantMicFrame(2, FRAME_SAMPLES, FRAME_SAMPLES, 400),
+    RATE,
+    240,
+  );
+
+  const resumed: Buffer[] = [];
+  session.drain((pcm) => resumed.push(pcm), 200, 1);
+  assert.equal(resumed.length, 1);
+
+  const settledIndex = Math.round(RATE * 0.005);
+  const actual = resumed[0]!.readInt16LE(settledIndex * 2);
+  const expected = Math.round(400 * (10 ** (24 / 20)));
+  assert.ok(
+    Math.abs(actual - expected) < 150,
+    `new capture inherited old limiter reduction: got ${actual}, expected ~${expected}`,
+  );
+});
+
+test('in-band Mic generation restart resets limiter only when the audible boundary is crossed', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 40,
+    backingGain: 1,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  // Three old-capture frames end at session sample 2880 (60 ms).
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES * 3, 12_000),
+    RATE,
+    20,
+  );
+
+  // A generation restart arriving at 80 ms anchors its first 20 ms capture
+  // interval exactly at session 60..80 ms, preserving the old PCM before it.
+  const replacement = session.ingestMic(
+    constantMicFrame(2, 0, FRAME_SAMPLES, 400),
+    RATE,
+    80,
+  );
+  assert.equal(replacement.captureRestarted, true);
+  session.ingestMic(
+    constantMicFrame(2, FRAME_SAMPLES, FRAME_SAMPLES, 400),
+    RATE,
+    81,
+  );
+
+  const outputs: Buffer[] = [];
+  session.drain((pcm) => outputs.push(pcm), 40, 1);
+  session.drain((pcm) => outputs.push(pcm), 60, 1);
+  session.drain((pcm) => outputs.push(pcm), 80, 1);
+  assert.ok(session.health().limitedSamples > 0, 'old capture must be limited before the restart');
+
+  // The next frame starts exactly on the retained restart boundary. Limiter
+  // ownership changes here, not when replacement PCM was merely ingested.
+  session.drain((pcm) => outputs.push(pcm), 100, 1);
+  assert.equal(outputs.length, 4);
+
+  const settledIndex = Math.round(RATE * 0.005);
+  const actual = outputs[3]!.readInt16LE(settledIndex * 2);
+  const expected = Math.round(400 * (10 ** (24 / 20)));
+  assert.ok(
+    Math.abs(actual - expected) < 150,
+    `audible replacement inherited old limiter reduction: got ${actual}, expected ~${expected}`,
+  );
+});
+
+test('Mic capture replacement resets raw meter ownership', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 3_000,
+  });
+  session.start(0);
+
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES, 12_000),
+    RATE,
+    0,
+  );
+  assert.ok((session.health().micPeakDbfs ?? -Infinity) > -10);
+
+  session.retireMicCapture();
+  assert.equal(
+    session.health().micPeakDbfs,
+    null,
+    'retired capture peak must not remain the current microphone level',
+  );
+
+  session.ingestMic(
+    constantMicFrame(2, 0, FRAME_SAMPLES, 1_000),
+    RATE,
+    40,
+  );
+  const replacementPeak = session.health().micPeakDbfs;
+  assert.ok(
+    replacementPeak !== null && replacementPeak < -29 && replacementPeak > -31,
+    `replacement meter still reflects the retired capture: ${replacementPeak}`,
+  );
+});
 
 test('seeded limiter and Mic ownership transitions stay output-continuous', () => {
   for (const seed of [0x12345678, 0x9e3779b9, 0xc0ffee, 0x5eed5eed]) {

@@ -402,6 +402,12 @@ export class AudioSession {
   // would put a 20 ms sawtooth on the vocal.
   private limiterEnvelope = 0;
   private limiterGain = 1;
+  /**
+   * A capture boundary owns fresh limiter dynamics, but a hot replacement must
+   * not start blindly at unity. Seed from that capture's own look-ahead on the
+   * first real audible sample instead of inheriting the retired capture.
+   */
+  private micLimiterResetPending = false;
 
   private micMeterPeak = 0;
   private micMeterPower = 0;
@@ -822,6 +828,12 @@ export class AudioSession {
       );
     }
 
+    // Raw level belongs to the acoustic capture. A generation/source-clock
+    // replacement must not inherit the previous device or singer's meter decay.
+    // Limiter state is different: old capture PCM may still be queued, so that
+    // resets only when the audible read head reaches the retained boundary.
+    if (result.captureRestarted) this.resetMicMeterState();
+
     // Meter only samples attributable to this source frame. A streaming
     // resampler may prepend one completed target sample that belongs to the
     // previous source packet; counting it again here would double-charge the
@@ -943,6 +955,13 @@ export class AudioSession {
       this.micReplacementNeedsFadeIn = true;
       this.micReplacementFadeInRemainingSamples = 0;
     }
+    // Limiter and raw-level history describe the retired acoustic capture.
+    // Keep cumulative Take evidence. Raw level can reset immediately; limiter
+    // reset is deferred until replacement PCM is actually audible so a hot new
+    // capture can seed a safe gain from its own look-ahead rather than jumping
+    // blindly to unity.
+    this.micLimiterResetPending = true;
+    this.resetMicMeterState();
     this.clearTimeline(this.mic);
     this.resetMicFrontierTracking();
   }
@@ -1022,16 +1041,13 @@ export class AudioSession {
     this.backingUnplayableRunFrames = 0;
     this.clippedSamples = 0;
     this.limitedSamples = 0;
-    this.micMeterPeak = 0;
-    this.micMeterPower = 0;
-    this.micMeterWeight = 0;
+    this.resetMicMeterState();
     this.micHeadroomMs = 0;
     this.backingHeadroomMs = 0;
     // These are audio state, not just diagnostics. Carrying gain reduction into
     // a new epoch makes the beginning of the next take inherit the previous
     // singer's last transient and can attenuate it for hundreds of milliseconds.
-    this.limiterEnvelope = 0;
-    this.limiterGain = 1;
+    this.resetMicLimiterState();
     this.lastEmittedMicContribution = 0;
     this.lastEmittedBackingContribution = 0;
     this.lastEmittedMicSourceSample = null;
@@ -1079,6 +1095,52 @@ export class AudioSession {
     timeline.clockCorrectionSamples = 0;
     timeline.resampleTailSample = null;
     timeline.resampleNextTargetSample = null;
+  }
+
+  /** Capture-scoped detector state; cumulative limiter evidence stays intact. */
+  private resetMicLimiterState() {
+    this.limiterEnvelope = 0;
+    this.limiterGain = 1;
+    this.micLimiterResetPending = false;
+  }
+
+  /**
+   * Starts a new capture's limiter from that capture's own first look-ahead.
+   *
+   * A fresh unity gain is unsafe when the replacement itself is already hot:
+   * the ordinary attack needs time to converge, while replacement audio starts
+   * immediately. Seed directly to the safe target implied by the first detector
+   * window. This does not charge cumulative limited-sample evidence; only
+   * emitted samples do.
+   */
+  private seedMicLimiterForCapture(
+    samples: Int16Array,
+    fromOffset: number,
+    toOffset: number,
+    currentMicGainDb: number,
+  ) {
+    const end = Math.min(samples.length - 1, Math.max(fromOffset, toOffset));
+    let peak = 0;
+    for (let offset = fromOffset; offset <= end; offset += 1) {
+      const gainDb = offset === fromOffset
+        ? currentMicGainDb
+        : this.projectedMicGainDb(offset - fromOffset);
+      const magnitude = Math.abs(samples[offset]! / 32768) * (10 ** (gainDb / 20));
+      if (magnitude > peak) peak = magnitude;
+    }
+
+    this.limiterEnvelope = peak;
+    this.limiterGain = peak > LIMITER_THRESHOLD
+      ? LIMITER_THRESHOLD / peak
+      : 1;
+    this.micLimiterResetPending = false;
+  }
+
+  /** Raw Mic level belongs to the active acoustic capture, not the room. */
+  private resetMicMeterState() {
+    this.micMeterPeak = 0;
+    this.micMeterPower = 0;
+    this.micMeterWeight = 0;
   }
 
   /** Where the session clock is now, in session samples since the epoch. */
@@ -2017,11 +2079,12 @@ export class AudioSession {
   }
 
   private beginMicCaptureRestartEdgeIfDue(sourceSample: number) {
-    if (!this.crossedRetainedMicRestartBoundary(sourceSample)) return;
+    if (!this.crossedRetainedMicRestartBoundary(sourceSample)) return false;
     this.micRetirementFadeStart = this.lastEmittedMicContribution;
     this.micRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
     this.micReplacementNeedsFadeIn = true;
     this.micReplacementFadeInRemainingSamples = 0;
+    return true;
   }
 
   private beginBackingCaptureRestartEdgeIfDue(sourceSample: number) {
@@ -2422,18 +2485,17 @@ export class AudioSession {
       const songGain = 1 + this.songDuck * (this.backingGain - 1);
       const mixHeadroomGain = 1 + this.songDuck * (this.backingSumHeadroomGain - 1);
 
-      const micGainDb = this.advanceMicGainDb();
-      const micGain = 10 ** (micGainDb / 20);
-      // The limiter detector looks ahead in source samples, so it must also see
-      // the gain that will apply when that future sample reaches the output.
-      const detectMicGain = 10 ** (this.projectedMicGainDb(lookahead) / 20);
-      let voice = this.limit(
-        (mic[i] / 32768) * micGain,
-        (mic[i + lookahead] / 32768) * detectMicGain,
-      );
       const micSourceSample = micSlew
         ? micSlew.firstPosition + i * micSlew.rate
         : micReadStart + i;
+      // A retained restart can be ingested well before the read head reaches
+      // it. Keep old-capture limiting until the audible trajectory actually
+      // crosses the semantic boundary. The first real replacement sample then
+      // seeds fresh dynamics from replacement PCM itself.
+      if (this.beginMicCaptureRestartEdgeIfDue(micSourceSample)) {
+        this.micLimiterResetPending = true;
+      }
+
       const micEvidenceMissing = micSlew
         ? micSlew.missingMask[i] === 1
         : micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
@@ -2442,7 +2504,25 @@ export class AudioSession {
       // the output, though, and crossing from that silence back into real PCM
       // must own the same bounded de-click edge as any other audible absence.
       const micAudibleMissing = micSourceSample < 0 || micEvidenceMissing;
-      this.beginMicCaptureRestartEdgeIfDue(micSourceSample);
+
+      const micGainDb = this.advanceMicGainDb();
+      const micGain = 10 ** (micGainDb / 20);
+      if (this.micLimiterResetPending && !micAudibleMissing) {
+        this.seedMicLimiterForCapture(
+          mic,
+          i,
+          i + lookahead,
+          micGainDb,
+        );
+      }
+
+      // The limiter detector looks ahead in source samples, so it must also see
+      // the gain that will apply when that future sample reaches the output.
+      const detectMicGain = 10 ** (this.projectedMicGainDb(lookahead) / 20);
+      let voice = this.limit(
+        (mic[i] / 32768) * micGain,
+        (mic[i + lookahead] / 32768) * detectMicGain,
+      );
 
       if (
         micEvidenceMissing

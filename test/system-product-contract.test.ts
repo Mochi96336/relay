@@ -39,7 +39,9 @@ test('normal System product copy is owned by relayI18n while diagnostics stay te
 
   for (const key of [
     'system.issue.cause.mic-audio-stalled',
+    'system.issue.cause.mic-input-clipping',
     'system.issue.recovery.retry-mic',
+    'system.issue.recovery.adjust-input',
     'system.issue.affects',
     'system.product.connecting',
     'system.product.normal',
@@ -141,13 +143,28 @@ test('retry-mic recovery becomes a self-owner user-gesture action without wideni
   );
   assert.doesNotMatch(
     system,
-    /issue\?\.recovery === '(?:automatic|retry-recording|recalibrate|host-service)'[\s\S]{0,240}createElement\('button'\)/,
+    /issue\?\.recovery === '(?:automatic|adjust-input|retry-recording|recalibrate|host-service)'[\s\S]{0,240}createElement\('button'\)/,
     'this focused recovery action must not turn unrelated guidance into buttons',
   );
   assert.equal(
     (liveCopy.match(/'system\.issue\.action\.retry-mic':/g) ?? []).length,
     2,
     'Retry Mic action copy must exist in both supported Live locales',
+  );
+  assert.match(
+    system,
+    /'mic-input-clipping': 'system\.attention\.mic-input-clipping'/,
+    'Mic clipping must have a normal System title',
+  );
+  assert.match(
+    system,
+    /'mic-input-clipping': 'system\.issue\.cause\.mic-input-clipping'/,
+    'Mic clipping must explain the pre-gain failure',
+  );
+  assert.match(
+    system,
+    /'adjust-input': 'system\.issue\.recovery\.adjust-input'/,
+    'Mic clipping recovery must tell the singer to adjust physical input',
   );
   assert.match(css, /\.system-issue-retry-mic \{[\s\S]*min-height: 44px;/);
 });

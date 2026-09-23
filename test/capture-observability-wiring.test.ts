@@ -7,7 +7,7 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
 
   assert.match(
     source,
-    /captureClippingSnapshot,[\s\S]*captureInputClippingDetected,[\s\S]*captureLevelSnapshot,[\s\S]*captureVoiceProcessingActive,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
+    /captureClippingSnapshot,[\s\S]*captureInputClippingDetected,[\s\S]*captureRecentInputClippingDetected,[\s\S]*captureLevelSnapshot,[\s\S]*captureVoiceProcessingActive,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
   );
   assert.match(source, /enforceUnprocessedCapture\(preparedStream\)/);
   assert.match(source, /captureAppliedSettings = readCaptureSettings\(captureStream\);/);
@@ -30,17 +30,60 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
   const payload = source.slice(payloadStart, payloadEnd);
   assert.match(payload, /capture:\s*captureAppliedSettings/);
   assert.match(payload, /captureLevel:\s*captureLevelSnapshot\(latestLocalMicLevel\)/);
-  assert.match(payload, /captureClipping:\s*captureClippingSnapshot\(latestLocalMicLevel\)/);
+  assert.match(payload, /captureClipping:\s*captureClippingHealthSnapshot\(\)/);
   assert.doesNotMatch(payload, /start-timing-calibration|micLagMs|confidence/);
+
+  assert.match(
+    source,
+    /captureRecentInputClippingDetected\(clipping\)[\s\S]*captureInputClippingSinceHealth = true;[\s\S]*captureInputClippingRevision \+= 1;/,
+    'each clipped level window must advance the interval revision',
+  );
+  assert.match(
+    source,
+    /pendingCaptureClippingHealth\.set\(healthRequestId,[\s\S]*revision: captureInputClippingRevision,[\s\S]*sentAtMs/,
+    'sent health must retain its clipping revision until Relay acknowledges it',
+  );
+  assert.match(
+    source,
+    /audio-uplink-health-ack'[\s\S]*publisherCommandLiveness\.noteAck[\s\S]*settleCaptureClippingHealth\(healthRequestId\)/,
+    'only an accepted correlated health ACK may settle the clipping interval',
+  );
+  assert.match(
+    source,
+    /accepted\.revision === captureInputClippingRevision[\s\S]*captureInputClippingSinceHealth = false/,
+    'a late ACK must not erase clipping that occurred after that report was sent',
+  );
 
   assert.match(source, /captureAppliedSettings = null;/, 'stopping capture must clear applied facts');
 });
 
-test('server authority code does not consume capture level or clipping telemetry', async () => {
+test('server uses recent clipping only as product quality truth, never timing authority', async () => {
   const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
+  const productStart = serverSource.indexOf('function productStatusPayload(');
+  const productEnd = serverSource.indexOf('let lastProductStatusJson', productStart);
+  assert.ok(productStart >= 0 && productEnd > productStart);
+  const product = serverSource.slice(productStart, productEnd);
+  assert.match(
+    product,
+    /micInputClipping:\s*freshMicUplink\?\.captureClipping\?\.recentDetected === true/,
+    'fresh browser flat-top evidence may degrade product health',
+  );
+
+  const takeQualityStart = serverSource.indexOf('function takeQualityFrameState(');
+  const takeQualityEnd = serverSource.indexOf('function micUplinkHealthPayload(', takeQualityStart);
+  assert.ok(takeQualityStart >= 0 && takeQualityEnd > takeQualityStart);
   assert.doesNotMatch(
-    serverSource,
-    /\bcapture(?:Level|Clipping)\b/,
-    'capture diagnostics may be parsed/projected as uplink health but must not enter server calibration policy',
+    serverSource.slice(takeQualityStart, takeQualityEnd),
+    /capture(?:Level|Clipping)/,
+    'input clipping must not silently become mixed-frame Take quality or timing authority',
+  );
+
+  const calibrationApplyStart = serverSource.indexOf('function syncAppliedCalibration(');
+  const calibrationApplyEnd = serverSource.indexOf('function sourceStatusPayload(', calibrationApplyStart);
+  assert.ok(calibrationApplyStart >= 0 && calibrationApplyEnd > calibrationApplyStart);
+  assert.doesNotMatch(
+    serverSource.slice(calibrationApplyStart, calibrationApplyEnd),
+    /capture(?:Level|Clipping)/,
+    'capture diagnostics must not steer calibration application',
   );
 });

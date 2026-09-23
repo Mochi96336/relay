@@ -10,6 +10,7 @@ import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 import {
   captureClippingSnapshot,
   captureInputClippingDetected,
+  captureRecentInputClippingDetected,
   captureLevelSnapshot,
   captureVoiceProcessingActive,
   enforceUnprocessedCapture,
@@ -164,6 +165,14 @@ let latestCaptureDispatchLagMs = null;
 let maxCaptureDispatchLagMs = null;
 let captureDispatchBacklogActive = false;
 let captureInputGapSamples = 0;
+/**
+ * Null means the active worklet does not expose interval clipping evidence
+ * (rollout-compatible legacy). Once observed, this is the OR of clipped 20 ms
+ * windows since the last server-acknowledged uplink-health report.
+ */
+let captureInputClippingSinceHealth = null;
+let captureInputClippingRevision = 0;
+const pendingCaptureClippingHealth = new Map();
 let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
@@ -238,6 +247,42 @@ function recordUplinkDrop(sampleCount, reason) {
   );
 }
 
+function captureClippingHealthSnapshot() {
+  const clipping = captureClippingSnapshot(latestLocalMicLevel);
+  if (!clipping) return null;
+  const {
+    windowMaxConsecutiveRailSamples: _windowMaxConsecutiveRailSamples,
+    ...lifetime
+  } = clipping;
+  return {
+    ...lifetime,
+    ...(captureInputClippingSinceHealth === null
+      ? {}
+      : { recentDetected: captureInputClippingSinceHealth }),
+  };
+}
+
+function settleCaptureClippingHealth(healthRequestId) {
+  const accepted = pendingCaptureClippingHealth.get(healthRequestId);
+  if (!accepted) return false;
+
+  // Mirror PublisherCommandLiveness supersession: once this request is
+  // acknowledged, any older clipping snapshot can never become authoritative.
+  for (const [requestId, pending] of pendingCaptureClippingHealth) {
+    if (pending.sentAtMs <= accepted.sentAtMs) pendingCaptureClippingHealth.delete(requestId);
+  }
+
+  // Do not let an older ACK erase a clipped window that occurred after that
+  // request was sent.
+  if (
+    captureInputClippingSinceHealth !== null
+    && accepted.revision === captureInputClippingRevision
+  ) {
+    captureInputClippingSinceHealth = false;
+  }
+  return true;
+}
+
 function audioUplinkHealthPayload(healthRequestId) {
   return {
     type: 'audio-uplink-health',
@@ -251,7 +296,7 @@ function audioUplinkHealthPayload(healthRequestId) {
     // Browser/worklet observations only; none of these fields is a calibration gate.
     capture: captureAppliedSettings,
     captureLevel: captureLevelSnapshot(latestLocalMicLevel),
-    captureClipping: captureClippingSnapshot(latestLocalMicLevel),
+    captureClipping: captureClippingHealthSnapshot(),
     captureDispatch: latestCaptureDispatchLagMs === null ? null : {
       lagMs: latestCaptureDispatchLagMs,
       maxLagMs: maxCaptureDispatchLagMs,
@@ -271,7 +316,17 @@ function sendAudioUplinkHealth() {
   const healthRequestId = publisherCommandLiveness.beginHealthRequest(sentAtMs);
   if (healthRequestId === null) return false;
   const result = audioTransport.sendControlJson(audioUplinkHealthPayload(healthRequestId));
-  if (!result.sent) publisherCommandLiveness.cancelHealthRequest(healthRequestId);
+  if (!result.sent) {
+    publisherCommandLiveness.cancelHealthRequest(healthRequestId);
+  } else {
+    // Keep interval evidence until the server ACK proves this exact health
+    // report was accepted. The revision prevents a late ACK from clearing
+    // clipping that happened after this request left the page.
+    pendingCaptureClippingHealth.set(healthRequestId, {
+      revision: captureInputClippingRevision,
+      sentAtMs,
+    });
+  }
   return result.sent;
 }
 
@@ -324,6 +379,9 @@ function advanceCaptureGeneration(reason) {
   captureSampleCursor = 0;
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
+  captureInputClippingSinceHealth = null;
+  captureInputClippingRevision = 0;
+  pendingCaptureClippingHealth.clear();
   captureInputMuted = mediaStream?.getAudioTracks?.()[0]?.muted === true;
   latestLocalMicLevel = null;
   uplinkDroppedSamples = 0;
@@ -509,6 +567,13 @@ function handleCaptureWorkletMessage(event, graph) {
       if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs) && analysis) {
         const { spectrumBands, f0Hz, pitchConfidence } = analysis;
         const clipping = captureClippingSnapshot(event.data);
+        if (clipping?.windowMaxConsecutiveRailSamples !== undefined) {
+          if (captureInputClippingSinceHealth === null) captureInputClippingSinceHealth = false;
+          if (captureRecentInputClippingDetected(clipping)) {
+            captureInputClippingSinceHealth = true;
+            captureInputClippingRevision += 1;
+          }
+        }
         latestLocalMicLevel = {
           peakDbfs,
           rmsDbfs,
@@ -527,6 +592,7 @@ function handleCaptureWorkletMessage(event, graph) {
           pitchConfidence,
           railSamples: clipping?.railSamples ?? null,
           maxConsecutiveRailSamples: clipping?.maxConsecutiveRailSamples ?? null,
+          windowMaxConsecutiveRailSamples: clipping?.windowMaxConsecutiveRailSamples ?? null,
         });
         renderGainAdvice();
       }
@@ -1268,6 +1334,7 @@ function handleServerMessage(
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
       || !publisherCommandLiveness.noteAck(ackGeneration, healthRequestId, performance.now())
     ) return;
+    settleCaptureClippingHealth(healthRequestId);
     refreshPublisherCommandChannel();
     return;
   }

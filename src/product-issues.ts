@@ -9,6 +9,7 @@ export type ProductIssueCode =
   | 'song-clock-unavailable'
   | 'mic-reconnecting'
   | 'mic-audio-stalled'
+  | 'mic-input-clipping'
   | 'timing-recovering'
   | 'timing-clamped'
   | 'take-failed';
@@ -25,6 +26,7 @@ export type ProductIssueCause =
   | 'song-clock-unavailable'
   | 'mic-transport-disconnected'
   | 'mic-audio-stalled'
+  | 'mic-input-clipping'
   | 'timing-calibrating'
   | 'timing-fallback'
   | 'timing-stale'
@@ -37,6 +39,7 @@ export type ProductImpact = 'song' | 'voice' | 'recording' | 'timing';
 export type ProductRecovery =
   | 'automatic'
   | 'retry-mic'
+  | 'adjust-input'
   | 'retry-recording'
   | 'recalibrate'
   | 'host-service';
@@ -74,6 +77,8 @@ export type ProductIssueFacts = {
     state: RoomMicState;
     /** Browser bounded media recovery exhausted while server PCM can still trickle. */
     mediaRecoveryDegraded?: boolean;
+    /** A flat-topped raw-input run occurred in the latest accepted uplink-health interval. */
+    inputClipping?: boolean;
   };
   takeLifecycle: TakeLifecycle;
   performanceActive: boolean;
@@ -191,6 +196,24 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       cause: 'mic-transport-disconnected',
       affects: ['voice', 'recording'],
       recovery: 'automatic',
+    });
+  }
+
+  if (
+    facts.mic.ownerId !== null
+    && facts.mic.state === 'live'
+    && facts.mic.mediaRecoveryDegraded !== true
+    && facts.mic.inputClipping === true
+  ) {
+    issues.push({
+      code: 'mic-input-clipping',
+      scope: 'mic',
+      severity: 'warning',
+      cause: 'mic-input-clipping',
+      affects: ['voice', 'recording'],
+      // The waveform is already flat before Relay software gain. Reconnecting
+      // or lowering Relay Mic gain cannot restore those clipped peaks.
+      recovery: 'adjust-input',
     });
   }
 

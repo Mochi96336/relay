@@ -44,6 +44,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.railSamples = 0;
     this.currentRailRunSamples = 0;
     this.maxConsecutiveRailSamples = 0;
+    // Per-level-window evidence. Unlike the capture-lifetime maximum above,
+    // this resets after each 20 ms report so the page can aggregate only the
+    // interval covered by its next health snapshot.
+    this.windowMaxConsecutiveRailSamples = 0;
     this.inputGapFadeSamples = Math.max(1, Math.round(sampleRate * (INPUT_GAP_DECLICK_MS / 1000)));
     this.gapFadeRemainingSamples = 0;
     this.gapFadeStartSample = 0;
@@ -165,7 +169,9 @@ class CaptureProcessor extends AudioWorkletProcessor {
       samples,
       railSamples: this.railSamples,
       maxConsecutiveRailSamples: this.maxConsecutiveRailSamples,
+      windowMaxConsecutiveRailSamples: this.windowMaxConsecutiveRailSamples,
     });
+    this.windowMaxConsecutiveRailSamples = 0;
   }
 
   process(inputs) {
@@ -233,6 +239,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
           this.currentRailRunSamples += 1;
           this.maxConsecutiveRailSamples = Math.max(
             this.maxConsecutiveRailSamples,
+            this.currentRailRunSamples,
+          );
+          this.windowMaxConsecutiveRailSamples = Math.max(
+            this.windowMaxConsecutiveRailSamples,
             this.currentRailRunSamples,
           );
         } else {

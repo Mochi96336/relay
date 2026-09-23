@@ -42,6 +42,7 @@ if (
     'song-clock-unavailable': () => t('system.attention.song-clock-unavailable'),
     'mic-reconnecting': () => t('system.attention.mic-reconnecting'),
     'mic-audio-stalled': () => t('system.attention.mic-audio-stalled'),
+    'mic-input-clipping': () => t('system.attention.mic-input-clipping'),
     'timing-recovering': () => t('system.attention.timing-recovering'),
     'timing-clamped': () => t('system.needsAttention'),
     'take-failed': () => t('system.attention.take-failed'),

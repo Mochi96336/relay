@@ -208,6 +208,34 @@ describe('audio uplink health', () => {
     }
   });
 
+  it('accepts recent clipping verdicts without requiring them from older v1 pages', () => {
+    const current: any = validHealth();
+    current.captureClipping.recentDetected = true;
+    assert.deepEqual(parseAudioUplinkHealth(current)?.captureClipping, {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 6,
+      recentDetected: true,
+    });
+
+    const clean: any = validHealth();
+    clean.captureClipping.recentDetected = false;
+    assert.equal(parseAudioUplinkHealth(clean)?.captureClipping?.recentDetected, false);
+
+    const legacy = parseAudioUplinkHealth(validHealth());
+    assert.ok(legacy);
+    assert.equal(legacy.captureClipping?.recentDetected, undefined);
+
+    for (const recentDetected of ['true', 1, 0, null, {}, []]) {
+      const malformed: any = validHealth();
+      malformed.captureClipping.recentDetected = recentDetected;
+      assert.equal(
+        parseAudioUplinkHealth(malformed),
+        null,
+        `supplied recentDetected must be boolean, got ${JSON.stringify(recentDetected)}`,
+      );
+    }
+  });
+
   it('keeps capture clipping optional for older v1 pages and rejects malformed rail evidence', () => {
     const legacy: any = validHealth();
     delete legacy.captureClipping;

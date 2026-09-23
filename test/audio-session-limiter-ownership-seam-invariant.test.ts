@@ -302,6 +302,47 @@ test('Mic limiter lookahead cannot let a replacement capture attenuate old PCM e
   assert.equal(session.health().clippedSamples, 0);
 });
 
+test('missing Mic output does not count limiter release as limited source samples', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  // Two hot real frames establish active gain reduction without starving the
+  // limiter look-ahead on the first emitted frame.
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES * 2, 12_000),
+    RATE,
+    0,
+  );
+  session.drain(() => {}, 0, 1);
+  session.drain(() => {}, 20, 1);
+  assert.ok(session.health().limitedSamples > 0, 'fixture must engage the limiter on real Mic PCM');
+
+  // Ownership release leaves limiter state to decay naturally, but the next
+  // frame contains no Mic source samples. Its output edge is a source fade to
+  // silence, not fresh PCM being held down by the limiter.
+  session.setMicExpected(false);
+  let evidence: Parameters<Parameters<AudioSession['drain']>[0]>[1] | null = null;
+  session.drain((_pcm, frameEvidence) => {
+    evidence = frameEvidence;
+  }, 40, 1);
+
+  assert.ok(evidence);
+  assert.equal(evidence!.micUnavailableSamples, FRAME_SAMPLES);
+  assert.equal(
+    evidence!.limitedSamples,
+    0,
+    'limiter release over unavailable silence must not be reported as limited source samples',
+  );
+});
+
 test('seeded limiter and Mic ownership transitions stay output-continuous', () => {
   for (const seed of [0x12345678, 0x9e3779b9, 0xc0ffee, 0x5eed5eed]) {
     const random = seeded(seed);

@@ -646,8 +646,16 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
       graph.deviceChangeCheckPending = true;
       Promise.resolve(mediaDevices.enumerateDevices()).then((devices) => {
         if (!captureGraphIsCurrent(graph) || track.readyState === 'ended') return;
-        const inputStillPresent = Array.isArray(devices) && devices.some(
-          (device) => device?.kind === 'audioinput' && device.deviceId === deviceId,
+        const audioInputs = Array.isArray(devices)
+          ? devices.filter((device) => device?.kind === 'audioinput')
+          : [];
+        // Some constrained browsers can resolve enumerateDevices() with an
+        // empty/filtered list instead of rejecting. That is not positive device
+        // removal evidence. Prefer a missed recovery over tearing down a live
+        // Mic on an ambiguous platform response.
+        if (audioInputs.length === 0) return;
+        const inputStillPresent = audioInputs.some(
+          (device) => device.deviceId === deviceId,
         );
         if (inputStillPresent) return;
 

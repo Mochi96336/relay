@@ -114,7 +114,7 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
     'forced room ownership cannot be bypassed by the Listen toggle');
 });
 
-test('capture AudioWorklet processorerror immediately rebuilds only the current graph', () => {
+test('capture AudioWorklet processorerror uses one bounded current-graph rebuild before grace fallback', () => {
   const installAt = app.indexOf('function installCaptureGraph');
   const roleAt = app.indexOf('// recorder.js reads this', installAt);
   assert.ok(installAt >= 0 && roleAt > installAt);
@@ -124,9 +124,20 @@ test('capture AudioWorklet processorerror immediately rebuilds only the current 
   assert.match(install, /capture\.addEventListener\('processorerror', graph\.processorErrorListener\)/);
   assert.match(
     install,
-    /graph\.processorErrorListener = \(\) => \{[\s\S]*if \(!captureGraphIsCurrent\(graph\)\) return;[\s\S]*rebuildPublisherCaptureGraph\('processor-error'\)/,
-    'only the currently authoritative capture graph may react to a processor crash',
+    /graph\.processorErrorListener = \(\) => \{[\s\S]*if \(!captureGraphIsCurrent\(graph\)\) return;[\s\S]*micCaptureRecovery\.noteProcessorError\(captureSnapshot\(\)\)/,
+    'only the currently authoritative capture graph may spend processor-error recovery authority',
   );
+  assert.match(
+    install,
+    /if \(decision\.rebuild\) \{[\s\S]*rebuildPublisherCaptureGraph\('processor-error'\)/,
+    'the first terminal processor error reuses the existing graph replacement path',
+  );
+  assert.match(
+    install,
+    /if \(!decision\.exhausted\) return;[\s\S]*finishMicrophoneSession\('processor-error-repeated', \{[\s\S]*releaseMic: false/,
+    'a replacement processor that crashes again before fresh PCM must enter bounded reconnect grace instead of looping generations',
+  );
+  assert.match(install, /Retry Mic to reconnect it/);
 
   const disposeAt = app.indexOf('function disposeCaptureGraph');
   const currentAt = app.indexOf('function captureGraphIsCurrent', disposeAt);
@@ -145,7 +156,7 @@ test('capture AudioWorklet processorerror immediately rebuilds only the current 
   assert.match(
     rebuild,
     /if \(captureGraphRebuildPromise\) return captureGraphRebuildPromise/,
-    'processorerror recovery must reuse the existing single-flight graph rebuild',
+    'processorerror recovery must still share the physical single-flight rebuild',
   );
 });
 

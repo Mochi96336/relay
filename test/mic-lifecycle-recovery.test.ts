@@ -180,7 +180,7 @@ test('confirmed active input removal enters Mic reconnect grace without guessing
     'bursty devicechange events must share one presence check');
   assert.match(install, /track\.readyState === 'ended'/,
     'track ended owns its existing terminal callback and must not double-trigger device removal');
-  assert.match(install, /track\.getSettings\?\.\(\)\.deviceId|track\.getSettings\?\.\(\)\?\.deviceId|track\.getSettings\?\.\(\)\.deviceId/,
+  assert.match(install, /captureTrackDeviceId\(track\)/,
     'the active capture device id is the removal authority');
   assert.match(
     install,
@@ -217,6 +217,56 @@ test('confirmed active input removal enters Mic reconnect grace without guessing
     dispose,
     /removeEventListener\?\.\('devicechange', graph\.deviceChangeListener\)/,
     'retired capture graphs must not keep devicechange authority',
+  );
+});
+
+test('live Mic input A→B becomes a capture-generation boundary instead of false removal', () => {
+  const identityAt = app.indexOf('function captureTrackDeviceId');
+  const recoveredAt = app.indexOf('function announceCaptureRecovered', identityAt);
+  assert.ok(identityAt >= 0 && recoveredAt > identityAt);
+  const identity = app.slice(identityAt, recoveredAt);
+
+  assert.match(identity, /track\?\.getSettings\?\.\(\)\.deviceId/);
+  assert.match(identity, /graph\.inputDeviceId === null/);
+  assert.match(
+    identity,
+    /currentDeviceId === graph\.inputDeviceId/,
+    'same physical input must remain the same capture generation',
+  );
+  assert.match(
+    identity,
+    /rebuildPublisherCaptureGraph\('input-device-changed'\)/,
+    'a live track routed to a different physical input must advance capture generation',
+  );
+
+  const installAt = app.indexOf('function installCaptureGraph');
+  const roleAt = app.indexOf('// recorder.js reads this', installAt);
+  assert.ok(installAt >= 0 && roleAt > installAt);
+  const install = app.slice(installAt, roleAt);
+  assert.match(
+    install,
+    /inputDeviceId: captureTrackDeviceId\(captureStream\.getAudioTracks\?\.\(\)\[0\] \?\? null\)/,
+    'each graph must remember the physical input identity it was installed against',
+  );
+  const routeChecks = install.match(/rebuildCaptureForInputDeviceChange\(graph\)/g) ?? [];
+  assert.ok(
+    routeChecks.length >= 2,
+    'devicechange must compare track identity both before and after asynchronous enumeration',
+  );
+  assert.match(
+    install,
+    /const confirmedDeviceId = captureTrackDeviceId\(track\);[\s\S]*if \(confirmedDeviceId !== deviceId\) return/,
+    'A disappearing while the browser auto-routes to B cannot be misclassified as terminal removal',
+  );
+
+  const refreshAt = app.indexOf('const refreshCaptureConfiguration = () => {');
+  const mutedAt = app.indexOf('captureInputMuted =', refreshAt);
+  assert.ok(refreshAt >= 0 && mutedAt > refreshAt);
+  const refresh = app.slice(refreshAt, mutedAt);
+  assert.match(
+    refresh,
+    /activeCaptureGraph[\s\S]*rebuildCaptureForInputDeviceChange\(activeCaptureGraph\)[\s\S]*\) return;[\s\S]*sendAudioUplinkHealth\(\)/,
+    'configurationchange-only route switches must rebuild before an old-generation health snapshot can be sent',
   );
 });
 

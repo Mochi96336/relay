@@ -146,7 +146,17 @@ test('confirmed active input removal enters Mic reconnect grace without guessing
     'the active capture device id is the removal authority');
   assert.match(
     install,
-    /device\?\.kind === 'audioinput' && device\.deviceId === deviceId/,
+    /devices\.filter\(\(device\) => device\?\.kind === 'audioinput'\)/,
+    'device presence must be proved from the audio-input subset only',
+  );
+  assert.match(
+    install,
+    /if \(audioInputs\.length === 0\) return/,
+    'an empty or filtered enumerateDevices response is ambiguous, not removal authority',
+  );
+  assert.match(
+    install,
+    /audioInputs\.some\([\s\S]*device\.deviceId === deviceId/,
     'unrelated output/input changes must leave the active Mic alone',
   );
   assert.match(

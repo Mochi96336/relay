@@ -345,6 +345,13 @@ function disposeCaptureGraph(graph) {
     graph.capture.port.onmessage = null;
   } catch {}
   try {
+    if (graph.deviceChangeListener) {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', graph.deviceChangeListener);
+    }
+  } catch {}
+  graph.deviceChangeListener = null;
+  graph.deviceChangeCheckPending = false;
+  try {
     graph.visualAnalysisWorker?.terminate();
   } catch {}
   graph.visualAnalysisWorker = null;
@@ -615,7 +622,67 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     silent,
     visualAnalysisWorker: null,
     visualAnalysis: null,
+    deviceChangeListener: null,
+    deviceChangeCheckPending: false,
   };
+
+  const mediaDevices = navigator.mediaDevices;
+  if (
+    typeof mediaDevices?.enumerateDevices === 'function'
+    && typeof mediaDevices?.addEventListener === 'function'
+  ) {
+    graph.deviceChangeListener = () => {
+      if (!captureGraphIsCurrent(graph) || graph.deviceChangeCheckPending) return;
+
+      const track = graph.stream.getAudioTracks?.()[0] ?? null;
+      // A terminal track has its own ended lifecycle and already enters Mic
+      // reconnect grace. Device presence is only extra evidence for a track
+      // that still claims to be live.
+      if (!track || track.readyState === 'ended') return;
+
+      const deviceId = track.getSettings?.().deviceId;
+      if (typeof deviceId !== 'string' || deviceId.length === 0) return;
+
+      graph.deviceChangeCheckPending = true;
+      Promise.resolve(mediaDevices.enumerateDevices()).then((devices) => {
+        if (!captureGraphIsCurrent(graph) || track.readyState === 'ended') return;
+        const audioInputs = Array.isArray(devices)
+          ? devices.filter((device) => device?.kind === 'audioinput')
+          : [];
+        // Some constrained browsers can resolve enumerateDevices() with an
+        // empty/filtered list instead of rejecting. That is not positive device
+        // removal evidence. Prefer a missed recovery over tearing down a live
+        // Mic on an ambiguous platform response.
+        if (audioInputs.length === 0) return;
+        const inputStillPresent = audioInputs.some(
+          (device) => device.deviceId === deviceId,
+        );
+        if (inputStillPresent) return;
+
+        return finishMicrophoneSession('input-device-removed', {
+          // A confirmed hardware removal is not a user intent to give up the
+          // room Mic. Reuse the same bounded server reconnect grace as track
+          // ended / graph-rebuild failure and require a user-gesture Retry Mic
+          // to obtain the replacement capture.
+          releaseMic: false,
+          afterEnded: () => {
+            setStatus(
+              'Microphone interrupted',
+              'The active input device disappeared. Retry Mic to reconnect it.',
+            );
+          },
+        });
+      }).catch((error) => {
+        // Device enumeration is opportunistic evidence only. Permission or
+        // platform errors must never tear down an otherwise live capture.
+        console.warn('Microphone device presence check failed', error);
+      }).finally(() => {
+        graph.deviceChangeCheckPending = false;
+      });
+    };
+    mediaDevices.addEventListener('devicechange', graph.deviceChangeListener);
+  }
+
   capture.port.onmessage = (event) => handleCaptureWorkletMessage(event, graph);
   attachMicVisualAnalysisWorker(graph);
   // New app + new worklet opts into timestamped PCM. Old worklets ignore this

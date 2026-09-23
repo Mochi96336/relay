@@ -1555,6 +1555,9 @@ export class AudioSession {
     const source = this.readRange(this.mic, sourceStart, sourceCount);
     const sourceEvidence = this.readSourceEvidenceMask(this.mic, sourceStart, sourceCount);
     const missingMask = new Uint8Array(this.frameSamples);
+    const crossesCaptureRestartBoundary = (sourceIndex: number) => (
+      this.micCaptureRestartBoundarySamples.includes(sourceIndex + 1)
+    );
     let gapSamples = 0;
     let frontierMissingSamples = 0;
     let unheaderedSamples = 0;
@@ -1564,7 +1567,13 @@ export class AudioSession {
       const fraction = position - index;
       const offset = index - sourceStart;
       const a = source[offset] ?? 0;
-      const b = source[offset + 1] ?? a;
+      // A capture restart is a semantic discontinuity, not an interpolation
+      // authority. Stay on the old side until the fractional read trajectory
+      // actually reaches the new capture; the existing output replacement fade
+      // owns continuity across that boundary.
+      const b = fraction !== 0 && crossesCaptureRestartBoundary(index)
+        ? a
+        : source[offset + 1] ?? a;
       return Math.round(a + (b - a) * fraction);
     };
 
@@ -1574,9 +1583,13 @@ export class AudioSession {
       const fraction = position - index;
       const offset = index - sourceStart;
       let evidence = sourceEvidence[offset] ?? 2;
-      // Interpolation really consumes both source samples. If either side is
-      // missing/unheadered, the emitted sample carries that evidence too.
-      if (fraction !== 0) evidence |= sourceEvidence[offset + 1] ?? 2;
+      // Interpolation normally consumes both source samples. A semantic
+      // capture-restart edge deliberately does not: audio stays on the old side
+      // until the source trajectory crosses the boundary, so evidence must do
+      // the same.
+      if (fraction !== 0 && !crossesCaptureRestartBoundary(index)) {
+        evidence |= sourceEvidence[offset + 1] ?? 2;
+      }
 
       if ((evidence & 2) !== 0) frontierMissingSamples += 1;
       else if ((evidence & 1) !== 0) gapSamples += 1;

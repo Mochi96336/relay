@@ -259,6 +259,90 @@ describe('AudioSession runtime calibration slew', () => {
     );
   });
 
+  test('immediate read-head crossfade does not leak across a retained Mic capture restart', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.setMicExpected(true);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100 });
+
+    const constant = (count: number, value: number) => {
+      const pcm = Buffer.alloc(count * 2);
+      for (let index = 0; index < count; index += 1) pcm.writeInt16LE(value, index * 2);
+      return pcm;
+    };
+
+    // The first emitted frame ends at source 5759. Keep one more old-capture
+    // sample, then start a replacement capture with opposite polarity at 5761.
+    // On the next frame the old crossfade leg starts at 5760 and would enter
+    // the replacement on its second sample. The new immediate read head is
+    // pulled 6 ms backward to 5472, so the authoritative trajectory itself
+    // remains entirely on the old capture during the 5 ms crossfade.
+    const boundary = 5_761;
+    session.ingestMic(
+      { generation: 1, firstSampleIndex: 0, pcm: constant(boundary, 12_000) },
+      RATE,
+      0,
+    );
+    const firstReplacementSamples = 960;
+    const restartNowMs = ((boundary + firstReplacementSamples) * 1_000) / RATE;
+    session.ingestMic(
+      {
+        generation: 2,
+        firstSampleIndex: 0,
+        pcm: constant(firstReplacementSamples, -12_000),
+      },
+      RATE,
+      restartNowMs,
+    );
+    session.ingestMic(
+      {
+        generation: 2,
+        firstSampleIndex: firstReplacementSamples,
+        pcm: constant(RATE, -12_000),
+      },
+      RATE,
+      restartNowMs + 20,
+    );
+
+    const mixed: Buffer[] = [];
+    session.drain((pcm) => mixed.push(pcm), 600, 1);
+    assert.equal(mixed.length, 1);
+
+    // A 6 ms immediate authority change is far beyond the bounded 1% slew
+    // budget, so it uses the 5 ms read-head crossfade.
+    session.setAlignment({ calibratedMicLagMs: 94 });
+    session.drain((pcm) => mixed.push(pcm), 620, 1);
+    assert.equal(mixed.length, 2);
+
+    const first = mixed[1].readInt16LE(0);
+    const second = mixed[1].readInt16LE(2);
+    assert.ok(Math.abs(first - 12_000) <= 1);
+    assert.ok(
+      Math.abs(second - first) <= 1,
+      `old crossfade leg leaked across retained capture restart: ${first} -> ${second}`,
+    );
+
+    let maximumStep = 0;
+    for (let index = 1; index < Math.round(RATE * 0.005); index += 1) {
+      maximumStep = Math.max(
+        maximumStep,
+        Math.abs(mixed[1].readInt16LE(index * 2) - mixed[1].readInt16LE((index - 1) * 2)),
+      );
+    }
+    assert.ok(
+      maximumStep < 500,
+      `retained restart contaminated the alignment crossfade by ${maximumStep} PCM counts`,
+    );
+  });
+
   test('fine-tune authority during a runtime slew crossfades from the actually emitted read head', () => {
     const session = new AudioSession({
       sampleRate: RATE,

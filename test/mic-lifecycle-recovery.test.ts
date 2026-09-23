@@ -365,6 +365,40 @@ test('reconnecting self owner gets a user-gesture Retry Mic without minting play
   );
 });
 
+test('recoverable terminal Mic failures preserve reconnect grace while explicit release stays terminal', () => {
+  const recoverable = [
+    ['input-ended', /finishMicrophoneSession\('input-ended', \{[\s\S]*?releaseMic: false/],
+    ['input-device-removed', /finishMicrophoneSession\('input-device-removed', \{[\s\S]*?releaseMic: false/],
+    ['context-closed', /finishMicrophoneSession\('context-closed', \{[\s\S]*?releaseMic: false/],
+    ['processor-error-repeated', /finishMicrophoneSession\('processor-error-repeated', \{[\s\S]*?releaseMic: false/],
+    ['capture-rebuild-failed', /finishMicrophoneSession\('capture-rebuild-failed', \{[\s\S]*?releaseMic: false/],
+  ] as const;
+
+  for (const [reason, pattern] of recoverable) {
+    assert.match(
+      app,
+      pattern,
+      `${reason} must preserve bounded server reconnect grace instead of sending terminal release-mic`,
+    );
+  }
+
+  assert.match(
+    app,
+    /finishMicrophoneSession\('released', \{[\s\S]*?releaseMic: true/,
+    'explicit user Release Mic remains terminal and must bypass reconnect grace',
+  );
+  assert.match(
+    app,
+    /finishMicrophoneSession\('revoked'\)/,
+    'server ownership revocation remains terminal without attempting self-recovery',
+  );
+  assert.match(
+    app,
+    /finishMicrophoneSession\('superseded'\)/,
+    'newer-tab supersession remains terminal for the stale publisher',
+  );
+});
+
 test('Mic startup is single-flight, deadline-bound, and disposes late permission capture', () => {
   const startAt = app.indexOf('async function startPublisher');
   const requestAt = app.indexOf('async function requestPublisherStart', startAt);

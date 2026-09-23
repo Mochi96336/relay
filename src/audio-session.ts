@@ -1105,15 +1105,13 @@ export class AudioSession {
   }
 
   /**
-   * Starts a new capture's limiter from that capture's own first look-ahead.
+   * Seeds limiter detector/gain from one already-buffered future window.
    *
-   * A fresh unity gain is unsafe when the replacement itself is already hot:
-   * the ordinary attack needs time to converge, while replacement audio starts
-   * immediately. Seed directly to the safe target implied by the first detector
-   * window. This does not charge cumulative limited-sample evidence; only
-   * emitted samples do.
+   * This is used only at semantic edges where the previous detector state no
+   * longer describes the next audible signal. It does not charge cumulative
+   * limited-sample evidence; only emitted samples do.
    */
-  private seedMicLimiterForCapture(
+  private seedMicLimiterFromWindow(
     samples: Int16Array,
     fromOffset: number,
     toOffset: number,
@@ -1133,6 +1131,23 @@ export class AudioSession {
     this.limiterGain = peak > LIMITER_THRESHOLD
       ? LIMITER_THRESHOLD / peak
       : 1;
+  }
+
+  /**
+   * Starts a new capture's limiter from that capture's own first look-ahead.
+   *
+   * A fresh unity gain is unsafe when the replacement itself is already hot:
+   * the ordinary attack needs time to converge, while replacement audio starts
+   * immediately. Seed directly to the safe target implied by the first detector
+   * window.
+   */
+  private seedMicLimiterForCapture(
+    samples: Int16Array,
+    fromOffset: number,
+    toOffset: number,
+    currentMicGainDb: number,
+  ) {
+    this.seedMicLimiterFromWindow(samples, fromOffset, toOffset, currentMicGainDb);
     this.micLimiterResetPending = false;
   }
 
@@ -2549,8 +2564,25 @@ export class AudioSession {
         }
       }
 
+      const recoveringFromFullMicSilence =
+        !micAudibleMissing
+        && this.micFrontierOutputMissing
+        && this.micFrontierFadeRemainingSamples <= 0;
+
       if (this.micLimiterResetPending && !micAudibleMissing) {
         this.seedMicLimiterForCapture(
+          mic,
+          i,
+          detectOffset,
+          micGainDb,
+        );
+      } else if (recoveringFromFullMicSilence) {
+        // Once a missing-source edge has fully reached silence, the old limiter
+        // detector has had time to release and no longer protects a suddenly
+        // hot recovery. Seed from the recovered PCM's own look-ahead before the
+        // first real sample becomes audible. Very short gaps that never reached
+        // silence deliberately keep their existing limiter continuity.
+        this.seedMicLimiterFromWindow(
           mic,
           i,
           detectOffset,

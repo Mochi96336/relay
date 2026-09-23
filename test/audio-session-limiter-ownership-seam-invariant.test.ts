@@ -242,6 +242,66 @@ test('Mic capture replacement resets raw meter ownership', () => {
   );
 });
 
+test('Mic limiter lookahead cannot let a replacement capture attenuate old PCM early', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 40,
+    backingGain: 1,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES * 3, 400),
+    RATE,
+    20,
+  );
+
+  const replacement = session.ingestMic(
+    constantMicFrame(2, 0, FRAME_SAMPLES, 12_000),
+    RATE,
+    80,
+  );
+  assert.equal(replacement.captureRestarted, true);
+  session.ingestMic(
+    constantMicFrame(2, FRAME_SAMPLES, FRAME_SAMPLES, 12_000),
+    RATE,
+    81,
+  );
+
+  const outputs: Buffer[] = [];
+  session.drain((pcm) => outputs.push(pcm), 40, 1);
+  session.drain((pcm) => outputs.push(pcm), 60, 1);
+  session.drain((pcm) => outputs.push(pcm), 80, 1);
+  assert.equal(outputs.length, 3);
+
+  const expectedOld = Math.round(400 * (10 ** (24 / 20)));
+  const beforeLookahead = outputs[2]!.readInt16LE(700 * 2);
+  const insideLookahead = outputs[2]!.readInt16LE(900 * 2);
+  assert.ok(
+    Math.abs(beforeLookahead - expectedOld) < 150,
+    `old capture fixture is not at the expected level: ${beforeLookahead} vs ~${expectedOld}`,
+  );
+  assert.ok(
+    Math.abs(insideLookahead - expectedOld) < 150,
+    `replacement capture attenuated old PCM before the restart boundary: ${insideLookahead} vs ~${expectedOld}`,
+  );
+  assert.equal(
+    session.health().limitedSamples,
+    0,
+    'replacement PCM must not own limiter lookahead before it becomes audible',
+  );
+
+  session.drain((pcm) => outputs.push(pcm), 100, 1);
+  assert.equal(outputs.length, 4);
+  assert.ok(session.health().limitedSamples > 0);
+  assert.equal(session.health().clippedSamples, 0);
+});
+
 test('seeded limiter and Mic ownership transitions stay output-continuous', () => {
   for (const seed of [0x12345678, 0x9e3779b9, 0xc0ffee, 0x5eed5eed]) {
     const random = seeded(seed);

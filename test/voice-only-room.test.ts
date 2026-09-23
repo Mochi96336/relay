@@ -124,6 +124,7 @@ test('voice-only quality ignores intentionally absent backing and timing evidenc
     micUnavailableSamples: 0,
     backingUnavailableSamples: 960,
     clippedSamples: 0,
+    micInputClippedSamples: 0,
     limitedSamples: 0,
     unheaderedSamples: 0,
   });

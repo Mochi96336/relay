@@ -259,6 +259,109 @@ describe('AudioSession runtime calibration slew', () => {
     );
   });
 
+  test('immediate read-head crossfade never counts more unheadered samples than it emits', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.setMicExpected(true);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100 });
+
+    // Legacy PCM has no source positions, so every emitted Mic sample in this
+    // fixture is unheadered. The immediate-jump crossfade used to compare a
+    // 242-sample old interpolation window with a 240-sample new window and add
+    // that two-sample lookahead difference on top of the 960 emitted samples.
+    session.ingestMic(
+      { generation: null, firstSampleIndex: null, pcm: tone(3, 997, 8_000) },
+      RATE,
+      0,
+    );
+
+    const evidence: Array<{ unheaderedSamples: number }> = [];
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 600, 1);
+    assert.equal(evidence[0]?.unheaderedSamples, 960);
+
+    session.setAlignment({ calibratedMicLagMs: 237 });
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 620, 1);
+
+    assert.equal(
+      evidence[1]?.unheaderedSamples,
+      960,
+      'interpolation lookahead is not an emitted sample and must not inflate Take evidence',
+    );
+  });
+
+  test('crossfade unheadered provenance follows only legs with non-zero output weight', () => {
+    const constant = (count: number, value = 8_000) => {
+      const pcm = Buffer.alloc(count * 2);
+      for (let index = 0; index < count; index += 1) pcm.writeInt16LE(value, index * 2);
+      return pcm;
+    };
+    const run = (oldLegUnheadered: boolean) => {
+      const session = new AudioSession({
+        sampleRate: RATE,
+        frameMs: 20,
+        prebufferMs: 600,
+        backingGain: 0.65,
+        retentionMs: 3_000,
+        backingRetentionMs: 1_000,
+      });
+      session.setMicGainDb(0);
+      session.setMicExpected(true);
+      session.start(0);
+      session.setAlignment({ calibratedMicLagMs: 100 });
+
+      const transition = 6_000;
+      const first = constant(transition);
+      const second = constant(RATE);
+      if (oldLegUnheadered) {
+        session.ingestMic(
+          { generation: null, firstSampleIndex: null, pcm: first },
+          RATE,
+          0,
+        );
+        session.ingestMic(
+          { generation: 1, firstSampleIndex: transition, pcm: second },
+          RATE,
+          0,
+        );
+      } else {
+        session.ingestMic(
+          { generation: 1, firstSampleIndex: 0, pcm: first },
+          RATE,
+          0,
+        );
+        session.ingestMic(
+          { generation: null, firstSampleIndex: null, pcm: second },
+          RATE,
+          0,
+        );
+      }
+
+      const evidence: Array<{ unheaderedSamples: number }> = [];
+      session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 600, 1);
+      session.setAlignment({ calibratedMicLagMs: 237 });
+      session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 620, 1);
+      return evidence[1]?.unheaderedSamples;
+    };
+
+    // Old leg: source 5760..5999. New leg: source 12336...
+    // The final crossfade sample has oldWeight=0, so only 239 output samples
+    // actually contain legacy old-leg PCM.
+    assert.equal(run(true), 239);
+
+    // In the inverse layout the new frame is legacy, but the first crossfade
+    // sample has newWeight=0 and comes entirely from positioned old PCM.
+    // 959 of the 960 emitted samples therefore contain legacy PCM.
+    assert.equal(run(false), 959);
+  });
+
   test('immediate read-head crossfade does not leak across a retained Mic capture restart', () => {
     const session = new AudioSession({
       sampleRate: RATE,

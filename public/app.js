@@ -373,6 +373,37 @@ function captureGraphIsCurrent(graph) {
   );
 }
 
+function captureTrackDeviceId(track) {
+  try {
+    const deviceId = track?.getSettings?.().deviceId;
+    return typeof deviceId === 'string' && deviceId.length > 0 ? deviceId : null;
+  } catch {
+    return null;
+  }
+}
+
+function rebuildCaptureForInputDeviceChange(graph) {
+  if (!captureGraphIsCurrent(graph)) return false;
+  const track = graph.stream.getAudioTracks?.()[0] ?? null;
+  const currentDeviceId = captureTrackDeviceId(track);
+  if (currentDeviceId === null) return false;
+
+  // Some browsers reveal deviceId only after the first post-permission
+  // configuration event. Establishing that first known identity is not itself
+  // a route change.
+  if (graph.inputDeviceId === null) {
+    graph.inputDeviceId = currentDeviceId;
+    return false;
+  }
+  if (currentDeviceId === graph.inputDeviceId) return false;
+
+  // The physical input authority changed while the track stayed live. Treat
+  // this as a capture-clock boundary: a fresh generation lets the server retire
+  // old positioned PCM and invalidate timing calibrated against the old device.
+  void rebuildPublisherCaptureGraph('input-device-changed');
+  return true;
+}
+
 function announceCaptureRecovered() {
   const connected = socket?.readyState === WebSocket.OPEN;
   if (connected) {
@@ -624,6 +655,7 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     visualAnalysis: null,
     deviceChangeListener: null,
     deviceChangeCheckPending: false,
+    inputDeviceId: captureTrackDeviceId(captureStream.getAudioTracks?.()[0] ?? null),
   };
 
   const mediaDevices = navigator.mediaDevices;
@@ -640,12 +672,24 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
       // that still claims to be live.
       if (!track || track.readyState === 'ended') return;
 
-      const deviceId = track.getSettings?.().deviceId;
-      if (typeof deviceId !== 'string' || deviceId.length === 0) return;
+      // A browser can auto-route the same live track from input A to input B.
+      // That is a capture replacement, not proof that the Mic is dead.
+      if (rebuildCaptureForInputDeviceChange(graph)) return;
+
+      const deviceId = captureTrackDeviceId(track);
+      if (deviceId === null) return;
 
       graph.deviceChangeCheckPending = true;
       Promise.resolve(mediaDevices.enumerateDevices()).then((devices) => {
         if (!captureGraphIsCurrent(graph) || track.readyState === 'ended') return;
+
+        // devicechange may fire before WebKit updates getSettings(). Re-check
+        // after enumerateDevices() settles so A→B auto-routing cannot be
+        // mistaken for "A disappeared" and torn down.
+        if (rebuildCaptureForInputDeviceChange(graph)) return;
+        const confirmedDeviceId = captureTrackDeviceId(track);
+        if (confirmedDeviceId !== deviceId) return;
+
         const audioInputs = Array.isArray(devices)
           ? devices.filter((device) => device?.kind === 'audioinput')
           : [];
@@ -1772,6 +1816,14 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         if (!captureIsCurrent()) return;
         captureAppliedSettings = readCaptureSettings(captureStream);
         renderGainAdvice();
+
+        // WebKit may change the underlying input without ending the live track
+        // and may surface that only as configurationchange. Do not send an old-
+        // generation health snapshot after observing a new physical input.
+        if (
+          activeCaptureGraph
+          && rebuildCaptureForInputDeviceChange(activeCaptureGraph)
+        ) return;
         sendAudioUplinkHealth();
       })().catch((error) => {
         console.warn('Microphone capture configuration refresh failed', error);

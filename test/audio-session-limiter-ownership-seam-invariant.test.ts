@@ -102,6 +102,60 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
   return { maximum, maximumAt, maximumFrom, maximumTo };
 }
 
+test('reconnected Backing cannot outrun two-source summing headroom', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setBackingExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  // Keep both retained timelines well ahead so a reconnect can re-arm Backing
+  // without this fixture depending on packet arrival timing.
+  session.ingestMic(
+    constantMicFrame(1, 0, RATE * 2, 1_000),
+    RATE,
+    0,
+  );
+  session.ingestBacking(
+    constantMicFrame(1, 0, RATE * 2, 20_000),
+    RATE,
+    0,
+  );
+
+  // Let the normal two-source mix settle, then model a Backing disconnect long
+  // enough for the 150 ms musical duck/headroom state to return to voice-only.
+  session.drain(() => {}, 180, 100);
+  session.setBackingExpected(false);
+  session.drain(() => {}, 380, 100);
+  assert.equal(session.health().clippedSamples, 0);
+
+  // The retained Backing timeline is still present. Re-arming the same capture
+  // makes song PCM audible on the very next frame, which must not beat the
+  // two-source safety state back into place.
+  session.setBackingExpected(true);
+  const evidence: MixFrameEvidence[] = [];
+  session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 400, 1);
+
+  assert.equal(evidence.length, 1);
+  assert.equal(
+    evidence[0]!.limitedSamples,
+    0,
+    'fixture Mic must stay below the limiter so this isolates Backing rejoin headroom',
+  );
+  assert.equal(
+    evidence[0]!.clippedSamples,
+    0,
+    'reconnected Backing must not reach the final hard clamp while headroom is still ramping',
+  );
+});
+
 test('bind-time Mic replacement does not inherit old capture limiter reduction', () => {
   const session = new AudioSession({
     sampleRate: RATE,

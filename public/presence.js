@@ -117,7 +117,10 @@ window.relayIdentityReady = (async () => {
   function micActionState() {
     const currentOwner = owner();
     const mine = latestSession?.micOwnerId === participantId;
-    const selfRetry = mine && !localPublisherActive;
+    const selfRetry =
+      mine
+      && !localPublisherActive
+      && latestSession?.micConnected === false;
     const commandChannelFresh = socket?.readyState === WebSocket.OPEN;
     const takeoverOpen = Boolean(
       takeoverOwnerId

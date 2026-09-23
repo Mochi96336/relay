@@ -18,6 +18,11 @@ type PcmChunk = {
   positioned: boolean;
 };
 
+type SampleRange = {
+  start: number;
+  end: number;
+};
+
 type PcmTimeline = {
   chunks: PcmChunk[];
   /** Write frontier on the session timeline, not a count of samples received. */
@@ -99,6 +104,8 @@ export type MixFrameEvidence = {
   micUnavailableSamples: number;
   backingUnavailableSamples: number;
   clippedSamples: number;
+  /** Emitted Mic samples derived from a proven raw-input flat-top run. */
+  micInputClippedSamples: number;
   limitedSamples: number;
   unheaderedSamples: number;
 };
@@ -397,6 +404,17 @@ export class AudioSession {
    */
   private readonly micCaptureRestartBoundarySamples: number[] = [];
   private readonly backingCaptureRestartBoundarySamples: number[] = [];
+  /**
+   * Proven raw-input flat-top ranges mapped onto the retained Mic session
+   * timeline. Detection runs on original source PCM before sample-rate
+   * conversion; attribution happens only when the mixer actually reads one of
+   * these ranges into an emitted frame.
+   */
+  private readonly micInputClippingRanges: SampleRange[] = [];
+  private micInputRailRunStartSourceSample: number | null = null;
+  private micInputRailRunSamples = 0;
+  /** Whether the current raw rail run has emitted a retained timeline range. */
+  private micInputRailRunRangeActive = false;
   /**
    * Mixer-output frontier continuity.
    *
@@ -902,8 +920,33 @@ export class AudioSession {
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
     const previousTotalSamples = this.mic.totalSamples;
     const previousChunk = this.mic.chunks.at(-1) ?? null;
+    const previousGeneration = this.mic.generation;
+    const previousSourceRate = this.mic.sourceRate;
+    const previousSourceFrontier = this.mic.sourceFrontier;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
     const currentChunk = this.mic.chunks.at(-1) ?? null;
+
+    const positioned = frame.firstSampleIndex !== null;
+    const sourceContinuous = Boolean(
+      positioned
+      && sourceRate
+      && !result.captureRestarted
+      && previousGeneration === frame.generation
+      && previousSourceRate === sourceRate
+      && previousSourceFrontier === frame.firstSampleIndex
+    );
+    if (!sourceContinuous) this.resetMicInputRailRun();
+    if (
+      positioned
+      && sourceRate
+      && result.samples.length > 0
+    ) {
+      this.observeMicInputClippingFrame(
+        frame,
+        sourceRate,
+        sourceContinuous ? null : result.start,
+      );
+    }
     if (result.captureRestarted && this.running) {
       this.queueCaptureRestartBoundary(
         this.micCaptureRestartBoundarySamples,
@@ -1163,6 +1206,8 @@ export class AudioSession {
       this.resetMicReadContinuity();
       this.lastEmittedMicSourceSample = null;
       this.micCaptureRestartBoundarySamples.length = 0;
+      this.micInputClippingRanges.length = 0;
+      this.resetMicInputRailRun();
     } else if (timeline === this.backing) {
       this.backingCaptureRestartBoundarySamples.length = 0;
     }
@@ -1178,6 +1223,116 @@ export class AudioSession {
     timeline.clockCorrectionSamples = 0;
     timeline.resampleTailSample = null;
     timeline.resampleNextTargetSample = null;
+  }
+
+  private resetMicInputRailRun() {
+    this.micInputRailRunStartSourceSample = null;
+    this.micInputRailRunSamples = 0;
+    this.micInputRailRunRangeActive = false;
+  }
+
+  private micSourceSampleToSessionSample(sourceSample: number, sourceRate: number) {
+    return Math.ceil((sourceSample * this.sampleRate) / sourceRate) + this.mic.originOffset;
+  }
+
+  /**
+   * Detect raw capture flat tops before resampling can blur them.
+   *
+   * The browser worklet calls a sample "on the rail" at
+   * abs(float) >= 32767/32768. After its asymmetric Float32 -> Int16 mapping
+   * that is >= +32766 or <= -32767. Four consecutive source samples match the
+   * product-side clipping policy from capture-observability.js.
+   */
+  private observeMicInputClippingFrame(
+    frame: PcmFrame,
+    sourceRate: number,
+    minimumSessionSample: number | null,
+  ) {
+    if (frame.firstSampleIndex === null) return;
+    const sourceStart = frame.firstSampleIndex;
+    const sampleCount = Math.floor(frame.pcm.byteLength / 2);
+
+    for (let offset = 0; offset < sampleCount; offset += 1) {
+      const sample = frame.pcm.readInt16LE(offset * 2);
+      const onInputRail = sample >= 32_766 || sample <= -32_767;
+      if (!onInputRail) {
+        this.resetMicInputRailRun();
+        continue;
+      }
+
+      const sourceSample = sourceStart + offset;
+      if (this.micInputRailRunSamples === 0) {
+        this.micInputRailRunStartSourceSample = sourceSample;
+      }
+      this.micInputRailRunSamples += 1;
+
+      if (
+        this.micInputRailRunSamples >= 4
+        && this.micInputRailRunStartSourceSample !== null
+      ) {
+        const mappedStart = this.micSourceSampleToSessionSample(
+          this.micInputRailRunStartSourceSample,
+          sourceRate,
+        );
+        // A discontinuous/new capture may initially map behind retained old
+        // PCM and be overlap-trimmed by ingest(). Its clipping authority starts
+        // only where that new capture was actually accepted onto the timeline.
+        const start = minimumSessionSample === null
+          ? mappedStart
+          : Math.max(mappedStart, minimumSessionSample);
+        const mappedEnd = this.micSourceSampleToSessionSample(sourceSample + 1, sourceRate);
+        // A run proven entirely inside overlap-trimmed old history does
+        // not become clipping evidence merely because a later part of the
+        // replacement capture was accepted.
+        if (minimumSessionSample !== null && mappedEnd <= minimumSessionSample) {
+          continue;
+        }
+        const end = Math.max(start + 1, mappedEnd);
+
+        if (!this.micInputRailRunRangeActive) {
+          this.micInputClippingRanges.push({ start, end });
+          this.micInputRailRunRangeActive = true;
+        } else {
+          const active = this.micInputClippingRanges.at(-1);
+          if (active) active.end = Math.max(active.end, end);
+        }
+      }
+    }
+  }
+
+  /** First sorted clipping range whose end is strictly after position. */
+  private firstMicInputClippingRangeAfter(position: number) {
+    let low = 0;
+    let high = this.micInputClippingRanges.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (this.micInputClippingRanges[mid]!.end <= position) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  }
+
+  private micInputClippingAt(position: number) {
+    const range = this.micInputClippingRanges[
+      this.firstMicInputClippingRangeAfter(position)
+    ];
+    return Boolean(range && range.start <= position && position < range.end);
+  }
+
+  private readMicInputClippingMask(startSample: number, count: number) {
+    if (count <= 0 || this.micInputClippingRanges.length === 0) return null;
+    const mask = new Uint8Array(count);
+    const endSample = startSample + count;
+    let rangeIndex = this.firstMicInputClippingRangeAfter(startSample);
+
+    for (; rangeIndex < this.micInputClippingRanges.length; rangeIndex += 1) {
+      const range = this.micInputClippingRanges[rangeIndex]!;
+      if (range.start >= endSample) break;
+      const start = Math.max(startSample, range.start);
+      const end = Math.min(endSample, range.end);
+      if (end > start) mask.fill(1, start - startSample, end - startSample);
+    }
+    return mask;
   }
 
   /** Capture-scoped detector state; cumulative limiter evidence stays intact. */
@@ -1722,6 +1877,9 @@ export class AudioSession {
     const source = this.readRange(this.mic, sourceStart, sourceCount);
     const sourceEvidence = this.readSourceEvidenceMask(this.mic, sourceStart, sourceCount);
     const missingMask = new Uint8Array(this.frameSamples);
+    const inputClippingMask = this.micInputClippingRanges.length > 0
+      ? new Uint8Array(this.frameSamples)
+      : null;
     const crossesCaptureRestartBoundary = (sourceIndex: number) => (
       this.micCaptureRestartBoundarySamples.includes(sourceIndex + 1)
     );
@@ -1762,6 +1920,13 @@ export class AudioSession {
       else if ((evidence & 1) !== 0) gapSamples += 1;
       if ((evidence & 4) !== 0) unheaderedSamples += 1;
       if ((evidence & 3) !== 0) missingMask[i] = 1;
+      if (inputClippingMask) {
+        let clipped = this.micInputClippingAt(index);
+        if (fraction !== 0 && !crossesCaptureRestartBoundary(index)) {
+          clipped ||= this.micInputClippingAt(index + 1);
+        }
+        if (clipped) inputClippingMask[i] = 1;
+      }
 
       output[i] = interpolate(position);
     }
@@ -1772,6 +1937,7 @@ export class AudioSession {
       samples: output,
       evidence: { gapSamples, frontierMissingSamples, unheaderedSamples },
       missingMask,
+      inputClippingMask,
       firstPosition,
       rate,
     };
@@ -1874,6 +2040,8 @@ export class AudioSession {
 
     let actualCrossfadeUnheaderedSamples = 0;
     let newLegCrossfadeUnheaderedSamples = 0;
+    let actualCrossfadeInputClippedSamples = 0;
+    let newLegCrossfadeInputClippedSamples = 0;
     for (let i = 0; i < crossfadeSamples; i += 1) {
       const newWeight = crossfadeSamples === 1 ? 1 : i / (crossfadeSamples - 1);
       const oldWeight = 1 - newWeight;
@@ -1881,12 +2049,40 @@ export class AudioSession {
       const oldSample = interpolate(oldPosition);
       const oldUnheadered = (evidenceAt(oldPosition) & UNHEADERED) !== 0;
       const newUnheadered = ((newLegEvidence[i] ?? 0) & UNHEADERED) !== 0;
+
+      const oldClippingPosition = (
+        restartBoundary !== null
+        && holdSourceSample !== null
+        && oldPosition >= restartBoundary
+      ) ? holdSourceSample : oldPosition;
+      const oldIndex = Math.floor(oldClippingPosition);
+      const oldFraction = oldClippingPosition - oldIndex;
+      let oldInputClipped = this.micInputClippingAt(oldIndex);
+      if (
+        oldFraction !== 0
+        && !(
+          restartBoundary !== null
+          && oldIndex < restartBoundary
+          && restartBoundary <= oldIndex + 1
+        )
+      ) {
+        oldInputClipped ||= this.micInputClippingAt(oldIndex + 1);
+      }
+      const newInputClipped = this.micInputClippingAt(toStartSample + i);
+
       if (newUnheadered) newLegCrossfadeUnheaderedSamples += 1;
+      if (newInputClipped) newLegCrossfadeInputClippedSamples += 1;
       if (
         (oldWeight > 0 && oldUnheadered)
         || (newWeight > 0 && newUnheadered)
       ) {
         actualCrossfadeUnheaderedSamples += 1;
+      }
+      if (
+        (oldWeight > 0 && oldInputClipped)
+        || (newWeight > 0 && newInputClipped)
+      ) {
+        actualCrossfadeInputClippedSamples += 1;
       }
       current[i] = Math.round(oldSample * oldWeight + current[i] * newWeight);
     }
@@ -1894,6 +2090,8 @@ export class AudioSession {
       samples: current,
       unheaderedSamplesDelta:
         actualCrossfadeUnheaderedSamples - newLegCrossfadeUnheaderedSamples,
+      inputClippedSamplesDelta:
+        actualCrossfadeInputClippedSamples - newLegCrossfadeInputClippedSamples,
     };
   }
 
@@ -2031,6 +2229,12 @@ export class AudioSession {
         && this.micCaptureRestartBoundarySamples[0]! < beforeSample
       ) {
         this.micCaptureRestartBoundarySamples.shift();
+      }
+      while (
+        this.micInputClippingRanges.length > 0
+        && this.micInputClippingRanges[0]!.end <= beforeSample
+      ) {
+        this.micInputClippingRanges.shift();
       }
     }
   }
@@ -2533,6 +2737,8 @@ export class AudioSession {
     const backingGapMask = backingReadEvidence.gapSamples > 0
       ? this.readGapMask(this.backing, startSample, this.frameSamples)
       : null;
+    const micInputClippingMask = micSlew?.inputClippingMask
+      ?? this.readMicInputClippingMask(micReadStart, this.frameSamples);
 
     this.micUnplayableRunFrames = this.micExpected
       && micReadEvidence.gapSamples + micReadEvidence.frontierMissingSamples > 0
@@ -2549,6 +2755,7 @@ export class AudioSession {
     let mic = micSlew?.samples
       ?? this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     let crossfadeUnheaderedSamplesDelta = 0;
+    let crossfadeMicInputClippedSamplesDelta = 0;
     if (
       canCrossfadeReadHeadJump
       && previouslyEmittedAdvanceSamples !== null
@@ -2562,6 +2769,7 @@ export class AudioSession {
       );
       mic = crossfade.samples;
       crossfadeUnheaderedSamplesDelta = crossfade.unheaderedSamplesDelta;
+      crossfadeMicInputClippedSamplesDelta = crossfade.inputClippedSamplesDelta;
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     // `backingExpected` and `micExpected` are the room's semantic signals for
@@ -2871,6 +3079,18 @@ export class AudioSession {
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
     }
 
+    let micInputClippedSamples = 0;
+    if (micInputClippingMask) {
+      for (let i = 0; i < micInputClippingMask.length; i += 1) {
+        if (micInputClippingMask[i] !== 1) continue;
+        const missing = micSlew
+          ? micSlew.missingMask[i] === 1
+          : micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
+        if (!missing) micInputClippedSamples += 1;
+      }
+    }
+    micInputClippedSamples += crossfadeMicInputClippedSamplesDelta;
+
     const evidence: MixFrameEvidence = {
       micGapSamples: micReadEvidence.gapSamples,
       backingGapSamples: backingReadEvidence.gapSamples,
@@ -2879,6 +3099,7 @@ export class AudioSession {
       micUnavailableSamples: this.micExpected ? 0 : micReadEvidence.frontierMissingSamples,
       backingUnavailableSamples: this.backingExpected ? 0 : backingReadEvidence.frontierMissingSamples,
       clippedSamples: this.clippedSamples - clippedBefore,
+      micInputClippedSamples: Math.max(0, micInputClippedSamples),
       limitedSamples: this.limitedSamples - limitedBefore,
       unheaderedSamples:
         micReadEvidence.unheaderedSamples

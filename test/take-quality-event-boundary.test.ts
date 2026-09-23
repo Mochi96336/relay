@@ -27,6 +27,7 @@ const FRAME_EVIDENCE: MixFrameEvidence = {
   micUnavailableSamples: 0,
   backingUnavailableSamples: 0,
   clippedSamples: 0,
+  micInputClippedSamples: 0,
   limitedSamples: 0,
   unheaderedSamples: 0,
 };

@@ -86,15 +86,21 @@ function v1Evidence() {
   };
 }
 
-function quality(policyVersion: 'take-quality-v1' | 'take-quality-v2' | 'take-quality-v3') {
+function quality(
+  policyVersion: 'take-quality-v1' | 'take-quality-v2' | 'take-quality-v3' | 'take-quality-v4',
+) {
   const evidence: Record<string, unknown> = v1Evidence();
   if (policyVersion !== 'take-quality-v1') {
     evidence.timingDivergedSamples = 0;
     evidence.timingDivergedMs = 0;
     evidence.peakTimingDivergenceMs = 0;
   }
-  if (policyVersion === 'take-quality-v3') {
+  if (policyVersion === 'take-quality-v3' || policyVersion === 'take-quality-v4') {
     evidence.timingDivergenceToleranceMs = 150;
+  }
+  if (policyVersion === 'take-quality-v4') {
+    evidence.micInputClippedSamples = 0;
+    evidence.micInputClippedMs = 0;
   }
   return {
     policyVersion,
@@ -104,7 +110,7 @@ function quality(policyVersion: 'take-quality-v1' | 'take-quality-v2' | 'take-qu
   };
 }
 
-function metadata(id: string, qualityValue: unknown = quality('take-quality-v3')) {
+function metadata(id: string, qualityValue: unknown = quality('take-quality-v4')) {
   const bytes = wav();
   return {
     version: 1,
@@ -195,10 +201,11 @@ test('malformed present rich fields fail closed to WAV-only recovery', async (t)
   }
 });
 
-test('archived v1 and v2 quality assessments remain valid without reassessment', async (t) => {
+test('archived v1, v2 and v3 quality assessments remain valid without reassessment', async (t) => {
   for (const [index, version] of [
     [5, 'take-quality-v1'],
     [6, 'take-quality-v2'],
+    [8, 'take-quality-v3'],
   ] as const) {
     await t.test(version, async () => {
       const id = takeId(index);
@@ -250,12 +257,29 @@ test('missing legacy rich fields normalize without rejecting an otherwise valid 
   }
 });
 
+test('quality v4 requires explicit Mic input clipping evidence', async () => {
+  const id = takeId(4);
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-rich-v4-clipping-'));
+  try {
+    const malformed = quality('take-quality-v4');
+    delete (malformed.evidence as Record<string, unknown>).micInputClippedSamples;
+    await writeCrashCandidate(directory, id, metadata(id, malformed));
+    const entry = await recover(directory, id);
+
+    assert.ok(entry);
+    assert.equal(entry.recovered, true);
+    assert.equal(entry.quality, null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('invalid archived quality policy versions fail closed', async () => {
   const id = takeId(9);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-rich-policy-'));
   try {
-    const invalid = quality('take-quality-v3') as Record<string, unknown>;
-    invalid.policyVersion = 'take-quality-v4';
+    const invalid = quality('take-quality-v4') as Record<string, unknown>;
+    invalid.policyVersion = 'take-quality-v5';
     await writeCrashCandidate(directory, id, metadata(id, invalid));
     const entry = await recover(directory, id);
 

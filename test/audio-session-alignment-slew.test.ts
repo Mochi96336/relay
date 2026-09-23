@@ -92,6 +92,78 @@ describe('AudioSession runtime calibration slew', () => {
     );
   });
 
+  test('bounded slew carries Mic input clipping along the exact interpolated source trajectory', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.setMicExpected(true);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100 });
+
+    const pcm = Buffer.alloc(RATE * 2);
+    for (let index = 0; index < RATE; index += 1) pcm.writeInt16LE(1_000, index * 2);
+    for (let index = 5_764; index <= 5_767; index += 1) {
+      pcm.writeInt16LE(32_766, index * 2);
+    }
+    session.ingestMic({ generation: 1, firstSampleIndex: 0, pcm }, RATE, 0);
+
+    const evidence: Array<{ micInputClippedSamples: number }> = [];
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 600, 1);
+    assert.equal(evidence[0]?.micInputClippedSamples, 0);
+
+    assert.equal(session.slewCalibratedMicLagTo(160), true);
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 620, 1);
+
+    assert.ok(
+      (evidence[1]?.micInputClippedSamples ?? 0) > 0,
+      'the 1% slew trajectory must retain clipping evidence from source samples skipped by the rounded read-head start',
+    );
+  });
+
+  test('immediate read-head crossfade attributes Mic input clipping from the audible old leg', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.setMicExpected(true);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100 });
+
+    const pcm = Buffer.alloc(RATE * 3 * 2);
+    for (let index = 0; index < RATE * 3; index += 1) pcm.writeInt16LE(1_000, index * 2);
+    for (let index = 5_760; index <= 5_763; index += 1) {
+      pcm.writeInt16LE(32_766, index * 2);
+    }
+    session.ingestMic({ generation: 1, firstSampleIndex: 0, pcm }, RATE, 0);
+
+    const evidence: Array<{ micInputClippedSamples: number }> = [];
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 600, 1);
+    assert.equal(evidence[0]?.micInputClippedSamples, 0);
+
+    // The new trajectory starts at source 12_336. The only clipped samples are
+    // on the old trajectory, so evidence exists only if the 5 ms crossfade
+    // accounts for the leg that is actually still audible.
+    session.setAlignment({ calibratedMicLagMs: 237 });
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 620, 1);
+
+    assert.equal(
+      evidence[1]?.micInputClippedSamples,
+      4,
+      'old-leg clipping must be charged exactly once when its crossfade weight is non-zero',
+    );
+  });
+
   test('bounded slew carries gap evidence along the exact interpolated source trajectory', () => {
     const session = new AudioSession({
       sampleRate: RATE,

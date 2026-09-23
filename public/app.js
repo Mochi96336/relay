@@ -1705,6 +1705,22 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     const captureContext = preparedContext;
     captureContext.addEventListener('statechange', () => {
       if (!publisherActive || audioContext !== captureContext) return;
+      if (captureContext.state === 'closed') {
+        // A closed AudioContext is terminal: resume() cannot revive it and the
+        // capture watchdog deliberately rebuilds only while the context is
+        // running. Treat unexpected closure like a local hardware failure and
+        // preserve the bounded server Mic grace for a user-gesture retry.
+        finishMicrophoneSession('context-closed', {
+          releaseMic: false,
+          afterEnded: () => {
+            setStatus(
+              'Microphone interrupted',
+              'The microphone audio engine closed. Retry Mic to reconnect it.',
+            );
+          },
+        }).catch(console.error);
+        return;
+      }
       if (shouldRequestAudioResume(captureContext.state)) {
         beginCaptureRecovery(`context-${captureContext.state}`);
       }

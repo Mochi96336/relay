@@ -352,6 +352,12 @@ function disposeCaptureGraph(graph) {
   graph.deviceChangeListener = null;
   graph.deviceChangeCheckPending = false;
   try {
+    if (graph.processorErrorListener) {
+      graph.capture?.removeEventListener?.('processorerror', graph.processorErrorListener);
+    }
+  } catch {}
+  graph.processorErrorListener = null;
+  try {
     graph.visualAnalysisWorker?.terminate();
   } catch {}
   graph.visualAnalysisWorker = null;
@@ -655,8 +661,20 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     visualAnalysis: null,
     deviceChangeListener: null,
     deviceChangeCheckPending: false,
+    processorErrorListener: null,
     inputDeviceId: captureTrackDeviceId(captureStream.getAudioTracks?.()[0] ?? null),
   };
+
+  if (typeof capture.addEventListener === 'function') {
+    graph.processorErrorListener = () => {
+      if (!captureGraphIsCurrent(graph)) return;
+      // Per Web Audio, a processorerror leaves this AudioWorkletNode producing
+      // silence for the rest of its lifetime. Do not wait for the generic
+      // sample-cursor watchdog to infer that terminal state.
+      void rebuildPublisherCaptureGraph('processor-error');
+    };
+    capture.addEventListener('processorerror', graph.processorErrorListener);
+  }
 
   const mediaDevices = navigator.mediaDevices;
   if (

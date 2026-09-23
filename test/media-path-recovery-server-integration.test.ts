@@ -290,6 +290,7 @@ test('browser media recovery follows real server accepted-PCM progress and prese
   assert.deepEqual(baselineAck.pcm, {
     acceptedFrameSerial: 1,
     receivedPacketSerial: 1,
+    receivedSampleSerial: PACKET_SAMPLES,
     mediaPath: 'webtransport',
   });
 
@@ -324,6 +325,7 @@ test('browser media recovery follows real server accepted-PCM progress and prese
   assert.deepEqual(wsBaselineAck.pcm, {
     acceptedFrameSerial: 2,
     receivedPacketSerial: 2,
+    receivedSampleSerial: PACKET_SAMPLES * 2,
     mediaPath: 'websocket',
   });
 
@@ -336,6 +338,7 @@ test('browser media recovery follows real server accepted-PCM progress and prese
   assert.deepEqual(recoveredAck.pcm, {
     acceptedFrameSerial: 3,
     receivedPacketSerial: 3,
+    receivedSampleSerial: PACKET_SAMPLES * 3,
     mediaPath: 'websocket',
   });
 

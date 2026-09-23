@@ -102,7 +102,7 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
   return { maximum, maximumAt, maximumFrom, maximumTo };
 }
 
-test('reconnected Backing cannot outrun two-source summing headroom', () => {
+test('Backing disconnect keeps two-source headroom while retained PCM remains audible', () => {
   const session = new AudioSession({
     sampleRate: RATE,
     frameMs: FRAME_MS,
@@ -116,8 +116,8 @@ test('reconnected Backing cannot outrun two-source summing headroom', () => {
   session.setMicGainDb(24);
   session.start(0);
 
-  // Keep both retained timelines well ahead so a reconnect can re-arm Backing
-  // without this fixture depending on packet arrival timing.
+  // Keep both retained timelines well ahead so expectation can drop while real
+  // Backing PCM remains authoritative on the audible timeline.
   session.ingestMic(
     constantMicFrame(1, 0, RATE * 2, 1_000),
     RATE,
@@ -129,30 +129,67 @@ test('reconnected Backing cannot outrun two-source summing headroom', () => {
     0,
   );
 
-  // Let the normal two-source mix settle, then model a Backing disconnect long
-  // enough for the 150 ms musical duck/headroom state to return to voice-only.
+  // Let the normal two-source mix settle, then model a Backing disconnect.
+  // Expectation disappears immediately, but retained Backing PCM is still what
+  // listeners hear and therefore must keep two-source safety authoritative.
   session.drain(() => {}, 180, 100);
   session.setBackingExpected(false);
-  session.drain(() => {}, 380, 100);
-  assert.equal(session.health().clippedSamples, 0);
+  const disconnectedEvidence: MixFrameEvidence[] = [];
+  session.drain((_pcm, frameEvidence) => disconnectedEvidence.push(frameEvidence), 380, 100);
 
-  // The retained Backing timeline is still present. Re-arming the same capture
-  // makes song PCM audible on the very next frame, which must not beat the
-  // two-source safety state back into place.
-  session.setBackingExpected(true);
-  const evidence: MixFrameEvidence[] = [];
-  session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 400, 1);
-
-  assert.equal(evidence.length, 1);
+  assert.ok(disconnectedEvidence.length > 0);
   assert.equal(
-    evidence[0]!.limitedSamples,
+    disconnectedEvidence.reduce((sum, evidence) => sum + evidence.limitedSamples, 0),
     0,
-    'fixture Mic must stay below the limiter so this isolates Backing rejoin headroom',
+    'fixture Mic must stay below the limiter so this isolates retained-source headroom',
   );
   assert.equal(
-    evidence[0]!.clippedSamples,
+    disconnectedEvidence.reduce((sum, evidence) => sum + evidence.clippedSamples, 0),
     0,
-    'reconnected Backing must not reach the final hard clamp while headroom is still ramping',
+    'retained Backing PCM must not lose two-source headroom before it becomes silent',
+  );
+});
+
+test('Mic release keeps two-source headroom while retained PCM remains audible', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setBackingExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  session.ingestMic(
+    constantMicFrame(1, 0, RATE * 2, 1_000),
+    RATE,
+    0,
+  );
+  session.ingestBacking(
+    constantMicFrame(1, 0, RATE * 2, 20_000),
+    RATE,
+    0,
+  );
+
+  session.drain(() => {}, 180, 100);
+  session.setMicExpected(false);
+  const releasedEvidence: MixFrameEvidence[] = [];
+  session.drain((_pcm, frameEvidence) => releasedEvidence.push(frameEvidence), 380, 100);
+
+  assert.ok(releasedEvidence.length > 0);
+  assert.equal(
+    releasedEvidence.reduce((sum, evidence) => sum + evidence.limitedSamples, 0),
+    0,
+    'fixture Mic must stay below the limiter so this isolates Mic-release headroom',
+  );
+  assert.equal(
+    releasedEvidence.reduce((sum, evidence) => sum + evidence.clippedSamples, 0),
+    0,
+    'retained Mic PCM must not lose two-source headroom before it becomes silent',
   );
 });
 

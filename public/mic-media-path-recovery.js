@@ -299,13 +299,14 @@ export class MicMediaPathRecovery {
 
   coverageEvidence(input) {
     const packet = this.packetCoverageEvidence(input);
-    const sample = this.sampleCoverageEvidence(input);
 
     // Preserve the rollout-safe packet/frame semantics until the existing
-    // quantitative packet window is authoritative. Sample conservation is an
-    // additional veto on a packet window that otherwise looks healthy, not a
-    // new early-start recovery trigger.
+    // quantitative packet window is authoritative. Do not advance the sample
+    // baseline on smaller interim health ticks: when packet coverage finally
+    // closes a window, sample coverage must describe that exact same interval.
     if (!packet.available || !packet.ready) return packet;
+
+    const sample = this.sampleCoverageEvidence(input);
     if (!sample.available || !sample.ready) return packet;
 
     return {

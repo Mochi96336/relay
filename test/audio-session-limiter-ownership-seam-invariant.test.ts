@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { AudioSession } from '../src/audio-session.js';
+import { AudioSession, type MixFrameEvidence } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
 
 const RATE = 48_000;
@@ -329,15 +329,15 @@ test('missing Mic output does not count limiter release as limited source sample
   // frame contains no Mic source samples. Its output edge is a source fade to
   // silence, not fresh PCM being held down by the limiter.
   session.setMicExpected(false);
-  let evidence: Parameters<Parameters<AudioSession['drain']>[0]>[1] | null = null;
+  const evidence: MixFrameEvidence[] = [];
   session.drain((_pcm, frameEvidence) => {
-    evidence = frameEvidence;
+    evidence.push(frameEvidence);
   }, 40, 1);
 
-  assert.ok(evidence);
-  assert.equal(evidence!.micUnavailableSamples, FRAME_SAMPLES);
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0]!.micUnavailableSamples, FRAME_SAMPLES);
   assert.equal(
-    evidence!.limitedSamples,
+    evidence[0]!.limitedSamples,
     0,
     'limiter release over unavailable silence must not be reported as limited source samples',
   );

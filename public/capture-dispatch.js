@@ -10,6 +10,7 @@ export const DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS = DEFAULT_WEBSOCKET_BACKLOG_MS;
 export function classifyCaptureDispatch({
   currentContextTimeSeconds,
   capturedAtContextTimeSeconds,
+  fallbackCapturedAtContextTimeSeconds,
   backlogMs = DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS,
 } = {}) {
   if (!Number.isFinite(backlogMs) || backlogMs <= 0) {
@@ -19,9 +20,18 @@ export function classifyCaptureDispatch({
   const now = typeof currentContextTimeSeconds === 'number'
     ? currentContextTimeSeconds
     : Number.NaN;
-  const capturedAt = typeof capturedAtContextTimeSeconds === 'number'
+  const explicitCapturedAt = typeof capturedAtContextTimeSeconds === 'number'
     ? capturedAtContextTimeSeconds
     : Number.NaN;
+  const fallbackCapturedAt = typeof fallbackCapturedAtContextTimeSeconds === 'number'
+    ? fallbackCapturedAtContextTimeSeconds
+    : Number.NaN;
+  // New worklets timestamp the oldest sample precisely. The fallback exists
+  // only for rollout-compatible raw PCM from an older cached worklet: its
+  // positioned sample clock is still enough to bound main-thread backlog.
+  const capturedAt = Number.isFinite(explicitCapturedAt)
+    ? explicitCapturedAt
+    : fallbackCapturedAt;
   if (!Number.isFinite(now) || !Number.isFinite(capturedAt) || now < 0 || capturedAt < 0) {
     return { measurable: false, lagMs: null, stale: false };
   }

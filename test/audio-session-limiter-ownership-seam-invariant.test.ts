@@ -11,6 +11,7 @@ const MIC_HZ = 220;
 const MIC_AMPLITUDE = 12_000;
 const BACKING_AMPLITUDE = 6_000;
 const MAX_AUDIBLE_STEP = 3_000;
+const PREBUFFER_MS = 400;
 
 function tone(
   firstSample: number,
@@ -94,7 +95,7 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     const session = new AudioSession({
       sampleRate: RATE,
       frameMs: FRAME_MS,
-      prebufferMs: 0,
+      prebufferMs: PREBUFFER_MS,
       backingGain: 0.65,
       retentionMs: 3_000,
       backingRetentionMs: 3_000,
@@ -127,10 +128,10 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     // derivative is not a runtime transition, so establish one emitted frame
     // before randomized gain/ownership actions begin. The frame0→frame1 join
     // remains inside the invariant.
-    session.drain((pcm) => outputs.push(pcm), 0, 1);
+    session.drain((pcm) => outputs.push(pcm), PREBUFFER_MS, 1);
 
     for (let outputFrame = 1; outputFrame < 180; outputFrame += 1) {
-      const nowMs = outputFrame * FRAME_MS;
+      const nowMs = PREBUFFER_MS + outputFrame * FRAME_MS;
       const action = random();
       let actionLabel = 'none';
 

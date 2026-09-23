@@ -129,19 +129,27 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
       gain: number;
       envelope: number;
       micGainDb: number;
+      songDuck: number;
     }> = [];
-    const frontierTrace: Array<{
+    const edgeTrace: Array<{
+      sample: number;
+      edge: 'retirement' | 'replacement' | 'frontier';
       input: number;
       output: number;
-      sourceMissing: boolean;
-      missingBefore: boolean;
-      recoveryBefore: number;
-      recoveryAfter: number;
+      sourceMissing?: boolean;
+      retirementRemaining?: number;
+      replacementNeeded?: boolean;
+      replacementRemaining?: number;
+      frontierMissing?: boolean;
+      frontierFadeRemaining?: number;
+      frontierRecoveryRemaining?: number;
     }> = [];
+    let currentMixSample = -1;
     if (seed === 0xc0ffee) {
       const debug = session as any;
       const originalLimit = debug.limit.bind(session);
       debug.limit = (value: number, detect: number) => {
+        currentMixSample = limiterTrace.length;
         const output = originalLimit(value, detect);
         limiterTrace.push({
           input: value,
@@ -150,22 +158,53 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
           gain: debug.limiterGain,
           envelope: debug.limiterEnvelope,
           micGainDb: debug.micGainDbApplied,
+          songDuck: debug.songDuck,
+        });
+        return output;
+      };
+
+      const originalRetirement = debug.applyMicRetirementFade.bind(session);
+      debug.applyMicRetirementFade = (value: number) => {
+        const output = originalRetirement(value);
+        edgeTrace.push({
+          sample: currentMixSample,
+          edge: 'retirement',
+          input: value,
+          output,
+          retirementRemaining: debug.micRetirementFadeRemainingSamples,
+          replacementNeeded: debug.micReplacementNeedsFadeIn,
+          replacementRemaining: debug.micReplacementFadeInRemainingSamples,
+        });
+        return output;
+      };
+
+      const originalReplacement = debug.applyMicReplacementFadeIn.bind(session);
+      debug.applyMicReplacementFadeIn = (value: number) => {
+        const output = originalReplacement(value);
+        edgeTrace.push({
+          sample: currentMixSample,
+          edge: 'replacement',
+          input: value,
+          output,
+          retirementRemaining: debug.micRetirementFadeRemainingSamples,
+          replacementNeeded: debug.micReplacementNeedsFadeIn,
+          replacementRemaining: debug.micReplacementFadeInRemainingSamples,
         });
         return output;
       };
 
       const originalFrontier = debug.applyMicFrontierEdge.bind(session);
       debug.applyMicFrontierEdge = (value: number, sourceMissing: boolean) => {
-        const missingBefore = debug.micFrontierOutputMissing;
-        const recoveryBefore = debug.micFrontierRecoveryFadeRemainingSamples;
         const output = originalFrontier(value, sourceMissing);
-        frontierTrace.push({
+        edgeTrace.push({
+          sample: currentMixSample,
+          edge: 'frontier',
           input: value,
           output,
           sourceMissing,
-          missingBefore,
-          recoveryBefore,
-          recoveryAfter: debug.micFrontierRecoveryFadeRemainingSamples,
+          frontierMissing: debug.micFrontierOutputMissing,
+          frontierFadeRemaining: debug.micFrontierFadeRemainingSamples,
+          frontierRecoveryRemaining: debug.micFrontierRecoveryFadeRemainingSamples,
         });
         return output;
       };
@@ -258,10 +297,11 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     const actionTrace = recentActions.slice(actionStart, maximumFrame + 1).join(' ');
     const previousLimiter = limiterTrace[maximumAt - 1];
     const currentLimiter = limiterTrace[maximumAt];
-    const previousFrontier = frontierTrace[maximumAt - 1];
-    const currentFrontier = frontierTrace[maximumAt];
+    const nearbyEdges = edgeTrace.filter(
+      (entry) => entry.sample >= maximumAt - 2 && entry.sample <= maximumAt + 2,
+    );
     const internalTrace = seed === 0xc0ffee
-      ? `; limiter ${JSON.stringify({ previous: previousLimiter, current: currentLimiter })}; frontier ${JSON.stringify({ previous: previousFrontier, current: currentFrontier })}`
+      ? `; limiter ${JSON.stringify({ previous: previousLimiter, current: currentLimiter })}; edges ${JSON.stringify(nearbyEdges)}`
       : '';
     assert.ok(
       maximum < MAX_AUDIBLE_STEP,

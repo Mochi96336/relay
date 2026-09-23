@@ -1895,15 +1895,21 @@ export class AudioSession {
       }
       this.micFrontierOutputMissing = false;
       this.micFrontierFadeRemainingSamples = 0;
+      // Recovery must crossfade from one fixed audible starting point. Chasing
+      // a moving waveform from lastEmitted on every sample leaves residual error
+      // until the counter reaches zero, then exposes that error as a final
+      // one-sample snap. Reuse the no-longer-needed fade start as the fixed
+      // recovery anchor so the final fade sample is already exactly current.
+      this.micFrontierFadeStart = this.lastEmittedMicContribution;
       this.micFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;
     }
     const remaining = this.micFrontierRecoveryFadeRemainingSamples;
     if (remaining <= 0) return current;
     const progress = this.sourceEdgeFadeSamples - remaining;
-    const value = progress === 0
-      ? this.lastEmittedMicContribution
-      : this.lastEmittedMicContribution
-        + (current - this.lastEmittedMicContribution) / remaining;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 1
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    const value = this.micFrontierFadeStart * (1 - weight) + current * weight;
     this.micFrontierRecoveryFadeRemainingSamples -= 1;
     return value;
   }
@@ -1939,15 +1945,16 @@ export class AudioSession {
       }
       this.backingFrontierOutputMissing = false;
       this.backingFrontierFadeRemainingSamples = 0;
+      this.backingFrontierFadeStart = this.lastEmittedBackingContribution;
       this.backingFrontierRecoveryFadeRemainingSamples = this.sourceEdgeFadeSamples;
     }
     const remaining = this.backingFrontierRecoveryFadeRemainingSamples;
     if (remaining <= 0) return current;
     const progress = this.sourceEdgeFadeSamples - remaining;
-    const value = progress === 0
-      ? this.lastEmittedBackingContribution
-      : this.lastEmittedBackingContribution
-        + (current - this.lastEmittedBackingContribution) / remaining;
+    const weight = this.sourceEdgeFadeSamples <= 1
+      ? 1
+      : progress / (this.sourceEdgeFadeSamples - 1);
+    const value = this.backingFrontierFadeStart * (1 - weight) + current * weight;
     this.backingFrontierRecoveryFadeRemainingSamples -= 1;
     return value;
   }

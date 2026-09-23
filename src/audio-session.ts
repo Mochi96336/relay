@@ -620,31 +620,43 @@ export class AudioSession {
       // The old capture may still own retained/fading PCM. Do not release bus
       // safety until mix output proves that source has actually reached silence.
       this.micExpectationReleaseHold = true;
-      if (this.micJoinSafetyPending) this.micJoinSafetyPending = false;
+      if (this.sourceJoinSafetyPending === 'mic') this.sourceJoinSafetyPending = null;
     } else if (changed && expected) {
       // If false -> true happened while the release was still held, listeners
       // never heard a source disappearance. Continuing the existing bus is the
-      // seamless path; starting a new song-only -> two-source join would itself
-      // create a discontinuity.
+      // seamless path; starting a new source join would itself create a seam.
       this.micExpectationReleaseHold = false;
-      if (joiningExistingBacking) {
-        // Registration can precede the first real PCM by an arbitrary amount.
-        // Arm now, but do not move the audible bus until a real Mic sample exists.
-        this.micJoinSafetyPending = true;
-        this.micJoinSafetyActive = false;
-        this.micJoinSafetyBlend = 0;
+      if (joiningExistingBacking && this.sourceJoinSafetyActive === null) {
+        // Registration can precede first real PCM by an arbitrary amount. Arm
+        // now, but do not move the audible bus until both sources are real.
+        this.sourceJoinSafetyPending = 'mic';
+        this.sourceJoinSafetyBlend = 0;
       }
     }
   }
 
   setBackingExpected(expected: boolean) {
     const changed = expected !== this.backingExpected;
+    const wasReleaseHeld = this.backingExpectationReleaseHold;
+    const joiningExistingMic = Boolean(
+      changed
+      && expected
+      && this.running
+      && (this.micExpected || this.micExpectationReleaseHold)
+      && !wasReleaseHeld
+    );
+
     this.backingExpected = expected;
 
     if (changed && !expected && this.running) {
       this.backingExpectationReleaseHold = true;
+      if (this.sourceJoinSafetyPending === 'backing') this.sourceJoinSafetyPending = null;
     } else if (changed && expected) {
       this.backingExpectationReleaseHold = false;
+      if (joiningExistingMic && this.sourceJoinSafetyActive === null) {
+        this.sourceJoinSafetyPending = 'backing';
+        this.sourceJoinSafetyBlend = 0;
+      }
     }
   }
 

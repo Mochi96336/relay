@@ -119,24 +119,52 @@ function nonNegativeSafeInteger(value) {
 export function captureClippingSnapshot(level) {
   const railSamples = nonNegativeSafeInteger(level?.railSamples);
   const maxConsecutiveRailSamples = nonNegativeSafeInteger(level?.maxConsecutiveRailSamples);
+  const rawWindowMax = level?.windowMaxConsecutiveRailSamples;
+  const windowMaxConsecutiveRailSamples = rawWindowMax === undefined
+    ? undefined
+    : nonNegativeSafeInteger(rawWindowMax);
   if (
     railSamples === null
     || maxConsecutiveRailSamples === null
     || maxConsecutiveRailSamples > railSamples
+    || windowMaxConsecutiveRailSamples === null
+    || (
+      windowMaxConsecutiveRailSamples !== undefined
+      && windowMaxConsecutiveRailSamples > maxConsecutiveRailSamples
+    )
   ) return null;
-  return { railSamples, maxConsecutiveRailSamples };
+  return {
+    railSamples,
+    maxConsecutiveRailSamples,
+    ...(windowMaxConsecutiveRailSamples === undefined
+      ? {}
+      : { windowMaxConsecutiveRailSamples }),
+  };
 }
 
 /**
  * Four consecutive near-full-scale raw samples are strong evidence of a
  * flattened input rail, rather than one ordinary full-scale waveform peak.
- * This is diagnostic/product guidance only; it never enters timing authority.
+ * This capture-lifetime verdict preserves the existing local Adjust guidance.
  */
 export function captureInputClippingDetected(clipping) {
   return Boolean(
     clipping
     && Number.isSafeInteger(clipping.maxConsecutiveRailSamples)
     && clipping.maxConsecutiveRailSamples >= 4
+  );
+}
+
+/**
+ * The same flat-top policy applied only to one worklet level window. This is
+ * what health aggregation uses so room/product status can clear after clean
+ * input rather than inheriting a capture-lifetime maximum forever.
+ */
+export function captureRecentInputClippingDetected(clipping) {
+  return Boolean(
+    clipping
+    && Number.isSafeInteger(clipping.windowMaxConsecutiveRailSamples)
+    && clipping.windowMaxConsecutiveRailSamples >= 4
   );
 }
 

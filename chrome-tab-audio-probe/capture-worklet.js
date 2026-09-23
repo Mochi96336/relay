@@ -124,7 +124,11 @@ class RelayTabCaptureProcessor extends AudioWorkletProcessor {
     for (let frame = 0; frame < frameCount; frame += 1) {
       let sum = 0;
       for (let channel = 0; channel < input.length; channel += 1) {
-        sum += input[channel][frame] ?? 0;
+        const channelSample = input[channel][frame] ?? 0;
+        // One corrupt channel must not turn the mixed sample and subsequent
+        // gap/recovery fade state into NaN. Treat only that channel sample as
+        // silence while preserving the fixed channel-count average.
+        sum += Number.isFinite(channelSample) ? channelSample : 0;
       }
       const realSample = Math.max(-1, Math.min(1, sum / input.length));
       this.writeSample(

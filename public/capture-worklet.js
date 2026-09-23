@@ -216,7 +216,13 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
       for (let i = 0; i < count; i += 1) {
         const rawSample = input[sourceOffset + i];
-        const sample = Math.max(-1, Math.min(1, rawSample));
+        // WebAudio normally supplies finite Float32 PCM, but one non-finite
+        // value must not poison the meter or the de-click state for every
+        // later sample. Preserve capture time and replace only that invalid
+        // sample with silence.
+        const sample = Number.isFinite(rawSample)
+          ? Math.max(-1, Math.min(1, rawSample))
+          : 0;
         const magnitude = Math.abs(sample);
         this.levelPeak = Math.max(this.levelPeak, magnitude);
         this.levelSquareSum += sample * sample;

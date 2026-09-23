@@ -146,6 +146,44 @@ test('tab capture keeps a sub-2 ms 96 kHz input gap continuous on recovery', asy
   );
 });
 
+test('tab capture isolates non-finite channel samples without poisoning the mixed edge state', async () => {
+  const processor = await loadProcessor();
+  enableEnvelope(processor);
+
+  const left = new Float32Array(960).fill(0.5);
+  const right = new Float32Array(960).fill(0.5);
+  right[100] = Number.NaN;
+  right[101] = Number.POSITIVE_INFINITY;
+  right[102] = Number.NEGATIVE_INFINITY;
+  right[959] = Number.NaN;
+
+  assert.equal(
+    processor.process([[left, right]], [[new Float32Array(960)]]),
+    true,
+  );
+
+  const pcm = processor.port.messages[0] as PcmMessage;
+  const samples = new Int16Array(pcm.buffer);
+  const full = Math.round(0.5 * 32767);
+  const oneChannel = Math.round(0.25 * 32767);
+
+  assert.ok(Math.abs(samples[99] - full) <= 1);
+  for (const index of [100, 101, 102, 959]) {
+    assert.ok(
+      Math.abs(samples[index] - oneChannel) <= 1,
+      `only the invalid channel sample at ${index} should become silence`,
+    );
+  }
+  assert.equal(Number.isFinite((processor as any).lastOutputSample), true);
+
+  processor.process([], [[new Float32Array(128)]]);
+  assert.equal(
+    Number.isFinite((processor as any).lastOutputSample),
+    true,
+    'backing input-gap state must remain finite after corrupt channel input',
+  );
+});
+
 test('tab capture worklet defaults to raw PCM for rollout compatibility', async () => {
   const processor = await loadProcessor();
   const input = new Float32Array(960).fill(0.25);

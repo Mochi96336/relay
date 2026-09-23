@@ -222,6 +222,7 @@ test('same-generation websocket replacement is bounded, then spontaneous PCM can
   assert.deepEqual(baseline.pcm, {
     acceptedFrameSerial: 1,
     receivedPacketSerial: 1,
+    receivedSampleSerial: PACKET_SAMPLES,
     mediaPath: 'websocket',
   });
 

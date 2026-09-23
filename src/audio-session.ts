@@ -413,6 +413,8 @@ export class AudioSession {
   private readonly micInputClippingRanges: SampleRange[] = [];
   private micInputRailRunStartSourceSample: number | null = null;
   private micInputRailRunSamples = 0;
+  /** Whether the current raw rail run has emitted a retained timeline range. */
+  private micInputRailRunRangeActive = false;
   /**
    * Mixer-output frontier continuity.
    *
@@ -1226,6 +1228,7 @@ export class AudioSession {
   private resetMicInputRailRun() {
     this.micInputRailRunStartSourceSample = null;
     this.micInputRailRunSamples = 0;
+    this.micInputRailRunRangeActive = false;
   }
 
   private micSourceSampleToSessionSample(sourceSample: number, sourceRate: number) {
@@ -1278,10 +1281,17 @@ export class AudioSession {
           ? mappedStart
           : Math.max(mappedStart, minimumSessionSample);
         const mappedEnd = this.micSourceSampleToSessionSample(sourceSample + 1, sourceRate);
+        // A run proven entirely inside overlap-trimmed old history does
+        // not become clipping evidence merely because a later part of the
+        // replacement capture was accepted.
+        if (minimumSessionSample !== null && mappedEnd <= minimumSessionSample) {
+          continue;
+        }
         const end = Math.max(start + 1, mappedEnd);
 
-        if (this.micInputRailRunSamples === 4) {
+        if (!this.micInputRailRunRangeActive) {
           this.micInputClippingRanges.push({ start, end });
+          this.micInputRailRunRangeActive = true;
         } else {
           const active = this.micInputClippingRanges.at(-1);
           if (active) active.end = Math.max(active.end, end);

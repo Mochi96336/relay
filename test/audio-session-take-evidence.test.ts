@@ -173,6 +173,43 @@ test('a flat-top run remains continuous across Mic transport packet boundaries',
   assert.equal(drainOne(session, 20).micInputClippedSamples, 2);
 });
 
+test('overlap-trimmed replacement clipping is not charged to emitted Mic audio', () => {
+  const session = makeSession();
+  session.setMicExpected(true);
+  session.start(0);
+
+  session.ingestMic(frame(0), RATE, 0);
+
+  // At 30 ms a fresh 20 ms capture is anchored at session sample 480. Its
+  // first 480 samples overlap already-retained history and are trimmed by
+  // ingest(). Put the only flat top entirely inside that discarded prefix.
+  session.ingestMic(
+    positionedFrame(
+      2,
+      0,
+      pcmWithRails(FRAME_SAMPLES, [100, 101, 102, 103, 104, 105]),
+    ),
+    RATE,
+    30,
+  );
+  session.ingestMic(
+    positionedFrame(
+      2,
+      FRAME_SAMPLES,
+      pcm(1_000),
+    ),
+    RATE,
+    50,
+  );
+
+  assert.equal(drainOne(session, 0).micInputClippedSamples, 0);
+  assert.equal(
+    drainOne(session, 20).micInputClippedSamples,
+    0,
+    'clipping in replacement PCM discarded by overlap trim must never become Take evidence',
+  );
+});
+
 test('a capture-generation boundary breaks an otherwise adjacent input-rail run', () => {
   const session = makeSession();
   session.setMicExpected(true);

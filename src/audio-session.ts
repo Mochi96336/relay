@@ -2064,18 +2064,25 @@ export class AudioSession {
     return due;
   }
 
+  private retainedMicRestartBoundaryBetween(fromSourceSample: number, toSourceSample: number) {
+    if (toSourceSample > fromSourceSample) {
+      return this.micCaptureRestartBoundarySamples.find(
+        (boundary) => fromSourceSample < boundary && boundary <= toSourceSample,
+      ) ?? null;
+    }
+    if (toSourceSample < fromSourceSample) {
+      for (let index = this.micCaptureRestartBoundarySamples.length - 1; index >= 0; index -= 1) {
+        const boundary = this.micCaptureRestartBoundarySamples[index]!;
+        if (toSourceSample < boundary && boundary <= fromSourceSample) return boundary;
+      }
+    }
+    return null;
+  }
+
   private crossedRetainedMicRestartBoundary(sourceSample: number) {
     const previous = this.lastEmittedMicSourceSample;
     if (previous === null || previous === sourceSample) return false;
-
-    if (sourceSample > previous) {
-      return this.micCaptureRestartBoundarySamples.some(
-        (boundary) => previous < boundary && boundary <= sourceSample,
-      );
-    }
-    return this.micCaptureRestartBoundarySamples.some(
-      (boundary) => sourceSample < boundary && boundary <= previous,
-    );
+    return this.retainedMicRestartBoundaryBetween(previous, sourceSample) !== null;
   }
 
   private beginMicCaptureRestartEdgeIfDue(sourceSample: number) {
@@ -2473,6 +2480,9 @@ export class AudioSession {
     // and the balance a real performance was tuned against is unchanged.
     const duckTarget = this.backingExpected && this.micExpected ? 1 : 0;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
+    const micSlewFrameEndPosition = micSlew
+      ? micSlew.firstPosition + this.frameSamples * micSlew.rate
+      : 0;
 
     for (let i = 0; i < this.frameSamples; i += 1) {
       // Ramped per sample: the room can gain or lose a microphone mid-song, and
@@ -2507,21 +2517,53 @@ export class AudioSession {
 
       const micGainDb = this.advanceMicGainDb();
       const micGain = 10 ** (micGainDb / 20);
+
+      // Look-ahead belongs to one acoustic capture. Only pay the extra boundary
+      // lookup while retained restart state exists; the ordinary mixer path
+      // keeps the same direct +3 ms detector as before.
+      let detectOffset = i + lookahead;
+      if (this.micCaptureRestartBoundarySamples.length > 0) {
+        const requestedDetectSourceSample = micSlew
+          ? detectOffset < this.frameSamples
+            ? micSlew.firstPosition + detectOffset * micSlew.rate
+            : micSlewFrameEndPosition + (detectOffset - this.frameSamples)
+          : micReadStart + detectOffset;
+        const detectorRestartBoundary = this.retainedMicRestartBoundaryBetween(
+          micSourceSample,
+          requestedDetectSourceSample,
+        );
+        if (detectorRestartBoundary !== null) {
+          // Retain every old-capture look-ahead sample that still exists. This
+          // is better than disabling look-ahead wholesale near the boundary:
+          // transients on the old capture remain protected without letting the
+          // replacement attenuate audio that precedes its semantic ownership.
+          while (detectOffset > i) {
+            const candidateSourceSample = micSlew
+              ? detectOffset < this.frameSamples
+                ? micSlew.firstPosition + detectOffset * micSlew.rate
+                : micSlewFrameEndPosition + (detectOffset - this.frameSamples)
+              : micReadStart + detectOffset;
+            if (candidateSourceSample < detectorRestartBoundary) break;
+            detectOffset -= 1;
+          }
+        }
+      }
+
       if (this.micLimiterResetPending && !micAudibleMissing) {
         this.seedMicLimiterForCapture(
           mic,
           i,
-          i + lookahead,
+          detectOffset,
           micGainDb,
         );
       }
 
       // The limiter detector looks ahead in source samples, so it must also see
       // the gain that will apply when that future sample reaches the output.
-      const detectMicGain = 10 ** (this.projectedMicGainDb(lookahead) / 20);
+      const detectMicGain = 10 ** (this.projectedMicGainDb(detectOffset - i) / 20);
       let voice = this.limit(
         (mic[i] / 32768) * micGain,
-        (mic[i + lookahead] / 32768) * detectMicGain,
+        (mic[detectOffset] / 32768) * detectMicGain,
       );
 
       if (

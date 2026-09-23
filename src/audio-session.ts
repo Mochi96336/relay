@@ -2481,35 +2481,12 @@ export class AudioSession {
       crossfadeUnheaderedSamplesDelta = crossfade.unheaderedSamplesDelta;
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
-    // `backingExpected` and `micExpected` are the room's semantic signals for
-    // which sources this mix has. Both must hold: the reservation is headroom
-    // for a sum, so a room with only one source has nothing to reserve against.
-    // Do not attenuate voice-only rooms merely because a stale backing timeline
-    // still exists from an earlier route, and do not quieten a song playing on
-    // its own to leave room for a voice nobody is singing.
-    // `backingExpected` and `micExpected` are the room's semantic signals for
-    // which sources this mix has. The song gain and the summing headroom both
-    // exist to leave space for a voice, so both are worth paying only when a
-    // voice can actually arrive: a song playing to a room where nobody has
-    // taken the microphone was being quietened for a singer who was not there,
-    // and the balance a real performance was tuned against is unchanged.
-    const duckTarget = this.backingExpected && this.micExpected ? 1 : 0;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
     const micSlewFrameEndPosition = micSlew
       ? micSlew.firstPosition + this.frameSamples * micSlew.rate
       : 0;
 
     for (let i = 0; i < this.frameSamples; i += 1) {
-      // Ramped per sample: the room can gain or lose a microphone mid-song, and
-      // several dB arriving in one sample is a click.
-      if (this.songDuck < duckTarget) {
-        this.songDuck = Math.min(duckTarget, this.songDuck + this.songDuckStep);
-      } else if (this.songDuck > duckTarget) {
-        this.songDuck = Math.max(duckTarget, this.songDuck - this.songDuckStep);
-      }
-      const songGain = 1 + this.songDuck * (this.backingGain - 1);
-      const mixHeadroomGain = 1 + this.songDuck * (this.backingSumHeadroomGain - 1);
-
       const micSourceSample = micSlew
         ? micSlew.firstPosition + i * micSlew.rate
         : micReadStart + i;
@@ -2529,6 +2506,38 @@ export class AudioSession {
       // the output, though, and crossing from that silence back into real PCM
       // must own the same bounded de-click edge as any other audible absence.
       const micAudibleMissing = micSourceSample < 0 || micEvidenceMissing;
+      const backingSourceSample = startSample + i;
+      const backingSourceMissing =
+        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
+
+      // Expectation says whether more source data should keep arriving. It does
+      // not revoke PCM that is already on the audible timeline. Keep two-source
+      // duck/headroom until a removed side is truly silent, including its
+      // bounded output fade; only then may the normal 150 ms release begin.
+      const micCanContribute =
+        this.micExpected
+        || !micAudibleMissing
+        || this.lastEmittedMicContribution !== 0
+        || this.micRetirementFadeRemainingSamples > 0
+        || this.micReplacementFadeInRemainingSamples > 0;
+      const backingCanContribute =
+        this.backingExpected
+        || !backingSourceMissing
+        || this.lastEmittedBackingContribution !== 0
+        || this.backingRetirementFadeRemainingSamples > 0
+        || this.backingReplacementFadeInRemainingSamples > 0;
+      const duckTarget = micCanContribute && backingCanContribute ? 1 : 0;
+
+      // Ramped per sample: source ownership can change mid-song, and several dB
+      // arriving in one sample is a click. The target itself is output-aware so
+      // this release never outruns retained/fading source PCM.
+      if (this.songDuck < duckTarget) {
+        this.songDuck = Math.min(duckTarget, this.songDuck + this.songDuckStep);
+      } else if (this.songDuck > duckTarget) {
+        this.songDuck = Math.max(duckTarget, this.songDuck - this.songDuckStep);
+      }
+      const songGain = 1 + this.songDuck * (this.backingGain - 1);
+      const mixHeadroomGain = 1 + this.songDuck * (this.backingSumHeadroomGain - 1);
 
       const micGainDb = this.advanceMicGainDb();
       const micGain = 10 ** (micGainDb / 20);
@@ -2638,9 +2647,6 @@ export class AudioSession {
       }
 
       let songContribution = (song[i] / 32768) * songGain;
-      const backingSourceSample = startSample + i;
-      const backingSourceMissing =
-        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
       this.beginBackingCaptureRestartEdgeIfDue(backingSourceSample);
 
       if (

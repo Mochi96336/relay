@@ -135,6 +135,7 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.deepEqual(lastAck(replacement).pcm, {
     acceptedFrameSerial: 2,
     receivedPacketSerial: 0,
+    receivedSampleSerial: 0,
     mediaPath: 'websocket',
   });
 

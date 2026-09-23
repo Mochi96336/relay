@@ -32,8 +32,8 @@ function render(state = latestState) {
   const takeoverOpen = state.takeoverOpen === true;
   const takeoverPending = state.takeoverPending === true;
   const takeoverMode = state.primaryMode === 'takeover';
+  const retryMode = state.primaryMode === 'retry';
   const authorityFresh = state.authorityFresh === true && state.commandChannelFresh === true;
-  const selfOwnsMic = state.mine === true || state.localPublisherActive === true;
 
   releaseButton.hidden = state.releaseVisible !== true;
   releaseButton.textContent = t('mic.release');
@@ -41,13 +41,19 @@ function render(state = latestState) {
   if (takeoverMode) {
     publisherButton.dataset.presenceLabel = 'takeover';
     publisherButton.textContent = t('mic.takeover');
+  } else if (retryMode) {
+    publisherButton.dataset.presenceLabel = 'retry';
+    publisherButton.textContent = t('system.issue.action.retry-mic');
   } else {
     delete publisherButton.dataset.presenceLabel;
     publisherButton.textContent = t('mic.take');
   }
 
   publisherButton.disabled = state.primaryActionable !== true;
-  publisherButton.hidden = takeoverOpen || selfOwnsMic;
+  // The room may still lease Mic ownership to this participant during the
+  // bounded transport grace even though the local capture is gone. Keep the
+  // primary surface visible in that state so the same user gesture can retry.
+  publisherButton.hidden = takeoverOpen || state.localPublisherActive === true;
   takeoverPanel.hidden = !takeoverOpen;
   confirmTakeoverButton.disabled = state.takeoverConfirmActionable !== true;
   confirmTakeoverButton.textContent = t('mic.takeover');

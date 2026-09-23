@@ -142,6 +142,78 @@ describe('AudioSession runtime calibration slew', () => {
     assert.equal(evidence[1]?.micStarvedSamples, 0);
   });
 
+  test('bounded slew does not interpolate across a Mic capture-restart boundary', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.setMicExpected(true);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100 });
+
+    const constant = (count: number, value: number) => {
+      const pcm = Buffer.alloc(count * 2);
+      for (let index = 0; index < count; index += 1) pcm.writeInt16LE(value, index * 2);
+      return pcm;
+    };
+
+    // Put the semantic capture boundary at source sample 5765. During the
+    // second output frame the 1% slew reads 5764.04 just before crossing it.
+    // Linear interpolation would blend old +12k PCM with new -12k PCM even
+    // though those captures have no waveform-continuity authority.
+    const boundary = 5_765;
+    session.ingestMic(
+      { generation: 1, firstSampleIndex: 0, pcm: constant(boundary, 12_000) },
+      RATE,
+      0,
+    );
+    const firstReplacementSamples = 960;
+    const restartNowMs = ((boundary + firstReplacementSamples) * 1_000) / RATE;
+    session.ingestMic(
+      {
+        generation: 2,
+        firstSampleIndex: 0,
+        pcm: constant(firstReplacementSamples, -12_000),
+      },
+      RATE,
+      restartNowMs,
+    );
+    session.ingestMic(
+      {
+        generation: 2,
+        firstSampleIndex: firstReplacementSamples,
+        pcm: constant(RATE, -12_000),
+      },
+      RATE,
+      restartNowMs + 20,
+    );
+
+    const mixed: Buffer[] = [];
+    session.drain((pcm) => mixed.push(pcm), 600, 1);
+    assert.equal(mixed.length, 1);
+
+    session.slewCalibratedMicLagTo(160);
+    session.drain((pcm) => mixed.push(pcm), 620, 1);
+    assert.equal(mixed.length, 2);
+
+    const beforeBoundary = mixed[1].readInt16LE(4 * 2);
+    assert.ok(
+      Math.abs(beforeBoundary - 12_000) <= 1,
+      `slew interpolated across a semantic capture restart before crossing it: ${beforeBoundary}`,
+    );
+
+    const firstAfterBoundary = mixed[1].readInt16LE(5 * 2);
+    assert.ok(
+      Math.abs(firstAfterBoundary - beforeBoundary) <= 1,
+      'the existing replacement fade should own the first post-restart sample',
+    );
+  });
+
   test('immediate live alignment jump crossfades instead of splicing the Mic', () => {
     const session = new AudioSession({
       sampleRate: RATE,

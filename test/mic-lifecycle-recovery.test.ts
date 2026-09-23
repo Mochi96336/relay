@@ -130,6 +130,48 @@ test('hardware input ending uses Mic reconnect grace instead of explicit release
   assert.doesNotMatch(handler, /dispatchRelayEvent\('relay-microphone-ended'/);
 });
 
+test('confirmed active input removal enters Mic reconnect grace without guessing on generic devicechange', () => {
+  const installAt = app.indexOf('function installCaptureGraph');
+  const roleAt = app.indexOf('// recorder.js reads this', installAt);
+  assert.ok(installAt >= 0 && roleAt > installAt);
+  const install = app.slice(installAt, roleAt);
+
+  assert.match(install, /mediaDevices\?\.enumerateDevices/);
+  assert.match(install, /mediaDevices\?\.addEventListener/);
+  assert.match(install, /deviceChangeCheckPending/,
+    'bursty devicechange events must share one presence check');
+  assert.match(install, /track\.readyState === 'ended'/,
+    'track ended owns its existing terminal callback and must not double-trigger device removal');
+  assert.match(install, /track\.getSettings\?\.\(\)\.deviceId|track\.getSettings\?\.\(\)\?\.deviceId|track\.getSettings\?\.\(\)\.deviceId/,
+    'the active capture device id is the removal authority');
+  assert.match(
+    install,
+    /device\?\.kind === 'audioinput' && device\.deviceId === deviceId/,
+    'unrelated output/input changes must leave the active Mic alone',
+  );
+  assert.match(
+    install,
+    /finishMicrophoneSession\('input-device-removed', \{[\s\S]*releaseMic: false/,
+    'only confirmed active-input disappearance may enter the bounded reconnect grace',
+  );
+  assert.match(install, /Retry Mic to reconnect it/);
+  assert.match(
+    install,
+    /catch\(\(error\) => \{[\s\S]*presence check failed/,
+    'enumeration failure is diagnostic only and cannot tear down a live capture',
+  );
+
+  const disposeAt = app.indexOf('function disposeCaptureGraph');
+  const currentAt = app.indexOf('function captureGraphIsCurrent', disposeAt);
+  assert.ok(disposeAt >= 0 && currentAt > disposeAt);
+  const dispose = app.slice(disposeAt, currentAt);
+  assert.match(
+    dispose,
+    /removeEventListener\?\.\('devicechange', graph\.deviceChangeListener\)/,
+    'retired capture graphs must not keep devicechange authority',
+  );
+});
+
 test('capture rebuild failure also falls back to bounded Mic reconnect grace', () => {
   const rebuildAt = app.indexOf('function rebuildPublisherCaptureGraph');
   const stopAt = app.indexOf('async function stop(', rebuildAt);

@@ -2258,7 +2258,7 @@ export class AudioSession {
    * should react to - a few milliseconds ahead of `value` - so the reduction is
    * already in place when the peak arrives.
    */
-  private limit(value: number, detect: number) {
+  private limit(value: number, detect: number, countLimitedSample = true) {
     const magnitude = Math.abs(detect);
     // Peak-hold: the envelope takes a new peak immediately and only decays
     // slowly. Smoothing the rise here as well would put two lags in series and
@@ -2276,7 +2276,7 @@ export class AudioSession {
     this.limiterGain += (target - this.limiterGain)
       * (target < this.limiterGain ? this.limiterAttack : this.limiterRelease);
 
-    if (this.limiterGain < 0.99) this.limitedSamples += 1;
+    if (countLimitedSample && this.limiterGain < 0.99) this.limitedSamples += 1;
     return value * this.limiterGain;
   }
 
@@ -2564,6 +2564,7 @@ export class AudioSession {
       let voice = this.limit(
         (mic[i] / 32768) * micGain,
         (mic[detectOffset] / 32768) * detectMicGain,
+        !micAudibleMissing,
       );
 
       if (

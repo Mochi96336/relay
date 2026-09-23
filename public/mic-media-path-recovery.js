@@ -72,6 +72,7 @@ export class MicMediaPathRecovery {
     this.lastServerReceivedPacketSerial = null;
     this.lastPacketCoverage = null;
     this.lastSampleCapturedSamples = null;
+    this.lastSampleCaptureBacklogDroppedSamples = null;
     this.lastServerReceivedSampleSerial = null;
     this.lastSampleCoverage = null;
     this.incompletePacketSemanticStalls = 0;
@@ -154,17 +155,21 @@ export class MicMediaPathRecovery {
 
   rebaselineSampleCoverage({
     capturedSamples,
+    localCaptureBacklogDroppedSamples,
     serverReceivedSampleSerial,
   } = {}) {
     const captured = optionalNonNegativeInteger(capturedSamples);
+    const captureBacklogDropped = optionalNonNegativeInteger(localCaptureBacklogDroppedSamples);
     const received = optionalNonNegativeInteger(serverReceivedSampleSerial);
-    if (captured === null || received === null) {
+    if (captured === null || captureBacklogDropped === null || received === null) {
       this.lastSampleCapturedSamples = null;
+      this.lastSampleCaptureBacklogDroppedSamples = null;
       this.lastServerReceivedSampleSerial = null;
       this.lastSampleCoverage = null;
       return false;
     }
     this.lastSampleCapturedSamples = captured;
+    this.lastSampleCaptureBacklogDroppedSamples = captureBacklogDropped;
     this.lastServerReceivedSampleSerial = received;
     this.lastSampleCoverage = null;
     return true;
@@ -183,6 +188,7 @@ export class MicMediaPathRecovery {
     senderFailedPackets,
     serverReceivedPacketSerial,
     serverReceivedSampleSerial,
+    localCaptureBacklogDroppedSamples,
   } = {}) {
     this.lastCapturedSamples = nonNegativeInteger(capturedSamples);
     this.lastServerAcceptedFrameSerial = nonNegativeInteger(serverAcceptedFrameSerial);
@@ -194,6 +200,7 @@ export class MicMediaPathRecovery {
       senderFailedPackets,
       serverReceivedPacketSerial,
       serverReceivedSampleSerial,
+      localCaptureBacklogDroppedSamples,
     });
     this.staleCount = 0;
   }
@@ -258,35 +265,45 @@ export class MicMediaPathRecovery {
 
   sampleCoverageEvidence({
     capturedSamples,
+    localCaptureBacklogDroppedSamples,
     serverReceivedSampleSerial,
   }) {
     const captured = optionalNonNegativeInteger(capturedSamples);
+    const captureBacklogDropped = optionalNonNegativeInteger(localCaptureBacklogDroppedSamples);
     const received = optionalNonNegativeInteger(serverReceivedSampleSerial);
-    if (captured === null || received === null) {
+    if (captured === null || captureBacklogDropped === null || received === null) {
       return { available: false, ready: false, healthy: null, coverage: null };
     }
 
     if (
       this.lastSampleCapturedSamples === null
+      || this.lastSampleCaptureBacklogDroppedSamples === null
       || this.lastServerReceivedSampleSerial === null
       || captured < this.lastSampleCapturedSamples
+      || captureBacklogDropped < this.lastSampleCaptureBacklogDroppedSamples
       || received < this.lastServerReceivedSampleSerial
     ) {
       this.rebaselineSampleCoverage({
         capturedSamples: captured,
+        localCaptureBacklogDroppedSamples: captureBacklogDropped,
         serverReceivedSampleSerial: received,
       });
       return { available: true, ready: false, healthy: null, coverage: null };
     }
 
     const capturedDelta = captured - this.lastSampleCapturedSamples;
+    const captureBacklogDroppedDelta = (
+      captureBacklogDropped - this.lastSampleCaptureBacklogDroppedSamples
+    );
+    const deliverableCapturedDelta = Math.max(0, capturedDelta - captureBacklogDroppedDelta);
     const receivedDelta = received - this.lastServerReceivedSampleSerial;
-    if (capturedDelta <= 0) {
+    if (deliverableCapturedDelta <= 0) {
       return { available: true, ready: false, healthy: null, coverage: null };
     }
 
-    const coverage = Math.max(0, Math.min(1, receivedDelta / capturedDelta));
+    const coverage = Math.max(0, Math.min(1, receivedDelta / deliverableCapturedDelta));
     this.lastSampleCapturedSamples = captured;
+    this.lastSampleCaptureBacklogDroppedSamples = captureBacklogDropped;
     this.lastServerReceivedSampleSerial = received;
     this.lastSampleCoverage = coverage;
     return {
@@ -367,6 +384,7 @@ export class MicMediaPathRecovery {
     senderFailedPackets,
     serverReceivedPacketSerial,
     serverReceivedSampleSerial,
+    localCaptureBacklogDroppedSamples,
     serverMediaPath,
     path,
     socketEpoch,
@@ -384,6 +402,7 @@ export class MicMediaPathRecovery {
       senderFailedPackets,
       serverReceivedPacketSerial,
       serverReceivedSampleSerial,
+      localCaptureBacklogDroppedSamples,
     };
 
     if (

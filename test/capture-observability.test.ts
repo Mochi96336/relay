@@ -4,6 +4,7 @@ import test, { describe } from 'node:test';
 import {
   captureClippingSnapshot,
   captureInputClippingDetected,
+  captureRecentInputClippingDetected,
   captureLevelSnapshot,
   captureVoiceProcessingActive,
   enforceUnprocessedCapture,
@@ -201,6 +202,40 @@ describe('capture observability', () => {
     }), null);
     assert.equal(captureClippingSnapshot({}), null);
     assert.equal(captureInputClippingDetected(null), false);
+  });
+
+  test('keeps recent clipping separate from the capture-lifetime maximum', () => {
+    const clippedWindow = captureClippingSnapshot({
+      railSamples: 12,
+      maxConsecutiveRailSamples: 8,
+      windowMaxConsecutiveRailSamples: 5,
+    });
+    assert.deepEqual(clippedWindow, {
+      railSamples: 12,
+      maxConsecutiveRailSamples: 8,
+      windowMaxConsecutiveRailSamples: 5,
+    });
+    assert.equal(captureInputClippingDetected(clippedWindow), true);
+    assert.equal(captureRecentInputClippingDetected(clippedWindow), true);
+
+    const cleanWindow = captureClippingSnapshot({
+      railSamples: 12,
+      maxConsecutiveRailSamples: 8,
+      windowMaxConsecutiveRailSamples: 0,
+    });
+    assert.ok(cleanWindow);
+    assert.equal(captureInputClippingDetected(cleanWindow), true, 'local lifetime guidance stays sticky');
+    assert.equal(captureRecentInputClippingDetected(cleanWindow), false, 'room health can clear after clean input');
+
+    assert.equal(captureRecentInputClippingDetected({
+      railSamples: 12,
+      maxConsecutiveRailSamples: 8,
+    }), false, 'legacy worklets do not invent recent clipping');
+    assert.equal(captureClippingSnapshot({
+      railSamples: 4,
+      maxConsecutiveRailSamples: 4,
+      windowMaxConsecutiveRailSamples: 5,
+    }), null);
   });
 
   test('projects only physically valid finite worklet levels', () => {

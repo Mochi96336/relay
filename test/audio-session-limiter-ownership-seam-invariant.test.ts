@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { AudioSession } from '../src/audio-session.js';
+import { AudioSession, type MixFrameEvidence } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
 
 const RATE = 48_000;
@@ -300,6 +300,47 @@ test('Mic limiter lookahead cannot let a replacement capture attenuate old PCM e
   assert.equal(outputs.length, 4);
   assert.ok(session.health().limitedSamples > 0);
   assert.equal(session.health().clippedSamples, 0);
+});
+
+test('missing Mic output does not count limiter release as limited source samples', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  // Two hot real frames establish active gain reduction without starving the
+  // limiter look-ahead on the first emitted frame.
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES * 2, 12_000),
+    RATE,
+    0,
+  );
+  session.drain(() => {}, 0, 1);
+  session.drain(() => {}, 20, 1);
+  assert.ok(session.health().limitedSamples > 0, 'fixture must engage the limiter on real Mic PCM');
+
+  // Ownership release leaves limiter state to decay naturally, but the next
+  // frame contains no Mic source samples. Its output edge is a source fade to
+  // silence, not fresh PCM being held down by the limiter.
+  session.setMicExpected(false);
+  const evidence: MixFrameEvidence[] = [];
+  session.drain((_pcm, frameEvidence) => {
+    evidence.push(frameEvidence);
+  }, 40, 1);
+
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0]!.micUnavailableSamples, FRAME_SAMPLES);
+  assert.equal(
+    evidence[0]!.limitedSamples,
+    0,
+    'limiter release over unavailable silence must not be reported as limited source samples',
+  );
 });
 
 test('seeded limiter and Mic ownership transitions stay output-continuous', () => {

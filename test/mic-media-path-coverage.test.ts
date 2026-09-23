@@ -12,6 +12,7 @@ type CoverageObservation = {
   senderSubmittedPackets: number;
   senderFailedPackets: number;
   serverReceivedPacketSerial: number;
+  serverReceivedSampleSerial?: number;
   serverMediaPath: Path | null;
   path: Path;
   socketEpoch: number;
@@ -49,6 +50,30 @@ test('healthy packet coverage clears stale evidence', () => {
   assert.equal(decision.reason, 'server-pcm-coverage-healthy');
   assert.equal(decision.packetCoverage, 0.8);
   assert.equal(decision.staleObservations, 0);
+});
+
+test('healthy packet counts cannot mask severe source-sample under-delivery', () => {
+  const recovery = new MicMediaPathRecovery();
+  recovery.observe(observation({
+    serverReceivedSampleSerial: 48_000,
+  }));
+
+  let decision;
+  for (let index = 1; index <= 3; index += 1) {
+    decision = recovery.observe(observation({
+      capturedSamples: 48_000 * (index + 1),
+      serverAcceptedFrameSerial: 100 + index,
+      senderSubmittedPackets: 100 * (index + 1),
+      serverReceivedPacketSerial: 100 * (index + 1),
+      serverReceivedSampleSerial: 48_000 + 4_800 * index,
+    }));
+    assert.equal(decision!.packetCoverage, 1, 'every packet reached Relay');
+    assert.equal(decision!.sampleCoverage, 0.1, 'only one tenth of captured PCM reached Relay');
+  }
+
+  assert.equal(decision!.action, 'replace-websocket');
+  assert.equal(decision!.reason, 'server-pcm-underdelivery');
+  assert.equal(decision!.webSocketReplacementUsed, true);
 });
 
 test('accepted-frame progress cannot mask three severe packet under-delivery windows', () => {

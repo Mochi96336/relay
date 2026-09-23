@@ -27,6 +27,8 @@ export type AudioPacketReceiverOptions = {
 export type AudioPacketReceiverStats = {
   receivedPackets: number;
   emittedPackets: number;
+  /** Cumulative source samples emitted as novel, ordered packets. */
+  emittedSamples: number;
   lostPackets: number;
   reorderedPackets: number;
   duplicatePackets: number;
@@ -129,6 +131,7 @@ export class AudioPacketReceiver {
   private readonly counters: Counters = {
     receivedPackets: 0,
     emittedPackets: 0,
+    emittedSamples: 0,
     lostPackets: 0,
     reorderedPackets: 0,
     duplicatePackets: 0,
@@ -407,6 +410,10 @@ export class AudioPacketReceiver {
 
     output.push(packet);
     this.counters.emittedPackets += 1;
+    this.counters.emittedSamples = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      this.counters.emittedSamples + packet.sampleCount,
+    );
     this.lastEmittedEndSampleIndex = end;
     this.rememberFinalized(sequence, 'emitted');
     this.expectedSequence = nextSequence(sequence);

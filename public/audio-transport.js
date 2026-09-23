@@ -437,6 +437,7 @@ export class PreferredAudioTransport extends AudioTransport {
     const ackGeneration = nonNegativeSafeInteger(message.captureGeneration);
     const acceptedFrameSerial = nonNegativeSafeInteger(message.pcm?.acceptedFrameSerial);
     const receivedPacketSerial = nonNegativeSafeInteger(message.pcm?.receivedPacketSerial);
+    const receivedSampleSerial = nonNegativeSafeInteger(message.pcm?.receivedSampleSerial);
     if (
       ackGeneration === null
       || ackGeneration > 0xffff_ffff
@@ -465,6 +466,7 @@ export class PreferredAudioTransport extends AudioTransport {
       senderSubmittedPackets: publisherHealth.senderSubmittedPackets,
       senderFailedPackets: publisherHealth.senderFailedPackets,
       serverReceivedPacketSerial: receivedPacketSerial,
+      serverReceivedSampleSerial: receivedSampleSerial,
       serverMediaPath,
       path: publisherHealth.path,
       socketEpoch: epoch,

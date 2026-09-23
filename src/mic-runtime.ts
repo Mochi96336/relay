@@ -328,6 +328,7 @@ export class MicRuntime {
           pcm: {
             acceptedFrameSerial: this.currentAcceptedFrameSerial,
             receivedPacketSerial: this.currentAudioTransport?.stats()?.emittedPackets ?? 0,
+            receivedSampleSerial: this.currentAudioTransport?.stats()?.emittedSamples ?? 0,
             mediaPath: this.mediaPath(),
           },
         }));

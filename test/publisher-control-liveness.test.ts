@@ -97,6 +97,7 @@ test('accepted current-generation uplink health renews the lease and gets an app
     pcm: {
       acceptedFrameSerial: 0,
       receivedPacketSerial: 0,
+      receivedSampleSerial: 0,
       mediaPath: 'websocket',
     },
   });

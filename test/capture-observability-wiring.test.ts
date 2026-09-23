@@ -53,6 +53,21 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
     /accepted\.revision === captureInputClippingRevision[\s\S]*captureInputClippingSinceHealth = false/,
     'a late ACK must not erase clipping that occurred after that report was sent',
   );
+  assert.match(
+    source,
+    /function resetPublisherHealthRequestCorrelation\(\)[\s\S]*publisherCommandLiveness\.reset\(\);[\s\S]*pendingCaptureClippingHealth\.clear\(\);/,
+    'command authority reset must retire clipping request ids whose ACKs can no longer be accepted',
+  );
+  assert.equal(
+    (source.match(/resetPublisherHealthRequestCorrelation\(\);/g) ?? []).length,
+    4,
+    'socket adoption, close, replacement and stop must share the same health-correlation reset',
+  );
+  assert.equal(
+    (source.match(/publisherCommandLiveness\.reset\(\);/g) ?? []).length,
+    1,
+    'raw command-liveness reset must exist only inside the shared correlation helper',
+  );
 
   assert.match(source, /captureAppliedSettings = null;/, 'stopping capture must clear applied facts');
 });

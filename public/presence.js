@@ -117,6 +117,7 @@ window.relayIdentityReady = (async () => {
   function micActionState() {
     const currentOwner = owner();
     const mine = latestSession?.micOwnerId === participantId;
+    const selfRetry = mine && !localPublisherActive;
     const commandChannelFresh = socket?.readyState === WebSocket.OPEN;
     const takeoverOpen = Boolean(
       takeoverOwnerId
@@ -135,7 +136,7 @@ window.relayIdentityReady = (async () => {
       authorityFresh: sessionAuthorityFresh,
       lastKnownSnapshot: latestSession,
       commandChannelFresh,
-      authorized: !mine,
+      authorized: selfRetry || !mine,
       serverAllowed: !localPublisherActive,
     });
     const takeoverAuthority = authorityState({
@@ -159,7 +160,7 @@ window.relayIdentityReady = (async () => {
       mine,
       localPublisherActive,
       releaseVisible: Boolean(mine || localPublisherActive),
-      primaryMode: currentOwner && !mine ? 'takeover' : 'take',
+      primaryMode: selfRetry ? 'retry' : currentOwner && !mine ? 'takeover' : 'take',
       primaryActionable: primaryAuthority.actionable,
       takeoverOpen,
       takeoverPending: takeoverOpen && startAfterTakeover,
@@ -340,6 +341,15 @@ window.relayIdentityReady = (async () => {
     if (!state.primaryActionable) {
       event.preventDefault();
       event.stopImmediatePropagation();
+      return;
+    }
+    if (state.primaryMode === 'retry') {
+      // Keep this inside the original click gesture for iOS AudioSession
+      // authority, but stop the ordinary Mic-intent listeners: a local capture
+      // retry must not move Song playback between tabs.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.dispatchEvent(new CustomEvent('relay-retry-microphone'));
       return;
     }
     const currentOwner = owner();

@@ -119,6 +119,25 @@ export class MicCaptureRecoveryWatchdog {
     };
   }
 
+  noteProcessorError(snapshot) {
+    if (!this.active) {
+      return { rebuild: false, inFlight: false, exhausted: false, reason: null };
+    }
+    if (this.rebuildRequested) {
+      return { rebuild: false, inFlight: true, exhausted: false, reason: null };
+    }
+
+    const current = normalizeSnapshot(snapshot);
+    this.beginRecovery(current, 'processor-error');
+    const rebuild = this.claimRebuild();
+    return {
+      rebuild,
+      inFlight: false,
+      exhausted: !rebuild && this.rebuildBudgetSpent,
+      reason: rebuild ? 'processor-error' : null,
+    };
+  }
+
   noteGraphRebuilt(snapshot) {
     if (!this.active) return;
     // The physical graph replacement completed, so the in-flight request is

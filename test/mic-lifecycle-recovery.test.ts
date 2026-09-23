@@ -114,6 +114,44 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
     'forced room ownership cannot be bypassed by the Listen toggle');
 });
 
+test('unexpected capture AudioContext closure enters bounded Mic reconnect grace', () => {
+  const startAt = app.indexOf('async function startPublisher');
+  const streamAt = app.indexOf('mediaStream = preparedStream', startAt);
+  assert.ok(startAt >= 0 && streamAt > startAt);
+  const startup = app.slice(startAt, streamAt);
+
+  const stateAt = startup.indexOf("captureContext.addEventListener('statechange'");
+  assert.ok(stateAt >= 0);
+  const stateHandler = startup.slice(stateAt);
+
+  assert.match(
+    stateHandler,
+    /if \(!publisherActive \|\| audioContext !== captureContext\) return/,
+    'stale or intentional context closure must not terminate a replacement/currently stopped session',
+  );
+  assert.match(stateHandler, /captureContext\.state === 'closed'/);
+  assert.match(
+    stateHandler,
+    /finishMicrophoneSession\('context-closed', \{[\s\S]*releaseMic: false/,
+    'terminal unexpected context closure must use reconnect grace, not explicit room-Mic release',
+  );
+  assert.match(stateHandler, /Retry Mic to reconnect it/);
+  assert.match(
+    stateHandler,
+    /captureContext\.state === 'closed'[\s\S]*return;[\s\S]*shouldRequestAudioResume/,
+    'closed is terminal and must not fall through to the resume-only path',
+  );
+
+  const stopAt = app.indexOf('async function stop(');
+  const startPublisherAt = app.indexOf('async function startPublisher', stopAt);
+  const stop = app.slice(stopAt, startPublisherAt);
+  assert.match(
+    stop,
+    /audioContext = null;[\s\S]*setPublisherActive\(false\);[\s\S]*await closingContext\.close\(\)/,
+    'intentional stop must revoke callback authority before closing the captured old context',
+  );
+});
+
 test('hardware input ending uses Mic reconnect grace instead of explicit release', () => {
   const trackStart = app.indexOf("track?.addEventListener('ended'");
   const watchdogStart = app.indexOf("micCaptureRecovery.start(captureSnapshot(), 'startup')", trackStart);

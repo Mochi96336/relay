@@ -124,7 +124,7 @@ test('Backing disconnect keeps two-source headroom while retained PCM remains au
     0,
   );
   session.ingestBacking(
-    constantMicFrame(1, 0, RATE * 2, 20_000),
+    constantMicFrame(1, 0, RATE / 2, 20_000),
     RATE,
     0,
   );
@@ -148,6 +148,17 @@ test('Backing disconnect keeps two-source headroom while retained PCM remains au
     0,
     'retained Backing PCM must not lose two-source headroom before it becomes silent',
   );
+
+  // Once retained Backing really exhausts, the original 150 ms release is still
+  // required to finish. Voice-only output should return close to its unity path
+  // rather than staying permanently under two-source headroom.
+  const voiceOnly: Buffer[] = [];
+  session.drain((pcm) => voiceOnly.push(pcm), 800, 100);
+  assert.ok(voiceOnly.length > 0);
+  assert.ok(
+    voiceOnly.at(-1)!.readInt16LE((FRAME_SAMPLES - 1) * 2) > 15_000,
+    'two-source headroom did not release after retained Backing became silent',
+  );
 });
 
 test('Mic release keeps two-source headroom while retained PCM remains audible', () => {
@@ -165,7 +176,7 @@ test('Mic release keeps two-source headroom while retained PCM remains audible',
   session.start(0);
 
   session.ingestMic(
-    constantMicFrame(1, 0, RATE * 2, 1_000),
+    constantMicFrame(1, 0, RATE / 2, 1_000),
     RATE,
     0,
   );
@@ -190,6 +201,14 @@ test('Mic release keeps two-source headroom while retained PCM remains audible',
     releasedEvidence.reduce((sum, evidence) => sum + evidence.clippedSamples, 0),
     0,
     'retained Mic PCM must not lose two-source headroom before it becomes silent',
+  );
+
+  const songOnly: Buffer[] = [];
+  session.drain((pcm) => songOnly.push(pcm), 800, 100);
+  assert.ok(songOnly.length > 0);
+  assert.ok(
+    songOnly.at(-1)!.readInt16LE((FRAME_SAMPLES - 1) * 2) > 19_000,
+    'two-source headroom did not release after retained Mic became silent',
   );
 });
 

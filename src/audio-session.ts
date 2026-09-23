@@ -1449,22 +1449,11 @@ export class AudioSession {
   }
 
   /**
-   * Reads one microphone frame while a bounded runtime timing correction moves
-   * the live read head.
+   * Per-source-sample evidence used only by the bounded Mic slew path.
    *
-   * Both content-validation slew and frontier-correction release are explicitly
-   * limited to about one percent per 20 ms frame. That is a read-rate policy:
-   * the frame should consume about 19.8-20.2 ms of microphone audio. Changing
-   * only the integer frame start instead skips/repeats about ten samples every
-   * 20 ms at 48 kHz, a 50 Hz train of waveform discontinuities that voiced
-   * harmonics expose as zipper/buzz.
-   *
-   * Interpolate a continuous source position across the emitted frame, landing
-   * exactly on the new advance at the next frame boundary. Limiter look-ahead
-   * then continues at unity rate from that landing point, so it observes the
-   * same future waveform the emitted frame is moving toward. Large authority or
-   * frontier-acquisition jumps remain deliberate discontinuities and do not use
-   * this bounded-rate path.
+   * Ordinary unity-rate mixing keeps the cheaper aggregate evidence readers.
+   * A slew interpolates fractional source positions, so it needs evidence for
+   * both interpolation endpoints from the exact source span it is reading.
    */
   private readSourceEvidenceMask(
     timeline: PcmTimeline,
@@ -1536,6 +1525,24 @@ export class AudioSession {
     return mask;
   }
 
+  /**
+   * Reads one microphone frame while a bounded runtime timing correction moves
+   * the live read head.
+   *
+   * Both content-validation slew and frontier-correction release are explicitly
+   * limited to about one percent per 20 ms frame. That is a read-rate policy:
+   * the frame should consume about 19.8-20.2 ms of microphone audio. Changing
+   * only the integer frame start instead skips/repeats about ten samples every
+   * 20 ms at 48 kHz, a 50 Hz train of waveform discontinuities that voiced
+   * harmonics expose as zipper/buzz.
+   *
+   * Interpolate a continuous source position across the emitted frame, landing
+   * exactly on the new advance at the next frame boundary. Limiter look-ahead
+   * then continues at unity rate from that landing point, so it observes the
+   * same future waveform the emitted frame is moving toward. Large authority or
+   * frontier-acquisition jumps remain deliberate discontinuities and do not use
+   * this bounded-rate path.
+   */
   private readMicSlewedRange(
     startSample: number,
     fromAdvanceSamples: number,

@@ -2615,16 +2615,24 @@ export class AudioSession {
       // the output, though, and crossing from that silence back into real PCM
       // must own the same bounded de-click edge as any other audible absence.
       const micAudibleMissing = micSourceSample < 0 || micEvidenceMissing;
+      const backingSourceSample = startSample + i;
+      const backingSourceMissing =
+        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
+      const effectiveTwoSourceOwnership = Boolean(
+        (this.micExpected || this.micExpectationReleaseHold)
+        && (this.backingExpected || this.backingExpectationReleaseHold)
+      );
 
       if (
-        this.micJoinSafetyPending
-        && (this.backingExpected || this.backingExpectationReleaseHold)
-        && (this.micExpected || this.micExpectationReleaseHold)
+        this.sourceJoinSafetyPending !== null
+        && this.sourceJoinSafetyActive === null
+        && effectiveTwoSourceOwnership
         && !micAudibleMissing
+        && !backingSourceMissing
       ) {
-        this.micJoinSafetyPending = false;
-        this.micJoinSafetyActive = true;
-        this.micJoinSafetyBlend = 0;
+        this.sourceJoinSafetyActive = this.sourceJoinSafetyPending;
+        this.sourceJoinSafetyPending = null;
+        this.sourceJoinSafetyBlend = 0;
       }
 
       const micGainDb = this.advanceMicGainDb();
@@ -2744,9 +2752,6 @@ export class AudioSession {
       }
 
       let songContribution = (song[i] / 32768) * songGain;
-      const backingSourceSample = startSample + i;
-      const backingSourceMissing =
-        backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
       this.beginBackingCaptureRestartEdgeIfDue(backingSourceSample);
 
       if (
@@ -2794,52 +2799,67 @@ export class AudioSession {
       const summed = voice + songContribution;
 
       let value = summed * mixHeadroomGain;
-      if (this.micJoinSafetyActive) {
-        const targetBlend = (
-          (this.micExpected || this.micExpectationReleaseHold)
-          && (this.backingExpected || this.backingExpectationReleaseHold)
-        ) ? 1 : 0;
-        if (this.micJoinSafetyBlend < targetBlend) {
-          this.micJoinSafetyBlend = Math.min(
+      if (this.sourceJoinSafetyActive !== null) {
+        const targetBlend = effectiveTwoSourceOwnership ? 1 : 0;
+        if (this.sourceJoinSafetyBlend < targetBlend) {
+          this.sourceJoinSafetyBlend = Math.min(
             targetBlend,
-            this.micJoinSafetyBlend + this.micJoinSafetyStep,
+            this.sourceJoinSafetyBlend + this.sourceJoinSafetyStep,
           );
-        } else if (this.micJoinSafetyBlend > targetBlend) {
-          this.micJoinSafetyBlend = Math.max(
+        } else if (this.sourceJoinSafetyBlend > targetBlend) {
+          this.sourceJoinSafetyBlend = Math.max(
             targetBlend,
-            this.micJoinSafetyBlend - this.micJoinSafetyStep,
+            this.sourceJoinSafetyBlend - this.sourceJoinSafetyStep,
           );
         }
 
-        // The old endpoint is exactly the song-only mix that was audible before
-        // this Mic joined. The new endpoint reserves enough headroom for a Mic
-        // at the limiter threshold against the song gain that exists *now*.
-        // A convex crossfade between two bounded endpoints cannot exceed either
-        // endpoint, so this transition never needs the final hard clamp.
-        const songOnlyValue = songContribution * mixHeadroomGain;
+        // While entering a two-source bus, the zero-blend endpoint is the peer
+        // that was already audible before the recorded joining source arrived.
+        // While leaving, expectation release holds ensure targetBlend stays at 1
+        // until one source is actually missing; then the zero-blend endpoint is
+        // whichever real source remains. Both endpoints are bounded, so their
+        // convex crossfade never needs the final hard clamp.
+        let singleSourceValue: number;
+        if (targetBlend === 1) {
+          singleSourceValue = this.sourceJoinSafetyActive === 'mic'
+            ? songContribution * mixHeadroomGain
+            : voice * mixHeadroomGain;
+        } else if (!micAudibleMissing && backingSourceMissing) {
+          singleSourceValue = voice * mixHeadroomGain;
+        } else if (micAudibleMissing && !backingSourceMissing) {
+          singleSourceValue = songContribution * mixHeadroomGain;
+        } else if (micAudibleMissing && backingSourceMissing) {
+          singleSourceValue = 0;
+        } else {
+          // Defensive fallback: effective ownership should not release while
+          // both sources remain real, but preserve the original pre-join peer
+          // if a future policy change violates that assumption.
+          singleSourceValue = this.sourceJoinSafetyActive === 'mic'
+            ? songContribution * mixHeadroomGain
+            : voice * mixHeadroomGain;
+        }
+
         const safeTwoSourceGain = sumHeadroomGain(songGain);
         const safeTwoSourceValue = summed * safeTwoSourceGain;
-        const blend = this.micJoinSafetyBlend;
-        value = songOnlyValue * (1 - blend) + safeTwoSourceValue * blend;
+        const blend = this.sourceJoinSafetyBlend;
+        value = singleSourceValue * (1 - blend) + safeTwoSourceValue * blend;
 
         if (
           targetBlend === 1
           && blend === 1
           && this.songDuck === 1
         ) {
-          // At steady duck the safety endpoint is byte-for-byte the ordinary
-          // two-source gain path, so ownership can return without a seam.
-          this.micJoinSafetyActive = false;
-          this.micJoinSafetyBlend = 0;
+          // At steady duck the safe endpoint is byte-for-byte the ordinary
+          // two-source path, so safety ownership can return without a seam.
+          this.sourceJoinSafetyActive = null;
+          this.sourceJoinSafetyBlend = 0;
         } else if (
           targetBlend === 0
           && blend === 0
-          && micAudibleMissing
+          && (micAudibleMissing || backingSourceMissing)
         ) {
-          // If ownership is revoked during the join, keep the crossfade owner
-          // until retained Mic PCM has actually gone silent; otherwise dropping
-          // this state would re-introduce old PCM through the ordinary path.
-          this.micJoinSafetyActive = false;
+          this.sourceJoinSafetyActive = null;
+          this.sourceJoinSafetyBlend = 0;
         }
       }
 

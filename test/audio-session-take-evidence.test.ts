@@ -141,6 +141,33 @@ test('isolated full-scale peaks do not masquerade as a flat-top Mic input', () =
   assert.equal(drainOne(session, 0).micInputClippedSamples, 0);
 });
 
+test('fragmented clipping ranges remain exact under bounded range lookup', () => {
+  const session = makeSession();
+  session.setMicExpected(true);
+  session.start(0);
+
+  const railIndices: number[] = [];
+  for (let run = 0; run < 150; run += 1) {
+    const start = 100 + run * 5;
+    railIndices.push(start, start + 1, start + 2, start + 3);
+  }
+  session.ingestMic(
+    positionedFrame(
+      1,
+      0,
+      pcmWithRails(FRAME_SAMPLES, railIndices),
+    ),
+    RATE,
+    0,
+  );
+
+  assert.equal(
+    drainOne(session, 0).micInputClippedSamples,
+    600,
+    'binary range lookup must preserve every four-sample flat top without filling the clean separators',
+  );
+});
+
 test('a flat-top run remains continuous across Mic transport packet boundaries', () => {
   const session = makeSession();
   session.setMicExpected(true);

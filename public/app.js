@@ -563,6 +563,8 @@ function handleCaptureWorkletMessage(event, graph) {
   const dispatch = classifyCaptureDispatch({
     currentContextTimeSeconds: graph.context.currentTime,
     capturedAtContextTimeSeconds: pcmMessage.capturedAtContextTime,
+    fallbackCapturedAtContextTimeSeconds:
+      graph.captureClockOriginContextTime + (chunkFirstSampleIndex / graph.context.sampleRate),
   });
   if (dispatch.measurable) {
     latestCaptureDispatchLagMs = Math.round(dispatch.lagMs);
@@ -663,6 +665,10 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     deviceChangeCheckPending: false,
     processorErrorListener: null,
     inputDeviceId: captureTrackDeviceId(captureStream.getAudioTracks?.()[0] ?? null),
+    // Raw PCM from a cached pre-envelope worklet has no per-chunk timestamp.
+    // Anchor its positioned sample clock at graph installation so old worklet
+    // compatibility cannot bypass the same realtime backlog budget.
+    captureClockOriginContextTime: captureContext.currentTime,
   };
 
   if (typeof capture.addEventListener === 'function') {

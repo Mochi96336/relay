@@ -149,6 +149,45 @@ describe('product issue contract', () => {
     }]);
   });
 
+  test('surfaces recent Mic input clipping as a non-blocking input-adjustment warning', () => {
+    const issues = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      mic: {
+        ownerId: 'participant-a',
+        state: 'live',
+        inputClipping: true,
+      },
+    });
+
+    assert.deepEqual(issues, [{
+      code: 'mic-input-clipping',
+      scope: 'mic',
+      severity: 'warning',
+      cause: 'mic-input-clipping',
+      affects: ['voice', 'recording'],
+      recovery: 'adjust-input',
+    }]);
+
+    const input = productInput();
+    input.micInputClipping = true;
+    const model = buildProductViewModel(input);
+    assert.equal(model.health, 'degraded');
+    assert.equal(model.attention?.code, 'mic-input-clipping');
+    assert.equal(model.actions.canStartTake, true, 'input clipping warns but does not block a recording');
+  });
+
+  test('does not let clipping hide a stronger Mic transport failure', () => {
+    const issues = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      mic: {
+        ownerId: 'participant-a',
+        state: 'interrupted',
+        inputClipping: true,
+      },
+    });
+    assert.deepEqual(issues.map((issue) => issue.code), ['mic-audio-stalled']);
+  });
+
   test('describes cause, impact and recovery for concurrent user-visible warnings', () => {
     const issues = buildProductIssues({
       ...HEALTHY_ISSUES,

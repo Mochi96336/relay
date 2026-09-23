@@ -269,6 +269,40 @@ test('Take History is review-first without changing newest-first selection seman
   await expect(page.locator('#last-take')).toBeHidden();
 });
 
+test('Take History surfaces non-clean quality verdicts without leaking internal issue codes', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installTakeHistoryHarness(page);
+
+  const history = [
+    historyEntry('recording-review', 7, 20, 41_000, { qualityVerdict: 'review' }),
+    historyEntry('recording-degraded', 7, 10, 39_000, { qualityVerdict: 'degraded' }),
+    historyEntry('recording-clean', 7, 0, 37_000, { qualityVerdict: 'clean' }),
+  ];
+  await publishHistory(page, history);
+
+  await expect(page.locator('#last-take-toggle')).toHaveText('上一段錄音 · 0:41 · 建議檢查');
+  await openHistory(page);
+
+  await expect(page.locator('[data-take-id="recording-review"] span')).toHaveText('0:41 · 建議檢查');
+  await expect(page.locator('[data-take-id="recording-degraded"] span')).toHaveText('0:39 · 音訊有問題');
+  await expect(page.locator('[data-take-id="recording-clean"] span')).toHaveText('0:37');
+  await expect(page.locator('.take-history-selected span')).toHaveText('0:41 · 建議檢查');
+
+  const visibleCopy = await page.locator('#take-history-panel').innerText();
+  expect(visibleCopy).not.toContain('mic-input-clipping');
+  expect(visibleCopy).not.toContain('output-clipping');
+
+  await page.locator('[data-take-id="recording-degraded"]').click();
+  await expect(page.locator('.take-history-selected span')).toHaveText('0:39 · 音訊有問題');
+
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expect(page.locator('#last-take-toggle')).toHaveText('Last take · 0:41 · Check recording');
+  await expect(page.locator('[data-take-id="recording-review"] span')).toHaveText('0:41 · Check recording');
+  await expect(page.locator('[data-take-id="recording-degraded"] span')).toHaveText('0:39 · Audio issue');
+  await expect(page.locator('[data-take-id="recording-clean"] span')).toHaveText('0:37');
+  await expect(page.locator('.take-history-selected span')).toHaveText('0:39 · Audio issue');
+});
+
 test('Take History review-first sheet stays readable on desktop', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await installTakeHistoryHarness(page);

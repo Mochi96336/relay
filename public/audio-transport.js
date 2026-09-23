@@ -467,6 +467,7 @@ export class PreferredAudioTransport extends AudioTransport {
       senderFailedPackets: publisherHealth.senderFailedPackets,
       serverReceivedPacketSerial: receivedPacketSerial,
       serverReceivedSampleSerial: receivedSampleSerial,
+      localCaptureBacklogDroppedSamples: publisherHealth.captureBacklogDroppedSamples,
       serverMediaPath,
       path: publisherHealth.path,
       socketEpoch: epoch,
@@ -498,6 +499,9 @@ export class PreferredAudioTransport extends AudioTransport {
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
       const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
+      const captureBacklogDroppedSamples = nonNegativeSafeInteger(
+        payload.droppedSamples?.captureBacklog,
+      );
       // Coverage starts at the browser transport decision boundary. A media
       // packet rejected by the bounded realtime queue is a final timeline hole,
       // not an in-flight packet: app.js never replays congestion rejects.
@@ -522,6 +526,7 @@ export class PreferredAudioTransport extends AudioTransport {
         this.pendingPublisherHealth.push({
           captureGeneration,
           capturedSamples,
+          captureBacklogDroppedSamples,
           senderSubmittedPackets,
           senderFailedPackets,
           path,

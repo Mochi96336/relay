@@ -33,6 +33,27 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
   assert.match(payload, /captureClipping:\s*captureClippingHealthSnapshot\(\)/);
   assert.doesNotMatch(payload, /start-timing-calibration|micLagMs|confidence/);
 
+  assert.match(
+    source,
+    /captureRecentInputClippingDetected\(clipping\)[\s\S]*captureInputClippingSinceHealth = true;[\s\S]*captureInputClippingRevision \+= 1;/,
+    'each clipped level window must advance the interval revision',
+  );
+  assert.match(
+    source,
+    /pendingCaptureClippingHealth\.set\(healthRequestId,[\s\S]*revision: captureInputClippingRevision,[\s\S]*sentAtMs/,
+    'sent health must retain its clipping revision until Relay acknowledges it',
+  );
+  assert.match(
+    source,
+    /audio-uplink-health-ack'[\s\S]*publisherCommandLiveness\.noteAck[\s\S]*settleCaptureClippingHealth\(healthRequestId\)/,
+    'only an accepted correlated health ACK may settle the clipping interval',
+  );
+  assert.match(
+    source,
+    /accepted\.revision === captureInputClippingRevision[\s\S]*captureInputClippingSinceHealth = false/,
+    'a late ACK must not erase clipping that occurred after that report was sent',
+  );
+
   assert.match(source, /captureAppliedSettings = null;/, 'stopping capture must clear applied facts');
 });
 

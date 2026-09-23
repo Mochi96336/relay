@@ -15,6 +15,8 @@ export type AudioCaptureClipping = {
   railSamples: number;
   /** Longest capture-generation run of consecutive near-full-scale samples. */
   maxConsecutiveRailSamples: number;
+  /** True when at least one flat-top run occurred since the preceding accepted health report. */
+  recentDetected?: boolean;
 };
 
 export type AudioCaptureDispatchHealth = {
@@ -191,13 +193,21 @@ function parseCaptureClipping(value: unknown): AudioCaptureClipping | null | und
 
   const railSamples = strictNonNegativeSafeInteger(clipping.railSamples);
   const maxConsecutiveRailSamples = strictNonNegativeSafeInteger(clipping.maxConsecutiveRailSamples);
+  const recentDetected = clipping.recentDetected === undefined
+    ? undefined
+    : clipping.recentDetected;
   if (
     railSamples === null
     || maxConsecutiveRailSamples === null
     || maxConsecutiveRailSamples > railSamples
+    || (recentDetected !== undefined && typeof recentDetected !== 'boolean')
   ) return undefined;
 
-  return { railSamples, maxConsecutiveRailSamples };
+  return {
+    railSamples,
+    maxConsecutiveRailSamples,
+    ...(recentDetected === undefined ? {} : { recentDetected }),
+  };
 }
 
 function parseCaptureDispatch(value: unknown): AudioCaptureDispatchHealth | null | undefined {

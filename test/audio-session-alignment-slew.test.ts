@@ -92,6 +92,56 @@ describe('AudioSession runtime calibration slew', () => {
     );
   });
 
+  test('bounded slew carries gap evidence along the exact interpolated source trajectory', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.setMicExpected(true);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100 });
+
+    // Frame 0 reads source samples 4800..5759. The next 1% runtime-slew frame
+    // begins on source sample 5760 but ends at a rounded +100.2 ms read head
+    // (sample 5770). Put a tiny real hole only in that 10-sample disagreement:
+    // the audio interpolator must traverse it even though a plain micReadStart
+    // evidence lookup would begin after it and report the frame as complete.
+    const gapStart = 5_760;
+    const gapEnd = 5_768;
+    const before = Buffer.alloc(gapStart * 2);
+    before.fill(0);
+    for (let index = 0; index < gapStart; index += 1) before.writeInt16LE(8_000, index * 2);
+    const afterCount = RATE - gapEnd;
+    const after = Buffer.alloc(afterCount * 2);
+    for (let index = 0; index < afterCount; index += 1) after.writeInt16LE(8_000, index * 2);
+
+    session.ingestMic({ generation: 1, firstSampleIndex: 0, pcm: before }, RATE, 0);
+    session.ingestMic({ generation: 1, firstSampleIndex: gapEnd, pcm: after }, RATE, 0);
+
+    const evidence: Array<{
+      micGapSamples: number;
+      micStarvedSamples: number;
+    }> = [];
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 600, 1);
+    assert.equal(evidence[0]?.micGapSamples, 0);
+
+    assert.equal(session.slewCalibratedMicLagTo(160), true);
+    session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 620, 1);
+
+    assert.equal(session.alignment.calibratedMicLagMs, 100.2);
+    assert.equal(
+      evidence[1]?.micGapSamples,
+      8,
+      'every emitted sample whose interpolation touches the positioned hole must remain gap evidence',
+    );
+    assert.equal(evidence[1]?.micStarvedSamples, 0);
+  });
+
   test('immediate live alignment jump crossfades instead of splicing the Mic', () => {
     const session = new AudioSession({
       sampleRate: RATE,

@@ -609,7 +609,7 @@ export class AudioSession {
       changed
       && expected
       && this.running
-      && this.backingExpected
+      && (this.backingExpected || this.backingExpectationReleaseHold)
       && !wasReleaseHeld
     );
 
@@ -2605,8 +2605,8 @@ export class AudioSession {
 
       if (
         this.micJoinSafetyPending
-        && this.backingExpected
-        && this.micExpected
+        && (this.backingExpected || this.backingExpectationReleaseHold)
+        && (this.micExpected || this.micExpectationReleaseHold)
         && !micAudibleMissing
       ) {
         this.micJoinSafetyPending = false;
@@ -2782,7 +2782,10 @@ export class AudioSession {
 
       let value = summed * mixHeadroomGain;
       if (this.micJoinSafetyActive) {
-        const targetBlend = this.micExpected && this.backingExpected ? 1 : 0;
+        const targetBlend = (
+          (this.micExpected || this.micExpectationReleaseHold)
+          && (this.backingExpected || this.backingExpectationReleaseHold)
+        ) ? 1 : 0;
         if (this.micJoinSafetyBlend < targetBlend) {
           this.micJoinSafetyBlend = Math.min(
             targetBlend,

@@ -17,6 +17,7 @@ export type MicMediaPathRecoveryObservation = {
   senderFailedPackets?: number | null;
   serverReceivedPacketSerial?: number | null;
   serverReceivedSampleSerial?: number | null;
+  localCaptureBacklogDroppedSamples?: number | null;
   serverMediaPath?: 'webtransport' | 'websocket' | null;
   path: 'webtransport' | 'websocket';
   socketEpoch: number;
@@ -62,6 +63,7 @@ export class MicMediaPathRecovery {
     senderFailedPackets?: number | null;
     serverReceivedPacketSerial?: number | null;
     serverReceivedSampleSerial?: number | null;
+    localCaptureBacklogDroppedSamples?: number | null;
   }): void;
   observe(input: MicMediaPathRecoveryObservation): MicMediaPathRecoveryDecision;
 }

@@ -413,7 +413,6 @@ export class AudioSession {
   private readonly micInputClippingRanges: SampleRange[] = [];
   private micInputRailRunStartSourceSample: number | null = null;
   private micInputRailRunSamples = 0;
-  private micInputRailRunRangeIndex: number | null = null;
   /**
    * Mixer-output frontier continuity.
    *
@@ -1218,6 +1217,86 @@ export class AudioSession {
     timeline.clockCorrectionSamples = 0;
     timeline.resampleTailSample = null;
     timeline.resampleNextTargetSample = null;
+  }
+
+  private resetMicInputRailRun() {
+    this.micInputRailRunStartSourceSample = null;
+    this.micInputRailRunSamples = 0;
+  }
+
+  private micSourceSampleToSessionSample(sourceSample: number, sourceRate: number) {
+    return Math.ceil((sourceSample * this.sampleRate) / sourceRate) + this.mic.originOffset;
+  }
+
+  /**
+   * Detect raw capture flat tops before resampling can blur them.
+   *
+   * The browser worklet calls a sample "on the rail" at
+   * abs(float) >= 32767/32768. After its asymmetric Float32 -> Int16 mapping
+   * that is >= +32766 or <= -32767. Four consecutive source samples match the
+   * product-side clipping policy from capture-observability.js.
+   */
+  private observeMicInputClippingFrame(frame: PcmFrame, sourceRate: number) {
+    if (frame.firstSampleIndex === null) return;
+    const sourceStart = frame.firstSampleIndex;
+    const sampleCount = Math.floor(frame.pcm.byteLength / 2);
+
+    for (let offset = 0; offset < sampleCount; offset += 1) {
+      const sample = frame.pcm.readInt16LE(offset * 2);
+      const onInputRail = sample >= 32_766 || sample <= -32_767;
+      if (!onInputRail) {
+        this.resetMicInputRailRun();
+        continue;
+      }
+
+      const sourceSample = sourceStart + offset;
+      if (this.micInputRailRunSamples === 0) {
+        this.micInputRailRunStartSourceSample = sourceSample;
+      }
+      this.micInputRailRunSamples += 1;
+
+      if (
+        this.micInputRailRunSamples >= 4
+        && this.micInputRailRunStartSourceSample !== null
+      ) {
+        const start = this.micSourceSampleToSessionSample(
+          this.micInputRailRunStartSourceSample,
+          sourceRate,
+        );
+        const mappedEnd = this.micSourceSampleToSessionSample(sourceSample + 1, sourceRate);
+        const end = Math.max(start + 1, mappedEnd);
+
+        if (this.micInputRailRunSamples === 4) {
+          this.micInputClippingRanges.push({ start, end });
+        } else {
+          const active = this.micInputClippingRanges.at(-1);
+          if (active) active.end = Math.max(active.end, end);
+        }
+      }
+    }
+  }
+
+  private micInputClippingAt(position: number) {
+    for (const range of this.micInputClippingRanges) {
+      if (position < range.start) return false;
+      if (position < range.end) return true;
+    }
+    return false;
+  }
+
+  private readMicInputClippingMask(startSample: number, count: number) {
+    if (count <= 0 || this.micInputClippingRanges.length === 0) return null;
+    const mask = new Uint8Array(count);
+    const endSample = startSample + count;
+
+    for (const range of this.micInputClippingRanges) {
+      if (range.end <= startSample) continue;
+      if (range.start >= endSample) break;
+      const start = Math.max(startSample, range.start);
+      const end = Math.min(endSample, range.end);
+      if (end > start) mask.fill(1, start - startSample, end - startSample);
+    }
+    return mask;
   }
 
   /** Capture-scoped detector state; cumulative limiter evidence stays intact. */

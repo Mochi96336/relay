@@ -221,11 +221,12 @@ function sumHeadroomGain(backingGain: number) {
 /**
  * How long the song takes to duck out of a singer's way, and to come back.
  *
- * The song gain and the summing headroom both exist to leave room for a voice,
- * so both follow whether a microphone is expected. Switched instantly that is a
- * step of several dB in the middle of a song - plainly audible, and a worse
- * fault than the level it corrects. A microphone registers before any audio
- * flows, so this ramp is finished long before the first note.
+ * The song gain and its steady summing headroom both follow whether a
+ * microphone is expected. Switched instantly that is a step of several dB in
+ * the middle of a song - plainly audible, and a worse fault than the level it
+ * corrects. Registration often leads real PCM, but correctness must not depend
+ * on that race: the Mic-join safety crossfade below owns any audio that arrives
+ * before this musical ramp settles.
  */
 const SONG_DUCK_RAMP_MS = 150;
 /**

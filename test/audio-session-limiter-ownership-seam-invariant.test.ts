@@ -122,6 +122,54 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
 
     const outputs: Buffer[] = [];
     const recentActions: string[] = [];
+    const limiterTrace: Array<{
+      input: number;
+      detect: number;
+      output: number;
+      gain: number;
+      envelope: number;
+      micGainDb: number;
+    }> = [];
+    const frontierTrace: Array<{
+      input: number;
+      output: number;
+      sourceMissing: boolean;
+      missingBefore: boolean;
+      recoveryBefore: number;
+      recoveryAfter: number;
+    }> = [];
+    if (seed === 0xc0ffee) {
+      const debug = session as any;
+      const originalLimit = debug.limit.bind(session);
+      debug.limit = (value: number, detect: number) => {
+        const output = originalLimit(value, detect);
+        limiterTrace.push({
+          input: value,
+          detect,
+          output,
+          gain: debug.limiterGain,
+          envelope: debug.limiterEnvelope,
+          micGainDb: debug.micGainDbApplied,
+        });
+        return output;
+      };
+
+      const originalFrontier = debug.applyMicFrontierEdge.bind(session);
+      debug.applyMicFrontierEdge = (value: number, sourceMissing: boolean) => {
+        const missingBefore = debug.micFrontierOutputMissing;
+        const recoveryBefore = debug.micFrontierRecoveryFadeRemainingSamples;
+        const output = originalFrontier(value, sourceMissing);
+        frontierTrace.push({
+          input: value,
+          output,
+          sourceMissing,
+          missingBefore,
+          recoveryBefore,
+          recoveryAfter: debug.micFrontierRecoveryFadeRemainingSamples,
+        });
+        return output;
+      };
+    }
     let micExpected = true;
 
     // The fixture intentionally starts with an already-hot sine. Its first
@@ -208,9 +256,16 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     const maximumFrame = Math.floor(maximumAt / FRAME_SAMPLES);
     const actionStart = Math.max(0, maximumFrame - 12);
     const actionTrace = recentActions.slice(actionStart, maximumFrame + 1).join(' ');
+    const previousLimiter = limiterTrace[maximumAt - 1];
+    const currentLimiter = limiterTrace[maximumAt];
+    const previousFrontier = frontierTrace[maximumAt - 1];
+    const currentFrontier = frontierTrace[maximumAt];
+    const internalTrace = seed === 0xc0ffee
+      ? `; limiter ${JSON.stringify({ previous: previousLimiter, current: currentLimiter })}; frontier ${JSON.stringify({ previous: previousFrontier, current: currentFrontier })}`
+      : '';
     assert.ok(
       maximum < MAX_AUDIBLE_STEP,
-      `limiter/ownership seed 0x${seed.toString(16)} emitted ${maximumFrom} -> ${maximumTo} (step ${maximum}) at sample ${maximumAt}, frame ${maximumFrame}, offset ${maximumAt % FRAME_SAMPLES}; recent ${actionTrace}`,
+      `limiter/ownership seed 0x${seed.toString(16)} emitted ${maximumFrom} -> ${maximumTo} (step ${maximum}) at sample ${maximumAt}, frame ${maximumFrame}, offset ${maximumAt % FRAME_SAMPLES}; recent ${actionTrace}${internalTrace}`,
     );
   }
 });

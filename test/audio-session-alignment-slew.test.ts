@@ -137,6 +137,50 @@ describe('AudioSession runtime calibration slew', () => {
     );
   });
 
+  test('fine-tune authority during a runtime slew crossfades from the actually emitted read head', () => {
+    const session = new AudioSession({
+      sampleRate: RATE,
+      frameMs: 20,
+      prebufferMs: 600,
+      backingGain: 0.65,
+      retentionMs: 3_000,
+      backingRetentionMs: 1_000,
+    });
+    session.setMicGainDb(0);
+    session.start(0);
+    session.setAlignment({ calibratedMicLagMs: 100, fineTuneMs: -25 });
+    session.ingestMic(frame(tone(3, 997, 8_000)), RATE, 0);
+
+    const mixed: Buffer[] = [];
+    session.drain((pcm) => mixed.push(pcm), 600, 1);
+
+    // Establish a real bounded runtime trajectory on both sides of the target.
+    session.slewCalibratedMicLagTo(141);
+    session.drain((pcm) => mixed.push(pcm), 620, 1);
+    session.slewCalibratedMicLagTo(73);
+    session.drain((pcm) => mixed.push(pcm), 640, 1);
+
+    // fineTune is immediate authority. The previous implementation recomputed
+    // the "old" read head with this new fine tune and therefore mistook the
+    // ~41 ms jump for the remaining 0.2 ms calibration slew.
+    session.setAlignment({ fineTuneMs: 16 });
+    session.drain((pcm) => mixed.push(pcm), 660, 1);
+    assert.equal(mixed.length, 4);
+
+    const frameSamples = Math.round(RATE * 0.02);
+    const before = mixed[2].readInt16LE((frameSamples - 1) * 2);
+    const after = mixed[3].readInt16LE(0);
+    const boundaryStep = Math.abs(after - before);
+    assert.ok(
+      boundaryStep < 3_000,
+      `fine-tune authority spliced the Mic while calibration was slewing: ${boundaryStep}`,
+    );
+    assert.ok(
+      session.appliedMicAdvanceMs < 90,
+      `fine-tune authority must remain immediate, saw ${session.appliedMicAdvanceMs} ms`,
+    );
+  });
+
   test('ordinary setAlignment remains immediate and cancels a pending runtime target', () => {
     const session = makeSession();
     session.start(0);

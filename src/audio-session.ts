@@ -2046,17 +2046,24 @@ export class AudioSession {
   }
 
   private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
+    const previouslyEmittedAdvanceSamples = this.lastEmittedMicAdvanceSamples;
     const previousCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
     const previousFrontierCorrectionSamples = this.micFrontierCorrectionSamples;
     const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
       ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
       : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;
-    const previousAdvanceSamplesExact = (
+    const modeledPreviousAdvanceSamplesExact = (
       this.appliedMicAdvanceForRequestedMs(
         previousRequestedMicAdvanceMs,
         previousFrontierCorrectionSamples,
       ) * this.sampleRate
     ) / 1000;
+    // Alignment fields can be replaced between emitted frames. In particular,
+    // fineTuneMs is immediate authority and therefore cannot be used to
+    // reconstruct where the preceding frame was actually heard. Once audible
+    // history exists, classify runtime motion from that emitted trajectory.
+    const previousAdvanceSamplesExact =
+      previouslyEmittedAdvanceSamples ?? modeledPreviousAdvanceSamplesExact;
 
     this.advanceCalibrationSlew();
     const startSample = frameIndex * this.frameSamples;
@@ -2066,7 +2073,6 @@ export class AudioSession {
     const advanceSamplesExact = (appliedAdvanceMs * this.sampleRate) / 1000;
     const advanceSamples = Math.round(advanceSamplesExact);
     const micReadStart = startSample + advanceSamples;
-    const previouslyEmittedAdvanceSamples = this.lastEmittedMicAdvanceSamples;
 
     // Calibration and frontier release can each move at the one-percent bound
     // in the same frame. Smooth that combined bounded motion, but never turn a

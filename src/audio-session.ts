@@ -1466,6 +1466,76 @@ export class AudioSession {
    * frontier-acquisition jumps remain deliberate discontinuities and do not use
    * this bounded-rate path.
    */
+  private readSourceEvidenceMask(
+    timeline: PcmTimeline,
+    startSample: number,
+    count: number,
+  ) {
+    // Bit 0 = positioned gap, bit 1 = past the known frontier, bit 2 =
+    // unheadered source. This helper is used only by the bounded Mic slew path;
+    // the ordinary unity-rate hot path keeps its existing aggregate reads.
+    const GAP = 1;
+    const FRONTIER = 2;
+    const UNHEADERED = 4;
+    const mask = new Uint8Array(Math.max(0, count));
+    let cursor = startSample;
+    let remaining = count;
+    let outputOffset = 0;
+
+    if (remaining <= 0) return mask;
+    if (cursor < 0) {
+      const preRoll = Math.min(remaining, -cursor);
+      cursor += preRoll;
+      remaining -= preRoll;
+      outputOffset += preRoll;
+    }
+    if (remaining <= 0) return mask;
+
+    if (timeline.chunks.length === 0 || cursor >= timeline.totalSamples) {
+      mask.fill(FRONTIER, outputOffset, outputOffset + remaining);
+      return mask;
+    }
+
+    let chunkIndex = this.firstChunkAtOrBefore(timeline, cursor);
+    while (remaining > 0) {
+      if (cursor >= timeline.totalSamples || chunkIndex >= timeline.chunks.length) {
+        mask.fill(FRONTIER, outputOffset, outputOffset + remaining);
+        break;
+      }
+
+      const chunk = timeline.chunks[chunkIndex];
+      const chunkEnd = chunk.start + chunk.samples.length;
+      if (cursor >= chunkEnd) {
+        chunkIndex += 1;
+        continue;
+      }
+
+      if (cursor < chunk.start) {
+        const missing = Math.min(
+          remaining,
+          chunk.start - cursor,
+          timeline.totalSamples - cursor,
+        );
+        mask.fill(GAP, outputOffset, outputOffset + missing);
+        cursor += missing;
+        remaining -= missing;
+        outputOffset += missing;
+        continue;
+      }
+
+      const available = Math.min(remaining, chunkEnd - cursor);
+      if (!chunk.positioned) {
+        mask.fill(UNHEADERED, outputOffset, outputOffset + available);
+      }
+      cursor += available;
+      remaining -= available;
+      outputOffset += available;
+      chunkIndex += 1;
+    }
+
+    return mask;
+  }
+
   private readMicSlewedRange(
     startSample: number,
     fromAdvanceSamples: number,
@@ -1481,7 +1551,13 @@ export class AudioSession {
     const lastPosition = frameEndPosition + Math.max(0, lookaheadSamples - 1);
     const sourceStart = Math.floor(Math.min(firstPosition, frameEndPosition, lastPosition));
     const sourceEnd = Math.ceil(Math.max(firstPosition, frameEndPosition, lastPosition)) + 2;
-    const source = this.readRange(this.mic, sourceStart, Math.max(0, sourceEnd - sourceStart));
+    const sourceCount = Math.max(0, sourceEnd - sourceStart);
+    const source = this.readRange(this.mic, sourceStart, sourceCount);
+    const sourceEvidence = this.readSourceEvidenceMask(this.mic, sourceStart, sourceCount);
+    const missingMask = new Uint8Array(this.frameSamples);
+    let gapSamples = 0;
+    let frontierMissingSamples = 0;
+    let unheaderedSamples = 0;
 
     const interpolate = (position: number) => {
       const index = Math.floor(position);
@@ -1493,12 +1569,32 @@ export class AudioSession {
     };
 
     for (let i = 0; i < this.frameSamples; i += 1) {
-      output[i] = interpolate(firstPosition + i * rate);
+      const position = firstPosition + i * rate;
+      const index = Math.floor(position);
+      const fraction = position - index;
+      const offset = index - sourceStart;
+      let evidence = sourceEvidence[offset] ?? 2;
+      // Interpolation really consumes both source samples. If either side is
+      // missing/unheadered, the emitted sample carries that evidence too.
+      if (fraction !== 0) evidence |= sourceEvidence[offset + 1] ?? 2;
+
+      if ((evidence & 2) !== 0) frontierMissingSamples += 1;
+      else if ((evidence & 1) !== 0) gapSamples += 1;
+      if ((evidence & 4) !== 0) unheaderedSamples += 1;
+      if ((evidence & 3) !== 0) missingMask[i] = 1;
+
+      output[i] = interpolate(position);
     }
     for (let i = 0; i < lookaheadSamples; i += 1) {
       output[this.frameSamples + i] = interpolate(frameEndPosition + i);
     }
-    return output;
+    return {
+      samples: output,
+      evidence: { gapSamples, frontierMissingSamples, unheaderedSamples },
+      missingMask,
+      firstPosition,
+      rate,
+    };
   }
 
   /**
@@ -2137,19 +2233,32 @@ export class AudioSession {
     if (this.micHeadroomMs < 0 && this.micExpected) this.micStarvedFrames += 1;
     if (this.backingHeadroomMs < 0 && this.backingExpected) this.backingStarvedFrames += 1;
 
-    // Take evidence is scoped only to source samples that feed this emitted
-    // frame. In particular, the limiter look-ahead may be short without a single
-    // emitted vocal sample being missing, so it is deliberately excluded here.
-    const micReadEvidence = this.readEvidence(this.mic, micReadStart, this.frameSamples);
+    // The extra tail is the limiter's look-ahead, not audio to be emitted.
+    const lookahead = this.limiterLookaheadSamples;
+    const micSlew = boundedRuntimeAdvanceMoved
+      ? this.readMicSlewedRange(
+          startSample,
+          previousAdvanceSamplesExact,
+          advanceSamplesExact,
+          lookahead,
+        )
+      : null;
+
+    // Take evidence must describe the source samples that actually feed the
+    // emitted frame. During a bounded read-rate slew that trajectory is
+    // fractional and begins at the previously-emitted advance, not at the new
+    // rounded micReadStart. Reuse the exact trajectory evidence produced beside
+    // the interpolated PCM; keep the ordinary hot path unchanged.
+    const micReadEvidence = micSlew?.evidence
+      ?? this.readEvidence(this.mic, micReadStart, this.frameSamples);
     const backingReadEvidence = this.readEvidence(this.backing, startSample, this.frameSamples);
-    // Frontier misses are always the trailing portion of readEvidence(): unlike
-    // an internal positioned gap there cannot be later retained PCM beyond the
-    // known frontier. Convert the counts into output-frame boundaries once,
-    // rather than re-running evidence lookup for every sample.
+    // Frontier misses are always the trailing portion of ordinary readEvidence().
+    // Slew frames instead carry an exact per-output missing mask because a
+    // changing read rate can encounter gaps/frontier at non-trailing positions.
     const micFrontierMissingStart = this.frameSamples - micReadEvidence.frontierMissingSamples;
     const backingFrontierMissingStart =
       this.frameSamples - backingReadEvidence.frontierMissingSamples;
-    const micGapMask = micReadEvidence.gapSamples > 0
+    const micGapMask = !micSlew && micReadEvidence.gapSamples > 0
       ? this.readGapMask(this.mic, micReadStart, this.frameSamples)
       : null;
     const backingGapMask = backingReadEvidence.gapSamples > 0
@@ -2168,16 +2277,8 @@ export class AudioSession {
     const clippedBefore = this.clippedSamples;
     const limitedBefore = this.limitedSamples;
 
-    // The extra tail is the limiter's look-ahead, not audio to be emitted.
-    const lookahead = this.limiterLookaheadSamples;
-    let mic = boundedRuntimeAdvanceMoved
-      ? this.readMicSlewedRange(
-          startSample,
-          previousAdvanceSamplesExact,
-          advanceSamplesExact,
-          lookahead,
-        )
-      : this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
+    let mic = micSlew?.samples
+      ?? this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     if (
       canCrossfadeReadHeadJump
       && previouslyEmittedAdvanceSamples !== null
@@ -2225,8 +2326,12 @@ export class AudioSession {
         (mic[i] / 32768) * micGain,
         (mic[i + lookahead] / 32768) * detectMicGain,
       );
-      const micSourceSample = micReadStart + i;
-      const micEvidenceMissing = micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
+      const micSourceSample = micSlew
+        ? micSlew.firstPosition + i * micSlew.rate
+        : micReadStart + i;
+      const micEvidenceMissing = micSlew
+        ? micSlew.missingMask[i] === 1
+        : micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
       // Negative session positions are structural pre-roll, not source failure,
       // so they stay out of MixFrameEvidence. They are still literal silence at
       // the output, though, and crossing from that silence back into real PCM

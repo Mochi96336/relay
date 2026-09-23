@@ -1766,6 +1766,7 @@ function productStatusPayload(nowMs = performance.now()) {
   const take = takeStatus.take;
   const alignment = session.alignment;
   const calibrationStatus = calibration.status();
+  const freshMicUplink = micRuntime.freshUplinkHealthPayload(nowMs);
 
   return buildProductViewModel({
     readiness,
@@ -1773,8 +1774,8 @@ function productStatusPayload(nowMs = performance.now()) {
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
-    micMediaRecoveryDegraded:
-      micRuntime.freshUplinkHealthPayload(nowMs)?.transport.mediaRecoveryDegraded === true,
+    micMediaRecoveryDegraded: freshMicUplink?.transport.mediaRecoveryDegraded === true,
+    micInputClipping: freshMicUplink?.captureClipping?.recentDetected === true,
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),

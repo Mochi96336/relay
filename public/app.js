@@ -168,7 +168,7 @@ let captureInputGapSamples = 0;
 /**
  * Null means the active worklet does not expose interval clipping evidence
  * (rollout-compatible legacy). Once observed, this is the OR of clipped 20 ms
- * windows since the last successfully sent uplink-health report.
+ * windows since the last server-acknowledged uplink-health report.
  */
 let captureInputClippingSinceHealth = null;
 let captureInputClippingRevision = 0;

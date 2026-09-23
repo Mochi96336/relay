@@ -228,6 +228,13 @@ function sumHeadroomGain(backingGain: number) {
  * flows, so this ramp is finished long before the first note.
  */
 const SONG_DUCK_RAMP_MS = 150;
+/**
+ * A Mic can become audible before the slower musical duck has established
+ * two-source headroom. Crossfade from the existing song-only bus into the
+ * already-safe two-source bus instead of asking the final hard clamp to absorb
+ * that semantic join.
+ */
+const MIC_JOIN_SAFETY_CROSSFADE_MS = 10;
 
 /**
  * Live Mic gain is user-controlled and may change while voiced audio is
@@ -310,6 +317,15 @@ export class AudioSession {
   private readonly songDuckStep: number;
   /** 0 while the song has the room to itself, 1 once it is out of a voice's way. */
   private songDuck = 0;
+  /**
+   * A mid-song Mic claim is a source join, not merely a slow gain change.
+   * Until the normal 150 ms duck reaches its steady state, blend from the
+   * previous song-only bus into a mathematically safe two-source bus.
+   */
+  private micJoinSafetyPending = false;
+  private micJoinSafetyActive = false;
+  private micJoinSafetyBlend = 0;
+  private readonly micJoinSafetyStep: number;
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
@@ -440,6 +456,10 @@ export class AudioSession {
       1,
       Math.round((SONG_DUCK_RAMP_MS / 1000) * options.sampleRate),
     );
+    this.micJoinSafetyStep = 1 / Math.max(
+      1,
+      Math.round((MIC_JOIN_SAFETY_CROSSFADE_MS / 1000) * options.sampleRate),
+    );
     this.micGainRampSamples = Math.max(
       1,
       Math.round((MIC_GAIN_RAMP_MS / 1000) * options.sampleRate),
@@ -560,6 +580,9 @@ export class AudioSession {
     // A new session starts from what the room currently is, not from wherever
     // the previous one's ramp happened to stop.
     this.songDuck = this.backingExpected && this.micExpected ? 1 : 0;
+    this.micJoinSafetyPending = false;
+    this.micJoinSafetyActive = false;
+    this.micJoinSafetyBlend = 0;
     this.micGainDbApplied = this.micGainDbValue;
     this.micGainRampRemainingSamples = 0;
     this.resetHealth();
@@ -570,7 +593,25 @@ export class AudioSession {
    * for a source that is supposed to be there; an absent phone is not a fault.
    */
   setMicExpected(expected: boolean) {
+    const changed = expected !== this.micExpected;
+    const joiningExistingBacking = Boolean(
+      changed
+      && expected
+      && this.running
+      && this.backingExpected
+    );
+
     this.micExpected = expected;
+
+    if (joiningExistingBacking) {
+      // Registration can precede the first real PCM by an arbitrary amount.
+      // Arm now, but do not move the audible bus until a real Mic sample exists.
+      this.micJoinSafetyPending = true;
+      this.micJoinSafetyActive = false;
+      this.micJoinSafetyBlend = 0;
+    } else if (changed && !expected && this.micJoinSafetyPending) {
+      this.micJoinSafetyPending = false;
+    }
   }
 
   setBackingExpected(expected: boolean) {
@@ -2530,6 +2571,17 @@ export class AudioSession {
       // must own the same bounded de-click edge as any other audible absence.
       const micAudibleMissing = micSourceSample < 0 || micEvidenceMissing;
 
+      if (
+        this.micJoinSafetyPending
+        && this.backingExpected
+        && this.micExpected
+        && !micAudibleMissing
+      ) {
+        this.micJoinSafetyPending = false;
+        this.micJoinSafetyActive = true;
+        this.micJoinSafetyBlend = 0;
+      }
+
       const micGainDb = this.advanceMicGainDb();
       const micGain = 10 ** (micGainDb / 20);
 
@@ -2677,7 +2729,54 @@ export class AudioSession {
       this.lastEmittedBackingContribution = songContribution;
       this.lastEmittedMicSourceSample = micSourceSample;
       const summed = voice + songContribution;
-      const value = summed * mixHeadroomGain;
+
+      let value = summed * mixHeadroomGain;
+      if (this.micJoinSafetyActive) {
+        const targetBlend = this.micExpected && this.backingExpected ? 1 : 0;
+        if (this.micJoinSafetyBlend < targetBlend) {
+          this.micJoinSafetyBlend = Math.min(
+            targetBlend,
+            this.micJoinSafetyBlend + this.micJoinSafetyStep,
+          );
+        } else if (this.micJoinSafetyBlend > targetBlend) {
+          this.micJoinSafetyBlend = Math.max(
+            targetBlend,
+            this.micJoinSafetyBlend - this.micJoinSafetyStep,
+          );
+        }
+
+        // The old endpoint is exactly the song-only mix that was audible before
+        // this Mic joined. The new endpoint reserves enough headroom for a Mic
+        // at the limiter threshold against the song gain that exists *now*.
+        // A convex crossfade between two bounded endpoints cannot exceed either
+        // endpoint, so this transition never needs the final hard clamp.
+        const songOnlyValue = songContribution * mixHeadroomGain;
+        const safeTwoSourceGain = sumHeadroomGain(songGain);
+        const safeTwoSourceValue = summed * safeTwoSourceGain;
+        const blend = this.micJoinSafetyBlend;
+        value = songOnlyValue * (1 - blend) + safeTwoSourceValue * blend;
+
+        if (
+          targetBlend === 1
+          && blend === 1
+          && this.songDuck === 1
+        ) {
+          // At steady duck the safety endpoint is byte-for-byte the ordinary
+          // two-source gain path, so ownership can return without a seam.
+          this.micJoinSafetyActive = false;
+          this.micJoinSafetyBlend = 0;
+        } else if (
+          targetBlend === 0
+          && blend === 0
+          && micAudibleMissing
+        ) {
+          // If ownership is revoked during the join, keep the crossfade owner
+          // until retained Mic PCM has actually gone silent; otherwise dropping
+          // this state would re-introduce old PCM through the ordinary path.
+          this.micJoinSafetyActive = false;
+        }
+      }
+
       // Normal two-source peaks have already had deterministic summing headroom
       // reserved. Keep this clamp as an invariant/backstop for unexpected future
       // inputs or limiter overshoot, and keep counting it as audible distortion.

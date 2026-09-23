@@ -21,6 +21,7 @@ function mixedFrame(patch: Partial<MixFrameEvidence> = {}): MixFrameEvidence {
     micUnavailableSamples: 0,
     backingUnavailableSamples: 0,
     clippedSamples: 0,
+    micInputClippedSamples: 0,
     limitedSamples: 0,
     unheaderedSamples: 0,
     ...patch,
@@ -56,6 +57,8 @@ function evidence(patch: Partial<TakeQualityEvidence> = {}): TakeQualityEvidence
     backingStarvedMs: 0,
     clippedSamples: 0,
     clippedMs: 0,
+    micInputClippedSamples: 0,
+    micInputClippedMs: 0,
     limitedSamples: 0,
     limitedMs: 0,
     unheaderedSamples: 0,
@@ -190,6 +193,23 @@ test('partial starvation preserves sub-millisecond loss without inflating it to 
   assert.equal(result.evidence.micStarvedMs, (13 / RATE) * 1000);
   assert.equal(result.issues.find((issue) => issue.code === 'mic-starvation')?.severity, 'warning');
   assert.equal(result.verdict, 'review');
+});
+
+test('raw microphone input clipping reviews the Take without pretending the final sum clipped', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), mixedFrame({
+    micInputClippedSamples: 6,
+    clippedSamples: 0,
+  }));
+
+  const result = quality.assessment();
+  assert.equal(result.policyVersion, 'take-quality-v4');
+  assert.equal(result.evidence.micInputClippedSamples, 6);
+  assert.equal(result.evidence.micInputClippedMs, (6 / RATE) * 1000);
+  assert.equal(result.evidence.clippedSamples, 0);
+  assert.equal(result.verdict, 'review');
+  assert.deepEqual(result.issues.map((issue) => issue.code), ['mic-input-clipping']);
+  assert.equal(result.issues[0]?.severity, 'warning');
 });
 
 test('microphone limiting is retained as evidence but is not itself a failed Take', () => {

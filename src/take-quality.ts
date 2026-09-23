@@ -1,6 +1,6 @@
 import type { MixFrameEvidence } from './audio-session.js';
 
-export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v3' as const;
+export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v4' as const;
 
 export type TakeQualityVerdict = 'clean' | 'review' | 'degraded';
 export type TakeQualitySeverity = 'warning' | 'critical';
@@ -59,6 +59,9 @@ export type TakeQualityEvidence = {
   backingStarvedMs: number;
   clippedSamples: number;
   clippedMs: number;
+  /** Mixed output samples derived from a proven pre-gain Mic flat-top. */
+  micInputClippedSamples: number;
+  micInputClippedMs: number;
   limitedSamples: number;
   limitedMs: number;
   unheaderedSamples: number;
@@ -104,6 +107,7 @@ export type TakeQualityIssueCode =
   | 'mic-starvation'
   | 'backing-starvation'
   | 'output-clipping'
+  | 'mic-input-clipping'
   | 'unheadered-pcm'
   | 'timing-fallback'
   | 'calibration-stale'
@@ -234,6 +238,16 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
       value: evidence.clippedSamples,
       unit: 'samples',
       message: 'The final summing stage had to clamp mixed samples.',
+    });
+  }
+
+  if (evidence.micInputClippedSamples > 0) {
+    issues.push({
+      code: 'mic-input-clipping',
+      severity: 'warning',
+      value: evidence.micInputClippedSamples,
+      unit: 'samples',
+      message: 'Recorded microphone samples came from a raw input waveform already flattened before Relay gain.',
     });
   }
 
@@ -370,6 +384,7 @@ export class TakeQualityTracker {
   private micStarvedFrames = 0;
   private backingStarvedFrames = 0;
   private clippedSamples = 0;
+  private micInputClippedSamples = 0;
   private limitedSamples = 0;
   private unheaderedSamples = 0;
   private micUnavailableSamples = 0;
@@ -416,6 +431,7 @@ export class TakeQualityTracker {
     }
 
     this.clippedSamples += audio.clippedSamples;
+    this.micInputClippedSamples += audio.micInputClippedSamples;
     this.limitedSamples += audio.limitedSamples;
     this.unheaderedSamples += audio.unheaderedSamples;
 
@@ -463,6 +479,8 @@ export class TakeQualityTracker {
       backingStarvedMs: toMs(this.backingStarvedSamples),
       clippedSamples: this.clippedSamples,
       clippedMs: toMs(this.clippedSamples),
+      micInputClippedSamples: this.micInputClippedSamples,
+      micInputClippedMs: toMs(this.micInputClippedSamples),
       limitedSamples: this.limitedSamples,
       limitedMs: toMs(this.limitedSamples),
       unheaderedSamples: this.unheaderedSamples,

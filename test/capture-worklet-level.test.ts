@@ -36,6 +36,7 @@ type InputLevel = {
   samples: number;
   railSamples: number;
   maxConsecutiveRailSamples: number;
+  windowMaxConsecutiveRailSamples: number;
 };
 
 async function captureWorkletSource() {
@@ -162,6 +163,7 @@ test('capture worklet contains non-finite input without poisoning PCM, meter, or
     'infinite raw input remains visible as rail diagnostics even though emitted PCM is sanitized',
   );
   assert.equal(level.maxConsecutiveRailSamples, 2);
+  assert.equal(level.windowMaxConsecutiveRailSamples, 2);
   assert.equal(Number.isFinite((processor as any).lastOutputSample), true);
 
   processor.process([]);
@@ -195,6 +197,7 @@ test('capture rail evidence distinguishes isolated full-scale peaks from flat-to
   assert.ok(clippedLevel);
   assert.equal(clippedLevel.railSamples, 8);
   assert.equal(clippedLevel.maxConsecutiveRailSamples, 8);
+  assert.equal(clippedLevel.windowMaxConsecutiveRailSamples, 8);
 });
 
 test('capture rail runs remain continuous across 20 ms level-message boundaries', async () => {
@@ -208,11 +211,27 @@ test('capture rail runs remain continuous across 20 ms level-message boundaries'
   )) as InputLevel[];
   assert.equal(levels.length, 2);
   assert.equal(levels[0].maxConsecutiveRailSamples, 2);
+  assert.equal(levels[0].windowMaxConsecutiveRailSamples, 2);
   assert.equal(levels[1].railSamples, 6, 'rail sample count is capture-lifetime cumulative');
   assert.equal(
     levels[1].maxConsecutiveRailSamples,
     6,
     'a flat top crossing a chunk boundary must remain one continuous run',
+  );
+  assert.equal(
+    levels[1].windowMaxConsecutiveRailSamples,
+    6,
+    'the second level window must inherit the cross-boundary run length while it is still on the rail',
+  );
+
+  processor.process([[new Float32Array(960).fill(0.25)]]);
+  const recovered = latestLevel(processor);
+  assert.ok(recovered);
+  assert.equal(recovered.maxConsecutiveRailSamples, 6, 'lifetime clipping evidence remains diagnostic');
+  assert.equal(
+    recovered.windowMaxConsecutiveRailSamples,
+    0,
+    'a clean later level window must clear recent clipping evidence',
   );
 });
 

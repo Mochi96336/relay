@@ -200,6 +200,55 @@ test('Mic late contiguous recovery fades in even when the raw timeline later has
   assert.ok(Math.abs(sample(recovered.output, FADE) - AMPLITUDE) <= 1);
 });
 
+test('hot Mic recovery after sustained starvation stays inside the limiter without clipping', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: 20,
+    prebufferMs: 0,
+    backingGain: 1,
+    retentionMs: 5_000,
+  });
+  session.setMicGainDb(24);
+  session.setMicExpected(true);
+  session.start(0);
+
+  // Begin below the limiter, then let the live frontier remain exhausted long
+  // enough that any prior limiter reduction has fully released.
+  session.ingestMic(frame(0, CHUNK, 400), RATE, 0);
+  drainOne(session, 0);
+  for (let nowMs = 20; nowMs <= 300; nowMs += 20) {
+    const missing = drainOne(session, nowMs);
+    assert.ok(missing.evidence.micStarvedSamples > 0);
+  }
+
+  // Late contiguous PCM can fill the raw timeline after listeners already heard
+  // starvation. Recover with an intentionally hot signal and enough headroom
+  // that this fixture isolates the audible recovery edge rather than frontier
+  // correction policy.
+  for (let index = 1; index < 32; index += 1) {
+    session.ingestMic(frame(CHUNK * index, CHUNK, 12_000), RATE, 320);
+  }
+
+  const recovered = drainOne(session, 320);
+  assert.equal(recovered.evidence.micGapSamples, 0);
+  assert.equal(recovered.evidence.micStarvedSamples, 0);
+  assert.equal(
+    recovered.evidence.clippedSamples,
+    0,
+    'a hot Mic returning from starvation must be caught before the final clamp',
+  );
+  assert.ok(
+    recovered.evidence.limitedSamples > 0,
+    'the recovery fixture must actually exercise limiter attack',
+  );
+
+  let peak = 0;
+  for (let index = 0; index < CHUNK; index += 1) {
+    peak = Math.max(peak, Math.abs(sample(recovered.output, index)));
+  }
+  assert.ok(peak < 32_767, `recovery reached full-scale PCM: ${peak}`);
+});
+
 test('Mic recovery keeps its fade pending across structural or source silence', () => {
   const session = makeSession();
   session.setMicExpected(true);

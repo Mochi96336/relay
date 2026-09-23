@@ -9,5 +9,6 @@ export type CaptureDispatchClassification = {
 export function classifyCaptureDispatch(input?: {
   currentContextTimeSeconds?: number | null;
   capturedAtContextTimeSeconds?: number | null;
+  fallbackCapturedAtContextTimeSeconds?: number | null;
   backlogMs?: number;
 }): CaptureDispatchClassification;

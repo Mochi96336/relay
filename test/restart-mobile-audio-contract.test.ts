@@ -145,6 +145,16 @@ test('Phone capture dispatch trims stale worklet PCM without shifting later capt
   );
   assert.match(
     appSource,
+    /captureClockOriginContextTime: captureContext\.currentTime/,
+    'each capture graph must anchor a fallback clock for rollout-compatible raw PCM',
+  );
+  assert.match(
+    appSource,
+    /fallbackCapturedAtContextTimeSeconds:\s*graph\.captureClockOriginContextTime \+ \(chunkFirstSampleIndex \/ graph\.context\.sampleRate\)/,
+    'legacy raw PCM must use its positioned graph clock instead of bypassing realtime backlog trimming',
+  );
+  assert.match(
+    appSource,
     /captureDispatch: latestCaptureDispatchLagMs === null \? null : \{[\s\S]*backlogActive: captureDispatchBacklogActive/,
     'capture dispatch freshness must be exported in uplink health',
   );

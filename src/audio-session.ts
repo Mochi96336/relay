@@ -1841,6 +1841,9 @@ export class AudioSession {
     const source = this.readRange(this.mic, sourceStart, sourceCount);
     const sourceEvidence = this.readSourceEvidenceMask(this.mic, sourceStart, sourceCount);
     const missingMask = new Uint8Array(this.frameSamples);
+    const inputClippingMask = this.micInputClippingRanges.length > 0
+      ? new Uint8Array(this.frameSamples)
+      : null;
     const crossesCaptureRestartBoundary = (sourceIndex: number) => (
       this.micCaptureRestartBoundarySamples.includes(sourceIndex + 1)
     );
@@ -1881,6 +1884,13 @@ export class AudioSession {
       else if ((evidence & 1) !== 0) gapSamples += 1;
       if ((evidence & 4) !== 0) unheaderedSamples += 1;
       if ((evidence & 3) !== 0) missingMask[i] = 1;
+      if (inputClippingMask) {
+        let clipped = this.micInputClippingAt(index);
+        if (fraction !== 0 && !crossesCaptureRestartBoundary(index)) {
+          clipped ||= this.micInputClippingAt(index + 1);
+        }
+        if (clipped) inputClippingMask[i] = 1;
+      }
 
       output[i] = interpolate(position);
     }
@@ -1891,6 +1901,7 @@ export class AudioSession {
       samples: output,
       evidence: { gapSamples, frontierMissingSamples, unheaderedSamples },
       missingMask,
+      inputClippingMask,
       firstPosition,
       rate,
     };
@@ -1993,6 +2004,8 @@ export class AudioSession {
 
     let actualCrossfadeUnheaderedSamples = 0;
     let newLegCrossfadeUnheaderedSamples = 0;
+    let actualCrossfadeInputClippedSamples = 0;
+    let newLegCrossfadeInputClippedSamples = 0;
     for (let i = 0; i < crossfadeSamples; i += 1) {
       const newWeight = crossfadeSamples === 1 ? 1 : i / (crossfadeSamples - 1);
       const oldWeight = 1 - newWeight;
@@ -2000,12 +2013,40 @@ export class AudioSession {
       const oldSample = interpolate(oldPosition);
       const oldUnheadered = (evidenceAt(oldPosition) & UNHEADERED) !== 0;
       const newUnheadered = ((newLegEvidence[i] ?? 0) & UNHEADERED) !== 0;
+
+      const oldClippingPosition = (
+        restartBoundary !== null
+        && holdSourceSample !== null
+        && oldPosition >= restartBoundary
+      ) ? holdSourceSample : oldPosition;
+      const oldIndex = Math.floor(oldClippingPosition);
+      const oldFraction = oldClippingPosition - oldIndex;
+      let oldInputClipped = this.micInputClippingAt(oldIndex);
+      if (
+        oldFraction !== 0
+        && !(
+          restartBoundary !== null
+          && oldIndex < restartBoundary
+          && restartBoundary <= oldIndex + 1
+        )
+      ) {
+        oldInputClipped ||= this.micInputClippingAt(oldIndex + 1);
+      }
+      const newInputClipped = this.micInputClippingAt(toStartSample + i);
+
       if (newUnheadered) newLegCrossfadeUnheaderedSamples += 1;
+      if (newInputClipped) newLegCrossfadeInputClippedSamples += 1;
       if (
         (oldWeight > 0 && oldUnheadered)
         || (newWeight > 0 && newUnheadered)
       ) {
         actualCrossfadeUnheaderedSamples += 1;
+      }
+      if (
+        (oldWeight > 0 && oldInputClipped)
+        || (newWeight > 0 && newInputClipped)
+      ) {
+        actualCrossfadeInputClippedSamples += 1;
       }
       current[i] = Math.round(oldSample * oldWeight + current[i] * newWeight);
     }
@@ -2013,6 +2054,8 @@ export class AudioSession {
       samples: current,
       unheaderedSamplesDelta:
         actualCrossfadeUnheaderedSamples - newLegCrossfadeUnheaderedSamples,
+      inputClippedSamplesDelta:
+        actualCrossfadeInputClippedSamples - newLegCrossfadeInputClippedSamples,
     };
   }
 
@@ -2658,6 +2701,8 @@ export class AudioSession {
     const backingGapMask = backingReadEvidence.gapSamples > 0
       ? this.readGapMask(this.backing, startSample, this.frameSamples)
       : null;
+    const micInputClippingMask = micSlew?.inputClippingMask
+      ?? this.readMicInputClippingMask(micReadStart, this.frameSamples);
 
     this.micUnplayableRunFrames = this.micExpected
       && micReadEvidence.gapSamples + micReadEvidence.frontierMissingSamples > 0
@@ -2674,6 +2719,7 @@ export class AudioSession {
     let mic = micSlew?.samples
       ?? this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
     let crossfadeUnheaderedSamplesDelta = 0;
+    let crossfadeMicInputClippedSamplesDelta = 0;
     if (
       canCrossfadeReadHeadJump
       && previouslyEmittedAdvanceSamples !== null
@@ -2687,6 +2733,7 @@ export class AudioSession {
       );
       mic = crossfade.samples;
       crossfadeUnheaderedSamplesDelta = crossfade.unheaderedSamplesDelta;
+      crossfadeMicInputClippedSamplesDelta = crossfade.inputClippedSamplesDelta;
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     // `backingExpected` and `micExpected` are the room's semantic signals for
@@ -2996,6 +3043,12 @@ export class AudioSession {
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
     }
 
+    let micInputClippedSamples = 0;
+    if (micInputClippingMask) {
+      for (const clipped of micInputClippingMask) micInputClippedSamples += clipped;
+    }
+    micInputClippedSamples += crossfadeMicInputClippedSamplesDelta;
+
     const evidence: MixFrameEvidence = {
       micGapSamples: micReadEvidence.gapSamples,
       backingGapSamples: backingReadEvidence.gapSamples,
@@ -3004,6 +3057,7 @@ export class AudioSession {
       micUnavailableSamples: this.micExpected ? 0 : micReadEvidence.frontierMissingSamples,
       backingUnavailableSamples: this.backingExpected ? 0 : backingReadEvidence.frontierMissingSamples,
       clippedSamples: this.clippedSamples - clippedBefore,
+      micInputClippedSamples: Math.max(0, micInputClippedSamples),
       limitedSamples: this.limitedSamples - limitedBefore,
       unheaderedSamples:
         micReadEvidence.unheaderedSamples

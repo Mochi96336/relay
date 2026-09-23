@@ -291,6 +291,7 @@ test('capture-generation advance clears recovery/FIFO authority and fences every
   assert.deepEqual(sendHealth(generation7, PACKET_SAMPLES).pcm, {
     acceptedFrameSerial: 1,
     receivedPacketSerial: 1,
+    receivedSampleSerial: PACKET_SAMPLES,
     mediaPath: 'webtransport',
   });
 

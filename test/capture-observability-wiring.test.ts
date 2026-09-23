@@ -68,6 +68,14 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
     1,
     'raw command-liveness reset must exist only inside the shared correlation helper',
   );
+  const correlationResetStart = source.indexOf('function resetPublisherHealthRequestCorrelation()');
+  const correlationResetEnd = source.indexOf('\n}\n', correlationResetStart) + 2;
+  assert.ok(correlationResetStart >= 0 && correlationResetEnd > correlationResetStart);
+  assert.doesNotMatch(
+    source.slice(correlationResetStart, correlationResetEnd),
+    /captureInputClippingSinceHealth\s*=/,
+    'socket correlation reset must preserve unsent clipping evidence for the replacement control channel',
+  );
 
   assert.match(source, /captureAppliedSettings = null;/, 'stopping capture must clear applied facts');
 });

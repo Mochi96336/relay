@@ -102,6 +102,62 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
   return { maximum, maximumAt, maximumFrom, maximumTo };
 }
 
+test('a newly audible Mic cannot outrun two-source summing headroom', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setBackingExpected(true);
+  session.setMicExpected(false);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  session.ingestBacking(
+    constantMicFrame(1, 0, RATE * 2, 20_000),
+    RATE,
+    0,
+  );
+  const before: Buffer[] = [];
+  session.drain((pcm) => before.push(pcm), 180, 100);
+  assert.equal(session.health().clippedSamples, 0);
+
+  session.setMicExpected(true);
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES * 3, 1_000),
+    RATE,
+    240,
+  );
+
+  const joined: Buffer[] = [];
+  const evidence: MixFrameEvidence[] = [];
+  session.drain((pcm, frameEvidence) => {
+    joined.push(pcm);
+    evidence.push(frameEvidence);
+  }, 200, 1);
+
+  assert.equal(evidence.length, 1);
+  assert.equal(
+    evidence[0]!.limitedSamples,
+    0,
+    'fixture Mic must stay below the limiter so this isolates summing headroom',
+  );
+  assert.equal(
+    evidence[0]!.clippedSamples,
+    0,
+    'a newly audible Mic must not reach the final hard clamp while headroom is still ramping',
+  );
+
+  const edge = maxAdjacentStep([before.at(-1)!, joined[0]!], FRAME_SAMPLES);
+  assert.ok(
+    edge.maximum < MAX_AUDIBLE_STEP,
+    `safe Mic join introduced a hard output step: ${edge.maximumFrom} -> ${edge.maximumTo} (${edge.maximum})`,
+  );
+});
+
 test('bind-time Mic replacement does not inherit old capture limiter reduction', () => {
   const session = new AudioSession({
     sampleRate: RATE,

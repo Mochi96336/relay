@@ -132,6 +132,46 @@ test('capture worklet publishes level evidence beside untouched PCM with rollout
   assert.equal(level.pitchConfidence, 0);
 });
 
+test('capture worklet contains non-finite input without poisoning PCM, meter, or edge state', async () => {
+  const processor = await loadCaptureProcessor();
+  enablePcmEnvelope(processor);
+
+  const input = new Float32Array(960).fill(0.25);
+  input[100] = Number.NaN;
+  input[101] = Number.POSITIVE_INFINITY;
+  input[102] = Number.NEGATIVE_INFINITY;
+  input[959] = Number.NaN;
+
+  assert.equal(processor.process([[input]]), true);
+
+  const pcm = processor.port.messages[0] as PcmMessage;
+  const samples = new Int16Array(pcm.buffer);
+  for (const index of [100, 101, 102, 959]) {
+    assert.equal(samples[index], 0, `non-finite input at ${index} must become one silent sample`);
+  }
+  assert.ok(Math.abs(samples[99] - Math.round(0.25 * 0x7fff)) <= 1);
+  assert.ok(Math.abs(samples[103] - Math.round(0.25 * 0x7fff)) <= 1);
+
+  const level = latestLevel(processor);
+  assert.ok(level);
+  assert.equal(Number.isFinite(level.peakDbfs), true);
+  assert.equal(Number.isFinite(level.rmsDbfs), true);
+  assert.equal(
+    level.railSamples,
+    2,
+    'infinite raw input remains visible as rail diagnostics even though emitted PCM is sanitized',
+  );
+  assert.equal(level.maxConsecutiveRailSamples, 2);
+  assert.equal(Number.isFinite((processor as any).lastOutputSample), true);
+
+  processor.process([]);
+  assert.equal(
+    Number.isFinite((processor as any).lastOutputSample),
+    true,
+    'a later input-gap fade must not inherit NaN state',
+  );
+});
+
 test('capture rail evidence distinguishes isolated full-scale peaks from flat-top clipping', async () => {
   const clean = await loadCaptureProcessor();
   const sine = new Float32Array(960);

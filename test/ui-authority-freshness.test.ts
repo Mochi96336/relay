@@ -275,8 +275,8 @@ test('publisher command authority waits for correlated ACKs plus registration an
   );
   assert.match(
     publisherSource,
-    /function sendAudioUplinkHealth\(\) \{[\s\S]*const sentAtMs = performance\.now\(\);[\s\S]*publisherCommandLiveness\.beginHealthRequest\(sentAtMs\)[\s\S]*audioUplinkHealthPayload\(healthRequestId\)[\s\S]*if \(!result\.sent\) publisherCommandLiveness\.cancelHealthRequest\(healthRequestId\)/,
-    'only successfully-sent health requests may become command freshness evidence',
+    /function sendAudioUplinkHealth\(\) \{[\s\S]*const sentAtMs = performance\.now\(\);[\s\S]*publisherCommandLiveness\.beginHealthRequest\(sentAtMs\)[\s\S]*audioUplinkHealthPayload\(healthRequestId\)[\s\S]*if \(!result\.sent\) \{[\s\S]*publisherCommandLiveness\.cancelHealthRequest\(healthRequestId\);[\s\S]*\} else \{[\s\S]*pendingCaptureClippingHealth\.set\(healthRequestId,/,
+    'failed health sends must cancel command freshness evidence, while success-only state may retain the correlated request',
   );
   assert.match(
     publisherSource,

@@ -96,6 +96,7 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.deepEqual(lastAck(first).pcm, {
     acceptedFrameSerial: 0,
     receivedPacketSerial: 0,
+    receivedSampleSerial: 0,
     mediaPath: 'websocket',
   });
 
@@ -185,6 +186,7 @@ test('receiver packet progress is distinct from AudioSession accepted-frame prog
   assert.deepEqual(lastAck(current).pcm, {
     acceptedFrameSerial: 0,
     receivedPacketSerial: 1,
+    receivedSampleSerial: 480,
     mediaPath: 'websocket',
   });
 });

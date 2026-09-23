@@ -327,6 +327,13 @@ export class AudioSession {
   private micJoinSafetyActive = false;
   private micJoinSafetyBlend = 0;
   private readonly micJoinSafetyStep: number;
+  /**
+   * Expectation is transport/product intent, not proof that retained source PCM
+   * has stopped reaching the bus. Keep two-source duck/headroom ownership until
+   * the mixer itself has completed that source's audible fade to silence.
+   */
+  private micExpectationReleaseHold = false;
+  private backingExpectationReleaseHold = false;
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
@@ -584,6 +591,8 @@ export class AudioSession {
     this.micJoinSafetyPending = false;
     this.micJoinSafetyActive = false;
     this.micJoinSafetyBlend = 0;
+    this.micExpectationReleaseHold = false;
+    this.backingExpectationReleaseHold = false;
     this.micGainDbApplied = this.micGainDbValue;
     this.micGainRampRemainingSamples = 0;
     this.resetHealth();
@@ -595,28 +604,47 @@ export class AudioSession {
    */
   setMicExpected(expected: boolean) {
     const changed = expected !== this.micExpected;
+    const wasReleaseHeld = this.micExpectationReleaseHold;
     const joiningExistingBacking = Boolean(
       changed
       && expected
       && this.running
       && this.backingExpected
+      && !wasReleaseHeld
     );
 
     this.micExpected = expected;
 
-    if (joiningExistingBacking) {
-      // Registration can precede the first real PCM by an arbitrary amount.
-      // Arm now, but do not move the audible bus until a real Mic sample exists.
-      this.micJoinSafetyPending = true;
-      this.micJoinSafetyActive = false;
-      this.micJoinSafetyBlend = 0;
-    } else if (changed && !expected && this.micJoinSafetyPending) {
-      this.micJoinSafetyPending = false;
+    if (changed && !expected && this.running) {
+      // The old capture may still own retained/fading PCM. Do not release bus
+      // safety until mix output proves that source has actually reached silence.
+      this.micExpectationReleaseHold = true;
+      if (this.micJoinSafetyPending) this.micJoinSafetyPending = false;
+    } else if (changed && expected) {
+      // If false -> true happened while the release was still held, listeners
+      // never heard a source disappearance. Continuing the existing bus is the
+      // seamless path; starting a new song-only -> two-source join would itself
+      // create a discontinuity.
+      this.micExpectationReleaseHold = false;
+      if (joiningExistingBacking) {
+        // Registration can precede the first real PCM by an arbitrary amount.
+        // Arm now, but do not move the audible bus until a real Mic sample exists.
+        this.micJoinSafetyPending = true;
+        this.micJoinSafetyActive = false;
+        this.micJoinSafetyBlend = 0;
+      }
     }
   }
 
   setBackingExpected(expected: boolean) {
+    const changed = expected !== this.backingExpected;
     this.backingExpected = expected;
+
+    if (changed && !expected && this.running) {
+      this.backingExpectationReleaseHold = true;
+    } else if (changed && expected) {
+      this.backingExpectationReleaseHold = false;
+    }
   }
 
   get micGainDb() {
@@ -2535,7 +2563,10 @@ export class AudioSession {
     // voice can actually arrive: a song playing to a room where nobody has
     // taken the microphone was being quietened for a singer who was not there,
     // and the balance a real performance was tuned against is unchanged.
-    const duckTarget = this.backingExpected && this.micExpected ? 1 : 0;
+    const duckTarget = (
+      (this.backingExpected || this.backingExpectationReleaseHold)
+      && (this.micExpected || this.micExpectationReleaseHold)
+    ) ? 1 : 0;
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
     const micSlewFrameEndPosition = micSlew
       ? micSlew.firstPosition + this.frameSamples * micSlew.rate
@@ -2689,6 +2720,15 @@ export class AudioSession {
       } else {
         voice = this.applyMicFrontierEdge(voice, micAudibleMissing);
       }
+      if (
+        this.micExpectationReleaseHold
+        && !this.micExpected
+        && this.micFrontierOutputMissing
+        && this.micFrontierFadeRemainingSamples <= 0
+        && !micReplacementEdgeActive
+      ) {
+        this.micExpectationReleaseHold = false;
+      }
 
       let songContribution = (song[i] / 32768) * songGain;
       const backingSourceSample = startSample + i;
@@ -2725,6 +2765,15 @@ export class AudioSession {
         this.resetBackingFrontierEdge();
       } else {
         songContribution = this.applyBackingFrontierEdge(songContribution, backingSourceMissing);
+      }
+      if (
+        this.backingExpectationReleaseHold
+        && !this.backingExpected
+        && this.backingFrontierOutputMissing
+        && this.backingFrontierFadeRemainingSamples <= 0
+        && !backingReplacementEdgeActive
+      ) {
+        this.backingExpectationReleaseHold = false;
       }
       this.lastEmittedMicContribution = voice;
       this.lastEmittedBackingContribution = songContribution;

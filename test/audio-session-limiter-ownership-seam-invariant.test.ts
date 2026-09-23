@@ -63,6 +63,18 @@ function constantMicFrame(
   return { generation, firstSampleIndex, pcm };
 }
 
+function constantBackingFrame(
+  firstSampleIndex: number,
+  count: number,
+  value: number,
+): PcmFrame {
+  const pcm = Buffer.alloc(count * 2);
+  for (let index = 0; index < count; index += 1) {
+    pcm.writeInt16LE(value, index * 2);
+  }
+  return { generation: 1, firstSampleIndex, pcm };
+}
+
 function seeded(seed: number) {
   let state = seed >>> 0;
   return () => {
@@ -101,6 +113,56 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
 
   return { maximum, maximumAt, maximumFrom, maximumTo };
 }
+
+test('a newly expected hot Mic cannot clip the bus before song headroom ramp catches up', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setBackingExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  // Let the song own the room first. With no Mic expected, both its gain and
+  // the shared sum-headroom stay at their unity/single-source positions.
+  session.ingestBacking(
+    constantBackingFrame(0, FRAME_SAMPLES * 12, 20_000),
+    RATE,
+    0,
+  );
+  session.drain(() => {}, 180, 100);
+  assert.equal(session.health().clippedSamples, 0);
+
+  // A Mic can be claimed while the song is already live. Do not assume the
+  // 150 ms duck/headroom ramp completes before its first PCM arrives.
+  session.setMicExpected(true);
+  session.ingestMic(
+    constantMicFrame(1, 0, FRAME_SAMPLES, 12_000),
+    RATE,
+    220,
+  );
+  session.ingestMic(
+    constantMicFrame(1, FRAME_SAMPLES, FRAME_SAMPLES, 12_000),
+    RATE,
+    240,
+  );
+
+  let evidence: MixFrameEvidence | null = null;
+  session.drain((_pcm, frameEvidence) => {
+    evidence = frameEvidence;
+  }, 200, 1);
+
+  assert.ok(evidence);
+  assert.equal(
+    evidence!.clippedSamples,
+    0,
+    'a hot joining Mic must not outrun the bus-level duck/headroom ramp',
+  );
+});
 
 test('bind-time Mic replacement does not inherit old capture limiter reduction', () => {
   const session = new AudioSession({

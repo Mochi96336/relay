@@ -215,6 +215,67 @@ test('stalled WS recovery requests exactly one physical replacement and fences l
   assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), false);
 });
 
+test('recovered capture backlog stays local when later sample coverage is scored', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport();
+  const socket = new EventSocket();
+  transport.bind(socket);
+
+  const sendPackets = (count: number) => {
+    for (let index = 0; index < count; index += 1) {
+      assert.equal(transport.send(new Uint8Array(100)).sent, true);
+    }
+  };
+  const emitAck = (
+    acceptedFrameSerial: number,
+    receivedPacketSerial: number,
+    receivedSampleSerial: number,
+  ) => socket.emitJson({
+    type: 'audio-uplink-health-ack',
+    version: 1,
+    captureGeneration: 7,
+    pcm: {
+      acceptedFrameSerial,
+      receivedPacketSerial,
+      receivedSampleSerial,
+      mediaPath: 'websocket',
+    },
+  });
+
+  sendPackets(100);
+  transport.sendControlJson({
+    ...health(7, 48_000),
+    droppedSamples: { captureBacklog: 0 },
+  });
+  emitAck(100, 100, 48_000);
+
+  // 43.2k samples were intentionally discarded before packetization, then the
+  // page caught up before the next 1 Hz health snapshot. backlogActive is
+  // already false here, so only the cumulative drop counter can attribute the
+  // missing capture time correctly.
+  sendPackets(100);
+  transport.sendControlJson({
+    ...health(7, 96_000),
+    captureDispatch: {
+      lagMs: 20,
+      maxLagMs: 900,
+      backlogMs: 200,
+      backlogActive: false,
+    },
+    droppedSamples: { captureBacklog: 43_200 },
+  });
+  emitAck(101, 200, 52_800);
+
+  const decision = (transport as any).lastMediaRecoveryDecision;
+  assert.equal(decision?.reason, 'server-pcm-coverage-healthy');
+  assert.equal(decision?.packetCoverage, 1);
+  assert.equal(decision?.sampleCoverage, 1);
+  assert.equal(socket.closeCalls.length, 0);
+  assert.equal(transport.stats().path, 'websocket');
+
+  transport.close();
+});
+
 test('capture-dispatch backlog rebaselines media recovery instead of blaming WT', async () => {
   FakeWebTransport.instances.length = 0;
   const { PreferredAudioTransport } = await import(moduleUrl.href);

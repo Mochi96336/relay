@@ -182,6 +182,20 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     return t('takeHistory.group.recovered');
   }
 
+  function qualityLabel(verdict) {
+    if (verdict === 'review') return t('takeHistory.quality.review');
+    if (verdict === 'degraded') return t('takeHistory.quality.degraded');
+    return '';
+  }
+
+  function entryMeta(entry) {
+    const duration = formatDuration(entry.artifact.durationMs);
+    const quality = qualityLabel(entry.qualityVerdict);
+    return quality
+      ? t('takeHistory.meta.quality', { duration, quality })
+      : duration;
+  }
+
   function createGroup(group) {
     const section = document.createElement('section');
     section.className = 'take-history-group';
@@ -219,7 +233,8 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       const when = document.createElement('strong');
       when.textContent = formatRecordedAt(entry.endedAtMs);
       const meta = document.createElement('span');
-      meta.textContent = formatDuration(entry.artifact.durationMs);
+      meta.textContent = entryMeta(entry);
+      button.dataset.qualityVerdict = entry.qualityVerdict ?? '';
       button.append(when, meta);
       button.addEventListener('click', (event) => {
         const keyboardActivation = event.detail === 0;
@@ -257,7 +272,8 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
 
     review.hidden = false;
     selectedWhen.textContent = formatRecordedAt(selected.endedAtMs);
-    selectedMeta.textContent = formatDuration(selected.artifact.durationMs);
+    selectedMeta.textContent = entryMeta(selected);
+    selectedSummary.dataset.qualityVerdict = selected.qualityVerdict ?? '';
 
     const href = artifactUrl(selected.artifact.url);
     if (currentArtifactHref !== href) {
@@ -280,9 +296,12 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     }
     const latest = historyEntries[0];
     root.hidden = false;
-    recentButton.textContent = t('takeHistory.last', {
-      duration: formatDuration(latest.artifact.durationMs),
-    });
+    const duration = formatDuration(latest.artifact.durationMs);
+    const quality = qualityLabel(latest.qualityVerdict);
+    recentButton.textContent = quality
+      ? t('takeHistory.lastQuality', { duration, quality })
+      : t('takeHistory.last', { duration });
+    recentButton.dataset.qualityVerdict = latest.qualityVerdict ?? '';
   }
 
   function renderHistory() {

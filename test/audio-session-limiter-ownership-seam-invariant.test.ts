@@ -102,6 +102,64 @@ function maxAdjacentStep(buffers: Buffer[], firstComparedSample = 0) {
   return { maximum, maximumAt, maximumFrom, maximumTo };
 }
 
+test('Backing returning from full silence cannot outrun two-source summing headroom', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setBackingExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  // Keep Mic continuously audible while Backing leaves the room completely.
+  session.ingestMic(
+    constantMicFrame(1, 0, RATE * 3, 1_000),
+    RATE,
+    0,
+  );
+  session.ingestBacking(
+    constantMicFrame(1, 0, RATE, 20_000),
+    RATE,
+    0,
+  );
+  session.drain(() => {}, 180, 100);
+
+  session.setBackingExpected(false);
+  session.retireBackingCapture();
+  for (let nowMs = 200; nowMs <= 400; nowMs += 20) {
+    session.drain(() => {}, nowMs, 1);
+  }
+  assert.equal(session.health().clippedSamples, 0);
+
+  // After the source has genuinely gone silent, a new Backing capture can
+  // become audible immediately when ownership returns.
+  session.setBackingExpected(true);
+  session.ingestBacking(
+    constantMicFrame(2, 0, FRAME_SAMPLES * 3, 20_000),
+    RATE,
+    440,
+  );
+
+  const evidence: MixFrameEvidence[] = [];
+  session.drain((_pcm, frameEvidence) => evidence.push(frameEvidence), 420, 1);
+  assert.equal(evidence.length, 1);
+  assert.equal(
+    evidence[0]!.limitedSamples,
+    0,
+    'fixture Mic must stay below the limiter so this isolates Backing join headroom',
+  );
+  assert.equal(
+    evidence[0]!.clippedSamples,
+    0,
+    'Backing returning from silence must not beat two-source headroom into place',
+  );
+});
+
 test('bind-time Mic replacement does not inherit old capture limiter reduction', () => {
   const session = new AudioSession({
     sampleRate: RATE,

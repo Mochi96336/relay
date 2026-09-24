@@ -599,20 +599,35 @@ function handleCaptureWorkletMessage(event, graph) {
       return;
     }
     if (event.data?.type === 'input-gap') {
+      const digitalSilence = event.data.reason === 'digital-silence';
+
+      // Exact digital zero is strong audibility evidence, but not positive proof
+      // that the capture graph is broken: headset/OS noise gates can legitimately
+      // render exact zeros while a live track remains healthy. The server-side
+      // MicAudibilityMonitor sees the same PCM and can surface Retry Mic if the
+      // room stays inaudible. Do not promote this heuristic into automatic
+      // generation replacement.
+      if (digitalSilence) {
+        console.warn(
+          'Microphone input gap',
+          'rendering exact digital silence',
+          event.data.recovered ? '(recovered)' : '(continuing)',
+        );
+        return;
+      }
+
       const samples = Number(event.data.samples);
       if (Number.isSafeInteger(samples) && samples > 0) captureInputGapSamples += samples;
       const decision = micCaptureRecovery.noteInputGap(captureSnapshot(), {
         recovered: event.data.recovered === true,
       });
-      // Active input loss is source authority, not merely diagnostics. Publish
-      // both edges immediately so Relay can fail closed and later require PCM
-      // beyond the exact recovery cursor before declaring the Mic live again.
+      // A missing worklet input channel is positive source-failure authority.
+      // Publish both edges immediately so Relay can fail closed and later
+      // require PCM beyond the exact recovery cursor before declaring Mic live.
       sendAudioUplinkHealth();
       console.warn(
         'Microphone input gap',
-        event.data.reason === 'digital-silence'
-          ? 'rendering exact digital silence'
-          : `${event.data.quanta} quanta padded with silence`,
+        `${event.data.quanta} quanta padded with silence`,
         event.data.recovered ? '(recovered)' : '(continuing)',
       );
       if (decision.rebuild) void rebuildPublisherCaptureGraph('input-gap');

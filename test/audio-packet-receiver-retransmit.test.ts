@@ -145,6 +145,35 @@ describe('AudioPacketReceiver retransmission', () => {
     assert.equal(r.retransmitStats().budgetDeniedPackets, 2);
   });
 
+  it('keeps a hole that found no budget waiting, and asks for it once budget returns', () => {
+    const { r, send } = receiver({ retransmitRequestsPerSecond: 2, retransmitHoldMs: 1_000 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    send(4, 2);
+    send(6, 3);
+    assert.deepEqual(r.takeRetransmitRequests(3), [1, 3]);
+    assert.equal(r.retransmitStats().budgetDeniedPackets, 1);
+
+    // No later packet proves hole 5 again; refill alone is enough.
+    r.flush(600);
+    assert.deepEqual(r.takeRetransmitRequests(600), [5]);
+    assert.equal(r.retransmitStats().budgetDeniedPackets, 1, 'a waiting hole is counted once');
+  });
+
+  it('spends scarce budget on the hole missing longest, not the newest reordering', () => {
+    const { r, send } = receiver({ retransmitRequestsPerSecond: 1, retransmitHoldMs: 2_000 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    assert.deepEqual(r.takeRetransmitRequests(1), [1], 'the one initial token');
+    send(4, 2); // 3 goes missing and waits for budget
+    // Many younger holes appear before the next token.
+    for (let sequence = 6; sequence <= 20; sequence += 2) send(sequence, 500 + sequence);
+    r.flush(1_010);
+    assert.deepEqual(r.takeRetransmitRequests(1_010), [3]);
+  });
+
   it('records no requests for a sender that cannot answer them', () => {
     const { r, send } = receiver();
     r.setRetransmitRequestsEnabled(false);

@@ -80,6 +80,7 @@ type Outcome = {
   recovered: number;
   retried: number;
   requested: number;
+  budgetDenied: number;
   /** Packet indices not heard in time, with when they were emitted (or null). */
   missed: [number, number | null][];
 };
@@ -312,6 +313,7 @@ async function simulate(scenario: Scenario, pageRetransmits: boolean, seed: numb
     recovered: stats.recoveredPackets,
     retried: stats.retriedPackets,
     requested: stats.requestedPackets,
+    budgetDenied: stats.budgetDeniedPackets,
     missed,
   };
 }
@@ -358,6 +360,7 @@ async function compare(scenario: Scenario, seed = 1) {
       requested: withRepair.requested,
       recovered: withRepair.recovered,
       retried: withRepair.retried,
+      budgetDenied: withRepair.budgetDenied,
     }));
   }
   return { without, withRepair };

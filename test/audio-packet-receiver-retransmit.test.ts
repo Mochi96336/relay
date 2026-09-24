@@ -118,6 +118,32 @@ describe('AudioPacketReceiver retransmission', () => {
     assert.equal(r.retransmitStats().budgetDeniedPackets, 2);
   });
 
+  it('refunds request budget when a promoted repeat was never sent', () => {
+    const { r, send } = receiver({ retransmitRequestsPerSecond: 1 });
+    send(0, 0);
+    send(2, 1);
+    assert.deepEqual(r.takeRetransmitRequests(), [1]);
+    assert.equal(r.retransmitStats().requestedPackets, 1);
+
+    assert.equal(r.cancelRetransmitRequests([1]), 1);
+    assert.equal(r.retransmitStats().requestedPackets, 0);
+
+    // No time has passed to refill the 1/s bucket. Packet 3 merely re-proves
+    // the same still-missing sequence 1 while 2 is already pending. The request
+    // is possible only if cancellation returned the token that never left Relay.
+    send(3, 2);
+    assert.deepEqual(
+      r.takeRetransmitRequests(),
+      [1],
+      'an unsent request must not consume the next real recovery opportunity',
+    );
+    assert.deepEqual(r.retransmitStats(), {
+      requestedPackets: 1,
+      recoveredPackets: 0,
+      budgetDeniedPackets: 0,
+    });
+  });
+
   it('records no requests for a sender that cannot answer them', () => {
     const { r, send } = receiver();
     r.setRetransmitRequestsEnabled(false);

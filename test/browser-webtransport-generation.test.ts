@@ -92,6 +92,7 @@ describe('WebTransport write generation ownership', () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({
       datagramQueuePackets: 1,
+      datagramBacklogPackets: 0,
       WebTransportClass: DeferredWebTransport,
     });
 
@@ -121,6 +122,7 @@ describe('WebTransport write generation ownership', () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({
       datagramQueuePackets: 1,
+      datagramBacklogPackets: 0,
       WebTransportClass: DeferredWebTransport,
     });
 

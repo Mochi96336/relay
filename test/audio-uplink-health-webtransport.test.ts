@@ -72,4 +72,24 @@ describe('WebTransport uplink health fields', () => {
     (badQueue.transport as Record<string, unknown>).datagramQueuePackets = -1;
     assert.equal(parseAudioUplinkHealth(badQueue), null);
   });
+
+  it('carries datagram backlog counters when present and leaves older pages unchanged', () => {
+    const payload = healthPayload();
+    Object.assign(payload.transport, {
+      webTransportBacklogQueued: 12,
+      webTransportBacklogExpired: 2,
+    });
+    const parsed = parseAudioUplinkHealth(payload);
+    assert.ok(parsed);
+    assert.equal(parsed.transport.webTransportBacklogQueued, 12);
+    assert.equal(parsed.transport.webTransportBacklogExpired, 2);
+
+    const older = parseAudioUplinkHealth(healthPayload());
+    assert.ok(older);
+    assert.equal('webTransportBacklogQueued' in older.transport, false);
+
+    const malformed = healthPayload();
+    Object.assign(malformed.transport, { webTransportBacklogExpired: -1 });
+    assert.equal(parseAudioUplinkHealth(malformed), null);
+  });
 });

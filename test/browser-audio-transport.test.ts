@@ -422,12 +422,54 @@ describe('browser AudioTransport', () => {
     assert.deepEqual(socket.sent, [], 'and nothing is duplicated onto the socket');
   });
 
-  it('still reports congestion once the outgoing datagram queue is genuinely full', async () => {
+  it('holds a burst past the write budget and writes it in order as slots settle', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     QueueingWebTransport.instances.length = 0;
     const transport = new PreferredAudioTransport({
       minimumPacketBytes: 26,
       datagramQueuePackets: 2,
+      WebTransportClass: QueueingWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=burst',
+    });
+
+    const instance = QueueingWebTransport.instances.at(-1)!;
+    // A main-thread stall releases several chunks back to back: six datagrams
+    // against a write budget of two, with no task boundary in between.
+    const results = Array.from({ length: 6 }, (_, index) => (
+      transport.send(new Uint8Array(100).fill(index + 1).buffer)
+    ));
+    assert.ok(results.every((result) => result.sent), 'a burst is not congestion');
+    assert.deepEqual(results.map((result) => result.queued === true), [
+      false, false, true, true, true, true,
+    ]);
+    assert.equal(instance.writer.writes.length, 2);
+
+    for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+    assert.deepEqual(
+      instance.writer.writes.map((write) => write[0]),
+      [1, 2, 3, 4, 5, 6],
+      'every held datagram is written, in capture order',
+    );
+    const stats = transport.stats();
+    assert.equal(stats.webTransportCongestedRejects, 0);
+    assert.equal(stats.webTransportBacklogQueued, 4);
+    assert.equal(stats.webTransportPacketsSubmitted, 6);
+    assert.equal(stats.webTransportDemotions, 0);
+    assert.deepEqual(socket.sent, [], 'and nothing is duplicated onto the socket');
+  });
+
+  it('still reports congestion once the bounded backlog is genuinely full', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    QueueingWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      datagramQueuePackets: 2,
+      datagramBacklogPackets: 1,
       WebTransportClass: QueueingWebTransport,
     });
     const socket = new FakeSocket();
@@ -440,19 +482,51 @@ describe('browser AudioTransport', () => {
     const instance = QueueingWebTransport.instances.at(-1)!;
     assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
     assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
+    assert.equal(transport.send(new Uint8Array(100).buffer).queued, true);
 
-    // Depth 2 is now occupied and nothing has settled yet.
+    // Both write slots and the one backlog slot are occupied.
     const overflow = transport.send(new Uint8Array(100).buffer);
     assert.equal(overflow.sent, false);
     assert.equal(overflow.reason, 'congested');
-    assert.equal(instance.writer.writes.length, 2, 'an overflowing datagram is dropped, not buffered');
+    assert.equal(instance.writer.writes.length, 2);
     assert.equal(transport.stats().webTransportCongestedRejects, 1);
 
     // Once the queue drains the path accepts again rather than staying demoted.
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+    assert.equal(instance.writer.writes.length, 3, 'the held datagram went out first');
     assert.equal(transport.send(new Uint8Array(100).buffer).sent, true);
     assert.equal(transport.stats().webTransportDemotions, 0);
+  });
+
+  it('expires held datagrams older than the realtime backlog instead of sending stale voice', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    QueueingWebTransport.instances.length = 0;
+    let nowMs = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      datagramQueuePackets: 1,
+      datagramBacklogMs: 200,
+      WebTransportClass: QueueingWebTransport,
+      nowMs: () => nowMs,
+    });
+    transport.bind(new FakeSocket());
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=stale',
+    });
+
+    const instance = QueueingWebTransport.instances.at(-1)!;
+    transport.send(new Uint8Array(100).fill(1).buffer);
+    transport.send(new Uint8Array(100).fill(2).buffer);
+    nowMs = 150;
+    transport.send(new Uint8Array(100).fill(3).buffer);
+    nowMs = 250;
+    for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+
+    assert.deepEqual(instance.writer.writes.map((write) => write[0]), [1, 3]);
+    const stats = transport.stats();
+    assert.equal(stats.webTransportBacklogExpired, 1);
+    assert.equal(stats.webTransportCongestedRejects, 1, 'an expired datagram is still a congestion hole');
   });
 
   it('bounds datagrams locally even when the platform refuses a deeper queue', async () => {
@@ -504,6 +578,7 @@ describe('browser AudioTransport', () => {
     // stream's desiredSize, so fill the bound rather than poking the writer.
     const transport = new PreferredAudioTransport({
       datagramQueuePackets: 1,
+      datagramBacklogPackets: 0,
       WebTransportClass: FakeWebTransport,
     });
     const socket = new FakeSocket();

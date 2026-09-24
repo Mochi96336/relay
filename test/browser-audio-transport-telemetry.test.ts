@@ -56,6 +56,7 @@ test('transport telemetry survives control reconnect and resets only for a fresh
     // counts datagrams still in flight rather than reading the writable stream's
     // desiredSize, which only reports whether a write is outstanding.
     datagramQueuePackets: 1,
+    datagramBacklogPackets: 0,
     WebTransportClass: FakeWebTransport,
   });
   const socket = new FakeSocket();

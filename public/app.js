@@ -610,8 +610,9 @@ function handleCaptureWorkletMessage(event, graph) {
       sendAudioUplinkHealth();
       console.warn(
         'Microphone input gap',
-        event.data.quanta,
-        'quanta padded with silence',
+        event.data.reason === 'digital-silence'
+          ? 'rendering exact digital silence'
+          : `${event.data.quanta} quanta padded with silence`,
         event.data.recovered ? '(recovered)' : '(continuing)',
       );
       if (decision.rebuild) void rebuildPublisherCaptureGraph('input-gap');

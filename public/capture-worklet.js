@@ -6,6 +6,13 @@ const INPUT_RAIL_THRESHOLD = 0x7fff / 0x8000;
 const INPUT_GAP_DECLICK_MS = 2;
 const INPUT_GAP_REPORT_REFERENCE_RATE = 48_000;
 const INPUT_GAP_REPORT_REFERENCE_QUANTA = 400;
+// An unprocessed microphone's noise floor always moves at least one LSB. A
+// present input channel that stays exactly zero this long is not a quiet room:
+// it is an interrupted or silenced capture (seen after OS audio-session
+// interruptions) still rendering digital silence. It is reported through the
+// same input-gap contract as a missing channel, so Relay stops calling the
+// Mic live and the page may rebuild the capture.
+const DIGITAL_SILENCE_REPORT_MS = 2_000;
 const VISUAL_ANALYSIS_PLACEHOLDER = Object.freeze({
   spectrumBands: Object.freeze([0, 0, 0, 0, 0]),
   f0Hz: null,
@@ -55,6 +62,12 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.recoveryFadeStartSample = 0;
     this.lastOutputSample = 0;
     this.chunkStartedAtContextTime = null;
+    this.digitalSilenceReportSamples = Math.max(
+      RENDER_QUANTUM,
+      Math.round((DIGITAL_SILENCE_REPORT_MS * sampleRate) / 1000),
+    );
+    this.digitalSilenceRunSamples = 0;
+    this.digitalSilenceActive = false;
 
     // Rollout compatibility is deliberately asymmetric: a newly deployed
     // worklet can be loaded by a page whose old app.js has been open across the
@@ -174,6 +187,48 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.windowMaxConsecutiveRailSamples = 0;
   }
 
+  /**
+   * Digital-silence edges share the input-gap message so every consumer of
+   * source authority already understands them. They carry no padded samples:
+   * the zeros were real rendered PCM and already travel on the timeline.
+   */
+  reportDigitalSilence(recovered) {
+    this.port.postMessage({
+      type: 'input-gap',
+      quanta: 0,
+      samples: 0,
+      totalQuanta: this.silenceQuanta,
+      recovered,
+      reason: 'digital-silence',
+    });
+  }
+
+  observeDigitalSilence(input) {
+    let nonZero = false;
+    for (let i = 0; i < input.length; i += 1) {
+      if (input[i] !== 0) {
+        nonZero = true;
+        break;
+      }
+    }
+    if (nonZero) {
+      this.digitalSilenceRunSamples = 0;
+      if (this.digitalSilenceActive) {
+        this.digitalSilenceActive = false;
+        this.reportDigitalSilence(true);
+      }
+      return;
+    }
+    this.digitalSilenceRunSamples += input.length;
+    if (
+      !this.digitalSilenceActive
+      && this.digitalSilenceRunSamples >= this.digitalSilenceReportSamples
+    ) {
+      this.digitalSilenceActive = true;
+      this.reportDigitalSilence(false);
+    }
+  }
+
   process(inputs) {
     const input = inputs[0]?.[0];
 
@@ -181,6 +236,8 @@ class CaptureProcessor extends AudioWorkletProcessor {
     // the whole microphone timeline forward for good. Emit silence for the
     // missing render quantum instead of skipping it.
     if (!input) {
+      // A missing channel is its own, already-reported source failure.
+      this.digitalSilenceRunSamples = 0;
       if (this.started) {
         this.silenceQuanta += 1;
         this.activeGapQuanta += 1;
@@ -208,6 +265,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
       this.recoveryFadeRemainingSamples = this.inputGapFadeSamples;
     }
     this.started = true;
+    this.observeDigitalSilence(input);
     let sourceOffset = 0;
     while (sourceOffset < input.length) {
       if (this.offset === 0) {

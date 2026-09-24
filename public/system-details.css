@@ -151,6 +151,29 @@
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
+.diagnostics-intro {
+  margin: 0 0 6px;
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.5;
+}
+/* A described value: the reading, then one plain-language line under it. */
+.diagnostic-pair dd .diagnostic-value {
+  display: block;
+}
+.diagnostic-pair dd .diagnostic-note {
+  display: block;
+  margin-top: 3px;
+  color: #74777e;
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+.diagnostic-pair:has(.diagnostic-note) {
+  padding: 7px 0;
+}
+.diagnostic-pair dd[data-tone="ok"] .diagnostic-value { color: #9fcfa6; }
+.diagnostic-pair dd[data-tone="warn"] .diagnostic-value { color: #e2b866; }
+.diagnostic-pair dd[data-tone="bad"] .diagnostic-value { color: #f0948b; }
 .diagnostics-raw {
   max-height: 360px;
   margin: 0;
@@ -172,4 +195,4 @@
   }
   .diagnostic-pair { grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
   .diagnostics-tabs { gap: 14px; }
-}
+}

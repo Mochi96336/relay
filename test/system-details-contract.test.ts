@@ -30,8 +30,8 @@ test('System keeps compatibility equipment rows behind one product surface befor
   assert.doesNotMatch(html.slice(systemStart, diagnosticsStart), /diagnostic-block/);
 });
 
-test('Technical details exposes Overview, Session, Audio, Timing, Robot, and Raw progressively', () => {
-  for (const tab of ['overview', 'session', 'audio', 'timing', 'robot', 'raw']) {
+test('Technical details exposes Overview, Session, Mic, Audio, Timing, Robot, and Raw progressively', () => {
+  for (const tab of ['overview', 'session', 'mic', 'audio', 'timing', 'robot', 'raw']) {
     assert.match(html, new RegExp(`data-diagnostics-tab="${tab}"`));
     assert.match(html, new RegExp(`data-diagnostics-panel="${tab}"`));
   }
@@ -56,6 +56,19 @@ test('ProductStatus stays live while readiness refresh belongs only to Technical
   assert.match(productEvent, /latestProduct = event\.detail/);
   assert.match(productEvent, /renderProductSystem\(\)/);
   assert.doesNotMatch(productEvent, /startReadinessRefresh|connectDiagnostics|diagnosticsPanel\.open\s*=/);
+});
+
+test('Mic transport evidence is sampled from statusz only on the Technical details cadence', () => {
+  assert.match(system, /import \{ describeMicAudio, describeMicTransport \} from '\.\/mic-diagnostics-model\.js'/);
+  assert.match(system, /fetch\(statuszUrl\(\), \{ cache: 'no-store' \}\)/);
+  const refreshStart = system.indexOf('async function refreshReadiness()');
+  const refreshEnd = system.indexOf('function stopReadinessRefresh()', refreshStart);
+  assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
+  assert.match(system.slice(refreshStart, refreshEnd), /refreshStatusz\(\)/,
+    'statusz rides the readiness refresh, which only runs while Technical details is open');
+  assert.match(system, /statusz: latestStatusz \?\? null/, 'Copy diagnostics carries the Mic evidence');
+  assert.match(html, /id="diag-overview-mic"/);
+  assert.match(html, /id="diag-mic-ledger"/);
 });
 
 test('legacy backing attention remains a compatibility projection outside normal System', () => {

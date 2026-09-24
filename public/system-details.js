@@ -1,5 +1,6 @@
 import './live-i18n.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import { describeMicAudio, describeMicTransport } from './mic-diagnostics-model.js';
 await window.relayIdentityReady;
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -17,6 +18,7 @@ if (
   const READINESS_REFRESH_MS = 1_000;
   let latestProduct = null;
   let latestReadiness = null;
+  let latestStatusz = null;
   let readinessRefreshTimer = null;
   let readinessRefreshInFlight = false;
   let diagnosticsSocket = null;
@@ -191,6 +193,40 @@ if (
     if (node) node.textContent = value ?? '—';
   }
 
+  /** One described row: a value, an optional plain-language note and a tone. */
+  function describedValue(node, described) {
+    if (!node) return;
+    const value = document.createElement('span');
+    value.className = 'diagnostic-value';
+    value.textContent = described.value ?? '—';
+    const parts = [value];
+    if (described.note) {
+      const note = document.createElement('span');
+      note.className = 'diagnostic-note';
+      note.textContent = described.note;
+      parts.push(note);
+    }
+    node.dataset.tone = described.tone ?? 'neutral';
+    node.replaceChildren(...parts);
+  }
+
+  function renderMicDiagnostics() {
+    describedValue(document.querySelector('#diag-overview-mic'), describeMicAudio(latestStatusz));
+    const ledger = document.querySelector('#diag-mic-ledger');
+    if (!ledger) return;
+    ledger.replaceChildren(...describeMicTransport(latestStatusz).map((described) => {
+      const pair = document.createElement('div');
+      pair.className = 'diagnostic-pair';
+      pair.dataset.micRow = described.key;
+      const label = document.createElement('dt');
+      label.textContent = described.label;
+      const value = document.createElement('dd');
+      describedValue(value, described);
+      pair.append(label, value);
+      return pair;
+    }));
+  }
+
   function yesNo(value) {
     if (value === true) return 'Yes';
     if (value === false) return 'No';
@@ -243,11 +279,33 @@ if (
     return `/readyz${query ? `?${query}` : ''}`;
   }
 
+  function statuszUrl() {
+    return readyzUrl().replace('/readyz', '/statusz');
+  }
+
+  /**
+   * Mic transport evidence lives on /statusz, not in any pushed message: it
+   * is counters and windows that only make sense sampled while someone is
+   * looking. Refreshed on the readiness cadence, only while Technical details
+   * is open.
+   */
+  async function refreshStatusz() {
+    try {
+      const response = await fetch(statuszUrl(), { cache: 'no-store' });
+      latestStatusz = await response.json();
+    } catch {
+      latestStatusz = null;
+    }
+  }
+
   async function refreshReadiness() {
     if (readinessRefreshInFlight) return latestReadiness;
     readinessRefreshInFlight = true;
     try {
-      const response = await fetch(readyzUrl(), { cache: 'no-store' });
+      const [response] = await Promise.all([
+        fetch(readyzUrl(), { cache: 'no-store' }),
+        refreshStatusz(),
+      ]);
       const payload = await response.json();
       latestReadiness = payload;
       snapshots.set('readiness', payload);
@@ -400,6 +458,8 @@ if (
       ? `${Math.round(Number(components.player.offsetMs) || 0)} ms`
       : components.player ? 'Not fresh' : '—');
 
+    renderMicDiagnostics();
+
     text('diag-robot-mode', routeLabel(components.route?.mode));
     text('diag-robot-source', components.robotSource ? connection(components.robotSource.connected) : '—');
     text('diag-robot-backing', components.backing
@@ -419,6 +479,7 @@ if (
       timeline: timeline ?? null,
       playbackClient: playbackClient ?? null,
       playbackClientLastRejection: playbackClientLastRejection ?? null,
+      statusz: latestStatusz ?? null,
     }, null, 2);
   }
 

@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
+import { concealGap } from './packet-loss-concealment.js';
 import type { PcmFrame } from './pcm-frame.js';
 
 /**
@@ -16,6 +17,11 @@ type PcmChunk = {
   start: number;
   samples: Int16Array;
   positioned: boolean;
+  /**
+   * Synthetic fill inside a real positioned hole. It is audible, but every
+   * evidence reader still counts it as the gap it stands in for.
+   */
+  concealed?: boolean;
 };
 
 type SampleRange = {
@@ -181,6 +187,18 @@ const MIC_READ_HEAD_CROSSFADE_MS = 5;
  * samples immediately adjacent to it.
  */
 const SOURCE_GAP_DECLICK_MS = 2;
+
+/**
+ * Real Mic history handed to concealment: enough for a 10 ms correlation
+ * window behind the longest (60 Hz) pitch period it searches for.
+ */
+const MIC_CONCEALMENT_HISTORY_SAMPLES = 2_048;
+
+/**
+ * Unemitted real audio concealment needs in front of a hole: its 4 ms join,
+ * plus the limiter's 3 ms look-ahead that may already have inspected it.
+ */
+const MIC_CONCEALMENT_JOIN_GUARD_MS = 8;
 
 /**
  * Peak limiter on the microphone, between its gain and the sum.
@@ -459,6 +477,9 @@ export class AudioSession {
   private readonly limiterRelease: number;
   private readonly limiterLookaheadSamples: number;
   private micHeadroomMs = 0;
+  private micConcealedSamples = 0;
+  /** Timeline position where the current Mic capture generation's audio begins. */
+  private micCaptureOriginSample: number | null = null;
   /** Samples the read head is held back to stay inside arrived microphone audio. */
   private micFrontierCorrectionSamples = 0;
   private micFrontierAtLastFrame = 0;
@@ -530,6 +551,20 @@ export class AudioSession {
    */
   get micTotalSamples() {
     return this.mic.totalSamples;
+  }
+
+  /**
+   * Mic audio buffered beyond what the last mixed frame read, or null before
+   * the mix is running. Unrounded, unlike health(): callers use it as a live
+   * budget for how long a transport may wait before the read head needs PCM.
+   */
+  get liveMicHeadroomMs(): number | null {
+    return this.running ? this.micHeadroomMs : null;
+  }
+
+  /** Samples of real Mic holes filled by concealment since the session began. */
+  get micConcealedSampleCount() {
+    return this.micConcealedSamples;
   }
 
   /** The same frontier for the captured song. See `micTotalSamples`. */
@@ -925,6 +960,18 @@ export class AudioSession {
     const previousSourceFrontier = this.mic.sourceFrontier;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
     const currentChunk = this.mic.chunks.at(-1) ?? null;
+    if (
+      currentChunk
+      && currentChunk !== previousChunk
+      && (
+        result.captureRestarted
+        || !previousChunk
+        || previousGeneration !== frame.generation
+        || previousSourceRate !== sourceRate
+      )
+    ) {
+      this.micCaptureOriginSample = currentChunk.start;
+    }
 
     const positioned = frame.firstSampleIndex !== null;
     const sourceContinuous = Boolean(
@@ -978,9 +1025,76 @@ export class AudioSession {
       && currentChunk.start > previousTotalSamples
     );
     if (startsAfterGap && previousChunk && currentChunk) {
-      this.declickSourceGap(previousChunk.samples, currentChunk.samples);
+      if (!this.concealMicGap(previousChunk, currentChunk, previousTotalSamples)) {
+        this.declickSourceGap(previousChunk.samples, currentChunk.samples);
+      }
     }
     return result;
+  }
+
+  /**
+   * Fills a proven same-capture hole with pitch-synchronous repetition instead
+   * of silence. The hole's evidence is unchanged: `gapSamples` still counts it
+   * and every evidence reader treats the concealed chunk as missing, so Take
+   * quality, playability and calibration see exactly the loss that happened.
+   * Only the audible output differs.
+   */
+  private concealMicGap(previousChunk: PcmChunk, currentChunk: PcmChunk, gapStart: number) {
+    if (!previousChunk.positioned || !currentChunk.positioned) return false;
+    // Concealment rewrites the last few milliseconds before the hole so the
+    // repetition joins without a step. Once the read head has emitted those
+    // samples the join cannot happen, and the output-side frontier edge already
+    // owns continuity from what was actually heard - keep that path.
+    const emitted = this.lastEmittedMicSourceSample;
+    const guardSamples = Math.round((MIC_CONCEALMENT_JOIN_GUARD_MS * this.sampleRate) / 1000);
+    if (emitted !== null && emitted >= gapStart - guardSamples) return false;
+    const gapSamples = currentChunk.start - gapStart;
+    const historyLength = gapStart - this.micConcealmentHistoryStart(gapStart);
+    if (gapSamples <= 0 || historyLength <= 0) return false;
+    const history = this.readRange(this.mic, gapStart - historyLength, historyLength);
+    const concealment = concealGap(
+      history,
+      previousChunk.samples,
+      currentChunk.samples,
+      gapSamples,
+      { sampleRate: this.sampleRate },
+    );
+    if (!concealment) return false;
+
+    const chunks = this.mic.chunks;
+    chunks.splice(chunks.length - 1, 0, {
+      start: gapStart,
+      samples: concealment.fill,
+      positioned: true,
+      concealed: true,
+    });
+    this.micConcealedSamples += concealment.fill.length;
+    // A long hole outlives the repetition, which has faded to silence by its
+    // end. Returning from that silence is an ordinary source edge.
+    if (concealment.fill.length < gapSamples) this.fadeInSourceEdge(currentChunk.samples);
+    return true;
+  }
+
+  /**
+   * Oldest sample concealment may learn a period from: contiguous audio of the
+   * current acoustic capture only. A pitch cycle spliced across a capture
+   * restart or an earlier hole is not a period of anything the singer sang.
+   */
+  private micConcealmentHistoryStart(gapStart: number) {
+    const floor = Math.max(
+      0,
+      gapStart - MIC_CONCEALMENT_HISTORY_SAMPLES,
+      this.micCaptureOriginSample ?? 0,
+    );
+    const chunks = this.mic.chunks;
+    let start = gapStart;
+    // The last chunk is the one that just proved the hole.
+    for (let index = chunks.length - 2; index >= 0 && start > floor; index -= 1) {
+      const chunk = chunks[index];
+      if (!chunk.positioned || chunk.start + chunk.samples.length !== start) break;
+      start = chunk.start;
+    }
+    return Math.max(start, floor);
   }
 
   ingestBacking(
@@ -1781,6 +1895,8 @@ export class AudioSession {
     const GAP = 1;
     const FRONTIER = 2;
     const UNHEADERED = 4;
+    // Bit 3 = concealment fill: audible, but still missing evidence.
+    const CONCEALED = 8;
     const mask = new Uint8Array(Math.max(0, count));
     let cursor = startSample;
     let remaining = count;
@@ -1830,6 +1946,8 @@ export class AudioSession {
       const available = Math.min(remaining, chunkEnd - cursor);
       if (!chunk.positioned) {
         mask.fill(UNHEADERED, outputOffset, outputOffset + available);
+      } else if (chunk.concealed) {
+        mask.fill(CONCEALED, outputOffset, outputOffset + available);
       }
       cursor += available;
       remaining -= available;
@@ -1917,7 +2035,8 @@ export class AudioSession {
       }
 
       if ((evidence & 2) !== 0) frontierMissingSamples += 1;
-      else if ((evidence & 1) !== 0) gapSamples += 1;
+      // Bit 3 is concealment: counted as a gap, but audible, so not missing.
+      else if ((evidence & 9) !== 0) gapSamples += 1;
       if ((evidence & 4) !== 0) unheaderedSamples += 1;
       if ((evidence & 3) !== 0) missingMask[i] = 1;
       if (inputClippingMask) {
@@ -2206,6 +2325,8 @@ export class AudioSession {
 
       const available = Math.min(remaining, chunkEnd - cursor);
       if (!chunk.positioned) unheaderedSamples += available;
+      // Concealment is audible fill, not received audio.
+      if (chunk.concealed) gapSamples += available;
       cursor += available;
       remaining -= available;
       chunkIndex += 1;

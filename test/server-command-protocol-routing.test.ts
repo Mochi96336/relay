@@ -132,7 +132,14 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, false\)/);
   assert.match(server, /calibration\.start\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
-  assert.match(server, /micRuntime\.noteUplinkHealth\(socket, health, performance\.now\(\)\)/);
+  assert.match(server, /const nowMs = performance\.now\(\)/);
+  assert.match(server, /const previous = micRuntime\.uplinkHealthPayload\(nowMs\)/);
+  assert.match(server, /const accepted = micRuntime\.noteUplinkHealth\(socket, health, nowMs\)/);
+  assert.match(
+    server,
+    /accepted[\s\S]*health\.inputGapActiveObserved === true[\s\S]*previous\?\.captureGeneration === health\.captureGeneration[\s\S]*health\.inputGapSamples > previous\.inputGapSamples[\s\S]*takeController\.noteQualityEvent\('mic-input-gap'\)/,
+    'only accepted current-generation uplink health may turn a real browser input gap into Take evidence',
+  );
 
   assert.match(server, /parseMicPresenceTelemetry\(payload\)/);
   assert.match(server, /socket\.participantId !== participants\.micOwnerId/);

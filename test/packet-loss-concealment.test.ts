@@ -100,6 +100,53 @@ describe('concealGap', () => {
     assert.equal(concealGap(history, history.slice(1_000), null, 960, { sampleRate: RATE }), null);
   });
 
+  it('keeps the first 10 ms exact but varies later unvoiced concealment across real history', () => {
+    let state = 1;
+    const history = new Int16Array(4_096).map(() => {
+      state = (state * 1_103_515_245 + 12_345) >>> 0;
+      return ((state >>> 16) % 4_000) - 2_000;
+    });
+    const previous = history.slice(history.length - 960);
+    const gapSamples = Math.round(RATE * 0.06);
+    const concealment = concealGap(history, previous, null, gapSamples, { sampleRate: RATE });
+    assert.ok(concealment);
+    assert.equal(concealment.fill.length, gapSamples);
+    assert.ok(concealment.historyPeriods >= 2);
+
+    const period = concealment.periodSamples;
+    const cycle = history.slice(history.length - period);
+    const holdSamples = Math.round(RATE * 0.01);
+    const fadeSamples = gapSamples - holdSamples;
+    const gainAt = (index: number) => (
+      index < holdSamples ? 1 : Math.max(0, 1 - (index - holdSamples) / fadeSamples)
+    );
+
+    // Preserve the already-good short-loss behavior exactly: the first 10 ms
+    // is still the most recent estimated period.
+    for (let index = 0; index < holdSamples; index += 1) {
+      assert.equal(
+        concealment.fill[index],
+        cycle[index % period],
+        `short-loss concealment changed at sample ${index}`,
+      );
+    }
+
+    // Old Relay repeated that same cycle for the full 60 ms and only changed
+    // amplitude. Once the loss outlives 10 ms, real older periods must add
+    // enough variation that the output is no longer that synthetic loop.
+    let divergence = 0;
+    let baselineEnergy = 0;
+    for (let index = holdSamples; index < holdSamples * 3; index += 1) {
+      const baseline = Math.round(cycle[index % period] * gainAt(index));
+      divergence += (concealment.fill[index] - baseline) ** 2;
+      baselineEnergy += baseline ** 2;
+    }
+    assert.ok(
+      baselineEnergy > 0 && divergence / baselineEnergy > 0.1,
+      `long concealment still behaves like one repeated cycle: ${(divergence / baselineEnergy).toFixed(3)}`,
+    );
+  });
+
   it('keeps unvoiced noise bounded instead of amplifying it', () => {
     let state = 1;
     const noise = new Int16Array(2_048).map(() => {

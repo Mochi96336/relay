@@ -29,6 +29,8 @@ export type Concealment = {
   /** Samples at the end of `previous` rewritten to join the repetition. */
   blendedPreviousSamples: number;
   periodSamples: number;
+  /** Real historical pitch periods used to vary concealment after the first 10 ms. */
+  historyPeriods: number;
 };
 
 const MIN_PITCH_HZ = 60;
@@ -125,15 +127,45 @@ export function concealGap(
   const period = estimatePitchPeriod(history, sampleRate);
   if (period === null || period > history.length) return null;
 
-  // The repetition source is the last real period. Take a copy before the
-  // previous tail is rewritten below.
-  const cycle = history.slice(history.length - period);
+  // The first 10 ms intentionally repeats the most recent period exactly.
+  // Beyond that, a single short cycle becomes an audible harmonic "beep",
+  // especially for unvoiced/transition material. G.711 Appendix I addresses
+  // the same failure by increasing the amount of real pitch history used as
+  // the erasure continues. Keep up to three contiguous real periods and move
+  // between them gradually at equal pitch phase, so the waveform gains natural
+  // variation without introducing a new splice at each 10 ms boundary.
+  const historyPeriods = Math.max(1, Math.min(3, Math.floor(history.length / period)));
+  const variationWindowSamples = Math.max(1, holdSamples);
+  const historicalPeriodSample = (periodIndex: number, phase: number) => (
+    history[
+      history.length
+      - ((periodIndex + 1) * period)
+      + phase
+    ]
+  );
   const fadeSamples = Math.max(1, maxConcealSamples - holdSamples);
   const gainAt = (index: number) => (
     index < holdSamples ? 1 : Math.max(0, 1 - (index - holdSamples) / fadeSamples)
   );
   // Continuation index 0 is the sample right after `previous` ends.
-  const continuation = (index: number) => cycle[index % period];
+  const continuation = (index: number) => {
+    const phase = index % period;
+    if (index < variationWindowSamples || historyPeriods === 1) {
+      return historicalPeriodSample(0, phase);
+    }
+
+    const segment = Math.floor(index / variationWindowSamples);
+    const offset = index % variationWindowSamples;
+    const fromPeriod = (segment - 1) % historyPeriods;
+    const toPeriod = segment % historyPeriods;
+    const weight = variationWindowSamples <= 1
+      ? 1
+      : offset / (variationWindowSamples - 1);
+    return (
+      historicalPeriodSample(fromPeriod, phase) * (1 - weight)
+      + historicalPeriodSample(toPeriod, phase) * weight
+    );
+  };
 
   // Join: ease the last fraction of a period of real audio toward the cycle's
   // own lead-in, so the first repeated sample follows without a step. The
@@ -181,5 +213,6 @@ export function concealGap(
     blendedNextSamples,
     blendedPreviousSamples: joinSamples,
     periodSamples: period,
+    historyPeriods,
   };
 }

@@ -248,6 +248,86 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
   }
 });
 
+test('a Mic input gap completed before Start does not contaminate the later Take', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-prestart-input-gap-'));
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
+  try {
+    const control = await RelayClient.connect(server, participantQuery('participant-pre-gap', 'PreGap'));
+    await establishRoomSong(control, 'pre-gap-playback');
+    const backing = await startBacking(server);
+
+    control.send({
+      type: 'register',
+      role: 'publisher',
+      sampleRate: RATE,
+      captureGeneration: 1,
+      audioPacketVersion: 2,
+    });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+
+    control.send(uplinkHealth(1, 0, 0, false));
+    await control.waitFor((message) => (
+      message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+    feedMicV2(control, 8);
+    feedBacking(backing, 8);
+
+    // The missing-input interval is fully over before recording starts. A later
+    // Take must not inherit this cumulative source-health delta.
+    feedMicV2(control, 5, 0);
+    feedBacking(backing, 5);
+    const preGapAckFrom = control.messages.length;
+    control.send(uplinkHealth(1, control.cursor, 4_800, false));
+    await control.waitFor((message) => (
+      control.messages.indexOf(message) >= preGapAckFrom
+      && message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+
+    control.send({ type: 'start-take' });
+    const started = await control.waitFor((message) => (
+      message.type === 'take-command-accepted' && message.command === 'start'
+    ));
+    const takeId = String(started.takeId);
+    await control.waitFor((message) => (
+      message.type === 'take-status'
+      && message.lifecycle === 'recording'
+      && message.take?.takeId === takeId
+    ));
+
+    // The first explicit health inside the recording is a baseline, not
+    // retroactive evidence for everything that happened before Start.
+    const baselineAckFrom = control.messages.length;
+    control.send(uplinkHealth(1, control.cursor, 4_800, false));
+    await control.waitFor((message) => (
+      control.messages.indexOf(message) >= baselineAckFrom
+      && message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+
+    feedMicV2(control, 16);
+    feedBacking(backing, 16);
+    await sleep(140);
+
+    control.send({ type: 'stop-take', takeId });
+    const ready = await waitReady(control, takeId);
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v5');
+    assert.equal(ready.take.quality.evidence.events['mic-input-gap'], 0);
+    assert.equal(
+      ready.take.quality.issues.some((issue: any) => issue.code === 'mic-input-gap'),
+      false,
+      'a source gap completed before the recording boundary must not become Take evidence',
+    );
+
+    backing.close();
+    control.close();
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a short worklet input gap prevents a padded-silence Take from assessing clean', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-input-gap-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });

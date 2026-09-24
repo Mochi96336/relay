@@ -106,6 +106,21 @@ describe('Mic diagnostics model', () => {
     assert.equal(repaired.value, '40 resent · 2 lost');
     assert.equal(repaired.note, '40 packets resent in time, 2 packets lost for good, 20 ms smoothed over.');
 
+    const retried = rows(liveStatus((s) => {
+      s.audio.receiverTransport.lostPackets = 1;
+      s.audio.receiverRetransmit = {
+        requestedPackets: 12,
+        recoveredPackets: 11,
+        budgetDeniedPackets: 0,
+        retriedPackets: 3,
+        repairRoundTripMs: 84.4,
+      };
+    })).repair;
+    assert.equal(
+      retried.note,
+      '11 packets resent in time (about 84 ms each), 3 resends had to be asked for twice, 1 packet lost for good.',
+    );
+
     const legacy = rows(liveStatus((s) => {
       s.audio.receiverTransport.lostPackets = 5;
       s.audio.captureAndSender.transport.retransmitBufferPackets = undefined;

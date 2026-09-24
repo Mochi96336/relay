@@ -46,12 +46,27 @@ export type AudioPacketReceiverOptions = {
 };
 
 export type AudioPacketRetransmitStats = {
-  /** Distinct sequences this receiver asked the sender to repeat. */
+  /** Distinct sequences whose repeat request actually left Relay. */
   requestedPackets: number;
   /** Requested sequences that arrived in time and were emitted in order. */
   recoveredPackets: number;
   /** Missing sequences not requested because the request budget was spent. */
   budgetDeniedPackets: number;
+  /** Requests sent again because the first repeat never arrived. */
+  retriedPackets: number;
+  /** Smoothed time from sending a first request to its repeat arriving. */
+  repairRoundTripMs: number | null;
+};
+
+/** One sequence to ask for, and which attempt this is (0 = first). */
+export type AudioPacketRetransmitRequest = { sequence: number; attempt: number };
+
+type RetransmitRequestState = {
+  /** Requests for this sequence that have left Relay. */
+  attempts: number;
+  /** Waiting for the caller to send it. */
+  queued: boolean;
+  dispatchedAtMs: number | null;
 };
 
 /** Upper bound on sequences requested per detected hole. */
@@ -59,6 +74,18 @@ const MAX_RETRANSMIT_REQUESTS_PER_HOLE = 32;
 /** A quarter of a 100 packet/s datagram stream: isolated loss, not congestion. */
 const DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND = 25;
 const DEFAULT_RETRANSMIT_REQUEST_DELAY_MS = 20;
+/**
+ * A repeat is a datagram like the one it replaces, so under loss it can be
+ * lost too. One retry covers that; beyond it the path is too lossy for waiting
+ * to pay, and the hole is ordinary loss.
+ */
+const MAX_RETRANSMIT_ATTEMPTS = 2;
+/** Retry wait before any round trip has been measured. */
+const DEFAULT_RETRANSMIT_RETRY_MS = 150;
+const MIN_RETRANSMIT_RETRY_MS = 40;
+const MAX_RETRANSMIT_RETRY_MS = 250;
+/** Never retry sooner than a couple of mixer ticks past the expected repeat. */
+const MIN_RETRANSMIT_RETRY_MARGIN_MS = 20;
 
 export type AudioPacketReceiverStats = {
   receivedPackets: number;
@@ -186,17 +213,24 @@ export class AudioPacketReceiver {
   readonly retransmitWindowPackets: number;
   private retransmitHoldAllowed = false;
   private retransmitRequestsEnabled = true;
-  /** Sequences requested and not yet emitted or given up on. */
-  private readonly retransmitRequested = new Set<number>();
+  /**
+   * Sequences requested and not yet emitted or given up on, oldest first. A
+   * request stays queued until the caller confirms it left Relay: a path that
+   * vanishes between noticing a hole and sending the request must not lose it.
+   */
+  private readonly retransmitRequested = new Map<number, RetransmitRequestState>();
   /** Missing sequences not yet old enough to request, by when they were noticed. */
   private readonly retransmitCandidates = new Map<number, number>();
   readonly retransmitRequestDelayMs: number;
-  private retransmitQueue: number[] = [];
-  private readonly retransmitCounters: AudioPacketRetransmitStats = {
+  private readonly retransmitCounters = {
     requestedPackets: 0,
     recoveredPackets: 0,
     budgetDeniedPackets: 0,
+    retriedPackets: 0,
   };
+  /** Smoothed first-attempt repair round trip (request sent to repeat received). */
+  private repairRoundTripMs: number | null = null;
+  private repairRoundTripVariationMs = 0;
   readonly retransmitRequestsPerSecond: number;
   private retransmitTokens = 0;
   private retransmitTokensAtMs: number | null = null;
@@ -284,6 +318,7 @@ export class AudioPacketReceiver {
     }
 
     this.resolveContinuity(packet);
+    this.noteRepeatArrival(packet.sequence, nowMs);
 
     if (this.pending.has(packet.sequence)) {
       this.counters.duplicatePackets += 1;
@@ -354,7 +389,10 @@ export class AudioPacketReceiver {
   }
 
   retransmitStats(): AudioPacketRetransmitStats {
-    return { ...this.retransmitCounters };
+    return {
+      ...this.retransmitCounters,
+      repairRoundTripMs: this.repairRoundTripMs === null ? null : Math.round(this.repairRoundTripMs),
+    };
   }
 
   /**
@@ -375,34 +413,72 @@ export class AudioPacketReceiver {
     this.retransmitRequestsEnabled = enabled;
   }
 
-  /** Sequences newly worth asking the sender to repeat, oldest first. */
-  takeRetransmitRequests(): number[] {
-    const requests = this.retransmitQueue;
-    this.retransmitQueue = [];
+  /**
+   * Requests waiting to be sent, oldest first. Reading them does not consume
+   * them: call `retransmitRequestsSent` once they have actually left Relay.
+   */
+  pendingRetransmitRequests(): AudioPacketRetransmitRequest[] {
+    const requests: AudioPacketRetransmitRequest[] = [];
+    for (const [sequence, state] of this.retransmitRequested) {
+      if (state.queued) requests.push({ sequence, attempt: state.attempts });
+    }
     return requests;
   }
 
+  /** Marks requests from `pendingRetransmitRequests` as sent at `nowMs`. */
+  retransmitRequestsSent(requests: readonly AudioPacketRetransmitRequest[], nowMs: number) {
+    for (const { sequence, attempt } of requests) {
+      const state = this.retransmitRequested.get(sequence);
+      if (!state || !state.queued || state.attempts !== attempt) continue;
+      if (state.attempts === 0) this.retransmitCounters.requestedPackets += 1;
+      state.attempts += 1;
+      state.queued = false;
+      state.dispatchedAtMs = nowMs;
+    }
+  }
+
+  /** Pending sequences, marked sent at once. For callers whose send cannot fail. */
+  takeRetransmitRequests(nowMs = Date.now()): number[] {
+    const requests = this.pendingRetransmitRequests();
+    this.retransmitRequestsSent(requests, nowMs);
+    return requests.map(({ sequence }) => sequence);
+  }
+
   /**
-   * Rolls back request ownership when every available request path failed to
-   * send. A sequence that was never actually asked for must not keep the
-   * ordered stream on the longer retransmit deadline.
-   *
-   * Future packets can prove the same hole again and create a fresh candidate.
+   * How long to wait for a repeat before asking again: the smoothed round trip
+   * plus four times its variation, as TCP sizes its retransmission timeout.
+   * A retry is only useful while the hole still holds, which is a few hundred
+   * milliseconds, so waiting a comfortable multiple of the round trip would
+   * leave the second repeat arriving after the mix has moved on.
    */
-  cancelRetransmitRequests(sequences: readonly number[]) {
-    let cancelled = 0;
-    for (const sequence of sequences) {
-      if (!uint32(sequence)) continue;
-      if (this.retransmitRequested.delete(sequence >>> 0)) cancelled += 1;
-      this.retransmitCandidates.delete(sequence >>> 0);
+  private retransmitRetryMs() {
+    if (this.repairRoundTripMs === null) return DEFAULT_RETRANSMIT_RETRY_MS;
+    return Math.min(
+      MAX_RETRANSMIT_RETRY_MS,
+      Math.max(
+        MIN_RETRANSMIT_RETRY_MS,
+        this.repairRoundTripMs
+          + Math.max(MIN_RETRANSMIT_RETRY_MARGIN_MS, 4 * this.repairRoundTripVariationMs),
+      ),
+    );
+  }
+
+  /**
+   * Round trip of a first request only: when a retried sequence arrives,
+   * which request it answers is ambiguous (Karn), so it teaches nothing.
+   */
+  private noteRepeatArrival(sequence: number, nowMs: number) {
+    const state = this.retransmitRequested.get(sequence);
+    if (!state || state.attempts !== 1 || state.dispatchedAtMs === null) return;
+    const sample = Math.max(0, nowMs - state.dispatchedAtMs);
+    if (this.repairRoundTripMs === null) {
+      this.repairRoundTripMs = sample;
+      this.repairRoundTripVariationMs = sample / 2;
+      return;
     }
-    if (cancelled > 0) {
-      this.retransmitCounters.requestedPackets = Math.max(
-        0,
-        this.retransmitCounters.requestedPackets - cancelled,
-      );
-    }
-    return cancelled;
+    this.repairRoundTripVariationMs = this.repairRoundTripVariationMs * 0.75
+      + Math.abs(this.repairRoundTripMs - sample) * 0.25;
+    this.repairRoundTripMs = this.repairRoundTripMs * 0.875 + sample * 0.125;
   }
 
   private retransmitHolding() {
@@ -466,7 +542,7 @@ export class AudioPacketReceiver {
   }
 
   private promoteRetransmitCandidates(nowMs: number) {
-    if (this.retransmitCandidates.size === 0) return;
+    if (this.retransmitCandidates.size === 0 && this.retransmitRequested.size === 0) return;
     if (this.retransmitTokensAtMs !== null && nowMs > this.retransmitTokensAtMs) {
       this.retransmitTokens = Math.min(
         this.retransmitRequestsPerSecond,
@@ -489,9 +565,24 @@ export class AudioPacketReceiver {
         continue;
       }
       this.retransmitTokens -= 1;
-      this.retransmitRequested.add(candidate);
-      this.retransmitQueue.push(candidate);
-      this.retransmitCounters.requestedPackets += 1;
+      this.retransmitRequested.set(candidate, { attempts: 0, queued: true, dispatchedAtMs: null });
+    }
+
+    // A request whose repeat has not arrived after about two round trips was
+    // lost itself, or its repeat was. Ask once more while the hole still holds.
+    if (!this.retransmitRequestsEnabled) return;
+    const retryMs = this.retransmitRetryMs();
+    for (const state of this.retransmitRequested.values()) {
+      if (
+        state.queued
+        || state.dispatchedAtMs === null
+        || state.attempts >= MAX_RETRANSMIT_ATTEMPTS
+        || nowMs - state.dispatchedAtMs < retryMs
+      ) continue;
+      if (this.retransmitTokens < 1) break;
+      this.retransmitTokens -= 1;
+      state.queued = true;
+      this.retransmitCounters.retriedPackets += 1;
     }
   }
 
@@ -637,7 +728,10 @@ export class AudioPacketReceiver {
     }
 
     output.push(packet);
-    if (this.retransmitRequested.delete(sequence)) this.retransmitCounters.recoveredPackets += 1;
+    if ((this.retransmitRequested.get(sequence)?.attempts ?? 0) > 0) {
+      this.retransmitCounters.recoveredPackets += 1;
+    }
+    this.retransmitRequested.delete(sequence);
     this.retransmitCandidates.delete(sequence);
     this.counters.emittedPackets += 1;
     this.counters.emittedSamples = Math.min(

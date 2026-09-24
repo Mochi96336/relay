@@ -130,7 +130,7 @@ When a direct HTTP/3 endpoint is configured and the browser can establish it, mi
 Microphone loss is handled in layers, all without lowering PCM quality:
 
 - a short, age-bounded datagram backlog absorbs send bursts after a main-thread stall instead of dropping them;
-- a page that advertises a retransmission buffer is asked to repeat lost datagrams (over the direct WebTransport session, with the control socket as fallback), and the ordered stream waits for the repeat only while the live mix still has headroom (`RELAY_AUDIO_RETRANSMIT_HOLD_MS`, default 400; `0` disables);
+- a page that advertises a retransmission buffer is asked to repeat lost datagrams (over the direct WebTransport session, with the control socket as fallback), and the ordered stream waits for the repeat only while the live mix still has headroom (`RELAY_AUDIO_RETRANSMIT_HOLD_MS`, default 400; `0` disables). A request is kept until it has actually left Relay, and asked once more, paced by the measured repair round trip, when the repeat itself is lost;
 - a hole that remains is concealed by pitch-synchronous repetition rather than silence, while Take quality and playability evidence still count it as missing;
 - a WebTransport session lost to a network change is re-offered with backoff, and seconds of exact digital silence from a present input are reported as a source gap rather than a live Mic.
 

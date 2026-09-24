@@ -55,7 +55,7 @@ describe('AudioPacketReceiver retransmission', () => {
     r.setRetransmitHoldAllowed(true);
     send(0, 0);
     send(2, 1);
-    r.takeRetransmitRequests();
+    r.takeRetransmitRequests(1);
 
     // Well past the 40 ms reorder deadline, but inside the 200 ms hold.
     assert.deepEqual(sequences(r.flush(120)), []);
@@ -64,7 +64,13 @@ describe('AudioPacketReceiver retransmission', () => {
 
     assert.deepEqual(sequences(send(1, 130)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     assert.equal(r.stats().lostPackets, 0);
-    assert.deepEqual(r.retransmitStats(), { requestedPackets: 1, recoveredPackets: 1, budgetDeniedPackets: 0 });
+    assert.deepEqual(r.retransmitStats(), {
+      requestedPackets: 1,
+      recoveredPackets: 1,
+      budgetDeniedPackets: 0,
+      retriedPackets: 0,
+      repairRoundTripMs: 129,
+    });
   });
 
   it('gives a requested repeat up at the hold deadline', () => {
@@ -100,21 +106,22 @@ describe('AudioPacketReceiver retransmission', () => {
   });
 
   it('stops asking once sustained loss spends the request budget, and never holds for it', () => {
-    const { r, send } = receiver({ retransmitRequestsPerSecond: 2 });
+    // A hold long enough that nothing is given up while the budget refills.
+    const { r, send } = receiver({ retransmitRequestsPerSecond: 2, retransmitHoldMs: 1_000 });
     r.setRetransmitHoldAllowed(true);
     send(0, 0);
     send(2, 1);
     send(4, 2);
-    assert.deepEqual(r.takeRetransmitRequests(), [1, 3], 'the initial budget covers isolated loss');
+    assert.deepEqual(r.takeRetransmitRequests(2), [1, 3], 'the initial budget covers isolated loss');
 
     send(6, 3);
-    assert.deepEqual(r.takeRetransmitRequests(), [], 'a third loss inside the same second is not requested');
+    assert.deepEqual(r.takeRetransmitRequests(3), [], 'a third loss inside the same second is not requested');
     assert.equal(r.retransmitStats().budgetDeniedPackets, 1);
 
     // The budget refills with time. A denied hole that is still missing is
     // reconsidered first; what the refill cannot cover stays denied.
     send(8, 600);
-    assert.deepEqual(r.takeRetransmitRequests(), [5]);
+    assert.deepEqual(r.takeRetransmitRequests(600), [5]);
     assert.equal(r.retransmitStats().budgetDeniedPackets, 2);
   });
 
@@ -140,22 +147,122 @@ describe('AudioPacketReceiver retransmission', () => {
     // 1 was only reordered and arrives inside the delay; 3 really was lost.
     send(1, 10);
     assert.deepEqual(sequences(r.flush(22)), []);
-    assert.deepEqual(r.takeRetransmitRequests(), [3]);
+    assert.deepEqual(r.takeRetransmitRequests(22), [3]);
     assert.equal(r.retransmitStats().requestedPackets, 1);
 
     // The hole was held from the moment it was noticed, not only once requested.
     assert.equal(r.stats().lostPackets, 0);
     assert.deepEqual(sequences(send(3, 90)), [3, 4]);
-    assert.deepEqual(r.retransmitStats(), { requestedPackets: 1, recoveredPackets: 1, budgetDeniedPackets: 0 });
+    assert.deepEqual(r.retransmitStats(), {
+      requestedPackets: 1,
+      recoveredPackets: 1,
+      budgetDeniedPackets: 0,
+      retriedPackets: 0,
+      repairRoundTripMs: 68,
+    });
   });
 
   it('bounds requests for one enormous hole to the most recent sequences', () => {
     const { r, send } = receiver({ retransmitRequestsPerSecond: 100 });
+    r.setRetransmitHoldAllowed(true);
     send(0, 0);
     send(60, 1);
     const requests = r.takeRetransmitRequests();
     assert.equal(requests.length, 32);
     assert.equal(requests[0], 28);
     assert.equal(requests.at(-1), 59);
+  });
+
+  it('never asks for a sequence it has already given up on', () => {
+    const { r, send } = receiver({ retransmitRequestsPerSecond: 100 });
+    send(0, 0);
+    // Without a hold the ordinary 4-packet window abandons most of the hole
+    // inside the same receive that noticed it.
+    send(60, 1);
+    assert.deepEqual(r.takeRetransmitRequests(1), [56, 57, 58, 59]);
+  });
+
+  it('keeps a request queued until it has actually been sent', () => {
+    const { r, send } = receiver();
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    const pending = r.pendingRetransmitRequests();
+    assert.deepEqual(pending, [{ sequence: 1, attempt: 0 }]);
+    // No path this tick: the caller sends nothing and confirms nothing.
+    assert.deepEqual(r.pendingRetransmitRequests(), pending, 'reading does not consume');
+    assert.equal(r.retransmitStats().requestedPackets, 0, 'nothing has left Relay yet');
+
+    r.retransmitRequestsSent(pending, 30);
+    assert.deepEqual(r.pendingRetransmitRequests(), []);
+    assert.equal(r.retransmitStats().requestedPackets, 1);
+    // Confirming the same request twice does not count it twice.
+    r.retransmitRequestsSent(pending, 31);
+    assert.equal(r.retransmitStats().requestedPackets, 1);
+  });
+
+  it('does not count a hole as recovered when no request ever left', () => {
+    const { r, send } = receiver();
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    assert.equal(r.pendingRetransmitRequests().length, 1);
+    assert.deepEqual(sequences(send(1, 5)), [1, 2]);
+    assert.equal(r.retransmitStats().recoveredPackets, 0);
+  });
+
+  it('asks once more when the repeat itself is lost, then stops', () => {
+    const { r, send } = receiver({ retransmitHoldMs: 1_000 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 1);
+
+    // Before any round trip is known, the retry waits 150 ms.
+    r.flush(150);
+    assert.deepEqual(r.pendingRetransmitRequests(), []);
+    r.flush(151);
+    assert.deepEqual(r.pendingRetransmitRequests(), [{ sequence: 1, attempt: 1 }]);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 151);
+    assert.equal(r.retransmitStats().retriedPackets, 1);
+    assert.equal(r.retransmitStats().requestedPackets, 1, 'a retry is not a new sequence');
+
+    r.flush(900);
+    assert.deepEqual(r.pendingRetransmitRequests(), [], 'two attempts is the limit');
+
+    assert.deepEqual(sequences(send(1, 910)), [1, 2]);
+    assert.equal(r.retransmitStats().recoveredPackets, 1);
+    assert.equal(r.retransmitStats().repairRoundTripMs, null, 'a retried arrival is ambiguous and never timed');
+  });
+
+  it('paces retries from the measured repair round trip', () => {
+    const { r, send } = receiver({ retransmitHoldMs: 1_000 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 10);
+    send(1, 50);
+    assert.equal(r.retransmitStats().repairRoundTripMs, 40);
+
+    send(4, 100);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 100);
+    // The 40 ms round trip plus four times its variation (half the first
+    // sample): 120 ms, as TCP sizes its retransmission timeout.
+    r.flush(219);
+    assert.deepEqual(r.pendingRetransmitRequests(), []);
+    r.flush(220);
+    assert.deepEqual(r.pendingRetransmitRequests(), [{ sequence: 3, attempt: 1 }]);
+  });
+
+  it('spends the request budget on retries too', () => {
+    const { r, send } = receiver({ retransmitHoldMs: 2_000, retransmitRequestsPerSecond: 1 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 1);
+    r.flush(200);
+    assert.deepEqual(r.pendingRetransmitRequests(), [], 'no token left for a retry');
+    r.flush(1_100);
+    assert.deepEqual(r.pendingRetransmitRequests(), [{ sequence: 1, attempt: 1 }]);
   });
 });

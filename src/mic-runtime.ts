@@ -8,6 +8,7 @@ import type { RelaySocket } from './relay-socket-server.js';
 import {
   MAX_RETRANSMIT_REQUEST_SEQUENCES,
   encodeRetransmitRequest,
+  MAX_RETRANSMIT_REQUEST_ATTEMPT,
 } from '../shared/retransmit-request.js';
 
 /**
@@ -16,6 +17,13 @@ import {
  * with room for arrival jitter on the packets queued behind the hole.
  */
 const RETRANSMIT_MIN_MIX_HEADROOM_MS = 60;
+/**
+ * How long a request path may be missing before holes stop being requested.
+ * Both paths blink during a Wi-Fi roam or a socket reconnect; a hole noticed
+ * in that blink is still worth asking for once a path is back, and the hold
+ * stays bounded by the mix headroom either way.
+ */
+const RETRANSMIT_PATH_GRACE_MS = 500;
 
 export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
 
@@ -65,6 +73,8 @@ export class MicRuntime {
   private currentSampleRate: number | null = null;
   private currentAudioTransport: AudioTransport | null = null;
   private currentMediaTicket: string | null = null;
+  /** When a retransmit request path was last available, for the current transport. */
+  private retransmitPathSeen: { transport: AudioTransport; atMs: number } | null = null;
   private currentMediaOwnerId: string | null = null;
   private currentMediaGeneration: number | null = null;
   private currentUplinkHealth: AudioUplinkHealth | null = null;
@@ -300,15 +310,19 @@ export class MicRuntime {
    */
   serviceRetransmits(nowMs: number, mixHeadroomMs: number | null) {
     const transport = this.currentAudioTransport;
-    if (!transport?.takeRetransmitRequests) return 0;
-    const health = this.freshUplinkHealthPayload(nowMs);
-    const capable = (health?.transport.retransmitBufferPackets ?? 0) > 0;
+    if (!transport?.pendingRetransmitRequests || !transport.retransmitRequestsSent) return 0;
+    // Whether the page keeps a history is a fact about the page, not about how
+    // recently it reported: health rides the control socket, and a stalled TCP
+    // link delays it exactly when datagrams are losing packets. The last report
+    // of this capture decides; a replaced capture clears it.
+    const capable = (this.currentUplinkHealth?.transport.retransmitBufferPackets ?? 0) > 0;
     const generation = this.currentMediaGeneration;
     const ticket = this.currentMediaTicket;
     // Either path can carry a request. The direct session keeps working while
-    // the control socket is inside its reconnect grace, and vice versa. With
-    // neither, nothing may be requested or held for: a hole that cannot be
-    // repeated is ordinary loss.
+    // the control socket is inside its reconnect grace, and vice versa. A
+    // brief loss of both only delays requests: they stay queued and holes are
+    // still recorded. Longer, and a hole that cannot be repeated is ordinary
+    // loss, neither requested nor held for.
     const directPath = Boolean(
       this.options.sendDirectMedia
       && ticket
@@ -316,7 +330,12 @@ export class MicRuntime {
     );
     const socket = this.currentPublisher;
     const controlPath = Boolean(socket && socket.readyState === WebSocket.OPEN);
-    const requestable = capable && generation !== null && (directPath || controlPath);
+    const pathUp = directPath || controlPath;
+    if (this.retransmitPathSeen?.transport !== transport) this.retransmitPathSeen = null;
+    if (pathUp) this.retransmitPathSeen = { transport, atMs: nowMs };
+    const pathRecent = this.retransmitPathSeen !== null
+      && nowMs - this.retransmitPathSeen.atMs <= RETRANSMIT_PATH_GRACE_MS;
+    const requestable = capable && generation !== null && pathRecent;
     transport.setRetransmitRequestsEnabled?.(requestable);
     transport.setRetransmitHoldAllowed?.(
       requestable
@@ -324,54 +343,52 @@ export class MicRuntime {
       && mixHeadroomMs > RETRANSMIT_MIN_MIX_HEADROOM_MS,
     );
 
-    const requests = transport.takeRetransmitRequests();
+    // Requests stay queued in the receiver until one actually leaves: with no
+    // path this tick, they wait for the next one instead of being dropped.
+    if (!requestable || !pathUp || generation === null) return 0;
+    const requests = transport.pendingRetransmitRequests();
     if (requests.length === 0) return 0;
-    if (!requestable || generation === null) {
-      // A request may have been promoted by media arrival before this service
-      // tick learned that the page/path cannot answer repeats. Once the queue is
-      // drained here, keeping receiver-side "requested" ownership would let a
-      // later healthy/path tick resurrect the long hold for a request never sent.
-      transport.cancelRetransmitRequests?.(requests);
-      transport.setRetransmitHoldAllowed?.(false);
-      return 0;
+
+    const byAttempt = new Map<number, number[]>();
+    for (const { sequence, attempt } of requests) {
+      const sequences = byAttempt.get(attempt) ?? [];
+      sequences.push(sequence);
+      byAttempt.set(attempt, sequences);
     }
 
-    const delivered = new Set<number>();
-    // The direct datagram path is the fast one: the repeat comes back on it.
-    // Track delivery by sequence so one successful datagram cannot accidentally
-    // authorize a hold for another batch whose send failed.
-    if (directPath && ticket) {
-      for (let offset = 0; offset < requests.length; offset += MAX_RETRANSMIT_REQUEST_SEQUENCES) {
-        const batch = requests.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES);
-        if (this.options.sendDirectMedia!(
-          ticket,
-          encodeRetransmitRequest(generation, batch),
-        )) {
-          for (const sequence of batch) delivered.add(sequence);
+    let sent = false;
+    for (const [attempt, sequences] of byAttempt) {
+      // The direct datagram path is the fast one: the repeat comes back on it.
+      // The control socket carries the same request because datagrams are
+      // unreliable; the page answers each attempt once, whichever lands first.
+      if (directPath && ticket) {
+        for (let offset = 0; offset < sequences.length; offset += MAX_RETRANSMIT_REQUEST_SEQUENCES) {
+          sent = this.options.sendDirectMedia!(
+            ticket,
+            encodeRetransmitRequest(
+              generation,
+              sequences.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES),
+              Math.min(attempt, MAX_RETRANSMIT_REQUEST_ATTEMPT),
+            ),
+          ) || sent;
         }
       }
+      if (controlPath && socket) {
+        try {
+          socket.send(JSON.stringify({
+            type: 'audio-retransmit-request',
+            version: 1,
+            captureGeneration: generation,
+            attempt,
+            sequences,
+          }));
+          sent = true;
+        } catch {}
+      }
     }
-    if (controlPath && socket) {
-      try {
-        socket.send(JSON.stringify({
-          type: 'audio-retransmit-request',
-          version: 1,
-          captureGeneration: generation,
-          sequences: requests,
-        }));
-        // A successful control send carries the whole request set.
-        for (const sequence of requests) delivered.add(sequence);
-      } catch {}
-    }
-
-    if (delivered.size < requests.length) {
-      const unsent = requests.filter((sequence) => !delivered.has(sequence));
-      transport.cancelRetransmitRequests?.(unsent);
-      // Nothing was actually requested for those holes. Do not let stale
-      // requested state re-enable the long hold on the next service tick.
-      if (delivered.size === 0) transport.setRetransmitHoldAllowed?.(false);
-    }
-    return delivered.size;
+    if (!sent) return 0;
+    transport.retransmitRequestsSent(requests, nowMs);
+    return requests.length;
   }
 
   retransmitStats() {

@@ -133,12 +133,12 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /calibration\.start\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
   assert.match(server, /const nowMs = performance\.now\(\)/);
-  assert.match(server, /const previous = micRuntime\.uplinkHealthPayload\(nowMs\)/);
   assert.match(server, /const accepted = micRuntime\.noteUplinkHealth\(socket, health, nowMs\)/);
+  assert.match(server, /if \(accepted\) noteRecordingMicGapHealth\(health\)/);
   assert.match(
     server,
-    /accepted[\s\S]*health\.inputGapActiveObserved === true[\s\S]*previous\?\.captureGeneration === health\.captureGeneration[\s\S]*health\.inputGapSamples > previous\.inputGapSamples[\s\S]*takeController\.noteQualityEvent\('mic-input-gap'\)/,
-    'only accepted current-generation uplink health may turn a real browser input gap into Take evidence',
+    /function noteRecordingMicGapHealth\(health: AudioUplinkHealth\)[\s\S]*takeController\.recordingTakeId[\s\S]*health\.inputGapActiveObserved !== true[\s\S]*previous\.takeId !== takeId[\s\S]*previous\.captureGeneration !== health\.captureGeneration[\s\S]*health\.inputGapSamples > previous\.inputGapSamples[\s\S]*takeController\.noteQualityEvent\('mic-input-gap'\)/,
+    'accepted explicit source health must establish one per-Take baseline before gap deltas can become recording evidence',
   );
 
   assert.match(server, /parseMicPresenceTelemetry\(payload\)/);

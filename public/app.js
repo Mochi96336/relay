@@ -173,6 +173,16 @@ let captureInputGapSamples = 0;
 let captureInputClippingSinceHealth = null;
 let captureInputClippingRevision = 0;
 const pendingCaptureClippingHealth = new Map();
+
+function resetPublisherHealthRequestCorrelation() {
+  // Once command-channel authority resets, no ACK from an older socket can be
+  // accepted by handleServerMessage(). Keep the interval evidence itself, but
+  // discard request ids that can no longer settle it so repeated failed
+  // reconnect cycles cannot grow this map indefinitely.
+  publisherCommandLiveness.reset();
+  pendingCaptureClippingHealth.clear();
+}
+
 let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
@@ -1574,7 +1584,7 @@ function schedulePublisherReconnect(
 function adoptSocket(ws) {
   const previous = socket;
   socket = ws;
-  publisherCommandLiveness.reset();
+  resetPublisherHealthRequestCorrelation();
   resetPublisherCommandFreshness();
   publishPublisherCommandAuthority();
   updateSingerControls();
@@ -1631,7 +1641,7 @@ async function connectPublisherSocket(
     activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
-    publisherCommandLiveness.reset();
+    resetPublisherHealthRequestCorrelation();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
@@ -1654,7 +1664,7 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   if (previous) {
     audioTransport.unbind(previous);
     socket = null;
-    publisherCommandLiveness.reset();
+    resetPublisherHealthRequestCorrelation();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
@@ -1749,7 +1759,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   const wasPublisherActive = publisherActive;
 
   socket = null;
-  publisherCommandLiveness.reset();
+  resetPublisherHealthRequestCorrelation();
   resetPublisherCommandFreshness();
   mediaStream = null;
   activeCaptureGraph = null;

@@ -308,8 +308,21 @@ test('publisher command authority waits for correlated ACKs plus registration an
     publisherSource,
     /message\.type === 'mix-settings'[\s\S]*publisherMixSettingsFresh = true[\s\S]*publishPublisherCommandAuthority\(\)[\s\S]*updateSingerControls\(\)/,
   );
-  assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*publisherCommandLiveness\.reset\(\)/);
-  assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*publisherCommandLiveness\.reset\(\)/);
+  assert.match(
+    publisherSource,
+    /function resetPublisherHealthRequestCorrelation\(\)[\s\S]*publisherCommandLiveness\.reset\(\)[\s\S]*pendingCaptureClippingHealth\.clear\(\)/,
+    'command route reset must revoke both freshness authority and ACK correlation owned by the retired socket',
+  );
+  assert.match(
+    publisherSource,
+    /function adoptSocket\(ws\)[\s\S]*resetPublisherHealthRequestCorrelation\(\)/,
+    'adopting a replacement socket must revoke the prior command/health correlation epoch',
+  );
+  assert.match(
+    publisherSource,
+    /ws\.addEventListener\('close'[\s\S]*resetPublisherHealthRequestCorrelation\(\)/,
+    'closing the command socket must revoke the same correlation epoch',
+  );
   assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /function sendMixSettings\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-mix'\)/);

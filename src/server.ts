@@ -9,7 +9,7 @@ import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
-import { parseAudioUplinkHealth } from './audio-uplink-health.js';
+import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
@@ -2909,6 +2909,51 @@ const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAccepta
   },
 });
 
+type RecordingMicGapHealthBaseline = {
+  takeId: string;
+  captureGeneration: number;
+  inputGapSamples: number;
+  inputGapActive: boolean;
+};
+
+let recordingMicGapHealthBaseline: RecordingMicGapHealthBaseline | null = null;
+
+function noteRecordingMicGapHealth(health: AudioUplinkHealth) {
+  const takeId = takeController.recordingTakeId;
+  if (!takeId || health.inputGapActiveObserved !== true) {
+    recordingMicGapHealthBaseline = null;
+    return false;
+  }
+
+  const previous = recordingMicGapHealthBaseline;
+  const current: RecordingMicGapHealthBaseline = {
+    takeId,
+    captureGeneration: health.captureGeneration,
+    inputGapSamples: health.inputGapSamples,
+    inputGapActive: health.inputGapActive === true,
+  };
+  recordingMicGapHealthBaseline = current;
+
+  // The first explicit source-health snapshot inside a Take is only a baseline.
+  // A cumulative delta first observed after Start may have happened before the
+  // recording boundary, so attributing it would create a permanent false
+  // positive in Take metadata. Subsequent same-generation snapshots bound the
+  // event entirely inside this recording's observed source-health window.
+  if (
+    !previous
+    || previous.takeId !== takeId
+    || previous.captureGeneration !== health.captureGeneration
+  ) return false;
+
+  if (
+    previous.inputGapActive !== true
+    && health.inputGapSamples > previous.inputGapSamples
+  ) {
+    return takeController.noteQualityEvent('mic-input-gap');
+  }
+  return false;
+}
+
 const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   startTake: (socket) => {
     if (!socket.participantId) {
@@ -3167,7 +3212,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   },
   audioUplinkHealth: (socket, payload) => {
     const health = parseAudioUplinkHealth(payload);
-    if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
+    if (!health) return;
+
+    const nowMs = performance.now();
+    const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs);
+    if (accepted) noteRecordingMicGapHealth(health);
     return;
   },
   micPresenceTelemetry: (socket, payload) => {

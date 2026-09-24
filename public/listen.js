@@ -15,6 +15,7 @@ import {
 import { createStreamingLinearResampler } from './streaming-linear-resampler.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
+import { createReconnectBackoff } from './reconnect-backoff.js';
 
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
@@ -23,7 +24,9 @@ const takeoverButton = document.querySelector('#confirm-takeover');
 
 if (toggle && gainControl && publisherButton && takeoverButton) {
   const MIX_SAMPLE_RATE = 48_000;
-  const RECONNECT_MS = 1_000;
+  // The room mix stops the moment this socket drops: reconnect fast, back off
+  // only while it keeps failing. See reconnect-backoff.js.
+  const reconnectBackoff = createReconnectBackoff();
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
   const monitorPcmReceiver = createMonitorPcmReceiver();
@@ -198,6 +201,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
   function closeTransport() {
     transportEnabled = false;
+    reconnectBackoff.reset();
     liveEdgeRecoveryRequired = false;
     audioInterruption.reset();
     // Mute/ownership teardown discards queued PCM immediately, but the worklet
@@ -216,7 +220,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
         render('reconnecting');
         scheduleReconnect();
       });
-    }, RECONNECT_MS);
+    }, reconnectBackoff.nextDelayMs());
   }
 
   function handleMessage(message) {
@@ -268,6 +272,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     if (previous && previous !== next) {
       try { previous.close(); } catch {}
     }
+    reconnectBackoff.noteConnected(performance.now());
     resetPlaybackTemporalState();
     sendParticipantAuthentication(next);
     next.send(JSON.stringify({
@@ -326,6 +331,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     next.addEventListener('close', () => {
       if (socket !== next || connectEpoch !== transportEpoch) return;
       socket = null;
+      reconnectBackoff.noteClosed(performance.now());
       if (!transportEnabled || !monitorTransportWanted()) return;
       render('reconnecting');
       scheduleReconnect();

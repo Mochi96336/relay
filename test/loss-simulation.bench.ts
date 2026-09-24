@@ -1,6 +1,8 @@
 /**
- * Lossy-uplink simulation against a real Relay process. Not part of `npm test`
- * (the file name does not match test/*.test.ts); run it directly:
+ * Lossy-uplink simulation against a real Relay process, on the wall clock.
+ * The deterministic loss matrix that gates CI is test/mic-loss-matrix.test.ts;
+ * this bench is the end-to-end cross-check. Not part of `npm test` (the file
+ * name does not match test/*.test.ts); run it directly:
  *
  *   node --import tsx test/loss-simulation.bench.ts
  *

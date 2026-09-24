@@ -325,7 +325,16 @@ export class MicRuntime {
     );
 
     const requests = transport.takeRetransmitRequests();
-    if (!requestable || requests.length === 0 || generation === null) return 0;
+    if (requests.length === 0) return 0;
+    if (!requestable || generation === null) {
+      // A request may have been promoted by media arrival before this service
+      // tick learned that the page/path cannot answer repeats. Once the queue is
+      // drained here, keeping receiver-side "requested" ownership would let a
+      // later healthy/path tick resurrect the long hold for a request never sent.
+      transport.cancelRetransmitRequests?.(requests);
+      transport.setRetransmitHoldAllowed?.(false);
+      return 0;
+    }
 
     const delivered = new Set<number>();
     // The direct datagram path is the fast one: the repeat comes back on it.

@@ -3068,7 +3068,24 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   },
   audioUplinkHealth: (socket, payload) => {
     const health = parseAudioUplinkHealth(payload);
-    if (health) micRuntime.noteUplinkHealth(socket, health, performance.now());
+    if (!health) return;
+
+    const nowMs = performance.now();
+    const previous = micRuntime.uplinkHealthPayload(nowMs);
+    const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs);
+    if (
+      accepted
+      && health.inputGapActiveObserved === true
+      && previous?.captureGeneration === health.captureGeneration
+      && previous.inputGapActive !== true
+      && health.inputGapSamples > previous.inputGapSamples
+    ) {
+      // Short worklet input loss is padded with positioned silence so the
+      // mixer timeline stays correct; it therefore cannot appear as a PCM gap.
+      // Preserve at least one recording-scoped quality witness for that source
+      // failure instead of allowing the Take to assess as clean.
+      takeController.noteQualityEvent('mic-input-gap');
+    }
     return;
   },
   micPresenceTelemetry: (socket, payload) => {

@@ -189,7 +189,7 @@ test('Listen gives every recovered running context a fresh stuck-resume budget',
 
 test('exact digital silence is audibility evidence, not automatic rebuild authority', () => {
   const handler = appSource.match(
-    /if \(event\.data\?\.type === 'input-gap'\) \{[\s\S]*?\n    \}\n\n    const pcmMessage/,
+    /if \(event\.data\?\.type === 'input-gap'\) \{[\s\S]*?rebuildPublisherCaptureGraph\('input-gap'\);\s*\}/,
   )?.[0] ?? '';
   assert.notEqual(handler, '', 'capture input-gap handler must remain readable as one ownership boundary');
   assert.match(handler, /const digitalSilence = event\.data\.reason === 'digital-silence'/);

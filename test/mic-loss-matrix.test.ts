@@ -65,6 +65,11 @@ type Scenario = {
   downlink: (rngs: Rngs) => Direction;
   /** Whether each request path is up at `nowMs`. */
   paths?: (nowMs: number) => { direct: boolean; control: boolean };
+  /**
+   * Whether the page's own media socket is open at `nowMs`. While it is not,
+   * the page drops packets as disconnected instead of the network losing them.
+   */
+  pageSocketUp?: (nowMs: number) => boolean;
 };
 
 type Outcome = {
@@ -234,6 +239,8 @@ async function simulate(scenario: Scenario, pageRetransmits: boolean, seed: numb
     if (nowMs > 0 && nowMs % 1_000 === 0 && paths().control) {
       reportHealth((nowMs / PACKET_MS) * PACKET_SAMPLES);
     }
+
+    pageSocket.readyState = scenario.pageSocketUp?.(nowMs) === false ? 3 : 1;
 
     // Page: capture one packet every 10 ms.
     if (nowMs % PACKET_MS === 0 && nowMs / PACKET_MS < total) {
@@ -471,6 +478,25 @@ describe('Mic loss matrix (virtual clock, real page and Relay transports)', () =
     assert.ok(
       withRepair.missing <= Math.max(2, without.missing * 0.2),
       `${withRepair.missing} of ${without.missing} heard after the direct path went`,
+    );
+  });
+
+  it('repairs packets the page could not send while its socket reconnected', async () => {
+    // A WebSocket-only page whose socket drops for 120 ms every 1.5 s: the
+    // network loses nothing, the page itself drops what it captured meanwhile.
+    const down = (nowMs: number) => nowMs > 1_500 && nowMs % 1_500 < 120;
+    const { without, withRepair } = await compare({
+      name: 'page socket reconnects',
+      seconds: 8,
+      uplink: clean(40, 10),
+      downlink: clean(40, 10),
+      paths: (nowMs) => ({ direct: false, control: !down(nowMs) }),
+      pageSocketUp: (nowMs) => !down(nowMs),
+    });
+    assert.ok(without.missing >= 40, `the outages should cost audio: ${without.missing}`);
+    assert.ok(
+      withRepair.missing <= Math.max(2, without.missing * 0.1),
+      `${withRepair.missing} of ${without.missing} unsent packets still heard missing`,
     );
   });
 

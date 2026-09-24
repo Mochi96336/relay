@@ -1133,7 +1133,13 @@ export class PreferredAudioTransport extends AudioTransport {
   send(packet) {
     const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
     const result = this.sendMedia(packet);
-    if (result.sent) this.rememberForRetransmit(bytes);
+    // Keep what could not go out right now as well. A socket that reconnects,
+    // or a path saturated for a moment, drops packets Relay will find missing
+    // and ask for once the path is back; a short blip is still inside the
+    // live hold. Only a packet too large for every path is not worth keeping.
+    if (result.sent || result.reason === 'disconnected' || result.reason === 'congested') {
+      this.rememberForRetransmit(bytes);
+    }
     return result;
   }
 

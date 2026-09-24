@@ -12,13 +12,14 @@ const TAKE_QUALITY_POLICY_VERSIONS = new Set([
   'take-quality-v2',
   'take-quality-v3',
   'take-quality-v4',
+  'take-quality-v5',
 ]);
 
 const TAKE_QUALITY_VERDICTS = new Set(['clean', 'review', 'degraded']);
 const TAKE_QUALITY_SEVERITIES = new Set(['warning', 'critical']);
 const TAKE_QUALITY_UNITS = new Set(['ms', 'samples', 'events', 'boolean']);
 
-const TAKE_QUALITY_EVENT_KINDS = [
+const TAKE_QUALITY_LEGACY_EVENT_KINDS = [
   'mic-transport-disconnected',
   'mic-transport-connected',
   'mic-capture-restarted',
@@ -31,6 +32,11 @@ const TAKE_QUALITY_EVENT_KINDS = [
   'robot-source-replaced',
   'mic-owner-changed',
   'server-shutdown',
+] as const;
+
+const TAKE_QUALITY_V5_EVENT_KINDS = [
+  ...TAKE_QUALITY_LEGACY_EVENT_KINDS,
+  'mic-input-gap',
 ] as const;
 
 const TAKE_QUALITY_V1_ISSUE_CODES = new Set([
@@ -56,6 +62,10 @@ const TAKE_QUALITY_V2_ISSUE_CODES = new Set([
 const TAKE_QUALITY_V4_ISSUE_CODES = new Set([
   ...TAKE_QUALITY_V2_ISSUE_CODES,
   'mic-input-clipping',
+]);
+const TAKE_QUALITY_V5_ISSUE_CODES = new Set([
+  ...TAKE_QUALITY_V4_ISSUE_CODES,
+  'mic-input-gap',
 ]);
 
 const BASE_SAMPLE_FIELDS = [
@@ -146,7 +156,10 @@ function isTakeQualityEvidence(value: unknown, policyVersion: string) {
 
   const events = recordValue(evidence.events);
   if (!events) return false;
-  for (const kind of TAKE_QUALITY_EVENT_KINDS) {
+  const eventKinds = policyVersion === 'take-quality-v5'
+    ? TAKE_QUALITY_V5_EVENT_KINDS
+    : TAKE_QUALITY_LEGACY_EVENT_KINDS;
+  for (const kind of eventKinds) {
     if (!nonNegativeSafeInteger(events[kind])) return false;
   }
 
@@ -154,19 +167,24 @@ function isTakeQualityEvidence(value: unknown, policyVersion: string) {
     policyVersion === 'take-quality-v2'
     || policyVersion === 'take-quality-v3'
     || policyVersion === 'take-quality-v4'
+    || policyVersion === 'take-quality-v5'
   ) {
     if (!nonNegativeSafeInteger(evidence.timingDivergedSamples)) return false;
     if (!nonNegativeFinite(evidence.timingDivergedMs)) return false;
     if (!nonNegativeFinite(evidence.peakTimingDivergenceMs)) return false;
   }
-  if (policyVersion === 'take-quality-v3' || policyVersion === 'take-quality-v4') {
+  if (
+    policyVersion === 'take-quality-v3'
+    || policyVersion === 'take-quality-v4'
+    || policyVersion === 'take-quality-v5'
+  ) {
     if (!positiveFinite(evidence.timingDivergenceToleranceMs)) return false;
     if (
       evidence.recordingInterrupted !== undefined
       && typeof evidence.recordingInterrupted !== 'boolean'
     ) return false;
   }
-  if (policyVersion === 'take-quality-v4') {
+  if (policyVersion === 'take-quality-v4' || policyVersion === 'take-quality-v5') {
     if (!nonNegativeSafeInteger(evidence.micInputClippedSamples)) return false;
     if (!nonNegativeFinite(evidence.micInputClippedMs)) return false;
   }
@@ -178,9 +196,11 @@ function isTakeQualityIssue(value: unknown, policyVersion: string) {
   if (!issue) return false;
   const allowedCodes = policyVersion === 'take-quality-v1'
     ? TAKE_QUALITY_V1_ISSUE_CODES
-    : policyVersion === 'take-quality-v4'
-      ? TAKE_QUALITY_V4_ISSUE_CODES
-      : TAKE_QUALITY_V2_ISSUE_CODES;
+    : policyVersion === 'take-quality-v5'
+      ? TAKE_QUALITY_V5_ISSUE_CODES
+      : policyVersion === 'take-quality-v4'
+        ? TAKE_QUALITY_V4_ISSUE_CODES
+        : TAKE_QUALITY_V2_ISSUE_CODES;
   if (typeof issue.code !== 'string' || !allowedCodes.has(issue.code)) return false;
   if (typeof issue.severity !== 'string' || !TAKE_QUALITY_SEVERITIES.has(issue.severity)) return false;
   if (typeof issue.unit !== 'string' || !TAKE_QUALITY_UNITS.has(issue.unit)) return false;
@@ -253,7 +273,7 @@ export function normalizePersistedTakeRichFields(
   if (take.quality !== undefined && take.quality !== null) {
     if (!isStoredTakeQualityAssessment(take.quality)) return null;
     // TakeLibrary's public type predates archival policy-version widening. The
-    // runtime validator above preserves v1/v2/v3/v4 verbatim; consumers rely only
+    // runtime validator above preserves v1/v2/v3/v4/v5 verbatim; consumers rely only
     // on the stable verdict/evidence surface and must not re-assess old Takes.
     quality = structuredClone(take.quality) as TakeQualityAssessment;
   }

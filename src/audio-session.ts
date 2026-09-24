@@ -2369,6 +2369,17 @@ export class AudioSession {
       ) {
         this.micInputClippingRanges.shift();
       }
+      if (
+        this.micInputRailRunRangeActive
+        && this.micInputClippingRanges.length === 0
+      ) {
+        // The current raw rail run used to own the range that retention just
+        // discarded. Keeping only the boolean "active" would leave no range to
+        // extend, so later source-contiguous clipped PCM could never become
+        // Take evidence again. Restart the proof window at retained history;
+        // four fresh rail samples are enough to establish a new bounded range.
+        this.resetMicInputRailRun();
+      }
     }
   }
 

@@ -96,6 +96,53 @@ function feedMic(mic: RelayClient, frames = 30, value = 4_000) {
   for (let i = 0; i < frames; i += 1) mic.sendPcm(frame);
 }
 
+function uplinkHealth(
+  generation: number,
+  capturedSamples: number,
+  inputGapSamples: number,
+  inputGapActive = false,
+) {
+  return {
+    type: 'audio-uplink-health',
+    version: 1,
+    captureGeneration: generation,
+    capturedSamples,
+    inputGapSamples,
+    inputGapActive,
+    inputMuted: false,
+    droppedSamples: {
+      total: 0,
+      disconnected: 0,
+      congested: 0,
+      packetTooLarge: 0,
+      captureBacklog: 0,
+    },
+    controlReconnects: 0,
+    transport: {
+      path: 'websocket',
+      maxPacketBytes: null,
+      minWebTransportMaxPacketBytes: null,
+      maxWebTransportMaxPacketBytes: null,
+      webTransportAttempts: 0,
+      webTransportConnections: 0,
+      webTransportDemotions: 0,
+      webTransportPacketsSubmitted: 0,
+      webTransportCongestedRejects: 0,
+      webTransportPacketTooLargeRejects: 0,
+      webTransportSendFailures: 0,
+      webSocketPacketsSent: 0,
+      webSocketCongestedRejects: 0,
+      webSocketDisconnectedRejects: 0,
+      webSocketSendFailures: 0,
+    },
+  };
+}
+
+function feedMicV2(mic: RelayClient, frames = 30, value = 4_000) {
+  const frame = pcmFrame(value);
+  for (let i = 0; i < frames; i += 1) mic.sendAudioPacket(frame);
+}
+
 async function waitReady(client: RelayClient, takeId: string) {
   return client.waitFor((message) => (
     message.type === 'take-status'
@@ -169,7 +216,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     assert.equal(ready.take.artifact.channels, 1);
     assert.equal(ready.take.artifact.bitsPerSample, 16);
     assert.ok(ready.take.artifact.durationMs > 0);
-    assert.equal(ready.take.quality.policyVersion, 'take-quality-v4');
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v5');
     assert.equal(
       ready.take.quality.evidence.recordedSamples,
       ready.take.artifact.sampleCount,
@@ -192,6 +239,172 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     assert.match(authorized.headers.get('content-type') ?? '', /audio\/wav/);
     assert.match(authorized.headers.get('cache-control') ?? '', /private/);
     assertWav(Buffer.from(await authorized.arrayBuffer()));
+
+    backing.close();
+    control.close();
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a Mic input gap completed before Start does not contaminate the later Take', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-prestart-input-gap-'));
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
+  try {
+    const control = await RelayClient.connect(server, participantQuery('participant-pre-gap', 'PreGap'));
+    await establishRoomSong(control, 'pre-gap-playback');
+    const backing = await startBacking(server);
+
+    control.send({
+      type: 'register',
+      role: 'publisher',
+      sampleRate: RATE,
+      captureGeneration: 1,
+      audioPacketVersion: 2,
+    });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+
+    control.send(uplinkHealth(1, 0, 0, false));
+    await control.waitFor((message) => (
+      message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+    feedMicV2(control, 8);
+    feedBacking(backing, 8);
+
+    // The missing-input interval is fully over before recording starts. A later
+    // Take must not inherit this cumulative source-health delta.
+    feedMicV2(control, 5, 0);
+    feedBacking(backing, 5);
+    const preGapAckFrom = control.messages.length;
+    control.send(uplinkHealth(1, control.cursor, 4_800, false));
+    await control.waitFor((message) => (
+      control.messages.indexOf(message) >= preGapAckFrom
+      && message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+
+    control.send({ type: 'start-take' });
+    const started = await control.waitFor((message) => (
+      message.type === 'take-command-accepted' && message.command === 'start'
+    ));
+    const takeId = String(started.takeId);
+    await control.waitFor((message) => (
+      message.type === 'take-status'
+      && message.lifecycle === 'recording'
+      && message.take?.takeId === takeId
+    ));
+
+    // The first explicit health inside the recording is a baseline, not
+    // retroactive evidence for everything that happened before Start.
+    const baselineAckFrom = control.messages.length;
+    control.send(uplinkHealth(1, control.cursor, 4_800, false));
+    await control.waitFor((message) => (
+      control.messages.indexOf(message) >= baselineAckFrom
+      && message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+
+    feedMicV2(control, 16);
+    feedBacking(backing, 16);
+    await sleep(140);
+
+    control.send({ type: 'stop-take', takeId });
+    const ready = await waitReady(control, takeId);
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v5');
+    assert.equal(ready.take.quality.evidence.events['mic-input-gap'], 0);
+    assert.equal(
+      ready.take.quality.issues.some((issue: any) => issue.code === 'mic-input-gap'),
+      false,
+      'a source gap completed before the recording boundary must not become Take evidence',
+    );
+
+    backing.close();
+    control.close();
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a short worklet input gap prevents a padded-silence Take from assessing clean', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-input-gap-'));
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
+  try {
+    const control = await RelayClient.connect(server, participantQuery('participant-gap', 'Gap'));
+    await establishRoomSong(control, 'input-gap-playback');
+    const backing = await startBacking(server);
+    feedBacking(backing, 16);
+    await sleep(60);
+
+    // Start on the already-supported Song/backing-only path. The v2 Mic joins
+    // while the room-owned Take is recording.
+    control.send({ type: 'start-take' });
+    const started = await control.waitFor((message) => (
+      message.type === 'take-command-accepted' && message.command === 'start'
+    ));
+    const takeId = String(started.takeId);
+    await control.waitFor((message) => (
+      message.type === 'take-status'
+      && message.lifecycle === 'recording'
+      && message.take?.takeId === takeId
+    ));
+
+    control.send({
+      type: 'register',
+      role: 'publisher',
+      sampleRate: RATE,
+      captureGeneration: 1,
+      audioPacketVersion: 2,
+    });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+
+    // Establish the accepted capture-health baseline, then send real v2 audio.
+    control.send(uplinkHealth(1, 0, 0, false));
+    await control.waitFor((message) => (
+      message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+    feedMicV2(control, 12);
+    feedBacking(backing, 12);
+    await sleep(80);
+
+    // A 100 ms input loss is shorter than the worklet's sustained-gap report
+    // threshold. Production still emits positioned silence PCM for that whole
+    // interval, so the mixer sees a continuous timeline rather than micGapSamples.
+    feedMicV2(control, 5, 0);
+    feedBacking(backing, 5);
+    await sleep(40);
+
+    // This is the short-gap recovery shape: inputGapActive is false on both
+    // accepted snapshots. Only the cumulative source-gap counter says the
+    // positioned silence above was missing input rather than intentional quiet.
+    const gapAckFrom = control.messages.length;
+    control.send(uplinkHealth(1, control.cursor, 4_800, false));
+    await control.waitFor((message) => (
+      control.messages.indexOf(message) >= gapAckFrom
+      && message.type === 'audio-uplink-health-ack'
+      && message.captureGeneration === 1
+    ));
+
+    feedMicV2(control, 16);
+    feedBacking(backing, 16);
+    await sleep(140);
+
+    control.send({ type: 'stop-take', takeId });
+    const ready = await waitReady(control, takeId);
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v5');
+    assert.equal(ready.take.quality.evidence.events['mic-input-gap'], 1);
+    assert.equal(
+      ready.take.quality.issues.some((issue: any) => issue.code === 'mic-input-gap'),
+      true,
+    );
+    assert.notEqual(
+      ready.take.quality.verdict,
+      'clean',
+      'positioned silence inserted for a real Mic input loss must never disappear from Take quality',
+    );
 
     backing.close();
     control.close();

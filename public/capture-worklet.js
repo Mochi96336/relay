@@ -3,6 +3,10 @@ const SILENCE_DBFS = -120;
 // Narrow enough that an unclipped voice peak normally touches it for at most
 // one sample. A flat-topped capture instead produces a run of rail samples.
 const INPUT_RAIL_THRESHOLD = 0x7fff / 0x8000;
+// Gap padding is synthetic continuity audio, not raw microphone evidence.
+// Keep it one quantization step below the raw-input rail so downstream PCM
+// inspection cannot complete a flat-top run that never existed at the input.
+const SYNTHETIC_INPUT_GAP_MAX_MAGNITUDE = (0x7fff - 1) / 0x8000;
 const INPUT_GAP_DECLICK_MS = 2;
 const INPUT_GAP_REPORT_REFERENCE_RATE = 48_000;
 const INPUT_GAP_REPORT_REFERENCE_QUANTA = 400;
@@ -121,6 +125,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
           outputSample = this.gapFadeStartSample * weight;
           this.gapFadeRemainingSamples -= 1;
         }
+        outputSample = Math.max(
+          -SYNTHETIC_INPUT_GAP_MAX_MAGNITUDE,
+          Math.min(SYNTHETIC_INPUT_GAP_MAX_MAGNITUDE, outputSample),
+        );
         this.chunk[this.offset + i] = outputSample < 0
           ? outputSample * 0x8000
           : outputSample * 0x7fff;

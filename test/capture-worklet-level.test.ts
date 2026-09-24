@@ -235,6 +235,50 @@ test('capture rail runs remain continuous across 20 ms level-message boundaries'
   );
 });
 
+test('synthetic input-gap fade cannot complete a false four-sample raw clipping run', async () => {
+  const processor = await loadCaptureProcessor();
+  enablePcmEnvelope(processor);
+
+  for (let quantum = 0; quantum < 7; quantum += 1) {
+    processor.process([[new Float32Array(128).fill(0.25)]]);
+  }
+  const edge = new Float32Array(128).fill(0.25);
+  edge[125] = 1;
+  edge[126] = 1;
+  edge[127] = 1;
+  processor.process([[edge]]);
+
+  for (let quantum = 0; quantum < 7; quantum += 1) processor.process([]);
+
+  const pcms = processor.port.messages.filter((message) => (
+    typeof message === 'object'
+    && message !== null
+    && (message as { type?: string }).type === 'pcm'
+  )) as PcmMessage[];
+  assert.equal(pcms.length, 2);
+
+  const second = new Int16Array(pcms[1]!.buffer);
+  let run = 0;
+  let maxRun = 0;
+  for (const sample of second) {
+    const onServerRail = sample >= 32_766 || sample <= -32_767;
+    run = onServerRail ? run + 1 : 0;
+    maxRun = Math.max(maxRun, run);
+  }
+
+  const level = latestLevel(processor);
+  assert.ok(level);
+  assert.equal(
+    level.maxConsecutiveRailSamples,
+    3,
+    'the worklet raw-input detector must correctly reject the three-sample peak',
+  );
+  assert.ok(
+    maxRun < 4,
+    `synthetic gap PCM completed a false server-side flat top of ${maxRun} samples`,
+  );
+});
+
 test('realtime capture worklet contains no FFT or pitch detector', async () => {
   const source = await captureWorkletSource();
   assert.doesNotMatch(source, /runFft|measureSpectrumBands|measureF0|F0_YIN_THRESHOLD|F0_RING_SIZE/);

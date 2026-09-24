@@ -236,6 +236,7 @@
               <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics">
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true">Overview</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="session" aria-selected="false">Session</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="mic" aria-selected="false">Mic</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false">Audio</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false">Timing</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="robot" aria-selected="false">Robot</button>
@@ -245,6 +246,7 @@
               <section class="diagnostics-view" data-diagnostics-panel="overview">
                 <dl class="diagnostic-ledger">
                   <div class="diagnostic-pair"><dt>Product health</dt><dd id="diag-overview-health">—</dd></div>
+                  <div class="diagnostic-pair"><dt>Mic audio</dt><dd id="diag-overview-mic">—</dd></div>
                   <div class="diagnostic-pair"><dt>Lifecycle</dt><dd id="diag-overview-lifecycle">—</dd></div>
                   <div class="diagnostic-pair"><dt>Host ready</dt><dd id="diag-overview-ready">—</dd></div>
                   <div class="diagnostic-pair"><dt>Session ready</dt><dd id="diag-overview-session-ready">—</dd></div>
@@ -257,6 +259,13 @@
                   <div class="diagnostic-pair"><dt>Microphone</dt><dd id="diag-session-mic">—</dd></div>
                   <div class="diagnostic-pair"><dt>Song</dt><dd id="diag-session-song">—</dd></div>
                   <div class="diagnostic-pair"><dt>Take</dt><dd id="diag-session-take">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="diagnostics-view" data-diagnostics-panel="mic" hidden>
+                <p class="diagnostics-intro">Whether the singer's voice is actually reaching the room, and what the phone, network and Relay are doing about it. Updates every second while open.</p>
+                <dl id="diag-mic-ledger" class="diagnostic-ledger">
+                  <div class="diagnostic-pair"><dt>Mic audio</dt><dd>—</dd></div>
                 </dl>
               </section>
 

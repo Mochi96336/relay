@@ -1567,6 +1567,7 @@ function remoteStatusPayload() {
     },
     audio: {
       micMediaPath: micMediaPath(),
+      micSampleRate: micRuntime.sampleRate,
       captureAndSender: micUplinkHealthPayload(nowMs),
       receiverTransport: micRuntime.receiverStats(),
       receiverRetransmit: micRuntime.retransmitStats(),

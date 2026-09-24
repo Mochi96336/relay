@@ -56,6 +56,7 @@ if (
     'song-clock-unavailable': 'system.issue.cause.song-clock-unavailable',
     'mic-transport-disconnected': 'system.issue.cause.mic-transport-disconnected',
     'mic-audio-stalled': 'system.issue.cause.mic-audio-stalled',
+    'mic-audio-intermittent': 'system.issue.cause.mic-audio-intermittent',
     'mic-input-clipping': 'system.issue.cause.mic-input-clipping',
     'timing-calibrating': 'system.issue.cause.timing-calibrating',
     'timing-fallback': 'system.issue.cause.timing-fallback',

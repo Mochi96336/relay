@@ -127,6 +127,15 @@ Relay keeps control-plane state on WebSocket connections. Microphone media uses 
 
 When a direct HTTP/3 endpoint is configured and the browser can establish it, microphone media can use WebTransport. Otherwise Relay continues over WebSocket binary media; WebTransport is an optional direct-media path, not a startup requirement.
 
+Microphone loss is handled in layers, all without lowering PCM quality:
+
+- a short, age-bounded datagram backlog absorbs send bursts after a main-thread stall instead of dropping them;
+- a page that advertises a retransmission buffer is asked to repeat lost datagrams (over the direct WebTransport session, with the control socket as fallback), and the ordered stream waits for the repeat only while the live mix still has headroom (`RELAY_AUDIO_RETRANSMIT_HOLD_MS`, default 400; `0` disables);
+- a hole that remains is concealed by pitch-synchronous repetition rather than silence, while Take quality and playability evidence still count it as missing;
+- a WebTransport session lost to a network change is re-offered with backoff, and seconds of exact digital silence from a present input are reported as a source gap rather than a live Mic.
+
+`/statusz` reports receiver retransmission, concealment and a Mic audibility window alongside the existing transport evidence.
+
 Robot backing audio currently enters through `backing:stdin` and the normal backing publisher path.
 
 For deployment details, certificate requirements, UDP reachability, and media-ticket behavior, see [ROBOT_DEPLOYMENT.md](ROBOT_DEPLOYMENT.md).

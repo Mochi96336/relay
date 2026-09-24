@@ -51,6 +51,8 @@ export type ProductViewModelInput = {
   publisherControlConnected?: boolean;
   /** Capture-scoped browser verdict after bounded media recovery is exhausted. */
   micMediaRecoveryDegraded?: boolean;
+  /** Relay's own sustained verdict that a live Mic is not reaching the mix. */
+  micAudibilityDegraded?: boolean;
   /** Recent raw-input flat-top evidence from the active Mic capture. */
   micInputClipping?: boolean;
   roomSong: ProductRoomSongInput;
@@ -260,6 +262,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       state: mic,
       mediaRecoveryDegraded: micMediaRecoveryDegraded,
       inputClipping: mic === 'live' && input.micInputClipping === true,
+      audibilityDegraded: mic === 'live' && input.micAudibilityDegraded === true,
     },
     takeLifecycle: input.take.lifecycle,
     performanceActive,

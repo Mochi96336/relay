@@ -50,6 +50,8 @@ import {
 } from './auto-content-calibration-policy.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
+import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
+import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
 import { TimingRuntime } from './timing-runtime.js';
@@ -251,6 +253,15 @@ const session = new AudioSession({
   backingRetentionMs: BACKING_RETENTION_MS,
 });
 
+/**
+ * Diagnostics for the "Mic shows live but the room hears no voice" class. It
+ * logs and feeds /statusz only; see MicAudibilityMonitor for why micPlayable
+ * cannot see these shapes.
+ */
+const micAudibility = new MicAudibilityMonitor({ sampleRate: MIX_SAMPLE_RATE });
+/** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
+const micClockDrift = new MicClockDriftEstimator();
+
 // Read here rather than beside the other calibration constants because the
 // Take quality policy needs it too: it is the line between the mixer's own
 // hysteresis and a correction a recording actually blocked.
@@ -407,6 +418,7 @@ const micRuntime = new MicRuntime({
   createDirectMediaTicket: () => webTransportMedia.createTicket(),
   directMediaConnected: (ticket) => webTransportMedia.hasSession(ticket),
   offerDirectMedia: (ticket) => webTransportMedia.offer(ticket),
+  sendDirectMedia: (ticket, bytes) => webTransportMedia.sendDatagram(ticket, bytes),
 });
 
 const micTransportGrace = new MicTransportGraceRuntime({
@@ -1554,8 +1566,12 @@ function remoteStatusPayload() {
       micMediaPath: micMediaPath(),
       captureAndSender: micUplinkHealthPayload(nowMs),
       receiverTransport: micRuntime.receiverStats(),
+      receiverRetransmit: micRuntime.retransmitStats(),
+      micAudibility: micAudibility.status(),
       timeline: {
         micGapMs: mixHealth.micGapMs,
+        micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
+        micClockDrift: micClockDrift.estimate(),
         micHeadroomMs: mixHealth.micHeadroomMs,
         micStarvedFrames: mixHealth.micStarvedFrames,
       },
@@ -1775,6 +1791,7 @@ function productStatusPayload(nowMs = performance.now()) {
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
     micMediaRecoveryDegraded: freshMicUplink?.transport.mediaRecoveryDegraded === true,
+    micAudibilityDegraded: micAudibility.degraded,
     micInputClipping: freshMicUplink?.captureClipping?.recentDetected === true,
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
@@ -1975,6 +1992,15 @@ function processPublisherFrame(frame: PcmFrame) {
       nowMs,
     );
     if (samples.length > 0) noteMicFrame(nowMs, frame);
+    micAudibility.observeReceived(samples);
+    if (frame.firstSampleIndex !== null && frame.generation !== null) {
+      micClockDrift.observe(
+        frame.generation,
+        micRuntime.sampleRate,
+        frame.firstSampleIndex + frame.pcm.byteLength / 2,
+        nowMs,
+      );
+    }
 
     if (session.active) {
       if (captureRestarted) {
@@ -2000,15 +2026,88 @@ function deliverMicPackets(packets: PcmFrame[]) {
 
 const mixerTimer = setInterval(() => {
   if (micRuntime.audioTransport) {
-    deliverMicPackets(micRuntime.flush(performance.now()));
+    const nowMs = performance.now();
+    micRuntime.serviceRetransmits(nowMs, session.liveMicHeadroomMs);
+    deliverMicPackets(micRuntime.flush(nowMs));
   }
 
   session.drain((frame, evidence, position) => {
     const nowMs = performance.now();
     takeController.append(frame, takeQualityFrameState(nowMs), evidence, position);
     monitorTransport.broadcast(frame, true, position);
+    const audibility = micAudibility.observeFrame({
+      micLive: micPlayable(nowMs),
+      frameSamples: frame.byteLength / 2,
+      micGapSamples: evidence.micGapSamples,
+      micStarvedSamples: evidence.micStarvedSamples,
+    });
+    if (audibility) reportMicAudibility(audibility, nowMs);
   });
 }, 5);
+
+let micAudibilityReceiverBaseline: ReturnType<typeof micRuntime.receiverStats> = null;
+
+function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
+  // Receiver deltas are per window so a log line says what this second did,
+  // not what the capture has accumulated since it started.
+  const receiver = micRuntime.receiverStats();
+  const baseline = micAudibilityReceiverBaseline;
+  micAudibilityReceiverBaseline = receiver;
+  if (result.events.length === 0) return;
+
+  const delta = (key: 'receivedPackets' | 'emittedPackets' | 'lostPackets' | 'latePackets'
+    | 'reorderedPackets' | 'futurePackets' | 'invalidSampleRangePackets') => (
+    receiver && baseline && receiver[key] >= baseline[key]
+      ? receiver[key] - baseline[key]
+      : null
+  );
+  const uplink = micRuntime.uplinkHealthPayload(nowMs);
+  const health = session.health();
+  console.warn('[mic-audibility]', JSON.stringify({
+    events: result.events,
+    window: {
+      ...result.window,
+      receivedFraction: Number(result.window.receivedFraction.toFixed(3)),
+      missingFraction: Number(result.window.missingFraction.toFixed(3)),
+      receivedRmsDbfs: result.window.receivedRmsDbfs === null
+        ? null
+        : Math.round(result.window.receivedRmsDbfs),
+    },
+    mediaPath: micMediaPath(),
+    micStreaming: micStreaming(nowMs),
+    micFrameAgeMs: micRuntime.frameAgeMs(nowMs),
+    receiverWindow: receiver ? {
+      received: delta('receivedPackets'),
+      emitted: delta('emittedPackets'),
+      lost: delta('lostPackets'),
+      late: delta('latePackets'),
+      reordered: delta('reorderedPackets'),
+      future: delta('futurePackets'),
+      invalidSampleRange: delta('invalidSampleRangePackets'),
+      buffered: receiver.bufferedPackets,
+    } : null,
+    retransmit: micRuntime.retransmitStats(),
+    mix: {
+      requestedMicAdvanceMs: Math.round(session.requestedMicAdvanceMs),
+      appliedMicAdvanceMs: Math.round(session.appliedMicAdvanceMs),
+      micFrontierCorrectionMs: Math.round(session.micFrontierCorrectionMs),
+      micHeadroomMs: health.micHeadroomMs,
+      micGapMs: health.micGapMs,
+      micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
+      micClockDrift: micClockDrift.estimate(),
+      micRmsDbfs: health.micRmsDbfs === null ? null : Math.round(health.micRmsDbfs),
+    },
+    phone: uplink ? {
+      reportAgeMs: uplink.reportAgeMs,
+      inputMuted: uplink.inputMuted,
+      inputGapActive: uplink.inputGapActive ?? null,
+      captureLevel: uplink.captureLevel,
+      captureDispatch: uplink.captureDispatch ?? null,
+      droppedSamples: uplink.droppedSamples,
+      transport: uplink.transport,
+    } : null,
+  }));
+}
 
 function maybeAutoCalibrate(nowMs: number) {
   // Feature enablement and Take ownership are outer scheduler concerns. The

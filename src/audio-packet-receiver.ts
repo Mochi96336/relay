@@ -382,6 +382,29 @@ export class AudioPacketReceiver {
     return requests;
   }
 
+  /**
+   * Rolls back request ownership when every available request path failed to
+   * send. A sequence that was never actually asked for must not keep the
+   * ordered stream on the longer retransmit deadline.
+   *
+   * Future packets can prove the same hole again and create a fresh candidate.
+   */
+  cancelRetransmitRequests(sequences: readonly number[]) {
+    let cancelled = 0;
+    for (const sequence of sequences) {
+      if (!uint32(sequence)) continue;
+      if (this.retransmitRequested.delete(sequence >>> 0)) cancelled += 1;
+      this.retransmitCandidates.delete(sequence >>> 0);
+    }
+    if (cancelled > 0) {
+      this.retransmitCounters.requestedPackets = Math.max(
+        0,
+        this.retransmitCounters.requestedPackets - cancelled,
+      );
+    }
+    return cancelled;
+  }
+
   private retransmitHolding() {
     return this.retransmitHoldMs > 0
       && this.retransmitHoldAllowed

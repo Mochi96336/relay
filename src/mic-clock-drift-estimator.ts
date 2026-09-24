@@ -14,7 +14,23 @@
  * the least-delayed packet of each window rides on the base path latency, and
  * its drift across windows is the clock difference. Fit a line through those
  * per-window minima.
+ *
+ * The first window of a capture is discarded: capture start-up, the first
+ * transport path choice and the mix beginning all land in it, and its minimum
+ * is not base latency. The fit is Theil-Sen (median of pairwise slopes), so a
+ * single disturbed window - a network change, a stalled page - cannot tilt it.
+ * Nothing is reported before a minute of windows: packet arrival is quantised
+ * to milliseconds, and over half a minute 2 ms of noise already reads as
+ * 67 ppm, which on a real rehearsal looked like a badly drifting phone.
+ *
+ * A path change shifts base latency as a step - one 20 ms chunk of dispatch
+ * phase, a new Wi-Fi access point - and every later window moves with it.
+ * Clock drift cannot move the envelope that fast (200 ppm is 1 ms per window),
+ * so a jump between consecutive windows beyond STEP_MS is spliced out before
+ * fitting instead of being read as drift.
  */
+
+const STEP_MS = 8;
 
 export type MicClockDriftEstimate = {
   /** Positive: the capture clock runs slow, spending live headroom. */
@@ -40,12 +56,16 @@ export class MicClockDriftEstimator {
   private sourceRate: number | null = null;
   private windowStartedAtMs: number | null = null;
   private windowMinimum: number | null = null;
+  private warmupWindowPending = true;
   private readonly minima: WindowMinimum[] = [];
+  /** Sum of spliced latency steps, in source samples. */
+  private stepOffsetSamples = 0;
+  private lastRawMinimum: number | null = null;
 
   constructor(options: MicClockDriftEstimatorOptions = {}) {
     this.windowMs = options.windowMs ?? 5_000;
     this.maxWindows = options.maxWindows ?? 24;
-    this.minWindows = options.minWindows ?? 6;
+    this.minWindows = options.minWindows ?? 12;
     if (!(this.windowMs > 0)) throw new RangeError('windowMs must be positive');
     if (!Number.isInteger(this.maxWindows) || this.maxWindows < 2) {
       throw new RangeError('maxWindows must be an integer of at least 2');
@@ -72,6 +92,9 @@ export class MicClockDriftEstimator {
       this.windowStartedAtMs = null;
       this.windowMinimum = null;
       this.minima.length = 0;
+      this.stepOffsetSamples = 0;
+      this.lastRawMinimum = null;
+      this.warmupWindowPending = true;
     }
 
     // Arrival on the mix clock minus capture position on the source clock,
@@ -83,8 +106,18 @@ export class MicClockDriftEstimator {
       : Math.min(this.windowMinimum, delaySamples);
 
     if (arrivedAtMs - this.windowStartedAtMs >= this.windowMs) {
-      this.minima.push({ atMs: arrivedAtMs, delaySamples: this.windowMinimum });
-      if (this.minima.length > this.maxWindows) this.minima.shift();
+      if (this.warmupWindowPending) {
+        this.warmupWindowPending = false;
+      } else {
+        const raw = this.windowMinimum;
+        if (this.lastRawMinimum !== null) {
+          const jump = raw - this.lastRawMinimum;
+          if (Math.abs(jump) > (STEP_MS * sourceRate) / 1000) this.stepOffsetSamples += jump;
+        }
+        this.lastRawMinimum = raw;
+        this.minima.push({ atMs: arrivedAtMs, delaySamples: raw - this.stepOffsetSamples });
+        if (this.minima.length > this.maxWindows) this.minima.shift();
+      }
       this.windowStartedAtMs = arrivedAtMs;
       this.windowMinimum = null;
     }
@@ -93,31 +126,26 @@ export class MicClockDriftEstimator {
   estimate(): MicClockDriftEstimate | null {
     if (this.minima.length < this.minWindows || this.sourceRate === null) return null;
     const n = this.minima.length;
-    const originMs = this.minima[0]!.atMs;
-    let sumX = 0;
-    let sumY = 0;
-    for (const { atMs, delaySamples } of this.minima) {
-      sumX += atMs - originMs;
-      sumY += delaySamples;
+    const slopes: number[] = [];
+    for (let i = 0; i < n; i += 1) {
+      for (let j = i + 1; j < n; j += 1) {
+        const dt = this.minima[j]!.atMs - this.minima[i]!.atMs;
+        if (dt > 0) slopes.push((this.minima[j]!.delaySamples - this.minima[i]!.delaySamples) / dt);
+      }
     }
-    const meanX = sumX / n;
-    const meanY = sumY / n;
-    let covariance = 0;
-    let variance = 0;
-    for (const { atMs, delaySamples } of this.minima) {
-      const dx = atMs - originMs - meanX;
-      covariance += dx * (delaySamples - meanY);
-      variance += dx * dx;
-    }
-    if (variance === 0) return null;
+    if (slopes.length === 0) return null;
+    slopes.sort((a, b) => a - b);
+    const middle = slopes.length >> 1;
     // Slope in source samples per millisecond; a growing delay means the
     // capture clock produces samples slower than real time.
-    const slopeSamplesPerMs = covariance / variance;
+    const slopeSamplesPerMs = slopes.length % 2 === 1
+      ? slopes[middle]!
+      : (slopes[middle - 1]! + slopes[middle]!) / 2;
     const ppm = (slopeSamplesPerMs * 1000 * 1e6) / this.sourceRate;
     return {
       ppm: Math.round(ppm * 10) / 10,
       windows: n,
-      spanMs: Math.round(this.minima[n - 1]!.atMs - originMs),
+      spanMs: Math.round(this.minima[n - 1]!.atMs - this.minima[0]!.atMs),
     };
   }
 }

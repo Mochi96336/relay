@@ -1,6 +1,6 @@
 import type { MixFrameEvidence } from './audio-session.js';
 
-export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v4' as const;
+export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v5' as const;
 
 export type TakeQualityVerdict = 'clean' | 'review' | 'degraded';
 export type TakeQualitySeverity = 'warning' | 'critical';
@@ -9,6 +9,7 @@ export type TakeQualityEventKind =
   | 'mic-transport-disconnected'
   | 'mic-transport-connected'
   | 'mic-capture-restarted'
+  | 'mic-input-gap'
   | 'backing-transport-disconnected'
   | 'backing-transport-connected'
   | 'backing-transport-replaced'
@@ -108,6 +109,7 @@ export type TakeQualityIssueCode =
   | 'backing-starvation'
   | 'output-clipping'
   | 'mic-input-clipping'
+  | 'mic-input-gap'
   | 'unheadered-pcm'
   | 'timing-fallback'
   | 'calibration-stale'
@@ -158,6 +160,7 @@ function emptyEvents(): TakeQualityEventCounts {
     'mic-transport-disconnected': 0,
     'mic-transport-connected': 0,
     'mic-capture-restarted': 0,
+    'mic-input-gap': 0,
     'backing-transport-disconnected': 0,
     'backing-transport-connected': 0,
     'backing-transport-replaced': 0,
@@ -248,6 +251,16 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
       value: evidence.micInputClippedSamples,
       unit: 'samples',
       message: 'Recorded microphone samples came from a raw input waveform already flattened before Relay gain.',
+    });
+  }
+
+  if (evidence.events['mic-input-gap'] > 0) {
+    issues.push({
+      code: 'mic-input-gap',
+      severity: 'warning',
+      value: evidence.events['mic-input-gap'],
+      unit: 'events',
+      message: 'The microphone input disappeared and the capture worklet padded missing input with silence during this Take.',
     });
   }
 

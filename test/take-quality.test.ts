@@ -83,6 +83,7 @@ function evidence(patch: Partial<TakeQualityEvidence> = {}): TakeQualityEvidence
       'mic-transport-disconnected': 0,
       'mic-transport-connected': 0,
       'mic-capture-restarted': 0,
+      'mic-input-gap': 0,
       'backing-transport-disconnected': 0,
       'backing-transport-connected': 0,
       'backing-transport-replaced': 0,
@@ -203,13 +204,33 @@ test('raw microphone input clipping reviews the Take without pretending the fina
   }));
 
   const result = quality.assessment();
-  assert.equal(result.policyVersion, 'take-quality-v4');
+  assert.equal(result.policyVersion, 'take-quality-v5');
   assert.equal(result.evidence.micInputClippedSamples, 6);
   assert.equal(result.evidence.micInputClippedMs, (6 / RATE) * 1000);
   assert.equal(result.evidence.clippedSamples, 0);
   assert.equal(result.verdict, 'review');
   assert.deepEqual(result.issues.map((issue) => issue.code), ['mic-input-clipping']);
   assert.equal(result.issues[0]?.severity, 'warning');
+});
+
+test('a worklet input gap prevents a padded-silence Take from assessing clean', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), mixedFrame());
+  quality.noteEvent('mic-input-gap');
+  quality.observeFrame(960, frameState(), mixedFrame());
+
+  const result = quality.assessment();
+  assert.equal(result.policyVersion, 'take-quality-v5');
+  assert.equal(result.evidence.events['mic-input-gap'], 1);
+  assert.equal(result.verdict, 'review');
+  assert.deepEqual(
+    result.issues.filter((issue) => issue.code === 'mic-input-gap').map((issue) => ({
+      severity: issue.severity,
+      value: issue.value,
+      unit: issue.unit,
+    })),
+    [{ severity: 'warning', value: 1, unit: 'events' }],
+  );
 });
 
 test('microphone limiting is retained as evidence but is not itself a failed Take', () => {

@@ -73,6 +73,7 @@ function cleanQuality() {
       'mic-transport-disconnected': 0,
       'mic-transport-connected': 0,
       'mic-capture-restarted': 0,
+      'mic-input-gap': 0,
       'backing-transport-disconnected': 0,
       'backing-transport-connected': 0,
       'backing-transport-replaced': 0,

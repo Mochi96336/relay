@@ -290,11 +290,18 @@ test('a short worklet input gap prevents a padded-silence Take from assessing cl
     feedBacking(backing, 12);
     await sleep(80);
 
-    // This is the short-gap shape: the worklet already recovered before its
-    // first gap report, so inputGapActive is false on both accepted snapshots.
-    // Only the cumulative source-gap counter proves that padding silence existed.
+    // A 100 ms input loss is shorter than the worklet's sustained-gap report
+    // threshold. Production still emits positioned silence PCM for that whole
+    // interval, so the mixer sees a continuous timeline rather than micGapSamples.
+    feedMicV2(control, 5, 0);
+    feedBacking(backing, 5);
+    await sleep(40);
+
+    // This is the short-gap recovery shape: inputGapActive is false on both
+    // accepted snapshots. Only the cumulative source-gap counter says the
+    // positioned silence above was missing input rather than intentional quiet.
     const gapAckFrom = control.messages.length;
-    control.send(uplinkHealth(1, control.cursor + 4_800, 4_800, false));
+    control.send(uplinkHealth(1, control.cursor, 4_800, false));
     await control.waitFor((message) => (
       control.messages.indexOf(message) >= gapAckFrom
       && message.type === 'audio-uplink-health-ack'

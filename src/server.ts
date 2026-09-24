@@ -2810,6 +2810,51 @@ const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAccepta
   },
 });
 
+type RecordingMicGapHealthBaseline = {
+  takeId: string;
+  captureGeneration: number;
+  inputGapSamples: number;
+  inputGapActive: boolean;
+};
+
+let recordingMicGapHealthBaseline: RecordingMicGapHealthBaseline | null = null;
+
+function noteRecordingMicGapHealth(health: AudioUplinkHealth) {
+  const takeId = takeController.recordingTakeId;
+  if (!takeId || health.inputGapActiveObserved !== true) {
+    recordingMicGapHealthBaseline = null;
+    return false;
+  }
+
+  const previous = recordingMicGapHealthBaseline;
+  const current: RecordingMicGapHealthBaseline = {
+    takeId,
+    captureGeneration: health.captureGeneration,
+    inputGapSamples: health.inputGapSamples,
+    inputGapActive: health.inputGapActive === true,
+  };
+  recordingMicGapHealthBaseline = current;
+
+  // The first explicit source-health snapshot inside a Take is only a baseline.
+  // A cumulative delta first observed after Start may have happened before the
+  // recording boundary, so attributing it would create a permanent false
+  // positive in Take metadata. Subsequent same-generation snapshots bound the
+  // event entirely inside this recording's observed source-health window.
+  if (
+    !previous
+    || previous.takeId !== takeId
+    || previous.captureGeneration !== health.captureGeneration
+  ) return false;
+
+  if (
+    previous.inputGapActive !== true
+    && health.inputGapSamples > previous.inputGapSamples
+  ) {
+    return takeController.noteQualityEvent('mic-input-gap');
+  }
+  return false;
+}
+
 const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   startTake: (socket) => {
     if (!socket.participantId) {
@@ -3071,21 +3116,8 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (!health) return;
 
     const nowMs = performance.now();
-    const previous = micRuntime.uplinkHealthPayload(nowMs);
     const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs);
-    if (
-      accepted
-      && health.inputGapActiveObserved === true
-      && previous?.captureGeneration === health.captureGeneration
-      && previous.inputGapActive !== true
-      && health.inputGapSamples > previous.inputGapSamples
-    ) {
-      // Short worklet input loss is padded with positioned silence so the
-      // mixer timeline stays correct; it therefore cannot appear as a PCM gap.
-      // Preserve at least one recording-scoped quality witness for that source
-      // failure instead of allowing the Take to assess as clean.
-      takeController.noteQualityEvent('mic-input-gap');
-    }
+    if (accepted) noteRecordingMicGapHealth(health);
     return;
   },
   micPresenceTelemetry: (socket, payload) => {

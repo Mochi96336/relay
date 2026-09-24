@@ -79,11 +79,11 @@ type Outcome = {
   missed: [number, number | null][];
 };
 
-function health(): AudioUplinkHealth {
+function health(capturedSamples: number): AudioUplinkHealth {
   return {
     version: 1,
     captureGeneration: GENERATION,
-    capturedSamples: 1_000,
+    capturedSamples,
     inputGapSamples: 0,
     inputGapActive: false,
     inputMuted: false,
@@ -189,9 +189,13 @@ async function simulate(scenario: Scenario, pageRetransmits: boolean, seed: numb
     audioPacketVersion: 2,
     nowMs: 0,
   });
-  const initialHealth = health();
-  if (!pageRetransmits) delete initialHealth.transport.retransmitBufferPackets;
-  assert.equal(mic.noteUplinkHealth(publisher, initialHealth, 0), true);
+  // The page reports uplink health once a second over the control socket.
+  const reportHealth = (capturedSamples: number) => {
+    const report = health(capturedSamples);
+    if (!pageRetransmits) delete report.transport.retransmitBufferPackets;
+    return mic.noteUplinkHealth(publisher, report, nowMs);
+  };
+  assert.equal(reportHealth(0), true);
 
   const firstSequence = scenario.firstSequence ?? 0;
   const total = Math.round((scenario.seconds * 1_000) / PACKET_MS);
@@ -227,6 +231,10 @@ async function simulate(scenario: Scenario, pageRetransmits: boolean, seed: numb
 
   const endMs = total * PACKET_MS + PLAYOUT_DELAY_MS + 1_000;
   for (nowMs = 0; nowMs <= endMs; nowMs += 1) {
+    if (nowMs > 0 && nowMs % 1_000 === 0 && paths().control) {
+      reportHealth((nowMs / PACKET_MS) * PACKET_SAMPLES);
+    }
+
     // Page: capture one packet every 10 ms.
     if (nowMs % PACKET_MS === 0 && nowMs / PACKET_MS < total) {
       const index = nowMs / PACKET_MS;

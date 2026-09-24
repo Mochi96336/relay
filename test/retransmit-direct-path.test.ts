@@ -73,7 +73,15 @@ function health(generation: number): AudioUplinkHealth {
   };
 }
 
-function capableRuntime({ directConnected }: { directConnected: boolean }) {
+function capableRuntime({
+  directConnected,
+  directSendSucceeds = true,
+  controlSendThrows = false,
+}: {
+  directConnected: boolean;
+  directSendSucceeds?: boolean;
+  controlSendThrows?: boolean;
+}) {
   const direct: { ticket: string | null; bytes: Uint8Array }[] = [];
   const mic = new MicRuntime({
     audioTransportConfig: { ...DEFAULT_AUDIO_TRANSPORT_CONFIG, retransmitRequestDelayMs: 0 } as never,
@@ -84,7 +92,7 @@ function capableRuntime({ directConnected }: { directConnected: boolean }) {
     offerDirectMedia: (ticket) => ({ ticket }) as never,
     sendDirectMedia: (ticket, bytes) => {
       direct.push({ ticket, bytes });
-      return true;
+      return directSendSucceeds;
     },
   });
   const control: string[] = [];
@@ -93,7 +101,10 @@ function capableRuntime({ directConnected }: { directConnected: boolean }) {
     role: 'publisher',
     isAlive: true,
     participantId: 'participant-direct',
-    send: (payload: string) => control.push(payload),
+    send: (payload: string) => {
+      if (controlSendThrows) throw new Error('control send failed');
+      control.push(payload);
+    },
   } as unknown as RelaySocket & { readyState: number };
   mic.bindPublisher({
     socket: publisher,
@@ -143,6 +154,61 @@ describe('Relay sends retransmission requests on every available path', () => {
     assert.equal(mic.serviceRetransmits(12, 300), 1);
     assert.equal(direct.length, 1);
     assert.deepEqual(control, []);
+  });
+
+  it('rolls back requests promoted before the service tick discovers no usable path', () => {
+    const { mic, publisher, loseOne } = capableRuntime({ directConnected: false });
+
+    // Media proves a hole while the receiver still has its constructor-default
+    // request capability. The control path disappears before MicRuntime gets its
+    // next chance to reconcile path/capability state.
+    loseOne(10);
+    (publisher as { readyState: number }).readyState = WebSocket.CLOSED;
+
+    assert.equal(mic.serviceRetransmits(12, 300), 0);
+    assert.equal(
+      mic.retransmitStats()?.requestedPackets,
+      0,
+      'a queue drained while no path exists must roll back receiver request ownership',
+    );
+
+    // A nominal request path later comes back. The stale request must not
+    // resurrect the long hold unless later media proves the hole again.
+    (publisher as { readyState: number }).readyState = WebSocket.OPEN;
+    assert.equal(mic.serviceRetransmits(13, 300), 0);
+    assert.deepEqual(
+      mic.flush(10 + DEFAULT_AUDIO_TRANSPORT_CONFIG.reorderDeadlineMs + 2)
+        .map((frame) => frame.firstSampleIndex),
+      [960],
+    );
+    assert.equal(mic.receiverStats()?.lostPackets, 1);
+  });
+
+  it('rolls back request ownership when every available request send fails', () => {
+    const { mic, loseOne } = capableRuntime({
+      directConnected: true,
+      directSendSucceeds: false,
+      controlSendThrows: true,
+    });
+    loseOne(10);
+
+    assert.equal(mic.serviceRetransmits(12, 300), 0);
+    assert.equal(
+      mic.retransmitStats()?.requestedPackets,
+      0,
+      'a repeat that reached no path was never actually requested',
+    );
+
+    // A later service tick still sees nominally available paths. It must not
+    // resurrect the long retransmit hold from stale requested state.
+    assert.equal(mic.serviceRetransmits(13, 300), 0);
+    assert.deepEqual(
+      mic.flush(10 + DEFAULT_AUDIO_TRANSPORT_CONFIG.reorderDeadlineMs + 2)
+        .map((frame) => frame.firstSampleIndex),
+      [960],
+      'unsent repeat ownership must fall back to the ordinary reorder deadline',
+    );
+    assert.equal(mic.receiverStats()?.lostPackets, 1);
   });
 
   it('neither asks nor holds when no path can carry a request', () => {

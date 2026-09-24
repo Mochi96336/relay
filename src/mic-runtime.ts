@@ -325,21 +325,30 @@ export class MicRuntime {
     );
 
     const requests = transport.takeRetransmitRequests();
-    if (!requestable || requests.length === 0 || generation === null) return 0;
+    if (requests.length === 0) return 0;
+    if (!requestable || generation === null) {
+      // A request may have been promoted by media arrival before this service
+      // tick learned that the page/path cannot answer repeats. Once the queue is
+      // drained here, keeping receiver-side "requested" ownership would let a
+      // later healthy/path tick resurrect the long hold for a request never sent.
+      transport.cancelRetransmitRequests?.(requests);
+      transport.setRetransmitHoldAllowed?.(false);
+      return 0;
+    }
 
-    let sent = false;
+    const delivered = new Set<number>();
     // The direct datagram path is the fast one: the repeat comes back on it.
-    // The control socket carries the same request because datagrams are
-    // unreliable; the page answers each sequence once, whichever lands first.
+    // Track delivery by sequence so one successful datagram cannot accidentally
+    // authorize a hold for another batch whose send failed.
     if (directPath && ticket) {
       for (let offset = 0; offset < requests.length; offset += MAX_RETRANSMIT_REQUEST_SEQUENCES) {
-        sent = this.options.sendDirectMedia!(
+        const batch = requests.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES);
+        if (this.options.sendDirectMedia!(
           ticket,
-          encodeRetransmitRequest(
-            generation,
-            requests.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES),
-          ),
-        ) || sent;
+          encodeRetransmitRequest(generation, batch),
+        )) {
+          for (const sequence of batch) delivered.add(sequence);
+        }
       }
     }
     if (controlPath && socket) {
@@ -350,10 +359,19 @@ export class MicRuntime {
           captureGeneration: generation,
           sequences: requests,
         }));
-        sent = true;
+        // A successful control send carries the whole request set.
+        for (const sequence of requests) delivered.add(sequence);
       } catch {}
     }
-    return sent ? requests.length : 0;
+
+    if (delivered.size < requests.length) {
+      const unsent = requests.filter((sequence) => !delivered.has(sequence));
+      transport.cancelRetransmitRequests?.(unsent);
+      // Nothing was actually requested for those holes. Do not let stale
+      // requested state re-enable the long hold on the next service tick.
+      if (delivered.size === 0) transport.setRetransmitHoldAllowed?.(false);
+    }
+    return delivered.size;
   }
 
   retransmitStats() {

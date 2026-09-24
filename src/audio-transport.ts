@@ -18,6 +18,7 @@ export interface AudioTransport {
   setRetransmitHoldAllowed?(allowed: boolean): void;
   setRetransmitRequestsEnabled?(enabled: boolean): void;
   takeRetransmitRequests?(): number[];
+  cancelRetransmitRequests?(sequences: readonly number[]): number;
   retransmitStats?(): AudioPacketRetransmitStats;
 }
 
@@ -73,6 +74,10 @@ class SequencedWebSocketAudioTransport implements AudioTransport {
 
   takeRetransmitRequests() {
     return this.receiver.takeRetransmitRequests();
+  }
+
+  cancelRetransmitRequests(sequences: readonly number[]) {
+    return this.receiver.cancelRetransmitRequests(sequences);
   }
 
   retransmitStats() {

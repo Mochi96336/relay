@@ -189,10 +189,11 @@ const MIC_READ_HEAD_CROSSFADE_MS = 5;
 const SOURCE_GAP_DECLICK_MS = 2;
 
 /**
- * Real Mic history handed to concealment: enough for a 10 ms correlation
- * window behind the longest (60 Hz) pitch period it searches for.
+ * Real Mic history handed to concealment. Fifty milliseconds holds three
+ * periods even at the 60 Hz lower pitch bound; a little extra room keeps the
+ * pitch correlation window independent from that variation history.
  */
-const MIC_CONCEALMENT_HISTORY_SAMPLES = 2_048;
+const MIC_CONCEALMENT_HISTORY_MS = 60;
 
 /**
  * Unemitted real audio concealment needs in front of a hole: its 4 ms join,
@@ -1091,7 +1092,7 @@ export class AudioSession {
   private micConcealmentHistoryStart(gapStart: number) {
     const floor = Math.max(
       0,
-      gapStart - MIC_CONCEALMENT_HISTORY_SAMPLES,
+      gapStart - Math.round((MIC_CONCEALMENT_HISTORY_MS * this.sampleRate) / 1000),
       this.micCaptureOriginSample ?? 0,
     );
     const chunks = this.mic.chunks;

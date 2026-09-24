@@ -221,7 +221,7 @@ test('archived v1, v2, v3 and v4 quality assessments remain valid without reasse
     [5, 'take-quality-v1'],
     [6, 'take-quality-v2'],
     [8, 'take-quality-v3'],
-    [10, 'take-quality-v4'],
+    [4, 'take-quality-v4'],
   ] as const) {
     await t.test(version, async () => {
       const id = takeId(index);
@@ -291,7 +291,7 @@ test('quality v4 requires explicit Mic input clipping evidence', async () => {
 });
 
 test('quality v5 requires explicit Mic input-gap event evidence', async () => {
-  const id = takeId(11);
+  const id = takeId(3);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-rich-v5-input-gap-'));
   try {
     const malformed = quality('take-quality-v5');

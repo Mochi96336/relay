@@ -1023,8 +1023,12 @@ export class PreferredAudioTransport extends AudioTransport {
       if (sequence === null || this.retransmitAnswered.has(sequence)) continue;
       const bytes = this.retransmitBuffer.get(sequence);
       if (!bytes) continue;
-      this.retransmitAnswered.add(sequence);
+      // "Answered" means a repeat was actually accepted by a media path. If
+      // the active path rejects it synchronously (for example a full datagram
+      // backlog), keep the sequence eligible for the duplicate request Relay
+      // deliberately sends on its other request path.
       if (this.resendPacket(bytes)) {
+        this.retransmitAnswered.add(sequence);
         answered += 1;
         this.telemetry.retransmittedPackets += 1;
       }

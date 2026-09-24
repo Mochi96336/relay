@@ -127,6 +127,66 @@ describe('browser Mic retransmission', () => {
     assert.equal(transport.stats().retransmittedPackets, 1);
   });
 
+  it('lets a duplicate request retry after the first repeat was synchronously rejected', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    class StuckWebTransport extends FakeWebTransport {
+      readonly stuckWriter = {
+        writes: [] as Uint8Array[],
+        write: (value: Uint8Array) => {
+          this.stuckWriter.writes.push(new Uint8Array(value));
+          return new Promise<void>(() => {});
+        },
+        releaseLock() {},
+      };
+      readonly datagrams = {
+        maxDatagramSize: 1200,
+        writable: { getWriter: () => this.stuckWriter },
+      };
+    }
+
+    FakeWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      datagramQueuePackets: 1,
+      datagramBacklogPackets: 0,
+      WebTransportClass: StuckWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({
+      preferred: 'webtransport',
+      url: 'https://media.example.test:4433/media?ticket=reject-repeat',
+    });
+
+    assert.equal(transport.send(mediaPacket(7, 1)).sent, true);
+    await settle();
+
+    // The original packet occupies the only datagram write slot. With no
+    // backlog capacity, the first repeat is rejected synchronously.
+    assert.equal(
+      transport.answerRetransmitRequest({
+        captureGeneration: 7,
+        sequences: [1],
+      }),
+      0,
+    );
+    assert.equal(transport.stats().retransmittedPackets, 0);
+
+    // Once WT is gone, the duplicate control-path request must still be able to
+    // answer on WebSocket. Old code had already marked sequence 1 as answered.
+    transport.closeWebTransport();
+    socket.deliver({
+      type: 'audio-retransmit-request',
+      version: 1,
+      captureGeneration: 7,
+      sequences: [1],
+    });
+
+    assert.equal(socket.sent.length, 1);
+    assert.equal(sequenceOf(new Uint8Array(socket.sent[0] as Uint8Array)), 1);
+    assert.equal(transport.stats().retransmittedPackets, 1);
+  });
+
   it('repeats over the WebSocket media path when no datagram path is active', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport();

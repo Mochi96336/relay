@@ -172,7 +172,11 @@ test('sustained worklet input gap requests one bounded graph rebuild even while 
 test('app promotes current-graph input-gap evidence into capture-graph recovery', () => {
   const gapAt = app.indexOf("if (event.data?.type === 'input-gap')");
   assert.ok(gapAt >= 0);
-  const gapHandler = app.slice(gapAt, gapAt + 1_200);
+  // Bound by the handler's own rebuild call rather than a fixed character
+  // budget, so explanatory comments inside the handler cannot hide it.
+  const rebuildAt = app.indexOf("rebuildPublisherCaptureGraph('input-gap')", gapAt);
+  assert.ok(rebuildAt > gapAt);
+  const gapHandler = app.slice(gapAt, rebuildAt + 64);
   assert.match(gapHandler, /micCaptureRecovery\.noteInputGap\(captureSnapshot\(\), \{\s*recovered:/);
   assert.match(gapHandler, /rebuildPublisherCaptureGraph\('input-gap'\)/);
 });

@@ -6,18 +6,18 @@ import {
   classifyCaptureDispatch,
 } from '../public/capture-dispatch.js';
 
-test('capture dispatch shares the 200 ms realtime backlog budget', () => {
-  assert.equal(DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS, 200);
+test('capture dispatch keeps stall-delayed PCM the positioned mix can still play', () => {
+  assert.equal(DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS, 400);
   const fresh = classifyCaptureDispatch({
-    currentContextTimeSeconds: 10.18,
+    currentContextTimeSeconds: 10.3,
     capturedAtContextTimeSeconds: 10,
   });
   assert.equal(fresh.measurable, true);
-  assert.ok(fresh.lagMs !== null && Math.abs(fresh.lagMs - 180) < 0.001);
-  assert.equal(fresh.stale, false);
+  assert.ok(fresh.lagMs !== null && Math.abs(fresh.lagMs - 300) < 0.001);
+  assert.equal(fresh.stale, false, 'a 300 ms main-thread stall is inside the live mix prebuffer');
   assert.equal(
     classifyCaptureDispatch({
-      currentContextTimeSeconds: 10.25,
+      currentContextTimeSeconds: 10.45,
       capturedAtContextTimeSeconds: 10,
     }).stale,
     true,
@@ -45,7 +45,7 @@ test('capture dispatch bounds legacy un-timestamped chunks with the positioned f
   assert.equal(fresh.stale, false);
 
   const stale = classifyCaptureDispatch({
-    currentContextTimeSeconds: 10.25,
+    currentContextTimeSeconds: 10.45,
     capturedAtContextTimeSeconds: null,
     fallbackCapturedAtContextTimeSeconds: 10,
   });

@@ -26,6 +26,7 @@ export type ProductIssueCause =
   | 'song-clock-unavailable'
   | 'mic-transport-disconnected'
   | 'mic-audio-stalled'
+  | 'mic-audio-intermittent'
   | 'mic-input-clipping'
   | 'timing-calibrating'
   | 'timing-fallback'
@@ -79,6 +80,12 @@ export type ProductIssueFacts = {
     mediaRecoveryDegraded?: boolean;
     /** A flat-topped raw-input run occurred in the latest accepted uplink-health interval. */
     inputClipping?: boolean;
+    /**
+     * The live Mic has been failing to reach the mix for a sustained stretch:
+     * too little PCM arriving, holes where the mix reads, or exact digital
+     * silence. The room Mic state stays live; this is its audible quality.
+     */
+    audibilityDegraded?: boolean;
   };
   takeLifecycle: TakeLifecycle;
   performanceActive: boolean;
@@ -185,6 +192,21 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       scope: 'mic',
       severity: 'warning',
       cause: 'mic-audio-stalled',
+      affects: ['voice', 'recording'],
+      recovery: 'retry-mic',
+    });
+  } else if (
+    facts.mic.ownerId !== null
+    && facts.mic.state === 'live'
+    && facts.mic.audibilityDegraded === true
+  ) {
+    // Without this the UI called a Mic live while the room heard almost none
+    // of it: sparse PCM keeps the room Mic state live by design.
+    issues.push({
+      code: 'mic-audio-stalled',
+      scope: 'mic',
+      severity: 'warning',
+      cause: 'mic-audio-intermittent',
       affects: ['voice', 'recording'],
       recovery: 'retry-mic',
     });

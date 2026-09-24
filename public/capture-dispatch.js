@@ -1,11 +1,17 @@
-import { DEFAULT_WEBSOCKET_BACKLOG_MS } from './audio-transport.js';
-
 /**
- * Keep the pre-transport capture queue on the same realtime budget as the
- * WebSocket fallback. Audio that is already older than this is no longer useful
- * as live voice and must become a timeline hole rather than delayed playback.
+ * How old worklet PCM may be when the main thread finally dispatches it.
+ *
+ * Every packet carries its capture position and Relay places it there, so a
+ * late chunk is never played late: it either lands before the mix read head
+ * reaches its position, or it is simply never read. Relay's live mix reads
+ * the Mic about its default 400 ms prebuffer behind real time, so a chunk
+ * delayed by a main-thread stall shorter than that is usually still playable.
+ * Dropping it here at the network backlog budget instead turned every
+ * 200-400 ms stall into a hole the mix could have filled. Older than this, the
+ * chunk cannot be heard and only costs uplink, so it stays a timeline hole.
+ * Network congestion keeps its own, tighter, WebSocket backlog bound.
  */
-export const DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS = DEFAULT_WEBSOCKET_BACKLOG_MS;
+export const DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS = 400;
 
 export function classifyCaptureDispatch({
   currentContextTimeSeconds,

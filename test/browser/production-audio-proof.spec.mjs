@@ -144,7 +144,11 @@ function pcm16Wav(segments) {
   for (const segment of segments) {
     const count = Math.round((segment.durationMs * SAMPLE_RATE) / 1000);
     for (let index = 0; index < count; index += 1) {
-      wav.writeInt16LE(segment.value, sampleOffset);
+      // A real unprocessed microphone never renders exact digital silence; the
+      // capture worklet treats seconds of it as an interrupted source. Give
+      // "silent" segments the one-LSB noise floor a physical mic always has.
+      const value = segment.value === 0 ? (index % 8 < 4 ? 1 : -1) : segment.value;
+      wav.writeInt16LE(value, sampleOffset);
       sampleOffset += 2;
     }
   }

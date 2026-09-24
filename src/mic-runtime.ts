@@ -5,6 +5,17 @@ import type { AudioTransportConfig } from './audio-transport-config.js';
 import type { AudioUplinkHealth } from './audio-uplink-health.js';
 import type { PcmFrame } from './pcm-frame.js';
 import type { RelaySocket } from './relay-socket-server.js';
+import {
+  MAX_RETRANSMIT_REQUEST_SEQUENCES,
+  encodeRetransmitRequest,
+} from '../shared/retransmit-request.js';
+
+/**
+ * Mix headroom below which a lost packet stops waiting for its repeat. It
+ * covers one 20 ms mix frame, the 5 ms mixer tick and limiter look-ahead,
+ * with room for arrival jitter on the packets queued behind the hole.
+ */
+const RETRANSMIT_MIN_MIX_HEADROOM_MS = 60;
 
 export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
 
@@ -15,6 +26,8 @@ export type MicRuntimeOptions = {
   uplinkHealthTimeoutMs?: number;
   createDirectMediaTicket?: () => string | null;
   directMediaConnected?: (ticket: string | null) => boolean;
+  /** Best-effort datagram to the page over its direct media session. */
+  sendDirectMedia?: (ticket: string | null, bytes: Uint8Array) => boolean;
   offerDirectMedia?: (ticket: string) => unknown;
 };
 
@@ -273,6 +286,78 @@ export class MicRuntime {
 
   flush(nowMs: number): PcmFrame[] {
     return this.currentAudioTransport?.flush(nowMs) ?? [];
+  }
+
+  /**
+   * Retransmission for lost Mic packets, one tick at a time.
+   *
+   * A page advertises that it keeps recently sent packets through its uplink
+   * health; only then may a hole hold the ordered stream waiting for a repeat.
+   * The mix headroom decides how long that wait may last: while enough audio
+   * stands between the hole and the read head, waiting costs nothing audible;
+   * once it runs short the hole is released as ordinary loss. A page that
+   * never answers therefore costs at most the headroom it was already given.
+   */
+  serviceRetransmits(nowMs: number, mixHeadroomMs: number | null) {
+    const transport = this.currentAudioTransport;
+    if (!transport?.takeRetransmitRequests) return 0;
+    const health = this.freshUplinkHealthPayload(nowMs);
+    const capable = (health?.transport.retransmitBufferPackets ?? 0) > 0;
+    const generation = this.currentMediaGeneration;
+    const ticket = this.currentMediaTicket;
+    // Either path can carry a request. The direct session keeps working while
+    // the control socket is inside its reconnect grace, and vice versa. With
+    // neither, nothing may be requested or held for: a hole that cannot be
+    // repeated is ordinary loss.
+    const directPath = Boolean(
+      this.options.sendDirectMedia
+      && ticket
+      && this.options.directMediaConnected?.(ticket),
+    );
+    const socket = this.currentPublisher;
+    const controlPath = Boolean(socket && socket.readyState === WebSocket.OPEN);
+    const requestable = capable && generation !== null && (directPath || controlPath);
+    transport.setRetransmitRequestsEnabled?.(requestable);
+    transport.setRetransmitHoldAllowed?.(
+      requestable
+      && mixHeadroomMs !== null
+      && mixHeadroomMs > RETRANSMIT_MIN_MIX_HEADROOM_MS,
+    );
+
+    const requests = transport.takeRetransmitRequests();
+    if (!requestable || requests.length === 0 || generation === null) return 0;
+
+    let sent = false;
+    // The direct datagram path is the fast one: the repeat comes back on it.
+    // The control socket carries the same request because datagrams are
+    // unreliable; the page answers each sequence once, whichever lands first.
+    if (directPath && ticket) {
+      for (let offset = 0; offset < requests.length; offset += MAX_RETRANSMIT_REQUEST_SEQUENCES) {
+        sent = this.options.sendDirectMedia!(
+          ticket,
+          encodeRetransmitRequest(
+            generation,
+            requests.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES),
+          ),
+        ) || sent;
+      }
+    }
+    if (controlPath && socket) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'audio-retransmit-request',
+          version: 1,
+          captureGeneration: generation,
+          sequences: requests,
+        }));
+        sent = true;
+      } catch {}
+    }
+    return sent ? requests.length : 0;
+  }
+
+  retransmitStats() {
+    return this.currentAudioTransport?.retransmitStats?.() ?? null;
   }
 
   receiverStats() {

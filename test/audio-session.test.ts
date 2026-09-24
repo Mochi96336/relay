@@ -113,7 +113,7 @@ describe('AudioSession timelines', () => {
     );
   });
 
-  test('de-clicks Mic packet-hole edges without concealing the missing interval', () => {
+  test('conceals a Mic packet hole audibly while reporting its full evidence', () => {
     const session = makeSession();
     session.start(0);
 
@@ -127,31 +127,21 @@ describe('AudioSession timelines', () => {
     );
 
     const read = session.readMic(0, chunk * 3);
-    const fadeSamples = Math.round(RATE * 0.002);
+    const joinSamples = Math.round(RATE * 0.004);
     const gapStart = chunk;
     const gapEnd = chunk * 2;
 
-    assert.equal(read[gapStart], 0, 'the missing packet still begins as literal silence');
-    assert.equal(read[gapEnd - 1], 0, 'the missing packet remains silence through its final sample');
-    assert.equal(read[gapEnd], 0, 'the first recovered sample starts at silence instead of clicking in');
-
-    assert.ok(
-      Math.abs(read[gapStart - 2] - read[gapStart - 1]) <= 200,
-      'fade-out approaches the hole without a full-scale one-sample step',
-    );
-    assert.ok(
-      Math.abs(read[gapEnd + 1] - read[gapEnd]) <= 200,
-      'fade-in leaves the hole without a full-scale one-sample step',
-    );
+    assert.equal(read[gapStart], amplitude, 'the hole continues the voice instead of dropping to silence');
+    assert.ok(read[gapEnd - 1] > amplitude / 2, 'a 20 ms hole is still audible at its end');
+    let maxStep = 0;
+    for (let index = 1; index < read.length; index += 1) {
+      maxStep = Math.max(maxStep, Math.abs(read[index] - read[index - 1]));
+    }
+    assert.ok(maxStep <= 200, `concealment joins both edges without a step: ${maxStep}`);
     assert.equal(
-      read[gapStart - fadeSamples - 1],
+      read[gapEnd + joinSamples],
       amplitude,
-      'audio before the bounded de-click window stays untouched',
-    );
-    assert.equal(
-      read[gapEnd + fadeSamples],
-      amplitude,
-      'audio after the bounded de-click window returns to the original level',
+      'audio after the bounded join returns to exactly what was received',
     );
 
     assert.equal(session.health().micGapMs, 20);
@@ -159,7 +149,64 @@ describe('AudioSession timelines', () => {
       gapSamples: chunk,
       frontierMissingSamples: 0,
       unheaderedSamples: 0,
-    }, 'de-clicking must not reduce or hide packet-loss evidence');
+    }, 'concealment must not reduce or hide packet-loss evidence');
+  });
+
+  test('a hole exactly as long as the concealment fade still fades the recovered audio in', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const gap = Math.round(RATE * 0.06);
+    const amplitude = 12_000;
+    session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(amplitude))), RATE, 0);
+    session.ingestMic(frame(chunk + gap, pcmOf(new Array(chunk).fill(amplitude))), RATE, 0);
+
+    const read = session.readMic(0, chunk * 2 + gap);
+    assert.equal(read[chunk + gap], 0, 'the repetition faded out, so recovery starts from silence');
+    let maxStep = 0;
+    for (let index = 1; index < read.length; index += 1) {
+      maxStep = Math.max(maxStep, Math.abs(read[index] - read[index - 1]));
+    }
+    assert.ok(maxStep <= 200, `no click at either edge: ${maxStep}`);
+  });
+
+  test('concealment never rewrites the PCM that ingest already handed to its consumers', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const first = session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(9_000))), RATE, 0);
+    const recovered = session.ingestMic(
+      frame(chunk * 2, pcmOf(new Array(chunk).fill(3_000))),
+      RATE,
+      0,
+    );
+
+    assert.ok(first.samples.every((sample) => sample === 9_000), 'the tail join is copy-on-write');
+    assert.ok(recovered.samples.every((sample) => sample === 3_000), 'the head blend is copy-on-write');
+    assert.notEqual(session.readMic(chunk * 2, 1)[0], 3_000, 'while the mix hears the blended join');
+  });
+
+  test('keeps the plain de-click taper when the capture has too little history to conceal', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const amplitude = 12_000;
+    // 1 ms of real audio cannot hold a pitch period plus its correlation window.
+    session.ingestMic(frame(0, pcmOf(new Array(48).fill(amplitude))), RATE, 0);
+    session.ingestMic(frame(48 + chunk, pcmOf(new Array(chunk).fill(amplitude))), RATE, 0);
+
+    const read = session.readMic(0, 48 + chunk * 2);
+    assert.equal(read[48], 0, 'without concealment the hole is literal silence');
+    assert.equal(read[48 + chunk - 1], 0);
+    assert.equal(read[48 + chunk], 0, 'and the recovered edge fades in from silence');
+    assert.deepEqual(session.readMicEvidence(0, 48 + chunk * 2), {
+      gapSamples: chunk,
+      frontierMissingSamples: 0,
+      unheaderedSamples: 0,
+    });
   });
 
   test('de-clicks Backing packet-hole edges without concealing the missing interval', () => {
@@ -252,9 +299,8 @@ describe('AudioSession timelines', () => {
 
     const read = session.readMic(0, chunk * 3);
     assert.equal(read[0], 1000);
-    assert.equal(read[chunk], 0, 'the hole reads as the silence that actually happened');
-    assert.equal(read[chunk * 2], 0, 'the recovered edge is de-clicked at the original position');
-    assert.equal(read[chunk * 2 + Math.round(RATE * 0.002)], 2000, 'later audio keeps its original position');
+    assert.equal(read[chunk], 1000, 'the hole is concealed from the audio before it, not pulled forward');
+    assert.equal(read[chunk * 2 + Math.round(RATE * 0.004)], 2000, 'later audio keeps its original position');
 
     assert.deepEqual(session.readMicEvidence(0, chunk * 3), {
       gapSamples: chunk,
@@ -400,8 +446,8 @@ describe('AudioSession timelines', () => {
 
     assert.equal(session.health().micGapMs, 20);
     assert.equal(
-      session.readMic(959, 1)[0],
-      0,
+      session.readMicEvidence(959, 1).gapSamples,
+      1,
       'a target sample waiting for source look-ahead becomes part of the gap, not interpolation across it',
     );
   });

@@ -1,4 +1,8 @@
 import { MicMediaPathRecovery } from './mic-media-path-recovery.js';
+import {
+  MAX_RETRANSMIT_REQUEST_SEQUENCES,
+  decodeRetransmitRequest,
+} from '../shared/retransmit-request.js';
 
 const WEB_SOCKET_OPEN = 1;
 
@@ -30,6 +34,51 @@ export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
  * and continues over WebSocket without replaying already-submitted datagrams.
  */
 export const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
+
+/**
+ * Datagrams waiting for a free write slot, in packets and in age.
+ *
+ * The write slots above are held until the platform settles each write, which
+ * happens on a later task. A main-thread stall releases its whole capture
+ * backlog back to back, so without somewhere to wait every datagram past the
+ * fourth was dropped as "congested" even though the network was idle. Each
+ * packet carries its own capture position, so a few tens of milliseconds of
+ * waiting costs no timeline accuracy - Relay places it by sample index and the
+ * mix reads hundreds of milliseconds behind the frontier. The age bound keeps
+ * a genuinely backpressured path dropping instead of building stale voice.
+ * 48 packets holds the ~400 ms capture-dispatch budget at two datagrams per
+ * 20 ms chunk.
+ */
+export const DEFAULT_DATAGRAM_BACKLOG_PACKETS = 48;
+export const DEFAULT_DATAGRAM_BACKLOG_MS = 200;
+
+/**
+ * Recently sent media packets kept to answer Relay's retransmission requests.
+ * About 1.3 s of 48 kHz audio at two datagrams per 20 ms chunk - longer than
+ * Relay will ever hold a hole, so a request never names a packet already gone.
+ */
+export const DEFAULT_RETRANSMIT_BUFFER_PACKETS = 128;
+
+/**
+ * Backoff before re-offering WebTransport after a transport-level demotion.
+ *
+ * A phone moving between Wi-Fi and cellular, a NAT rebinding or one failed
+ * write closes the datagram session, and the capture then stayed on the
+ * WebSocket fallback until the control socket happened to re-register. The
+ * same capture-scoped offer is retried instead. A recovery quarantine is a
+ * deliberate verdict and is never retried here.
+ */
+export const DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 15_000, 30_000]);
+const AUDIO_PACKET_MAGIC = 0x4c52;
+const AUDIO_PACKET_HEADER_BYTES = 24;
+
+/** Generation and sequence of an AudioPacket v2, or null for anything else. */
+function audioPacketIdentity(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < AUDIO_PACKET_HEADER_BYTES) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint16(0, true) !== AUDIO_PACKET_MAGIC || view.getUint8(2) !== 2) return null;
+  return { generation: view.getUint32(4, true), sequence: view.getUint32(8, true) };
+}
 
 /**
  * WebSocket fallback must stay a realtime path too. 256 KiB at 48 kHz mono
@@ -204,6 +253,12 @@ export class PreferredAudioTransport extends AudioTransport {
     datagramPacketBytesCeiling = DEFAULT_DATAGRAM_PACKET_BYTES_CEILING,
     datagramQueuePackets = DEFAULT_DATAGRAM_QUEUE_PACKETS,
     datagramWriteTimeoutMs = DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS,
+    datagramBacklogPackets = DEFAULT_DATAGRAM_BACKLOG_PACKETS,
+    datagramBacklogMs = DEFAULT_DATAGRAM_BACKLOG_MS,
+    retransmitBufferPackets = DEFAULT_RETRANSMIT_BUFFER_PACKETS,
+    webTransportRetryDelaysMs = DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS,
+    setTimer = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+    clearTimer = (handle) => globalThis.clearTimeout(handle),
     holdMediaUntilPreference = false,
     initialPreferenceHoldMs = 1_500,
     WebTransportClass = globalThis.WebTransport,
@@ -225,6 +280,21 @@ export class PreferredAudioTransport extends AudioTransport {
     if (!Number.isFinite(datagramWriteTimeoutMs) || datagramWriteTimeoutMs <= 0) {
       throw new RangeError('datagramWriteTimeoutMs must be positive');
     }
+    if (!Number.isInteger(datagramBacklogPackets) || datagramBacklogPackets < 0) {
+      throw new RangeError('datagramBacklogPackets must be a non-negative integer');
+    }
+    if (!Number.isFinite(datagramBacklogMs) || datagramBacklogMs <= 0) {
+      throw new RangeError('datagramBacklogMs must be positive');
+    }
+    if (!Number.isInteger(retransmitBufferPackets) || retransmitBufferPackets < 0) {
+      throw new RangeError('retransmitBufferPackets must be a non-negative integer');
+    }
+    if (
+      !Array.isArray(webTransportRetryDelaysMs)
+      || webTransportRetryDelaysMs.some((delay) => !Number.isFinite(delay) || delay <= 0)
+    ) {
+      throw new RangeError('webTransportRetryDelaysMs must be positive delays');
+    }
     if (typeof holdMediaUntilPreference !== 'boolean') {
       throw new TypeError('holdMediaUntilPreference must be boolean');
     }
@@ -239,6 +309,22 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.datagramQueuePackets = datagramQueuePackets;
     this.datagramWriteTimeoutMs = datagramWriteTimeoutMs;
+    this.datagramBacklogPackets = datagramBacklogPackets;
+    this.datagramBacklogMs = datagramBacklogMs;
+    /** @type {{ bytes: Uint8Array, enqueuedAt: number, retransmit?: boolean }[]} */
+    this.datagramBacklog = [];
+    this.retransmitBufferPackets = retransmitBufferPackets;
+    /** Sent packets of `retransmitGeneration`, by sequence, oldest first. */
+    this.retransmitBuffer = new Map();
+    this.retransmitGeneration = null;
+    this.retransmitAnswered = new Set();
+    this.webTransportRetryDelaysMs = [...webTransportRetryDelaysMs];
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
+    /** The offer a transport-level demotion may retry, while it still applies. */
+    this.retryableOffer = null;
+    this.webTransportRetryAttempt = 0;
+    this.webTransportRetryTimer = null;
     this.holdMediaUntilPreference = holdMediaUntilPreference;
     this.initialPreferenceHoldMs = initialPreferenceHoldMs;
     // Phone publisher capture starts before Relay's registered/media offer can
@@ -276,6 +362,11 @@ export class PreferredAudioTransport extends AudioTransport {
       webTransportCongestedRejects: 0,
       webTransportPacketTooLargeRejects: 0,
       webTransportSendFailures: 0,
+      webTransportBacklogQueued: 0,
+      webTransportBacklogExpired: 0,
+      webTransportRetries: 0,
+      retransmittedPackets: 0,
+      retransmitDatagramRequests: 0,
       webSocketPacketsSent: 0,
       webSocketCongestedRejects: 0,
       webSocketDisconnectedRejects: 0,
@@ -308,6 +399,62 @@ export class PreferredAudioTransport extends AudioTransport {
   resetOutstandingDatagramWrites() {
     this.pendingDatagramWrites.clear();
     this.outstandingDatagramWrites = 0;
+  }
+
+  /**
+   * Datagrams that never reached the retired writer were never sent, so moving
+   * them to the socket is not duplication. Still-fresh ones keep their place in
+   * the capture order; stale ones become the same hole congestion would leave.
+   */
+  takeDatagramBacklog() {
+    const backlog = this.datagramBacklog;
+    this.datagramBacklog = [];
+    return backlog;
+  }
+
+  expireDatagramBacklog(nowMs = Number(this.nowMs())) {
+    // Scan the whole queue: a repeat is placed at the front with its own
+    // enqueue time, so the head is not always the oldest entry.
+    if (this.datagramBacklog.length === 0) return;
+    const fresh = [];
+    for (const entry of this.datagramBacklog) {
+      if (nowMs - entry.enqueuedAt <= this.datagramBacklogMs) {
+        fresh.push(entry);
+        continue;
+      }
+      // A repeat is not a capture packet: its loss is not congestion evidence.
+      if (entry.retransmit) continue;
+      this.telemetry.webTransportBacklogExpired += 1;
+      this.telemetry.webTransportCongestedRejects += 1;
+    }
+    if (fresh.length !== this.datagramBacklog.length) this.datagramBacklog = fresh;
+  }
+
+  flushDatagramBacklogToFallback(backlog) {
+    const nowMs = Number(this.nowMs());
+    for (const entry of backlog) {
+      if (nowMs - entry.enqueuedAt > this.datagramBacklogMs) {
+        if (entry.retransmit) continue;
+        this.telemetry.webTransportBacklogExpired += 1;
+        this.telemetry.webTransportCongestedRejects += 1;
+        continue;
+      }
+      const result = this.fallback.send(entry.bytes);
+      if (!entry.retransmit) this.recordFallbackResult(result);
+    }
+  }
+
+  pumpDatagramBacklog() {
+    if (!this.datagramWriter) return;
+    this.expireDatagramBacklog();
+    while (
+      this.datagramWriter
+      && this.datagramBacklog.length > 0
+      && this.outstandingDatagramWrites < this.datagramQueuePackets
+    ) {
+      const entry = this.datagramBacklog.shift();
+      this.writeDatagram(entry.bytes, { original: !entry.retransmit });
+    }
   }
 
   oldestOutstandingDatagramWriteAgeMs() {
@@ -372,6 +519,9 @@ export class PreferredAudioTransport extends AudioTransport {
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
       datagramQueuePackets: this.datagramQueuePackets,
+      datagramBacklogPackets: this.datagramBacklogPackets,
+      datagramBacklogMs: this.datagramBacklogMs,
+      retransmitBufferPackets: this.retransmitBufferPackets,
       // ProductStatus may surface the terminal bounded-recovery verdict while
       // keeping server flow freshness as the room Mic state authority.
       mediaRecoveryDegraded: this.mediaPathRecovery.status().degraded,
@@ -422,7 +572,14 @@ export class PreferredAudioTransport extends AudioTransport {
       || epoch !== this.publisherSocketEpoch
       || this.fallback.socket !== socket
       || typeof event?.data !== 'string'
-      || this.pendingPublisherHealth.length < 1
+    ) return;
+    // Cheap prefilter: only the two media-control messages are parsed here.
+    if (
+      !event.data.includes('"audio-retransmit-request"')
+      && (
+        this.pendingPublisherHealth.length < 1
+        || !event.data.includes('"audio-uplink-health-ack"')
+      )
     ) return;
 
     let message;
@@ -431,6 +588,11 @@ export class PreferredAudioTransport extends AudioTransport {
     } catch {
       return;
     }
+    if (message?.type === 'audio-retransmit-request' && message?.version === 1) {
+      this.answerRetransmitRequest(message);
+      return;
+    }
+    if (this.pendingPublisherHealth.length < 1) return;
     if (message?.type !== 'audio-uplink-health-ack' || message?.version !== 1) return;
 
     const publisherHealth = this.pendingPublisherHealth[0];
@@ -589,7 +751,9 @@ export class PreferredAudioTransport extends AudioTransport {
     if (this.datagramWriter) {
       const maxPacketBytes = this.maxPacketBytes();
       if (!this.datagramWriter) return this.fallback.state();
-      const ready = this.outstandingDatagramWrites < this.datagramQueuePackets;
+      this.expireDatagramBacklog();
+      const ready = this.outstandingDatagramWrites < this.datagramQueuePackets
+        || this.datagramBacklog.length < this.datagramBacklogPackets;
       return {
         ready,
         reason: ready ? null : 'congested',
@@ -601,8 +765,15 @@ export class PreferredAudioTransport extends AudioTransport {
     return this.fallback.state();
   }
 
-  async prefer(offer) {
+  async prefer(offer, { retry = false } = {}) {
+    if (!retry) {
+      // A fresh offer from Relay restarts the retry schedule for that offer.
+      this.cancelWebTransportRetry();
+      this.webTransportRetryAttempt = 0;
+      this.retryableOffer = offer?.preferred === 'webtransport' && offer.url ? offer : null;
+    }
     if (this.mediaPathRecovery.quarantineWebTransport()) {
+      this.retryableOffer = null;
       this.closeWebTransport();
       this.resolveInitialPreference();
       return false;
@@ -690,6 +861,7 @@ export class PreferredAudioTransport extends AudioTransport {
       this.observeWebTransportPacketBudget(maxPacketBytes);
       this.telemetry.webTransportConnections += 1;
       this.resolveInitialPreference();
+      void this.readInboundDatagrams(transport);
       Promise.resolve(transport.closed).then(
         () => this.demoteWebTransport(transport),
         () => this.demoteWebTransport(transport),
@@ -725,6 +897,8 @@ export class PreferredAudioTransport extends AudioTransport {
     if (writer) {
       try { writer.releaseLock(); } catch {}
     }
+    this.flushDatagramBacklogToFallback(this.takeDatagramBacklog());
+    if (wasActive) this.scheduleWebTransportRetry();
     // Releasing the writer stops this page sending datagrams, but it leaves the
     // session open, and the server reads liveness from the session rather than
     // from traffic. Without this close, micMediaPath() keeps answering
@@ -734,7 +908,43 @@ export class PreferredAudioTransport extends AudioTransport {
     }
   }
 
-  closeWebTransport(incrementGeneration = true) {
+  cancelWebTransportRetry() {
+    if (this.webTransportRetryTimer !== null) {
+      try { this.clearTimer(this.webTransportRetryTimer); } catch {}
+    }
+    this.webTransportRetryTimer = null;
+  }
+
+  scheduleWebTransportRetry() {
+    if (
+      this.webTransportRetryTimer !== null
+      || !this.retryableOffer
+      || this.mediaPathRecovery.quarantineWebTransport()
+      || this.webTransportRetryDelaysMs.length === 0
+    ) return;
+    const index = Math.min(this.webTransportRetryAttempt, this.webTransportRetryDelaysMs.length - 1);
+    const offer = this.retryableOffer;
+    const generation = this.preferenceGeneration;
+    this.webTransportRetryAttempt += 1;
+    this.webTransportRetryTimer = this.setTimer(() => {
+      this.webTransportRetryTimer = null;
+      // A newer offer, a close or an explicit preference change owns the path.
+      if (
+        this.retryableOffer !== offer
+        || this.preferenceGeneration !== generation
+        || this.datagramWriter
+        || !this.fallback.socket
+      ) return;
+      this.telemetry.webTransportRetries += 1;
+      void this.prefer(offer, { retry: true }).then((preferred) => {
+        if (!preferred && this.retryableOffer === offer && !this.datagramWriter) {
+          this.scheduleWebTransportRetry();
+        }
+      });
+    }, this.webTransportRetryDelaysMs[index]);
+  }
+
+  closeWebTransport(incrementGeneration = true, { flushBacklog = true } = {}) {
     if (incrementGeneration) this.preferenceGeneration += 1;
     const transport = this.webTransport;
     const writer = this.datagramWriter;
@@ -743,6 +953,8 @@ export class PreferredAudioTransport extends AudioTransport {
     this.preferredUrl = null;
     this.lastWebTransportMaxPacketBytes = Number.POSITIVE_INFINITY;
     this.resetOutstandingDatagramWrites();
+    const backlog = this.takeDatagramBacklog();
+    if (flushBacklog) this.flushDatagramBacklogToFallback(backlog);
     if (writer) {
       try { writer.releaseLock(); } catch {}
     }
@@ -759,11 +971,123 @@ export class PreferredAudioTransport extends AudioTransport {
     this.mediaPathRecovery.reset();
     this.pendingPublisherHealth = [];
     this.lastMediaRecoveryDecision = null;
-    this.closeWebTransport();
+    // Capture teardown: nothing queued belongs to a live capture any more.
+    this.retryableOffer = null;
+    this.webTransportRetryAttempt = 0;
+    this.cancelWebTransportRetry();
+    this.closeWebTransport(true, { flushBacklog: false });
     this.fallback.unbind();
+    this.clearRetransmitBuffer();
+  }
+
+  clearRetransmitBuffer() {
+    this.retransmitBuffer.clear();
+    this.retransmitAnswered.clear();
+    this.retransmitGeneration = null;
+  }
+
+  /** Keeps a sent capture packet long enough to answer a repeat request. */
+  rememberForRetransmit(bytes) {
+    if (this.retransmitBufferPackets <= 0) return;
+    const identity = audioPacketIdentity(bytes);
+    if (!identity) return;
+    if (identity.generation !== this.retransmitGeneration) {
+      this.clearRetransmitBuffer();
+      this.retransmitGeneration = identity.generation;
+    }
+    this.retransmitBuffer.delete(identity.sequence);
+    this.retransmitBuffer.set(identity.sequence, bytes);
+    while (this.retransmitBuffer.size > this.retransmitBufferPackets) {
+      const oldest = this.retransmitBuffer.keys().next().value;
+      this.retransmitBuffer.delete(oldest);
+      this.retransmitAnswered.delete(oldest);
+    }
+  }
+
+  /**
+   * Repeats packets Relay reports missing, once each, on whatever path is
+   * active now. A repeat carries the original sequence and capture position,
+   * so Relay places it exactly where the lost packet belonged.
+   */
+  answerRetransmitRequest(message) {
+    const generation = nonNegativeSafeInteger(message.captureGeneration);
+    if (
+      generation === null
+      || generation !== this.retransmitGeneration
+      || !Array.isArray(message.sequences)
+    ) return 0;
+
+    let answered = 0;
+    for (const value of message.sequences.slice(0, MAX_RETRANSMIT_REQUEST_SEQUENCES)) {
+      const sequence = nonNegativeSafeInteger(value);
+      if (sequence === null || this.retransmitAnswered.has(sequence)) continue;
+      const bytes = this.retransmitBuffer.get(sequence);
+      if (!bytes) continue;
+      this.retransmitAnswered.add(sequence);
+      if (this.resendPacket(bytes)) {
+        answered += 1;
+        this.telemetry.retransmittedPackets += 1;
+      }
+    }
+    return answered;
+  }
+
+  /**
+   * Relay sends retransmission requests down the same direct session the
+   * repeats travel back on. The loop ends with the session; anything that is
+   * not a request is ignored.
+   */
+  async readInboundDatagrams(transport) {
+    const readable = transport?.datagrams?.readable;
+    if (!readable || typeof readable.getReader !== 'function') return;
+    let reader;
+    try {
+      reader = readable.getReader();
+    } catch {
+      return;
+    }
+    try {
+      while (transport === this.webTransport) {
+        const { done, value } = await reader.read();
+        if (done || transport !== this.webTransport) break;
+        const request = decodeRetransmitRequest(value);
+        if (request) {
+          this.telemetry.retransmitDatagramRequests += 1;
+          this.answerRetransmitRequest(request);
+        }
+      }
+    } catch {
+      // The session closed or failed; its demotion is handled elsewhere.
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+  }
+
+  resendPacket(bytes) {
+    if (this.datagramWriter && !this.demoteStalledWebTransport()) {
+      if (
+        this.datagramBacklog.length === 0
+        && this.outstandingDatagramWrites < this.datagramQueuePackets
+      ) {
+        return this.writeDatagram(bytes, { original: false });
+      }
+      if (this.datagramBacklog.length >= this.datagramBacklogPackets) return false;
+      // A repeat is already late: it goes ahead of fresh audio that still has
+      // its whole budget.
+      this.datagramBacklog.unshift({ bytes, enqueuedAt: Number(this.nowMs()), retransmit: true });
+      return true;
+    }
+    return this.fallback.send(bytes).sent;
   }
 
   send(packet) {
+    const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
+    const result = this.sendMedia(packet);
+    if (result.sent) this.rememberForRetransmit(bytes);
+    return result;
+  }
+
+  sendMedia(packet) {
     if (!this.initialPreferenceResolved && !this.datagramWriter) {
       const startedAt = this.initialPreferenceHoldStartedAt;
       const holdAgeMs = startedAt === null
@@ -823,24 +1147,71 @@ export class PreferredAudioTransport extends AudioTransport {
       };
     }
 
-    if (this.outstandingDatagramWrites >= this.datagramQueuePackets) {
-      this.telemetry.webTransportCongestedRejects += 1;
+    const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
+    this.expireDatagramBacklog();
+    if (
+      this.datagramBacklog.length > 0
+      || this.outstandingDatagramWrites >= this.datagramQueuePackets
+    ) {
+      // Order matters to the receiver's reorder window: once anything waits,
+      // every later datagram waits behind it.
+      if (this.datagramBacklog.length >= this.datagramBacklogPackets) {
+        this.telemetry.webTransportCongestedRejects += 1;
+        return {
+          ready: false,
+          sent: false,
+          reason: 'congested',
+          bufferedAmount: 0,
+          maxPacketBytes,
+          path: 'webtransport',
+        };
+      }
+      this.datagramBacklog.push({ bytes, enqueuedAt: Number(this.nowMs()) });
+      this.telemetry.webTransportBacklogQueued += 1;
       return {
-        ready: false,
-        sent: false,
-        reason: 'congested',
+        ready: true,
+        sent: true,
+        queued: true,
+        reason: null,
         bufferedAmount: 0,
         maxPacketBytes,
         path: 'webtransport',
       };
     }
 
+    if (!this.writeDatagram(bytes)) {
+      return {
+        ready: false,
+        sent: false,
+        reason: 'disconnected',
+        bufferedAmount: 0,
+        maxPacketBytes,
+        path: 'webtransport',
+      };
+    }
+    return {
+      ready: true,
+      sent: true,
+      reason: null,
+      bufferedAmount: 0,
+      maxPacketBytes,
+      path: 'webtransport',
+    };
+  }
+
+  /**
+   * Hands one datagram to the active writer. False means the path just failed.
+   * Repeats are not `original`: coverage telemetry counts each capture packet
+   * once, however many times it had to be sent.
+   */
+  writeDatagram(bytes, { original = true } = {}) {
+    const writer = this.datagramWriter;
+    if (!writer) return false;
     try {
-      const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
       const transport = this.webTransport;
       const generation = this.preferenceGeneration;
       const writeId = this.nextDatagramWriteId++;
-      this.telemetry.webTransportPacketsSubmitted += 1;
+      if (original) this.telemetry.webTransportPacketsSubmitted += 1;
       this.pendingDatagramWrites.set(writeId, Number(this.nowMs()));
       this.outstandingDatagramWrites = this.pendingDatagramWrites.size;
       // A write belongs to the transport generation that submitted it. The
@@ -856,31 +1227,20 @@ export class PreferredAudioTransport extends AudioTransport {
         this.pendingDatagramWrites.delete(writeId);
         this.outstandingDatagramWrites = this.pendingDatagramWrites.size;
       };
-      Promise.resolve(writer.write(bytes)).then(settle, () => {
+      Promise.resolve(writer.write(bytes)).then(() => {
+        settle();
+        if (ownsCapture()) this.pumpDatagramBacklog();
+      }, () => {
         if (!ownsCapture()) return;
         settle();
         this.telemetry.webTransportSendFailures += 1;
         this.demoteWebTransport(transport);
       });
-      return {
-        ready: true,
-        sent: true,
-        reason: null,
-        bufferedAmount: 0,
-        maxPacketBytes,
-        path: 'webtransport',
-      };
+      return true;
     } catch {
       this.telemetry.webTransportSendFailures += 1;
       this.demoteWebTransport();
-      return {
-        ready: false,
-        sent: false,
-        reason: 'disconnected',
-        bufferedAmount: 0,
-        maxPacketBytes,
-        path: 'webtransport',
-      };
+      return false;
     }
   }
 }

@@ -31,6 +31,11 @@ export type WebTransportMediaServer = {
   available: boolean;
   offer(ticket: string): WebTransportMediaOffer | undefined;
   hasSession(ticket: string | null): boolean;
+  /**
+   * Best-effort datagram back to the page on that ticket's newest session.
+   * False when there is no writable session; delivery is never confirmed.
+   */
+  sendDatagram?(ticket: string | null, bytes: Uint8Array): boolean;
   stop(): Promise<void>;
 };
 
@@ -159,6 +164,9 @@ function unavailableWebTransportMediaServer(error: unknown): WebTransportMediaSe
     hasSession() {
       return false;
     },
+    sendDatagram() {
+      return false;
+    },
     async stop() {},
   };
 }
@@ -201,6 +209,9 @@ async function startConfiguredWebTransportMediaServer(
 
   const sessionStream = await server.sessionStream(path);
   const activeSessions = new Map<string, number>();
+  // Newest writable datagram path per ticket. A reconnecting page may briefly
+  // hold two sessions; the one that opened last is the one it is reading.
+  const sessionWriters = new Map<string, { writer: any }>();
   let stopping = false;
 
   const addSession = (ticket: string) => {
@@ -221,6 +232,15 @@ async function startConfiguredWebTransportMediaServer(
 
     await session.ready;
     addSession(ticket);
+    let outbound: { writer: any } | null = null;
+    try {
+      const writable = session.datagrams.writable ?? session.datagrams.createWritable();
+      outbound = { writer: writable.getWriter() };
+      sessionWriters.set(ticket, outbound);
+    } catch {
+      // Outbound datagrams are an optimisation; inbound media is unaffected.
+      outbound = null;
+    }
     const reader = session.datagrams.readable.getReader();
     try {
       while (!stopping) {
@@ -239,6 +259,10 @@ async function startConfiguredWebTransportMediaServer(
       // to WebSocket and the shared packet receiver keeps timeline authority.
     } finally {
       removeSession(ticket);
+      if (outbound && sessionWriters.get(ticket) === outbound) sessionWriters.delete(ticket);
+      try {
+        outbound?.writer.releaseLock();
+      } catch {}
       try {
         reader.releaseLock();
       } catch {}
@@ -269,6 +293,18 @@ async function startConfiguredWebTransportMediaServer(
     },
     hasSession(ticket) {
       return Boolean(ticket && (activeSessions.get(ticket) ?? 0) > 0);
+    },
+    sendDatagram(ticket, bytes) {
+      const outbound = ticket ? sessionWriters.get(ticket) : undefined;
+      if (!outbound) return false;
+      try {
+        // Unreliable by design: a rejected write is just a lost request, and
+        // the control WebSocket carries the same request as the fallback.
+        Promise.resolve(outbound.writer.write(bytes)).catch(() => {});
+        return true;
+      } catch {
+        return false;
+      }
     },
     async stop() {
       if (stopping) return;
@@ -323,6 +359,10 @@ export class WebTransportMediaRuntime {
 
   hasSession(ticket: string | null) {
     return this.server?.hasSession(ticket) ?? false;
+  }
+
+  sendDatagram(ticket: string | null, bytes: Uint8Array) {
+    return this.server?.sendDatagram?.(ticket, bytes) ?? false;
   }
 
   offer(ticket: string) {

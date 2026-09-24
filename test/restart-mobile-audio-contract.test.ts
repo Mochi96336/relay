@@ -187,6 +187,24 @@ test('Listen gives every recovered running context a fresh stuck-resume budget',
   assert.doesNotMatch(listenSource, /audioResumeGestures/);
 });
 
+test('exact digital silence is audibility evidence, not automatic rebuild authority', () => {
+  const handler = appSource.match(
+    /if \(event\.data\?\.type === 'input-gap'\) \{[\s\S]*?rebuildPublisherCaptureGraph\('input-gap'\);\s*\}/,
+  )?.[0] ?? '';
+  assert.notEqual(handler, '', 'capture input-gap handler must remain readable as one ownership boundary');
+  assert.match(handler, /const digitalSilence = event\.data\.reason === 'digital-silence'/);
+  assert.match(
+    handler,
+    /if \(digitalSilence\) \{[\s\S]*console\.warn[\s\S]*return;[\s\S]*micCaptureRecovery\.noteInputGap/,
+    'exact-zero detection may surface diagnostics but must return before source-failure recovery authority',
+  );
+  assert.match(
+    handler,
+    /micCaptureRecovery\.noteInputGap[\s\S]*if \(decision\.rebuild\) void rebuildPublisherCaptureGraph\('input-gap'\)/,
+    'a real missing input channel keeps the existing bounded rebuild path',
+  );
+});
+
 test('Mic recovery exposes OS input mute to server liveness', () => {
   assert.match(appSource, /initialSequence: capturePacketSequence >>> 0/);
   assert.match(appSource, /track\?\.addEventListener\('mute'/);

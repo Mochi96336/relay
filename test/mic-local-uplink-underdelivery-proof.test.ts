@@ -89,6 +89,7 @@ test('severe local WT congestion counts as packet under-delivery and demotes the
   const transport = new PreferredAudioTransport({
     WebTransportClass: SlowWebTransport,
     datagramQueuePackets: 1,
+    datagramBacklogPackets: 0,
   });
   transport.bind(socket);
   assert.equal(await transport.prefer({

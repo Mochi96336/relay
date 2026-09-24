@@ -44,6 +44,21 @@ export type AudioUplinkTransportHealth = {
   webTransportCongestedRejects: number;
   webTransportPacketTooLargeRejects: number;
   webTransportSendFailures: number;
+  /** Datagrams that waited for a write slot instead of being dropped. Older pages omit it. */
+  webTransportBacklogQueued?: number;
+  /** Waiting datagrams dropped for exceeding the realtime backlog age. Older pages omit it. */
+  webTransportBacklogExpired?: number;
+  /**
+   * Sent packets the page keeps for retransmission. Present and positive means
+   * the page answers audio-retransmit-request; older pages omit it.
+   */
+  retransmitBufferPackets?: number;
+  /** Packets repeated in answer to retransmission requests. Older pages omit it. */
+  retransmittedPackets?: number;
+  /** WebTransport re-offers attempted after a transport-level demotion. Older pages omit it. */
+  webTransportRetries?: number;
+  /** Retransmission requests that arrived on the direct session. Older pages omit it. */
+  retransmitDatagramRequests?: number;
   webSocketPacketsSent: number;
   webSocketCongestedRejects: number;
   webSocketDisconnectedRejects: number;
@@ -341,6 +356,24 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   ) as Record<(typeof counterNames)[number], number | null>;
   if (counterNames.some((name) => counters[name] === null)) return null;
 
+  // Datagram backlog and retransmission counters arrived after v1 shipped. They stay absent from
+  // the parsed shape for older pages rather than inventing a zero history.
+  const optionalCounterNames = [
+    'webTransportBacklogQueued',
+    'webTransportBacklogExpired',
+    'retransmitBufferPackets',
+    'retransmittedPackets',
+    'webTransportRetries',
+    'retransmitDatagramRequests',
+  ] as const;
+  const backlogCounters: Partial<Record<(typeof optionalCounterNames)[number], number>> = {};
+  for (const name of optionalCounterNames) {
+    if (transport[name] === undefined) continue;
+    const value = nonNegativeSafeInteger(transport[name]);
+    if (value === null) return null;
+    backlogCounters[name] = value;
+  }
+
   const parsed: AudioUplinkHealth = {
     version: 1,
     captureGeneration,
@@ -364,6 +397,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       datagramQueuePackets,
       mediaRecoveryDegraded,
       ...counters as Record<(typeof counterNames)[number], number>,
+      ...backlogCounters,
     },
   };
   Object.defineProperty(parsed, 'inputGapActiveObserved', {

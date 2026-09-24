@@ -166,6 +166,7 @@ describe('live WebTransport runtime hardening', () => {
     const transport = new PreferredAudioTransport({
       minimumPacketBytes: 26,
       datagramQueuePackets: 2,
+      datagramBacklogPackets: 0,
       WebTransportClass: OverstatedBudgetWebTransport,
     });
     await transport.prefer({
@@ -182,7 +183,7 @@ describe('live WebTransport runtime hardening', () => {
     assert.equal(transport.stats().webTransportCongestedRejects, 1);
   });
 
-  it('demotes an unresolved write stall at its deadline and sends only the new packet over WebSocket', async () => {
+  it('demotes an unresolved write stall at its deadline and moves only never-written packets to WebSocket', async () => {
     OverstatedBudgetWebTransport.instances.length = 0;
     const { PreferredAudioTransport } = await import(transportModuleUrl.href);
     let nowMs = 0;
@@ -206,9 +207,10 @@ describe('live WebTransport runtime hardening', () => {
     assert.equal(socket.sent.length, 0);
 
     nowMs = 999;
-    const beforeDeadline = transport.send(new Uint8Array([5]).buffer);
-    assert.equal(beforeDeadline.sent, false);
-    assert.equal(beforeDeadline.reason, 'congested');
+    const waitingPacket = new Uint8Array([5]);
+    const beforeDeadline = transport.send(waitingPacket.buffer);
+    assert.equal(beforeDeadline.sent, true);
+    assert.equal(beforeDeadline.queued, true, 'a full write budget waits instead of dropping');
     assert.equal(webTransport.writer.writes.length, 4);
     assert.equal(socket.sent.length, 0);
 
@@ -219,14 +221,17 @@ describe('live WebTransport runtime hardening', () => {
     assert.equal(recovered.path, 'websocket');
     assert.equal(webTransport.closeCalls, 1);
     assert.equal(webTransport.writer.writes.length, 4, 'already-submitted datagrams are never replayed');
-    assert.deepEqual(socket.sent, [fallbackPacket]);
+    assert.equal(socket.sent.length, 2, 'the never-written datagram keeps its place ahead of the new packet');
+    assert.deepEqual(new Uint8Array(socket.sent[0] as Uint8Array), waitingPacket);
+    assert.equal(socket.sent[1], fallbackPacket);
 
     const stats = transport.stats();
     assert.equal(stats.path, 'websocket');
     assert.equal(stats.webTransportPacketsSubmitted, 4);
-    assert.equal(stats.webTransportCongestedRejects, 1);
+    assert.equal(stats.webTransportCongestedRejects, 0);
+    assert.equal(stats.webTransportBacklogQueued, 1);
     assert.equal(stats.webTransportDemotions, 1);
-    assert.equal(stats.webSocketPacketsSent, 1);
+    assert.equal(stats.webSocketPacketsSent, 2);
 
     webTransport.writer.resolve(0);
     await Promise.resolve();

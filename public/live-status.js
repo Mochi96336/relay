@@ -204,6 +204,11 @@ if (
     const selfOwner = isSelfOwner(status);
     const micAudioStalled = status.issues?.some((issue) => issue?.code === 'mic-audio-stalled')
       || status.attention?.code === 'mic-audio-stalled';
+    // Audio still arriving in part is a different message from audio that
+    // stopped: say which, from the cause the product issue already carries.
+    const stalledIssues = status.issues?.filter((issue) => issue?.code === 'mic-audio-stalled') ?? [];
+    const micAudioIntermittent = stalledIssues.length > 0
+      && stalledIssues.every((issue) => issue?.cause === 'mic-audio-intermittent');
 
     if (status.lifecycle === 'preparing') {
       if (selfOwner && status.timing?.state === 'calibrating') {
@@ -235,6 +240,9 @@ if (
     }
 
     if (selfOwner) {
+      if (micAudioIntermittent) {
+        return { title: t('voice.droppingOutYours'), detail: t('voice.audioNotReachingRoom') };
+      }
       if (micAudioStalled) {
         return { title: t('voice.interruptedYours'), detail: t('voice.mediaConnectedAudioStopped') };
       }
@@ -257,6 +265,9 @@ if (
     }
 
     const owner = mic.ownerNickname || t('voice.someone');
+    if (micAudioIntermittent) {
+      return { title: owner, detail: t('voice.droppingOutOther') };
+    }
     if (micAudioStalled) {
       return { title: owner, detail: t('voice.interruptedOther') };
     }

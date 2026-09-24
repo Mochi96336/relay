@@ -23,9 +23,9 @@ export type AudioPacketReceiverOptions = {
   reorderDeadlineMs: number;
   maxForwardJumpPackets: number;
   /**
-   * Longest a missing packet whose retransmission was requested may hold the
-   * ordered stream, while the caller says the mix can afford it. 0 disables
-   * retransmission requests entirely.
+   * Longest a missing packet may hold the ordered stream, waiting for its
+   * late arrival or its requested repeat, while the caller says the mix can
+   * afford it. 0 disables holding and retransmission requests entirely.
    */
   retransmitHoldMs?: number;
   /** Reorder window while such a hold is active, in packets. */
@@ -398,10 +398,11 @@ export class AudioPacketReceiver {
   }
 
   /**
-   * Whether a hole may keep holding the ordered stream for its retransmission.
-   * The caller owns this answer because only the mix knows how much buffered
-   * audio stands between the hole and the read head. Withdrawing it releases
-   * a waiting hole on the next flush at the ordinary reorder deadline.
+   * Whether a hole may keep holding the ordered stream, for a late arrival or
+   * a requested repeat. The caller owns this answer because only the mix
+   * knows how much buffered audio stands between the hole and the read head.
+   * Withdrawing it releases a waiting hole on the next flush at the ordinary
+   * reorder deadline.
    */
   setRetransmitHoldAllowed(allowed: boolean) {
     this.retransmitHoldAllowed = allowed;
@@ -483,14 +484,18 @@ export class AudioPacketReceiver {
     this.repairRoundTripMs = this.repairRoundTripMs * 0.875 + sample * 0.125;
   }
 
+  /**
+   * Any hole holds while the mix can afford it, not only a requested one.
+   * Waiting is free until the read head gets close, and a packet that is
+   * merely late (queueing jitter, a stalled radio, reordering) is heard if the
+   * frontier waits for it, but lost for good if the frontier has moved on. A
+   * repeat request is an extra way to fill the hole, not the reason to wait.
+   */
   private retransmitHolding() {
     return this.retransmitHoldMs > 0
       && this.retransmitHoldAllowed
       && this.expectedSequence !== null
-      && (
-        this.retransmitRequested.has(this.expectedSequence)
-        || this.retransmitCandidates.has(this.expectedSequence)
-      );
+      && this.pending.size > 0;
   }
 
   private currentDeadlineMs() {

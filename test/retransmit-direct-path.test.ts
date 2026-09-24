@@ -300,7 +300,7 @@ describe('Relay sends retransmission requests on every available path', () => {
     assert.equal(mic.retransmitStats()?.requestedPackets, 1);
   });
 
-  it('neither asks nor holds when no path can carry a request', () => {
+  it('never asks when no path can carry a request, but still waits for a late packet', () => {
     const { mic, direct, control, publisher, loseOne } = capableRuntime({ directConnected: false });
     (publisher as { readyState: number }).readyState = WebSocket.CLOSED;
     mic.serviceRetransmits(5, 300);
@@ -309,7 +309,10 @@ describe('Relay sends retransmission requests on every available path', () => {
     assert.deepEqual(direct, []);
     assert.deepEqual(control, []);
     assert.equal(mic.retransmitStats()?.requestedPackets, 0, 'no request is recorded as sent');
-    // The hole is released at the ordinary reorder deadline, not held for a repeat.
-    assert.deepEqual(mic.flush(10 + DEFAULT_AUDIO_TRANSPORT_CONFIG.reorderDeadlineMs + 2).map((frame) => frame.firstSampleIndex), [960]);
+    const pastReorderDeadline = 10 + DEFAULT_AUDIO_TRANSPORT_CONFIG.reorderDeadlineMs + 2;
+    assert.deepEqual(mic.flush(pastReorderDeadline), [], 'the mix can afford to wait');
+    // Once the mix runs short, the hole is released as ordinary loss.
+    mic.serviceRetransmits(pastReorderDeadline, 40);
+    assert.deepEqual(mic.flush(pastReorderDeadline).map((frame) => frame.firstSampleIndex), [960]);
   });
 });

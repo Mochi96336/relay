@@ -40,6 +40,26 @@ function receiver(overrides: Partial<ConstructorParameters<typeof AudioPacketRec
 const sequences = (packets: { sequence: number }[]) => packets.map((p) => p.sequence);
 
 describe('AudioPacketReceiver retransmission', () => {
+  it('holds for a late packet only while the caller allows, requested or not', () => {
+    const { r, send } = receiver({ retransmitRequestsPerSecond: 1 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    send(4, 2);
+    // 1 was requested with the only token; 3 was denied, yet still waits.
+    assert.deepEqual(r.takeRetransmitRequests(2), [1]);
+    assert.equal(r.retransmitStats().budgetDeniedPackets, 1);
+    assert.deepEqual(sequences(send(1, 100)), [1, 2]);
+    assert.deepEqual(sequences(r.flush(150)), [], 'the denied hole still holds');
+    assert.deepEqual(sequences(send(3, 160)), [3, 4], 'and its late packet is heard');
+    assert.equal(r.stats().lostPackets, 0);
+
+    send(6, 170);
+    r.setRetransmitHoldAllowed(false);
+    assert.deepEqual(sequences(r.flush(211)), [6], 'without headroom the hole is released at the reorder deadline');
+    assert.equal(r.stats().lostPackets, 1);
+  });
+
   it('asks once for each sequence a later packet proves missing', () => {
     const { r, send } = receiver();
     send(0, 0);
@@ -133,7 +153,10 @@ describe('AudioPacketReceiver retransmission', () => {
     send(2, 1);
     assert.deepEqual(r.takeRetransmitRequests(), []);
     assert.equal(r.retransmitStats().requestedPackets, 0);
-    assert.deepEqual(sequences(r.flush(41)), [2], 'and never holds for a repeat that cannot come');
+    // It may still be merely late: the stream waits while the caller allows.
+    assert.deepEqual(sequences(r.flush(41)), []);
+    assert.deepEqual(sequences(send(1, 90)), [1, 2], 'a late packet is heard, not lost');
+    assert.equal(r.stats().lostPackets, 0);
   });
 
   it('waits for the request delay so merely reordered datagrams are never requested', () => {

@@ -2,6 +2,7 @@ import {
   AudioPacketReceiver,
   type AudioPacketReceiverOptions,
   type AudioPacketReceiverStats,
+  type AudioPacketRetransmitStats,
 } from './audio-packet-receiver.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 
@@ -13,6 +14,11 @@ export interface AudioTransport {
   receive(buffer: Buffer, nowMs: number): PcmFrame[];
   flush(nowMs: number): PcmFrame[];
   stats(): AudioPacketReceiverStats | null;
+  /** Sequenced transports only: see AudioPacketReceiver retransmission. */
+  setRetransmitHoldAllowed?(allowed: boolean): void;
+  setRetransmitRequestsEnabled?(enabled: boolean): void;
+  takeRetransmitRequests?(): number[];
+  retransmitStats?(): AudioPacketRetransmitStats;
 }
 
 export type WebSocketAudioTransportOptions =
@@ -55,6 +61,22 @@ class SequencedWebSocketAudioTransport implements AudioTransport {
 
   stats() {
     return this.receiver.stats();
+  }
+
+  setRetransmitHoldAllowed(allowed: boolean) {
+    this.receiver.setRetransmitHoldAllowed(allowed);
+  }
+
+  setRetransmitRequestsEnabled(enabled: boolean) {
+    this.receiver.setRetransmitRequestsEnabled(enabled);
+  }
+
+  takeRetransmitRequests() {
+    return this.receiver.takeRetransmitRequests();
+  }
+
+  retransmitStats() {
+    return this.receiver.retransmitStats();
   }
 }
 

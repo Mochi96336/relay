@@ -22,7 +22,43 @@ export type AudioPacketReceiverOptions = {
   reorderWindowPackets: number;
   reorderDeadlineMs: number;
   maxForwardJumpPackets: number;
+  /**
+   * Longest a missing packet whose retransmission was requested may hold the
+   * ordered stream, while the caller says the mix can afford it. 0 disables
+   * retransmission requests entirely.
+   */
+  retransmitHoldMs?: number;
+  /** Reorder window while such a hold is active, in packets. */
+  retransmitWindowPackets?: number;
+  /**
+   * Sustained repeat requests per second. Heavy loss usually means a congested
+   * uplink, and asking it to carry every lost packet twice makes that worse;
+   * beyond this budget a hole is ordinary loss and never holds the stream.
+   */
+  retransmitRequestsPerSecond?: number;
+  /**
+   * How long a sequence must stay missing before it is requested. Datagrams
+   * that were merely reordered arrive within a few milliseconds; asking for
+   * them spends the request budget and the uplink on audio already on its way.
+   * The stream still holds for the hole from the moment it is noticed.
+   */
+  retransmitRequestDelayMs?: number;
 };
+
+export type AudioPacketRetransmitStats = {
+  /** Distinct sequences this receiver asked the sender to repeat. */
+  requestedPackets: number;
+  /** Requested sequences that arrived in time and were emitted in order. */
+  recoveredPackets: number;
+  /** Missing sequences not requested because the request budget was spent. */
+  budgetDeniedPackets: number;
+};
+
+/** Upper bound on sequences requested per detected hole. */
+const MAX_RETRANSMIT_REQUESTS_PER_HOLE = 32;
+/** A quarter of a 100 packet/s datagram stream: isolated loss, not congestion. */
+const DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND = 25;
+const DEFAULT_RETRANSMIT_REQUEST_DELAY_MS = 20;
 
 export type AudioPacketReceiverStats = {
   receivedPackets: number;
@@ -146,6 +182,24 @@ export class AudioPacketReceiver {
   private continuityCandidate: ContinuitySnapshot | null = null;
   private continuityResolved = false;
   private resyncCandidate: PendingPacket | null = null;
+  readonly retransmitHoldMs: number;
+  readonly retransmitWindowPackets: number;
+  private retransmitHoldAllowed = false;
+  private retransmitRequestsEnabled = true;
+  /** Sequences requested and not yet emitted or given up on. */
+  private readonly retransmitRequested = new Set<number>();
+  /** Missing sequences not yet old enough to request, by when they were noticed. */
+  private readonly retransmitCandidates = new Map<number, number>();
+  readonly retransmitRequestDelayMs: number;
+  private retransmitQueue: number[] = [];
+  private readonly retransmitCounters: AudioPacketRetransmitStats = {
+    requestedPackets: 0,
+    recoveredPackets: 0,
+    budgetDeniedPackets: 0,
+  };
+  readonly retransmitRequestsPerSecond: number;
+  private retransmitTokens = 0;
+  private retransmitTokensAtMs: number | null = null;
 
   constructor(options: AudioPacketReceiverOptions) {
     if (!nonNegativeInteger(options.reorderWindowPackets)) {
@@ -172,6 +226,33 @@ export class AudioPacketReceiver {
     this.reorderWindowPackets = options.reorderWindowPackets;
     this.reorderDeadlineMs = options.reorderDeadlineMs;
     this.maxForwardJumpPackets = options.maxForwardJumpPackets;
+    const retransmitHoldMs = options.retransmitHoldMs ?? 0;
+    if (!Number.isFinite(retransmitHoldMs) || retransmitHoldMs < 0) {
+      throw new RangeError('retransmitHoldMs must be non-negative');
+    }
+    const retransmitWindowPackets = options.retransmitWindowPackets ?? options.reorderWindowPackets;
+    if (
+      !nonNegativeInteger(retransmitWindowPackets)
+      || retransmitWindowPackets > options.maxForwardJumpPackets
+    ) {
+      throw new RangeError('retransmitWindowPackets must be a non-negative integer within maxForwardJumpPackets');
+    }
+    this.retransmitHoldMs = retransmitHoldMs;
+    this.retransmitWindowPackets = retransmitWindowPackets;
+    const retransmitRequestsPerSecond = options.retransmitRequestsPerSecond
+      ?? DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND;
+    if (!Number.isFinite(retransmitRequestsPerSecond) || retransmitRequestsPerSecond <= 0) {
+      throw new RangeError('retransmitRequestsPerSecond must be positive');
+    }
+    this.retransmitRequestsPerSecond = retransmitRequestsPerSecond;
+    const retransmitRequestDelayMs = options.retransmitRequestDelayMs
+      ?? DEFAULT_RETRANSMIT_REQUEST_DELAY_MS;
+    if (!Number.isFinite(retransmitRequestDelayMs) || retransmitRequestDelayMs < 0) {
+      throw new RangeError('retransmitRequestDelayMs must be non-negative');
+    }
+    this.retransmitRequestDelayMs = retransmitRequestDelayMs;
+    // Start with one second of budget so the first isolated losses are covered.
+    this.retransmitTokens = retransmitRequestsPerSecond;
 
     const wallNowMs = Date.now();
     pruneContinuitySnapshots(wallNowMs);
@@ -241,6 +322,7 @@ export class AudioPacketReceiver {
     this.resyncCandidate = null;
     this.counters.reorderedPackets += 1;
     this.pending.set(packet.sequence, { packet, receivedAtMs: nowMs });
+    this.requestMissingBefore(packet.sequence, nowMs);
 
     const output: AudioPacket[] = [];
     this.enforceWindow(packet.sequence, output);
@@ -253,11 +335,12 @@ export class AudioPacketReceiver {
     const output: AudioPacket[] = [];
     if (this.expectedSequence === null) return output;
 
+    this.promoteRetransmitCandidates(nowMs);
     this.drainPending(output);
     while (this.pending.size > 0) {
       let oldestAt = Infinity;
       for (const pending of this.pending.values()) oldestAt = Math.min(oldestAt, pending.receivedAtMs);
-      if (nowMs - oldestAt < this.reorderDeadlineMs) break;
+      if (nowMs - oldestAt < this.currentDeadlineMs()) break;
 
       this.markExpectedLost();
       this.drainPending(output);
@@ -268,6 +351,125 @@ export class AudioPacketReceiver {
 
   stats(): AudioPacketReceiverStats {
     return { ...this.counters, bufferedPackets: this.pending.size };
+  }
+
+  retransmitStats(): AudioPacketRetransmitStats {
+    return { ...this.retransmitCounters };
+  }
+
+  /**
+   * Whether a hole may keep holding the ordered stream for its retransmission.
+   * The caller owns this answer because only the mix knows how much buffered
+   * audio stands between the hole and the read head. Withdrawing it releases
+   * a waiting hole on the next flush at the ordinary reorder deadline.
+   */
+  setRetransmitHoldAllowed(allowed: boolean) {
+    this.retransmitHoldAllowed = allowed;
+  }
+
+  /**
+   * Whether the sender can answer repeat requests at all. A sender that keeps
+   * no history is never asked, so its losses are not recorded as requests.
+   */
+  setRetransmitRequestsEnabled(enabled: boolean) {
+    this.retransmitRequestsEnabled = enabled;
+  }
+
+  /** Sequences newly worth asking the sender to repeat, oldest first. */
+  takeRetransmitRequests(): number[] {
+    const requests = this.retransmitQueue;
+    this.retransmitQueue = [];
+    return requests;
+  }
+
+  private retransmitHolding() {
+    return this.retransmitHoldMs > 0
+      && this.retransmitHoldAllowed
+      && this.expectedSequence !== null
+      && (
+        this.retransmitRequested.has(this.expectedSequence)
+        || this.retransmitCandidates.has(this.expectedSequence)
+      );
+  }
+
+  private currentDeadlineMs() {
+    return this.retransmitHolding()
+      ? Math.max(this.reorderDeadlineMs, this.retransmitHoldMs)
+      : this.reorderDeadlineMs;
+  }
+
+  private currentWindowPackets() {
+    return this.retransmitHolding()
+      ? Math.max(this.reorderWindowPackets, this.retransmitWindowPackets)
+      : this.reorderWindowPackets;
+  }
+
+  /**
+   * A packet arrived ahead of the frontier: every sequence between the
+   * frontier and it that has not arrived is a candidate loss. It is requested
+   * once it has stayed missing for the request delay; the sender answers from
+   * its short history or not at all.
+   */
+  private requestMissingBefore(sequence: number, nowMs: number) {
+    if (
+      this.retransmitHoldMs <= 0
+      || !this.retransmitRequestsEnabled
+      || this.expectedSequence === null
+    ) return;
+
+    const distance = sequenceDistance(this.expectedSequence, sequence);
+    const first = distance > MAX_RETRANSMIT_REQUESTS_PER_HOLE
+      ? (sequence - MAX_RETRANSMIT_REQUESTS_PER_HOLE) >>> 0
+      : this.expectedSequence;
+    for (let candidate = first; candidate !== sequence; candidate = nextSequence(candidate)) {
+      if (
+        this.pending.has(candidate)
+        || this.retransmitRequested.has(candidate)
+        || this.retransmitCandidates.has(candidate)
+      ) continue;
+      this.retransmitCandidates.set(candidate, nowMs);
+    }
+    // Candidates and requests normally retire as the frontier emits or
+    // abandons them. Bound the bookkeeping anyway so no sender behaviour can
+    // grow it without limit.
+    for (const tracked of [this.retransmitCandidates, this.retransmitRequested]) {
+      while (tracked.size > this.maxForwardJumpPackets) {
+        const oldest = tracked.keys().next().value as number | undefined;
+        if (oldest === undefined) break;
+        tracked.delete(oldest);
+      }
+    }
+    this.promoteRetransmitCandidates(nowMs);
+  }
+
+  private promoteRetransmitCandidates(nowMs: number) {
+    if (this.retransmitCandidates.size === 0) return;
+    if (this.retransmitTokensAtMs !== null && nowMs > this.retransmitTokensAtMs) {
+      this.retransmitTokens = Math.min(
+        this.retransmitRequestsPerSecond,
+        this.retransmitTokens
+          + ((nowMs - this.retransmitTokensAtMs) * this.retransmitRequestsPerSecond) / 1000,
+      );
+    }
+    this.retransmitTokensAtMs = nowMs;
+
+    for (const [candidate, noticedAtMs] of this.retransmitCandidates) {
+      if (this.pending.has(candidate)) {
+        this.retransmitCandidates.delete(candidate);
+        continue;
+      }
+      if (nowMs - noticedAtMs < this.retransmitRequestDelayMs) continue;
+      this.retransmitCandidates.delete(candidate);
+      if (!this.retransmitRequestsEnabled) continue;
+      if (this.retransmitTokens < 1) {
+        this.retransmitCounters.budgetDeniedPackets += 1;
+        continue;
+      }
+      this.retransmitTokens -= 1;
+      this.retransmitRequested.add(candidate);
+      this.retransmitQueue.push(candidate);
+      this.retransmitCounters.requestedPackets += 1;
+    }
   }
 
   private resolveContinuity(packet: AudioPacket) {
@@ -341,6 +543,9 @@ export class AudioPacketReceiver {
     ) {
       const output: AudioPacket[] = [];
       this.pending.clear();
+      // Everything behind a resync is abandoned, including requested repeats.
+      this.retransmitRequested.clear();
+      this.retransmitCandidates.clear();
       this.expectedSequence = candidate.packet.sequence;
       this.resyncCandidate = null;
       this.emitExpected(candidate.packet, output);
@@ -374,7 +579,7 @@ export class AudioPacketReceiver {
     if (this.expectedSequence === null) return;
 
     let distance = sequenceDistance(this.expectedSequence, newestSequence);
-    while (distance > this.reorderWindowPackets) {
+    while (distance > this.currentWindowPackets()) {
       this.markExpectedLost();
       this.drainPending(output);
       if (this.expectedSequence === null) return;
@@ -409,6 +614,8 @@ export class AudioPacketReceiver {
     }
 
     output.push(packet);
+    if (this.retransmitRequested.delete(sequence)) this.retransmitCounters.recoveredPackets += 1;
+    this.retransmitCandidates.delete(sequence);
     this.counters.emittedPackets += 1;
     this.counters.emittedSamples = Math.min(
       Number.MAX_SAFE_INTEGER,
@@ -422,6 +629,8 @@ export class AudioPacketReceiver {
   private markExpectedLost() {
     if (this.expectedSequence === null) return;
     const sequence = this.expectedSequence;
+    this.retransmitRequested.delete(sequence);
+    this.retransmitCandidates.delete(sequence);
     this.counters.lostPackets += 1;
     this.rememberFinalized(sequence, 'lost');
     this.expectedSequence = nextSequence(sequence);

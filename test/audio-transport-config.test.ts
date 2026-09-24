@@ -21,6 +21,8 @@ describe('audio transport configuration', () => {
       reorderWindowPackets: 8,
       reorderDeadlineMs: 40,
       maxForwardJumpPackets: 256,
+      retransmitHoldMs: 400,
+      retransmitWindowPackets: 48,
     });
   });
 
@@ -33,7 +35,25 @@ describe('audio transport configuration', () => {
       reorderWindowPackets: 0,
       reorderDeadlineMs: 0,
       maxForwardJumpPackets: 12,
+      retransmitHoldMs: 400,
+      // The default retransmit window follows a smaller forward bound.
+      retransmitWindowPackets: 12,
     });
+  });
+
+  it('can disable retransmission and rejects a contradictory explicit window', () => {
+    assert.equal(loadAudioTransportConfig({ RELAY_AUDIO_RETRANSMIT_HOLD_MS: '0' }).retransmitHoldMs, 0);
+    assert.throws(
+      () => loadAudioTransportConfig({
+        RELAY_AUDIO_MAX_FORWARD_JUMP_PACKETS: '12',
+        RELAY_AUDIO_RETRANSMIT_WINDOW_PACKETS: '13',
+      }),
+      /RELAY_AUDIO_RETRANSMIT_WINDOW_PACKETS/,
+    );
+    assert.throws(
+      () => loadAudioTransportConfig({ RELAY_AUDIO_RETRANSMIT_HOLD_MS: '-1' }),
+      /RELAY_AUDIO_RETRANSMIT_HOLD_MS/,
+    );
   });
 
   for (const [name, value] of [

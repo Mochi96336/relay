@@ -73,47 +73,55 @@ function health(generation: number): AudioUplinkHealth {
   };
 }
 
-describe('Relay sends retransmission requests on both paths', () => {
-  it('uses the direct media session and keeps the control socket as fallback', () => {
-    const direct: { ticket: string | null; bytes: Uint8Array }[] = [];
-    const mic = new MicRuntime({
-      audioTransportConfig: { ...DEFAULT_AUDIO_TRANSPORT_CONFIG, retransmitRequestDelayMs: 0 } as never,
-      firstFrameTimeoutMs: 3_000,
-      streamLiveMs: 1_000,
-      createDirectMediaTicket: () => 'ticket-direct',
-      offerDirectMedia: (ticket) => ({ ticket }) as never,
-      sendDirectMedia: (ticket, bytes) => {
-        direct.push({ ticket, bytes });
-        return true;
-      },
-    });
-    const control: string[] = [];
-    const publisher = {
-      readyState: WebSocket.OPEN,
-      role: 'publisher',
-      isAlive: true,
-      participantId: 'participant-direct',
-      send: (payload: string) => control.push(payload),
-    } as unknown as RelaySocket;
-    mic.bindPublisher({
-      socket: publisher,
-      sampleRate: 48_000,
-      captureGeneration: 9,
-      audioPacketVersion: 2,
-      nowMs: 0,
-    });
-    assert.equal(mic.noteUplinkHealth(publisher, health(9), 1), true);
-    control.length = 0;
+function capableRuntime({ directConnected }: { directConnected: boolean }) {
+  const direct: { ticket: string | null; bytes: Uint8Array }[] = [];
+  const mic = new MicRuntime({
+    audioTransportConfig: { ...DEFAULT_AUDIO_TRANSPORT_CONFIG, retransmitRequestDelayMs: 0 } as never,
+    firstFrameTimeoutMs: 3_000,
+    streamLiveMs: 1_000,
+    createDirectMediaTicket: () => 'ticket-direct',
+    directMediaConnected: () => directConnected,
+    offerDirectMedia: (ticket) => ({ ticket }) as never,
+    sendDirectMedia: (ticket, bytes) => {
+      direct.push({ ticket, bytes });
+      return true;
+    },
+  });
+  const control: string[] = [];
+  const publisher = {
+    readyState: WebSocket.OPEN,
+    role: 'publisher',
+    isAlive: true,
+    participantId: 'participant-direct',
+    send: (payload: string) => control.push(payload),
+  } as unknown as RelaySocket & { readyState: number };
+  mic.bindPublisher({
+    socket: publisher,
+    sampleRate: 48_000,
+    captureGeneration: 9,
+    audioPacketVersion: 2,
+    nowMs: 0,
+  });
+  assert.equal(mic.noteUplinkHealth(publisher, health(9), 1), true);
+  control.length = 0;
+  const packet = (sequence: number) => encodeAudioPacket({
+    source: 'mic',
+    generation: 9,
+    sequence,
+    firstSampleIndex: sequence * 480,
+    pcm: Buffer.alloc(960),
+  });
+  const loseOne = (nowMs: number) => {
+    mic.receiveDirectMedia('ticket-direct', packet(0), nowMs);
+    mic.receiveDirectMedia('ticket-direct', packet(2), nowMs + 1);
+  };
+  return { mic, direct, control, publisher, loseOne };
+}
 
-    const packet = (sequence: number) => encodeAudioPacket({
-      source: 'mic',
-      generation: 9,
-      sequence,
-      firstSampleIndex: sequence * 480,
-      pcm: Buffer.alloc(960),
-    });
-    mic.receiveDirectMedia('ticket-direct', packet(0), 10);
-    mic.receiveDirectMedia('ticket-direct', packet(2), 11);
+describe('Relay sends retransmission requests on every available path', () => {
+  it('uses the direct media session and keeps the control socket as fallback', () => {
+    const { mic, direct, control, loseOne } = capableRuntime({ directConnected: true });
+    loseOne(10);
     assert.equal(mic.serviceRetransmits(12, 300), 1);
 
     assert.equal(direct.length, 1);
@@ -125,5 +133,28 @@ describe('Relay sends retransmission requests on both paths', () => {
       captureGeneration: 9,
       sequences: [1],
     }]);
+  });
+
+  it('still asks over the direct session while the control socket reconnects', () => {
+    const { mic, direct, control, publisher, loseOne } = capableRuntime({ directConnected: true });
+    (publisher as { readyState: number }).readyState = WebSocket.CLOSED;
+    mic.serviceRetransmits(5, 300);
+    loseOne(10);
+    assert.equal(mic.serviceRetransmits(12, 300), 1);
+    assert.equal(direct.length, 1);
+    assert.deepEqual(control, []);
+  });
+
+  it('neither asks nor holds when no path can carry a request', () => {
+    const { mic, direct, control, publisher, loseOne } = capableRuntime({ directConnected: false });
+    (publisher as { readyState: number }).readyState = WebSocket.CLOSED;
+    mic.serviceRetransmits(5, 300);
+    loseOne(10);
+    assert.equal(mic.serviceRetransmits(12, 300), 0);
+    assert.deepEqual(direct, []);
+    assert.deepEqual(control, []);
+    assert.equal(mic.retransmitStats()?.requestedPackets, 0, 'no request is recorded as sent');
+    // The hole is released at the ordinary reorder deadline, not held for a repeat.
+    assert.deepEqual(mic.flush(10 + DEFAULT_AUDIO_TRANSPORT_CONFIG.reorderDeadlineMs + 2).map((frame) => frame.firstSampleIndex), [960]);
   });
 });

@@ -71,6 +71,13 @@ export type MicAudibilityMonitorOptions = {
   degradedAfterWindows?: number;
   /** Consecutive clean windows before a degraded Mic is called healthy again. */
   recoveredAfterWindows?: number;
+  /**
+   * Consecutive digital-silence windows before that alone degrades the Mic.
+   * Longer than the other shapes: a headset whose own noise gate emits exact
+   * zeros between phrases must sing again before this, while a capture that
+   * an OS interruption left rendering zeros never will.
+   */
+  digitalSilenceDegradedAfterWindows?: number;
 };
 
 const SILENCE_DBFS = -120;
@@ -83,6 +90,7 @@ export class MicAudibilityMonitor {
   readonly repeatEveryWindows: number;
   readonly degradedAfterWindows: number;
   readonly recoveredAfterWindows: number;
+  readonly digitalSilenceDegradedAfterWindows: number;
 
   private emittedSamples = 0;
   private liveSamples = 0;
@@ -95,6 +103,7 @@ export class MicAudibilityMonitor {
   private degradedState = false;
   private suspectRunWindows = 0;
   private cleanRunWindows = 0;
+  private digitalSilenceRunWindows = 0;
 
   constructor(options: MicAudibilityMonitorOptions) {
     const windowMs = options.windowMs ?? 1_000;
@@ -119,6 +128,13 @@ export class MicAudibilityMonitor {
     this.repeatEveryWindows = repeatEveryWindows;
     this.degradedAfterWindows = options.degradedAfterWindows ?? 2;
     this.recoveredAfterWindows = options.recoveredAfterWindows ?? 3;
+    this.digitalSilenceDegradedAfterWindows = options.digitalSilenceDegradedAfterWindows ?? 5;
+    if (
+      !Number.isInteger(this.digitalSilenceDegradedAfterWindows)
+      || this.digitalSilenceDegradedAfterWindows < 1
+    ) {
+      throw new RangeError('digitalSilenceDegradedAfterWindows must be a positive integer');
+    }
     if (!Number.isInteger(this.degradedAfterWindows) || this.degradedAfterWindows < 1) {
       throw new RangeError('degradedAfterWindows must be a positive integer');
     }
@@ -181,6 +197,7 @@ export class MicAudibilityMonitor {
     this.degradedState = false;
     this.suspectRunWindows = 0;
     this.cleanRunWindows = 0;
+    this.digitalSilenceRunWindows = 0;
     return events;
   }
 
@@ -217,14 +234,21 @@ export class MicAudibilityMonitor {
       }
     }
 
+    this.digitalSilenceRunWindows = suspect.includes('digital-silence')
+      ? this.digitalSilenceRunWindows + 1
+      : 0;
+    const deliverySuspect = suspect.some((kind) => kind !== 'digital-silence');
     if (!eligible) {
       this.degradedState = false;
       this.suspectRunWindows = 0;
       this.cleanRunWindows = 0;
     } else if (suspect.length > 0) {
-      this.suspectRunWindows += 1;
       this.cleanRunWindows = 0;
-      if (this.suspectRunWindows >= this.degradedAfterWindows) this.degradedState = true;
+      this.suspectRunWindows = deliverySuspect ? this.suspectRunWindows + 1 : 0;
+      if (
+        this.suspectRunWindows >= this.degradedAfterWindows
+        || this.digitalSilenceRunWindows >= this.digitalSilenceDegradedAfterWindows
+      ) this.degradedState = true;
     } else {
       this.cleanRunWindows += 1;
       this.suspectRunWindows = 0;

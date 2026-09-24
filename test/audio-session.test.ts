@@ -152,6 +152,42 @@ describe('AudioSession timelines', () => {
     }, 'concealment must not reduce or hide packet-loss evidence');
   });
 
+  test('a hole exactly as long as the concealment fade still fades the recovered audio in', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const gap = Math.round(RATE * 0.06);
+    const amplitude = 12_000;
+    session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(amplitude))), RATE, 0);
+    session.ingestMic(frame(chunk + gap, pcmOf(new Array(chunk).fill(amplitude))), RATE, 0);
+
+    const read = session.readMic(0, chunk * 2 + gap);
+    assert.equal(read[chunk + gap], 0, 'the repetition faded out, so recovery starts from silence');
+    let maxStep = 0;
+    for (let index = 1; index < read.length; index += 1) {
+      maxStep = Math.max(maxStep, Math.abs(read[index] - read[index - 1]));
+    }
+    assert.ok(maxStep <= 200, `no click at either edge: ${maxStep}`);
+  });
+
+  test('concealment never rewrites the PCM that ingest already handed to its consumers', () => {
+    const session = makeSession();
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    const first = session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(9_000))), RATE, 0);
+    const recovered = session.ingestMic(
+      frame(chunk * 2, pcmOf(new Array(chunk).fill(3_000))),
+      RATE,
+      0,
+    );
+
+    assert.ok(first.samples.every((sample) => sample === 9_000), 'the tail join is copy-on-write');
+    assert.ok(recovered.samples.every((sample) => sample === 3_000), 'the head blend is copy-on-write');
+    assert.notEqual(session.readMic(chunk * 2, 1)[0], 3_000, 'while the mix hears the blended join');
+  });
+
   test('keeps the plain de-click taper when the capture has too little history to conceal', () => {
     const session = makeSession();
     session.start(0);

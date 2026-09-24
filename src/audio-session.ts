@@ -1052,14 +1052,21 @@ export class AudioSession {
     const historyLength = gapStart - this.micConcealmentHistoryStart(gapStart);
     if (gapSamples <= 0 || historyLength <= 0) return false;
     const history = this.readRange(this.mic, gapStart - historyLength, historyLength);
+    // Copy on write. The joins only change what the mix will read: the PCM the
+    // ingest result already handed to calibration, validation and meters stays
+    // exactly what arrived.
+    const previous = previousChunk.samples.slice();
+    const next = currentChunk.samples.slice();
     const concealment = concealGap(
       history,
-      previousChunk.samples,
-      currentChunk.samples,
+      previous,
+      next,
       gapSamples,
       { sampleRate: this.sampleRate },
     );
     if (!concealment) return false;
+    previousChunk.samples = previous;
+    currentChunk.samples = next;
 
     const chunks = this.mic.chunks;
     chunks.splice(chunks.length - 1, 0, {
@@ -1069,9 +1076,10 @@ export class AudioSession {
       concealed: true,
     });
     this.micConcealedSamples += concealment.fill.length;
-    // A long hole outlives the repetition, which has faded to silence by its
-    // end. Returning from that silence is an ordinary source edge.
-    if (concealment.fill.length < gapSamples) this.fadeInSourceEdge(currentChunk.samples);
+    // Without a blend the repetition has faded to silence by the end of the
+    // hole (a long hole, or one exactly as long as the fade). Returning from
+    // that silence is an ordinary source edge.
+    if (concealment.blendedNextSamples === 0) this.fadeInSourceEdge(currentChunk.samples);
     return true;
   }
 
@@ -1091,7 +1099,11 @@ export class AudioSession {
     // The last chunk is the one that just proved the hole.
     for (let index = chunks.length - 2; index >= 0 && start > floor; index -= 1) {
       const chunk = chunks[index];
-      if (!chunk.positioned || chunk.start + chunk.samples.length !== start) break;
+      if (
+        !chunk.positioned
+        || chunk.concealed
+        || chunk.start + chunk.samples.length !== start
+      ) break;
       start = chunk.start;
     }
     return Math.max(start, floor);

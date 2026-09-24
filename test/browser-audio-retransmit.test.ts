@@ -189,6 +189,48 @@ describe('browser Mic retransmission', () => {
     assert.equal(webTransport.writer.writes.length, 3);
   });
 
+  it('expires stale capture datagrams even behind a fresh repeat at the head of the backlog', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    let nowMs = 0;
+    class StuckWebTransport extends FakeWebTransport {
+      readonly stuckWriter = {
+        writes: [] as Uint8Array[],
+        write: (value: Uint8Array) => {
+          this.stuckWriter.writes.push(new Uint8Array(value));
+          return new Promise<void>(() => {});
+        },
+        releaseLock() {},
+      };
+      readonly datagrams = {
+        maxDatagramSize: 1200,
+        writable: { getWriter: () => this.stuckWriter },
+      };
+    }
+    FakeWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      datagramQueuePackets: 1,
+      datagramBacklogMs: 200,
+      datagramWriteTimeoutMs: 60_000,
+      WebTransportClass: StuckWebTransport,
+      nowMs: () => nowMs,
+    });
+    transport.bind(new FakeSocket());
+    await transport.prefer({ preferred: 'webtransport', url: 'https://media.example.test:4433/media?ticket=stale' });
+
+    transport.send(mediaPacket(5, 0));
+    assert.equal(transport.send(mediaPacket(5, 1)).queued, true);
+    assert.equal(transport.send(mediaPacket(5, 2)).queued, true);
+
+    nowMs = 150;
+    transport.answerRetransmitRequest({ captureGeneration: 5, sequences: [0] });
+    nowMs = 250;
+    transport.state();
+
+    assert.deepEqual(transport.datagramBacklog.map((entry: { retransmit?: boolean }) => entry.retransmit), [true]);
+    assert.equal(transport.stats().webTransportBacklogExpired, 2);
+  });
+
   it('keeps only a bounded history and forgets it with the capture', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({ retransmitBufferPackets: 2 });

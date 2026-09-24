@@ -54,23 +54,32 @@ describe('MicAudibilityMonitor degraded hysteresis', () => {
   const RATE = 48_000;
   const FRAME = 960;
 
-  function window(monitor: MicAudibilityMonitor, { live = true, silent = false } = {}) {
+  function window(
+    monitor: MicAudibilityMonitor,
+    { live = true, silent = false, holes = false } = {},
+  ) {
     // 100 ms windows: five 20 ms frames.
     for (let frame = 0; frame < 5; frame += 1) {
       const samples = new Int16Array(FRAME);
       if (!silent) samples.fill(1_000);
       monitor.observeReceived(samples);
-      monitor.observeFrame({ micLive: live, frameSamples: FRAME, micGapSamples: 0, micStarvedSamples: 0 });
+      monitor.observeFrame({
+        micLive: live,
+        frameSamples: FRAME,
+        // Every other frame read a hole: intermittent loss.
+        micGapSamples: holes && frame % 2 === 1 ? FRAME : 0,
+        micStarvedSamples: 0,
+      });
     }
     return monitor.degraded;
   }
 
   test('rises after consecutive suspect windows and falls only after consecutive clean ones', () => {
     const monitor = new MicAudibilityMonitor({ sampleRate: RATE, windowMs: 100 });
-    assert.equal(window(monitor, { silent: true }), false, 'one bad window is not a verdict');
-    assert.equal(window(monitor, { silent: true }), true);
+    assert.equal(window(monitor, { holes: true }), false, 'one bad window is not a verdict');
+    assert.equal(window(monitor, { holes: true }), true);
     assert.equal(window(monitor), true, 'one good window does not clear it');
-    assert.equal(window(monitor, { silent: true }), true);
+    assert.equal(window(monitor, { holes: true }), true);
     assert.equal(window(monitor), true);
     assert.equal(window(monitor), true);
     assert.equal(window(monitor), false, 'three clean windows in a row do');
@@ -79,8 +88,30 @@ describe('MicAudibilityMonitor degraded hysteresis', () => {
 
   test('clears as soon as the room stops calling the Mic live', () => {
     const monitor = new MicAudibilityMonitor({ sampleRate: RATE, windowMs: 100 });
-    window(monitor, { silent: true });
-    assert.equal(window(monitor, { silent: true }), true);
+    window(monitor, { holes: true });
+    assert.equal(window(monitor, { holes: true }), true);
     assert.equal(window(monitor, { live: false }), false);
+  });
+
+  test('digital silence alone needs a longer run, so a gated pause is not a verdict', () => {
+    const monitor = new MicAudibilityMonitor({ sampleRate: RATE, windowMs: 100 });
+    for (let run = 0; run < 4; run += 1) {
+      assert.equal(window(monitor, { silent: true }), false, `window ${run + 1}`);
+    }
+    // A headset gate reopening when the singer resumes restarts the count.
+    window(monitor);
+    for (let run = 0; run < 4; run += 1) window(monitor, { silent: true });
+    assert.equal(monitor.degraded, false);
+    assert.equal(window(monitor, { silent: true }), true, 'a capture that stays at exact zero is surfaced');
+  });
+
+  test('reset forgets a verdict at a capture boundary', () => {
+    const monitor = new MicAudibilityMonitor({ sampleRate: RATE, windowMs: 100 });
+    window(monitor, { holes: true });
+    window(monitor, { holes: true });
+    assert.equal(monitor.degraded, true);
+    monitor.reset();
+    assert.equal(monitor.degraded, false);
+    assert.equal(window(monitor, { holes: true }), false, 'the next capture starts its own count');
   });
 });

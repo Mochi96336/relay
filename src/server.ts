@@ -261,6 +261,7 @@ const session = new AudioSession({
 const micAudibility = new MicAudibilityMonitor({ sampleRate: MIX_SAMPLE_RATE });
 /** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
 const micClockDrift = new MicClockDriftEstimator();
+let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
 
 // Read here rather than beside the other calibration constants because the
 // Take quality policy needs it too: it is the line between the mixer's own
@@ -485,6 +486,8 @@ function micMediaPath() {
 function clearMicMediaAuthority() {
   micRuntime.clearMediaAuthority(performance.now());
   session.setMicExpected(false);
+  // An audibility verdict belongs to one capture, never to the next singer.
+  resetMicAudibility();
 }
 
 function expireMicTransportGrace(expectedOwnerId: string) {
@@ -1932,6 +1935,7 @@ const liveSourceStopCoordinator = createRelayLiveSourceStopCoordinator({
 
 function stopLiveSource() {
   liveSourceStopCoordinator.stop();
+  resetMicAudibility();
 }
 
 function roomHasSong(nowMs = performance.now()) {
@@ -2004,6 +2008,7 @@ function processPublisherFrame(frame: PcmFrame) {
 
     if (session.active) {
       if (captureRestarted) {
+        resetMicAudibility();
         micCaptureRestartCoordinator.restart({
           calibrationCollecting: calibration.collecting,
         });
@@ -2045,7 +2050,13 @@ const mixerTimer = setInterval(() => {
   });
 }, 5);
 
-let micAudibilityReceiverBaseline: ReturnType<typeof micRuntime.receiverStats> = null;
+function resetMicAudibility() {
+  const events = micAudibility.reset();
+  micAudibilityReceiverBaseline = null;
+  if (events.length > 0) {
+    console.warn('[mic-audibility]', JSON.stringify({ events, reason: 'capture-boundary' }));
+  }
+}
 
 function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
   // Receiver deltas are per window so a log line says what this second did,

@@ -1,5 +1,8 @@
 import { MicMediaPathRecovery } from './mic-media-path-recovery.js';
-import { decodeRetransmitRequest } from '../shared/retransmit-request.js';
+import {
+  MAX_RETRANSMIT_REQUEST_SEQUENCES,
+  decodeRetransmitRequest,
+} from '../shared/retransmit-request.js';
 
 const WEB_SOCKET_OPEN = 1;
 
@@ -66,7 +69,6 @@ export const DEFAULT_RETRANSMIT_BUFFER_PACKETS = 128;
  * deliberate verdict and is never retried here.
  */
 export const DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 15_000, 30_000]);
-const MAX_RETRANSMIT_SEQUENCES_PER_REQUEST = 64;
 const AUDIO_PACKET_MAGIC = 0x4c52;
 const AUDIO_PACKET_HEADER_BYTES = 24;
 
@@ -411,16 +413,21 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   expireDatagramBacklog(nowMs = Number(this.nowMs())) {
-    while (
-      this.datagramBacklog.length > 0
-      && nowMs - this.datagramBacklog[0].enqueuedAt > this.datagramBacklogMs
-    ) {
-      const expired = this.datagramBacklog.shift();
+    // Scan the whole queue: a repeat is placed at the front with its own
+    // enqueue time, so the head is not always the oldest entry.
+    if (this.datagramBacklog.length === 0) return;
+    const fresh = [];
+    for (const entry of this.datagramBacklog) {
+      if (nowMs - entry.enqueuedAt <= this.datagramBacklogMs) {
+        fresh.push(entry);
+        continue;
+      }
       // A repeat is not a capture packet: its loss is not congestion evidence.
-      if (expired.retransmit) continue;
+      if (entry.retransmit) continue;
       this.telemetry.webTransportBacklogExpired += 1;
       this.telemetry.webTransportCongestedRejects += 1;
     }
+    if (fresh.length !== this.datagramBacklog.length) this.datagramBacklog = fresh;
   }
 
   flushDatagramBacklogToFallback(backlog) {
@@ -1011,7 +1018,7 @@ export class PreferredAudioTransport extends AudioTransport {
     ) return 0;
 
     let answered = 0;
-    for (const value of message.sequences.slice(0, MAX_RETRANSMIT_SEQUENCES_PER_REQUEST)) {
+    for (const value of message.sequences.slice(0, MAX_RETRANSMIT_REQUEST_SEQUENCES)) {
       const sequence = nonNegativeSafeInteger(value);
       if (sequence === null || this.retransmitAnswered.has(sequence)) continue;
       const bytes = this.retransmitBuffer.get(sequence);

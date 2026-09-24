@@ -303,47 +303,57 @@ export class MicRuntime {
     if (!transport?.takeRetransmitRequests) return 0;
     const health = this.freshUplinkHealthPayload(nowMs);
     const capable = (health?.transport.retransmitBufferPackets ?? 0) > 0;
-    transport.setRetransmitRequestsEnabled?.(capable);
+    const generation = this.currentMediaGeneration;
+    const ticket = this.currentMediaTicket;
+    // Either path can carry a request. The direct session keeps working while
+    // the control socket is inside its reconnect grace, and vice versa. With
+    // neither, nothing may be requested or held for: a hole that cannot be
+    // repeated is ordinary loss.
+    const directPath = Boolean(
+      this.options.sendDirectMedia
+      && ticket
+      && this.options.directMediaConnected?.(ticket),
+    );
+    const socket = this.currentPublisher;
+    const controlPath = Boolean(socket && socket.readyState === WebSocket.OPEN);
+    const requestable = capable && generation !== null && (directPath || controlPath);
+    transport.setRetransmitRequestsEnabled?.(requestable);
     transport.setRetransmitHoldAllowed?.(
-      capable
+      requestable
       && mixHeadroomMs !== null
       && mixHeadroomMs > RETRANSMIT_MIN_MIX_HEADROOM_MS,
     );
 
     const requests = transport.takeRetransmitRequests();
-    const socket = this.currentPublisher;
-    if (
-      !capable
-      || requests.length === 0
-      || !socket
-      || socket.readyState !== WebSocket.OPEN
-      || this.currentMediaGeneration === null
-    ) return 0;
+    if (!requestable || requests.length === 0 || generation === null) return 0;
+
+    let sent = false;
     // The direct datagram path is the fast one: the repeat comes back on it.
     // The control socket carries the same request because datagrams are
     // unreliable; the page answers each sequence once, whichever lands first.
-    if (this.options.sendDirectMedia && this.currentMediaTicket) {
+    if (directPath && ticket) {
       for (let offset = 0; offset < requests.length; offset += MAX_RETRANSMIT_REQUEST_SEQUENCES) {
-        this.options.sendDirectMedia(
-          this.currentMediaTicket,
+        sent = this.options.sendDirectMedia!(
+          ticket,
           encodeRetransmitRequest(
-            this.currentMediaGeneration,
+            generation,
             requests.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES),
           ),
-        );
+        ) || sent;
       }
     }
-    try {
-      socket.send(JSON.stringify({
-        type: 'audio-retransmit-request',
-        version: 1,
-        captureGeneration: this.currentMediaGeneration,
-        sequences: requests,
-      }));
-    } catch {
-      return 0;
+    if (controlPath && socket) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'audio-retransmit-request',
+          version: 1,
+          captureGeneration: generation,
+          sequences: requests,
+        }));
+        sent = true;
+      } catch {}
     }
-    return requests.length;
+    return sent ? requests.length : 0;
   }
 
   retransmitStats() {

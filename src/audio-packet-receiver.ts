@@ -401,6 +401,14 @@ export class AudioPacketReceiver {
         0,
         this.retransmitCounters.requestedPackets - cancelled,
       );
+      // Promotion spends one request-budget token before MicRuntime knows
+      // whether any direct/control path actually accepted the request. A
+      // cancelled request was never sent, so return exactly that unused budget
+      // instead of penalising later real losses for a local send failure.
+      this.retransmitTokens = Math.min(
+        this.retransmitRequestsPerSecond,
+        this.retransmitTokens + cancelled,
+      );
     }
     return cancelled;
   }

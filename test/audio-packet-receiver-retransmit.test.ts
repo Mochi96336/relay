@@ -254,15 +254,22 @@ describe('AudioPacketReceiver retransmission', () => {
     assert.deepEqual(r.pendingRetransmitRequests(), [{ sequence: 3, attempt: 1 }]);
   });
 
-  it('spends the request budget on retries too', () => {
-    const { r, send } = receiver({ retransmitHoldMs: 2_000, retransmitRequestsPerSecond: 1 });
+  it('retries only from spare budget, keeping a reserve for fresh holes', () => {
+    // 5 requests/s: a fifth of it (one token) is kept back from retries.
+    const { r, send } = receiver({ retransmitHoldMs: 2_000, retransmitRequestsPerSecond: 5 });
     r.setRetransmitHoldAllowed(true);
     send(0, 0);
-    send(2, 1);
-    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 1);
-    r.flush(200);
-    assert.deepEqual(r.pendingRetransmitRequests(), [], 'no token left for a retry');
-    r.flush(1_100);
+    for (const sequence of [2, 4, 6, 8]) send(sequence, sequence / 2);
+    const first = r.pendingRetransmitRequests();
+    assert.deepEqual(first.map(({ sequence }) => sequence), [1, 3, 5, 7]);
+    r.retransmitRequestsSent(first, 5);
+
+    // One token left, plus refill: not enough above the reserve to retry.
+    r.flush(160);
+    assert.deepEqual(r.pendingRetransmitRequests(), []);
+    // Refill lifts the budget above the reserve for exactly one retry.
+    r.flush(260);
     assert.deepEqual(r.pendingRetransmitRequests(), [{ sequence: 1, attempt: 1 }]);
+    assert.equal(r.retransmitStats().retriedPackets, 1);
   });
 });

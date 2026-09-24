@@ -84,6 +84,8 @@ const MAX_RETRANSMIT_ATTEMPTS = 2;
 const DEFAULT_RETRANSMIT_RETRY_MS = 150;
 const MIN_RETRANSMIT_RETRY_MS = 40;
 const MAX_RETRANSMIT_RETRY_MS = 250;
+/** Share of the request budget kept back from retries for fresh holes. */
+const RETRANSMIT_RETRY_RESERVE_FRACTION = 0.2;
 /** Never retry sooner than a couple of mixer ticks past the expected repeat. */
 const MIN_RETRANSMIT_RETRY_MARGIN_MS = 20;
 
@@ -568,9 +570,12 @@ export class AudioPacketReceiver {
       this.retransmitRequested.set(candidate, { attempts: 0, queued: true, dispatchedAtMs: null });
     }
 
-    // A request whose repeat has not arrived after about two round trips was
-    // lost itself, or its repeat was. Ask once more while the hole still holds.
+    // A request whose repeat has not arrived within the retry timeout was
+    // lost itself, or its repeat was. Ask once more while the hole still holds,
+    // but only from spare budget: when loss is heavy enough to drain it, a
+    // first request for a fresh hole is the better use of each token.
     if (!this.retransmitRequestsEnabled) return;
+    const retryReserve = this.retransmitRequestsPerSecond * RETRANSMIT_RETRY_RESERVE_FRACTION;
     const retryMs = this.retransmitRetryMs();
     for (const state of this.retransmitRequested.values()) {
       if (
@@ -579,7 +584,7 @@ export class AudioPacketReceiver {
         || state.attempts >= MAX_RETRANSMIT_ATTEMPTS
         || nowMs - state.dispatchedAtMs < retryMs
       ) continue;
-      if (this.retransmitTokens < 1) break;
+      if (this.retransmitTokens < 1 + retryReserve) break;
       this.retransmitTokens -= 1;
       state.queued = true;
       this.retransmitCounters.retriedPackets += 1;

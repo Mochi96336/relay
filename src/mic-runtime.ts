@@ -337,10 +337,10 @@ export class MicRuntime {
       && nowMs - this.retransmitPathSeen.atMs <= RETRANSMIT_PATH_GRACE_MS;
     const requestable = capable && generation !== null && pathRecent;
     transport.setRetransmitRequestsEnabled?.(requestable);
+    // Holding for a late packet needs no path and no page history: only mix
+    // headroom. A page that cannot repeat still has packets that are merely late.
     transport.setRetransmitHoldAllowed?.(
-      requestable
-      && mixHeadroomMs !== null
-      && mixHeadroomMs > RETRANSMIT_MIN_MIX_HEADROOM_MS,
+      mixHeadroomMs !== null && mixHeadroomMs > RETRANSMIT_MIN_MIX_HEADROOM_MS,
     );
 
     // Requests stay queued in the receiver until one actually leaves: with no

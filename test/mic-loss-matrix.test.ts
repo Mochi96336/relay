@@ -369,6 +369,19 @@ describe('Mic loss matrix (virtual clock, real page and Relay transports)', () =
     assert.equal(withRepair.requested, 0, 'jitter alone is not loss');
   });
 
+  it('waits out heavy jitter instead of discarding late packets', async () => {
+    const { without, withRepair } = await compare({
+      name: 'heavy jitter, no loss',
+      seconds: 8,
+      uplink: clean(30, 150),
+      downlink: clean(30, 150),
+    });
+    // Up to 150 ms of queueing reorders far past the 40 ms reorder deadline,
+    // but well inside the live buffer: even a page with no history loses nothing.
+    assert.equal(without.missing, 0, `late packets discarded: ${JSON.stringify(without.missed.slice(0, 10))}`);
+    assert.equal(withRepair.missing, 0);
+  });
+
   for (const rate of [0.02, 0.05, 0.1]) {
     it(`repairs ${rate * 100}% random loss at an 80 ms round trip`, async () => {
       const { without, withRepair } = await compare({

@@ -64,7 +64,7 @@ async function statusz(server: Awaited<ReturnType<typeof startRelay>>) {
   return fetch(server.httpUrl('/statusz')).then((response) => response.json()) as Promise<any>;
 }
 
-async function runLoss(retransmitBufferPackets: number | undefined) {
+async function runLoss(retransmitBufferPackets: number | undefined, tailPackets = 10) {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
     RELAY_HEARTBEAT_MS: '60000',
@@ -111,7 +111,7 @@ async function runLoss(retransmitBufferPackets: number | undefined) {
 
     // Answer exactly as the page would: the original bytes, late.
     if (requests.length > 0) publisher.sendBinary(packet(generation, lost));
-    for (; sequence < lost + 10; sequence += 1) {
+    for (; sequence < lost + tailPackets; sequence += 1) {
       publisher.sendBinary(packet(generation, sequence));
       await untilDue(sequence + 1);
     }
@@ -144,8 +144,10 @@ test('Relay asks a capable page to repeat a lost Mic packet and splices it back 
   assert.deepEqual(status.audio.micAudibility.activeEpisodes, []);
 });
 
-test('Relay never asks, or waits, for a page that keeps no retransmission history', async () => {
-  const { requests, status } = await runLoss(undefined);
+test('Relay never asks a page that keeps no retransmission history, and gives its hole up in time', async () => {
+  // The hole still waits for a late arrival while the mix can afford it, so
+  // keep streaming well past the hold before looking.
+  const { requests, status } = await runLoss(undefined, 40);
 
   assert.equal(requests.length, 0);
   assert.equal(status.audio.receiverRetransmit.requestedPackets, 0);

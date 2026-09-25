@@ -96,6 +96,9 @@ test('transport boundaries reset both positioned continuity and the AudioWorklet
     'abandoning a transport connection must invalidate its epoch and forward the audible reset policy');
   assert.match(closeSection, /transportEnabled = false;[\s\S]*abandonTransportConnection\(audioRendering\(\)\)/,
     'an audible explicit transport close must discard queued PCM with the worklet de-click path');
-  assert.match(connectSection, /resetPlaybackTemporalState\(\)[\s\S]*sendParticipantAuthentication\(next\)/,
-    'a quiet reconnect anchor must still use a plain temporal reset before registration');
+  assert.match(
+    connectSection,
+    /resetPlaybackTemporalState\(audioRendering\(\)\)[\s\S]*sendParticipantAuthentication\(next\)/,
+    'a reconnect can land while the old stream is still audible, so its reset de-clicks while rendering',
+  );
 });

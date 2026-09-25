@@ -316,6 +316,68 @@ test('real Chromium listener recovers monitor reconnect, proven starvation and A
   }
 });
 
+test('real Chromium listener de-clicks the playback reset when a monitor reconnect lands', async () => {
+  test.setTimeout(30_000);
+  const relay = await startRelay();
+  const mic = await startDeterministicMic(relay);
+  const browser = await chromium.launch({
+    channel: 'chromium',
+    args: ['--autoplay-policy=no-user-gesture-required'],
+  });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  // Record every reset production Listen asks of its playback worklet, with the
+  // AudioContext state at that moment. Whether the reconnect finds the old
+  // stream still queued depends on timing; the reset it sends does not.
+  await context.addInitScript(() => {
+    const resets = [];
+    window.__relayTestPlaybackResets = resets;
+    const NativeAudioWorkletNode = window.AudioWorkletNode;
+    window.AudioWorkletNode = class extends NativeAudioWorkletNode {
+      constructor(audioContext, name, options) {
+        super(audioContext, name, options);
+        if (name !== 'playback-processor') return;
+        const port = this.port;
+        const post = port.postMessage.bind(port);
+        port.postMessage = (message, transfer) => {
+          if (message?.type === 'reset') {
+            resets.push({ deClick: message.deClick === true, contextState: audioContext.state });
+          }
+          return transfer === undefined ? post(message) : post(message, transfer);
+        };
+      }
+    };
+  });
+  const page = await context.newPage();
+
+  try {
+    await openListener(page, relay, { debug: true });
+    await page.waitForFunction(() => window.__relayListenerDiagnostics?.snapshot?.()?.evidence === 'internally-healthy');
+
+    const beforeHealth = await latestHealthObservedAt(page);
+    const before = await page.evaluate(() => ({
+      resets: window.__relayTestPlaybackResets.length,
+      connections: window.__relayListenerDiagnostics.snapshot().monitorConnectionCount,
+    }));
+    await page.evaluate(() => window.__relayListenerDiagnostics.faults.disconnectMonitor());
+    await page.waitForFunction((count) => (
+      window.__relayListenerDiagnostics.snapshot().monitorConnectionCount > count
+    ), before.connections, { timeout: 4_000 });
+    await waitForHealthyPlayback(page, { afterObservedAt: beforeHealth });
+
+    const resets = await page.evaluate(
+      (from) => window.__relayTestPlaybackResets.slice(from),
+      before.resets,
+    );
+    const audible = resets.filter((reset) => reset.contextState === 'running');
+    expect(audible.length, 'the reconnect resets playback while audio renders').toBeGreaterThan(0);
+    expect(audible.filter((reset) => !reset.deClick), 'no audible reset cuts the waveform to zero').toEqual([]);
+  } finally {
+    await browser.close();
+    mic.close();
+    await relay.stop();
+  }
+});
+
 test('iOS foreground lifecycle restarts the real AudioDestination once and returns to healthy playback', async () => {
   test.setTimeout(45_000);
   const relay = await startRelay();

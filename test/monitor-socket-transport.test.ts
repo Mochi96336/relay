@@ -107,3 +107,40 @@ test('binary backlog drops are transport-owned and counted per destination', () 
   assert.equal(congestedA.sent.length, 1, 'text control/status traffic is not PCM-backpressure dropped');
   assert.equal(transport.droppedFrames, 2);
 });
+
+test('recent drops describe the listeners behind now, not the lifetime total', () => {
+  let nowMs = 0;
+  const slow = fakeSocket({ bufferedAmount: 100 });
+  const clear = fakeSocket({ bufferedAmount: 0 });
+  const transport = createMonitorSocketTransport(fakeServer(slow.socket, clear.socket), {
+    backlogBytes: 100,
+    nowMs: () => nowMs,
+  });
+
+  transport.broadcast(Buffer.alloc(8), true, { generation: 1, firstSampleIndex: 0 });
+  nowMs = 20;
+  transport.broadcast(Buffer.alloc(8), true, { generation: 1, firstSampleIndex: 960 });
+  assert.deepEqual(transport.recentDrops(), { frames: 2, listeners: 1, windowMs: 10_000 });
+
+  // The slow phone catches up; its drops age out of the window.
+  (slow.socket as { bufferedAmount: number }).bufferedAmount = 0;
+  nowMs = 10_019;
+  transport.broadcast(Buffer.alloc(8), true, { generation: 1, firstSampleIndex: 1_920 });
+  assert.equal(transport.recentDrops().frames, 1);
+  nowMs = 10_020;
+  assert.deepEqual(transport.recentDrops(), { frames: 0, listeners: 0, windowMs: 10_000 });
+  assert.equal(transport.droppedFrames, 2, 'the lifetime total is unchanged');
+});
+
+test('a listener that has left is not reported as behind', () => {
+  const slow = fakeSocket({ bufferedAmount: 100 });
+  const transport = createMonitorSocketTransport(fakeServer(slow.socket), {
+    backlogBytes: 100,
+    nowMs: () => 0,
+  });
+  transport.broadcast(Buffer.alloc(8), true, { generation: 1, firstSampleIndex: 0 });
+  assert.equal(transport.recentDrops().listeners, 1);
+
+  (slow.socket as { readyState: number }).readyState = WebSocket.CLOSED;
+  assert.deepEqual(transport.recentDrops(), { frames: 1, listeners: 0, windowMs: 10_000 });
+});

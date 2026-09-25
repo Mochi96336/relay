@@ -1480,6 +1480,7 @@ function micUplinkHealthPayload(nowMs = performance.now()) {
 
 function mixHealthPayload() {
   const health = session.health();
+  const monitorDrops = monitorTransport.recentDrops();
   return {
     type: 'mix-health',
     active: session.active,
@@ -1487,6 +1488,8 @@ function mixHealthPayload() {
     recommendedMicGainDb: recommendedMicGainDb(health.micPeakDbfs),
     micGainDb: session.micGainDb,
     monitorDroppedFrames: monitorTransport.droppedFrames,
+    monitorRecentDroppedFrames: monitorDrops.frames,
+    monitorRecentDroppingListeners: monitorDrops.listeners,
     prebufferMs: session.prebufferMs,
     micMediaPath: micMediaPath(),
     micUplink: micUplinkHealthPayload(),
@@ -1519,6 +1522,7 @@ function remoteStatusPayload() {
   const alignment = session.alignment;
   const snapshot = participants.snapshot();
   const mixHealth = session.health();
+  const monitorDrops = monitorTransport.recentDrops(nowMs);
 
   const readiness = readinessPayload(nowMs);
   const health = deriveRemoteStatusHealth(readiness);
@@ -1564,6 +1568,8 @@ function remoteStatusPayload() {
       active: session.active,
       ...mixHealth,
       monitorDroppedFrames: monitorTransport.droppedFrames,
+      monitorRecentDroppedFrames: monitorDrops.frames,
+      monitorRecentDroppingListeners: monitorDrops.listeners,
     },
     audio: {
       micMediaPath: micMediaPath(),

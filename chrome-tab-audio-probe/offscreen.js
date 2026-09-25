@@ -45,6 +45,22 @@ function framePcm(pcm, generation, firstSampleIndex) {
   return frame;
 }
 
+/**
+ * Socket backlog the song may build before chunks are dropped, as time. This
+ * used to be 512 KiB: at 48 kHz mono PCM16 that is 2.7 s of stale song queued
+ * ahead of live audio. Relay's other PCM uplinks (the Mic page and the robot's
+ * stdin bridge) stop at 200 ms and leave a positioned hole instead.
+ */
+const REALTIME_BACKLOG_MS = 200;
+
+function realtimeFrameWouldExceedBacklog(bufferedAmount, frameBytes, sampleRate) {
+  const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 48_000;
+  // Always admit one whole frame, so an idle socket never refuses everything.
+  const budgetBytes = Math.max(frameBytes, Math.round((rate * 2 * REALTIME_BACKLOG_MS) / 1000));
+  const queued = Number.isFinite(bufferedAmount) ? Math.max(0, bufferedAmount) : 0;
+  return queued + frameBytes > budgetBytes;
+}
+
 function relayWsUrl(pageUrl) {
   const url = new URL(pageUrl);
   const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -238,7 +254,11 @@ function handlePcm(message) {
 
   if (!relayReady || relaySocket?.readyState !== WebSocket.OPEN) return;
 
-  if (relaySocket.bufferedAmount >= 512 * 1024) {
+  if (realtimeFrameWouldExceedBacklog(
+    relaySocket.bufferedAmount,
+    FRAME_HEADER_BYTES + buffer.byteLength,
+    audioContext?.sampleRate,
+  )) {
     droppedChunks += 1;
     const now = performance.now();
     if (now - lastDropWarningAt > 2_000) {

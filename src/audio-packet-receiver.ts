@@ -120,7 +120,14 @@ type ContinuitySnapshot = {
   updatedAtWallMs: number;
 };
 
-const continuitySnapshots = new Map<string, ContinuitySnapshot>();
+/**
+ * The receiver currently carrying each source + capture generation, for a
+ * replacement receiver to continue from. Only a replacement ever reads that
+ * state, so it is copied when one is constructed: copying it after every
+ * packet and every mixer flush, as this used to, was nearly all of the
+ * receiver's work.
+ */
+const continuityOwners = new Map<string, AudioPacketReceiver>();
 
 function continuityKey(source: AudioPacketSource, generation: number) {
   return `${source}:${generation >>> 0}`;
@@ -142,26 +149,14 @@ function uint32(value: number) {
   return Number.isInteger(value) && value >= 0 && value <= 0xffff_ffff;
 }
 
-function pruneContinuitySnapshots(wallNowMs = Date.now()) {
-  for (const [key, snapshot] of continuitySnapshots) {
-    if (wallNowMs - snapshot.updatedAtWallMs > CONTINUITY_TTL_MS) {
-      continuitySnapshots.delete(key);
-    }
-  }
-  while (continuitySnapshots.size > MAX_CONTINUITY_SNAPSHOTS) {
-    const oldest = continuitySnapshots.keys().next().value as string | undefined;
-    if (!oldest) break;
-    continuitySnapshots.delete(oldest);
-  }
-}
-
 /**
  * Converts unordered media packets into an ordered, bounded stream without
  * assigning them a new time. Missing sequences are transport evidence only;
  * the next packet's `firstSampleIndex` is what leaves the real timeline hole.
  *
- * Receiver state is snapshotted by source + capture generation for a short
- * reconnect window. A replacement receiver adopts that state only when its
+ * A replacement receiver for the same source + capture generation, created
+ * within a short reconnect window of the latest one's last activity, copies
+ * that receiver's state and adopts it only when its
  * first valid packet proves capture continuation (non-zero sequence/time and a
  * forward sequence within the configured bound). A fresh capture beginning at
  * sequence 0 / sample 0 always resets the snapshot, so a coincidental generation
@@ -211,6 +206,9 @@ export class AudioPacketReceiver {
   };
   private continuityCandidate: ContinuitySnapshot | null = null;
   private continuityResolved = false;
+  private readonly continuityKey: string;
+  /** Wall time this receiver last changed the state a replacement would adopt. */
+  private continuityUpdatedAtWallMs = -Infinity;
   private resyncCandidate: PendingPacket | null = null;
   readonly retransmitHoldMs: number;
   readonly retransmitWindowPackets: number;
@@ -294,12 +292,48 @@ export class AudioPacketReceiver {
     // Start with one second of budget so the first isolated losses are covered.
     this.retransmitTokens = retransmitRequestsPerSecond;
 
+    this.continuityKey = continuityKey(this.source, this.generation);
     const wallNowMs = Date.now();
-    pruneContinuitySnapshots(wallNowMs);
-    const candidate = continuitySnapshots.get(continuityKey(this.source, this.generation));
-    if (candidate && wallNowMs - candidate.updatedAtWallMs <= CONTINUITY_TTL_MS) {
-      this.continuityCandidate = candidate;
+    AudioPacketReceiver.pruneContinuityOwners(wallNowMs);
+    const owner = continuityOwners.get(this.continuityKey);
+    if (owner && wallNowMs - owner.continuityUpdatedAtWallMs <= CONTINUITY_TTL_MS) {
+      this.continuityCandidate = owner.continuitySnapshot();
     }
+  }
+
+  private static pruneContinuityOwners(wallNowMs: number) {
+    for (const [key, owner] of continuityOwners) {
+      if (wallNowMs - owner.continuityUpdatedAtWallMs > CONTINUITY_TTL_MS) {
+        continuityOwners.delete(key);
+      }
+    }
+    while (continuityOwners.size > MAX_CONTINUITY_SNAPSHOTS) {
+      let leastRecentKey: string | null = null;
+      let leastRecentAtMs = Infinity;
+      for (const [key, owner] of continuityOwners) {
+        if (owner.continuityUpdatedAtWallMs < leastRecentAtMs) {
+          leastRecentAtMs = owner.continuityUpdatedAtWallMs;
+          leastRecentKey = key;
+        }
+      }
+      if (leastRecentKey === null) break;
+      continuityOwners.delete(leastRecentKey);
+    }
+  }
+
+  /** The state a replacement receiver adopts, copied so it cannot be shared. */
+  private continuitySnapshot(): ContinuitySnapshot {
+    return {
+      expectedSequence: this.expectedSequence!,
+      lastEmittedEndSampleIndex: this.lastEmittedEndSampleIndex,
+      pending: [...this.pending.entries()].map(([sequence, pending]) => [sequence, {
+        packet: pending.packet,
+        receivedAtMs: pending.receivedAtMs,
+      }]),
+      finalized: [...this.finalized.entries()],
+      counters: { ...this.counters },
+      updatedAtWallMs: this.continuityUpdatedAtWallMs,
+    };
   }
 
   receive(buffer: Buffer, nowMs = Date.now()): AudioPacket[] {
@@ -649,7 +683,7 @@ export class AudioPacketReceiver {
       this.counters.wrongGenerationPackets += currentWrongGenerationPackets;
       this.counters.wrongSourcePackets += currentWrongSourcePackets;
     } else {
-      continuitySnapshots.delete(continuityKey(this.source, this.generation));
+      continuityOwners.delete(this.continuityKey);
       if (this.expectedSequence === null) this.expectedSequence = packet.sequence;
     }
 
@@ -696,22 +730,14 @@ export class AudioPacketReceiver {
     return [];
   }
 
+  /** Makes this receiver the one a replacement for its capture continues from. */
   private rememberContinuity() {
     if (this.expectedSequence === null) return;
-    const key = continuityKey(this.source, this.generation);
-    continuitySnapshots.delete(key);
-    continuitySnapshots.set(key, {
-      expectedSequence: this.expectedSequence,
-      lastEmittedEndSampleIndex: this.lastEmittedEndSampleIndex,
-      pending: [...this.pending.entries()].map(([sequence, pending]) => [sequence, {
-        packet: pending.packet,
-        receivedAtMs: pending.receivedAtMs,
-      }]),
-      finalized: [...this.finalized.entries()],
-      counters: { ...this.counters },
-      updatedAtWallMs: Date.now(),
-    });
-    pruneContinuitySnapshots();
+    this.continuityUpdatedAtWallMs = Date.now();
+    if (continuityOwners.get(this.continuityKey) === this) return;
+    continuityOwners.delete(this.continuityKey);
+    continuityOwners.set(this.continuityKey, this);
+    AudioPacketReceiver.pruneContinuityOwners(this.continuityUpdatedAtWallMs);
   }
 
   private enforceWindow(newestSequence: number, output: AudioPacket[]) {

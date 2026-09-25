@@ -225,7 +225,12 @@ const MIC_CONCEALMENT_JOIN_GUARD_MS = 8;
  */
 export const LIMITER_THRESHOLD_DBFS = -1;
 const LIMITER_THRESHOLD = 10 ** (LIMITER_THRESHOLD_DBFS / 20);
-const LIMITER_ATTACK_MS = 1.5;
+// Five attack time constants fit in the look-ahead, so the gain has reached
+// within 1% of its target when the detected peak arrives. At 1.5 ms only two
+// fitted: a plosive after quiet singing kept about 14% of the reduction still
+// to come, which at the default gain is about a third above the threshold and past
+// the clamp. Still a millisecond-scale ramp, so the reduction does not click.
+const LIMITER_ATTACK_MS = 0.6;
 const LIMITER_RELEASE_MS = 150;
 const LIMITER_LOOKAHEAD_MS = 3;
 

@@ -811,6 +811,38 @@ describe('AudioSession microphone limiter', () => {
     assert.ok(peakSampleIndex(mixed).value < 32_767, 'nothing is left sitting on the rail');
   });
 
+  test('a plosive after quiet singing is held under the threshold, not clipped', () => {
+    // Quiet singing lets the gain recover; a "p" or a clap then rises in a
+    // fraction of a millisecond. The detector sees it 3 ms early, so the gain
+    // must converge within those 3 ms - a 1.5 ms attack left a quarter of the
+    // reduction undone and the peak reached the clamp at the default gain.
+    for (const rawPeak of [6_500, 13_000]) {
+      // Production's live bus with only the Mic sounding, at the default gain.
+      const session = makeSession({ backingGain: 0.65 });
+      session.setMicGainDb(24);
+      session.setMicExpected(true);
+      session.setBackingExpected(false);
+      session.start(0);
+      const samples = new Array(RATE * 2);
+      for (let i = 0; i < samples.length; i += 1) {
+        const t = i / RATE;
+        const since = t % 0.4 - 0.3;
+        const burst = since > 0
+          ? Math.min(1, since / 0.000_3) * Math.exp(-since / 0.01) * Math.sin(2 * Math.PI * 900 * since)
+          : 0;
+        samples[i] = Math.round(130 * Math.sin(2 * Math.PI * 165 * t) + rawPeak * burst);
+      }
+      session.ingestMic(frame(0, pcmOf(samples)), RATE, 0);
+      const mixed = drainAll(session, 1_900);
+
+      assert.equal(session.health().clippedSamples, 0, `a ${rawPeak} plosive reached the clamp`);
+      assert.ok(
+        peakSampleIndex(mixed).value / 32_768 < 0.95,
+        `a ${rawPeak} plosive overshot the -1 dBFS threshold to ${(peakSampleIndex(mixed).value / 32_768).toFixed(3)}`,
+      );
+    }
+  });
+
   test('the output level stops depending on where the gain knob is', () => {
     // The point of the limiter: above the threshold, more gain buys more
     // limiting rather than more distortion, so the knob stops being critical.

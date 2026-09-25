@@ -52,4 +52,16 @@ describe('publisher reconnect backoff', () => {
     assert.match(app, /adoptSocket\(ws\);\s*publisherReconnectBackoff\.noteConnected\(/);
     assert.match(app, /if \(socket !== ws\) return;\s*publisherReconnectBackoff\.noteClosed\(/);
   });
+
+  it('drives the Listen monitor socket reconnect too', () => {
+    const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'utf8');
+    const schedule = listen.slice(
+      listen.indexOf('function scheduleReconnect'),
+      listen.indexOf('function handleMessage'),
+    );
+    assert.match(schedule, /reconnectBackoff\.nextDelayMs\(\)/);
+    assert.doesNotMatch(listen, /RECONNECT_MS/, 'no fixed one-second wait remains');
+    assert.match(listen, /socket = next;[\s\S]{0,120}previous\.close\(\); \} catch \{\}\s*\}\s*reconnectBackoff\.noteConnected\(/);
+    assert.match(listen, /socket = null;\s*reconnectBackoff\.noteClosed\(/);
+  });
 });

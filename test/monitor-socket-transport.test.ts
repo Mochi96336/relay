@@ -73,6 +73,26 @@ test('positioned monitor gets framed PCM while legacy monitor stays raw', () => 
   assert.deepEqual(legacy.sent[0], { payload: pcm, options: { binary: true } });
 });
 
+test('positioned monitors share one framed packet per broadcast', () => {
+  const first = fakeSocket({ monitorPacketVersion: 1 });
+  const second = fakeSocket({ monitorPacketVersion: 1 });
+  const third = fakeSocket({ monitorPacketVersion: 1 });
+  const transport = createMonitorSocketTransport(
+    fakeServer(first.socket, second.socket, third.socket),
+    { backlogBytes: 10_000 },
+  );
+
+  transport.broadcast(Buffer.from([1, 0, 2, 0]), true, { generation: 7, firstSampleIndex: 960 });
+  transport.broadcast(Buffer.from([3, 0, 4, 0]), true, { generation: 7, firstSampleIndex: 962 });
+
+  const [firstA, firstB] = first.sent.map((sent) => sent.payload);
+  assert.equal(second.sent[0].payload, firstA, 'framed once, not once per listener');
+  assert.equal(third.sent[0].payload, firstA);
+  assert.notEqual(firstB, firstA, 'each broadcast frames its own packet');
+  assert.equal(second.sent[1].payload, firstB);
+  assert.equal(decodePcmFrame(firstB as Buffer).firstSampleIndex, 962);
+});
+
 test('positioned monitor never silently receives unpositioned binary PCM', () => {
   const framed = fakeSocket({ monitorPacketVersion: 1 });
   const legacy = fakeSocket();

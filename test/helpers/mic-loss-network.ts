@@ -223,6 +223,10 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
   assert.equal(reportHealth(0), true);
 
   const firstSequence = scenario.firstSequence ?? 0;
+  // Numbered as public/app.js numbers them: a packet spends its sequence only
+  // when the transport sent it or kept it for repair. A harness that spent one
+  // per captured packet proved repair for holes the real page never exposed.
+  let nextSequence = firstSequence;
   const total = Math.round((scenario.seconds * 1_000) / PACKET_MS);
   const playoutAt = (index: number) => uplink.delayMs + index * PACKET_MS + PLAYOUT_DELAY_MS;
   const heardAt = new Map<number, number>();
@@ -274,7 +278,7 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
     // Page: capture one packet every 10 ms.
     if (nowMs % PACKET_MS === 0 && nowMs / PACKET_MS < total) {
       const index = nowMs / PACKET_MS;
-      const sequence = (firstSequence + index) >>> 0;
+      const sequence = nextSequence >>> 0;
       const firstSampleIndex = (firstSequence + index) * packetSamples;
       const bytes = encodeAudioPacket({
         source: 'mic',
@@ -285,16 +289,15 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
           ?? Buffer.alloc(packetSamples * 2, index & 0xff),
       });
       const packetBytes = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).slice();
+      const result = page.send(packetBytes.buffer);
+      if (result.sent || result.retained) nextSequence += 1;
       if (index < WARMUP_PACKETS) {
         // The warm-up is delivered untouched so every run starts from a live mix.
-        page.send(packetBytes.buffer);
         originals.add(String(sequence));
         for (const sent of pageSocket.outbox) {
           uplinkQueue.push({ at: nowMs + uplink.delayMs, bytes: Buffer.from(sent), path: mediaPath() });
         }
         pageSocket.outbox.length = 0;
-      } else {
-        page.send(packetBytes.buffer);
       }
     }
 

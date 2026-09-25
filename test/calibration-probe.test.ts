@@ -160,4 +160,75 @@ describe('calibration-probe', () => {
     const tail = reference.subarray(reference.length - 20);
     assert.ok(tail.every((sample) => Math.abs(sample) < 50), 'fully decayed by the end of the window');
   });
+  test('locates exactly what the per-sample detector located, at every tested rate', () => {
+    // The detector's original form, evaluating each note's phase per sample.
+    // The table-driven detector must reproduce it bit for bit.
+    const frameMs = 5;
+    const features = (samples: Int16Array, sampleRate: number) => {
+      const frameSamples = Math.max(1, Math.round((sampleRate * frameMs) / 1000));
+      const frameCount = Math.floor(samples.length / frameSamples);
+      const output = new Float64Array(frameCount * PROBE_NOTES.length);
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        for (let channel = 0; channel < PROBE_NOTES.length; channel += 1) {
+          let sumCos = 0;
+          let sumSin = 0;
+          for (let i = 0; i < frameSamples; i += 1) {
+            const value = samples[frame * frameSamples + i] / 32768;
+            const phase = (2 * Math.PI * PROBE_NOTES[channel].frequencyHz * i) / sampleRate;
+            sumCos += value * Math.cos(phase);
+            sumSin += value * Math.sin(phase);
+          }
+          output[frame * PROBE_NOTES.length + channel] = Math.hypot(sumCos, sumSin) / frameSamples;
+        }
+      }
+      return output;
+    };
+    const perSample = (window: Int16Array, sampleRate: number) => {
+      const mic = features(window, sampleRate);
+      const ref = features(generateProbeReference(sampleRate), sampleRate);
+      const channels = PROBE_NOTES.length;
+      let bestFrame = 0;
+      let bestCorrelation = -1;
+      for (let start = 0; start <= mic.length / channels - ref.length / channels; start += 1) {
+        let sumA = 0;
+        let sumB = 0;
+        for (let i = 0; i < ref.length; i += 1) {
+          sumA += mic[start * channels + i];
+          sumB += ref[i];
+        }
+        const meanA = sumA / ref.length;
+        const meanB = sumB / ref.length;
+        let covariance = 0;
+        let varianceA = 0;
+        let varianceB = 0;
+        for (let i = 0; i < ref.length; i += 1) {
+          const x = mic[start * channels + i] - meanA;
+          const y = ref[i] - meanB;
+          covariance += x * y;
+          varianceA += x * x;
+          varianceB += y * y;
+        }
+        const denominator = Math.sqrt(varianceA * varianceB);
+        const correlation = denominator > 1e-12 ? covariance / denominator : -1;
+        if (correlation > bestCorrelation) {
+          bestCorrelation = correlation;
+          bestFrame = start;
+        }
+      }
+      const frameSamples = Math.max(1, Math.round((sampleRate * frameMs) / 1000));
+      return { offsetSamples: bestFrame * frameSamples, correlation: bestCorrelation };
+    };
+
+    for (const sampleRate of [48_000, 44_100]) {
+      for (const seed of [3, 5]) {
+        const windowSamples = Math.round(sampleRate * 1.5);
+        const window = noise(windowSamples, 0.05, seed);
+        const probe = browserProbe(sampleRate);
+        const at = Math.round(sampleRate * 0.4) + seed * 37;
+        for (let i = 0; i < probe.length; i += 1) window[at + i] += probe[i];
+        const samples = toInt16(window);
+        assert.deepEqual(locateProbe(samples, sampleRate), perSample(samples, sampleRate));
+      }
+    }
+  });
 });

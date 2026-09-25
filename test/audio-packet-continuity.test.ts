@@ -51,3 +51,35 @@ test('malformed replacement traffic cannot erase same-capture continuity before 
   assert.equal(stats.lostPackets, 0);
   assert.equal(stats.replayPackets, 0);
 });
+
+test('a replacement continues from the latest state, including a packet still held for its hole', () => {
+  const generation = 0x7f02;
+  const first = receiver(generation);
+  assert.deepEqual(first.receive(packet(generation, 0, 0), 1_000).map((item) => item.sequence), [0]);
+  // Sequence 1 is missing: 2 waits behind it, and no flush releases it yet.
+  assert.deepEqual(first.receive(packet(generation, 2, 4), 1_001), []);
+  assert.deepEqual(first.flush(1_005), []);
+
+  const replacement = receiver(generation);
+  assert.deepEqual(
+    replacement.receive(packet(generation, 1, 2), 1_010).map((item) => item.sequence),
+    [1, 2],
+    'the held packet crossed the reconnect with its hole',
+  );
+  assert.equal(replacement.stats().receivedPackets, 3);
+});
+
+test('a receiver idle past the reconnect window is not continued', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  const generation = 0x7f03;
+  const first = receiver(generation);
+  assert.deepEqual(first.receive(packet(generation, 0, 0), 1_000).map((item) => item.sequence), [0]);
+  assert.deepEqual(first.receive(packet(generation, 1, 2), 1_001).map((item) => item.sequence), [1]);
+
+  t.mock.timers.tick(15_001);
+  const late = receiver(generation);
+  // Not adopted: the explicit initial sequence 0 stands, so 5 is a reorder
+  // hole rather than the continuation of 0-1.
+  assert.deepEqual(late.receive(packet(generation, 5, 10), 1_100), []);
+  assert.equal(late.stats().receivedPackets, 1);
+});

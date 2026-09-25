@@ -722,10 +722,13 @@ function handleCaptureWorkletMessage(event, graph) {
       }
     }
 
-    if (sendResult.sent) {
+    // A packet kept for repair spends its sequence even though it did not go
+    // out: numbering the next packet the same would hide the hole from Relay,
+    // which then never asks for the audio the transport kept for it.
+    if (sendResult.sent || sendResult.retained) {
       capturePacketSequence = (capturePacketSequence + 1) >>> 0;
-      continue;
     }
+    if (sendResult.sent) continue;
 
     if (
       sendResult.reason === 'disconnected'

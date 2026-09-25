@@ -32,8 +32,9 @@ export type AudioPacketReceiverOptions = {
   retransmitWindowPackets?: number;
   /**
    * Sustained repeat requests per second. Heavy loss usually means a congested
-   * uplink, and asking it to carry every lost packet twice makes that worse;
-   * beyond this budget a hole is ordinary loss and never holds the stream.
+   * uplink, and asking it to carry every lost packet twice makes that worse.
+   * Beyond this budget a hole waits for the next token, longest-missing first,
+   * and is ordinary loss if none comes while the mix can still hold it.
    */
   retransmitRequestsPerSecond?: number;
   /**
@@ -50,7 +51,7 @@ export type AudioPacketRetransmitStats = {
   requestedPackets: number;
   /** Requested sequences that arrived in time and were emitted in order. */
   recoveredPackets: number;
-  /** Missing sequences not requested because the request budget was spent. */
+  /** Missing sequences that had to wait for request budget (some later got it). */
   budgetDeniedPackets: number;
   /** Requests sent again because the first repeat never arrived. */
   retriedPackets: number;
@@ -221,8 +222,11 @@ export class AudioPacketReceiver {
    * vanishes between noticing a hole and sending the request must not lose it.
    */
   private readonly retransmitRequested = new Map<number, RetransmitRequestState>();
-  /** Missing sequences not yet old enough to request, by when they were noticed. */
-  private readonly retransmitCandidates = new Map<number, number>();
+  /**
+   * Missing sequences not requested yet, in the order they were noticed:
+   * too young to request, or waiting for request budget.
+   */
+  private readonly retransmitCandidates = new Map<number, { noticedAtMs: number; denied: boolean }>();
   readonly retransmitRequestDelayMs: number;
   private readonly retransmitCounters = {
     requestedPackets: 0,
@@ -533,7 +537,7 @@ export class AudioPacketReceiver {
         || this.retransmitRequested.has(candidate)
         || this.retransmitCandidates.has(candidate)
       ) continue;
-      this.retransmitCandidates.set(candidate, nowMs);
+      this.retransmitCandidates.set(candidate, { noticedAtMs: nowMs, denied: false });
     }
     // Candidates and requests normally retire as the frontier emits or
     // abandons them. Bound the bookkeeping anyway so no sender behaviour can
@@ -559,18 +563,29 @@ export class AudioPacketReceiver {
     }
     this.retransmitTokensAtMs = nowMs;
 
-    for (const [candidate, noticedAtMs] of this.retransmitCandidates) {
+    // Oldest first. When the budget runs short, a hole keeps its place instead
+    // of being dropped: a packet that was only reordered fills its hole by
+    // itself within the jitter spread, so the holes still waiting for the next
+    // token are the ones really lost. On a jittery path this spends the budget
+    // on real loss rather than on the reordering that happens to be youngest.
+    for (const [candidate, entry] of this.retransmitCandidates) {
       if (this.pending.has(candidate)) {
         this.retransmitCandidates.delete(candidate);
         continue;
       }
-      if (nowMs - noticedAtMs < this.retransmitRequestDelayMs) continue;
-      this.retransmitCandidates.delete(candidate);
-      if (!this.retransmitRequestsEnabled) continue;
-      if (this.retransmitTokens < 1) {
-        this.retransmitCounters.budgetDeniedPackets += 1;
+      if (nowMs - entry.noticedAtMs < this.retransmitRequestDelayMs) continue;
+      if (!this.retransmitRequestsEnabled) {
+        this.retransmitCandidates.delete(candidate);
         continue;
       }
+      if (this.retransmitTokens < 1) {
+        if (!entry.denied) {
+          entry.denied = true;
+          this.retransmitCounters.budgetDeniedPackets += 1;
+        }
+        continue;
+      }
+      this.retransmitCandidates.delete(candidate);
       this.retransmitTokens -= 1;
       this.retransmitRequested.set(candidate, { attempts: 0, queued: true, dispatchedAtMs: null });
     }

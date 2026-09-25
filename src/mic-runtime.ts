@@ -356,21 +356,22 @@ export class MicRuntime {
       byAttempt.set(attempt, sequences);
     }
 
-    let sent = false;
+    // Track delivery per sequence: one batch that went out must not mark
+    // another whose send failed as asked for. Those stay queued.
+    const delivered = new Set<number>();
     for (const [attempt, sequences] of byAttempt) {
       // The direct datagram path is the fast one: the repeat comes back on it.
       // The control socket carries the same request because datagrams are
       // unreliable; the page answers each attempt once, whichever lands first.
       if (directPath && ticket) {
         for (let offset = 0; offset < sequences.length; offset += MAX_RETRANSMIT_REQUEST_SEQUENCES) {
-          sent = this.options.sendDirectMedia!(
+          const batch = sequences.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES);
+          if (this.options.sendDirectMedia!(
             ticket,
-            encodeRetransmitRequest(
-              generation,
-              sequences.slice(offset, offset + MAX_RETRANSMIT_REQUEST_SEQUENCES),
-              Math.min(attempt, MAX_RETRANSMIT_REQUEST_ATTEMPT),
-            ),
-          ) || sent;
+            encodeRetransmitRequest(generation, batch, Math.min(attempt, MAX_RETRANSMIT_REQUEST_ATTEMPT)),
+          )) {
+            for (const sequence of batch) delivered.add(sequence);
+          }
         }
       }
       if (controlPath && socket) {
@@ -382,13 +383,14 @@ export class MicRuntime {
             attempt,
             sequences,
           }));
-          sent = true;
+          for (const sequence of sequences) delivered.add(sequence);
         } catch {}
       }
     }
-    if (!sent) return 0;
-    transport.retransmitRequestsSent(requests, nowMs);
-    return requests.length;
+    if (delivered.size === 0) return 0;
+    const sent = requests.filter(({ sequence }) => delivered.has(sequence));
+    transport.retransmitRequestsSent(sent, nowMs);
+    return sent.length;
   }
 
   retransmitStats() {

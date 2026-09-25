@@ -206,6 +206,37 @@ describe('Relay sends retransmission requests on every available path', () => {
     assert.deepEqual(direct, []);
   });
 
+  it('marks only the batches that went out as asked for', () => {
+    const { mic, direct, publisher, loseOne, path } = capableRuntime({ directConnected: true });
+    (publisher as { readyState: number }).readyState = WebSocket.CLOSED;
+    loseOne(10);
+    assert.equal(mic.serviceRetransmits(12, 300), 1);
+
+    // By 170 ms the retry for 1 is due, and 3 has just gone missing: two
+    // datagram batches (attempt 1, then attempt 0). The second send fails.
+    mic.receiveDirectMedia('ticket-direct', encodeAudioPacket({
+      source: 'mic', generation: 9, sequence: 4, firstSampleIndex: 4 * 480, pcm: Buffer.alloc(960),
+    }), 170);
+    mic.flush(170);
+    let sends = 0;
+    Object.defineProperty(path, 'directSendOk', {
+      get: () => (sends += 1) !== 2,
+      configurable: true,
+    });
+    assert.equal(mic.serviceRetransmits(170, 300), 1, 'only the retry went out');
+    assert.deepEqual(
+      direct.map(({ bytes }) => decodeRetransmitRequest(bytes)).map((r) => [r!.attempt, r!.sequences]),
+      [[0, [1]], [1, [1]]],
+    );
+    assert.equal(mic.retransmitStats()?.requestedPackets, 1, 'hole 3 was not asked for yet');
+
+    // The failed batch stayed queued and goes out on the next tick.
+    Object.defineProperty(path, 'directSendOk', { value: true, writable: true, configurable: true });
+    assert.equal(mic.serviceRetransmits(180, 300), 1);
+    assert.deepEqual(decodeRetransmitRequest(direct[2]!.bytes), { captureGeneration: 9, sequences: [3], attempt: 0 });
+    assert.equal(mic.retransmitStats()?.requestedPackets, 2);
+  });
+
   it('retries with a higher attempt number when no repeat arrives', () => {
     const { mic, direct, control, loseOne } = capableRuntime({ directConnected: true });
     loseOne(10);

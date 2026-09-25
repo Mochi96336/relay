@@ -503,3 +503,144 @@ test('health telemetry exposes queue target and measured arrival jitter', async 
   assert.equal(typeof health.arrivalJitterMs, 'number');
   assert.equal(typeof health.arrivalDeviationMs, 'number');
 });
+
+function sinePacketFactory(frequencyHz: number, amplitude: number) {
+  let nextSample = 0;
+  return (samples: number) => {
+    const chunk = new Float32Array(samples);
+    for (let i = 0; i < samples; i += 1) {
+      chunk[i] = amplitude * Math.sin((2 * Math.PI * frequencyHz * (nextSample + i)) / SAMPLE_RATE);
+    }
+    nextSample += samples;
+    return chunk;
+  };
+}
+
+/**
+ * 20 ms packets on a steady cadence, except that the link holds everything
+ * sent during each stall and delivers it in one burst when the stall ends:
+ * nothing is lost, so the page never sees a position gap to reset on.
+ */
+function runStalledLink(
+  processor: any,
+  { untilMs, stalls, packet }: {
+    untilMs: number;
+    stalls: { atMs: number; durationMs: number }[];
+    packet: (samples: number) => Float32Array;
+  },
+  onQuantum?: (output: Float32Array) => void,
+) {
+  const frameSamples = samplesFromMs(20);
+  let sentFrames = 0;
+  let deliveredFrames = 0;
+  const endSamples = samplesFromMs(untilMs);
+  while (processor.renderClockSamples < endSamples) {
+    const nowMs = (processor.renderClockSamples / SAMPLE_RATE) * 1000;
+    while (sentFrames * 20 <= nowMs) sentFrames += 1;
+    const stalled = stalls.some(({ atMs, durationMs }) => nowMs >= atMs && nowMs < atMs + durationMs);
+    if (!stalled) {
+      for (; deliveredFrames < sentFrames; deliveredFrames += 1) processor.push(packet(frameSamples));
+    }
+    const block = outputBlock();
+    processor.process([], block);
+    onQuantum?.(block[0][0]);
+  }
+}
+
+test('gives back the latency a stalled link left queued once the target no longer needs it', async () => {
+  const processor = await makeProcessor({ stableWindowMs: 2_000 });
+  let afterBurstMs = 0;
+  let lowMs = Infinity;
+  runStalledLink(processor, {
+    untilMs: 40_000,
+    stalls: [{ atMs: 1_000, durationMs: 190 }],
+    packet: (samples) => new Float32Array(samples).fill(0.1),
+  }, () => {
+    const queuedMs = (processor.queuedSamples / SAMPLE_RATE) * 1000;
+    if (processor.renderClockSamples <= samplesFromMs(1_300)) afterBurstMs = queuedMs;
+    if (processor.renderClockSamples > samplesFromMs(36_000)) lowMs = Math.min(lowMs, queuedMs);
+  });
+  assert.ok(afterBurstMs >= 150, `the stall should leave audio queued: ${afterBurstMs.toFixed(0)} ms`);
+
+  const targetMs = (processor.prebufferSamples / SAMPLE_RATE) * 1000;
+  assert.ok(processor.trimmedSamples > 0, 'excess latency was trimmed');
+  assert.ok(
+    lowMs <= targetMs + 20 + 1,
+    `queue low point ${lowMs.toFixed(0)} ms should settle within the margin of target ${targetMs.toFixed(0)} ms`,
+  );
+  assert.equal(processor.underruns, 1, 'trimming never starves playback');
+  assert.equal(processor.droppedSamples, 0, 'a trim is not an overflow drop');
+});
+
+test('never trims a queue that steady traffic keeps at its target', async () => {
+  const processor = await makeProcessor();
+  runStalledLink(processor, {
+    untilMs: 20_000,
+    stalls: [],
+    packet: (samples) => new Float32Array(samples).fill(0.1),
+  });
+  assert.equal(processor.trimmedSamples, 0);
+  assert.equal(processor.underruns, 0);
+});
+
+test('crossfades a latency trim instead of splicing the waveform', async () => {
+  const processor = await makeProcessor({ stableWindowMs: 1_000 });
+  const packet = sinePacketFactory(440, 0.5);
+  const naturalStep = 0.5 * 2 * Math.PI * (440 / SAMPLE_RATE);
+  let previous: number | null = null;
+  let worstStep = 0;
+  let trimmedBefore = 0;
+  let sawTrim = false;
+  runStalledLink(processor, {
+    untilMs: 12_000,
+    stalls: [{ atMs: 1_000, durationMs: 190 }],
+    packet,
+  }, (output) => {
+    if (processor.trimmedSamples > trimmedBefore) sawTrim = true;
+    trimmedBefore = processor.trimmedSamples;
+    if (processor.underruns > 0 && processor.playing) {
+      for (const sample of output) {
+        if (previous !== null) worstStep = Math.max(worstStep, Math.abs(sample - previous));
+        previous = sample;
+      }
+    } else {
+      previous = null;
+    }
+  });
+
+  assert.ok(sawTrim, 'the scenario must exercise a trim');
+  assert.ok(
+    worstStep <= naturalStep * 1.5 + 0.01,
+    `worst step ${worstStep.toFixed(4)} against a natural step of ${naturalStep.toFixed(4)}`,
+  );
+});
+
+test('health telemetry reports trimmed latency apart from overflow drops', async () => {
+  const processor = await makeProcessor();
+  processor.trimmedSamples = samplesFromMs(40);
+  processor.reportCountdown = 0;
+  processor.report(0);
+  const health = processor.port.messages.findLast((message: any) => message?.type === 'health') as any;
+  assert.equal(health.trimmedMs, 40);
+  assert.equal(health.droppedMs, 0);
+});
+
+test('does not trim away the buffer a link that keeps stalling still needs', async () => {
+  const stalls = Array.from({ length: 14 }, (_, index) => ({ atMs: 1_000 + index * 4_000, durationMs: 170 }));
+  const run = async (options: Record<string, number>) => {
+    const processor = await makeProcessor(options);
+    runStalledLink(processor, {
+      untilMs: 60_000,
+      stalls,
+      packet: (samples) => new Float32Array(samples).fill(0.1),
+    });
+    return processor;
+  };
+
+  const untrimmed = await run({ trimWindowMs: 1e9 });
+  const trimmed = await run({});
+  assert.ok(
+    trimmed.underruns <= untrimmed.underruns,
+    `trimming added underruns: ${trimmed.underruns} against ${untrimmed.underruns}`,
+  );
+});

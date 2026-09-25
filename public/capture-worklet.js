@@ -7,6 +7,10 @@ const INPUT_RAIL_THRESHOLD = 0x7fff / 0x8000;
 // Keep it one quantization step below the raw-input rail so downstream PCM
 // inspection cannot complete a flat-top run that never existed at the input.
 const SYNTHETIC_INPUT_GAP_MAX_MAGNITUDE = (0x7fff - 1) / 0x8000;
+// Int16 codes Relay reads as the raw-input rail (AudioSession
+// observeMicInputClippingFrame): >= +32766 or <= -32767.
+const PCM16_RAIL_POSITIVE = 0x7fff - 1;
+const PCM16_RAIL_NEGATIVE = -0x7fff;
 const INPUT_GAP_DECLICK_MS = 2;
 const INPUT_GAP_REPORT_REFERENCE_RATE = 48_000;
 const INPUT_GAP_REPORT_REFERENCE_QUANTA = 400;
@@ -25,6 +29,26 @@ const VISUAL_ANALYSIS_PLACEHOLDER = Object.freeze({
 
 function amplitudeToDbfs(amplitude) {
   return amplitude > 0 ? 20 * Math.log10(amplitude) : SILENCE_DBFS;
+}
+
+/**
+ * Float -> Int16 to the nearest step. Storing into Int16Array truncates toward
+ * zero instead, which makes every sample up to a whole step smaller, always
+ * toward silence: an error that follows the signal (distortion rather than
+ * noise), which Relay's default +24 dB Mic gain then lifts with the voice.
+ *
+ * Rounding must not move a sample onto the codes Relay reads as raw-input
+ * clipping, though. Only a sample that really reached the rail threshold may
+ * land there, exactly as truncation guaranteed; everything below stays one
+ * step short of it.
+ */
+function toPcm16(sample) {
+  if (sample < 0) {
+    const value = Math.round(sample * 0x8000);
+    return sample > -INPUT_RAIL_THRESHOLD ? Math.max(PCM16_RAIL_NEGATIVE + 1, value) : value;
+  }
+  const value = Math.round(sample * 0x7fff);
+  return sample < INPUT_RAIL_THRESHOLD ? Math.min(PCM16_RAIL_POSITIVE - 1, value) : value;
 }
 
 class CaptureProcessor extends AudioWorkletProcessor {
@@ -129,9 +153,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
           -SYNTHETIC_INPUT_GAP_MAX_MAGNITUDE,
           Math.min(SYNTHETIC_INPUT_GAP_MAX_MAGNITUDE, outputSample),
         );
-        this.chunk[this.offset + i] = outputSample < 0
-          ? outputSample * 0x8000
-          : outputSample * 0x7fff;
+        this.chunk[this.offset + i] = toPcm16(outputSample);
         this.lastOutputSample = outputSample;
       }
 
@@ -324,9 +346,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
           this.recoveryFadeRemainingSamples -= 1;
         }
 
-        this.chunk[this.offset + i] = outputSample < 0
-          ? outputSample * 0x8000
-          : outputSample * 0x7fff;
+        this.chunk[this.offset + i] = toPcm16(outputSample);
         this.lastOutputSample = outputSample;
       }
 

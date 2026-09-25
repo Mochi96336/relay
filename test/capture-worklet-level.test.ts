@@ -464,3 +464,43 @@ test('capture input-gap hysteresis stays time-equivalent across sample rates', a
     );
   }
 });
+
+test('capture PCM rounds to the nearest Int16 step instead of truncating toward silence', async () => {
+  const processor = await loadCaptureProcessor();
+  enablePcmEnvelope(processor);
+  const input = new Float32Array(960).fill(0.25);
+  input[1] = 1.6 / 0x7fff;
+  input[2] = -1.6 / 0x8000;
+  input[3] = 0.4 / 0x7fff;
+  input[4] = -0.4 / 0x8000;
+  processor.process([[input]]);
+
+  const samples = new Int16Array((processor.port.messages[0] as PcmMessage).buffer);
+  assert.equal(samples[0], 8192, '0.25 of full scale is 8191.75 steps');
+  assert.equal(samples[1], 2);
+  assert.equal(samples[2], -2);
+  assert.equal(samples[3], 0);
+  assert.equal(samples[4], 0);
+});
+
+test('rounding never lands a sample below the rail threshold on Relay\'s clipping codes', async () => {
+  const processor = await loadCaptureProcessor();
+  enablePcmEnvelope(processor);
+  const threshold = 0x7fff / 0x8000;
+  const justBelow = Math.fround(threshold) - 2 ** -20;
+  const input = new Float32Array(960);
+  input[0] = justBelow;
+  input[1] = -justBelow;
+  input[2] = threshold;
+  input[3] = -threshold;
+  input[4] = 1;
+  input[5] = -1;
+  processor.process([[input]]);
+
+  const samples = new Int16Array((processor.port.messages[0] as PcmMessage).buffer);
+  const onServerRail = (sample: number) => sample >= 32_766 || sample <= -32_767;
+  assert.equal(onServerRail(samples[0]), false, `${samples[0]} is below the positive rail`);
+  assert.equal(onServerRail(samples[1]), false, `${samples[1]} is below the negative rail`);
+  assert.deepEqual(Array.from(samples.subarray(2, 6)), [32_766, -32_767, 32_767, -32_768]);
+  assert.equal(latestLevel(processor)?.railSamples, 4, 'the worklet and Relay agree on which samples hit the rail');
+});

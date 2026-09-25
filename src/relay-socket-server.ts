@@ -50,6 +50,22 @@ export type MonitorFramePosition = {
 
 export type MonitorSocketTransportOptions = {
   backlogBytes: number;
+  nowMs?: () => number;
+};
+
+/**
+ * How far back a monitor backlog drop still describes a listener that is
+ * behind now. The lifetime total never falls, so one slow phone that has since
+ * recovered, or left, would otherwise read as a current room fault.
+ */
+export const MONITOR_RECENT_DROP_WINDOW_MS = 10_000;
+
+export type MonitorRecentDrops = {
+  /** PCM frames dropped for any listener within the window. */
+  frames: number;
+  /** Listeners still connected that had a frame dropped within the window. */
+  listeners: number;
+  windowMs: number;
 };
 
 /**
@@ -136,6 +152,17 @@ export function createMonitorSocketTransport(
   }
 
   let droppedFrames = 0;
+  const nowMs = options.nowMs ?? (() => performance.now());
+  const recentDrops: { atMs: number; socket: RelaySocket }[] = [];
+
+  function pruneRecentDrops(atMs: number) {
+    let expired = 0;
+    while (
+      expired < recentDrops.length
+      && atMs - recentDrops[expired].atMs >= MONITOR_RECENT_DROP_WINDOW_MS
+    ) expired += 1;
+    if (expired > 0) recentDrops.splice(0, expired);
+  }
 
   function broadcast(
     payload: string | Buffer,
@@ -167,6 +194,9 @@ export function createMonitorSocketTransport(
         )
       ) {
         droppedFrames += 1;
+        const atMs = nowMs();
+        pruneRecentDrops(atMs);
+        recentDrops.push({ atMs, socket });
         continue;
       }
       socket.send(outbound, { binary });
@@ -175,8 +205,21 @@ export function createMonitorSocketTransport(
 
   return {
     broadcast,
+    /** Lifetime total across every listener; see recentDrops() for now. */
     get droppedFrames() {
       return droppedFrames;
+    },
+    recentDrops(atMs = nowMs()): MonitorRecentDrops {
+      pruneRecentDrops(atMs);
+      const listeners = new Set<RelaySocket>();
+      for (const drop of recentDrops) {
+        if (drop.socket.readyState === WebSocket.OPEN) listeners.add(drop.socket);
+      }
+      return {
+        frames: recentDrops.length,
+        listeners: listeners.size,
+        windowMs: MONITOR_RECENT_DROP_WINDOW_MS,
+      };
     },
   };
 }

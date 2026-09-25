@@ -239,6 +239,8 @@ describe('live mix', () => {
       assert.equal(health.active, true);
       assert.equal(health.micStarvedFrames, 0, 'a primed buffer must not starve');
       assert.equal(health.monitorDroppedFrames, 0);
+      assert.equal(health.monitorRecentDroppedFrames, 0);
+      assert.equal(health.monitorRecentDroppingListeners, 0);
       assert.ok(health.micHeadroomMs > 0, `headroom ${health.micHeadroomMs} ms`);
 
       backing.close();

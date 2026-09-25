@@ -83,6 +83,8 @@ function observation(overrides: {
       micRmsDbfs: -24,
       unheadered: false,
       monitorDroppedFrames: 0,
+      monitorRecentDroppedFrames: 0,
+      monitorRecentDroppingListeners: 0,
     },
     issues: {
       faults: overrides.faults ?? [],

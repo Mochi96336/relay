@@ -83,7 +83,7 @@ export function generateProbeReference(sampleRate: number): Int16Array {
  * the irregular note timing and the C6/E6/G6 frequency sequence.
  */
 function probeToneFeatures(samples: Int16Array, sampleRate: number): Float64Array {
-  const frameSamples = Math.max(1, Math.round((sampleRate * FEATURE_FRAME_MS) / 1000));
+  const { frameSamples, cos, sin } = probeToneBasis(sampleRate);
   const frameCount = Math.floor(samples.length / frameSamples);
   const channels = PROBE_NOTES.length;
   const features = new Float64Array(frameCount * channels);
@@ -92,21 +92,62 @@ function probeToneFeatures(samples: Int16Array, sampleRate: number): Float64Arra
     const start = frame * frameSamples;
 
     for (let channel = 0; channel < channels; channel += 1) {
-      const frequencyHz = PROBE_NOTES[channel].frequencyHz;
+      const channelCos = cos[channel];
+      const channelSin = sin[channel];
       let sumCos = 0;
       let sumSin = 0;
 
       for (let i = 0; i < frameSamples; i += 1) {
         const value = samples[start + i] / 32768;
-        const phase = (2 * Math.PI * frequencyHz * i) / sampleRate;
-        sumCos += value * Math.cos(phase);
-        sumSin += value * Math.sin(phase);
+        sumCos += value * channelCos[i];
+        sumSin += value * channelSin[i];
       }
 
       features[frame * channels + channel] = Math.hypot(sumCos, sumSin) / frameSamples;
     }
   }
 
+  return features;
+}
+
+type ProbeToneBasis = { frameSamples: number; cos: Float64Array[]; sin: Float64Array[] };
+const probeToneBases = new Map<number, ProbeToneBasis>();
+const probeReferenceFeatures = new Map<number, Float64Array>();
+
+/**
+ * Each feature frame measures its notes from phase zero, so one frame's worth
+ * of cosine and sine per note serves every frame. `locateProbe` runs on the
+ * mixer's thread, and evaluating them per sample cost it tens of milliseconds
+ * of blocked mixing per probe leg; the table holds exactly the same values.
+ */
+function probeToneBasis(sampleRate: number): ProbeToneBasis {
+  const cached = probeToneBases.get(sampleRate);
+  if (cached) return cached;
+  const frameSamples = Math.max(1, Math.round((sampleRate * FEATURE_FRAME_MS) / 1000));
+  const cos: Float64Array[] = [];
+  const sin: Float64Array[] = [];
+  for (const note of PROBE_NOTES) {
+    const channelCos = new Float64Array(frameSamples);
+    const channelSin = new Float64Array(frameSamples);
+    for (let i = 0; i < frameSamples; i += 1) {
+      const phase = (2 * Math.PI * note.frequencyHz * i) / sampleRate;
+      channelCos[i] = Math.cos(phase);
+      channelSin[i] = Math.sin(phase);
+    }
+    cos.push(channelCos);
+    sin.push(channelSin);
+  }
+  const basis = { frameSamples, cos, sin };
+  probeToneBases.set(sampleRate, basis);
+  return basis;
+}
+
+/** The reference never changes for a rate, so neither do its features. */
+function probeReferenceToneFeatures(sampleRate: number) {
+  const cached = probeReferenceFeatures.get(sampleRate);
+  if (cached) return cached;
+  const features = probeToneFeatures(generateProbeReference(sampleRate), sampleRate);
+  probeReferenceFeatures.set(sampleRate, features);
   return features;
 }
 
@@ -142,9 +183,8 @@ function normalizedCorrelation(a: Float64Array, aStart: number, b: Float64Array,
  * close enough that the true position falls inside it.
  */
 export function locateProbe(micWindow: Int16Array, sampleRate: number): ProbeLocation {
-  const reference = generateProbeReference(sampleRate);
   const micFeature = probeToneFeatures(micWindow, sampleRate);
-  const refFeature = probeToneFeatures(reference, sampleRate);
+  const refFeature = probeReferenceToneFeatures(sampleRate);
   const channels = PROBE_NOTES.length;
   const micFrames = Math.floor(micFeature.length / channels);
   const refFrames = Math.floor(refFeature.length / channels);

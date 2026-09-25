@@ -169,6 +169,9 @@ export function createMonitorSocketTransport(
     binary = false,
     position: MonitorFramePosition | null = null,
   ) {
+    // Every positioned monitor gets the same bytes, so frame them once per
+    // broadcast rather than once per listener. The sockets only read them.
+    let framed: Buffer | null = null;
     for (const client of wss.clients) {
       const socket = client as RelaySocket;
       if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
@@ -181,7 +184,7 @@ export function createMonitorSocketTransport(
         && Buffer.isBuffer(payload)
         && socket.monitorPacketVersion === 1
         && position !== null
-        ? encodePcmFrame(position.generation, position.firstSampleIndex, payload)
+        ? (framed ??= encodePcmFrame(position.generation, position.firstSampleIndex, payload))
         : payload;
 
       if (

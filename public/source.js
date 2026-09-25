@@ -596,8 +596,13 @@ function renderMixHealth() {
   if (latestMixHealth.backingGapMs > 0) {
     notes.push(`⚠ 歌曲缺口 ${latestMixHealth.backingGapMs} ms`);
   }
-  if (latestMixHealth.monitorDroppedFrames > 0) {
-    notes.push(`⚠ 丟棄 ${latestMixHealth.monitorDroppedFrames} frames`);
+  // Recent drops only: the lifetime total never falls, so it would keep the
+  // warning up long after a slow listener recovered or left.
+  if (latestMixHealth.monitorRecentDroppingListeners > 0) {
+    notes.push(
+      `⚠ ${latestMixHealth.monitorRecentDroppingListeners} 位 Listen 跟不上，`
+      + `最近 10 秒共丟棄 ${latestMixHealth.monitorRecentDroppedFrames} frames`,
+    );
   }
   notes.push(`headroom mic ${latestMixHealth.micHeadroomMs} ms / song ${latestMixHealth.backingHeadroomMs} ms`);
   captureState.textContent += ` · ${notes.join(' · ')}`;

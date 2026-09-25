@@ -62,7 +62,11 @@ export type RelayObservationStatusV1 = {
     micPeakDbfs: number | null;
     micRmsDbfs: number | null;
     unheadered: boolean;
+    /** Lifetime total since the process started, across every listener. */
     monitorDroppedFrames: number;
+    /** Frames dropped in the last 10 s, and the connected listeners they belong to. */
+    monitorRecentDroppedFrames: number;
+    monitorRecentDroppingListeners: number;
   };
   issues: {
     faults: string[];

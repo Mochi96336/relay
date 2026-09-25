@@ -100,7 +100,7 @@ describe('concealGap', () => {
     assert.equal(concealGap(history, history.slice(1_000), null, 960, { sampleRate: RATE }), null);
   });
 
-  it('keeps the first 10 ms of a note exact but varies later concealment across real periods', () => {
+  it('keeps the first 10 ms of a note the recent period but varies later concealment across real periods', () => {
     // A held 150 Hz note whose timbre moves over the last 20 ms (the second
     // harmonic swells as the third fades): clearly periodic, yet each real
     // period differs from the one before. Unvoiced input is continued as
@@ -132,14 +132,23 @@ describe('concealGap', () => {
       index < holdSamples ? 1 : Math.max(0, 1 - (index - holdSamples) / fadeSamples)
     );
 
-    // Preserve the already-good short-loss behavior exactly: the first 10 ms
-    // is still the most recent estimated period.
+    // The first 10 ms is still the most recent estimated period. Only the last
+    // quarter of each cycle eases toward the audio that led into its start, so
+    // the wrap back to that start is continuous even as the timbre moves.
+    const wrapSamples = Math.floor(period / 4);
     for (let index = 0; index < holdSamples; index += 1) {
-      assert.equal(
-        concealment.fill[index],
-        cycle[index % period],
-        `short-loss concealment changed at sample ${index}`,
-      );
+      const phase = index % period;
+      if (phase < period - wrapSamples) {
+        assert.equal(concealment.fill[index], cycle[phase], `short-loss concealment changed at sample ${index}`);
+      } else {
+        const leadIn = history[history.length - 2 * period + phase]!;
+        const low = Math.min(cycle[phase]!, leadIn) - 1;
+        const high = Math.max(cycle[phase]!, leadIn) + 1;
+        assert.ok(
+          concealment.fill[index]! >= low && concealment.fill[index]! <= high,
+          `wrap easing left the cycle and its lead-in at sample ${index}`,
+        );
+      }
     }
 
     // Old Relay repeated that same cycle for the full 60 ms and only changed
@@ -156,6 +165,40 @@ describe('concealGap', () => {
       baselineEnergy > 0 && divergence / baselineEnergy > 0.02,
       `long concealment still behaves like one repeated cycle: ${(divergence / baselineEnergy).toFixed(3)}`,
     );
+  });
+
+  it('repeats without a click when a note changes inside the history', () => {
+    // A 110 Hz reedy note glides into a 165 Hz vowel over 5 ms, and the packet
+    // after the change is lost. The history's newest period then holds part of
+    // each note, so a plain repetition splices one timbre onto the other at
+    // every wrap, and the vowel's breathiness enters as noise at the join.
+    const reed = (t: number) => {
+      let value = 0;
+      for (let k = 1; k <= 15; k += 2) value += Math.sin(2 * Math.PI * 110 * k * t) / k;
+      return value * 0.9;
+    };
+    const vowel = (t: number) => (
+      Math.sin(2 * Math.PI * 165 * t) + 0.8 * Math.sin(2 * Math.PI * 330 * t)
+      + 0.9 * Math.sin(2 * Math.PI * 660 * t) + 0.35 * Math.sin(2 * Math.PI * 1_320 * t)
+    ) / 1.9;
+    const sung = (t: number) => {
+      if (t < 0) return reed(t);
+      if (t >= 0.005) return vowel(t);
+      return vowel(t) * (t / 0.005) + reed(t) * (1 - t / 0.005);
+    };
+    const historyLength = 2_880;
+    for (let endMs = -10; endMs <= 30; endMs += 1) {
+      const from = endMs / 1_000 - historyLength / RATE;
+      const whole = Int16Array.from({ length: historyLength + 960 + 480 }, (_, i) => Math.round(sung(from + i / RATE) * 12_000));
+      const history = whole.slice(0, historyLength);
+      const previous = history.slice(historyLength - 480);
+      const next = whole.slice(historyLength + 960);
+      const concealment = concealGap(history, previous, next, 960, { sampleRate: RATE });
+      if (!concealment) continue;
+      const natural = maxNaturalStep(whole);
+      const step = maxAdjacentStep(previous, concealment.fill, next);
+      assert.ok(step <= natural * 1.5, `history ending ${endMs} ms after the change clicked: ${step} vs natural ${natural}`);
+    }
   });
 
   it('keeps unvoiced noise bounded instead of amplifying it', () => {

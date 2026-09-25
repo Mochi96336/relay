@@ -49,11 +49,11 @@ type PcmTimeline = {
   /** Samples inserted to keep a slower continuous local source on time. */
   clockCorrectionSamples: number;
   /**
-   * Last raw source sample from the furthest accepted positioned packet.
-   * A phase-correct resampler may need this one sample when the next transport
-   * packet begins between two target-rate sample positions.
+   * Last raw source samples (up to three, oldest first) from the furthest
+   * accepted positioned packet. A phase-correct cubic resampler needs them when
+   * the next transport packet begins between two target-rate sample positions.
    */
-  resampleTailSample: number | null;
+  resampleTail: number[];
   /**
    * Next absolute mix-rate sample on the source clock that still needs to be
    * emitted. Upsampling may defer one target sample until the following source
@@ -161,6 +161,9 @@ const ADVANCE_SAFETY_MS = 200;
  * Song timeline.
  */
 const BACKING_CLOCK_ERROR_ALPHA = 0.002;
+
+/** Source samples a deferred cubic target can still need from the previous packet. */
+const RESAMPLE_TAIL_SAMPLES = 3;
 const BACKING_CLOCK_DEADBAND_MS = 2;
 
 /**
@@ -331,7 +334,7 @@ function emptyTimeline(): PcmTimeline {
     clockErrorSamples: 0,
     sourceFrontier: null,
     clockCorrectionSamples: 0,
-    resampleTailSample: null,
+    resampleTail: [],
     resampleNextTargetSample: null,
   };
 }
@@ -1353,7 +1356,7 @@ export class AudioSession {
     timeline.clockErrorSamples = 0;
     timeline.sourceFrontier = null;
     timeline.clockCorrectionSamples = 0;
-    timeline.resampleTailSample = null;
+    timeline.resampleTail = [];
     timeline.resampleNextTargetSample = null;
   }
 
@@ -1585,7 +1588,7 @@ export class AudioSession {
       frame.pcm,
       sourceRate,
       positioned ? frame.firstSampleIndex : null,
-      sourceContinuous ? timeline.resampleTailSample : null,
+      sourceContinuous ? timeline.resampleTail : [],
       sourceContinuous ? timeline.resampleNextTargetSample : null,
     );
     let samples = resampled.samples;
@@ -1600,7 +1603,7 @@ export class AudioSession {
       // stale rather than letting it degrade invisibly. Its source position is
       // unknowable, so it also breaks positioned resampler continuity.
       timeline.unheadered = true;
-      timeline.resampleTailSample = null;
+      timeline.resampleTail = [];
       timeline.resampleNextTargetSample = null;
       start = timeline.totalSamples;
     } else {
@@ -1678,7 +1681,12 @@ export class AudioSession {
         ? sourceEnd
         : Math.max(previousSourceFrontier, sourceEnd);
       if (advancesSourceFrontier) {
-        timeline.resampleTailSample = frame.pcm.readInt16LE((sourceSampleCount - 1) * 2);
+        const carried = sourceContinuous ? timeline.resampleTail : [];
+        const own: number[] = [];
+        for (let index = Math.max(0, sourceSampleCount - RESAMPLE_TAIL_SAMPLES); index < sourceSampleCount; index += 1) {
+          own.push(frame.pcm.readInt16LE(index * 2));
+        }
+        timeline.resampleTail = [...carried, ...own].slice(-RESAMPLE_TAIL_SAMPLES);
         timeline.resampleNextTargetSample = resampled.nextTargetSample;
       }
     }
@@ -1722,7 +1730,7 @@ export class AudioSession {
     buffer: Buffer,
     sourceRate: number,
     sourceFirstSampleIndex: number | null = null,
-    previousSourceSample: number | null = null,
+    previousSourceSamples: readonly number[] = [],
     nextTargetSample: number | null = null,
   ): {
     samples: Int16Array;
@@ -1785,19 +1793,24 @@ export class AudioSession {
     const emitted: number[] = [];
 
     const readAbsoluteSourceSample = (index: number) => {
-      if (index === sourceStart - 1 && previousSourceSample !== null) {
-        return previousSourceSample;
+      if (index < sourceStart && sourceStart - index <= previousSourceSamples.length) {
+        return previousSourceSamples[previousSourceSamples.length - (sourceStart - index)]!;
       }
       if (index < sourceStart || index >= sourceEnd) return null;
       return buffer.readInt16LE((index - sourceStart) * 2);
     };
 
-    // A target sample t represents source position t * sourceRate / mixRate.
-    // Emit it only when both interpolation endpoints are actually available.
-    // If the second endpoint is the next packet's first source sample, leave t
-    // pending; the contiguous next packet will emit it using resampleTailSample
-    // plus its own first sample. This removes the 20 ms sample-hold seam without
-    // inventing audio across a real source gap.
+    // A target sample t represents source position t * sourceRate / mixRate,
+    // interpolated with a 4-point cubic (Catmull-Rom) through the two source
+    // samples around it and one more on each side. Linear interpolation is a
+    // triangle filter: upsampling 44.1 kHz it took 1.5 dB off 10 kHz and
+    // 3.1 dB off 15 kHz, where the cubic keeps them within 0.4 and 1.5 dB.
+    // Emit t only once every tap past the packet end has arrived: the
+    // contiguous next packet emits a pending t from the resample tail plus its
+    // own first samples. This removes the 20 ms sample-hold seam without
+    // inventing audio across a real source gap. An outer tap before the
+    // capture began, or across a real gap, never arrives, so the edge sample
+    // stands in for it.
     const safetyEnd = Math.ceil((sourceEnd * this.sampleRate) / sourceRate) + 2;
     while (targetIndex <= safetyEnd) {
       const numerator = targetIndex * sourceRate;
@@ -1815,7 +1828,18 @@ export class AudioSession {
       if (remainder !== 0) {
         const b = readAbsoluteSourceSample(sourceIndex + 1);
         if (b === null) break;
-        value = a + (b - a) * (remainder / this.sampleRate);
+        const c = readAbsoluteSourceSample(sourceIndex + 2);
+        if (c === null && sourceIndex + 2 >= sourceEnd) break;
+        const fraction = remainder / this.sampleRate;
+        const p0 = readAbsoluteSourceSample(sourceIndex - 1) ?? a;
+        const p3 = c ?? b;
+        value = a + 0.5 * fraction * (
+          b - p0 + fraction * (
+            2 * p0 - 5 * a + 4 * b - p3 + fraction * (3 * (a - b) + p3 - p0)
+          )
+        );
+        // A cubic can overshoot its taps; Int16Array would wrap it.
+        value = Math.max(-32_768, Math.min(32_767, value));
       }
 
       if (firstEmittedTarget === null) firstEmittedTarget = targetIndex;

@@ -73,8 +73,8 @@ test('reused Mic generation at a different source rate re-anchors without restar
   assert.equal(replacement.start, 47_520);
   assert.equal(
     replacement.samples.length,
-    479,
-    '44.1 kHz upsampling defers the final target sample until the next source endpoint exists',
+    478,
+    '44.1 kHz cubic upsampling defers the final two target samples until their outer source taps exist',
   );
   assert.equal(session.readMic(replacement.start, 1)[0], 333);
   assert.equal(session.readBacking(0, 1)[0], 111);
@@ -98,8 +98,8 @@ test('reused Backing generation at a different source rate re-anchors without re
   assert.equal(replacement.start, 47_520);
   assert.equal(
     replacement.samples.length,
-    479,
-    'capture restart keeps one future-dependent target sample pending instead of clamping it',
+    478,
+    'capture restart keeps two future-dependent target samples pending instead of clamping them',
   );
   assert.equal(session.readBacking(replacement.start, 1)[0], 333);
   assert.equal(session.readMic(0, 1)[0], 222);
@@ -118,7 +118,10 @@ test('reused Backing generation at a different source rate re-anchors without re
   );
   const deferredSourcePosition = (479 * 44_100) / RATE;
   const deferredFraction = deferredSourcePosition - Math.floor(deferredSourcePosition);
-  const expectedDeferred = Math.round(333 + (444 - 333) * deferredFraction);
+  // The cubic taps around target 479 are 333, 333 | 444, 444: the last two
+  // samples of the first frame and the first two of the next.
+  const f = deferredFraction;
+  const expectedDeferred = Math.round(333 + (444 - 333) * (0.5 * f + 1.5 * f ** 2 - f ** 3));
   assert.equal(
     session.readBacking(47_999, 1)[0],
     expectedDeferred,
@@ -262,7 +265,7 @@ test('sub-2ms Mic restart chains stay continuous when the replacement target cha
   session.start(0);
 
   // Build exactly 160 ms of stable capture so the three following re-anchors
-  // reproduce the 959 -> 48 -> 912 sample restart chain found by the seeded
+  // reproduce the 958 -> 48 -> 912 sample restart chain found by the seeded
   // invariant. The middle capture is shorter than the production 2 ms fade.
   for (let index = 0; index < 8; index += 1) {
     session.ingestMic(frame(1, index * chunk, chunk, 12_000), RATE, index * 20);
@@ -274,7 +277,7 @@ test('sub-2ms Mic restart chains stay continuous when the replacement target cha
   assert.equal(b.captureRestarted, true);
   assert.equal(d.captureRestarted, true);
   assert.equal(b.samples.length, 48, 'fixture must keep the sub-2ms intermediate capture');
-  assert.equal(d.start, 8_687, 'fixture must reproduce the overlapping restart frontier');
+  assert.equal(d.start, 8_686, 'fixture must reproduce the overlapping restart frontier');
 
   const outputs: Buffer[] = [];
   for (let nowMs = 40; nowMs <= 220; nowMs += 20) {

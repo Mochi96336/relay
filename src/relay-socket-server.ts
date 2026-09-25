@@ -41,7 +41,19 @@ export type RelaySocketServerOptions = {
   path?: string;
   relayKey: string | null;
   heartbeatMs: number;
+  maxPayloadBytes?: number;
 };
+
+/**
+ * Largest single inbound WebSocket message, in bytes.
+ *
+ * `ws` otherwise accepts 100 MiB and buffers all of it before any handler can
+ * look at it, so one oversized message from any socket that passed the room
+ * key costs the Relay host that much memory. Relay's largest real messages are
+ * PCM frames: 20 ms is under 2 KB, and even a 1 s Backing frame at 192 kHz is
+ * 384 KB. Anything past this is closed with 1009 (message too big).
+ */
+export const DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 export type MonitorFramePosition = {
   generation: number;
@@ -236,7 +248,11 @@ export function createRelayWebSocketServer(
   server: HttpServer,
   options: RelaySocketServerOptions,
 ) {
-  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+  const wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+    maxPayload: options.maxPayloadBytes ?? DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  });
   const socketPath = options.path ?? '/ws';
   let connectionSequence = 0;
 
@@ -265,6 +281,12 @@ export function createRelayWebSocketServer(
     socket.role = 'unknown';
     socket.isAlive = true;
 
+    // `ws` reports a protocol violation from the peer (invalid UTF-8, a bad
+    // opcode, an oversized message) as an 'error' event on this socket after
+    // it has already started closing it. With no listener, Node rethrows that
+    // event and one malformed frame from any client takes the whole room down.
+    // The socket is already on its way out; there is nothing else to do.
+    socket.on('error', () => {});
     socket.on('pong', () => {
       socket.isAlive = true;
     });

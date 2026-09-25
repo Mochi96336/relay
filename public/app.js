@@ -19,6 +19,7 @@ import {
 import { MicLifecycleTransaction } from './mic-lifecycle-transaction.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
+import { createReconnectBackoff } from './reconnect-backoff.js';
 
 const publisherButton = document.querySelector('#start-publisher');
 const releaseButton = document.querySelector('#release-mic');
@@ -39,7 +40,9 @@ const vocalFineTuneValue = document.querySelector('#vocal-fine-tune-value');
 const calibrateButton = document.querySelector('#calibrate-timing');
 const calibrateStatus = document.querySelector('#calibrate-status');
 
-const SOCKET_RECONNECT_MS = 1000;
+// Mic audio on a WebSocket-only page rides this socket: reconnect fast, back
+// off only while it keeps failing. See reconnect-backoff.js.
+const publisherReconnectBackoff = createReconnectBackoff();
 const SLIDER_HOLD_MS = 2000;
 const AUDIO_UPLINK_HEALTH_INTERVAL_MS = 1000;
 const MIC_CAPTURE_WATCHDOG_INTERVAL_MS = 250;
@@ -1593,7 +1596,7 @@ function schedulePublisherReconnect(
       setStatus('Reconnecting microphone…', 'Relay is still unavailable; retrying automatically.');
       schedulePublisherReconnect(sessionEpoch, expectedGeneration);
     });
-  }, SOCKET_RECONNECT_MS);
+  }, publisherReconnectBackoff.nextDelayMs());
   socketReconnectTimer = timer;
 }
 
@@ -1625,6 +1628,7 @@ async function connectPublisherSocket(
   }
 
   adoptSocket(ws);
+  publisherReconnectBackoff.noteConnected(performance.now());
 
   const registration = {
     type: 'register',
@@ -1654,6 +1658,7 @@ async function connectPublisherSocket(
 
   ws.addEventListener('close', () => {
     if (socket !== ws) return;
+    publisherReconnectBackoff.noteClosed(performance.now());
     activeCalibrationProbeRequestId = null;
     audioTransport.unbind(ws);
     socket = null;
@@ -1689,6 +1694,7 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
     } catch {}
   }
   audioTransport.close();
+  publisherReconnectBackoff.reset();
   connectPublisherSocket(sessionEpoch, generation).catch(() => {
     if (!isCurrentPublisherCapture(sessionEpoch, generation)) return;
     setStatus('Reconnecting microphone…', 'Capture restarted; reconnecting the new sample generation.');
@@ -2006,6 +2012,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       `${captureContext.sampleRate} Hz capture graph started; waiting for fresh PCM and Relay.`,
     );
 
+    publisherReconnectBackoff.reset();
     try {
       await connectPublisherSocket(sessionEpoch, generation);
     } catch {

@@ -390,6 +390,22 @@ describe('browser Mic retransmission', () => {
     assert.deepEqual(repeats.map((sent) => sequenceOf(new Uint8Array(sent as Uint8Array))), [0]);
   });
 
+  it('repeats a packet it could not send while its socket was reconnecting', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport();
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    transport.send(mediaPacket(3, 4));
+    socket.readyState = 3;
+    assert.equal(transport.send(mediaPacket(3, 5)).reason, 'disconnected');
+    socket.readyState = 1;
+    transport.send(mediaPacket(3, 6));
+
+    // Relay finds 5 missing once the socket is back and asks for it.
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 3, sequences: [5] });
+    assert.deepEqual(socket.sent.map((sent) => sequenceOf(new Uint8Array(sent as Uint8Array))), [4, 6, 5]);
+  });
+
   it('keeps only a bounded history and forgets it with the capture', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({ retransmitBufferPackets: 2 });

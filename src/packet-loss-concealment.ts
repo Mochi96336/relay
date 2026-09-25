@@ -283,25 +283,40 @@ export function concealGap(
   );
 
   // Constant-power mix of the two continuations: they are uncorrelated.
-  const periodicWeight = Math.sqrt(voicing);
   const noiseWeight = Math.sqrt(1 - voicing);
   const noise = noiseWeight > 0
     ? noiseContinuation(history, fillLength + joinSamples, sampleRate)
     : null;
   if (noiseWeight > 0 && noise === null && period === null) return null;
-  // The first 10 ms repeats the most recent period exactly. Beyond that, a
-  // single short cycle becomes an audible harmonic "beep"; G.711 Appendix I
-  // answers by drawing on more real pitch history as the erasure continues.
-  // Keep up to three contiguous real periods and move between them gradually
-  // at equal pitch phase, so the waveform gains natural variation without a
-  // new splice at each 10 ms boundary.
+  // Wrapping from a cycle's last sample back to its first is a splice unless
+  // the history is exactly periodic. A note or vowel change inside the history
+  // leaves one timbre at the cycle's end and another at its start, and the
+  // repetition then clicks at every wrap. Ease the last quarter period of each
+  // cycle into the audio that led into its first sample, as G.711 Appendix I
+  // overlap-adds at each period boundary. An exactly periodic cycle already
+  // equals its lead-in there and is unchanged.
+  const wrapSamples = period === null
+    ? 0
+    : Math.max(0, Math.min(Math.floor(period / 4), history.length - period));
+  // The first 10 ms repeats the most recent period. Beyond that, a single
+  // short cycle becomes an audible harmonic "beep"; G.711 Appendix I answers by
+  // drawing on more real pitch history as the erasure continues. Keep up to
+  // three contiguous real periods (each with its own lead-in in the history)
+  // and move between them gradually at equal pitch phase, so the waveform
+  // gains natural variation without a new splice at each 10 ms boundary.
   const historyPeriods = period === null
     ? 0
-    : Math.max(1, Math.min(3, Math.floor(history.length / period)));
+    : Math.max(1, Math.min(3, Math.floor((history.length - wrapSamples) / period)));
   const variationWindowSamples = Math.max(1, holdSamples);
-  const historicalPeriodSample = (periodIndex: number, phase: number) => (
-    history[history.length - (periodIndex + 1) * period! + phase]
-  );
+  const historicalPeriodSample = (periodIndex: number, phase: number) => {
+    const cycleStart = history.length - (periodIndex + 1) * period!;
+    const value = history[cycleStart + phase];
+    const intoWrap = phase - (period! - wrapSamples);
+    if (intoWrap < 0) return value;
+    // Reaches the sample just before the cycle's start at its last phase.
+    const weight = (intoWrap + 1) / wrapSamples;
+    return value * (1 - weight) + history[cycleStart + phase - period!] * weight;
+  };
   const periodicAt = (index: number) => {
     const phase = index % period!;
     if (index < variationWindowSamples || historyPeriods === 1) {
@@ -318,25 +333,27 @@ export function concealGap(
   // Continuation index 0 is the sample right after `previous` ends.
   // A part that could not be built leaves the other at full level.
   const continuation = (index: number) => {
-    let value = 0;
-    if (period !== null) value += (noise ? periodicWeight : 1) * periodicAt(index);
-    if (noise) value += (period !== null ? noiseWeight : 1) * noise[index];
-    return value;
+    if (period === null) return noise![index];
+    if (!noise) return periodicAt(index);
+    // The join below hands over to the periodic part alone, so the noise part
+    // enters over the same span, at constant power, instead of arriving at its
+    // full weight on the first concealed sample.
+    const entering = Math.min(1, (index + 1) / (joinSamples + 1));
+    const noiseGain = noiseWeight * entering;
+    return Math.sqrt(1 - noiseGain * noiseGain) * periodicAt(index) + noiseGain * noise[index];
   };
 
   // Join: ease the last fraction of a period of real audio toward the cycle's
   // own lead-in, so the first repeated sample follows without a step. The
   // lead-in to cycle[0] is the period before it, i.e. history shifted by one
   // period - exactly what a perfectly periodic signal would have contained.
-  // The noise part needs no join: its filter already starts from real audio.
   let blendedPreviousSamples = 0;
   if (period !== null) {
-    const joinWeight = noise ? periodicWeight : 1;
     blendedPreviousSamples = joinSamples;
     for (let j = 0; j < joinSamples; j += 1) {
       const previousIndex = previous.length - joinSamples + j;
       const historyIndex = history.length - joinSamples + j;
-      const weight = ((j + 1) / (joinSamples + 1)) * joinWeight;
+      const weight = (j + 1) / (joinSamples + 1);
       previous[previousIndex] = clampInt16(
         previous[previousIndex] * (1 - weight) + history[historyIndex - period] * weight,
       );

@@ -95,7 +95,7 @@ function ack(
   };
 }
 
-test('server-stale accepted PCM demotes WT once and quarantines it for the capture generation', async () => {
+test('server-stale accepted PCM demotes WT once and quarantines it against an immediate re-offer', async () => {
   FakeWebTransport.instances.length = 0;
   const { PreferredAudioTransport } = await import(moduleUrl.href);
   const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
@@ -115,7 +115,8 @@ test('server-stale accepted PCM demotes WT once and quarantines it for the captu
   assert.equal(FakeWebTransport.instances[0].closeCalls, 1);
 
   // A same-generation control reconnect can advertise the same WT ticket, but
-  // semantic failure quarantines WT until the capture generation changes.
+  // semantic failure quarantines WT until the fallback has proven healthy for a
+  // while or the capture generation changes.
   assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), false);
   assert.equal(FakeWebTransport.instances.length, 1);
   assert.equal(transport.stats().path, 'websocket');
@@ -182,7 +183,7 @@ test('late WT acceptance cannot prove fallback before the server reports WS and 
   socket.emitJson(ack(7, 12, 'websocket'));
   assert.equal(socket.closeCalls.length, 0);
 
-  // The successful fallback remains generation-scoped: do not re-promote WT.
+  // A fallback that only just recovered does not re-promote WT yet.
   assert.equal(await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' }), false);
 });
 
@@ -487,4 +488,48 @@ test('hidden-page health ACKs rebaseline and never trigger semantic media recove
       configurable: true,
     });
   }
+});
+
+test('a quarantine released after a healthy fallback reconnects WebTransport with the latest offer', async () => {
+  FakeWebTransport.instances.length = 0;
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({ WebTransportClass: FakeWebTransport });
+  const socket = new EventSocket();
+  transport.bind(socket);
+  await transport.prefer({ preferred: 'webtransport', url: 'https://relay.test/media' });
+
+  // The phone changed networks: the old session accepts writes that never arrive.
+  let captured = 1_000;
+  for (let index = 0; index < 4; index += 1) {
+    transport.sendControlJson(health(7, captured));
+    socket.emitJson(ack(7, 10, 'webtransport'));
+    captured += 100;
+  }
+  assert.equal(transport.stats().path, 'websocket');
+  let serial = 10;
+  const healthyAck = () => {
+    transport.sendControlJson(health(7, captured));
+    socket.emitJson(ack(7, serial, 'websocket'));
+    captured += 100;
+    serial += 1;
+  };
+  healthyAck(); // server confirms WebSocket: proof baseline
+  healthyAck(); // the fallback carries PCM: recovered
+
+  // A control reconnect on the new network re-advertises WebTransport. The
+  // quarantine refuses it now but keeps it for the release.
+  const nextOffer = { preferred: 'webtransport', url: 'https://relay.test/media-2' };
+  assert.equal(await transport.prefer(nextOffer), false);
+  assert.equal(FakeWebTransport.instances.length, 1);
+
+  for (let index = 1; index < 15; index += 1) healthyAck();
+  await Promise.resolve();
+  assert.equal(FakeWebTransport.instances.length, 1, 'not before 15 healthy observations');
+
+  healthyAck();
+  for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+  assert.equal(FakeWebTransport.instances.length, 2);
+  assert.equal(FakeWebTransport.instances[1].url, nextOffer.url);
+  assert.equal(transport.stats().path, 'webtransport');
+  assert.equal(transport.stats().webTransportRetries, 1);
 });

@@ -1029,11 +1029,14 @@ export class PreferredAudioTransport extends AudioTransport {
     this.retransmitGeneration = null;
   }
 
-  /** Keeps a sent capture packet long enough to answer a repeat request. */
+  /**
+   * Keeps a capture packet long enough to answer a repeat request. False when
+   * there is no history to keep it in.
+   */
   rememberForRetransmit(bytes) {
-    if (this.retransmitBufferPackets <= 0) return;
+    if (this.retransmitBufferPackets <= 0) return false;
     const identity = audioPacketIdentity(bytes);
-    if (!identity) return;
+    if (!identity) return false;
     if (identity.generation !== this.retransmitGeneration) {
       this.clearRetransmitBuffer();
       this.retransmitGeneration = identity.generation;
@@ -1045,6 +1048,7 @@ export class PreferredAudioTransport extends AudioTransport {
       this.retransmitBuffer.delete(oldest);
       this.retransmitAnswered.delete(oldest);
     }
+    return true;
   }
 
   /**
@@ -1148,17 +1152,31 @@ export class PreferredAudioTransport extends AudioTransport {
     return this.fallback.send(bytes).sent;
   }
 
+  /**
+   * Sends one capture packet. `retained` says an unsent packet was kept to
+   * answer a repeat request, so its sequence is spent: the caller must number
+   * the next packet after it, or Relay never sees the hole it would ask for.
+   */
   send(packet) {
     const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
     const result = this.sendMedia(packet);
     // Keep what could not go out right now as well. A socket that reconnects,
     // or a path saturated for a moment, drops packets Relay will find missing
     // and ask for once the path is back; a short blip is still inside the
-    // live hold. Only a packet too large for every path is not worth keeping.
-    if (result.sent || result.reason === 'disconnected' || result.reason === 'congested') {
+    // live hold. Not a packet too large for every path, and not one captured
+    // before the first path was chosen: Relay's receiver starts at the
+    // sequence registered before that wait, so those were never part of the
+    // stream it can repair.
+    let retained = false;
+    if (result.sent) {
       this.rememberForRetransmit(bytes);
+    } else if (
+      !result.awaitingPath
+      && (result.reason === 'disconnected' || result.reason === 'congested')
+    ) {
+      retained = this.rememberForRetransmit(bytes);
     }
-    return result;
+    return { ...result, retained };
   }
 
   sendMedia(packet) {
@@ -1174,6 +1192,7 @@ export class PreferredAudioTransport extends AudioTransport {
           ready: false,
           sent: false,
           reason: 'disconnected',
+          awaitingPath: true,
           bufferedAmount: 0,
           maxPacketBytes: this.fallback.maxPacketBytes(),
           path: 'websocket',

@@ -291,6 +291,105 @@ describe('browser Mic retransmission', () => {
     assert.equal(transport.stats().webTransportBacklogExpired, 2);
   });
 
+  it('answers Relay\'s retry once more, but each attempt only once', async () => {
+    const { transport, socket, webTransport } = await webTransportPath();
+    transport.send(mediaPacket(7, 0));
+    transport.send(mediaPacket(7, 1));
+    await settle();
+
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 7, attempt: 0, sequences: [1] });
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 7, attempt: 0, sequences: [1] });
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 7, attempt: 1, sequences: [1] });
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 7, attempt: 1, sequences: [1] });
+    // A late copy of the first attempt after the retry is not answered again.
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 7, attempt: 0, sequences: [1] });
+    await settle();
+
+    assert.deepEqual(webTransport.writer.writes.map(sequenceOf), [0, 1, 1, 1]);
+    assert.equal(transport.stats().retransmittedPackets, 2);
+  });
+
+  it('answers again when a queued repeat expired before it was ever sent', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    let nowMs = 0;
+    class StuckWebTransport extends FakeWebTransport {
+      readonly stuckWriter = {
+        writes: [] as Uint8Array[],
+        write: (value: Uint8Array) => {
+          this.stuckWriter.writes.push(new Uint8Array(value));
+          return new Promise<void>(() => {});
+        },
+        releaseLock() {},
+      };
+      readonly datagrams = {
+        maxDatagramSize: 1200,
+        writable: { getWriter: () => this.stuckWriter },
+      };
+    }
+    FakeWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      datagramQueuePackets: 1,
+      datagramBacklogMs: 200,
+      datagramWriteTimeoutMs: 60_000,
+      WebTransportClass: StuckWebTransport,
+      nowMs: () => nowMs,
+    });
+    transport.bind(new FakeSocket());
+    await transport.prefer({ preferred: 'webtransport', url: 'https://media.example.test:4433/media?ticket=expire' });
+    transport.send(mediaPacket(5, 0));
+
+    transport.answerRetransmitRequest({ captureGeneration: 5, sequences: [0] });
+    assert.equal(transport.datagramBacklog.length, 1, 'the repeat waits behind the stuck write');
+    // The same request's other copy lands while the repeat is still queued.
+    transport.answerRetransmitRequest({ captureGeneration: 5, sequences: [0] });
+    assert.equal(transport.datagramBacklog.length, 1, 'a queued repeat is not queued twice');
+
+    nowMs = 300;
+    transport.state();
+    assert.equal(transport.datagramBacklog.length, 0, 'the repeat expired unsent');
+    transport.answerRetransmitRequest({ captureGeneration: 5, sequences: [0] });
+    assert.equal(transport.datagramBacklog.length, 1, 'so the next copy is answered, not ignored');
+  });
+
+  it('answers again on the socket after the repeat\'s datagram write failed', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    let failWrites = false;
+    class FailingWebTransport extends FakeWebTransport {
+      readonly failingWriter = {
+        writes: [] as Uint8Array[],
+        write: async (value: Uint8Array) => {
+          if (failWrites) throw new Error('session reset');
+          this.failingWriter.writes.push(new Uint8Array(value));
+        },
+        releaseLock() {},
+      };
+      readonly datagrams = {
+        maxDatagramSize: 1200,
+        writable: { getWriter: () => this.failingWriter },
+      };
+    }
+    FakeWebTransport.instances.length = 0;
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      WebTransportClass: FailingWebTransport,
+    });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    await transport.prefer({ preferred: 'webtransport', url: 'https://media.example.test:4433/media?ticket=fail' });
+    transport.send(mediaPacket(6, 0));
+    await settle();
+
+    failWrites = true;
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 6, sequences: [0] });
+    await settle();
+    assert.equal(transport.state().path, 'websocket', 'the failed write demoted the direct path');
+
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 6, sequences: [0] });
+    const repeats = socket.sent.filter((sent) => sent instanceof Uint8Array || ArrayBuffer.isView(sent));
+    assert.deepEqual(repeats.map((sent) => sequenceOf(new Uint8Array(sent as Uint8Array))), [0]);
+  });
+
   it('keeps only a bounded history and forgets it with the capture', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({ retransmitBufferPackets: 2 });

@@ -142,6 +142,8 @@ function describeLossRepair(status) {
   const retransmit = status.audio.receiverRetransmit;
   const recovered = count(retransmit?.recoveredPackets);
   const lost = count(receiver.lostPackets);
+  const retried = count(retransmit?.retriedPackets);
+  const roundTripMs = finite(retransmit?.repairRoundTripMs);
   const concealedMs = count(status.audio.timeline?.micConcealedMs);
   const resendSupported = count(status.audio.captureAndSender?.transport?.retransmitBufferPackets) > 0;
 
@@ -149,7 +151,12 @@ function describeLossRepair(status) {
     return row('repair', 'Loss repair', 'No loss', 'Every Mic packet has arrived so far.', 'ok');
   }
   const notes = [];
-  if (recovered > 0) notes.push(`${plural(recovered, 'packet')} resent in time`);
+  if (recovered > 0) {
+    notes.push(`${plural(recovered, 'packet')} resent in time${
+      roundTripMs === null ? '' : ` (about ${Math.round(roundTripMs)} ms each)`
+    }`);
+  }
+  if (retried > 0) notes.push(`${plural(retried, 'resend')} had to be asked for twice`);
   if (lost > 0) notes.push(`${plural(lost, 'packet')} lost for good`);
   if (concealedMs > 0) notes.push(`${concealedMs} ms smoothed over`);
   if (!resendSupported) notes.push('this phone page cannot resend; reload it');

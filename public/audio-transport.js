@@ -311,13 +311,19 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriteTimeoutMs = datagramWriteTimeoutMs;
     this.datagramBacklogPackets = datagramBacklogPackets;
     this.datagramBacklogMs = datagramBacklogMs;
-    /** @type {{ bytes: Uint8Array, enqueuedAt: number, retransmit?: boolean }[]} */
+    /** @type {{ bytes: Uint8Array, enqueuedAt: number, retransmit?: boolean, release?: () => void }[]} */
     this.datagramBacklog = [];
     this.retransmitBufferPackets = retransmitBufferPackets;
     /** Sent packets of `retransmitGeneration`, by sequence, oldest first. */
     this.retransmitBuffer = new Map();
     this.retransmitGeneration = null;
-    this.retransmitAnswered = new Set();
+    /**
+     * Highest request attempt answered per sequence. An answer counts from the
+     * moment its repeat is handed to a live path; a repeat that expires in the
+     * backlog or whose write fails withdraws it, so the next copy of the
+     * request (the other path, or Relay's retry) is answered again.
+     */
+    this.retransmitAnswered = new Map();
     this.webTransportRetryDelaysMs = [...webTransportRetryDelaysMs];
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
@@ -423,7 +429,11 @@ export class PreferredAudioTransport extends AudioTransport {
         continue;
       }
       // A repeat is not a capture packet: its loss is not congestion evidence.
-      if (entry.retransmit) continue;
+      // It was never sent, so a later request for it must be answered again.
+      if (entry.retransmit) {
+        entry.release?.();
+        continue;
+      }
       this.telemetry.webTransportBacklogExpired += 1;
       this.telemetry.webTransportCongestedRejects += 1;
     }
@@ -434,13 +444,24 @@ export class PreferredAudioTransport extends AudioTransport {
     const nowMs = Number(this.nowMs());
     for (const entry of backlog) {
       if (nowMs - entry.enqueuedAt > this.datagramBacklogMs) {
-        if (entry.retransmit) continue;
+        if (entry.retransmit) {
+          entry.release?.();
+          continue;
+        }
         this.telemetry.webTransportBacklogExpired += 1;
         this.telemetry.webTransportCongestedRejects += 1;
         continue;
       }
       const result = this.fallback.send(entry.bytes);
       if (!entry.retransmit) this.recordFallbackResult(result);
+      else if (!result.sent) entry.release?.();
+    }
+  }
+
+  /** Repeats in a backlog that is being thrown away were never sent. */
+  releaseDiscardedBacklog(backlog) {
+    for (const entry of backlog) {
+      if (entry.retransmit) entry.release?.();
     }
   }
 
@@ -453,7 +474,10 @@ export class PreferredAudioTransport extends AudioTransport {
       && this.outstandingDatagramWrites < this.datagramQueuePackets
     ) {
       const entry = this.datagramBacklog.shift();
-      this.writeDatagram(entry.bytes, { original: !entry.retransmit });
+      if (
+        !this.writeDatagram(entry.bytes, { original: !entry.retransmit, onFailure: entry.release })
+        && entry.retransmit
+      ) entry.release?.();
     }
   }
 
@@ -955,6 +979,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.resetOutstandingDatagramWrites();
     const backlog = this.takeDatagramBacklog();
     if (flushBacklog) this.flushDatagramBacklogToFallback(backlog);
+    else this.releaseDiscardedBacklog(backlog);
     if (writer) {
       try { writer.releaseLock(); } catch {}
     }
@@ -1005,9 +1030,14 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   /**
-   * Repeats packets Relay reports missing, once each, on whatever path is
-   * active now. A repeat carries the original sequence and capture position,
-   * so Relay places it exactly where the lost packet belonged.
+   * Repeats packets Relay reports missing on whatever path is active now. A
+   * repeat carries the original sequence and capture position, so Relay places
+   * it exactly where the lost packet belonged.
+   *
+   * Relay sends each request on both paths and may retry it with a higher
+   * attempt number when the repeat itself is lost. Each attempt is answered
+   * once, whichever copy lands first; an answer that never left the phone is
+   * withdrawn so the next copy is answered instead of ignored.
    */
   answerRetransmitRequest(message) {
     const generation = nonNegativeSafeInteger(message.captureGeneration);
@@ -1016,21 +1046,27 @@ export class PreferredAudioTransport extends AudioTransport {
       || generation !== this.retransmitGeneration
       || !Array.isArray(message.sequences)
     ) return 0;
+    const attempt = nonNegativeSafeInteger(message.attempt) ?? 0;
 
     let answered = 0;
     for (const value of message.sequences.slice(0, MAX_RETRANSMIT_REQUEST_SEQUENCES)) {
       const sequence = nonNegativeSafeInteger(value);
-      if (sequence === null || this.retransmitAnswered.has(sequence)) continue;
+      if (sequence === null) continue;
+      const previous = this.retransmitAnswered.get(sequence);
+      if (previous !== undefined && previous >= attempt) continue;
       const bytes = this.retransmitBuffer.get(sequence);
       if (!bytes) continue;
-      // "Answered" means a repeat was actually accepted by a media path. If
-      // the active path rejects it synchronously (for example a full datagram
-      // backlog), keep the sequence eligible for the duplicate request Relay
-      // deliberately sends on its other request path.
-      if (this.resendPacket(bytes)) {
-        this.retransmitAnswered.add(sequence);
+      this.retransmitAnswered.set(sequence, attempt);
+      const release = () => {
+        if (this.retransmitAnswered.get(sequence) !== attempt) return;
+        if (previous === undefined) this.retransmitAnswered.delete(sequence);
+        else this.retransmitAnswered.set(sequence, previous);
+      };
+      if (this.resendPacket(bytes, release)) {
         answered += 1;
         this.telemetry.retransmittedPackets += 1;
+      } else {
+        release();
       }
     }
     return answered;
@@ -1067,18 +1103,28 @@ export class PreferredAudioTransport extends AudioTransport {
     }
   }
 
-  resendPacket(bytes) {
+  /**
+   * Hands a repeat to the active path. `release` runs if the repeat is later
+   * found never to have left: it expired in the backlog, the backlog was
+   * discarded, or its datagram write failed.
+   */
+  resendPacket(bytes, release = undefined) {
     if (this.datagramWriter && !this.demoteStalledWebTransport()) {
       if (
         this.datagramBacklog.length === 0
         && this.outstandingDatagramWrites < this.datagramQueuePackets
       ) {
-        return this.writeDatagram(bytes, { original: false });
+        return this.writeDatagram(bytes, { original: false, onFailure: release });
       }
       if (this.datagramBacklog.length >= this.datagramBacklogPackets) return false;
       // A repeat is already late: it goes ahead of fresh audio that still has
       // its whole budget.
-      this.datagramBacklog.unshift({ bytes, enqueuedAt: Number(this.nowMs()), retransmit: true });
+      this.datagramBacklog.unshift({
+        bytes,
+        enqueuedAt: Number(this.nowMs()),
+        retransmit: true,
+        release,
+      });
       return true;
     }
     return this.fallback.send(bytes).sent;
@@ -1208,7 +1254,7 @@ export class PreferredAudioTransport extends AudioTransport {
    * Repeats are not `original`: coverage telemetry counts each capture packet
    * once, however many times it had to be sent.
    */
-  writeDatagram(bytes, { original = true } = {}) {
+  writeDatagram(bytes, { original = true, onFailure = undefined } = {}) {
     const writer = this.datagramWriter;
     if (!writer) return false;
     try {
@@ -1235,6 +1281,8 @@ export class PreferredAudioTransport extends AudioTransport {
         settle();
         if (ownsCapture()) this.pumpDatagramBacklog();
       }, () => {
+        // Whichever session it belonged to, this datagram never left.
+        onFailure?.();
         if (!ownsCapture()) return;
         settle();
         this.telemetry.webTransportSendFailures += 1;

@@ -12,7 +12,7 @@ import {
   MONITOR_PCM_PACKET_VERSION,
   createMonitorPcmReceiver,
 } from './monitor-pcm-continuity.js';
-import { createStreamingLinearResampler } from './streaming-linear-resampler.js';
+import { createStreamingResampler } from './streaming-resampler.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
@@ -30,7 +30,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
   const monitorPcmReceiver = createMonitorPcmReceiver();
-  const listenResampler = createStreamingLinearResampler();
+  const listenResampler = createStreamingResampler();
   const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
   const iosAudioDestinationRecovery = new IosAudioDestinationRecovery();
 

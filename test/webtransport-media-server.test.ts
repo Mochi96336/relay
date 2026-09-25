@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 
 import {
   WebTransportMediaRuntime,
+  createWebTransportMediaSessions,
   createWebTransportMediaTicket,
   startWebTransportMediaServer,
   webTransportMediaConfig,
@@ -257,4 +258,114 @@ it('server delegates optional WebTransport lifecycle without moving Mic authorit
 
   assert.doesNotMatch(media, /from ['"]\.\/(?:mic-runtime|participant-session|audio-session)\.js['"]/);
   assert.doesNotMatch(media, /releaseMic\(|micOwnerId/);
+});
+
+describe('WebTransport media sessions', () => {
+  function fakeSession({
+    ticket,
+    ready = Promise.resolve(),
+    closed = new Promise<void>(() => {}),
+    datagrams = [] as Uint8Array[],
+    readerThrows = false,
+  }: {
+    ticket: string | null;
+    ready?: Promise<void>;
+    closed?: Promise<unknown>;
+    datagrams?: Uint8Array[];
+    readerThrows?: boolean;
+  }) {
+    const closes: unknown[] = [];
+    let released = false;
+    return {
+      closes,
+      get released() {
+        return released;
+      },
+      userData: ticket === null ? undefined : { ticket },
+      ready,
+      closed,
+      close(info: unknown) {
+        closes.push(info);
+      },
+      datagrams: {
+        createWritable: () => ({ getWriter: () => ({ write: async () => {}, releaseLock() {} }) }),
+        readable: {
+          getReader: () => {
+            if (readerThrows) throw new Error('session already gone');
+            return {
+              read: async () => (datagrams.length > 0
+                ? { done: false, value: datagrams.shift() }
+                : { done: true, value: undefined }),
+              releaseLock() {
+                released = true;
+              },
+            };
+          },
+        },
+      },
+    };
+  }
+
+  async function withoutUnhandledRejections(run: () => Promise<void>) {
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', listener);
+    try {
+      await run();
+      for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off('unhandledRejection', listener);
+    }
+    assert.deepEqual(unhandled, [], 'a failed session must never become an unhandled rejection');
+  }
+
+  it('absorbs a session that closes before its handshake completes', async () => {
+    await withoutUnhandledRejections(async () => {
+      const sessions = createWebTransportMediaSessions({ authorize: () => true, onDatagram: () => {} });
+      const failure = new Error('Opening handshake failed.');
+      const session = fakeSession({
+        ticket: 'ticket-a',
+        ready: Promise.reject(failure),
+        closed: Promise.reject(failure),
+      });
+      await sessions.consume(session);
+      assert.equal(sessions.hasSession('ticket-a'), false);
+    });
+  });
+
+  it('closes a stale ticket without leaving its closed promise unobserved', async () => {
+    await withoutUnhandledRejections(async () => {
+      const sessions = createWebTransportMediaSessions({ authorize: () => false, onDatagram: () => {} });
+      const session = fakeSession({ ticket: 'stale', closed: Promise.reject(new Error('closed')) });
+      await sessions.consume(session);
+      assert.deepEqual(session.closes, [{ closeCode: 403, reason: 'media ticket is no longer valid' }]);
+    });
+  });
+
+  it('does not keep a ticket live when its datagram reader cannot be opened', async () => {
+    await withoutUnhandledRejections(async () => {
+      const sessions = createWebTransportMediaSessions({ authorize: () => true, onDatagram: () => {} });
+      await sessions.consume(fakeSession({ ticket: 'ticket-b', readerThrows: true }));
+      assert.equal(sessions.hasSession('ticket-b'), false);
+      assert.equal(sessions.sendDatagram('ticket-b', new Uint8Array([1])), false);
+    });
+  });
+
+  it('delivers datagrams while the session is live and forgets it when it ends', async () => {
+    const received: [string, number[]][] = [];
+    let liveDuringRead = false;
+    const sessions = createWebTransportMediaSessions({
+      authorize: () => true,
+      onDatagram: (ticket, packet) => {
+        liveDuringRead = sessions.hasSession(ticket);
+        received.push([ticket, [...packet]]);
+      },
+    });
+    const session = fakeSession({ ticket: 'ticket-c', datagrams: [new Uint8Array([1, 2]), new Uint8Array([3])] });
+    await sessions.consume(session);
+    assert.deepEqual(received, [['ticket-c', [1, 2]], ['ticket-c', [3]]]);
+    assert.equal(liveDuringRead, true);
+    assert.equal(sessions.hasSession('ticket-c'), false);
+    assert.equal(session.released, true);
+  });
 });

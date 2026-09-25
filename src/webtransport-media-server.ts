@@ -208,6 +208,59 @@ async function startConfiguredWebTransportMediaServer(
   });
 
   const sessionStream = await server.sessionStream(path);
+  const sessions = createWebTransportMediaSessions(hooks);
+
+  void (async () => {
+    const reader = sessionStream.getReader();
+    try {
+      while (!sessions.stopping) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) void sessions.consume(value);
+      }
+    } catch {
+      if (!sessions.stopping) console.error('WebTransport media session stream failed.');
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+  })();
+
+  return {
+    available: true,
+    offer(ticket) {
+      return offerFor(config, ticket, certificateHash);
+    },
+    hasSession(ticket) {
+      return sessions.hasSession(ticket);
+    },
+    sendDatagram(ticket, bytes) {
+      return sessions.sendDatagram(ticket, bytes);
+    },
+    async stop() {
+      if (sessions.stopping) return;
+      sessions.stop();
+      server.stopServer();
+      try {
+        await server.closed;
+      } catch {}
+    },
+  };
+}
+
+/**
+ * Per-session media handling for the HTTP/3 server: which tickets have a live
+ * session, the newest outbound datagram writer for each, and the inbound
+ * datagram loop. Separate from the native server so it can be driven with
+ * plain session objects.
+ *
+ * A session that closes before it is established rejects both `ready` and
+ * `closed`. Nothing else observes those promises, and in Node an unhandled
+ * rejection terminates the process, so one phone dropping mid-handshake would
+ * take the whole room down. `consume` therefore never rejects.
+ */
+export function createWebTransportMediaSessions(hooks: WebTransportMediaHooks) {
   const activeSessions = new Map<string, number>();
   // Newest writable datagram path per ticket. A reconnecting page may briefly
   // hold two sessions; the one that opened last is the one it is reading.
@@ -222,32 +275,44 @@ async function startConfiguredWebTransportMediaServer(
     if (next <= 0) activeSessions.delete(ticket);
     else activeSessions.set(ticket, next);
   };
+  const close = (session: any, closeCode: number, reason: string) => {
+    try {
+      session.close({ closeCode, reason });
+    } catch {}
+  };
 
   const consumeSession = async (session: any) => {
+    Promise.resolve(session.closed).catch(() => {});
     const ticket = String(session.userData?.ticket ?? '');
     if (!ticket || !hooks.authorize(ticket)) {
-      session.close({ closeCode: 403, reason: 'media ticket is no longer valid' });
+      close(session, 403, 'media ticket is no longer valid');
       return;
     }
 
-    await session.ready;
+    try {
+      await session.ready;
+    } catch {
+      // The handshake failed; the page falls back to WebSocket on its own.
+      return;
+    }
     addSession(ticket);
     let outbound: { writer: any } | null = null;
+    let reader: any = null;
     try {
-      const writable = session.datagrams.writable ?? session.datagrams.createWritable();
-      outbound = { writer: writable.getWriter() };
-      sessionWriters.set(ticket, outbound);
-    } catch {
-      // Outbound datagrams are an optimisation; inbound media is unaffected.
-      outbound = null;
-    }
-    const reader = session.datagrams.readable.getReader();
-    try {
+      try {
+        const writable = session.datagrams.writable ?? session.datagrams.createWritable();
+        outbound = { writer: writable.getWriter() };
+        sessionWriters.set(ticket, outbound);
+      } catch {
+        // Outbound datagrams are an optimisation; inbound media is unaffected.
+        outbound = null;
+      }
+      reader = session.datagrams.readable.getReader();
       while (!stopping) {
         const { done, value } = await reader.read();
         if (done) break;
         if (!hooks.authorize(ticket)) {
-          session.close({ closeCode: 403, reason: 'media ticket expired' });
+          close(session, 403, 'media ticket expired');
           break;
         }
         if (value instanceof Uint8Array) {
@@ -264,37 +329,29 @@ async function startConfiguredWebTransportMediaServer(
         outbound?.writer.releaseLock();
       } catch {}
       try {
-        reader.releaseLock();
+        reader?.releaseLock();
       } catch {}
     }
   };
 
-  void (async () => {
-    const reader = sessionStream.getReader();
-    try {
-      while (!stopping) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) void consumeSession(value);
-      }
-    } catch {
-      if (!stopping) console.error('WebTransport media session stream failed.');
-    } finally {
-      try {
-        reader.releaseLock();
-      } catch {}
-    }
-  })();
-
   return {
-    available: true,
-    offer(ticket) {
-      return offerFor(config, ticket, certificateHash);
+    get stopping() {
+      return stopping;
     },
-    hasSession(ticket) {
+    stop() {
+      stopping = true;
+    },
+    async consume(session: any) {
+      try {
+        await consumeSession(session);
+      } catch (error) {
+        console.warn('WebTransport media session failed.', error);
+      }
+    },
+    hasSession(ticket: string | null) {
       return Boolean(ticket && (activeSessions.get(ticket) ?? 0) > 0);
     },
-    sendDatagram(ticket, bytes) {
+    sendDatagram(ticket: string | null, bytes: Uint8Array) {
       const outbound = ticket ? sessionWriters.get(ticket) : undefined;
       if (!outbound) return false;
       try {
@@ -305,14 +362,6 @@ async function startConfiguredWebTransportMediaServer(
       } catch {
         return false;
       }
-    },
-    async stop() {
-      if (stopping) return;
-      stopping = true;
-      server.stopServer();
-      try {
-        await server.closed;
-      } catch {}
     },
   };
 }

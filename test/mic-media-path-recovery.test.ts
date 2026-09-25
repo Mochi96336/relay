@@ -518,3 +518,114 @@ test('degraded latch may clear on spontaneous accepted PCM without restoring WT 
   assert.equal(recovered.webTransportDemotionUsed, true);
   assert.equal(recovered.webSocketReplacementUsed, true);
 });
+
+/** Demotes a failing WebTransport path and proves the WebSocket fallback. */
+function demoteAndRecover(recovery: MicMediaPathRecovery, captured: number, serial: number) {
+  assert.equal(
+    advanceStale(recovery, { fromCaptured: captured, count: 3, serial }).action,
+    'demote-webtransport',
+  );
+  captured += 400;
+  assert.equal(
+    recovery.observe(observation({
+      capturedSamples: captured,
+      serverAcceptedFrameSerial: serial,
+      serverMediaPath: 'websocket',
+      path: 'websocket',
+    })).reason,
+    'server-websocket-rebaseline',
+  );
+  captured += 100;
+  serial += 1;
+  assert.equal(
+    recovery.observe(observation({
+      capturedSamples: captured,
+      serverAcceptedFrameSerial: serial,
+      serverMediaPath: 'websocket',
+      path: 'websocket',
+    })).action,
+    'recovered',
+  );
+  return { captured, serial };
+}
+
+function healthyOnWebSocket(recovery: MicMediaPathRecovery, at: { captured: number; serial: number }) {
+  at.captured += 100;
+  at.serial += 1;
+  return recovery.observe(observation({
+    capturedSamples: at.captured,
+    serverAcceptedFrameSerial: at.serial,
+    serverMediaPath: 'websocket',
+    path: 'websocket',
+  }));
+}
+
+test('a WebSocket fallback proven healthy for 15 observations offers WebTransport again', () => {
+  const recovery = new MicMediaPathRecovery();
+  const at = demoteAndRecover(recovery, 1_000, 10);
+
+  for (let index = 1; index < 15; index += 1) {
+    const decision = healthyOnWebSocket(recovery, at);
+    assert.equal(decision.action, 'none');
+    assert.equal(decision.webTransportQuarantined, true);
+  }
+  const released = healthyOnWebSocket(recovery, at);
+  assert.equal(released.action, 'retry-webtransport');
+  assert.equal(released.reason, 'fallback-healthy');
+  assert.equal(released.webTransportQuarantined, false);
+  assert.equal(released.webTransportDemotionUsed, false, 'a failing retry can be demoted again');
+  assert.equal(released.quarantineReleasesUsed, 1);
+  assert.equal(recovery.quarantineWebTransport(), false);
+});
+
+test('a stale fallback observation restarts the healthy run before a release', () => {
+  const recovery = new MicMediaPathRecovery({ quarantineReleaseObservations: [3] });
+  const at = demoteAndRecover(recovery, 1_000, 10);
+
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'none');
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'none');
+  at.captured += 100;
+  assert.equal(
+    recovery.observe(observation({
+      capturedSamples: at.captured,
+      serverAcceptedFrameSerial: at.serial,
+      serverMediaPath: 'websocket',
+      path: 'websocket',
+    })).reason,
+    'server-pcm-stale-observation',
+  );
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'none');
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'none');
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'retry-webtransport');
+});
+
+test('a WebTransport path that keeps failing is released twice, then stays quarantined', () => {
+  const recovery = new MicMediaPathRecovery({ quarantineReleaseObservations: [2, 3] });
+  let at = demoteAndRecover(recovery, 1_000, 10);
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'none');
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'retry-webtransport');
+
+  // The offered session fails the same way: demoted again, never latched.
+  at = demoteAndRecover(recovery, at.captured + 100, at.serial);
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'none');
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'none');
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'retry-webtransport');
+
+  at = demoteAndRecover(recovery, at.captured + 100, at.serial);
+  for (let index = 0; index < 100; index += 1) {
+    const decision = healthyOnWebSocket(recovery, at);
+    assert.equal(decision.action, 'none');
+    assert.equal(decision.webTransportQuarantined, true);
+  }
+  assert.equal(recovery.status().quarantineReleasesUsed, 2);
+  assert.equal(recovery.status().degraded, false);
+});
+
+test('quarantine release budget is per capture', () => {
+  const recovery = new MicMediaPathRecovery({ quarantineReleaseObservations: [1] });
+  const at = demoteAndRecover(recovery, 1_000, 10);
+  assert.equal(healthyOnWebSocket(recovery, at).action, 'retry-webtransport');
+  assert.equal(recovery.status().quarantineReleasesUsed, 1);
+  recovery.observe(observation({ captureGeneration: 8, capturedSamples: 1_000 }));
+  assert.equal(recovery.status().quarantineReleasesUsed, 0);
+});

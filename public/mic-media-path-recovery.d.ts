@@ -1,12 +1,14 @@
 export const DEFAULT_MEDIA_PATH_STALE_OBSERVATIONS: number;
 export const DEFAULT_MEDIA_PATH_MIN_PACKET_COVERAGE: number;
 export const DEFAULT_MEDIA_PATH_MIN_PACKET_WINDOW: number;
+export const DEFAULT_WEBTRANSPORT_QUARANTINE_RELEASE_OBSERVATIONS: readonly number[];
 
 export type MicMediaPathRecoveryAction =
   | 'none'
   | 'demote-webtransport'
   | 'replace-websocket'
   | 'recovered'
+  | 'retry-webtransport'
   | 'degraded-latched';
 
 export type MicMediaPathRecoveryObservation = {
@@ -36,6 +38,7 @@ export type MicMediaPathRecoveryStatus = {
   webTransportDemotionUsed: boolean;
   webSocketReplacementUsed: boolean;
   webTransportQuarantined: boolean;
+  quarantineReleasesUsed: number;
   degraded: boolean;
 };
 
@@ -49,6 +52,7 @@ export class MicMediaPathRecovery {
     staleObservations?: number;
     minPacketCoverage?: number;
     minPacketWindow?: number;
+    quarantineReleaseObservations?: readonly number[];
   });
   reset(): void;
   status(): MicMediaPathRecoveryStatus;

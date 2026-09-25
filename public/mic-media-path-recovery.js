@@ -2,6 +2,21 @@ export const DEFAULT_MEDIA_PATH_STALE_OBSERVATIONS = 3;
 export const DEFAULT_MEDIA_PATH_MIN_PACKET_COVERAGE = 0.5;
 export const DEFAULT_MEDIA_PATH_MIN_PACKET_WINDOW = 8;
 
+/**
+ * Healthy WebSocket observations (one a second) before a quarantined
+ * WebTransport path is offered again, one entry per release.
+ *
+ * The usual cause of a semantic WebTransport failure on a phone is a network
+ * change: the control socket reconnects on the new network while the old QUIC
+ * session keeps accepting writes it can no longer deliver. That session is
+ * closed once demoted, and a fresh one on the new network would work, but the
+ * quarantine kept the whole remaining capture on the fallback. A path that
+ * fails for good - a network that drops UDP - costs one detection window per
+ * entry, so the list is short and each wait longer; after the last release a
+ * further failure keeps WebTransport quarantined for the capture.
+ */
+export const DEFAULT_WEBTRANSPORT_QUARANTINE_RELEASE_OBSERVATIONS = Object.freeze([15, 60]);
+
 function uint32(value) {
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 && number <= 0xffff_ffff
@@ -45,6 +60,7 @@ export class MicMediaPathRecovery {
     staleObservations = DEFAULT_MEDIA_PATH_STALE_OBSERVATIONS,
     minPacketCoverage = DEFAULT_MEDIA_PATH_MIN_PACKET_COVERAGE,
     minPacketWindow = DEFAULT_MEDIA_PATH_MIN_PACKET_WINDOW,
+    quarantineReleaseObservations = DEFAULT_WEBTRANSPORT_QUARANTINE_RELEASE_OBSERVATIONS,
   } = {}) {
     if (!Number.isInteger(staleObservations) || staleObservations < 1) {
       throw new Error('Mic media-path staleObservations must be a positive integer.');
@@ -55,7 +71,14 @@ export class MicMediaPathRecovery {
     if (!Number.isInteger(minPacketWindow) || minPacketWindow < 1) {
       throw new Error('Mic media-path minPacketWindow must be a positive integer.');
     }
+    if (
+      !Array.isArray(quarantineReleaseObservations)
+      || !quarantineReleaseObservations.every((count) => Number.isInteger(count) && count >= 1)
+    ) {
+      throw new Error('Mic media-path quarantineReleaseObservations must be positive integers.');
+    }
     this.staleObservations = staleObservations;
+    this.quarantineReleaseObservations = [...quarantineReleaseObservations];
     this.minPacketCoverage = minPacketCoverage;
     this.minPacketWindow = minPacketWindow;
     this.reset();
@@ -84,6 +107,8 @@ export class MicMediaPathRecovery {
     this.webTransportDemotionUsed = false;
     this.webSocketReplacementUsed = false;
     this.webTransportQuarantined = false;
+    this.quarantineReleasesUsed = 0;
+    this.healthyFallbackObservations = 0;
   }
 
   status() {
@@ -99,12 +124,34 @@ export class MicMediaPathRecovery {
       webTransportDemotionUsed: this.webTransportDemotionUsed,
       webSocketReplacementUsed: this.webSocketReplacementUsed,
       webTransportQuarantined: this.webTransportQuarantined,
+      quarantineReleasesUsed: this.quarantineReleasesUsed,
       degraded: this.phase === 'degraded-latched',
     };
   }
 
   quarantineWebTransport() {
     return this.webTransportQuarantined;
+  }
+
+  /**
+   * Counts one healthy observation on the WebSocket fallback toward releasing
+   * the quarantine. The release re-arms the one-time demotion so an offered
+   * path that fails again is demoted again rather than latched degraded.
+   */
+  noteHealthyFallback(localPath, reason) {
+    const required = this.quarantineReleaseObservations[this.quarantineReleasesUsed];
+    if (!this.webTransportQuarantined || localPath !== 'websocket' || required === undefined) {
+      return { action: 'none', reason, ...this.status() };
+    }
+    this.healthyFallbackObservations += 1;
+    if (this.healthyFallbackObservations < required) {
+      return { action: 'none', reason, ...this.status() };
+    }
+    this.healthyFallbackObservations = 0;
+    this.quarantineReleasesUsed += 1;
+    this.webTransportQuarantined = false;
+    this.webTransportDemotionUsed = false;
+    return { action: 'retry-webtransport', reason: 'fallback-healthy', ...this.status() };
   }
 
   noteSourceIneligibleBoundary() {
@@ -666,12 +713,15 @@ export class MicMediaPathRecovery {
       }
       if (coverageEvidence.healthy && serverAdvanced) {
         this.staleCount = 0;
-        return { action: 'none', reason: 'server-pcm-coverage-healthy', ...this.status() };
+        return this.noteHealthyFallback(localPath, 'server-pcm-coverage-healthy');
       }
     } else if (serverAdvanced) {
       this.staleCount = 0;
-      return { action: 'none', reason: 'server-pcm-advancing', ...this.status() };
+      return this.noteHealthyFallback(localPath, 'server-pcm-advancing');
     }
+
+    // Only an unbroken run of healthy fallback earns WebTransport another try.
+    this.healthyFallbackObservations = 0;
 
     const underDelivered = coverageEvidence.available
       && coverageEvidence.ready

@@ -65,8 +65,9 @@ export const DEFAULT_RETRANSMIT_BUFFER_PACKETS = 128;
  * A phone moving between Wi-Fi and cellular, a NAT rebinding or one failed
  * write closes the datagram session, and the capture then stayed on the
  * WebSocket fallback until the control socket happened to re-register. The
- * same capture-scoped offer is retried instead. A recovery quarantine is a
- * deliberate verdict and is never retried here.
+ * same capture-scoped offer is retried instead. A recovery quarantine is not
+ * retried here: media recovery releases it once the fallback has proven
+ * healthy for a while (see DEFAULT_WEBTRANSPORT_QUARANTINE_RELEASE_OBSERVATIONS).
  */
 export const DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 15_000, 30_000]);
 const AUDIO_PACKET_MAGIC = 0x4c52;
@@ -327,7 +328,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.webTransportRetryDelaysMs = [...webTransportRetryDelaysMs];
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
-    /** The offer a transport-level demotion may retry, while it still applies. */
+    /** The offer a demotion or a released quarantine may retry, while it still applies. */
     this.retryableOffer = null;
     this.webTransportRetryAttempt = 0;
     this.webTransportRetryTimer = null;
@@ -665,6 +666,10 @@ export class PreferredAudioTransport extends AudioTransport {
       this.demoteWebTransport();
       return;
     }
+    if (decision.action === 'retry-webtransport') {
+      this.retryQuarantinedWebTransport();
+      return;
+    }
     if (decision.action !== 'replace-websocket') return;
 
     // Fence every late ACK from the retiring physical socket immediately. The
@@ -797,7 +802,7 @@ export class PreferredAudioTransport extends AudioTransport {
       this.retryableOffer = offer?.preferred === 'webtransport' && offer.url ? offer : null;
     }
     if (this.mediaPathRecovery.quarantineWebTransport()) {
-      this.retryableOffer = null;
+      // Keep the offer: it is the one tried when the quarantine is released.
       this.closeWebTransport();
       this.resolveInitialPreference();
       return false;
@@ -930,6 +935,19 @@ export class PreferredAudioTransport extends AudioTransport {
     if (demoted) {
       try { demoted.close(); } catch {}
     }
+  }
+
+  retryQuarantinedWebTransport() {
+    const offer = this.retryableOffer;
+    if (!offer || this.datagramWriter || !this.fallback.socket) return;
+    this.cancelWebTransportRetry();
+    this.webTransportRetryAttempt = 0;
+    this.telemetry.webTransportRetries += 1;
+    void this.prefer(offer, { retry: true }).then((preferred) => {
+      if (!preferred && this.retryableOffer === offer && !this.datagramWriter) {
+        this.scheduleWebTransportRetry();
+      }
+    });
   }
 
   cancelWebTransportRetry() {

@@ -397,13 +397,64 @@ describe('browser Mic retransmission', () => {
     transport.bind(socket);
     transport.send(mediaPacket(3, 4));
     socket.readyState = 3;
-    assert.equal(transport.send(mediaPacket(3, 5)).reason, 'disconnected');
+    const unsent = transport.send(mediaPacket(3, 5));
+    assert.equal(unsent.reason, 'disconnected');
+    assert.equal(unsent.sent, false);
+    assert.equal(unsent.retained, true, 'kept for repair, so its sequence is spent');
     socket.readyState = 1;
     transport.send(mediaPacket(3, 6));
 
     // Relay finds 5 missing once the socket is back and asks for it.
     socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 3, sequences: [5] });
     assert.deepEqual(socket.sent.map((sent) => sequenceOf(new Uint8Array(sent as Uint8Array))), [4, 6, 5]);
+  });
+
+  it('keeps a packet the congested socket refused, and says so', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport();
+    const socket = new FakeSocket();
+    transport.bind(socket, { sampleRate: 48_000 });
+    socket.bufferedAmount = 1_000_000;
+    const refused = transport.send(mediaPacket(3, 7));
+    assert.equal(refused.reason, 'congested');
+    assert.equal(refused.retained, true);
+
+    socket.bufferedAmount = 0;
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 3, sequences: [7] });
+    assert.deepEqual(socket.sent.map((sent) => sequenceOf(new Uint8Array(sent as Uint8Array))), [7]);
+  });
+
+  it('neither keeps nor spends a sequence before the first path is chosen', async () => {
+    // Relay's receiver starts at the sequence registered before this wait, so
+    // audio held back here was never part of the stream it can repair.
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({ holdMediaUntilPreference: true, nowMs: () => 0 });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    const held = transport.send(mediaPacket(3, 0));
+    assert.equal(held.reason, 'disconnected');
+    assert.equal(held.retained, false);
+
+    socket.deliver({ type: 'audio-retransmit-request', version: 1, captureGeneration: 3, sequences: [0] });
+    assert.equal(socket.sent.length, 0);
+  });
+
+  it('does not spend a sequence it has no history to repeat from', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    const transport = new PreferredAudioTransport({ retransmitBufferPackets: 0 });
+    const socket = new FakeSocket();
+    transport.bind(socket);
+    socket.readyState = 3;
+    assert.equal(transport.send(mediaPacket(3, 0)).retained, false);
+  });
+
+  it('numbers the next capture packet after one the transport kept', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+    assert.match(
+      app,
+      /if \(sendResult\.sent \|\| sendResult\.retained\) \{\s*capturePacketSequence = \(capturePacketSequence \+ 1\) >>> 0;/,
+    );
   });
 
   it('keeps only a bounded history and forgets it with the capture', async () => {

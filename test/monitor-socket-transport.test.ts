@@ -164,3 +164,105 @@ test('a listener that has left is not reported as behind', () => {
   (slow.socket as { readyState: number }).readyState = WebSocket.CLOSED;
   assert.deepEqual(transport.recentDrops(), { frames: 1, listeners: 0, windowMs: 10_000 });
 });
+
+const FRAME = 960;
+
+function positionedFrame(transport: ReturnType<typeof createMonitorSocketTransport>, index: number, generation = 1) {
+  transport.broadcast(Buffer.alloc(FRAME * 2), true, { generation, firstSampleIndex: index * FRAME });
+}
+
+function ack(
+  transport: ReturnType<typeof createMonitorSocketTransport>,
+  socket: RelaySocket,
+  receivedEndSampleIndex: number,
+  generation = 1,
+) {
+  return transport.acknowledge(socket, { type: 'monitor-ack', generation, receivedEndSampleIndex });
+}
+
+test('a monitor that never confirms delivery is only limited by its own socket buffer', () => {
+  const listener = fakeSocket({ monitorPacketVersion: 1 });
+  const transport = createMonitorSocketTransport(fakeServer(listener.socket), {
+    backlogBytes: 1_000_000,
+    unacknowledgedSamples: FRAME * 5,
+  });
+  for (let index = 0; index < 50; index += 1) positionedFrame(transport, index);
+  assert.equal(listener.sent.length, 50);
+  assert.equal(transport.droppedFrames, 0);
+});
+
+test('a confirming monitor stops receiving once too much is outstanding, and rejoins after catching up', () => {
+  const listener = fakeSocket({ monitorPacketVersion: 1 });
+  const transport = createMonitorSocketTransport(fakeServer(listener.socket), {
+    backlogBytes: 1_000_000,
+    unacknowledgedSamples: FRAME * 5,
+    nowMs: () => 0,
+  });
+  positionedFrame(transport, 0);
+  assert.equal(ack(transport, listener.socket, FRAME), true);
+
+  // The link stalls downstream: the socket buffer stays empty, no acks come.
+  for (let index = 1; index <= 10; index += 1) positionedFrame(transport, index);
+  const sentIndexes = () => listener.sent.map((sent) => decodePcmFrame(sent.payload as Buffer).firstSampleIndex! / FRAME);
+  assert.deepEqual(sentIndexes(), [0, 1, 2, 3, 4, 5, 6], 'sending stops past five outstanding frames');
+  assert.deepEqual(transport.recentDrops(), { frames: 4, listeners: 1, windowMs: 10_000 });
+
+  // The stalled audio finally arrives and is confirmed.
+  ack(transport, listener.socket, FRAME * 7);
+  positionedFrame(transport, 11);
+  assert.deepEqual(sentIndexes(), [0, 1, 2, 3, 4, 5, 6, 11], 'the hole brings the listener to the live edge');
+});
+
+test('a confirmation from an earlier mix generation confirms nothing of the current one', () => {
+  const listener = fakeSocket({ monitorPacketVersion: 1 });
+  const transport = createMonitorSocketTransport(fakeServer(listener.socket), {
+    backlogBytes: 1_000_000,
+    unacknowledgedSamples: FRAME * 3,
+  });
+  positionedFrame(transport, 0, 1);
+  ack(transport, listener.socket, FRAME, 1);
+  for (let index = 0; index < 6; index += 1) positionedFrame(transport, index, 2);
+  assert.equal(listener.sent.length, 1 + 4);
+  ack(transport, listener.socket, FRAME * 4, 2);
+  positionedFrame(transport, 6, 2);
+  assert.equal(listener.sent.length, 6);
+});
+
+test('monitor acknowledgements are validated and never move backwards', () => {
+  const listener = fakeSocket({ monitorPacketVersion: 1 });
+  const legacy = fakeSocket();
+  const publisher = fakeSocket({ role: 'publisher' });
+  const transport = createMonitorSocketTransport(fakeServer(listener.socket), {
+    backlogBytes: 1_000_000,
+    unacknowledgedSamples: FRAME,
+  });
+
+  assert.equal(transport.acknowledge(listener.socket, { type: 'clock-ping' }), false);
+  for (const bad of [
+    { type: 'monitor-ack', generation: -1, receivedEndSampleIndex: 0 },
+    { type: 'monitor-ack', generation: 2 ** 32, receivedEndSampleIndex: 0 },
+    { type: 'monitor-ack', generation: 1, receivedEndSampleIndex: 1.5 },
+    { type: 'monitor-ack', generation: 1, receivedEndSampleIndex: '960' },
+  ]) {
+    assert.equal(transport.acknowledge(listener.socket, bad), true);
+    assert.equal(listener.socket.monitorDelivery, undefined);
+  }
+  assert.equal(ack(transport, legacy.socket, FRAME), true);
+  assert.equal(legacy.socket.monitorDelivery, undefined, 'only positioned monitors confirm delivery');
+  assert.equal(ack(transport, publisher.socket, FRAME), true);
+  assert.equal(publisher.socket.monitorDelivery, undefined);
+
+  ack(transport, listener.socket, FRAME * 4);
+  ack(transport, listener.socket, FRAME * 2);
+  assert.deepEqual(listener.socket.monitorDelivery?.acknowledged, { generation: 1, endSampleIndex: FRAME * 4 });
+});
+
+test('Listen confirms delivered monitor PCM and Relay routes it to the monitor transport', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const listen = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
+  const server = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
+  assert.match(listen, /if \(received\.action !== 'accept'\) return;[\s\S]{0,200}acknowledgeMonitorFrame\(next, received\.frame\);/);
+  assert.match(listen, /type: 'monitor-ack',\s*generation: frame\.generation,\s*receivedEndSampleIndex: frame\.firstSampleIndex \+ frame\.sampleCount,/);
+  assert.match(server, /if \(monitorTransport\.acknowledge\(socket, payload\)\) return;/);
+  assert.match(server, /unacknowledgedSamples: MONITOR_UNACKNOWLEDGED_SAMPLES/);
+});

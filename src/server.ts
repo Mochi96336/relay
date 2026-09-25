@@ -151,6 +151,14 @@ const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
 const MONITOR_BACKLOG_MS = relayConfig.monitorBacklogMs;
 const MONITOR_BACKLOG_BYTES = monitorBacklogBudgetBytes(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS);
+/**
+ * Room audio a Listen page may have outstanding - sent but not confirmed - on
+ * top of its round trip, before it is dropped to rejoin the live edge. The
+ * byte backlog above only sees this process's own socket buffer.
+ */
+const MONITOR_UNACKNOWLEDGED_SAMPLES = Math.round(
+  (MIX_SAMPLE_RATE * relayConfig.monitorUnacknowledgedMs) / 1_000,
+);
 const LIVE_MIX_PREBUFFER_MS = relayConfig.livePrebufferMs;
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
@@ -213,6 +221,7 @@ const {
 } = createRelaySocketTransport(wss);
 const monitorTransport = createMonitorSocketTransport(wss, {
   backlogBytes: MONITOR_BACKLOG_BYTES,
+  unacknowledgedSamples: MONITOR_UNACKNOWLEDGED_SAMPLES,
 });
 const infrastructureCapability = new InfrastructureCapabilityRuntime<RelaySocket>({
   key: relayConfig.infrastructureKey,
@@ -3968,6 +3977,7 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
+    if (monitorTransport.acknowledge(socket, payload)) return;
     if (queryProtocol.dispatch(socket, payload)) return;
     if (commandProtocol.dispatch(socket, payload)) return;
     if (infrastructureEventProtocol.dispatch(socket, payload)) return;

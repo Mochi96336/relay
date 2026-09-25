@@ -30,3 +30,28 @@ export function monitorFrameWouldExceedBacklog(
   const incoming = Number.isFinite(nextFrameBytes) ? Math.max(0, nextFrameBytes) : 0;
   return queued + incoming > budgetBytes;
 }
+
+/** One monitor's positioned-PCM delivery: what was sent and what it confirmed. */
+export type MonitorDelivery = {
+  sent: { generation: number; endSampleIndex: number } | null;
+  acknowledged: { generation: number; endSampleIndex: number } | null;
+};
+
+/**
+ * Mix samples sent to a monitor that it has not confirmed receiving, or null
+ * for a monitor that never confirms anything (an older Listen page).
+ *
+ * The socket's own backlog is blind to everything past this process: behind a
+ * tunnel or reverse proxy the server writes to a local connection that always
+ * drains, and seconds of stale PCM queue up downstream where bufferedAmount
+ * never sees them. Only the listener can say what actually arrived. An
+ * acknowledgement from an earlier mix generation confirms nothing of the
+ * current one, whose sample positions start again from zero.
+ */
+export function monitorUnacknowledgedSamples(delivery: MonitorDelivery) {
+  const { sent, acknowledged } = delivery;
+  if (!acknowledged) return null;
+  if (!sent) return 0;
+  const confirmed = acknowledged.generation === sent.generation ? acknowledged.endSampleIndex : 0;
+  return Math.max(0, sent.endSampleIndex - confirmed);
+}

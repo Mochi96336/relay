@@ -11,8 +11,12 @@
 Description=Relay server
 Documentation=https://github.com/Mochi96336/relay/blob/main/ROBOT_DEPLOYMENT.md
 After=network.target
-# A server that cannot start will not be fixed by starting it every five
-# seconds. Stop, and leave a failed unit behind to be read.
+# Restart=always below brings the server back from a clean SIGTERM too, not
+# only from a crash - on 2026-09-06 something sent it a TERM and the unit,
+# being on-failure at the time, stayed down for a day. The limit here is what
+# keeps that from becoming a loop: a server that cannot start will not be
+# fixed by starting it every five seconds. Give up after five, and leave a
+# failed unit behind to be read.
 StartLimitIntervalSec=120
 StartLimitBurst=5
 
@@ -25,7 +29,7 @@ WorkingDirectory=%h/relay
 Environment=PORT=3100
 EnvironmentFile=-%h/.config/relay/robot.env
 ExecStart=/usr/bin/npm start
-Restart=on-failure
+Restart=always
 RestartSec=5
 SyslogIdentifier=relay-server
 

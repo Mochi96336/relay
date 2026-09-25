@@ -1,12 +1,19 @@
 /**
- * Pitch-synchronous packet-loss concealment for the Mic timeline.
+ * Packet-loss concealment for the Mic timeline.
  *
  * A lost 10-20 ms of a sung note heard as silence is a click-gap-click that no
  * edge taper removes, because the listener hears the *absence*, not the edge.
  * Real-time voice stacks (G.711 Appendix I, Opus, WebRTC NetEQ) instead keep
  * the waveform going: repeat the last pitch period, fade it out if the loss
- * runs long, and blend back into real audio when it returns. This is the same
- * idea in its simplest dependable form.
+ * runs long, and blend back into real audio when it returns.
+ *
+ * Only voiced audio has a period to repeat. Breath, fricatives, room hiss and
+ * interface noise have none, and repeating a "best" 2-16 ms slice of them turns
+ * broadband noise into a 60-500 Hz buzz. So, like NetEQ's expand, the fill
+ * follows how periodic the history actually is: a clear period is repeated;
+ * noise is continued as noise with the same spectral envelope (an LPC filter
+ * driven by white noise at the history's residual level); in between, the two
+ * are mixed at constant power.
  *
  * It is purely an audible fill. Callers must keep reporting the concealed span
  * as missing evidence: concealment changes what the room hears, never what
@@ -15,9 +22,9 @@
 
 export type ConcealmentOptions = {
   sampleRate: number;
-  /** Full-level repetition before the fade begins. */
+  /** Full-level fill before the fade begins. */
   holdMs?: number;
-  /** Repetition beyond this fades to silence; the rest of the gap stays silent. */
+  /** Fill beyond this fades to silence; the rest of the gap stays silent. */
   maxConcealMs?: number;
 };
 
@@ -28,22 +35,46 @@ export type Concealment = {
   blendedNextSamples: number;
   /** Samples at the end of `previous` rewritten to join the repetition. */
   blendedPreviousSamples: number;
-  periodSamples: number;
-  /** Real historical pitch periods used to vary concealment after the first 10 ms. */
+  /** Repeated period, or null when the fill is noise only. */
+  periodSamples: number | null;
+  /** Real historical pitch periods used to vary repetition after the first 10 ms. */
   historyPeriods: number;
+  /** Share of the fill's power that is periodic repetition, 0..1. */
+  voicing: number;
+};
+
+export type PitchEstimate = {
+  periodSamples: number;
+  /** Normalised autocorrelation at that period: near 1 for a held note, near 0 for noise. */
+  correlation: number;
 };
 
 const MIN_PITCH_HZ = 60;
 const MAX_PITCH_HZ = 500;
 const CORRELATION_WINDOW_MS = 10;
 const JOIN_MS = 4;
+/**
+ * For a periodic signal plus independent noise, the normalised correlation at
+ * the period is close to the periodic share of the power: measured on this
+ * estimator, a harmonic note 6 dB above noise reads 0.80, 0 dB reads 0.53.
+ * Pure noise still reads up to about 0.43, because the search keeps the best
+ * of several hundred lags; below that nothing is periodic.
+ */
+const NOISE_CORRELATION_CEILING = 0.42;
+const VOICING_RAMP = 0.1;
+/** Above this the history is a held note: repeat it, add no noise. */
+const FULLY_VOICED_CORRELATION = 0.95;
+const LPC_ORDER = 16;
+const LPC_WINDOW_MS = 20;
+/** Bandwidth expansion: keeps the synthesis filter's poles off the unit circle. */
+const LPC_BANDWIDTH_EXPANSION = 0.98;
 
 /**
- * Normalised autocorrelation pitch search over the end of `history`.
- * Returns the period in samples. Unvoiced input still returns the best lag:
- * repeating a short noise segment is a far smaller artefact than a hole.
+ * Normalised autocorrelation pitch search over the end of `history`: the best
+ * period in 60-500 Hz and how periodic the signal really is there. Noise
+ * always has *some* best lag; its correlation is what says it is not a pitch.
  */
-export function estimatePitchPeriod(history: Int16Array, sampleRate: number) {
+export function estimatePitch(history: Int16Array, sampleRate: number): PitchEstimate | null {
   const minLag = Math.max(2, Math.floor(sampleRate / MAX_PITCH_HZ));
   const maxLag = Math.floor(sampleRate / MIN_PITCH_HZ);
   const window = Math.round((CORRELATION_WINDOW_MS * sampleRate) / 1000);
@@ -87,16 +118,33 @@ export function estimatePitchPeriod(history: Int16Array, sampleRate: number) {
   }
 
   // Octave guard: a period and its double correlate almost equally. Prefer the
-  // shortest candidate that is nearly as good, so repetition stays tight.
-  for (let divisor = 2; divisor <= 4; divisor += 1) {
-    const candidate = Math.round(bestLag / divisor);
-    if (candidate < minLag) break;
-    if (correlationAt(candidate) >= bestScore * 0.9) {
-      bestLag = candidate;
-      break;
+  // shortest candidate that is nearly as good, so repetition stays tight. Only
+  // a real period has octaves; for noise the comparison means nothing.
+  if (bestScore > 0) {
+    for (let divisor = 2; divisor <= 4; divisor += 1) {
+      const candidate = Math.round(bestLag / divisor);
+      if (candidate < minLag) break;
+      const score = correlationAt(candidate);
+      if (score >= bestScore * 0.9) {
+        bestLag = candidate;
+        bestScore = score;
+        break;
+      }
     }
   }
-  return bestLag;
+  return { periodSamples: bestLag, correlation: Math.max(0, bestScore) };
+}
+
+/** The best period in samples, whether or not the history is voiced. */
+export function estimatePitchPeriod(history: Int16Array, sampleRate: number) {
+  return estimatePitch(history, sampleRate)?.periodSamples ?? null;
+}
+
+/** Share of fill power given to periodic repetition for a pitch correlation. */
+export function voicingForCorrelation(correlation: number) {
+  if (correlation >= FULLY_VOICED_CORRELATION) return 1;
+  if (correlation <= NOISE_CORRELATION_CEILING) return 0;
+  return correlation * Math.min(1, (correlation - NOISE_CORRELATION_CEILING) / VOICING_RAMP);
 }
 
 function clampInt16(value: number) {
@@ -104,13 +152,106 @@ function clampInt16(value: number) {
 }
 
 /**
+ * Linear-prediction coefficients (autocorrelation method, Levinson-Durbin) of
+ * a Hann-windowed segment. The windowed autocorrelation keeps the synthesis
+ * filter stable; bandwidth expansion keeps it from ringing.
+ */
+function lpcCoefficients(segment: Float64Array, order: number) {
+  const n = segment.length;
+  const windowed = new Float64Array(n);
+  for (let i = 0; i < n; i += 1) {
+    windowed[i] = segment[i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * (i + 0.5)) / n));
+  }
+  const r = new Float64Array(order + 1);
+  for (let lag = 0; lag <= order; lag += 1) {
+    let sum = 0;
+    for (let i = lag; i < n; i += 1) sum += windowed[i] * windowed[i - lag];
+    r[lag] = sum;
+  }
+  // White-noise correction: a -40 dB floor so a nearly pure tone stays solvable.
+  r[0] *= 1.0001;
+  if (r[0] <= 0) return null;
+
+  const a = new Float64Array(order + 1);
+  const previous = new Float64Array(order + 1);
+  let error = r[0];
+  for (let i = 1; i <= order; i += 1) {
+    let acc = r[i];
+    for (let j = 1; j < i; j += 1) acc -= a[j] * r[i - j];
+    const k = acc / error;
+    if (!Number.isFinite(k) || Math.abs(k) >= 1) break;
+    previous.set(a);
+    a[i] = k;
+    for (let j = 1; j < i; j += 1) a[j] = previous[j] - k * previous[i - j];
+    error *= 1 - k * k;
+    if (error <= 0) break;
+  }
+  let gamma = 1;
+  for (let i = 1; i <= order; i += 1) {
+    gamma *= LPC_BANDWIDTH_EXPANSION;
+    a[i] *= gamma;
+  }
+  return a;
+}
+
+/**
+ * `length` samples continuing `history` as noise with its spectral envelope:
+ * the LPC synthesis filter starts from the real samples, so the first
+ * synthetic sample follows the last real one, and is driven by white noise at
+ * the level of the history's own prediction residual. Never louder than the
+ * loudest real sample it learned from.
+ */
+function noiseContinuation(history: Int16Array, length: number, sampleRate: number) {
+  const order = Math.min(LPC_ORDER, history.length - 1);
+  const windowLength = Math.min(history.length, Math.round((LPC_WINDOW_MS * sampleRate) / 1000));
+  if (order < 1 || windowLength <= order * 2) return null;
+  const segment = Float64Array.from(history.subarray(history.length - windowLength));
+  const a = lpcCoefficients(segment, order);
+  if (!a) return null;
+
+  let peak = 0;
+  let residualEnergy = 0;
+  for (let i = order; i < segment.length; i += 1) {
+    let predicted = 0;
+    for (let k = 1; k <= order; k += 1) predicted += a[k] * segment[i - k];
+    residualEnergy += (segment[i] - predicted) ** 2;
+  }
+  for (const sample of segment) peak = Math.max(peak, Math.abs(sample));
+  const excitationRms = Math.sqrt(residualEnergy / (segment.length - order));
+
+  // Deterministic excitation: the same loss conceals the same way.
+  let seed = 0x9e37_79b9;
+  for (let i = segment.length - 32; i < segment.length; i += 1) {
+    seed = Math.imul(seed ^ (segment[i] & 0xffff), 0x85eb_ca6b) >>> 0;
+  }
+  const white = () => {
+    seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+    // Uniform on [-sqrt(3), sqrt(3)): unit variance.
+    return ((seed / 0x1_0000_0000) * 2 - 1) * Math.sqrt(3);
+  };
+
+  const state = Float64Array.from(segment.subarray(segment.length - order));
+  const output = new Float64Array(length);
+  for (let i = 0; i < length; i += 1) {
+    let value = excitationRms * white();
+    // state[order - k] is the sample k steps back.
+    for (let k = 1; k <= order; k += 1) value += a[k] * state[order - k];
+    value = Math.max(-peak, Math.min(peak, value));
+    state.copyWithin(0, 1);
+    state[order - 1] = value;
+    output[i] = value;
+  }
+  return output;
+}
+
+/**
  * Builds concealment for a gap of `gapSamples` between `previous` (whose tail
  * may be rewritten in place over a fraction of a period) and `next` (whose head
- * is blended in place when the repetition is still audible at the gap's end).
+ * is blended in place when the fill is still audible at the gap's end).
  * `history` must end exactly where `previous` ends and include it.
  *
- * Returns null when there is not enough real history to find a period; the
- * caller then keeps its plain edge taper.
+ * Returns null when there is not enough real history to continue; the caller
+ * then keeps its plain edge taper.
  */
 export function concealGap(
   history: Int16Array,
@@ -124,77 +265,92 @@ export function concealGap(
   const maxConcealSamples = Math.round(((options.maxConcealMs ?? 60) * sampleRate) / 1000);
   if (gapSamples <= 0 || previous.length === 0) return null;
 
-  const period = estimatePitchPeriod(history, sampleRate);
-  if (period === null || period > history.length) return null;
+  const pitch = estimatePitch(history, sampleRate);
+  if (pitch === null || pitch.periodSamples > history.length) return null;
+  const voicing = voicingForCorrelation(pitch.correlation);
+  const period = voicing > 0 ? pitch.periodSamples : null;
 
-  // The first 10 ms intentionally repeats the most recent period exactly.
-  // Beyond that, a single short cycle becomes an audible harmonic "beep",
-  // especially for unvoiced/transition material. G.711 Appendix I addresses
-  // the same failure by increasing the amount of real pitch history used as
-  // the erasure continues. Keep up to three contiguous real periods and move
-  // between them gradually at equal pitch phase, so the waveform gains natural
-  // variation without introducing a new splice at each 10 ms boundary.
-  const historyPeriods = Math.max(1, Math.min(3, Math.floor(history.length / period)));
-  const variationWindowSamples = Math.max(1, holdSamples);
-  const historicalPeriodSample = (periodIndex: number, phase: number) => (
-    history[
-      history.length
-      - ((periodIndex + 1) * period)
-      + phase
-    ]
-  );
   const fadeSamples = Math.max(1, maxConcealSamples - holdSamples);
   const gainAt = (index: number) => (
     index < holdSamples ? 1 : Math.max(0, 1 - (index - holdSamples) / fadeSamples)
   );
-  // Continuation index 0 is the sample right after `previous` ends.
-  const continuation = (index: number) => {
-    const phase = index % period;
+  const fillLength = Math.min(gapSamples, maxConcealSamples);
+  const joinLimit = Math.max(1, Math.round((JOIN_MS * sampleRate) / 1000));
+  const joinSamples = Math.min(
+    joinLimit,
+    previous.length,
+    ...(period === null ? [] : [Math.floor(period / 2), history.length - period]),
+  );
+
+  // Constant-power mix of the two continuations: they are uncorrelated.
+  const periodicWeight = Math.sqrt(voicing);
+  const noiseWeight = Math.sqrt(1 - voicing);
+  const noise = noiseWeight > 0
+    ? noiseContinuation(history, fillLength + joinSamples, sampleRate)
+    : null;
+  if (noiseWeight > 0 && noise === null && period === null) return null;
+  // The first 10 ms repeats the most recent period exactly. Beyond that, a
+  // single short cycle becomes an audible harmonic "beep"; G.711 Appendix I
+  // answers by drawing on more real pitch history as the erasure continues.
+  // Keep up to three contiguous real periods and move between them gradually
+  // at equal pitch phase, so the waveform gains natural variation without a
+  // new splice at each 10 ms boundary.
+  const historyPeriods = period === null
+    ? 0
+    : Math.max(1, Math.min(3, Math.floor(history.length / period)));
+  const variationWindowSamples = Math.max(1, holdSamples);
+  const historicalPeriodSample = (periodIndex: number, phase: number) => (
+    history[history.length - (periodIndex + 1) * period! + phase]
+  );
+  const periodicAt = (index: number) => {
+    const phase = index % period!;
     if (index < variationWindowSamples || historyPeriods === 1) {
       return historicalPeriodSample(0, phase);
     }
-
     const segment = Math.floor(index / variationWindowSamples);
     const offset = index % variationWindowSamples;
     const fromPeriod = (segment - 1) % historyPeriods;
     const toPeriod = segment % historyPeriods;
-    const weight = variationWindowSamples <= 1
-      ? 1
-      : offset / (variationWindowSamples - 1);
-    return (
-      historicalPeriodSample(fromPeriod, phase) * (1 - weight)
-      + historicalPeriodSample(toPeriod, phase) * weight
-    );
+    const weight = variationWindowSamples <= 1 ? 1 : offset / (variationWindowSamples - 1);
+    return historicalPeriodSample(fromPeriod, phase) * (1 - weight)
+      + historicalPeriodSample(toPeriod, phase) * weight;
+  };
+  // Continuation index 0 is the sample right after `previous` ends.
+  // A part that could not be built leaves the other at full level.
+  const continuation = (index: number) => {
+    let value = 0;
+    if (period !== null) value += (noise ? periodicWeight : 1) * periodicAt(index);
+    if (noise) value += (period !== null ? noiseWeight : 1) * noise[index];
+    return value;
   };
 
   // Join: ease the last fraction of a period of real audio toward the cycle's
   // own lead-in, so the first repeated sample follows without a step. The
   // lead-in to cycle[0] is the period before it, i.e. history shifted by one
   // period - exactly what a perfectly periodic signal would have contained.
-  const joinSamples = Math.min(
-    Math.max(1, Math.round((JOIN_MS * sampleRate) / 1000)),
-    Math.floor(period / 2),
-    previous.length,
-    history.length - period,
-  );
-  for (let j = 0; j < joinSamples; j += 1) {
-    const previousIndex = previous.length - joinSamples + j;
-    const historyIndex = history.length - joinSamples + j;
-    const weight = (j + 1) / (joinSamples + 1);
-    previous[previousIndex] = clampInt16(
-      previous[previousIndex] * (1 - weight) + history[historyIndex - period] * weight,
-    );
+  // The noise part needs no join: its filter already starts from real audio.
+  let blendedPreviousSamples = 0;
+  if (period !== null) {
+    const joinWeight = noise ? periodicWeight : 1;
+    blendedPreviousSamples = joinSamples;
+    for (let j = 0; j < joinSamples; j += 1) {
+      const previousIndex = previous.length - joinSamples + j;
+      const historyIndex = history.length - joinSamples + j;
+      const weight = ((j + 1) / (joinSamples + 1)) * joinWeight;
+      previous[previousIndex] = clampInt16(
+        previous[previousIndex] * (1 - weight) + history[historyIndex - period] * weight,
+      );
+    }
   }
 
-  const fillLength = Math.min(gapSamples, maxConcealSamples);
   const fill = new Int16Array(fillLength);
   for (let i = 0; i < fillLength; i += 1) {
     fill[i] = clampInt16(continuation(i) * gainAt(i));
   }
 
-  // Leave the gap: if the repetition is still audible, crossfade into real
-  // audio from the continued repetition. If it already faded out, the caller's
-  // own fade-in from silence owns that edge.
+  // Leave the gap: if the fill is still audible, crossfade into real audio
+  // from its continuation. If it already faded out, the caller's own fade-in
+  // from silence owns that edge.
   let blendedNextSamples = 0;
   if (next && fillLength === gapSamples) {
     const endGain = gainAt(gapSamples);
@@ -211,8 +367,9 @@ export function concealGap(
   return {
     fill,
     blendedNextSamples,
-    blendedPreviousSamples: joinSamples,
+    blendedPreviousSamples,
     periodSamples: period,
     historyPeriods,
+    voicing,
   };
 }

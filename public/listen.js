@@ -273,7 +273,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       try { previous.close(); } catch {}
     }
     reconnectBackoff.noteConnected(performance.now());
-    resetPlaybackTemporalState();
+    // The first reconnect starts 100 ms after a drop, while up to 250 ms of
+    // the old stream can still be playing. Discard it with the 2 ms de-click
+    // rather than cutting the waveform to zero mid-cycle.
+    resetPlaybackTemporalState(audioRendering());
     sendParticipantAuthentication(next);
     next.send(JSON.stringify({
       type: 'register',

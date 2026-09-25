@@ -40,3 +40,29 @@ test('Chrome extension keeps capture backlog separate from WebSocket congestion'
   assert.match(source, /capture backlog: dropped/);
   assert.match(source, /uplink congestion: dropped/);
 });
+
+test('Chrome offscreen drops song chunks beyond 200 ms of socket backlog, like the other PCM uplinks', async () => {
+  const source = await readFile(
+    path.resolve('chrome-tab-audio-probe/offscreen.js'),
+    'utf8',
+  );
+  assert.doesNotMatch(source, /512 \* 1024/, 'a byte ceiling allowed seconds of stale song');
+
+  const start = source.indexOf('const REALTIME_BACKLOG_MS');
+  const end = source.indexOf('function relayWsUrl');
+  assert.ok(start >= 0 && end > start);
+  const wouldExceed = new Function(
+    `${source.slice(start, end)}; return realtimeFrameWouldExceedBacklog;`,
+  )() as (bufferedAmount: number, frameBytes: number, sampleRate?: number) => boolean;
+
+  const frameBytes = 16 + 960 * 2;
+  assert.equal(wouldExceed(0, frameBytes, 48_000), false);
+  assert.equal(wouldExceed(19_200 - frameBytes, frameBytes, 48_000), false, '200 ms of PCM16 fits');
+  assert.equal(wouldExceed(19_200 - frameBytes + 1, frameBytes, 48_000), true);
+  assert.equal(wouldExceed(17_000, frameBytes, 96_000), false, 'the budget is time, not bytes');
+  assert.equal(wouldExceed(0, 64_000, 48_000), false, 'one oversized frame still goes out on an idle socket');
+
+  const guard = source.indexOf('if (realtimeFrameWouldExceedBacklog(');
+  const relaySend = source.indexOf('relaySocket.send(framePcm(buffer, captureGeneration, firstSampleIndex));');
+  assert.ok(guard >= 0 && relaySend > guard, 'every song chunk passes the realtime budget before it is sent');
+});

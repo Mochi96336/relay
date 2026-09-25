@@ -9,8 +9,11 @@ const DEFAULT_JITTER_SAFETY_FACTOR = 4;
 const DEFAULT_JITTER_SPIKE_FACTOR = 1.5;
 const DEFAULT_JITTER_SPIKE_CAP_MS = 60;
 const DEFAULT_MAX_QUEUE_MS = 2_000;
+const DEFAULT_TRIM_WINDOW_MS = 10_000;
+const DEFAULT_TRIM_MARGIN_MS = 20;
 const REPORT_INTERVAL_MS = 500;
 const OUTPUT_GAP_DECLICK_MS = 2;
+const TRIM_CROSSFADE_MS = 5;
 
 // Listen starts with a small buffer and continuously measures PCM arrival
 // variation. The estimator is RTP-like: compare each observed inter-arrival
@@ -28,6 +31,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
     this.underruns = 0;
     this.droppedSamples = 0;
+    this.trimmedSamples = 0;
     this.starvedSamples = 0;
     this.reportCountdown = 0;
     this.stablePlaybackSamples = 0;
@@ -44,6 +48,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.recoveryFadeStartSample = 0;
     this.needsOutputRecoveryFade = false;
     this.lastOutputSample = 0;
+    // A latency trim crossfades the audio it skips into the audio it resumes
+    // at, sample for sample, instead of from one held value.
+    this.trimFadeSamples = Math.max(1, Math.round((sampleRate * TRIM_CROSSFADE_MS) / 1000));
+    this.trimFadeFrom = new Float32Array(this.trimFadeSamples);
+    this.trimFadeTotalSamples = 0;
+    this.trimFadeRemainingSamples = 0;
 
     // AudioWorklet has a reliable render cadence even when message delivery is
     // bursty. Count render samples locally so tests and browsers share one clock.
@@ -103,6 +113,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     const configuredJitterSpikeFactor = Number(options.jitterSpikeFactor);
     const configuredJitterSpikeCapMs = Number(options.jitterSpikeCapMs);
     const maxQueueMs = Number(options.maxQueueMs);
+    const configuredTrimWindowMs = Number(options.trimWindowMs);
+    const configuredTrimMarginMs = Number(options.trimMarginMs);
 
     this.minPrebufferSamples = Math.round((sampleRate * minPrebufferMs) / 1000);
     this.maxPrebufferSamples = Math.round((sampleRate * maxPrebufferMs) / 1000);
@@ -143,11 +155,27 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       (sampleRate * (Number.isFinite(maxQueueMs) ? maxQueueMs : DEFAULT_MAX_QUEUE_MS)) / 1000,
     );
     this.maxQueueSamples = Math.max(this.maxQueueSamples, this.maxPrebufferSamples * 2);
+    this.trimWindowSamples = Math.max(1, Math.round(
+      (sampleRate * (Number.isFinite(configuredTrimWindowMs)
+        ? Math.max(1, configuredTrimWindowMs)
+        : DEFAULT_TRIM_WINDOW_MS)) / 1000,
+    ));
+    this.trimMarginSamples = Math.max(0, Math.round(
+      (sampleRate * (Number.isFinite(configuredTrimMarginMs)
+        ? Math.max(0, configuredTrimMarginMs)
+        : DEFAULT_TRIM_MARGIN_MS)) / 1000,
+    ));
     this.reportEvery = Math.max(1, Math.round((sampleRate * REPORT_INTERVAL_MS) / (1000 * 128)));
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
     this.resetArrivalObservation();
+    this.resetQueueLatencyWindow();
+  }
+
+  resetQueueLatencyWindow() {
+    this.queueLatencyWindowSamples = 0;
+    this.queueLatencyLowSamples = Infinity;
   }
 
   resetArrivalObservation() {
@@ -165,6 +193,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
+    this.trimFadeRemainingSamples = 0;
 
     if (deClick) {
       // A positioned monitor gap/generation jump must discard queued stale
@@ -186,6 +215,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     }
 
     this.resetArrivalObservation();
+    this.resetQueueLatencyWindow();
     // Keep the learned target across a reconnect, but throw away raw timing
     // anchors so the first packet on a new transport cannot look like a huge gap.
   }
@@ -263,6 +293,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       droppedForCatchUp += usable;
     }
 
+    if (droppedForCatchUp > 0) this.resetQueueLatencyWindow();
     if (droppedForCatchUp > 0 && this.playing) {
       // Queue overflow is an intentional live-edge catch-up, but jumping from
       // the last emitted sample straight into the newer queue creates a click.
@@ -270,6 +301,70 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       // audible edge over the existing bounded recovery window.
       this.beginRecoveryFade();
     }
+  }
+
+  /**
+   * Gives back latency the target no longer asks for.
+   *
+   * A link that stalls without losing anything delivers the stall all at once
+   * afterwards, and that audio then plays late for as long as the room stays
+   * connected: the target decays, but nothing short of an underrun or the
+   * overflow bound ever shortens the queue itself. So watch the queue's low
+   * point, the latency arrival jitter never needed, and once it has stayed
+   * above the target for a whole window, drop that excess from the oldest
+   * audio, crossfading what it skips into where it resumes. A listener clock
+   * slower than Relay's builds up the same way and is trimmed the same way.
+   */
+  observeQueueLatency(renderedSamples) {
+    this.queueLatencyWindowSamples += renderedSamples;
+    this.queueLatencyLowSamples = Math.min(this.queueLatencyLowSamples, this.queuedSamples);
+    if (this.queueLatencyWindowSamples < this.trimWindowSamples) return;
+
+    const excess = this.queueLatencyLowSamples - this.prebufferSamples;
+    this.resetQueueLatencyWindow();
+    if (excess <= this.trimMarginSamples) return;
+
+    // The low point bounds the queue from below, so the target's worth of
+    // audio is still queued behind the excess to fade into.
+    const fadeSamples = Math.min(this.trimFadeSamples, this.queuedSamples - excess);
+    const skipped = this.readQueuedHead(this.trimFadeFrom, fadeSamples);
+    let remaining = excess;
+    while (remaining > 0 && this.queue.length > 0) {
+      const oldest = this.queue[0];
+      const usable = oldest.length - this.offset;
+      if (usable <= remaining) {
+        this.queue.shift();
+        this.offset = 0;
+        this.queuedSamples -= usable;
+        remaining -= usable;
+      } else {
+        this.offset += remaining;
+        this.queuedSamples -= remaining;
+        remaining = 0;
+      }
+    }
+    this.trimmedSamples += excess - remaining;
+    if (this.recoveryFadeRemainingSamples > 0 || skipped === 0) {
+      // Still leaving an earlier edge: keep converging from what was heard.
+      this.beginRecoveryFade();
+      return;
+    }
+    this.trimFadeTotalSamples = skipped;
+    this.trimFadeRemainingSamples = skipped;
+  }
+
+  /** Copies up to `count` samples from the head of the queue without consuming them. */
+  readQueuedHead(target, count) {
+    let copied = 0;
+    let offset = this.offset;
+    for (let index = 0; index < this.queue.length && copied < count; index += 1) {
+      const chunk = this.queue[index];
+      const take = Math.min(count - copied, chunk.length - offset);
+      target.set(chunk.subarray(offset, offset + take), copied);
+      copied += take;
+      offset = 0;
+    }
+    return copied;
   }
 
   raisePrebuffer(jitterTarget = this.jitterTargetSamples()) {
@@ -299,6 +394,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.silenceFadeStartSample = this.lastOutputSample;
     this.silenceFadeRemainingSamples = this.outputGapFadeSamples;
     this.recoveryFadeRemainingSamples = 0;
+    this.trimFadeRemainingSamples = 0;
   }
 
   writeSilenceFade(output, start) {
@@ -318,15 +414,17 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.recoveryFadeStartSample = this.lastOutputSample;
     this.recoveryFadeRemainingSamples = this.outputGapFadeSamples;
     this.silenceFadeRemainingSamples = 0;
+    this.trimFadeRemainingSamples = 0;
   }
 
   writeQueuedSamples(output, written, chunk, sourceOffset, count) {
-    if (this.recoveryFadeRemainingSamples <= 0) {
+    if (this.recoveryFadeRemainingSamples <= 0 && this.trimFadeRemainingSamples <= 0) {
       output.set(chunk.subarray(sourceOffset, sourceOffset + count), written);
       return;
     }
 
     const total = this.outputGapFadeSamples;
+    const trimTotal = this.trimFadeTotalSamples;
     for (let i = 0; i < count; i += 1) {
       const sample = chunk[sourceOffset + i];
       if (this.recoveryFadeRemainingSamples > 0) {
@@ -334,6 +432,11 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         const weight = total <= 1 ? 1 : progress / (total - 1);
         output[written + i] = this.recoveryFadeStartSample * (1 - weight) + sample * weight;
         this.recoveryFadeRemainingSamples -= 1;
+      } else if (this.trimFadeRemainingSamples > 0) {
+        const progress = trimTotal - this.trimFadeRemainingSamples;
+        const weight = (progress + 1) / (trimTotal + 1);
+        output[written + i] = this.trimFadeFrom[progress] * (1 - weight) + sample * weight;
+        this.trimFadeRemainingSamples -= 1;
       } else {
         output[written + i] = sample;
       }
@@ -390,10 +493,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       this.pendingRecovery = true;
       this.recoveryWaitSamples = output.length - written;
       this.needsOutputRecoveryFade = true;
+      this.resetQueueLatencyWindow();
       this.port.postMessage({ type: 'buffering' });
     } else {
       this.lastOutputSample = output[output.length - 1] ?? 0;
       this.noteStablePlayback(output.length);
+      this.observeQueueLatency(output.length);
     }
 
     this.report(0);
@@ -415,6 +520,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       arrivalDeviationMs: (this.lastArrivalDeviationSamples / sampleRate) * 1000,
       underruns: this.underruns,
       droppedMs: (this.droppedSamples / sampleRate) * 1000,
+      trimmedMs: (this.trimmedSamples / sampleRate) * 1000,
       starvedMs: (this.starvedSamples / sampleRate) * 1000,
       playing: this.playing,
     });

@@ -19,6 +19,7 @@
     "test:webtransport-loopback": "node --import tsx scripts/webtransport-loopback.mjs"
   },
   "dependencies": {
+    "@evan/opus": "1.0.3",
     "@fails-components/webtransport": "1.6.7",
     "@fails-components/webtransport-transport-http3-quiche": "1.6.7",
     "express": "^5.2.1",

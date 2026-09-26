@@ -5,6 +5,13 @@ export type MonitorPcmFrame = {
   firstSampleIndex: number;
   sampleCount: number;
   pcm: ArrayBuffer;
+  codec?: undefined;
+} | {
+  generation: number;
+  firstSampleIndex: number;
+  sampleCount: number;
+  codec: 'opus';
+  packet: ArrayBuffer;
 };
 
 export type MonitorPcmAccept = {

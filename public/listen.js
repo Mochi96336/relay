@@ -13,6 +13,7 @@ import {
   createMonitorPcmReceiver,
 } from './monitor-pcm-continuity.js';
 import { createStreamingLinearResampler } from './streaming-linear-resampler.js';
+import { createListenOpusDecoder, listenOpusDecodingSupported } from './listen-opus-decoder.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
@@ -31,6 +32,18 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const MAX_QUEUE_MS = 800;
   const monitorPcmReceiver = createMonitorPcmReceiver();
   const listenResampler = createStreamingLinearResampler();
+  // Opus is offered only when this browser can decode it, and never again in
+  // this page once decoding has failed: the page then rejoins on PCM.
+  let opusOffer = null;
+  let opusRefused = false;
+  const listenOpusDecoder = createListenOpusDecoder({
+    onPcm: (pcm, firstSampleIndex) => enqueuePlayback(pcm, firstSampleIndex),
+    onError: (error) => {
+      console.warn('Listen Opus decoding failed; rejoining on PCM', error);
+      opusRefused = true;
+      restartMonitorAtLiveEdge();
+    },
+  });
   const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
   const iosAudioDestinationRecovery = new IosAudioDestinationRecovery();
 
@@ -177,8 +190,28 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     return recovery.requiresLiveEdge;
   }
 
+  function offerOpus() {
+    if (opusRefused) return Promise.resolve(false);
+    opusOffer ??= listenOpusDecodingSupported();
+    return opusOffer;
+  }
+
+  /** Decoded room mix, PCM or Opus, into the resampler and the worklet. */
+  function enqueuePlayback(pcm, firstSampleIndex) {
+    if (!audioRendering()) return;
+    const samples = listenResampler.resample(pcm, {
+      sourceRate: sourceSampleRate,
+      targetRate: audioContext.sampleRate,
+      firstSampleIndex,
+    });
+    if (samples.length > 0) {
+      playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
+    }
+  }
+
   function resetPlaybackTemporalState(deClick = false) {
     monitorPcmReceiver.reset();
+    listenOpusDecoder.reset();
     listenResampler.reset();
     playbackNode?.port.postMessage({ type: 'reset', deClick });
   }
@@ -231,6 +264,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       applyRoomSessionStatus(message);
       return;
     }
+    if (message.type === 'registered' && message.role === 'monitor') {
+      window.relayListenCodec = message.monitorCodec === 'opus' ? 'opus' : 'pcm';
+      return;
+    }
     if (message.type === 'source-status') {
       const nextSourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;
       if (nextSourceSampleRate !== sourceSampleRate) listenResampler.reset();
@@ -246,6 +283,14 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       || socket
     ) return;
     const connectEpoch = transportEpoch;
+    const withOpus = await offerOpus();
+    if (
+      connectEpoch !== transportEpoch
+      || !transportEnabled
+      || !monitorTransportWanted()
+      || pendingSocket
+      || socket
+    ) return;
     const next = new WebSocket(wsUrl());
     pendingSocket = next;
     next.binaryType = 'arraybuffer';
@@ -282,6 +327,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       type: 'register',
       role: 'monitor',
       monitorPacketVersion: MONITOR_PCM_PACKET_VERSION,
+      ...(withOpus ? { monitorCodecs: ['opus'] } : {}),
     }));
 
     next.addEventListener('message', (event) => {
@@ -317,18 +363,21 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       if (liveEdgeRecoveryRequired) return;
 
       if (received.reset) {
+        listenOpusDecoder.reset();
         listenResampler.reset();
         playbackNode.port.postMessage({ type: 'reset', deClick: true });
       }
-      const pcm = int16ToFloat32(received.frame.pcm);
-      const samples = listenResampler.resample(pcm, {
-        sourceRate: sourceSampleRate,
-        targetRate: audioContext.sampleRate,
-        firstSampleIndex: received.frame.firstSampleIndex,
-      });
-      if (samples.length > 0) {
-        playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
+      if (received.frame.codec === 'opus') {
+        try {
+          listenOpusDecoder.decode(received.frame);
+        } catch (error) {
+          console.warn('Listen Opus decoding failed; rejoining on PCM', error);
+          opusRefused = true;
+          restartMonitorAtLiveEdge();
+        }
+        return;
       }
+      enqueuePlayback(int16ToFloat32(received.frame.pcm), received.frame.firstSampleIndex);
     });
 
     next.addEventListener('close', () => {

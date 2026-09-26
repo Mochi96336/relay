@@ -3,6 +3,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import { monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
+import { encodeMonitorOpusFrame, type MonitorOpusEncoder } from './monitor-opus.js';
 import { encodePcmFrame } from './pcm-frame.js';
 
 export type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';
@@ -23,6 +24,8 @@ export type RelaySocket = WebSocket & {
   captureGeneration?: number;
   audioPacketVersion?: 1 | 2;
   monitorPacketVersion?: 1;
+  /** Codec this positioned monitor negotiated for PCM frames; absent is PCM. */
+  monitorCodec?: 'opus';
   isAlive: boolean;
   replaced?: boolean;
   isRobotSource?: boolean;
@@ -50,6 +53,12 @@ export type MonitorFramePosition = {
 
 export type MonitorSocketTransportOptions = {
   backlogBytes: number;
+  /**
+   * Socket backlog allowed for an Opus monitor. The PCM byte budget would let
+   * an Opus socket queue about eight times as much time, so it gets the same
+   * time budget at the Opus bitrate.
+   */
+  opusBacklogBytes?: number;
   nowMs?: () => number;
 };
 
@@ -153,6 +162,40 @@ export function createMonitorSocketTransport(
 
   let droppedFrames = 0;
   const nowMs = options.nowMs ?? (() => performance.now());
+  let opusEncoder: MonitorOpusEncoder | null = null;
+  /** End of the last frame the encoder saw: its state only fits the next one. */
+  let opusEncodedEnd: MonitorFramePosition | null = null;
+
+  /**
+   * One Opus codec frame for this mix frame, or null to send PCM instead: no
+   * encoder, or it failed and Relay stays on PCM from then on. Pages that
+   * negotiated Opus decode either kind.
+   */
+  function encodeOpus(pcm: Buffer, position: MonitorFramePosition) {
+    if (!opusEncoder) return null;
+    try {
+      if (
+        opusEncodedEnd === null
+        || opusEncodedEnd.generation !== position.generation
+        || opusEncodedEnd.firstSampleIndex !== position.firstSampleIndex
+      ) {
+        // Nobody needed Opus for a while, or the mix epoch restarted.
+        opusEncoder.reset();
+      }
+      const sampleCount = pcm.byteLength / 2;
+      const packet = opusEncoder.encode(pcm);
+      opusEncodedEnd = {
+        generation: position.generation,
+        firstSampleIndex: position.firstSampleIndex + sampleCount,
+      };
+      return encodeMonitorOpusFrame(position.generation, position.firstSampleIndex, sampleCount, packet);
+    } catch (error) {
+      opusEncoder = null;
+      opusEncodedEnd = null;
+      console.warn('Listen Opus encoding failed; every listener stays on PCM.', error);
+      return null;
+    }
+  }
   const recentDrops: { atMs: number; socket: RelaySocket }[] = [];
 
   function pruneRecentDrops(atMs: number) {
@@ -172,6 +215,7 @@ export function createMonitorSocketTransport(
     // Every positioned monitor gets the same bytes, so frame them once per
     // broadcast rather than once per listener. The sockets only read them.
     let framed: Buffer | null = null;
+    let opusFramed: Buffer | null | undefined;
     for (const client of wss.clients) {
       const socket = client as RelaySocket;
       if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
@@ -180,12 +224,18 @@ export function createMonitorSocketTransport(
       // framed. Do not silently fall back to raw PCM on an unpositioned path.
       if (binary && socket.monitorPacketVersion === 1 && position === null) continue;
 
-      const outbound = binary
+      const positioned = binary
         && Buffer.isBuffer(payload)
         && socket.monitorPacketVersion === 1
-        && position !== null
-        ? (framed ??= encodePcmFrame(position.generation, position.firstSampleIndex, payload))
-        : payload;
+        && position !== null;
+      if (positioned && socket.monitorCodec === 'opus' && opusFramed === undefined) {
+        opusFramed = encodeOpus(payload, position);
+      }
+      const opus = positioned && socket.monitorCodec === 'opus' && opusFramed ? opusFramed : null;
+      const outbound = opus
+        ?? (positioned
+          ? (framed ??= encodePcmFrame(position.generation, position.firstSampleIndex, payload))
+          : payload);
 
       if (
         binary
@@ -193,7 +243,7 @@ export function createMonitorSocketTransport(
         && monitorFrameWouldExceedBacklog(
           socket.bufferedAmount,
           outbound.byteLength,
-          options.backlogBytes,
+          opus ? options.opusBacklogBytes ?? options.backlogBytes : options.backlogBytes,
         )
       ) {
         droppedFrames += 1;
@@ -208,6 +258,14 @@ export function createMonitorSocketTransport(
 
   return {
     broadcast,
+    /** Starts offering Opus frames to monitors that negotiate them. */
+    enableOpus(encoder: MonitorOpusEncoder) {
+      opusEncoder = encoder;
+      opusEncodedEnd = null;
+    },
+    get opusEnabled() {
+      return opusEncoder !== null;
+    },
     /** Lifetime total across every listener; see recentDrops() for now. */
     get droppedFrames() {
       return droppedFrames;

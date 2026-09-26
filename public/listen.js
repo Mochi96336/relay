@@ -29,6 +29,14 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const reconnectBackoff = createReconnectBackoff();
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
+  // Relay sees only its own socket buffer. Behind a tunnel or reverse proxy
+  // the room audio can queue far downstream of it, and this page cannot tell
+  // that contiguous audio is stale. Confirming what arrived lets Relay stop
+  // sending once too much is outstanding; the hole that leaves brings this
+  // page back to the live edge. Frequent enough to stay well inside Relay's
+  // one-second allowance, cheap enough to ignore.
+  const MONITOR_ACK_INTERVAL_MS = 100;
+  let lastMonitorAckAt = Number.NEGATIVE_INFINITY;
   const monitorPcmReceiver = createMonitorPcmReceiver();
   const listenResampler = createStreamingLinearResampler();
   const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
@@ -177,6 +185,19 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     return recovery.requiresLiveEdge;
   }
 
+  function acknowledgeMonitorFrame(target, frame) {
+    const now = performance.now();
+    if (now - lastMonitorAckAt < MONITOR_ACK_INTERVAL_MS) return;
+    lastMonitorAckAt = now;
+    try {
+      target.send(JSON.stringify({
+        type: 'monitor-ack',
+        generation: frame.generation,
+        receivedEndSampleIndex: frame.firstSampleIndex + frame.sampleCount,
+      }));
+    } catch {}
+  }
+
   function resetPlaybackTemporalState(deClick = false) {
     monitorPcmReceiver.reset();
     listenResampler.reset();
@@ -273,6 +294,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       try { previous.close(); } catch {}
     }
     reconnectBackoff.noteConnected(performance.now());
+    lastMonitorAckAt = Number.NEGATIVE_INFINITY;
     // The first reconnect starts 100 ms after a drop, while up to 250 ms of
     // the old stream can still be playing. Discard it with the 2 ms de-click
     // rather than cutting the waveform to zero mid-cycle.
@@ -294,6 +316,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
       const received = monitorPcmReceiver.receive(event.data);
       if (received.action !== 'accept') return;
+      // Delivery, not playback: a frame counts as arrived even if a paused
+      // audio graph then discards it.
+      acknowledgeMonitorFrame(next, received.frame);
 
       // Keep framing continuity if Safari leaves this page running in the
       // background, but never build a playback backlog while WebAudio is not

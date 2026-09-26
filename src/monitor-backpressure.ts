@@ -35,7 +35,18 @@ export function monitorFrameWouldExceedBacklog(
 export type MonitorDelivery = {
   sent: { generation: number; endSampleIndex: number } | null;
   acknowledged: { generation: number; endSampleIndex: number } | null;
+  /** When the last positioned frame was actually sent, on the transport clock. */
+  sentAtMs: number | null;
 };
+
+/**
+ * How often a monitor held back for unconfirmed audio is still sent one
+ * frame. Confirmations only follow audio the page actually took in, so a page
+ * that discarded what was sent (or a sender that never learns why) could
+ * otherwise wait forever. On a genuinely stalled link a probe adds only one
+ * 20 ms frame per interval to what is queued downstream.
+ */
+export const MONITOR_UNACKNOWLEDGED_PROBE_MS = 500;
 
 /**
  * Mix samples sent to a monitor that it has not confirmed receiving, or null

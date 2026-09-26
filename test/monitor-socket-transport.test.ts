@@ -266,3 +266,32 @@ test('Listen confirms delivered monitor PCM and Relay routes it to the monitor t
   assert.match(server, /if \(monitorTransport\.acknowledge\(socket, payload\)\) return;/);
   assert.match(server, /unacknowledgedSamples: MONITOR_UNACKNOWLEDGED_SAMPLES/);
 });
+
+test('a held-back listener still gets one probe frame every 500 ms, and confirming it resumes delivery', () => {
+  let nowMs = 0;
+  const listener = fakeSocket({ monitorPacketVersion: 1 });
+  const transport = createMonitorSocketTransport(fakeServer(listener.socket), {
+    backlogBytes: 1_000_000,
+    unacknowledgedSamples: FRAME * 5,
+    nowMs: () => nowMs,
+  });
+  const sentIndexes = () => listener.sent.map((sent) => decodePcmFrame(sent.payload as Buffer).firstSampleIndex! / FRAME);
+  positionedFrame(transport, 0);
+  ack(transport, listener.socket, FRAME);
+
+  // The page discards everything from here, so it never confirms any of it.
+  for (let index = 1; index <= 60; index += 1) {
+    nowMs = index * 20;
+    positionedFrame(transport, index);
+  }
+  assert.deepEqual(sentIndexes(), [0, 1, 2, 3, 4, 5, 6, 31, 56],
+    'after the allowance, one frame per 500 ms still goes out');
+
+  // The page takes in the latest probe and confirms it: delivery resumes.
+  ack(transport, listener.socket, FRAME * 57);
+  nowMs = 61 * 20;
+  positionedFrame(transport, 61);
+  nowMs = 62 * 20;
+  positionedFrame(transport, 62);
+  assert.deepEqual(sentIndexes().slice(-2), [61, 62]);
+});

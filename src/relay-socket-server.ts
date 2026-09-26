@@ -3,6 +3,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import {
+  MONITOR_UNACKNOWLEDGED_PROBE_MS,
   monitorFrameWouldExceedBacklog,
   monitorUnacknowledgedSamples,
   type MonitorDelivery,
@@ -227,7 +228,9 @@ export function createMonitorSocketTransport(
       const positioned = outbound === framed && framed !== null && position !== null;
       if (positioned && options.unacknowledgedSamples !== undefined && socket.monitorDelivery) {
         const outstanding = monitorUnacknowledgedSamples(socket.monitorDelivery);
-        if (outstanding !== null && outstanding > options.unacknowledgedSamples) {
+        const sentAtMs = socket.monitorDelivery.sentAtMs;
+        const probeDue = sentAtMs === null || nowMs() - sentAtMs >= MONITOR_UNACKNOWLEDGED_PROBE_MS;
+        if (outstanding !== null && outstanding > options.unacknowledgedSamples && !probeDue) {
           // The listener is that far behind somewhere this process cannot
           // see. The hole this leaves makes it drop what it queued and
           // rejoin the live edge once the backlog has drained.
@@ -237,7 +240,8 @@ export function createMonitorSocketTransport(
       }
       socket.send(outbound, { binary });
       if (positioned) {
-        socket.monitorDelivery ??= { sent: null, acknowledged: null };
+        socket.monitorDelivery ??= { sent: null, acknowledged: null, sentAtMs: null };
+        socket.monitorDelivery.sentAtMs = nowMs();
         socket.monitorDelivery.sent = {
           generation: position.generation,
           endSampleIndex: position.firstSampleIndex + (framed!.byteLength - FRAME_HEADER_BYTES) / 2,
@@ -266,7 +270,7 @@ export function createMonitorSocketTransport(
       || !Number.isSafeInteger(endSampleIndex)
       || endSampleIndex < 0
     ) return true;
-    socket.monitorDelivery ??= { sent: null, acknowledged: null };
+    socket.monitorDelivery ??= { sent: null, acknowledged: null, sentAtMs: null };
     const previous = socket.monitorDelivery.acknowledged;
     // Acknowledgements travel in order on one socket; never move one back.
     if (

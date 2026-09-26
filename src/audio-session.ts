@@ -2796,12 +2796,18 @@ export class AudioSession {
         this.micFrontierFadeRemainingSamples = this.sourceEdgeFadeSamples;
         this.micFrontierRecoveryFadeRemainingSamples = 0;
       }
-      if (this.micFrontierFadeRemainingSamples <= 0) return current;
+      // A missing source contributes only the fade of what was last heard. It
+      // is not always read as zero: a read-rate slew interpolates the samples
+      // around a hole's edge from both sides, so they are marked missing yet
+      // carry part of the real audio. Fading toward that, or passing it
+      // through once faded, left the recovery fade starting from it rather
+      // than from silence.
+      if (this.micFrontierFadeRemainingSamples <= 0) return 0;
       const progress = this.sourceEdgeFadeSamples - this.micFrontierFadeRemainingSamples;
       const weight = this.sourceEdgeFadeSamples <= 1
         ? 1
         : progress / (this.sourceEdgeFadeSamples - 1);
-      const value = this.micFrontierFadeStart * (1 - weight) + current * weight;
+      const value = this.micFrontierFadeStart * (1 - weight);
       this.micFrontierFadeRemainingSamples -= 1;
       return value;
     }

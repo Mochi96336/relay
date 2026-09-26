@@ -19,7 +19,7 @@ test('Listen explicitly negotiates positioned monitor PCM', async () => {
   );
   assert.match(
     source,
-    /import \{ createStreamingLinearResampler \} from '\.\/streaming-linear-resampler\.js';/,
+    /import \{ createStreamingResampler \} from '\.\/streaming-resampler\.js';/,
     'Listen must use the stateful positioned resampler instead of packet-local interpolation',
   );
   assert.match(

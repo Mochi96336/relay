@@ -2,8 +2,13 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
-import { encodePcmFrame } from './pcm-frame.js';
+import {
+  MONITOR_UNACKNOWLEDGED_PROBE_MS,
+  monitorFrameWouldExceedBacklog,
+  monitorUnacknowledgedSamples,
+  type MonitorDelivery,
+} from './monitor-backpressure.js';
+import { encodePcmFrame, FRAME_HEADER_BYTES } from './pcm-frame.js';
 
 export type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';
 type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
@@ -23,6 +28,7 @@ export type RelaySocket = WebSocket & {
   captureGeneration?: number;
   audioPacketVersion?: 1 | 2;
   monitorPacketVersion?: 1;
+  monitorDelivery?: MonitorDelivery;
   isAlive: boolean;
   replaced?: boolean;
   isRobotSource?: boolean;
@@ -62,6 +68,12 @@ export type MonitorFramePosition = {
 
 export type MonitorSocketTransportOptions = {
   backlogBytes: number;
+  /**
+   * Positioned PCM a monitor that confirms delivery may have outstanding, in
+   * mix samples. Past it, frames for that monitor are dropped until it
+   * catches up. See monitorUnacknowledgedSamples.
+   */
+  unacknowledgedSamples?: number;
   nowMs?: () => number;
 };
 
@@ -162,6 +174,12 @@ export function createMonitorSocketTransport(
   if (!Number.isFinite(options.backlogBytes) || options.backlogBytes <= 0) {
     throw new Error('MonitorSocketTransport backlogBytes must be positive.');
   }
+  if (
+    options.unacknowledgedSamples !== undefined
+    && (!Number.isFinite(options.unacknowledgedSamples) || options.unacknowledgedSamples <= 0)
+  ) {
+    throw new Error('MonitorSocketTransport unacknowledgedSamples must be positive.');
+  }
 
   let droppedFrames = 0;
   const nowMs = options.nowMs ?? (() => performance.now());
@@ -174,6 +192,13 @@ export function createMonitorSocketTransport(
       && atMs - recentDrops[expired].atMs >= MONITOR_RECENT_DROP_WINDOW_MS
     ) expired += 1;
     if (expired > 0) recentDrops.splice(0, expired);
+  }
+
+  function noteDrop(socket: RelaySocket) {
+    droppedFrames += 1;
+    const atMs = nowMs();
+    pruneRecentDrops(atMs);
+    recentDrops.push({ atMs, socket });
   }
 
   function broadcast(
@@ -208,18 +233,70 @@ export function createMonitorSocketTransport(
           options.backlogBytes,
         )
       ) {
-        droppedFrames += 1;
-        const atMs = nowMs();
-        pruneRecentDrops(atMs);
-        recentDrops.push({ atMs, socket });
+        noteDrop(socket);
         continue;
       }
+
+      const positioned = outbound === framed && framed !== null && position !== null;
+      if (positioned && options.unacknowledgedSamples !== undefined && socket.monitorDelivery) {
+        const outstanding = monitorUnacknowledgedSamples(socket.monitorDelivery);
+        const sentAtMs = socket.monitorDelivery.sentAtMs;
+        const probeDue = sentAtMs === null || nowMs() - sentAtMs >= MONITOR_UNACKNOWLEDGED_PROBE_MS;
+        if (outstanding !== null && outstanding > options.unacknowledgedSamples && !probeDue) {
+          // The listener is that far behind somewhere this process cannot
+          // see. The hole this leaves makes it drop what it queued and
+          // rejoin the live edge once the backlog has drained.
+          noteDrop(socket);
+          continue;
+        }
+      }
       socket.send(outbound, { binary });
+      if (positioned) {
+        socket.monitorDelivery ??= { sent: null, acknowledged: null, sentAtMs: null };
+        socket.monitorDelivery.sentAtMs = nowMs();
+        socket.monitorDelivery.sent = {
+          generation: position.generation,
+          endSampleIndex: position.firstSampleIndex + (framed!.byteLength - FRAME_HEADER_BYTES) / 2,
+        };
+      }
     }
+  }
+
+  /**
+   * Records a Listen page's confirmation of the positioned PCM it received,
+   * which opts that monitor into acknowledged delivery. True when the payload
+   * was a monitor acknowledgement, valid or not.
+   */
+  function acknowledge(socket: RelaySocket, payload: Record<string, unknown>) {
+    if (payload.type !== 'monitor-ack') return false;
+    const generation = payload.generation;
+    const endSampleIndex = payload.receivedEndSampleIndex;
+    if (
+      socket.role !== 'monitor'
+      || socket.monitorPacketVersion !== 1
+      || typeof generation !== 'number'
+      || !Number.isInteger(generation)
+      || generation < 0
+      || generation > 0xffff_ffff
+      || typeof endSampleIndex !== 'number'
+      || !Number.isSafeInteger(endSampleIndex)
+      || endSampleIndex < 0
+    ) return true;
+    socket.monitorDelivery ??= { sent: null, acknowledged: null, sentAtMs: null };
+    const previous = socket.monitorDelivery.acknowledged;
+    // Acknowledgements travel in order on one socket; never move one back.
+    if (
+      previous
+      && previous.generation === generation
+      && previous.endSampleIndex >= endSampleIndex
+    ) return true;
+    socket.monitorDelivery.acknowledged = { generation, endSampleIndex };
+    return true;
   }
 
   return {
     broadcast,
+    acknowledge,
     /** Lifetime total across every listener; see recentDrops() for now. */
     get droppedFrames() {
       return droppedFrames;

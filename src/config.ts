@@ -83,6 +83,7 @@ export function loadRelayConfig(env: Env = process.env) {
     legacyTestInfrastructure: env.NODE_ENV === 'test'
       && env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1',
     monitorBacklogMs: legacyPositiveNumber(env, 'RELAY_MONITOR_BACKLOG_MS', 200),
+    monitorUnacknowledgedMs: envNumber(env, 'RELAY_MONITOR_UNACKNOWLEDGED_MS', 1_000, { min: 1 }),
     micFirstFrameTimeoutMs: legacyPositiveNumber(env, 'RELAY_MIC_FIRST_FRAME_TIMEOUT_MS', 3_000),
     probeReplyTimeoutMs: legacyPositiveNumber(env, 'RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS', 3_000),
     probeMaxAttempts: legacyPositiveInt(env, 'RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS', 3),

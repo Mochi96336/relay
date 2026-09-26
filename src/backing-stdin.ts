@@ -3,6 +3,7 @@ import process from 'node:process';
 
 import WebSocket from 'ws';
 
+import { BackingPcmFramer } from './backing-pcm-framer.js';
 import { encodePcmFrame, FRAME_HEADER_BYTES } from './pcm-frame.js';
 import {
   realtimeFrameWouldExceedBacklog,
@@ -108,19 +109,12 @@ let registered = false;
 let everRegistered = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let stopped = false;
-// Annotated, not inferred: `Buffer.alloc` narrows to `Buffer<ArrayBuffer>`,
-// while stdin hands out the wider `Buffer<ArrayBufferLike>`.
-let pending: Buffer = Buffer.alloc(0);
 let droppedFrames = 0;
 let lastDropLogAt = 0;
-/**
- * Wall-clock instant the startup flush ends, set when the first byte arrives
- * rather than at process start: the window has to cover the backlog draining,
- * and the process may be up well before the capture writes anything.
- */
-let flushUntil: number | null = null;
-let flushing = STARTUP_FLUSH_MS > 0;
-let flushedBytes = 0;
+// The flush window starts when the first byte arrives rather than at process
+// start: it has to cover the backlog draining, and the process may be up well
+// before the capture writes anything.
+const framer = new BackingPcmFramer({ frameBytes: FRAME_BYTES, startupFlushMs: STARTUP_FLUSH_MS });
 /**
  * Periodic peak of what is actually forwarded, off by default.
  *
@@ -279,27 +273,14 @@ function sendPcm(pcm: Buffer) {
 }
 
 function consume(chunk: Buffer) {
-  // Discarded rather than counted: `sampleCursor` has to start at live audio,
-  // because the server anchors the timeline to where the first frame arrives.
-  if (flushing) {
-    const now = Date.now();
-    if (flushUntil === null) flushUntil = now + STARTUP_FLUSH_MS;
-    if (now < flushUntil) {
-      flushedBytes += chunk.byteLength;
-      return;
-    }
-    flushing = false;
-    log(`discarded ${Math.round((flushedBytes / 2 / SAMPLE_RATE) * 1000)} ms of startup backlog`);
+  // Startup backlog is discarded rather than counted: `sampleCursor` has to
+  // start at live audio, because the server anchors the timeline to where the
+  // first frame arrives.
+  const { frames, flushEndedAfterBytes } = framer.push(chunk, Date.now());
+  if (flushEndedAfterBytes !== null) {
+    log(`discarded ${Math.round((flushEndedAfterBytes / 2 / SAMPLE_RATE) * 1000)} ms of startup backlog`);
   }
-
-  pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
-
-  while (pending.length >= FRAME_BYTES) {
-    // Copy because ws may retain the Buffer after this function advances the
-    // pending window.
-    sendPcm(Buffer.from(pending.subarray(0, FRAME_BYTES)));
-    pending = pending.subarray(FRAME_BYTES);
-  }
+  for (const frame of frames) sendPcm(frame);
 }
 
 function stop(exitCode = 0) {
@@ -308,11 +289,10 @@ function stop(exitCode = 0) {
   clearReconnect();
   process.stdin.pause();
 
-  // A final even-length partial frame is still valid PCM. Preserve its sample
-  // position rather than silently discarding the tail on a clean shutdown.
-  const evenBytes = pending.length - (pending.length % 2);
-  if (evenBytes > 0) sendPcm(Buffer.from(pending.subarray(0, evenBytes)));
-  pending = Buffer.alloc(0);
+  // A final partial frame of whole samples is still valid PCM. Preserve its
+  // sample position rather than silently discarding the tail on a clean shutdown.
+  const tail = framer.takeTail();
+  if (tail) sendPcm(tail);
 
   const current = socket;
   socket = null;

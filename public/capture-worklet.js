@@ -21,6 +21,11 @@ const INPUT_GAP_REPORT_REFERENCE_QUANTA = 400;
 // same input-gap contract as a missing channel, so Relay stops calling the
 // Mic live and the page may rebuild the capture.
 const DIGITAL_SILENCE_REPORT_MS = 2_000;
+// Each flushed chunk is transferred to the page, which detaches it, so every
+// 20 ms flush used to allocate a new buffer on the audio rendering thread. A
+// current page hands each buffer back once it has framed the PCM; a few spares
+// cover a page that is briefly slow to return them.
+const MAX_POOLED_CHUNK_BUFFERS = 8;
 const VISUAL_ANALYSIS_PLACEHOLDER = Object.freeze({
   spectrumBands: Object.freeze([0, 0, 0, 0, 0]),
   f0Hz: null,
@@ -55,7 +60,8 @@ class CaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.chunkSize = Math.max(128, Math.round(sampleRate * 0.02));
-    this.chunk = new Int16Array(this.chunkSize);
+    this.chunkBufferPool = [];
+    this.chunk = this.nextChunk();
     this.offset = 0;
     this.started = false;
     this.silenceQuanta = 0;
@@ -108,8 +114,26 @@ class CaptureProcessor extends AudioWorkletProcessor {
         && event.data.pcmEnvelope === true
       ) {
         this.pcmEnvelopeEnabled = true;
+        return;
       }
+      if (event.data?.type === 'pcm-buffer-return') this.reuseChunkBuffer(event.data.buffer);
     };
+  }
+
+  nextChunk() {
+    const pooled = this.chunkBufferPool.pop();
+    return pooled ? new Int16Array(pooled) : new Int16Array(this.chunkSize);
+  }
+
+  reuseChunkBuffer(buffer) {
+    // Every chunk is written in full before it is flushed, so a returned
+    // buffer never carries old samples out again.
+    if (
+      !(buffer instanceof ArrayBuffer)
+      || buffer.byteLength !== this.chunkSize * Int16Array.BYTES_PER_ELEMENT
+      || this.chunkBufferPool.length >= MAX_POOLED_CHUNK_BUFFERS
+    ) return;
+    this.chunkBufferPool.push(buffer);
   }
 
   reportInputGap(recovered) {
@@ -192,7 +216,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
         }
       : buffer;
     this.port.postMessage(pcmMessage, [buffer]);
-    this.chunk = new Int16Array(this.chunkSize);
+    this.chunk = this.nextChunk();
     this.offset = 0;
     this.chunkStartedAtContextTime = null;
     this.levelPeak = 0;

@@ -94,15 +94,18 @@ test('Mic frontier hold de-clicks structural pre-roll when the read head crosses
   session.setMicExpected(true);
   session.start(0);
 
-  // Leave the live frontier 145 samples short of frame 9 + limiter look-ahead.
-  // Frontier safety therefore acquires its 200 ms margin and holds frame 9
-  // entirely in negative session-position pre-roll.
+  // Leave the live frontier 145 samples short of frame 9 + limiter look-ahead,
+  // and hold frame 9 entirely in negative session-position pre-roll with the
+  // full 200 ms margin on top of that overrun. A 145-sample overrun is now
+  // taken gradually, so the fixture holds the correction directly, as the
+  // release test does, to isolate the pre-roll edge from acquisition policy.
   const totalRealSamples = CHUNK * 10 - 1;
   session.ingestMic(frame(0, totalRealSamples), RATE, 0);
 
   for (let nowMs = 40; nowMs <= 200; nowMs += 20) {
     drainOne(session, nowMs);
   }
+  (session as any).micFrontierCorrectionSamples = 145 + Math.round(RATE * 0.2);
   const held = drainOne(session, 220);
   assert.equal(sample(held.output, CHUNK - 1), 0);
   assert.equal(held.evidence.micGapSamples, 0);

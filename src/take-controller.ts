@@ -649,8 +649,9 @@ export class TakeController {
         try {
           // Retention can durably invalidate a WAV before a later sidecar
           // cleanup fails. Always re-read durable history so product status
-          // cannot keep advertising an artifact that is already gone.
-          if (this.refreshHistoryCache()) this.emitChange();
+          // cannot keep advertising an artifact that is already gone. Read it
+          // without blocking: this runs after every recording, room still live.
+          if (this.replaceHistoryItems(await this.library.listAsync())) this.emitChange();
         } catch (error) {
           refreshFailure = { error };
         }
@@ -670,7 +671,11 @@ export class TakeController {
   }
 
   private refreshHistoryCache() {
-    const nextItems = this.library.list().map(historyItem);
+    return this.replaceHistoryItems(this.library.list());
+  }
+
+  private replaceHistoryItems(entries: readonly TakeLibraryEntry[]) {
+    const nextItems = entries.map(historyItem);
     const changed = nextItems.length !== this.historyCache.length
       || nextItems.some((entry, index) => !sameHistoryItem(this.historyCache[index], entry));
     this.historyCache = Object.freeze(nextItems.map((entry) => structuredClone(entry)));

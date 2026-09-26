@@ -373,8 +373,8 @@ describe('AudioSession timelines', () => {
     assert.equal(session.readMic(expectedStart - 1, 1)[0], 0);
     assert.equal(
       session.micTotalSamples,
-      RATE - 1,
-      'only the future-dependent tail sample is deferred; the capture origin does not move',
+      RATE - 2,
+      'only the two future-dependent tail samples are deferred; the capture origin does not move',
     );
   });
 
@@ -734,8 +734,8 @@ describe('AudioSession health', () => {
     assert.ok(corrected, 'test mismatch must trigger a correction');
     assert.equal(
       corrected.samples.length,
-      960,
-      'frame-scoped return keeps the future-dependent target deferred: 959 current samples plus one clock trim',
+      959,
+      'frame-scoped return keeps the future-dependent targets deferred: 958 current samples plus one clock trim',
     );
     assert.ok(
       Math.abs(corrected.samples[0] - expectedCurrentFrameFirst) <= 1,

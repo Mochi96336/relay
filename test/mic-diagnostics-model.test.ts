@@ -185,6 +185,30 @@ describe('Mic diagnostics model', () => {
     assert.equal(zero.value, '0 ppm', 'no signed zero');
   });
 
+  it('says a drifting clock is handled once Relay trims the Mic for it', () => {
+    const slow = rows(liveStatus((s) => {
+      s.audio.timeline.micClockDrift = { ppm: 80, windows: 24, spanMs: 115_000 };
+      s.audio.timeline.micClockTrimPpm = 80;
+    })).drift;
+    assert.deepEqual(
+      [slow.value, slow.note, slow.tone],
+      ['+80 ppm', 'The phone clock runs slow; Relay stretches the Mic to match.', 'ok'],
+    );
+    const fast = rows(liveStatus((s) => {
+      s.audio.timeline.micClockDrift = { ppm: -30, windows: 24, spanMs: 115_000 };
+      s.audio.timeline.micClockTrimPpm = -30;
+    })).drift;
+    assert.deepEqual(
+      [fast.note, fast.tone],
+      ['The phone clock runs fast; Relay shortens the Mic to match.', 'ok'],
+    );
+    const untrimmed = rows(liveStatus((s) => {
+      s.audio.timeline.micClockDrift = { ppm: 80, windows: 24, spanMs: 115_000 };
+      s.audio.timeline.micClockTrimPpm = 0;
+    })).drift;
+    assert.equal(untrimmed.tone, 'warn');
+  });
+
   it('renders placeholders rather than guesses before statusz has answered', () => {
     for (const row of describeMicTransport(null)) assert.equal(row.value, '—', row.key);
   });

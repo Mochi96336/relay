@@ -1582,6 +1582,7 @@ function remoteStatusPayload() {
         micGapMs: mixHealth.micGapMs,
         micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
         micClockDrift: micClockDrift.estimate(),
+        micClockTrimPpm: session.micClockTrimPpm,
         micHeadroomMs: mixHealth.micHeadroomMs,
         micStarvedFrames: mixHealth.micStarvedFrames,
       },
@@ -2004,13 +2005,20 @@ function processPublisherFrame(frame: PcmFrame) {
     );
     if (samples.length > 0) noteMicFrame(nowMs, frame);
     micAudibility.observeReceived(samples);
-    if (frame.firstSampleIndex !== null && frame.generation !== null) {
-      micClockDrift.observe(
+    if (
+      frame.firstSampleIndex !== null
+      && frame.generation !== null
+      && micClockDrift.observe(
         frame.generation,
         micRuntime.sampleRate,
         frame.firstSampleIndex + frame.pcm.byteLength / 2,
         nowMs,
-      );
+      )
+    ) {
+      // The estimate only moves when a window closes. It describes this
+      // capture's clock: ingestMic above already cleared the trim if this
+      // packet began a new capture, and the estimator restarted with it.
+      session.setMicClockTrimPpm(micClockDrift.estimate()?.ppm ?? null);
     }
 
     if (session.active) {
@@ -2113,6 +2121,7 @@ function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
       micGapMs: health.micGapMs,
       micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
       micClockDrift: micClockDrift.estimate(),
+      micClockTrimPpm: session.micClockTrimPpm,
       micRmsDbfs: health.micRmsDbfs === null ? null : Math.round(health.micRmsDbfs),
     },
     phone: uplink ? {

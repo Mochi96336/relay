@@ -87,6 +87,25 @@ function stretchPcmSpanByOne(input: Int16Array) {
   return output;
 }
 
+/**
+ * Shorten a proven-contiguous PCM span by exactly one sample, the mirror of
+ * stretchPcmSpanByOne: endpoints kept, the removed time spread across the span.
+ */
+function compressPcmSpanByOne(input: Int16Array) {
+  if (input.length < 3) return input.slice();
+  const output = new Int16Array(input.length - 1);
+  const sourceScale = (input.length - 1) / (input.length - 2);
+  for (let index = 0; index < output.length; index += 1) {
+    const position = index * sourceScale;
+    const left = Math.floor(position);
+    const fraction = position - left;
+    const a = input[left];
+    const b = input[Math.min(left + 1, input.length - 1)];
+    output[index] = Math.round(a + (b - a) * fraction);
+  }
+  return output;
+}
+
 export type AlignmentState = {
   /** RTT/2 fallback used until an acoustic calibration succeeds. */
   networkCompensationMs: number;
@@ -162,6 +181,23 @@ const ADVANCE_SAFETY_MS = 200;
  */
 const BACKING_CLOCK_ERROR_ALPHA = 0.002;
 const BACKING_CLOCK_DEADBAND_MS = 2;
+
+/**
+ * The Mic capture clock is a phone's, and it drifts against the mix clock
+ * too: tens of ppm is ordinary. Mic packets are placed by their capture index
+ * against an anchor taken once, so the drift accumulates for as long as the
+ * capture lasts - a slow clock spends the live headroom (and moves the voice
+ * earlier against the song), a fast one moves the voice later. At 50 ppm that
+ * is 180 ms an hour. The estimate comes from arrival times
+ * (MicClockDriftEstimator) and is applied as the same one-sample stretch the
+ * Backing correction uses, or its mirror, at contiguous packet boundaries.
+ *
+ * The estimator reads a stable clock within about 15 ppm, so smaller estimates
+ * are left alone rather than risk making a good clock worse; far larger ones
+ * are not a capture clock.
+ */
+const MIC_CLOCK_TRIM_MIN_PPM = 15;
+const MIC_CLOCK_TRIM_MAX_PPM = 500;
 
 /**
  * Runtime validation corrects an already-live read head. Moving it in one frame
@@ -514,6 +550,12 @@ export class AudioSession {
   private micFrontierSlewTargetSamples: number | null = null;
   /** Live frontier slack of recent frames, oldest first. */
   private readonly micFrontierRecentSlackSamples: number[] = [];
+  /** Mic capture clock error the timeline is being trimmed for; positive is slow. */
+  private micClockTrimPpmValue = 0;
+  /** Fractional samples of trim owed but not yet applied. */
+  private micClockTrimCarrySamples = 0;
+  /** Net samples the trim has inserted (positive) or removed for this capture. */
+  private micClockTrimSamplesValue = 0;
   private backingHeadroomMs = 0;
 
   constructor(options: AudioSessionOptions) {
@@ -588,6 +630,36 @@ export class AudioSession {
   /** Samples of real Mic holes filled by concealment since the session began. */
   get micConcealedSampleCount() {
     return this.micConcealedSamples;
+  }
+
+  /** Capture clock error the Mic timeline is currently trimmed for, in ppm. */
+  get micClockTrimPpm() {
+    return this.micClockTrimPpmValue;
+  }
+
+  /** Net samples inserted (positive) or removed by the trim for this capture. */
+  get micClockTrimSamples() {
+    return this.micClockTrimSamplesValue;
+  }
+
+  /**
+   * Trims the Mic timeline for a capture clock running `ppm` slow (positive)
+   * or fast (negative) against the mix clock. Null, or an estimate inside the
+   * estimator's own error, stops trimming. A capture restart clears it: the
+   * next capture has its own clock and must be measured again.
+   */
+  setMicClockTrimPpm(ppm: number | null) {
+    this.micClockTrimPpmValue = ppm !== null
+      && Number.isFinite(ppm)
+      && Math.abs(ppm) >= MIC_CLOCK_TRIM_MIN_PPM
+      ? Math.max(-MIC_CLOCK_TRIM_MAX_PPM, Math.min(MIC_CLOCK_TRIM_MAX_PPM, ppm))
+      : 0;
+  }
+
+  private resetMicClockTrim() {
+    this.micClockTrimPpmValue = 0;
+    this.micClockTrimCarrySamples = 0;
+    this.micClockTrimSamplesValue = 0;
   }
 
   /** The same frontier for the captured song. See `micTotalSamples`. */
@@ -1401,6 +1473,7 @@ export class AudioSession {
 
   private clearTimeline(timeline: PcmTimeline) {
     if (timeline === this.mic) {
+      this.resetMicClockTrim();
       this.resetMicReadContinuity();
       this.lastEmittedMicSourceSample = null;
       this.micCaptureRestartBoundarySamples.length = 0;
@@ -1703,6 +1776,7 @@ export class AudioSession {
           const heldCorrection = this.micFrontierCorrectionSamples > 0;
           this.resetMicFrontierTracking();
           if (!heldCorrection) this.resetMicReadContinuity();
+          this.resetMicClockTrim();
         }
       } else if (timeline.sourceRate === null) {
         timeline.sourceRate = sourceRate;
@@ -1738,6 +1812,45 @@ export class AudioSession {
           timeline.clockErrorSamples -= 1;
           timeline.clockCorrectionSamples += 1;
           start = timeline.totalSamples;
+        }
+      }
+
+      if (
+        timeline === this.mic
+        && this.micClockTrimPpmValue !== 0
+        && timeline.sourceFrontier !== null
+      ) {
+        // Owed trim follows the capture clock, holes included: the clock
+        // drifts across a lost packet just the same.
+        const sourceAdvance = frame.firstSampleIndex! + sourceSampleCount - timeline.sourceFrontier;
+        if (sourceAdvance > 0) {
+          this.micClockTrimCarrySamples += (
+            ((sourceAdvance * this.sampleRate) / sourceRate) * this.micClockTrimPpmValue
+          ) / 1e6;
+        }
+        const currentFrameLength = samples.length - sourceAlignedSampleOffset;
+        const trim = !sourceContinuous || start !== timeline.totalSamples
+          ? 0
+          : this.micClockTrimCarrySamples >= 1 && currentFrameLength >= 1
+            ? 1
+            : this.micClockTrimCarrySamples <= -1 && currentFrameLength >= 3
+              ? -1
+              : 0;
+        if (trim !== 0) {
+          // As for the Backing correction, a deferred previous-frame
+          // interpolation prefix stays byte-for-byte intact.
+          const prefix = samples.subarray(0, sourceAlignedSampleOffset);
+          const currentFrame = samples.subarray(sourceAlignedSampleOffset);
+          const trimmedCurrentFrame = trim > 0
+            ? stretchPcmSpanByOne(currentFrame)
+            : compressPcmSpanByOne(currentFrame);
+          const trimmed = new Int16Array(prefix.length + trimmedCurrentFrame.length);
+          trimmed.set(prefix, 0);
+          trimmed.set(trimmedCurrentFrame, prefix.length);
+          samples = trimmed;
+          timeline.originOffset += trim;
+          this.micClockTrimCarrySamples -= trim;
+          this.micClockTrimSamplesValue += trim;
         }
       }
       const sourceEnd = frame.firstSampleIndex! + sourceSampleCount;

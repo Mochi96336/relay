@@ -1592,6 +1592,7 @@ function remoteStatusPayload() {
         micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
         micClockDrift: micClockDrift.estimate(),
         micClockTrimPpm: session.micClockTrimPpm,
+        micAnchorExcessMs: micClockDrift.anchorExcessMs(),
         micHeadroomMs: mixHealth.micHeadroomMs,
         micStarvedFrames: mixHealth.micStarvedFrames,
       },
@@ -2131,6 +2132,7 @@ function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
       micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
       micClockDrift: micClockDrift.estimate(),
       micClockTrimPpm: session.micClockTrimPpm,
+      micAnchorExcessMs: micClockDrift.anchorExcessMs(),
       micRmsDbfs: health.micRmsDbfs === null ? null : Math.round(health.micRmsDbfs),
     },
     phone: uplink ? {

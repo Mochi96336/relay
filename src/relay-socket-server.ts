@@ -287,7 +287,6 @@ export function createMonitorSocketTransport(
         continue;
       }
 
-      const positioned = outbound === framed && framed !== null && position !== null;
       if (positioned && options.unacknowledgedSamples !== undefined && socket.monitorDelivery) {
         const outstanding = monitorUnacknowledgedSamples(socket.monitorDelivery);
         const sentAtMs = socket.monitorDelivery.sentAtMs;
@@ -306,7 +305,8 @@ export function createMonitorSocketTransport(
         socket.monitorDelivery.sentAtMs = nowMs();
         socket.monitorDelivery.sent = {
           generation: position.generation,
-          endSampleIndex: position.firstSampleIndex + (framed!.byteLength - FRAME_HEADER_BYTES) / 2,
+          // ACK tracks original positioned PCM samples, regardless of PCM or Opus wire size.
+          endSampleIndex: position.firstSampleIndex + payload.byteLength / 2,
         };
       }
     }

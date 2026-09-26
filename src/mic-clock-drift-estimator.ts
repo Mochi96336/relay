@@ -1,13 +1,11 @@
 /**
- * Diagnostic estimate of how fast the phone's capture clock runs against
- * Relay's mix clock, in parts per million.
+ * Estimate of how fast the phone's capture clock runs against Relay's mix
+ * clock, in parts per million. AudioSession trims the Mic timeline by it.
  *
  * The Mic timeline is anchored once, at capture start, and Mic packets are
  * never time-stretched afterwards. A capture clock that is slower than the mix
  * clock therefore spends the live headroom a little every second; a faster one
- * makes the voice drift later against the song. Whether that matters in a real
- * session depends entirely on the size of the error, which is what this
- * measures before anyone builds a correction for it.
+ * makes the voice drift later against the song.
  *
  * Packet arrival is dominated by network queueing, so a direct fit of arrival
  * time against capture position is mostly jitter. The lower envelope is not:
@@ -78,13 +76,14 @@ export class MicClockDriftEstimator {
   /**
    * One accepted positioned Mic packet: its capture generation, source rate,
    * the source-clock index just past its last sample, and when it arrived.
+   * True when this packet closed a window, the only time the estimate moves.
    */
   observe(generation: number, sourceRate: number, sourceEndSample: number, arrivedAtMs: number) {
     if (
       !Number.isFinite(sourceEndSample)
       || !Number.isFinite(arrivedAtMs)
       || !(sourceRate > 0)
-    ) return;
+    ) return false;
     if (generation !== this.generation || sourceRate !== this.sourceRate) {
       // A new capture is a new clock anchor; nothing before it applies.
       this.generation = generation;
@@ -120,7 +119,9 @@ export class MicClockDriftEstimator {
       }
       this.windowStartedAtMs = arrivedAtMs;
       this.windowMinimum = null;
+      return true;
     }
+    return false;
   }
 
   estimate(): MicClockDriftEstimate | null {

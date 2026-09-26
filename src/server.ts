@@ -64,6 +64,7 @@ import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
+import { loadMonitorOpusEncoder } from './monitor-opus.js';
 import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
@@ -151,6 +152,19 @@ const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
 const MONITOR_BACKLOG_MS = relayConfig.monitorBacklogMs;
 const MONITOR_BACKLOG_BYTES = monitorBacklogBudgetBytes(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS);
+/**
+ * Room audio a Listen page may have outstanding - sent but not confirmed - on
+ * top of its round trip, before it is dropped to rejoin the live edge. The
+ * byte backlog above only sees this process's own socket buffer.
+ */
+const MONITOR_UNACKNOWLEDGED_SAMPLES = Math.round(
+  (MIX_SAMPLE_RATE * relayConfig.monitorUnacknowledgedMs) / 1_000,
+);
+/** The same time budget for an Opus listener, at the Opus bitrate. */
+const MONITOR_OPUS_BACKLOG_BYTES = Math.max(
+  1,
+  Math.round((relayConfig.listenOpusBitrate / 8) * (MONITOR_BACKLOG_MS / 1_000)),
+);
 const LIVE_MIX_PREBUFFER_MS = relayConfig.livePrebufferMs;
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
@@ -213,6 +227,8 @@ const {
 } = createRelaySocketTransport(wss);
 const monitorTransport = createMonitorSocketTransport(wss, {
   backlogBytes: MONITOR_BACKLOG_BYTES,
+  unacknowledgedSamples: MONITOR_UNACKNOWLEDGED_SAMPLES,
+  opusBacklogBytes: MONITOR_OPUS_BACKLOG_BYTES,
 });
 const infrastructureCapability = new InfrastructureCapabilityRuntime<RelaySocket>({
   key: relayConfig.infrastructureKey,
@@ -1582,6 +1598,8 @@ function remoteStatusPayload() {
         micGapMs: mixHealth.micGapMs,
         micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
         micClockDrift: micClockDrift.estimate(),
+        micClockTrimPpm: session.micClockTrimPpm,
+        micAnchorExcessMs: micClockDrift.anchorExcessMs(),
         micHeadroomMs: mixHealth.micHeadroomMs,
         micStarvedFrames: mixHealth.micStarvedFrames,
       },
@@ -2004,13 +2022,20 @@ function processPublisherFrame(frame: PcmFrame) {
     );
     if (samples.length > 0) noteMicFrame(nowMs, frame);
     micAudibility.observeReceived(samples);
-    if (frame.firstSampleIndex !== null && frame.generation !== null) {
-      micClockDrift.observe(
+    if (
+      frame.firstSampleIndex !== null
+      && frame.generation !== null
+      && micClockDrift.observe(
         frame.generation,
         micRuntime.sampleRate,
         frame.firstSampleIndex + frame.pcm.byteLength / 2,
         nowMs,
-      );
+      )
+    ) {
+      // The estimate only moves when a window closes. It describes this
+      // capture's clock: ingestMic above already cleared the trim if this
+      // packet began a new capture, and the estimator restarted with it.
+      session.setMicClockTrimPpm(micClockDrift.estimate()?.ppm ?? null);
     }
 
     if (session.active) {
@@ -2113,6 +2138,8 @@ function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
       micGapMs: health.micGapMs,
       micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
       micClockDrift: micClockDrift.estimate(),
+      micClockTrimPpm: session.micClockTrimPpm,
+      micAnchorExcessMs: micClockDrift.anchorExcessMs(),
       micRmsDbfs: health.micRmsDbfs === null ? null : Math.round(health.micRmsDbfs),
     },
     phone: uplink ? {
@@ -3757,12 +3784,23 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       return;
     }
 
+    // Opus rides only positioned monitor frames, and only for a page that
+    // said it can decode it, on a Relay that has it enabled and loaded.
+    const monitorCodec = monitorPacketVersion === 1
+      && Array.isArray(payload.monitorCodecs)
+      && payload.monitorCodecs.includes('opus')
+      && monitorTransport.opusEnabled
+      ? 'opus' as const
+      : undefined;
+
     commitSocketRole(socket, 'monitor');
     socket.monitorPacketVersion = monitorPacketVersion;
+    socket.monitorCodec = monitorCodec;
     sendJson(socket, {
       type: 'registered',
       role: 'monitor',
       ...(monitorPacketVersion ? { monitorPacketVersion } : {}),
+      ...(monitorCodec ? { monitorCodec } : {}),
     });
     sendJson(socket, publisherStatusPayload());
     sendJson(socket, sourceStatusPayload());
@@ -3968,6 +4006,7 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
+    if (monitorTransport.acknowledge(socket, payload)) return;
     if (queryProtocol.dispatch(socket, payload)) return;
     if (commandProtocol.dispatch(socket, payload)) return;
     if (infrastructureEventProtocol.dispatch(socket, payload)) return;
@@ -4015,6 +4054,18 @@ server.on('error', (error: NodeJS.ErrnoException) => {
   console.error('Relay server error', error);
   process.exit(1);
 });
+
+if (relayConfig.listenOpus) {
+  try {
+    monitorTransport.enableOpus(await loadMonitorOpusEncoder({
+      sampleRate: MIX_SAMPLE_RATE,
+      bitrate: relayConfig.listenOpusBitrate,
+    }));
+    console.log(`Relay Listen offers Opus at ${relayConfig.listenOpusBitrate / 1_000} kbps`);
+  } catch (error) {
+    console.warn('Relay Listen Opus is unavailable; listeners stay on PCM.', error);
+  }
+}
 
 const directMediaConfig = webTransportMediaConfig();
 if (directMediaConfig) {

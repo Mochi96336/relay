@@ -19,7 +19,7 @@ test('Listen explicitly negotiates positioned monitor PCM', async () => {
   );
   assert.match(
     source,
-    /import \{ createStreamingLinearResampler \} from '\.\/streaming-linear-resampler\.js';/,
+    /import \{ createStreamingResampler \} from '\.\/streaming-resampler\.js';/,
     'Listen must use the stateful positioned resampler instead of packet-local interpolation',
   );
   assert.match(
@@ -54,8 +54,19 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
     'the transport header must be stripped before PCM conversion');
   assert.match(
     messageSection,
-    /listenResampler\.resample\(pcm, \{[\s\S]*sourceRate: sourceSampleRate,[\s\S]*targetRate: audioContext\.sampleRate,[\s\S]*firstSampleIndex: received\.frame\.firstSampleIndex,[\s\S]*\}\)/,
+    /enqueuePlayback\(int16ToFloat32\(received\.frame\.pcm\), received\.frame\.firstSampleIndex\)/,
     'Listen resampling must stay anchored to the positioned monitor frame clock',
+  );
+  const enqueueSection = section(source, 'function enqueuePlayback(pcm, firstSampleIndex)', 'function resetPlaybackTemporalState(');
+  assert.match(
+    enqueueSection,
+    /listenResampler\.resample\(pcm, \{[\s\S]*sourceRate: sourceSampleRate,[\s\S]*targetRate: audioContext\.sampleRate,[\s\S]*firstSampleIndex,[\s\S]*\}\)[\s\S]*playbackNode\.port\.postMessage\(samples\.buffer/,
+    'decoded PCM and Opus reach the worklet through the same positioned resampler',
+  );
+  assert.match(
+    messageSection,
+    /if \(received\.reset\) \{[\s\S]*listenOpusDecoder\.reset\(\)[\s\S]*\}/,
+    'a gap or generation boundary must also retire Opus audio still in the decoder',
   );
   assert.doesNotMatch(source, /function linearResample\(/,
     'packet-local resampling must not remain beside the streaming resampler');
@@ -64,11 +75,11 @@ test('Listen catches up on explicit timeline gaps before enqueueing the newest f
 
   const recoveryIndex = messageSection.indexOf('if (finishAudioInterruptionEvidence())');
   const resetIndex = messageSection.indexOf('if (received.reset) {');
-  const pcmIndex = messageSection.indexOf('int16ToFloat32(received.frame.pcm)');
-  const pushIndex = messageSection.indexOf('playbackNode.port.postMessage(samples.buffer');
+  const opusIndex = messageSection.indexOf('listenOpusDecoder.decode(received.frame)');
+  const pcmIndex = messageSection.indexOf('enqueuePlayback(int16ToFloat32(received.frame.pcm)');
   assert.ok(
-    recoveryIndex >= 0 && resetIndex > recoveryIndex && pcmIndex > resetIndex && pushIndex > pcmIndex,
-    'interruption evidence and catch-up must settle before the recovered frame is converted and pushed',
+    recoveryIndex >= 0 && resetIndex > recoveryIndex && opusIndex > resetIndex && pcmIndex > resetIndex,
+    'interruption evidence and catch-up must settle before the recovered frame is decoded or converted and pushed',
   );
 });
 
@@ -89,7 +100,7 @@ test('transport boundaries reset both positioned continuity and the AudioWorklet
 
   assert.match(
     resetSection,
-    /monitorPcmReceiver\.reset\(\)[\s\S]*listenResampler\.reset\(\)[\s\S]*postMessage\(\{ type: 'reset', deClick \}\)/,
+    /monitorPcmReceiver\.reset\(\)[\s\S]*listenOpusDecoder\.reset\(\)[\s\S]*listenResampler\.reset\(\)[\s\S]*postMessage\(\{ type: 'reset', deClick \}\)/,
     'one helper must clear positioned continuity, resampler history and queued worklet audio together while preserving the requested de-click policy',
   );
   assert.match(abandonSection, /transportEpoch \+= 1;[\s\S]*resetPlaybackTemporalState\(deClickPlayback\)/,

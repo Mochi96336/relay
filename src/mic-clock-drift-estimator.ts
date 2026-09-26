@@ -1,13 +1,11 @@
 /**
- * Diagnostic estimate of how fast the phone's capture clock runs against
- * Relay's mix clock, in parts per million.
+ * Estimate of how fast the phone's capture clock runs against Relay's mix
+ * clock, in parts per million. AudioSession trims the Mic timeline by it.
  *
  * The Mic timeline is anchored once, at capture start, and Mic packets are
  * never time-stretched afterwards. A capture clock that is slower than the mix
  * clock therefore spends the live headroom a little every second; a faster one
- * makes the voice drift later against the song. Whether that matters in a real
- * session depends entirely on the size of the error, which is what this
- * measures before anyone builds a correction for it.
+ * makes the voice drift later against the song.
  *
  * Packet arrival is dominated by network queueing, so a direct fit of arrival
  * time against capture position is mostly jitter. The lower envelope is not:
@@ -61,6 +59,10 @@ export class MicClockDriftEstimator {
   /** Sum of spliced latency steps, in source samples. */
   private stepOffsetSamples = 0;
   private lastRawMinimum: number | null = null;
+  /** Delay of the capture's first packet: the one AudioSession anchors to. */
+  private anchorDelaySamples: number | null = null;
+  /** Lowest delay of the first window after warm-up: the settled path. */
+  private settledMinimumSamples: number | null = null;
 
   constructor(options: MicClockDriftEstimatorOptions = {}) {
     this.windowMs = options.windowMs ?? 5_000;
@@ -78,13 +80,14 @@ export class MicClockDriftEstimator {
   /**
    * One accepted positioned Mic packet: its capture generation, source rate,
    * the source-clock index just past its last sample, and when it arrived.
+   * True when this packet closed a window, the only time the estimate moves.
    */
   observe(generation: number, sourceRate: number, sourceEndSample: number, arrivedAtMs: number) {
     if (
       !Number.isFinite(sourceEndSample)
       || !Number.isFinite(arrivedAtMs)
       || !(sourceRate > 0)
-    ) return;
+    ) return false;
     if (generation !== this.generation || sourceRate !== this.sourceRate) {
       // A new capture is a new clock anchor; nothing before it applies.
       this.generation = generation;
@@ -95,11 +98,14 @@ export class MicClockDriftEstimator {
       this.stepOffsetSamples = 0;
       this.lastRawMinimum = null;
       this.warmupWindowPending = true;
+      this.anchorDelaySamples = null;
+      this.settledMinimumSamples = null;
     }
 
     // Arrival on the mix clock minus capture position on the source clock,
     // both in source samples. Only its change over time matters.
     const delaySamples = (arrivedAtMs * sourceRate) / 1000 - sourceEndSample;
+    if (this.anchorDelaySamples === null) this.anchorDelaySamples = delaySamples;
     if (this.windowStartedAtMs === null) this.windowStartedAtMs = arrivedAtMs;
     this.windowMinimum = this.windowMinimum === null
       ? delaySamples
@@ -110,6 +116,7 @@ export class MicClockDriftEstimator {
         this.warmupWindowPending = false;
       } else {
         const raw = this.windowMinimum;
+        if (this.settledMinimumSamples === null) this.settledMinimumSamples = raw;
         if (this.lastRawMinimum !== null) {
           const jump = raw - this.lastRawMinimum;
           if (Math.abs(jump) > (STEP_MS * sourceRate) / 1000) this.stepOffsetSamples += jump;
@@ -120,7 +127,30 @@ export class MicClockDriftEstimator {
       }
       this.windowStartedAtMs = arrivedAtMs;
       this.windowMinimum = null;
+      return true;
     }
+    return false;
+  }
+
+  /**
+   * How much later than the settled path the capture's first packet arrived,
+   * in ms, or null before the first window after warm-up closes.
+   *
+   * AudioSession anchors a capture's whole Mic timeline to its first packet's
+   * arrival, so a first packet held up by start-up (a busy main thread, a
+   * transport still being chosen) bakes that delay into the capture for as
+   * long as it lasts. Calibration absorbs it, but the read-ahead budget is
+   * sized as if it were not there, and nothing else reports it.
+   */
+  anchorExcessMs() {
+    if (
+      this.anchorDelaySamples === null
+      || this.settledMinimumSamples === null
+      || this.sourceRate === null
+    ) return null;
+    return Math.round(
+      ((this.anchorDelaySamples - this.settledMinimumSamples) * 1000) / this.sourceRate,
+    );
   }
 
   estimate(): MicClockDriftEstimate | null {

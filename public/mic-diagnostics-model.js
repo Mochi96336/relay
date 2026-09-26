@@ -267,6 +267,18 @@ function describeClockDrift(status) {
   if (Math.abs(ppm) < NEGLIGIBLE_DRIFT_PPM) {
     return row('drift', 'Clock drift', value, 'Phone and Relay clocks agree.', 'ok');
   }
+  const trimPpm = finite(status?.audio?.timeline?.micClockTrimPpm);
+  if (trimPpm !== null && trimPpm !== 0) {
+    return row(
+      'drift',
+      'Clock drift',
+      value,
+      ppm > 0
+        ? 'The phone clock runs slow; Relay stretches the Mic to match.'
+        : 'The phone clock runs fast; Relay shortens the Mic to match.',
+      'ok',
+    );
+  }
   const msPerMinute = (Math.abs(ppm) * 60_000) / 1e6;
   const rate = msPerMinute < 10 ? msPerMinute.toFixed(1) : String(Math.round(msPerMinute));
   return row(

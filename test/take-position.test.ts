@@ -162,6 +162,9 @@ test('a positioned capture packet gap does not compress the Take sample timeline
     session.start(0);
     session.ingestMic(positionedFrame(0), RATE, 0);
     session.ingestMic(positionedFrame(FRAME_SAMPLES * 2, 2_000), RATE, 0);
+    // Cover the third frame's limiter look-ahead too, so frontier safety never
+    // moves the read head in this zero-prebuffer timeline fixture.
+    session.ingestMic(positionedFrame(FRAME_SAMPLES * 3, 2_000), RATE, 0);
 
     const setup = waitForReady(directory);
     controller = setup.controller;

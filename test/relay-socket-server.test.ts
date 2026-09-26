@@ -5,6 +5,7 @@ import test from 'node:test';
 import WebSocket from 'ws';
 
 import {
+  DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
   createRelaySocketTransport,
   createRelayWebSocketServer,
   type RelaySocket,
@@ -180,4 +181,81 @@ test('heartbeat terminates a stale socket', { timeout: 10_000 }, async () => {
     await closeWebSocketServer(wss);
     await closeServer(server);
   }
+});
+
+test('a malformed frame closes only that socket, not the Relay process', { timeout: 10_000 }, async () => {
+  const server = createServer();
+  const wss = createRelayWebSocketServer(server, {
+    relayKey: null,
+    heartbeatMs: 1_000,
+  });
+  const port = await listen(server);
+  let client: WebSocket | null = null;
+  let survivor: WebSocket | null = null;
+
+  try {
+    const accepted = waitForEvent(wss, 'connection', 'malformed frame connection');
+    client = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    await waitForEvent(client, 'open', 'malformed frame client open');
+    const [rawSocket] = await accepted;
+    const socket = rawSocket as RelaySocket;
+    // Only the substrate's own listener may observe the error: a test listener
+    // here would hide exactly the unhandled 'error' this pins.
+    assert.equal(socket.listenerCount('error'), 1);
+
+    const serverClosed = waitForEvent(socket, 'close', 'malformed frame server close');
+    const clientClosed = waitForEvent(client, 'close', 'malformed frame close');
+    // A text frame must be valid UTF-8; 0xff never is.
+    client.send(Buffer.from([0xff, 0xfe, 0xfd]), { binary: false });
+    const [[code]] = await Promise.all([clientClosed, serverClosed]);
+    assert.equal(code, 1007);
+
+    // The server is still accepting and serving other sockets.
+    survivor = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    await waitForEvent(survivor, 'open', 'survivor client open');
+  } finally {
+    for (const socket of [client, survivor]) {
+      if (socket && socket.readyState !== WebSocket.CLOSED) socket.terminate();
+    }
+    await closeWebSocketServer(wss);
+    await closeServer(server);
+  }
+});
+
+test('an inbound message past the payload cap closes that socket as too big', { timeout: 10_000 }, async () => {
+  const server = createServer();
+  const wss = createRelayWebSocketServer(server, {
+    relayKey: null,
+    heartbeatMs: 1_000,
+    maxPayloadBytes: 4_096,
+  });
+  const port = await listen(server);
+  let client: WebSocket | null = null;
+
+  try {
+    const accepted = waitForEvent(wss, 'connection', 'payload cap connection');
+    client = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    await waitForEvent(client, 'open', 'payload cap client open');
+    const [rawSocket] = await accepted;
+    const socket = rawSocket as RelaySocket;
+
+    const atCap = waitForEvent(socket, 'message', 'message at the cap');
+    client.send(Buffer.alloc(4_096));
+    const [received] = await atCap;
+    assert.equal((received as Buffer).byteLength, 4_096);
+
+    const clientClosed = waitForEvent(client, 'close', 'oversized message close');
+    client.send(Buffer.alloc(4_097));
+    const [code] = await clientClosed;
+    assert.equal(code, 1009);
+  } finally {
+    if (client && client.readyState !== WebSocket.CLOSED) client.terminate();
+    await closeWebSocketServer(wss);
+    await closeServer(server);
+  }
+});
+
+test('the default payload cap admits a one-second 192 kHz Backing frame', () => {
+  assert.ok(DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES >= 16 + 192_000 * 2);
+  assert.ok(DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES < 100 * 1024 * 1024);
 });

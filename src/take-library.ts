@@ -9,6 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { mkdir, open, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { durableRenameSync } from './file-durability.js';
@@ -23,6 +24,7 @@ import type {
 import type { TakeQualityAssessment } from './take-quality.js';
 
 const WAV_HEADER_BYTES = 44;
+const LIST_ASYNC_CONCURRENCY = 4;
 const MAX_JS_DATE_MS = 8_640_000_000_000_000;
 const TAKE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TAKE_WAV_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.wav$/i;
@@ -132,6 +134,32 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
   } finally {
     closeSync(descriptor);
   }
+  return wavArtifactFromHeader(header, bytesRead, () => statSync(filePath).size, takeId, baseUrl);
+}
+
+/** readWavArtifact without blocking the event loop; also returns the WAV's mtime. */
+async function readWavArtifactAsync(filePath: string, takeId: string, baseUrl: string) {
+  const header = Buffer.alloc(WAV_HEADER_BYTES);
+  const handle = await open(filePath, 'r');
+  try {
+    const { bytesRead } = await handle.read(header, 0, WAV_HEADER_BYTES, 0);
+    const info = await handle.stat();
+    return {
+      artifact: wavArtifactFromHeader(header, bytesRead, () => info.size, takeId, baseUrl),
+      mtimeMs: info.mtimeMs,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function wavArtifactFromHeader(
+  header: Buffer,
+  bytesRead: number,
+  fileSize: () => number,
+  takeId: string,
+  baseUrl: string,
+): TakeArtifact {
   if (bytesRead < WAV_HEADER_BYTES) throw new Error('Take WAV header is incomplete.');
   if (
     header.toString('ascii', 0, 4) !== 'RIFF'
@@ -162,8 +190,8 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
   }
   if (dataBytes % 2 !== 0) throw new Error('Take WAV PCM payload is not 16-bit aligned.');
 
-  const info = statSync(filePath);
-  if (riffBytes !== 36 + dataBytes || info.size !== WAV_HEADER_BYTES + dataBytes) {
+  const sizeBytes = fileSize();
+  if (riffBytes !== 36 + dataBytes || sizeBytes !== WAV_HEADER_BYTES + dataBytes) {
     throw new Error('Take WAV length is inconsistent with its header.');
   }
   const sampleCount = dataBytes / 2;
@@ -171,7 +199,7 @@ function readWavArtifact(filePath: string, takeId: string, baseUrl: string): Tak
     fileName: `${takeId}.wav`,
     url: artifactUrl(baseUrl, takeId),
     mimeType: 'audio/wav',
-    sizeBytes: info.size,
+    sizeBytes,
     sampleRate,
     channels: 1,
     bitsPerSample: 16,
@@ -186,7 +214,15 @@ function recoveredEntryFromWav(
   baseUrl: string,
 ): TakeLibraryEntry {
   const artifact = readWavArtifact(wavPath, takeId, baseUrl);
-  const endedAtMs = Math.min(MAX_JS_DATE_MS, Math.max(0, statSync(wavPath).mtimeMs));
+  return entryFromRecoveredWav(artifact, statSync(wavPath).mtimeMs, takeId);
+}
+
+function entryFromRecoveredWav(
+  artifact: TakeArtifact,
+  mtimeMs: number,
+  takeId: string,
+): TakeLibraryEntry {
+  const endedAtMs = Math.min(MAX_JS_DATE_MS, Math.max(0, mtimeMs));
   return {
     takeId,
     startedAtMs: Math.max(0, endedAtMs - artifact.durationMs),
@@ -227,16 +263,31 @@ function readValidatedMetadata(
   if (!metadata) return null;
 
   const artifact = readWavArtifact(wavPath, takeId, baseUrl);
+  if (!metadataMatchesArtifact(metadata, artifact)) return null;
+  return useWavArtifact ? { ...metadata, artifact } : metadata;
+}
+
+async function readValidatedEntryAsync(
+  metadataPath: string,
+  wavPath: string,
+  takeId: string,
+  baseUrl: string,
+): Promise<TakeLibraryEntry | null> {
+  const metadata = parseMetadata(await readFile(metadataPath), takeId);
+  if (!metadata) return null;
+  const { artifact } = await readWavArtifactAsync(wavPath, takeId, baseUrl);
+  if (!metadataMatchesArtifact(metadata, artifact)) return null;
+  return { ...metadata, artifact };
+}
+
+function metadataMatchesArtifact(metadata: PersistedTakeLibraryEntry, artifact: TakeArtifact) {
   if (
     metadata.artifact.sampleCount !== artifact.sampleCount
     || metadata.artifact.sampleRate !== artifact.sampleRate
     || metadata.artifact.sizeBytes !== artifact.sizeBytes
-  ) return null;
-  if (
-    metadata.mixSampleRange !== null
-    && metadata.mixSampleRange.sampleCount !== artifact.sampleCount
-  ) return null;
-  return useWavArtifact ? { ...metadata, artifact } : metadata;
+  ) return false;
+  return metadata.mixSampleRange === null
+    || metadata.mixSampleRange.sampleCount === artifact.sampleCount;
 }
 
 function cloneEntry(entry: TakeLibraryEntry): TakeLibraryEntry {
@@ -432,6 +483,60 @@ export class TakeLibrary {
       if (!seenTakeIds.has(takeId)) entries.push(entry);
     }
 
+    return entries
+      .sort((a, b) => b.endedAtMs - a.endedAtMs)
+      .map(cloneEntry);
+  }
+
+  /**
+   * The history list() would return, read without blocking the event loop.
+   *
+   * list() re-validates every Take twice with synchronous file I/O - once
+   * while repairing, once while listing - which with a few hundred Takes held
+   * the event loop for about a second, and it runs after every recording
+   * while the room is still live. This reads each Take once, asynchronously,
+   * and writes nothing: a Take whose sidecar list() would repair appears here
+   * as that repair would show it (its staged metadata, or the WAV alone).
+   * prepare() still performs the repairs.
+   */
+  async listAsync() {
+    await mkdir(this.options.directory, { recursive: true });
+    const names = new Set(await readdir(this.options.directory));
+    const reads: (() => Promise<TakeLibraryEntry | null>)[] = [];
+    for (const name of names) {
+      const match = TAKE_WAV_PATTERN.exec(name);
+      if (!match) continue;
+      const takeId = match[1];
+      const wavPath = path.join(this.options.directory, name);
+      const candidates = [metadataFileName(takeId), metadataPartFileName(takeId)]
+        .filter((candidate) => names.has(candidate))
+        .map((candidate) => path.join(this.options.directory, candidate));
+      reads.push(async () => {
+        for (const metadataPath of candidates) {
+          try {
+            const entry = await readValidatedEntryAsync(metadataPath, wavPath, takeId, this.artifactBaseUrl);
+            if (entry) return entry;
+          } catch {}
+        }
+        try {
+          const { artifact, mtimeMs } = await readWavArtifactAsync(wavPath, takeId, this.artifactBaseUrl);
+          return entryFromRecoveredWav(artifact, mtimeMs, takeId);
+        } catch {
+          // Corrupt or non-Relay WAVs are left out, as list() leaves them out.
+          return null;
+        }
+      });
+    }
+    // A few reads at a time: enough to overlap file latency, without opening
+    // every Take at once or crowding the Take writer out of the fs threadpool.
+    const entries: TakeLibraryEntry[] = [];
+    let next = 0;
+    await Promise.all(Array.from({ length: LIST_ASYNC_CONCURRENCY }, async () => {
+      while (next < reads.length) {
+        const entry = await reads[next++]!();
+        if (entry) entries.push(entry);
+      }
+    }));
     return entries
       .sort((a, b) => b.endedAtMs - a.endedAtMs)
       .map(cloneEntry);

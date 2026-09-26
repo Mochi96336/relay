@@ -64,6 +64,7 @@ import { buildReadiness } from './readiness.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
+import { loadMonitorOpusEncoder } from './monitor-opus.js';
 import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
@@ -151,6 +152,11 @@ const MIX_SAMPLE_RATE = 48_000;
 const MIX_FRAME_MS = 20;
 const MONITOR_BACKLOG_MS = relayConfig.monitorBacklogMs;
 const MONITOR_BACKLOG_BYTES = monitorBacklogBudgetBytes(MIX_SAMPLE_RATE, MONITOR_BACKLOG_MS);
+/** The same time budget for an Opus listener, at the Opus bitrate. */
+const MONITOR_OPUS_BACKLOG_BYTES = Math.max(
+  1,
+  Math.round((relayConfig.listenOpusBitrate / 8) * (MONITOR_BACKLOG_MS / 1_000)),
+);
 const LIVE_MIX_PREBUFFER_MS = relayConfig.livePrebufferMs;
 const LIVE_BACKING_GAIN = 0.65;
 const MAX_OFFSET_MS = 500;
@@ -213,6 +219,7 @@ const {
 } = createRelaySocketTransport(wss);
 const monitorTransport = createMonitorSocketTransport(wss, {
   backlogBytes: MONITOR_BACKLOG_BYTES,
+  opusBacklogBytes: MONITOR_OPUS_BACKLOG_BYTES,
 });
 const infrastructureCapability = new InfrastructureCapabilityRuntime<RelaySocket>({
   key: relayConfig.infrastructureKey,
@@ -3757,12 +3764,23 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       return;
     }
 
+    // Opus rides only positioned monitor frames, and only for a page that
+    // said it can decode it, on a Relay that has it enabled and loaded.
+    const monitorCodec = monitorPacketVersion === 1
+      && Array.isArray(payload.monitorCodecs)
+      && payload.monitorCodecs.includes('opus')
+      && monitorTransport.opusEnabled
+      ? 'opus' as const
+      : undefined;
+
     commitSocketRole(socket, 'monitor');
     socket.monitorPacketVersion = monitorPacketVersion;
+    socket.monitorCodec = monitorCodec;
     sendJson(socket, {
       type: 'registered',
       role: 'monitor',
       ...(monitorPacketVersion ? { monitorPacketVersion } : {}),
+      ...(monitorCodec ? { monitorCodec } : {}),
     });
     sendJson(socket, publisherStatusPayload());
     sendJson(socket, sourceStatusPayload());
@@ -4015,6 +4033,18 @@ server.on('error', (error: NodeJS.ErrnoException) => {
   console.error('Relay server error', error);
   process.exit(1);
 });
+
+if (relayConfig.listenOpus) {
+  try {
+    monitorTransport.enableOpus(await loadMonitorOpusEncoder({
+      sampleRate: MIX_SAMPLE_RATE,
+      bitrate: relayConfig.listenOpusBitrate,
+    }));
+    console.log(`Relay Listen offers Opus at ${relayConfig.listenOpusBitrate / 1_000} kbps`);
+  } catch (error) {
+    console.warn('Relay Listen Opus is unavailable; listeners stay on PCM.', error);
+  }
+}
 
 const directMediaConfig = webTransportMediaConfig();
 if (directMediaConfig) {

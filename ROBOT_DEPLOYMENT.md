@@ -120,6 +120,15 @@ With a normal publicly trusted certificate, leave `RELAY_WEBTRANSPORT_PIN_CERT` 
 
 The WebTransport URL carries a random, capture-scoped media ticket issued only after publisher registration. A fresh capture or ownership change rotates it. A same-capture control reconnect preserves it until the existing microphone reconnect grace expires. This ticket is a narrow media capability, not a replacement for `RELAY_KEY` or participant ownership.
 
+## Optional Opus for Listen
+
+Listen pages receive the room mix as 48 kHz mono PCM, about 800 kbps per listener. With `RELAY_LISTEN_OPUS=1`, Relay also encodes each mix frame once with Opus (`RELAY_LISTEN_OPUS_BITRATE`, default 96000 bps) and sends it to every Listen page whose browser can decode Opus through WebCodecs; other pages keep PCM, and a page whose decoder fails rejoins on PCM by itself. It is off by default. The codec comes from the `@evan/opus` package: prebuilt native code on x64 and arm64 Linux, WebAssembly elsewhere. If it cannot be loaded, Relay logs a warning and every listener stays on PCM.
+
+```bash
+RELAY_LISTEN_OPUS=1
+# RELAY_LISTEN_OPUS_BITRATE=96000
+```
+
 ## Watching the route
 
 The robot is unattended, so the interesting question is not only "is Relay running" but "is the route still carrying audio". `/healthz` cannot answer that — it stays `{"ok": true}` while Chromium is dead.

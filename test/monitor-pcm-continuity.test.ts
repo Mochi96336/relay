@@ -33,6 +33,7 @@ test('monitor frame decoder strips the transport header and preserves mix positi
   assert.equal(frame.generation, 7);
   assert.equal(frame.firstSampleIndex, 12_480);
   assert.equal(frame.sampleCount, FRAME_SAMPLES);
+  assert.ok(frame.codec === undefined);
   assert.equal(frame.pcm.byteLength, FRAME_SAMPLES * Int16Array.BYTES_PER_ELEMENT);
 });
 

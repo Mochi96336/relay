@@ -1,6 +1,11 @@
 const FRAME_MAGIC = 0x4c52; // 'RL' as uint16 LE
 const FRAME_VERSION = 1;
 const FRAME_HEADER_BYTES = 16;
+// A codec frame (src/monitor-opus.ts): the same position, an explicit sample
+// count, and one encoded packet. Sent only to a page that offered the codec.
+const CODEC_FRAME_VERSION = 2;
+const CODEC_FRAME_HEADER_BYTES = 20;
+const CODEC_OPUS = 1;
 
 export const MONITOR_PCM_PACKET_VERSION = FRAME_VERSION;
 
@@ -13,6 +18,12 @@ export const MONITOR_PCM_PACKET_VERSION = FRAME_VERSION;
  */
 export function decodeMonitorPcmFrame(buffer) {
   if (!(buffer instanceof ArrayBuffer)) return null;
+  if (buffer.byteLength > CODEC_FRAME_HEADER_BYTES) {
+    const view = new DataView(buffer);
+    if (view.getUint16(0, true) === FRAME_MAGIC && view.getUint8(2) === CODEC_FRAME_VERSION) {
+      return decodeMonitorCodecFrame(view, buffer);
+    }
+  }
   const pcmBytes = buffer.byteLength - FRAME_HEADER_BYTES;
   if (pcmBytes <= 0 || pcmBytes % Int16Array.BYTES_PER_ELEMENT !== 0) return null;
 
@@ -31,6 +42,24 @@ export function decodeMonitorPcmFrame(buffer) {
     firstSampleIndex,
     sampleCount: pcmBytes / Int16Array.BYTES_PER_ELEMENT,
     pcm: buffer.slice(FRAME_HEADER_BYTES),
+  };
+}
+
+function decodeMonitorCodecFrame(view, buffer) {
+  if (view.getUint8(3) !== CODEC_OPUS) return null;
+  const firstSampleIndex = view.getFloat64(8, true);
+  const sampleCount = view.getUint32(16, true);
+  if (
+    !Number.isSafeInteger(firstSampleIndex)
+    || firstSampleIndex < 0
+    || sampleCount <= 0
+  ) return null;
+  return {
+    generation: view.getUint32(4, true),
+    firstSampleIndex,
+    sampleCount,
+    codec: 'opus',
+    packet: buffer.slice(CODEC_FRAME_HEADER_BYTES),
   };
 }
 

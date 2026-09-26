@@ -556,6 +556,17 @@ function submitMicVisualAnalysis(graph, pcm) {
   }
 }
 
+/**
+ * Hands a chunk buffer back for the worklet to reuse, sparing its audio thread
+ * an allocation per chunk. Only once nothing here still reads it: every packet
+ * is framed into its own buffer and visual analysis works on a copy.
+ */
+function returnCaptureBuffer(graph, buffer) {
+  try {
+    graph.capture.port.postMessage({ type: 'pcm-buffer-return', buffer }, [buffer]);
+  } catch {}
+}
+
 function handleCaptureWorkletMessage(event, graph) {
   // MessagePort delivery is asynchronous. A chunk queued by an old worklet
   // must never be reframed with a replacement graph's generation/cursor.
@@ -677,6 +688,7 @@ function handleCaptureWorkletMessage(event, graph) {
 
   if (dispatch.stale) {
     recordUplinkDrop(pcm.byteLength / 2, 'capture-backlog');
+    returnCaptureBuffer(graph, pcm);
     return;
   }
 
@@ -738,6 +750,7 @@ function handleCaptureWorkletMessage(event, graph) {
       recordUplinkDrop(segment.pcm.byteLength / 2, sendResult.reason);
     }
   }
+  returnCaptureBuffer(graph, pcm);
 }
 
 function installCaptureGraph(sessionEpoch, captureStream, captureContext) {

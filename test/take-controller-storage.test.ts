@@ -190,6 +190,10 @@ test('status delivery reads cached Take history instead of scanning storage', as
   assert.match(statusMethod, /history: this\.historyCache/);
   assert.doesNotMatch(statusMethod, /library\.list|readdir|readFile/,
     'normal product/status updates must not rescan Take metadata on disk');
-  assert.match(source, /if \(this\.refreshHistoryCache\(\)\) this\.emitChange\(\)/,
+  assert.match(source, /if \(this\.replaceHistoryItems\(await this\.library\.listAsync\(\)\)\) this\.emitChange\(\)/,
     'retention must publish a new snapshot when it removes or changes visible Takes');
+  const pruneStart = source.indexOf('private scheduleRetentionPrune()');
+  const pruneEnd = source.indexOf('\n  private ', pruneStart + 1);
+  assert.doesNotMatch(source.slice(pruneStart, pruneEnd), /refreshHistoryCache\(\)|library\.list\(\)/,
+    'the refresh after every recording must not block the live room on a synchronous rescan');
 });

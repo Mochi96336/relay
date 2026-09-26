@@ -644,3 +644,84 @@ test('does not trim away the buffer a link that keeps stalling still needs', asy
     `trimming added underruns: ${trimmed.underruns} against ${untrimmed.underruns}`,
   );
 });
+
+function toneSamples(count: number, frequencyHz: number, amplitude = 0.5, phaseSamples = 0) {
+  return Float32Array.from({ length: count }, (_, index) => (
+    amplitude * Math.sin((2 * Math.PI * frequencyHz * (index + phaseSamples)) / SAMPLE_RATE)
+  ));
+}
+
+function renderQuanta(processor: any, quanta: number) {
+  const rendered: number[] = [];
+  for (let quantum = 0; quantum < quanta; quantum += 1) {
+    const block = outputBlock();
+    processor.process([], block);
+    rendered.push(...block[0][0]);
+  }
+  return rendered;
+}
+
+function largestStep(samples: number[], from = 1, to = samples.length) {
+  let largest = 0;
+  for (let index = Math.max(1, from); index < to; index += 1) {
+    largest = Math.max(largest, Math.abs(samples[index] - samples[index - 1]));
+  }
+  return largest;
+}
+
+test('a short underrun in a sung note keeps the note going, then fades it out', async () => {
+  const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
+  // 220 Hz at 0.5 moves at most about 0.0144 per sample on its own.
+  processor.push(toneSamples(samplesFromMs(60), 220));
+  const rendered = renderQuanta(processor, 40);
+  const starveAt = samplesFromMs(60);
+
+  assert.equal(processor.underruns, 1);
+  assert.ok(largestStep(rendered, 1, starveAt + samplesFromMs(40)) < 0.02, 'the note is continued without a step');
+  const held = rendered.slice(starveAt, starveAt + samplesFromMs(10));
+  const heldRms = Math.sqrt(held.reduce((sum, sample) => sum + sample ** 2, 0) / held.length);
+  // The tone's own RMS is 0.354; a 2 ms fade to silence leaves about 0.12.
+  assert.ok(heldRms > 0.33, `the first 10 ms keep the note at full level, RMS ${heldRms.toFixed(3)}`);
+  assert.ok(
+    rendered.slice(starveAt + samplesFromMs(40)).every((sample) => sample === 0),
+    'concealment has faded to silence by 40 ms',
+  );
+  assert.equal(
+    processor.starvedSamples,
+    rendered.length - starveAt,
+    'concealment is output only: every missing sample is still starvation',
+  );
+  processor.report(0);
+  processor.reportCountdown = 0;
+  processor.report(0);
+  const health = processor.port.messages.filter((message: any) => message?.type === 'health').at(-1) as any;
+  assert.ok(Math.abs(health.concealedMs - 40) < 0.1, `reported ${health.concealedMs} ms concealed`);
+});
+
+test('an underrun in noise keeps the plain 2 ms fade instead of a repeated buzz', async () => {
+  const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
+  let seed = 3;
+  const noise = Float32Array.from({ length: samplesFromMs(60) }, () => {
+    seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0;
+    return ((seed >>> 8) / 0x1000000 - 0.5) * 0.6;
+  });
+  processor.push(noise);
+  const rendered = renderQuanta(processor, 40);
+  const starveAt = samplesFromMs(60);
+  assert.ok(
+    rendered.slice(starveAt + samplesFromMs(2)).every((sample) => sample === 0),
+    'noise reaches silence within the 2 ms fade',
+  );
+  assert.equal(processor.concealedSamples, 0);
+});
+
+test('audio that returns during concealment takes over without a click', async () => {
+  const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
+  const first = samplesFromMs(60);
+  processor.push(toneSamples(first, 220));
+  const rendered = renderQuanta(processor, Math.ceil(first / RENDER_QUANTUM) + 4);
+  // The stalled audio arrives 15 ms late, in phase with where it belongs.
+  processor.push(toneSamples(samplesFromMs(40), 220, 0.5, first + samplesFromMs(15)));
+  rendered.push(...renderQuanta(processor, 20));
+  assert.ok(largestStep(rendered) < 0.03, `recovery stepped by ${largestStep(rendered)}`);
+});

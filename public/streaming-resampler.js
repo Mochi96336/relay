@@ -1,16 +1,42 @@
-export function createStreamingLinearResampler() {
+/**
+ * Positioned streaming resampler for Listen's room mix, used only when the
+ * listener's AudioContext does not run at the mix rate (44.1 kHz devices).
+ *
+ * Interpolation is 4-point cubic (Catmull-Rom) rather than linear. Linear
+ * interpolation is a triangle filter: it rolls the top octave off by about
+ * 3 dB at 15 kHz and turns the fractional position into audible modulation of
+ * the treble. The cubic needs one more source sample on each side, which the
+ * causal clock provides by running two source samples late (about 42 us).
+ */
+const CAUSAL_DELAY_SAMPLES = 2;
+const HISTORY_SAMPLES = 3;
+
+function catmullRom(p0, p1, p2, p3, fraction) {
+  return p1 + 0.5 * fraction * (
+    p2 - p0 + fraction * (
+      2 * p0 - 5 * p1 + 4 * p2 - p3 + fraction * (3 * (p1 - p2) + p3 - p0)
+    )
+  );
+}
+
+export function createStreamingResampler() {
   let activeSourceRate = null;
   let activeTargetRate = null;
   let expectedSourceSample = null;
-  let previousSourceSample = 0;
-  let hasPreviousSourceSample = false;
+  // The last source samples of the previous contiguous frame, oldest first.
+  let history = [];
 
   function reset() {
     activeSourceRate = null;
     activeTargetRate = null;
     expectedSourceSample = null;
-    previousSourceSample = 0;
-    hasPreviousSourceSample = false;
+    history = [];
+  }
+
+  function rememberTail(input, continuous) {
+    const carried = continuous ? history : [];
+    const tail = [...carried, ...input.subarray(Math.max(0, input.length - HISTORY_SAMPLES))];
+    history = tail.slice(Math.max(0, tail.length - HISTORY_SAMPLES));
   }
 
   function resample(input, {
@@ -42,15 +68,14 @@ export function createStreamingLinearResampler() {
       activeSourceRate === sourceRate
       && activeTargetRate === targetRate
       && expectedSourceSample === firstSampleIndex
-      && hasPreviousSourceSample
+      && history.length > 0
     );
 
     if (sourceRate === targetRate) {
+      rememberTail(input, continuous);
       activeSourceRate = sourceRate;
       activeTargetRate = targetRate;
       expectedSourceSample = sourceEnd;
-      previousSourceSample = input[input.length - 1];
-      hasPreviousSourceSample = true;
       return input;
     }
 
@@ -60,18 +85,17 @@ export function createStreamingLinearResampler() {
     const output = new Float32Array(outputLength);
 
     const readSourceSample = (absoluteIndex) => {
-      if (absoluteIndex === firstSampleIndex - 1 && continuous) {
-        return previousSourceSample;
-      }
       if (absoluteIndex < firstSampleIndex) {
+        const back = firstSampleIndex - absoluteIndex;
+        if (continuous && back <= history.length) return history[history.length - back];
         // One-time reset/start boundary. Clamp locally instead of pulling stale
         // PCM from a previous generation or a real monitor gap.
         return input[0];
       }
       if (absoluteIndex >= sourceEnd) {
-        // The one-source-sample causal delay guarantees this is not needed in
-        // steady state, but keep a bounded fallback for floating-point/range
-        // edge cases rather than reading outside the packet.
+        // The causal delay guarantees this is not needed in steady state, but
+        // keep a bounded fallback for floating-point/range edge cases rather
+        // than reading outside the packet.
         return input[input.length - 1];
       }
       return input[absoluteIndex - firstSampleIndex];
@@ -80,23 +104,26 @@ export function createStreamingLinearResampler() {
     for (let offset = 0; offset < outputLength; offset += 1) {
       const targetIndex = targetStart + offset;
 
-      // Delay the local playback interpolation clock by one source sample.
-      // That makes every endpoint causal: a boundary target can use the
+      // Delay the local playback interpolation clock by two source samples.
+      // That makes all four taps causal: a boundary target can use the
       // previous packet tail plus the current packet head, so no 20 ms
       // packet-local sample hold is required even when upsampling.
-      const sourcePosition = (targetIndex * sourceRate) / targetRate - 1;
+      const sourcePosition = (targetIndex * sourceRate) / targetRate - CAUSAL_DELAY_SAMPLES;
       const sourceIndex = Math.floor(sourcePosition);
       const fraction = sourcePosition - sourceIndex;
-      const a = readSourceSample(sourceIndex);
-      const b = readSourceSample(sourceIndex + 1);
-      output[offset] = a + (b - a) * fraction;
+      output[offset] = catmullRom(
+        readSourceSample(sourceIndex - 1),
+        readSourceSample(sourceIndex),
+        readSourceSample(sourceIndex + 1),
+        readSourceSample(sourceIndex + 2),
+        fraction,
+      );
     }
 
+    rememberTail(input, continuous);
     activeSourceRate = sourceRate;
     activeTargetRate = targetRate;
     expectedSourceSample = sourceEnd;
-    previousSourceSample = input[input.length - 1];
-    hasPreviousSourceSample = true;
 
     return output;
   }

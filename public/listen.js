@@ -12,7 +12,8 @@ import {
   MONITOR_PCM_PACKET_VERSION,
   createMonitorPcmReceiver,
 } from './monitor-pcm-continuity.js';
-import { createStreamingLinearResampler } from './streaming-linear-resampler.js';
+import { createStreamingResampler } from './streaming-resampler.js';
+import { createListenOpusDecoder, listenOpusDecodingSupported } from './listen-opus-decoder.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
@@ -29,8 +30,28 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   const reconnectBackoff = createReconnectBackoff();
   const PREBUFFER_MS = 250;
   const MAX_QUEUE_MS = 800;
+  // Relay sees only its own socket buffer. Behind a tunnel or reverse proxy
+  // the room audio can queue far downstream of it, and this page cannot tell
+  // that contiguous audio is stale. Confirming what arrived lets Relay stop
+  // sending once too much is outstanding; the hole that leaves brings this
+  // page back to the live edge. Frequent enough to stay well inside Relay's
+  // one-second allowance, cheap enough to ignore.
+  const MONITOR_ACK_INTERVAL_MS = 100;
+  let lastMonitorAckAt = Number.NEGATIVE_INFINITY;
   const monitorPcmReceiver = createMonitorPcmReceiver();
-  const listenResampler = createStreamingLinearResampler();
+  const listenResampler = createStreamingResampler();
+  // Opus is offered only when this browser can decode it, and never again in
+  // this page once decoding has failed: the page then rejoins on PCM.
+  let opusOffer = null;
+  let opusRefused = false;
+  const listenOpusDecoder = createListenOpusDecoder({
+    onPcm: (pcm, firstSampleIndex) => enqueuePlayback(pcm, firstSampleIndex),
+    onError: (error) => {
+      console.warn('Listen Opus decoding failed; rejoining on PCM', error);
+      opusRefused = true;
+      restartMonitorAtLiveEdge();
+    },
+  });
   const audioInterruption = createAudioInterruptionTracker({ staleAfterMs: PREBUFFER_MS });
   const iosAudioDestinationRecovery = new IosAudioDestinationRecovery();
 
@@ -177,8 +198,41 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     return recovery.requiresLiveEdge;
   }
 
+  function acknowledgeMonitorFrame(target, frame) {
+    const now = performance.now();
+    if (now - lastMonitorAckAt < MONITOR_ACK_INTERVAL_MS) return;
+    lastMonitorAckAt = now;
+    try {
+      target.send(JSON.stringify({
+        type: 'monitor-ack',
+        generation: frame.generation,
+        receivedEndSampleIndex: frame.firstSampleIndex + frame.sampleCount,
+      }));
+    } catch {}
+  }
+
+  function offerOpus() {
+    if (opusRefused) return Promise.resolve(false);
+    opusOffer ??= listenOpusDecodingSupported();
+    return opusOffer;
+  }
+
+  /** Decoded room mix, PCM or Opus, into the resampler and the worklet. */
+  function enqueuePlayback(pcm, firstSampleIndex) {
+    if (!audioRendering()) return;
+    const samples = listenResampler.resample(pcm, {
+      sourceRate: sourceSampleRate,
+      targetRate: audioContext.sampleRate,
+      firstSampleIndex,
+    });
+    if (samples.length > 0) {
+      playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
+    }
+  }
+
   function resetPlaybackTemporalState(deClick = false) {
     monitorPcmReceiver.reset();
+    listenOpusDecoder.reset();
     listenResampler.reset();
     playbackNode?.port.postMessage({ type: 'reset', deClick });
   }
@@ -231,6 +285,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       applyRoomSessionStatus(message);
       return;
     }
+    if (message.type === 'registered' && message.role === 'monitor') {
+      window.relayListenCodec = message.monitorCodec === 'opus' ? 'opus' : 'pcm';
+      return;
+    }
     if (message.type === 'source-status') {
       const nextSourceSampleRate = Number(message.mixSampleRate ?? message.sampleRate) || MIX_SAMPLE_RATE;
       if (nextSourceSampleRate !== sourceSampleRate) listenResampler.reset();
@@ -246,6 +304,14 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       || socket
     ) return;
     const connectEpoch = transportEpoch;
+    const withOpus = await offerOpus();
+    if (
+      connectEpoch !== transportEpoch
+      || !transportEnabled
+      || !monitorTransportWanted()
+      || pendingSocket
+      || socket
+    ) return;
     const next = new WebSocket(wsUrl());
     pendingSocket = next;
     next.binaryType = 'arraybuffer';
@@ -273,6 +339,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       try { previous.close(); } catch {}
     }
     reconnectBackoff.noteConnected(performance.now());
+    lastMonitorAckAt = Number.NEGATIVE_INFINITY;
     // The first reconnect starts 100 ms after a drop, while up to 250 ms of
     // the old stream can still be playing. Discard it with the 2 ms de-click
     // rather than cutting the waveform to zero mid-cycle.
@@ -282,6 +349,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       type: 'register',
       role: 'monitor',
       monitorPacketVersion: MONITOR_PCM_PACKET_VERSION,
+      ...(withOpus ? { monitorCodecs: ['opus'] } : {}),
     }));
 
     next.addEventListener('message', (event) => {
@@ -294,6 +362,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
       const received = monitorPcmReceiver.receive(event.data);
       if (received.action !== 'accept') return;
+      // Delivery, not playback: a frame counts as arrived even if a paused
+      // audio graph then discards it.
+      acknowledgeMonitorFrame(next, received.frame);
 
       // Keep framing continuity if Safari leaves this page running in the
       // background, but never build a playback backlog while WebAudio is not
@@ -317,18 +388,21 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       if (liveEdgeRecoveryRequired) return;
 
       if (received.reset) {
+        listenOpusDecoder.reset();
         listenResampler.reset();
         playbackNode.port.postMessage({ type: 'reset', deClick: true });
       }
-      const pcm = int16ToFloat32(received.frame.pcm);
-      const samples = listenResampler.resample(pcm, {
-        sourceRate: sourceSampleRate,
-        targetRate: audioContext.sampleRate,
-        firstSampleIndex: received.frame.firstSampleIndex,
-      });
-      if (samples.length > 0) {
-        playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
+      if (received.frame.codec === 'opus') {
+        try {
+          listenOpusDecoder.decode(received.frame);
+        } catch (error) {
+          console.warn('Listen Opus decoding failed; rejoining on PCM', error);
+          opusRefused = true;
+          restartMonitorAtLiveEdge();
+        }
+        return;
       }
+      enqueuePlayback(int16ToFloat32(received.frame.pcm), received.frame.firstSampleIndex);
     });
 
     next.addEventListener('close', () => {

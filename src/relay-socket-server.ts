@@ -2,8 +2,14 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { monitorFrameWouldExceedBacklog } from './monitor-backpressure.js';
-import { encodePcmFrame } from './pcm-frame.js';
+import {
+  MONITOR_UNACKNOWLEDGED_PROBE_MS,
+  monitorFrameWouldExceedBacklog,
+  monitorUnacknowledgedSamples,
+  type MonitorDelivery,
+} from './monitor-backpressure.js';
+import { encodePcmFrame, FRAME_HEADER_BYTES } from './pcm-frame.js';
+import { encodeMonitorOpusFrame, type MonitorOpusEncoder } from './monitor-opus.js';
 
 export type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';
 type ClaimedClientRole = Exclude<ClientRole, 'unknown'>;
@@ -23,6 +29,9 @@ export type RelaySocket = WebSocket & {
   captureGeneration?: number;
   audioPacketVersion?: 1 | 2;
   monitorPacketVersion?: 1;
+  monitorDelivery?: MonitorDelivery;
+  /** Codec this positioned monitor negotiated for PCM frames; absent is PCM. */
+  monitorCodec?: 'opus';
   isAlive: boolean;
   replaced?: boolean;
   isRobotSource?: boolean;
@@ -41,7 +50,19 @@ export type RelaySocketServerOptions = {
   path?: string;
   relayKey: string | null;
   heartbeatMs: number;
+  maxPayloadBytes?: number;
 };
+
+/**
+ * Largest single inbound WebSocket message, in bytes.
+ *
+ * `ws` otherwise accepts 100 MiB and buffers all of it before any handler can
+ * look at it, so one oversized message from any socket that passed the room
+ * key costs the Relay host that much memory. Relay's largest real messages are
+ * PCM frames: 20 ms is under 2 KB, and even a 1 s Backing frame at 192 kHz is
+ * 384 KB. Anything past this is closed with 1009 (message too big).
+ */
+export const DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 export type MonitorFramePosition = {
   generation: number;
@@ -50,6 +71,18 @@ export type MonitorFramePosition = {
 
 export type MonitorSocketTransportOptions = {
   backlogBytes: number;
+  /**
+   * Positioned PCM a monitor that confirms delivery may have outstanding, in
+   * mix samples. Past it, frames for that monitor are dropped until it
+   * catches up. See monitorUnacknowledgedSamples.
+   */
+  unacknowledgedSamples?: number;
+  /**
+   * Socket backlog allowed for an Opus monitor. The PCM byte budget would let
+   * an Opus socket queue about eight times as much time, so it gets the same
+   * time budget at the Opus bitrate.
+   */
+  opusBacklogBytes?: number;
   nowMs?: () => number;
 };
 
@@ -150,9 +183,49 @@ export function createMonitorSocketTransport(
   if (!Number.isFinite(options.backlogBytes) || options.backlogBytes <= 0) {
     throw new Error('MonitorSocketTransport backlogBytes must be positive.');
   }
+  if (
+    options.unacknowledgedSamples !== undefined
+    && (!Number.isFinite(options.unacknowledgedSamples) || options.unacknowledgedSamples <= 0)
+  ) {
+    throw new Error('MonitorSocketTransport unacknowledgedSamples must be positive.');
+  }
 
   let droppedFrames = 0;
   const nowMs = options.nowMs ?? (() => performance.now());
+  let opusEncoder: MonitorOpusEncoder | null = null;
+  /** End of the last frame the encoder saw: its state only fits the next one. */
+  let opusEncodedEnd: MonitorFramePosition | null = null;
+
+  /**
+   * One Opus codec frame for this mix frame, or null to send PCM instead: no
+   * encoder, or it failed and Relay stays on PCM from then on. Pages that
+   * negotiated Opus decode either kind.
+   */
+  function encodeOpus(pcm: Buffer, position: MonitorFramePosition) {
+    if (!opusEncoder) return null;
+    try {
+      if (
+        opusEncodedEnd === null
+        || opusEncodedEnd.generation !== position.generation
+        || opusEncodedEnd.firstSampleIndex !== position.firstSampleIndex
+      ) {
+        // Nobody needed Opus for a while, or the mix epoch restarted.
+        opusEncoder.reset();
+      }
+      const sampleCount = pcm.byteLength / 2;
+      const packet = opusEncoder.encode(pcm);
+      opusEncodedEnd = {
+        generation: position.generation,
+        firstSampleIndex: position.firstSampleIndex + sampleCount,
+      };
+      return encodeMonitorOpusFrame(position.generation, position.firstSampleIndex, sampleCount, packet);
+    } catch (error) {
+      opusEncoder = null;
+      opusEncodedEnd = null;
+      console.warn('Listen Opus encoding failed; every listener stays on PCM.', error);
+      return null;
+    }
+  }
   const recentDrops: { atMs: number; socket: RelaySocket }[] = [];
 
   function pruneRecentDrops(atMs: number) {
@@ -164,6 +237,13 @@ export function createMonitorSocketTransport(
     if (expired > 0) recentDrops.splice(0, expired);
   }
 
+  function noteDrop(socket: RelaySocket) {
+    droppedFrames += 1;
+    const atMs = nowMs();
+    pruneRecentDrops(atMs);
+    recentDrops.push({ atMs, socket });
+  }
+
   function broadcast(
     payload: string | Buffer,
     binary = false,
@@ -172,6 +252,7 @@ export function createMonitorSocketTransport(
     // Every positioned monitor gets the same bytes, so frame them once per
     // broadcast rather than once per listener. The sockets only read them.
     let framed: Buffer | null = null;
+    let opusFramed: Buffer | null | undefined;
     for (const client of wss.clients) {
       const socket = client as RelaySocket;
       if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
@@ -180,12 +261,18 @@ export function createMonitorSocketTransport(
       // framed. Do not silently fall back to raw PCM on an unpositioned path.
       if (binary && socket.monitorPacketVersion === 1 && position === null) continue;
 
-      const outbound = binary
+      const positioned = binary
         && Buffer.isBuffer(payload)
         && socket.monitorPacketVersion === 1
-        && position !== null
-        ? (framed ??= encodePcmFrame(position.generation, position.firstSampleIndex, payload))
-        : payload;
+        && position !== null;
+      if (positioned && socket.monitorCodec === 'opus' && opusFramed === undefined) {
+        opusFramed = encodeOpus(payload, position);
+      }
+      const opus = positioned && socket.monitorCodec === 'opus' && opusFramed ? opusFramed : null;
+      const outbound = opus
+        ?? (positioned
+          ? (framed ??= encodePcmFrame(position.generation, position.firstSampleIndex, payload))
+          : payload);
 
       if (
         binary
@@ -193,21 +280,81 @@ export function createMonitorSocketTransport(
         && monitorFrameWouldExceedBacklog(
           socket.bufferedAmount,
           outbound.byteLength,
-          options.backlogBytes,
+          opus ? options.opusBacklogBytes ?? options.backlogBytes : options.backlogBytes,
         )
       ) {
-        droppedFrames += 1;
-        const atMs = nowMs();
-        pruneRecentDrops(atMs);
-        recentDrops.push({ atMs, socket });
+        noteDrop(socket);
         continue;
       }
+
+      const positioned = outbound === framed && framed !== null && position !== null;
+      if (positioned && options.unacknowledgedSamples !== undefined && socket.monitorDelivery) {
+        const outstanding = monitorUnacknowledgedSamples(socket.monitorDelivery);
+        const sentAtMs = socket.monitorDelivery.sentAtMs;
+        const probeDue = sentAtMs === null || nowMs() - sentAtMs >= MONITOR_UNACKNOWLEDGED_PROBE_MS;
+        if (outstanding !== null && outstanding > options.unacknowledgedSamples && !probeDue) {
+          // The listener is that far behind somewhere this process cannot
+          // see. The hole this leaves makes it drop what it queued and
+          // rejoin the live edge once the backlog has drained.
+          noteDrop(socket);
+          continue;
+        }
+      }
       socket.send(outbound, { binary });
+      if (positioned) {
+        socket.monitorDelivery ??= { sent: null, acknowledged: null, sentAtMs: null };
+        socket.monitorDelivery.sentAtMs = nowMs();
+        socket.monitorDelivery.sent = {
+          generation: position.generation,
+          endSampleIndex: position.firstSampleIndex + (framed!.byteLength - FRAME_HEADER_BYTES) / 2,
+        };
+      }
     }
+  }
+
+  /**
+   * Records a Listen page's confirmation of the positioned PCM it received,
+   * which opts that monitor into acknowledged delivery. True when the payload
+   * was a monitor acknowledgement, valid or not.
+   */
+  function acknowledge(socket: RelaySocket, payload: Record<string, unknown>) {
+    if (payload.type !== 'monitor-ack') return false;
+    const generation = payload.generation;
+    const endSampleIndex = payload.receivedEndSampleIndex;
+    if (
+      socket.role !== 'monitor'
+      || socket.monitorPacketVersion !== 1
+      || typeof generation !== 'number'
+      || !Number.isInteger(generation)
+      || generation < 0
+      || generation > 0xffff_ffff
+      || typeof endSampleIndex !== 'number'
+      || !Number.isSafeInteger(endSampleIndex)
+      || endSampleIndex < 0
+    ) return true;
+    socket.monitorDelivery ??= { sent: null, acknowledged: null, sentAtMs: null };
+    const previous = socket.monitorDelivery.acknowledged;
+    // Acknowledgements travel in order on one socket; never move one back.
+    if (
+      previous
+      && previous.generation === generation
+      && previous.endSampleIndex >= endSampleIndex
+    ) return true;
+    socket.monitorDelivery.acknowledged = { generation, endSampleIndex };
+    return true;
   }
 
   return {
     broadcast,
+    acknowledge,
+    /** Starts offering Opus frames to monitors that negotiate them. */
+    enableOpus(encoder: MonitorOpusEncoder) {
+      opusEncoder = encoder;
+      opusEncodedEnd = null;
+    },
+    get opusEnabled() {
+      return opusEncoder !== null;
+    },
     /** Lifetime total across every listener; see recentDrops() for now. */
     get droppedFrames() {
       return droppedFrames;
@@ -236,7 +383,11 @@ export function createRelayWebSocketServer(
   server: HttpServer,
   options: RelaySocketServerOptions,
 ) {
-  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+  const wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+    maxPayload: options.maxPayloadBytes ?? DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  });
   const socketPath = options.path ?? '/ws';
   let connectionSequence = 0;
 
@@ -265,6 +416,12 @@ export function createRelayWebSocketServer(
     socket.role = 'unknown';
     socket.isAlive = true;
 
+    // `ws` reports a protocol violation from the peer (invalid UTF-8, a bad
+    // opcode, an oversized message) as an 'error' event on this socket after
+    // it has already started closing it. With no listener, Node rethrows that
+    // event and one malformed frame from any client takes the whole room down.
+    // The socket is already on its way out; there is nothing else to do.
+    socket.on('error', () => {});
     socket.on('pong', () => {
       socket.isAlive = true;
     });

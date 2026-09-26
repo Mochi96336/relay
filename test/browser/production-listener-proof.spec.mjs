@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import { createServer } from 'node:http';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { chromium, expect, test } from '@playwright/test';
+import { Encoder } from '@evan/opus';
 import WebSocket from 'ws';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -15,7 +18,7 @@ const CAPTURE_GENERATION = 7;
 const STARVATION_FAULT_MS = 1_200;
 const IOS_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1';
 
-function startRelay() {
+function startRelay(extraEnv = {}) {
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
@@ -32,6 +35,7 @@ function startRelay() {
         RELAY_CALIBRATION_PROBE: '0',
         RELAY_HEARTBEAT_MS: '60000',
         RELAY_LIVE_PREBUFFER_MS: '40',
+        ...extraEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -533,6 +537,123 @@ test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ow
     });
     await waitForDestinationRestart(postMicStart);
     await waitForHealthyPlayback(page, { afterObservedAt: healthBeforePostMic });
+  } finally {
+    await browser.close();
+    mic.close();
+    await relay.stop();
+  }
+});
+
+test('real Chromium WebCodecs decodes Relay Listen Opus at its mix positions', async () => {
+  test.setTimeout(20_000);
+  // Encoded exactly as src/monitor-opus.ts encodes the room mix.
+  const encoder = new Encoder({ channels: 1, sample_rate: SAMPLE_RATE, application: 'audio' });
+  encoder.bitrate = 96_000;
+  encoder.signal = 'music';
+  const start = SAMPLE_RATE * 3_600 * 3 + CHUNK_SAMPLES * 5;
+  const packets = [];
+  for (let index = 0; index < 50; index += 1) {
+    const firstSampleIndex = start + index * CHUNK_SAMPLES;
+    packets.push({
+      firstSampleIndex,
+      base64: Buffer.from(encoder.encode(sineChunk(firstSampleIndex, 997, 12_000))).toString('base64'),
+    });
+  }
+
+  // WebCodecs exists only in a secure context; a loopback origin is one.
+  const origin = createServer((_request, response) => {
+    response.setHeader('content-type', 'text/html');
+    response.end('<!doctype html><title>opus</title>');
+  });
+  await new Promise((resolve) => origin.listen(0, '127.0.0.1', resolve));
+  const browser = await chromium.launch({ channel: 'chromium' });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${origin.address().port}/`);
+    const result = await page.evaluate(async (frames) => {
+      const { createListenOpusDecoder, listenOpusDecodingSupported } = await import(
+        'data:text/javascript;base64,' + frames.module
+      );
+      const supported = await listenOpusDecodingSupported();
+      if (!supported) return { supported, decoded: [], errors: [] };
+      const decoded = [];
+      const errors = [];
+      const decoder = createListenOpusDecoder({
+        onPcm: (pcm, firstSampleIndex) => {
+          let peak = 0;
+          for (const sample of pcm) peak = Math.max(peak, Math.abs(sample));
+          decoded.push({ firstSampleIndex, length: pcm.length, peak });
+        },
+        onError: (error) => errors.push(String(error)),
+      });
+      for (const frame of frames.packets) {
+        const bytes = Uint8Array.from(atob(frame.base64), (char) => char.charCodeAt(0));
+        decoder.decode({ firstSampleIndex: frame.firstSampleIndex, packet: bytes.buffer });
+      }
+      const deadline = performance.now() + 5_000;
+      while (decoded.length < frames.packets.length && errors.length === 0 && performance.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return { supported, decoded, errors };
+    }, {
+      packets,
+      module: fs.readFileSync(path.join(root, 'public', 'listen-opus-decoder.js')).toString('base64'),
+    });
+
+    assert.equal(result.supported, true, 'Chromium must offer Opus decoding');
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(
+      result.decoded.map((frame) => frame.firstSampleIndex),
+      packets.map((packet) => packet.firstSampleIndex),
+      'every decoded frame comes back at the position it was sent for',
+    );
+    assert.ok(result.decoded.every((frame) => frame.length === CHUNK_SAMPLES));
+    const settled = result.decoded.slice(5).map((frame) => frame.peak);
+    const expectedPeak = 12_000 / 32_768;
+    assert.ok(
+      settled.every((peak) => Math.abs(peak - expectedPeak) < 0.05),
+      `decoded peaks ${settled.map((peak) => peak.toFixed(3)).join(', ')} vs ${expectedPeak.toFixed(3)}`,
+    );
+  } finally {
+    await browser.close();
+    await new Promise((resolve) => origin.close(resolve));
+  }
+});
+
+test('real Chromium Listen negotiates Opus with a Relay that offers it and keeps playing', async () => {
+  test.setTimeout(35_000);
+  const relay = await startRelay({ RELAY_LISTEN_OPUS: '1' });
+  const mic = await startDeterministicMic(relay);
+  const browser = await chromium.launch({
+    channel: 'chromium',
+    args: ['--autoplay-policy=no-user-gesture-required'],
+  });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const warnings = [];
+  page.on('console', (message) => {
+    if (message.type() === 'warning') warnings.push(message.text());
+  });
+
+  try {
+    await openListener(page, relay);
+    assert.equal(await page.evaluate(() => window.relayListenCodec), 'opus');
+
+    const before = await page.evaluate(() => ({
+      observedAt: Number(window.relayListenHealth?.observedAt ?? -1),
+      underruns: Number(window.relayListenHealth?.underruns ?? 0),
+    }));
+    await page.waitForTimeout(3_000);
+    await waitForHealthyPlayback(page, { afterObservedAt: before.observedAt });
+    const after = await page.evaluate(() => ({
+      codec: window.relayListenCodec,
+      underruns: Number(window.relayListenHealth?.underruns ?? 0),
+      queuedMs: Number(window.relayListenHealth?.queuedMs ?? -1),
+    }));
+    assert.equal(after.codec, 'opus', 'Listen never fell back to PCM');
+    assert.ok(after.queuedMs >= 0);
+    assert.ok(after.underruns - before.underruns <= 1, `${after.underruns - before.underruns} underruns in 3 s of Opus`);
+    assert.deepEqual(warnings.filter((text) => /Opus/i.test(text)), []);
   } finally {
     await browser.close();
     mic.close();

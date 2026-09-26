@@ -92,3 +92,33 @@ describe('MicClockDriftEstimator', () => {
     assert.equal(estimator.estimate(), null);
   });
 });
+
+describe('MicClockDriftEstimator anchor', () => {
+  it('reports how much later than the settled path the anchoring packet arrived', () => {
+    const estimator = new MicClockDriftEstimator();
+    // The first packet waits 180 ms behind a busy page; the path itself is 30 ms.
+    feed(estimator, { ppm: 0, seconds: 12, jitter: (n) => (n === 0 ? 180 : noise() * 5) });
+    const excess = estimator.anchorExcessMs();
+    assert.ok(excess !== null && Math.abs(excess - 180) <= 5, `anchored ${excess} ms late`);
+  });
+
+  it('reads a prompt first packet as no excess', () => {
+    const estimator = new MicClockDriftEstimator();
+    feed(estimator, { ppm: 0, seconds: 12, jitter: (n) => (n === 0 ? 0 : noise() * 5) });
+    const excess = estimator.anchorExcessMs();
+    assert.ok(excess !== null && Math.abs(excess) <= 1, `anchored ${excess} ms late`);
+  });
+
+  it('says nothing before the path has settled, and starts over with a new capture', () => {
+    const early = new MicClockDriftEstimator();
+    // Only the warm-up window has closed after 6 s.
+    feed(early, { ppm: 0, seconds: 6, jitter: () => 0 });
+    assert.equal(early.anchorExcessMs(), null);
+
+    const settled = new MicClockDriftEstimator();
+    feed(settled, { ppm: 0, seconds: 12, jitter: () => 0 });
+    assert.notEqual(settled.anchorExcessMs(), null);
+    settled.observe(2, RATE, CHUNK, 999_999);
+    assert.equal(settled.anchorExcessMs(), null);
+  });
+});

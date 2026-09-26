@@ -138,6 +138,43 @@ test('the encoder restarts where the Opus stream does not continue, and idles wi
   ]);
 });
 
+test('Opus monitors use the same downstream ACK limit and live-edge recovery as PCM', () => {
+  let nowMs = 0;
+  const opus = fakeSocket({ monitorCodec: 'opus' });
+  const { encoder } = fakeEncoder();
+  const transport = createMonitorSocketTransport(fakeServer(opus.socket), {
+    backlogBytes: 100_000,
+    opusBacklogBytes: 100_000,
+    unacknowledgedSamples: FRAME * 5,
+    nowMs: () => nowMs,
+  });
+  transport.enableOpus(encoder);
+  const publish = (index: number) => {
+    nowMs = index * 20;
+    transport.broadcast(tone(index * FRAME), true, { generation: 1, firstSampleIndex: index * FRAME });
+  };
+  const positions = () => opus.sent.map((wire) => {
+    const frame = decodeMonitorPcmFrame(asArrayBuffer(wire));
+    assert.ok(frame && frame.codec === 'opus');
+    return frame.firstSampleIndex / FRAME;
+  });
+  publish(0);
+  assert.equal(transport.acknowledge(opus.socket, {
+    type: 'monitor-ack', generation: 1, receivedEndSampleIndex: FRAME,
+  }), true);
+  assert.deepEqual(opus.socket.monitorDelivery?.sent, { generation: 1, endSampleIndex: FRAME },
+    'Opus ACK counts the original 960 mix samples, not compressed packet bytes');
+  for (let index = 1; index <= 10; index += 1) publish(index);
+  assert.deepEqual(positions(), [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(transport.recentDrops().frames, 4);
+  transport.acknowledge(opus.socket, {
+    type: 'monitor-ack', generation: 1, receivedEndSampleIndex: FRAME * 7,
+  });
+  publish(11);
+  assert.deepEqual(positions(), [0, 1, 2, 3, 4, 5, 6, 11],
+    'a downstream-stalled Opus listener catches up instead of replaying stale frames');
+});
+
 test('an encoder failure keeps Opus listeners playing, on PCM', () => {
   const opus = fakeSocket({ monitorCodec: 'opus' });
   const { encoder } = fakeEncoder();

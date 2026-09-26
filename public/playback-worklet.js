@@ -14,6 +14,17 @@ const DEFAULT_TRIM_MARGIN_MS = 20;
 const REPORT_INTERVAL_MS = 500;
 const OUTPUT_GAP_DECLICK_MS = 2;
 const TRIM_CROSSFADE_MS = 5;
+// Underrun concealment: a periodic signal keeps its last pitch period going
+// for CONCEAL_HOLD_MS, then fades to silence by CONCEAL_MAX_MS, so a brief
+// stall sounds like a held note rather than a dropout. It needs a clear period
+// in the last CONCEAL_HISTORY_MS of output; noise and DC keep the 2 ms fade.
+const CONCEAL_HISTORY_MS = 30;
+const CONCEAL_WINDOW_MS = 10;
+const CONCEAL_MIN_PERIOD_HZ = 400;
+const CONCEAL_MAX_PERIOD_HZ = 60;
+const CONCEAL_MIN_CORRELATION = 0.8;
+const CONCEAL_HOLD_MS = 10;
+const CONCEAL_MAX_MS = 40;
 
 // Listen starts with a small buffer and continuously measures PCM arrival
 // variation. The estimator is RTP-like: compare each observed inter-arrival
@@ -54,6 +65,18 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.trimFadeFrom = new Float32Array(this.trimFadeSamples);
     this.trimFadeTotalSamples = 0;
     this.trimFadeRemainingSamples = 0;
+
+    // The most recent real output, in a ring, for underrun concealment.
+    this.historySamples = Math.max(1, Math.round((sampleRate * CONCEAL_HISTORY_MS) / 1000));
+    this.history = new Float32Array(this.historySamples);
+    this.historyWrite = 0;
+    this.historyFilled = 0;
+    this.concealCycle = null;
+    this.concealPeriod = null;
+    this.concealEmittedSamples = 0;
+    this.concealHoldSamples = Math.round((sampleRate * CONCEAL_HOLD_MS) / 1000);
+    this.concealMaxSamples = Math.round((sampleRate * CONCEAL_MAX_MS) / 1000);
+    this.concealedSamples = 0;
 
     // AudioWorklet has a reliable render cadence even when message delivery is
     // bursty. Count render samples locally so tests and browsers share one clock.
@@ -186,6 +209,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
   }
 
   reset(deClick = false) {
+    this.concealPeriod = null;
+    this.historyFilled = 0;
     this.queue = [];
     this.offset = 0;
     this.queuedSamples = 0;
@@ -390,6 +415,109 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.stablePlaybackSamples = 0;
   }
 
+  rememberOutput(output, count) {
+    for (let index = 0; index < count; index += 1) {
+      this.history[this.historyWrite] = output[index];
+      this.historyWrite = (this.historyWrite + 1) % this.historySamples;
+    }
+    this.historyFilled = Math.min(this.historySamples, this.historyFilled + count);
+  }
+
+  /** Recent real output, oldest first. */
+  unrolledHistory() {
+    const length = this.historyFilled;
+    const recent = new Float32Array(length);
+    const start = (this.historyWrite - length + this.historySamples) % this.historySamples;
+    for (let index = 0; index < length; index += 1) {
+      recent[index] = this.history[(start + index) % this.historySamples];
+    }
+    return recent;
+  }
+
+  /**
+   * The period of the last real output, or null when it has none worth
+   * repeating: too little history, no energy, or no lag that correlates.
+   * Runs once per underrun, never per render quantum.
+   */
+  estimateConcealmentPeriod() {
+    if (this.historyFilled < this.historySamples) return null;
+    const recent = this.unrolledHistory();
+    let mean = 0;
+    for (const sample of recent) mean += sample;
+    mean /= recent.length;
+    for (let index = 0; index < recent.length; index += 1) recent[index] -= mean;
+
+    const window = Math.round((sampleRate * CONCEAL_WINDOW_MS) / 1000);
+    const end = recent.length;
+    const minLag = Math.max(2, Math.floor(sampleRate / CONCEAL_MIN_PERIOD_HZ));
+    const maxLag = Math.min(Math.floor(sampleRate / CONCEAL_MAX_PERIOD_HZ), end - window);
+    if (maxLag < minLag) return null;
+    let segmentEnergy = 0;
+    for (let index = end - window; index < end; index += 1) segmentEnergy += recent[index] ** 2;
+    // Below about -80 dBFS RMS there is nothing to continue.
+    if (segmentEnergy / window < 1e-8) return null;
+
+    const correlationAt = (lag) => {
+      let cross = 0;
+      let energy = 0;
+      for (let index = end - window; index < end; index += 1) {
+        const lagged = recent[index - lag];
+        cross += recent[index] * lagged;
+        energy += lagged * lagged;
+      }
+      return energy > 0 ? cross / Math.sqrt(segmentEnergy * energy) : -1;
+    };
+    let bestLag = minLag;
+    let bestScore = -Infinity;
+    for (let lag = minLag; lag <= maxLag; lag += 2) {
+      const score = correlationAt(lag);
+      if (score > bestScore) {
+        bestScore = score;
+        bestLag = lag;
+      }
+    }
+    for (let lag = Math.max(minLag, bestLag - 1); lag <= Math.min(maxLag, bestLag + 1); lag += 1) {
+      const score = correlationAt(lag);
+      if (score > bestScore) {
+        bestScore = score;
+        bestLag = lag;
+      }
+    }
+    return bestScore >= CONCEAL_MIN_CORRELATION ? bestLag : null;
+  }
+
+  /** Starts concealing an underrun; false leaves the edge to the silence fade. */
+  beginConcealment() {
+    const period = this.estimateConcealmentPeriod();
+    if (period === null) return false;
+    const recent = this.unrolledHistory();
+    this.concealCycle = recent.slice(recent.length - period);
+    this.concealPeriod = period;
+    this.concealEmittedSamples = 0;
+    this.silenceFadeRemainingSamples = 0;
+    this.recoveryFadeRemainingSamples = 0;
+    this.trimFadeRemainingSamples = 0;
+    return true;
+  }
+
+  writeConcealment(output, start) {
+    const fadeSamples = Math.max(1, this.concealMaxSamples - this.concealHoldSamples);
+    for (let index = start; index < output.length && this.concealPeriod !== null; index += 1) {
+      const emitted = this.concealEmittedSamples;
+      if (emitted >= this.concealMaxSamples) {
+        this.concealPeriod = null;
+        break;
+      }
+      const gain = emitted < this.concealHoldSamples
+        ? 1
+        : Math.max(0, 1 - (emitted - this.concealHoldSamples + 1) / fadeSamples);
+      output[index] = this.concealCycle[emitted % this.concealPeriod] * gain;
+      this.concealEmittedSamples += 1;
+      this.concealedSamples += 1;
+    }
+    this.lastOutputSample = output.length > 0 ? output[output.length - 1] : 0;
+  }
+
   beginSilenceFade() {
     this.silenceFadeStartSample = this.lastOutputSample;
     this.silenceFadeRemainingSamples = this.outputGapFadeSamples;
@@ -451,12 +579,14 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     if (!this.playing) {
       if (this.pendingRecovery) this.recoveryWaitSamples += output.length;
       if (this.queuedSamples < this.prebufferSamples) {
-        if (this.silenceFadeRemainingSamples > 0) this.writeSilenceFade(output, 0);
+        if (this.concealPeriod !== null) this.writeConcealment(output, 0);
+        else if (this.silenceFadeRemainingSamples > 0) this.writeSilenceFade(output, 0);
         else this.lastOutputSample = 0;
         this.report(output.length);
         return true;
       }
       this.playing = true;
+      this.concealPeriod = null;
       if (this.needsOutputRecoveryFade) {
         this.beginRecoveryFade();
         this.needsOutputRecoveryFade = false;
@@ -483,8 +613,13 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
     if (written < output.length) {
       if (written > 0) this.lastOutputSample = output[written - 1];
-      this.beginSilenceFade();
-      this.writeSilenceFade(output, written);
+      this.rememberOutput(output, written);
+      if (this.beginConcealment()) {
+        this.writeConcealment(output, written);
+      } else {
+        this.beginSilenceFade();
+        this.writeSilenceFade(output, written);
+      }
 
       this.playing = false;
       this.underruns += 1;
@@ -497,6 +632,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       this.port.postMessage({ type: 'buffering' });
     } else {
       this.lastOutputSample = output[output.length - 1] ?? 0;
+      this.rememberOutput(output, output.length);
       this.noteStablePlayback(output.length);
       this.observeQueueLatency(output.length);
     }
@@ -522,6 +658,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       droppedMs: (this.droppedSamples / sampleRate) * 1000,
       trimmedMs: (this.trimmedSamples / sampleRate) * 1000,
       starvedMs: (this.starvedSamples / sampleRate) * 1000,
+      concealedMs: (this.concealedSamples / sampleRate) * 1000,
       playing: this.playing,
     });
   }

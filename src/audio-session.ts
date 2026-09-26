@@ -217,6 +217,16 @@ const RUNTIME_CALIBRATION_SLEW_FRACTION = 0.01;
 const MIC_READ_HEAD_CROSSFADE_MS = 5;
 
 /**
+ * When a Mic frontier overrun counts as gradual: the frontier has stayed
+ * within this much of the read window for a whole window of frames. A capture
+ * clock spending the headroom does that for minutes before it overruns; a
+ * healthy stream that stalls or arrives in bursts overruns from ~200 ms of
+ * slack and still needs the whole safety margin at once.
+ */
+const MIC_FRONTIER_GRADUAL_WINDOW_MS = 1_000;
+const MIC_FRONTIER_GRADUAL_SLACK_MS = 60;
+
+/**
  * A real packet hole is silence, but entering or leaving that silence in one
  * sample creates a click that was not present in either source segment.
  * Preserve the hole itself and its evidence; taper only the real source
@@ -533,6 +543,13 @@ export class AudioSession {
    * latency, but a genuinely steady late stream must regain frontier correction.
    */
   private micFrontierResumeGuardFrames = 0;
+  /**
+   * Correction still to be taken at the bounded slew rate, after a frontier
+   * that ran out gradually was stepped back only to just inside arrived audio.
+   */
+  private micFrontierSlewTargetSamples: number | null = null;
+  /** Live frontier slack of recent frames, oldest first. */
+  private readonly micFrontierRecentSlackSamples: number[] = [];
   /** Mic capture clock error the timeline is being trimmed for; positive is slow. */
   private micClockTrimPpmValue = 0;
   /** Fractional samples of trim owed but not yet applied. */
@@ -927,6 +944,8 @@ export class AudioSession {
     this.micFrontierAtLastFrame = 0;
     this.micFrontierIdleFrames = 0;
     this.micFrontierResumeGuardFrames = 0;
+    this.micFrontierSlewTargetSamples = null;
+    this.micFrontierRecentSlackSamples.length = 0;
   }
 
   private trackMicFrontierProgress() {
@@ -973,10 +992,19 @@ export class AudioSession {
    * ordinary arrival jitter does not force a new correction every few frames,
    * and given back at the same inaudible rate the calibration slew uses once
    * there is real slack again.
+   *
+   * A frontier that runs out gradually is different: a phone capture clock a
+   * little slower than the mix clock spends the headroom over tens of minutes
+   * and overruns by a fraction of a frame. Stepping the whole margin then
+   * replayed about 200 ms of voice in one go. Such an overrun is stepped back
+   * only to a frame inside arrived audio, and the rest of the margin is taken
+   * at the bounded slew rate.
    */
   private updateMicFrontierCorrection(startSample: number) {
     if (!this.micExpected) {
       this.micFrontierCorrectionSamples = 0;
+      this.micFrontierSlewTargetSamples = null;
+      this.micFrontierRecentSlackSamples.length = 0;
       return;
     }
 
@@ -987,6 +1015,13 @@ export class AudioSession {
     const frontierLimit = this.mic.totalSamples - span - startSample;
     const applied = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
     const overrun = applied - frontierLimit;
+    const recentSlack = this.micFrontierRecentSlackSamples;
+    const gradualWindowFrames = Math.ceil(MIC_FRONTIER_GRADUAL_WINDOW_MS / this.frameMs);
+    const frontierHasBeenShort = recentSlack.length >= gradualWindowFrames
+      && Math.max(...recentSlack)
+        <= Math.round((MIC_FRONTIER_GRADUAL_SLACK_MS * this.sampleRate) / 1000);
+    recentSlack.push(-overrun);
+    if (recentSlack.length > gradualWindowFrames) recentSlack.shift();
 
     // A true stall can resume by draining queued old PCM. Do not let the first
     // such packet reinterpret the whole outage as stable live latency: with the
@@ -1005,6 +1040,7 @@ export class AudioSession {
     const earliestRetained = this.mic.chunks[0]?.start ?? null;
     if (earliestRetained === null || frontierLimit < earliestRetained - startSample) {
       this.micFrontierCorrectionSamples = 0;
+      this.micFrontierSlewTargetSamples = null;
       return;
     }
 
@@ -1014,18 +1050,48 @@ export class AudioSession {
       // anything, and reading before retention is silence just the same.
       const budgeted = Math.round((this.budgetedMicAdvanceMs() * this.sampleRate) / 1000);
       const behind = Math.round((this.maximumMicReadBehindMs() * this.sampleRate) / 1000);
-      this.micFrontierCorrectionSamples = Math.min(
+      const target = Math.min(
         budgeted + behind,
         this.micFrontierCorrectionSamples + overrun + marginSamples,
       );
+      if (overrun <= this.frameSamples && frontierHasBeenShort) {
+        // One frame of cushion covers packet-sized arrival steps, so the
+        // frontier is not overrun again before the slew has built slack.
+        this.micFrontierCorrectionSamples = Math.min(
+          target,
+          this.micFrontierCorrectionSamples + overrun + this.frameSamples,
+        );
+        this.micFrontierSlewTargetSamples = target > this.micFrontierCorrectionSamples
+          ? target
+          : null;
+      } else {
+        this.micFrontierCorrectionSamples = target;
+        this.micFrontierSlewTargetSamples = null;
+      }
       return;
     }
 
+    const step = Math.max(
+      1,
+      Math.round((this.frameMs * RUNTIME_CALIBRATION_SLEW_FRACTION * this.sampleRate) / 1000),
+    );
+    const slewTarget = this.micFrontierSlewTargetSamples;
+    if (slewTarget !== null) {
+      // A frontier that stops is starvation, not latency to hold back for; and
+      // once the margin is back there is nothing left to take.
+      if (this.micFrontierStalled() || -overrun >= marginSamples) {
+        this.micFrontierSlewTargetSamples = null;
+      } else {
+        this.micFrontierCorrectionSamples = Math.min(
+          slewTarget,
+          this.micFrontierCorrectionSamples + step,
+        );
+        if (this.micFrontierCorrectionSamples >= slewTarget) this.micFrontierSlewTargetSamples = null;
+        return;
+      }
+    }
+
     if (this.micFrontierCorrectionSamples > 0 && -overrun > marginSamples) {
-      const step = Math.max(
-        1,
-        Math.round((this.frameMs * RUNTIME_CALIBRATION_SLEW_FRACTION * this.sampleRate) / 1000),
-      );
       this.micFrontierCorrectionSamples = Math.max(0, this.micFrontierCorrectionSamples - step);
     }
   }
@@ -1703,8 +1769,13 @@ export class AudioSession {
         // was covering. Carrying that forward would hold the read head a second
         // behind fresh audio and unwind only at the slew rate - most of a song.
         if (timeline === this.mic) {
+          // Dropping a held correction moves the read head at once, while it
+          // is still reading the retiring capture's retained audio. Keep read
+          // continuity then, so the next frame crossfades that jump like any
+          // other instead of splicing it.
+          const heldCorrection = this.micFrontierCorrectionSamples > 0;
           this.resetMicFrontierTracking();
-          this.resetMicReadContinuity();
+          if (!heldCorrection) this.resetMicReadContinuity();
           this.resetMicClockTrim();
         }
       } else if (timeline.sourceRate === null) {
@@ -2948,6 +3019,18 @@ export class AudioSession {
       && nextTransitionEvidence.gapSamples === 0
       && nextTransitionEvidence.frontierMissingSamples === 0
     );
+    const readHeadJumped = previouslyEmittedAdvanceSamples !== null
+      && Math.abs(advanceSamples - previouslyEmittedAdvanceSamples)
+        > maximumBoundedRuntimeDeltaSamples;
+    if (readHeadJumped && !canCrossfadeReadHeadJump) {
+      // A crossfade needs real PCM on both legs: the previous frame may have
+      // ended in a hole or its concealment, or the old leg may run into one.
+      // The jump still must not splice. Converge from what was last heard
+      // over the same 2 ms edge a capture replacement uses, which replays
+      // nothing.
+      this.micRetirementFadeStart = this.lastEmittedMicContribution;
+      this.micRetirementFadeRemainingSamples = this.sourceEdgeFadeSamples;
+    }
 
     // Reading ahead can outrun what has actually arrived. readRange pads with
     // zeros when that happens, so without this the vocal simply disappears in

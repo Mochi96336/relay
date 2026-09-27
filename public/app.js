@@ -1678,8 +1678,8 @@ async function connectPublisherSocket(
   if (pendingPublisherTakeoverOwnerId) {
     registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
   }
-  ws.send(JSON.stringify(registration));
   ws.send(JSON.stringify({ type: 'broadcast-subscribe', types: PUBLISHER_BROADCAST_TYPES }));
+  ws.send(JSON.stringify(registration));
   audioTransport.bind(ws, { sampleRate: audioContext.sampleRate });
   publisherCommandLiveness.begin(expectedGeneration, performance.now());
   refreshPublisherCommandChannel();

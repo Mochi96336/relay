@@ -114,6 +114,37 @@ test('only the authoritative singer and current capture generation can relay tru
     assert.equal(relayed.f0Hz, currentEvidence.f0Hz);
     assert.equal(relayed.pitchConfidence, currentEvidence.pitchConfidence);
 
+    // Display telemetry goes to every listener, so the broadcast carries only
+    // what the presence display can show, whatever precision the page sent.
+    singerMedia.sendAudioPacket(pcm());
+    await sleep(80);
+    const beforePrecise = observer.messages.length;
+    singerStatus.send({
+      ...evidence(singerMedia.generationId),
+      rmsDbfs: -31.47281934712345,
+      spectrumBands: [0.1234567891, 0.4876543219, 1, 0.3712345678, 0.0812345678],
+      f0Hz: 220.43749283748273,
+      pitchConfidence: 0.9134287342873428,
+    });
+    const rounded = await observer.waitFor((message) => (
+      message.type === 'room-mic-presence'
+      && observer.messages.indexOf(message) >= beforePrecise
+    ));
+    assert.deepEqual(
+      {
+        rmsDbfs: rounded.rmsDbfs,
+        spectrumBands: rounded.spectrumBands,
+        f0Hz: rounded.f0Hz,
+        pitchConfidence: rounded.pitchConfidence,
+      },
+      {
+        rmsDbfs: -31.5,
+        spectrumBands: [0.123, 0.488, 1, 0.371, 0.081],
+        f0Hz: 220.4,
+        pitchConfidence: 0.91,
+      },
+    );
+
     singerStatus.close();
     singerMedia.close();
     observer.close();

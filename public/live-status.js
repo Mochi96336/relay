@@ -1,6 +1,7 @@
 import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
+import { micPresenceDisplayValues } from '../shared/mic-presence-precision.js';
 await window.relayIdentityReady;
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const title = document.querySelector('#live-state-title');
@@ -496,10 +497,7 @@ if (
       type: 'mic-presence-telemetry',
       version: 1,
       captureGeneration: captureGeneration >>> 0,
-      rmsDbfs,
-      spectrumBands,
-      f0Hz,
-      pitchConfidence,
+      ...micPresenceDisplayValues({ rmsDbfs, spectrumBands, f0Hz, pitchConfidence }),
     }));
   });
 

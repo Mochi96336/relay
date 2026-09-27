@@ -11,6 +11,7 @@ import { SourceRuntime } from './source-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
+import { micPresenceDisplayValues } from '../shared/mic-presence-precision.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
 import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
@@ -3283,15 +3284,14 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       && nowMs - socket.micPresenceTelemetryAt! < 60
     ) return;
     socket.micPresenceTelemetryAt = nowMs;
+    // Rounded here too, so a page that still sends full precision does not
+    // cost every listener for it.
     broadcastJson({
       type: 'room-mic-presence',
       version: 1,
       ownerId: micRuntime.mediaOwnerId,
       captureGeneration: micRuntime.mediaGeneration,
-      rmsDbfs: presence.rmsDbfs,
-      spectrumBands: presence.spectrumBands,
-      f0Hz: presence.f0Hz,
-      pitchConfidence: presence.pitchConfidence,
+      ...micPresenceDisplayValues(presence),
     });
     return;
   },

@@ -203,6 +203,51 @@ test('Mic late contiguous recovery fades in even when the raw timeline later has
   assert.ok(Math.abs(sample(recovered.output, FADE) - AMPLITUDE) <= 1);
 });
 
+test('Mic entering real audio during a read-rate slew fades in from silence', () => {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: 20,
+    prebufferMs: 400,
+    backingGain: 1,
+    retentionMs: 3_000,
+  });
+  session.setMicGainDb(0);
+  session.setMicExpected(true);
+  session.start(0);
+  session.setAlignment({ calibratedMicLagMs: 100 });
+  // A live validation correction: the read head moves at the bounded 1% rate,
+  // so every Mic sample it reads is interpolated between two source samples.
+  session.slewCalibratedMicLagTo(150);
+
+  // The capture's first packet lands at 700 ms; the read head reaches the
+  // start of its timeline mid-frame while the slew is still running.
+  let lastSample: number | null = null;
+  let maxStep = 0;
+  let crossedIntoAudio = false;
+  for (let nowMs = 0, packet = 0; nowMs <= 1_400; nowMs += 20) {
+    if (nowMs >= 700) {
+      session.ingestMic(frame(packet * CHUNK), RATE, nowMs);
+      packet += 1;
+    }
+    session.drain((output, evidence) => {
+      if (evidence.micGapSamples > 0 && evidence.micGapSamples < CHUNK) crossedIntoAudio = true;
+      for (let index = 0; index < CHUNK; index += 1) {
+        const value = sample(output, index);
+        if (lastSample !== null) maxStep = Math.max(maxStep, Math.abs(value - lastSample));
+        lastSample = value;
+      }
+    }, nowMs);
+  }
+
+  assert.ok(crossedIntoAudio, 'one emitted frame crosses from before the timeline into its audio');
+  assert.notEqual(session.calibratedMicLagTarget, session.alignment.calibratedMicLagMs, 'the slew is still running');
+  assert.equal(lastSample, AMPLITUDE);
+  // A 2 ms fade from silence to a constant 12k steps by about 128 per sample.
+  // The sample straddling the timeline start is interpolated from both sides;
+  // emitted as is, it jumped straight to a fraction of the full level.
+  assert.ok(maxStep <= 2 * Math.ceil(AMPLITUDE / (FADE - 1)), `largest step ${maxStep}`);
+});
+
 test('hot Mic recovery after sustained starvation stays inside the limiter without clipping', () => {
   const session = new AudioSession({
     sampleRate: RATE,

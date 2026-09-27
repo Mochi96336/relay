@@ -277,6 +277,11 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     }, reconnectBackoff.nextDelayMs());
   }
 
+  // The broadcasts handleMessage reads. Relay sends this socket no others:
+  // the room audio shares its stream, and at Opus bitrates the status traffic
+  // the page ignores here was as large as the audio.
+  const MONITOR_BROADCAST_TYPES = ['session-status', 'source-status'];
+
   function handleMessage(message) {
     if (message.type === 'session-status') {
       // The monitor socket already receives authoritative room state. Consume it
@@ -349,6 +354,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       type: 'register',
       role: 'monitor',
       monitorPacketVersion: MONITOR_PCM_PACKET_VERSION,
+      broadcastTypes: MONITOR_BROADCAST_TYPES,
       ...(withOpus ? { monitorCodecs: ['opus'] } : {}),
     }));
 

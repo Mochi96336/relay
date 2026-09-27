@@ -17,6 +17,7 @@ import { createListenOpusDecoder, listenOpusDecodingSupported } from './listen-o
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
+import { wsUrl } from './ws-url.js';
 
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
@@ -83,17 +84,6 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let micPrimaryMode = window.relayMicActionState?.primaryMode === 'takeover'
     ? 'takeover'
     : 'microphone';
-
-  function wsUrl() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const source = new URLSearchParams(location.search);
-    const params = new URLSearchParams();
-    const key = source.get('key');
-    if (key) params.set('key', key);
-
-    const query = params.toString();
-    return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-  }
 
   function int16ToFloat32(buffer) {
     const input = new Int16Array(buffer);

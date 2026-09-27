@@ -1,3 +1,5 @@
+import { wsUrl } from './ws-url.js';
+
 const RECONNECT_MS = 1_000;
 const REFRESH_MS = 250;
 // Six missed polls tolerates short response jitter without treating an OPEN
@@ -30,16 +32,6 @@ function publish(authorityFresh, valueMs = null) {
     && previous.valueMs === state.valueMs
   ) return;
   window.dispatchEvent(new CustomEvent('relay-timing-authority', { detail: state }));
-}
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const source = new URLSearchParams(location.search);
-  const params = new URLSearchParams();
-  const key = source.get('key');
-  if (key) params.set('key', key);
-  const query = params.toString();
-  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
 
 function stopRefresh() {

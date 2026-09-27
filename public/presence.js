@@ -18,6 +18,8 @@ window.relayIdentityReady = (async () => {
   const NICKNAME_KEY = 'relay.nickname.v1';
   const PENDING_NICKNAME_KEY = 'relay.pendingNickname.v1';
   const RECONNECT_MS = 1_000;
+  // The broadcasts handleMessage reads; Relay sends this socket no others.
+  const PRESENCE_BROADCAST_TYPES = ['session-status'];
   const adjectives = [
     'Blue', 'Quiet', 'Tiny', 'Silver', 'Mint', 'Soft', 'Bright', 'Lazy',
     'Lucky', 'Warm', 'Swift', 'Night', 'Sunny', 'Mellow', 'Cloud', 'Little',
@@ -334,6 +336,7 @@ window.relayIdentityReady = (async () => {
       try { next.close(); } catch {}
     });
 
+    next.send(JSON.stringify({ type: 'broadcast-subscribe', types: PRESENCE_BROADCAST_TYPES }));
     sendParticipantAuthentication(next);
     next.send(JSON.stringify({ type: 'session-status-request' }));
     sendPendingRename();

@@ -222,6 +222,7 @@ const wss = createRelayWebSocketServer(server, {
 const {
   sendJson,
   broadcastJson,
+  subscribeBroadcasts,
   retire: retireSocket,
   canClaimSocketRole,
   commitSocketRole,
@@ -4012,6 +4013,7 @@ wss.on('connection', (rawSocket, request) => {
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
     if (monitorTransport.acknowledge(socket, payload)) return;
+    if (subscribeBroadcasts(socket, payload)) return;
     if (queryProtocol.dispatch(socket, payload)) return;
     if (commandProtocol.dispatch(socket, payload)) return;
     if (infrastructureEventProtocol.dispatch(socket, payload)) return;

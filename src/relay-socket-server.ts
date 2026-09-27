@@ -163,6 +163,17 @@ export function createRelaySocketTransport(wss: WebSocketServer) {
   }
 
   /**
+   * Records the broadcasts a page reads on this socket; it may send this any
+   * time after connecting. True when the payload was a subscription, valid or
+   * not. A malformed one goes back to every broadcast.
+   */
+  function subscribeBroadcasts(socket: RelaySocket, payload: Record<string, unknown>) {
+    if (payload.type !== 'broadcast-subscribe') return false;
+    socket.broadcastTypes = parseBroadcastTypes(payload.types);
+    return true;
+  }
+
+  /**
    * Physically retires one transport after server/domain policy has decided it
    * is replaced. The delayed terminate is only a close-handshake backstop; it
    * carries no authority decision of its own.
@@ -206,6 +217,7 @@ export function createRelaySocketTransport(wss: WebSocketServer) {
   return {
     sendJson,
     broadcastJson,
+    subscribeBroadcasts,
     retire,
     canClaimSocketRole,
     commitSocketRole,

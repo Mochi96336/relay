@@ -222,3 +222,67 @@ export function extractMusicTimingFeatures(
     bandActivity,
   };
 }
+
+const ENERGY_WEIGHT = 0.4;
+const FLUX_WEIGHT = 0.6;
+
+/** Pearson correlation of one feature channel between the two streams, or -1 if either is flat. */
+function channelCorrelation(
+  backing: MusicTimingFeatures,
+  mic: MusicTimingFeatures,
+  channel: number,
+  backingStart: number,
+  micStart: number,
+  length: number,
+) {
+  const backingOffset = channel * backing.frameCount + backingStart;
+  const micOffset = channel * mic.frameCount + micStart;
+  let sumBacking = 0;
+  let sumMic = 0;
+  let sumBackingSquares = 0;
+  let sumMicSquares = 0;
+  let sumProducts = 0;
+
+  for (let index = 0; index < length; index += 1) {
+    const backingValue = backing.values[backingOffset + index];
+    const micValue = mic.values[micOffset + index];
+    sumBacking += backingValue;
+    sumMic += micValue;
+    sumBackingSquares += backingValue * backingValue;
+    sumMicSquares += micValue * micValue;
+    sumProducts += backingValue * micValue;
+  }
+
+  const covariance = sumProducts - (sumBacking * sumMic) / length;
+  const backingVariance = sumBackingSquares - (sumBacking * sumBacking) / length;
+  const micVariance = sumMicSquares - (sumMic * sumMic) / length;
+  const denominator = Math.sqrt(Math.max(0, backingVariance) * Math.max(0, micVariance));
+  return denominator > 1e-10 ? covariance / denominator : -1;
+}
+
+/**
+ * How well one band agrees between the backing, read from `backingStart`, and
+ * the Mic, read from `micStart`, over `length` feature frames: its energy and
+ * flux channels correlated and weighted together. Shared by the calibration
+ * lag search and the Robot content-transition check, which must score a band
+ * the same way.
+ */
+export function musicBandScore(
+  backing: MusicTimingFeatures,
+  mic: MusicTimingFeatures,
+  band: number,
+  backingStart: number,
+  micStart: number,
+  length: number,
+) {
+  const energy = channelCorrelation(backing, mic, band, backingStart, micStart, length);
+  const flux = channelCorrelation(
+    backing,
+    mic,
+    backing.bandCount + band,
+    backingStart,
+    micStart,
+    length,
+  );
+  return energy * ENERGY_WEIGHT + flux * FLUX_WEIGHT;
+}

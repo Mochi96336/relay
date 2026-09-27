@@ -1,6 +1,7 @@
 import './take-history.js';
 import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import { wsUrl } from './ws-url.js';
 await window.relayIdentityReady;
 const recordButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
@@ -29,16 +30,6 @@ let takeStatusFresh = false;
 let startCommandPending = false;
 let startTakeBlockedReason = null;
 let startTakeBlockingIssue = null;
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const source = new URLSearchParams(location.search);
-  const params = new URLSearchParams();
-  const key = source.get('key');
-  if (key) params.set('key', key);
-  const query = params.toString();
-  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-}
 
 function publishTakeStatus(status) {
   window.relayTakeStatus = status;

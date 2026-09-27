@@ -20,6 +20,7 @@ import { MicLifecycleTransaction } from './mic-lifecycle-transaction.js';
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
+import { wsUrl } from './ws-url.js';
 
 const publisherButton = document.querySelector('#start-publisher');
 const releaseButton = document.querySelector('#release-mic');
@@ -1163,17 +1164,6 @@ function updateCalibrateButton() {
   }
 
   calibrateStatus.textContent = t('adjust.calibration.fallback');
-}
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const source = new URLSearchParams(location.search);
-  const params = new URLSearchParams();
-  const key = source.get('key');
-  if (key) params.set('key', key);
-
-  const query = params.toString();
-  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
 
 function connectSocket() {

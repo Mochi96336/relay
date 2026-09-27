@@ -96,7 +96,7 @@ test('TakeLibrary preserves finalized Take metadata across a new instance', asyn
       error: null,
     };
 
-    new TakeLibrary({ directory }).record(take);
+    await new TakeLibrary({ directory }).record(take);
     const entry = new TakeLibrary({ directory }).get(TAKE_2);
 
     assert.ok(entry);
@@ -196,7 +196,7 @@ test('TakeLibrary revokes authoritative sample metadata when the WAV no longer m
       quality: null,
       error: null,
     };
-    new TakeLibrary({ directory }).record(take);
+    await new TakeLibrary({ directory }).record(take);
 
     await writeFile(wavPath, wav(48_000, 2_400));
     const entry = new TakeLibrary({ directory }).get(TAKE_2);

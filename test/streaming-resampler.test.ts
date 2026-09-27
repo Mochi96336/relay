@@ -147,6 +147,37 @@ test('48 to 44.1 kHz Listen resampling keeps exact packetization parity', () => 
   assert.ok(maximumDifference(whole, framed) < 1e-7);
 });
 
+test('Listen resampling is independent of frames that start off the aligned grid', () => {
+  // 48 and 44.1 kHz line up every 160 source samples, which every 960-sample
+  // mix frame does. A frame that starts elsewhere - a decoder that trims its
+  // first packet, say - puts its first output up to half a target sample
+  // before its start, and the cubic's earliest tap one source sample further
+  // back than a three-sample history holds.
+  const sizes = [648, 960, 331, 960, 1_024, 7, 960];
+  for (const [sourceRate, targetRate] of [[48_000, 44_100], [48_000, 96_000], [48_000, 22_050], [44_100, 48_000]]) {
+    const firstSampleIndex = 12_345;
+    const input = tone(sourceRate, sourceRate, 6_100);
+    const whole = createStreamingResampler().resample(input, { sourceRate, targetRate, firstSampleIndex });
+
+    const resampler = createStreamingResampler();
+    const outputs: Float32Array[] = [];
+    for (let start = 0, index = 0; start < input.length; index += 1) {
+      const end = Math.min(input.length, start + sizes[index % sizes.length]);
+      outputs.push(resampler.resample(input.slice(start, end), {
+        sourceRate,
+        targetRate,
+        firstSampleIndex: firstSampleIndex + start,
+      }));
+      start = end;
+    }
+
+    assert.ok(
+      maximumDifference(whole, concatFloat32(...outputs)) < 1e-7,
+      `${sourceRate} to ${targetRate} Hz output depends on where frames start`,
+    );
+  }
+});
+
 test('Listen streaming resampling never interpolates across a real monitor gap', () => {
   const resampler = createStreamingResampler();
 

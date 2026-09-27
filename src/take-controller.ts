@@ -532,7 +532,7 @@ export class TakeController {
       const finalizingTake = this.session.currentTake();
       if (finalizingTake?.takeId === takeId && finalizingTake.lifecycle === 'finalizing') {
         try {
-          this.library.stageFinalizing(finalizingTake, {
+          await this.library.stageFinalizing(finalizingTake, {
             sampleRate: writer.sampleRate,
             sampleCount: writer.sampleCount,
           });
@@ -577,10 +577,10 @@ export class TakeController {
           try {
             let libraryEntry: TakeLibraryEntry;
             if (metadataStaged) {
-              libraryEntry = this.library.commitStaged(readyTake);
+              libraryEntry = await this.library.commitStaged(readyTake);
               metadataStaged = false;
             } else {
-              libraryEntry = this.library.record(readyTake);
+              libraryEntry = await this.library.record(readyTake);
             }
             const item = historyItem(libraryEntry);
             this.historyCache = Object.freeze([

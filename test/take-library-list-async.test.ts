@@ -73,7 +73,7 @@ test('listAsync reads the history list() returns, and repairs nothing', async ()
     const file = (name: string) => path.join(directory, name);
 
     await writeFile(file(`${COMMITTED}.wav`), wav());
-    library.record(readyTake(COMMITTED, 5_000_000));
+    await library.record(readyTake(COMMITTED, 5_000_000));
 
     const legacyAt = new Date(4_000_000);
     await writeFile(file(`${LEGACY}.wav`), wav());
@@ -85,12 +85,12 @@ test('listAsync reads the history list() returns, and repairs nothing', async ()
 
     // A complete staged transaction whose promotion never happened.
     await writeFile(file(`${STAGED}.wav`), wav());
-    library.record(readyTake(STAGED, 6_000_000));
+    await library.record(readyTake(STAGED, 6_000_000));
     await rename(file(`${STAGED}.json`), file(`${STAGED}.json.part`));
 
     // Its sidecar describes a different recording than the WAV now holds.
     await writeFile(file(`${MISMATCHED}.wav`), wav());
-    library.record(readyTake(MISMATCHED, 7_000_000));
+    await library.record(readyTake(MISMATCHED, 7_000_000));
     await writeFile(file(`${MISMATCHED}.wav`), wav(2_400));
     await utimes(file(`${MISMATCHED}.wav`), new Date(2_000_000), new Date(2_000_000));
 

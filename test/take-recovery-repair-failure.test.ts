@@ -75,7 +75,7 @@ test('valid final metadata stays authoritative when stale partial cleanup fails'
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-repair-final-'));
   try {
     await writeFile(path.join(directory, `${FINAL_ID}.wav`), wav());
-    new TakeLibrary({ directory }).record(take(FINAL_ID, 'ready'));
+    await new TakeLibrary({ directory }).record(take(FINAL_ID, 'ready'));
 
     // A directory at the stale-part path deterministically makes non-recursive
     // rmSync fail without relying on chmod/root behavior.
@@ -101,7 +101,7 @@ test('valid staged metadata remains readable when cleanup and promotion cannot c
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-repair-staged-'));
   try {
     const stagingLibrary = new TakeLibrary({ directory });
-    stagingLibrary.stageFinalizing(take(STAGED_ID, 'finalizing'), {
+    await stagingLibrary.stageFinalizing(take(STAGED_ID, 'finalizing'), {
       sampleRate: SAMPLE_RATE,
       sampleCount: SAMPLE_COUNT,
     });

@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
-const source = readFileSync(new URL('../public/timing-authority.js', import.meta.url), 'utf8');
+// The page's socket URL reads the page's location, so it runs inside the context too.
+const wsUrlSource = readFileSync(new URL('../public/ws-url.js', import.meta.url), 'utf8')
+  .replace(/^export /m, '');
+const source = wsUrlSource
+  + readFileSync(new URL('../public/timing-authority.js', import.meta.url), 'utf8')
+    .replace(/^import .*;\s*$/gm, '');
 
 type SocketListener = (event?: { data?: string }) => void;
 
@@ -91,7 +96,9 @@ test('timing authority keeps polling across idle and observes the later applied 
   socket.readyState = FakeSocket.OPEN;
   socket.emit('open');
 
-  assert.equal(socket.sent.length, 1, 'open should request the first source snapshot immediately');
+  const sourceRequests = () => socket.sent
+    .filter((payload) => JSON.parse(payload).type === 'source-status-request').length;
+  assert.equal(sourceRequests(), 1, 'open should request the first source snapshot immediately');
   const refreshId = [...intervals.keys()][0];
   assert.ok(refreshId, 'open socket should keep a refresh loop alive');
 
@@ -109,7 +116,7 @@ test('timing authority keeps polling across idle and observes the later applied 
     'an idle source snapshot must not stop observation of a later active mix');
 
   intervals.get(refreshId!)?.();
-  assert.equal(socket.sent.length, 2,
+  assert.equal(sourceRequests(), 2,
     'the adapter should keep asking for source status while the socket remains open');
 
   socket.emit('message', {

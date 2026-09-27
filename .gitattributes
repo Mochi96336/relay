@@ -1,0 +1,4 @@
+# Check out text files with LF on every platform. Several source-contract
+# tests match regexes over src/ and public/, and the shell scripts run on the
+# Robot, so a CRLF working tree (core.autocrlf=true on Windows) fails them.
+* text=auto eol=lf

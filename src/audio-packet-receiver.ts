@@ -397,6 +397,7 @@ export class AudioPacketReceiver {
     this.resyncCandidate = null;
     this.counters.reorderedPackets += 1;
     this.pending.set(packet.sequence, { packet, receivedAtMs: nowMs });
+    this.withdrawRequestForHeldArrival(packet.sequence);
     this.requestMissingBefore(packet.sequence, nowMs);
 
     const output: AudioPacket[] = [];
@@ -523,6 +524,40 @@ export class AudioPacketReceiver {
   }
 
   /**
+   * Takes back a request or retry that has not left Relay yet. A token pays
+   * for a request that is sent, so one withdrawn first is returned. False
+   * when nothing was waiting to be sent.
+   */
+  private withdrawQueuedRequest(state: RetransmitRequestState | undefined) {
+    if (!state?.queued) return false;
+    state.queued = false;
+    this.retransmitTokens = Math.min(this.retransmitRequestsPerSecond, this.retransmitTokens + 1);
+    if (state.attempts > 0) this.retransmitCounters.retriedPackets -= 1;
+    return true;
+  }
+
+  /**
+   * A requested sequence that arrived while an earlier hole still holds the
+   * stream needs nothing more. A repeat that answered a request stays tracked
+   * until it is emitted, so it still counts as recovered; but it is never
+   * retried, and a request still waiting to leave is withdrawn. Asking again
+   * for audio already here spends the budget and the uplink that the hole in
+   * front of it needs.
+   */
+  private withdrawRequestForHeldArrival(sequence: number) {
+    const state = this.retransmitRequested.get(sequence);
+    if (!this.withdrawQueuedRequest(state)) return;
+    if (state!.attempts === 0) this.retransmitRequested.delete(sequence);
+  }
+
+  /** Stops tracking a sequence the frontier has emitted or given up on. */
+  private retireRetransmitTracking(sequence: number) {
+    this.withdrawQueuedRequest(this.retransmitRequested.get(sequence));
+    this.retransmitRequested.delete(sequence);
+    this.retransmitCandidates.delete(sequence);
+  }
+
+  /**
    * Any hole holds while the mix can afford it, not only a requested one.
    * Waiting is free until the read head gets close, and a packet that is
    * merely late (queueing jitter, a stalled radio, reordering) is heard if the
@@ -631,9 +666,10 @@ export class AudioPacketReceiver {
     if (!this.retransmitRequestsEnabled) return;
     const retryReserve = this.retransmitRequestsPerSecond * RETRANSMIT_RETRY_RESERVE_FRACTION;
     const retryMs = this.retransmitRetryMs();
-    for (const state of this.retransmitRequested.values()) {
+    for (const [sequence, state] of this.retransmitRequested) {
       if (
         state.queued
+        || this.pending.has(sequence)
         || state.dispatchedAtMs === null
         || state.attempts >= MAX_RETRANSMIT_ATTEMPTS
         || nowMs - state.dispatchedAtMs < retryMs
@@ -773,6 +809,7 @@ export class AudioPacketReceiver {
       && packet.firstSampleIndex < this.lastEmittedEndSampleIndex
     ) {
       this.counters.invalidSampleRangePackets += 1;
+      this.retireRetransmitTracking(sequence);
       this.rememberFinalized(sequence, 'invalid');
       this.expectedSequence = nextSequence(sequence);
       return;
@@ -782,8 +819,7 @@ export class AudioPacketReceiver {
     if ((this.retransmitRequested.get(sequence)?.attempts ?? 0) > 0) {
       this.retransmitCounters.recoveredPackets += 1;
     }
-    this.retransmitRequested.delete(sequence);
-    this.retransmitCandidates.delete(sequence);
+    this.retireRetransmitTracking(sequence);
     this.counters.emittedPackets += 1;
     this.counters.emittedSamples = Math.min(
       Number.MAX_SAFE_INTEGER,
@@ -797,8 +833,7 @@ export class AudioPacketReceiver {
   private markExpectedLost() {
     if (this.expectedSequence === null) return;
     const sequence = this.expectedSequence;
-    this.retransmitRequested.delete(sequence);
-    this.retransmitCandidates.delete(sequence);
+    this.retireRetransmitTracking(sequence);
     this.counters.lostPackets += 1;
     this.rememberFinalized(sequence, 'lost');
     this.expectedSequence = nextSequence(sequence);

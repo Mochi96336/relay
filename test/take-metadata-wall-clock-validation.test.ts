@@ -76,7 +76,7 @@ async function recoverWithTimestampMutation(
   try {
     await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
     const writer = new TakeLibrary({ directory });
-    writer.record(readyTake());
+    await writer.record(readyTake());
 
     const metadataPath = path.join(directory, `${TAKE_ID}.json`);
     const payload = JSON.parse(await readFile(metadataPath, 'utf8')) as {

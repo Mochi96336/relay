@@ -1,6 +1,7 @@
 import './live-i18n.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { describeMicAudio, describeMicTransport } from './mic-diagnostics-model.js';
+import { wsUrl } from './ws-url.js';
 await window.relayIdentityReady;
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -336,16 +337,6 @@ if (
       }
       void refreshReadiness();
     }, READINESS_REFRESH_MS);
-  }
-
-  function wsUrl() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const source = new URLSearchParams(location.search);
-    const params = new URLSearchParams();
-    const key = source.get('key');
-    if (key) params.set('key', key);
-    const query = params.toString();
-    return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
   }
 
   function requestDiagnostics(socket) {

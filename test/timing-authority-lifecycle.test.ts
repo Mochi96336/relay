@@ -91,7 +91,9 @@ test('timing authority keeps polling across idle and observes the later applied 
   socket.readyState = FakeSocket.OPEN;
   socket.emit('open');
 
-  assert.equal(socket.sent.length, 1, 'open should request the first source snapshot immediately');
+  const sourceRequests = () => socket.sent
+    .filter((payload) => JSON.parse(payload).type === 'source-status-request').length;
+  assert.equal(sourceRequests(), 1, 'open should request the first source snapshot immediately');
   const refreshId = [...intervals.keys()][0];
   assert.ok(refreshId, 'open socket should keep a refresh loop alive');
 
@@ -109,7 +111,7 @@ test('timing authority keeps polling across idle and observes the later applied 
     'an idle source snapshot must not stop observation of a later active mix');
 
   intervals.get(refreshId!)?.();
-  assert.equal(socket.sent.length, 2,
+  assert.equal(sourceRequests(), 2,
     'the adapter should keep asking for source status while the socket remains open');
 
   socket.emit('message', {

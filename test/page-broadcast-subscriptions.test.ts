@@ -112,6 +112,18 @@ const PAGES: PageSubscription[] = [
     handlerEnd: "next.addEventListener('close'",
   },
   {
+    page: 'timing-authority.js',
+    constant: 'TIMING_AUTHORITY_BROADCAST_TYPES',
+    handlerStart: 'function acceptSourceStatus(message) {',
+    handlerEnd: 'function connect() {',
+  },
+  {
+    page: 'youtube-sync.js',
+    constant: 'YOUTUBE_SYNC_BROADCAST_TYPES',
+    handlerStart: 'function handleServerMessage(message) {',
+    handlerEnd: '// Every message type handleServerMessage reads',
+  },
+  {
     page: 'recorder.js',
     constant: 'RECORDER_BROADCAST_TYPES',
     handlerStart: "next.addEventListener('message'",
@@ -131,7 +143,7 @@ for (const { page, constant, handlerStart, handlerEnd } of PAGES) {
     const end = source.indexOf(handlerEnd, start);
     assert.ok(start >= 0 && end > start, `${page} keeps one socket message handler`);
     const handled = new Set(
-      [...source.slice(start, end).matchAll(/message\.type [!=]== '([^']+)'/g)].map((match) => match[1]),
+      [...source.slice(start, end).matchAll(/message\??\.type [!=]== '([^']+)'/g)].map((match) => match[1]),
     );
     assert.ok(handled.size > 0, `${page}: the handler's message types were not found`);
     for (const type of handled) {

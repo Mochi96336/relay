@@ -3,6 +3,9 @@ const REFRESH_MS = 250;
 // Six missed polls tolerates short response jitter without treating an OPEN
 // transport as indefinitely authoritative.
 const FRESHNESS_TTL_MS = REFRESH_MS * 6;
+// acceptSourceStatus reads only source status, and polls for it; Relay
+// broadcasts this socket nothing else.
+const TIMING_AUTHORITY_BROADCAST_TYPES = ['source-status'];
 
 let socket = null;
 let reconnectTimer = null;
@@ -125,6 +128,7 @@ function connect() {
     // Keep observing across idle -> active transitions. An inactive mix means
     // there is no applied value to paint yet; it must not stop the authority
     // adapter or the first later calibration can remain invisible forever.
+    next.send(JSON.stringify({ type: 'broadcast-subscribe', types: TIMING_AUTHORITY_BROADCAST_TYPES }));
     requestSourceStatus();
     startRefresh();
   });

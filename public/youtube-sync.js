@@ -416,6 +416,28 @@ function handleServerMessage(message) {
   }
 }
 
+// Every message type handleServerMessage reads; Relay broadcasts this socket
+// no others. Replies among them would arrive regardless.
+const YOUTUBE_SYNC_BROADCAST_TYPES = [
+  'clock-pong',
+  'session-status',
+  'youtube-telemetry-rejected',
+  'room-song-telemetry-rejected',
+  'youtube-timeline-status',
+  'room-song-status',
+  'room-song-command-status',
+  'room-song-command-accepted',
+  'room-song-command-rejected',
+  'room-song-command-apply',
+  'room-song-command-complete',
+  'room-song-command-failed-ack',
+  'song-handoff-prepare',
+  'song-handoff-commit',
+  'song-handoff-release',
+  'song-handoff-complete',
+  'song-handoff-cancelled',
+];
+
 function connect() {
   clearTimeout(reconnectTimer);
   const next = new WebSocket(wsUrl());
@@ -423,6 +445,7 @@ function connect() {
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
+    send({ type: 'broadcast-subscribe', types: YOUTUBE_SYNC_BROADCAST_TYPES });
     sendParticipantAuthentication(next);
     recentRttMs.length = 0;
     pendingPings.clear();

@@ -1,4 +1,5 @@
 import { sendParticipantAuthentication } from './participant-auth.js';
+import { wsUrl } from './ws-url.js';
 
 const REFRESH_MS = 1_000;
 let initialized = false;
@@ -159,16 +160,6 @@ function initialize() {
     nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null
       ? `${ms(pathDifference + liveDelta)} · confidence ${confidence(boot.confidence)}`
       : boot ? 'Path ready · waiting for playback' : '—';
-  }
-
-  function wsUrl() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const source = new URLSearchParams(location.search);
-    const params = new URLSearchParams();
-    const key = source.get('key');
-    if (key) params.set('key', key);
-    const query = params.toString();
-    return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
   }
 
   function request() {

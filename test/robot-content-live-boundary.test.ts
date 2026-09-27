@@ -135,6 +135,17 @@ async function waitForTimingStatus(
   throw new Error(`Timed out waiting for timing status. Last=${JSON.stringify(last ?? null)}`);
 }
 
+/**
+ * The first offset rides the Robot's own socket, so Relay can read half a
+ * second or more of the Backing and Mic sockets' PCM before it. Content
+ * evidence only counts once that mapping exists: sent any earlier, 7 s of
+ * audio can come up one frame short of a 6 s calibration window, and nothing
+ * arrives afterwards to finish it.
+ */
+async function waitForRobotMapping(monitor: RelayClient) {
+  await waitForTimingStatus(monitor, (status) => status.robotDeltaFresh === true, 2_000);
+}
+
 async function waitForActiveLag(monitor: RelayClient, expectedMs: number, timeoutMs: number, from?: number) {
   return waitForTimingStatus(
     monitor,
@@ -185,6 +196,7 @@ test('confirmed Robot content keeps pre-seek live lag until post-seek PCM commit
     keepMappingFresh = setInterval(() => {
       room.robot.send({ type: 'robot-player-offset', offsetMs: INITIAL_DELTA_MS });
     }, 250);
+    await waitForRobotMapping(room.monitor);
     await sendRange(room, mic, master, FRAME_SAMPLES, INITIAL_CONFIRMED_END, INITIAL_DELTA_MS);
 
     const confirmed = await waitForActiveLag(room.monitor, REFERENCE_LAG_MS, 30_000);

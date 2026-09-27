@@ -1,5 +1,6 @@
 import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import { wsUrl } from './ws-url.js';
 window.relayIdentityReady = (async () => {
   const identityButton = document.querySelector('#identity-name');
   const identityInput = document.querySelector('#identity-input');
@@ -18,6 +19,8 @@ window.relayIdentityReady = (async () => {
   const NICKNAME_KEY = 'relay.nickname.v1';
   const PENDING_NICKNAME_KEY = 'relay.pendingNickname.v1';
   const RECONNECT_MS = 1_000;
+  // The broadcasts handleMessage reads; Relay sends this socket no others.
+  const PRESENCE_BROADCAST_TYPES = ['session-status'];
   const adjectives = [
     'Blue', 'Quiet', 'Tiny', 'Silver', 'Mint', 'Soft', 'Bright', 'Lazy',
     'Lucky', 'Warm', 'Swift', 'Night', 'Sunny', 'Mellow', 'Cloud', 'Little',
@@ -95,16 +98,6 @@ window.relayIdentityReady = (async () => {
   window.relayParticipantCapability = participantCapability;
   window.relayNickname = nickname;
   identityButton.textContent = nickname;
-
-  function wsUrl() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const source = new URLSearchParams(location.search);
-    const params = new URLSearchParams();
-    const key = source.get('key');
-    if (key) params.set('key', key);
-    const query = params.toString();
-    return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-  }
 
   function participantById(id) {
     return latestSession?.participants?.find((participant) => participant.id === id) ?? null;
@@ -334,6 +327,7 @@ window.relayIdentityReady = (async () => {
       try { next.close(); } catch {}
     });
 
+    next.send(JSON.stringify({ type: 'broadcast-subscribe', types: PRESENCE_BROADCAST_TYPES }));
     sendParticipantAuthentication(next);
     next.send(JSON.stringify({ type: 'session-status-request' }));
     sendPendingRename();

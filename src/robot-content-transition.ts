@@ -1,4 +1,8 @@
-import { extractMusicTimingFeatures, type MusicTimingFeatures } from './music-timing-features.js';
+import {
+  extractMusicTimingFeatures,
+  musicBandScore,
+  type MusicTimingFeatures,
+} from './music-timing-features.js';
 
 export type RobotContentTransitionAnchor = {
   rawLagMs: number;
@@ -17,8 +21,6 @@ export type RobotContentTransitionComparison = {
   postSupportingBands: number;
 };
 
-const ENERGY_WEIGHT = 0.4;
-const FLUX_WEIGHT = 0.6;
 const MIN_ACTIVE_BANDS = 3;
 const MIN_SUPPORTING_BANDS = 3;
 const MIN_SUPPORTING_BAND_SCORE = 0.12;
@@ -49,56 +51,6 @@ function activeBackingBands(features: MusicTimingFeatures) {
   return active;
 }
 
-function normalizedChannelCorrelation(
-  backing: MusicTimingFeatures,
-  mic: MusicTimingFeatures,
-  channel: number,
-  backingStart: number,
-  micStart: number,
-  length: number,
-) {
-  const backingOffset = channel * backing.frameCount + backingStart;
-  const micOffset = channel * mic.frameCount + micStart;
-  let sumBacking = 0;
-  let sumMic = 0;
-  let sumBackingSquares = 0;
-  let sumMicSquares = 0;
-  let sumProducts = 0;
-
-  for (let index = 0; index < length; index += 1) {
-    const backingValue = backing.values[backingOffset + index];
-    const micValue = mic.values[micOffset + index];
-    sumBacking += backingValue;
-    sumMic += micValue;
-    sumBackingSquares += backingValue * backingValue;
-    sumMicSquares += micValue * micValue;
-    sumProducts += backingValue * micValue;
-  }
-
-  const covariance = sumProducts - (sumBacking * sumMic) / length;
-  const backingVariance = sumBackingSquares - (sumBacking * sumBacking) / length;
-  const micVariance = sumMicSquares - (sumMic * sumMic) / length;
-  const denominator = Math.sqrt(Math.max(0, backingVariance) * Math.max(0, micVariance));
-  return denominator > 1e-10 ? covariance / denominator : -1;
-}
-
-function bandScore(
-  backing: MusicTimingFeatures,
-  mic: MusicTimingFeatures,
-  band: number,
-  backingStart: number,
-  micStart: number,
-  length: number,
-) {
-  const energy = normalizedChannelCorrelation(
-    backing, mic, band, backingStart, micStart, length,
-  );
-  const flux = normalizedChannelCorrelation(
-    backing, mic, backing.bandCount + band, backingStart, micStart, length,
-  );
-  return energy * ENERGY_WEIGHT + flux * FLUX_WEIGHT;
-}
-
 function scoreOverlap(
   backing: MusicTimingFeatures,
   mic: MusicTimingFeatures,
@@ -107,7 +59,7 @@ function scoreOverlap(
   micStart: number,
   length: number,
 ) {
-  const bandScores = activeBands.map((band) => bandScore(
+  const bandScores = activeBands.map((band) => musicBandScore(
     backing, mic, band, backingStart, micStart, length,
   ));
   return {

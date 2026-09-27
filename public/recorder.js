@@ -1,11 +1,15 @@
 import './take-history.js';
 import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import { wsUrl } from './ws-url.js';
 await window.relayIdentityReady;
 const recordButton = document.querySelector('#start-recording');
 const stopButton = document.querySelector('#stop-recording');
 
 const RECONNECT_MS = 1_000;
+// The message types this socket's handler reads; Relay broadcasts it no
+// others. `take-command-rejected` is a reply and would arrive regardless.
+const RECORDER_BROADCAST_TYPES = ['product-status', 'take-status', 'take-command-rejected'];
 const START_POLICY_BLOCK_REASONS = new Set([
   'mix-not-active',
   'timing-calibration-active',
@@ -29,16 +33,6 @@ let takeStatusFresh = false;
 let startCommandPending = false;
 let startTakeBlockedReason = null;
 let startTakeBlockingIssue = null;
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const source = new URLSearchParams(location.search);
-  const params = new URLSearchParams();
-  const key = source.get('key');
-  if (key) params.set('key', key);
-  const query = params.toString();
-  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-}
 
 function publishTakeStatus(status) {
   window.relayTakeStatus = status;
@@ -282,6 +276,7 @@ async function connect() {
     try { next.close(); } catch {}
   });
 
+  next.send(JSON.stringify({ type: 'broadcast-subscribe', types: RECORDER_BROADCAST_TYPES }));
   sendParticipantAuthentication(next);
   next.send(JSON.stringify({ type: 'take-status-request' }));
   next.send(JSON.stringify({ type: 'product-status-request' }));

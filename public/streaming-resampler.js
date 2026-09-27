@@ -9,7 +9,18 @@
  * causal clock provides by running two source samples late (about 42 us).
  */
 const CAUSAL_DELAY_SAMPLES = 2;
-const HISTORY_SAMPLES = 3;
+
+/**
+ * Source samples a frame can need from before its own first sample. The
+ * frame's first output is the nearest target sample to its start, which can
+ * sit up to half a target sample earlier; from there the causal delay and the
+ * cubic's earliest tap reach three more source samples back. At 48 to
+ * 44.1 kHz that is four, not three, whenever a frame starts off the 160-sample
+ * grid where the two rates line up.
+ */
+function historySamples(sourceRate, targetRate) {
+  return CAUSAL_DELAY_SAMPLES + 1 + Math.ceil((0.5 * sourceRate) / targetRate);
+}
 
 function catmullRom(p0, p1, p2, p3, fraction) {
   return p1 + 0.5 * fraction * (
@@ -33,10 +44,10 @@ export function createStreamingResampler() {
     history = [];
   }
 
-  function rememberTail(input, continuous) {
+  function rememberTail(input, continuous, keep) {
     const carried = continuous ? history : [];
-    const tail = [...carried, ...input.subarray(Math.max(0, input.length - HISTORY_SAMPLES))];
-    history = tail.slice(Math.max(0, tail.length - HISTORY_SAMPLES));
+    const tail = [...carried, ...input.subarray(Math.max(0, input.length - keep))];
+    history = tail.slice(Math.max(0, tail.length - keep));
   }
 
   function resample(input, {
@@ -71,8 +82,9 @@ export function createStreamingResampler() {
       && history.length > 0
     );
 
+    const keep = historySamples(sourceRate, targetRate);
     if (sourceRate === targetRate) {
-      rememberTail(input, continuous);
+      rememberTail(input, continuous, keep);
       activeSourceRate = sourceRate;
       activeTargetRate = targetRate;
       expectedSourceSample = sourceEnd;
@@ -120,7 +132,7 @@ export function createStreamingResampler() {
       );
     }
 
-    rememberTail(input, continuous);
+    rememberTail(input, continuous, keep);
     activeSourceRate = sourceRate;
     activeTargetRate = targetRate;
     expectedSourceSample = sourceEnd;

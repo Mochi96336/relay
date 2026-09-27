@@ -1,5 +1,6 @@
 import { authorityState } from './authority-freshness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import { wsUrl } from './ws-url.js';
 window.relayIdentityReady = (async () => {
   const identityButton = document.querySelector('#identity-name');
   const identityInput = document.querySelector('#identity-input');
@@ -97,16 +98,6 @@ window.relayIdentityReady = (async () => {
   window.relayParticipantCapability = participantCapability;
   window.relayNickname = nickname;
   identityButton.textContent = nickname;
-
-  function wsUrl() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const source = new URLSearchParams(location.search);
-    const params = new URLSearchParams();
-    const key = source.get('key');
-    if (key) params.set('key', key);
-    const query = params.toString();
-    return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-  }
 
   function participantById(id) {
     return latestSession?.participants?.find((participant) => participant.id === id) ?? null;

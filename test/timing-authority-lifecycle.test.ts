@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
-const source = readFileSync(new URL('../public/timing-authority.js', import.meta.url), 'utf8');
+// The page's socket URL reads the page's location, so it runs inside the context too.
+const wsUrlSource = readFileSync(new URL('../public/ws-url.js', import.meta.url), 'utf8')
+  .replace(/^export /m, '');
+const source = wsUrlSource
+  + readFileSync(new URL('../public/timing-authority.js', import.meta.url), 'utf8')
+    .replace(/^import .*;\s*$/gm, '');
 
 type SocketListener = (event?: { data?: string }) => void;
 

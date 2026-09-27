@@ -46,6 +46,27 @@ const calibrateStatus = document.querySelector('#calibrate-status');
 const publisherReconnectBackoff = createReconnectBackoff();
 const SLIDER_HOLD_MS = 2000;
 const AUDIO_UPLINK_HEALTH_INTERVAL_MS = 1000;
+// Every message type the publisher socket's readers take: handleServerMessage
+// and the audio transport's repeat-request and health handlers. Relay
+// broadcasts this socket nothing else, so the repeat requests it sends do not
+// queue behind status this page never reads. Replies arrive regardless.
+const PUBLISHER_BROADCAST_TYPES = [
+  'error',
+  'audio-uplink-health-ack',
+  'command-rejected',
+  'calibration-command-rejected',
+  'mic-busy',
+  'mic-takeover-rejected',
+  'mic-revoked',
+  'publisher-superseded',
+  'registered',
+  'source-status',
+  'mix-settings',
+  'timing-calibration-status',
+  'play-calibration-probe',
+  'mix-health',
+  'audio-retransmit-request',
+];
 const MIC_CAPTURE_WATCHDOG_INTERVAL_MS = 250;
 const MAX_MIC_GAIN_DB = 40;
 const MAX_RECOMMENDED_MIC_GAIN_DB = 36;
@@ -1647,6 +1668,7 @@ async function connectPublisherSocket(
   if (pendingPublisherTakeoverOwnerId) {
     registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
   }
+  ws.send(JSON.stringify({ type: 'broadcast-subscribe', types: PUBLISHER_BROADCAST_TYPES }));
   ws.send(JSON.stringify(registration));
   audioTransport.bind(ws, { sampleRate: audioContext.sampleRate });
   publisherCommandLiveness.begin(expectedGeneration, performance.now());

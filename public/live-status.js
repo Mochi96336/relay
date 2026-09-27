@@ -22,6 +22,8 @@ if (
   && systemAudio && systemTiming && systemRecording
 ) {
   const RECONNECT_MS = 1_000;
+  // The broadcasts this socket's message handler reads; Relay sends it no others.
+  const LIVE_STATUS_BROADCAST_TYPES = ['product-status', 'room-mic-presence'];
   const PRODUCT_STATUS_REFRESH_MS = 1_000;
   const PRODUCT_STATUS_FRESHNESS_TTL_MS = PRODUCT_STATUS_REFRESH_MS * 4;
   const MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80;
@@ -450,6 +452,7 @@ if (
       try { next.close(); } catch {}
     });
 
+    next.send(JSON.stringify({ type: 'broadcast-subscribe', types: LIVE_STATUS_BROADCAST_TYPES }));
     sendParticipantAuthentication(next);
     requestProductStatus();
     startProductStatusRefresh();

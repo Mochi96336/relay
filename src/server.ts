@@ -2011,50 +2011,46 @@ function processPublisherFrame(frame: PcmFrame) {
   // short-lived WebTransport media ticket boundary, so the mixer must not make
   // a control socket pointer into a second source of truth.
   if (!micRuntime.audioTransport || micRuntime.sampleRate === null) return;
+  // Mic PCM is what starts the mix when nothing else has; from here on the
+  // session is always running.
   if (!session.active) startLiveSource();
 
-  if (session.active) {
-    const nowMs = performance.now();
-    const { samples, start, captureRestarted } = session.ingestMic(
-      frame,
+  const nowMs = performance.now();
+  const { samples, start, captureRestarted } = session.ingestMic(
+    frame,
+    micRuntime.sampleRate,
+    nowMs,
+  );
+  if (samples.length > 0) noteMicFrame(nowMs, frame);
+  micAudibility.observeReceived(samples);
+  if (
+    frame.firstSampleIndex !== null
+    && frame.generation !== null
+    && micClockDrift.observe(
+      frame.generation,
       micRuntime.sampleRate,
+      frame.firstSampleIndex + frame.pcm.byteLength / 2,
       nowMs,
-    );
-    if (samples.length > 0) noteMicFrame(nowMs, frame);
-    micAudibility.observeReceived(samples);
-    if (
-      frame.firstSampleIndex !== null
-      && frame.generation !== null
-      && micClockDrift.observe(
-        frame.generation,
-        micRuntime.sampleRate,
-        frame.firstSampleIndex + frame.pcm.byteLength / 2,
-        nowMs,
-      )
-    ) {
-      // The estimate only moves when a window closes. It describes this
-      // capture's clock: ingestMic above already cleared the trim if this
-      // packet began a new capture, and the estimator restarted with it.
-      session.setMicClockTrimPpm(micClockDrift.estimate()?.ppm ?? null);
-    }
-
-    if (session.active) {
-      if (captureRestarted) {
-        resetMicAudibility();
-        micCaptureRestartCoordinator.restart({
-          calibrationCollecting: calibration.collecting,
-        });
-      }
-      if (robotContentFallbackPrimingActive()) {
-        calibration.primeMic(samples, start);
-      }
-      calibration.observeMic(samples, start);
-      contentCalibrationValidator.observeMic(samples, start);
-      robotContentTransitionRuntime.noteMicProgress();
-    }
-  } else {
-    monitorTransport.broadcast(frame.pcm, true);
+    )
+  ) {
+    // The estimate only moves when a window closes. It describes this
+    // capture's clock: ingestMic above already cleared the trim if this
+    // packet began a new capture, and the estimator restarted with it.
+    session.setMicClockTrimPpm(micClockDrift.estimate()?.ppm ?? null);
   }
+
+  if (captureRestarted) {
+    resetMicAudibility();
+    micCaptureRestartCoordinator.restart({
+      calibrationCollecting: calibration.collecting,
+    });
+  }
+  if (robotContentFallbackPrimingActive()) {
+    calibration.primeMic(samples, start);
+  }
+  calibration.observeMic(samples, start);
+  contentCalibrationValidator.observeMic(samples, start);
+  robotContentTransitionRuntime.noteMicProgress();
 }
 
 function deliverMicPackets(packets: PcmFrame[]) {

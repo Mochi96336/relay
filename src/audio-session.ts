@@ -1107,17 +1107,17 @@ export class AudioSession {
     const previousSourceFrontier = this.mic.sourceFrontier;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
     const currentChunk = this.mic.chunks.at(-1) ?? null;
-    if (
-      currentChunk
-      && currentChunk !== previousChunk
-      && (
-        result.captureRestarted
-        || !previousChunk
-        || previousGeneration !== frame.generation
-        || previousSourceRate !== sourceRate
-      )
-    ) {
-      this.micCaptureOriginSample = currentChunk.start;
+    const addedChunk = currentChunk !== null && currentChunk !== previousChunk;
+    const captureClockChanged = result.captureRestarted
+      || previousGeneration !== this.mic.generation
+      || previousSourceRate !== this.mic.sourceRate;
+    if (captureClockChanged || (addedChunk && !previousChunk)) {
+      // Where this capture's own audio begins: its first chunk, or, when the
+      // whole first packet lay behind audio already retained and was trimmed
+      // away, the frontier its audio has to follow. Recorded only from the
+      // later chunk, the origin stayed with the retiring capture, and
+      // concealment learned a pitch period across the seam between them.
+      this.micCaptureOriginSample = addedChunk ? currentChunk.start : this.mic.totalSamples;
     }
 
     const positioned = frame.firstSampleIndex !== null;
@@ -1670,12 +1670,13 @@ export class AudioSession {
     this.micMeterWeight = 0;
   }
 
-  /** Where the session clock is now, in session samples since the epoch. */
+  /** Forgets the trajectory the last emitted Mic frame was read along. */
   private resetMicReadContinuity() {
     this.lastEmittedMicAdvanceSamples = null;
     this.lastEmittedMicFrameComplete = false;
   }
 
+  /** Where the session clock is now, in session samples since the epoch. */
   private currentSessionSample(nowMs = performance.now()) {
     return Math.round(((nowMs - this.startedAt) * this.sampleRate) / 1000);
   }
@@ -1772,13 +1773,12 @@ export class AudioSession {
         // was covering. Carrying that forward would hold the read head a second
         // behind fresh audio and unwind only at the slew rate - most of a song.
         if (timeline === this.mic) {
-          // Dropping a held correction moves the read head at once, while it
-          // is still reading the retiring capture's retained audio. Keep read
-          // continuity then, so the next frame crossfades that jump like any
-          // other instead of splicing it.
-          const heldCorrection = this.micFrontierCorrectionSamples > 0;
+          // The read head does not move with the capture: it is still reading
+          // the retiring capture's retained audio. Whatever moves it next -
+          // dropping a held correction here, or the timing a new capture
+          // invalidates, applied before the next frame - must crossfade like
+          // any other jump, so read continuity is kept.
           this.resetMicFrontierTracking();
-          if (!heldCorrection) this.resetMicReadContinuity();
           this.resetMicClockTrim();
         }
       } else if (timeline.sourceRate === null) {
@@ -2441,12 +2441,6 @@ export class AudioSession {
   }
 
   /**
-   * Describes missing/legacy source samples for exactly the requested output
-   * range. Silence before session sample zero is structural pre-roll and is not
-   * counted as a source failure. Missing samples inside an established frontier
-   * are gaps; samples beyond the frontier are starvation/unavailability.
-   */
-  /**
    * Marks only proven internal positioned holes for the requested source range.
    * Frontier starvation is intentionally left unmarked: mixFrame already knows
    * that trailing boundary from readEvidence(). Structural pre-roll is neither.
@@ -2507,6 +2501,12 @@ export class AudioSession {
     return mask;
   }
 
+  /**
+   * Describes missing/legacy source samples for exactly the requested output
+   * range. Silence before session sample zero is structural pre-roll and is not
+   * counted as a source failure. Missing samples inside an established frontier
+   * are gaps; samples beyond the frontier are starvation/unavailability.
+   */
   private readEvidence(timeline: PcmTimeline, startSample: number, count: number) {
     let cursor = startSample;
     let remaining = count;
@@ -3149,17 +3149,12 @@ export class AudioSession {
     }
     const song = this.readRange(this.backing, startSample, this.frameSamples);
     // `backingExpected` and `micExpected` are the room's semantic signals for
-    // which sources this mix has. Both must hold: the reservation is headroom
-    // for a sum, so a room with only one source has nothing to reserve against.
-    // Do not attenuate voice-only rooms merely because a stale backing timeline
-    // still exists from an earlier route, and do not quieten a song playing on
-    // its own to leave room for a voice nobody is singing.
-    // `backingExpected` and `micExpected` are the room's semantic signals for
     // which sources this mix has. The song gain and the summing headroom both
-    // exist to leave space for a voice, so both are worth paying only when a
-    // voice can actually arrive: a song playing to a room where nobody has
-    // taken the microphone was being quietened for a singer who was not there,
-    // and the balance a real performance was tuned against is unchanged.
+    // exist to leave space for a voice, so both are worth paying only when
+    // both sources can be there: a voice-only room is not attenuated because a
+    // stale backing timeline survives from an earlier route, and a song playing
+    // to a room where nobody has taken the microphone is not quietened for a
+    // singer who is not there.
     const duckTarget = (
       (this.backingExpected || this.backingExpectationReleaseHold)
       && (this.micExpected || this.micExpectationReleaseHold)

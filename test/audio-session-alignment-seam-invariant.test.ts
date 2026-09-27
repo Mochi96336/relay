@@ -115,6 +115,43 @@ test('seeded live alignment authority changes never splice a continuous Mic tone
   }
 });
 
+test('timing revoked by an in-band Mic capture restart does not splice the retained tone', () => {
+  const session = makeSession();
+  session.setAlignment({ calibratedMicLagMs: 150 });
+
+  const outputs: Buffer[] = [];
+  let firstSample = 0;
+  for (let step = 0; step < 100; step += 1) {
+    const nowMs = step * FRAME_MS;
+    if (step === 60) {
+      // A new capture clock arrives in band. It invalidates the calibration
+      // measured on the old one, and the server applies that before the next
+      // frame: the read head moves 150 ms back through audio the retiring
+      // capture left behind.
+      const replacement = session.ingestMic(
+        { generation: 2, firstSampleIndex: 0, pcm: pcmTone(0, FRAME_SAMPLES) },
+        RATE,
+        nowMs,
+      );
+      assert.equal(replacement.captureRestarted, true);
+      session.setAlignment({ calibratedMicLagMs: null });
+      firstSample = FRAME_SAMPLES;
+    } else {
+      session.ingestMic(
+        { generation: step > 60 ? 2 : 1, firstSampleIndex: firstSample, pcm: pcmTone(firstSample, FRAME_SAMPLES) },
+        RATE,
+        nowMs,
+      );
+      firstSample += FRAME_SAMPLES;
+    }
+    session.drain((pcm) => outputs.push(pcm), nowMs, 1);
+  }
+
+  const { maximum, maximumAt } = maxAdjacentStep(outputs);
+  assert.ok(outputs.length > 60, 'the read head was still on the retiring capture when timing moved');
+  assert.ok(maximum < MAX_AUDIBLE_STEP, `emitted a ${maximum}-sample splice at ${maximumAt}`);
+});
+
 test('real Mic frontier correction acquire and release stays continuous on a tone', () => {
   const session = makeSession();
   session.setAlignment({ networkCompensationMs: 140 });

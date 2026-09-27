@@ -99,6 +99,7 @@ import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
   createRelayWebSocketServer,
+  parseBroadcastTypes,
   type RelaySocket,
 } from './relay-socket-server.js';
 import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
@@ -3796,6 +3797,10 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
     commitSocketRole(socket, 'monitor');
     socket.monitorPacketVersion = monitorPacketVersion;
     socket.monitorCodec = monitorCodec;
+    // The room audio shares this TCP stream and its backlog budget with every
+    // status broadcast. A page that names the few it reads here gets only
+    // those; at Opus bitrates the rest was as much traffic as the audio.
+    socket.broadcastTypes = parseBroadcastTypes(payload.broadcastTypes);
     sendJson(socket, {
       type: 'registered',
       role: 'monitor',

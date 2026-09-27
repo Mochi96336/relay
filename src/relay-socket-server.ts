@@ -32,6 +32,11 @@ export type RelaySocket = WebSocket & {
   monitorDelivery?: MonitorDelivery;
   /** Codec this positioned monitor negotiated for PCM frames; absent is PCM. */
   monitorCodec?: 'opus';
+  /**
+   * The broadcast JSON types this socket reads, when it named them; absent
+   * receives every broadcast. Replies addressed to the socket are not filtered.
+   */
+  broadcastTypes?: ReadonlySet<string>;
   isAlive: boolean;
   replaced?: boolean;
   isRobotSource?: boolean;
@@ -45,6 +50,38 @@ export type RelaySocket = WebSocket & {
   micPresenceTelemetryAt?: number;
   infrastructureAuthenticated?: boolean;
 };
+
+const MAX_BROADCAST_TYPES = 32;
+const MAX_BROADCAST_TYPE_LENGTH = 64;
+
+/** A registration's list of broadcast types, or undefined to receive them all. */
+export function parseBroadcastTypes(value: unknown): ReadonlySet<string> | undefined {
+  if (
+    !Array.isArray(value)
+    || value.length > MAX_BROADCAST_TYPES
+    || !value.every((type) => typeof type === 'string' && type.length > 0 && type.length <= MAX_BROADCAST_TYPE_LENGTH)
+  ) return undefined;
+  return new Set(value as string[]);
+}
+
+function jsonMessageType(payload: unknown) {
+  const type = typeof payload === 'object' && payload !== null
+    ? (payload as { type?: unknown }).type
+    : undefined;
+  return typeof type === 'string' ? type : null;
+}
+
+function serializedMessageType(message: string) {
+  try {
+    return jsonMessageType(JSON.parse(message));
+  } catch {
+    return null;
+  }
+}
+
+function wantsBroadcast(socket: RelaySocket, type: string | null) {
+  return !socket.broadcastTypes || (type !== null && socket.broadcastTypes.has(type));
+}
 
 export type RelaySocketServerOptions = {
   path?: string;
@@ -117,8 +154,11 @@ export function createRelaySocketTransport(wss: WebSocketServer) {
 
   function broadcastJson(payload: unknown) {
     const message = JSON.stringify(payload);
+    const type = jsonMessageType(payload);
     for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) client.send(message);
+      if (client.readyState !== WebSocket.OPEN) continue;
+      if (!wantsBroadcast(client as RelaySocket, type)) continue;
+      client.send(message);
     }
   }
 
@@ -253,9 +293,16 @@ export function createMonitorSocketTransport(
     // broadcast rather than once per listener. The sockets only read them.
     let framed: Buffer | null = null;
     let opusFramed: Buffer | null | undefined;
+    let textType: string | null | undefined;
     for (const client of wss.clients) {
       const socket = client as RelaySocket;
       if (socket.role !== 'monitor' || socket.readyState !== WebSocket.OPEN) continue;
+      if (!binary && socket.broadcastTypes) {
+        if (textType === undefined) {
+          textType = typeof payload === 'string' ? serializedMessageType(payload) : null;
+        }
+        if (!wantsBroadcast(socket, textType)) continue;
+      }
 
       // Once a monitor opts into positioned PCM, every binary packet must remain
       // framed. Do not silently fall back to raw PCM on an unpositioned path.

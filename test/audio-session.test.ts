@@ -209,6 +209,36 @@ describe('AudioSession timelines', () => {
     });
   });
 
+  test('never conceals a replacement capture from audio of the capture it replaced', () => {
+    const session = makeSession({ prebufferMs: 400 });
+    session.setMicExpected(true);
+    session.start(0);
+
+    const chunk = Math.round(RATE * 0.02);
+    // The first capture's packets arrive on time: its timeline runs a packet
+    // ahead of the mix clock.
+    for (let packet = 0; packet < 10; packet += 1) {
+      session.ingestMic(frame(packet * chunk, pcmOf(new Array(chunk).fill(9_000))), RATE, packet * 20);
+    }
+    const retainedFrontier = session.micTotalSamples;
+
+    // A replacement clock arrives in band. It anchors behind audio already
+    // retained, so its whole first packet is trimmed away and its second
+    // leaves only a millisecond past the old frontier.
+    const replacement = session.ingestMic(frame(0, pcmOf(new Array(chunk).fill(-9_000)), 2), RATE, 181);
+    assert.equal(replacement.captureRestarted, true);
+    assert.equal(replacement.samples.length, 0, 'the first replacement packet lies behind retained audio');
+    const second = session.ingestMic(frame(chunk, pcmOf(new Array(chunk).fill(-9_000)), 2), RATE, 200);
+    assert.equal(second.start, retainedFrontier);
+    assert.equal(second.samples.length, 48);
+
+    // Its third packet is lost. One millisecond of its own audio cannot hold
+    // a pitch period; the capture it replaced must not lend it one.
+    session.ingestMic(frame(chunk * 3, pcmOf(new Array(chunk).fill(-9_000)), 2), RATE, 240);
+    assert.equal(session.micConcealedSampleCount, 0, 'concealment learned across the capture seam');
+    assert.equal(session.readMic(retainedFrontier + 48, 1)[0], 0, 'the hole stays literal silence');
+  });
+
   test('de-clicks Backing packet-hole edges without concealing the missing interval', () => {
     const session = makeSession();
     session.start(0);

@@ -1107,17 +1107,17 @@ export class AudioSession {
     const previousSourceFrontier = this.mic.sourceFrontier;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
     const currentChunk = this.mic.chunks.at(-1) ?? null;
-    if (
-      currentChunk
-      && currentChunk !== previousChunk
-      && (
-        result.captureRestarted
-        || !previousChunk
-        || previousGeneration !== frame.generation
-        || previousSourceRate !== sourceRate
-      )
-    ) {
-      this.micCaptureOriginSample = currentChunk.start;
+    const addedChunk = currentChunk !== null && currentChunk !== previousChunk;
+    const captureClockChanged = result.captureRestarted
+      || previousGeneration !== this.mic.generation
+      || previousSourceRate !== this.mic.sourceRate;
+    if (captureClockChanged || (addedChunk && !previousChunk)) {
+      // Where this capture's own audio begins: its first chunk, or, when the
+      // whole first packet lay behind audio already retained and was trimmed
+      // away, the frontier its audio has to follow. Recorded only from the
+      // later chunk, the origin stayed with the retiring capture, and
+      // concealment learned a pitch period across the seam between them.
+      this.micCaptureOriginSample = addedChunk ? currentChunk.start : this.mic.totalSamples;
     }
 
     const positioned = frame.firstSampleIndex !== null;
@@ -1773,13 +1773,12 @@ export class AudioSession {
         // was covering. Carrying that forward would hold the read head a second
         // behind fresh audio and unwind only at the slew rate - most of a song.
         if (timeline === this.mic) {
-          // Dropping a held correction moves the read head at once, while it
-          // is still reading the retiring capture's retained audio. Keep read
-          // continuity then, so the next frame crossfades that jump like any
-          // other instead of splicing it.
-          const heldCorrection = this.micFrontierCorrectionSamples > 0;
+          // The read head does not move with the capture: it is still reading
+          // the retiring capture's retained audio. Whatever moves it next -
+          // dropping a held correction here, or the timing a new capture
+          // invalidates, applied before the next frame - must crossfade like
+          // any other jump, so read continuity is kept.
           this.resetMicFrontierTracking();
-          if (!heldCorrection) this.resetMicReadContinuity();
           this.resetMicClockTrim();
         }
       } else if (timeline.sourceRate === null) {
@@ -2797,12 +2796,18 @@ export class AudioSession {
         this.micFrontierFadeRemainingSamples = this.sourceEdgeFadeSamples;
         this.micFrontierRecoveryFadeRemainingSamples = 0;
       }
-      if (this.micFrontierFadeRemainingSamples <= 0) return current;
+      // A missing source contributes only the fade of what was last heard. It
+      // is not always read as zero: a read-rate slew interpolates the samples
+      // around a hole's edge from both sides, so they are marked missing yet
+      // carry part of the real audio. Fading toward that, or passing it
+      // through once faded, left the recovery fade starting from it rather
+      // than from silence.
+      if (this.micFrontierFadeRemainingSamples <= 0) return 0;
       const progress = this.sourceEdgeFadeSamples - this.micFrontierFadeRemainingSamples;
       const weight = this.sourceEdgeFadeSamples <= 1
         ? 1
         : progress / (this.sourceEdgeFadeSamples - 1);
-      const value = this.micFrontierFadeStart * (1 - weight) + current * weight;
+      const value = this.micFrontierFadeStart * (1 - weight);
       this.micFrontierFadeRemainingSamples -= 1;
       return value;
     }

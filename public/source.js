@@ -1,3 +1,5 @@
+import { wsUrl } from './ws-url.js';
+
 const armButton = document.querySelector('#arm-source');
 const stateNode = document.querySelector('#source-state');
 const detailNode = document.querySelector('#source-detail');
@@ -60,13 +62,6 @@ let robotDeltaSuppressedUntil = 0;
 // between corrections.
 let offsetReportedSinceSeek = true;
 let activeBackingProbeRequestId = null;
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const key = new URLSearchParams(location.search).get('key');
-  const query = key ? `?key=${encodeURIComponent(key)}` : '';
-  return `${protocol}//${location.host}/ws${query}`;
-}
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';

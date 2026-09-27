@@ -17,6 +17,7 @@ import { createListenOpusDecoder, listenOpusDecodingSupported } from './listen-o
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
+import { wsUrl } from './ws-url.js';
 
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
@@ -83,17 +84,6 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let micPrimaryMode = window.relayMicActionState?.primaryMode === 'takeover'
     ? 'takeover'
     : 'microphone';
-
-  function wsUrl() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const source = new URLSearchParams(location.search);
-    const params = new URLSearchParams();
-    const key = source.get('key');
-    if (key) params.set('key', key);
-
-    const query = params.toString();
-    return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-  }
 
   function int16ToFloat32(buffer) {
     const input = new Int16Array(buffer);
@@ -277,6 +267,11 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     }, reconnectBackoff.nextDelayMs());
   }
 
+  // The broadcasts handleMessage reads. Relay sends this socket no others:
+  // the room audio shares its stream, and at Opus bitrates the status traffic
+  // the page ignores here was as large as the audio.
+  const MONITOR_BROADCAST_TYPES = ['session-status', 'source-status'];
+
   function handleMessage(message) {
     if (message.type === 'session-status') {
       // The monitor socket already receives authoritative room state. Consume it
@@ -349,6 +344,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       type: 'register',
       role: 'monitor',
       monitorPacketVersion: MONITOR_PCM_PACKET_VERSION,
+      broadcastTypes: MONITOR_BROADCAST_TYPES,
       ...(withOpus ? { monitorCodecs: ['opus'] } : {}),
     }));
 

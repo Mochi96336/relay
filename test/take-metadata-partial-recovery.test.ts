@@ -89,7 +89,7 @@ test('startup promotes a complete metadata partial beside its finalized WAV', as
   try {
     await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
     const library = new TakeLibrary({ directory });
-    library.record(readyTake());
+    await library.record(readyTake());
     await rename(
       path.join(directory, `${TAKE_ID}.json`),
       path.join(directory, `${TAKE_ID}.json.part`),
@@ -122,7 +122,7 @@ test('rich metadata can be staged before WAV publication and recovered after the
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-staged-before-wav-'));
   try {
     const library = new TakeLibrary({ directory });
-    const staged = library.stageFinalizing(finalizingTake(), {
+    const staged = await library.stageFinalizing(finalizingTake(), {
       sampleRate: 48_000,
       sampleCount: 4_800,
     });
@@ -165,14 +165,14 @@ test('normal staged commit publishes the exact fsynced metadata candidate withou
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-commit-'));
   try {
     const library = new TakeLibrary({ directory });
-    library.stageFinalizing(finalizingTake(), {
+    await library.stageFinalizing(finalizingTake(), {
       sampleRate: 48_000,
       sampleCount: 4_800,
     });
     const stagedBytes = await readFile(path.join(directory, `${TAKE_ID}.json.part`));
     await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
 
-    const entry = library.commitStaged(readyTake());
+    const entry = await library.commitStaged(readyTake());
     const committedBytes = await readFile(path.join(directory, `${TAKE_ID}.json`));
 
     assert.equal(entry.recovered, false);
@@ -189,7 +189,7 @@ test('staged commit is idempotent when a reader promotes the exact partial befor
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-reader-promote-'));
   try {
     const library = new TakeLibrary({ directory });
-    library.stageFinalizing(finalizingTake(), {
+    await library.stageFinalizing(finalizingTake(), {
       sampleRate: 48_000,
       sampleCount: 4_800,
     });
@@ -204,7 +204,7 @@ test('staged commit is idempotent when a reader promotes the exact partial befor
     assert.equal(namesAfterPromotion.includes(`${TAKE_ID}.json.part`), false);
     assert.deepEqual(await readFile(path.join(directory, `${TAKE_ID}.json`)), stagedBytes);
 
-    const entry = library.commitStaged(readyTake());
+    const entry = await library.commitStaged(readyTake());
     assert.equal(entry.recovered, false);
     assert.deepEqual(entry.quality, readyTake().quality);
     assert.deepEqual(await readFile(path.join(directory, `${TAKE_ID}.json`)), stagedBytes);
@@ -217,7 +217,7 @@ test('staged commit still rejects a promoted final sidecar that is not the exact
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-partial-reader-mismatch-'));
   try {
     const library = new TakeLibrary({ directory });
-    library.stageFinalizing(finalizingTake(), {
+    await library.stageFinalizing(finalizingTake(), {
       sampleRate: 48_000,
       sampleCount: 4_800,
     });
@@ -231,7 +231,7 @@ test('staged commit still rejects a promoted final sidecar that is not the exact
     payload.take.startedByParticipantId = 'participant-other';
     await writeFile(metadataPath, `${JSON.stringify(payload)}\n`);
 
-    assert.throws(
+    await assert.rejects(
       () => library.commitStaged(readyTake()),
       /Staged Take metadata does not match the finalized recording/,
     );

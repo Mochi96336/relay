@@ -6,7 +6,12 @@ import test from 'node:test';
 import { authorityState } from '../public/authority-freshness.js';
 import { formatTimingValueMs } from '../public/timing-value.js';
 
-const adapterSource = readFileSync(new URL('../public/timing-authority.js', import.meta.url), 'utf8');
+// The page's socket URL reads the page's location, so it runs inside the context too.
+const wsUrlSource = readFileSync(new URL('../public/ws-url.js', import.meta.url), 'utf8')
+  .replace(/^export /m, '');
+const adapterSource = wsUrlSource
+  + readFileSync(new URL('../public/timing-authority.js', import.meta.url), 'utf8')
+    .replace(/^import .*;\s*$/gm, '');
 const calibrationUiSource = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8')
   .replace(/^import .*;\s*$/gm, '');
 
@@ -242,7 +247,13 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
   assert.equal(sockets.length, 1);
   const socket = sockets[0];
   socket.open();
-  assert.deepEqual(JSON.parse(socket.sent[0]), { type: 'source-status-request' });
+  assert.deepEqual(
+    socket.sent.map((payload: string) => JSON.parse(payload)),
+    [
+      { type: 'broadcast-subscribe', types: ['source-status'] },
+      { type: 'source-status-request' },
+    ],
+  );
 
   socket.message({ type: 'source-status', active: true, appliedMicAdvanceMs: 42 });
   assert.equal(window.relayTimingAuthority.authorityFresh, true);

@@ -91,12 +91,31 @@ test('a page socket that subscribes gets only the broadcasts it named', async ()
   }
 });
 
+type Handler = { file: string; start: string; end: string };
+
 type PageSubscription = {
   page: string;
   constant: string;
   handlerStart: string;
   handlerEnd: string;
+  /** Other readers on the same socket, such as a transport the page binds to it. */
+  otherHandlers?: Handler[];
 };
+
+async function pageSource(file: string) {
+  return (await readFile(new URL(`../public/${file}`, import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+}
+
+function handledTypes(source: string, start: string, end: string, label: string) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from);
+  assert.ok(from >= 0 && to > from, `${label} keeps its socket message handler`);
+  const types = new Set(
+    [...source.slice(from, to).matchAll(/message\??\.type [!=]== '([^']+)'/g)].map((match) => match[1]),
+  );
+  assert.ok(types.size > 0, `${label}: the handler's message types were not found`);
+  return types;
+}
 
 const PAGES: PageSubscription[] = [
   {
@@ -124,6 +143,17 @@ const PAGES: PageSubscription[] = [
     handlerEnd: '// Every message type handleServerMessage reads',
   },
   {
+    page: 'app.js',
+    constant: 'PUBLISHER_BROADCAST_TYPES',
+    handlerStart: 'function handleServerMessage(',
+    handlerEnd: 'function canKeepPublishing() {',
+    otherHandlers: [{
+      file: 'audio-transport.js',
+      start: 'observePublisherSocketMessage(socket, epoch, event) {',
+      end: 'sendControlJson(payload) {',
+    }],
+  },
+  {
     page: 'recorder.js',
     constant: 'RECORDER_BROADCAST_TYPES',
     handlerStart: "next.addEventListener('message'",
@@ -131,21 +161,19 @@ const PAGES: PageSubscription[] = [
   },
 ];
 
-for (const { page, constant, handlerStart, handlerEnd } of PAGES) {
-  test(`${page} subscribes to every message type its socket handler reads`, async () => {
-    const source = (await readFile(new URL(`../public/${page}`, import.meta.url), 'utf8'))
-      .replace(/\r\n/g, '\n');
+for (const { page, constant, handlerStart, handlerEnd, otherHandlers = [] } of PAGES) {
+  test(`${page} subscribes to every message type its socket handlers read`, async () => {
+    const source = await pageSource(page);
     const declared = source.match(new RegExp(`const ${constant} = \\[([^\\]]*)\\];`));
     assert.ok(declared, `${page} must declare ${constant}`);
     const named = new Set([...declared[1].matchAll(/'([^']+)'/g)].map((match) => match[1]));
 
-    const start = source.indexOf(handlerStart);
-    const end = source.indexOf(handlerEnd, start);
-    assert.ok(start >= 0 && end > start, `${page} keeps one socket message handler`);
-    const handled = new Set(
-      [...source.slice(start, end).matchAll(/message\??\.type [!=]== '([^']+)'/g)].map((match) => match[1]),
-    );
-    assert.ok(handled.size > 0, `${page}: the handler's message types were not found`);
+    const handled = handledTypes(source, handlerStart, handlerEnd, page);
+    for (const other of otherHandlers) {
+      for (const type of handledTypes(await pageSource(other.file), other.start, other.end, other.file)) {
+        handled.add(type);
+      }
+    }
     for (const type of handled) {
       assert.ok(named.has(type), `${page} reads ${type} but never subscribes to it`);
     }

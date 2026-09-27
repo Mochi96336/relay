@@ -101,7 +101,7 @@ test('invalid derived artifact claims do not discard valid finalized rich metada
   try {
     await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
     const library = new TakeLibrary({ directory });
-    library.record(readyTake());
+    await library.record(readyTake());
 
     const metadataPath = path.join(directory, `${TAKE_ID}.json`);
     const payload = JSON.parse(await readFile(metadataPath, 'utf8'));
@@ -127,7 +127,7 @@ test('crash recovery promotes rich metadata partials even when only derived arti
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-derived-partial-'));
   try {
     const library = new TakeLibrary({ directory });
-    library.stageFinalizing(finalizingTake(), {
+    await library.stageFinalizing(finalizingTake(), {
       sampleRate: SAMPLE_RATE,
       sampleCount: SAMPLE_COUNT,
     });

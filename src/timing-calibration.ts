@@ -1,4 +1,8 @@
-import { extractMusicTimingFeatures, type MusicTimingFeatures } from './music-timing-features.js';
+import {
+  extractMusicTimingFeatures,
+  musicBandScore,
+  type MusicTimingFeatures,
+} from './music-timing-features.js';
 
 export type TimingCalibrationDiagnostics = {
   activeBands: number[];
@@ -60,9 +64,6 @@ const MIN_SUPPORTING_BAND_SCORE = 0.12;
 const MIN_LOCAL_SCORE = 0.04;
 const DISTINCT_PEAK_RADIUS_MS = 100;
 
-const ENERGY_WEIGHT = 0.4;
-const FLUX_WEIGHT = 0.6;
-
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -84,66 +85,6 @@ function median(values: number[]) {
   return sorted.length % 2 === 1
     ? sorted[middle]
     : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function normalizedChannelCorrelation(
-  backing: MusicTimingFeatures,
-  mic: MusicTimingFeatures,
-  channel: number,
-  start: number,
-  length: number,
-  lagFrames: number,
-) {
-  const backingOffset = channel * backing.frameCount;
-  const micOffset = channel * mic.frameCount;
-  let sumBacking = 0;
-  let sumMic = 0;
-  let sumBackingSquares = 0;
-  let sumMicSquares = 0;
-  let sumProducts = 0;
-
-  for (let i = 0; i < length; i += 1) {
-    const backingValue = backing.values[backingOffset + start + i];
-    const micValue = mic.values[micOffset + start + i + lagFrames];
-    sumBacking += backingValue;
-    sumMic += micValue;
-    sumBackingSquares += backingValue * backingValue;
-    sumMicSquares += micValue * micValue;
-    sumProducts += backingValue * micValue;
-  }
-
-  const covariance = sumProducts - (sumBacking * sumMic) / length;
-  const backingVariance = sumBackingSquares - (sumBacking * sumBacking) / length;
-  const micVariance = sumMicSquares - (sumMic * sumMic) / length;
-  const denominator = Math.sqrt(Math.max(0, backingVariance) * Math.max(0, micVariance));
-  return denominator > 1e-10 ? covariance / denominator : -1;
-}
-
-function bandScoreAtLag(
-  backing: MusicTimingFeatures,
-  mic: MusicTimingFeatures,
-  band: number,
-  start: number,
-  length: number,
-  lagFrames: number,
-) {
-  const energyCorrelation = normalizedChannelCorrelation(
-    backing,
-    mic,
-    band,
-    start,
-    length,
-    lagFrames,
-  );
-  const fluxCorrelation = normalizedChannelCorrelation(
-    backing,
-    mic,
-    backing.bandCount + band,
-    start,
-    length,
-    lagFrames,
-  );
-  return energyCorrelation * ENERGY_WEIGHT + fluxCorrelation * FLUX_WEIGHT;
 }
 
 function medianScratch(values: Float64Array, length: number) {
@@ -174,13 +115,13 @@ function scoreLag(
   scratch: Float64Array,
 ) {
   for (let index = 0; index < activeBands.length; index += 1) {
-    scratch[index] = bandScoreAtLag(
+    scratch[index] = musicBandScore(
       backing,
       mic,
       activeBands[index],
       start,
+      start + lagFrames,
       length,
-      lagFrames,
     );
   }
   return medianScratch(scratch, activeBands.length);
@@ -194,8 +135,8 @@ function scoreLagDetailed(
   length: number,
   lagFrames: number,
 ) {
-  const bandScores = activeBands.map((band) => bandScoreAtLag(
-    backing, mic, band, start, length, lagFrames,
+  const bandScores = activeBands.map((band) => musicBandScore(
+    backing, mic, band, start, start + lagFrames, length,
   ));
   return {
     score: median(bandScores),

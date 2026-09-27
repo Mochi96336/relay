@@ -3,6 +3,7 @@ await window.relayIdentityReady;
 import { resolvePlaybackRole } from './song-role.js';
 import { createPlaybackHandoffReconnectRecovery } from './playback-handoff-reconnect-recovery.js';
 import { reduceSessionOwnership } from './session-status-projection.js';
+import { wsUrl } from './ws-url.js';
 
 let socket = null;
 let reconnectTimer = null;
@@ -112,22 +113,6 @@ function publishPlaybackDiagnostics(kind, message = {}) {
   };
   window.relayPlaybackDiagnostics = detail;
   window.dispatchEvent(new CustomEvent('relay:playback-diagnostics', { detail }));
-}
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const source = new URLSearchParams(location.search);
-  const params = new URLSearchParams();
-  const key = source.get('key');
-  if (key) params.set('key', key);
-
-  // Playback is a human page transport, not robot infrastructure. Carry the
-  // same explicit participant identity as the presence/publisher sockets so
-  // the server can authorize telemetry without trusting a participant ID in
-  // the telemetry payload itself.
-
-  const query = params.toString();
-  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
 
 function optionalNumber(value) {
@@ -416,6 +401,28 @@ function handleServerMessage(message) {
   }
 }
 
+// Every message type handleServerMessage reads; Relay broadcasts this socket
+// no others. Replies among them would arrive regardless.
+const YOUTUBE_SYNC_BROADCAST_TYPES = [
+  'clock-pong',
+  'session-status',
+  'youtube-telemetry-rejected',
+  'room-song-telemetry-rejected',
+  'youtube-timeline-status',
+  'room-song-status',
+  'room-song-command-status',
+  'room-song-command-accepted',
+  'room-song-command-rejected',
+  'room-song-command-apply',
+  'room-song-command-complete',
+  'room-song-command-failed-ack',
+  'song-handoff-prepare',
+  'song-handoff-commit',
+  'song-handoff-release',
+  'song-handoff-complete',
+  'song-handoff-cancelled',
+];
+
 function connect() {
   clearTimeout(reconnectTimer);
   const next = new WebSocket(wsUrl());
@@ -423,6 +430,7 @@ function connect() {
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
+    send({ type: 'broadcast-subscribe', types: YOUTUBE_SYNC_BROADCAST_TYPES });
     sendParticipantAuthentication(next);
     recentRttMs.length = 0;
     pendingPings.clear();

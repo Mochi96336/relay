@@ -9,10 +9,10 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { mkdir, open, readFile, readdir } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { durableRenameSync } from './file-durability.js';
+import { durableRename, durableRenameSync } from './file-durability.js';
 import { normalizePersistedTakeRichFields } from './take-metadata-validation.js';
 import type {
   TakeArtifact,
@@ -267,17 +267,32 @@ function readValidatedMetadata(
   return useWavArtifact ? { ...metadata, artifact } : metadata;
 }
 
+function isNotFound(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+}
+
+/** readValidatedMetadata without blocking the event loop. */
+async function readValidatedMetadataAsync(
+  metadataPath: string,
+  wavPath: string,
+  takeId: string,
+  baseUrl: string,
+) {
+  const metadata = parseMetadata(await readFile(metadataPath), takeId);
+  if (!metadata) return null;
+  const { artifact } = await readWavArtifactAsync(wavPath, takeId, baseUrl);
+  if (!metadataMatchesArtifact(metadata, artifact)) return null;
+  return { metadata, artifact };
+}
+
 async function readValidatedEntryAsync(
   metadataPath: string,
   wavPath: string,
   takeId: string,
   baseUrl: string,
 ): Promise<TakeLibraryEntry | null> {
-  const metadata = parseMetadata(await readFile(metadataPath), takeId);
-  if (!metadata) return null;
-  const { artifact } = await readWavArtifactAsync(wavPath, takeId, baseUrl);
-  if (!metadataMatchesArtifact(metadata, artifact)) return null;
-  return { ...metadata, artifact };
+  const validated = await readValidatedMetadataAsync(metadataPath, wavPath, takeId, baseUrl);
+  return validated ? { ...validated.metadata, artifact: validated.artifact } : null;
 }
 
 function metadataMatchesArtifact(metadata: PersistedTakeLibraryEntry, artifact: TakeArtifact) {
@@ -343,8 +358,12 @@ export class TakeLibrary {
    * A crash before WAV rename leaves an orphan partial that startup removes; a
    * crash after WAV rename leaves a complete transaction candidate that startup
    * can validate and promote without degrading to WAV-only recovery.
+   *
+   * Staging and commit run as a recording ends, with the room still live. They
+   * are asynchronous so their fsyncs never hold the event loop, and with it
+   * the mixer, for as long as the disk takes.
    */
-  stageFinalizing(take: TakeRecord, audio: { sampleRate: number; sampleCount: number }) {
+  async stageFinalizing(take: TakeRecord, audio: { sampleRate: number; sampleCount: number }) {
     if (take.lifecycle !== 'finalizing' || take.artifact !== null || take.endedAtMs === null) {
       throw new Error('Only a finalizing Take without an artifact can stage recording metadata.');
     }
@@ -376,13 +395,20 @@ export class TakeLibrary {
       durationMs: (audio.sampleCount / audio.sampleRate) * 1000,
     };
     const entry = entryFromTake(take, artifact);
-    mkdirSync(this.options.directory, { recursive: true });
-    this.writeMetadataPartial(entry);
+    // Registered before the first await: a history repair that runs while the
+    // partial is being written must not take it for an orphan.
     this.stagedTakeIds.add(take.takeId);
+    try {
+      await mkdir(this.options.directory, { recursive: true });
+      await this.writeMetadataPartialAsync(entry);
+    } catch (error) {
+      this.stagedTakeIds.delete(take.takeId);
+      throw error;
+    }
     return cloneEntry(entry);
   }
 
-  commitStaged(take: TakeRecord) {
+  async commitStaged(take: TakeRecord) {
     if (take.lifecycle !== 'ready' || !take.artifact || take.endedAtMs === null) {
       throw new Error('Only a finalized ready Take can commit staged recording metadata.');
     }
@@ -395,33 +421,52 @@ export class TakeLibrary {
 
     let staged: PersistedTakeLibraryEntry | null;
     try {
-      staged = readValidatedMetadata(partialPath, wavPath, take.takeId, this.artifactBaseUrl);
+      staged = (await readValidatedMetadataAsync(
+        partialPath,
+        wavPath,
+        take.takeId,
+        this.artifactBaseUrl,
+      ))?.metadata ?? null;
     } catch (error) {
-      const partialWasPromoted = Boolean(
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && error.code === 'ENOENT',
-      );
-      if (!partialWasPromoted) throw error;
-
-      let committed: PersistedTakeLibraryEntry | null = null;
-      try {
-        committed = readValidatedMetadata(finalPath, wavPath, take.takeId, this.artifactBaseUrl);
-      } catch {}
-      if (!committed || JSON.stringify(committed) !== JSON.stringify(expected)) {
-        throw new Error('Staged Take metadata does not match the finalized recording.');
-      }
-      this.stagedTakeIds.delete(take.takeId);
-      return cloneEntry(expected);
+      if (!isNotFound(error)) throw error;
+      return this.confirmPromotedStage(take.takeId, finalPath, wavPath, expected);
     }
 
     if (!staged || JSON.stringify(staged) !== JSON.stringify(expected)) {
       throw new Error('Staged Take metadata does not match the finalized recording.');
     }
 
-    durableRenameSync(partialPath, finalPath);
+    try {
+      await durableRename(partialPath, finalPath);
+    } catch (error) {
+      // A history repair that ran after the stage was read promoted it itself.
+      if (!isNotFound(error)) throw error;
+      return this.confirmPromotedStage(take.takeId, finalPath, wavPath, expected);
+    }
     this.stagedTakeIds.delete(take.takeId);
+    return cloneEntry(expected);
+  }
+
+  /** The stage is already committed metadata: accept it only if it is ours. */
+  private async confirmPromotedStage(
+    takeId: string,
+    finalPath: string,
+    wavPath: string,
+    expected: TakeLibraryEntry,
+  ) {
+    let committed: PersistedTakeLibraryEntry | null = null;
+    try {
+      committed = (await readValidatedMetadataAsync(
+        finalPath,
+        wavPath,
+        takeId,
+        this.artifactBaseUrl,
+      ))?.metadata ?? null;
+    } catch {}
+    if (!committed || JSON.stringify(committed) !== JSON.stringify(expected)) {
+      throw new Error('Staged Take metadata does not match the finalized recording.');
+    }
+    this.stagedTakeIds.delete(takeId);
     return cloneEntry(expected);
   }
 
@@ -431,7 +476,7 @@ export class TakeLibrary {
     rmSync(path.join(this.options.directory, metadataPartFileName(takeId)), { force: true });
   }
 
-  record(take: TakeRecord) {
+  async record(take: TakeRecord) {
     if (take.lifecycle !== 'ready' || !take.artifact || take.endedAtMs === null) {
       throw new Error('Only finalized ready Takes can enter the recording library.');
     }
@@ -440,12 +485,16 @@ export class TakeLibrary {
       throw new Error('Take artifact file does not match its id.');
     }
 
-    mkdirSync(this.options.directory, { recursive: true });
-    const artifactInfo = statSync(path.join(this.options.directory, take.artifact.fileName));
+    await mkdir(this.options.directory, { recursive: true });
+    const artifactInfo = await stat(path.join(this.options.directory, take.artifact.fileName));
     if (!artifactInfo.isFile()) throw new Error('Take artifact is not a file.');
 
     const entry = entryFromTake(take, take.artifact);
-    this.writeMetadata(entry);
+    await this.writeMetadataPartialAsync(entry);
+    await durableRename(
+      path.join(this.options.directory, metadataPartFileName(entry.takeId)),
+      path.join(this.options.directory, metadataFileName(entry.takeId)),
+    );
     return cloneEntry(entry);
   }
 
@@ -689,6 +738,12 @@ export class TakeLibrary {
     const partialPath = path.join(this.options.directory, metadataPartFileName(entry.takeId));
     const payload: TakeMetadataV1 = { version: 1, take: entry };
     writeFileSync(partialPath, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', flush: true });
+  }
+
+  private async writeMetadataPartialAsync(entry: TakeLibraryEntry) {
+    const partialPath = path.join(this.options.directory, metadataPartFileName(entry.takeId));
+    const payload: TakeMetadataV1 = { version: 1, take: entry };
+    await writeFile(partialPath, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', flush: true });
   }
 
   private writeMetadata(entry: TakeLibraryEntry) {

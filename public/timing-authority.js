@@ -1,8 +1,13 @@
+import { wsUrl } from './ws-url.js';
+
 const RECONNECT_MS = 1_000;
 const REFRESH_MS = 250;
 // Six missed polls tolerates short response jitter without treating an OPEN
 // transport as indefinitely authoritative.
 const FRESHNESS_TTL_MS = REFRESH_MS * 6;
+// acceptSourceStatus reads only source status, and polls for it; Relay
+// broadcasts this socket nothing else.
+const TIMING_AUTHORITY_BROADCAST_TYPES = ['source-status'];
 
 let socket = null;
 let reconnectTimer = null;
@@ -30,16 +35,6 @@ function publish(authorityFresh, valueMs = null) {
     && previous.valueMs === state.valueMs
   ) return;
   window.dispatchEvent(new CustomEvent('relay-timing-authority', { detail: state }));
-}
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const source = new URLSearchParams(location.search);
-  const params = new URLSearchParams();
-  const key = source.get('key');
-  if (key) params.set('key', key);
-  const query = params.toString();
-  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
 }
 
 function stopRefresh() {
@@ -125,6 +120,7 @@ function connect() {
     // Keep observing across idle -> active transitions. An inactive mix means
     // there is no applied value to paint yet; it must not stop the authority
     // adapter or the first later calibration can remain invisible forever.
+    next.send(JSON.stringify({ type: 'broadcast-subscribe', types: TIMING_AUTHORITY_BROADCAST_TYPES }));
     requestSourceStatus();
     startRefresh();
   });

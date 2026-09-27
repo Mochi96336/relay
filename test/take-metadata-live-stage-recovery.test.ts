@@ -81,7 +81,7 @@ test('same-process history reads preserve rich metadata staged before WAV public
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-live-stage-'));
   try {
     const library = new TakeLibrary({ directory });
-    library.stageFinalizing(finalizingTake(), {
+    await library.stageFinalizing(finalizingTake(), {
       sampleRate: SAMPLE_RATE,
       sampleCount: SAMPLE_COUNT,
     });
@@ -96,10 +96,40 @@ test('same-process history reads preserve rich metadata staged before WAV public
     );
 
     await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
-    const committed = library.commitStaged(readyTake());
+    const committed = await library.commitStaged(readyTake());
 
     assert.equal(committed.recovered, false);
     assert.equal(committed.startedByParticipantId, 'participant-a');
+    assert.equal(committed.song?.videoId, 'video-live-stage');
+    const names = await readdir(directory);
+    assert.equal(names.includes(`${TAKE_ID}.json`), true);
+    assert.equal(names.includes(`${TAKE_ID}.json.part`), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a history repair that promotes the stage while its commit is in flight does not fail the commit', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-live-stage-race-'));
+  try {
+    const library = new TakeLibrary({ directory });
+    const staging = library.stageFinalizing(finalizingTake(), {
+      sampleRate: SAMPLE_RATE,
+      sampleCount: SAMPLE_COUNT,
+    });
+    // A history read while the stage is still being written must not take the
+    // partial for an orphan.
+    assert.deepEqual(library.list(), []);
+    await staging;
+
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    const commit = library.commitStaged(readyTake());
+    // The commit is now waiting on the disk; a synchronous repair promotes the
+    // same stage in the meantime.
+    assert.equal(library.get(TAKE_ID)?.startedByParticipantId, 'participant-a');
+    const committed = await commit;
+
+    assert.equal(committed.recovered, false);
     assert.equal(committed.song?.videoId, 'video-live-stage');
     const names = await readdir(directory);
     assert.equal(names.includes(`${TAKE_ID}.json`), true);
@@ -113,7 +143,7 @@ test('a fresh TakeLibrary instance still removes a pre-WAV metadata partial as a
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-restart-orphan-'));
   try {
     const liveLibrary = new TakeLibrary({ directory });
-    liveLibrary.stageFinalizing(finalizingTake(), {
+    await liveLibrary.stageFinalizing(finalizingTake(), {
       sampleRate: SAMPLE_RATE,
       sampleCount: SAMPLE_COUNT,
     });

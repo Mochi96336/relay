@@ -306,6 +306,46 @@ describe('AudioPacketReceiver retransmission', () => {
     assert.deepEqual(r.pendingRetransmitRequests(), [{ sequence: 3, attempt: 1 }]);
   });
 
+  it('never retries a sequence that already arrived behind an earlier hole', () => {
+    const { r, send } = receiver({ retransmitHoldMs: 1_000 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(4, 1);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 1);
+
+    // The repeats of 2 and 3 arrive; 1's is lost, so 2 and 3 wait behind it.
+    assert.deepEqual(sequences(send(2, 50)), []);
+    assert.deepEqual(sequences(send(3, 50)), []);
+
+    r.flush(400);
+    assert.deepEqual(
+      r.pendingRetransmitRequests(),
+      [{ sequence: 1, attempt: 1 }],
+      'only the hole that is still missing is asked for again',
+    );
+    assert.equal(r.retransmitStats().retriedPackets, 1);
+
+    assert.deepEqual(sequences(send(1, 450)), [1, 2, 3, 4]);
+    assert.equal(r.retransmitStats().recoveredPackets, 3, 'the held repeats still count as recovered');
+  });
+
+  it('withdraws a request that has not left once its packet arrives, and returns its token', () => {
+    const { r, send } = receiver({ retransmitRequestsPerSecond: 2 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(3, 0);
+    assert.deepEqual(r.pendingRetransmitRequests().map(({ sequence }) => sequence), [1, 2]);
+
+    // 2 arrives by itself before any request could leave; 1 is still missing.
+    assert.deepEqual(sequences(send(2, 0)), []);
+    assert.deepEqual(r.pendingRetransmitRequests(), [{ sequence: 1, attempt: 0 }]);
+
+    // Its token pays for the next hole instead of a request for audio already here.
+    send(5, 0);
+    assert.deepEqual(r.takeRetransmitRequests(0), [1, 4]);
+    assert.equal(r.retransmitStats().budgetDeniedPackets, 0);
+  });
+
   it('retries only from spare budget, keeping a reserve for fresh holes', () => {
     // 5 requests/s: a fifth of it (one token) is kept back from retries.
     const { r, send } = receiver({ retransmitHoldMs: 2_000, retransmitRequestsPerSecond: 5 });

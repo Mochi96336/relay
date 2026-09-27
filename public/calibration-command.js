@@ -1,14 +1,5 @@
 import { sendParticipantAuthentication } from './participant-auth.js';
-
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const source = new URLSearchParams(location.search);
-  const params = new URLSearchParams();
-  const key = source.get('key');
-  if (key) params.set('key', key);
-  const query = params.toString();
-  return `${protocol}//${location.host}/ws${query ? `?${query}` : ''}`;
-}
+import { wsUrl } from './ws-url.js';
 
 /**
  * Sends one Mic-owner calibration command on a short-lived authenticated socket.

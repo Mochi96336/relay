@@ -1429,6 +1429,11 @@ export class AudioSession {
 
   // ---------------------------------------------------------------- internals
 
+  /** Whether retained PCM still lies ahead of this read position. */
+  private retainsPcmAfter(timeline: PcmTimeline, sourceSample: number) {
+    return timeline.chunks.length > 0 && timeline.totalSamples > sourceSample;
+  }
+
   private clearTimeline(timeline: PcmTimeline) {
     if (timeline === this.mic) {
       this.resetMicClockTrim();
@@ -3034,11 +3039,16 @@ export class AudioSession {
       // replacement; structural pre-roll is silent but not source failure, so
       // an active restart transition keeps ownership through it.
       voice = this.micEdge.apply(voice, micEvidenceMissing, micAudibleMissing);
+      // Release only once the departing source has run out: silent at the
+      // output *and* read past everything it retained. A hole inside the tail
+      // also silences it, and releasing there un-ducked the song and dropped
+      // the summing headroom under the retained PCM after the hole.
       if (
         this.micExpectationReleaseHold
         && !this.micExpected
         && this.micEdge.silenced
         && !this.micEdge.replacementActive
+        && !this.retainsPcmAfter(this.mic, micSourceSample)
       ) {
         this.micExpectationReleaseHold = false;
       }
@@ -3055,6 +3065,7 @@ export class AudioSession {
         && !this.backingExpected
         && this.backingEdge.silenced
         && !this.backingEdge.replacementActive
+        && !this.retainsPcmAfter(this.backing, backingSourceSample)
       ) {
         this.backingExpectationReleaseHold = false;
       }

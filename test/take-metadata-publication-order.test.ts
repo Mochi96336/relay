@@ -28,7 +28,12 @@ test('Take finalization stages rich metadata before publishing the WAV', () => {
 
   assert.match(
     finalize,
-    /if \(metadataStaged\) \{\s*libraryEntry = this\.library\.commitStaged\(readyTake\);\s*metadataStaged = false;\s*\} else \{\s*libraryEntry = this\.library\.record\(readyTake\);\s*\}/,
+    /if \(metadataStaged\) \{\s*libraryEntry = await this\.library\.commitStaged\(readyTake\);\s*metadataStaged = false;\s*\} else \{\s*libraryEntry = await this\.library\.record\(readyTake\);\s*\}/,
+  );
+  assert.match(
+    finalize,
+    /await this\.library\.stageFinalizing\(/,
+    'the staged sidecar must be durable before the WAV publication that follows it',
   );
   assert.match(
     finalize,

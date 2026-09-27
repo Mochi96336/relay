@@ -34,9 +34,9 @@ test('server delegates AudioSession capture-clock restarts before consuming new 
   );
 
   const restartStart = block.indexOf('if (captureRestarted) {');
-  const restartEnd = block.indexOf('\n      }', restartStart);
+  const restartEnd = block.indexOf('\n  }', restartStart);
   assert.ok(restartStart >= 0 && restartEnd > restartStart);
-  const restartBlock = block.slice(restartStart, restartEnd + '\n      }'.length);
+  const restartBlock = block.slice(restartStart, restartEnd + '\n  }'.length);
   assert.doesNotMatch(restartBlock, /takeController\.|bootProbeRuntime\.|contentCalibrationValidator\./);
   assert.doesNotMatch(restartBlock, /calibration\.(?:fail|reset|apply|begin)/);
   assert.doesNotMatch(restartBlock, /broadcastJson\(|(?:^|[^.])syncAppliedCalibration\(/m);

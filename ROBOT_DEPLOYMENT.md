@@ -129,6 +129,18 @@ RELAY_LISTEN_OPUS=1
 # RELAY_LISTEN_OPUS_BITRATE=96000
 ```
 
+## Optional compression for status sockets
+
+Each page also keeps several sockets open for room status, and in a playing room that status adds up to tens of kbps per page. With `RELAY_STATUS_DEFLATE=1`, the status sockets negotiate WebSocket compression (permessage-deflate, 4 KB window). Status JSON repeats the same keys several times a second, so it shrinks about tenfold: one status socket measured 117 kbps uncompressed and 12 kbps compressed.
+
+The sockets that carry audio (the singer's publisher socket and Listen's) never negotiate it, because a browser compresses everything it sends on a compressed socket.
+
+The cost is Relay CPU, once per message per socket. On a desktop x64 CPU, 30 sockets receiving 20 messages a second took 16% of a core with compression and 3.5% without; expect several times that on a Pi. It is off by default. Before leaving it on, measure it on the Pi with the room's usual number of listeners.
+
+```bash
+RELAY_STATUS_DEFLATE=1
+```
+
 ## Watching the route
 
 The robot is unattended, so the interesting question is not only "is Relay running" but "is the route still carrying audio". `/healthz` cannot answer that — it stays `{"ok": true}` while Chromium is dead.

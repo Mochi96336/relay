@@ -116,7 +116,7 @@ test('no-Song preflight authenticates and waits for its boot-probe timing acknow
   });
   assert.equal(sockets.length, 1);
   const socket = sockets[0]!;
-  assert.equal(socket.url, 'wss://relay.test/ws?key=room-key');
+  assert.equal(socket.url, 'wss://relay.test/ws?key=room-key&compress=1');
 
   authenticate(socket);
 

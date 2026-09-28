@@ -100,10 +100,15 @@ export type RelaySocketServerOptions = {
  * Only a socket whose URL asks for it (`compress=1`) negotiates it. A browser
  * compresses everything it sends on a deflating socket, so the sockets that
  * carry audio - the singer's publisher socket and Listen's - never ask.
+ *
+ * The client's own window is left to the client. Sizing it is only allowed
+ * when the offer names `client_max_window_bits`, WebKit's offer names nothing,
+ * and ws answers such an offer by failing the whole handshake with 400 rather
+ * than by leaving the socket uncompressed. What pages send on these sockets is
+ * a few small requests, so the size of that window saves nothing.
  */
 const STATUS_DEFLATE = {
   serverMaxWindowBits: 12,
-  clientMaxWindowBits: 12,
   zlibDeflateOptions: { memLevel: 4 },
   // ws leaves messages under 1 KB uncompressed by default: most status is.
   threshold: 64,

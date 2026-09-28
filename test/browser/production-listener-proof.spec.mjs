@@ -530,18 +530,23 @@ test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ow
 
     const postMicStart = await page.evaluate(() => window.__relayListenerDiagnostics.dump().events.length);
     const healthBeforePostMic = await latestHealthObservedAt(page);
-    const postMicAtMs = await page.evaluate(() => {
+    const postMicStartState = await page.evaluate(() => {
+      // Snapshot and dispatch on the same page turn. A real room ownership
+      // update may have arrived since the earlier wait for muted state; the
+      // proof must begin from the state that actually existed at dispatch.
       const atMs = performance.now();
+      const muted = window.relayListenState?.muted === true;
+      const ownedHere = window.__proofSessionStatuses.at(-1)?.micOwnerId === window.relayParticipantId;
       window.dispatchEvent(new CustomEvent('relay-microphone-ended', {
         detail: { reason: 'proof-delayed-owner' },
       }));
-      return atMs;
+      return { atMs, muted, ownedHere };
     });
     await page.waitForTimeout(250);
     const postMic = await page.evaluate((fromMs) => ({
       events: window.__relayListenerDiagnostics.dump().events.filter((entry) => entry.atMs >= fromMs),
       statuses: window.__proofSessionStatuses.filter((entry) => entry.atMs >= fromMs),
-    }), postMicAtMs);
+    }), postMicStartState.atMs);
     const postMicTimeline = [
       ...postMic.events.map((entry) => ({ atMs: entry.atMs, kind: entry.type, ...entry.detail })),
       ...postMic.statuses.map((entry) => ({ ...entry, kind: 'session-status' })),
@@ -553,8 +558,8 @@ test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ow
     ));
     // Listen may unmute only once the room names someone else as owner, and
     // AudioDestination may be touched only while Listen is unmuted.
-    let muted = true;
-    let ownedHere = true;
+    let muted = postMicStartState.muted;
+    let ownedHere = postMicStartState.ownedHere;
     const violations = [];
     for (const entry of postMicTimeline) {
       if (entry.kind === 'session-status') ownedHere = entry.micOwnerId === participantId;

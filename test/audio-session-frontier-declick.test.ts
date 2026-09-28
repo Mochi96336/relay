@@ -498,3 +498,36 @@ test('Backing starvation and late contiguous recovery use the same bounded outpu
   );
   assert.ok(Math.abs(sample(recovered.output, FADE) - AMPLITUDE) <= 1);
 });
+
+test('a hole proven after part of the tail before it was heard leaves the heard tail continuous', () => {
+  // Concealment needs unheard audio in front of a hole, so a hole proven this
+  // late falls back to tapering the retained tail. That taper spans 2 ms; when
+  // most of it was already heard, rewriting only the unheard remainder made it
+  // start part-way down the ramp, a step at the boundary with what was heard.
+  for (const source of ['mic', 'backing'] as const) {
+    const session = makeSession();
+    if (source === 'mic') session.setMicExpected(true);
+    else session.setBackingExpected(true);
+    const ingest = (packet: PcmFrame, nowMs: number) => (
+      source === 'mic' ? session.ingestMic(packet, RATE, nowMs) : session.ingestBacking(packet, RATE, nowMs)
+    );
+
+    const unheard = 40;
+    ingest(frame(0, CHUNK + unheard), 0);
+    const heard = drainOne(session, 0);
+    const lastHeard = sample(heard.output, CHUNK - 1);
+    assert.ok(Math.abs(lastHeard - AMPLITUDE) <= 1);
+
+    ingest(frame(CHUNK * 2), 20);
+    const next = drainOne(session, 20);
+    let largestStep = Math.abs(sample(next.output, 0) - lastHeard);
+    for (let index = 1; index < CHUNK; index += 1) {
+      largestStep = Math.max(largestStep, Math.abs(sample(next.output, index) - sample(next.output, index - 1)));
+    }
+    assert.ok(
+      largestStep <= Math.ceil(AMPLITUDE / (FADE - 1)) + 1,
+      `${source}: the unheard tail and the hole after it change by at most one 2 ms fade step, not ${largestStep}`,
+    );
+    assert.equal(sample(next.output, unheard + FADE), 0, `${source}: the hole still reaches silence`);
+  }
+});

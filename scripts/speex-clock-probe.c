@@ -77,6 +77,7 @@ static void run_case(int seconds, int ppm, int first) {
     int64_t speex_samples = 0;
     int64_t relay_samples = 0;
     int corrected_frames = 0;
+    uint64_t relay_energy = 0, speex_energy = 0;
     double carry = 0;
     double speex_boundary_step = 0;
     double relay_boundary_step = 0;
@@ -103,6 +104,10 @@ static void run_case(int seconds, int ppm, int first) {
                 const double step = fabs((double)output[0] - last_speex);
                 if (step > speex_boundary_step) speex_boundary_step = step;
             }
+            for (spx_uint32_t i = 0; i < out_len; ++i) {
+                const int64_t v = output[i];
+                speex_energy += (uint64_t)(v * v);
+            }
             if (out_len > 0) { last_speex = output[out_len - 1]; have_speex = 1; }
             speex_samples += out_len;
             consumed += in_len;
@@ -124,6 +129,8 @@ static void run_case(int seconds, int ppm, int first) {
             const int left = (int)floor(position);
             const double fraction = position - left;
             const spx_int16_t sample = linear_sample(input[left], input[left < FRAME - 1 ? left + 1 : left], fraction);
+            const int64_t v = sample;
+            relay_energy += (uint64_t)(v * v);
             if (i == 0) first_sample = sample;
             if (i == out_len - 1) last_sample = sample;
         }
@@ -152,11 +159,12 @@ static void run_case(int seconds, int ppm, int first) {
            "\"relaySamples\":%lld,\"relayCorrectedFrames\":%d,"
            "\"speexSamples\":%lld,\"speexInputLatency\":%d,"
            "\"speexOutputLatency\":%d,\"relayBoundaryStep\":%.0f,"
-           "\"speexBoundaryStep\":%.0f,\"relayCpuMs\":%.4f,\"speexCpuMs\":%.4f}",
+           "\"speexBoundaryStep\":%.0f,\"relayEnergy\":%llu,\"speexEnergy\":%llu,\"relayCpuMs\":%.4f,\"speexCpuMs\":%.4f}",
            first ? "" : ",",
            ppm, (long long)total_input, expected_output, (long long)relay_samples,
            corrected_frames, (long long)speex_samples, in_latency, out_latency,
-           relay_boundary_step, speex_boundary_step, cpu_relay_ms, cpu_speex_ms);
+           relay_boundary_step, speex_boundary_step, (unsigned long long)relay_energy, (unsigned long long)speex_energy,
+           cpu_relay_ms, cpu_speex_ms);
     speex_resampler_destroy(resampler);
 }
 

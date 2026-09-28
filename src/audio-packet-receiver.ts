@@ -73,7 +73,7 @@ type RetransmitRequestState = {
 /** Upper bound on sequences requested per detected hole. */
 const MAX_RETRANSMIT_REQUESTS_PER_HOLE = 32;
 /** A quarter of a 100 packet/s datagram stream: isolated loss, not congestion. */
-const DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND = 25;
+export const DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND = 25;
 const DEFAULT_RETRANSMIT_REQUEST_DELAY_MS = 20;
 /**
  * A repeat is a datagram like the one it replaces, so under loss it can be

@@ -273,10 +273,18 @@ describe('unattended boot', () => {
     assert.match(route, /After=relay-server\.service/);
   });
 
-  test('both units restart on failure without thrashing', () => {
-    for (const name of ['relay-server.service', 'relay-robot-source.service']) {
+  test('both units restart without thrashing, each under the policy it needs', () => {
+    // The server comes back from a clean SIGTERM as well as a crash: on
+    // 2026-09-06 something sent it a TERM and an on-failure unit, having exited
+    // zero, stayed down for a day. The robot source keeps on-failure, because
+    // stopping it by hand is how the sink and Chromium are released.
+    const restartPolicy = {
+      'relay-server.service': /Restart=always/,
+      'relay-robot-source.service': /Restart=on-failure/,
+    };
+    for (const [name, policy] of Object.entries(restartPolicy)) {
       const text = unit(name);
-      assert.match(text, /Restart=on-failure/, name);
+      assert.match(text, policy, name);
       assert.match(text, /StartLimitBurst=/, `${name} would otherwise respawn indefinitely`);
       assert.match(text, /WantedBy=default\.target/, `${name} must install into the user manager`);
       assert.doesNotMatch(text, /RELAY_KEY=/, `${name} is in the repository and must not carry the key`);

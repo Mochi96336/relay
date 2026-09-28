@@ -10,6 +10,7 @@ import {
   startCalibrationCollecting,
   startRelay,
   toInt16,
+  waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
 
@@ -58,23 +59,6 @@ async function liveSession(server: RelayServer) {
   await monitor.waitForType('registered');
 
   return { backing, publisher, monitor };
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 8_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out waiting for message. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
 }
 
 async function primeStreams(backing: RelayClient, publisher: RelayClient) {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay, type RelayServer } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -107,24 +107,6 @@ async function stopAndRead(control: RelayClient, takeId: string) {
     && message.lifecycle === 'ready'
     && message.take?.takeId === takeId
   ));
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  startIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 5_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(startIndex).find(predicate);
-    if (found) return found;
-    await sleep(10);
-  }
-  throw new Error(
-    `Timed out after ${timeoutMs} ms waiting for a new message. `
-    + `Saw after index ${startIndex}: ${client.messages.slice(startIndex).map((message) => message.type).join(', ')}`,
-  );
 }
 
 async function room(server: RelayServer, controllerId = 'participant-a') {

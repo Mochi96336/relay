@@ -10,6 +10,7 @@ import {
   sleep,
   startRelay,
   toInt16,
+  waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
 
@@ -76,21 +77,27 @@ function probeAudio(leadMs = 20, tailMs = 1_800) {
   ]);
 }
 
-async function waitForNewMessage(
+/**
+ * Asks for timing status until one matches. Relay broadcasts it when timing
+ * changes, and a heartbeat going stale changes nothing it would announce - the
+ * point of holding the measurement - so only a request is sure to see it.
+ */
+async function requestTimingStatus(
   client: RelayClient,
-  fromIndex: number,
   predicate: (message: Record<string, any>) => boolean,
   timeoutMs = 8_000,
 ) {
+  const fromIndex = client.messages.length;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
+    client.send({ type: 'timing-calibration-status-request' });
+    await sleep(100);
+    const found = client.messages
+      .slice(fromIndex)
+      .find((m) => m.type === 'timing-calibration-status' && predicate(m));
     if (found) return found;
-    await sleep(20);
   }
-  throw new Error(
-    `Timed out after ${timeoutMs} ms. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
+  throw new Error(`Timed out after ${timeoutMs} ms waiting for a matching timing status.`);
 }
 
 /**

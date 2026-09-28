@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 import WebSocket from 'ws';
 
 import { participantIdForCapability } from '../src/participant-capability.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -38,24 +38,6 @@ function registerPublisher(
     captureGeneration,
     ...(takeoverExpectedOwnerId ? { takeoverExpectedOwnerId } : {}),
   });
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  startIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 3_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(startIndex).find(predicate);
-    if (found) return found;
-    await sleep(10);
-  }
-  throw new Error(
-    `Timed out after ${timeoutMs} ms waiting for a new message. `
-    + `Saw after index ${startIndex}: ${client.messages.slice(startIndex).map((message) => message.type).join(', ')}`,
-  );
 }
 
 describe('participant presence and microphone ownership', () => {

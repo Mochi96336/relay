@@ -8,10 +8,10 @@ import {
   RelayClient,
   pulseTrain,
   sendPcmInChunks,
-  sleep,
   startCalibrationCollecting,
   startRelay,
   toInt16,
+  waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
 
@@ -50,23 +50,6 @@ function playing(startedAtMs: number) {
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 8_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out waiting for message. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
 }
 
 async function primeStreams(backing: RelayClient, singer: RelayClient) {
@@ -141,7 +124,7 @@ async function liveRoom(server: RelayServer) {
 async function productStatus(singer: RelayClient) {
   const from = singer.messages.length;
   singer.send({ type: 'product-status-request' });
-  return waitForNewMessage(singer, from, (message) => message.type === 'product-status');
+  return waitForNewMessage(singer, from, (message) => message.type === 'product-status', 8_000);
 }
 
 test('a running content measurement leaves the room live and recordable', async () => {
@@ -181,7 +164,7 @@ test('a running content measurement leaves the room live and recordable', async 
     singer.send({ type: 'start-take' });
     const accepted = await waitForNewMessage(singer, from, (message) => (
       message.type === 'take-command-accepted' && message.command === 'start'
-    ));
+    ), 8_000);
     assert.ok(accepted.takeId);
 
     // The run is stood down so it cannot promote a new alignment into the
@@ -189,7 +172,7 @@ test('a running content measurement leaves the room live and recordable', async 
     // never told a calibration error occurred.
     const settled = await waitForNewMessage(monitor, monitorFrom, (message) => (
       message.type === 'timing-calibration-status' && message.state !== 'collecting'
-    ));
+    ), 8_000);
     assert.equal(settled.state, 'idle');
     assert.equal(settled.error, null);
 

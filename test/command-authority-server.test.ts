@@ -1,26 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 3_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out waiting for new message. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
-}
 
 async function participant(
   server: Awaited<ReturnType<typeof startRelay>>,

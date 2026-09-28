@@ -11,6 +11,7 @@ import {
   startCalibrationCollecting,
   startRelay,
   toInt16,
+  waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
 
@@ -89,23 +90,6 @@ async function calibrate(
     3_000,
   );
   return complete;
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 5_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out waiting for new message. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
 }
 
 describe('timing validity boundary', () => {

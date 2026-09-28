@@ -123,13 +123,24 @@ function systemdVerifySkip() {
   return false;
 }
 
+/**
+ * The launcher refuses to start without `flock`, before it validates anything
+ * else, and the doctor counts a missing one as a failed check. Git Bash on
+ * Windows has none, so a launcher run or a clean doctor run cannot happen there.
+ */
+function flockSkip() {
+  const probe = spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' });
+  return probe.status === 0 ? false : 'flock unavailable';
+}
+const FLOCK_SKIP = flockSkip();
+
 afterEach(() => {
   while (temporaryDirectories.length > 0) {
     rmSync(temporaryDirectories.pop()!, { recursive: true, force: true });
   }
 });
 
-describe('robot-source launcher', () => {
+describe('robot-source launcher', { skip: FLOCK_SKIP }, () => {
   test('uses one sample rate, hides deployment secrets, and treats a child exit as failure', () => {
     const { env, state } = mockedEnvironment();
     const infrastructureKey = 'cd'.repeat(32);
@@ -220,7 +231,7 @@ describe('robot-source launcher', () => {
 });
 
 describe('robot doctor', () => {
-  test('checks the localhost route and an existing sink monitor without changing state', () => {
+  test('checks the localhost route and an existing sink monitor without changing state', { skip: FLOCK_SKIP }, () => {
     const { env, state } = mockedEnvironment();
     const result = run('robot-doctor.sh', { ...env, PORT: '3100' });
 

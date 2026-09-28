@@ -122,13 +122,18 @@ test('persisted wall-clock timestamps outside the JavaScript Date domain fail cl
   });
 });
 
-test('WAV-only recovery clamps a pre-epoch filesystem mtime into the persisted wall-clock domain', async () => {
+test('WAV-only recovery clamps a pre-epoch filesystem mtime into the persisted wall-clock domain', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-wall-clock-mtime-'));
   try {
     const wavPath = path.join(directory, `${TAKE_ID}.wav`);
     await writeFile(wavPath, wav());
     await utimes(wavPath, new Date(-1_000), new Date(-1_000));
-    assert.ok((await stat(wavPath)).mtimeMs < 0, 'fixture must expose a pre-epoch filesystem mtime');
+    if (!((await stat(wavPath)).mtimeMs < 0)) {
+      // Node on Windows wraps -1 s to 2^32 - 1 s (the year 2106), so there is
+      // no pre-epoch mtime here to clamp.
+      t.skip('this platform cannot set a pre-epoch mtime');
+      return;
+    }
 
     const library = new TakeLibrary({ directory });
     library.prepare();

@@ -250,6 +250,31 @@ export class RelayClient {
 export const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
 /**
+ * Waits for a matching message received at or after `fromIndex`.
+ *
+ * `waitFor` also matches messages that already arrived, which is right for a
+ * first answer and wrong after a retry: a status left behind by an earlier
+ * request must not answer a later question.
+ */
+export async function waitForNewMessage(
+  client: RelayClient,
+  fromIndex: number,
+  predicate: (message: JsonMessage) => boolean,
+  timeoutMs = 5_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = client.messages.slice(fromIndex).find(predicate);
+    if (found) return found;
+    await sleep(10);
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs} ms waiting for a new message. `
+    + `Saw after index ${fromIndex}: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
+  );
+}
+
+/**
  * Asks for content calibration and resolves once the room is really collecting.
  *
  * A refused start is not a slow start. `decideCalibrationStart` blocks on room

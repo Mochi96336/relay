@@ -141,27 +141,34 @@ async function robotRoom(server: RelayServer): Promise<Room> {
  * Bursting the measurement window and stopping leaves both streams outside the
  * liveness horizon and lets the room timeline age out; automatic content
  * calibration then correctly refuses to measure audio nobody is producing.
+ *
+ * Paced by the wall clock, not by timer ticks: a 20 ms interval fires every
+ * ~31 ms on Windows, and one frame per tick streamed the room at two thirds of
+ * real time until calibration reported the backing silent.
  */
 function startRoomStream(room: Room, master: Float64Array, mic: Buffer) {
   const state = { deltaMs: INITIAL_DELTA_MS, cursor: 0, tick: 0 };
   const startedAt = Date.now();
   const timer = setInterval(() => {
-    const start = state.cursor;
-    const end = start + FRAME_SAMPLES;
-    const advanceSamples = Math.round((RATE * (PATH_LAG_MS + state.deltaMs)) / 1_000);
-    room.backing.sendPcm(toInt16(master.subarray(start + advanceSamples, end + advanceSamples), 0.9));
-    room.singer.sendPcm(mic.subarray(start * 2, end * 2));
-    state.cursor = end;
+    const dueSamples = Math.floor(((Date.now() - startedAt) * RATE) / 1_000);
+    while (state.cursor + FRAME_SAMPLES <= dueSamples) {
+      const start = state.cursor;
+      const end = start + FRAME_SAMPLES;
+      const advanceSamples = Math.round((RATE * (PATH_LAG_MS + state.deltaMs)) / 1_000);
+      room.backing.sendPcm(toInt16(master.subarray(start + advanceSamples, end + advanceSamples), 0.9));
+      room.singer.sendPcm(mic.subarray(start * 2, end * 2));
+      state.cursor = end;
 
-    state.tick += 1;
-    if (state.tick % 5 === 0) {
-      room.robot.send({ type: 'robot-player-offset', offsetMs: state.deltaMs });
-    }
-    if (state.tick % 25 === 0) {
-      room.singer.send({
-        ...playing,
-        currentTime: playing.currentTime + (Date.now() - startedAt) / 1_000,
-      });
+      state.tick += 1;
+      if (state.tick % 5 === 0) {
+        room.robot.send({ type: 'robot-player-offset', offsetMs: state.deltaMs });
+      }
+      if (state.tick % 25 === 0) {
+        room.singer.send({
+          ...playing,
+          currentTime: playing.currentTime + (Date.now() - startedAt) / 1_000,
+        });
+      }
     }
   }, 20);
   return {

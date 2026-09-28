@@ -94,6 +94,29 @@ async function waitForNewMessage(
 }
 
 /**
+ * Asks for timing status until one matches. Relay broadcasts it when timing
+ * changes, and a heartbeat going stale changes nothing it would announce - the
+ * point of holding the measurement - so only a request is sure to see it.
+ */
+async function requestTimingStatus(
+  client: RelayClient,
+  predicate: (message: Record<string, any>) => boolean,
+  timeoutMs = 8_000,
+) {
+  const fromIndex = client.messages.length;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    client.send({ type: 'timing-calibration-status-request' });
+    await sleep(100);
+    const found = client.messages
+      .slice(fromIndex)
+      .find((m) => m.type === 'timing-calibration-status' && predicate(m));
+    if (found) return found;
+  }
+  throw new Error(`Timed out after ${timeoutMs} ms waiting for a matching timing status.`);
+}
+
+/**
  * A Robot room whose boot probe has completed successfully, with a Song playing
  * and a fresh player delta - the exact state #222 says must promote to content.
  *
@@ -330,11 +353,9 @@ test('a quiet Robot offset heartbeat holds the measured alignment instead of gue
 
     // Wait for the room to actually notice the silence rather than for a fixed
     // delay, so the assertion below is about a genuinely stale heartbeat.
-    const stillHeld = await waitForNewMessage(
+    const stillHeld = await requestTimingStatus(
       room.monitor,
-      beforeQuiet,
-      (m) => m.type === 'timing-calibration-status' && m.robotDeltaFresh === false,
-      8_000,
+      (m) => m.robotDeltaFresh === false,
     );
     assert.equal(
       stillHeld.timingMode,

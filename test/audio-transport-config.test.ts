@@ -6,6 +6,7 @@ import {
   DEFAULT_AUDIO_TRANSPORT_CONFIG,
   loadAudioTransportConfig,
 } from '../src/audio-transport-config.js';
+import { AudioPacketReceiver } from '../src/audio-packet-receiver.js';
 import { startRelay } from './helpers/harness.js';
 import {
   classMethodCode,
@@ -23,6 +24,7 @@ describe('audio transport configuration', () => {
       maxForwardJumpPackets: 256,
       retransmitHoldMs: 400,
       retransmitWindowPackets: 48,
+      retransmitRequestsPerSecond: 25,
     });
   });
 
@@ -38,6 +40,7 @@ describe('audio transport configuration', () => {
       retransmitHoldMs: 400,
       // The default retransmit window follows a smaller forward bound.
       retransmitWindowPackets: 12,
+      retransmitRequestsPerSecond: 25,
     });
   });
 
@@ -54,6 +57,30 @@ describe('audio transport configuration', () => {
       () => loadAudioTransportConfig({ RELAY_AUDIO_RETRANSMIT_HOLD_MS: '-1' }),
       /RELAY_AUDIO_RETRANSMIT_HOLD_MS/,
     );
+  });
+
+  it('lets the operator set the repeat request budget within what one request carries', () => {
+    assert.equal(
+      loadAudioTransportConfig({ RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND: '50' }).retransmitRequestsPerSecond,
+      50,
+    );
+    assert.throws(
+      () => loadAudioTransportConfig({ RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND: '0' }),
+      /RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND/,
+    );
+    assert.throws(
+      () => loadAudioTransportConfig({ RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND: '65' }),
+      /RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND/,
+    );
+
+    // The field reaches the receiver under the name it reads.
+    const receiver = new AudioPacketReceiver({
+      source: 'mic',
+      generation: 1,
+      initialSequence: 0,
+      ...loadAudioTransportConfig({ RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND: '50' }),
+    });
+    assert.equal(receiver.retransmitRequestsPerSecond, 50);
   });
 
   for (const [name, value] of [

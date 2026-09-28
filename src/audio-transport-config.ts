@@ -1,3 +1,6 @@
+import { DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND } from './audio-packet-receiver.js';
+import { MAX_RETRANSMIT_REQUEST_SEQUENCES } from '../shared/retransmit-request.js';
+
 export type AudioTransportConfig = {
   reorderWindowPackets: number;
   reorderDeadlineMs: number;
@@ -14,6 +17,15 @@ export type AudioTransportConfig = {
   retransmitHoldMs?: number;
   /** Reorder window while a retransmission hold is active, in packets. */
   retransmitWindowPackets?: number;
+  /**
+   * How many lost Mic packets Relay may ask the page to repeat per second (a
+   * token bucket). A larger budget repairs more of a lossy link and sends
+   * that many more repeats over it. In the loss simulation, 50 instead of 25
+   * heard about a third less loss under heavy loss and jitter while doubling
+   * repeat traffic; the simulation has no congestion, so measure on the real
+   * link. Capped at what one request can carry.
+   */
+  retransmitRequestsPerSecond?: number;
 };
 
 export const DEFAULT_AUDIO_TRANSPORT_CONFIG: Readonly<Required<AudioTransportConfig>> = Object.freeze({
@@ -22,6 +34,7 @@ export const DEFAULT_AUDIO_TRANSPORT_CONFIG: Readonly<Required<AudioTransportCon
   maxForwardJumpPackets: 256,
   retransmitHoldMs: 400,
   retransmitWindowPackets: 48,
+  retransmitRequestsPerSecond: DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND,
 });
 
 const HALF_SEQUENCE_SPACE = 0x8000_0000;
@@ -86,6 +99,13 @@ export function loadAudioTransportConfig(
     { minimum: 0, maximum: HALF_SEQUENCE_SPACE - 1 },
   );
 
+  const retransmitRequestsPerSecond = optionalInteger(
+    env,
+    'RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND',
+    DEFAULT_AUDIO_TRANSPORT_CONFIG.retransmitRequestsPerSecond,
+    { minimum: 1, maximum: MAX_RETRANSMIT_REQUEST_SEQUENCES },
+  );
+
   if (reorderWindowPackets > maxForwardJumpPackets) {
     throw new Error(
       'RELAY_AUDIO_REORDER_WINDOW_PACKETS cannot exceed '
@@ -106,5 +126,6 @@ export function loadAudioTransportConfig(
     maxForwardJumpPackets,
     retransmitHoldMs,
     retransmitWindowPackets,
+    retransmitRequestsPerSecond,
   };
 }

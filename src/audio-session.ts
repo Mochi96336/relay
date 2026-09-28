@@ -1154,7 +1154,7 @@ export class AudioSession {
     );
     if (startsAfterGap && previousChunk && currentChunk) {
       if (!this.concealMicGap(previousChunk, currentChunk, previousTotalSamples)) {
-        this.declickSourceGap(previousChunk.samples, currentChunk.samples);
+        this.declickSourceGap(previousChunk, currentChunk.samples, this.firstUnheardMicSample());
       }
     }
     return result;
@@ -1276,7 +1276,8 @@ export class AudioSession {
       && currentChunk.start > previousTotalSamples
     );
     if (startsAfterGap && previousChunk && currentChunk) {
-      this.declickSourceGap(previousChunk.samples, currentChunk.samples);
+      // The Backing is read at the mix position itself.
+      this.declickSourceGap(previousChunk, currentChunk.samples, this.frameIndex * this.frameSamples);
     }
     return result;
   }
@@ -2579,9 +2580,31 @@ export class AudioSession {
     }
   }
 
-  private declickSourceGap(previous: Int16Array, next: Int16Array) {
-    this.fadeOutSourceEdge(previous);
+  /**
+   * Tapers the real PCM on both sides of a proven same-capture hole, in the
+   * retained timeline. Only audio nobody has heard yet may be rewritten. When
+   * part of the taper before the hole was already emitted, rewriting the rest
+   * made it start part-way down the ramp - a step against what was heard - so
+   * that tail is left alone and the mix output's missing-source edge fades out
+   * from what was actually heard instead.
+   */
+  private declickSourceGap(previous: PcmChunk, next: Int16Array, firstUnheardSample: number) {
+    const taper = Math.min(this.sourceEdgeFadeSamples, previous.samples.length);
+    const previousEnd = previous.start + previous.samples.length;
+    if (previousEnd - Math.max(previous.start, firstUnheardSample) >= taper) {
+      this.fadeOutSourceEdge(previous.samples);
+    }
     this.fadeInSourceEdge(next);
+  }
+
+  /**
+   * The first Mic timeline sample the mix has not read. A slewed read
+   * interpolates, so the sample after a fractional position was read too.
+   */
+  private firstUnheardMicSample() {
+    return this.lastEmittedMicSourceSample === null
+      ? Number.NEGATIVE_INFINITY
+      : Math.ceil(this.lastEmittedMicSourceSample) + 1;
   }
 
   private queueCaptureRestartBoundary(boundaries: number[], boundary: number) {

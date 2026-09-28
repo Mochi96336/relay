@@ -12,7 +12,7 @@ import WebSocket from 'ws';
 import { encodeAudioPacket } from '../../src/audio-packet.js';
 import { DEFAULT_AUDIO_TRANSPORT_CONFIG } from '../../src/audio-transport-config.js';
 import type { AudioUplinkHealth } from '../../src/audio-uplink-health.js';
-import { MicRuntime } from '../../src/mic-runtime.js';
+import { MicRuntime, type MicRuntimeOptions } from '../../src/mic-runtime.js';
 import type { PcmFrame } from '../../src/pcm-frame.js';
 import type { RelaySocket } from '../../src/relay-socket-server.js';
 import { decodeRetransmitRequest } from '../../shared/retransmit-request.js';
@@ -95,6 +95,7 @@ export type UplinkRun = {
    * how far the next packet is from a fixed 400 ms playout deadline.
    */
   mixHeadroomMs?: (nowMs: number) => number | null;
+  onRetransmitDeadlineObservation?: MicRuntimeOptions['onRetransmitDeadlineObservation'];
   /** Every frame MicRuntime hands the mixer, in order, as production does. */
   onFrames?: (frames: PcmFrame[], nowMs: number) => void;
   /** After each mixer tick's flush. */
@@ -177,6 +178,7 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
   };
 
   const mic = new MicRuntime({
+    onRetransmitDeadlineObservation: run.onRetransmitDeadlineObservation,
     audioTransportConfig: DEFAULT_AUDIO_TRANSPORT_CONFIG as never,
     firstFrameTimeoutMs: 3_000,
     streamLiveMs: 1_000,

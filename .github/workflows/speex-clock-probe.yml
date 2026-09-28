@@ -1,0 +1,47 @@
+name: Speex fractional SRC experiment
+
+on:
+  pull_request:
+    paths:
+      - scripts/speex-clock-probe.c
+      - .github/workflows/speex-clock-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fractional-src-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install isolated experiment dependency
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libspeexdsp-dev pkg-config
+      - name: Build stand-alone native probe
+        run: |
+          cc -O2 -Wall -Wextra -Werror -std=c11 \
+            scripts/speex-clock-probe.c -o /tmp/speex-clock-probe \
+            $(pkg-config --cflags --libs speexdsp) -lm
+      - name: Run fractional clock scenarios
+        run: |
+          /tmp/speex-clock-probe 30 > speex-clock-report.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open("speex-clock-report.json", encoding="utf-8"))
+          cases = report["cases"]
+          assert [x["ppm"] for x in cases] == [0, 50, -50, 100, -100]
+          for item in cases:
+              assert abs(item["relaySamples"] - item["expectedOutput"]) < 2
+              assert abs(item["speexSamples"] + item["speexOutputLatency"] - item["expectedOutput"]) < 960
+              assert item["relayEnergy"] > 0 and item["speexEnergy"] > 0
+          assert all(x["relayCorrectedFrames"] > 0 for x in cases[1:])
+          print(json.dumps(report, indent=2))
+          PY
+      - name: Save native benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: speex-fractional-src-report
+          path: speex-clock-report.json
+          retention-days: 14

@@ -623,3 +623,44 @@ test('seeded limiter and Mic ownership transitions stay output-continuous', () =
     );
   }
 });
+
+test('a Mic joining while the Backing drops out enters through the join crossfade, not a cut', () => {
+  // The join crossfade used to arm only once both sources were real at the
+  // same sample. A Mic that became real while the Backing was missing played
+  // through the ordinary sum first; when the Backing came back the crossfade
+  // started from the Backing alone and cut the Mic already being heard.
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(false);
+  session.setBackingExpected(true);
+  session.start(0);
+
+  const backingHoleStart = Math.round(RATE * 0.4);
+  const backingHoleEnd = Math.round(RATE * 0.8);
+  const output: Buffer[] = [];
+  let micCursor = 0;
+  for (let nowMs = 0; nowMs <= 1_400; nowMs += FRAME_MS) {
+    const start = Math.round((nowMs * RATE) / 1000);
+    if (start + FRAME_SAMPLES <= backingHoleStart || start >= backingHoleEnd) {
+      session.ingestBacking(backingFrame(start, FRAME_SAMPLES), RATE, nowMs);
+    }
+    if (nowMs === 300) session.setMicExpected(true);
+    if (nowMs >= 500) {
+      session.ingestMic(micFrame(1, micCursor, FRAME_SAMPLES), RATE, nowMs);
+      micCursor += FRAME_SAMPLES;
+    }
+    session.drain((pcm) => output.push(pcm), nowMs);
+  }
+
+  const { maximum, maximumAt, maximumFrom, maximumTo } = maxAdjacentStep(output);
+  assert.ok(
+    maximum < MAX_AUDIBLE_STEP,
+    `emitted ${maximumFrom} -> ${maximumTo} (step ${maximum}) at sample ${maximumAt}`,
+  );
+});

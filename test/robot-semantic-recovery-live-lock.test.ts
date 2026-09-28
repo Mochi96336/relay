@@ -105,7 +105,14 @@ test('live recovery fails closed without an absolute per-user runtime directory'
   assert.equal(existsSync(path.join(state, 'tsx-calls')), false, 'recovery body must not start');
 });
 
-test('a second live recovery process skips while the first still owns restart authority', async () => {
+// The wrapper holds its lock with `flock` and exits before the recovery body
+// without it; Git Bash on Windows has none.
+function flockSkip() {
+  const probe = spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' });
+  return probe.status === 0 ? false : 'flock unavailable';
+}
+
+test('a second live recovery process skips while the first still owns restart authority', { skip: flockSkip() }, async () => {
   const { env, state } = harness();
   const entered = path.join(state, 'entered');
   const release = path.join(state, 'release');

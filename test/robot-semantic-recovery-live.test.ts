@@ -159,7 +159,8 @@ test('live recovery state is separate from dry-run authority and mode 0600', asy
 
   await writeRobotSemanticRecoveryLiveState(live, restartCandidateState());
   assert.deepEqual(await readRobotSemanticRecoveryLiveState(live), restartCandidateState());
-  assert.equal((await stat(live)).mode & 0o777, 0o600);
+  // Windows has no POSIX permission bits; the robot that relies on them is Linux.
+  if (process.platform !== 'win32') assert.equal((await stat(live)).mode & 0o777, 0o600);
 });
 
 test('one live restart is successful only after two snapshots prove continuing PCM', async () => {

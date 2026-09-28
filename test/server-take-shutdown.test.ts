@@ -14,8 +14,14 @@ function pcm(samples = 960, value = 1200) {
   return buffer;
 }
 
+// Windows ends a child sent SIGTERM or SIGINT without running its handlers, so
+// there is no graceful shutdown to observe.
+const POSIX_SIGNAL_SKIP = process.platform === 'win32'
+  ? 'Windows terminates the child instead of delivering the signal'
+  : false;
+
 for (const shutdownSignal of ['SIGTERM', 'SIGINT'] as const) {
-  test(`${shutdownSignal} remains graceful when repeated during active Take finalization`, async () => {
+  test(`${shutdownSignal} remains graceful when repeated during active Take finalization`, { skip: POSIX_SIGNAL_SKIP }, async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-shutdown-'));
     let first: Awaited<ReturnType<typeof startRelay>> | null = null;
     let second: Awaited<ReturnType<typeof startRelay>> | null = null;

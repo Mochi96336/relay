@@ -83,7 +83,7 @@ async function tempStateFile() {
 test('dry-run state path requires an absolute XDG runtime directory', () => {
   assert.equal(
     robotSemanticRecoveryDryRunStatePath('/run/user/1000'),
-    '/run/user/1000/relay-robot-semantic-recovery-dry-run.json',
+    path.join('/run/user/1000', 'relay-robot-semantic-recovery-dry-run.json'),
   );
   assert.throws(() => robotSemanticRecoveryDryRunStatePath(undefined), /XDG_RUNTIME_DIR is required/);
   assert.throws(() => robotSemanticRecoveryDryRunStatePath(''), /XDG_RUNTIME_DIR is required/);
@@ -106,7 +106,8 @@ test('dry-run state round-trips atomically with mode 0600', async () => {
   await writeRobotSemanticRecoveryDryRunState(stateFile, state);
 
   assert.deepEqual(await readRobotSemanticRecoveryDryRunState(stateFile), state);
-  assert.equal((await stat(stateFile)).mode & 0o777, 0o600);
+  // Windows has no POSIX permission bits; the robot that relies on them is Linux.
+  if (process.platform !== 'win32') assert.equal((await stat(stateFile)).mode & 0o777, 0o600);
   assert.deepEqual(await readdir(directory), ['relay-robot-semantic-recovery-dry-run.json']);
 });
 

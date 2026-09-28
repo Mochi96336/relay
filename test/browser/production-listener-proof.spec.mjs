@@ -507,6 +507,20 @@ test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ow
     const participantId = await page.evaluate(() => window.relayParticipantId ?? null);
     assert.equal(typeof participantId, 'string');
     assert.ok(participantId.length > 0);
+    // The ownership below exists only in this page. Presence still delivers the
+    // room's real status, which names the proof's publisher as the Mic owner,
+    // and one landing in the window below rightly unmutes Listen. Keep every
+    // status on the page clock, ahead of Listen's own listener, so the check can
+    // tell that from a recovery that ignores ownership.
+    await page.evaluate(() => {
+      window.__proofSessionStatuses = [];
+      window.addEventListener('relay-session-status', (event) => {
+        window.__proofSessionStatuses.push({
+          atMs: performance.now(),
+          micOwnerId: event.detail?.micOwnerId ?? null,
+        });
+      }, { capture: true });
+    });
     await page.evaluate((ownerId) => {
       window.dispatchEvent(new CustomEvent('relay-session-status', {
         detail: { micOwnerId: ownerId },
@@ -516,19 +530,52 @@ test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ow
 
     const postMicStart = await page.evaluate(() => window.__relayListenerDiagnostics.dump().events.length);
     const healthBeforePostMic = await latestHealthObservedAt(page);
-    await page.evaluate(() => {
+    const postMicStartState = await page.evaluate(() => {
+      // Snapshot and dispatch on the same page turn. A real room ownership
+      // update may have arrived since the earlier wait for muted state; the
+      // proof must begin from the state that actually existed at dispatch.
+      const atMs = performance.now();
+      const muted = window.relayListenState?.muted === true;
+      const ownedHere = window.__proofSessionStatuses.at(-1)?.micOwnerId === window.relayParticipantId;
       window.dispatchEvent(new CustomEvent('relay-microphone-ended', {
         detail: { reason: 'proof-delayed-owner' },
       }));
+      // Returning the pre-dispatch state prevents real intervening room status
+      // from being mistaken for a forbidden recovery while Mic owns this page.
+      return { atMs, muted, ownedHere };
     });
     await page.waitForTimeout(250);
-    const earlyPostMicKicks = await page.evaluate((start) => (
-      window.__relayListenerDiagnostics.dump().events.slice(start).filter((entry) => (
-        entry.type === 'audio-context-suspend-request' && entry.detail?.listener === true
-      )).length
-    ), postMicStart);
-    assert.equal(earlyPostMicKicks, 0,
-      'post-Mic recovery must not touch AudioDestination while room ownership is still muted');
+    const postMic = await page.evaluate((fromMs) => ({
+      events: window.__relayListenerDiagnostics.dump().events.filter((entry) => entry.atMs >= fromMs),
+      statuses: window.__proofSessionStatuses.filter((entry) => entry.atMs >= fromMs),
+    }), postMicStartState.atMs);
+    const postMicTimeline = [
+      ...postMic.events.map((entry) => ({ atMs: entry.atMs, kind: entry.type, ...entry.detail })),
+      ...postMic.statuses.map((entry) => ({ ...entry, kind: 'session-status' })),
+    ].sort((a, b) => (
+      // The page clock can be coarse. A status is logged before Listen hears
+      // it, so on a tie it comes first.
+      a.atMs - b.atMs
+      || Number(b.kind === 'session-status') - Number(a.kind === 'session-status')
+    ));
+    // Listen may unmute only once the room names someone else as owner, and
+    // AudioDestination may be touched only while Listen is unmuted.
+    let muted = postMicStartState.muted;
+    let ownedHere = postMicStartState.ownedHere;
+    const violations = [];
+    for (const entry of postMicTimeline) {
+      if (entry.kind === 'session-status') ownedHere = entry.micOwnerId === participantId;
+      if (entry.kind === 'listen-state') {
+        muted = entry.muted === true;
+        if (!muted && ownedHere) violations.push(entry);
+      }
+      if (entry.kind === 'audio-context-suspend-request' && entry.listener === true && muted) {
+        violations.push(entry);
+      }
+    }
+    assert.deepEqual(violations, [],
+      'post-Mic recovery must keep Listen muted, and AudioDestination untouched, until the room releases ownership: '
+      + JSON.stringify(postMicTimeline));
 
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent('relay-session-status', {

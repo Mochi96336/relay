@@ -199,6 +199,14 @@ const MAX_RECOMMENDED_MIC_GAIN_DB = 36;
 const FIXED_SONG_LEVEL = 100;
 const HEARTBEAT_MS = relayConfig.heartbeatMs;
 const MIX_HEALTH_INTERVAL_MS = 1_000;
+/**
+ * How often the room timeline goes out while a Song has telemetry. The
+ * leader's page samples its player every 250 ms and each accepted packet
+ * already broadcasts a fresh snapshot, so the timer only fills in when that
+ * stops. Sending its own copy as well doubled the most frequent status on
+ * every socket - about 60 kbps per page - and told nobody anything new.
+ */
+const TIMELINE_STATUS_REFRESH_MS = 250;
 const PARTICIPANT_GRACE_MS = relayConfig.participantGraceMs;
 const MIC_TRANSPORT_GRACE_MS = relayConfig.micTransportGraceMs;
 const BACKING_GRACE_MS = relayConfig.backingGraceMs;
@@ -258,6 +266,7 @@ type TimelineStatus = {
 const webTransportMedia = new WebTransportMediaRuntime();
 const songLevel = FIXED_SONG_LEVEL;
 let lastMixHealthAt = 0;
+let lastTelemetryTimelineBroadcastAtMs = Number.NEGATIVE_INFINITY;
 
 const session = new AudioSession({
   sampleRate: MIX_SAMPLE_RATE,
@@ -2706,7 +2715,10 @@ function restartManualBootCalibration(nowMs: number) {
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
 
-  if (youtubeTimeline.hasTelemetry) {
+  if (
+    youtubeTimeline.hasTelemetry
+    && nowMs - lastTelemetryTimelineBroadcastAtMs >= TIMELINE_STATUS_REFRESH_MS
+  ) {
     broadcastJson(youtubeTimeline.statusPayload(nowMs));
     broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
   }
@@ -2766,7 +2778,7 @@ const youtubeTimelineTimer = setInterval(() => {
   if (presenceSweep.changed) broadcastSessionStatus();
 
   broadcastProductStatus(nowMs);
-}, 250);
+}, TIMELINE_STATUS_REFRESH_MS);
 
 function validSampleRate(value: unknown) {
   const sampleRate = Number(value);
@@ -2926,7 +2938,10 @@ const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAccepta
   cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
   revokeContentMappingOnRateChange: (playbackRate) => revokeContentMappingOnRateChange(playbackRate),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportTimelineStatus: (status) => broadcastJson(status),
+  reportTimelineStatus: (status) => {
+    lastTelemetryTimelineBroadcastAtMs = performance.now();
+    broadcastJson(status);
+  },
   reportRoomStatus: (nowMs) => broadcastJson(youtubeTimeline.roomStatusPayload(nowMs)),
   completeRoomSongCommand: (commandId) => roomSongCommands.complete(commandId),
   reportRoomSongCommandComplete: (commandId) => {

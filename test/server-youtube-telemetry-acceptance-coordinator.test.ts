@@ -51,7 +51,11 @@ test('server composition retains every accepted YouTube telemetry domain effect'
   assert.match(server, /clearTelemetryRejection: \(socket\) => \{ socket\.telemetryRejectedReason = undefined; \}/);
   assert.match(server, /cancelActiveContentValidation: \(nowMs\) => cancelActiveContentValidation\(nowMs\)/);
   assert.match(server, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
-  assert.match(server, /reportTimelineStatus: \(status\) => broadcastJson\(status\)/);
+  assert.match(
+    server,
+    /reportTimelineStatus: \(status\) => \{\s*lastTelemetryTimelineBroadcastAtMs = performance\.now\(\);\s*broadcastJson\(status\);\s*\}/,
+    'an accepted telemetry snapshot is broadcast, and tells the room timer it need not repeat it',
+  );
   assert.match(server, /reportRoomStatus: \(nowMs\) => broadcastJson\(youtubeTimeline\.roomStatusPayload\(nowMs\)\)/);
   assert.match(server, /completeRoomSongCommand: \(commandId\) => roomSongCommands\.complete\(commandId\)/);
   assert.match(server, /type: 'room-song-command-complete'/);

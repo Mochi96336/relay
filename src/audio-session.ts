@@ -2957,12 +2957,19 @@ export class AudioSession {
         && (this.backingExpected || this.backingExpectationReleaseHold)
       );
 
+      // The joining source enters through this crossfade as soon as it is
+      // real. Waiting for its peer too let it play through the ordinary sum
+      // whenever the peer happened to be missing at that moment; the crossfade
+      // then started from the peer alone and cut the source already heard.
+      // With the peer missing, the zero-blend endpoint is silence.
+      const joiningSourceReal = this.sourceJoinSafetyPending === 'mic'
+        ? !micAudibleMissing
+        : !backingSourceMissing;
       if (
         this.sourceJoinSafetyPending !== null
         && this.sourceJoinSafetyActive === null
         && effectiveTwoSourceOwnership
-        && !micAudibleMissing
-        && !backingSourceMissing
+        && joiningSourceReal
       ) {
         this.sourceJoinSafetyActive = this.sourceJoinSafetyPending;
         this.sourceJoinSafetyPending = null;

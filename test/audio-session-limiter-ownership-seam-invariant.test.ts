@@ -209,6 +209,70 @@ test('retained Backing cannot lose two-source headroom before it becomes silent'
   assert.equal(rearmed[0]!.clippedSamples, 0);
 });
 
+/**
+ * A source's retained tail ending in a hole longer than concealment covers,
+ * then more retained PCM: what a phone that drops off mid-song leaves behind
+ * when some of its last packets never arrived.
+ */
+function retainedTailWithHole(source: 'mic' | 'backing') {
+  const session = new AudioSession({
+    sampleRate: RATE,
+    frameMs: FRAME_MS,
+    prebufferMs: 0,
+    backingGain: 0.65,
+    retentionMs: 3_000,
+    backingRetentionMs: 3_000,
+  });
+  session.setMicExpected(true);
+  session.setBackingExpected(true);
+  session.setMicGainDb(24);
+  session.start(0);
+
+  const holeStart = Math.round(RATE * 0.6);
+  const holeEnd = Math.round(RATE * 0.75);
+  const tailEnd = Math.round(RATE * 1.0);
+  const departing = (generation: number, from: number, to: number, value: number) => (
+    constantMicFrame(generation, from, to - from, value)
+  );
+  if (source === 'mic') {
+    session.ingestMic(departing(1, 0, holeStart, 1_000), RATE, 0);
+    session.ingestMic(departing(1, holeEnd, tailEnd, 1_000), RATE, 0);
+    session.ingestBacking(constantMicFrame(1, 0, RATE * 2, 20_000), RATE, 0);
+  } else {
+    session.ingestMic(constantMicFrame(1, 0, RATE * 2, 1_000), RATE, 0);
+    session.ingestBacking(departing(1, 0, holeStart, 20_000), RATE, 0);
+    session.ingestBacking(departing(1, holeEnd, tailEnd, 20_000), RATE, 0);
+  }
+
+  session.drain(() => {}, 180, 100);
+  if (source === 'mic') session.setMicExpected(false);
+  else session.setBackingExpected(false);
+
+  let clippedWhileRetained = 0;
+  for (let nowMs = 200; nowMs <= 1_000; nowMs += 20) {
+    session.drain((_pcm, evidence) => {
+      clippedWhileRetained += evidence.clippedSamples;
+    }, nowMs, 1);
+  }
+  return clippedWhileRetained;
+}
+
+test('a hole in a departing Mic tail does not release two-source headroom early', () => {
+  assert.equal(
+    retainedTailWithHole('mic'),
+    0,
+    'the retained Mic PCM after the hole must still play under the two-source bus',
+  );
+});
+
+test('a hole in a departing Backing tail does not release two-source headroom early', () => {
+  assert.equal(
+    retainedTailWithHole('backing'),
+    0,
+    'the retained Backing PCM after the hole must still play under the two-source bus',
+  );
+});
+
 test('Backing returning from full silence cannot outrun two-source summing headroom', () => {
   const session = new AudioSession({
     sampleRate: RATE,

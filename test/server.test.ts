@@ -10,6 +10,7 @@ import {
   startRelay,
   toInt16,
   pulseTrain,
+  waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
 
@@ -527,14 +528,18 @@ describe('timing calibration', () => {
       publisher.send(playingTelemetry);
       await primeStreams(backing, publisher);
 
-      await startCalibrationCollecting(publisher, monitor, async () => {
+      const collecting = await startCalibrationCollecting(publisher, monitor, async () => {
         publisher.send(playingTelemetry);
         await primeStreams(backing, publisher);
       });
 
       await sendPcmInChunks(backing, silence(2));
 
-      const failed = await monitor.waitFor(
+      // Only a failure of the run that is collecting. On a loaded runner a start
+      // can be refused and retried, and that refusal is a failed status too.
+      const failed = await waitForNewMessage(
+        monitor,
+        monitor.messages.indexOf(collecting),
         (m) => m.type === 'timing-calibration-status' && m.state === 'failed',
         6_000,
       );

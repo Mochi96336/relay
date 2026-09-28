@@ -88,6 +88,26 @@ export type RelaySocketServerOptions = {
   relayKey: string | null;
   heartbeatMs: number;
   maxPayloadBytes?: number;
+  /** Lets sockets that ask for it (`compress=1`) negotiate STATUS_DEFLATE. */
+  statusDeflate?: boolean;
+};
+
+/**
+ * Compression for status sockets. Status JSON repeats the same keys, and
+ * mostly the same values, several times a second; with the dictionary carried
+ * from message to message even a 4 KB window shrinks it about ninefold.
+ *
+ * Only a socket whose URL asks for it (`compress=1`) negotiates it. A browser
+ * compresses everything it sends on a deflating socket, so the sockets that
+ * carry audio - the singer's publisher socket and Listen's - never ask.
+ */
+const STATUS_DEFLATE = {
+  serverMaxWindowBits: 12,
+  clientMaxWindowBits: 12,
+  zlibDeflateOptions: { memLevel: 4 },
+  // ws leaves messages under 1 KB uncompressed by default: most status is.
+  threshold: 64,
+  concurrencyLimit: 10,
 };
 
 /**
@@ -444,7 +464,7 @@ export function createRelayWebSocketServer(
 ) {
   const wss = new WebSocketServer({
     noServer: true,
-    perMessageDeflate: false,
+    perMessageDeflate: options.statusDeflate ? STATUS_DEFLATE : false,
     maxPayload: options.maxPayloadBytes ?? DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
   });
   const socketPath = options.path ?? '/ws';
@@ -461,6 +481,11 @@ export function createRelayWebSocketServer(
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
+    }
+
+    // ws negotiates compression from this header alone; see STATUS_DEFLATE.
+    if (url.searchParams.get('compress') !== '1') {
+      delete request.headers['sec-websocket-extensions'];
     }
 
     wss.handleUpgrade(request, socket, head, (webSocket) => {

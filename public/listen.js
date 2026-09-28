@@ -307,7 +307,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       || pendingSocket
       || socket
     ) return;
-    const next = new WebSocket(wsUrl());
+    // Carries the room audio.
+    const next = new WebSocket(wsUrl({ compress: false }));
     pendingSocket = next;
     next.binaryType = 'arraybuffer';
     try {

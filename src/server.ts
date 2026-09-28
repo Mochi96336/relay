@@ -218,6 +218,7 @@ const server = createRelayHttpServer({
 const wss = createRelayWebSocketServer(server, {
   relayKey,
   heartbeatMs: HEARTBEAT_MS,
+  statusDeflate: relayConfig.statusDeflate,
 });
 const {
   sendJson,

@@ -1189,7 +1189,8 @@ function updateCalibrateButton() {
 
 function connectSocket() {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl());
+    // Carries the Mic's PCM whenever WebTransport is unavailable.
+    const ws = new WebSocket(wsUrl({ compress: false }));
     ws.binaryType = 'arraybuffer';
     ws.addEventListener('open', () => {
       sendParticipantAuthentication(ws);

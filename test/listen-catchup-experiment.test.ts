@@ -9,7 +9,7 @@ test('offline Listen catch-up A/B exercises the real Worklet and a gated candida
     { cwd: process.cwd(), encoding: 'utf8', timeout: 90_000, maxBuffer: 2 * 1024 * 1024 },
   );
   assert.equal(child.error, undefined, child.error?.message);
-  assert.equal(child.status, 0, child.stderr || child.stdout);
+  assert.equal(child.status, 0, child.stderr || child.stdout || 'Listen A/B probe exited unsuccessfully');
   const report = JSON.parse(child.stdout);
   assert.equal(report.current.mode, 'current');
   assert.equal(report.candidate.mode, 'candidate');

@@ -4,6 +4,8 @@ import {
   type AudioPacketSource,
 } from './audio-packet.js';
 
+import type { RepairRoundTripTiming } from './retransmit-deadline-estimate.js';
+
 const HALF_SEQUENCE_SPACE = 0x8000_0000;
 const CONTINUITY_TTL_MS = 15_000;
 const MAX_CONTINUITY_SNAPSHOTS = 8;
@@ -235,6 +237,7 @@ export class AudioPacketReceiver {
   /** Smoothed first-attempt repair round trip (request sent to repeat received). */
   private repairRoundTripMs: number | null = null;
   private repairRoundTripVariationMs = 0;
+  private repairRoundTripObservations = 0;
   readonly retransmitRequestsPerSecond: number;
   private retransmitTokens = 0;
   private retransmitTokensAtMs: number | null = null;
@@ -436,6 +439,16 @@ export class AudioPacketReceiver {
     };
   }
 
+  /** Research-only RTT evidence. Existing request scheduling is unchanged. */
+  retransmitTiming(): RepairRoundTripTiming | null {
+    if (this.repairRoundTripMs === null) return null;
+    return {
+      rttMs: this.repairRoundTripMs,
+      variationMs: this.repairRoundTripVariationMs,
+      observations: this.repairRoundTripObservations,
+    };
+  }
+
   /**
    * Whether a hole may keep holding the ordered stream, for a late arrival or
    * a requested repeat. The caller owns this answer because only the mix
@@ -513,6 +526,7 @@ export class AudioPacketReceiver {
     const state = this.retransmitRequested.get(sequence);
     if (!state || state.attempts !== 1 || state.dispatchedAtMs === null) return;
     const sample = Math.max(0, nowMs - state.dispatchedAtMs);
+    this.repairRoundTripObservations += 1;
     if (this.repairRoundTripMs === null) {
       this.repairRoundTripMs = sample;
       this.repairRoundTripVariationMs = sample / 2;

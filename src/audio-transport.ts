@@ -5,6 +5,7 @@ import {
   type AudioPacketRetransmitRequest,
   type AudioPacketRetransmitStats,
 } from './audio-packet-receiver.js';
+import type { RepairRoundTripTiming } from './retransmit-deadline-estimate.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 
 export type AudioPacketVersion = 1 | 2;
@@ -21,6 +22,7 @@ export interface AudioTransport {
   pendingRetransmitRequests?(): AudioPacketRetransmitRequest[];
   retransmitRequestsSent?(requests: readonly AudioPacketRetransmitRequest[], nowMs: number): void;
   retransmitStats?(): AudioPacketRetransmitStats;
+  retransmitTiming?(): RepairRoundTripTiming | null;
 }
 
 export type WebSocketAudioTransportOptions =
@@ -83,6 +85,10 @@ class SequencedWebSocketAudioTransport implements AudioTransport {
 
   retransmitStats() {
     return this.receiver.retransmitStats();
+  }
+
+  retransmitTiming() {
+    return this.receiver.retransmitTiming();
   }
 }
 

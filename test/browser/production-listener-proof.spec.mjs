@@ -540,6 +540,8 @@ test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ow
       window.dispatchEvent(new CustomEvent('relay-microphone-ended', {
         detail: { reason: 'proof-delayed-owner' },
       }));
+      // Returning the pre-dispatch state prevents real intervening room status
+      // from being mistaken for a forbidden recovery while Mic owns this page.
       return { atMs, muted, ownedHere };
     });
     await page.waitForTimeout(250);

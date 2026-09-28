@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { encodePcmFrame } from '../src/pcm-frame.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -14,23 +14,6 @@ const FAST = {
 
 function pcm(ms = 40) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  startIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 3_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(startIndex).find(predicate);
-    if (found) return found;
-    await sleep(10);
-  }
-  throw new Error(
-    `Timed out waiting for new message; saw ${client.messages.slice(startIndex).map((message) => message.type).join(', ')}`,
-  );
 }
 
 async function requestProduct(

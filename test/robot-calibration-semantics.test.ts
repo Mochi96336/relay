@@ -5,8 +5,8 @@ import test from 'node:test';
 import {
   RelayClient,
   sendPcmInChunks,
-  sleep,
   startRelay,
+  waitForNewMessage,
 } from './helpers/harness.js';
 
 const RATE = 48_000;
@@ -23,23 +23,6 @@ const ROBOT_FAST = {
   RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
   RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
 };
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 5_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out waiting for new message. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
-}
 
 test('Robot manual realignment starts boot-probe from fresh silent capture without YouTube telemetry', async () => {
   const server = await startRelay(ROBOT_FAST);

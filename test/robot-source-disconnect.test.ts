@@ -9,6 +9,7 @@ import {
   sleep,
   startRelay,
   toInt16,
+  waitForNewMessage,
 } from './helpers/harness.js';
 
 const RATE = 48_000;
@@ -37,23 +38,6 @@ function probeAudio(leadMs = 20, tailMs = 1_800) {
     probe,
     Buffer.alloc(Math.round((RATE * tailMs) / 1000) * 2),
   ]);
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 5_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out waiting for new message. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
 }
 
 function assertBootUsesDelta(status: Record<string, any>, expectedDeltaMs: number) {

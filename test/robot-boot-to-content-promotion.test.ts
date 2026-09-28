@@ -10,6 +10,7 @@ import {
   sleep,
   startRelay,
   toInt16,
+  waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
 
@@ -74,23 +75,6 @@ function probeAudio(leadMs = 20, tailMs = 1_800) {
     probe,
     Buffer.alloc(Math.round((RATE * tailMs) / 1000) * 2),
   ]);
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 8_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out after ${timeoutMs} ms. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
 }
 
 /**

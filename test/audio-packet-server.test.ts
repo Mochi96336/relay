@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { encodeAudioPacket } from '../src/audio-packet.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 
@@ -25,21 +25,6 @@ async function waitForBinaryFrames(client: RelayClient, count: number, timeoutMs
     await sleep(10);
   }
   throw new Error(`Timed out waiting for ${count} binary frames; saw ${client.binaryFrames}`);
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: any) => boolean,
-  timeoutMs = 2_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const match = client.messages.slice(fromIndex).find(predicate);
-    if (match) return match;
-    await sleep(10);
-  }
-  throw new Error(`Timed out waiting for a new matching message after index ${fromIndex}`);
 }
 
 async function receiverStats(server: Awaited<ReturnType<typeof startRelay>>) {

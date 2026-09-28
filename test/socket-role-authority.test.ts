@@ -5,9 +5,9 @@ import {
   RelayClient,
   pulseTrain,
   sendPcmInChunks,
-  sleep,
   startRelay,
   toInt16,
+  waitForNewMessage,
 } from './helpers/harness.js';
 
 const RATE = 48_000;
@@ -15,23 +15,6 @@ const INFRA_KEY = 'ab'.repeat(32);
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
-async function waitForNewMessage(
-  client: RelayClient,
-  fromIndex: number,
-  predicate: (message: Record<string, any>) => boolean,
-  timeoutMs = 3_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const found = client.messages.slice(fromIndex).find(predicate);
-    if (found) return found;
-    await sleep(20);
-  }
-  throw new Error(
-    `Timed out waiting for new message. Saw: ${client.messages.slice(fromIndex).map((m) => m.type).join(', ')}`,
-  );
 }
 
 async function authenticateInfrastructure(client: RelayClient) {

@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { estimateRepairDeadline, type RepairDeadlineEstimate } from './retransmit-deadline-estimate.js';
 
 import { createWebSocketAudioTransport, type AudioPacketVersion, type AudioTransport } from './audio-transport.js';
 import type { AudioTransportConfig } from './audio-transport-config.js';
@@ -29,6 +30,16 @@ export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
 
 export type MicRuntimeOptions = {
   audioTransportConfig: AudioTransportConfig;
+  /**
+   * Research-only diagnostic callback. Does not change live request/hold rules.
+   * A global mix headroom is NOT an authoritative per-sequence deadline.
+   */
+  onRetransmitDeadlineObservation?: (observation: {
+    nowMs: number;
+    mixHeadroomMs: number | null;
+    pendingRequests: number;
+    estimate: RepairDeadlineEstimate;
+  }) => void;
   firstFrameTimeoutMs: number;
   streamLiveMs: number;
   uplinkHealthTimeoutMs?: number;
@@ -348,6 +359,17 @@ export class MicRuntime {
     if (!requestable || !pathUp || generation === null) return 0;
     const requests = transport.pendingRetransmitRequests();
     if (requests.length === 0) return 0;
+    if (this.options.onRetransmitDeadlineObservation) {
+      this.options.onRetransmitDeadlineObservation({
+        nowMs,
+        mixHeadroomMs,
+        pendingRequests: requests.length,
+        estimate: estimateRepairDeadline({
+          mixHeadroomMs,
+          timing: transport.retransmitTiming?.() ?? null,
+        }),
+      });
+    }
 
     const byAttempt = new Map<number, number[]>();
     for (const { sequence, attempt } of requests) {

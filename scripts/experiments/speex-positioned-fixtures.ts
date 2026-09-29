@@ -121,6 +121,27 @@ for(const scenario of scenarios){
   }
   if(scenario.trueGapSamples)assert.equal(gapInfo?.trueSamples,scenario.trueGapSamples);
   if(scenario.id.startsWith('mic-packet-150'))samplesByCase.set(scenario.id,session.readMic(0,frontier));
+  // A Take is charged by the *emitted mix read*, not by ingest health.
+  // Replay only the interval spanning the 50 ms internal gap while real
+  // source PCM is available on either side; never count end starvation as
+  // evidence for the interior gap.
+  let takeEvidence: null | { gapSamples:number; starvedSamples:number; frames:number } = null;
+  if(scenario.trueGapSamples){
+    let gapSamples=0,starvedSamples=0,frames=0;
+    for(let at=0;at<=120;at+=20){
+      const n=session.drain((_pcm,evidence)=>{
+        gapSamples+=scenario.source==='mic'?evidence.micGapSamples:evidence.backingGapSamples;
+        starvedSamples+=scenario.source==='mic'?evidence.micStarvedSamples:evidence.backingStarvedSamples;
+        frames++;
+      },at,1);
+      assert.equal(n,1,'Take evidence fixture must emit one exact 20 ms frame');
+    }
+    assert.equal(gapSamples,gapInfo!.observedSamples,
+      scenario.id+': actual emitted Take evidence differs from gap read evidence');
+    assert.equal(starvedSamples,0,
+      'the internal gap fixture must not be mistaken for exhausted source frontier');
+    takeEvidence={gapSamples,starvedSamples,frames};
+  }
   if(scenario.id==='mic-ppm-steps'){
     const high=Math.max(...observations.slice(45,90).map(x=>x.micTrimSamples));
     const low=Math.min(...observations.slice(90,135).map(x=>x.micTrimSamples));
@@ -130,7 +151,7 @@ for(const scenario of scenarios){
   summaries.push({
     id:scenario.id,source:scenario.source,epochPreserved:session.generation===epoch,
     restarts:observations.filter(x=>x.captureRestarted).length,
-    gap:gapInfo,
+    gap:gapInfo,takeEvidence,
     healthGapMs:scenario.source==='mic'?session.health().micGapMs:session.health().backingGapMs,
     frontier,observations,
   });
@@ -148,6 +169,7 @@ console.log(JSON.stringify({
   packetizationExactSamples:a.length,
   scenarios:summaries.map((v:any)=>({
     id:v.id,source:v.source,events:v.observations.length,
-    restarts:v.restarts,gap:v.gap,healthGapMs:v.healthGapMs,frontier:v.frontier,
+    restarts:v.restarts,gap:v.gap,takeEvidence:v.takeEvidence,
+    healthGapMs:v.healthGapMs,frontier:v.frontier,
   })),
 },null,2));

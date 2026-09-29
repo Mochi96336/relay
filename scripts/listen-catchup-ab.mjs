@@ -102,7 +102,7 @@ function retireHead(processor, count) {
   return count - remaining;
 }
 
-function experimentalLatencyTrim(events) {
+function experimentalLatencyTrim(events, productionHardTrim) {
   // This deliberately lives OUTSIDE public/playback-worklet.js. It is an
   // isolated candidate for auditory and deadline testing, not production DSP.
   return function observeQueueLatency(renderedSamples) {
@@ -114,13 +114,35 @@ function experimentalLatencyTrim(events) {
     if (excess <= this.trimMarginSamples || !this.playing) return;
     if (this.recoveryFadeRemainingSamples > 0 || this.trimFadeRemainingSamples > 0) return;
 
+    // Rejecting a candidate period must NOT strand an unvoiced source at
+    // permanently high latency. Re-run precisely the original trim policy
+    // for this already observed excess, preserving the real Worklet hard bound.
+    const fallback = (reason) => {
+      this.queueLatencyWindowSamples = this.trimWindowSamples;
+      this.queueLatencyLowSamples = this.prebufferSamples + excess;
+      const before = this.trimmedSamples;
+      productionHardTrim.call(this, 0);
+      events.push({
+        kind: 'hard-fallback', reason,
+        atOutputSample: this.renderClockSamples,
+        removed: this.trimmedSamples - before,
+        correlation: null,
+      });
+    };
+
     const join = this.trimFadeSamples; // 5 ms already supported by Worklet.
     const minLag = Math.round(RATE / 400); // 2.5 ms
     const maxLag = Math.min(excess, Math.round(RATE / 60)); // 16.67 ms
-    if (maxLag < minLag || this.queuedSamples < maxLag + join + this.prebufferSamples) return;
+    if (maxLag < minLag || this.queuedSamples < maxLag + join + this.prebufferSamples) {
+      fallback('short-or-insufficient-data');
+      return;
+    }
 
     const probe = new Float32Array(maxLag + join);
-    if (this.readQueuedHead(probe, probe.length) !== probe.length) return;
+    if (this.readQueuedHead(probe, probe.length) !== probe.length) {
+      fallback('incomplete-queue');
+      return;
+    }
 
     // Normalised, DC-free correlation of the same join window at both sides.
     let meanA = 0;
@@ -128,7 +150,10 @@ function experimentalLatencyTrim(events) {
     meanA /= join;
     let energyA = 0;
     for (let i = 0; i < join; i++) energyA += (probe[i] - meanA) ** 2;
-    if (energyA / join < 1e-8) return;
+    if (energyA / join < 1e-8) {
+      fallback('silence-or-low-energy');
+      return;
+    }
 
     let bestLag = 0;
     let bestScore = -1;
@@ -164,17 +189,23 @@ function experimentalLatencyTrim(events) {
     // This is intentionally conservative: if the program is non-periodic,
     // postpone trim rather than inventing a splice. The production overflow
     // guard remains unchanged and is deliberately scored separately.
-    if (bestScore < 0.86) return;
+    if (bestScore < 0.86) {
+      fallback('weak-correlation');
+      return;
+    }
 
     // Reuse the current Worklet's established overlapping-crossfade output
     // path. Only the choice of what to remove is experimental.
     const overlap = this.readQueuedHead(this.trimFadeFrom, join);
-    if (overlap === 0) return;
+    if (overlap === 0) {
+      fallback('missing-overlap');
+      return;
+    }
     const removed = retireHead(this, bestLag);
     this.trimmedSamples += removed;
     this.trimFadeTotalSamples = overlap;
     this.trimFadeRemainingSamples = overlap;
-    events.push({ atOutputSample: this.renderClockSamples, removed, correlation: bestScore });
+    events.push({ kind: 'correlated-overlap', atOutputSample: this.renderClockSamples, removed, correlation: bestScore });
   };
 }
 
@@ -192,7 +223,10 @@ async function makeProcessor(experiment, trimEvents) {
     registerProcessor(_name, klass) { Constructor = klass; },
   }, { filename: 'playback-worklet.js' });
   assert.ok(Constructor);
-  if (experiment) Constructor.prototype.observeQueueLatency = experimentalLatencyTrim(trimEvents);
+  if (experiment) {
+    const hardTrim = Constructor.prototype.observeQueueLatency;
+    Constructor.prototype.observeQueueLatency = experimentalLatencyTrim(trimEvents, hardTrim);
+  }
   else {
     const original = Constructor.prototype.observeQueueLatency;
     Constructor.prototype.observeQueueLatency = function(...args) {
@@ -269,7 +303,8 @@ async function simulate(experimental) {
     finalQueuedMs: (processor.queuedSamples / RATE) * 1_000,
     targetPrebufferMs: (processor.prebufferSamples / RATE) * 1_000,
     unrecoveredExcessMs: Math.max(0, ((processor.queuedSamples - processor.prebufferSamples) / RATE) * 1_000),
-    overlapAccepted: events.filter(event => event.correlation !== null).length,
+    overlapAccepted: events.filter(event => event.kind === 'correlated-overlap').length,
+    hardFallbacks: events.filter(event => event.kind === 'hard-fallback').length,
     overlapCorrelationMin: events.filter(event => event.correlation !== null).length
       ? Math.min(...events.filter(event => event.correlation !== null).map(event => event.correlation)) : null,
     trimEvents: events.map(event => ({
@@ -315,7 +350,7 @@ const report = {
     'This is a reproducible synthetic comparison, not proof of better listening quality.',
     'Correlation search runs in an offline Node VM, not on an actual mobile audio thread.',
     'This bounded proposal handles only normal latency trim; production overflow remains unchanged.',
-    'Pure hiss/nonperiodic input may prevent any correction; unrecoveredExcessMs is a necessary safety metric.',
+    'Uncorrelated input falls back to the existing production latency trim; hardFallbacks must be inspected.',
     'This artificial extra-production fixture is not the same as a stalled link re-delivering its pending packets.',
     'Real music recordings and real-device measurements are required before enabling it in Listen.',
   ],

@@ -121,7 +121,7 @@ assert.equal(steadyCandidate.length,p[0].postLatencySamples,
 // promise a phase-perfect source/sample origin for all fractional ratios.
 // Quantify the residual fractional offset rather than silently declaring
 // the filter output to be authoritative Take PCM.
-function phaseFit(samples, group) {
+function phaseFit(samples, group, native=true) {
   const stop=samples.length-250;
   assert.ok(stop>400,'group is too short to identify steady voiced phase');
   const signed=group.generation%2?1:-1;
@@ -144,13 +144,38 @@ function phaseFit(samples, group) {
     if(rms<best.rms)best={fractionalSamples,rms};
   }
   assert.ok(best.rms<15,
-    'even after offline fractional phase fitting, Speex is not consistent with positioned source time');
+    'even after offline fractional phase fitting, source audio is not consistent with positioned time');
+  const analytic=group.analyticFractionalOffsetSamples;
+  let correctedRms=null;
+  if(native) {
+    // The Speex public source defines output delay as the nearest integer
+    // to input_delay*(output_rate/input_rate). Their difference explains
+    // the measurable residual phase WITHOUT tuning to the known test tone.
+    assert.ok(Math.abs(analytic-best.fractionalSamples)<0.015,
+      'documented input/output latency ratio did not predict observed phase');
+    let correctedErr2=0,n=0;
+    for(let i=250;i<stop;i++){
+      const pos=i-analytic,j=Math.floor(pos),t=pos-j;
+      const p0=samples[j-1],p1=samples[j],p2=samples[j+1],p3=samples[j+2];
+      const aligned=p1+0.5*t*(p2-p0+t*(2*p0-5*p1+4*p2-p3+
+        t*(3*(p1-p2)+p3-p0)));
+      const time=(group.nominalFirstTarget+i)/48000;
+      const ref=signed*(8000*Math.sin(2*Math.PI*220*time)+
+        2500*Math.sin(2*Math.PI*1980*time));
+      correctedErr2+=(aligned-ref)**2;n++;
+    }
+    correctedRms=Math.sqrt(correctedErr2/n);
+    assert.ok(correctedRms<15,
+      'derived fractional-delay interpolation failed to map known stable source time');
+  }
   return {comparedSamples:stop-250,integerDelayOnlyRms:noShiftRms,
     bestOfflineFractionalPhaseSamples:best.fractionalSamples,
-    bestOfflinePhaseFitRms:best.rms};
+    bestOfflinePhaseFitRms:best.rms,
+    documentedDerivedOffsetSamples:native?analytic:null,
+    documentedDelayCorrectedRms:correctedRms};
 }
 const baseGroup=p[0];
-const baselineFit=phaseFit(steadyBase,baseGroup);
+const baselineFit=phaseFit(steadyBase,baseGroup,false);
 const nativeFit=phaseFit(steadyCandidate,baseGroup);
 const phaseSteadyTone={
   comparedSamples:Math.min(baselineFit.comparedSamples,nativeFit.comparedSamples),
@@ -158,6 +183,8 @@ const phaseSteadyTone={
   nativeIntegerDelayRms:nativeFit.integerDelayOnlyRms,
   nativeBestOfflineFractionalOffsetSamples:nativeFit.bestOfflineFractionalPhaseSamples,
   nativeBestOfflineFitRms:nativeFit.bestOfflinePhaseFitRms,
+  nativeDocumentedDerivedOffsetSamples:nativeFit.documentedDerivedOffsetSamples,
+  nativeDocumentedDelayCorrectedRms:nativeFit.documentedDelayCorrectedRms,
   integrationBlockedUntilExactPhaseMapping:true,
 };
 const gapGroups=groupFor('mic-gap-50ms');
@@ -189,7 +216,7 @@ const report={
   syntheticGapPreview:'Zeros in candidate WAV include both true gap and deliberately quarantined unknown filter tail; this is not a candidate Take mix.',
   scenarios:verified,
   unresolved:[
-    'Integer filter latency alone leaves a quality/ratio-dependent fractional sample phase; offline tone fitting is diagnostic and CANNOT act as a live correction.',
+    'Both public latency getters explain the fixed-ratio fractional offset; the offline cubic delay correction is NOT a proven realtime adapter with dynamic ratios.',
     'The per-group post-filter stream is not yet bound to AudioSession absolute output sample authority.',
     'Trailing delayed SRC output is not recovered/attributed at a source gap; reported unfilled target count must not be hidden.',
     'No actual Take candidate mix, source-gap declicking, realistic estimator uncertainty, or ARM profiling has passed.',

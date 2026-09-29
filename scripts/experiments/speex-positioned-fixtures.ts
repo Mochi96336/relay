@@ -121,6 +121,15 @@ for(const scenario of scenarios){
   }
   if(scenario.trueGapSamples)assert.equal(gapInfo?.trueSamples,scenario.trueGapSamples);
   if(scenario.id.startsWith('mic-packet-150'))samplesByCase.set(scenario.id,session.readMic(0,frontier));
+  if(scenario.id==='mic-packet-150a'||scenario.id==='mic-gap-50ms'){
+    // Source-timeline audio only; mixed Take audio and its evidence are
+    // collected separately. Gap concealment may be audible in this read,
+    // but the evidence explicitly remains missing source capture.
+    const pcm=session.readMic(0,frontier);
+    const bytes=Buffer.alloc(pcm.length*2);
+    pcm.forEach((sample,index)=>bytes.writeInt16LE(sample,index*2));
+    await writeFile(path.join(OUT,'baseline-'+scenario.id+'.pcm'),bytes);
+  }
   // A Take is charged by the *emitted mix read*, not by ingest health.
   // Replay only the interval spanning the 50 ms internal gap while real
   // source PCM is available on either side; never count end starvation as

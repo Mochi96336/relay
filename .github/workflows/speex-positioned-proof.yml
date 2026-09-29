@@ -44,6 +44,7 @@ jobs:
           done
       - name: Audit boundaries independently at all three filter qualities
         run: |
+          set -euo pipefail
           for quality in 3 5 8; do
             node scripts/experiments/check-speex-positioned.mjs positioned-evidence \
               "native-q${quality}.ndjson" "comparison-q${quality}.json" \
@@ -60,7 +61,9 @@ jobs:
               filterLatencySamples:gap.knownFilterLatencySamples,
               unfilledTargetEstimate:gap.nativeUnfilledTargetEstimate,
               baselineSteadyRms:r.phaseSteadyTone.baselineCubicRms,
-              candidateSteadyRms:r.phaseSteadyTone.nativePostDelayRms,
+              candidateIntegerDelayRms:r.phaseSteadyTone.nativeIntegerDelayRms,
+              candidateFractionalOffsetSamples:r.phaseSteadyTone.nativeBestOfflineFractionalOffsetSamples,
+              candidateOfflinePhaseFitRms:r.phaseSteadyTone.nativeBestOfflineFitRms,
             };
           });
           fs.writeFileSync('positioned-evidence/quality-tradeoff.json',JSON.stringify(rows,null,2)+'\n');

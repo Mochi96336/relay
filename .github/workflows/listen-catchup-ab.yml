@@ -26,11 +26,16 @@ jobs:
             node scripts/listen-catchup-ab.mjs --signal "$signal" --self-test --out "listen-ab/$signal"               > "report-$signal.json"
           done
           node scripts/listen-catchup-ab.mjs --signal mixed --burst-frames 0 --self-test --out listen-ab/no-burst             > report-no-burst.json
+          # The shorter 0.5 s window is a stress probe, not production.
+          # Separately test the REAL 10 s latency-trim window to expose
+          # whether periodic overlap convergence is operationally plausible.
+          node scripts/listen-catchup-ab.mjs --signal tone --seconds 26 --trim-window-ms 10000 \
+            --out listen-ab/production-window-tone > report-prod-tone.json
       - name: Present bounded numeric comparisons
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const names = ['mixed', 'tone', 'hiss', 'no-burst'];
+          const names = ['mixed', 'tone', 'hiss', 'no-burst', 'prod-tone'];
           const summaries = [];
           for (const name of names) {
             const report = JSON.parse(fs.readFileSync('report-' + name + '.json', 'utf8'));
@@ -52,6 +57,8 @@ jobs:
               baselineUnderruns: x.underruns,
               candidateUnderruns: y.underruns,
               candidateOverlaps: y.overlapAccepted,
+              candidateHardFallbacks: y.hardFallbacks,
+              trimWindowMs: report.fixture.experimentalTrimWindowMs,
               candidateMinCorrelation: y.overlapCorrelationMin,
               nodeBaselineWorstMs: x.nodeVmWorstProcessMs,
               nodeCandidateWorstMs: y.nodeVmWorstProcessMs,

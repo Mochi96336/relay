@@ -31,10 +31,16 @@ static double ms_since(struct timespec a, struct timespec b) {
     return (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1000000.0;
 }
 
+static double ideal_signal(double source_position) {
+    const double t = source_position / RATE;
+    return 5500.0 * sin(2.0 * PI * 220.0 * t)
+         + 3500.0 * sin(2.0 * PI * 1980.0 * t);
+}
+
 static spx_int16_t synth(int64_t index) {
     const double t = (double)index / RATE;
-    const double x = 5500.0 * sin(2.0 * PI * 220.0 * t)
-                   + 3500.0 * sin(2.0 * PI * 1980.0 * t);
+    (void)t;
+    const double x = ideal_signal((double)index);
     return (spx_int16_t)lround(x);
 }
 
@@ -78,6 +84,10 @@ static void run_case(int seconds, int ppm, int first) {
     int64_t relay_samples = 0;
     int corrected_frames = 0;
     uint64_t relay_energy = 0, speex_energy = 0;
+    double relay_ideal_err2 = 0, speex_ideal_err2 = 0;
+    uint64_t relay_ideal_n = 0, speex_ideal_n = 0;
+    const int fixed_speex_latency = speex_resampler_get_output_latency(resampler);
+    const double source_per_output = (double)ratio_num / ratio_den;
     double carry = 0;
     double speex_boundary_step = 0;
     double relay_boundary_step = 0;
@@ -107,6 +117,15 @@ static void run_case(int seconds, int ppm, int first) {
             for (spx_uint32_t i = 0; i < out_len; ++i) {
                 const int64_t v = output[i];
                 speex_energy += (uint64_t)(v * v);
+                const int64_t j = speex_samples + i;
+                // Account for the filter's reported group delay. Skip cold
+                // start, where its initial padding is intentionally audible.
+                if (j >= RATE / 10) {
+                    const double ideal = ideal_signal((j - fixed_speex_latency) * source_per_output);
+                    const double error = output[i] - ideal;
+                    speex_ideal_err2 += error * error;
+                    speex_ideal_n++;
+                }
             }
             if (out_len > 0) { last_speex = output[out_len - 1]; have_speex = 1; }
             speex_samples += out_len;
@@ -131,6 +150,13 @@ static void run_case(int seconds, int ppm, int first) {
             const spx_int16_t sample = linear_sample(input[left], input[left < FRAME - 1 ? left + 1 : left], fraction);
             const int64_t v = sample;
             relay_energy += (uint64_t)(v * v);
+            const int64_t j = relay_samples + i;
+            if (j >= RATE / 10) {
+                const double ideal = ideal_signal(j * source_per_output);
+                const double error = sample - ideal;
+                relay_ideal_err2 += error * error;
+                relay_ideal_n++;
+            }
             if (i == 0) first_sample = sample;
             if (i == out_len - 1) last_sample = sample;
         }
@@ -159,11 +185,13 @@ static void run_case(int seconds, int ppm, int first) {
            "\"relaySamples\":%lld,\"relayCorrectedFrames\":%d,"
            "\"speexSamples\":%lld,\"speexInputLatency\":%d,"
            "\"speexOutputLatency\":%d,\"relayBoundaryStep\":%.0f,"
-           "\"speexBoundaryStep\":%.0f,\"relayEnergy\":%llu,\"speexEnergy\":%llu,\"relayCpuMs\":%.4f,\"speexCpuMs\":%.4f}",
+           "\"speexBoundaryStep\":%.0f,\"relayEnergy\":%llu,\"speexEnergy\":%llu,"
+           "\"relayIdealRms\":%.4f,\"speexIdealRms\":%.4f,\"relayCpuMs\":%.4f,\"speexCpuMs\":%.4f}",
            first ? "" : ",",
            ppm, (long long)total_input, expected_output, (long long)relay_samples,
            corrected_frames, (long long)speex_samples, in_latency, out_latency,
            relay_boundary_step, speex_boundary_step, (unsigned long long)relay_energy, (unsigned long long)speex_energy,
+           sqrt(relay_ideal_err2 / relay_ideal_n), sqrt(speex_ideal_err2 / speex_ideal_n),
            cpu_relay_ms, cpu_speex_ms);
     speex_resampler_destroy(resampler);
 }

@@ -220,74 +220,46 @@
           </details>
 
           <details id="diagnostics-panel" class="diagnostics-panel">
-            <summary>Technical details</summary>
+            <summary data-i18n="diag.title">Technical details</summary>
             <div class="diagnostics-body">
               <div class="diagnostics-toolbar">
-                <span id="diagnostics-state">Open to refresh</span>
-                <button id="copy-diagnostics" class="text-action" type="button">Copy diagnostics</button>
+                <span id="diagnostics-state" data-i18n="diag.state.openToRefresh">Open to refresh</span>
+                <button id="copy-diagnostics" class="text-action" type="button" data-i18n="diag.copy">Copy diagnostics</button>
               </div>
 
-              <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics">
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true">Overview</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="session" aria-selected="false">Session</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="mic" aria-selected="false">Mic</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false">Audio</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false">Timing</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="robot" aria-selected="false">Robot</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="raw" aria-selected="false">Raw</button>
+              <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics" data-i18n-aria-label="diag.tabsAria">
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true" data-i18n="diag.tab.overview">Overview</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="session" aria-selected="false" data-i18n="diag.tab.session">Session</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="mic" aria-selected="false" data-i18n="diag.tab.mic">Mic</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false" data-i18n="diag.tab.audio">Audio</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false" data-i18n="diag.tab.timing">Timing</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="robot" aria-selected="false" data-i18n="diag.tab.robot">Robot</button>
+                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="raw" aria-selected="false" data-i18n="diag.tab.raw">Raw</button>
               </div>
 
               <section class="diagnostics-view" data-diagnostics-panel="overview">
-                <dl class="diagnostic-ledger">
-                  <div class="diagnostic-pair"><dt>Product health</dt><dd id="diag-overview-health">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Mic audio</dt><dd id="diag-overview-mic">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Lifecycle</dt><dd id="diag-overview-lifecycle">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Host ready</dt><dd id="diag-overview-ready">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Session ready</dt><dd id="diag-overview-session-ready">—</dd></div>
-                </dl>
+                <dl id="diag-overview-ledger" class="diagnostic-ledger"></dl>
               </section>
 
               <section class="diagnostics-view" data-diagnostics-panel="session" hidden>
-                <dl class="diagnostic-ledger">
-                  <div class="diagnostic-pair"><dt>People</dt><dd id="diag-session-people">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Microphone</dt><dd id="diag-session-mic">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Song</dt><dd id="diag-session-song">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Take</dt><dd id="diag-session-take">—</dd></div>
-                </dl>
+                <dl id="diag-session-ledger" class="diagnostic-ledger"></dl>
               </section>
 
               <section class="diagnostics-view" data-diagnostics-panel="mic" hidden>
-                <p class="diagnostics-intro">Whether the singer's voice is actually reaching the room, and what the phone, network and Relay are doing about it. Updates every second while open.</p>
-                <dl id="diag-mic-ledger" class="diagnostic-ledger">
-                  <div class="diagnostic-pair"><dt>Mic audio</dt><dd>—</dd></div>
-                </dl>
+                <p class="diagnostics-intro" data-i18n="diag.micIntro">Whether the voice is actually reaching the room, and what the device, network and Relay are doing about it. Updates every second while open.</p>
+                <dl id="diag-mic-ledger" class="diagnostic-ledger"></dl>
               </section>
 
               <section class="diagnostics-view" data-diagnostics-panel="audio" hidden>
-                <dl class="diagnostic-ledger">
-                  <div class="diagnostic-pair"><dt>Route</dt><dd id="diag-audio-route">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Backing</dt><dd id="diag-audio-backing">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Mic stream</dt><dd id="diag-audio-mic">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Mixer</dt><dd id="diag-audio-mix">—</dd></div>
-                </dl>
+                <dl id="diag-audio-ledger" class="diagnostic-ledger"></dl>
               </section>
 
               <section class="diagnostics-view" data-diagnostics-panel="timing" hidden>
-                <dl class="diagnostic-ledger">
-                  <div class="diagnostic-pair"><dt>Product timing</dt><dd id="diag-timing-product">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Timeline</dt><dd id="diag-timing-player">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Calibration</dt><dd id="diag-timing-calibration">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Player offset</dt><dd id="diag-timing-offset">—</dd></div>
-                </dl>
+                <dl id="diag-timing-ledger" class="diagnostic-ledger"></dl>
               </section>
 
               <section class="diagnostics-view" data-diagnostics-panel="robot" hidden>
-                <dl class="diagnostic-ledger">
-                  <div class="diagnostic-pair"><dt>Route mode</dt><dd id="diag-robot-mode">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Source page</dt><dd id="diag-robot-source">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Backing</dt><dd id="diag-robot-backing">—</dd></div>
-                  <div class="diagnostic-pair"><dt>Player</dt><dd id="diag-robot-player">—</dd></div>
-                </dl>
+                <dl id="diag-robot-ledger" class="diagnostic-ledger"></dl>
               </section>
 
               <section class="diagnostics-view" data-diagnostics-panel="raw" hidden>

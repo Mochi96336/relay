@@ -1,5 +1,11 @@
+import { DIAGNOSTICS_MESSAGES } from './diagnostics-copy.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
+
+// Registered here as well as by system-details.js: whichever module loads
+// first must find the copy, and identical registrations are no-ops.
+window.relayI18n?.registerMessages?.(DIAGNOSTICS_MESSAGES);
+const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 
 const REFRESH_MS = 1_000;
 let initialized = false;
@@ -13,16 +19,18 @@ function initialize() {
 
   const heading = document.createElement('h4');
   heading.className = 'diagnostics-subheading';
-  heading.textContent = 'Calibration measurements';
+  heading.textContent = t('diag.cal.heading');
+  const labels = [];
 
   const ledger = document.createElement('dl');
   ledger.className = 'diagnostic-ledger';
 
-  function pair(label, id) {
+  function pair(labelKey, id) {
     const row = document.createElement('div');
     row.className = 'diagnostic-pair';
     const term = document.createElement('dt');
-    term.textContent = label;
+    term.textContent = t(labelKey);
+    labels.push([term, labelKey]);
     const value = document.createElement('dd');
     value.id = id;
     value.textContent = '—';
@@ -32,22 +40,23 @@ function initialize() {
   }
 
   const nodes = {
-    applied: pair('Applied / requested', 'diag-calibration-applied'),
-    contentState: pair('Content state', 'diag-content-state'),
-    contentProgress: pair('Content progress', 'diag-content-progress'),
-    contentAgreement: pair('Content agreement', 'diag-content-agreement'),
-    contentCandidate: pair('Content candidate', 'diag-content-candidate'),
-    contentConfidence: pair('Content confidence', 'diag-content-confidence'),
-    contentLevels: pair('Content levels', 'diag-content-levels'),
-    contentSegments: pair('Content segments', 'diag-content-segments'),
-    validation: pair('Runtime validation', 'diag-content-validation'),
-    validationLast: pair('Validation last measure', 'diag-content-validation-last'),
-    pathState: pair('Path probe', 'diag-path-state'),
-    pathCorrelations: pair('Probe correlations', 'diag-path-correlations'),
-    pathDifference: pair('Path difference', 'diag-path-difference'),
-    playerDelta: pair('Player delta', 'diag-path-player-delta'),
-    effective: pair('Effective calibration', 'diag-path-effective'),
+    applied: pair('diag.cal.applied', 'diag-calibration-applied'),
+    contentState: pair('diag.cal.contentState', 'diag-content-state'),
+    contentProgress: pair('diag.cal.contentProgress', 'diag-content-progress'),
+    contentAgreement: pair('diag.cal.contentAgreement', 'diag-content-agreement'),
+    contentCandidate: pair('diag.cal.contentCandidate', 'diag-content-candidate'),
+    contentConfidence: pair('diag.cal.contentConfidence', 'diag-content-confidence'),
+    contentLevels: pair('diag.cal.contentLevels', 'diag-content-levels'),
+    contentSegments: pair('diag.cal.contentSegments', 'diag-content-segments'),
+    validation: pair('diag.cal.validation', 'diag-content-validation'),
+    validationLast: pair('diag.cal.validationLast', 'diag-content-validation-last'),
+    pathState: pair('diag.cal.pathState', 'diag-path-state'),
+    pathCorrelations: pair('diag.cal.pathCorrelations', 'diag-path-correlations'),
+    pathDifference: pair('diag.cal.pathDifference', 'diag-path-difference'),
+    playerDelta: pair('diag.cal.playerDelta', 'diag-path-player-delta'),
+    effective: pair('diag.cal.effective', 'diag-path-effective'),
   };
+  let latestTiming = null;
 
   timingPanel.append(heading, ledger);
 
@@ -83,8 +92,21 @@ function initialize() {
     return value.replaceAll('-', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
 
+  /** A server enum in the current locale; an unknown value still reads as words. */
+  function named(group, value) {
+    if (typeof value !== 'string' || !value) return '—';
+    const key = `diag.cal.${group}.${value}`;
+    const text = t(key);
+    return text === key ? title(value) : text;
+  }
+
+  function micSong(mic, song) {
+    return t('diag.cal.micSong', { mic, song });
+  }
+
   function render(timing) {
     if (!timing || typeof timing !== 'object') return;
+    latestTiming = timing;
 
     const applied = finite(timing.appliedMicAdvanceMs);
     const requested = finite(timing.requestedMicAdvanceMs);
@@ -93,7 +115,7 @@ function initialize() {
       : `${ms(applied)} / ${ms(requested)}`;
 
     const contentActive = timing.calibrationKind === 'content';
-    nodes.contentState.textContent = contentActive ? title(timing.state) : 'Not running';
+    nodes.contentState.textContent = contentActive ? named('phase', timing.state) : t('diag.cal.notRunning');
     const progress = finite(timing.progress);
     nodes.contentProgress.textContent = contentActive && progress !== null
       ? `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`
@@ -102,12 +124,12 @@ function initialize() {
     const agreed = finite(timing.windowsAgreed);
     const needed = finite(timing.windowsNeeded);
     nodes.contentAgreement.textContent = contentActive && agreed !== null && needed !== null
-      ? `${Math.round(agreed)} / ${Math.round(needed)} windows${timing.provisional === true ? ' · provisional' : ''}`
+      ? `${t('diag.cal.windows', { agreed: Math.round(agreed), needed: Math.round(needed) })}${timing.provisional === true ? ` · ${t('diag.cal.provisional')}` : ''}`
       : '—';
     nodes.contentCandidate.textContent = contentActive ? ms(timing.micLagMs) : '—';
     nodes.contentConfidence.textContent = contentActive ? confidence(timing.confidence) : '—';
     nodes.contentLevels.textContent = contentActive
-      ? `Mic ${dbfs(timing.micLevelDbfs)} · Song ${dbfs(timing.backingLevelDbfs)}`
+      ? micSong(dbfs(timing.micLevelDbfs), dbfs(timing.backingLevelDbfs))
       : '—';
     nodes.contentSegments.textContent = contentActive && Array.isArray(timing.segmentLagsMs)
       && timing.segmentLagsMs.length > 0
@@ -116,15 +138,16 @@ function initialize() {
 
     const validation = timing.validation;
     if (validation && typeof validation === 'object') {
-      const baseline = ms(validation.baselineLagMs);
-      const suspect = finite(validation.suspectLagMs) === null ? '' : ` · suspect ${ms(validation.suspectLagMs)}`;
+      const parts = [named('validationState', validation.state), t('diag.cal.baseline', { ms: ms(validation.baselineLagMs) })];
+      if (finite(validation.suspectLagMs) !== null) parts.push(t('diag.cal.suspect', { ms: ms(validation.suspectLagMs) }));
       const next = finite(validation.nextValidationInMs);
-      nodes.validation.textContent = `${title(validation.state)} · baseline ${baseline}${suspect}${next === null ? '' : ` · next ${Math.round(next / 1000)} s`}`;
+      if (next !== null) parts.push(t('diag.cal.nextIn', { seconds: Math.round(next / 1000) }));
+      nodes.validation.textContent = parts.join(' · ');
       const measured = finite(validation.lastMeasuredLagMs);
       const delta = finite(validation.lastDeltaMs);
       nodes.validationLast.textContent = measured === null
         ? '—'
-        : `${ms(measured)} · Δ ${ms(delta)} · ${title(validation.lastOutcome)}`;
+        : `${ms(measured)} · ${t('diag.cal.delta', { ms: ms(delta) })} · ${named('outcome', validation.lastOutcome)}`;
     } else {
       nodes.validation.textContent = '—';
       nodes.validationLast.textContent = '—';
@@ -133,12 +156,12 @@ function initialize() {
     const boot = timing.bootCalibration;
     const probeActive = timing.probeActive === true;
     nodes.pathState.textContent = probeActive
-      ? `${title(timing.probePhase)} · ${title(timing.calibrationKind)}`
-      : boot ? 'Complete' : 'Idle';
+      ? `${named('probe', timing.probePhase)} · ${named('kind', timing.calibrationKind)}`
+      : t(boot ? 'diag.cal.pathComplete' : 'diag.cal.pathIdle');
 
     const correlations = timing.probeCorrelation;
     nodes.pathCorrelations.textContent = correlations && typeof correlations === 'object'
-      ? `Mic ${confidence(correlations.mic)} · Song ${confidence(correlations.backing)}`
+      ? micSong(confidence(correlations.mic), confidence(correlations.backing))
       : '—';
 
     let pathDifference = null;
@@ -150,16 +173,16 @@ function initialize() {
         : null;
       nodes.pathDifference.textContent = pathDifference === null
         ? '—'
-        : `${ms(pathDifference)} · Mic ${ms(micLatency)} · Song ${ms(backingLatency)}`;
+        : t('diag.cal.pathMicSong', { difference: ms(pathDifference), mic: ms(micLatency), song: ms(backingLatency) });
     } else {
       nodes.pathDifference.textContent = '—';
     }
 
     const liveDelta = finite(timing.robotPlayerOffsetMs);
-    nodes.playerDelta.textContent = liveDelta === null ? 'Waiting for playback' : ms(liveDelta);
+    nodes.playerDelta.textContent = liveDelta === null ? t('diag.cal.waitingPlayback') : ms(liveDelta);
     nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null
-      ? `${ms(pathDifference + liveDelta)} · confidence ${confidence(boot.confidence)}`
-      : boot ? 'Path ready · waiting for playback' : '—';
+      ? t('diag.cal.effectiveValue', { ms: ms(pathDifference + liveDelta), confidence: confidence(boot.confidence) })
+      : boot ? t('diag.cal.pathReady') : '—';
   }
 
   function request() {
@@ -217,6 +240,11 @@ function initialize() {
   diagnosticsPanel.addEventListener('toggle', () => {
     if (diagnosticsPanel.open) connect();
     else stop();
+  });
+  window.addEventListener('relay-locale-changed', () => {
+    heading.textContent = t('diag.cal.heading');
+    for (const [term, key] of labels) term.textContent = t(key);
+    render(latestTiming);
   });
   if (diagnosticsPanel.open) connect();
 }

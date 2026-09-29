@@ -176,7 +176,7 @@ describe('Mic diagnostics model', () => {
   it('turns clock drift into what it does to the performance', () => {
     const slow = rows(liveStatus((s) => { s.audio.timeline.micClockDrift = { ppm: 80, windows: 24, spanMs: 115_000 }; })).drift;
     assert.equal(slow.value, '+80 ppm');
-    assert.equal(slow.note, 'The phone clock runs slow: the buffer shrinks about 4.8 ms per minute.');
+    assert.equal(slow.note, 'The device clock runs slow: the buffer shrinks about 4.8 ms per minute.');
     const fast = rows(liveStatus((s) => { s.audio.timeline.micClockDrift = { ppm: -30, windows: 24, spanMs: 115_000 }; })).drift;
     assert.match(fast.note, /drifts about 1\.8 ms per minute later/);
     const fine = rows(liveStatus((s) => { s.audio.timeline.micClockDrift = { ppm: 4, windows: 24, spanMs: 115_000 }; })).drift;
@@ -192,7 +192,7 @@ describe('Mic diagnostics model', () => {
     })).drift;
     assert.deepEqual(
       [slow.value, slow.note, slow.tone],
-      ['+80 ppm', 'The phone clock runs slow; Relay stretches the Mic to match.', 'ok'],
+      ['+80 ppm', 'The device clock runs slow; Relay stretches the Mic to match.', 'ok'],
     );
     const fast = rows(liveStatus((s) => {
       s.audio.timeline.micClockDrift = { ppm: -30, windows: 24, spanMs: 115_000 };
@@ -200,7 +200,7 @@ describe('Mic diagnostics model', () => {
     })).drift;
     assert.deepEqual(
       [fast.note, fast.tone],
-      ['The phone clock runs fast; Relay shortens the Mic to match.', 'ok'],
+      ['The device clock runs fast; Relay shortens the Mic to match.', 'ok'],
     );
     const untrimmed = rows(liveStatus((s) => {
       s.audio.timeline.micClockDrift = { ppm: 80, windows: 24, spanMs: 115_000 };

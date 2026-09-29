@@ -24,6 +24,8 @@ async function installProductionDomHarness(page) {
       history: [],
     };
     let revision = 1;
+    let holdSocketOpens = false;
+    const heldSockets = [];
 
     function mark(name) {
       if (timeline[name] === undefined) timeline[name] = performance.now();
@@ -129,12 +131,21 @@ async function installProductionDomHarness(page) {
         this.binaryType = 'blob';
         this.kind = 'unknown';
         this.authParticipantId = null;
+        this.requestTypes = new Set();
         sockets.push(this);
         queueMicrotask(() => {
-          if (this.readyState !== FakeWebSocket.CONNECTING) return;
-          this.readyState = FakeWebSocket.OPEN;
-          this.dispatchEvent(new Event('open'));
+          if (holdSocketOpens) {
+            heldSockets.push(this);
+            return;
+          }
+          this.open();
         });
+      }
+
+      open() {
+        if (this.readyState !== FakeWebSocket.CONNECTING) return;
+        this.readyState = FakeWebSocket.OPEN;
+        this.dispatchEvent(new Event('open'));
       }
 
       send(data) {
@@ -161,6 +172,7 @@ async function installProductionDomHarness(page) {
         let message;
         try { message = JSON.parse(data); } catch { return; }
         commands.push({ ...message, socketKind: this.kind, at: performance.now() });
+        this.requestTypes.add(message.type);
 
         if (message.type === 'participant-authenticate') {
           this.authParticipantId = message.participantId ?? null;
@@ -361,6 +373,23 @@ async function installProductionDomHarness(page) {
       emitSilentPcm() {
         if (!captureNode?.port?.onmessage) throw new Error('capture worklet is not ready');
         captureNode.port.onmessage({ data: new ArrayBuffer(1_920) });
+      },
+      /** New sockets stay CONNECTING until released, like a slow network. */
+      holdSocketOpens() {
+        holdSocketOpens = true;
+      },
+      releaseSocketOpens() {
+        holdSocketOpens = false;
+        for (const socket of heldSockets.splice(0)) socket.open();
+      },
+      disconnectDiagnostics() {
+        // Technical details is the one page socket that asks for both the
+        // YouTube timeline and the calibration status in its snapshot burst.
+        const diagnostics = sockets.find((candidate) => candidate.readyState === FakeWebSocket.OPEN
+          && candidate.requestTypes.has('youtube-timeline-request')
+          && candidate.requestTypes.has('timing-calibration-status-request'));
+        if (!diagnostics) throw new Error('Technical details socket is not connected');
+        diagnostics.close();
       },
       setStartResponseDelay(ms) {
         startResponseDelayMs = Math.max(0, Number(ms) || 0);
@@ -703,4 +732,43 @@ test('production DOM: People and More close with Escape without regressing Syste
   expect(await more.evaluate((node) => node.open)).toBe(false);
   await page.keyboard.press('Escape');
   expect(await system.evaluate((node) => node.open)).toBe(false);
+});
+
+test('production DOM: a locale switch keeps the Technical details connection state', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+
+  await page.locator('#room-more > summary').click();
+  await page.locator('#open-system').click();
+  await page.locator('#diagnostics-panel > summary').click();
+  const state = page.locator('#diagnostics-state');
+  const setLocale = (locale) => page.evaluate((next) => window.relayI18n.setLocale(next, { persist: false }), locale);
+
+  // OPEN: the socket stays connected across the switch in both directions.
+  await expect(state).toHaveText('Connected');
+  await setLocale('zh-Hant');
+  await expect(state).toHaveText('已連線');
+  await setLocale('en');
+  await expect(state).toHaveText('Connected');
+
+  // RECONNECTING: the socket dropped and the retry has not started yet.
+  await page.evaluate(() => {
+    window.__relayInteractionHarness.holdSocketOpens();
+    window.__relayInteractionHarness.disconnectDiagnostics();
+  });
+  await expect(state).toHaveText('Reconnecting…');
+  await setLocale('zh-Hant');
+  await expect(state).toHaveText('重新連線中…');
+
+  // CONNECTING: the retry socket exists but has not opened.
+  await expect(state).toHaveText('更新中…', { timeout: 3_000 });
+  await setLocale('en');
+  await expect(state).toHaveText('Refreshing…');
+
+  await page.evaluate(() => window.__relayInteractionHarness.releaseSocketOpens());
+  await expect(state).toHaveText('Connected');
+  await setLocale('zh-Hant');
+  await expect(state).toHaveText('已連線');
 });

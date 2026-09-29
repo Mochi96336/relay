@@ -59,7 +59,7 @@ test('ProductStatus stays live while readiness refresh belongs only to Technical
 });
 
 test('Mic transport evidence is sampled from statusz only on the Technical details cadence', () => {
-  assert.match(system, /import \{ describeMicAudio, describeMicTransport \} from '\.\/mic-diagnostics-model\.js'/);
+  assert.match(system, /import \{ describeMicTransport \} from '\.\/mic-diagnostics-model\.js'/);
   assert.match(system, /fetch\(statuszUrl\(\), \{ cache: 'no-store' \}\)/);
   const refreshStart = system.indexOf('async function refreshReadiness()');
   const refreshEnd = system.indexOf('function stopReadinessRefresh()', refreshStart);
@@ -67,8 +67,10 @@ test('Mic transport evidence is sampled from statusz only on the Technical detai
   assert.match(system.slice(refreshStart, refreshEnd), /refreshStatusz\(\)/,
     'statusz rides the readiness refresh, which only runs while Technical details is open');
   assert.match(system, /statusz: latestStatusz \?\? null/, 'Copy diagnostics carries the Mic evidence');
-  assert.match(html, /id="diag-overview-mic"/);
-  assert.match(html, /id="diag-mic-ledger"/);
+  for (const tab of ['overview', 'session', 'mic', 'audio', 'timing', 'robot']) {
+    assert.match(html, new RegExp(`id="diag-${tab}-ledger"`));
+    assert.match(system, new RegExp(`renderLedger\\('diag-${tab}-ledger'`));
+  }
 });
 
 test('legacy backing attention remains a compatibility projection outside normal System', () => {

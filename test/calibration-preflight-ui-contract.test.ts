@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import { DIAGNOSTICS_MESSAGES } from '../public/diagnostics-copy.js';
+
 const ui = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8');
 const command = readFileSync(new URL('../public/calibration-command.js', import.meta.url), 'utf8');
 const system = readFileSync(new URL('../public/calibration-system-details.js', import.meta.url), 'utf8');
@@ -31,6 +33,8 @@ test('preflight command authenticates the Mic owner before sending calibration',
 });
 
 test('System timing diagnostics expose content, validation, and path evidence separately', () => {
+  const english = DIAGNOSTICS_MESSAGES.en;
+  const keyFor = (text: string) => Object.keys(english).find((key) => key.startsWith('diag.cal.') && english[key] === text);
   for (const marker of [
     'Content progress',
     'Content agreement',
@@ -44,10 +48,15 @@ test('System timing diagnostics expose content, validation, and path evidence se
     'Player delta',
     'Effective calibration',
   ]) {
-    assert.ok(system.includes(marker), `missing System calibration field: ${marker}`);
+    const key = keyFor(marker);
+    assert.ok(key, `missing System calibration copy: ${marker}`);
+    assert.ok(system.includes(`'${key}'`), `missing System calibration field: ${marker}`);
   }
   assert.match(system, /value === null \|\| value === undefined \|\| value === ''/,
     'diagnostics must not coerce unknown/null timing evidence to numeric zero');
-  assert.match(system, /Path ready · waiting for playback/,
+  assert.equal(english['diag.cal.pathReady'], 'Path ready · waiting for playback');
+  assert.match(system, /t\('diag\.cal\.pathReady'\)/,
     'path calibration must remain distinct from a complete player-relative alignment');
+  assert.doesNotMatch(system, /'Not running'|'Waiting for playback'|'Calibration measurements'/,
+    'calibration measurements follow the locale instead of hard-coding English');
 });

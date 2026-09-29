@@ -112,7 +112,7 @@ function describePath(status, t) {
   if (demotions > 0) history.push(plural(t, 'diag.mic.path.fellBack', demotions));
   if (retries > 0) history.push(plural(t, 'diag.mic.path.retried', retries));
   const suffix = history.length > 0
-    ? ` ${t('diag.mic.path.history', { history: history.join(t('diag.listSeparator')) })}`
+    ? `${t('diag.sentenceGap')}${t('diag.mic.path.history', { history: history.join(t('diag.listSeparator')) })}`
     : '';
 
   if (path === 'webtransport') {
@@ -197,13 +197,13 @@ function describeDeviceSend(status, t) {
   const totalMs = samplesToMs(dropped.total, rate);
   const transport = sender.transport ?? {};
   const queued = count(transport.webTransportBacklogQueued);
-  const smoothed = queued > 0 ? ` ${plural(t, 'diag.mic.send.burst', queued)}` : '';
+  const smoothed = queued > 0 ? `${t('diag.sentenceGap')}${plural(t, 'diag.mic.send.burst', queued)}` : '';
 
   if (totalMs === 0) {
     return row('send', label, t('diag.mic.send.none'), `${t('diag.mic.send.noneNote')}${smoothed}`, 'ok');
   }
   const onlyConnecting = parts.length === 1 && parts[0][0] === 'disconnected';
-  const context = onlyConnecting ? ` ${t('diag.mic.send.connectingNormal')}` : '';
+  const context = onlyConnecting ? `${t('diag.sentenceGap')}${t('diag.mic.send.connectingNormal')}` : '';
   const described = parts.length > 0
     ? parts.map(([reason, ms]) => t('diag.mic.send.part', {
       reason: t(`diag.mic.send.reason.${reason}`),

@@ -105,17 +105,92 @@ describe('Overview', () => {
 });
 
 describe('Timing', () => {
-  it('says how late a clamped voice is and why', () => {
-    const rows = byKey(describeTiming({
+  function clamped(overrides: Facts, t = en) {
+    return byKey(describeTiming({
       product: { timing: { state: 'clamped' } },
       readiness: readiness(),
-      source: source({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 }),
-    }, en));
+      source: source(overrides),
+    }, t));
+  }
+
+  it('blames the buffer only for what the buffer limited', () => {
+    const rows = clamped({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 });
     assert.deepEqual([rows.alignment.value, rows.alignment.tone], ['Buffer too small', 'bad']);
     assert.deepEqual(
       [rows.offset.value, rows.offset.note, rows.offset.tone],
-      ['200 ms', 'Needs 245 ms but the buffer allows 200 ms, so the voice is 45 ms late.', 'bad'],
+      [
+        '200 ms',
+        'Needs 245 ms, gets 200 ms, so the voice is 45 ms late. '
+          + 'The buffer allows at most 200 ms ahead; raising RELAY_LIVE_PREBUFFER_MS makes room.',
+        'bad',
+      ],
     );
+    const zhRows = clamped({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 }, zh);
+    assert.equal(zhRows.alignment.value, '緩衝不足');
+    assert.equal(
+      zhRows.offset.note,
+      '需要 245 ms，實際是 200 ms，所以人聲晚了 45 ms。緩衝最多只容許提前 200 ms；調高 RELAY_LIVE_PREBUFFER_MS 可以放寬。',
+    );
+  });
+
+  it('blames late Mic audio, not the buffer, for a frontier hold-back', () => {
+    // A 120 ms request the buffer affords, held back 50 ms because Mic audio
+    // has not arrived that far: applied 70 ms, and the buffer is not at fault.
+    const facts = { requestedMicAdvanceMs: 120, appliedMicAdvanceMs: 70, micFrontierCorrectionMs: 50 };
+    const rows = clamped(facts);
+    assert.deepEqual([rows.alignment.value, rows.alignment.tone], ['Mic audio late', 'bad']);
+    assert.match(rows.alignment.note, /Retry the Mic/);
+    assert.equal(
+      rows.offset.note,
+      'Needs 120 ms, gets 70 ms, so the voice is 50 ms late. '
+        + 'Mic audio is arriving late, so 50 ms is held back; retrying the Mic starts a fresh capture.',
+    );
+    assert.doesNotMatch(rows.offset.note, /buffer/i);
+
+    const zhRows = clamped(facts, zh);
+    assert.equal(zhRows.alignment.value, 'Mic 音訊晚到');
+    assert.equal(
+      zhRows.offset.note,
+      '需要 120 ms，實際是 70 ms，所以人聲晚了 50 ms。Mic 音訊送達偏晚，因此往後退了 50 ms；重試 Mic 會重新開始擷取。',
+    );
+    assert.doesNotMatch(zhRows.offset.note, /緩衝/);
+  });
+
+  it('names both causes when the buffer clamps and the frontier holds back', () => {
+    // The buffer allowed 200 of 300 ms; the frontier then held back 40 more.
+    const facts = { requestedMicAdvanceMs: 300, appliedMicAdvanceMs: 160, micFrontierCorrectionMs: 40 };
+    const rows = clamped(facts);
+    assert.equal(rows.alignment.value, 'Buffer too small, Mic late');
+    assert.equal(
+      rows.offset.note,
+      'Needs 300 ms, gets 160 ms, so the voice is 140 ms late. '
+        + 'The buffer allows at most 200 ms ahead; raising RELAY_LIVE_PREBUFFER_MS makes room. '
+        + 'Mic audio is arriving late, so 40 ms is held back; retrying the Mic starts a fresh capture.',
+    );
+    assert.equal(clamped(facts, zh).alignment.value, '緩衝不足且 Mic 晚到');
+  });
+
+  it('says early, not late, when a negative request is clipped by the kept history', () => {
+    // Alignment asks to read 500 ms behind; history allows 300 ms, so the voice
+    // is not delayed enough and plays 200 ms early.
+    const facts = { requestedMicAdvanceMs: -500, appliedMicAdvanceMs: -300 };
+    const rows = clamped(facts);
+    assert.equal(rows.alignment.value, 'Buffer too small');
+    assert.equal(
+      rows.offset.note,
+      'Needs -500 ms, gets -300 ms, so the voice is 200 ms early. '
+        + 'The kept Mic history allows at most 300 ms behind.',
+    );
+    assert.doesNotMatch(rows.offset.note, /late|PREBUFFER/);
+    assert.equal(
+      clamped(facts, zh).offset.note,
+      '需要 -500 ms，實際是 -300 ms，所以人聲早了 200 ms。保留的 Mic 歷史最多只容許延後 300 ms。',
+    );
+  });
+
+  it('keeps a generic clamp when the serving alignment is unknown', () => {
+    const rows = byKey(describeTiming({ product: { timing: { state: 'clamped' } } }, en));
+    assert.deepEqual([rows.alignment.value, rows.alignment.tone], ['Correction limited', 'bad']);
   });
 
   it('names the measurement method or admits it is an estimate', () => {
@@ -192,7 +267,7 @@ describe('locales', () => {
       source: source({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 }),
     }, zh));
     assert.equal(rows.alignment.value, '緩衝不足');
-    assert.equal(rows.offset.note, '需要 245 ms，但緩衝只容許 200 ms，所以人聲晚了 45 ms。');
+    assert.equal(rows.offset.note, '需要 245 ms，實際是 200 ms，所以人聲晚了 45 ms。緩衝最多只容許提前 200 ms；調高 RELAY_LIVE_PREBUFFER_MS 可以放寬。');
     const overview = byKey(describeOverview({
       readiness: readiness({ ready: false, reasons: ['backing-not-streaming', 'robot-source-not-connected'] }),
     }, zh));
@@ -230,6 +305,7 @@ describe('locales', () => {
       for (const row of rows) {
         for (const field of [row.label, row.value, row.note]) {
           assert.doesNotMatch(String(field), /diag\.|\{\w+\}/, `${row.key}: ${field}`);
+          if (t === zh) assert.doesNotMatch(String(field), /。 /, `${row.key}: no space after 。`);
         }
       }
     }

@@ -231,14 +231,59 @@ const ALIGNMENT_TONES = {
   clamped: 'bad',
 };
 
+/**
+ * Why the serving read-ahead differs from the one alignment asked for.
+ *
+ * AudioSession clamps the request to the configured buffers first, then holds
+ * the read head back by the live Mic frontier correction when Mic audio has
+ * not arrived that far yet. Those are different faults with different repairs
+ * (a larger prebuffer or history vs a fresh Mic capture), so they are reported
+ * apart. `short` is signed: positive means the voice plays later than it
+ * should, negative earlier.
+ */
+function readAheadShortfall(source) {
+  const applied = finite(source?.appliedMicAdvanceMs);
+  const requested = finite(source?.requestedMicAdvanceMs);
+  if (applied === null || requested === null) return null;
+  const frontier = Math.max(0, finite(source.micFrontierCorrectionMs) ?? 0);
+  const short = requested - applied;
+  const budgetShort = short - frontier;
+  return {
+    requested,
+    applied,
+    short,
+    frontier,
+    /** What the buffers alone allowed, before the frontier hold-back. */
+    budgeted: applied + frontier,
+    bufferLimited: Math.abs(budgetShort) >= SHORTFALL_MS,
+    // The same line product issues draw for `mic-frontier-lagging`.
+    frontierLimited: frontier >= 0.5,
+  };
+}
+
+function clampCause(shortfall) {
+  if (!shortfall) return null;
+  if (shortfall.bufferLimited && shortfall.frontierLimited) return 'both';
+  if (shortfall.bufferLimited) return 'buffer';
+  if (shortfall.frontierLimited) return 'frontier';
+  return null;
+}
+
 export function describeTiming({ product, readiness, source } = {}, t = english) {
   const rows = [];
+  const shortfall = source ? readAheadShortfall(source) : null;
 
   const state = product?.timing?.state;
-  rows.push(Object.hasOwn(ALIGNMENT_TONES, state)
-    ? row('alignment', t('diag.timing.alignment'), t(`diag.timing.alignment.${state}`),
-      t(`diag.timing.alignment.${state}Note`), ALIGNMENT_TONES[state])
-    : unknown(t, 'alignment', 'diag.timing.alignment'));
+  if (state === 'clamped') {
+    const cause = clampCause(shortfall);
+    const key = cause ? `diag.timing.alignment.clamped.${cause}` : 'diag.timing.alignment.clamped';
+    rows.push(row('alignment', t('diag.timing.alignment'), t(key), t(`${key}Note`), 'bad'));
+  } else {
+    rows.push(Object.hasOwn(ALIGNMENT_TONES, state)
+      ? row('alignment', t('diag.timing.alignment'), t(`diag.timing.alignment.${state}`),
+        t(`diag.timing.alignment.${state}Note`), ALIGNMENT_TONES[state])
+      : unknown(t, 'alignment', 'diag.timing.alignment'));
+  }
 
   if (!source) {
     rows.push(unknown(t, 'method', 'diag.timing.method'));
@@ -257,18 +302,23 @@ export function describeTiming({ product, readiness, source } = {}, t = english)
     }
 
     const applied = finite(source.appliedMicAdvanceMs);
-    const requested = finite(source.requestedMicAdvanceMs);
-    const frontier = finite(source.micFrontierCorrectionMs) ?? 0;
     if (applied === null) {
       rows.push(unknown(t, 'offset', 'diag.timing.offset'));
-    } else if (requested !== null && Math.abs(requested - applied) >= SHORTFALL_MS) {
-      const notes = [t('diag.timing.offset.short', {
-        requested: Math.round(requested),
-        applied: Math.round(applied),
-        short: Math.round(Math.abs(requested - applied)),
+    } else if (shortfall && Math.abs(shortfall.short) >= SHORTFALL_MS) {
+      const notes = [t(shortfall.short > 0 ? 'diag.timing.offset.late' : 'diag.timing.offset.early', {
+        requested: Math.round(shortfall.requested),
+        applied: Math.round(shortfall.applied),
+        ms: Math.round(Math.abs(shortfall.short)),
       })];
-      if (frontier >= 0.5) notes.push(t('diag.timing.offset.frontier', { ms: Math.round(frontier) }));
-      rows.push(row('offset', t('diag.timing.offset'), `${Math.round(applied)} ms`, notes.join(' '), 'bad'));
+      if (shortfall.bufferLimited) {
+        notes.push(t(shortfall.budgeted >= 0 ? 'diag.timing.offset.bufferAhead' : 'diag.timing.offset.bufferBehind', {
+          limit: Math.round(Math.abs(shortfall.budgeted)),
+        }));
+      }
+      if (shortfall.frontierLimited) {
+        notes.push(t('diag.timing.offset.frontier', { ms: Math.round(shortfall.frontier) }));
+      }
+      rows.push(row('offset', t('diag.timing.offset'), `${Math.round(applied)} ms`, notes.join(t('diag.sentenceGap')), 'bad'));
     } else {
       rows.push(row('offset', t('diag.timing.offset'), `${Math.round(applied)} ms`, t('diag.timing.offset.note')));
     }

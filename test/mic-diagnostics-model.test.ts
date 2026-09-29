@@ -285,6 +285,24 @@ describe('Mic diagnostics model', () => {
       '這一秒沒有被壓低，但前幾秒常被壓低。已經連續 3 秒沒被壓低，滿 10 秒警告就會解除。',
     );
 
+    // Held down 50 ms: below what counts as a hot second, so it is calm for
+    // the warning, but the voice was held down and the row must not deny it.
+    const brief = { ...calm, lastWindow: { ...calm.lastWindow, heavyLimitedMs: 50 } };
+    const briefRow = levelRow(brief);
+    assert.deepEqual(
+      [briefRow.note, briefRow.tone],
+      [
+        'The last second was held down more than 3 dB for only 50 ms, too briefly to count, but the seconds before it were held down longer. Calm for 3 of the 10 seconds that clear the warning.',
+        'warn',
+      ],
+    );
+    assert.doesNotMatch(briefRow.note, /not held down/);
+    assert.equal(
+      levelRow(brief, diagnosticsTranslator('zh-Hant')).note,
+      '這一秒只被壓低超過 3 dB 共 50 ms，時間太短不算數，但前幾秒被壓得更久。已經連續 3 秒不算被壓低，滿 10 秒警告就會解除。',
+    );
+    assert.doesNotMatch(levelRow(brief, diagnosticsTranslator('zh-Hant')).note, /沒有被壓低/);
+
     const hot = levelRow({ ...calm, calmWindows: 0, lastWindow: { ...calm.lastWindow, heavyLimitedMs: 240 } });
     assert.match(hot.note, /^Held down more than 3 dB for 240 ms/);
   });

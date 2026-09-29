@@ -282,12 +282,15 @@ function describeLevel(status, t) {
     const calm = finite(level.calmWindows);
     const needed = finite(level.calmWindowsNeeded);
     // Calm windows count only while too loud, and only after the last hot
-    // one, so any here means the last second was not the problem.
+    // one, so any here means the last second did not count against the
+    // warning. It may still have been held down, just too briefly to count,
+    // and then the row says so rather than calling it untouched.
     const lastSecondCalm = calm === null ? heavyMs === 0 : calm > 0;
     if (lastSecondCalm) {
+      const kind = heavyMs > 0 ? 'loudBrief' : 'loudCalm';
       return row('level', label, value, needed === null
-        ? t('diag.mic.level.loudCalmNote', vars)
-        : t('diag.mic.level.loudCalmCountNote', { ...vars, calm: Math.round(calm ?? 0), needed: Math.round(needed) }),
+        ? t(`diag.mic.level.${kind}Note`, vars)
+        : t(`diag.mic.level.${kind}CountNote`, { ...vars, calm: Math.round(calm ?? 0), needed: Math.round(needed) }),
       'warn');
     }
     return row('level', label, value, t('diag.mic.level.loudNote', vars), 'warn');

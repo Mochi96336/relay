@@ -64,6 +64,8 @@ jobs:
               candidateIntegerDelayRms:r.phaseSteadyTone.nativeIntegerDelayRms,
               candidateFractionalOffsetSamples:r.phaseSteadyTone.nativeBestOfflineFractionalOffsetSamples,
               candidateOfflinePhaseFitRms:r.phaseSteadyTone.nativeBestOfflineFitRms,
+              documentedFractionalOffsetSamples:r.phaseSteadyTone.nativeDocumentedDerivedOffsetSamples,
+              candidateDocumentedPhaseCorrectedRms:r.phaseSteadyTone.nativeDocumentedDelayCorrectedRms,
             };
           });
           fs.writeFileSync('positioned-evidence/quality-tradeoff.json',JSON.stringify(rows,null,2)+'\n');

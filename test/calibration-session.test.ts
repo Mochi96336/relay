@@ -158,7 +158,7 @@ describe('CalibrationSession lifecycle', () => {
 
     lag = 999;
     calibration.start(0);
-    calibration.fail('Play YouTube on the phone before calibration.');
+    calibration.fail('Play the song before calibration.');
 
     assert.equal(calibration.status().state, 'failed');
     assert.equal(calibration.result?.micLagMs, 240, 'the applied measurement must survive a failed retry');

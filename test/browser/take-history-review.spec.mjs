@@ -243,7 +243,7 @@ test('Take History is review-first without changing newest-first selection seman
     }));
   });
   await expect(page.locator('#recording-player')).toHaveJSProperty('paused', true);
-  await expect(page.locator('.take-history-notice')).toHaveText('這支手機拿到 Mic，錄音播放已暫停。');
+  await expect(page.locator('.take-history-notice')).toHaveText('這台裝置拿到 Mic，錄音播放已暫停。');
 
   const noHorizontalScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(noHorizontalScroll).toBe(true);

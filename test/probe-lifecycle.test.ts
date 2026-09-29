@@ -81,7 +81,7 @@ test('probe retries are bounded and settle on a terminal failure', () => {
 
   assert.equal(lifecycle.beginRequest(request('mic', 2, 110)), true);
   const failure = lifecycle.failAttempt('mic', 'no acknowledgement', 120);
-  assert.match(failure?.message ?? '', /Phone microphone timing probe failed after 2 attempts/);
+  assert.match(failure?.message ?? '', /Microphone timing probe failed after 2 attempts/);
 
   const status = lifecycle.status(1_000);
   assert.equal(status.active, false);

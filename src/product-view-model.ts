@@ -204,7 +204,12 @@ function timingState(
   if (preparingCalibrationActive(input)) return 'calibrating';
   const performanceActive = input.roomSong.state === 1
     && (lifecycle === 'live' || lifecycle === 'recording');
-  if (!performanceActive) return calibrationActive(input) ? 'calibrating' : 'idle';
+  // Timing is the voice's alignment to the song. With nobody holding the Mic
+  // there is no voice to align, and Realign is refused without one, so a
+  // missing measurement is not something the room can or needs to recover.
+  if (!performanceActive || input.micOwnerId === null) {
+    return calibrationActive(input) ? 'calibrating' : 'idle';
+  }
   if (input.timing.alignmentClamped) return 'clamped';
   // Applied authority, not the candidate being measured. A background content
   // run deliberately leaves the previous confirmed result serving, so reading

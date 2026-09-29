@@ -51,13 +51,11 @@ test('Song is a fixed 100% reference while Mic is the only live mix variable', (
   assert.equal(app.includes('const FIXED_SONG_LEVEL = 100;'), true);
 });
 
-test('Mic exposes +40 dB manual headroom without raising automatic recommendation ceiling', () => {
+test('Mic exposes +40 dB manual headroom with no automatic gain recommendation', () => {
   assert.match(html, /id="mic-gain"[^>]*min="0"[^>]*max="40"[^>]*value="24"/);
   assert.match(source, /id="source-mic-gain"[^>]*min="0"[^>]*max="40"[^>]*value="24"/);
-  assert.equal(app.includes('const MAX_MIC_GAIN_DB = 40;'), true);
-  assert.equal(app.includes('const MAX_RECOMMENDED_MIC_GAIN_DB = 36;'), true);
-  assert.equal(app.includes('(suggested / MAX_MIC_GAIN_DB) * 100'), true);
-  assert.equal(app.includes('useMicGainSuggestion.addEventListener'), true);
+  assert.equal(app.includes('recommendedMicGainDb'), false);
+  assert.equal(html.includes('use-mic-gain-suggestion'), false);
 });
 
 test('realignment stays a direct More task while manual timing tweak is compatibility-only', () => {
@@ -153,8 +151,7 @@ test('System remains the only transient product sheet', () => {
   assert.match(ia, /window\.addEventListener\('relay-open-system', revealSystem\)/);
 });
 
-test('gain controls remain thin rails with explicit recommendation action', () => {
+test('gain controls remain thin rails', () => {
   assert.equal(css.includes('.adjust-range::-webkit-slider-runnable-track'), true);
   assert.equal(css.includes('height: 2px;'), true);
-  assert.equal(css.includes('.recommendation-marker'), true);
 });

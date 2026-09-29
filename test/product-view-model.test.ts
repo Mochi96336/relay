@@ -172,6 +172,42 @@ describe('product lifecycle and health', () => {
     assert.equal(model.room.mic.state, 'free');
   });
 
+  test('has no timing to recover while nobody holds the Mic', () => {
+    const freeMic = {
+      readiness: readiness({
+        micConnected: false,
+        micStreaming: false,
+        micFlowObserved: false,
+        calibrationValid: false,
+      }),
+      micOwnerId: null,
+      micOwnerNickname: null,
+      timing: {
+        timingMode: 'network-estimate' as const,
+        calibrationState: 'idle',
+        calibrationStale: true,
+        alignmentClamped: true,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: false,
+      },
+    };
+    const model = buildProductViewModel(input(freeMic));
+
+    assert.equal(model.lifecycle, 'live', 'the song is still playing to the room');
+    assert.equal(model.timing.state, 'idle');
+    assert.deepEqual(model.issues, []);
+    assert.equal(model.health, 'healthy');
+
+    const measuring = buildProductViewModel(input({
+      ...freeMic,
+      timing: { ...freeMic.timing, calibrationActive: true },
+    }));
+    assert.equal(measuring.timing.state, 'calibrating', 'a measurement in flight is still reported');
+
+    const held = buildProductViewModel(input({ ...freeMic, micOwnerId: 'participant-a' }));
+    assert.equal(held.timing.state, 'clamped', 'the same timing matters once someone holds the Mic');
+  });
+
   test('turns a prepared playback handoff into preparing without calling it unhealthy', () => {
     const model = buildProductViewModel(input({
       roomSong: { videoId: 'abcdefghijk', connected: true, clockAgeMs: 0, state: 1, handoffState: 'preparing' },

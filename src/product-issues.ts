@@ -1,3 +1,4 @@
+import type { MicLevelWarning } from './mic-level-monitor.js';
 import type { RoomMicState } from './room-domain.js';
 import type { TakeLifecycle } from './take-session.js';
 
@@ -10,6 +11,8 @@ export type ProductIssueCode =
   | 'mic-reconnecting'
   | 'mic-audio-stalled'
   | 'mic-input-clipping'
+  | 'mic-too-loud'
+  | 'mic-too-quiet'
   | 'timing-recovering'
   | 'timing-clamped'
   | 'take-failed';
@@ -28,6 +31,8 @@ export type ProductIssueCause =
   | 'mic-audio-stalled'
   | 'mic-audio-intermittent'
   | 'mic-input-clipping'
+  | 'mic-too-loud'
+  | 'mic-too-quiet'
   | 'timing-calibrating'
   | 'timing-fallback'
   | 'timing-stale'
@@ -41,6 +46,8 @@ export type ProductRecovery =
   | 'automatic'
   | 'retry-mic'
   | 'adjust-input'
+  | 'lower-mic-gain'
+  | 'raise-mic-gain'
   | 'retry-recording'
   | 'recalibrate'
   | 'host-service';
@@ -86,6 +93,8 @@ export type ProductIssueFacts = {
      * silence. The room Mic state stays live; this is its audible quality.
      */
     audibilityDegraded?: boolean;
+    /** Sustained heavy limiting, or a post-gain peak too low to hear over the song. */
+    levelWarning?: MicLevelWarning | null;
   };
   takeLifecycle: TakeLifecycle;
   performanceActive: boolean;
@@ -236,6 +245,26 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       // The waveform is already flat before Relay software gain. Reconnecting
       // or lowering Relay Mic gain cannot restore those clipped peaks.
       recovery: 'adjust-input',
+    });
+  }
+
+  // Gain advice only means something for a Mic that is otherwise healthy: a
+  // stalled Mic is quiet for a reason gain cannot fix, and a clipping input is
+  // already flat before Relay gain, so lowering it cannot restore the peaks.
+  if (
+    facts.mic.ownerId !== null
+    && facts.mic.state === 'live'
+    && facts.mic.levelWarning
+    && !issues.some((issue) => issue.scope === 'mic')
+  ) {
+    const tooLoud = facts.mic.levelWarning === 'too-loud';
+    issues.push({
+      code: tooLoud ? 'mic-too-loud' : 'mic-too-quiet',
+      scope: 'mic',
+      severity: 'warning',
+      cause: tooLoud ? 'mic-too-loud' : 'mic-too-quiet',
+      affects: ['voice', 'recording'],
+      recovery: tooLoud ? 'lower-mic-gain' : 'raise-mic-gain',
     });
   }
 

@@ -9,7 +9,6 @@
 .adjust-heading,
 .adjust-group-heading,
 .adjust-row-heading,
-.recommendation-meta,
 .timing-row {
   display: flex;
   align-items: baseline;
@@ -89,26 +88,6 @@
 }
 .adjust-range:disabled { opacity: .42; cursor: default; }
 
-.recommendation-marker {
-  position: absolute;
-  top: 4px;
-  width: 1px;
-  height: 14px;
-  background: #858991;
-  transform: translateX(-.5px);
-  pointer-events: none;
-}
-.recommendation-meta { min-height: 24px; }
-.recommendation-meta > span {
-  color: #b4b5b9;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-.recommendation-action {
-  padding: 3px 0;
-  color: #ddd9d2;
-  font-size: 11px;
-}
 .adjust-helper {
   margin: 0;
   color: #74777e;

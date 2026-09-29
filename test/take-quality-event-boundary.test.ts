@@ -29,6 +29,7 @@ const FRAME_EVIDENCE: MixFrameEvidence = {
   clippedSamples: 0,
   micInputClippedSamples: 0,
   limitedSamples: 0,
+  heavyLimitedSamples: 0,
   unheaderedSamples: 0,
 };
 const VOICE_ONLY_SONG = {

@@ -117,34 +117,65 @@ const steadyBase=await pcmFrom('baseline-mic-packet-150a.pcm');
 const steadyCandidate=await pcmFrom(p[0].pcmPath);
 assert.equal(steadyCandidate.length,p[0].postLatencySamples,
   'native candidate audio length differs from delay-quarantined accounting');
-const stop=Math.min(steadyBase.length,steadyCandidate.length)-250;
-assert.ok(stop>400,'not enough unambiguous aligned audio to score');
-let baseError=0,candidateError=0,scored=0;
-for(let i=250;i<stop;i++){
-  const t=i/48000;
-  const ideal=8000*Math.sin(2*Math.PI*220*t)+2500*Math.sin(2*Math.PI*1980*t);
-  baseError+=(steadyBase[i]-ideal)**2;
-  candidateError+=(steadyCandidate[i]-ideal)**2;
-  scored++;
+// get_output_latency() returns an INTEGER group delay. It does not
+// promise a phase-perfect source/sample origin for all fractional ratios.
+// Quantify the residual fractional offset rather than silently declaring
+// the filter output to be authoritative Take PCM.
+function phaseFit(samples, group) {
+  const stop=samples.length-250;
+  assert.ok(stop>400,'group is too short to identify steady voiced phase');
+  const signed=group.generation%2?1:-1;
+  const errorAt=shift=>{
+    let squared=0,n=0;
+    for(let i=250;i<stop;i++){
+      const t=(group.nominalFirstTarget+i+shift)/48000;
+      const reference=signed*(8000*Math.sin(2*Math.PI*220*t)
+        +2500*Math.sin(2*Math.PI*1980*t));
+      squared+=(samples[i]-reference)**2;
+      n++;
+    }
+    return Math.sqrt(squared/n);
+  };
+  const noShiftRms=errorAt(0);
+  let best={fractionalSamples:0,rms:noShiftRms};
+  for(let step=-200;step<=200;step++){
+    const fractionalSamples=step/200;
+    const rms=errorAt(fractionalSamples);
+    if(rms<best.rms)best={fractionalSamples,rms};
+  }
+  assert.ok(best.rms<15,
+    'even after offline fractional phase fitting, Speex is not consistent with positioned source time');
+  return {comparedSamples:stop-250,integerDelayOnlyRms:noShiftRms,
+    bestOfflineFractionalPhaseSamples:best.fractionalSamples,
+    bestOfflinePhaseFitRms:best.rms};
 }
+const baseGroup=p[0];
+const baselineFit=phaseFit(steadyBase,baseGroup);
+const nativeFit=phaseFit(steadyCandidate,baseGroup);
 const phaseSteadyTone={
-  comparedSamples:scored,
-  baselineCubicRms:Math.sqrt(baseError/scored),
-  nativePostDelayRms:Math.sqrt(candidateError/scored),
+  comparedSamples:Math.min(baselineFit.comparedSamples,nativeFit.comparedSamples),
+  baselineCubicRms:baselineFit.integerDelayOnlyRms,
+  nativeIntegerDelayRms:nativeFit.integerDelayOnlyRms,
+  nativeBestOfflineFractionalOffsetSamples:nativeFit.bestOfflineFractionalPhaseSamples,
+  nativeBestOfflineFitRms:nativeFit.bestOfflinePhaseFitRms,
+  integrationBlockedUntilExactPhaseMapping:true,
 };
-assert.ok(phaseSteadyTone.nativePostDelayRms<150,
-  'compensating reported filter delay does not recover the correct waveform time position');
 const gapGroups=groupFor('mic-gap-50ms');
 const gapBaseline=await pcmFrom('baseline-mic-gap-50ms.pcm');
 const lastGapTarget=Math.max(gapBaseline.length,...gapGroups.map(g=>g.nominalEndTarget));
 const gapCandidate=new Int16Array(lastGapTarget);
+const gapPhaseFitting=[];
 for(const g of gapGroups){
   const segment=await pcmFrom(g.pcmPath);
   assert.equal(segment.length,g.postLatencySamples);
   assert.ok(g.nominalFirstTarget+segment.length<=g.nominalEndTarget+4,
     'sidecar output crossed a segment boundary or fabricated the gap');
   gapCandidate.set(segment,g.nominalFirstTarget);
+  gapPhaseFitting.push(phaseFit(segment,g));
 }
+assert.ok(Math.abs(gapPhaseFitting[0].bestOfflineFractionalPhaseSamples
+  -gapPhaseFitting[1].bestOfflineFractionalPhaseSamples)<0.04,
+  'a true packet gap changed the sidecar fractional phase beyond independent reset consistency');
 const quality=[...qualitySet][0];
 await writeFile(path.join(root,'candidate-mic-gap-q'+quality+'.wav'),wav(gapCandidate));
 await writeFile(path.join(root,'baseline-mic-gap.wav'),wav(gapBaseline));
@@ -154,10 +185,11 @@ const report={
   candidate:'Independent native Speex library consuming exactly the same PCM files',
   packetizationExactBaselineSamples:baseline.packetizationExactSamples,
   packetizationBitExactNative:true,quality,
-  phaseSteadyTone,
+  phaseSteadyTone,gapPhaseFitting,
   syntheticGapPreview:'Zeros in candidate WAV include both true gap and deliberately quarantined unknown filter tail; this is not a candidate Take mix.',
   scenarios:verified,
   unresolved:[
+    'Integer filter latency alone leaves a quality/ratio-dependent fractional sample phase; offline tone fitting is diagnostic and CANNOT act as a live correction.',
     'The per-group post-filter stream is not yet bound to AudioSession absolute output sample authority.',
     'Trailing delayed SRC output is not recovered/attributed at a source gap; reported unfilled target count must not be hidden.',
     'No actual Take candidate mix, source-gap declicking, realistic estimator uncertainty, or ARM profiling has passed.',

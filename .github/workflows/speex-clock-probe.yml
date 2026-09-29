@@ -45,6 +45,7 @@ jobs:
                       "ppm": c["ppm"], "expected": c["expectedOutput"],
                       "relay": c["relaySamples"], "speex": c["speexSamples"],
                       "speexLatency": c["speexOutputLatency"],
+                      "relayIdealRms": c["relayIdealRms"], "speexIdealRms": c["speexIdealRms"],
                       "relayCpuMs": c["relayCpuMs"], "speexCpuMs": c["speexCpuMs"],
                   } for c in cases],
               }))

@@ -27,7 +27,7 @@
 
 typedef struct {
     char scenario[96], source[16], reason[32];
-    int gen, rate, ppm, group_index, changes, delay;
+    int gen, rate, ppm, group_index, changes, delay, input_delay;
     int64_t first, end, received, produced;
     uint64_t hash;
     int64_t gap_source, gap_target;
@@ -92,7 +92,8 @@ static void finalize_group(void) {
         "\"nominalTargetSpan\":%" PRId64 ",\"sourceSamples\":%" PRId64 ","
         "\"emittedSamples\":%" PRId64 ",\"filterLatencySamples\":%d,"
         "\"startupQuarantined\":%" PRId64 ",\"postLatencySamples\":%" PRId64 ","
-        "\"unfilledTargetEstimate\":%" PRId64 ","
+        "\"unfilledTargetEstimate\":%" PRId64 ",\"inputFilterLatencySamples\":%d,"
+        "\"analyticFractionalOffsetSamples\":%.6f,"
         "\"trueGapSourceSamples\":%" PRId64 ",\"trueGapTargetSamples\":%" PRId64 ","
         "\"ppmChanges\":%d,\"idealDynamicOutput\":%.5f,"
         "\"pcmHash\":\"%016" PRIx64 "\",\"pcmPath\":\"%s\"}\n",
@@ -100,7 +101,11 @@ static void finalize_group(void) {
         group.gen,group.rate,group.first,group.end,
         start,end,expected,group.received,group.produced,group.delay,
         group.produced<group.delay?group.produced:group.delay,
-        usable,shortfall,group.gap_source,group.gap_target,
+        usable,shortfall,group.input_delay,
+        group.changes==0
+            ? group.delay-(double)group.input_delay*MIX_RATE/group.rate
+            : -999.0,
+        group.gap_source,group.gap_target,
         group.changes,group.ideal_dynamic_output,group.hash,group.pcm_path);
     if (fclose(pcm_output)!=0) die("cannot finalize candidate PCM");
     pcm_output=NULL;
@@ -121,6 +126,7 @@ static void start_group(
     group.group_index=group_index++;
     group.hash=UINT64_C(14695981039346656037);
     group.delay=init_rate(rate,ppm);
+    group.input_delay=speex_resampler_get_input_latency(state);
     snprintf(group.pcm_path,sizeof(group.pcm_path),
         "nativepcm/%s-g%d-q%d.pcm",scenario,group.group_index,quality_mode);
     char dest[1024];

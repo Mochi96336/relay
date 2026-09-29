@@ -122,8 +122,10 @@ for(const scenario of scenarios){
   if(scenario.trueGapSamples)assert.equal(gapInfo?.trueSamples,scenario.trueGapSamples);
   if(scenario.id.startsWith('mic-packet-150'))samplesByCase.set(scenario.id,session.readMic(0,frontier));
   if(scenario.id==='mic-ppm-steps'){
-    assert.ok(observations.some(x=>x.micTrimSamples>=5),'positive correction not observed');
-    assert.ok(observations.some(x=>x.micTrimSamples<=-1),'negative correction not observed');
+    const high=Math.max(...observations.slice(45,90).map(x=>x.micTrimSamples));
+    const low=Math.min(...observations.slice(90,135).map(x=>x.micTrimSamples));
+    assert.ok(high>=5,'positive correction not observed');
+    assert.ok(low<=high-5,'negative correction did not unwind the earlier insertion');
   }
   summaries.push({
     id:scenario.id,source:scenario.source,epochPreserved:session.generation===epoch,

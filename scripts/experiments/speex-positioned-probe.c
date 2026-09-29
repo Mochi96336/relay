@@ -33,7 +33,7 @@ typedef struct {
 } Group;
 static SpeexResamplerState *state = NULL;
 static Group group;
-static int have_group = 0, group_index = 0;
+static int have_group = 0, group_index = 0, quality_mode = 5;
 
 static void die(const char *message) {
     fprintf(stderr, "Speex positioned probe: %s\n", message);
@@ -51,7 +51,7 @@ static int init_rate(int rate, int ppm) {
     }
     state=speex_resampler_init_frac(1,num,den,
         (spx_uint32_t)rate,(spx_uint32_t)MIX_RATE,
-        SPEEX_RESAMPLER_QUALITY_DESKTOP,&error);
+        quality_mode,&error);
     if (!state || error != RESAMPLER_ERR_SUCCESS) die("could not initialize fractional native SRC");
     return speex_resampler_get_output_latency(state);
 }
@@ -80,7 +80,7 @@ static void finalize_group(void) {
         exit(3);
     }
     printf(
-        "{\"scenario\":\"%s\",\"source\":\"%s\",\"group\":%d,"
+        "{\"scenario\":\"%s\",\"source\":\"%s\",\"group\":%d,\"quality\":%d,"
         "\"reason\":\"%s\",\"generation\":%d,\"rate\":%d,"
         "\"firstSource\":%" PRId64 ",\"endSource\":%" PRId64 ","
         "\"nominalFirstTarget\":%" PRId64 ",\"nominalEndTarget\":%" PRId64 ","
@@ -91,7 +91,7 @@ static void finalize_group(void) {
         "\"trueGapSourceSamples\":%" PRId64 ",\"trueGapTargetSamples\":%" PRId64 ","
         "\"ppmChanges\":%d,\"idealDynamicOutput\":%.5f,"
         "\"pcmHash\":\"%016" PRIx64 "\"}\n",
-        group.scenario,group.source,group.group_index,group.reason,
+        group.scenario,group.source,group.group_index,quality_mode,group.reason,
         group.gen,group.rate,group.first,group.end,
         start,end,expected,group.received,group.produced,group.delay,
         group.produced<group.delay?group.produced:group.delay,
@@ -117,7 +117,12 @@ static void start_group(
     have_group=1;
 }
 int main(int argc,char **argv) {
-    if(argc!=3)die("usage: positioned-probe MANIFEST_TSV FIXTURE_ROOT");
+    if(argc<3||argc>4)die("usage: positioned-probe MANIFEST_TSV FIXTURE_ROOT [quality=5]");
+    if(argc==4) {
+        quality_mode=atoi(argv[3]);
+        if(quality_mode!=3&&quality_mode!=5&&quality_mode!=8)
+            die("research quality sweep only permits 3, 5, 8");
+    }
     FILE *manifest=fopen(argv[1],"r");
     if(!manifest)die("cannot open manifest");
     char line[MAX_LINE],scenario[96],source[16],rel[256];

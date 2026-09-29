@@ -531,7 +531,7 @@ export class CalibrationSession {
     const backingMs = Math.round((this.collector.backingSpanSamples / this.sampleRate) * 1000);
     this.fail(
       `Calibration timed out (mic ${micMs} ms, source ${backingMs} ms of ${this.durationMs} ms). ` +
-      'Check that both the phone microphone and the desktop capture are still streaming.',
+      'Check that both the microphone and the desktop capture are still streaming.',
     );
     return true;
   }

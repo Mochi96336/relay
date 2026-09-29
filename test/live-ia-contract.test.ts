@@ -67,15 +67,15 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
   assert.match(html, /<script type="module" src="\/room-sound-ui\.js"><\/script>/);
   assert.equal(script.includes("'./room-sound-ui.js'"), false);
   assert.match(roomSound, /roomSoundControlPresentation/);
-  assert.doesNotMatch(roomSound, /'房間聲音'|'只影響這支裝置'/,
+  assert.doesNotMatch(roomSound, /'房間聲音'|'只影響這台裝置'/,
     'the DOM adapter must not regain Room sound product-copy ownership');
   assert.match(roomSoundPresentation, /labelKey:\s*'roomSound\.label'/);
   assert.match(roomSoundPresentation, /scopeKey:\s*'roomSound\.scope'/);
-  assert.doesNotMatch(roomSoundPresentation, /'房間聲音'|'只影響這支裝置'|'Room sound'/,
+  assert.doesNotMatch(roomSoundPresentation, /'房間聲音'|'只影響這台裝置'|'Room sound'/,
     'the semantic presenter owns keys, not locale branches');
   assert.match(liveI18n, /'roomSound\.label': 'Room sound'/);
   assert.match(liveI18n, /'roomSound\.label': '房間聲音'/);
-  assert.match(liveI18n, /'roomSound\.scope': '只影響這支裝置'/);
+  assert.match(liveI18n, /'roomSound\.scope': '只影響這台裝置'/);
   assert.doesNotMatch(composition, /\.local-sound-control|#listen-gain-value/,
     'formal composition must not own persistent Room sound rail geometry');
   assert.match(layout, /#listen-toggle \{[\s\S]*?width:\s*44px;[\s\S]*?min-height:\s*44px;/);

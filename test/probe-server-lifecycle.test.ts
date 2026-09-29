@@ -99,7 +99,7 @@ test('probe acknowledgement retries stop at the configured limit and block Take 
     assert.equal(failed.probeActive, false);
     assert.equal(failed.probeAttempts.mic, 2);
     assert.equal(failed.probeMaxAttempts, 2);
-    assert.match(failed.probeError, /Phone microphone timing probe failed after 2 attempts/);
+    assert.match(failed.probeError, /Microphone timing probe failed after 2 attempts/);
 
     const countAtFailure = clients.publisher.messages.filter(
       (message) => message.type === 'play-calibration-probe' && message.target === 'mic',

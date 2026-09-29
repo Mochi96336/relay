@@ -52,8 +52,16 @@ function program(sample) {
     ? Math.exp(-pulsePhase / 0.005) * Math.sin(2 * Math.PI * 2_400 * pulsePhase)
     : 0;
   // Deterministic unvoiced segment tests the no-correlation path.
-  const hash = Math.imul(sample ^ (sample >>> 11), 1_664_525) >>> 0;
-  const hiss = ((hash / 0xffff_ffff) * 2 - 1) * 0.13;
+  // Full avalanche hash: avoid adjacent-index correlation in the hiss
+  // negative control. The former single multiplication unintentionally
+  // produced near-periodic structure and invalidated the noise result.
+  let hash = Math.imul(sample ^ 0x9e3779b9, 0x85ebca6b);
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0xc2b2ae35);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0x27d4eb2d);
+  hash ^= hash >>> 15;
+  const hiss = (((hash >>> 0) / 0x1_0000_0000) * 2 - 1) * 0.13;
   const phase = time % 2;
   if (SIGNAL === 'tone') return 0.24 * note + 0.12 * upper;
   if (SIGNAL === 'hiss') return hiss;

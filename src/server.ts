@@ -1608,7 +1608,9 @@ function remoteStatusPayload() {
       receiverTransport: micRuntime.receiverStats(),
       receiverRetransmit: micRuntime.retransmitStats(),
       micAudibility: micAudibility.status(),
-      micLevel: micLevel.status(),
+      // The gain now, beside the gain the last window was measured at: a
+      // change is judged at once but measured only when the next window closes.
+      micLevel: { ...micLevel.status(), micGainDb: session.micGainDb },
       timeline: {
         micGapMs: mixHealth.micGapMs,
         micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),

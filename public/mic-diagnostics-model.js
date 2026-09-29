@@ -18,7 +18,9 @@ const NEGLIGIBLE_DRIFT_PPM = 20;
 
 const english = diagnosticsTranslator('en');
 
+/** A number, or null for anything missing. Number(null) is 0, a real reading. */
 function finite(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -243,6 +245,12 @@ function describeMicInput(status, t) {
  * peak after gain but before the limiter, and how long the limiter held the
  * voice down audibly. The same evidence raises the Mic too loud / too quiet
  * warnings, so this row is where their numbers live.
+ *
+ * Three things keep the number honest. A second with no Mic PCM has no peak.
+ * The warning spans several seconds, so a calm last second beside it is
+ * explained, not contradicted. A gain change is judged at once but measured
+ * only when the next second closes, so an old reading is labelled with the
+ * gain it was taken at.
  */
 function describeLevel(status, t) {
   const level = status?.audio?.micLevel;
@@ -251,16 +259,41 @@ function describeLevel(status, t) {
   const label = t('diag.mic.level');
   const window = level.lastWindow;
   const rawPeak = finite(window?.rawPeakDbfs);
-  const gain = finite(window?.micGainDb);
-  if (!window?.eligible || rawPeak === null || gain === null) {
+  const measuredGain = finite(window?.micGainDb);
+  // A Mic that stopped streaming has no current level, only a stale one.
+  if (!status.source.micStreaming || !window?.eligible || rawPeak === null || measuredGain === null) {
     return row('level', label, t('diag.unknown'));
   }
-  const peak = Math.round(rawPeak + gain) || 0;
+
+  const peak = Math.round(rawPeak + measuredGain) || 0;
   const value = t('diag.mic.level.value', { db: `${peak > 0 ? '+' : ''}${peak}` });
-  const vars = { gain: Math.round(gain), ms: Math.round(finite(window.heavyLimitedMs) ?? 0) };
-  if (level.warning === 'too-loud') return row('level', label, value, t('diag.mic.level.loudNote', vars), 'warn');
+  const heavyMs = Math.round(finite(window.heavyLimitedMs) ?? 0);
+  const vars = { gain: Math.round(measuredGain), ms: heavyMs };
+  const warned = level.warning === 'too-loud' || level.warning === 'too-quiet';
+
+  const gainNow = finite(level.micGainDb);
+  if (gainNow !== null && Math.round(gainNow) !== Math.round(measuredGain)) {
+    return row('level', label, value,
+      t('diag.mic.level.regainNote', { measured: Math.round(measuredGain), gain: Math.round(gainNow) }),
+      warned ? 'warn' : 'neutral');
+  }
+
+  if (level.warning === 'too-loud') {
+    const calm = finite(level.calmWindows);
+    const needed = finite(level.calmWindowsNeeded);
+    // Calm windows count only while too loud, and only after the last hot
+    // one, so any here means the last second was not the problem.
+    const lastSecondCalm = calm === null ? heavyMs === 0 : calm > 0;
+    if (lastSecondCalm) {
+      return row('level', label, value, needed === null
+        ? t('diag.mic.level.loudCalmNote', vars)
+        : t('diag.mic.level.loudCalmCountNote', { ...vars, calm: Math.round(calm ?? 0), needed: Math.round(needed) }),
+      'warn');
+    }
+    return row('level', label, value, t('diag.mic.level.loudNote', vars), 'warn');
+  }
   if (level.warning === 'too-quiet') return row('level', label, value, t('diag.mic.level.quietNote', vars), 'warn');
-  if (vars.ms > 0) return row('level', label, value, t('diag.mic.level.pressedNote', vars), 'neutral');
+  if (heavyMs > 0) return row('level', label, value, t('diag.mic.level.pressedNote', vars), 'neutral');
   return row('level', label, value, t('diag.mic.level.okNote', vars), 'ok');
 }
 

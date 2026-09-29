@@ -247,6 +247,88 @@ describe('Mic diagnostics model', () => {
     );
   });
 
+  function levelRow(micLevel: Status, t = diagnosticsTranslator('en'), overrides: (status: Status) => void = () => {}) {
+    const status = liveStatus((s) => { s.audio.micLevel = micLevel; overrides(s); });
+    return Object.fromEntries(describeMicTransport(status, t).map((row) => [row.key, row])).level;
+  }
+
+  it('never invents a peak for a live second with no Mic PCM', () => {
+    const row = levelRow({
+      warning: null,
+      lastWindow: { eligible: true, songPlaying: true, heavyLimitedMs: 0, rawPeakDbfs: null, micGainDb: 24 },
+      micGainDb: 24,
+    });
+    assert.equal(row.value, '—');
+    assert.doesNotMatch(`${row.value} ${row.note}`, /dBFS|\+24/);
+  });
+
+  it('explains a too-loud warning beside a calm last second instead of contradicting it', () => {
+    const calm = {
+      warning: 'too-loud',
+      calmWindows: 3,
+      calmWindowsNeeded: 10,
+      lastWindow: { eligible: true, songPlaying: true, heavyLimitedMs: 0, rawPeakDbfs: -30, micGainDb: 24 },
+      micGainDb: 24,
+    };
+    const row = levelRow(calm);
+    assert.deepEqual(
+      [row.value, row.note, row.tone],
+      [
+        '-6 dBFS before the limiter',
+        'The last second was not held down, but the seconds before it often were. Calm for 3 of the 10 seconds that clear the warning.',
+        'warn',
+      ],
+    );
+    assert.doesNotMatch(row.note, /0 ms|Lower the Mic gain/);
+    assert.equal(
+      levelRow(calm, diagnosticsTranslator('zh-Hant')).note,
+      '這一秒沒有被壓低，但前幾秒常被壓低。已經連續 3 秒沒被壓低，滿 10 秒警告就會解除。',
+    );
+
+    const hot = levelRow({ ...calm, calmWindows: 0, lastWindow: { ...calm.lastWindow, heavyLimitedMs: 240 } });
+    assert.match(hot.note, /^Held down more than 3 dB for 240 ms/);
+  });
+
+  it('labels a reading taken before a gain change with the gain it was taken at', () => {
+    // The singer lowered +24 to +16; the warning is already re-judged, but the
+    // last window was measured at +24 until the next second closes.
+    const moved = {
+      warning: null,
+      lastWindow: { eligible: true, songPlaying: true, heavyLimitedMs: 758, rawPeakDbfs: -17, micGainDb: 24 },
+      micGainDb: 16,
+    };
+    const row = levelRow(moved);
+    assert.deepEqual(
+      [row.value, row.note, row.tone],
+      [
+        '+7 dBFS before the limiter',
+        'Measured at Mic gain +24 dB. The reading at +16 dB shows once the next second is measured.',
+        'neutral',
+      ],
+    );
+    assert.equal(
+      levelRow(moved, diagnosticsTranslator('zh-Hant')).note,
+      '這是 Mic 增益 +24 dB 時量到的。+16 dB 的結果會在下一秒量完後顯示。',
+    );
+    assert.equal(levelRow({ ...moved, warning: 'too-loud' }).tone, 'warn');
+  });
+
+  it('drops a stale level once the Mic stops streaming', () => {
+    const row = levelRow({
+      warning: null,
+      lastWindow: { eligible: true, songPlaying: true, heavyLimitedMs: 0, rawPeakDbfs: -20, micGainDb: 24 },
+      micGainDb: 24,
+    }, diagnosticsTranslator('en'), (s) => { s.source.micStreaming = false; });
+    assert.equal(row.value, '—');
+  });
+
+  it('reads a null capture level or drift as missing, not as zero', () => {
+    const input = rows(liveStatus((s) => { s.audio.captureAndSender.captureLevel = { peakDbfs: null }; })).input;
+    assert.deepEqual([input.value, input.tone], ['Live', 'neutral']);
+    const drift = rows(liveStatus((s) => { s.audio.timeline.micClockDrift = { ppm: null }; })).drift;
+    assert.equal(drift.value, 'Measuring…');
+  });
+
   it('shows no level before the monitor has judged a live window', () => {
     assert.equal(rows(liveStatus()).level.value, '—');
     const notLive = rows(liveStatus((s) => {

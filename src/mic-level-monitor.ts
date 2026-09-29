@@ -179,6 +179,13 @@ export class MicLevelMonitor {
     return {
       warning: this.warning,
       hotWindows: this.hotHistory.filter(Boolean).length,
+      /**
+       * While too loud, consecutive windows the limiter left alone, and how many
+       * clear the warning. The warning outlives any single calm second, so a
+       * reader needs both to explain a warning beside a quiet last window.
+       */
+      calmWindows: this.loud ? this.coolRunWindows : 0,
+      calmWindowsNeeded: this.loudClearWindows,
       quietRunWindows: this.quietPeaksDbfs.length,
       lastWindow: this.lastWindow,
     };

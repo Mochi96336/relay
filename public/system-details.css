@@ -157,18 +157,32 @@
   font-size: 10px;
   line-height: 1.5;
 }
-/* A described value: the reading, then one plain-language line under it. */
-.diagnostic-pair dd .diagnostic-value {
-  display: block;
+/*
+ * A described value: the reading beside its label, then one plain-language
+ * line under both. The note spans the row and reads from the left, so its
+ * edge stays put while the numbers in it change every second. Right-aligned
+ * under the value, each refresh re-wrapped it and the text jumped sideways.
+ */
+.diagnostic-pair dd[data-tone] {
+  display: contents;
 }
-.diagnostic-pair dd .diagnostic-note {
-  display: block;
-  margin-top: 3px;
+.diagnostic-pair dd[data-tone] .diagnostic-value {
+  grid-column: 2;
+  grid-row: 1;
+  text-align: right;
+}
+.diagnostic-pair dd[data-tone] .diagnostic-note {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin-top: 1px;
   color: #74777e;
   font-size: 9.5px;
   line-height: 1.4;
+  text-align: left;
 }
+.diagnostic-pair dt { grid-row: 1; }
 .diagnostic-pair:has(.diagnostic-note) {
+  row-gap: 0;
   padding: 7px 0;
 }
 .diagnostic-pair dd[data-tone="ok"] .diagnostic-value { color: #9fcfa6; }
@@ -195,4 +209,4 @@
   }
   .diagnostic-pair { grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
   .diagnostics-tabs { gap: 14px; }
-}
+}

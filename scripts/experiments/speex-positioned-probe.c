@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <inttypes.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include <speex/speex_resampler.h>
 
 #define MIX_RATE 48000
@@ -30,10 +32,13 @@ typedef struct {
     uint64_t hash;
     int64_t gap_source, gap_target;
     double ideal_dynamic_output;
+    char pcm_path[256];
 } Group;
 static SpeexResamplerState *state = NULL;
 static Group group;
 static int have_group = 0, group_index = 0, quality_mode = 5;
+static const char *root_dir = NULL;
+static FILE *pcm_output = NULL;
 
 static void die(const char *message) {
     fprintf(stderr, "Speex positioned probe: %s\n", message);
@@ -90,13 +95,15 @@ static void finalize_group(void) {
         "\"unfilledTargetEstimate\":%" PRId64 ","
         "\"trueGapSourceSamples\":%" PRId64 ",\"trueGapTargetSamples\":%" PRId64 ","
         "\"ppmChanges\":%d,\"idealDynamicOutput\":%.5f,"
-        "\"pcmHash\":\"%016" PRIx64 "\"}\n",
+        "\"pcmHash\":\"%016" PRIx64 "\",\"pcmPath\":\"%s\"}\n",
         group.scenario,group.source,group.group_index,quality_mode,group.reason,
         group.gen,group.rate,group.first,group.end,
         start,end,expected,group.received,group.produced,group.delay,
         group.produced<group.delay?group.produced:group.delay,
         usable,shortfall,group.gap_source,group.gap_target,
-        group.changes,group.ideal_dynamic_output,group.hash);
+        group.changes,group.ideal_dynamic_output,group.hash,group.pcm_path);
+    if (fclose(pcm_output)!=0) die("cannot finalize candidate PCM");
+    pcm_output=NULL;
     speex_resampler_destroy(state);
     state=NULL;have_group=0;
 }
@@ -114,6 +121,13 @@ static void start_group(
     group.group_index=group_index++;
     group.hash=UINT64_C(14695981039346656037);
     group.delay=init_rate(rate,ppm);
+    snprintf(group.pcm_path,sizeof(group.pcm_path),
+        "nativepcm/%s-g%d-q%d.pcm",scenario,group.group_index,quality_mode);
+    char dest[1024];
+    if(snprintf(dest,sizeof(dest),"%s/%s",root_dir,group.pcm_path)>=(int)sizeof(dest))
+        die("output path too long");
+    pcm_output=fopen(dest,"wb");
+    if(!pcm_output) die("cannot write candidate PCM");
     have_group=1;
 }
 int main(int argc,char **argv) {
@@ -123,6 +137,11 @@ int main(int argc,char **argv) {
         if(quality_mode!=3&&quality_mode!=5&&quality_mode!=8)
             die("research quality sweep only permits 3, 5, 8");
     }
+    root_dir=argv[2];
+    char pcm_dir[1024];
+    if(snprintf(pcm_dir,sizeof(pcm_dir),"%s/nativepcm",root_dir)>=(int)sizeof(pcm_dir))
+        die("PCM output directory is too long");
+    if(mkdir(pcm_dir,0755)!=0 && errno!=EEXIST) die("cannot make native PCM directory");
     FILE *manifest=fopen(argv[1],"r");
     if(!manifest)die("cannot open manifest");
     char line[MAX_LINE],scenario[96],source[16],rel[256];
@@ -189,6 +208,13 @@ int main(int argc,char **argv) {
                 const uint16_t v=(uint16_t)out[i];
                 group.hash^=(uint8_t)(v&0xff);group.hash*=UINT64_C(1099511628211);
                 group.hash^=(uint8_t)(v>>8);group.hash*=UINT64_C(1099511628211);
+                // Save only samples after the library's reported startup
+                // group delay. The pending tail must stay explicit debt;
+                // it is NOT legitimate evidence of captured sound.
+                if(group.produced+i >= group.delay) {
+                    if(fwrite(&out[i],sizeof(out[i]),1,pcm_output)!=1)
+                        die("failed to write post-delay PCM");
+                }
             }
             group.produced+=out_len;
         }

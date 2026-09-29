@@ -81,7 +81,7 @@ test('post-handoff autoplay recovery CTA persists, localizes, and clears only af
   assert.doesNotMatch(source, /const AUTOPLAY_RECOVERY_NOTE =/,
     'persistent recovery copy must not bypass the canonical locale table');
   assert.match(i18n, /'song\.handoffAutoplayRecovery': 'Playback moved here, but the browser paused audio\./);
-  assert.match(i18n, /'song\.handoffAutoplayRecovery': '播放已移到這支手機，但瀏覽器暫停了音訊。/,
+  assert.match(i18n, /'song\.handoffAutoplayRecovery': '播放已移到這台裝置，但瀏覽器暫停了音訊。/,
     'the persistent recovery CTA needs a zh-Hant product translation');
   assert.match(renderSection, /if \(!autoplayRecoveryRequired\)/,
     'normal 250 ms telemetry must not overwrite the recovery CTA');

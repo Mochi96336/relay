@@ -543,7 +543,7 @@ describe('timing calibration', () => {
         (m) => m.type === 'timing-calibration-status' && m.state === 'failed',
         6_000,
       );
-      assert.match(failed.error, /no audio from the phone microphone/i);
+      assert.match(failed.error, /no audio from the microphone/i);
 
       backing.close();
       publisher.close();

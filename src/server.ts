@@ -495,7 +495,7 @@ function bothStreamsFlowing(nowMs: number) {
 
 function silentSides(nowMs: number) {
   const silent: string[] = [];
-  if (!micPlayable(nowMs)) silent.push('phone microphone');
+  if (!micPlayable(nowMs)) silent.push('microphone');
   if (!backingPlayable(nowMs)) silent.push('desktop capture');
   return silent;
 }
@@ -3327,7 +3327,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
           sendJson(socket, timingCalibrationStatusPayload());
           return;
         case 'sources-not-connected':
-          calibration.fail('Connect both phone Microphone and Desktop Source before calibration.');
+          calibration.fail('Connect both the Mic and Desktop Source before calibration.');
           return;
         case 'sources-not-streaming': {
           const silent = silentSides(nowMs);
@@ -3338,7 +3338,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
           return;
         }
         case 'phone-not-playing':
-          calibration.fail('Play YouTube on the phone before calibration.');
+          calibration.fail('Play the song before calibration.');
           return;
         case 'robot-route-incomplete':
           // Not "connect your devices": on a Robot route the second leg is

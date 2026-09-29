@@ -400,7 +400,7 @@ async function prepareReadyMic(page) {
   await page.locator('#start-publisher').click();
   await page.waitForFunction(() => Number.isFinite(window.__relayInteractionHarness.timeline.T4));
   await expect(page.locator('#live-state-title')).toHaveText('Starting your mic…');
-  await expect(page.locator('#live-state-detail')).toHaveText('Waiting for the first audio frame from this phone.');
+  await expect(page.locator('#live-state-detail')).toHaveText('Waiting for the first audio frame from this device.');
   await page.evaluate(() => window.__relayInteractionHarness.emitSilentPcm());
   await page.waitForFunction(() => window.relayRecordingState?.canStart === true);
   await expect(page.locator('#live-state-title')).toHaveText('You’re live');
@@ -429,7 +429,7 @@ test('production DOM: recording stays one row through blocked readiness and morp
   await page.waitForFunction(() => Number.isFinite(window.__relayInteractionHarness.timeline.T4));
 
   await expect(page.locator('#live-state-title')).toHaveText('Starting your mic…');
-  await expect(page.locator('#live-state-detail')).toHaveText('Waiting for the first audio frame from this phone.');
+  await expect(page.locator('#live-state-detail')).toHaveText('Waiting for the first audio frame from this device.');
   await expect(strip).toBeVisible();
   await expect(record).toBeHidden();
   await expect(status).toBeVisible();

@@ -174,7 +174,7 @@ export class ProbeLifecycle {
 
     if (this.attemptCounts[target] < this.maxAttempts) return null;
 
-    const label = target === 'mic' ? 'Phone microphone' : 'Song source';
+    const label = target === 'mic' ? 'Microphone' : 'Song source';
     const message = `${label} timing probe failed after ${this.attemptCounts[target]} attempts: ${reason}`;
     this.failure = { target, message };
     return this.failure;

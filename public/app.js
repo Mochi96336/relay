@@ -1145,7 +1145,7 @@ function updateCalibrateButton() {
     const phase = String(latestCalibration?.probePhase ?? '');
     const attempts = latestCalibration?.probeAttempts ?? {};
     const max = Number(latestCalibration?.probeMaxAttempts) || 1;
-    const target = phase.startsWith('backing') ? 'Song path' : 'Phone mic';
+    const target = phase.startsWith('backing') ? 'Song path' : 'Mic';
     const attempt = Number(phase.startsWith('backing') ? attempts.backing : attempts.mic) || 1;
     calibrateStatus.textContent = `Calibrating · ${target} ${Math.min(attempt, max)}/${max}`;
     return;

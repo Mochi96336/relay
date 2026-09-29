@@ -384,3 +384,26 @@ test('legacy unpositioned PCM is attributed only when those source samples reach
   const evidence = drainOne(session, 0);
   assert.equal(evidence.unheaderedSamples, FRAME_SAMPLES);
 });
+
+test('heavy limiting counts only reduction deep enough to hear, not every sample the limiter touches', () => {
+  const heldDown = (micGainDb: number) => {
+    const session = makeSession();
+    session.setMicExpected(true);
+    session.setMicGainDb(micGainDb);
+    session.start(0);
+    // About 0.2 dB over the -1 dBFS threshold before gain. The third frame
+    // feeds the limiter look-ahead past the one inspected.
+    for (let index = 0; index < 3; index += 1) {
+      session.ingestMic(frame(index * FRAME_SAMPLES, 30_000), RATE, 0);
+    }
+    drainOne(session, 0);
+    return drainOne(session, 20);
+  };
+
+  const light = heldDown(0);
+  assert.equal(light.limitedSamples, FRAME_SAMPLES, 'the limiter is holding the whole frame');
+  assert.equal(light.heavyLimitedSamples, 0, 'a fraction of a dB is protection, not squashing');
+
+  const heavy = heldDown(6);
+  assert.equal(heavy.heavyLimitedSamples, FRAME_SAMPLES, 'six dB over the threshold is held down audibly');
+});

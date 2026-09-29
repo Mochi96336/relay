@@ -1,3 +1,4 @@
+import type { MicLevelWarning } from './mic-level-monitor.js';
 import type { ReadinessSnapshot } from './readiness.js';
 import {
   deriveRoomMicState,
@@ -55,6 +56,8 @@ export type ProductViewModelInput = {
   micAudibilityDegraded?: boolean;
   /** Recent raw-input flat-top evidence from the active Mic capture. */
   micInputClipping?: boolean;
+  /** Relay's sustained verdict that the live Mic gain is too high or too low. */
+  micLevelWarning?: MicLevelWarning | null;
   roomSong: ProductRoomSongInput;
   take: ProductTakeInput;
   timing: {
@@ -263,6 +266,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       mediaRecoveryDegraded: micMediaRecoveryDegraded,
       inputClipping: mic === 'live' && input.micInputClipping === true,
       audibilityDegraded: mic === 'live' && input.micAudibilityDegraded === true,
+      levelWarning: mic === 'live' ? input.micLevelWarning ?? null : null,
     },
     takeLifecycle: input.take.lifecycle,
     performanceActive,

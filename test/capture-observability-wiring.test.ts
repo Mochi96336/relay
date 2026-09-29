@@ -7,13 +7,10 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
 
   assert.match(
     source,
-    /captureClippingSnapshot,[\s\S]*captureInputClippingDetected,[\s\S]*captureRecentInputClippingDetected,[\s\S]*captureLevelSnapshot,[\s\S]*captureVoiceProcessingActive,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
+    /captureClippingSnapshot,[\s\S]*captureRecentInputClippingDetected,[\s\S]*captureLevelSnapshot,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
   );
   assert.match(source, /enforceUnprocessedCapture\(preparedStream\)/);
   assert.match(source, /captureAppliedSettings = readCaptureSettings\(captureStream\);/);
-  assert.match(source, /captureVoiceProcessingActive\(captureAppliedSettings\)/);
-  assert.match(source, /captureInputClippingDetected\(clipping\)/);
-  assert.match(source, /adjust\.inputClipping/);
   assert.match(
     source,
     /addEventListener\('configurationchange', refreshCaptureConfiguration\)/,

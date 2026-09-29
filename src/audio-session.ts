@@ -133,6 +133,8 @@ export type MixFrameEvidence = {
   /** Emitted Mic samples derived from a proven raw-input flat-top run. */
   micInputClippedSamples: number;
   limitedSamples: number;
+  /** Mic samples held down by more than `HEAVY_LIMIT_DB`: audible, not just protective. */
+  heavyLimitedSamples: number;
   unheaderedSamples: number;
 };
 
@@ -283,6 +285,13 @@ const LIMITER_THRESHOLD = 10 ** (LIMITER_THRESHOLD_DBFS / 20);
 const LIMITER_ATTACK_MS = 0.6;
 const LIMITER_RELEASE_MS = 150;
 const LIMITER_LOOKAHEAD_MS = 3;
+/**
+ * Gain reduction past which limiting is audible rather than protective. The
+ * attack is sub-millisecond, so a dB or two on transients goes unheard; held
+ * reduction past this is what makes a hot vocal sound squashed.
+ */
+export const HEAVY_LIMIT_DB = 3;
+const HEAVY_LIMIT_GAIN = 10 ** (-HEAVY_LIMIT_DB / 20);
 
 /**
  * Worst-case linear sum after the microphone limiter plus the configured song
@@ -492,6 +501,7 @@ export class AudioSession {
   private backingUnplayableRunFrames = 0;
   private clippedSamples = 0;
   private limitedSamples = 0;
+  private heavyLimitedSamples = 0;
 
   // Envelope and gain reduction carry across frames; resetting them per frame
   // would put a 20 ms sawtooth on the vocal.
@@ -2722,6 +2732,7 @@ export class AudioSession {
       * (target < this.limiterGain ? this.limiterAttack : this.limiterRelease);
 
     if (countLimitedSample && this.limiterGain < 0.99) this.limitedSamples += 1;
+    if (countLimitedSample && this.limiterGain < HEAVY_LIMIT_GAIN) this.heavyLimitedSamples += 1;
     return value * this.limiterGain;
   }
 
@@ -2905,6 +2916,7 @@ export class AudioSession {
 
     const clippedBefore = this.clippedSamples;
     const limitedBefore = this.limitedSamples;
+    const heavyLimitedBefore = this.heavyLimitedSamples;
 
     let mic = micSlew?.samples
       ?? this.readRange(this.mic, micReadStart, this.frameSamples + lookahead);
@@ -3197,6 +3209,7 @@ export class AudioSession {
       clippedSamples: this.clippedSamples - clippedBefore,
       micInputClippedSamples: Math.max(0, micInputClippedSamples),
       limitedSamples: this.limitedSamples - limitedBefore,
+      heavyLimitedSamples: this.heavyLimitedSamples - heavyLimitedBefore,
       unheaderedSamples:
         micReadEvidence.unheaderedSamples
         + backingReadEvidence.unheaderedSamples

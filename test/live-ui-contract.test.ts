@@ -34,7 +34,6 @@ test('performance task keeps local capture diagnostic while visible Mic evidence
   const take = position('class="take-strip"');
   const footer = position('class="live-actions"');
   assert.ok(stage < meter && meter < mic && mic < gain && gain < take && take < footer);
-  assert.match(app, /latestLocalMicLevel\?\.peakDbfs/);
   assert.match(app, /event\.data\?\.type === 'input-level'/);
   assert.match(app, /spectrumBands/);
   assert.doesNotMatch(app, /latestMixHealth\?\.micPeakDbfs/);

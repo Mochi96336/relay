@@ -188,6 +188,56 @@ describe('product issue contract', () => {
     assert.deepEqual(issues.map((issue) => issue.code), ['mic-audio-stalled']);
   });
 
+  test('surfaces Mic level as a non-blocking gain warning', () => {
+    for (const [levelWarning, code, recovery] of [
+      ['too-loud', 'mic-too-loud', 'lower-mic-gain'],
+      ['too-quiet', 'mic-too-quiet', 'raise-mic-gain'],
+    ] as const) {
+      const issues = buildProductIssues({
+        ...HEALTHY_ISSUES,
+        mic: { ownerId: 'participant-a', state: 'live', levelWarning },
+      });
+      assert.deepEqual(issues, [{
+        code,
+        scope: 'mic',
+        severity: 'warning',
+        cause: code,
+        affects: ['voice', 'recording'],
+        recovery,
+      }]);
+
+      const input = productInput();
+      input.micLevelWarning = levelWarning;
+      const model = buildProductViewModel(input);
+      assert.equal(model.health, 'degraded');
+      assert.equal(model.attention?.code, code);
+      assert.equal(model.actions.canStartTake, true, 'a level warning does not block a recording');
+    }
+  });
+
+  test('does not give gain advice a lower gain cannot follow or a stalled Mic cannot use', () => {
+    const clipping = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      mic: { ownerId: 'participant-a', state: 'live', inputClipping: true, levelWarning: 'too-loud' },
+    });
+    assert.deepEqual(clipping.map((issue) => issue.code), ['mic-input-clipping']);
+
+    const stalled = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      mic: { ownerId: 'participant-a', state: 'live', audibilityDegraded: true, levelWarning: 'too-quiet' },
+    });
+    assert.deepEqual(stalled.map((issue) => issue.code), ['mic-audio-stalled']);
+
+    const input = productInput();
+    input.micOwnerId = null;
+    input.micLevelWarning = 'too-quiet';
+    assert.equal(
+      buildProductViewModel(input).issues.some((issue) => issue.scope === 'mic'),
+      false,
+      'no live Mic, no level warning',
+    );
+  });
+
   test('describes cause, impact and recovery for concurrent user-visible warnings', () => {
     const issues = buildProductIssues({
       ...HEALTHY_ISSUES,

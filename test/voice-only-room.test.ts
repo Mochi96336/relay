@@ -126,6 +126,7 @@ test('voice-only quality ignores intentionally absent backing and timing evidenc
     clippedSamples: 0,
     micInputClippedSamples: 0,
     limitedSamples: 0,
+    heavyLimitedSamples: 0,
     unheaderedSamples: 0,
   });
   tracker.noteEvent('backing-transport-disconnected');

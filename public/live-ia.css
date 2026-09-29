@@ -180,7 +180,7 @@
 
 /* Mic gain is part of singing, not an Adjust destination. It appears only when
    this phone really owns a live Mic. The collapsed row answers the normal
-   question; opening it reveals the existing slider and recommendation logic. */
+   question; opening it reveals the existing slider. */
 .mic-live-control {
   display: none;
   margin-top: 18px;

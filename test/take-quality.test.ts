@@ -23,6 +23,7 @@ function mixedFrame(patch: Partial<MixFrameEvidence> = {}): MixFrameEvidence {
     clippedSamples: 0,
     micInputClippedSamples: 0,
     limitedSamples: 0,
+    heavyLimitedSamples: 0,
     unheaderedSamples: 0,
     ...patch,
   };

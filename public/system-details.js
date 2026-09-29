@@ -205,6 +205,16 @@ if (
     issuesNode.replaceChildren(...issues.map(issueCard));
   }
 
+  /**
+   * Shows a copy key on a node the locale switch also rewrites. i18n's
+   * applyStatic() re-renders every [data-i18n] from the attribute, so the
+   * attribute has to carry the current state, not the markup's initial one.
+   */
+  function showCopy(node, key) {
+    node.dataset.i18n = key;
+    node.textContent = t(key);
+  }
+
   /** One described row: a value, an optional plain-language note and a tone. */
   function describedValue(node, described) {
     const value = document.createElement('span');
@@ -335,7 +345,7 @@ if (
     if (socket) {
       try { socket.close(); } catch {}
     }
-    diagnosticsState.textContent = t('diag.state.openToRefresh');
+    showCopy(diagnosticsState, 'diag.state.openToRefresh');
   }
 
   function connectDiagnostics() {
@@ -345,13 +355,13 @@ if (
       || diagnosticsSocket?.readyState === WebSocket.CONNECTING
     ) return;
 
-    diagnosticsState.textContent = t('diag.state.refreshing');
+    showCopy(diagnosticsState, 'diag.state.refreshing');
     const socket = new WebSocket(wsUrl());
     diagnosticsSocket = socket;
 
     socket.addEventListener('open', () => {
       if (diagnosticsSocket !== socket) return;
-      diagnosticsState.textContent = t('diag.state.connected');
+      showCopy(diagnosticsState, 'diag.state.connected');
       sendParticipantAuthentication(socket);
       requestDiagnostics(socket);
     });
@@ -372,7 +382,7 @@ if (
     socket.addEventListener('close', () => {
       if (diagnosticsSocket !== socket) return;
       diagnosticsSocket = null;
-      diagnosticsState.textContent = t(diagnosticsPanel.open ? 'diag.state.reconnecting' : 'diag.state.openToRefresh');
+      showCopy(diagnosticsState, diagnosticsPanel.open ? 'diag.state.reconnecting' : 'diag.state.openToRefresh');
       scheduleDiagnosticsReconnect();
     });
     socket.addEventListener('error', () => {
@@ -438,11 +448,11 @@ if (
   copyButton.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(rawNode.textContent || '{}');
-      copyButton.textContent = t('diag.copied');
+      showCopy(copyButton, 'diag.copied');
     } catch {
-      copyButton.textContent = t('diag.copyFailed');
+      showCopy(copyButton, 'diag.copyFailed');
     }
-    setTimeout(() => { copyButton.textContent = t('diag.copy'); }, 1_400);
+    setTimeout(() => { showCopy(copyButton, 'diag.copy'); }, 1_400);
   });
 
   window.addEventListener('relay-locale-changed', () => {

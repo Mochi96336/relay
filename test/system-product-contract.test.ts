@@ -7,7 +7,7 @@ const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.ur
 test('normal System renders product issues without reconstructing diagnostics', () => {
   const system = read('public/system-details.js');
   const start = system.indexOf('function renderProductSystem()');
-  const end = system.indexOf('function describedValue(', start);
+  const end = system.indexOf('function showCopy(', start);
   assert.ok(start >= 0 && end > start);
 
   const productSurface = system.slice(start, end);
@@ -21,7 +21,7 @@ test('normal System renders product issues without reconstructing diagnostics', 
 test('normal System product copy is owned by relayI18n while diagnostics own their copy', () => {
   const system = read('public/system-details.js');
   const liveCopy = read('public/live-i18n.js');
-  const technicalStart = system.indexOf('function describedValue(');
+  const technicalStart = system.indexOf('function showCopy(');
   assert.ok(technicalStart >= 0);
 
   const productSurface = system.slice(0, technicalStart);
@@ -50,8 +50,12 @@ test('normal System product copy is owned by relayI18n while diagnostics own the
     assert.equal((liveCopy.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 2, key);
   }
 
-  assert.match(technicalDetails, /diagnosticsState\.textContent = t\('diag\.state\.openToRefresh'\)/);
-  assert.match(technicalDetails, /copyButton\.textContent = t\('diag\.copy'\)/);
+  assert.match(technicalDetails, /showCopy\(diagnosticsState, 'diag\.state\.openToRefresh'\)/);
+  assert.match(technicalDetails, /showCopy\(copyButton, 'diag\.copy'\)/);
+  assert.match(technicalDetails, /node\.dataset\.i18n = key;/,
+    'a locale switch re-renders [data-i18n], so the attribute carries the live state');
+  assert.doesNotMatch(technicalDetails, /(diagnosticsState|copyButton)\.textContent =/,
+    'every state change goes through showCopy');
   assert.match(system, /registerMessages\?\.\(DIAGNOSTICS_MESSAGES\)/,
     'Technical details copy is registered from its own module');
   assert.doesNotMatch(technicalDetails, /system\.issue\.|system\.product\./,

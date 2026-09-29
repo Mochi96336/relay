@@ -25,23 +25,6 @@ if (micInputDiagnostics) {
   micInputDiagnostics.setAttribute('aria-hidden', 'true');
 }
 
-// The old gain recommendation was permanently hidden in production. Retire its
-// render sentinel before app.js captures DOM references, so background input
-// updates no longer keep calculating a product recommendation that no user can
-// see. app.js still binds the compatibility action later in bootstrap; remove
-// the remaining detached presentation only after that binding is safe.
-document.querySelector('#mic-gain-advice')?.remove();
-
-function removeDeadGainRecommendationPresentation() {
-  for (const selector of [
-    '#mic-gain-recommendation-marker',
-    '.recommendation-meta',
-  ]) {
-    document.querySelector(selector)?.remove();
-  }
-}
-window.addEventListener('load', removeDeadGainRecommendationPresentation, { once: true });
-
 function closeHeaderMenus(except = null) {
   for (const menu of [peopleMenu, moreMenu]) {
     if (menu && menu !== except) menu.open = false;

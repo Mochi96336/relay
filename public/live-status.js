@@ -47,6 +47,8 @@ if (
     'mic-reconnecting': () => t('system.attention.mic-reconnecting'),
     'mic-audio-stalled': () => t('system.attention.mic-audio-stalled'),
     'mic-input-clipping': () => t('system.attention.mic-input-clipping'),
+    'mic-too-loud': () => t('system.attention.mic-too-loud'),
+    'mic-too-quiet': () => t('system.attention.mic-too-quiet'),
     'timing-recovering': () => t('system.attention.timing-recovering'),
     'timing-clamped': () => t('system.needsAttention'),
     'take-failed': () => t('system.attention.take-failed'),

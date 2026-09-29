@@ -1,3 +1,5 @@
+import type { DiagnosticsTranslator } from './diagnostics-copy.js';
+
 export type MicDiagnosticTone = 'ok' | 'warn' | 'bad' | 'neutral';
 
 export type MicDiagnosticRow = {
@@ -10,5 +12,5 @@ export type MicDiagnosticRow = {
 
 export const LOW_HEADROOM_MS: number;
 
-export function describeMicAudio(status: unknown): MicDiagnosticRow;
-export function describeMicTransport(status: unknown): MicDiagnosticRow[];
+export function describeMicAudio(status: unknown, t?: DiagnosticsTranslator): MicDiagnosticRow;
+export function describeMicTransport(status: unknown, t?: DiagnosticsTranslator): MicDiagnosticRow[];

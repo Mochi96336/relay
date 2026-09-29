@@ -1,8 +1,18 @@
 import './live-i18n.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
-import { describeMicAudio, describeMicTransport } from './mic-diagnostics-model.js';
+import { DIAGNOSTICS_MESSAGES } from './diagnostics-copy.js';
+import {
+  describeAudio,
+  describeOverview,
+  describeRobot,
+  describeSession,
+  describeTiming,
+} from './diagnostics-model.js';
+import { describeMicTransport } from './mic-diagnostics-model.js';
 import { wsUrl } from './ws-url.js';
 await window.relayIdentityReady;
+
+window.relayI18n?.registerMessages?.(DIAGNOSTICS_MESSAGES);
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const systemPanel = document.querySelector('#system-panel');
@@ -189,14 +199,8 @@ if (
     issuesNode.replaceChildren(...issues.map(issueCard));
   }
 
-  function text(id, value) {
-    const node = document.querySelector(`#${id}`);
-    if (node) node.textContent = value ?? '—';
-  }
-
   /** One described row: a value, an optional plain-language note and a tone. */
   function describedValue(node, described) {
-    if (!node) return;
     const value = document.createElement('span');
     value.className = 'diagnostic-value';
     value.textContent = described.value ?? '—';
@@ -211,14 +215,14 @@ if (
     node.replaceChildren(...parts);
   }
 
-  function renderMicDiagnostics() {
-    describedValue(document.querySelector('#diag-overview-mic'), describeMicAudio(latestStatusz));
-    const ledger = document.querySelector('#diag-mic-ledger');
+  /** Technical details renders every tab the same way: model rows into a ledger. */
+  function renderLedger(id, rows) {
+    const ledger = document.querySelector(`#${id}`);
     if (!ledger) return;
-    ledger.replaceChildren(...describeMicTransport(latestStatusz).map((described) => {
+    ledger.replaceChildren(...rows.map((described) => {
       const pair = document.createElement('div');
       pair.className = 'diagnostic-pair';
-      pair.dataset.micRow = described.key;
+      pair.dataset.row = described.key;
       const label = document.createElement('dt');
       label.textContent = described.label;
       const value = document.createElement('dd');
@@ -226,49 +230,6 @@ if (
       pair.append(label, value);
       return pair;
     }));
-  }
-
-  function yesNo(value) {
-    if (value === true) return 'Yes';
-    if (value === false) return 'No';
-    return '—';
-  }
-
-  function connection(connected, streaming) {
-    if (!connected) return 'Disconnected';
-    if (streaming === false) return 'Connected · quiet';
-    if (streaming === true) return 'Streaming';
-    return 'Connected';
-  }
-
-  function titleCase(value) {
-    if (typeof value !== 'string' || !value) return '—';
-    return value.replaceAll('-', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-  }
-
-  function routeLabel(mode) {
-    if (mode === 'robot') return 'Robot';
-    if (mode === 'legacy') return 'Legacy';
-    if (mode === 'idle') return 'Idle';
-    return '—';
-  }
-
-  function micSummary(product) {
-    const mic = product?.room?.mic;
-    if (!mic) return '—';
-    if (mic.state === 'free') return t('system.micFree');
-    const owner = mic.ownerNickname || t('voice.someone');
-    if (mic.state === 'reconnecting') return t('system.micOwnerReconnecting', { name: owner });
-    return t('system.micOwner', { name: owner });
-  }
-
-  function songSummary(product) {
-    const song = product?.room?.song;
-    if (!song) return '—';
-    if (song.state === 'empty') return t('system.noSong');
-    if (song.state === 'handoff') return t('system.songChangingPhones');
-    if (song.state === 'unavailable') return t('system.unavailable');
-    return titleCase(song.state);
   }
 
   function readyzUrl() {
@@ -368,7 +329,7 @@ if (
     if (socket) {
       try { socket.close(); } catch {}
     }
-    diagnosticsState.textContent = 'Open to refresh';
+    diagnosticsState.textContent = t('diag.state.openToRefresh');
   }
 
   function connectDiagnostics() {
@@ -378,13 +339,13 @@ if (
       || diagnosticsSocket?.readyState === WebSocket.CONNECTING
     ) return;
 
-    diagnosticsState.textContent = 'Refreshing…';
+    diagnosticsState.textContent = t('diag.state.refreshing');
     const socket = new WebSocket(wsUrl());
     diagnosticsSocket = socket;
 
     socket.addEventListener('open', () => {
       if (diagnosticsSocket !== socket) return;
-      diagnosticsState.textContent = 'Connected';
+      diagnosticsState.textContent = t('diag.state.connected');
       sendParticipantAuthentication(socket);
       requestDiagnostics(socket);
     });
@@ -405,7 +366,7 @@ if (
     socket.addEventListener('close', () => {
       if (diagnosticsSocket !== socket) return;
       diagnosticsSocket = null;
-      diagnosticsState.textContent = diagnosticsPanel.open ? 'Reconnecting…' : 'Open to refresh';
+      diagnosticsState.textContent = t(diagnosticsPanel.open ? 'diag.state.reconnecting' : 'diag.state.openToRefresh');
       scheduleDiagnosticsReconnect();
     });
     socket.addEventListener('error', () => {
@@ -423,42 +384,14 @@ if (
     const timeline = snapshots.get('youtube-timeline-status');
     const playbackClient = snapshots.get('playback-client');
     const playbackClientLastRejection = snapshots.get('playback-client-last-rejection');
-    const components = readiness?.components ?? {};
+    const facts = { product, readiness, source, statusz: latestStatusz };
 
-    text('diag-overview-health', product ? titleCase(product.health) : '—');
-    text('diag-overview-lifecycle', product ? titleCase(product.lifecycle) : '—');
-    text('diag-overview-ready', readiness ? yesNo(readiness.ready) : '—');
-    text('diag-overview-session-ready', readiness ? yesNo(readiness.sessionReady) : '—');
-
-    text('diag-session-people', product ? String(Number(product.room?.participantCount) || 0) : '—');
-    text('diag-session-mic', product ? micSummary(product) : '—');
-    text('diag-session-song', product ? songSummary(product) : '—');
-    text('diag-session-take', product ? titleCase(product.take?.lifecycle) : '—');
-
-    text('diag-audio-route', routeLabel(components.route?.mode));
-    text('diag-audio-backing', connection(components.backing?.connected, components.backing?.streaming));
-    text('diag-audio-mic', connection(components.mic?.connected, components.mic?.streaming));
-    text('diag-audio-mix', components.session ? (components.session.active ? 'Active' : 'Idle') : '—');
-
-    text('diag-timing-product', product ? titleCase(product.timing?.state) : '—');
-    text('diag-timing-player', components.player ? connection(components.player.timelineConnected) : '—');
-    text('diag-timing-calibration', components.calibration
-      ? `${titleCase(components.calibration.state)} · valid ${yesNo(components.calibration.valid)}`
-      : '—');
-    text('diag-timing-offset', components.player?.offsetFresh
-      ? `${Math.round(Number(components.player.offsetMs) || 0)} ms`
-      : components.player ? 'Not fresh' : '—');
-
-    renderMicDiagnostics();
-
-    text('diag-robot-mode', routeLabel(components.route?.mode));
-    text('diag-robot-source', components.robotSource ? connection(components.robotSource.connected) : '—');
-    text('diag-robot-backing', components.backing
-      ? `${connection(components.backing.connected, components.backing.streaming)}${components.backing.sampleRate ? ` · ${components.backing.sampleRate} Hz` : ''}`
-      : '—');
-    text('diag-robot-player', components.player
-      ? `${connection(components.player.timelineConnected)} · offset fresh ${yesNo(components.player.offsetFresh)}`
-      : '—');
+    renderLedger('diag-overview-ledger', describeOverview(facts, t));
+    renderLedger('diag-session-ledger', describeSession(facts, t));
+    renderLedger('diag-mic-ledger', describeMicTransport(latestStatusz, t));
+    renderLedger('diag-audio-ledger', describeAudio(facts, t));
+    renderLedger('diag-timing-ledger', describeTiming(facts, t));
+    renderLedger('diag-robot-ledger', describeRobot(facts, t));
 
     rawNode.textContent = JSON.stringify({
       product: product ?? null,
@@ -499,11 +432,11 @@ if (
   copyButton.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(rawNode.textContent || '{}');
-      copyButton.textContent = 'Copied';
+      copyButton.textContent = t('diag.copied');
     } catch {
-      copyButton.textContent = 'Copy failed';
+      copyButton.textContent = t('diag.copyFailed');
     }
-    setTimeout(() => { copyButton.textContent = 'Copy diagnostics'; }, 1_400);
+    setTimeout(() => { copyButton.textContent = t('diag.copy'); }, 1_400);
   });
 
   window.addEventListener('relay-locale-changed', () => {

@@ -225,12 +225,12 @@ describe('Mic diagnostics model', () => {
       [
         'Level',
         '+7 dBFS before the limiter',
-        'Held down more than 3 dB for 758 ms of the last second, at Mic gain +24 dB. Lower the Mic gain.',
+        'Held down >3 dB for 758 ms at +24 dB. Lower the Mic gain.',
         'warn',
       ],
     );
     assert.deepEqual([level(null, 21).tone, level(null, 21).note],
-      ['neutral', 'Held down more than 3 dB for 21 ms of the last second, at Mic gain +24 dB. Fine unless it keeps happening.']);
+      ['neutral', 'Held down >3 dB for 21 ms at +24 dB. Fine if occasional.']);
     assert.deepEqual([level(null, 0, -40).value, level(null, 0, -40).tone], ['-16 dBFS before the limiter', 'ok']);
     assert.match(level('too-quiet', 0, -60).note, /raise the Mic gain/);
 
@@ -243,7 +243,7 @@ describe('Mic diagnostics model', () => {
     }), zh).map((row) => [row.key, row])).level;
     assert.deepEqual(
       [zhLoud.label, zhLoud.value, zhLoud.note],
-      ['音量', '限幅前 +7 dBFS', 'Mic 增益 +24 dB 時，上一秒有 758 ms 被壓低超過 3 dB。請調低 Mic 增益。'],
+      ['音量', '限幅前 +7 dBFS', '增益 +24 dB，被壓超過 3 dB 共 758 ms。請調低 Mic 增益。'],
     );
   });
 
@@ -275,14 +275,14 @@ describe('Mic diagnostics model', () => {
       [row.value, row.note, row.tone],
       [
         '-6 dBFS before the limiter',
-        'The last second was not held down, but the seconds before it often were. Calm for 3 of the 10 seconds that clear the warning.',
+        'Not held down this second, but earlier seconds were. Calm 3/10 s to clear.',
         'warn',
       ],
     );
     assert.doesNotMatch(row.note, /0 ms|Lower the Mic gain/);
     assert.equal(
       levelRow(calm, diagnosticsTranslator('zh-Hant')).note,
-      '這一秒沒有被壓低，但前幾秒常被壓低。已經連續 3 秒沒被壓低，滿 10 秒警告就會解除。',
+      '這一秒沒被壓，但前幾秒有。已連續 3/10 秒，滿了就解除。',
     );
 
     // Held down 50 ms: below what counts as a hot second, so it is calm for
@@ -292,19 +292,19 @@ describe('Mic diagnostics model', () => {
     assert.deepEqual(
       [briefRow.note, briefRow.tone],
       [
-        'The last second was held down more than 3 dB for only 50 ms, too briefly to count, but the seconds before it were held down longer. Calm for 3 of the 10 seconds that clear the warning.',
+        'Held down only 50 ms this second, too brief to count; earlier seconds were longer. Calm 3/10 s to clear.',
         'warn',
       ],
     );
-    assert.doesNotMatch(briefRow.note, /not held down/);
+    assert.doesNotMatch(briefRow.note, /not held down/i);
     assert.equal(
       levelRow(brief, diagnosticsTranslator('zh-Hant')).note,
-      '這一秒只被壓低超過 3 dB 共 50 ms，時間太短不算數，但前幾秒被壓得更久。已經連續 3 秒不算被壓低，滿 10 秒警告就會解除。',
+      '這一秒只被壓 50 ms，太短不算；前幾秒壓得更久。已連續 3/10 秒，滿了就解除。',
     );
-    assert.doesNotMatch(levelRow(brief, diagnosticsTranslator('zh-Hant')).note, /沒有被壓低/);
+    assert.doesNotMatch(levelRow(brief, diagnosticsTranslator('zh-Hant')).note, /沒被壓|沒有被壓/);
 
     const hot = levelRow({ ...calm, calmWindows: 0, lastWindow: { ...calm.lastWindow, heavyLimitedMs: 240 } });
-    assert.match(hot.note, /^Held down more than 3 dB for 240 ms/);
+    assert.match(hot.note, /^Held down >3 dB for 240 ms/);
   });
 
   it('labels a reading taken before a gain change with the gain it was taken at', () => {
@@ -320,13 +320,13 @@ describe('Mic diagnostics model', () => {
       [row.value, row.note, row.tone],
       [
         '+7 dBFS before the limiter',
-        'Measured at Mic gain +24 dB. The reading at +16 dB shows once the next second is measured.',
+        'Measured at +24 dB; +16 dB shows next second.',
         'neutral',
       ],
     );
     assert.equal(
       levelRow(moved, diagnosticsTranslator('zh-Hant')).note,
-      '這是 Mic 增益 +24 dB 時量到的。+16 dB 的結果會在下一秒量完後顯示。',
+      '這是 +24 dB 時量的；+16 dB 的結果下一秒顯示。',
     );
     assert.equal(levelRow({ ...moved, warning: 'too-loud' }).tone, 'warn');
   });

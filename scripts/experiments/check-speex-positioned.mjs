@@ -11,11 +11,17 @@ import path from 'node:path';
 const root=process.argv[2];
 if(!root)throw Error('usage: node scripts/experiments/check-speex-positioned.mjs OUTDIR');
 const baseline=JSON.parse(await readFile(path.join(root,'baseline.json'),'utf8'));
-const native=(await readFile(path.join(root,'native.ndjson'),'utf8'))
+const nativeName=process.argv[3]??'native.ndjson';
+const reportName=process.argv[4]??'comparison.json';
+if(!/^native(?:-q[358])?\.ndjson$/.test(nativeName)||!/^comparison(?:-q[358])?\.json$/.test(reportName))
+  throw Error('invalid evidence filename');
+const native=(await readFile(path.join(root,nativeName),'utf8'))
   .split('\n').filter(Boolean).map(line=>JSON.parse(line));
 const RATE=48_000;
 const tceil=(source,rate)=>Math.ceil(source*RATE/rate);
 const verified=[];
+const qualitySet=new Set(native.map(g=>g.quality));
+assert.equal(qualitySet.size,1,'a single report must use one SRC quality');
 for(const scenario of baseline.scenarios){
   const groups=native.filter(g=>g.scenario===scenario.id);
   const boundaryRows=scenario.observations.filter(x=>x.kind!=='continuous');
@@ -92,7 +98,7 @@ const report={
   control:'Real unmodified AudioSession including Mic and Backing',
   candidate:'Independent native Speex library consuming exactly the same PCM files',
   packetizationExactBaselineSamples:baseline.packetizationExactSamples,
-  packetizationBitExactNative:true,
+  packetizationBitExactNative:true,quality:[...qualitySet][0],
   scenarios:verified,
   unresolved:[
     'The per-group post-filter stream is not yet bound to AudioSession absolute output sample authority.',
@@ -100,5 +106,5 @@ const report={
     'No actual Take candidate mix, source-gap declicking, realistic estimator uncertainty, or ARM profiling has passed.',
   ],
 };
-await writeFile(path.join(root,'comparison.json'),JSON.stringify(report,null,2)+'\n');
+await writeFile(path.join(root,reportName),JSON.stringify(report,null,2)+'\n');
 console.log(JSON.stringify(report,null,2));

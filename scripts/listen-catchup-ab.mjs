@@ -25,10 +25,22 @@ import vm from 'node:vm';
 const RATE = 48_000;
 const QUANTUM = 128;
 const FRAME = 960;
-const SECONDS = 14;
-const BURST_AT_SECONDS = 4;
-const BURST_FRAMES = 10;
-const TRIM_WINDOW_MS = 500; // experiment only; production is 10,000 ms.
+const args = process.argv.slice(2);
+function option(name, fallback) {
+  const index = args.indexOf(name);
+  if (index === -1) return fallback;
+  if (!args[index + 1]) throw new Error(`${name} requires a value`);
+  return args[index + 1];
+}
+const SIGNAL = option('--signal', 'mixed');
+if (!['mixed', 'tone', 'hiss'].includes(SIGNAL)) throw new Error('signal must be mixed, tone or hiss');
+const SECONDS = Number(option('--seconds', '14'));
+const BURST_AT_SECONDS = Number(option('--burst-at', '4'));
+const BURST_FRAMES = Number(option('--burst-frames', '10'));
+const TRIM_WINDOW_MS = Number(option('--trim-window-ms', '500')); // production default 10000
+if (!(SECONDS > 0 && SECONDS <= 40) || !(BURST_AT_SECONDS >= 0 && BURST_AT_SECONDS < SECONDS)
+  || !(Number.isInteger(BURST_FRAMES) && BURST_FRAMES >= 0 && BURST_FRAMES <= 75)
+  || !(TRIM_WINDOW_MS >= 100 && TRIM_WINDOW_MS <= 10000)) throw new Error('invalid experiment parameters');
 const WORKLET_FILE = fileURLToPath(new URL('../public/playback-worklet.js', import.meta.url));
 
 function program(sample) {
@@ -43,6 +55,8 @@ function program(sample) {
   const hash = Math.imul(sample ^ (sample >>> 11), 1_664_525) >>> 0;
   const hiss = ((hash / 0xffff_ffff) * 2 - 1) * 0.13;
   const phase = time % 2;
+  if (SIGNAL === 'tone') return 0.24 * note + 0.12 * upper;
+  if (SIGNAL === 'hiss') return hiss;
   return phase >= 0.85 && phase < 1.15
     ? hiss + note * 0.05
     : 0.24 * note + 0.12 * upper + 0.28 * attack;
@@ -204,7 +218,6 @@ function localOutputStep(samples, atSample, length = 480) {
 async function simulate(experimental) {
   const events = [];
   const processor = await makeProcessor(experimental, events);
-  const chunks = [];
   let sourceIndex = 0;
   const deliver = () => {
     const chunk = new Float32Array(FRAME);
@@ -247,6 +260,10 @@ async function simulate(experimental) {
     starvedMs: (processor.starvedSamples / RATE) * 1_000,
     finalQueuedMs: (processor.queuedSamples / RATE) * 1_000,
     targetPrebufferMs: (processor.prebufferSamples / RATE) * 1_000,
+    unrecoveredExcessMs: Math.max(0, ((processor.queuedSamples - processor.prebufferSamples) / RATE) * 1_000),
+    overlapAccepted: events.filter(event => event.correlation !== null).length,
+    overlapCorrelationMin: events.filter(event => event.correlation !== null).length
+      ? Math.min(...events.filter(event => event.correlation !== null).map(event => event.correlation)) : null,
     trimEvents: events.map(event => ({
       ...event,
       atOutputMs: (event.atOutputSample / RATE) * 1_000,
@@ -259,15 +276,20 @@ async function simulate(experimental) {
   return { output, metrics };
 }
 
-const args = process.argv.slice(2);
 const outIndex = args.indexOf('--out');
 const outDir = outIndex === -1 ? null : args[outIndex + 1];
 if (outIndex !== -1 && !outDir) throw new Error('--out requires a directory');
 const baseline = await simulate(false);
 const candidate = await simulate(true);
 if (args.includes('--self-test')) {
-  assert.ok(baseline.metrics.trimmedMs > 0, 'fixture must exercise the real existing latency trim');
-  assert.ok(candidate.metrics.trimEvents.length > 0, 'fixture must exercise the experimental overlap');
+  if (SIGNAL === 'mixed' && BURST_FRAMES > 0 && TRIM_WINDOW_MS === 500) {
+    assert.ok(baseline.metrics.trimmedMs > 0, 'fixture must exercise the real existing latency trim');
+    assert.ok(candidate.metrics.trimEvents.length > 0, 'fixture must exercise the experimental overlap');
+  }
+  if (BURST_FRAMES === 0) {
+    assert.equal(baseline.metrics.trimmedMs, 0, 'negative control cannot need baseline trim');
+    assert.equal(candidate.metrics.trimmedMs, 0, 'negative control cannot need candidate trim');
+  }
   assert.equal(baseline.output.length, candidate.output.length);
   assert.ok([...baseline.output, ...candidate.output].every(Number.isFinite));
   assert.equal(baseline.metrics.droppedMs, candidate.metrics.droppedMs,
@@ -277,6 +299,7 @@ const report = {
   fixture: {
     sampleRate: RATE, seconds: SECONDS, burstAtMs: BURST_AT_SECONDS * 1_000,
     injectedExtraQueueMs: BURST_FRAMES * 20, experimentalTrimWindowMs: TRIM_WINDOW_MS,
+    signal: SIGNAL,
   },
   current: baseline.metrics,
   candidate: candidate.metrics,
@@ -284,6 +307,8 @@ const report = {
     'This is a reproducible synthetic comparison, not proof of better listening quality.',
     'Correlation search runs in an offline Node VM, not on an actual mobile audio thread.',
     'This bounded proposal handles only normal latency trim; production overflow remains unchanged.',
+    'Pure hiss/nonperiodic input may prevent any correction; unrecoveredExcessMs is a necessary safety metric.',
+    'This artificial extra-production fixture is not the same as a stalled link re-delivering its pending packets.',
     'Real music recordings and real-device measurements are required before enabling it in Listen.',
   ],
 };

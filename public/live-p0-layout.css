@@ -281,10 +281,9 @@ html body .performance-stage > .take-strip > .recent-take #last-take-toggle {
   text-decoration: none;
 }
 
-/* Mic gain becomes the first of the two bottom rails. Keep the existing input,
-   authority and recommendation model; only flatten the closed <details> shell
-   into a 44px rail. Recommendations remain available as data but do not consume
-   permanent Live height. */
+/* Mic gain becomes the first of the two bottom rails. Keep the existing input
+   and authority model; only flatten the closed <details> shell into a 44px
+   rail. Level problems surface as product issues, not permanent Live height. */
 html body[data-self-mic="live"] .performance-stage > .mic-live-control {
   width: 100%;
   height: 44px;
@@ -346,12 +345,6 @@ html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain
 html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain::-webkit-slider-runnable-track,
 html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain::-moz-range-track {
   height: 2px;
-}
-
-html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain-recommendation-marker,
-html body[data-self-mic="live"] .performance-stage > .mic-live-control .recommendation-meta,
-html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain-advice {
-  display: none !important;
 }
 
 html body .live-actions {

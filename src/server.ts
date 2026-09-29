@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import type { loadRelayConfig } from './config.js';
-import { AudioSession, LIMITER_THRESHOLD_DBFS } from './audio-session.js';
+import { AudioSession } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
@@ -52,6 +52,7 @@ import {
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
+import { MicLevelMonitor } from './mic-level-monitor.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
@@ -196,7 +197,6 @@ const TIMING_CALIBRATION_MS = 6_000;
 const TIMING_CALIBRATION_TIMEOUT_MS = relayConfig.calibrationTimeoutMs;
 const MAX_VOCAL_FINE_TUNE_MS = 100;
 const MAX_MIC_GAIN_DB = 40;
-const MAX_RECOMMENDED_MIC_GAIN_DB = 36;
 const FIXED_SONG_LEVEL = 100;
 const HEARTBEAT_MS = relayConfig.heartbeatMs;
 const MIX_HEALTH_INTERVAL_MS = 1_000;
@@ -288,6 +288,7 @@ const session = new AudioSession({
  * cannot see these shapes.
  */
 const micAudibility = new MicAudibilityMonitor({ sampleRate: MIX_SAMPLE_RATE });
+const micLevel = new MicLevelMonitor({ sampleRate: MIX_SAMPLE_RATE });
 /** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
 const micClockDrift = new MicClockDriftEstimator();
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
@@ -515,8 +516,9 @@ function micMediaPath() {
 function clearMicMediaAuthority() {
   micRuntime.clearMediaAuthority(performance.now());
   session.setMicExpected(false);
-  // An audibility verdict belongs to one capture, never to the next singer.
+  // An audibility or level verdict belongs to one capture, never to the next singer.
   resetMicAudibility();
+  micLevel.reset();
 }
 
 function expireMicTransportGrace(expectedOwnerId: string) {
@@ -1514,7 +1516,6 @@ function mixHealthPayload() {
     type: 'mix-health',
     active: session.active,
     ...health,
-    recommendedMicGainDb: recommendedMicGainDb(health.micPeakDbfs),
     micGainDb: session.micGainDb,
     monitorDroppedFrames: monitorTransport.droppedFrames,
     monitorRecentDroppedFrames: monitorDrops.frames,
@@ -1607,6 +1608,7 @@ function remoteStatusPayload() {
       receiverTransport: micRuntime.receiverStats(),
       receiverRetransmit: micRuntime.retransmitStats(),
       micAudibility: micAudibility.status(),
+      micLevel: micLevel.status(),
       timeline: {
         micGapMs: mixHealth.micGapMs,
         micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
@@ -1678,11 +1680,6 @@ function observationStatusV1Payload() {
       warnings: remote.warnings,
     },
   });
-}
-
-function recommendedMicGainDb(micPeakDbfs: number | null) {
-  if (micPeakDbfs === null || !Number.isFinite(micPeakDbfs)) return null;
-  return Math.max(0, Math.min(MAX_RECOMMENDED_MIC_GAIN_DB, Math.round(LIMITER_THRESHOLD_DBFS - micPeakDbfs)));
 }
 
 function probeStatus(nowMs = performance.now()) {
@@ -1834,6 +1831,7 @@ function productStatusPayload(nowMs = performance.now()) {
     micMediaRecoveryDegraded: freshMicUplink?.transport.mediaRecoveryDegraded === true,
     micAudibilityDegraded: micAudibility.degraded,
     micInputClipping: freshMicUplink?.captureClipping?.recentDetected === true,
+    micLevelWarning: micLevel.warning,
     roomSong: {
       videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
       connected: Boolean(room.connected),
@@ -1974,10 +1972,16 @@ const liveSourceStopCoordinator = createRelayLiveSourceStopCoordinator({
 function stopLiveSource() {
   liveSourceStopCoordinator.stop();
   resetMicAudibility();
+  micLevel.reset();
 }
 
 function roomHasSong(nowMs = performance.now()) {
   return takeSongSnapshot(nowMs).videoId !== null;
+}
+
+/** The song is audibly under the voice: YouTube says playing and its audio is arriving. */
+function roomSongPlaying(nowMs = performance.now()) {
+  return takeSongSnapshot(nowMs).state === 1 && backingPlayable(nowMs);
 }
 
 function maybeStopLiveSourceWhenUnarmed() {
@@ -2036,6 +2040,7 @@ function processPublisherFrame(frame: PcmFrame) {
   );
   if (samples.length > 0) noteMicFrame(nowMs, frame);
   micAudibility.observeReceived(samples);
+  micLevel.observeReceived(samples);
   if (
     frame.firstSampleIndex !== null
     && frame.generation !== null
@@ -2054,6 +2059,7 @@ function processPublisherFrame(frame: PcmFrame) {
 
   if (captureRestarted) {
     resetMicAudibility();
+    micLevel.reset();
     micCaptureRestartCoordinator.restart({
       calibrationCollecting: calibration.collecting,
     });
@@ -2088,8 +2094,18 @@ const mixerTimer = setInterval(() => {
       micStarvedSamples: evidence.micStarvedSamples,
     });
     if (audibility) reportMicAudibility(audibility, nowMs);
+    const levelChanged = micLevel.observeFrame({
+      micLive: micPlayable(nowMs),
+      frameSamples: frame.byteLength / 2,
+      heavyLimitedSamples: evidence.heavyLimitedSamples,
+    }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.micGainDb }));
+    if (levelChanged) reportMicLevel('window');
   });
 }, 5);
+
+function reportMicLevel(reason: 'window' | 'gain') {
+  console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));
+}
 
 function resetMicAudibility() {
   const events = micAudibility.reset();
@@ -3262,7 +3278,14 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (!requireMicOwnerCommand(socket, 'set-mix')) return;
     const nextGain = Number(payload.micGainDb);
     if (Number.isFinite(nextGain)) {
+      const previousGainDb = session.micGainDb;
       session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
+      // A gain change is the fix the level warning asks for; answer it now
+      // rather than on the next periodic product status.
+      if (micLevel.noteMicGainChanged(previousGainDb, session.micGainDb)) {
+        reportMicLevel('gain');
+        broadcastProductStatus();
+      }
     }
     // `songLevel` remains accepted on the old wire shape for compatibility,
     // but Song is now a server-owned 100% reference and cannot be mutated by

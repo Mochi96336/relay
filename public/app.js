@@ -9,10 +9,8 @@ import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 import {
   captureClippingSnapshot,
-  captureInputClippingDetected,
   captureRecentInputClippingDetected,
   captureLevelSnapshot,
-  captureVoiceProcessingActive,
   enforceUnprocessedCapture,
   readCaptureSettings,
 } from './capture-observability.js';
@@ -28,12 +26,6 @@ const status = document.querySelector('#status');
 const details = document.querySelector('#details');
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
-const micGainAdvice = document.querySelector('#mic-gain-advice');
-const micInputMeter = document.querySelector('#mic-input-meter');
-const micInputValue = document.querySelector('#mic-input-value');
-const micGainRecommendation = document.querySelector('#mic-gain-recommendation');
-const micGainRecommendationMarker = document.querySelector('#mic-gain-recommendation-marker');
-const useMicGainSuggestion = document.querySelector('#use-mic-gain-suggestion');
 const songLevel = document.querySelector('#song-level');
 const songLevelValue = document.querySelector('#song-level-value');
 const vocalFineTune = document.querySelector('#vocal-fine-tune');
@@ -68,8 +60,6 @@ const PUBLISHER_BROADCAST_TYPES = [
   'audio-retransmit-request',
 ];
 const MIC_CAPTURE_WATCHDOG_INTERVAL_MS = 250;
-const MAX_MIC_GAIN_DB = 40;
-const MAX_RECOMMENDED_MIC_GAIN_DB = 36;
 const FIXED_SONG_LEVEL = 100;
 
 let socket = null;
@@ -93,7 +83,6 @@ const micLifecycle = new MicLifecycleTransaction();
 const publisherCommandLiveness = new PublisherCommandLiveness();
 let publishedPublisherCommandChannelFresh = false;
 let liveMixActive = false;
-let latestMixHealth = null;
 let latestLocalMicLevel = null;
 let captureAppliedSettings = null;
 let latestCalibration = null;
@@ -108,82 +97,6 @@ let lastKnownControlSnapshot = {
   vocalFineTuneMs: Number(vocalFineTune.value) || 0,
 };
 
-/**
- * The local capture owns the live meter; server mix health owns slower gain
- * advice. Keeping those evidence paths separate prevents a 1 Hz health cadence
- * from masquerading as a realtime microphone display.
- */
-function renderGainAdvice() {
-  if (
-    !micGainAdvice || !micInputMeter || !micInputValue
-    || !micGainRecommendation || !micGainRecommendationMarker || !useMicGainSuggestion
-  ) return;
-
-  const rawPeak = latestLocalMicLevel?.peakDbfs;
-  const rawRecommended = latestMixHealth?.recommendedMicGainDb;
-  const peak = rawPeak === null || rawPeak === undefined ? Number.NaN : Number(rawPeak);
-  const recommended = rawRecommended === null || rawRecommended === undefined
-    ? Number.NaN
-    : Number(rawRecommended);
-
-  if (Number.isFinite(peak)) {
-    // Evidence only: the rail shows the measured input, not another setting.
-    // -60 dBFS maps to the quiet edge and 0 dBFS to full scale.
-    const inputPercent = Math.max(0, Math.min(100, ((peak + 60) / 60) * 100));
-    micInputMeter.style.setProperty('--input-level', `${inputPercent}%`);
-    micInputValue.value = `${peak.toFixed(1)} dBFS`;
-  } else {
-    micInputMeter.style.setProperty('--input-level', '0%');
-    micInputValue.value = t('adjust.listening');
-  }
-
-  const clipping = captureClippingSnapshot(latestLocalMicLevel);
-  if (captureInputClippingDetected(clipping)) {
-    micGainRecommendationMarker.hidden = true;
-    micGainRecommendation.textContent = t('adjust.inputClipping');
-    micGainAdvice.textContent = t('adjust.inputClippingHelp');
-    useMicGainSuggestion.hidden = true;
-    return;
-  }
-
-  if (captureVoiceProcessingActive(captureAppliedSettings)) {
-    micGainRecommendationMarker.hidden = true;
-    micGainRecommendation.textContent = t('adjust.processingActive');
-    micGainAdvice.textContent = t('adjust.processingActiveHelp');
-    useMicGainSuggestion.hidden = true;
-    return;
-  }
-
-  const current = Math.round(Number(micGain.value) || 0);
-  if (!Number.isFinite(recommended)) {
-    micGainRecommendationMarker.hidden = true;
-    micGainRecommendation.textContent = t('adjust.singNormally');
-    micGainAdvice.textContent = t('adjust.suggestionHelp');
-    useMicGainSuggestion.hidden = true;
-    return;
-  }
-
-  // Relay's automatic recommendation remains deliberately conservative. The
-  // last 4 dB of the rail is manual headroom, not a target the product should
-  // push a singer toward automatically.
-  const suggested = Math.max(0, Math.min(MAX_RECOMMENDED_MIC_GAIN_DB, Math.round(recommended)));
-  const markerPercent = (suggested / MAX_MIC_GAIN_DB) * 100;
-  micGainRecommendationMarker.hidden = false;
-  micGainRecommendationMarker.style.left = `${markerPercent}%`;
-  micGainRecommendation.textContent = t('adjust.recommendedGain', { gain: suggested });
-
-  const off = suggested - current;
-  micGainAdvice.textContent = Math.abs(off) <= 3
-    ? t('adjust.soundsGood')
-    : off < 0
-      ? t('adjust.aboveSuggestion', { amount: -off })
-      : t('adjust.belowSuggestion', { amount: off });
-
-  const canApply = publisherCommandAuthority().actionable && Math.abs(off) > 3;
-  useMicGainSuggestion.hidden = !canApply;
-  useMicGainSuggestion.disabled = !publisherCommandAuthority().actionable;
-  useMicGainSuggestion.textContent = t('adjust.useGain', { gain: suggested });
-}
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0, captureBacklog: 0 };
 let latestCaptureDispatchLagMs = null;
@@ -640,7 +553,6 @@ function handleCaptureWorkletMessage(event, graph) {
           maxConsecutiveRailSamples: clipping?.maxConsecutiveRailSamples ?? null,
           windowMaxConsecutiveRailSamples: clipping?.windowMaxConsecutiveRailSamples ?? null,
         });
-        renderGainAdvice();
       }
       return;
     }
@@ -1045,8 +957,6 @@ function sliderIsBusy(element) {
 function updateMixLabels() {
   micGainValue.value = signed(micGain.value, ' dB');
   songLevelValue.value = `${Math.round(Number(songLevel.value) || 0)}%`;
-  // The verdict compares the slider against the meter, so it moves with both.
-  renderGainAdvice();
 }
 
 function updateVocalFineTuneLabel() {
@@ -1111,7 +1021,6 @@ function updateSingerControls() {
   // interactive singer control even while this participant owns the Mic.
   songLevel.disabled = true;
   vocalFineTune.disabled = !actionable;
-  renderGainAdvice();
   updateCalibrateButton();
 }
 
@@ -1543,13 +1452,8 @@ function handleServerMessage(
     return;
   }
 
-  if (message.type === 'mix-health') {
-    latestMixHealth = message;
-    // Mix health can update the gain recommendation, but the meter itself is
-    // intentionally driven only by local capture evidence.
-    renderGainAdvice();
-    return;
-  }
+  // Mix health feeds the desktop source page; the Live surface has no use for it.
+  if (message.type === 'mix-health') return;
 }
 
 function canKeepPublishing() {
@@ -1843,7 +1747,6 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   setPublisherActive(false);
 
   liveMixActive = false;
-  latestMixHealth = null;
   latestLocalMicLevel = null;
   captureAppliedSettings = null;
   dispatchRelayEvent('relay-local-mic-level', {
@@ -1966,7 +1869,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     // A websocket reconnect keeps this generation. Only a true capture-clock
     // boundary (new Mic session or rebuilt graph) advances it.
     const generation = advanceCaptureGeneration('publisher-start');
-    latestMixHealth = null;
     publisherControlConnections = 0;
     startAudioUplinkHealthReporting();
 
@@ -1986,7 +1888,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         await enforceUnprocessedCapture(captureStream);
         if (!captureIsCurrent()) return;
         captureAppliedSettings = readCaptureSettings(captureStream);
-        renderGainAdvice();
 
         // WebKit may change the underlying input without ending the live track
         // and may surface that only as configurationchange. Do not send an old-
@@ -2160,16 +2061,7 @@ vocalFineTune.addEventListener('input', () => {
 });
 vocalFineTune.addEventListener('change', () => markSliderTouched(vocalFineTune));
 
-useMicGainSuggestion.addEventListener('click', () => {
-  const recommended = Number(latestMixHealth?.recommendedMicGainDb);
-  if (!publisherCommandAuthority().actionable || !Number.isFinite(recommended)) return;
-  micGain.value = String(Math.max(0, Math.min(MAX_RECOMMENDED_MIC_GAIN_DB, Math.round(recommended))));
-  markSliderTouched(micGain);
-  sendMixSettings();
-});
-
 window.addEventListener('relay-locale-changed', () => {
-  renderGainAdvice();
   updateCalibrateButton();
 });
 

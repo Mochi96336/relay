@@ -238,6 +238,32 @@ function describeMicInput(status, t) {
   return row('input', label, value, t('diag.mic.input.okNote'), 'ok');
 }
 
+/**
+ * The Mic gain's effect, from the server's level monitor: the last second's
+ * peak after gain but before the limiter, and how long the limiter held the
+ * voice down audibly. The same evidence raises the Mic too loud / too quiet
+ * warnings, so this row is where their numbers live.
+ */
+function describeLevel(status, t) {
+  const level = status?.audio?.micLevel;
+  if (!status?.source?.micConnected || !level) return unknown(t, 'level', 'diag.mic.level');
+
+  const label = t('diag.mic.level');
+  const window = level.lastWindow;
+  const rawPeak = finite(window?.rawPeakDbfs);
+  const gain = finite(window?.micGainDb);
+  if (!window?.eligible || rawPeak === null || gain === null) {
+    return row('level', label, t('diag.unknown'));
+  }
+  const peak = Math.round(rawPeak + gain) || 0;
+  const value = t('diag.mic.level.value', { db: `${peak > 0 ? '+' : ''}${peak}` });
+  const vars = { gain: Math.round(gain), ms: Math.round(finite(window.heavyLimitedMs) ?? 0) };
+  if (level.warning === 'too-loud') return row('level', label, value, t('diag.mic.level.loudNote', vars), 'warn');
+  if (level.warning === 'too-quiet') return row('level', label, value, t('diag.mic.level.quietNote', vars), 'warn');
+  if (vars.ms > 0) return row('level', label, value, t('diag.mic.level.pressedNote', vars), 'neutral');
+  return row('level', label, value, t('diag.mic.level.okNote', vars), 'ok');
+}
+
 function describeClockDrift(status, t) {
   if (!status?.source?.micStreaming) return unknown(t, 'drift', 'diag.mic.drift');
   const label = t('diag.mic.drift');
@@ -295,6 +321,7 @@ function describeProblems(status, t) {
 export function describeMicTransport(status, t = english) {
   return [
     describeMicAudio(status, t),
+    describeLevel(status, t),
     describeProblems(status, t),
     describePath(status, t),
     describeLossRepair(status, t),

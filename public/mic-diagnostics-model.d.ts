@@ -3,7 +3,7 @@ import type { DiagnosticsTranslator } from './diagnostics-copy.js';
 export type MicDiagnosticTone = 'ok' | 'warn' | 'bad' | 'neutral';
 
 export type MicDiagnosticRow = {
-  key: 'audio' | 'problems' | 'path' | 'repair' | 'buffer' | 'send' | 'input' | 'drift';
+  key: 'audio' | 'level' | 'problems' | 'path' | 'repair' | 'buffer' | 'send' | 'input' | 'drift';
   label: string;
   value: string;
   note: string;

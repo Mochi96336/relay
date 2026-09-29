@@ -231,6 +231,17 @@ describe('Audio, Session and Robot', () => {
     assert.deepEqual([rows.listeners.value, rows.listeners.tone], ['12 frames dropped', 'warn']);
   });
 
+  it('says what the mixer does, and mentions clipping only when the final mix clipped', () => {
+    const running = byKey(describeAudio({ readiness: readiness(), statusz: { mix: { clippedSamples: 0 } } }, en)).mixer;
+    assert.deepEqual([running.note, running.tone], ['Mixing the voice and the song into the room sound.', 'ok']);
+    assert.doesNotMatch(running.note, /clip/i);
+    const clipped = byKey(describeAudio({ readiness: readiness(), statusz: { mix: { clippedSamples: 4 } } }, en)).mixer;
+    assert.equal(clipped.tone, 'warn');
+    assert.match(clipped.note, /since the mixer started\. This is separate from the Mic limiter/);
+    const zhRunning = byKey(describeAudio({ readiness: readiness(), statusz: { mix: { clippedSamples: 0 } } }, zh)).mixer;
+    assert.doesNotMatch(zhRunning.note, /削波|削平/);
+  });
+
   it('names the Mic holder and what their Mic is doing', () => {
     const rows = byKey(describeSession({
       product: {

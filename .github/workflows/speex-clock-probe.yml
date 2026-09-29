@@ -27,21 +27,33 @@ jobs:
       - name: Run fractional clock scenarios
         run: |
           /tmp/speex-clock-probe 30 > speex-clock-report.json
+          /tmp/speex-clock-probe 120 > speex-clock-report-long.json
           python3 - <<'PY'
           import json
-          report = json.load(open("speex-clock-report.json", encoding="utf-8"))
-          cases = report["cases"]
-          assert [x["ppm"] for x in cases] == [0, 50, -50, 100, -100]
-          for item in cases:
-              assert abs(item["relaySamples"] - item["expectedOutput"]) < 2
-              assert abs(item["speexSamples"] + item["speexOutputLatency"] - item["expectedOutput"]) < 960
-              assert item["relayEnergy"] > 0 and item["speexEnergy"] > 0
-          assert all(x["relayCorrectedFrames"] > 0 for x in cases[1:])
-          print(json.dumps(report, indent=2))
+          for file in ["speex-clock-report.json", "speex-clock-report-long.json"]:
+              report = json.load(open(file, encoding="utf-8"))
+              cases = report["cases"]
+              assert [x["ppm"] for x in cases] == [0, 50, -50, 100, -100]
+              for item in cases:
+                  assert abs(item["relaySamples"] - item["expectedOutput"]) < 2
+                  assert abs(item["speexSamples"] + item["speexOutputLatency"] - item["expectedOutput"]) < 960
+                  assert item["relayEnergy"] > 0 and item["speexEnergy"] > 0
+              assert all(x["relayCorrectedFrames"] > 0 for x in cases[1:])
+              print(file, json.dumps({
+                  "seconds": report["seconds"],
+                  "cases": [{
+                      "ppm": c["ppm"], "expected": c["expectedOutput"],
+                      "relay": c["relaySamples"], "speex": c["speexSamples"],
+                      "speexLatency": c["speexOutputLatency"],
+                      "relayCpuMs": c["relayCpuMs"], "speexCpuMs": c["speexCpuMs"],
+                  } for c in cases],
+              }))
           PY
       - name: Save native benchmark evidence
         uses: actions/upload-artifact@v4
         with:
           name: speex-fractional-src-report
-          path: speex-clock-report.json
+          path: |
+            speex-clock-report.json
+            speex-clock-report-long.json
           retention-days: 14

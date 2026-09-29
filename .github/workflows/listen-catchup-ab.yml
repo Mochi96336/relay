@@ -1,0 +1,69 @@
+name: Listen catch-up offline A/B
+
+on:
+  pull_request:
+    paths:
+      - public/playback-worklet.js
+      - scripts/listen-catchup-ab.mjs
+      - .github/workflows/listen-catchup-ab.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-ab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Identical audio / backlog matrix against actual playback Worklet
+        run: |
+          set -euo pipefail
+          for signal in mixed tone hiss; do
+            node scripts/listen-catchup-ab.mjs --signal "$signal" --self-test --out "listen-ab/$signal"               > "report-$signal.json"
+          done
+          node scripts/listen-catchup-ab.mjs --signal mixed --burst-frames 0 --self-test --out listen-ab/no-burst             > report-no-burst.json
+      - name: Present bounded numeric comparisons
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const names = ['mixed', 'tone', 'hiss', 'no-burst'];
+          const summaries = [];
+          for (const name of names) {
+            const report = JSON.parse(fs.readFileSync('report-' + name + '.json', 'utf8'));
+            const x = report.current, y = report.candidate;
+            if (x.droppedMs !== y.droppedMs) throw Error('overflow policy changed for ' + name);
+            if (x.outputSamples !== y.outputSamples) throw Error('output duration changed for ' + name);
+            if (name === 'no-burst' && (x.trimmedMs !== 0 || y.trimmedMs !== 0)) {
+              throw Error('negative control trimmed a clean stream');
+            }
+            const summary = {
+              signal: name,
+              injectedMs: report.fixture.injectedExtraQueueMs,
+              baselineTrimmedMs: x.trimmedMs,
+              candidateTrimmedMs: y.trimmedMs,
+              baselineRemainingMs: x.unrecoveredExcessMs,
+              candidateRemainingMs: y.unrecoveredExcessMs,
+              baselineDroppedMs: x.droppedMs,
+              candidateDroppedMs: y.droppedMs,
+              baselineUnderruns: x.underruns,
+              candidateUnderruns: y.underruns,
+              candidateOverlaps: y.overlapAccepted,
+              candidateMinCorrelation: y.overlapCorrelationMin,
+              nodeBaselineWorstMs: x.nodeVmWorstProcessMs,
+              nodeCandidateWorstMs: y.nodeVmWorstProcessMs,
+            };
+            summaries.push(summary);
+            console.log(JSON.stringify(summary));
+          }
+          fs.writeFileSync('listen-ab/summary.json', JSON.stringify(summaries, null, 2) + '\n');
+          NODE
+      - name: Archive WAV output and full experiment metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: listen-catchup-ab-offline
+          path: listen-ab/
+          retention-days: 14

@@ -1,0 +1,60 @@
+name: Speex positioned authority offline proof
+
+on:
+  pull_request:
+    paths:
+      - scripts/experiments/speex-positioned-fixtures.ts
+      - scripts/experiments/speex-positioned-probe.c
+      - scripts/experiments/check-speex-positioned.mjs
+      - .github/workflows/speex-positioned-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  positioned-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build external SpeexDSP candidate only in experimental job
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libspeexdsp-dev pkg-config
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            scripts/experiments/speex-positioned-probe.c \
+            -o /tmp/speex-positioned \
+            $(pkg-config --cflags --libs speexdsp) -lm
+      - name: Generate exact PCM and actual AudioSession reference trace
+        run: |
+          mkdir -p positioned-evidence
+          node --import tsx scripts/experiments/speex-positioned-fixtures.ts positioned-evidence \
+            | tee positioned-evidence/control-console.json
+      - name: Replay identical PCM through stateful native Speex sidecar
+        run: |
+          /tmp/speex-positioned positioned-evidence/events.tsv positioned-evidence \
+            > positioned-evidence/native.ndjson
+      - name: Audit authoritative source holes, restart, and packetization
+        run: |
+          node scripts/experiments/check-speex-positioned.mjs positioned-evidence \
+            | tee positioned-evidence/comparison-console.json
+      - name: Archive independent evidence and explicit unresolved group latency
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speex-positioned-authority-evidence
+          path: |
+            positioned-evidence/control-console.json
+            positioned-evidence/events.tsv
+            positioned-evidence/baseline.json
+            positioned-evidence/native.ndjson
+            positioned-evidence/comparison.json
+            positioned-evidence/comparison-console.json
+          if-no-files-found: warn
+          retention-days: 14

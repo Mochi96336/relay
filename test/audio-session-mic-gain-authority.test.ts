@@ -43,9 +43,9 @@ test('server owns Mic gain command policy while AudioSession owns the applied va
 
   assert.doesNotMatch(serverCode, /let\s+micGainDb\s*=/);
   assert.doesNotMatch(serverCode, /session\.setMicGainDb\(micGainDb\)/);
-  // Read through, never copied: mix health, mix settings, and the Mic level
-  // monitor's per-window context.
-  assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 3);
+  // Read through, never copied: mix health, mix settings, the Mic level
+  // monitor's per-window context, and its diagnostics status.
+  assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 4);
 
   const commands = variableInitializerCode(server, 'commandProtocol');
   const setMix = commands.indexOf('setMix: (socket, payload) => {');

@@ -198,9 +198,12 @@ export function describeAudio({ readiness, statusz } = {}, t = english) {
       'mixer',
       t('diag.audio.mixer'),
       t('diag.audio.mixer.running'),
-      clipped === null ? '' : clipped > 0
+      // Only a clip is news. The limiter and summing headroom exist so the
+      // final mix never clips; "no clipping" beside a Mic-too-loud warning
+      // read as a contradiction.
+      clipped !== null && clipped > 0
         ? t('diag.audio.mixer.clipped', { count: Math.round(clipped) })
-        : t('diag.audio.mixer.clean'),
+        : t('diag.audio.mixer.runningNote'),
       clipped !== null && clipped > 0 ? 'warn' : 'ok',
     ));
   } else {

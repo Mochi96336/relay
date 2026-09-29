@@ -96,6 +96,11 @@ describe('MicLevelMonitor too loud', () => {
     runWindow(level, { heavyLimitedMs: 20 });
     runWindows(level, 9);
     assert.equal(level.warning, 'too-loud', 'a hot window restarts the cool run');
+    assert.deepEqual(
+      [level.level.status().calmWindows, level.level.status().calmWindowsNeeded],
+      [9, 10],
+      'diagnostics can say how close the warning is to clearing',
+    );
     assert.equal(runWindow(level), true);
     assert.equal(level.warning, null);
   });

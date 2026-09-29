@@ -93,12 +93,69 @@ assert.ok(baseline.packetizationExactSamples>1000,
   'actual AudioSession control did not exercise interpacket cubic interpolation');
 assert.ok(groupFor('mic-ppm-steps')[0].ppmChanges===3,
   'variable ppm must use rate updates WITHOUT resetting native SRC state');
+// Both implementations read the exact same source PCM, but their
+// stateful resampling and source-mapping execution layers differ. Here we
+// separately score the *position* of stable voiced output at fixed 44.1k.
+// This is a phase sanity check, NOT a comprehensive music quality verdict.
+const pcmFrom=async rel=>{
+  const bytes=await readFile(path.join(root,rel));
+  assert.equal(bytes.length%2,0);
+  return Int16Array.from({length:bytes.length/2},(_,i)=>bytes.readInt16LE(i*2));
+};
+const wav=pcm=>{
+  const b=Buffer.alloc(44+pcm.length*2);
+  b.write('RIFF',0);b.writeUInt32LE(b.length-8,4);
+  b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);
+  b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);
+  b.writeUInt32LE(48000,24);b.writeUInt32LE(96000,28);
+  b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);
+  b.write('data',36);b.writeUInt32LE(pcm.length*2,40);
+  for(let i=0;i<pcm.length;i++)b.writeInt16LE(pcm[i],44+i*2);
+  return b;
+};
+const steadyBase=await pcmFrom('baseline-mic-packet-150a.pcm');
+const steadyCandidate=await pcmFrom(p[0].pcmPath);
+assert.equal(steadyCandidate.length,p[0].postLatencySamples,
+  'native candidate audio length differs from delay-quarantined accounting');
+const stop=Math.min(steadyBase.length,steadyCandidate.length)-250;
+assert.ok(stop>400,'not enough unambiguous aligned audio to score');
+let baseError=0,candidateError=0,scored=0;
+for(let i=250;i<stop;i++){
+  const t=i/48000;
+  const ideal=8000*Math.sin(2*Math.PI*220*t)+2500*Math.sin(2*Math.PI*1980*t);
+  baseError+=(steadyBase[i]-ideal)**2;
+  candidateError+=(steadyCandidate[i]-ideal)**2;
+  scored++;
+}
+const phaseSteadyTone={
+  comparedSamples:scored,
+  baselineCubicRms:Math.sqrt(baseError/scored),
+  nativePostDelayRms:Math.sqrt(candidateError/scored),
+};
+assert.ok(phaseSteadyTone.nativePostDelayRms<150,
+  'compensating reported filter delay does not recover the correct waveform time position');
+const gapGroups=groupFor('mic-gap-50ms');
+const gapBaseline=await pcmFrom('baseline-mic-gap-50ms.pcm');
+const lastGapTarget=Math.max(gapBaseline.length,...gapGroups.map(g=>g.nominalEndTarget));
+const gapCandidate=new Int16Array(lastGapTarget);
+for(const g of gapGroups){
+  const segment=await pcmFrom(g.pcmPath);
+  assert.equal(segment.length,g.postLatencySamples);
+  assert.ok(g.nominalFirstTarget+segment.length<=g.nominalEndTarget+4,
+    'sidecar output crossed a segment boundary or fabricated the gap');
+  gapCandidate.set(segment,g.nominalFirstTarget);
+}
+const quality=[...qualitySet][0];
+await writeFile(path.join(root,'candidate-mic-gap-q'+quality+'.wav'),wav(gapCandidate));
+await writeFile(path.join(root,'baseline-mic-gap.wav'),wav(gapBaseline));
 const report={
   conclusion:'Phase A trace contract passed: gaps are segmented and never merged, source coordinate mapping is explicit, native filter delay is quarantined in metrics. Production adapter NOT VALIDATED.',
   control:'Real unmodified AudioSession including Mic and Backing',
   candidate:'Independent native Speex library consuming exactly the same PCM files',
   packetizationExactBaselineSamples:baseline.packetizationExactSamples,
-  packetizationBitExactNative:true,quality:[...qualitySet][0],
+  packetizationBitExactNative:true,quality,
+  phaseSteadyTone,
+  syntheticGapPreview:'Zeros in candidate WAV include both true gap and deliberately quarantined unknown filter tail; this is not a candidate Take mix.',
   scenarios:verified,
   unresolved:[
     'The per-group post-filter stream is not yet bound to AudioSession absolute output sample authority.',

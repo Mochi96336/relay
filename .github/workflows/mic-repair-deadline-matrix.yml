@@ -1,0 +1,38 @@
+name: Mic repair deadline offline matrix
+
+on:
+  pull_request:
+    paths:
+      - scripts/mic-deadline-audit.ts
+      - src/retransmit-deadline-estimate.ts
+      - src/audio-packet-receiver.ts
+      - src/audio-transport.ts
+      - src/mic-runtime.ts
+      - test/helpers/mic-loss-network.ts
+      - .github/workflows/mic-repair-deadline-matrix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Multi-scenario deterministic observational repair A/B
+        run: |
+          mkdir -p repair-deadline
+          node --import tsx scripts/mic-deadline-audit.ts --out repair-deadline/metrics.json > repair-deadline/console.json
+          node -e 'let x=require("./repair-deadline/metrics.json");console.log(JSON.stringify({control:x.control,samples:x.samples,totals:x.totals},null,2))'
+      - name: Archive all repair observations
+        uses: actions/upload-artifact@v4
+        with:
+          name: mic-repair-deadline-offline
+          path: repair-deadline/metrics.json
+          retention-days: 14

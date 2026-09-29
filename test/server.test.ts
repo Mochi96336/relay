@@ -488,7 +488,7 @@ describe('timing calibration', () => {
       publisher.send({ type: 'start-timing-calibration' });
 
       const status = await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'failed');
-      assert.match(status.error, /Play YouTube/);
+      assert.match(status.error, /Play the song/);
 
       backing.close();
       publisher.close();

@@ -325,16 +325,19 @@ body:has(.system-panel[open]) {
 }
 
 @media (min-width: 760px) {
-  .system-panel[open] {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 28px;
-  }
-
+  /*
+   * Centred by position, not by making <details> a flex container: Chromium
+   * wraps a details element's content in its own shrink-to-fit slot, so a
+   * percentage width resolved against the content and the sheet grew and
+   * shrank with whichever Technical details tab was showing. Absolute
+   * positioning resolves against the fixed overlay, i.e. the viewport.
+   */
   .system-panel[open] .system-sheet {
-    position: static;
-    width: min(100%, 720px);
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: min(calc(100% - 56px), 720px);
+    height: fit-content;
     max-width: 720px;
     max-height: min(82dvh, 760px);
     border-bottom: 1px solid #292b30;

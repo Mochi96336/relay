@@ -83,6 +83,8 @@
 }
 .diagnostics-body {
   display: grid;
+  /* Fill the sheet, never size to content: an auto track grew with the text. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   padding: 4px 0 12px;
 }
@@ -133,11 +135,13 @@
 .diagnostic-ledger {
   margin: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 .diagnostic-pair {
   min-height: 34px;
   display: grid;
-  grid-template-columns: minmax(92px, 1fr) minmax(0, 1.4fr);
+  /* A fixed label column: values line up and do not move with the panel width. */
+  grid-template-columns: 128px minmax(0, 1fr);
   gap: 16px;
   align-items: center;
   border-bottom: 1px solid #1a1c20;

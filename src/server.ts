@@ -53,6 +53,7 @@ import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-cl
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
 import { MicLevelMonitor } from './mic-level-monitor.js';
+import { MicGainMemory } from './mic-gain-memory.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
@@ -289,6 +290,8 @@ const session = new AudioSession({
  */
 const micAudibility = new MicAudibilityMonitor({ sampleRate: MIX_SAMPLE_RATE });
 const micLevel = new MicLevelMonitor({ sampleRate: MIX_SAMPLE_RATE });
+/** Each participant's last Mic gain, so a handoff does not inherit the previous singer's. */
+const micGains = new MicGainMemory({ defaultGainDb: session.micGainDb });
 /** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
 const micClockDrift = new MicClockDriftEstimator();
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
@@ -1188,6 +1191,7 @@ function applyMicOwnerEffects(
       if (options.invalidateTiming) options.invalidateTiming(reason);
       else invalidateMicTiming(reason);
     },
+    restoreMicGain: (participantId) => restoreMicGainFor(participantId),
     prepareSongHandoff: (participantId) => {
       if (options.prepareSongHandoff) options.prepareSongHandoff(participantId);
       else beginPreparedSongHandoff(participantId, nowMs);
@@ -2107,6 +2111,58 @@ const mixerTimer = setInterval(() => {
 
 function reportMicLevel(reason: 'window' | 'gain') {
   console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));
+}
+
+/** Who a diagnostic line is about: the room nickname plus a stable id prefix. */
+function participantLogLabel(participantId: string) {
+  const nickname = participants.participant(participantId)?.nickname ?? null;
+  return { id: participantId.replace(/^participant-/, '').slice(0, 8), nickname };
+}
+
+let lastMicDeviceReportKey: string | null = null;
+
+/**
+ * Names the device and microphone behind the live capture, once per capture
+ * and again if either changes, so the level and probe lines around it can be
+ * traced to a singer's phone or headset.
+ */
+function reportMicDevice(health: AudioUplinkHealth) {
+  const ownerId = participants.micOwnerId;
+  const key = JSON.stringify([ownerId, health.captureGeneration, health.capture]);
+  if (key === lastMicDeviceReportKey) return;
+  lastMicDeviceReportKey = key;
+  console.log('[mic-device]', JSON.stringify({
+    participant: ownerId ? participantLogLabel(ownerId) : null,
+    captureGeneration: health.captureGeneration,
+    device: health.capture?.device ?? null,
+    inputLabel: health.capture?.inputLabel ?? null,
+    sampleRate: micRuntime.sampleRate,
+    voiceProcessing: health.capture === null ? null : {
+      echoCancellation: health.capture.echoCancellation,
+      noiseSuppression: health.capture.noiseSuppression,
+      autoGainControl: health.capture.autoGainControl,
+    },
+    audioSessionType: health.capture?.audioSessionType ?? null,
+    gainDb: session.micGainDb,
+  }));
+}
+
+/** Gives the new Mic owner the gain they last chose, or the default for a device never seen. */
+function restoreMicGainFor(participantId: string) {
+  const { gainDb, remembered } = micGains.gainFor(participantId);
+  const previousGainDb = session.micGainDb;
+  console.log('[mic-gain]', JSON.stringify({
+    reason: 'owner-changed',
+    participant: participantLogLabel(participantId),
+    previousGainDb,
+    gainDb,
+    remembered,
+  }));
+  if (gainDb === previousGainDb) return;
+  // Not `micLevel.noteMicGainChanged`: the level history still describes the
+  // previous singer, and the new owner's capture boundary resets it anyway.
+  session.setMicGainDb(gainDb);
+  broadcastJson(mixSettingsPayload());
 }
 
 function resetMicAudibility() {
@@ -3282,6 +3338,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (Number.isFinite(nextGain)) {
       const previousGainDb = session.micGainDb;
       session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
+      if (participants.micOwnerId) micGains.remember(participants.micOwnerId, session.micGainDb);
       // A gain change is the fix the level warning asks for; answer it now
       // rather than on the next periodic product status.
       if (micLevel.noteMicGainChanged(previousGainDb, session.micGainDb)) {
@@ -3302,6 +3359,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const nowMs = performance.now();
     const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs);
     if (accepted) noteRecordingMicGapHealth(health);
+    if (accepted) reportMicDevice(health);
     return;
   },
   micPresenceTelemetry: (socket, payload) => {

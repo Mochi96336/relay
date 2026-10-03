@@ -6,6 +6,7 @@ export type MicOwnerTransitionApplicationPort = {
   cancelSongHandoff(): boolean;
   publishSongHandoffCancellation(): void;
   invalidateTiming(reason: string): void;
+  restoreMicGain(participantId: string): void;
   prepareSongHandoff(participantId: string): void;
 };
 
@@ -51,6 +52,10 @@ export function applyMicOwnerTransitionEffects(
 
   if (effects.invalidateTimingReason) {
     port.invalidateTiming(effects.invalidateTimingReason);
+  }
+
+  if (effects.restoreMicGainFor) {
+    port.restoreMicGain(effects.restoreMicGainFor);
   }
 
   let songHandoffPrepared = false;

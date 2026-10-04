@@ -78,16 +78,9 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
 });
 
 test('server uses recent clipping only as product quality truth, never timing authority', async () => {
+  // That fresh flat-top evidence degrades product health is a ProductStatus
+  // projection rule, tested as behaviour in relay-status-projection.test.ts.
   const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
-  const productStart = serverSource.indexOf('function productStatusPayload(');
-  const productEnd = serverSource.indexOf('let lastProductStatusJson', productStart);
-  assert.ok(productStart >= 0 && productEnd > productStart);
-  const product = serverSource.slice(productStart, productEnd);
-  assert.match(
-    product,
-    /micInputClipping:\s*freshMicUplink\?\.captureClipping\?\.recentDetected === true/,
-    'fresh browser flat-top evidence may degrade product health',
-  );
 
   const takeQualityStart = serverSource.indexOf('function takeQualityFrameState(');
   const takeQualityEnd = serverSource.indexOf('function micUplinkHealthPayload(', takeQualityStart);

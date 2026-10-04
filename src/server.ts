@@ -60,13 +60,18 @@ import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
 import { TimingRuntime } from './timing-runtime.js';
-import { buildRelayObservationStatusV1 } from './observation-status.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import type { ProbeTarget } from './probe-lifecycle.js';
-import { buildProductViewModel } from './product-view-model.js';
 import { buildReadiness } from './readiness.js';
-import { deriveRemoteStatusHealth } from './remote-status.js';
+import {
+  projectObservationStatusV1,
+  projectProductStatus,
+  projectRemoteStatus,
+  type ProductStatusFacts,
+  type RemoteStatusFacts,
+  type RobotPlayerError,
+} from './relay-status-projection.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { loadMonitorOpusEncoder } from './monitor-opus.js';
@@ -1544,167 +1549,67 @@ function frameAgeMs(atMs: number, nowMs: number) {
   return Number.isFinite(atMs) ? Math.round(nowMs - atMs) : null;
 }
 
-/**
- * The status another machine can poll.
- *
- * `/healthz` answers "is the Relay process up", which stays `true` through
- * every failure an unattended robot actually has: the browser died, the sink
- * vanished, the backing bridge stopped. This reports on the *route* instead.
- *
- * It reduces that to `ok` plus named faults so the poller does not have to
- * model Relay's internals. A fault is something that is definitely broken - a
- * connected client that stopped sending audio, or a robot route missing a
- * component - never merely "nobody is singing", which is what `idle` is for.
- * Warnings degrade quality without stopping audio, so they do not clear `ok`.
- *
- * Deliberately carries no nicknames or keys: it is unauthenticated on the LAN
- * like `/healthz`, so it reports counts and states only.
- */
+/** /statusz; see projectRemoteStatus for what it promises. */
 function remoteStatusPayload() {
-  const nowMs = performance.now();
+  return projectRemoteStatus(remoteStatusFacts(performance.now()));
+}
+
+/**
+ * One sample of everything /statusz reports. Readiness-owned facts arrive only
+ * inside `readiness`, so the projection cannot re-read them from a live runtime.
+ */
+function remoteStatusFacts(nowMs: number): RemoteStatusFacts {
   const alignment = session.alignment;
   const snapshot = participants.snapshot();
   const mixHealth = session.health();
   const monitorDrops = monitorTransport.recentDrops(nowMs);
-
   const readiness = readinessPayload(nowMs);
-  const health = deriveRemoteStatusHealth(readiness);
-  const components = readiness.components;
-  const backingConnected = components.backing.connected;
-  const micConnected = components.mic.connected;
-  const backingStreaming = components.backing.streaming;
-  const micStreaming = components.mic.streaming;
-  const routeMode = components.route.mode;
-  const robotRoute = routeMode === 'robot';
-  const robotSourceConnected = components.robotSource.connected;
-  const deltaFresh = components.player.offsetFresh;
 
   return {
-    ok: health.ok,
-    state: health.state,
-    faults: health.faults,
-    warnings: health.warnings,
-    uptimeMs: Math.round(nowMs),
-    source: {
-      backingConnected,
-      backingStreaming,
-      backingSampleRate: components.backing.sampleRate,
-      backingIsRobot: components.backing.robot,
-      backingFrameAgeMs: frameAgeMs(backingRuntime.lastFrameAt, nowMs),
-      micConnected,
-      micStreaming,
-      // Mic PCM still arriving, playable or not. `micStreaming` is what the
-      // room can hear, so the two apart mean the mix has fallen behind it.
-      micArriving: components.mic.arriving,
-      micMediaPath: micMediaPath(),
-      micFrameAgeMs: micRuntime.frameAgeMs(nowMs),
-      participants: snapshot.participants.length,
-      participantsConnected: snapshot.participants.filter((participant) => participant.connected).length,
+    nowMs,
+    readiness,
+    participants: {
+      total: snapshot.participants.length,
+      connected: snapshot.participants.filter((participant) => participant.connected).length,
     },
-    robot: {
-      route: robotRoute,
-      sourceConnected: robotSourceConnected,
-      deltaFresh,
-      calibrationKind: components.calibration.kind,
-      calibrationStale: components.calibration.stale,
-      timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
-      activeCalibratedMicLagMs: alignment.calibratedMicLagMs,
-      playerError: robotPlayerError === null ? null : {
-        ...robotPlayerError,
-        unplayable: youtubeErrorMeansUnplayable(robotPlayerError.code),
-      },
-    },
+    backingFrameAgeMs: frameAgeMs(backingRuntime.lastFrameAt, nowMs),
+    calibratedMicLagMs: alignment.calibratedMicLagMs,
+    robotPlayerError,
+    mixSampleRate: MIX_SAMPLE_RATE,
     mix: {
       active: session.active,
-      ...mixHealth,
+      health: mixHealth,
       monitorDroppedFrames: monitorTransport.droppedFrames,
       monitorRecentDroppedFrames: monitorDrops.frames,
       monitorRecentDroppingListeners: monitorDrops.listeners,
     },
-    audio: {
-      micMediaPath: micMediaPath(),
-      micSampleRate: micRuntime.sampleRate,
+    mic: {
+      mediaPath: micMediaPath(),
+      frameAgeMs: micRuntime.frameAgeMs(nowMs),
+      sampleRate: micRuntime.sampleRate,
       captureAndSender: micUplinkHealthPayload(nowMs),
       receiverTransport: micRuntime.receiverStats(),
       receiverRetransmit: micRuntime.retransmitStats(),
-      micAudibility: micAudibility.status(),
-      // The gain now, beside the gain the last window was measured at: a
-      // change is judged at once but measured only when the next window closes.
-      micLevel: { ...micLevel.status(), micGainDb: session.micGainDb },
-      timeline: {
-        micGapMs: mixHealth.micGapMs,
-        micConcealedMs: Math.round((session.micConcealedSampleCount / MIX_SAMPLE_RATE) * 1000),
-        micClockDrift: micClockDrift.estimate(),
-        micClockTrimPpm: session.micClockTrimPpm,
-        micAnchorExcessMs: micClockDrift.anchorExcessMs(),
-        micHeadroomMs: mixHealth.micHeadroomMs,
-        micStarvedFrames: mixHealth.micStarvedFrames,
-        micFrontierCorrectionMs: Math.round(session.micFrontierCorrectionMs),
-        micTimelineFolds: session.micTimelineFoldCount,
-        lastMicTimelineFold: session.lastMicTimelineFold,
-      },
-      micCaptureDelivery: micCaptureDelivery.status(),
+      audibility: micAudibility.status(),
+      level: micLevel.status(),
+      micGainDb: session.micGainDb,
+      concealedSamples: session.micConcealedSampleCount,
+      clockDrift: micClockDrift.estimate(),
+      clockTrimPpm: session.micClockTrimPpm,
+      anchorExcessMs: micClockDrift.anchorExcessMs(),
+      frontierCorrectionMs: session.micFrontierCorrectionMs,
+      timelineFolds: session.micTimelineFoldCount,
+      lastTimelineFold: session.lastMicTimelineFold,
+      captureDelivery: micCaptureDelivery.status(),
     },
   };
 }
 
 function observationStatusV1Payload() {
   const remote = remoteStatusPayload();
-  const snapshot = participants.snapshot();
-
-  return buildRelayObservationStatusV1({
-    workload: {
-      id: 'relay',
-      state: remote.state,
-      ok: remote.ok,
-      uptimeMs: remote.uptimeMs,
-    },
-    activity: {
-      sessionActive: remote.mix.active,
-      participants: {
-        total: remote.source.participants,
-        connected: remote.source.participantsConnected,
-      },
-      microphoneLease: {
-        held: snapshot.micOwnerId !== null,
-        transportConnected: remote.source.micConnected,
-      },
-    },
-    sources: {
-      backing: {
-        connected: remote.source.backingConnected,
-        streaming: remote.source.backingStreaming,
-        sampleRate: remote.source.backingSampleRate,
-        robot: remote.source.backingIsRobot,
-        frameAgeMs: remote.source.backingFrameAgeMs,
-      },
-      microphone: {
-        connected: remote.source.micConnected,
-        streaming: remote.source.micStreaming,
-        sampleRate: micRuntime.sampleRate,
-        frameAgeMs: remote.source.micFrameAgeMs,
-      },
-      robot: {
-        routeActive: remote.robot.route,
-        sourceConnected: remote.robot.sourceConnected,
-        playerDeltaFresh: remote.robot.deltaFresh,
-      },
-    },
-    calibration: {
-      kind: remote.robot.calibrationKind === 'boot-probe'
-        ? 'boot-probe'
-        : remote.robot.calibrationKind === 'content'
-          ? 'content'
-          : 'none',
-      stale: remote.robot.calibrationStale,
-      timingMode: remote.robot.timingMode,
-      activeCalibratedMicLagMs: remote.robot.activeCalibratedMicLagMs,
-    },
-    mix: remote.mix,
-    issues: {
-      faults: remote.faults,
-      warnings: remote.warnings,
-    },
+  return projectObservationStatusV1(remote, {
+    micLeaseHeld: participants.snapshot().micOwnerId !== null,
+    micSampleRate: micRuntime.sampleRate,
   });
 }
 
@@ -1829,65 +1734,52 @@ function readinessPayload(nowMs = performance.now()) {
 }
 
 function productStatusPayload(nowMs = performance.now()) {
+  return projectProductStatus(productStatusFacts(nowMs));
+}
+
+function productStatusFacts(nowMs: number): ProductStatusFacts {
   const readiness = readinessPayload(nowMs);
   const participantSnapshot = participants.snapshot();
   const micOwner = participantSnapshot.micOwnerId
     ? participantSnapshot.participants.find((participant) => participant.id === participantSnapshot.micOwnerId) ?? null
     : null;
   const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
-  const roomState = Number(room.state);
-  // `connected` answers "is the clock authoritative right now", on a window
-  // tight enough for alignment. Telling a singer their playback is unavailable
-  // is a different question with a different answer, so the product view gets
-  // the raw age and draws its own, slower line.
   const timelineAgeMs = Number(
     (youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>).ageMs,
   );
   const takeStatus = takeController.statusPayload();
-  const take = takeStatus.take;
   const alignment = session.alignment;
   const calibrationStatus = calibration.status();
-  const freshMicUplink = micRuntime.freshUplinkHealthPayload(nowMs);
 
-  return buildProductViewModel({
+  return {
     readiness,
     participantCount: participantSnapshot.participants.length,
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
-    micMediaRecoveryDegraded: freshMicUplink?.transport.mediaRecoveryDegraded === true,
-    robotVideoUnplayable: robotVideoUnplayable(room),
+    freshMicUplink: micRuntime.freshUplinkHealthPayload(nowMs),
     micAudibilityDegraded: micAudibility.degraded,
-    micInputClipping: freshMicUplink?.captureClipping?.recentDetected === true,
     micLevelWarning: micLevel.warning,
-    roomSong: {
-      videoId: typeof room.videoId === 'string' && room.videoId ? room.videoId : null,
-      connected: Boolean(room.connected),
-      clockAgeMs: Number.isFinite(timelineAgeMs) ? timelineAgeMs : Number.POSITIVE_INFINITY,
-      state: Number.isFinite(roomState) ? roomState : null,
-      handoffState: typeof room.handoffState === 'string' ? room.handoffState : 'idle',
-    },
-    take: {
-      lifecycle: takeStatus.lifecycle,
-      takeId: take?.takeId ?? null,
-      qualityVerdict: take?.quality?.verdict ?? null,
-    },
+    robotPlayerError,
+    room,
+    timelineAgeMs,
+    takeStatus,
     timing: {
-      timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
+      calibratedMicLagMs: alignment.calibratedMicLagMs,
       calibrationState: String(calibrationStatus.state ?? 'idle'),
       calibrationActive: timingCalibrationInProgress(nowMs),
       calibrationStale: calibrationIsStale(),
-      alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
-      frontierCorrectionActive: session.micFrontierCorrectionMs >= 0.5,
-      // Product timing describes the alignment actually serving the mixer, not a
-      // replacement strategy that may be measuring in the background.
-      requiresRobotPlayerDelta: robotRouteActive() && appliedCalibrationKind() === 'boot-probe',
+      requestedMicAdvanceMs: session.requestedMicAdvanceMs,
+      appliedMicAdvanceMs: session.appliedMicAdvanceMs,
+      micFrontierCorrectionMs: session.micFrontierCorrectionMs,
+      robotRouteActive: robotRouteActive(),
+      appliedCalibrationKind: appliedCalibrationKind(),
       robotProbeTimingActive: robotProbeTimingActive(),
       bootProbeActive: bootProbeInProgress(nowMs),
       contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
     },
-  });
+  };
 }
 
 let lastProductStatusJson = '';
@@ -2013,7 +1905,7 @@ function roomHasSong(nowMs = performance.now()) {
  * Robot page sees a YouTube error; without this the room got no Song and no
  * reason, beyond a stale timing delta.
  */
-let robotPlayerError: { videoId: string; code: number } | null = null;
+let robotPlayerError: RobotPlayerError | null = null;
 
 function noteRobotPlayerStatus(videoId: string | null, errorCode: number | null) {
   const next = videoId !== null && errorCode !== null ? { videoId, code: errorCode } : null;
@@ -2025,13 +1917,6 @@ function noteRobotPlayerStatus(videoId: string | null, errorCode: number | null)
     unplayable: next !== null && youtubeErrorMeansUnplayable(next.code),
   }));
   broadcastProductStatus();
-}
-
-/** Whether the Robot has said it cannot play the room's current video. */
-function robotVideoUnplayable(room: Record<string, unknown>) {
-  return robotPlayerError !== null
-    && room.videoId === robotPlayerError.videoId
-    && youtubeErrorMeansUnplayable(robotPlayerError.code);
 }
 
 function roomSongPlaying(nowMs = performance.now()) {

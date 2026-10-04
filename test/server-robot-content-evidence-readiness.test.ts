@@ -51,7 +51,7 @@ test('priming, automatic calibration and content validation all require an evide
 
 test('ProductStatus and command rejection share the content mapping pending policy', () => {
   assert.match(
-    functionBlock('productStatusPayload'),
+    functionBlock('productStatusFacts'),
     /contentEvidenceReady: robotContentEvidenceMappingReady\(nowMs\)/,
   );
   assert.match(

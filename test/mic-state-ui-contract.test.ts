@@ -64,17 +64,8 @@ test('Mic presence follows media availability and direct WebTransport can retain
 
 
 test('terminal browser media degradation is composed without rewriting server Mic state', () => {
-  const productStatus = functionCode(server, 'productStatusPayload');
-  assert.match(
-    productStatus,
-    /const freshMicUplink = micRuntime\.freshUplinkHealthPayload\(nowMs\);/,
-    'one fresh Mic health snapshot must own all browser-quality facts in a ProductStatus',
-  );
-  assert.match(
-    productStatus,
-    /micMediaRecoveryDegraded: freshMicUplink\?\.transport\.mediaRecoveryDegraded === true/,
-  );
-
+  // ProductStatus reads every browser-quality fact from one fresh Mic report;
+  // relay-status-projection.test.ts tests that as behaviour.
   const liveCopy = functionCode(liveStatus, 'liveCopy');
   const stalledFact = liveCopy.indexOf("issue?.code === 'mic-audio-stalled'");
   const selfOwner = liveCopy.indexOf('if (selfOwner)');

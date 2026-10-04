@@ -285,34 +285,27 @@ test('an ongoing Mic rail run remains attributable after its retained clipping r
     20,
   );
 
-  const internal = session as unknown as {
-    micInputClippingRanges: Array<{ start: number; end: number }>;
-  };
-  assert.equal(internal.micInputClippingRanges.length, 1);
-  assert.equal(internal.micInputClippingRanges[0]?.end, FRAME_SAMPLES * 2);
-
   // Simulate the read head advancing far enough that the retained clipping
   // range is discarded while the source capture itself stays generation- and
   // sample-contiguous. A later packet can still continue the same physical
   // flat-top run, so detector ownership must not point at a range that no
   // longer exists.
   session.trimMic(FRAME_SAMPLES * 2);
-  assert.equal(internal.micInputClippingRanges.length, 0);
 
   session.ingestMic(
     positionedFrame(1, FRAME_SAMPLES * 2, pcm(32_766)),
     RATE,
     40,
   );
+  // Audio past it, so reading that frame does not run into the frontier.
+  session.ingestMic(positionedFrame(1, FRAME_SAMPLES * 3, pcm()), RATE, 60);
 
+  drainOne(session, 0);
+  drainOne(session, 20);
   assert.equal(
-    internal.micInputClippingRanges.length,
-    1,
+    drainOne(session, 40).micInputClippedSamples,
+    FRAME_SAMPLES,
     'continued clipped PCM must re-establish retained evidence after the old active range was trimmed',
-  );
-  assert.ok(
-    (internal.micInputClippingRanges[0]?.end ?? 0) > FRAME_SAMPLES * 2,
-    'the replacement retained range must cover newly accepted source samples',
   );
 });
 

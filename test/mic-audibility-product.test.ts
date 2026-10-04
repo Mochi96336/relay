@@ -39,6 +39,27 @@ describe('sustained Mic audibility loss in product state', () => {
     assert.deepEqual(issues.map((issue) => issue.cause), ['mic-audio-stalled']);
   });
 
+  test('an interrupted Mic whose audio still arrives has fallen behind, not stopped', () => {
+    const behind = buildProductIssues({
+      ...LIVE_MIC,
+      mic: { ownerId: 'participant-a', state: 'interrupted', arriving: true },
+    });
+    assert.deepEqual(behind, [{
+      code: 'mic-audio-stalled',
+      scope: 'mic',
+      severity: 'warning',
+      cause: 'mic-timeline-behind',
+      affects: ['voice', 'recording'],
+      recovery: 'retry-mic',
+    }]);
+
+    const stopped = buildProductIssues({
+      ...LIVE_MIC,
+      mic: { ownerId: 'participant-a', state: 'interrupted', arriving: false },
+    });
+    assert.deepEqual(stopped.map((issue) => issue.cause), ['mic-audio-stalled']);
+  });
+
   test('a Mic that is not live owns its own state', () => {
     for (const state of ['free', 'starting', 'reconnecting'] as const) {
       const issues = buildProductIssues({

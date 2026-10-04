@@ -55,6 +55,7 @@ import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility
 import { MicLevelMonitor } from './mic-level-monitor.js';
 import { MicGainMemory } from './mic-gain-memory.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
+import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
 import { TimingRuntime } from './timing-runtime.js';
@@ -294,6 +295,13 @@ const micLevel = new MicLevelMonitor({ sampleRate: MIX_SAMPLE_RATE });
 const micGains = new MicGainMemory({ defaultGainDb: session.micGainDb });
 /** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
 const micClockDrift = new MicClockDriftEstimator();
+/**
+ * How much real time the phone's own Mic capture has lost. Confirmed loss is
+ * what lets AudioSession fold a growing frontier correction into the timeline.
+ */
+const micCaptureDelivery = new MicCaptureDeliveryMonitor();
+let micCaptureFallingBehind = false;
+let reportedMicTimelineFolds = 0;
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
 
 // Read here rather than beside the other calibration constants because the
@@ -1623,7 +1631,11 @@ function remoteStatusPayload() {
         micAnchorExcessMs: micClockDrift.anchorExcessMs(),
         micHeadroomMs: mixHealth.micHeadroomMs,
         micStarvedFrames: mixHealth.micStarvedFrames,
+        micFrontierCorrectionMs: Math.round(session.micFrontierCorrectionMs),
+        micTimelineFolds: session.micTimelineFoldCount,
+        lastMicTimelineFold: session.lastMicTimelineFold,
       },
+      micCaptureDelivery: micCaptureDelivery.status(),
     },
   };
 }
@@ -1786,6 +1798,7 @@ function readinessPayload(nowMs = performance.now()) {
     backingIsRobot: backingRuntime.isRobot,
     micConnected: micMediaConnected(),
     micStreaming: micPlayable(nowMs),
+    micArriving: micStreaming(nowMs),
     micFlowObserved: micFlowObserved(),
     micStartupTimedOut: micStartupTimedOut(nowMs),
     robotSourceConnected: sourceRuntime.connected(),
@@ -2107,10 +2120,60 @@ const mixerTimer = setInterval(() => {
     }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.micGainDb }));
     if (levelChanged) reportMicLevel('window');
   });
+  reportMicTimelineFolds();
 }, 5);
 
 function reportMicLevel(reason: 'window' | 'gain') {
   console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));
+}
+
+/**
+ * Measures the phone's capture against real time from its own sample count and
+ * hands confirmed loss to the mixer (see MicCaptureDeliveryMonitor).
+ */
+function noteMicCaptureDelivery(health: AudioUplinkHealth, nowMs: number) {
+  if (micRuntime.sampleRate === null) return;
+  micCaptureDelivery.observe({
+    generation: health.captureGeneration,
+    capturedSamples: health.capturedSamples,
+    sampleRate: micRuntime.sampleRate,
+    atMs: nowMs,
+  });
+  const delivery = micCaptureDelivery.status();
+  if (!delivery) return;
+  session.noteMicCaptureLoss(delivery.generation, delivery.lossMs);
+  // A phone falling behind real time is what grows the frontier correction,
+  // and nothing else names it. Edge-logged, with a little hysteresis.
+  const fallingBehind = delivery.ratio !== null
+    && delivery.ratio < (micCaptureFallingBehind ? 0.995 : 0.99);
+  if (fallingBehind !== micCaptureFallingBehind) {
+    micCaptureFallingBehind = fallingBehind;
+    console.warn('[mic-capture]', JSON.stringify({ fallingBehind, ...delivery }));
+  }
+}
+
+/**
+ * A fold is inaudible in the mix, but it moves the Mic timeline under every
+ * measurement that holds Mic positions; evidence collected across it would
+ * splice two placements of the same audio. Applied timing stays: the fold does
+ * not change what is heard when.
+ */
+function reportMicTimelineFolds(nowMs = performance.now()) {
+  const folds = session.micTimelineFoldCount;
+  if (folds === reportedMicTimelineFolds) return;
+  reportedMicTimelineFolds = folds;
+  console.warn('[mic-timeline]', JSON.stringify({
+    reason: 'capture-loss-folded',
+    folds,
+    ...session.lastMicTimelineFold,
+    correctionAfterMs: Math.round(session.micFrontierCorrectionMs),
+    delivery: micCaptureDelivery.status(),
+  }));
+  calibration.restartWorkingEvidence(nowMs);
+  if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
+  // Only a run in flight: resetting an idle or failed one would play the probe
+  // again mid-song.
+  if (probeStatus(nowMs).active || bootProbeRuntime.hasMicLeg) abandonProbeRun();
 }
 
 /** Who a diagnostic line is about: the room nickname plus a stable id prefix. */
@@ -3360,6 +3423,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs);
     if (accepted) noteRecordingMicGapHealth(health);
     if (accepted) reportMicDevice(health);
+    if (accepted) noteMicCaptureDelivery(health, nowMs);
     return;
   },
   micPresenceTelemetry: (socket, payload) => {

@@ -72,6 +72,7 @@ if (
     'mic-transport-disconnected': 'system.issue.cause.mic-transport-disconnected',
     'mic-audio-stalled': 'system.issue.cause.mic-audio-stalled',
     'mic-audio-intermittent': 'system.issue.cause.mic-audio-intermittent',
+    'mic-timeline-behind': 'system.issue.cause.mic-timeline-behind',
     'mic-input-clipping': 'system.issue.cause.mic-input-clipping',
     'mic-too-loud': 'system.issue.cause.mic-too-loud',
     'mic-too-quiet': 'system.issue.cause.mic-too-quiet',

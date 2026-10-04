@@ -204,6 +204,8 @@ if (
     const stalledIssues = status.issues?.filter((issue) => issue?.code === 'mic-audio-stalled') ?? [];
     const micAudioIntermittent = stalledIssues.length > 0
       && stalledIssues.every((issue) => issue?.cause === 'mic-audio-intermittent');
+    const micAudioBehind = stalledIssues.length > 0
+      && stalledIssues.every((issue) => issue?.cause === 'mic-timeline-behind');
 
     if (status.lifecycle === 'preparing') {
       if (selfOwner && status.timing?.state === 'calibrating') {
@@ -237,6 +239,9 @@ if (
     if (selfOwner) {
       if (micAudioIntermittent) {
         return { title: t('voice.droppingOutYours'), detail: t('voice.audioNotReachingRoom') };
+      }
+      if (micAudioBehind) {
+        return { title: t('voice.interruptedYours'), detail: t('voice.audioBehindLiveMix') };
       }
       if (micAudioStalled) {
         return { title: t('voice.interruptedYours'), detail: t('voice.mediaConnectedAudioStopped') };

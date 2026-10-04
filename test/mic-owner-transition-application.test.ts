@@ -14,6 +14,7 @@ function recorder(cancelled = true) {
       cancelSongHandoff() { calls.push('handoff:cancel'); return cancelled; },
       publishSongHandoffCancellation() { calls.push('handoff:publish'); },
       invalidateTiming(reason: string) { calls.push(`timing:${reason}`); },
+      restoreMicGain(participantId: string) { calls.push(`gain:restore:${participantId}`); },
       prepareSongHandoff(participantId: string) { calls.push(`handoff:prepare:${participantId}`); },
     },
   };
@@ -35,6 +36,7 @@ describe('mic owner transition application', () => {
       'quality:mic-owner-changed',
       'command:mic-owner-changed',
       'timing:Microphone ownership changed.',
+      'gain:restore:participant-alice',
       'handoff:prepare:participant-alice',
     ]);
     assert.deepEqual(result, {

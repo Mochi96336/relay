@@ -90,6 +90,7 @@ describe('participant session', () => {
         cancelRoomSongCommand: 'mic-owner-released',
         cancelSongHandoff: true,
         invalidateTimingReason: 'Microphone owner left the Relay session.',
+        restoreMicGainFor: null,
         prepareSongHandoffFor: null,
       },
     });
@@ -122,6 +123,7 @@ describe('participant session', () => {
       cancelRoomSongCommand: 'mic-owner-changed',
       cancelSongHandoff: false,
       invalidateTimingReason: 'Microphone ownership changed.',
+      restoreMicGainFor: 'participant-bobby',
       prepareSongHandoffFor: 'participant-bobby',
     });
     assert.equal(session.micOwnerId, 'participant-bobby');
@@ -186,6 +188,7 @@ describe('participant session', () => {
       cancelRoomSongCommand: 'mic-owner-released',
       cancelSongHandoff: false,
       invalidateTimingReason: 'Microphone transport did not reconnect before its grace period expired.',
+      restoreMicGainFor: null,
       prepareSongHandoffFor: null,
     });
   });

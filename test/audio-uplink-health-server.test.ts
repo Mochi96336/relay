@@ -21,6 +21,8 @@ function uplinkHealth(generation: number) {
       noiseSuppression: false,
       autoGainControl: false,
       audioSessionType: 'play-and-record',
+      inputLabel: 'iPhone Microphone',
+      device: 'iPhone iOS 18.6 · Safari 26.0',
     },
     captureLevel: {
       peakDbfs: -18,
@@ -156,6 +158,8 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
       noiseSuppression: false,
       autoGainControl: false,
       audioSessionType: 'play-and-record',
+      inputLabel: 'iPhone Microphone',
+      device: 'iPhone iOS 18.6 · Safari 26.0',
     });
     assert.deepEqual(status.audio.captureAndSender.captureLevel, {
       peakDbfs: -18,

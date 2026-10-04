@@ -16,6 +16,8 @@ export type MicOwnerTransitionEffects = {
   cancelRoomSongCommand: 'mic-owner-changed' | 'mic-owner-released' | null;
   cancelSongHandoff: boolean;
   invalidateTimingReason: string | null;
+  /** The new owner, whose own last Mic gain replaces the previous singer's. */
+  restoreMicGainFor: string | null;
   prepareSongHandoffFor: string | null;
 };
 
@@ -25,6 +27,7 @@ const NO_EFFECTS: MicOwnerTransitionEffects = {
   cancelRoomSongCommand: null,
   cancelSongHandoff: false,
   invalidateTimingReason: null,
+  restoreMicGainFor: null,
   prepareSongHandoffFor: null,
 };
 
@@ -33,8 +36,9 @@ const NO_EFFECTS: MicOwnerTransitionEffects = {
  *
  * `ParticipantSession` owns the lease itself. This policy owns what a changed
  * lease means to the rest of the room: pending Song commands may no longer be
- * authorized, a prepared playback handoff may need to be abandoned, and an
- * acoustic timing result cannot survive a different singer/capture authority.
+ * authorized, a prepared playback handoff may need to be abandoned, an
+ * acoustic timing result cannot survive a different singer/capture authority,
+ * and the previous singer's Mic gain is wrong for the next device.
  *
  * Transport mechanics deliberately do not live here. Closing a publisher
  * socket, clearing a WebTransport ticket, or cancelling a reconnect timer are
@@ -55,6 +59,7 @@ export function micOwnerTransitionEffects(
       cancelRoomSongCommand: 'mic-owner-changed',
       cancelSongHandoff: false,
       invalidateTimingReason: 'Microphone ownership changed.',
+      restoreMicGainFor: ownerId,
       prepareSongHandoffFor: ownerId,
     };
   }
@@ -75,6 +80,8 @@ export function micOwnerTransitionEffects(
       : transportExpired
         ? 'Microphone transport did not reconnect before its grace period expired.'
         : 'Microphone was released.',
+    // A released Mic keeps the last gain; the next owner brings their own.
+    restoreMicGainFor: null,
     prepareSongHandoffFor: null,
   };
 }

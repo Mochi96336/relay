@@ -99,6 +99,8 @@ test('Song composition preserves playback authority while Mic owner recovers los
 
 test('normal Song state stays quiet while transition and recovery context remains visible', () => {
   assert.match(songSurface, /const visible = recoverable \|\| role === 'preparing' \|\| role === 'connecting';/);
+  // The one exception: a video the room's player cannot play.
+  assert.match(songSurface, /if \(robotCannotPlay\) \{\s*deviceNote\.hidden = false;\s*setText\(deviceNote, t\('song\.robotCannotPlay'\)\);/);
   assert.match(songSurface, /deviceNote\.hidden = !visible;/);
   assert.match(songSurface, /stage\.dataset\.songEditing = editing \? 'true' : 'false';/);
   assert.match(songSurface, /changeButton\.setAttribute\('aria-expanded', editing \? 'true' : 'false'\);/);

@@ -8,6 +8,7 @@ type RelayInfrastructureEventHandler<TSocket> = (
 type RelayInfrastructureEventProtocolHandlers<TSocket> = {
   backingSampleBoundary: RelayInfrastructureEventHandler<TSocket>;
   robotPlayerOffset: RelayInfrastructureEventHandler<TSocket>;
+  robotPlayerStatus: RelayInfrastructureEventHandler<TSocket>;
   calibrationProbe: RelayInfrastructureEventHandler<TSocket>;
   sourceSeeked: RelayInfrastructureEventHandler<TSocket>;
 };
@@ -28,6 +29,9 @@ export function createRelayInfrastructureEventProtocol<TSocket>(
           return true;
         case 'robot-player-offset':
           handlers.robotPlayerOffset(socket, payload);
+          return true;
+        case 'robot-player-status':
+          handlers.robotPlayerStatus(socket, payload);
           return true;
         case 'calibration-probe-played':
         case 'calibration-probe-failed':

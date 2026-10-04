@@ -165,7 +165,7 @@ The observation endpoints themselves never perform recovery. The optional semant
 
 ## Ownership boundaries
 
-- `source.html` mirrors the phone's YouTube media timeline.
+- `source.html` mirrors the phone's YouTube media timeline. It also reports YouTube player errors to Relay. A video the Robot cannot play (errors 2, 100, 101 and 150; a region-restricted video reports 150) becomes a product issue asking for another upload, and the page is not reloaded for it, since a reload cannot help.
 - `scripts/robot-source.sh` owns robot-local browser audio capture and process cleanup.
 - `src/backing-stdin.ts` owns PCM framing, its capture clock, and backing transport reconnection.
 - `src/server.ts` owns WebSocket routing and source lifecycle orchestration.

@@ -75,6 +75,8 @@ if (
   let editingVideoId = null;
   let lastVideoId = null;
   let lastRoom = {};
+  // The Robot said it cannot play this video. Only product status carries it.
+  let robotCannotPlay = false;
   let canEditCurrentSong = false;
 
   const observerAuthor = document.createElement('span');
@@ -102,6 +104,13 @@ if (
   }
 
   function renderDeviceNote(recoverable) {
+    // A video the room cannot play is not a normal state, and everyone needs to
+    // see it: the singer's own phone may play it fine.
+    if (robotCannotPlay) {
+      deviceNote.hidden = false;
+      setText(deviceNote, t('song.robotCannotPlay'));
+      return;
+    }
     // Playback location is implementation context, not a persistent task. Keep
     // the heading quiet in the normal holder/observer/empty states and surface
     // it only while the user needs to understand a transition or recovery.
@@ -219,6 +228,13 @@ if (
   });
 
   window.addEventListener('relay:playback-view', render);
+  window.addEventListener('relay-product-status', (event) => {
+    const issues = Array.isArray(event?.detail?.issues) ? event.detail.issues : [];
+    const next = issues.some((issue) => issue?.cause === 'robot-video-unplayable');
+    if (next === robotCannotPlay) return;
+    robotCannotPlay = next;
+    renderDeviceNote(canRecoverPlayback({ role, timeline: lastRoom }));
+  });
   window.addEventListener('relay-locale-changed', () => {
     const recoverable = canRecoverPlayback({ role, timeline: lastRoom });
     renderDeviceNote(recoverable);

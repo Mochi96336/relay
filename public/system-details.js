@@ -68,6 +68,7 @@ if (
     'backing-stalled': 'system.issue.cause.backing-stalled',
     'backing-route-mismatch': 'system.issue.cause.backing-route-mismatch',
     'robot-source-unavailable': 'system.issue.cause.robot-source-unavailable',
+    'robot-video-unplayable': 'system.issue.cause.robot-video-unplayable',
     'song-clock-unavailable': 'system.issue.cause.song-clock-unavailable',
     'mic-transport-disconnected': 'system.issue.cause.mic-transport-disconnected',
     'mic-audio-stalled': 'system.issue.cause.mic-audio-stalled',
@@ -92,6 +93,7 @@ if (
     'retry-recording': 'system.issue.recovery.retry-recording',
     recalibrate: 'system.issue.recovery.recalibrate',
     'host-service': 'system.issue.recovery.host-service',
+    'change-song': 'system.issue.recovery.change-song',
   };
 
   function causeCopy(cause) {

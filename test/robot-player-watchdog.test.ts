@@ -5,6 +5,7 @@ import test from 'node:test';
 // exercised in Node without installing its DOM watcher.
 import {
   decideRobotPlayerRecovery,
+  playerErrorCodeFromState,
   playerLoadedFromMirrorState,
   reloadBudgetAvailable,
   trimReloadHistory,
@@ -34,6 +35,32 @@ test('robot player recovery waits through transient failures and reloads persist
     decideRobotPlayerRecovery({ ...healthy, stalledForMs: 12_000 }),
     'youtube-player-stalled',
   );
+});
+
+test('a video the player cannot play is not reloaded over and over', () => {
+  // Region-restricted: the Robot host's Chromium reports 150.
+  const unplayable = {
+    hasTimeline: true,
+    phonePlaying: true,
+    playerError: true,
+    playerErrorCode: 150,
+    playerLoaded: true,
+    errorAgeMs: 60_000,
+    notReadyAgeMs: 0,
+    stalledForMs: 60_000,
+  };
+  assert.equal(decideRobotPlayerRecovery(unplayable), null);
+  for (const code of [2, 100, 101]) {
+    assert.equal(decideRobotPlayerRecovery({ ...unplayable, playerErrorCode: code }), null, `code ${code}`);
+  }
+  // A player failure is still worth a reload.
+  assert.equal(
+    decideRobotPlayerRecovery({ ...unplayable, playerErrorCode: 5 }),
+    'youtube-player-error',
+  );
+
+  assert.equal(playerErrorCodeFromState('YouTube source error 150'), 150);
+  assert.equal(playerErrorCodeFromState('Source armed'), null);
 });
 
 test('robot player loading state is not confused by UI suffixes', () => {

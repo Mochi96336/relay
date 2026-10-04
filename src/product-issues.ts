@@ -26,6 +26,7 @@ export type ProductIssueCause =
   | 'backing-stalled'
   | 'backing-route-mismatch'
   | 'robot-source-unavailable'
+  | 'robot-video-unplayable'
   | 'song-clock-unavailable'
   | 'mic-transport-disconnected'
   | 'mic-audio-stalled'
@@ -50,7 +51,8 @@ export type ProductRecovery =
   | 'raise-mic-gain'
   | 'retry-recording'
   | 'recalibrate'
-  | 'host-service';
+  | 'host-service'
+  | 'change-song';
 
 export type ProductIssue = {
   code: ProductIssueCode;
@@ -79,6 +81,8 @@ export type ProductIssueFacts = {
     robot: boolean;
   };
   robotSourceConnected: boolean;
+  /** The Robot's player reported that it cannot play the room's current video. */
+  robotVideoUnplayable?: boolean;
   songClockSeverity: 'warning' | 'critical' | null;
   mic: {
     ownerId: string | null;
@@ -158,6 +162,18 @@ function hostIssues(facts: ProductIssueFacts) {
       cause: 'robot-source-unavailable',
       affects: ['song', 'recording'],
       recovery: 'host-service',
+    });
+  } else if (facts.routeMode === 'robot' && facts.robotVideoUnplayable === true) {
+    // The Robot is there but its player refuses this video: region-restricted,
+    // removed or not embeddable. The room hears no Song, and before this the
+    // only trace was a stale timing delta. Another upload usually plays.
+    issues.push({
+      code: 'robot-player-unavailable',
+      scope: 'robot',
+      severity: 'critical',
+      cause: 'robot-video-unplayable',
+      affects: ['song', 'recording'],
+      recovery: 'change-song',
     });
   }
 

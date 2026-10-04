@@ -1,3 +1,5 @@
+import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
+
 const CHECK_INTERVAL_MS = 1_000;
 const ERROR_GRACE_MS = 5_000;
 const NOT_READY_GRACE_MS = 15_000;
@@ -10,12 +12,17 @@ export function decideRobotPlayerRecovery({
   hasTimeline,
   phonePlaying,
   playerError,
+  playerErrorCode = null,
   playerLoaded,
   errorAgeMs,
   notReadyAgeMs,
   stalledForMs,
 }) {
   if (!hasTimeline) return null;
+  // A video this player cannot play stays unplayable after a reload. Reloading
+  // only took the Robot source offline three times before giving up silently;
+  // the page reports the error to the server instead.
+  if (playerError && youtubeErrorMeansUnplayable(playerErrorCode)) return null;
   if (playerError && errorAgeMs >= ERROR_GRACE_MS) return 'youtube-player-error';
   if (!playerLoaded && notReadyAgeMs >= NOT_READY_GRACE_MS) return 'youtube-player-not-ready';
   if (phonePlaying && playerLoaded && stalledForMs >= STALL_GRACE_MS) return 'youtube-player-stalled';
@@ -28,6 +35,12 @@ export function trimReloadHistory(history, nowMs) {
 
 export function reloadBudgetAvailable(history, nowMs) {
   return trimReloadHistory(history, nowMs).length < MAX_RELOADS_PER_WINDOW;
+}
+
+/** The YouTube error code the source page shows, or null. */
+export function playerErrorCodeFromState(text) {
+  const match = String(text).match(/^YouTube source error (\d+)/);
+  return match ? Number(match[1]) : null;
 }
 
 export function playerLoadedFromMirrorState(text) {
@@ -99,6 +112,7 @@ function installRobotPlayerWatchdog() {
       hasTimeline,
       phonePlaying,
       playerError,
+      playerErrorCode: playerErrorCodeFromState(stateText),
       playerLoaded,
       errorAgeMs: errorSince === null ? 0 : now - errorSince,
       notReadyAgeMs: notReadySince === null ? 0 : now - notReadySince,

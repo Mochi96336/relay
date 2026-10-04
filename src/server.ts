@@ -54,6 +54,7 @@ import { applyMicOwnerTransitionEffects } from './mic-owner-transition-applicati
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
 import { MicLevelMonitor } from './mic-level-monitor.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
+import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
 import { TimingRuntime } from './timing-runtime.js';
@@ -1593,6 +1594,10 @@ function remoteStatusPayload() {
       calibrationStale: components.calibration.stale,
       timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
       activeCalibratedMicLagMs: alignment.calibratedMicLagMs,
+      playerError: robotPlayerError === null ? null : {
+        ...robotPlayerError,
+        unplayable: youtubeErrorMeansUnplayable(robotPlayerError.code),
+      },
     },
     mix: {
       active: session.active,
@@ -1831,6 +1836,7 @@ function productStatusPayload(nowMs = performance.now()) {
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
     micMediaRecoveryDegraded: freshMicUplink?.transport.mediaRecoveryDegraded === true,
+    robotVideoUnplayable: robotVideoUnplayable(room),
     micAudibilityDegraded: micAudibility.degraded,
     micInputClipping: freshMicUplink?.captureClipping?.recentDetected === true,
     micLevelWarning: micLevel.warning,
@@ -1982,6 +1988,32 @@ function roomHasSong(nowMs = performance.now()) {
 }
 
 /** The song is audibly under the voice: YouTube says playing and its audio is arriving. */
+/**
+ * What the Robot's player last said about a video it could not play. Only the
+ * Robot page sees a YouTube error; without this the room got no Song and no
+ * reason, beyond a stale timing delta.
+ */
+let robotPlayerError: { videoId: string; code: number } | null = null;
+
+function noteRobotPlayerStatus(videoId: string | null, errorCode: number | null) {
+  const next = videoId !== null && errorCode !== null ? { videoId, code: errorCode } : null;
+  if (JSON.stringify(next) === JSON.stringify(robotPlayerError)) return;
+  robotPlayerError = next;
+  console.warn('[robot-player]', JSON.stringify({
+    videoId,
+    errorCode,
+    unplayable: next !== null && youtubeErrorMeansUnplayable(next.code),
+  }));
+  broadcastProductStatus();
+}
+
+/** Whether the Robot has said it cannot play the room's current video. */
+function robotVideoUnplayable(room: Record<string, unknown>) {
+  return robotPlayerError !== null
+    && room.videoId === robotPlayerError.videoId
+    && youtubeErrorMeansUnplayable(robotPlayerError.code);
+}
+
 function roomSongPlaying(nowMs = performance.now()) {
   return takeSongSnapshot(nowMs).state === 1 && backingPlayable(nowMs);
 }
@@ -3435,6 +3467,15 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
       currentBackingGeneration: session.backingGeneration,
       context: calibrationContext(),
     });
+    return;
+  },
+  robotPlayerStatus: (socket, payload) => {
+    if (!sourceRuntime.isActiveRobot(socket)) return;
+    const videoId = typeof payload.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(payload.videoId)
+      ? payload.videoId
+      : null;
+    const errorCode = Number.isInteger(payload.errorCode) ? Number(payload.errorCode) : null;
+    noteRobotPlayerStatus(videoId, errorCode);
     return;
   },
   robotPlayerOffset: (socket, payload) => {

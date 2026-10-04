@@ -105,7 +105,7 @@ test('Mic frontier hold de-clicks structural pre-roll when the read head crosses
   for (let nowMs = 40; nowMs <= 200; nowMs += 20) {
     drainOne(session, nowMs);
   }
-  (session as any).micFrontierCorrectionSamples = 145 + Math.round(RATE * 0.2);
+  (session as any).micFrontier.correction = 145 + Math.round(RATE * 0.2);
   const held = drainOne(session, 220);
   assert.equal(sample(held.output, CHUNK - 1), 0);
   assert.equal(held.evidence.micGapSamples, 0);

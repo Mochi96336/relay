@@ -1315,7 +1315,7 @@ describe('AudioSession microphone frontier', () => {
     // how this held correction is acquired. With ample fresh frontier ahead,
     // updateMicFrontierCorrection() now gives it back at the documented 1%
     // rate, about 9.6 samples per 20 ms frame at 48 kHz.
-    (session as any).micFrontierCorrectionSamples = Math.round(RATE * 0.02);
+    (session as any).micFrontier.correction = Math.round(RATE * 0.02);
 
     const mixed: Buffer[] = [];
     session.drain((pcm) => mixed.push(pcm), 400, 1);
@@ -1331,9 +1331,11 @@ describe('AudioSession microphone frontier', () => {
       boundaryStep < 3_000,
       `frontier correction release spliced the Mic waveform at the frame boundary: ${boundaryStep}`,
     );
-    assert.ok(
-      session.micFrontierCorrectionMs < 20,
-      'the correction must still release; continuity cannot freeze recovery',
+    // Two frames at the bounded rate: 10 samples each off the held 960.
+    assert.equal(
+      Math.round((session.micFrontierCorrectionMs * RATE) / 1000),
+      940,
+      'the correction must still release, at the bounded rate; continuity cannot freeze recovery',
     );
   });
 

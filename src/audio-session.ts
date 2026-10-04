@@ -22,6 +22,8 @@ import {
   type PcmChunk,
   type PcmTimeline,
 } from './pcm-timeline.js';
+import { MicClockTrim } from './mic-clock-trim.js';
+import { MicFrontierCorrection } from './mic-frontier-correction.js';
 import { MicInputClipping } from './mic-input-clipping.js';
 import { SourceOutputEdge } from './source-output-edge.js';
 
@@ -34,6 +36,8 @@ import { SourceOutputEdge } from './source-output-edge.js';
  * session is now told what happened - a source appeared, a frame arrived, an
  * alignment was measured - and decides for itself what that does to the audio.
  */
+
+export type { MicTimelineFold } from './mic-frontier-correction.js';
 
 export type AlignmentState = {
   /** RTT/2 fallback used until an acoustic calibration succeeds. */
@@ -115,23 +119,6 @@ const BACKING_CLOCK_ERROR_ALPHA = 0.002;
 const BACKING_CLOCK_DEADBAND_MS = 2;
 
 /**
- * The Mic capture clock is a phone's, and it drifts against the mix clock
- * too: tens of ppm is ordinary. Mic packets are placed by their capture index
- * against an anchor taken once, so the drift accumulates for as long as the
- * capture lasts - a slow clock spends the live headroom (and moves the voice
- * earlier against the song), a fast one moves the voice later. At 50 ppm that
- * is 180 ms an hour. The estimate comes from arrival times
- * (MicClockDriftEstimator) and is applied as the same one-sample stretch the
- * Backing correction uses, or its mirror, at contiguous packet boundaries.
- *
- * The estimator reads a stable clock within about 15 ppm, so smaller estimates
- * are left alone rather than risk making a good clock worse; far larger ones
- * are not a capture clock.
- */
-const MIC_CLOCK_TRIM_MIN_PPM = 15;
-const MIC_CLOCK_TRIM_MAX_PPM = 500;
-
-/**
  * Runtime validation corrects an already-live read head. Moving it in one frame
  * skips or repeats the whole delta, so validated drift is allowed to change the
  * read rate by at most one percent until the new target is reached. Initial,
@@ -147,38 +134,6 @@ const RUNTIME_CALIBRATION_SLEW_FRACTION = 0.01;
  * timing authority is not audibly delayed.
  */
 const MIC_READ_HEAD_CROSSFADE_MS = 5;
-
-/**
- * When a Mic frontier overrun counts as gradual: the frontier has stayed
- * within this much of the read window for a whole window of frames. A capture
- * clock spending the headroom does that for minutes before it overruns; a
- * healthy stream that stalls or arrives in bursts overruns from ~200 ms of
- * slack and still needs the whole safety margin at once.
- */
-const MIC_FRONTIER_GRADUAL_WINDOW_MS = 1_000;
-const MIC_FRONTIER_GRADUAL_SLACK_MS = 60;
-
-/**
- * Confirmed Mic capture loss is folded into the timeline only once the frontier
- * correction is within this much of its bound. The fold is inaudible, but it
- * restarts any timing measurement in flight, so it should be rare; one burst
- * of loss plus the safety margin must still fit after the decision.
- */
-const MIC_TIMELINE_FOLD_ROOM_MS = 1_000;
-/**
- * Confirmed loss below this is measurement noise, not capture loss: the
- * phone's health reports arrive with jitter that the lower envelope only
- * mostly removes. Folding noise would turn real network lateness, which can
- * still catch up, into permanent lateness.
- */
-const MIC_TIMELINE_FOLD_MIN_MS = 250;
-
-/** One fold of confirmed Mic capture loss into the timeline. */
-export type MicTimelineFold = {
-  shiftMs: number;
-  correctionBeforeMs: number;
-  captureLossMs: number;
-};
 
 /**
  * A real packet hole is silence, but entering or leaving that silence in one
@@ -446,40 +401,9 @@ export class AudioSession {
   private micConcealedSamples = 0;
   /** Timeline position where the current Mic capture generation's audio begins. */
   private micCaptureOriginSample: number | null = null;
-  /** Samples the read head is held back to stay inside arrived microphone audio. */
-  private micFrontierCorrectionSamples = 0;
-  private micFrontierAtLastFrame = 0;
-  /** Consecutive mixed frames in which no new microphone audio arrived. */
-  private micFrontierIdleFrames = 0;
-  /**
-   * Bounded settling window after a truly stalled frontier starts moving again.
-   * A queued stale packet must not instantly redefine seconds of outage as live
-   * latency, but a genuinely steady late stream must regain frontier correction.
-   */
-  private micFrontierResumeGuardFrames = 0;
-  /**
-   * Correction still to be taken at the bounded slew rate, after a frontier
-   * that ran out gradually was stepped back only to just inside arrived audio.
-   */
-  private micFrontierSlewTargetSamples: number | null = null;
-  /** Live frontier slack of recent frames, oldest first. */
-  private readonly micFrontierRecentSlackSamples: number[] = [];
-  /**
-   * Real time the Mic capture `micCaptureLossGeneration` is known to have
-   * lost, measured outside the mixer from the phone's own sample count.
-   */
-  private micCaptureLossGeneration: number | null = null;
-  private micCaptureLossSamples = 0;
-  /** The part of that loss already folded into the timeline or absorbed by its anchor. */
-  private micTimelineFoldedSamples = 0;
-  private micTimelineFoldCountValue = 0;
-  private lastMicTimelineFoldValue: MicTimelineFold | null = null;
-  /** Mic capture clock error the timeline is being trimmed for; positive is slow. */
-  private micClockTrimPpmValue = 0;
-  /** Fractional samples of trim owed but not yet applied. */
-  private micClockTrimCarrySamples = 0;
-  /** Net samples the trim has inserted (positive) or removed for this capture. */
-  private micClockTrimSamplesValue = 0;
+  /** Holds the Mic read head inside audio that has arrived. */
+  private readonly micFrontier: MicFrontierCorrection;
+  private readonly micClockTrim: MicClockTrim;
   private backingHeadroomMs = 0;
 
   constructor(options: AudioSessionOptions) {
@@ -514,6 +438,15 @@ export class AudioSession {
     this.limiterAttack = onePoleCoefficient(LIMITER_ATTACK_MS, options.sampleRate);
     this.limiterRelease = onePoleCoefficient(LIMITER_RELEASE_MS, options.sampleRate);
     this.limiterLookaheadSamples = Math.round((LIMITER_LOOKAHEAD_MS * options.sampleRate) / 1000);
+    this.micFrontier = new MicFrontierCorrection({
+      sampleRate: options.sampleRate,
+      frameMs: options.frameMs,
+      frameSamples: this.frameSamples,
+      lookaheadSamples: this.limiterLookaheadSamples,
+      safetyMs: ADVANCE_SAFETY_MS,
+      slewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
+    });
+    this.micClockTrim = new MicClockTrim(options.sampleRate);
   }
 
   get active() {
@@ -560,12 +493,12 @@ export class AudioSession {
 
   /** Capture clock error the Mic timeline is currently trimmed for, in ppm. */
   get micClockTrimPpm() {
-    return this.micClockTrimPpmValue;
+    return this.micClockTrim.ppm;
   }
 
   /** Net samples inserted (positive) or removed by the trim for this capture. */
   get micClockTrimSamples() {
-    return this.micClockTrimSamplesValue;
+    return this.micClockTrim.samples;
   }
 
   /**
@@ -575,17 +508,7 @@ export class AudioSession {
    * next capture has its own clock and must be measured again.
    */
   setMicClockTrimPpm(ppm: number | null) {
-    this.micClockTrimPpmValue = ppm !== null
-      && Number.isFinite(ppm)
-      && Math.abs(ppm) >= MIC_CLOCK_TRIM_MIN_PPM
-      ? Math.max(-MIC_CLOCK_TRIM_MAX_PPM, Math.min(MIC_CLOCK_TRIM_MAX_PPM, ppm))
-      : 0;
-  }
-
-  private resetMicClockTrim() {
-    this.micClockTrimPpmValue = 0;
-    this.micClockTrimCarrySamples = 0;
-    this.micClockTrimSamplesValue = 0;
+    this.micClockTrim.setPpm(ppm);
   }
 
   /** The same frontier for the captured song. See `micTotalSamples`. */
@@ -656,7 +579,7 @@ export class AudioSession {
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     // The frontier correction described the old timelines' positions.
-    this.resetMicFrontierTracking();
+    this.micFrontier.reset(this.mic.generation);
     // A pending correction belongs to the old mix epoch. Preserve the value
     // already being applied but do not continue walking an old target forward.
     this.calibratedMicLagTargetMs = this.alignmentState.calibratedMicLagMs;
@@ -822,12 +745,12 @@ export class AudioSession {
    * the frame with zeros, and because both timelines advance at the mix rate
    * afterwards the deficit is constant. Nothing closes it, so a single
    * alignment change silences the microphone for as long as the room stays up.
-   * `micFrontierCorrectionSamples` is what keeps the read head behind the
+   * The frontier correction (MicFrontierCorrection) keeps the read head behind the
    * frontier that actually exists.
    */
   private appliedMicAdvanceForRequestedMs(
     requestedMicAdvanceMs: number,
-    frontierCorrectionSamples = this.micFrontierCorrectionSamples,
+    frontierCorrectionSamples = this.micFrontier.correctionSamples,
   ) {
     const corrected = this.budgetedMicAdvanceMs(requestedMicAdvanceMs)
       - (frontierCorrectionSamples / this.sampleRate) * 1000;
@@ -844,7 +767,7 @@ export class AudioSession {
    * configured prebuffer/retention budget.
    */
   get micFrontierCorrectionMs() {
-    return (this.micFrontierCorrectionSamples / this.sampleRate) * 1000;
+    return (this.micFrontier.correctionSamples / this.sampleRate) * 1000;
   }
 
   /**
@@ -852,83 +775,16 @@ export class AudioSession {
    * the mixer (MicCaptureDeliveryMonitor). Only a matching capture uses it.
    */
   noteMicCaptureLoss(generation: number, lossMs: number) {
-    if (!Number.isFinite(lossMs) || lossMs < 0) return;
-    this.micCaptureLossGeneration = generation;
-    this.micCaptureLossSamples = Math.round((lossMs * this.sampleRate) / 1000);
+    this.micFrontier.noteCaptureLoss(generation, lossMs);
   }
 
   /** Folds of confirmed capture loss into the Mic timeline since this mixer was created. */
   get micTimelineFoldCount() {
-    return this.micTimelineFoldCountValue;
+    return this.micFrontier.foldCount;
   }
 
-  get lastMicTimelineFold(): MicTimelineFold | null {
-    return this.lastMicTimelineFoldValue;
-  }
-
-  /**
-   * Whether the microphone frontier has stopped keeping up with the mix clock.
-   *
-   * This is the difference between a capture that is *behind* and one that has
-   * *stopped*, and the correction must only ever answer the first. A live but
-   * late stream shows a constant deficit, so one correction settles it. A
-   * stopped stream shows a deficit growing at the mix rate; chasing that would
-   * pin the read head to the last samples that arrived and replay them as
-   * though they were live - worse than silence, because a Take would record it.
-   * Letting the read head walk past a frozen frontier is what reports the
-   * starvation that is genuinely happening.
-   */
-  private micFrontierStalled() {
-    // Arrival is packet-shaped, so single frames legitimately see no progress.
-    // Only a run of them says the frontier has stopped moving.
-    return this.micFrontierIdleFrames > Math.ceil(ADVANCE_SAFETY_MS / this.frameMs);
-  }
-
-  private resetMicFrontierTracking() {
-    this.micFrontierCorrectionSamples = 0;
-    this.micFrontierAtLastFrame = 0;
-    this.micFrontierIdleFrames = 0;
-    this.micFrontierResumeGuardFrames = 0;
-    this.micFrontierSlewTargetSamples = null;
-    this.micFrontierRecentSlackSamples.length = 0;
-    // A fresh anchor already places the capture where it is now, so whatever
-    // it had lost up to here is accounted for and must not be folded again.
-    this.micTimelineFoldedSamples = this.micCaptureLossGeneration !== null
-      && this.micCaptureLossGeneration === this.mic.generation
-      ? this.micCaptureLossSamples
-      : 0;
-  }
-
-  private trackMicFrontierProgress() {
-    const wasStalled = this.micFrontierStalled();
-    const advanced = this.mic.totalSamples - this.micFrontierAtLastFrame;
-    this.micFrontierAtLastFrame = this.mic.totalSamples;
-
-    if (advanced > 0) {
-      if (wasStalled) {
-        // Keep the guard one frame longer than the stall threshold. If this was
-        // only one queued stale packet, the guard then expires on the same frame
-        // the frontier becomes stalled again, leaving no one-frame gap in which
-        // a multi-second deficit can be mistaken for stable latency.
-        this.micFrontierResumeGuardFrames = Math.ceil(ADVANCE_SAFETY_MS / this.frameMs) + 1;
-      } else if (
-        this.micFrontierResumeGuardFrames > 0
-        && advanced <= this.frameSamples
-      ) {
-        // A frontier advancing faster than the mix clock is catching up queued
-        // history, not proving a stable late-live offset. Keep the resume guard
-        // armed until that burst has either reached the live read window or
-        // settled back to roughly realtime progress.
-        this.micFrontierResumeGuardFrames -= 1;
-      }
-      this.micFrontierIdleFrames = 0;
-      return;
-    }
-
-    this.micFrontierIdleFrames += 1;
-    if (this.micFrontierResumeGuardFrames > 0) {
-      this.micFrontierResumeGuardFrames -= 1;
-    }
+  get lastMicTimelineFold() {
+    return this.micFrontier.lastFold;
   }
 
   /** The most frontier correction the retained history lets the read head use. */
@@ -940,44 +796,22 @@ export class AudioSession {
 
   /**
    * Folds Mic capture loss the phone has confirmed into the timeline before the
-   * frontier correction covering it runs out of room.
-   *
-   * A phone whose audio graph loses render time sends contiguous sample numbers
-   * that fall behind the wall clock. Its frontier slides behind the mix and the
-   * correction grows with every burst, but the correction is bounded by the
-   * retained history: once pinned, the read head runs past arrived audio for
-   * good. On 2026-10-03 a Mic stayed silent for almost four minutes that way
-   * while its packets kept arriving. Time the phone never captured cannot catch
-   * up later, so it can move out of the correction and into the timeline's own
-   * positions. Lateness the phone does not confirm stays a correction, to be
-   * given back if delayed audio catches up.
+   * frontier correction covering it runs out of room (see
+   * MicFrontierCorrection.foldDue for why).
    *
    * Runs before a frame reads any of the previous frame's read state, so that
    * state moves with the timeline.
    */
   private foldConfirmedMicCaptureLoss() {
-    const correction = this.micFrontierCorrectionSamples;
-    if (!this.micExpected || correction <= 0) return;
-    if (
-      this.micCaptureLossGeneration === null
-      || this.micCaptureLossGeneration !== this.mic.generation
-    ) return;
-    const roomSamples = this.micFrontierCorrectionCapSamples() - correction;
-    if (roomSamples > Math.round((MIC_TIMELINE_FOLD_ROOM_MS * this.sampleRate) / 1000)) return;
-    const shift = Math.min(
-      correction,
-      Math.floor(this.micCaptureLossSamples - this.micTimelineFoldedSamples),
+    const correctionBefore = this.micFrontier.correctionSamples;
+    const shift = this.micFrontier.foldDue(
+      this.micExpected,
+      this.mic.generation,
+      this.micFrontierCorrectionCapSamples(),
     );
-    if (shift < Math.round((MIC_TIMELINE_FOLD_MIN_MS * this.sampleRate) / 1000)) return;
-
+    if (shift === 0) return;
     this.rebaseMicTimeline(shift);
-    this.micTimelineFoldedSamples += shift;
-    this.micTimelineFoldCountValue += 1;
-    this.lastMicTimelineFoldValue = {
-      shiftMs: Math.round((shift / this.sampleRate) * 1000),
-      correctionBeforeMs: Math.round((correction / this.sampleRate) * 1000),
-      captureLossMs: Math.round((this.micCaptureLossSamples / this.sampleRate) * 1000),
-    };
+    this.micFrontier.folded(shift, correctionBefore);
   }
 
   /**
@@ -999,133 +833,19 @@ export class AudioSession {
     // The read position is the frame start plus the advance, so the advance
     // moves with the audio it was reading.
     if (this.lastEmittedMicAdvanceSamples !== null) this.lastEmittedMicAdvanceSamples += shift;
-    this.micFrontierAtLastFrame += shift;
-    this.micFrontierCorrectionSamples -= shift;
-    if (this.micFrontierSlewTargetSamples !== null) {
-      const target = this.micFrontierSlewTargetSamples - shift;
-      this.micFrontierSlewTargetSamples = target > this.micFrontierCorrectionSamples ? target : null;
-    }
+    this.micFrontier.rebase(shift);
   }
 
-  /**
-   * Holds the microphone read head behind the samples that have actually
-   * arrived.
-   *
-   * Deliberately a held correction rather than a per-frame `min()` against the
-   * frontier. The deficit is constant once it appears, while the frontier moves
-   * in packet-sized steps: re-deriving the bound every frame would pin the read
-   * position to arrival and replay the same samples between packets. So it is
-   * taken in one step when the read window would overrun, with a margin so
-   * ordinary arrival jitter does not force a new correction every few frames,
-   * and given back at the same inaudible rate the calibration slew uses once
-   * there is real slack again.
-   *
-   * A frontier that runs out gradually is different: a phone capture clock a
-   * little slower than the mix clock spends the headroom over tens of minutes
-   * and overruns by a fraction of a frame. Stepping the whole margin then
-   * replayed about 200 ms of voice in one go. Such an overrun is stepped back
-   * only to a frame inside arrived audio, and the rest of the margin is taken
-   * at the bounded slew rate.
-   */
+  /** Holds the microphone read head behind the samples that have actually arrived. */
   private updateMicFrontierCorrection(startSample: number) {
-    // Whether the frontier is moving is a fact about arrival, kept even while
-    // the Mic is not expected. A WebSocket phone whose socket drops is not
-    // expected until it registers again, and its next packet lands a round
-    // trip after that. Tracked only while expected, a frontier frozen for the
-    // whole outage looked fresh in those frames and was taken for lateness:
-    // the read head went back into the audio from before the drop, replayed
-    // it, and the voice then ran seconds late for minutes.
-    this.trackMicFrontierProgress();
-    if (!this.micExpected) {
-      this.micFrontierCorrectionSamples = 0;
-      this.micFrontierSlewTargetSamples = null;
-      this.micFrontierRecentSlackSamples.length = 0;
-      return;
-    }
-
-    const marginSamples = Math.round((ADVANCE_SAFETY_MS * this.sampleRate) / 1000);
-    const span = this.frameSamples + this.limiterLookaheadSamples;
-    // The largest advance whose read window still ends inside arrived audio.
-    const frontierLimit = this.mic.totalSamples - span - startSample;
-    const applied = Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000);
-    const overrun = applied - frontierLimit;
-    const recentSlack = this.micFrontierRecentSlackSamples;
-    const gradualWindowFrames = Math.ceil(MIC_FRONTIER_GRADUAL_WINDOW_MS / this.frameMs);
-    const frontierHasBeenShort = recentSlack.length >= gradualWindowFrames
-      && Math.max(...recentSlack)
-        <= Math.round((MIC_FRONTIER_GRADUAL_SLACK_MS * this.sampleRate) / 1000);
-    recentSlack.push(-overrun);
-    if (recentSlack.length > gradualWindowFrames) recentSlack.shift();
-
-    // A true stall can resume by draining queued old PCM. Do not let the first
-    // such packet reinterpret the whole outage as stable live latency: with the
-    // default 3 s retention that can pin the read head at -2.8 s. The guard is
-    // deliberately bounded, though. If the frontier keeps moving for a full
-    // safety window while remaining late, that is exactly the steady-late
-    // stream this correction was introduced to keep audible.
-    if (this.micFrontierResumeGuardFrames > 0 && overrun > 0) return;
-    if (overrun <= 0) this.micFrontierResumeGuardFrames = 0;
-
-    // Only worth holding back when there is arrived audio to hold back *to*.
-    // A microphone that has delivered nothing, or whose whole window predates
-    // the retained history, is starving however the read head is placed, and
-    // moving it into the void before the timeline starts would silently turn
-    // that true signal into apparent healthy headroom.
-    const earliestRetained = this.mic.chunks[0]?.start ?? null;
-    if (earliestRetained === null || frontierLimit < earliestRetained - startSample) {
-      this.micFrontierCorrectionSamples = 0;
-      this.micFrontierSlewTargetSamples = null;
-      return;
-    }
-
-    if (overrun > 0 && !this.micFrontierStalled()) {
-      // Bounded by the retained history: growing the correction past what the
-      // read head can actually move would let it climb without changing
-      // anything, and reading before retention is silence just the same.
-      const target = Math.min(
-        this.micFrontierCorrectionCapSamples(),
-        this.micFrontierCorrectionSamples + overrun + marginSamples,
-      );
-      if (overrun <= this.frameSamples && frontierHasBeenShort) {
-        // One frame of cushion covers packet-sized arrival steps, so the
-        // frontier is not overrun again before the slew has built slack.
-        this.micFrontierCorrectionSamples = Math.min(
-          target,
-          this.micFrontierCorrectionSamples + overrun + this.frameSamples,
-        );
-        this.micFrontierSlewTargetSamples = target > this.micFrontierCorrectionSamples
-          ? target
-          : null;
-      } else {
-        this.micFrontierCorrectionSamples = target;
-        this.micFrontierSlewTargetSamples = null;
-      }
-      return;
-    }
-
-    const step = Math.max(
-      1,
-      Math.round((this.frameMs * RUNTIME_CALIBRATION_SLEW_FRACTION * this.sampleRate) / 1000),
-    );
-    const slewTarget = this.micFrontierSlewTargetSamples;
-    if (slewTarget !== null) {
-      // A frontier that stops is starvation, not latency to hold back for; and
-      // once the margin is back there is nothing left to take.
-      if (this.micFrontierStalled() || -overrun >= marginSamples) {
-        this.micFrontierSlewTargetSamples = null;
-      } else {
-        this.micFrontierCorrectionSamples = Math.min(
-          slewTarget,
-          this.micFrontierCorrectionSamples + step,
-        );
-        if (this.micFrontierCorrectionSamples >= slewTarget) this.micFrontierSlewTargetSamples = null;
-        return;
-      }
-    }
-
-    if (this.micFrontierCorrectionSamples > 0 && -overrun > marginSamples) {
-      this.micFrontierCorrectionSamples = Math.max(0, this.micFrontierCorrectionSamples - step);
-    }
+    this.micFrontier.update({
+      expected: this.micExpected,
+      frontier: this.mic.totalSamples,
+      earliestRetained: this.mic.chunks[0]?.start ?? null,
+      startSample,
+      appliedAdvanceSamples: Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000),
+      capSamples: this.micFrontierCorrectionCapSamples(),
+    });
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
@@ -1387,7 +1107,7 @@ export class AudioSession {
     this.micLimiterResetPending = true;
     this.resetMicMeterState();
     this.clearTimeline(this.mic);
-    this.resetMicFrontierTracking();
+    this.micFrontier.reset(this.mic.generation);
   }
 
   /**
@@ -1402,7 +1122,7 @@ export class AudioSession {
 
   clearMic() {
     this.clearTimeline(this.mic);
-    this.resetMicFrontierTracking();
+    this.micFrontier.reset(this.mic.generation);
   }
 
   /** Emits every frame whose time has come. Returns how many were produced. */
@@ -1480,7 +1200,7 @@ export class AudioSession {
 
   private clearTimeline(timeline: PcmTimeline) {
     if (timeline === this.mic) {
-      this.resetMicClockTrim();
+      this.micClockTrim.reset();
       this.resetMicReadContinuity();
       this.lastEmittedMicSourceSample = null;
       this.micCaptureRestartBoundarySamples.length = 0;
@@ -1665,8 +1385,8 @@ export class AudioSession {
           // dropping a held correction here, or the timing a new capture
           // invalidates, applied before the next frame - must crossfade like
           // any other jump, so read continuity is kept.
-          this.resetMicFrontierTracking();
-          this.resetMicClockTrim();
+          this.micFrontier.reset(this.mic.generation);
+          this.micClockTrim.reset();
         }
       } else if (timeline.sourceRate === null) {
         timeline.sourceRate = sourceRate;
@@ -1707,25 +1427,15 @@ export class AudioSession {
 
       if (
         timeline === this.mic
-        && this.micClockTrimPpmValue !== 0
+        && this.micClockTrim.ppm !== 0
         && timeline.sourceFrontier !== null
       ) {
-        // Owed trim follows the capture clock, holes included: the clock
-        // drifts across a lost packet just the same.
-        const sourceAdvance = frame.firstSampleIndex! + sourceSampleCount - timeline.sourceFrontier;
-        if (sourceAdvance > 0) {
-          this.micClockTrimCarrySamples += (
-            ((sourceAdvance * this.sampleRate) / sourceRate) * this.micClockTrimPpmValue
-          ) / 1e6;
-        }
-        const currentFrameLength = samples.length - sourceAlignedSampleOffset;
-        const trim = !sourceContinuous || start !== timeline.totalSamples
-          ? 0
-          : this.micClockTrimCarrySamples >= 1 && currentFrameLength >= 1
-            ? 1
-            : this.micClockTrimCarrySamples <= -1 && currentFrameLength >= 3
-              ? -1
-              : 0;
+        const trim = this.micClockTrim.next(
+          frame.firstSampleIndex! + sourceSampleCount - timeline.sourceFrontier,
+          sourceRate,
+          sourceContinuous && start === timeline.totalSamples,
+          samples.length - sourceAlignedSampleOffset,
+        );
         if (trim !== 0) {
           // As for the Backing correction, a deferred previous-frame
           // interpolation prefix stays byte-for-byte intact.
@@ -1739,8 +1449,7 @@ export class AudioSession {
           trimmed.set(trimmedCurrentFrame, prefix.length);
           samples = trimmed;
           timeline.originOffset += trim;
-          this.micClockTrimCarrySamples -= trim;
-          this.micClockTrimSamplesValue += trim;
+          this.micClockTrim.applied(trim);
         }
       }
       const sourceEnd = frame.firstSampleIndex! + sourceSampleCount;
@@ -2279,7 +1988,7 @@ export class AudioSession {
     this.foldConfirmedMicCaptureLoss();
     const previouslyEmittedAdvanceSamples = this.lastEmittedMicAdvanceSamples;
     const previousCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
-    const previousFrontierCorrectionSamples = this.micFrontierCorrectionSamples;
+    const previousFrontierCorrectionSamples = this.micFrontier.correctionSamples;
     const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
       ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
       : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;

@@ -102,7 +102,7 @@ export function describeOverview({ product, readiness, statusz } = {}, t = engli
   return rows;
 }
 
-export function describeSession({ product } = {}, t = english) {
+export function describeSession({ product, readiness } = {}, t = english) {
   const room = product?.room;
   if (!room) {
     return [
@@ -121,7 +121,9 @@ export function describeSession({ product } = {}, t = english) {
     rows.push(row('mic', t('diag.session.mic'), t('diag.session.mic.free'), t('diag.session.mic.freeNote')));
   } else {
     const tone = mic.state === 'live' ? 'ok' : mic.state === 'starting' ? 'neutral' : 'warn';
-    const noteKey = `diag.session.mic.${mic.state}`;
+    const behind = mic.state === 'interrupted'
+      && (product?.issues ?? []).some((issue) => issue?.cause === 'mic-timeline-behind');
+    const noteKey = behind ? 'diag.session.mic.behind' : `diag.session.mic.${mic.state}`;
     const note = t(noteKey);
     rows.push(row('mic', t('diag.session.mic'), mic.ownerNickname || t('diag.session.mic.someone'),
       note === noteKey ? '' : note, tone));
@@ -129,7 +131,10 @@ export function describeSession({ product } = {}, t = english) {
 
   const song = room.song?.state;
   const songTones = { playing: 'ok', unavailable: 'bad' };
-  if (['empty', 'ready', 'playing', 'handoff', 'unavailable'].includes(song)) {
+  if (song === 'ready' && Number(readiness?.components?.player?.state) === 0) {
+    // "Paused or not started" misdescribed a Song that has simply finished.
+    rows.push(row('song', t('diag.session.song'), t('diag.session.song.ended')));
+  } else if (['empty', 'ready', 'playing', 'handoff', 'unavailable'].includes(song)) {
     const noteKey = `diag.session.song.${song}Note`;
     const note = t(noteKey);
     rows.push(row('song', t('diag.session.song'), t(`diag.session.song.${song}`),
@@ -188,9 +193,13 @@ export function describeAudio({ readiness, statusz } = {}, t = english) {
   }));
 
   const mic = components.mic ?? {};
-  rows.push(flow(t, 'mic', 'diag.audio.mic', mic.connected, mic.streaming, {
-    absent: row('mic', t('diag.audio.mic'), t('diag.audio.mic.none')),
-  }));
+  if (mic.connected && !mic.streaming && mic.arriving === true) {
+    rows.push(row('mic', t('diag.audio.mic'), t('diag.audio.late'), t('diag.audio.lateNote'), 'warn'));
+  } else {
+    rows.push(flow(t, 'mic', 'diag.audio.mic', mic.connected, mic.streaming, {
+      absent: row('mic', t('diag.audio.mic'), t('diag.audio.mic.none')),
+    }));
+  }
 
   const clipped = finite(statusz?.mix?.clippedSamples);
   if (components.session?.active) {
@@ -203,7 +212,7 @@ export function describeAudio({ readiness, statusz } = {}, t = english) {
       // read as a contradiction.
       clipped !== null && clipped > 0
         ? t('diag.audio.mixer.clipped', { count: Math.round(clipped) })
-        : t('diag.audio.mixer.runningNote'),
+        : t(mixerNoteKey(Boolean(mic.streaming), Number(components.player?.state) === 1)),
       clipped !== null && clipped > 0 ? 'warn' : 'ok',
     ));
   } else {
@@ -223,6 +232,14 @@ export function describeAudio({ readiness, statusz } = {}, t = english) {
       t('diag.audio.listeners.cleanNote'), 'ok'));
   }
   return rows;
+}
+
+/** What the running mixer is actually mixing, not what it could mix. */
+function mixerNoteKey(voice, song) {
+  if (voice && song) return 'diag.audio.mixer.runningNote';
+  if (voice) return 'diag.audio.mixer.voiceNote';
+  if (song) return 'diag.audio.mixer.songNote';
+  return 'diag.audio.mixer.idleNote';
 }
 
 const ALIGNMENT_TONES = {
@@ -291,13 +308,18 @@ export function describeTiming({ product, readiness, source } = {}, t = english)
   if (!source) {
     rows.push(unknown(t, 'method', 'diag.timing.method'));
     rows.push(unknown(t, 'offset', 'diag.timing.offset'));
-    rows.push(unknown(t, 'fineTune', 'diag.timing.fineTune'));
+  } else if (source.micConnected === false) {
+    // Without a Mic there is no voice to place; these rows only added noise.
   } else {
     if (source.timingMode === 'acoustic-calibration') {
       const kind = source.activeCalibrationKind ?? source.calibrationKind;
       const kindKey = `diag.timing.method.${kind}`;
       const kindNote = t(kindKey);
-      rows.push(row('method', t('diag.timing.method'), t('diag.timing.method.measured'),
+      // Name the method itself: "Measured" right under an aligned verdict
+      // said the same thing twice.
+      const kindValue = t(`${kindKey}.value`);
+      rows.push(row('method', t('diag.timing.method'),
+        kindValue === `${kindKey}.value` ? t('diag.timing.method.measured') : kindValue,
         kindNote === kindKey ? t('diag.timing.method.other') : kindNote, 'ok'));
     } else {
       rows.push(row('method', t('diag.timing.method'), t('diag.timing.method.estimate'),
@@ -308,11 +330,9 @@ export function describeTiming({ product, readiness, source } = {}, t = english)
     if (applied === null) {
       rows.push(unknown(t, 'offset', 'diag.timing.offset'));
     } else if (shortfall && Math.abs(shortfall.short) >= SHORTFALL_MS) {
-      const notes = [t(shortfall.short > 0 ? 'diag.timing.offset.late' : 'diag.timing.offset.early', {
-        requested: Math.round(shortfall.requested),
-        applied: Math.round(shortfall.applied),
-        ms: Math.round(Math.abs(shortfall.short)),
-      })];
+      // Say what a person hears, and why. The requested and applied numbers
+      // stay in the calibration measurements below.
+      const notes = [];
       if (shortfall.bufferLimited) {
         notes.push(t(shortfall.budgeted >= 0 ? 'diag.timing.offset.bufferAhead' : 'diag.timing.offset.bufferBehind', {
           limit: Math.round(Math.abs(shortfall.budgeted)),
@@ -321,13 +341,20 @@ export function describeTiming({ product, readiness, source } = {}, t = english)
       if (shortfall.frontierLimited) {
         notes.push(t('diag.timing.offset.frontier', { ms: Math.round(shortfall.frontier) }));
       }
-      rows.push(row('offset', t('diag.timing.offset'), `${Math.round(applied)} ms`, notes.join(t('diag.sentenceGap')), 'bad'));
+      const effect = t(shortfall.short > 0 ? 'diag.timing.offset.late' : 'diag.timing.offset.early', {
+        ms: Math.round(Math.abs(shortfall.short)),
+      });
+      rows.push(row('offset', t('diag.timing.offset'), effect, notes.join(t('diag.sentenceGap')), 'bad'));
     } else {
       rows.push(row('offset', t('diag.timing.offset'), `${Math.round(applied)} ms`, t('diag.timing.offset.note')));
     }
 
+    // Live no longer offers fine tune; a value can only remain from an older
+    // page, and then it still shifts the voice, so show it only then.
     const fineTune = finite(source.vocalFineTuneMs) ?? 0;
-    rows.push(row('fineTune', t('diag.timing.fineTune'), signedMs(fineTune), t('diag.timing.fineTune.note')));
+    if (Math.abs(fineTune) >= 0.5) {
+      rows.push(row('fineTune', t('diag.timing.fineTune'), signedMs(fineTune), t('diag.timing.fineTune.note'), 'warn'));
+    }
   }
 
   const player = readiness?.components?.player;
@@ -343,11 +370,18 @@ export function describeTiming({ product, readiness, source } = {}, t = english)
   // describe equipment the room is not using.
   if (source?.robotRoute) {
     const offset = finite(player?.offsetMs);
-    rows.push(source.robotDeltaFresh
-      ? row('robotDelta', t('diag.timing.robotDelta'), t('diag.timing.robotDelta.fresh'),
-        offset === null ? '' : t('diag.timing.robotDelta.freshNote', { ms: Math.round(offset) }), 'ok')
-      : row('robotDelta', t('diag.timing.robotDelta'), t('diag.timing.robotDelta.stale'),
-        t('diag.timing.robotDelta.staleNote'), 'warn'));
+    const songPlaying = Boolean(player?.timelineConnected) && Number(player?.state) === 1;
+    const label = t('diag.timing.robotDelta');
+    if (!songPlaying) {
+      // The Robot reports a position only while the song plays; out of date
+      // with nothing playing was a warning about nothing.
+      rows.push(row('robotDelta', label, t('diag.timing.robotDelta.idle'), t('diag.timing.robotDelta.idleNote')));
+    } else if (source.robotDeltaFresh) {
+      rows.push(row('robotDelta', label, t('diag.timing.robotDelta.fresh'),
+        offset === null ? '' : t('diag.timing.robotDelta.freshNote', { ms: Math.round(offset) }), 'ok'));
+    } else {
+      rows.push(row('robotDelta', label, t('diag.timing.robotDelta.stale'), t('diag.timing.robotDelta.staleNote'), 'warn'));
+    }
   }
   return rows;
 }

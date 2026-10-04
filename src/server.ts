@@ -1593,6 +1593,9 @@ function remoteStatusPayload() {
       backingFrameAgeMs: frameAgeMs(backingRuntime.lastFrameAt, nowMs),
       micConnected,
       micStreaming,
+      // Mic PCM still arriving, playable or not. `micStreaming` is what the
+      // room can hear, so the two apart mean the mix has fallen behind it.
+      micArriving: components.mic.arriving,
       micMediaPath: micMediaPath(),
       micFrameAgeMs: micRuntime.frameAgeMs(nowMs),
       participants: snapshot.participants.length,

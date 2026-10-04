@@ -17,7 +17,11 @@ function initialize() {
   if (!diagnosticsPanel || !timingPanel) return;
   initialized = true;
 
-  const heading = document.createElement('h4');
+  // Raw calibration figures are for whoever is debugging timing, so they sit
+  // closed under the readable rows instead of doubling the tab's length.
+  const section = document.createElement('details');
+  section.className = 'diagnostics-advanced';
+  const heading = document.createElement('summary');
   heading.className = 'diagnostics-subheading';
   heading.textContent = t('diag.cal.heading');
   const labels = [];
@@ -58,7 +62,8 @@ function initialize() {
   };
   let latestTiming = null;
 
-  timingPanel.append(heading, ledger);
+  section.append(heading, ledger);
+  timingPanel.append(section);
 
   let socket = null;
   let reconnectTimer = null;

@@ -118,19 +118,12 @@ describe('Timing', () => {
     assert.deepEqual([rows.alignment.value, rows.alignment.tone], ['Buffer too small', 'bad']);
     assert.deepEqual(
       [rows.offset.value, rows.offset.note, rows.offset.tone],
-      [
-        '200 ms',
-        'Needs 245 ms, gets 200 ms, so the voice is 45 ms late. '
-          + 'The buffer allows at most 200 ms ahead; raising RELAY_LIVE_PREBUFFER_MS makes room.',
-        'bad',
-      ],
+      ['Voice may be 45 ms late', 'The host buffer only allows 200 ms of compensation.', 'bad'],
     );
+    assert.doesNotMatch(rows.offset.note, /RELAY_/, 'no environment variable names in what a singer reads');
     const zhRows = clamped({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 }, zh);
     assert.equal(zhRows.alignment.value, '緩衝不足');
-    assert.equal(
-      zhRows.offset.note,
-      '需要 245 ms，實際是 200 ms，所以人聲晚了 45 ms。緩衝最多只容許提前 200 ms；調高 RELAY_LIVE_PREBUFFER_MS 可以放寬。',
-    );
+    assert.deepEqual([zhRows.offset.value, zhRows.offset.note], ['人聲可能晚 45 ms', '主機的緩衝設定最多只能補 200 ms。']);
   });
 
   it('blames late Mic audio, not the buffer, for a frontier hold-back', () => {
@@ -140,19 +133,16 @@ describe('Timing', () => {
     const rows = clamped(facts);
     assert.deepEqual([rows.alignment.value, rows.alignment.tone], ['Mic audio late', 'bad']);
     assert.match(rows.alignment.note, /Retry the Mic/);
+    assert.equal(rows.offset.value, 'Voice may be 50 ms late');
     assert.equal(
       rows.offset.note,
-      'Needs 120 ms, gets 70 ms, so the voice is 50 ms late. '
-        + 'Mic audio is arriving late, so 50 ms is held back; retrying the Mic starts a fresh capture.',
+      'Mic audio is arriving late, so Relay waits 50 ms longer before playing it. If the voice sounds late, retry the Mic.',
     );
     assert.doesNotMatch(rows.offset.note, /buffer/i);
 
     const zhRows = clamped(facts, zh);
     assert.equal(zhRows.alignment.value, 'Mic 音訊晚到');
-    assert.equal(
-      zhRows.offset.note,
-      '需要 120 ms，實際是 70 ms，所以人聲晚了 50 ms。Mic 音訊送達偏晚，因此往後退了 50 ms；重試 Mic 會重新開始擷取。',
-    );
+    assert.equal(zhRows.offset.note, 'Mic 音訊晚到，Relay 多等了 50 ms 才播放。人聲聽起來變晚的話，請重試 Mic。');
     assert.doesNotMatch(zhRows.offset.note, /緩衝/);
   });
 
@@ -161,11 +151,11 @@ describe('Timing', () => {
     const facts = { requestedMicAdvanceMs: 300, appliedMicAdvanceMs: 160, micFrontierCorrectionMs: 40 };
     const rows = clamped(facts);
     assert.equal(rows.alignment.value, 'Buffer too small, Mic late');
+    assert.equal(rows.offset.value, 'Voice may be 140 ms late');
     assert.equal(
       rows.offset.note,
-      'Needs 300 ms, gets 160 ms, so the voice is 140 ms late. '
-        + 'The buffer allows at most 200 ms ahead; raising RELAY_LIVE_PREBUFFER_MS makes room. '
-        + 'Mic audio is arriving late, so 40 ms is held back; retrying the Mic starts a fresh capture.',
+      'The host buffer only allows 200 ms of compensation. '
+        + 'Mic audio is arriving late, so Relay waits 40 ms longer before playing it. If the voice sounds late, retry the Mic.',
     );
     assert.equal(clamped(facts, zh).alignment.value, '緩衝不足且 Mic 晚到');
   });
@@ -176,15 +166,14 @@ describe('Timing', () => {
     const facts = { requestedMicAdvanceMs: -500, appliedMicAdvanceMs: -300 };
     const rows = clamped(facts);
     assert.equal(rows.alignment.value, 'Buffer too small');
-    assert.equal(
-      rows.offset.note,
-      'Needs -500 ms, gets -300 ms, so the voice is 200 ms early. '
-        + 'The kept Mic history allows at most 300 ms behind.',
+    assert.deepEqual(
+      [rows.offset.value, rows.offset.note],
+      ['Voice may be 200 ms early', 'Relay only keeps 300 ms of Mic audio to read back.'],
     );
     assert.doesNotMatch(rows.offset.note, /late|PREBUFFER/);
-    assert.equal(
-      clamped(facts, zh).offset.note,
-      '需要 -500 ms，實際是 -300 ms，所以人聲早了 200 ms。保留的 Mic 歷史最多只容許延後 300 ms。',
+    assert.deepEqual(
+      [clamped(facts, zh).offset.value, clamped(facts, zh).offset.note],
+      ['人聲可能早 200 ms', 'Relay 只保留 300 ms 的 Mic 音訊可以往回讀。'],
     );
   });
 
@@ -195,7 +184,9 @@ describe('Timing', () => {
 
   it('names the measurement method or admits it is an estimate', () => {
     const measured = byKey(describeTiming({ source: source({ activeCalibrationKind: 'content' }) }, en));
-    assert.deepEqual([measured.method.value, measured.method.note], ['Measured', 'From the song itself, while it plays.']);
+    assert.deepEqual([measured.method.value, measured.method.note], ['Song content', 'From the song itself, while it plays.']);
+    const probe = byKey(describeTiming({ source: source({ activeCalibrationKind: 'boot-probe' }) }, zh));
+    assert.deepEqual([probe.method.value, probe.method.note], ['測試音', 'Mic 開始時，用手機播放的測試音量出延遲。']);
     const estimated = byKey(describeTiming({
       product: { timing: { state: 'fallback' } },
       source: source({ timingMode: 'network-estimate' }),
@@ -271,6 +262,76 @@ describe('Audio, Session and Robot', () => {
   });
 });
 
+describe('rows that only describe what is really there', () => {
+  const room = (song: string, mic: Facts = { state: 'free' }, issues: Facts[] = []) => ({
+    issues,
+    room: { participantCount: 2, mic, song: { state: song } },
+    take: { lifecycle: 'idle' },
+  });
+
+  it('calls a finished Song ended, not paused', () => {
+    const ended = readiness();
+    ended.components.player = { timelineConnected: false, state: 0, offsetMs: null, offsetFresh: false };
+    assert.equal(byKey(describeSession({ product: room('ready'), readiness: ended }, en)).song.value, 'Ended');
+    assert.equal(byKey(describeSession({ product: room('ready'), readiness: ended }, zh)).song.value, '已播完');
+    const paused = readiness();
+    paused.components.player.state = 2;
+    assert.equal(byKey(describeSession({ product: room('ready'), readiness: paused }, en)).song.value, 'Loaded');
+  });
+
+  it('tells a Mic arriving too late apart from a silent one', () => {
+    const behind = room('ready', { state: 'interrupted', ownerNickname: 'Ka' }, [{ cause: 'mic-timeline-behind' }]);
+    assert.equal(
+      byKey(describeSession({ product: behind }, en)).mic.note,
+      'Holds the Mic; its audio arrives too late for the live mix.',
+    );
+    const late = readiness();
+    late.components.mic = { connected: true, streaming: false, arriving: true };
+    const lateRow = byKey(describeAudio({ readiness: late }, en)).mic;
+    assert.deepEqual([lateRow.value, lateRow.tone], ['Arriving late', 'warn']);
+    const silent = readiness();
+    silent.components.mic = { connected: true, streaming: false, arriving: false };
+    assert.equal(byKey(describeAudio({ readiness: silent }, en)).mic.value, 'Silent');
+  });
+
+  it('says what the mixer is actually mixing', () => {
+    const mixer = (facts: Facts) => byKey(describeAudio({ readiness: facts, statusz: { mix: { clippedSamples: 0 } } }, en)).mixer.note;
+    const voiceOnly = readiness();
+    voiceOnly.components.player.state = 2;
+    assert.equal(mixer(voiceOnly), 'Sending the voice to the room.');
+    const songOnly = readiness();
+    songOnly.components.mic = { connected: false, streaming: false };
+    assert.equal(mixer(songOnly), 'Sending the song to the room.');
+    const neither = readiness();
+    neither.components.mic = { connected: false, streaming: false };
+    neither.components.player = { timelineConnected: false, state: null };
+    assert.equal(mixer(neither), 'No voice and no song right now.');
+  });
+
+  it('leaves out voice timing rows while nobody holds the Mic', () => {
+    const rows = byKey(describeTiming({ readiness: readiness(), source: source({ micConnected: false }) }, en));
+    assert.equal(rows.method, undefined);
+    assert.equal(rows.offset, undefined);
+    assert.equal(rows.fineTune, undefined);
+    assert.ok(rows.alignment && rows.clock);
+  });
+
+  it('shows fine tune only when an older page left one, without pointing at a hidden control', () => {
+    assert.equal(byKey(describeTiming({ readiness: readiness(), source: source() }, en)).fineTune, undefined);
+    const leftOver = byKey(describeTiming({ readiness: readiness(), source: source({ vocalFineTuneMs: 20 }) }, zh)).fineTune;
+    assert.deepEqual([leftOver.label, leftOver.value, leftOver.tone], ['人聲微調', '+20 ms', 'warn']);
+    assert.doesNotMatch(leftOver.note, /•••/);
+    assert.match(leftOver.note, /已不提供/);
+  });
+
+  it('does not warn about the Robot position while no song plays', () => {
+    const idle = readiness();
+    idle.components.player = { timelineConnected: false, state: null, offsetMs: null, offsetFresh: false };
+    const robotDelta = byKey(describeTiming({ readiness: idle, source: source({ robotDeltaFresh: false }) }, en)).robotDelta;
+    assert.deepEqual([robotDelta.value, robotDelta.tone], ['Not needed', 'neutral']);
+  });
+});
+
 describe('locales', () => {
   it('renders Chinese from the same facts', () => {
     const rows = byKey(describeTiming({
@@ -278,7 +339,7 @@ describe('locales', () => {
       source: source({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 }),
     }, zh));
     assert.equal(rows.alignment.value, '緩衝不足');
-    assert.equal(rows.offset.note, '需要 245 ms，實際是 200 ms，所以人聲晚了 45 ms。緩衝最多只容許提前 200 ms；調高 RELAY_LIVE_PREBUFFER_MS 可以放寬。');
+    assert.equal(rows.offset.note, '主機的緩衝設定最多只能補 200 ms。');
     const overview = byKey(describeOverview({
       readiness: readiness({ ready: false, reasons: ['backing-not-streaming', 'robot-source-not-connected'] }),
     }, zh));

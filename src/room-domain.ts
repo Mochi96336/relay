@@ -38,6 +38,9 @@ export const SONG_CLOCK_LOST_MS = 6_000;
 export const SONG_CLOCK_BLOCKING_MS = 15_000;
 
 export function roomSongClockLost(facts: RoomSongFacts): boolean {
+  // An ended Song plays nothing, so there is no clock left to lose. Its holder
+  // leaving afterwards is not a problem worth a warning.
+  if (facts.state === 0) return false;
   return !facts.connected && facts.clockAgeMs > SONG_CLOCK_LOST_MS;
 }
 

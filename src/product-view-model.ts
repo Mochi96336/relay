@@ -52,6 +52,8 @@ export type ProductViewModelInput = {
   publisherControlConnected?: boolean;
   /** Capture-scoped browser verdict after bounded media recovery is exhausted. */
   micMediaRecoveryDegraded?: boolean;
+  /** The Robot's player said it cannot play the room's current video. */
+  robotVideoUnplayable?: boolean;
   /** Relay's own sustained verdict that a live Mic is not reaching the mix. */
   micAudibilityDegraded?: boolean;
   /** Recent raw-input flat-top evidence from the active Mic capture. */
@@ -264,6 +266,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       robot: input.readiness.components.backing.robot,
     },
     robotSourceConnected: input.readiness.components.robotSource.connected,
+    robotVideoUnplayable: input.robotVideoUnplayable === true,
     songClockSeverity: roomSongClockSeverity(input.roomSong, performanceActive),
     mic: {
       ownerId: input.micOwnerId,

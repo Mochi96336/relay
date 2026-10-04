@@ -55,6 +55,9 @@ let latestMixHealth = null;
 let loadedVideoId = null;
 let lastSeekAt = 0;
 let playerError = null;
+// What the server last heard about this player; reset on every connection so
+// a new socket starts informed.
+let reportedPlayerStatusKey = null;
 let robotSuperseded = false;
 let robotDeltaSuppressedUntil = 0;
 // Every seek must be answered by at least one fresh player offset before the
@@ -80,6 +83,19 @@ function send(payload) {
   if (socket?.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(payload));
   return true;
+}
+
+/**
+ * Tells the server whether this player can play the room's video. A video the
+ * Robot cannot play - region-restricted, removed, not embeddable - leaves the
+ * room without its Song, and only this page can see why.
+ */
+function reportPlayerStatus() {
+  if (!ROBOT_MODE) return;
+  const status = { videoId: loadedVideoId, errorCode: playerError };
+  const key = JSON.stringify(status);
+  if (key === reportedPlayerStatusKey) return;
+  if (send({ type: 'robot-player-status', ...status })) reportedPlayerStatusKey = key;
 }
 
 /**
@@ -448,6 +464,7 @@ function applyTimeline() {
       playerError = null;
       player.cueVideoById({ videoId: timeline.videoId, startSeconds: Math.max(0, target) });
       loadedVideoId = timeline.videoId;
+      reportPlayerStatus();
       lastSeekAt = performance.now();
       robotDeltaSuppressedUntil = lastSeekAt + ROBOT_DELTA_SETTLE_MS;
       // Loading a preview while Source is unarmed is not an authoritative
@@ -627,7 +644,11 @@ function connect() {
     }
 
     if (message.type === 'infrastructure-authenticated') {
-      if (ROBOT_MODE) send({ type: 'robot-source-hello' });
+      if (ROBOT_MODE) {
+        send({ type: 'robot-source-hello' });
+        reportedPlayerStatusKey = null;
+        reportPlayerStatus();
+      }
       return;
     }
 
@@ -765,10 +786,12 @@ window.onYouTubeIframeAPIReady = () => {
       },
       onStateChange: (event) => {
         if (Number(event.data) !== -1) playerError = null;
+        reportPlayerStatus();
         renderTimeline();
       },
       onError: (event) => {
         playerError = Number(event.data);
+        reportPlayerStatus();
         renderTimeline();
       },
     },

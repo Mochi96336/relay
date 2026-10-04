@@ -48,6 +48,42 @@ describe('YouTubeTimelineTracker', () => {
     assert.ok(Math.abs(status.serverTime - 12) < 0.05, `serverTime ${status.serverTime}`);
   });
 
+  test('a playing clock whose holder went away stops at the end of the Song', () => {
+    // 2026-10-04: the holder left during a 3:40 Song and the room still said
+    // it was playing, nine hours in.
+    const tracker = new YouTubeTimelineTracker();
+    tracker.update(telemetry({ currentTime: 200, duration: 220.441 }), 0);
+
+    const midway = tracker.statusPayload(10_000) as Record<string, any>;
+    assert.equal(midway.connected, false);
+    assert.equal(midway.state, 1, 'within the Song the clock still runs on for a takeover');
+    assert.ok(Math.abs(midway.serverTime - 210) < 0.05, `serverTime ${midway.serverTime}`);
+
+    const later = tracker.statusPayload(9 * 60 * 60_000) as Record<string, any>;
+    assert.equal(later.state, 0, 'a clock that ran to the end with no holder has ended');
+    assert.equal(later.serverTime, 220.441);
+    assert.equal(later.youtubeTime, 220.441);
+  });
+
+  test('a live holder keeps the end state its own to report', () => {
+    const tracker = new YouTubeTimelineTracker();
+    tracker.update(telemetry({ currentTime: 219.9, duration: 220 }), 0);
+
+    const status = tracker.statusPayload(1_000) as Record<string, any>;
+    assert.equal(status.connected, true);
+    assert.equal(status.state, 1);
+    assert.equal(status.serverTime, 220, 'the position is clamped even while the holder catches up');
+  });
+
+  test('a Song of unknown length keeps its projected clock', () => {
+    const tracker = new YouTubeTimelineTracker();
+    tracker.update(telemetry({ currentTime: 10, duration: 0 }), 0);
+
+    const status = tracker.statusPayload(60_000) as Record<string, any>;
+    assert.equal(status.state, 1);
+    assert.ok(Math.abs(status.serverTime - 70) < 0.05, `serverTime ${status.serverTime}`);
+  });
+
   test('holds the clock still while paused', () => {
     const tracker = new YouTubeTimelineTracker();
     tracker.update(telemetry({ state: 2, currentTime: 30 }), 0);

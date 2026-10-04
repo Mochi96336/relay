@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
+const ENDED = 0;
 const PLAYING = 1;
 const STALE_AFTER_MS = 1_500;
 const DISCONTINUITY_THRESHOLD_MS = 750;
@@ -206,8 +207,16 @@ export class YouTubeTimelineTracker {
     }
 
     const projected = this.project(nowMs);
-    const youtubeTime = this.projectTelemetry(this.latest, nowMs);
-    const serverTime = projected?.positionSeconds ?? youtubeTime;
+    // A clock projected past the end of the media describes nothing: a 3:40
+    // Song is never at 9:07:25. Clamp both readings to a known duration.
+    const knownEndSeconds = this.latest.duration > 0 ? this.latest.duration : null;
+    const atEnd = (seconds: number) => (
+      knownEndSeconds === null ? seconds : Math.min(seconds, knownEndSeconds)
+    );
+    const unclampedServerTime = projected?.positionSeconds
+      ?? this.projectTelemetry(this.latest, nowMs);
+    const youtubeTime = atEnd(this.projectTelemetry(this.latest, nowMs));
+    const serverTime = atEnd(unclampedServerTime);
     const differenceMs = (youtubeTime - serverTime) * 1000;
     const telemetryAgeMs = Math.max(0, nowMs - this.latest.receivedAtServerMs);
     const progressAgeMs = Number.isFinite(this.playingProgressAtMs)
@@ -218,15 +227,24 @@ export class YouTubeTimelineTracker {
       : telemetryAgeMs;
     const transportEstimateMs = Math.max(0, this.latest.receivedAtServerMs - this.latest.estimatedSampleAtServerMs);
     const driftStats = this.estimateDriftStats();
+    const connected = clockAgeMs <= STALE_AFTER_MS;
+    // A live holder reports the end itself. Once its clock is stale, nothing
+    // will: on 2026-10-04 the room kept "playing" a finished Song for nine
+    // hours after the holder left. A PLAYING clock that has run to the end
+    // with no holder has ended.
+    const endedWithoutHolder = !connected
+      && this.latest.state === PLAYING
+      && knownEndSeconds !== null
+      && unclampedServerTime >= knownEndSeconds;
 
     return {
       type: 'youtube-timeline-status',
-      connected: clockAgeMs <= STALE_AFTER_MS,
+      connected,
       measurementMode: 'media-vs-server-monotonic',
       videoId: this.latest.videoId,
       videoTitle: this.latest.videoTitle,
       videoAuthor: this.latest.videoAuthor,
-      state: this.latest.state,
+      state: endedWithoutHolder ? ENDED : this.latest.state,
       duration: this.latest.duration,
       playbackRate: this.latest.playbackRate,
       bufferedFraction: this.latest.bufferedFraction,

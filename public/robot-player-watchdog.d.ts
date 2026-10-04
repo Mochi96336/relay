@@ -2,6 +2,8 @@ export type RobotPlayerRecoveryState = {
   hasTimeline: boolean;
   phonePlaying: boolean;
   playerError: boolean;
+  /** The YouTube error code behind `playerError`, when the page shows one. */
+  playerErrorCode?: number | null;
   playerLoaded: boolean;
   errorAgeMs: number;
   notReadyAgeMs: number;
@@ -20,3 +22,4 @@ export function decideRobotPlayerRecovery(
 export function trimReloadHistory(history: number[], nowMs: number): number[];
 export function reloadBudgetAvailable(history: number[], nowMs: number): boolean;
 export function playerLoadedFromMirrorState(text: unknown): boolean;
+export function playerErrorCodeFromState(text: unknown): number | null;

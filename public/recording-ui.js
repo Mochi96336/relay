@@ -31,6 +31,7 @@ function blockingIssueCopy(issue) {
     'backing-stalled': 'recording.blocked.issue.backing-stalled',
     'backing-route-mismatch': 'recording.blocked.issue.backing-route-mismatch',
     'robot-source-unavailable': 'recording.blocked.issue.robot-source-unavailable',
+    'robot-video-unplayable': 'recording.blocked.issue.robot-video-unplayable',
     'song-clock-unavailable': 'recording.blocked.issue.song-clock-unavailable',
   }[issue?.cause];
   return key ? t(key) : t('recording.blocked.room-blocked');

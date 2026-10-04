@@ -307,3 +307,32 @@ describe('product issue contract', () => {
     assert.equal(model.issues[1].code, 'robot-player-unavailable');
   });
 });
+
+describe('a video the Robot cannot play', () => {
+  test('is a critical Song issue whose recovery is another upload', () => {
+    const issues = buildProductIssues({ ...HEALTHY_ISSUES, robotVideoUnplayable: true });
+    assert.deepEqual(issues, [{
+      code: 'robot-player-unavailable',
+      scope: 'robot',
+      severity: 'critical',
+      cause: 'robot-video-unplayable',
+      affects: ['song', 'recording'],
+      recovery: 'change-song',
+    }]);
+  });
+
+  test('yields to a Robot that is not there at all, and means nothing off the Robot route', () => {
+    const missing = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      robotSourceConnected: false,
+      robotVideoUnplayable: true,
+    });
+    assert.deepEqual(
+      missing.filter((issue) => issue.code === 'robot-player-unavailable').map((issue) => issue.cause),
+      ['robot-source-unavailable'],
+    );
+
+    const legacy = buildProductIssues({ ...HEALTHY_ISSUES, routeMode: 'legacy', robotVideoUnplayable: true });
+    assert.ok(!legacy.some((issue) => issue.cause === 'robot-video-unplayable'));
+  });
+});

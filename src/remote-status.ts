@@ -34,7 +34,11 @@ export function deriveRemoteStatusHealth(readiness: ReadinessSnapshot): RemoteSt
   if (components.mic.connected && components.mic.startupTimedOut) {
     faults.push('microphone is connected but did not send its first audio frame in time');
   } else if (components.mic.connected && components.mic.flowObserved && !components.mic.streaming) {
-    faults.push('microphone is connected but no longer sending audio');
+    // Packets still arriving is a different fault from packets that stopped:
+    // the mix cannot place them, and the network is not where to look.
+    faults.push(components.mic.arriving
+      ? 'microphone audio is arriving but too far behind the live mix to be heard'
+      : 'microphone is connected but no longer sending audio');
   }
 
   if (routeMode !== 'idle' && !components.backing.connected) {

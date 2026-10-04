@@ -272,6 +272,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       ownerId: input.micOwnerId,
       state: mic,
       mediaRecoveryDegraded: micMediaRecoveryDegraded,
+      arriving: input.readiness.components.mic.arriving === true,
       inputClipping: mic === 'live' && input.micInputClipping === true,
       audibilityDegraded: mic === 'live' && input.micAudibilityDegraded === true,
       levelWarning: mic === 'live' ? input.micLevelWarning ?? null : null,

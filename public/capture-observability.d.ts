@@ -3,6 +3,8 @@ export type CaptureAppliedSettings = {
   noiseSuppression: boolean | null;
   autoGainControl: boolean | null;
   audioSessionType: string | null;
+  inputLabel: string | null;
+  device: string | null;
 };
 
 export type CaptureClippingSnapshot = {
@@ -17,9 +19,19 @@ export type CaptureLevelSnapshot = {
 };
 
 export function readCaptureSettings(
-  stream: { getAudioTracks?: () => Array<{ getSettings?: () => Record<string, unknown> }> } | null | undefined,
-  navigatorLike?: { audioSession?: { type?: unknown } } | null,
+  stream: {
+    getAudioTracks?: () => Array<{ label?: unknown; getSettings?: () => Record<string, unknown> }>;
+  } | null | undefined,
+  navigatorLike?: {
+    audioSession?: { type?: unknown };
+    userAgent?: unknown;
+    maxTouchPoints?: unknown;
+  } | null,
 ): CaptureAppliedSettings | null;
+
+export function describeCaptureDevice(
+  navigatorLike?: { userAgent?: unknown; maxTouchPoints?: unknown } | null,
+): string | null;
 
 export function captureLevelSnapshot(
   level: { peakDbfs?: unknown; rmsDbfs?: unknown } | null | undefined,

@@ -53,7 +53,9 @@ import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-cl
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
 import { MicLevelMonitor } from './mic-level-monitor.js';
+import { MicGainMemory } from './mic-gain-memory.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
+import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
@@ -290,8 +292,17 @@ const session = new AudioSession({
  */
 const micAudibility = new MicAudibilityMonitor({ sampleRate: MIX_SAMPLE_RATE });
 const micLevel = new MicLevelMonitor({ sampleRate: MIX_SAMPLE_RATE });
+/** Each participant's last Mic gain, so a handoff does not inherit the previous singer's. */
+const micGains = new MicGainMemory({ defaultGainDb: session.micGainDb });
 /** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
 const micClockDrift = new MicClockDriftEstimator();
+/**
+ * How much real time the phone's own Mic capture has lost. Confirmed loss is
+ * what lets AudioSession fold a growing frontier correction into the timeline.
+ */
+const micCaptureDelivery = new MicCaptureDeliveryMonitor();
+let micCaptureFallingBehind = false;
+let reportedMicTimelineFolds = 0;
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
 
 // Read here rather than beside the other calibration constants because the
@@ -1189,6 +1200,7 @@ function applyMicOwnerEffects(
       if (options.invalidateTiming) options.invalidateTiming(reason);
       else invalidateMicTiming(reason);
     },
+    restoreMicGain: (participantId) => restoreMicGainFor(participantId),
     prepareSongHandoff: (participantId) => {
       if (options.prepareSongHandoff) options.prepareSongHandoff(participantId);
       else beginPreparedSongHandoff(participantId, nowMs);
@@ -1624,7 +1636,11 @@ function remoteStatusPayload() {
         micAnchorExcessMs: micClockDrift.anchorExcessMs(),
         micHeadroomMs: mixHealth.micHeadroomMs,
         micStarvedFrames: mixHealth.micStarvedFrames,
+        micFrontierCorrectionMs: Math.round(session.micFrontierCorrectionMs),
+        micTimelineFolds: session.micTimelineFoldCount,
+        lastMicTimelineFold: session.lastMicTimelineFold,
       },
+      micCaptureDelivery: micCaptureDelivery.status(),
     },
   };
 }
@@ -1787,6 +1803,7 @@ function readinessPayload(nowMs = performance.now()) {
     backingIsRobot: backingRuntime.isRobot,
     micConnected: micMediaConnected(),
     micStreaming: micPlayable(nowMs),
+    micArriving: micStreaming(nowMs),
     micFlowObserved: micFlowObserved(),
     micStartupTimedOut: micStartupTimedOut(nowMs),
     robotSourceConnected: sourceRuntime.connected(),
@@ -2135,10 +2152,112 @@ const mixerTimer = setInterval(() => {
     }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.micGainDb }));
     if (levelChanged) reportMicLevel('window');
   });
+  reportMicTimelineFolds();
 }, 5);
 
 function reportMicLevel(reason: 'window' | 'gain') {
   console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));
+}
+
+/**
+ * Measures the phone's capture against real time from its own sample count and
+ * hands confirmed loss to the mixer (see MicCaptureDeliveryMonitor).
+ */
+function noteMicCaptureDelivery(health: AudioUplinkHealth, nowMs: number) {
+  if (micRuntime.sampleRate === null) return;
+  micCaptureDelivery.observe({
+    generation: health.captureGeneration,
+    capturedSamples: health.capturedSamples,
+    sampleRate: micRuntime.sampleRate,
+    atMs: nowMs,
+  });
+  const delivery = micCaptureDelivery.status();
+  if (!delivery) return;
+  session.noteMicCaptureLoss(delivery.generation, delivery.lossMs);
+  // A phone falling behind real time is what grows the frontier correction,
+  // and nothing else names it. Edge-logged, with a little hysteresis.
+  const fallingBehind = delivery.ratio !== null
+    && delivery.ratio < (micCaptureFallingBehind ? 0.995 : 0.99);
+  if (fallingBehind !== micCaptureFallingBehind) {
+    micCaptureFallingBehind = fallingBehind;
+    console.warn('[mic-capture]', JSON.stringify({ fallingBehind, ...delivery }));
+  }
+}
+
+/**
+ * A fold is inaudible in the mix, but it moves the Mic timeline under every
+ * measurement that holds Mic positions; evidence collected across it would
+ * splice two placements of the same audio. Applied timing stays: the fold does
+ * not change what is heard when.
+ */
+function reportMicTimelineFolds(nowMs = performance.now()) {
+  const folds = session.micTimelineFoldCount;
+  if (folds === reportedMicTimelineFolds) return;
+  reportedMicTimelineFolds = folds;
+  console.warn('[mic-timeline]', JSON.stringify({
+    reason: 'capture-loss-folded',
+    folds,
+    ...session.lastMicTimelineFold,
+    correctionAfterMs: Math.round(session.micFrontierCorrectionMs),
+    delivery: micCaptureDelivery.status(),
+  }));
+  calibration.restartWorkingEvidence(nowMs);
+  if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
+  // Only a run in flight: resetting an idle or failed one would play the probe
+  // again mid-song.
+  if (probeStatus(nowMs).active || bootProbeRuntime.hasMicLeg) abandonProbeRun();
+}
+
+/** Who a diagnostic line is about: the room nickname plus a stable id prefix. */
+function participantLogLabel(participantId: string) {
+  const nickname = participants.participant(participantId)?.nickname ?? null;
+  return { id: participantId.replace(/^participant-/, '').slice(0, 8), nickname };
+}
+
+let lastMicDeviceReportKey: string | null = null;
+
+/**
+ * Names the device and microphone behind the live capture, once per capture
+ * and again if either changes, so the level and probe lines around it can be
+ * traced to a singer's phone or headset.
+ */
+function reportMicDevice(health: AudioUplinkHealth) {
+  const ownerId = participants.micOwnerId;
+  const key = JSON.stringify([ownerId, health.captureGeneration, health.capture]);
+  if (key === lastMicDeviceReportKey) return;
+  lastMicDeviceReportKey = key;
+  console.log('[mic-device]', JSON.stringify({
+    participant: ownerId ? participantLogLabel(ownerId) : null,
+    captureGeneration: health.captureGeneration,
+    device: health.capture?.device ?? null,
+    inputLabel: health.capture?.inputLabel ?? null,
+    sampleRate: micRuntime.sampleRate,
+    voiceProcessing: health.capture === null ? null : {
+      echoCancellation: health.capture.echoCancellation,
+      noiseSuppression: health.capture.noiseSuppression,
+      autoGainControl: health.capture.autoGainControl,
+    },
+    audioSessionType: health.capture?.audioSessionType ?? null,
+    gainDb: session.micGainDb,
+  }));
+}
+
+/** Gives the new Mic owner the gain they last chose, or the default for a device never seen. */
+function restoreMicGainFor(participantId: string) {
+  const { gainDb, remembered } = micGains.gainFor(participantId);
+  const previousGainDb = session.micGainDb;
+  console.log('[mic-gain]', JSON.stringify({
+    reason: 'owner-changed',
+    participant: participantLogLabel(participantId),
+    previousGainDb,
+    gainDb,
+    remembered,
+  }));
+  if (gainDb === previousGainDb) return;
+  // Not `micLevel.noteMicGainChanged`: the level history still describes the
+  // previous singer, and the new owner's capture boundary resets it anyway.
+  session.setMicGainDb(gainDb);
+  broadcastJson(mixSettingsPayload());
 }
 
 function resetMicAudibility() {
@@ -3314,6 +3433,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (Number.isFinite(nextGain)) {
       const previousGainDb = session.micGainDb;
       session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
+      if (participants.micOwnerId) micGains.remember(participants.micOwnerId, session.micGainDb);
       // A gain change is the fix the level warning asks for; answer it now
       // rather than on the next periodic product status.
       if (micLevel.noteMicGainChanged(previousGainDb, session.micGainDb)) {
@@ -3334,6 +3454,8 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const nowMs = performance.now();
     const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs);
     if (accepted) noteRecordingMicGapHealth(health);
+    if (accepted) reportMicDevice(health);
+    if (accepted) noteMicCaptureDelivery(health, nowMs);
     return;
   },
   micPresenceTelemetry: (socket, payload) => {

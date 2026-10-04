@@ -94,6 +94,21 @@ describe('remote status health projection', () => {
     ]);
   });
 
+  test('a Mic whose audio still arrives but cannot be placed is named as such', () => {
+    // 2026-10-03: packets kept arriving for minutes while the mix had fallen
+    // too far behind them, and "no longer sending" sent people to the network.
+    const result = status({
+      micConnected: true,
+      micStreaming: false,
+      micArriving: true,
+      micFlowObserved: true,
+    });
+    assert.equal(result.state, 'fault');
+    assert.deepEqual(result.faults, [
+      'microphone audio is arriving but too far behind the live mix to be heard',
+    ]);
+  });
+
   test('a required route without backing is a fault', () => {
     const result = status({ routeMode: 'song' });
     assert.equal(result.state, 'fault');

@@ -31,6 +31,7 @@ export type ProductIssueCause =
   | 'mic-transport-disconnected'
   | 'mic-audio-stalled'
   | 'mic-audio-intermittent'
+  | 'mic-timeline-behind'
   | 'mic-input-clipping'
   | 'mic-too-loud'
   | 'mic-too-quiet'
@@ -89,6 +90,8 @@ export type ProductIssueFacts = {
     state: RoomMicState;
     /** Browser bounded media recovery exhausted while server PCM can still trickle. */
     mediaRecoveryDegraded?: boolean;
+    /** Mic PCM is still arriving, whether or not the mix can place it. */
+    arriving?: boolean;
     /** A flat-topped raw-input run occurred in the latest accepted uplink-health interval. */
     inputClipping?: boolean;
     /**
@@ -216,7 +219,12 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       code: 'mic-audio-stalled',
       scope: 'mic',
       severity: 'warning',
-      cause: 'mic-audio-stalled',
+      // An interrupted Mic whose PCM still arrives has fallen behind the live
+      // mix rather than stopped; saying "stopped arriving" sent people to the
+      // network. A fresh capture re-anchors it, so the recovery is the same.
+      cause: facts.mic.state === 'interrupted' && facts.mic.arriving === true
+        ? 'mic-timeline-behind'
+        : 'mic-audio-stalled',
       affects: ['voice', 'recording'],
       recovery: 'retry-mic',
     });

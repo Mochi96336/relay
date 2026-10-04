@@ -42,10 +42,10 @@ test('System timing diagnostics expose content, validation, and path evidence se
     'Content confidence',
     'Content segments',
     'Runtime validation',
-    'Path probe',
-    'Probe correlations',
+    'Test tone',
+    'Test tone correlation',
     'Path difference',
-    'Player delta',
+    'Robot player offset',
     'Effective calibration',
   ]) {
     const key = keyFor(marker);

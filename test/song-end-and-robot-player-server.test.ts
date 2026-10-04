@@ -108,6 +108,7 @@ test("a video the Robot cannot play is named in product status until it plays ag
     });
     const statusz = await (await fetch(server.httpUrl('/statusz'))).json() as any;
     assert.deepEqual(statusz.robot.playerError, { videoId: VIDEO, code: 150, unplayable: true });
+    assert.equal(statusz.source.micArriving, false, 'statusz names Mic arrival apart from playability');
 
     robot.send({ type: 'robot-player-status', videoId: VIDEO, errorCode: null });
     await sleep(50);

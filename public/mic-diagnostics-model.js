@@ -60,6 +60,12 @@ export function describeMicAudio(status, t = english) {
     return row('audio', label, t('diag.mic.audio.none'), t('diag.mic.audio.noneNote'));
   }
   if (!source.micStreaming) {
+    // Packets still arriving is a different fault from packets that stopped:
+    // on 2026-10-03 this row said nothing reached Relay while 98% did, only
+    // too late for the live mix to use.
+    if (source.micArriving === true) {
+      return row('audio', label, t('diag.mic.audio.behind'), t('diag.mic.audio.behindNote'), 'bad');
+    }
     return row(
       'audio',
       label,
@@ -336,7 +342,12 @@ function describeClockDrift(status, t) {
 }
 
 function describeProblems(status, t) {
-  if (!status?.source?.micConnected) return unknown(t, 'problems', 'diag.mic.problems');
+  // Episodes are judged only while the Mic is playable; a Mic that is not has
+  // no current verdict, and "No problems" beside "Not delivering" contradicted
+  // the row above it.
+  if (!status?.source?.micConnected || !status.source.micStreaming) {
+    return unknown(t, 'problems', 'diag.mic.problems');
+  }
   const label = t('diag.mic.problems');
   const episodes = status?.audio?.micAudibility?.activeEpisodes ?? [];
   if (episodes.length === 0) return row('problems', label, t('diag.mic.problems.none'), '', 'ok');
@@ -355,6 +366,8 @@ function describeProblems(status, t) {
 
 /** Rows for the Mic diagnostics tab, most important first. */
 export function describeMicTransport(status, t = english) {
+  // Without a Mic every other row could only say "—".
+  if (status?.source && !status.source.micConnected) return [describeMicAudio(status, t)];
   return [
     describeMicAudio(status, t),
     describeLevel(status, t),

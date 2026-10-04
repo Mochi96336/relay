@@ -119,7 +119,7 @@ describe('Mic diagnostics model', () => {
     })).repair;
     assert.equal(
       retried.note,
-      '11 packets resent in time (about 84 ms each), 3 resends had to be asked for twice, 1 packet lost for good.',
+      '11 packets resent in time (about 84 ms each), 3 packets needed a second resend, 1 packet lost for good.',
     );
 
     const legacy = rows(liveStatus((s) => {
@@ -128,6 +128,26 @@ describe('Mic diagnostics model', () => {
     })).repair;
     assert.equal(legacy.tone, 'warn');
     assert.match(legacy.note, /cannot resend; reload it/);
+  });
+
+  it('names audio that arrives too late for the mix instead of saying none arrives', () => {
+    // 2026-10-03: 98% of the voice reached Relay, but behind the live mix.
+    const late = (s: Status) => { s.source.micStreaming = false; s.source.micArriving = true; };
+    const behind = describeMicAudio(liveStatus(late));
+    assert.deepEqual([behind.value, behind.tone], ['Arriving too late', 'bad']);
+    assert.match(behind.note, /reaches Relay, but too late/);
+    assert.equal(describeMicAudio(liveStatus(late), diagnosticsTranslator('zh-Hant')).value, '跟不上混音');
+  });
+
+  it('gives no verdict on current problems while the Mic is not playable', () => {
+    const described = rows(liveStatus((s) => { s.source.micStreaming = false; }));
+    assert.equal(described.audio.value, 'Not delivering');
+    assert.equal(described.problems.value, '—', '"No problems" under "Not delivering" contradicted itself');
+  });
+
+  it('shows a single row while nobody holds the Mic', () => {
+    const described = describeMicTransport(liveStatus((s) => { s.source.micConnected = false; }));
+    assert.deepEqual(described.map((row) => [row.key, row.value]), [['audio', 'No Mic']]);
   });
 
   it('warns before a thin buffer turns into audible gaps', () => {
@@ -148,7 +168,7 @@ describe('Mic diagnostics model', () => {
       s.audio.captureAndSender.transport.webTransportBacklogQueued = 12;
     })).send;
     assert.equal(send.value, '300 ms dropped');
-    assert.equal(send.note, 'network busy 100 ms · page stalled 200 ms. 12 burst packets held briefly instead of dropped.');
+    assert.equal(send.note, 'network busy 100 ms · page stalled 200 ms. 12 packets waited briefly during network bursts instead of being dropped.');
   });
 
   it('treats drops while the Mic connects as the normal start-up they are', () => {

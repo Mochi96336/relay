@@ -132,6 +132,25 @@
   padding-top: 12px;
 }
 .diagnostics-view[hidden] { display: none; }
+.diagnostics-advanced { margin-top: 12px; }
+.diagnostics-advanced > summary {
+  min-height: 34px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #85878d;
+  font-size: 11px;
+  cursor: pointer;
+}
+.diagnostics-advanced > summary::-webkit-details-marker { display: none; }
+/* Closed by default, below a full tab of rows: say that it opens. */
+.diagnostics-advanced > summary::after {
+  content: "›";
+  color: #666970;
+  transition: transform 120ms ease;
+}
+.diagnostics-advanced[open] > summary::after { transform: rotate(90deg); }
 .diagnostic-ledger {
   margin: 0;
   display: grid;

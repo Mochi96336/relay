@@ -20,7 +20,13 @@ export type ReadinessInput = {
   backingSampleRate: number | null;
   backingIsRobot: boolean;
   micConnected: boolean;
+  /** Mic PCM is arriving and the live mix can place it: what the room hears. */
   micStreaming: boolean;
+  /**
+   * Mic PCM is arriving at all, playable or not. Older callers omit it and it
+   * follows `micStreaming`.
+   */
+  micArriving?: boolean;
   /** Current Mic owner/capture has produced at least one PCM frame. */
   micFlowObserved?: boolean;
   /** Current connected Mic capture exceeded its first-frame startup deadline. */
@@ -125,6 +131,7 @@ export function buildReadiness(input: ReadinessInput) {
       mic: {
         connected: input.micConnected,
         streaming: input.micStreaming,
+        arriving: input.micArriving ?? input.micStreaming,
         flowObserved: input.micFlowObserved ?? input.micStreaming,
         startupTimedOut: input.micStartupTimedOut === true,
       },

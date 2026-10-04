@@ -132,9 +132,10 @@ Microphone loss is handled in layers, all without lowering PCM quality:
 - a short, age-bounded datagram backlog absorbs send bursts after a main-thread stall instead of dropping them;
 - a page that advertises a retransmission buffer is asked to repeat lost datagrams (over the direct WebTransport session, with the control socket as fallback), and the ordered stream waits for the repeat only while the live mix still has headroom (`RELAY_AUDIO_RETRANSMIT_HOLD_MS`, default 400; `0` disables). Relay asks for at most `RELAY_AUDIO_RETRANSMIT_REQUESTS_PER_SECOND` repeats a second (default 25, up to 64); a larger budget repairs more of a lossy link and sends that many more repeats over it. A request is kept until it has actually left Relay, and asked once more, paced by the measured repair round trip, when the repeat itself is lost;
 - a hole that remains is concealed by pitch-synchronous repetition rather than silence, while Take quality and playability evidence still count it as missing;
-- a WebTransport session lost to a network change is re-offered with backoff, and seconds of exact digital silence from a present input are reported as a source gap rather than a live Mic.
+- a WebTransport session lost to a network change is re-offered with backoff, and seconds of exact digital silence from a present input are reported as a source gap rather than a live Mic;
+- a phone whose capture itself loses real time (contiguous sample numbers that fall behind the wall clock) is measured from the `capturedSamples` in its uplink health. Once that loss is confirmed, it is folded into the Mic timeline before the frontier correction covering it reaches its bound. The fold is inaudible. Without it, the read head would stay past arrived audio and the Mic would go silent while its packets kept arriving. Lateness the phone does not confirm, such as a network queue, stays a correction that can be given back.
 
-`/statusz` reports receiver retransmission, concealment and a Mic audibility window alongside the existing transport evidence.
+`/statusz` reports receiver retransmission, concealment, a Mic audibility window, the phone's capture delivery and timeline folds alongside the existing transport evidence. When Mic audio still arrives but cannot be placed in the live mix, the fault says so instead of reporting that the Mic stopped sending.
 
 Robot backing audio currently enters through `backing:stdin` and the normal backing publisher path.
 

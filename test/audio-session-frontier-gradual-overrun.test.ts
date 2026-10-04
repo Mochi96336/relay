@@ -156,10 +156,11 @@ test('a capture restart that drops a held correction crossfades the read-head mo
   const { session, cursor, nowMs } = steadyToneSession();
   // A held correction smaller than the live slack: dropping it moves the read
   // head forward inside the retiring capture's own, still retained, audio.
-  (session as any).micFrontierCorrectionSamples = Math.round(RATE * 0.05);
+  (session as any).micFrontier.correction = Math.round(RATE * 0.05);
   const frames: Buffer[] = [];
   session.drain((output) => frames.push(output), nowMs);
   session.drain((output) => frames.push(output), nowMs + 20);
+  assert.ok(session.micFrontierCorrectionMs > 0, 'fixture must hold a correction for the restart to drop');
 
   session.ingestMic({ ...toneChunk(cursor), generation: 8, firstSampleIndex: 0 }, RATE, nowMs + 20);
   for (let t = nowMs + 40; t <= nowMs + 120; t += 20) {

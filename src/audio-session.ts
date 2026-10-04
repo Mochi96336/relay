@@ -1131,6 +1131,14 @@ export class AudioSession {
    * at the bounded slew rate.
    */
   private updateMicFrontierCorrection(startSample: number) {
+    // Whether the frontier is moving is a fact about arrival, kept even while
+    // the Mic is not expected. A WebSocket phone whose socket drops is not
+    // expected until it registers again, and its next packet lands a round
+    // trip after that. Tracked only while expected, a frontier frozen for the
+    // whole outage looked fresh in those frames and was taken for lateness:
+    // the read head went back into the audio from before the drop, replayed
+    // it, and the voice then ran seconds late for minutes.
+    this.trackMicFrontierProgress();
     if (!this.micExpected) {
       this.micFrontierCorrectionSamples = 0;
       this.micFrontierSlewTargetSamples = null;
@@ -1138,7 +1146,6 @@ export class AudioSession {
       return;
     }
 
-    this.trackMicFrontierProgress();
     const marginSamples = Math.round((ADVANCE_SAFETY_MS * this.sampleRate) / 1000);
     const span = this.frameSamples + this.limiterLookaheadSamples;
     // The largest advance whose read window still ends inside arrived audio.

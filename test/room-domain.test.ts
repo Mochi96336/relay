@@ -88,6 +88,23 @@ test('Song clock degradation and blocking use separate product thresholds', () =
   assert.equal(roomSongClockSeverity(blocked, true), 'critical');
 });
 
+test('an ended Song has no clock to lose once its holder leaves', () => {
+  const ended = {
+    videoId: 'abcdefghijk',
+    connected: false,
+    clockAgeMs: 9 * 60 * 60_000,
+    state: 0,
+    handoffState: 'idle',
+  };
+  assert.equal(roomSongClockLost(ended), false);
+  assert.equal(deriveRoomSongState(ended), 'ready');
+  assert.equal(roomSongClockSeverity(ended, true), null);
+
+  // A paused Song still needs its holder to resume, so losing it still counts.
+  const paused = { ...ended, state: 2, clockAgeMs: SONG_CLOCK_LOST_MS + 1 };
+  assert.equal(deriveRoomSongState(paused), 'unavailable');
+});
+
 test('handoff remains a first-class Song state ahead of clock availability', () => {
   assert.equal(deriveRoomSongState({
     videoId: 'abcdefghijk',

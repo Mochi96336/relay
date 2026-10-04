@@ -48,6 +48,9 @@ export function canRecoverPlayback({ role, timeline }) {
   if (role !== 'observer') return false;
   if (!timeline || typeof timeline !== 'object') return false;
   if (timeline.handoffState && timeline.handoffState !== 'idle') return false;
+  // An ended Song has nothing to recover: its holder leaving afterwards is not
+  // an interruption, and calling it one made a finished Song look broken.
+  if (Number(timeline.state) === 0) return false;
 
   const health = playbackLeaderHealth(timeline);
   return health === 'missing' || health === 'disconnected' || health === 'stale';

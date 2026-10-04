@@ -39,6 +39,13 @@ function formatTime(seconds) {
   return `${minutes}:${String(whole % 60).padStart(2, '0')}`;
 }
 
+/** A room position never reads past the end of the Song it belongs to. */
+function roomPosition(room) {
+  const position = Number(room.serverTime);
+  const duration = Number(room.duration);
+  return Number.isFinite(duration) && duration > 0 ? Math.min(position, duration) : position;
+}
+
 /**
  * The playback view repaints about eight times a second: the server sweeps the
  * room every 250ms and broadcasts the timeline and room snapshots as a pair.
@@ -126,7 +133,7 @@ if (
     setText(observerState, titleCopy);
     setText(observerAuthor, authorCopy);
     observerAuthor.hidden = !authorCopy;
-    setText(observerTimeline, `${formatTime(room.serverTime)} / ${formatTime(room.duration)}`);
+    setText(observerTimeline, `${formatTime(roomPosition(room))} / ${formatTime(room.duration)}`);
     setText(observerPlaybackState, stateLabel);
     observerPlaybackState.hidden = !recoverable && state === 1;
 

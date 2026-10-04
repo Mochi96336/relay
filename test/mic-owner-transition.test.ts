@@ -15,6 +15,7 @@ describe('mic owner transition policy', () => {
       cancelRoomSongCommand: 'mic-owner-changed',
       cancelSongHandoff: false,
       invalidateTimingReason: 'Microphone ownership changed.',
+      restoreMicGainFor: 'participant-alice',
       prepareSongHandoffFor: 'participant-alice',
     });
   });
@@ -30,6 +31,7 @@ describe('mic owner transition policy', () => {
       cancelRoomSongCommand: 'mic-owner-changed',
       cancelSongHandoff: false,
       invalidateTimingReason: 'Microphone ownership changed.',
+      restoreMicGainFor: 'participant-bobby',
       prepareSongHandoffFor: 'participant-bobby',
     });
   });
@@ -45,6 +47,7 @@ describe('mic owner transition policy', () => {
       cancelRoomSongCommand: null,
       cancelSongHandoff: false,
       invalidateTimingReason: null,
+      restoreMicGainFor: null,
       prepareSongHandoffFor: null,
     });
   });
@@ -60,6 +63,7 @@ describe('mic owner transition policy', () => {
       cancelRoomSongCommand: 'mic-owner-released',
       cancelSongHandoff: true,
       invalidateTimingReason: 'Microphone was released.',
+      restoreMicGainFor: null,
       prepareSongHandoffFor: null,
     });
   });
@@ -75,6 +79,7 @@ describe('mic owner transition policy', () => {
       cancelRoomSongCommand: 'mic-owner-released',
       cancelSongHandoff: true,
       invalidateTimingReason: 'Microphone owner left the Relay session.',
+      restoreMicGainFor: null,
       prepareSongHandoffFor: null,
     });
   });
@@ -90,6 +95,7 @@ describe('mic owner transition policy', () => {
       cancelRoomSongCommand: 'mic-owner-released',
       cancelSongHandoff: false,
       invalidateTimingReason: 'Microphone transport did not reconnect before its grace period expired.',
+      restoreMicGainFor: null,
       prepareSongHandoffFor: null,
     });
   });

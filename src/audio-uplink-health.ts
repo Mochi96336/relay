@@ -3,6 +3,10 @@ export type AudioCaptureAppliedSettings = {
   noiseSuppression: boolean | null;
   autoGainControl: boolean | null;
   audioSessionType: string | null;
+  /** The browser's name for the microphone, such as a headset's. Older pages omit it. */
+  inputLabel: string | null;
+  /** Short device and browser name, for telling singers' phones apart. Older pages omit it. */
+  device: string | null;
 };
 
 export type AudioCaptureLevel = {
@@ -108,6 +112,8 @@ export type AudioUplinkHealth = {
 };
 
 const MAX_AUDIO_SESSION_TYPE_LENGTH = 64;
+const MAX_INPUT_LABEL_LENGTH = 64;
+const MAX_DEVICE_LENGTH = 96;
 
 function uint32(value: unknown): number | null {
   const number = Number(value);
@@ -158,6 +164,16 @@ function nullableAudioSessionType(value: unknown): string | null | undefined {
     : undefined;
 }
 
+/**
+ * Display-only text: anything unusable becomes null rather than rejecting the
+ * whole health report, which also carries the uplink facts that matter.
+ */
+function displayText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -180,7 +196,14 @@ function parseCaptureAppliedSettings(value: unknown): AudioCaptureAppliedSetting
     || audioSessionType === undefined
   ) return undefined;
 
-  return { echoCancellation, noiseSuppression, autoGainControl, audioSessionType };
+  return {
+    echoCancellation,
+    noiseSuppression,
+    autoGainControl,
+    audioSessionType,
+    inputLabel: displayText(capture.inputLabel, MAX_INPUT_LABEL_LENGTH),
+    device: displayText(capture.device, MAX_DEVICE_LENGTH),
+  };
 }
 
 function parseCaptureLevel(value: unknown): AudioCaptureLevel | null | undefined {

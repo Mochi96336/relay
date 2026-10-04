@@ -7,6 +7,7 @@ import {
   captureRecentInputClippingDetected,
   captureLevelSnapshot,
   captureVoiceProcessingActive,
+  describeCaptureDevice,
   enforceUnprocessedCapture,
   readCaptureSettings,
 } from '../public/capture-observability.js';
@@ -98,18 +99,24 @@ describe('capture observability', () => {
       noiseSuppression: false,
       autoGainControl: false,
       audioSessionType: 'play-and-record',
+      inputLabel: null,
+      device: null,
     }), false);
     assert.equal(captureVoiceProcessingActive({
       echoCancellation: false,
       noiseSuppression: true,
       autoGainControl: false,
       audioSessionType: null,
+      inputLabel: null,
+      device: null,
     }), true);
     assert.equal(captureVoiceProcessingActive({
       echoCancellation: null,
       noiseSuppression: null,
       autoGainControl: null,
       audioSessionType: null,
+      inputLabel: null,
+      device: null,
     }), false);
     assert.equal(captureVoiceProcessingActive(null), false);
   });
@@ -130,6 +137,8 @@ describe('capture observability', () => {
       noiseSuppression: true,
       autoGainControl: false,
       audioSessionType: 'play-and-record',
+      inputLabel: null,
+      device: null,
     });
   });
 
@@ -149,6 +158,8 @@ describe('capture observability', () => {
       noiseSuppression: null,
       autoGainControl: null,
       audioSessionType: null,
+      inputLabel: null,
+      device: null,
     });
   });
 
@@ -165,6 +176,79 @@ describe('capture observability', () => {
       readCaptureSettings(stream, { audioSession: { type: '' } })?.audioSessionType,
       null,
     );
+  });
+
+  test('names the microphone and the device behind the capture', () => {
+    const stream = {
+      getAudioTracks: () => [{ label: '  AirPods Pro  ', getSettings: () => ({}) }],
+    };
+    const settings = readCaptureSettings(stream, {
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 '
+        + '(KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1',
+      maxTouchPoints: 5,
+    });
+    assert.equal(settings?.inputLabel, 'AirPods Pro');
+    assert.equal(settings?.device, 'iPhone iOS 18.6 · Safari 26.0');
+
+    const unnamed = { getAudioTracks: () => [{ label: '', getSettings: () => ({}) }] };
+    assert.equal(readCaptureSettings(unnamed, {})?.inputLabel, null);
+    const long = { getAudioTracks: () => [{ label: 'x'.repeat(100), getSettings: () => ({}) }] };
+    assert.equal(readCaptureSettings(long, {})?.inputLabel?.length, 64);
+  });
+
+  test('describes common singer devices from the user agent', () => {
+    const cases: Array<[string, number, string]> = [
+      [
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) '
+          + 'CriOS/129.0.6668.69 Mobile/15E148 Safari/604.1',
+        5,
+        'iPhone iOS 17.5 · Chrome 129',
+      ],
+      [
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) '
+          + 'Mobile/15E148 Safari Line/14.15.0',
+        5,
+        'iPhone iOS 18.6 · LINE 14.15',
+      ],
+      [
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) '
+          + 'Version/18.0 Safari/605.1.15',
+        5,
+        'iPad · Safari 18.0',
+      ],
+      [
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) '
+          + 'Chrome/129.0.0.0 Safari/537.36',
+        0,
+        'Mac · Chrome 129',
+      ],
+      [
+        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) '
+          + 'Chrome/129.0.0.0 Mobile Safari/537.36',
+        5,
+        'Android 10 · Chrome 129',
+      ],
+      [
+        'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) '
+          + 'SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36',
+        5,
+        'Android 14 SM-S921B · Samsung Internet 25',
+      ],
+      [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+          + 'Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0',
+        0,
+        'Windows · Edge 129',
+      ],
+    ];
+    for (const [userAgent, maxTouchPoints, expected] of cases) {
+      assert.equal(describeCaptureDevice({ userAgent, maxTouchPoints }), expected);
+    }
+
+    assert.equal(describeCaptureDevice({ userAgent: 'odd-agent/1.0' }), 'odd-agent/1.0');
+    assert.equal(describeCaptureDevice({ userAgent: 'x'.repeat(200) })?.length, 96);
+    assert.equal(describeCaptureDevice({}), null);
+    assert.equal(describeCaptureDevice(null), null);
   });
 
   test('fails closed when getSettings is unavailable or throws', () => {

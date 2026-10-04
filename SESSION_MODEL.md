@@ -114,6 +114,10 @@ A revoked or superseded publisher stops local capture and does **not** enter the
 
 A real ownership change invalidates microphone timing evidence before it can affect the new singer. A same-capture network reconnect may preserve the capture generation and timeline. A genuinely new capture generation invalidates timing even when the participant ID is unchanged.
 
+## Mic gain
+
+Mic gain follows the participant, because capture level differs widely between devices. Every gain the owner sets is remembered against their participant ID, and a real ownership change applies the new owner's remembered gain, or the default for a participant who never set one. A release leaves the last gain in place. The memory lasts for the server's lifetime; a restart forgets it.
+
 ## Scope boundary
 
 This model intentionally does not introduce:

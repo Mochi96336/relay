@@ -17,6 +17,8 @@ function validHealth() {
       noiseSuppression: false,
       autoGainControl: false,
       audioSessionType: 'play-and-record',
+      inputLabel: 'iPhone Microphone',
+      device: 'iPhone iOS 18.6 · Safari 26.0',
     },
     captureLevel: {
       peakDbfs: -18,
@@ -66,6 +68,8 @@ describe('audio uplink health', () => {
       noiseSuppression: false,
       autoGainControl: false,
       audioSessionType: 'play-and-record',
+      inputLabel: 'iPhone Microphone',
+      device: 'iPhone iOS 18.6 · Safari 26.0',
     });
     assert.deepEqual(health.captureLevel, { peakDbfs: -18, rmsDbfs: -31 });
     assert.deepEqual(health.captureClipping, {
@@ -294,8 +298,27 @@ describe('audio uplink health', () => {
     input.captureLevel = null;
     const health = parseAudioUplinkHealth(input);
     assert.ok(health);
-    assert.deepEqual(health.capture, input.capture);
+    // A page from before the device fields omits them; they read as unknown.
+    assert.deepEqual(health.capture, { ...input.capture, inputLabel: null, device: null });
     assert.equal(health.captureLevel, null);
+  });
+
+  it('keeps device names display-only: bounded, and never a reason to drop the report', () => {
+    const long: any = validHealth();
+    long.capture.inputLabel = `  ${'m'.repeat(100)}  `;
+    long.capture.device = 'd'.repeat(200);
+    const bounded = parseAudioUplinkHealth(long);
+    assert.ok(bounded);
+    assert.equal(bounded.capture?.inputLabel, 'm'.repeat(64));
+    assert.equal(bounded.capture?.device, 'd'.repeat(96));
+
+    const odd: any = validHealth();
+    odd.capture.inputLabel = 42;
+    odd.capture.device = '   ';
+    const unknown = parseAudioUplinkHealth(odd);
+    assert.ok(unknown, 'a malformed name must not cost the uplink facts beside it');
+    assert.equal(unknown.capture?.inputLabel, null);
+    assert.equal(unknown.capture?.device, null);
   });
 
   it('rejects malformed or unbounded applied settings instead of turning them into policy', () => {

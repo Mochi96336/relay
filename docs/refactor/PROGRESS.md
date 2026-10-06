@@ -3,7 +3,7 @@
 ## 目前執行 checkpoint（以此與最新驗收段落為準）
 
 - **S31、S40a、S40b與S40c：verified；S40d Backing C0完成1775/10全過；C1同243fixedcases雙入口＋2static／舊37共525全過、CHECK0，唯一live148檔C1union（handle見最新S40d段）。** S40c最後CHECK／144union1526/10／audio-listener8／FULL3620/115全過，nativeWT0/browserWT1pass，末audit與42logs封存完成。以下歷史active/live記錄保留作過程證據；S40b最後CHECK0/139union1342/10全過、audio-listener8pass、FULL3446/115全過、nativeWT0/browserWT1pass、803來源指紋一致。S40b與S40c所有handles皆terminal（firstFULL85800=1、新版FULL22727/nativeWT29429/browserWT18140=0、其餘已記錄gates=0），不可再poll。第一版CHECK/FULL失敗完整保留，不冒充green；S40整卡尚未完成。
-- source_worktree：`/tmp/claude-1000/-home-mochi-relay/e8ac15ae-68bf-4977-9fa9-2c586edcef32/scratchpad/wt9`；branch `refactor/mic-timeline`，HEAD `7b5d550682d43ae8eba3f55aeff3bf0b239ba056`；全部既有 dirty／DSP 成果保留，沒有 commit/push/deploy/install。
+- source_worktree：`/home/mochi/relay-wip/deep-refactor`；branch `refactor/mic-timeline`，HEAD `7b5d550682d43ae8eba3f55aeff3bf0b239ba056`；全部既有 dirty／DSP 成果保留，沒有 commit/push/deploy/install。
 - S31最後 C2 CHECK0、58檔 union471tests/10suites 全過、FULL3370tests/115suites 全過，0 fail/cancel/skip/todo，FULL原11896已terminalexit0；log `/tmp/relay-S31b-C2-durable-full-suite.log`，durable `RELAY_S31B_C2_FULL_PROCESS_EXIT=0`，耗時801299.330727ms。所有S31 handles皆terminal，不能再poll或重啟原FULL；S40新profile另見最新記錄。
 - 完整801檔 inventory／fingerprint `46b6bb39be90d9dc1104ae87221c48969d75d204fc2601d1ac272b97672e02b4` 執行前後一致，tarcompare0/diffcheck0；最後audit `/tmp/relay-S31b-C2-final-audit.log`。source `S31b-C2-source.tar` SHA `8564734c7e7fcc1aa1254b366c21c204ac51904f4b61454cfda29da6d7301bae`；FULL verified evidence `S31b-C2-FULL-verified-evidence.tar` SHA `64408f735f868a5986af33b5a7e3cce1b4b5cd9addba3a6860823817ba003bfe`，均在 `/home/mochi/relay-refactor-tests.eVYy9t/`。
 - next_task：先poll S40d C1唯一148union原handle至terminal→完整audit/evidence→C2 canonicalroot/全部caller/necessarylocator；完整806/aba1…source/test/config freeze，不修改/並跑profile。Backing新module尚unused、production/原tests未改，四coordinator仍server；不跨群總清理。原失敗證據保留，不覆寫；所有已terminalhandles不重poll。S40/B10–B40/Z00與conditional branch啟動證據稽核仍未完成，整體goal保持active。
@@ -281,7 +281,7 @@
 ## P00 — 初次執行基線核對
 
 - status: verified
-- source_worktree: `/tmp/claude-1000/-home-mochi-relay/e8ac15ae-68bf-4977-9fa9-2c586edcef32/scratchpad/wt9`
+- source_worktree: `/home/mochi/relay-wip/deep-refactor`
 - source_HEAD: `7b5d550682d43ae8eba3f55aeff3bf0b239ba056`
 - starting_checkpoint: BASELINE.json；33個檔案hash全符，11個已知dirty檔完整保留。
 - 環境：Node v20.19.2、npm 9.2.0；工作樹與所有適用父目錄未找到AGENTS.md。
@@ -596,7 +596,7 @@
 
 ## S20 — Robot mapping orchestration（active；先 S20a，再 S20b）
 
-- baseline：已驗證 S11，worktree `/tmp/claude-1000/-home-mochi-relay/e8ac15ae-68bf-4977-9fa9-2c586edcef32/scratchpad/wt9`／branch refactor/mic-timeline／HEAD `7b5d550682d43ae8eba3f55aeff3bf0b239ba056`，777-file fingerprint `819baf5758f787f69061e22501650a2a90d75aa6fe3cf6f6e4379fb88008edaa`，完整 source archive 沿 S11-frozen-source.tar。原11 dirty＋A/S10/S11成果保留。重新核對 worktree/HEAD/Node20.19.2/npm9.2.0、diff-check0；root/parents與src/test中未找到適用AGENTS。已重讀00/02/04、SESSION_MODEL、ARCHITECTURE_BOUNDARIES。
+- baseline：已驗證 S11，worktree `/home/mochi/relay-wip/deep-refactor`／branch refactor/mic-timeline／HEAD `7b5d550682d43ae8eba3f55aeff3bf0b239ba056`，777-file fingerprint `819baf5758f787f69061e22501650a2a90d75aa6fe3cf6f6e4379fb88008edaa`，完整 source archive 沿 S11-frozen-source.tar。原11 dirty＋A/S10/S11成果保留。重新核對 worktree/HEAD/Node20.19.2/npm9.2.0、diff-check0；root/parents與src/test中未找到適用AGENTS。已重讀00/02/04、SESSION_MODEL、ARCHITECTURE_BOUNDARIES。
 - 目前符號：server route/readiness/helper 群575–711；clear/revocation/rate/begin/reconcile/frame/request 群718–872；mapper/offset/transition/coordinators保留自身來源檔。所有production callers及 source-contract定位已rg核對，不按文件行號切割。
 - scope_allowlist：`src/server.ts`、新增 `src/relay-robot-mapping-orchestration.ts`、新增 `test/relay-robot-mapping-orchestration.test.ts`；必要定位/接線更新限 `test/runtime-single-snapshot.test.ts`、`test/server-robot-content-evidence-readiness.test.ts`、`test/server-robot-content-anchor-readiness.test.ts`、`test/server-robot-bootstrap-timing-deadlock.test.ts`、`test/server-robot-content-mapping-revocation-coordinator.test.ts`、`test/server-robot-content-transition-teardown.test.ts`、`test/playback-rate-timing.test.ts`。其他定位檔如確有新failure，先明列必要性再修改。domain source／wire／policy／golden／timeouts不在白名單。
 - S20a先搬六個route/readiness/mapping/preservation函式的算法：robotRouteActive、robotDeltaIsFresh、robotContentMappingReady、robotContentEvidenceMappingReady、mappedContentBackingStart、robotFollowerSeekMayPreserveMapping。新factory inert，窄 readonly Pick domain ports＋context/appliedKind/isStale query ports；server保留具名薄wrapper與原performance.now defaults，以保留所有protocol/status/coordinator callers但不得留下第二份算法。mapper state、offset housekeeping、calibration collecting/confirmed/evidence與timing candidate truth都仍屬原owner。factory在calibration/validator都建構後初始化，constructor稽核證實此期間無callbacks，不用let!或setters。

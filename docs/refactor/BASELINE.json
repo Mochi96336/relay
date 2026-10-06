@@ -3,7 +3,7 @@
   "captured_date": "2026-10-05",
   "timezone": "Asia/Taipei",
   "purpose": "Read-only starting-state identification, not a restore bundle or permanent hash requirement.",
-  "source_worktree": "/tmp/claude-1000/-home-mochi-relay/e8ac15ae-68bf-4977-9fa9-2c586edcef32/scratchpad/wt9",
+  "source_worktree": "/home/mochi/relay-wip/deep-refactor",
   "source_branch": "refactor/mic-timeline",
   "source_HEAD": "7b5d550682d43ae8eba3f55aeff3bf0b239ba056",
   "documents_root": "/home/mochi/relay",

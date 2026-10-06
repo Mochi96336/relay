@@ -39,7 +39,7 @@ Relay 不是缺少模組，而是已經有不少正確的 domain owner，剩餘�
 ### 2.1 兩個工作目錄不能混算
 
 - 主目錄：`/home/mochi/relay`，`main`，HEAD `7fe0c27`。本文件寫在這裡；盤點開始時工作樹乾淨。
-- 重構工作樹：`/tmp/claude-1000/-home-mochi-relay/e8ac15ae-68bf-4977-9fa9-2c586edcef32/scratchpad/wt9`，分支 `refactor/mic-timeline`，HEAD `7b5d550`，含未提交的 bus／Mic DSP 變更。
+- 重構工作樹：`/home/mochi/relay-wip/deep-refactor`，分支 `refactor/mic-timeline`，HEAD `7b5d550`，含未提交的 bus／Mic DSP 變更。
 - 下列原始碼行數、函式位置、測試與熱點，以重構工作樹為準，不是較舊的 main。
 - 後續開工沿用這個 worktree 的變更；不得把 main 當最新基線覆蓋回去。整合分支另行處理，不自動 reset、cherry-pick、push。
 

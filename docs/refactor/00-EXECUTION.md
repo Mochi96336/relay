@@ -31,7 +31,7 @@ git status --short
 盤點時兩個目錄：
 
 - 文件所在主目錄 HEAD：`7fe0c279c06ec14b12bec67e6ebf91db74ef3334`。
-- 執行程式工作樹：`/tmp/claude-1000/-home-mochi-relay/e8ac15ae-68bf-4977-9fa9-2c586edcef32/scratchpad/wt9`。
+- 執行程式工作樹：`/home/mochi/relay-wip/deep-refactor`。
 - 執行分支：`refactor/mic-timeline`，HEAD `7b5d550682d43ae8eba3f55aeff3bf0b239ba056`，另有 11 個已知未提交／未追蹤檔案；它們是既有成果，不是垃圾。
 
 在找到的執行工作樹內依序執行：
@@ -51,7 +51,7 @@ git diff --check
 2. 與 BASELINE 中 `files` 的 hash、`preexisting_dirty` 比對；hash 是辨識工具，**不是要求永遠保持它不變**。
 3. 初次執行與 BASELINE 不同：列出差異，讀新版本與相關測試，更新本包判斷。不得先覆蓋差異以求 hash 相符。
 4. 後續執行以最近已驗證 checkpoint 為基線；否則前一刀正常改動會被誤判成污染。
-5. `/tmp` worktree 不存在時，用 worktree list／分支資訊找真實位置；找不到未提交成果就回報缺少來源。不能只 checkout HEAD 然後假裝包含未提交 bus／DSP。
+5. worktree 不存在時，用 worktree list／分支資訊找真實位置；找不到未提交成果就回報缺少來源。不能只 checkout HEAD 然後假裝包含未提交 bus／DSP。
 6. 此文件包寫在主目錄；切到 worktree 之前記住文件位置。不要因 worktree 沒有 `docs/refactor` 而另建一份不同版本的計畫。
 
 禁止 `git reset --hard`、`git clean`、`git checkout --`、覆蓋 node_modules 或刪掉 scratch。不要把使用者未提交變更自動 stash。若需要保存基線，明列含未追蹤檔的清單；單一 `git diff` 不包含新檔案，不是完整備份。

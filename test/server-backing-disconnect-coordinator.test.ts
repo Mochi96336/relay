@@ -45,8 +45,8 @@ test('socket close retains replacement fence plus Robot, Mic, Backing dispatch a
   const close = server.slice(closeStart, closeEnd);
 
   const fence = close.indexOf('if (!socket.replaced) {');
-  const robot = close.indexOf('robotDisconnectCoordinator.handle(socket);');
-  const mic = close.indexOf('micDisconnectCoordinator.handle(socket);');
+  const robot = close.indexOf('relayRobotMapping.disconnectSource(socket);');
+  const mic = close.indexOf('relayMicLifecycle.disconnect(socket);');
   const backing = close.indexOf('backingDisconnectCoordinator.handle(socket);');
 
   assert.ok(fence >= 0 && robot > fence);

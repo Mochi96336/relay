@@ -18,10 +18,13 @@ const coordinator = parseTypeScriptSource(
   new URL('../src/relay-live-source-stop-coordinator.ts', import.meta.url),
   readFileSync(new URL('../src/relay-live-source-stop-coordinator.ts', import.meta.url), 'utf8'),
 );
+const application = parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'));
 
 test('stopLiveSource delegates teardown ordering through the coordinator seam', () => {
   const stop = functionCode(server, 'stopLiveSource');
-  assert.match(stop, /liveSourceStopCoordinator\.stop\(\)/);
+  assert.match(stop, /relayCalibrationLifecycle\.stopLiveSource\(\)/);
+  assert.match(functionCode(application, 'stopLiveSource'), /liveSourceStopCoordinator\.stop\(\)/);
   assert.doesNotMatch(stop, /backingRuntime\./);
   assert.doesNotMatch(stop, /takeController\./);
   assert.doesNotMatch(stop, /clearBootCalibrationState\(/);
@@ -37,20 +40,24 @@ test('stopLiveSource delegates teardown ordering through the coordinator seam', 
 });
 
 test('server composition retains every live source teardown domain effect', () => {
-  assert.ok(importSources(server).includes('./relay-live-source-stop-coordinator.js'));
-  const composition = variableInitializerCode(server, 'liveSourceStopCoordinator');
+  assert.ok(importSources(application).includes('./relay-live-source-stop-coordinator.js'));
+  const composition = variableInitializerCode(application, 'liveSourceStopCoordinator');
+  const binding = variableInitializerCode(server, 'relayCalibrationLifecycle');
   assert.match(composition, /^createRelayLiveSourceStopCoordinator\(\{/);
   assert.match(composition, /cancelBackingGrace: \(\) => backingRuntime\.cancelGrace\(\)/);
   assert.match(composition, /retireRobotRoute: \(\) => backingRuntime\.retireRobotRoute\(\)/);
   assert.match(composition, /sessionActive: \(\) => session\.active/);
-  assert.match(composition, /endTakeMix: \(\) => takeController\.endMix\(\)/);
+  assert.match(composition, /endTakeMix: \(\) => effects\.endTakeMix\(\)/);
+  assert.match(binding, /endTakeMix: \(\) => takeController\.endMix\(\)/);
   assert.match(composition, /clearBootCalibration: \(\) => clearBootCalibrationState\(\)/);
-  assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
+  assert.match(composition, /clearContentValidation: \(\) => commands\.clearContentValidation\(\)/);
+  assert.match(binding, /clearContentValidation: clearContentValidationBaseline/);
+  assert.match(functionCode(application, 'clearBootCalibrationState'), /bootProbeRuntime\.clear\(\)/);
   assert.match(composition, /resetRobotPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
   assert.match(composition, /resetRobotContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
   assert.match(
     composition,
-    /clearRobotContentTransition: \(\) => clearRobotContentTransition\(\)/,
+    /clearRobotContentTransition: \(\) => commands\.clearRobotContentTransition\(\)/,
   );
   assert.match(composition, /stopSession: \(\) => session\.stop\(\)/);
   assert.match(composition, /resetCalibration: \(\) => calibration\.reset\(\)/);
@@ -61,10 +68,13 @@ test('server composition retains every live source teardown domain effect', () =
   );
   assert.match(
     composition,
-    /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/,
+    /reportTimingStatus: \(\) => effects\.reportTimingStatus\(\)/,
   );
-  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
-  assert.match(composition, /reportStatus: \(\) => broadcastStatus\(\)/);
+  assert.match(composition, /reportSourceStatus: \(\) => effects\.reportSourceStatus\(\)/);
+  assert.match(composition, /reportStatus: \(\) => effects\.reportStatus\(\)/);
+  assert.match(binding, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
+  assert.match(binding, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(binding, /reportStatus: \(\) => broadcastStatus\(\)/);
 });
 
 test('live source stop coordinator owns ordering only, not server runtime authority', () => {

@@ -52,6 +52,12 @@ export type PcmTimeline = {
   resampleNextTargetSample: number | null;
 };
 
+/** Narrow, read-only structure used by PCM readers; no capture or edit authority. */
+export type PcmTimelineReadView = {
+  readonly chunks: readonly Readonly<PcmChunk>[];
+  readonly totalSamples: number;
+};
+
 export type PcmEvidence = {
   gapSamples: number;
   frontierMissingSamples: number;
@@ -285,7 +291,7 @@ export function resamplePcm(
   };
 }
 
-function firstChunkAtOrBefore(timeline: PcmTimeline, sampleIndex: number) {
+function firstChunkAtOrBefore(timeline: PcmTimelineReadView, sampleIndex: number) {
   let low = 0;
   let high = timeline.chunks.length - 1;
   let result = 0;
@@ -304,7 +310,7 @@ function firstChunkAtOrBefore(timeline: PcmTimeline, sampleIndex: number) {
 }
 
 /** The samples for a session range; anything missing reads as silence. */
-export function readPcmRange(timeline: PcmTimeline, startSample: number, count: number) {
+export function readPcmRange(timeline: PcmTimelineReadView, startSample: number, count: number) {
   const output = new Int16Array(count);
   if (timeline.chunks.length === 0) return output;
 
@@ -357,7 +363,7 @@ export function readPcmRange(timeline: PcmTimeline, startSample: number, count: 
  * both interpolation endpoints from the exact source span it is reading.
  */
 export function readPcmSourceEvidence(
-  timeline: PcmTimeline,
+  timeline: PcmTimelineReadView,
   startSample: number,
   count: number,
 ) {

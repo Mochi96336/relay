@@ -7,6 +7,8 @@ const root = process.cwd();
 const runtime = fs.readFileSync(path.join(root, 'src/mic-transport-grace-runtime.ts'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'src/server.ts'), 'utf8');
 
+const lifecycle = fs.readFileSync(path.join(root, 'src/relay-mic-lifecycle.ts'), 'utf8');
+
 function withoutComments(source: string) {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -28,12 +30,14 @@ test('MicTransportGraceRuntime owns only timer lifecycle, not Mic lease or trans
     /ParticipantSession|MicRuntime|AudioSession|releaseMic|clearMediaAuthority|broadcastJson|broadcastSessionStatus|applyMicOwnerEffects/,
   );
 
-  // Lease/liveness decisions and side effects remain in server composition.
-  assert.match(server, /participants\.micOwnerId !== expectedOwnerId/);
-  assert.match(server, /micRuntime\.controlConnected\(\)/);
-  assert.match(server, /micRuntime\.mediaOwnerId === expectedOwnerId/);
-  assert.match(server, /participants\.releaseMic\(expectedOwnerId, 'transport-expired'\)/);
+  // Timer stays isolated; lease/liveness effects now belong to the Mic assembly.
+  assert.match(lifecycle, /participants\.micOwnerId !== expectedOwnerId/);
+  assert.match(lifecycle, /micRuntime\.controlConnected\(\)/);
+  assert.match(lifecycle, /micRuntime\.mediaOwnerId === expectedOwnerId/);
+  assert.match(lifecycle, /participants\.releaseMic\(expectedOwnerId, 'transport-expired'\)/);
   assert.match(server, /clearMicMediaAuthority\(\)/);
-  assert.match(server, /applyMicOwnerEffects\(released\.effects\)/);
+  assert.match(lifecycle, /commands\.applyOwnershipEffects\(released\.effects\)/);
+  assert.match(lifecycle, /effects\.reportSessionStatus\(\)/);
+  assert.match(server, /relayMicLifecycle\.expire\(expectedOwnerId\)/);
   assert.match(server, /broadcastSessionStatus\(\)/);
 });

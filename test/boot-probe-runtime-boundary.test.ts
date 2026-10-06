@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  functionCode,
   importSources,
   parseTypeScriptSource,
   sourceCode,
@@ -19,6 +20,11 @@ const runtime = parseTypeScriptSource(
 );
 const serverCode = sourceCode(server);
 const runtimeCode = sourceCode(runtime);
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
+);
+const workflowCode = sourceCode(workflow);
 
 test('BootProbeRuntime aggregates probe evidence without absorbing calibration or media authority', () => {
   assert.deepEqual(
@@ -43,18 +49,25 @@ test('BootProbeRuntime aggregates probe evidence without absorbing calibration o
     'server scheduler/composition code must not extract provisional Mic evidence directly',
   );
   assert.ok(serverCode.includes('bootProbeRuntime.hasMicLeg'));
-  assert.ok(serverCode.includes('bootProbeRuntime.micLegStaleForContext('));
-  assert.ok(serverCode.includes('bootProbeRuntime.takeMicLegForContext('));
-  assert.ok(serverCode.includes('bootProbeRuntime.lifecycleIdle'));
+  assert.ok(functionCode(workflow, 'maybeStartProbeCalibration').includes('bootProbeRuntime.micLegStaleForContext('));
+  assert.ok(functionCode(workflow, 'maybeFinishProbeAnalysis').includes('bootProbeRuntime.takeMicLegForContext('));
+  assert.ok(functionCode(workflow, 'maybeStartProbeCalibration').includes('bootProbeRuntime.lifecycleIdle'));
   assert.ok(serverCode.includes('bootProbeRuntime.takeExpiredRequest('));
   assert.doesNotMatch(serverCode, /bootProbeRuntime\.pendingRequest/);
   assert.doesNotMatch(serverCode, /bootProbeRuntime\.acceptReply\(/);
 
   // Signal analysis, combination and application remain orchestration/domain work.
-  assert.ok(serverCode.includes('locateProbe('));
-  assert.ok(serverCode.includes('combineBootCalibration('));
-  assert.ok(serverCode.includes('calibration.applyExternalResult('));
-  assert.ok(serverCode.includes('timingRuntime.markBootProbeAuthority()'));
+  assert.ok(functionCode(workflow, 'maybeFinishProbeAnalysis').includes('locateProbe('));
+  assert.ok(functionCode(workflow, 'maybeFinishProbeAnalysis').includes('combineBootCalibration('));
+  const promotion = variableInitializerCode(workflow, 'bootProbeCalibrationPromotionCoordinator');
+  assert.ok(promotion.includes('calibration.applyExternalResult('));
+  assert.ok(promotion.includes('timingRuntime.markBootProbeAuthority()'));
+  assert.match(variableInitializerCode(server, 'relayBootProbe'), /probe: bootProbeRuntime/);
+  assert.match(variableInitializerCode(server, 'relayBootProbe'), /timing: timingRuntime/);
+  assert.match(variableInitializerCode(server, 'relayBootProbe'), /\bcalibration,/);
+  assert.doesNotMatch(workflowCode, /new (?:BootProbeRuntime|ProbeLifecycle|TimingRuntime|CalibrationSession|AudioSession)\(/);
+  assert.doesNotMatch(workflowCode, /let (?:probeRequestId|measuredMicLeg|lastProbeCorrelation|lastProbeContext|lastBootCalibration|bootPathDifferenceMs|bootConfidence)\b/);
+  assert.doesNotMatch(workflowCode, /bootProbeRuntime\.micLeg\b|bootProbeRuntime\.pendingRequest|bootProbeRuntime\.acceptReply\(/);
   assert.doesNotMatch(
     runtimeCode,
     /locateProbe|combineBootCalibration|applyExternalResult|markBootProbeAuthority|AudioSession|CalibrationSession|TimingRuntime/,

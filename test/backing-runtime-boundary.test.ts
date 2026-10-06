@@ -17,6 +17,10 @@ const server = parseTypeScriptSource(
   new URL('../src/server.ts', import.meta.url),
   readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
 );
+const micLifecycle = parseTypeScriptSource(
+  new URL('../src/relay-mic-lifecycle.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-mic-lifecycle.ts', import.meta.url), 'utf8'),
+);
 
 test('BackingRuntime owns transport lifecycle without absorbing domain authority', () => {
   const runtimeCode = sourceCode(runtime);
@@ -30,7 +34,12 @@ test('BackingRuntime owns transport lifecycle without absorbing domain authority
   assert.match(backingRuntime, /^new BackingRuntime<RelaySocket>/);
   assert.match(serverCode, /backingRuntime\.bind\(/);
   assert.match(serverCode, /backingRuntime\.detach\(/);
-  assert.match(serverCode, /backingRuntime\.armed\(\)/);
+  // The room's unarmed-stop decision moved as a complete Mic lifecycle group;
+  // it still queries the canonical Backing owner, never copied armed state.
+  const unarmedStop = functionCode(micLifecycle, 'maybeStopLiveSourceWhenUnarmed');
+  assert.match(unarmedStop, /backingRuntime\.armed\(\)/);
+  const micComposition = variableInitializerCode(server, 'relayMicLifecycle');
+  assert.match(micComposition, /backing:\s*backingRuntime/);
 
   assert.doesNotMatch(serverCode, /let backing: RelaySocket \| null/);
   assert.doesNotMatch(serverCode, /let backingSampleRate: number \| null/);

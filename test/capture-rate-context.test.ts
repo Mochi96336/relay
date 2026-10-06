@@ -5,6 +5,7 @@ import test from 'node:test';
 import { BootProbeRuntime, type BootProbeContext } from '../src/boot-probe-runtime.js';
 import { CalibrationSession, type CalibrationContext } from '../src/calibration-session.js';
 import { RobotContentTimelineMapper } from '../src/robot-content-timeline.js';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 const RATE = 48_000;
 
@@ -108,15 +109,20 @@ test('Robot content mapping rejects a rate-only capture-context change', () => {
 
 test('production timing contexts and async context fences include capture source rates', () => {
   const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+  const workflow = parseTypeScriptSource(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'));
   const calibration = readFileSync(new URL('../src/calibration-session.ts', import.meta.url), 'utf8');
   const validator = readFileSync(new URL('../src/content-calibration-validator.ts', import.meta.url), 'utf8');
   const timeline = readFileSync(new URL('../src/robot-content-timeline.ts', import.meta.url), 'utf8');
   const transition = readFileSync(new URL('../src/robot-content-transition-runtime.ts', import.meta.url), 'utf8');
 
-  assert.match(server, /function calibrationContext\(\)[\s\S]*micSourceRate: micRuntime\.sampleRate[\s\S]*backingSourceRate: backingRuntime\.sampleRate/);
-  assert.match(server, /function bootProbeContext\(\)[\s\S]*micSourceRate: micRuntime\.sampleRate[\s\S]*backingSourceRate: backingRuntime\.sampleRate/);
-  assert.match(server, /bootProbeRuntime\.setMicLeg\(\{[\s\S]*micSourceRate: micRuntime\.sampleRate/);
-  assert.match(server, /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*micSourceRate: micRuntime\.sampleRate,\s*\}\)/);
+  const application = readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8');
+  assert.match(server, /function calibrationContext\(\)[\s\S]*return relayCalibration\.context\(\)/);
+  assert.match(application, /function calibrationContext\(\)[\s\S]*micSourceRate: micRuntime\.sampleRate[\s\S]*backingSourceRate: backingRuntime\.sampleRate/);
+  assert.match(functionCode(workflow, 'bootProbeContext'), /micSourceRate: micRuntime\.sampleRate[\s\S]*backingSourceRate: backingRuntime\.sampleRate/);
+  const analysis = functionCode(workflow, 'maybeFinishProbeAnalysis');
+  assert.match(analysis, /bootProbeRuntime\.setMicLeg\(\{[\s\S]*micSourceRate: micRuntime\.sampleRate/);
+  assert.match(analysis, /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*micSourceRate: micRuntime\.sampleRate,?\s*\}\)/);
 
   for (const [name, source] of [
     ['calibration', calibration],

@@ -17,6 +17,10 @@ const server = parseTypeScriptSource(
   new URL('../src/server.ts', import.meta.url),
   readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
 );
+const lifecycle = parseTypeScriptSource(
+  new URL('../src/relay-mic-lifecycle.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-mic-lifecycle.ts', import.meta.url), 'utf8'),
+);
 const micRuntime = parseTypeScriptSource(
   new URL('../src/mic-runtime.ts', import.meta.url),
   readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8'),
@@ -51,10 +55,10 @@ test('Mic presence follows media availability and direct WebTransport can retain
   assert.ok(ownerMatch >= 0, 'session presence must belong to the current Mic media owner');
   assert.ok(mediaConnected > ownerMatch, 'session presence must require current Mic media connectivity');
 
-  const graceExpiry = functionCode(server, 'expireMicTransportGrace');
+  const graceExpiry = functionCode(lifecycle, 'expireMicTransportGrace');
   const directMedia = graceExpiry.indexOf('const directMediaStillFlowing =');
-  const webTransport = graceExpiry.indexOf('webTransportMicConnected()', directMedia);
-  const freshPcm = graceExpiry.indexOf('micStreaming(performance.now())', webTransport);
+  const webTransport = graceExpiry.indexOf('micRuntime.directMediaConnected()', directMedia);
+  const freshPcm = graceExpiry.indexOf('micRuntime.streaming(performance.now())', webTransport);
   const retainLease = graceExpiry.indexOf('micTransportGrace.schedule(expectedOwnerId);', freshPcm);
   assert.ok(directMedia >= 0, 'Mic grace expiry must classify independent direct media');
   assert.ok(webTransport > directMedia, 'direct media retention must require the WebTransport path');

@@ -27,7 +27,7 @@ test('server delegates binary audio routing through the uplink coordinator seam'
 
 test('server composition retains audio uplink authority and domain effects', () => {
   assert.match(server, /isMicPublisher: \(socket\) => micRuntime\.isPublisher\(socket\)/);
-  assert.match(server, /deliverMicPackets\(micRuntime\.receivePublisher\(socket, data, nowMs\)\)/);
+  assert.match(server, /relayMixPump\.deliver\(micRuntime\.receivePublisher\(socket, data, nowMs\)\)/);
   assert.match(
     server,
     /backingRuntime\.isSocket\(socket\) && socket\.role === 'backing' && session\.active/,
@@ -47,7 +47,7 @@ test('server composition retains audio uplink authority and domain effects', () 
   assert.match(restartComposition, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
   assert.match(restartComposition, /failCalibration: \(message\) => calibration\.fail\(message\)/);
 
-  const disconnectStart = server.indexOf('const robotDisconnectCoordinator =', uplinkStart);
+  const disconnectStart = server.indexOf('const backingDisconnectCoordinator =', uplinkStart);
   assert.ok(disconnectStart > uplinkStart, 'audio uplink composition must remain identifiable');
   const uplinkComposition = server.slice(uplinkStart, disconnectStart);
   assert.match(

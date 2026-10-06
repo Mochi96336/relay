@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { functionCode, parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
 
 import {
   RelayClient,
@@ -69,22 +70,22 @@ test('Robot manual realignment starts boot-probe from fresh silent capture witho
 
 test('Robot recalibration adapter preserves old authority until candidate promotion', async () => {
   const source = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
+  const workflow = parseTypeScriptSource(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+    await readFile(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'));
+  const application = parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+    await readFile(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'));
   const restart = source.match(/function restartManualBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
-
-  const compositionStart = source.indexOf('const manualBootRecalibrationCoordinator =');
-  const compositionEnd = source.indexOf('function restartManualBootCalibration', compositionStart);
-  assert.ok(
-    compositionStart >= 0 && compositionEnd > compositionStart,
-    'manual recalibration composition must remain identifiable',
-  );
-  const composition = source.slice(compositionStart, compositionEnd);
+  assert.match(restart, /relayCalibrationLifecycle\.restartManualBootCalibration\(nowMs\)/);
+  assert.match(functionCode(application, 'restartManualBootCalibration'), /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
+  const composition = variableInitializerCode(application, 'manualBootRecalibrationCoordinator');
+  assert.match(composition, /^createRelayManualBootRecalibrationCoordinator\(\{/,
+    'the unique manual recalibration composition remains identifiable in its actual owner');
   assert.match(composition, /beginExternalRecalibration: \(\) => calibration\.beginExternalRecalibration\(\)/);
   assert.doesNotMatch(composition, /calibration\.reset\(\)/, 'manual retry must not erase known-good calibration first');
   assert.doesNotMatch(composition, /clearBootCalibrationState\(\)/, 'old confirmed boot evidence remains rollback authority');
   assert.doesNotMatch(composition, /robotPlayerOffset\.reset\(\)/, 'old confirmed Robot total still depends on its live player delta');
 
-  const startProbe = source.match(/function maybeStartProbeCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  const startProbe = functionCode(workflow, 'maybeStartProbeCalibration');
   assert.match(
     startProbe,
     /bootProbeStartAuthorityAllowsAttempt\(\{/,
@@ -96,7 +97,7 @@ test('Robot recalibration adapter preserves old authority until candidate promot
     'the replacement transaction fact must cross the policy boundary',
   );
 
-  const reapply = source.match(/function maybeReapplyBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  const reapply = functionCode(workflow, 'maybeReapplyBootCalibration');
   assert.match(
     reapply,
     /calibration\.transactionActive/,
@@ -117,7 +118,7 @@ test('Robot recalibration adapter preserves old authority until candidate promot
     'boot reapply must not follow the replacement candidate kind',
   );
 
-  const appliedKind = source.match(/function appliedCalibrationKind\([\s\S]*?\n\}/)?.[0] ?? '';
+  const appliedKind = functionCode(application, 'appliedCalibrationKind');
   assert.match(appliedKind, /timingRuntime\.appliedCalibrationKind/);
   assert.match(appliedKind, /hasConfirmedResult: calibration\.confirmedResult !== null/);
   assert.match(appliedKind, /provisional: status\.provisional/);
@@ -137,15 +138,15 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   assert.match(settlement, /confirmedRevision: calibration\.confirmedRevision/);
   assert.match(settlement, /hasConfirmedResult: calibration\.confirmedResult !== null/);
 
-  const canApply = source.match(/function calibrationApplicability\([\s\S]*?\n\}/)?.[0] ?? '';
+  const canApply = functionCode(application, 'calibrationApplicability');
 assert.match(canApply, /decideCalibrationApplicability\(\{/);
 assert.match(canApply, /calibrationTransactionActive: calibration\.transactionActive/);
 assert.match(canApply, /calibrationProvisional: status\.provisional/);
 assert.match(canApply, /hasConfirmedResult: calibration\.confirmedResult !== null/);
-assert.match(canApply, /bootProbeSettled: bootProbeSettled\(nowMs\)/);
+assert.match(canApply, /bootProbeSettled: queries\.bootProbeSettled\(nowMs\)/);
 assert.doesNotMatch(canApply, /retainingConfirmedAuthority/);
 
-  const sync = source.match(/function syncAppliedCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
+  const sync = functionCode(application, 'syncAppliedCalibration');
   assert.match(sync, /const calibrationKind = appliedCalibrationKind\(\)/);
   assert.doesNotMatch(
     sync,
@@ -164,7 +165,7 @@ assert.doesNotMatch(canApply, /retainingConfirmedAuthority/);
     'Boot Probe mixer application must delegate to the pure decision policy',
   );
 
-  const failProbe = source.match(/function failProbeAttempt\([\s\S]*?\n\}/)?.[0] ?? '';
+  const failProbe = functionCode(workflow, 'failProbeAttempt');
   assert.match(
     failProbe,
     /bootProbeRuntime\.failAttempt\(target, reason, nowMs\)[\s\S]*?bootProbeFailureSettlementCoordinator\.settle\(failure\)/,

@@ -18,6 +18,10 @@ const coordinator = parseTypeScriptSource(
   new URL('../src/relay-publisher-activation-coordinator.ts', import.meta.url),
   readFileSync(new URL('../src/relay-publisher-activation-coordinator.ts', import.meta.url), 'utf8'),
 );
+const lifecycle = parseTypeScriptSource(
+  new URL('../src/relay-mic-lifecycle.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-mic-lifecycle.ts', import.meta.url), 'utf8'),
+);
 
 test('publisher registration keeps admission, validation, ownership CAS and role commit in server', () => {
   const publisher = objectArrowCallbackCode(server, 'registrationProtocol', 'publisher');
@@ -29,7 +33,7 @@ test('publisher registration keeps admission, validation, ownership CAS and role
   assert.match(publisher, /participants\.takeoverMic\(socket\.participantId, expectedOwnerId\)/);
   assert.match(publisher, /participants\.acquireMic\(socket\.participantId\)/);
   assert.match(publisher, /commitSocketRole\(socket, 'publisher'\)/);
-  assert.match(publisher, /publisherActivationCoordinator\.activate\(\{/);
+  assert.match(publisher, /relayMicLifecycle\.activate\(\{/);
 
   assert.doesNotMatch(publisher, /applyMicOwnerEffects\(/);
   assert.doesNotMatch(publisher, /micRuntime\.bindPublisher\(/);
@@ -39,26 +43,29 @@ test('publisher registration keeps admission, validation, ownership CAS and role
 });
 
 test('server composition retains publisher activation domain effects', () => {
-  assert.ok(importSources(server).includes('./relay-publisher-activation-coordinator.js'));
-  const composition = variableInitializerCode(server, 'publisherActivationCoordinator');
+  assert.ok(importSources(server).includes('./relay-mic-lifecycle.js'));
+  const composition = variableInitializerCode(lifecycle, 'publisherActivationCoordinator');
   assert.match(composition, /^createRelayPublisherActivationCoordinator/);
-  assert.match(composition, /applyMicOwnerEffects\(effects, performance\.now\(\), \{/);
+  assert.match(composition, /commands\.applyOwnershipEffects\(current, performance\.now\(\), \{/);
   assert.match(composition, /bindPublisher: \(registration\) => micRuntime\.bindPublisher\(registration\)/);
   assert.match(
     composition,
-    /retireReplacedCapture: \(\) => \{\s*clearRobotContentTransition\(\);\s*session\.retireMicCapture\(\);\s*takeController\.noteQualityEvent\('mic-capture-restarted'\);\s*\}/,
+    /retireReplacedCapture: \(\) => \{\s*commands\.clearRobotContentTransition\(\);\s*session\.retireMicCapture\(\);\s*takeController\.noteQualityEvent\('mic-capture-restarted'\);\s*\}/,
   );
   assert.match(composition, /retirePublisherTransport\(/);
   assert.match(composition, /micTransportGrace\.cancel\(\)/);
   assert.match(composition, /session\.setMicExpected\(true\)/);
   assert.match(composition, /takeController\.noteQualityEvent\('mic-transport-connected'\)/);
-  assert.match(composition, /invalidateMicTiming\(reason\)/);
+  assert.match(composition, /commands\.invalidateTiming\(reason\)/);
   assert.match(composition, /restartLiveSourceAfterMicReconnect\(\)/);
   assert.match(composition, /micRuntime\.directMediaOffer\(\)/);
-  assert.match(composition, /sendJson\(socket, mixSettingsPayload\(\)\)/);
-  assert.match(composition, /sendJson\(socket, timingCalibrationStatusPayload\(\)\)/);
-  assert.match(composition, /broadcastSessionStatus\(\)/);
-  assert.match(composition, /beginPreparedSongHandoff\(participantId\)/);
+  assert.match(composition, /effects\.sendInitialState\(socket\)/);
+  assert.match(composition, /effects\.reportSessionStatus\(\)/);
+  assert.match(composition, /commands\.beginPreparedSongHandoff\(participantId\)/);
+  const wiring = variableInitializerCode(server, 'relayMicLifecycle');
+  assert.match(wiring, /sendJson\(socket, mixSettingsPayload\(\)\)/);
+  assert.match(wiring, /sendJson\(socket, timingCalibrationStatusPayload\(\)\)/);
+  assert.match(wiring, /reportSessionStatus: \(\) => broadcastSessionStatus\(\)/);
 });
 
 test('activation coordinator owns ordering only, not Relay runtimes or participant authority', () => {

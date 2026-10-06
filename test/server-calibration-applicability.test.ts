@@ -9,18 +9,18 @@ import {
   sourceCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+const application = parseTypeScriptSource(
+  new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'),
 );
 const policy = parseTypeScriptSource(
   new URL('../src/calibration-applicability.ts', import.meta.url),
   readFileSync(new URL('../src/calibration-applicability.ts', import.meta.url), 'utf8'),
 );
 
-test('server samples calibration applicability facts once and delegates authority policy', () => {
-  assert.ok(importSources(server).includes('./calibration-applicability.js'));
-  const applicability = functionCode(server, 'calibrationApplicability');
+test('calibration orchestration samples calibration applicability facts once and delegates authority policy', () => {
+  assert.ok(importSources(application).includes('./calibration-applicability.js'));
+  const applicability = functionCode(application, 'calibrationApplicability');
 
   assert.match(applicability, /const nowMs = performance\.now\(\)/);
   assert.match(applicability, /const result = calibration\.result/);
@@ -32,14 +32,14 @@ test('server samples calibration applicability facts once and delegates authorit
   assert.match(applicability, /calibrationTransactionActive: calibration\.transactionActive/);
   assert.match(applicability, /calibrationProvisional: status\.provisional/);
   assert.match(applicability, /hasConfirmedResult: calibration\.confirmedResult !== null/);
-  assert.match(applicability, /robotProbeTimingActive: robotProbeTimingActive\(\)/);
-  assert.match(applicability, /bootProbeSettled: bootProbeSettled\(nowMs\)/);
-  assert.match(applicability, /robotRouteActive: robotRouteActive\(\)/);
+  assert.match(applicability, /robotProbeTimingActive: queries\.robotProbeTimingActive\(\)/);
+  assert.match(applicability, /bootProbeSettled: queries\.bootProbeSettled\(nowMs\)/);
+  assert.match(applicability, /robotRouteActive: queries\.robotRouteActive\(\)/);
   assert.match(applicability, /robotSourceConnected: sourceRuntime\.connected\(\)/);
-  assert.match(applicability, /roomHasSong: roomHasSong\(nowMs\)/);
-  assert.match(applicability, /robotDeltaFresh: robotDeltaIsFresh\(nowMs\)/);
-  assert.match(applicability, /robotDeltaEverEstablished: robotDeltaEverEstablished\(\)/);
-  assert.match(applicability, /robotContentMappingReady: robotContentMappingReady\(nowMs\)/);
+  assert.match(applicability, /roomHasSong: queries\.roomHasSong\(nowMs\)/);
+  assert.match(applicability, /robotDeltaFresh: queries\.robotDeltaIsFresh\(nowMs\)/);
+  assert.match(applicability, /robotDeltaEverEstablished: queries\.robotDeltaEverEstablished\(\)/);
+  assert.match(applicability, /robotContentMappingReady: queries\.robotContentMappingReady\(nowMs\)/);
 
   assert.doesNotMatch(applicability, /retainingConfirmedAuthority/);
   assert.doesNotMatch(applicability, /return ['"](?:apply|hold|revoke)['"]/);

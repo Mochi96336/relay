@@ -132,6 +132,28 @@ async function waitForValidationCollection(
   );
 }
 
+async function waitForValidationOutcome(
+  monitor: RelayClient,
+  fromIndex: number,
+  backing: RelayClient,
+  publisher: RelayClient,
+  predicate: (message: Record<string, any>) => boolean,
+  timeoutMs: number,
+) {
+  // Keep the admitted live path alive while the worker answers. These are real
+  // positioned PCM frames, not fabricated health or a status request. Once the
+  // requested outcome is received, do not send frames into the next window.
+  const livePathTimer = setInterval(() => {
+    if (monitor.messages.slice(fromIndex).some(predicate)) return;
+    refreshLivePath(backing, publisher);
+  }, 100);
+  try {
+    return await waitForNewMessage(monitor, fromIndex, predicate, timeoutMs);
+  } finally {
+    clearInterval(livePathTimer);
+  }
+}
+
 describe('continuous content calibration validation server policy', () => {
   test('baseline seed and stable completion are published without a status request', async () => {
     const server = await startRelay(FAST);
@@ -161,9 +183,11 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(publisher, stablePair.mic),
       ]);
 
-      const stable = await waitForNewMessage(
+      const stable = await waitForValidationOutcome(
         monitor,
         stableFrom,
+        backing,
+        publisher,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.state === 'waiting'
           && m.validation?.lastOutcome === 'stable',
@@ -196,9 +220,11 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(publisher, silence),
       ]);
 
-      const invalid = await waitForNewMessage(
+      const invalid = await waitForValidationOutcome(
         monitor,
         invalidFrom,
+        backing,
+        publisher,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.state === 'waiting'
           && m.validation?.lastOutcome === 'invalid',
@@ -230,9 +256,11 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
-      await waitForNewMessage(
+      await waitForValidationOutcome(
         monitor,
         suspectFrom,
+        backing,
+        publisher,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.lastOutcome === 'suspect',
         4_000,
@@ -250,9 +278,11 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, secondDrift.backing),
         sendPcmInChunks(publisher, secondDrift.mic),
       ]);
-      const inconclusive = await waitForNewMessage(
+      const inconclusive = await waitForValidationOutcome(
         monitor,
         inconclusiveFrom,
+        backing,
+        publisher,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.lastOutcome === 'inconclusive'
           && m.validation?.state === 'waiting',
@@ -288,9 +318,11 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
 
-      const suspect = await waitForNewMessage(
+      const suspect = await waitForValidationOutcome(
         monitor,
         suspectFrom,
+        backing,
+        publisher,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.lastOutcome === 'suspect'
           && m.validation?.suspectLagMs !== null,
@@ -319,9 +351,11 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(publisher, secondDrift.mic),
       ]);
 
-      const promoted = await waitForNewMessage(
+      const promoted = await waitForValidationOutcome(
         monitor,
         confirmFrom,
+        backing,
+        publisher,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.lastOutcome === 'drift-confirmed',
         8_000,

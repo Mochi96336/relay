@@ -18,10 +18,14 @@ const coordinator = parseTypeScriptSource(
   new URL('../src/relay-robot-content-mapping-revocation-coordinator.ts', import.meta.url),
   readFileSync(new URL('../src/relay-robot-content-mapping-revocation-coordinator.ts', import.meta.url), 'utf8'),
 );
+const mapping = parseTypeScriptSource(
+  new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url), 'utf8'),
+);
 
 test('revokeRobotContentMapping delegates cross-runtime teardown ordering', () => {
   const revoke = functionCode(server, 'revokeRobotContentMapping');
-  assert.match(revoke, /robotContentMappingRevocationCoordinator\.revoke\(reason\)/);
+  assert.match(revoke, /relayRobotMapping\.revoke\(reason\)/);
   for (const step of [
     /robotPlayerOffset\.reset\(/,
     /robotContentTimeline\.reset\(/,
@@ -39,24 +43,32 @@ test('revokeRobotContentMapping delegates cross-runtime teardown ordering', () =
 
 test('server composition retains Robot mapping and calibration authority', () => {
   assert.ok(
-    importSources(server).includes('./relay-robot-content-mapping-revocation-coordinator.js'),
+    importSources(mapping).includes('./relay-robot-content-mapping-revocation-coordinator.js'),
   );
-  const composition = variableInitializerCode(server, 'robotContentMappingRevocationCoordinator');
+  assert.ok(importSources(server).includes('./relay-robot-mapping-orchestration.js'));
+  const composition = variableInitializerCode(mapping, 'revocation');
   assert.match(composition, /^createRelayRobotContentMappingRevocationCoordinator\(\{/);
-  assert.match(composition, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
-  assert.match(composition, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
-  assert.match(composition, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
-  assert.match(composition, /invalidateSourceMapping: \(\) => sourceRuntime\.invalidateMapping\(\)/);
-  assert.match(composition, /discardPrimedContent: \(\) => calibration\.discardPrimedContent\(\)/);
-  assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
+  assert.match(composition, /resetPlayerOffset: \(\) => dependencies\.offset\.reset\(\)/);
+  assert.match(composition, /resetContentTimeline: \(\) => dependencies\.timeline\.reset\(\)/);
+  assert.match(composition, /clearContentTransition: \(\) => clearTransition\(\)/);
+  assert.match(composition, /invalidateSourceMapping: \(\) => dependencies\.source\.invalidateMapping\(\)/);
+  assert.match(composition, /discardPrimedContent: \(\) => dependencies\.calibration\.discardPrimedContent\(\)/);
+  assert.match(composition, /clearContentValidation: \(\) => dependencies\.effects\.clearContentValidation\(\)/);
   assert.match(composition, /abortCalibrationIfCollecting: \(reason\) => \{/);
-  assert.match(composition, /if \(calibration\.collecting\) calibration\.fail\(reason\)/);
-  assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
-  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(composition, /if \(dependencies\.calibration\.collecting\) dependencies\.calibration\.fail\(reason\)/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => \{ dependencies\.effects\.syncAppliedCalibration\(\); \}/);
+  assert.match(composition, /reportSourceStatus: \(\) => dependencies\.effects\.reportSourceStatus\(\)/);
   assert.match(
     composition,
-    /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/,
+    /reportTimingStatus: \(\) => dependencies\.effects\.reportTimingStatus\(\)/,
   );
+  const production = variableInitializerCode(server, 'relayRobotMapping');
+  for (const binding of ['offset: robotPlayerOffset', 'timeline: robotContentTimeline',
+    'source: sourceRuntime', 'calibration,', 'transition: robotContentTransitionRuntime',
+    'clearContentValidation: clearContentValidationBaseline']) assert.ok(production.includes(binding));
+  assert.match(production, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
+  assert.match(production, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(production, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
   assert.doesNotMatch(
     composition,
     /bootProbeRuntime/,

@@ -46,8 +46,11 @@ test('server still owns registration authority, validation, and effects', () => 
   assert.match(serverFlow, /participants\.takeoverMic\(/);
   assert.match(serverFlow, /participants\.acquireMic\(/);
   assert.match(serverFlow, /commitSocketRole\(socket, 'publisher'\)/);
-  assert.match(serverFlow, /micRuntime\.bindPublisher\(/);
-  assert.match(serverFlow, /retirePublisherTransport\(/);
+  const lifecycle = readFileSync(new URL('../src/relay-mic-lifecycle.ts', import.meta.url), 'utf8');
+  assert.match(serverFlow, /relayMicLifecycle\.activate\(/);
+  assert.match(serverFlow, /mic: micRuntime/);
+  assert.match(lifecycle, /micRuntime\.bindPublisher\(/);
+  assert.match(lifecycle, /retirePublisherTransport\(/);
 
   assert.match(serverFlow, /infrastructureCapability\.authorized\(socket\)/);
   assert.match(serverFlow, /canClaimSocketRole\(socket, 'backing'\)/);

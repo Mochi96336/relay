@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 test('publisher reports browser-applied capture facts and worklet level as uplink diagnostics', async () => {
   const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -91,11 +92,10 @@ test('server uses recent clipping only as product quality truth, never timing au
     'input clipping must not silently become mixed-frame Take quality or timing authority',
   );
 
-  const calibrationApplyStart = serverSource.indexOf('function syncAppliedCalibration(');
-  const calibrationApplyEnd = serverSource.indexOf('function sourceStatusPayload(', calibrationApplyStart);
-  assert.ok(calibrationApplyStart >= 0 && calibrationApplyEnd > calibrationApplyStart);
+  const application = parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+    await readFile(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'));
   assert.doesNotMatch(
-    serverSource.slice(calibrationApplyStart, calibrationApplyEnd),
+    functionCode(application, 'syncAppliedCalibration'),
     /capture(?:Level|Clipping)/,
     'capture diagnostics must not steer calibration application',
   );

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { functionCode, parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
 
 /**
  * Structural rules for Robot bootstrap timing that the server-side harness
@@ -18,6 +19,10 @@ import test from 'node:test';
 const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 
 function functionBlock(name: string) {
+  if (['calibrationApplicability', 'syncContentValidationBaseline', 'contentValidationPathReady',
+    'maybeAutoCalibrate'].includes(name)) return functionCode(
+    parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+      readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8')), name);
   const start = server.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `${name} must exist`);
   const next = server.indexOf('\nfunction ', start + 1);
@@ -25,28 +30,34 @@ function functionBlock(name: string) {
 }
 
 test('boot-probe result cannot impersonate a confirmed content transition anchor', () => {
-  const begin = functionBlock('beginRobotContentTransition');
-  const reconcile = functionBlock('reconcileRobotContentTransitionWithFreshDelta');
+  const mapping = parseTypeScriptSource(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url), 'utf8'));
+  const begin = functionCode(mapping, 'beginTransition');
+  const reconcile = functionCode(mapping, 'reconcile');
   for (const block of [begin, reconcile]) {
-    assert.match(block, /appliedCalibrationKind\(\) === 'content'/);
-    assert.match(block, /!calibrationIsStale\(\)/);
+    assert.match(block, /dependencies\.queries\.appliedKind\(\) === 'content'/);
+    assert.match(block, /!dependencies\.queries\.calibrationIsStale\(\)/);
     assert.doesNotMatch(
       block,
-      /timingRuntime\.calibrationKind === 'content'/,
+      /(?:timingRuntime|dependencies\.timing)\.calibrationKind === 'content'/,
       'candidate content mode must not relabel a retained boot-probe result as content authority',
     );
   }
+  assert.match(variableInitializerCode(mapping, 'seek'), /mapping\.beginTransition\(/);
+  assert.match(functionCode(mapping, 'createRelayRobotMappingOrchestration'), /beginTransition: lifecycle\.beginTransition/);
+  assert.match(functionCode(mapping, 'requestBoundary'), /reconcile\(context, nowMs\)/,
+    'the actual boundary-request caller must use the same applied-authority reconciliation');
 });
 
 test('content provenance is read from applied authority, never the in-flight candidate', () => {
-  // Baseline semantics now live in a pure policy. The server must sample the
+  // Baseline semantics live in a pure policy. The canonical workflow samples the
   // applied authority and confirmed-result facts, then delegate; candidate
   // strategy metadata remains outside this provenance boundary.
   const baseline = functionBlock('syncContentValidationBaseline');
   assert.match(baseline, /decideContentValidationBaselineSync\(\{/);
-  assert.match(baseline, /appliedKind:\s*appliedCalibrationKind\(\)/);
+  assert.match(baseline, /appliedKind:\s*queries\.appliedCalibrationKind\(\)/);
   assert.match(baseline, /hasConfirmedResult:\s*confirmed !== null/);
-  assert.match(baseline, /calibrationStale:\s*confirmed !== null && calibrationIsStale\(\)/);
+  assert.match(baseline, /calibrationStale:\s*confirmed !== null && queries\.calibrationIsStale\(\)/);
   assert.doesNotMatch(
     baseline,
     /timingRuntime\.calibrationKind/,
@@ -58,14 +69,14 @@ test('content provenance is read from applied authority, never the in-flight can
   // read is now pure; candidate strategy still remains outside this boundary.
   const path = functionBlock('contentValidationPathReady');
   const prerequisites = path.indexOf('contentValidationPathPrerequisitesReady({');
-  const authorityRead = path.indexOf('const appliedKind = appliedCalibrationKind()');
+  const authorityRead = path.indexOf('const appliedKind = queries.appliedCalibrationKind()');
   const authorityGate = path.indexOf('contentValidationAuthorityReady({');
   const liveGate = path.indexOf('contentValidationLivePathReady({');
   assert.ok(prerequisites >= 0, 'path readiness must delegate prerequisite admission');
   assert.ok(authorityRead > prerequisites, 'applied authority must be sampled only after prerequisites');
   assert.ok(authorityGate > authorityRead, 'authority policy must consume the applied authority query');
   assert.ok(liveGate > authorityGate, 'transport/media liveness must be checked after authority admission');
-  assert.match(path, /bootProbeSettled:\s*bootProbeSettled\(nowMs\)/);
+  assert.match(path, /bootProbeSettled:\s*queries\.bootProbeSettled\(nowMs\)/);
   assert.doesNotMatch(
     path,
     /timingRuntime\.calibrationKind/,
@@ -101,7 +112,7 @@ test('every Robot mapping revocation goes through one teardown transaction', () 
   // The server adapter and every destructive caller must only delegate to that
   // one transaction rather than re-spelling any subset of its effects.
   const revoke = functionBlock('revokeRobotContentMapping');
-  assert.match(revoke, /robotContentMappingRevocationCoordinator\.revoke\(reason\)/);
+  assert.match(revoke, /relayRobotMapping\.revoke\(reason\)/);
   assert.doesNotMatch(
     revoke,
     /robotPlayerOffset\.reset\(\)|robotContentTimeline\.reset\(\)|sourceRuntime\.invalidateMapping\(\)|calibration\.discardPrimedContent\(\)|clearContentValidationBaseline\(\)|calibration\.fail\(|syncAppliedCalibration\(\)|broadcastJson\(/,
@@ -118,11 +129,14 @@ test('every Robot mapping revocation goes through one teardown transaction', () 
     /onDegraded: \(status\) => \{[\s\S]*?revokeRobotContentMapping\(\{/,
     'a degraded transition must revoke through the shared transaction',
   );
+  const mapping = parseTypeScriptSource(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url), 'utf8'));
   assert.match(
-    server,
-    /revokeContentMapping: \(reason\) => revokeRobotContentMapping\(\{ reason \}\)/,
+    variableInitializerCode(mapping, 'seek'),
+    /revokeContentMapping: \(reason\) => mapping\.revoke\(reason\)/,
     'a destructive Source seek must revoke through the shared transaction',
   );
+  assert.match(functionCode(mapping, 'createRelayRobotMappingOrchestration'), /revoke: lifecycle\.revoke/);
 });
 
 test('losing the Robot source aborts a calibration measured in the old reference frame', () => {

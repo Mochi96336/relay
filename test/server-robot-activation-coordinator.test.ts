@@ -18,13 +18,15 @@ const coordinator = parseTypeScriptSource(
   new URL('../src/relay-robot-activation-coordinator.ts', import.meta.url),
   readFileSync(new URL('../src/relay-robot-activation-coordinator.ts', import.meta.url), 'utf8'),
 );
+const mapping = parseTypeScriptSource(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url), 'utf8'));
 
 test('Robot hello keeps infrastructure and SourceRuntime attach authority in server', () => {
   const hello = objectArrowCallbackCode(server, 'robotLifecycleProtocol', 'robotSourceHello');
   assert.match(hello, /infrastructureCapability\.authorized\(socket\)/);
   assert.match(hello, /sourceRuntime\.isActive\(socket\)/);
   assert.match(hello, /sourceRuntime\.attachRobot\(socket\)/);
-  assert.match(hello, /robotActivationCoordinator\.activate\(\{ previous, replaced \}\)/);
+  assert.match(hello, /relayRobotMapping\.activateSource\(\{ previous, replaced \}\)/);
 
   assert.doesNotMatch(hello, /takeController\.noteQualityEvent\(/);
   assert.doesNotMatch(hello, /abandonProbeRun\(\)/);
@@ -37,20 +39,26 @@ test('Robot hello keeps infrastructure and SourceRuntime attach authority in ser
 });
 
 test('server composition retains Robot activation effects', () => {
-  assert.ok(importSources(server).includes('./relay-robot-activation-coordinator.js'));
-  const composition = variableInitializerCode(server, 'robotActivationCoordinator');
-  assert.match(composition, /^createRelayRobotActivationCoordinator<RelaySocket>/);
-  assert.match(composition, /type: 'robot-source-replaced'/);
-  assert.match(composition, /takeController\.noteQualityEvent\(event\)/);
-  assert.match(composition, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
-  assert.match(composition, /sessionActive: \(\) => session\.active/);
-  assert.match(composition, /resetPlayerOffset: \(\) => robotPlayerOffset\.reset\(\)/);
-  assert.match(composition, /resetContentTimeline: \(\) => robotContentTimeline\.reset\(\)/);
-  assert.match(composition, /clearContentTransition: \(\) => clearRobotContentTransition\(\)/);
-  assert.match(composition, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
-  assert.match(composition, /syncAppliedCalibration: \(\) => \{ syncAppliedCalibration\(\); \}/);
-  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
-  assert.match(composition, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
+  assert.ok(importSources(mapping).includes('./relay-robot-activation-coordinator.js'));
+  const composition = variableInitializerCode(mapping, 'activation');
+  const binding = variableInitializerCode(server, 'relayRobotMapping');
+  assert.match(composition, /^createRelayRobotActivationCoordinator<TSocket>/);
+  assert.match(composition, /dependencies\.effects\.notifyPreviousReplaced\(previous\)/);
+  assert.match(binding, /notifyPreviousReplaced: \(previous\) => sendJson\(previous, \{ type: 'robot-source-replaced' \}\)/);
+  assert.match(composition, /dependencies\.take\.noteQualityEvent\(event\)/);
+  assert.match(composition, /abandonProbeRun: \(\) => dependencies\.commands\.abandonProbeRun\(\)/);
+  assert.match(composition, /sessionActive: \(\) => dependencies\.mix\.active/);
+  assert.match(composition, /resetPlayerOffset: \(\) => dependencies\.offset\.reset\(\)/);
+  assert.match(composition, /resetContentTimeline: \(\) => dependencies\.timeline\.reset\(\)/);
+  assert.match(composition, /clearContentTransition: \(\) => mapping\.clearTransition\(\)/);
+  assert.match(composition, /dropLegacyCalibrationForRobot: \(\) => legacyDrop\.drop\(\)/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => \{ dependencies\.effects\.syncAppliedCalibration\(\); \}/);
+  assert.match(composition, /reportSourceStatus: \(\) => dependencies\.effects\.reportSourceStatus\(\)/);
+  assert.match(composition, /reportTimingStatus: \(\) => dependencies\.effects\.reportTimingStatus\(\)/);
+  for (const canonical of ['take: takeController', 'mix: session', 'commands: { abandonProbeRun }',
+    'offset: robotPlayerOffset', 'timeline: robotContentTimeline', 'calibration,']) assert.ok(binding.includes(canonical));
+  assert.match(binding, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(binding, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
 });
 
 test('Robot activation coordinator owns ordering only, not source or timing authority', () => {

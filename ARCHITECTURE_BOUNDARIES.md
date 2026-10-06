@@ -195,3 +195,54 @@ span, and all of them must use the same bound.
 Only the transport that currently owns playback may report a seek that
 invalidates mapping and calibration. A development adapter holds that authority
 only while no production Source does.
+
+## 8. The mix bus owns source membership and summing transitions
+
+`AudioSession` owns the shared clock, retained capture timelines, alignment and
+read planning, source output edges, and emitted frame evidence. `MixBus` owns
+source expectation, audible release holds, song duck, summing headroom, and the
+crossfade between single-source and two-source output.
+
+Transport expectation is not proof that audio has left the bus. A departing
+source keeps its release hold until `AudioSession` proves that its output edge
+is silent, no replacement edge remains active, and no retained PCM lies ahead.
+A hole inside retained audio cannot release the hold. Rejoining before that
+release completes continues the existing bus.
+
+Registration arms a join; real PCM from the joining source starts it. Its peer
+may be missing at that moment, in which case the single-source endpoint is
+silence. Join safety hands back to the ordinary sum only after both its own
+crossfade and the musical duck have settled.
+
+The musical duck target is sampled once per frame. Join ownership is sampled
+before each sample's source edges can finish a release, so that release changes
+the join target on the following sample. Refactoring these phases must preserve
+their ordering as well as the public PCM, evidence, position and telemetry
+contracts; the AudioSession golden record checks all four.
+
+Mic DSP has three separate owners beneath `AudioSession`: `MicGainRamp` owns
+the accepted gain target and the sample ramp, `MicLimiter` owns detector/gain
+dynamics, and `MicRawMeter` owns levels of accepted PCM before gain. Future gain
+projection must not advance the audible ramp. Server command authorization and
+clamping stay outside these DSP components.
+
+Raw meter history is retired as soon as capture replacement is known. Limiter
+history is retired when replacement becomes audible, seeded from its own
+look-ahead so a hot new capture cannot begin unprotected. `AudioSession` owns
+those boundary decisions and counts limiter evidence only for emitted real
+source samples.
+
+`CaptureRestartBoundaries` stores capture seams in mix-rate session-timeline
+coordinates. Mic queries retain seams for backwards and forwards read-head
+visits; Backing consumes due seams on its forward-only trajectory. A crossfade's
+old leg uses a forward-only interval even when its end lies behind the previous
+read position. `AudioSession` still owns when a seam starts an output edge or
+resets limiter history, and rebases and trims the seam owner with its timeline.
+
+`mic-frame-reader` keeps fractional PCM, missing/legacy evidence and raw-input
+clipping on one read trajectory. Its timeline structure and clipping/seam
+interfaces expose reads only; it cannot own source resets, alignment, output
+edges or limiter dynamics. Lookahead continues at unity rate after the frame's
+landing and is not charged to emitted-frame evidence. Read-head crossfade
+modifies only the caller-owned current PCM and holds its old leg at a
+forward-only capture seam, never rewriting retained source chunks.

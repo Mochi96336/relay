@@ -8,27 +8,33 @@ const coordinator = readFileSync(
   'utf8',
 );
 
+const lifecycle = readFileSync(new URL('../src/relay-mic-lifecycle.ts', import.meta.url), 'utf8');
+
 test('server delegates only Mic disconnect ordering through the coordinator seam', () => {
-  assert.match(server, /createRelayMicDisconnectCoordinator<RelaySocket>/);
-  assert.match(server, /micDisconnectCoordinator\.handle\(socket\)/);
+  assert.match(server, /createRelayMicLifecycle<RelaySocket>/);
+  assert.match(server, /relayMicLifecycle\.disconnect\(socket\)/);
   assert.doesNotMatch(server, /if \(micRuntime\.isPublisher\(socket\)\) \{\s*takeController\.noteQualityEvent\('mic-transport-disconnected'\)/);
 });
 
 test('server composition retains Mic disconnect authority and domain effects', () => {
-  assert.match(server, /isPublisher: \(socket\) => micRuntime\.isPublisher\(socket\)/);
-  assert.match(server, /noteDisconnected: \(\) => takeController\.noteQualityEvent\('mic-transport-disconnected'\)/);
-  assert.match(server, /socket\.participantId\s*&& participants\.micOwnerId === socket\.participantId/);
-  assert.match(server, /detachPublisher: \(socket\) => micRuntime\.detachPublisher\(socket\)/);
-  assert.match(server, /clearMediaAuthority: \(\) => clearMicMediaAuthority\(\)/);
-  assert.match(server, /const directMediaStillLive = webTransportMicConnected\(\)/);
-  assert.match(server, /session\.setMicExpected\(directMediaStillLive\)/);
-  assert.match(server, /micTransportGrace\.schedule\(ownerId\)/);
-  assert.match(server, /maybeStopLiveSourceWhenUnarmed: \(\) => maybeStopLiveSourceWhenUnarmed\(\)/);
-  assert.match(server, /calibration\.collecting/);
-  assert.match(server, /calibration\.fail\('Microphone disconnected during calibration\.'\)/);
-  assert.match(server, /cancelActiveContentValidation\(\)/);
-  assert.match(server, /broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
-  assert.match(server, /reportStatus: \(\) => broadcastStatus\(\)/);
+  assert.match(lifecycle, /isPublisher: \(socket\) => micRuntime\.isPublisher\(socket\)/);
+  assert.match(lifecycle, /noteDisconnected: \(\) => takeController\.noteQualityEvent\('mic-transport-disconnected'\)/);
+  assert.match(lifecycle, /socket\.participantId\s*&& participants\.micOwnerId === socket\.participantId/);
+  assert.match(lifecycle, /detachPublisher: \(socket\) => micRuntime\.detachPublisher\(socket\)/);
+  assert.match(lifecycle, /clearMediaAuthority: \(\) => clearMicMediaAuthority\(\)/);
+  assert.match(lifecycle, /const directMediaStillLive = micRuntime\.directMediaConnected\(\)/);
+  assert.match(lifecycle, /session\.setMicExpected\(directMediaStillLive\)/);
+  assert.match(lifecycle, /micTransportGrace\.schedule\(ownerId\)/);
+  assert.match(lifecycle, /maybeStopLiveSourceWhenUnarmed: \(\) => maybeStopLiveSourceWhenUnarmed\(\)/);
+  assert.match(lifecycle, /calibration\.collecting/);
+  assert.match(lifecycle, /calibration\.fail\('Microphone disconnected during calibration\.'\)/);
+  assert.match(lifecycle, /commands\.cancelActiveContentValidation\(\)/);
+  assert.match(lifecycle, /effects\.reportTimingStatus\(\)/);
+  assert.match(lifecycle, /reportStatus: \(\) => effects\.reportStatus\(\)/);
+
+  assert.match(server, /mic: micRuntime/);
+  assert.match(server, /participants,/);
+  assert.match(server, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
 
   assert.doesNotMatch(
     coordinator,
@@ -44,8 +50,8 @@ test('socket close retains replacement fence plus Robot, Backing and participant
   const close = server.slice(closeStart, closeEnd);
 
   assert.match(close, /if \(!socket\.replaced\) \{/);
-  assert.match(close, /robotDisconnectCoordinator\.handle\(socket\)/);
-  assert.match(close, /micDisconnectCoordinator\.handle\(socket\)/);
+  assert.match(close, /relayRobotMapping\.disconnectSource\(socket\)/);
+  assert.match(close, /relayMicLifecycle\.disconnect\(socket\)/);
   assert.match(close, /backingDisconnectCoordinator\.handle\(socket\)/);
   assert.match(close, /participants\.detach\(socket\.participantConnectionId, Date\.now\(\)\)/);
 });

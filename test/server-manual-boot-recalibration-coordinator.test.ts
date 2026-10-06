@@ -17,12 +17,14 @@ const coordinator = parseTypeScriptSource(
   new URL('../src/relay-manual-boot-recalibration-coordinator.ts', import.meta.url),
   readFileSync(new URL('../src/relay-manual-boot-recalibration-coordinator.ts', import.meta.url), 'utf8'),
 );
+const application = parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'));
 const serverCode = sourceCode(server);
 const coordinatorCode = sourceCode(coordinator);
 
 test('manual Robot recalibration delegates only after server command authority', () => {
   assert.match(
-    serverCode,
+    sourceCode(application),
     /import \{ createRelayManualBootRecalibrationCoordinator \} from '\.\/relay-manual-boot-recalibration-coordinator\.js';/,
   );
   assert.match(serverCode, /requireMicOwnerCommand\(socket, 'start-timing-calibration'\)/);
@@ -30,7 +32,8 @@ test('manual Robot recalibration delegates only after server command authority',
   assert.match(serverCode, /restartManualBootCalibration\(nowMs\)/);
 
   const restart = functionCode(server, 'restartManualBootCalibration');
-  assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
+  assert.match(restart, /relayCalibrationLifecycle\.restartManualBootCalibration\(nowMs\)/);
+  assert.match(functionCode(application, 'restartManualBootCalibration'), /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
   assert.doesNotMatch(restart, /calibration\./);
   assert.doesNotMatch(restart, /timingRuntime\./);
   assert.doesNotMatch(restart, /bootProbeRuntime\./);
@@ -40,17 +43,21 @@ test('manual Robot recalibration delegates only after server command authority',
 });
 
 test('server composition retains candidate-state and publication effects', () => {
-  const composition = variableInitializerCode(server, 'manualBootRecalibrationCoordinator');
+  const composition = variableInitializerCode(application, 'manualBootRecalibrationCoordinator');
+  const binding = variableInitializerCode(server, 'relayCalibrationLifecycle');
 
-  assert.match(composition, /clearContentValidation: \(\) => clearContentValidationBaseline\(\)/);
+  assert.match(composition, /clearContentValidation: \(\) => commands\.clearContentValidation\(\)/);
+  assert.match(binding, /clearContentValidation: clearContentValidationBaseline/);
   assert.match(composition, /beginExternalRecalibration: \(\) => calibration\.beginExternalRecalibration\(\)/);
   assert.match(composition, /beginManualBootProbe: \(\) => timingRuntime\.beginBootProbe\(false\)/);
-  assert.match(composition, /abandonProbeRun: \(\) => abandonProbeRun\(\)/);
+  assert.match(composition, /abandonProbeRun: \(\) => commands\.abandonProbeRun\(\)/);
   assert.match(composition, /resetProbeCorrelations: \(\) => bootProbeRuntime\.resetCorrelations\(\)/);
-  assert.match(composition, /syncAppliedCalibration: \(\) => syncAppliedCalibration\(\)/);
-  assert.match(composition, /maybeStartProbeCalibration: \(nowMs\) => maybeStartProbeCalibration\(nowMs\)/);
-  assert.match(composition, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
-  assert.match(composition, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
+  assert.match(composition, /syncAppliedCalibration: \(\) => commands\.syncAppliedCalibration\(\)/);
+  assert.match(composition, /maybeStartProbeCalibration: \(nowMs\) => commands\.maybeStartProbeCalibration\(nowMs\)/);
+  assert.match(composition, /reportTimingStatus: \(\) => effects\.reportTimingStatus\(\)/);
+  assert.match(composition, /reportSourceStatus: \(\) => effects\.reportSourceStatus\(\)/);
+  assert.match(binding, /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
+  assert.match(binding, /reportSourceStatus: \(\) => broadcastJson\(sourceStatusPayload\(\)\)/);
 });
 
 test('manual recalibration coordinator owns no runtime or command authority', () => {

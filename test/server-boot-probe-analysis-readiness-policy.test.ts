@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
+
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
+);
 
 function functionBlock(name: string) {
-  const start = server.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `${name} must exist`);
-  const next = server.indexOf('\nfunction ', start + 1);
-  return server.slice(start, next === -1 ? server.length : next);
+  return functionCode(workflow, name);
 }
 
 test('Boot Probe analysis readiness delegates identity/deadline/window precedence', () => {
@@ -32,7 +34,7 @@ test('stale analysis settlement effects remain server-owned', () => {
   const decision = block.indexOf('decideBootProbeAnalysisReadiness({');
   const abandonBranch = block.indexOf("if (readiness.kind === 'abandon')");
   const abandon = block.indexOf('abandonProbeRun()', abandonBranch);
-  const report = block.indexOf('broadcastJson(timingCalibrationStatusPayload())', abandonBranch);
+  const report = block.indexOf('effects.reportTimingStatus()', abandonBranch);
   assert.ok(decision >= 0);
   assert.ok(abandonBranch > decision);
   assert.ok(abandon > abandonBranch);

@@ -7,6 +7,7 @@ import { encodeAudioPacket } from '../src/audio-packet.js';
 import { parseAudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { AudioSessionPolicy, resolveAudioSessionType } from '../public/audio-session-policy.js';
 import { RelayClient, startRelay } from './helpers/harness.js';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 const micRuntimeSource = readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8');
@@ -57,8 +58,14 @@ test('fresh receiver can resume a continuing non-zero sequence after Relay resta
 });
 
 test('Take freezes applied timing calibration until recording and finalizing finish', () => {
-  assert.match(serverSource, /function syncAppliedCalibration\(\) \{\n  if \(takeBlocksCalibration\(\)\) return false;/);
-  assert.match(serverSource, /function maybeReapplyBootCalibration[\s\S]*if \(takeBlocksCalibration\(\)\) return;/);
+  const application = parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'));
+  assert.match(functionCode(application, 'syncAppliedCalibration'), /function syncAppliedCalibration\(\) \{\s+if \(queries\.takeBlocksCalibration\(\)\) return false;/);
+  assert.match(serverSource, /function syncAppliedCalibration\(\) \{\s+return relayCalibration\.syncApplied\(\);/);
+  const workflow = parseTypeScriptSource(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'));
+  assert.match(functionCode(workflow, 'maybeReapplyBootCalibration'), /if \(queries\.takeBlocksCalibration\(\)\) return;/);
+  assert.match(serverSource, /function maybeReapplyBootCalibration[\s\S]*relayBootProbe\.stepReapply\(nowMs\)/);
 });
 
 test('Listen consumes mix rate, stays at unity or below, and recovers suspended contexts', () => {

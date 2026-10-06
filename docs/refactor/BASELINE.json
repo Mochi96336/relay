@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "captured_date": "2026-10-05",
+  "timezone": "Asia/Taipei",
+  "purpose": "Read-only starting-state identification, not a restore bundle or permanent hash requirement.",
+  "source_worktree": "/tmp/claude-1000/-home-mochi-relay/e8ac15ae-68bf-4977-9fa9-2c586edcef32/scratchpad/wt9",
+  "source_branch": "refactor/mic-timeline",
+  "source_HEAD": "7b5d550682d43ae8eba3f55aeff3bf0b239ba056",
+  "documents_root": "/home/mochi/relay",
+  "documents_HEAD": "7fe0c279c06ec14b12bec67e6ebf91db74ef3334",
+  "known_full_test": {
+    "command": "npm test",
+    "tests": 2531,
+    "suites": 115,
+    "fail": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "duration_ms": 719745.588048,
+    "log": "/tmp/relay-mixer-dsp-full-suite.log",
+    "historical": true,
+    "browser_ci_rerun": false
+  },
+  "files": {
+    ".github/workflows/ci.yml": {
+      "sha256": "4bf8cb9761cad57aa49b830db72c33f5a746c01a4f4feb8ab7798738c607056b",
+      "preexisting_dirty": false
+    },
+    ".github/workflows/production-browser-audio-proof.yml": {
+      "sha256": "0bf2acd1e835f6b5f2a2cf0bc2453c65fcf0c3f9ee90bbf808acccaa0dea47b8",
+      "preexisting_dirty": false
+    },
+    "ARCHITECTURE_BOUNDARIES.md": {
+      "sha256": "ef50cd06ad9433e39ff6c7c827ac10586bc81d5343c8dcc46ed766daa71a2a9a",
+      "preexisting_dirty": true
+    },
+    "SESSION_MODEL.md": {
+      "sha256": "5de87c0efb02ac0a18693eabe170c5415d2e417ff392001a8280202eacbdd33f",
+      "preexisting_dirty": false
+    },
+    "package-lock.json": {
+      "sha256": "598fa114c3193c75c9ba88bff6a79d2dee96a615f0c2ad739e06dafafc53e2ea",
+      "preexisting_dirty": false
+    },
+    "package.json": {
+      "sha256": "59559f4d6123c7273cc0a7a9ab6fb663a0cc77a78b5ed85dbcb842e91a4cc387",
+      "preexisting_dirty": false
+    },
+    "public/app.js": {
+      "sha256": "5f71426f65b7149064bf2ee38ace23aa440435001e0a6f0d3d76286e62496ea4",
+      "preexisting_dirty": false
+    },
+    "public/audio-transport.js": {
+      "sha256": "297cda262785573a736791a418920b521c09b9db9a56135dcc857cc2e6c7cdc4",
+      "preexisting_dirty": false
+    },
+    "public/listen.js": {
+      "sha256": "235d110ac80ee39fe8448a3e70d28f69882f153658cd206c3e57e78688e67dbe",
+      "preexisting_dirty": false
+    },
+    "public/source.js": {
+      "sha256": "84778fc7aa15da2fa1744f65893f9541e4fc7d1e91b9e7371bd20e37789c5fdb",
+      "preexisting_dirty": false
+    },
+    "public/youtube.js": {
+      "sha256": "73de10aede089a1ffe861aee307158d38c6454ccce500f28545c509d20d16219",
+      "preexisting_dirty": false
+    },
+    "src/audio-packet-receiver.ts": {
+      "sha256": "4c68960ffaef59aacf7ffefdfa6fa2d88125a7c7835df9134fc668ca185aa298",
+      "preexisting_dirty": false
+    },
+    "src/audio-session.ts": {
+      "sha256": "64269f9f2870e7ebfddb947a2d5595a711b50a43e69761c5bc13a9f0fb8d1050",
+      "preexisting_dirty": true
+    },
+    "src/mic-clock-trim.ts": {
+      "sha256": "623a26e66ad6ba7c8dccbc98f7f551f360690a45caa45b98791cb5db93cbd2bc",
+      "preexisting_dirty": false
+    },
+    "src/mic-frontier-correction.ts": {
+      "sha256": "c730023113046b2f4a8e078d916e508362d5d25f984029d1aee9c1008fdd33b5",
+      "preexisting_dirty": false
+    },
+    "src/mic-gain-ramp.ts": {
+      "sha256": "fcf6536213c977096f4309b7e35806ab17527067ff5d1eb2b49e9c6f991f390e",
+      "preexisting_dirty": true
+    },
+    "src/mic-limiter.ts": {
+      "sha256": "ebce0266b048e61fbb9b2313bbc531abe71efe26ab90a83fe43fa8470a1c1fe6",
+      "preexisting_dirty": true
+    },
+    "src/mic-raw-meter.ts": {
+      "sha256": "0b927a49a0457ff34c9dfe7cb8e0a2f7bfd9f102ae7aebffa62c5fdc7b38c2b1",
+      "preexisting_dirty": true
+    },
+    "src/mic-runtime.ts": {
+      "sha256": "f8ae8121bf37b408973581ae150ef4085ac0ca17f999f0eaa472aecb3fbf4bf7",
+      "preexisting_dirty": false
+    },
+    "src/mix-bus.ts": {
+      "sha256": "903996f9f0b29f0d057ad1b2eb3c3d9b464dd2ee915f2f5144fa088473acdd6f",
+      "preexisting_dirty": true
+    },
+    "src/pcm-timeline.ts": {
+      "sha256": "2c18be0b2edf5b9f876a0c59c64120519ffac0b5c47d8f9bf780dd01d7d1f03e",
+      "preexisting_dirty": false
+    },
+    "src/relay-status-projection.ts": {
+      "sha256": "9b54133b6e1e1a529203bf16feb7fb2eaa998fa8747ce4a0d6614a96b357a71b",
+      "preexisting_dirty": false
+    },
+    "src/server.ts": {
+      "sha256": "e15ba0c720b66f3501be2147eaa43a1dcc7e7fa67acd2d598c6f4a36a80486f8",
+      "preexisting_dirty": false
+    },
+    "src/source-output-edge.ts": {
+      "sha256": "ea6d5a91bd45a87b460d650a2c307f624f5be29ba685686a2a64cee40472a33c",
+      "preexisting_dirty": false
+    },
+    "src/take-controller.ts": {
+      "sha256": "3e1b36ba4a6569480746642590997d2f719c0f72bdcf2539587b100df27f9e25",
+      "preexisting_dirty": false
+    },
+    "src/take-library.ts": {
+      "sha256": "64ed27d47c213b417f6016e3649e9b840504194f5847bd52f3a33504a61618d8",
+      "preexisting_dirty": false
+    },
+    "src/timing-runtime.ts": {
+      "sha256": "58b044ab7eb9c8b6e483fd023e028e0f2794bd2a494727fa0472812409cb5255",
+      "preexisting_dirty": false
+    },
+    "test/audio-session-golden.test.ts": {
+      "sha256": "8529e4113129b423fea34c83b1960bd422fff7a720a21b82d64d393feb815d77",
+      "preexisting_dirty": false
+    },
+    "test/audio-session-mic-gain-authority.test.ts": {
+      "sha256": "f4f718dd1d5df353318d2870a66916708a449460cc8b7254ef13535ba5895b80",
+      "preexisting_dirty": true
+    },
+    "test/mic-gain-ramp.test.ts": {
+      "sha256": "303767c958465989d8c3fb6379df30870bc9b681004cfee1a41b606655cb6da6",
+      "preexisting_dirty": true
+    },
+    "test/mic-limiter.test.ts": {
+      "sha256": "d349cb76795edd237e0553272ca6e07eadfd8eca21f3ad9ce2654202f3f980fd",
+      "preexisting_dirty": true
+    },
+    "test/mic-raw-meter.test.ts": {
+      "sha256": "d4c612d310380617733307a08c04edd6df096dc25756961934c739b6552e1600",
+      "preexisting_dirty": true
+    },
+    "test/mix-bus.test.ts": {
+      "sha256": "99c3b1bb8b65ebe90e28a2fd45bbd1e1a8974642a4396cd56373a567ca3dd6d1",
+      "preexisting_dirty": true
+    }
+  }
+}

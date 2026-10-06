@@ -10,9 +10,9 @@ import {
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
 );
 const coordinator = parseTypeScriptSource(
   new URL('../src/relay-boot-probe-calibration-promotion-coordinator.ts', import.meta.url),
@@ -23,7 +23,7 @@ const coordinator = parseTypeScriptSource(
 );
 
 test('boot-probe promotion delegates synchronous ordering through the coordinator seam', () => {
-  const promotion = functionCode(server, 'promoteBootProbeCalibration');
+  const promotion = functionCode(workflow, 'promoteBootProbeCalibration');
   assert.match(
     promotion,
     /bootProbeCalibrationPromotionCoordinator\.promote\(mutateProbe, result\)/,
@@ -36,9 +36,9 @@ test('boot-probe promotion delegates synchronous ordering through the coordinato
 
 test('server composition retains Boot Probe timing and calibration authorities', () => {
   assert.ok(
-    importSources(server).includes('./relay-boot-probe-calibration-promotion-coordinator.js'),
+    importSources(workflow).includes('./relay-boot-probe-calibration-promotion-coordinator.js'),
   );
-  const composition = variableInitializerCode(server, 'bootProbeCalibrationPromotionCoordinator');
+  const composition = variableInitializerCode(workflow, 'bootProbeCalibrationPromotionCoordinator');
   assert.match(composition, /^createRelayBootProbeCalibrationPromotionCoordinator\(\{/);
   assert.match(
     composition,
@@ -46,7 +46,7 @@ test('server composition retains Boot Probe timing and calibration authorities',
   );
   assert.match(
     composition,
-    /applyExternalResult: \(result\) => calibration\.applyExternalResult\(result\)/,
+    /applyExternalResult: result => calibration\.applyExternalResult\(result\)/,
   );
 });
 
@@ -60,7 +60,7 @@ test('Boot Probe promotion coordinator owns ordering only, not runtime authority
 });
 
 test('fresh two-leg probe result delegates ordered promotion without duplicating settlement effects', () => {
-  const finish = functionCode(server, 'maybeFinishProbeAnalysis');
+  const finish = functionCode(workflow, 'maybeFinishProbeAnalysis');
 
   assert.match(
     finish,
@@ -71,13 +71,13 @@ test('fresh two-leg probe result delegates ordered promotion without duplicating
 });
 
 test('backing completion consumes Mic evidence through the BootProbeRuntime context boundary', () => {
-  const finish = functionCode(server, 'maybeFinishProbeAnalysis');
+  const finish = functionCode(workflow, 'maybeFinishProbeAnalysis');
   const consume = finish.indexOf('bootProbeRuntime.takeMicLegForContext({');
   const combine = finish.indexOf('combineBootCalibration({', consume);
 
   assert.match(
     finish,
-    /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*micSourceRate: micRuntime\.sampleRate,\s*\}\)/,
+    /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*micSourceRate: micRuntime\.sampleRate,?\s*\}\)/,
   );
   assert.doesNotMatch(
     finish,
@@ -89,11 +89,11 @@ test('backing completion consumes Mic evidence through the BootProbeRuntime cont
 });
 
 test('delta reapply reads probe confidence only through the ordered promotion seam', () => {
-  const reapply = functionCode(server, 'maybeReapplyBootCalibration');
+  const reapply = functionCode(workflow, 'maybeReapplyBootCalibration');
 
   assert.match(
     reapply,
-    /promoteBootProbeCalibration\([\s\S]*bootProbeRuntime\.reapplyCalibration\(advanceMs, currentDeltaMs\(nowMs\)\)[\s\S]*micLagMs: advanceMs[\s\S]*confidence: bootProbeRuntime\.confidence \?\? 0/,
+    /promoteBootProbeCalibration\([\s\S]*bootProbeRuntime\.reapplyCalibration\(advanceMs, queries\.currentDeltaMs\(nowMs\)\)[\s\S]*micLagMs: advanceMs[\s\S]*confidence: bootProbeRuntime\.confidence \?\? 0/,
   );
   assert.doesNotMatch(reapply, /timingRuntime\.markBootProbeAuthority\(\)/);
   assert.doesNotMatch(reapply, /calibration\.applyExternalResult\(/);

@@ -10,6 +10,7 @@ import {
 import { shouldSetPlaybackRate } from '../public/room-song-seek-policy.js';
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
+import { functionCode, parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
 
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const VIDEO = 'dQw4w9WgXcQ';
@@ -274,5 +275,11 @@ test('browser carries folded mutation authority and predecessor provenance', asy
   assert.match(source, /observedCommandTransitions/);
   assert.match(source, /supersedesCommandId === serverMutation\.commandId/);
   assert.match(source, /roomCommandOwnsLocalAction/);
-  assert.match(server, /supersedesCommandId: command\.supersedesCommandId/);
+  const orchestration = await readFile(new URL('../src/relay-song-orchestration.ts', import.meta.url), 'utf8');
+  const songSource = parseTypeScriptSource(new URL('../src/relay-song-orchestration.ts', import.meta.url), orchestration);
+  const serverSource = parseTypeScriptSource(new URL('../src/server.ts', import.meta.url), server);
+  assert.match(functionCode(songSource, 'applyPayload'), /supersedesCommandId: command\.supersedesCommandId/);
+  assert.match(variableInitializerCode(songSource, 'registration'), /playback\.send\(identity, commandOrchestration\.applyPayload\(command\)\)/);
+  assert.match(variableInitializerCode(serverSource, 'relaySongLifecycle'), /commandOrchestration: relaySongCommands/);
+  assert.match(variableInitializerCode(serverSource, 'relaySongCommands'), /commands: roomSongCommands/);
 });

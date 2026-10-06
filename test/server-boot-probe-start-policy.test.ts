@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
+
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
+);
 
 function functionBlock(name: string) {
-  const start = server.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `${name} must exist`);
-  const next = server.indexOf('\nfunction ', start + 1);
-  return server.slice(start, next === -1 ? server.length : next);
+  return functionCode(workflow, name);
 }
 
 test('Boot Probe scheduler reconciles stale Mic leg before policy admission', () => {
@@ -31,11 +33,11 @@ test('Boot Probe scheduler preserves lazy stale and lifecycle sampling order', (
   const block = functionBlock('maybeStartProbeCalibration');
   assert.match(
     block,
-    /calibrationStale:\s*candidateIsBootProbe && hasCalibrationResult\s*\? calibrationIsStale\(\)\s*:\s*false/,
+    /calibrationStale:\s*candidateIsBootProbe && hasCalibrationResult\s*\? queries\.calibrationIsStale\(\)\s*:\s*false/,
   );
   const authority = block.indexOf('bootProbeStartAuthorityAllowsAttempt({');
   const lifecycle = block.indexOf('if (!bootProbeRuntime.lifecycleIdle) return;');
-  const status = block.indexOf('const probeErrored = probeStatus(nowMs).error !== null');
+  const status = block.indexOf('const probeErrored = queries.probeStatus(nowMs).error !== null');
   const completed = block.indexOf('bootProbeRuntime.completedContextMatches(context)');
   const target = block.indexOf('selectBootProbeStartTarget({');
   assert.ok(authority >= 0);

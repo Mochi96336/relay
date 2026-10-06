@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { functionCode, parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
 
 const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 
 function functionBlock(name: string) {
+  if (name === 'maybeAutoCalibrate' || name === 'contentValidationPathReady') return functionCode(
+    parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+      readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8')), name);
   const start = server.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `${name} must exist`);
   const next = server.indexOf('\nfunction ', start + 1);
@@ -20,9 +24,12 @@ function commandHandlerBlock(name: string) {
 }
 
 test('Robot content evidence readiness rejects a pending backing boundary even while the timeline is fresh', () => {
-  const block = functionBlock('robotContentEvidenceMappingReady');
-  assert.match(block, /robotContentMappingReady\(nowMs\)/);
-  assert.match(block, /!robotContentTimeline\.needsBackingBoundary\(calibrationContext\(\)\)/);
+  const mapping = parseTypeScriptSource(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url), 'utf8'));
+  const block = functionCode(mapping, 'contentEvidenceReady');
+  assert.match(block, /contentMappingReady\(nowMs\)/);
+  assert.match(block, /!dependencies\.timeline\.needsBackingBoundary\(dependencies\.queries\.context\(\)\)/);
+  assert.match(functionBlock('robotContentEvidenceMappingReady'), /relayRobotMapping\.contentEvidenceReady\(nowMs\)/);
 });
 
 test('priming, automatic calibration and content validation all require an evidence-usable Robot mapping', () => {
@@ -34,7 +41,7 @@ test('priming, automatic calibration and content validation all require an evide
   assert.match(automatic, /autoContentCalibrationPrerequisitesReady\(\{/);
   assert.match(
     automatic,
-    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
+    /robotEvidenceMappingReady:\s*!robotRoute \|\| queries\.robotContentEvidenceMappingReady\(nowMs\)/,
   );
 
   // Content-validation admission now delegates its prerequisite decision to a
@@ -45,15 +52,22 @@ test('priming, automatic calibration and content validation all require an evide
   assert.match(validation, /contentValidationPathPrerequisitesReady\(\{/);
   assert.match(
     validation,
-    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
+    /robotEvidenceMappingReady:\s*!robotRoute \|\| queries\.robotContentEvidenceMappingReady\(nowMs\)/,
   );
 });
 
 test('ProductStatus and command rejection share the content mapping pending policy', () => {
-  assert.match(
-    functionBlock('productStatusFacts'),
-    /contentEvidenceReady: robotContentEvidenceMappingReady\(nowMs\)/,
+  const facts = parseTypeScriptSource(
+    new URL('../src/relay-status-facts.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-status-facts.ts', import.meta.url), 'utf8'),
   );
+  assert.match(
+    functionCode(facts, 'product'),
+    /contentEvidenceReady: readers\.robot\.contentEvidenceReady\(nowMs\)/,
+  );
+  const composition = parseTypeScriptSource(new URL('../src/server.ts', import.meta.url), server);
+  assert.match(variableInitializerCode(composition, 'relayStatusFacts'),
+    /contentEvidenceReady: robotContentEvidenceMappingReady/);
   assert.match(
     server,
     /case 'content-mapping-pending':[\s\S]*?type: 'calibration-command-rejected'[\s\S]*?reason: 'content-mapping-pending'/,
@@ -75,6 +89,6 @@ test('a degraded Robot content transition ends a stuck content calibration throu
   );
   assert.match(
     functionBlock('revokeRobotContentMapping'),
-    /robotContentMappingRevocationCoordinator\.revoke\(reason\)/,
+    /relayRobotMapping\.revoke\(reason\)/,
   );
 });

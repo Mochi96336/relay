@@ -11,7 +11,10 @@ const server = parseTypeScriptSource(
 
 test('manual Robot recalibration is explicit and does not masquerade as the automatic path', () => {
   const restart = functionCode(server, 'restartManualBootCalibration');
-  assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
+  assert.match(restart, /relayCalibrationLifecycle\.restartManualBootCalibration\(nowMs\)/);
+  const application = parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'));
+  assert.match(functionCode(application, 'restartManualBootCalibration'), /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
   assert.doesNotMatch(restart, /automatic/);
   assert.doesNotMatch(restart, /calibration\.reset\(\)/);
   assert.doesNotMatch(restart, /clearBootCalibrationState\(\)/);
@@ -19,7 +22,9 @@ test('manual Robot recalibration is explicit and does not masquerade as the auto
 });
 
 test('automatic boot-probe remains owned by the probe request path', () => {
-  const sendProbe = functionCode(server, 'sendProbeRequest');
+  const workflow = parseTypeScriptSource(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'));
+  const sendProbe = functionCode(workflow, 'sendProbeRequest');
   assert.match(sendProbe, /timingRuntime\.beginBootProbe\(true\)/);
   assert.doesNotMatch(sendProbe, /restartManualBootCalibration\(/);
 });

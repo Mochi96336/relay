@@ -17,6 +17,8 @@ const protocol = parseTypeScriptSource(
   new URL('../src/relay-infrastructure-event-protocol.ts', import.meta.url),
   readFileSync(new URL('../src/relay-infrastructure-event-protocol.ts', import.meta.url), 'utf8'),
 );
+const mapping = parseTypeScriptSource(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url), 'utf8'));
 
 test('server delegates low-risk infrastructure observations through their own routing seam', () => {
   const serverCode = sourceCode(server);
@@ -64,12 +66,16 @@ test('server still owns infrastructure observation authority and effects', () =>
   assert.match(serverFlow, /sourceRuntime\.canReportSeek\(socket\)/);
   assert.match(serverFlow, /robotContentTransitionRuntime\.clearPendingBoundary\(\)/);
   assert.match(serverFlow, /robotContentTimeline\.noteFollowerCorrection\(/);
-  assert.match(serverFlow, /sourceSeekTransactionCoordinator\.handle\(\{/);
-  assert.match(serverFlow, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
-  assert.match(serverFlow, /beginRobotContentTransition\(/);
+  assert.match(serverFlow, /relayRobotMapping\.handleSourceSeek\(\{/);
+  const seek = variableInitializerCode(mapping, 'seek');
+  assert.match(seek, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
+  assert.match(seek, /mapping\.beginTransition\(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\)/);
   // The destructive branch's teardown is the server's one revocation
   // transaction, so the composition supplies that rather than each step.
-  assert.match(serverFlow, /revokeContentMapping: \(reason\) => revokeRobotContentMapping\(\{ reason \}\)/);
+  assert.match(seek, /revokeContentMapping: \(reason\) => mapping\.revoke\(reason\)/);
+  const root = functionCode(mapping, 'createRelayRobotMappingOrchestration');
+  assert.match(root, /beginTransition: lifecycle\.beginTransition/);
+  assert.match(root, /revoke: lifecycle\.revoke/);
 
   assert.doesNotMatch(
     factory,

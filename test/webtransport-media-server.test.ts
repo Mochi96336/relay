@@ -118,10 +118,13 @@ it('logs direct-media listening only when HTTP/3 actually started', () => {
 
 it('retires direct-media authority at every Mic ownership terminal boundary', () => {
   const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+  const lifecycle = readFileSync(new URL('../src/relay-mic-lifecycle.ts', import.meta.url), 'utf8');
+  assert.match(server, /relayMicLifecycle\.expire\(expectedOwnerId\)/);
+  assert.match(server, /relayMicLifecycle\.clearMediaAuthority\(\)/);
 
   assert.match(
-    server,
-    /participants\.releaseMic\(expectedOwnerId, 'transport-expired'\)[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}applyMicOwnerEffects\(released\.effects\)/,
+    lifecycle,
+    /participants\.releaseMic\(expectedOwnerId, 'transport-expired'\)[\s\S]{0,500}clearMicMediaAuthority\(\)[\s\S]{0,500}commands\.applyOwnershipEffects\(released\.effects\)/,
     'Mic transport-grace expiry must retire WebTransport authority while applying canonical room effects',
   );
   assert.match(
@@ -136,7 +139,7 @@ it('retires direct-media authority at every Mic ownership terminal boundary', ()
   );
   assert.match(
     server,
-    /async function gracefulShutdown\(signal: NodeJS\.Signals\)[\s\S]{0,2000}clearInterval\(mixerTimer\)[\s\S]{0,2000}await takeController\.shutdown\(Date\.now\(\)\)[\s\S]{0,1000}await webTransportMedia\.stop\(\)[\s\S]{0,1000}for \(const client of wss\.clients\) client\.terminate\(\)[\s\S]{0,1000}wss\.close/,
+    /async function gracefulShutdown\(signal: NodeJS\.Signals\)[\s\S]{0,2000}relayMixPump\.stop\(\)[\s\S]{0,2000}await takeController\.shutdown\(Date\.now\(\)\)[\s\S]{0,1000}await webTransportMedia\.stop\(\)[\s\S]{0,1000}for \(const client of wss\.clients\) client\.terminate\(\)[\s\S]{0,1000}wss\.close/,
     'controlled process shutdown must freeze mixing, await Take and HTTP/3 finalization, then close sockets',
   );
   assert.match(
@@ -254,7 +257,7 @@ it('server delegates optional WebTransport lifecycle without moving Mic authorit
   assert.match(server, /createDirectMediaTicket: \(\) => webTransportMedia\.createTicket\(\)/);
   assert.match(server, /directMediaConnected: \(ticket\) => webTransportMedia\.hasSession\(ticket\)/);
   assert.match(server, /offerDirectMedia: \(ticket\) => webTransportMedia\.offer\(ticket\)/);
-  assert.match(server, /await webTransportMedia\.start\(directMediaConfig, \{[\s\S]*micRuntime\.authorizeDirectMedia\(ticket\)[\s\S]*deliverMicPackets\(micRuntime\.receiveDirectMedia/);
+  assert.match(server, /await webTransportMedia\.start\(directMediaConfig, \{[\s\S]*micRuntime\.authorizeDirectMedia\(ticket\)[\s\S]*relayMixPump\.deliver\(micRuntime\.receiveDirectMedia/);
 
   assert.doesNotMatch(media, /from ['"]\.\/(?:mic-runtime|participant-session|audio-session)\.js['"]/);
   assert.doesNotMatch(media, /releaseMic\(|micOwnerId/);

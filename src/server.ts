@@ -13,42 +13,15 @@ import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-h
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { micPresenceDisplayValues } from '../shared/mic-presence-precision.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
-import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
 import { BootProbeRuntime } from './boot-probe-runtime.js';
-import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
-import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
-import {
-  bootProbeStartAuthorityAllowsAttempt,
-  selectBootProbeStartTarget,
-} from './boot-probe-start-policy.js';
-import { bootProbeTopologyReady } from './boot-probe-topology-admission-policy.js';
-import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
-import { decideBootProbeAnalysisEvidence } from './boot-probe-analysis-evidence-policy.js';
-import { decideBootProbeRunIdentity } from './boot-probe-run-identity-policy.js';
-import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
-import {
-  decideCalibrationApplicability,
-  type CalibrationApplicability,
-} from './calibration-applicability.js';
-import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
+import type { CalibrationApplicability } from './calibration-applicability.js';
+import { PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
   CalibrationSession,
   MAX_CAPTURE_GAP_MS,
   type CalibrationContext,
 } from './calibration-session.js';
 import { ContentCalibrationValidator } from './content-calibration-validator.js';
-import { decideContentValidationBaselineSync } from './content-validation-baseline-policy.js';
-import {
-  contentValidationAuthorityReady,
-  contentValidationLivePathReady,
-  contentValidationPathPrerequisitesReady,
-} from './content-validation-path-policy.js';
-import {
-  autoContentCalibrationAuthorityAllowsStart,
-  autoContentCalibrationLivePathReady,
-  autoContentCalibrationPrerequisitesReady,
-  autoContentCalibrationStartMode,
-} from './auto-content-calibration-policy.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
@@ -63,15 +36,14 @@ import { TimingRuntime } from './timing-runtime.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import type { ProbeTarget } from './probe-lifecycle.js';
-import { buildReadiness } from './readiness.js';
 import {
   projectObservationStatusV1,
   projectProductStatus,
   projectRemoteStatus,
-  type ProductStatusFacts,
-  type RemoteStatusFacts,
   type RobotPlayerError,
 } from './relay-status-projection.js';
+import { createRelayStatusFacts } from './relay-status-facts.js';
+import { createRelayMixPump } from './relay-mix-pump.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { loadMonitorOpusEncoder } from './monitor-opus.js';
@@ -79,32 +51,15 @@ import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
-import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
-import { createRelayMicReleaseCoordinator } from './relay-mic-release-coordinator.js';
-import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
+import { createRelayMicLifecycle } from './relay-mic-lifecycle.js';
+import { createRelayBackingLifecycle } from './relay-backing-lifecycle.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
-import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
-import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
-import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
-import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
-import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
-import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
-import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
-import { createRelayRobotLegacyCalibrationDropCoordinator } from './relay-robot-legacy-calibration-drop-coordinator.js';
+import { createRelayBootProbeOrchestration } from './relay-boot-probe-orchestration.js';
+import { createRelayCalibrationOrchestration, createRelayContentCalibrationOrchestration, createRelayCalibrationLifecycle } from './relay-calibration-orchestration.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
-import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
-import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
-import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
-import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
-import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
-import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
-import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
-import { createRelayRobotContentMappingRevocationCoordinator } from './relay-robot-content-mapping-revocation-coordinator.js';
+import { createRelayRobotMappingOrchestration } from './relay-robot-mapping-orchestration.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
-import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
-import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
-import { createRelaySongHandoffResultCoordinator } from './relay-song-handoff-result-coordinator.js';
-import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
+import { createRelaySongCommandOrchestration, createRelaySongLifecycle } from './relay-song-orchestration.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -114,7 +69,6 @@ import {
 } from './relay-socket-server.js';
 import { RobotPlayerOffsetTracker } from './robot-player-offset.js';
 import { RobotContentTimelineMapper } from './robot-content-timeline.js';
-import { robotContentAnchorEvidenceUsable } from './robot-content-transition.js';
 import { RobotContentTransitionRuntime } from './robot-content-transition-runtime.js';
 import {
   ParticipantSession,
@@ -127,10 +81,8 @@ import {
   type ParticipantIdentityResult,
 } from './participant-identity.js';
 import { PlaybackTransportRuntime } from './playback-transport-runtime.js';
-import { createRelayPlaybackDisconnectCoordinator } from './relay-playback-disconnect-coordinator.js';
 import { InfrastructureCapabilityRuntime } from './infrastructure-capability-runtime.js';
 import { parseRoomSongCommand } from './room-song-command.js';
-import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
 import { RoomSongCommandRuntime } from './room-song-command-runtime.js';
 import {
   LEGACY_PLAYBACK_PARTICIPANT_ID,
@@ -138,8 +90,6 @@ import {
   SongSession,
   normalizePlaybackGeneration,
   normalizePlaybackTransportId,
-  type PlaybackIdentity,
-  type SongHandoffPlan,
 } from './song-session.js';
 import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
@@ -264,6 +214,16 @@ const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
 const youtubeTimeline = new SongSession();
 const roomSongCommands = new RoomSongCommandRuntime();
 
+const relaySongCommands = createRelaySongCommandOrchestration<RelaySocket>({
+  clock: { now: () => performance.now() },
+  commands: roomSongCommands,
+  song: youtubeTimeline,
+  playback: playbackTransport,
+  participants,
+  queries: { participantPayload, commandStatusPayload: roomSongCommandStatusPayload },
+  effects: { send: sendJson, broadcast: broadcastJson },
+});
+
 type TimelineStatus = {
   connected?: boolean;
   videoId?: string;
@@ -277,6 +237,26 @@ const webTransportMedia = new WebTransportMediaRuntime();
 const songLevel = FIXED_SONG_LEVEL;
 let lastMixHealthAt = 0;
 let lastTelemetryTimelineBroadcastAtMs = Number.NEGATIVE_INFINITY;
+
+const relaySongLifecycle = createRelaySongLifecycle<RelaySocket>({
+  clock: { now: () => performance.now() },
+  participants,
+  song: youtubeTimeline,
+  playback: playbackTransport,
+  commands: roomSongCommands,
+  commandOrchestration: relaySongCommands,
+  queries: { commandStatusPayload: roomSongCommandStatusPayload },
+  crossCommands: { cancelActiveContentValidation, revokeContentMappingOnRateChange },
+  effects: {
+    send: sendJson,
+    broadcast: broadcastJson,
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+    reportAcceptedTimelineStatus: (status) => {
+      lastTelemetryTimelineBroadcastAtMs = performance.now();
+      broadcastJson(status);
+    },
+  },
+});
 
 const session = new AudioSession({
   sampleRate: MIX_SAMPLE_RATE,
@@ -389,23 +369,6 @@ const ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG = {
   maxWorkerFailures: ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES,
 };
 
-// RobotContentTransitionRuntime remains plan and state authority. Timeline,
-// calibration and validation authority remain behind these server-owned callbacks;
-// this seam owns only the accepted commit effect ordering.
-const robotContentTransitionCommitCoordinator =
-  createRelayRobotContentTransitionCommitCoordinator<CalibrationContext>({
-    noteBackingBoundary: (boundarySample, context, nowMs) =>
-      robotContentTimeline.noteBackingBoundary(boundarySample, context, nowMs),
-    restartWorkingEvidence: (nowMs) => calibration.restartWorkingEvidence(nowMs),
-    contentValidationCollecting: () => contentCalibrationValidator.collecting,
-    cancelContentValidation: (nowMs) => contentCalibrationValidator.cancel(nowMs),
-    feedBackingEvidence: (samples, start, nowMs) => {
-      feedContentBackingEvidence(samples, start, nowMs);
-    },
-    mapBackingStart: (start, context, nowMs) =>
-      robotContentTimeline.mapBackingStart(start, context, nowMs),
-  });
-
 const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
   sampleRate: MIX_SAMPLE_RATE,
   historySamples: ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES,
@@ -425,7 +388,7 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
     readBackingEvidence: (start, length) => session.readBackingEvidence(start, length),
     readMicEvidence: (start, length) => session.readMicEvidence(start, length),
     transitionEvidence: (maxSamples) => calibration.transitionEvidence(maxSamples),
-    commit: (plan, nowMs) => robotContentTransitionCommitCoordinator.commit(plan, nowMs),
+    commit: (plan, nowMs) => relayRobotMapping.commit(plan, nowMs),
     onDegraded: (status) => {
       console.warn(
         '[robot-content-transition] degraded fail-closed:'
@@ -474,18 +437,6 @@ const micTransportGrace = new MicTransportGraceRuntime({
   onExpired: expireMicTransportGrace,
 });
 
-function noteMicFrame(nowMs: number, frame: PcmFrame) {
-  micRuntime.noteFrame(nowMs, frame);
-}
-
-function micFlowObserved() {
-  return micRuntime.flowObserved();
-}
-
-function micStartupTimedOut(nowMs = performance.now()) {
-  return micRuntime.startupTimedOut(nowMs);
-}
-
 function micStreaming(nowMs = performance.now()) {
   return micRuntime.streaming(nowMs);
 }
@@ -531,47 +482,15 @@ function micMediaPath() {
 }
 
 function clearMicMediaAuthority() {
-  micRuntime.clearMediaAuthority(performance.now());
-  session.setMicExpected(false);
-  // An audibility or level verdict belongs to one capture, never to the next singer.
-  resetMicAudibility();
-  micLevel.reset();
+  relayMicLifecycle.clearMediaAuthority();
 }
 
 function expireMicTransportGrace(expectedOwnerId: string) {
-  if (participants.micOwnerId !== expectedOwnerId) return;
-  if (
-    micRuntime.controlConnected()
-    && micRuntime.publisher?.participantId === expectedOwnerId
-  ) return;
-
-  const directMediaStillFlowing = micRuntime.mediaOwnerId === expectedOwnerId
-    && webTransportMicConnected()
-    && micStreaming(performance.now());
-  if (directMediaStillFlowing) {
-    // Control-plane loss must not revoke a Mic whose independent media plane
-    // is still carrying the same capture. Keep checking until control returns
-    // or the direct media path actually stops carrying fresh PCM.
-    micTransportGrace.schedule(expectedOwnerId);
-    return;
-  }
-
-  const released = participants.releaseMic(expectedOwnerId, 'transport-expired');
-  if (!released.ok) return;
-  clearMicMediaAuthority();
-  applyMicOwnerEffects(released.effects);
-  broadcastSessionStatus();
+  relayMicLifecycle.expire(expectedOwnerId);
 }
 
 function calibrationContext(): CalibrationContext {
-  return {
-    sessionGeneration: session.generation,
-    micGeneration: session.micGeneration,
-    backingGeneration: session.backingGeneration,
-    micSourceRate: micRuntime.sampleRate,
-    backingSourceRate: backingRuntime.sampleRate,
-    sourceGeneration: sourceRuntime.generation,
-  };
+  return relayCalibration.context();
 }
 
 /**
@@ -586,7 +505,7 @@ function calibrationContext(): CalibrationContext {
  * one - see ARCHITECTURE_BOUNDARIES.md section 7.
  */
 function robotRouteActive() {
-  return backingRuntime.isRobot || sourceRuntime.connected();
+  return relayRobotMapping.routeActive();
 }
 
 /**
@@ -618,7 +537,7 @@ function probeCalibrationExhausted(nowMs = performance.now()) {
  * a probe that succeeds never reports an error, so a gate keyed on error stays
  * shut forever.
  */
-function bootProbeSettled(nowMs = performance.now()) {
+function bootProbeSettled(nowMs = performance.now()): boolean {
   if (!robotProbeTimingActive()) return true;
   if (probeCalibrationExhausted(nowMs)) return true;
   return bootProbeRuntime.pathDifferenceMs !== null
@@ -638,9 +557,7 @@ function robotContentFallbackPrimingActive(nowMs = performance.now()) {
 }
 
 function robotDeltaIsFresh(nowMs = performance.now()) {
-  return sourceRuntime.connected()
-    && robotPlayerOffset.offsetMs(nowMs) !== null
-    && robotPlayerOffset.isFresh(nowMs);
+  return relayRobotMapping.deltaFresh(nowMs);
 }
 
 /**
@@ -669,9 +586,7 @@ function robotDeltaEverEstablished() {
 }
 
 function robotContentMappingReady(nowMs = performance.now()) {
-  if (!robotRouteActive()) return true;
-  return sourceRuntime.connected()
-    && robotContentTimeline.isReady(calibrationContext(), nowMs);
+  return relayRobotMapping.contentMappingReady(nowMs);
 }
 
 // A fresh timeline can still be intentionally withholding backing PCM while a
@@ -680,13 +595,11 @@ function robotContentMappingReady(nowMs = performance.now()) {
 // content), but it is not usable as new correlation evidence: mapBackingStart()
 // will return null until the boundary is committed.
 function robotContentEvidenceMappingReady(nowMs = performance.now()) {
-  if (!robotContentMappingReady(nowMs)) return false;
-  return !robotContentTimeline.needsBackingBoundary(calibrationContext());
+  return relayRobotMapping.contentEvidenceReady(nowMs);
 }
 
 function mappedContentBackingStart(startSample: number, nowMs = performance.now()) {
-  if (!backingRuntime.isRobot) return startSample;
-  return robotContentTimeline.mapBackingStart(startSample, calibrationContext(), nowMs);
+  return relayRobotMapping.mapBackingStart(startSample, nowMs);
 }
 
 /**
@@ -702,24 +615,7 @@ function mappedContentBackingStart(startSample: number, nowMs = performance.now(
  * the windows=0 catch-22, so the seek must reset mapping instead.
  */
 function robotFollowerSeekMayPreserveMapping(nowMs = performance.now()) {
-  if (!backingRuntime.isRobot && !sourceRuntime.connected()) return true;
-  const context = calibrationContext();
-  if (!sourceRuntime.connected() || !robotContentTimeline.isReady(context, nowMs)) return false;
-
-  const confirmedContentAuthority = appliedCalibrationKind() === 'content'
-    && calibration.confirmedResult !== null
-    && !calibrationIsStale();
-  if (confirmedContentAuthority) return true;
-
-  if (timingRuntime.calibrationKind !== 'content' || !calibration.collecting) return false;
-  // Preserving is only safe against evidence the correlator could actually use.
-  // Anything worse falls through to a clean destructive remap, which recovers,
-  // rather than to a doomed anchor worker, which does not.
-  return robotContentAnchorEvidenceUsable(
-    calibration.transitionEvidence(ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES),
-    MIX_SAMPLE_RATE,
-    MAX_CAPTURE_GAP_MS,
-  );
+  return relayRobotMapping.followerSeekMayPreserveMapping(nowMs);
 }
 
 /**
@@ -730,24 +626,8 @@ function robotFollowerSeekMayPreserveMapping(nowMs = performance.now()) {
  * transition state, not merely forget an outstanding sample-boundary request.
  */
 function clearRobotContentTransition() {
-  robotContentTransitionRuntime.clear();
+  relayRobotMapping.clearTransition();
 }
-
-const robotContentMappingRevocationCoordinator =
-  createRelayRobotContentMappingRevocationCoordinator({
-    resetPlayerOffset: () => robotPlayerOffset.reset(),
-    resetContentTimeline: () => robotContentTimeline.reset(),
-    clearContentTransition: () => clearRobotContentTransition(),
-    invalidateSourceMapping: () => sourceRuntime.invalidateMapping(),
-    discardPrimedContent: () => calibration.discardPrimedContent(),
-    clearContentValidation: () => clearContentValidationBaseline(),
-    abortCalibrationIfCollecting: (reason) => {
-      if (calibration.collecting) calibration.fail(reason);
-    },
-    syncAppliedCalibration: () => { syncAppliedCalibration(); },
-    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  });
 
 /**
  * The single way to revoke Robot content mapping.
@@ -761,7 +641,7 @@ const robotContentMappingRevocationCoordinator =
  * write at the call site.
  */
 function revokeRobotContentMapping({ reason }: { reason: string }) {
-  robotContentMappingRevocationCoordinator.revoke(reason);
+  relayRobotMapping.revoke(reason);
 }
 
 /**
@@ -778,15 +658,7 @@ function revokeRobotContentMapping({ reason }: { reason: string }) {
  * `maybeReapplyBootCalibration()` folds the delta back in at the new rate.
  */
 function revokeContentMappingOnRateChange(playbackRate: unknown) {
-  const rate = Number(playbackRate);
-  if (!Number.isFinite(rate) || rate <= 0) return false;
-  if (robotContentTimeline.matchesPlaybackRate(rate)) return false;
-
-  revokeRobotContentMapping({
-    reason: 'The room changed playback rate during calibration.'
-      + ' Rebuilding the Robot content mapping before calibration retries.',
-  });
-  return true;
+  return relayRobotMapping.revokeOnRateChange(playbackRate);
 }
 
 function robotContentTransitionStatus(nowMs = performance.now()) {
@@ -806,83 +678,17 @@ function feedContentBackingEvidence(samples: Int16Array, start: number, nowMs: n
   contentCalibrationValidator.observeBacking(samples, start);
 }
 
-function beginRobotContentTransition(
-  fromMediaTime: number,
-  toMediaTime: number,
-  preDeltaMs: number,
-  referenceDeltaMs: number,
-  context: CalibrationContext,
-  nowMs = performance.now(),
-) {
-  const confirmedReferenceLagMs = appliedCalibrationKind() === 'content'
-    && !calibrationIsStale()
-    ? calibration.confirmedResult?.micLagMs ?? null
-    : null;
-  robotContentTransitionRuntime.begin({
-    fromMediaTime,
-    toMediaTime,
-    preDeltaMs,
-    referenceDeltaMs,
-    context,
-    confirmedReferenceLagMs,
-    playbackRate: currentPlaybackRate(nowMs),
-  }, nowMs);
-}
-
-function reconcileRobotContentTransitionWithFreshDelta(
-  context: CalibrationContext,
-  nowMs = performance.now(),
-) {
-  const confirmedReferenceLagMs = appliedCalibrationKind() === 'content'
-    && !calibrationIsStale()
-    ? calibration.confirmedResult?.micLagMs ?? null
-    : null;
-  return robotContentTransitionRuntime.reconcileWithFreshDelta({
-    context,
-    committedDeltaMs: robotContentTimeline.committedDeltaMs,
-    freshDeltaMs: robotContentTimeline.currentDeltaMs,
-    referenceDeltaMs: robotContentTimeline.referenceDeltaMs,
-    confirmedReferenceLagMs,
-    playbackRate: currentPlaybackRate(nowMs),
-  }, nowMs);
-}
-
 function noteRobotTransitionBackingFrame(
   frame: PcmFrame,
   samples: Int16Array,
   start: number,
   nowMs: number,
 ) {
-  robotContentTransitionRuntime.noteBackingFrame({
-    frameGeneration: frame.generation,
-    firstSampleIndex: frame.firstSampleIndex,
-    sourceSampleCount: Math.floor(frame.pcm.byteLength / 2),
-    sourceSampleRate: backingRuntime.sampleRate,
-    samples,
-    start,
-    backingTotalSamples: session.backingTotalSamples,
-  }, nowMs);
+  relayRobotMapping.noteBackingFrame(frame, samples, start, nowMs);
 }
 
 function requestRobotBackingBoundary(nowMs = performance.now()) {
-  const context = calibrationContext();
-  if (!robotContentTimeline.needsBackingBoundary(context)) return false;
-  if (!reconcileRobotContentTransitionWithFreshDelta(context, nowMs)) return false;
-  const target = backingRuntime.socket;
-  const backingGeneration = session.backingGeneration;
-  if (
-    !backingRuntime.isRobot
-    || target?.readyState !== WebSocket.OPEN
-    || backingGeneration === null
-  ) return false;
-
-  const request = robotContentTransitionRuntime.requestBackingBoundary(backingGeneration);
-  if (request === null) return false;
-  sendJson(target, {
-    type: 'backing-sample-boundary-request',
-    requestId: request.requestId,
-  });
-  return true;
+  return relayRobotMapping.requestBoundary(nowMs);
 }
 
 const calibration = new CalibrationSession({
@@ -933,53 +739,177 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
   },
 });
 
+// All domain owners are constructed before this inert assembly is bound.
+// The hoisted wrappers above defer queries until normal server operation.
+const relayRobotMapping = createRelayRobotMappingOrchestration({
+  socketOpenState: WebSocket.OPEN,
+  mixSampleRate: MIX_SAMPLE_RATE,
+  transitionHistorySamples: ROBOT_CONTENT_TRANSITION_HISTORY_SAMPLES,
+  maxCaptureGapMs: MAX_CAPTURE_GAP_MS,
+  backing: backingRuntime,
+  source: sourceRuntime,
+  offset: robotPlayerOffset,
+  timeline: robotContentTimeline,
+  calibration,
+  validator: contentCalibrationValidator,
+  timing: timingRuntime,
+  transition: robotContentTransitionRuntime,
+  mix: session,
+  take: takeController,
+  commands: { abandonProbeRun },
+  queries: {
+    context: calibrationContext,
+    appliedKind: appliedCalibrationKind,
+    calibrationIsStale,
+    currentPlaybackRate,
+    bootProbeSettled,
+  },
+  effects: {
+    notifyPreviousReplaced: (previous) => sendJson(previous, { type: 'robot-source-replaced' }),
+    feedBackingEvidence: feedContentBackingEvidence,
+    clearContentValidation: clearContentValidationBaseline,
+    syncAppliedCalibration: () => { syncAppliedCalibration(); },
+    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+    sendBoundaryRequest: (target, message) => sendJson(target, message),
+  },
+});
+
+// Inert binding: constructors above retain callbacks without invoking them.
+// Live queries continue to sample the canonical owners at their original call sites.
+const relayCalibration = createRelayCalibrationOrchestration({
+  config: { reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS },
+  clock: performance,
+  mix: session,
+  mic: micRuntime,
+  backing: backingRuntime,
+  source: sourceRuntime,
+  calibration,
+  timing: timingRuntime,
+  probe: bootProbeRuntime,
+  contentTimeline: robotContentTimeline,
+  queries: {
+    takeBlocksCalibration,
+    robotRouteActive,
+    robotProbeTimingActive,
+    bootProbeSettled,
+    bootProbeContext,
+    roomHasSong,
+    robotDeltaIsFresh,
+    robotDeltaEverEstablished,
+    robotContentMappingReady,
+    currentDeltaMs,
+    currentPlaybackRate,
+  },
+});
+
+const relayContentCalibration = createRelayContentCalibrationOrchestration({
+  config: { autoEnabled: AUTO_CALIBRATE, validationEnabled: CONTENT_VALIDATION_ENABLED },
+  clock: performance,
+  mix: session,
+  calibration,
+  timing: timingRuntime,
+  validator: contentCalibrationValidator,
+  backing: backingRuntime,
+  mic: micRuntime,
+  queries: {
+    calibrationContext,
+    appliedCalibrationKind,
+    calibrationIsStale,
+    takeBlocksCalibration,
+    robotRouteActive,
+    bootProbeSettled,
+    robotContentEvidenceMappingReady,
+    bothStreamsFlowing,
+    currentTimelineStatus,
+    probeCalibrationExhausted,
+  },
+  effects: { reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()) },
+});
+
+const relayCalibrationLifecycle = createRelayCalibrationLifecycle({
+  mix: session,
+  calibration,
+  timing: timingRuntime,
+  probe: bootProbeRuntime,
+  backing: backingRuntime,
+  offset: robotPlayerOffset,
+  contentTimeline: robotContentTimeline,
+  commands: {
+    clearContentValidation: clearContentValidationBaseline,
+    syncAppliedCalibration,
+    clearRobotContentTransition,
+    abandonProbeRun,
+    maybeStartProbeCalibration,
+  },
+  effects: {
+    endTakeMix: () => takeController.endMix(),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+    reportStatus: () => broadcastStatus(),
+    resetMicAudibility,
+    resetMicLevel: () => micLevel.reset(),
+  },
+});
+
+const relayMicLifecycle = createRelayMicLifecycle<RelaySocket>({
+  clock: { now: () => performance.now() },
+  participants,
+  mic: micRuntime,
+  mix: session,
+  grace: micTransportGrace,
+  backing: backingRuntime,
+  calibration,
+  take: takeController,
+  queries: { participantPayload },
+  commands: {
+    applyOwnershipEffects: applyMicOwnerEffects,
+    invalidateTiming: invalidateMicTiming,
+    clearRobotContentTransition,
+    refreshLiveMicNetworkCompensation,
+    cancelActiveContentValidation,
+    stopLiveSource,
+    beginPreparedSongHandoff,
+    abandonProbeRun,
+    clearContentValidationBaseline,
+    syncAppliedCalibration,
+  },
+  effects: {
+    resetMicAudibility,
+    resetMicLevel: () => micLevel.reset(),
+    retirePublisher: (socket, payload) => retireSocket(socket, payload),
+    sendRegistered: (socket, result) => {
+      sendJson(socket, {
+        type: 'registered',
+        role: 'publisher',
+        takeover: result.takeover,
+        ...(result.mediaTransport ? { mediaTransport: result.mediaTransport } : {}),
+      });
+    },
+    sendInitialState: (socket) => {
+      sendJson(socket, mixSettingsPayload());
+      sendJson(socket, youtubeTimeline.statusPayload());
+      sendJson(socket, youtubeTimeline.roomStatusPayload());
+      sendJson(socket, roomSongCommandStatusPayload());
+      sendJson(socket, takeController.statusPayload());
+      sendJson(socket, sourceStatusPayload());
+      sendJson(socket, timingCalibrationStatusPayload());
+    },
+    sendReleased: (socket) => sendJson(socket, { type: 'mic-released' }),
+    reportStatus: () => broadcastStatus(),
+    reportSessionStatus: () => broadcastSessionStatus(),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+  },
+});
+
 function clearContentValidationBaseline() {
-  timingRuntime.clearContentValidationBaseline();
-  contentCalibrationValidator.clearBaseline();
+  relayContentCalibration.clearBaseline();
 }
 
-/**
- * Seeds the drift validator from the content result that is actually in force.
- *
- * Provenance here must come from `appliedCalibrationKind()`, never the
- * candidate kind. `CalibrationSession.start()` deliberately keeps the previous
- * confirmed result serving while a replacement is measured, so
- * `candidate = content` alongside `confirmed = boot-probe` is an ordinary
- * state - and reading the candidate there would install a boot-probe
- * measurement as the baseline that content drift is judged against.
- */
-function syncContentValidationBaseline(nowMs: number) {
-  const confirmed = calibration.confirmedResult;
-  const decision = decideContentValidationBaselineSync({
-    appliedKind: appliedCalibrationKind(),
-    hasConfirmedResult: confirmed !== null,
-    calibrationStale: confirmed !== null && calibrationIsStale(),
-    hasBaseline: contentCalibrationValidator.hasBaseline,
-    baselineRevision: timingRuntime.contentValidationBaselineRevision,
-    confirmedRevision: calibration.confirmedRevision,
-  });
-
-  if (decision === 'none') return;
-  if (decision === 'clear') {
-    clearContentValidationBaseline();
-    return;
-  }
-  if (confirmed === null) return;
-
-  contentCalibrationValidator.setBaseline({
-    micLagMs: confirmed.micLagMs,
-    confidence: confirmed.confidence,
-    segmentLagsMs: confirmed.segmentLagsMs,
-    context: calibrationContext(),
-  }, nowMs);
-  timingRuntime.markContentValidationBaseline(calibration.confirmedRevision);
-}
 
 function cancelActiveContentValidation(nowMs = performance.now()) {
-  const state = contentCalibrationValidator.status(nowMs).state;
-  if (!contentCalibrationValidator.collecting && state !== 'suspect') return false;
-  contentCalibrationValidator.cancel(nowMs);
-  return true;
+  return relayContentCalibration.cancelValidation(nowMs);
 }
 
 function rejectInfrastructure(socket: RelaySocket, message: string) {
@@ -1055,49 +985,12 @@ function roomSongCommandStatusPayload(nowMs = performance.now()) {
   };
 }
 
-function roomSongCommandApplyPayload(command: AcceptedRoomSongCommand) {
-  return {
-    type: 'room-song-command-apply',
-    commandId: command.commandId,
-    revision: command.revision,
-    supersedesCommandId: command.supersedesCommandId,
-    issuedByParticipantId: command.issuedByParticipantId,
-    targetPlaybackTransportId: command.target.transportId,
-    targetPlaybackGeneration: command.target.generation,
-    ...command.body,
-  };
-}
-
 function rejectRoomSongCommand(socket: RelaySocket, commandId: unknown, reason: string) {
-  sendJson(socket, {
-    type: 'room-song-command-rejected',
-    commandId: typeof commandId === 'string' ? commandId : null,
-    reason,
-    revision: roomSongCommands.revision,
-    room: youtubeTimeline.roomStatusPayload(),
-  });
-}
-
-function broadcastRoomSongCommandFailure(
-  commandId: string,
-  reason: string,
-  nowMs = performance.now(),
-) {
-  broadcastJson({
-    type: 'room-song-command-failed-ack',
-    commandId,
-    revision: roomSongCommands.revision,
-    reason,
-    room: youtubeTimeline.roomStatusPayload(nowMs),
-  });
+  relaySongCommands.reject(socket, commandId, reason);
 }
 
 function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now()) {
-  const cancelled = roomSongCommands.cancelPending();
-  if (!cancelled) return false;
-  broadcastRoomSongCommandFailure(cancelled.commandId, reason, nowMs);
-  broadcastJson(roomSongCommandStatusPayload(nowMs));
-  return true;
+  return relaySongCommands.cancelPending(reason, nowMs);
 }
 
 function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
@@ -1124,22 +1017,6 @@ function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reaso
   });
 }
 
-function handoffPayload(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
-  return {
-    type,
-    handoffId: plan.handoffId,
-    revision: plan.revision,
-    videoId: plan.videoId,
-    state: plan.state,
-    serverTime: plan.serverTime,
-    playbackRate: plan.playbackRate,
-  };
-}
-
-function sendHandoffPlan(type: 'song-handoff-prepare' | 'song-handoff-commit', plan: SongHandoffPlan) {
-  return playbackTransport.send(plan.target, handoffPayload(type, plan));
-}
-
 /**
  * Ends a handoff that has stopped being able to complete.
  *
@@ -1150,29 +1027,11 @@ function sendHandoffPlan(type: 'song-handoff-prepare' | 'song-handoff-commit', p
  * gone.
  */
 function sweepPreparedSongHandoff(nowMs: number) {
-  const target = youtubeTimeline.handoffTarget();
-  if (!target) return false;
-  if (!youtubeTimeline.sweepHandoff(
-    playbackTransport.connected(target),
-    nowMs,
-    participants.micOwnerId,
-  )) return false;
-
-  playbackTransport.send(target, { type: 'song-handoff-cancelled' });
-  broadcastJson(youtubeTimeline.statusPayload(nowMs));
-  broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
-  return true;
+  return relaySongLifecycle.stepHandoff(nowMs);
 }
 
 function beginPreparedSongHandoff(participantId: string, nowMs = performance.now()) {
-  const target = playbackTransport.selectHandoffTarget(participantId, nowMs);
-  if (!target) return false;
-  const plan = youtubeTimeline.beginHandoff(target, participants.micOwnerId, nowMs);
-  if (!plan) return false;
-  sendHandoffPlan('song-handoff-prepare', plan);
-  broadcastJson(youtubeTimeline.statusPayload(nowMs));
-  broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
-  return true;
+  return relaySongLifecycle.prepare(participantId, nowMs);
 }
 
 function applyMicOwnerEffects(
@@ -1230,40 +1089,16 @@ function applyMicOwnerEffects(
  * clears both.
  */
 function reportRoomSongTelemetryRejected(socket: RelaySocket, reason: string) {
-  const key = `room-song:${reason}`;
-  if (socket.telemetryRejectedReason === key) return;
-  socket.telemetryRejectedReason = key;
-  sendJson(socket, {
-    type: 'room-song-telemetry-rejected',
-    reason,
-    revision: roomSongCommands.revision,
-  });
+  relaySongCommands.reportRoomTelemetryRejected(socket, reason);
 }
 
 function reportTelemetryRejected(socket: RelaySocket, reason: string) {
-  if (socket.telemetryRejectedReason === reason) return;
-  socket.telemetryRejectedReason = reason;
-  sendJson(socket, {
-    type: 'youtube-telemetry-rejected',
-    reason,
-    playbackLeaderParticipantId: youtubeTimeline.statusPayload().playbackLeaderParticipantId,
-    micOwner: participantPayload(participants.micOwnerId),
-  });
+  relaySongCommands.reportTelemetryRejected(socket, reason);
 }
 
 function replacePrevious(previous: RelaySocket | null, next: RelaySocket, message: string) {
   if (!previous || previous === next) return;
   retireSocket(previous, { type: 'error', message });
-}
-
-function retirePublisherTransport(
-  previous: RelaySocket | null,
-  type: 'mic-revoked' | 'publisher-superseded',
-  message: string,
-) {
-  if (!previous) return false;
-  retireSocket(previous, { type, message });
-  return true;
 }
 
 function publisherStatusPayload() {
@@ -1276,7 +1111,7 @@ function publisherStatusPayload() {
 }
 
 function calibrationIsStale() {
-  return calibration.isStaleFor(calibrationContext());
+  return relayCalibration.isStale();
 }
 
 /**
@@ -1288,11 +1123,7 @@ function calibrationIsStale() {
  * candidate that produced it.
  */
 function appliedCalibrationKind() {
-  const status = calibration.status();
-  return timingRuntime.appliedCalibrationKind({
-    hasConfirmedResult: calibration.confirmedResult !== null,
-    provisional: status.provisional,
-  });
+  return relayCalibration.appliedKind();
 }
 
 /**
@@ -1312,25 +1143,7 @@ function appliedCalibrationKind() {
  * of which revokes through its own path.
  */
 function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationApplicability {
-  const nowMs = performance.now();
-  const result = calibration.result;
-  const status = calibration.status();
-  return decideCalibrationApplicability({
-    kind,
-    hasResult: result !== null,
-    stale: result !== null && calibrationIsStale(),
-    calibrationTransactionActive: calibration.transactionActive,
-    calibrationProvisional: status.provisional,
-    hasConfirmedResult: calibration.confirmedResult !== null,
-    robotProbeTimingActive: robotProbeTimingActive(),
-    bootProbeSettled: bootProbeSettled(nowMs),
-    robotRouteActive: robotRouteActive(),
-    robotSourceConnected: sourceRuntime.connected(),
-    roomHasSong: roomHasSong(nowMs),
-    robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    robotDeltaEverEstablished: robotDeltaEverEstablished(),
-    robotContentMappingReady: robotContentMappingReady(nowMs),
-  });
+  return relayCalibration.applicability(kind);
 }
 
 /**
@@ -1343,19 +1156,7 @@ function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationA
  * what the boot strategy currently wants.
  */
 function bootProbeAdvanceMs(nowMs: number) {
-  const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
-  if (pathDifferenceMs === null) return null;
-  // The measured path difference is wall time and rate-independent; the player
-  // delta is media time and is not.
-  return pathDifferenceMs + mediaToWallMs(currentDeltaMs(nowMs), currentPlaybackRate(nowMs));
-}
-
-/**
- * A content result carried from the mapper's stable reference frame into live
- * coordinates. Same two-reader rule as `bootProbeAdvanceMs()`.
- */
-function contentLiveLagMs(referenceLagMs: number, nowMs: number) {
-  return robotContentTimeline.liveLagMs(referenceLagMs, calibrationContext(), nowMs);
+  return relayCalibration.bootAdvance(nowMs);
 }
 
 /**
@@ -1377,23 +1178,7 @@ function contentLiveLagMs(referenceLagMs: number, nowMs: number) {
  * describe.
  */
 function desiredCalibratedMicLagMs(nowMs: number): number | null {
-  const kind = appliedCalibrationKind();
-
-  if (robotRouteActive() && kind === 'boot-probe') {
-    if (calibration.result === null || calibrationIsStale()) return null;
-    if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return null;
-    // With no Song there is no player-relative term, exactly as the applier
-    // reads it: the measured path difference is the whole correction.
-    if (!roomHasSong(nowMs)) return bootProbeRuntime.pathDifferenceMs;
-    if (calibrationApplicability(kind) !== 'apply') return null;
-    return bootProbeAdvanceMs(nowMs);
-  }
-
-  if (calibrationApplicability(kind) !== 'apply') return null;
-  const result = calibration.result;
-  if (result === null) return null;
-  if (!robotRouteActive() || kind !== 'content') return result.micLagMs;
-  return contentLiveLagMs(result.micLagMs, nowMs);
+  return relayCalibration.desiredLag(nowMs);
 }
 
 /**
@@ -1415,52 +1200,7 @@ function desiredCalibratedMicLagMs(nowMs: number): number | null {
  * can publish the transition immediately.
  */
 function syncAppliedCalibration() {
-  if (takeBlocksCalibration()) return false;
-  const active = session.alignment.calibratedMicLagMs;
-  const calibrationKind = appliedCalibrationKind();
-
-  if (robotRouteActive() && calibrationKind === 'boot-probe') {
-    const nowMs = performance.now();
-    const result = calibration.result;
-    const decision = decideBootProbeMixerApplication({
-      activeMicLagMs: active,
-      roomHasSong: roomHasSong(nowMs),
-      resultMicLagMs: result?.micLagMs ?? null,
-      pathDifferenceMs: bootProbeRuntime.pathDifferenceMs,
-      calibrationStale: calibrationIsStale(),
-      completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
-      applicability: calibrationApplicability(calibrationKind),
-      storedDeltaMs: bootProbeRuntime.calibrationResult?.deltaMs ?? null,
-      currentDeltaMs: currentDeltaMs(nowMs),
-    });
-    if (decision.kind === 'hold') return false;
-    session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
-    return true;
-  }
-  const applicability = calibrationApplicability(calibrationKind);
-  let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;
-  const robotContentAuthority = robotRouteActive() && calibrationKind === 'content';
-  if (nextMicLagMs !== null && robotContentAuthority) {
-    nextMicLagMs = contentLiveLagMs(nextMicLagMs, performance.now());
-  }
-
-  const decision = decideCalibrationMixerApplication({
-    applicability,
-    calibrationKind,
-    activeMicLagMs: active,
-    nextMicLagMs,
-    robotContentAuthority,
-    hasContentValidationSlew: timingRuntime.contentValidationSlewRevision !== null,
-    contentValidationSlewMatchesRevision:
-      timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision),
-    calibratedMicLagTarget: session.calibratedMicLagTarget,
-    jitterThresholdMs: BOOT_DELTA_REAPPLY_MS,
-  });
-  if (decision.clearContentValidationSlew) timingRuntime.clearContentValidationSlew();
-  if (decision.kind === 'none') return false;
-  if (decision.kind === 'slew') return session.slewCalibratedMicLagTo(decision.micLagMs);
-  session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
-  return true;
+  return relayCalibration.syncApplied();
 }
 
 function sourceStatusPayload() {
@@ -1545,64 +1285,45 @@ function mixHealthPayload() {
   };
 }
 
-function frameAgeMs(atMs: number, nowMs: number) {
-  return Number.isFinite(atMs) ? Math.round(nowMs - atMs) : null;
-}
+const relayStatusFacts = createRelayStatusFacts({
+  mixSampleRate: MIX_SAMPLE_RATE,
+  mix: session,
+  participants,
+  monitor: monitorTransport,
+  backing: backingRuntime,
+  robot: {
+    get playerError() { return robotPlayerError; },
+    offset: robotPlayerOffset,
+    routeActive: robotRouteActive,
+    deltaFresh: robotDeltaIsFresh,
+    probeTimingActive: robotProbeTimingActive,
+    contentEvidenceReady: robotContentEvidenceMappingReady,
+  },
+  source: sourceRuntime,
+  song: { runtime: youtubeTimeline, hasSong: roomHasSong },
+  take: takeController,
+  media: { backingPlayable, micPlayable },
+  timing: {
+    calibration,
+    probe: bootProbeRuntime,
+    applicability: calibrationApplicability,
+    isStale: calibrationIsStale,
+    appliedKind: appliedCalibrationKind,
+    calibrationInProgress: timingCalibrationInProgress,
+    bootProbeInProgress,
+  },
+  mic: {
+    runtime: micRuntime,
+    audibility: micAudibility,
+    level: micLevel,
+    drift: micClockDrift,
+    captureDelivery: micCaptureDelivery,
+  },
+});
 
 /** /statusz; see projectRemoteStatus for what it promises. */
 function remoteStatusPayload() {
-  return projectRemoteStatus(remoteStatusFacts(performance.now()));
-}
-
-/**
- * One sample of everything /statusz reports. Readiness-owned facts arrive only
- * inside `readiness`, so the projection cannot re-read them from a live runtime.
- */
-function remoteStatusFacts(nowMs: number): RemoteStatusFacts {
-  const alignment = session.alignment;
-  const snapshot = participants.snapshot();
-  const mixHealth = session.health();
-  const monitorDrops = monitorTransport.recentDrops(nowMs);
-  const readiness = readinessPayload(nowMs);
-
-  return {
-    nowMs,
-    readiness,
-    participants: {
-      total: snapshot.participants.length,
-      connected: snapshot.participants.filter((participant) => participant.connected).length,
-    },
-    backingFrameAgeMs: frameAgeMs(backingRuntime.lastFrameAt, nowMs),
-    calibratedMicLagMs: alignment.calibratedMicLagMs,
-    robotPlayerError,
-    mixSampleRate: MIX_SAMPLE_RATE,
-    mix: {
-      active: session.active,
-      health: mixHealth,
-      monitorDroppedFrames: monitorTransport.droppedFrames,
-      monitorRecentDroppedFrames: monitorDrops.frames,
-      monitorRecentDroppingListeners: monitorDrops.listeners,
-    },
-    mic: {
-      mediaPath: micMediaPath(),
-      frameAgeMs: micRuntime.frameAgeMs(nowMs),
-      sampleRate: micRuntime.sampleRate,
-      captureAndSender: micUplinkHealthPayload(nowMs),
-      receiverTransport: micRuntime.receiverStats(),
-      receiverRetransmit: micRuntime.retransmitStats(),
-      audibility: micAudibility.status(),
-      level: micLevel.status(),
-      micGainDb: session.micGainDb,
-      concealedSamples: session.micConcealedSampleCount,
-      clockDrift: micClockDrift.estimate(),
-      clockTrimPpm: session.micClockTrimPpm,
-      anchorExcessMs: micClockDrift.anchorExcessMs(),
-      frontierCorrectionMs: session.micFrontierCorrectionMs,
-      timelineFolds: session.micTimelineFoldCount,
-      lastTimelineFold: session.lastMicTimelineFold,
-      captureDelivery: micCaptureDelivery.status(),
-    },
-  };
+  return projectRemoteStatus(relayStatusFacts.remote(performance.now()));
 }
 
 function observationStatusV1Payload() {
@@ -1680,106 +1401,13 @@ function currentTimelineStatus(nowMs = performance.now()) {
   return youtubeTimeline.statusPayload(nowMs) as TimelineStatus & Record<string, unknown>;
 }
 
-/**
- * One runtime readiness collector shared by diagnostics and product UI.
- *
- * Keep transport facts here rather than reconstructing them in /readyz, the
- * browser, or ProductViewModel independently. The pure readiness model decides
- * what those facts mean; this function only samples the live server once.
- */
-function readinessRouteMode(nowMs = performance.now()) {
-  if (robotRouteActive()) return 'robot' as const;
-  if (backingRuntime.armed()) return 'legacy' as const;
-  // Voice-only is valid only while the room truly has no Song. Once a Song
-  // exists, backing is an expected dependency even before a concrete route
-  // has announced itself.
-  if (roomHasSong(nowMs)) return 'song' as const;
-  return 'idle' as const;
-}
-
+/** Keep the entry's default clock; collection lives with the status boundary. */
 function readinessPayload(nowMs = performance.now()) {
-  const timeline = currentTimelineStatus(nowMs);
-  const calibrationStatus = calibration.status();
-  const timelineState = Number(timeline.state);
-
-  return buildReadiness({
-    routeMode: readinessRouteMode(nowMs),
-    backingConnected: backingRuntime.connected(),
-    // Readiness is a product/media fact, not merely a socket-arrival fact.
-    backingStreaming: backingPlayable(nowMs),
-    backingSampleRate: backingRuntime.sampleRate,
-    backingIsRobot: backingRuntime.isRobot,
-    micConnected: micMediaConnected(),
-    micStreaming: micPlayable(nowMs),
-    micArriving: micStreaming(nowMs),
-    micFlowObserved: micFlowObserved(),
-    micStartupTimedOut: micStartupTimedOut(nowMs),
-    robotSourceConnected: sourceRuntime.connected(),
-    sessionActive: session.active,
-    timelineConnected: Boolean(timeline.connected && timeline.videoId),
-    timelineState: Number.isFinite(timelineState) ? timelineState : null,
-    playerOffsetMs: robotPlayerOffset.offsetMs(nowMs),
-    playerOffsetFresh: robotDeltaIsFresh(nowMs),
-    calibrationState: String(calibrationStatus.state ?? 'idle'),
-    // A held measurement is still a measured alignment in force, so readiness
-    // must not report it as invalid merely because the Robot's offset heartbeat
-    // is momentarily quiet.
-    calibrationValid: calibrationApplicability() !== 'revoke'
-      && session.alignment.calibratedMicLagMs !== null,
-    calibrationStale: calibrationIsStale(),
-    calibrationKind: appliedCalibrationKind(),
-    probeCorrelation: bootProbeRuntime.correlations,
-    bootCalibration: bootProbeRuntime.calibrationResult,
-  });
+  return relayStatusFacts.readiness(nowMs);
 }
 
 function productStatusPayload(nowMs = performance.now()) {
-  return projectProductStatus(productStatusFacts(nowMs));
-}
-
-function productStatusFacts(nowMs: number): ProductStatusFacts {
-  const readiness = readinessPayload(nowMs);
-  const participantSnapshot = participants.snapshot();
-  const micOwner = participantSnapshot.micOwnerId
-    ? participantSnapshot.participants.find((participant) => participant.id === participantSnapshot.micOwnerId) ?? null
-    : null;
-  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
-  const timelineAgeMs = Number(
-    (youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>).ageMs,
-  );
-  const takeStatus = takeController.statusPayload();
-  const alignment = session.alignment;
-  const calibrationStatus = calibration.status();
-
-  return {
-    readiness,
-    participantCount: participantSnapshot.participants.length,
-    micOwnerId: participantSnapshot.micOwnerId,
-    micOwnerNickname: micOwner?.nickname ?? null,
-    publisherControlConnected: micRuntime.controlConnected(),
-    freshMicUplink: micRuntime.freshUplinkHealthPayload(nowMs),
-    micAudibilityDegraded: micAudibility.degraded,
-    micLevelWarning: micLevel.warning,
-    robotPlayerError,
-    room,
-    timelineAgeMs,
-    takeStatus,
-    timing: {
-      calibratedMicLagMs: alignment.calibratedMicLagMs,
-      calibrationState: String(calibrationStatus.state ?? 'idle'),
-      calibrationActive: timingCalibrationInProgress(nowMs),
-      calibrationStale: calibrationIsStale(),
-      requestedMicAdvanceMs: session.requestedMicAdvanceMs,
-      appliedMicAdvanceMs: session.appliedMicAdvanceMs,
-      micFrontierCorrectionMs: session.micFrontierCorrectionMs,
-      robotRouteActive: robotRouteActive(),
-      appliedCalibrationKind: appliedCalibrationKind(),
-      robotProbeTimingActive: robotProbeTimingActive(),
-      bootProbeActive: bootProbeInProgress(nowMs),
-      contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
-      robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    },
-  };
+  return projectProductStatus(relayStatusFacts.product(nowMs));
 }
 
 let lastProductStatusJson = '';
@@ -1797,32 +1425,8 @@ function broadcastStatus() {
   broadcastJson(sourceStatusPayload());
 }
 
-function revokePublisherTransport(message: string) {
-  const previous = micRuntime.publisher;
-  const hadMedia = Boolean(previous || micRuntime.audioTransport || micRuntime.mediaTicket);
-  if (previous) micRuntime.detachPublisher(previous);
-  clearMicMediaAuthority();
-  if (previous) retirePublisherTransport(previous, 'mic-revoked', message);
-  broadcastStatus();
-  return hadMedia;
-}
-
-const micTimingInvalidationCoordinator = createRelayMicTimingInvalidationCoordinator({
-  clearBootCalibration: () => clearBootCalibrationState(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  invalidateCalibration: (message) => {
-    if (calibration.collecting) calibration.fail(message);
-    else calibration.reset();
-  },
-  clearTimingKind: () => timingRuntime.clearCalibrationKind(),
-  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-});
-
 function invalidateMicTiming(message: string) {
-  micTimingInvalidationCoordinator.invalidate(message);
+  relayCalibrationLifecycle.invalidateMicTiming(message);
 }
 
 function refreshLiveMicNetworkCompensation() {
@@ -1852,47 +1456,16 @@ function startLiveSource() {
   broadcastJson(timingCalibrationStatusPayload());
 }
 
-function restartLiveSourceAfterMicReconnect() {
-  if (!session.active || !backingRuntime.connected()) return;
-  refreshLiveMicNetworkCompensation();
-  if (calibration.collecting) {
-    calibration.fail('Microphone reconnected during calibration. Start calibration again.');
-  }
-  if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
-}
-
 function abandonProbeRun() {
-  bootProbeRuntime.abandonRun();
+  relayBootProbe.abandon();
 }
 
-function clearBootCalibrationState() {
-  bootProbeRuntime.clear();
-}
 
-const liveSourceStopCoordinator = createRelayLiveSourceStopCoordinator({
-  cancelBackingGrace: () => backingRuntime.cancelGrace(),
-  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
-  sessionActive: () => session.active,
-  endTakeMix: () => takeController.endMix(),
-  clearBootCalibration: () => clearBootCalibrationState(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  resetRobotPlayerOffset: () => robotPlayerOffset.reset(),
-  resetRobotContentTimeline: () => robotContentTimeline.reset(),
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  stopSession: () => session.stop(),
-  resetCalibration: () => calibration.reset(),
-  clearTimingKind: () => timingRuntime.clearCalibrationKind(),
-  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportStatus: () => broadcastStatus(),
-});
+
+
 
 function stopLiveSource() {
-  liveSourceStopCoordinator.stop();
-  resetMicAudibility();
-  micLevel.reset();
+  relayCalibrationLifecycle.stopLiveSource();
 }
 
 function roomHasSong(nowMs = performance.now()) {
@@ -1923,125 +1496,70 @@ function roomSongPlaying(nowMs = performance.now()) {
   return takeSongSnapshot(nowMs).state === 1 && backingPlayable(nowMs);
 }
 
-function maybeStopLiveSourceWhenUnarmed() {
-  if (!session.active) return;
-  const micArmed = micRuntime.controlConnected()
-    || webTransportMicConnected()
-    || micTransportGrace.pending;
-  const backingArmed = backingRuntime.armed();
-  if (!micArmed && !backingArmed) stopLiveSource();
-}
-
-const backingGraceExpiryCoordinator = createRelayBackingGraceExpiryCoordinator({
-  stopLiveSource: () => stopLiveSource(),
-  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  invalidateMicTiming: (message) => invalidateMicTiming(message),
-  reportStatus: () => broadcastStatus(),
+const relayBackingLifecycle = createRelayBackingLifecycle<RelaySocket>({
+  backing: backingRuntime,
+  mix: session,
+  calibration,
+  take: takeController,
+  commands: {
+    clearRobotContentTransition,
+    dropLegacyCalibrationForRobot,
+    abandonProbeRun,
+    clearContentValidationBaseline,
+    cancelActiveContentValidation,
+    syncAppliedCalibration,
+    invalidateMicTiming,
+    startLiveSource,
+    stopLiveSource,
+  },
+  effects: {
+    retirePrevious: replacePrevious,
+    sendRegistered: (socket, robot) => {
+      sendJson(socket, { type: 'registered', role: 'backing', robot });
+    },
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+    reportStatus: () => broadcastStatus(),
+  },
 });
 
 function expireBackingGrace() {
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGrace.pending;
-  backingGraceExpiryCoordinator.expire({
+  relayBackingLifecycle.expireGrace({
     roomHasSong: roomHasSong(),
     micArmed,
   });
 }
 
 
-const micCaptureRestartCoordinator = createRelayMicCaptureRestartCoordinator({
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  abandonProbeRun: () => abandonProbeRun(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  failCalibration: (message) => calibration.fail(message),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
+const relayMixPump = createRelayMixPump({
+  now: () => performance.now(),
+  mix: session,
+  mic: micRuntime,
+  audibility: micAudibility,
+  level: micLevel,
+  drift: micClockDrift,
+  calibration,
+  validator: contentCalibrationValidator,
+  transition: robotContentTransitionRuntime,
+  restart: { restart: relayMicLifecycle.restartCapture },
+  take: takeController,
+  monitor: monitorTransport,
+  effects: {
+    startLiveSource,
+    resetAudibility: resetMicAudibility,
+    fallbackPrimingActive: robotContentFallbackPrimingActive,
+    quality: takeQualityFrameState,
+    micPlayable,
+    roomSongPlaying,
+    reportAudibility: reportMicAudibility,
+    reportLevel: reportMicLevel,
+    reportTimelineFolds: reportMicTimelineFolds,
+  },
 });
-
-function processPublisherFrame(frame: PcmFrame) {
-  // Physical media can outlive the control WebSocket during its reconnect
-  // grace. Authorization already happened at the WS publisher boundary or the
-  // short-lived WebTransport media ticket boundary, so the mixer must not make
-  // a control socket pointer into a second source of truth.
-  if (!micRuntime.audioTransport || micRuntime.sampleRate === null) return;
-  // Mic PCM is what starts the mix when nothing else has; from here on the
-  // session is always running.
-  if (!session.active) startLiveSource();
-
-  const nowMs = performance.now();
-  const { samples, start, captureRestarted } = session.ingestMic(
-    frame,
-    micRuntime.sampleRate,
-    nowMs,
-  );
-  if (samples.length > 0) noteMicFrame(nowMs, frame);
-  micAudibility.observeReceived(samples);
-  micLevel.observeReceived(samples);
-  if (
-    frame.firstSampleIndex !== null
-    && frame.generation !== null
-    && micClockDrift.observe(
-      frame.generation,
-      micRuntime.sampleRate,
-      frame.firstSampleIndex + frame.pcm.byteLength / 2,
-      nowMs,
-    )
-  ) {
-    // The estimate only moves when a window closes. It describes this
-    // capture's clock: ingestMic above already cleared the trim if this
-    // packet began a new capture, and the estimator restarted with it.
-    session.setMicClockTrimPpm(micClockDrift.estimate()?.ppm ?? null);
-  }
-
-  if (captureRestarted) {
-    resetMicAudibility();
-    micLevel.reset();
-    micCaptureRestartCoordinator.restart({
-      calibrationCollecting: calibration.collecting,
-    });
-  }
-  if (robotContentFallbackPrimingActive()) {
-    calibration.primeMic(samples, start);
-  }
-  calibration.observeMic(samples, start);
-  contentCalibrationValidator.observeMic(samples, start);
-  robotContentTransitionRuntime.noteMicProgress();
-}
-
-function deliverMicPackets(packets: PcmFrame[]) {
-  for (const packet of packets) processPublisherFrame(packet);
-}
-
-const mixerTimer = setInterval(() => {
-  if (micRuntime.audioTransport) {
-    const nowMs = performance.now();
-    micRuntime.serviceRetransmits(nowMs, session.liveMicHeadroomMs);
-    deliverMicPackets(micRuntime.flush(nowMs));
-  }
-
-  session.drain((frame, evidence, position) => {
-    const nowMs = performance.now();
-    takeController.append(frame, takeQualityFrameState(nowMs), evidence, position);
-    monitorTransport.broadcast(frame, true, position);
-    const audibility = micAudibility.observeFrame({
-      micLive: micPlayable(nowMs),
-      frameSamples: frame.byteLength / 2,
-      micGapSamples: evidence.micGapSamples,
-      micStarvedSamples: evidence.micStarvedSamples,
-    });
-    if (audibility) reportMicAudibility(audibility, nowMs);
-    const levelChanged = micLevel.observeFrame({
-      micLive: micPlayable(nowMs),
-      frameSamples: frame.byteLength / 2,
-      heavyLimitedSamples: evidence.heavyLimitedSamples,
-    }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.micGainDb }));
-    if (levelChanged) reportMicLevel('window');
-  });
-  reportMicTimelineFolds();
-}, 5);
+relayMixPump.start();
 
 function reportMicLevel(reason: 'window' | 'gain') {
   console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));
@@ -2221,453 +1739,81 @@ function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
 }
 
 function maybeAutoCalibrate(nowMs: number) {
-  // Feature enablement and Take ownership are outer scheduler concerns. The
-  // calibration policy below owns why an otherwise eligible automatic content
-  // attempt may proceed.
-  if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
-  const robotRoute = robotRouteActive();
-  if (!autoContentCalibrationPrerequisitesReady({
-    bootProbeSettled: bootProbeSettled(nowMs),
-    robotRouteActive: robotRoute,
-    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
-    sessionActive: session.active,
-    calibrationCollecting: calibration.collecting,
-  })) return;
-
-  const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
-  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
-  // Preserve the historical short-circuit: only fresh Robot authority needs
-  // that stateful read to distinguish replaceable Boot from terminal content.
-  const appliedKind = freshConfirmedResult && robotRoute
-    ? appliedCalibrationKind()
-    : null;
-  if (!autoContentCalibrationAuthorityAllowsStart({
-    freshConfirmedResult,
-    robotRouteActive: robotRoute,
-    appliedKind,
-  })) return;
-
-  // Preserve the old liveness read order even though the final decision is
-  // pure: a retry that is not due must not fan out into transport/timeline work.
-  const retryDue = timingRuntime.autoCalibrationDue(nowMs);
-  const backingConnected = retryDue && backingRuntime.connected();
-  const micControlConnected = backingConnected && micRuntime.controlConnected();
-  const streamsFlowing = micControlConnected && bothStreamsFlowing(nowMs);
-  const timeline = streamsFlowing ? currentTimelineStatus() : null;
-  if (!autoContentCalibrationLivePathReady({
-    retryDue,
-    backingConnected,
-    micControlConnected,
-    streamsFlowing,
-    timelineConnected: Boolean(timeline?.connected),
-    timelinePlaying: Number(timeline?.state) === 1,
-  })) return;
-
-  timingRuntime.beginContentCalibration(nowMs, true);
-  const startMode = autoContentCalibrationStartMode(probeCalibrationExhausted(nowMs));
-  if (startMode === 'primed') calibration.startFromPrimed(nowMs);
-  else calibration.start(nowMs);
-  broadcastJson(timingCalibrationStatusPayload());
+  relayContentCalibration.stepAuto(nowMs);
 }
 
-function contentValidationPathReady(nowMs: number) {
-  const robotRoute = robotRouteActive();
-  if (!contentValidationPathPrerequisitesReady({
-    enabled: CONTENT_VALIDATION_ENABLED,
-    takeBlocked: takeBlocksCalibration(),
-    bootProbeSettled: bootProbeSettled(nowMs),
-    robotRouteActive: robotRoute,
-    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
-    sessionActive: session.active,
-    calibrationCollecting: calibration.collecting,
-  })) return false;
-
-  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
-  // Keep that stateful read after the prerequisite short-circuit, matching the
-  // historical admission ordering rather than sampling every fact eagerly.
-  const confirmed = calibration.confirmedResult;
-  const appliedKind = appliedCalibrationKind();
-  if (!contentValidationAuthorityReady({
-    appliedKind,
-    hasConfirmedResult: confirmed !== null,
-    calibrationStale:
-      appliedKind === 'content' && confirmed !== null && calibrationIsStale(),
-  })) return false;
-
-  const timeline = currentTimelineStatus(nowMs);
-  return contentValidationLivePathReady({
-    backingConnected: backingRuntime.connected(),
-    micControlConnected: micRuntime.controlConnected(),
-    streamsFlowing: bothStreamsFlowing(nowMs),
-    timelineConnected: Boolean(timeline.connected),
-    timelinePlaying: Number(timeline.state) === 1,
-  });
-}
 
 function maybeValidateContentCalibration(nowMs: number) {
-  syncContentValidationBaseline(nowMs);
-  if (!contentCalibrationValidator.hasBaseline) return;
-
-  const state = contentCalibrationValidator.status(nowMs).state;
-  if (!contentValidationPathReady(nowMs)) {
-    if (contentCalibrationValidator.collecting || state === 'suspect') {
-      contentCalibrationValidator.cancel(nowMs);
-    }
-    return;
-  }
-
-  // Every state transition publishes through validator.onChange. Return values
-  // remain useful to domain tests but are no longer a second telemetry channel.
-  contentCalibrationValidator.tick(nowMs);
-  contentCalibrationValidator.maybeStart(nowMs);
+  relayContentCalibration.stepValidation(nowMs);
 }
 
-function probeGeneration(target: ProbeTarget) {
-  return target === 'mic' ? session.micGeneration : session.backingGeneration;
-}
+const relayBootProbe = createRelayBootProbeOrchestration({
+  config: {
+    sampleRate: MIX_SAMPLE_RATE,
+    leadMs: PROBE_LEAD_MS,
+    searchMarginMs: PROBE_SEARCH_MARGIN_MS,
+    referenceMs: PROBE_REFERENCE_MS,
+    analysisTimeoutMs: PROBE_ANALYSIS_TIMEOUT_MS,
+    minCorrelation: PROBE_MIN_CORRELATION,
+    maxCaptureGapMs: MAX_CAPTURE_GAP_MS,
+    reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS,
+    debug: PROBE_DEBUG,
+  },
+  mix: session,
+  mic: micRuntime,
+  backing: backingRuntime,
+  source: sourceRuntime,
+  probe: bootProbeRuntime,
+  calibration,
+  timing: timingRuntime,
+  queries: {
+    robotRouteActive,
+    robotProbeTimingActive,
+    takeBlocksCalibration,
+    micPlayable,
+    backingPlayable,
+    calibrationIsStale,
+    probeStatus,
+    appliedCalibrationKind,
+    calibrationApplicability,
+    roomHasSong,
+    robotDeltaIsFresh,
+    currentDeltaMs,
+    currentPlaybackRate,
+    bootProbeAdvanceMs,
+  },
+  effects: {
+    sendProbe: (target, message) => sendJson(target, message),
+    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
+    debugLog: (message) => console.log(message),
+  },
+});
 
 function bootProbeContext() {
-  return {
-    sessionGeneration: session.generation,
-    micGeneration: session.micGeneration,
-    backingGeneration: session.backingGeneration,
-    micSourceRate: micRuntime.sampleRate,
-    backingSourceRate: backingRuntime.sampleRate,
-  };
+  return relayBootProbe.context();
 }
-
-function probePathReady(target: ProbeTarget, nowMs: number) {
-  // A boot probe is a two-leg measurement of one Robot route, so admitting a
-  // leg whose topology does not exist is what strands a run: the Mic leg
-  // succeeds, the backing leg sits in `backing-waiting` forever, and because
-  // nothing was ever requested no attempt is ever spent - so the bounded run
-  // never terminates. `decideCalibrationStart` already refuses this for manual
-  // and product-advertised starts; the automatic scheduler needs the same rule
-  // rather than a second, laxer policy.
-  if (robotRouteActive() && !bootProbeTopologyReady({
-    backingIsRobot: backingRuntime.isRobot,
-    robotSourceConnected: sourceRuntime.connected(),
-  })) {
-    return false;
-  }
-  if (target === 'mic') {
-    return micRuntime.controlConnected() && micPlayable(nowMs);
-  }
-  return backingRuntime.connected()
-    && backingPlayable(nowMs)
-    && sourceRuntime.connected();
-}
-
-const bootProbeFailureSettlementCoordinator =
-  createRelayBootProbeFailureSettlementCoordinator({
-    restoreCandidateKindToAuthority: () => timingRuntime.restoreCandidateKindToAuthority(),
-    failPreservingPrimed: (message) => calibration.failPreservingPrimed(message),
-    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  });
 
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
-  const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
-  bootProbeFailureSettlementCoordinator.settle(failure);
-}
-
-function sendProbeRequest(target: ProbeTarget, nowMs: number) {
-  if (timingRuntime.calibrationKind !== 'boot-probe') {
-    timingRuntime.beginBootProbe(true);
-  }
-
-  const requestId = bootProbeRuntime.nextRequestId();
-  const request = {
-    target,
-    requestId,
-    serverSentAtMs: nowMs,
-    sessionGeneration: session.generation,
-    generation: probeGeneration(target),
-  };
-  if (!bootProbeRuntime.beginRequest(request)) return;
-
-  if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${requestId} generation=${request.generation}`);
-
-  const payload = { type: 'play-calibration-probe', target, requestId, leadMs: PROBE_LEAD_MS };
-  if (target === 'mic') {
-    sendJson(micRuntime.publisher!, payload);
-  } else if (sourceRuntime.socket) {
-    sendJson(sourceRuntime.socket, payload);
-  }
-  broadcastJson(timingCalibrationStatusPayload());
+  relayBootProbe.failAttempt(target, reason, nowMs);
 }
 
 function maybeStartProbeCalibration(nowMs: number) {
-  if (!robotProbeTimingActive() || takeBlocksCalibration()) return;
-  if (!session.active || calibration.collecting) return;
-
-  const context = bootProbeContext();
-  if (bootProbeRuntime.micLegStaleForContext(context)) {
-    abandonProbeRun();
-  }
-
-  const candidateIsBootProbe = timingRuntime.calibrationKind === 'boot-probe';
-  const hasCalibrationResult = calibration.result !== null;
-  if (!bootProbeStartAuthorityAllowsAttempt({
-    candidateIsBootProbe,
-    hasCalibrationResult,
-    calibrationStale: candidateIsBootProbe && hasCalibrationResult
-      ? calibrationIsStale()
-      : false,
-    calibrationTransactionActive: calibration.transactionActive,
-  })) return;
-
-  if (!bootProbeRuntime.lifecycleIdle) return;
-
-  const probeErrored = probeStatus(nowMs).error !== null;
-  const hasMicLeg = bootProbeRuntime.hasMicLeg;
-  const completedContextMatches = !probeErrored
-    && !calibration.transactionActive
-    && !hasMicLeg
-    && bootProbeRuntime.completedContextMatches(context);
-  const target = selectBootProbeStartTarget({
-    probeErrored,
-    calibrationTransactionActive: calibration.transactionActive,
-    hasMicLeg,
-    completedContextMatches,
-  });
-  if (target === null) return;
-  if (!bootProbeRuntime.canStart(target, nowMs)) return;
-  if (!probePathReady(target, nowMs)) return;
-  sendProbeRequest(target, nowMs);
-}
-
-/**
- * The one place a probe client's answer is fenced against the run it claims.
- *
- * A capture-generation mismatch on the *reply* is deliberately not handled
- * here. `ProbeLifecycle.acceptClientReply()` already drops it without consuming
- * the request, because the phone reports its live AudioWorklet generation
- * rather than echoing the request: a racy mismatch must leave the current
- * request authoritative so the real acknowledgement can still land. Anything
- * that reaches this function has already passed that fence.
- */
-function acceptCurrentProbeClientResult(
-  reply: { requestId: unknown; generation: unknown },
-  options: { logCaptureGenerationMismatch?: boolean } = {},
-) {
-  const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
-  if (!pending) return null;
-
-  const sessionCurrent = session.active
-    && pending.sessionGeneration === session.generation;
-  const captureGenerationMatches = sessionCurrent
-    ? probeGeneration(pending.target) === pending.generation
-    : false;
-  const identity = decideBootProbeRunIdentity({
-    sessionCurrent,
-    captureGenerationMatches,
-  });
-
-  if (identity.kind === 'abandon') {
-    if (
-      identity.reason === 'capture-generation'
-      && options.logCaptureGenerationMismatch
-      && PROBE_DEBUG
-    ) {
-      console.log(`[probe] ${pending.target} dropped: capture generation changed`);
-    }
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return null;
-  }
-
-  return pending;
+  relayBootProbe.stepAdmission(nowMs);
 }
 
 function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
-  const pending = acceptCurrentProbeClientResult(reply, { logCaptureGenerationMismatch: true });
-  if (!pending) return;
-
-  const oneWayMs = (nowMs - pending.serverSentAtMs) / 2;
-  const targetSample = Math.round(session.sessionSampleAt(pending.serverSentAtMs + oneWayMs + PROBE_LEAD_MS));
-  const marginSamples = Math.round((MIX_SAMPLE_RATE * PROBE_SEARCH_MARGIN_MS) / 1000);
-  const referenceSamples = Math.round((MIX_SAMPLE_RATE * PROBE_REFERENCE_MS) / 1000);
-
-  bootProbeRuntime.beginAnalysis({
-    target: pending.target,
-    targetSample,
-    windowStart: targetSample - Math.round(marginSamples / 8),
-    windowSamples: referenceSamples + marginSamples,
-    sessionGeneration: pending.sessionGeneration,
-    generation: pending.generation,
-    deadlineMs: nowMs + PROBE_ANALYSIS_TIMEOUT_MS,
-  });
-  broadcastJson(timingCalibrationStatusPayload());
+  relayBootProbe.handleReply(reply, nowMs);
 }
 
 function handleProbeFailure(
   reply: { requestId: unknown; generation: unknown; reason: unknown },
   nowMs: number,
 ) {
-  const pending = acceptCurrentProbeClientResult(reply);
-  if (!pending) return;
-
-  const rawReason = typeof reply.reason === 'string' ? reply.reason.trim() : '';
-  const reason = rawReason ? rawReason.slice(0, 240) : 'client could not play the probe';
-  failProbeAttempt(pending.target, reason, nowMs);
-}
-
-const bootProbeCalibrationPromotionCoordinator =
-  createRelayBootProbeCalibrationPromotionCoordinator({
-    markBootProbeAuthority: () => timingRuntime.markBootProbeAuthority(),
-    applyExternalResult: (result) => calibration.applyExternalResult(result),
-  });
-
-function promoteBootProbeCalibration(
-  mutateProbe: () => void,
-  result: () => { micLagMs: number; confidence: number },
-) {
-  bootProbeCalibrationPromotionCoordinator.promote(mutateProbe, result);
+  relayBootProbe.handleFailure(reply, nowMs);
 }
 
 function maybeFinishProbeAnalysis(nowMs: number) {
-  const waiting = bootProbeRuntime.pendingAnalysis;
-  if (!waiting) return;
-
-  const reached = waiting.target === 'mic' ? session.micTotalSamples : session.backingTotalSamples;
-  const needed = waiting.windowStart + waiting.windowSamples;
-  const sessionCurrent = session.active
-    && waiting.sessionGeneration === session.generation;
-  const captureGenerationMatches = sessionCurrent
-    ? probeGeneration(waiting.target) === waiting.generation
-    : false;
-  const readiness = decideBootProbeAnalysisReadiness({
-    sessionCurrent,
-    captureGenerationMatches,
-    nowMs,
-    deadlineMs: waiting.deadlineMs,
-    reachedSamples: reached,
-    neededSamples: needed,
-  });
-
-  if (readiness.kind === 'abandon') {
-    if (readiness.reason === 'capture-generation' && PROBE_DEBUG) {
-      console.log(`[probe] ${waiting.target} analysis dropped: capture generation changed`);
-    }
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  if (readiness.kind === 'timeout') {
-    if (PROBE_DEBUG) {
-      console.log(
-        `[probe] ${waiting.target} analysis timed out: reached=${reached} needed=${needed}`,
-      );
-    }
-    bootProbeRuntime.takeAnalysis();
-    failProbeAttempt(waiting.target, 'captured audio did not reach the analyzer before timeout', nowMs);
-    return;
-  }
-
-  if (readiness.kind === 'wait') return;
-  const analysis = bootProbeRuntime.takeAnalysis();
-  if (!analysis) return;
-
-  const rangeEvidence = analysis.target === 'mic'
-    ? session.readMicEvidence(analysis.windowStart, analysis.windowSamples)
-    : session.readBackingEvidence(analysis.windowStart, analysis.windowSamples);
-  const evidenceDecision = decideBootProbeAnalysisEvidence({
-    gapSamples: rangeEvidence.gapSamples,
-    frontierMissingSamples: rangeEvidence.frontierMissingSamples,
-    sampleRate: MIX_SAMPLE_RATE,
-    maxGapMs: MAX_CAPTURE_GAP_MS,
-  });
-  if (evidenceDecision.kind === 'reject') {
-    const reason = evidenceDecision.reason === 'frontier-missing'
-      ? `captured audio window was incomplete (${evidenceDecision.frontierMissingSamples} samples beyond the capture frontier)`
-      : `captured audio gap ${evidenceDecision.gapMs.toFixed(1)} ms exceeded ${MAX_CAPTURE_GAP_MS} ms`;
-    failProbeAttempt(analysis.target, reason, nowMs);
-    return;
-  }
-
-  const window = analysis.target === 'mic'
-    ? session.readMic(analysis.windowStart, analysis.windowSamples)
-    : session.readBacking(analysis.windowStart, analysis.windowSamples);
-  const { offsetSamples, correlation } = locateProbe(window, MIX_SAMPLE_RATE);
-  const actualSample = analysis.windowStart + offsetSamples;
-  const latencyMs = ((actualSample - analysis.targetSample) / MIX_SAMPLE_RATE) * 1000;
-  bootProbeRuntime.noteCorrelation(analysis.target, correlation);
-
-  if (PROBE_DEBUG) {
-    let peak = 0;
-    for (let i = 0; i < window.length; i += 1) {
-      const magnitude = Math.abs(window[i]);
-      if (magnitude > peak) peak = magnitude;
-    }
-    const controlSeconds = 20;
-    const recent = analysis.target === 'mic'
-      ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
-      : session.readBacking(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds);
-    let recentPeak = 0;
-    for (let i = 0; i < recent.length; i += 1) {
-      const magnitude = Math.abs(recent[i]);
-      if (magnitude > recentPeak) recentPeak = magnitude;
-    }
-    console.log(
-      `[probe] ${analysis.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
-      + ` windowPeak=${peak} recent${controlSeconds}sPeak=${recentPeak}`
-      + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`,
-    );
-  }
-
-  if (correlation < PROBE_MIN_CORRELATION) {
-    failProbeAttempt(
-      analysis.target,
-      `correlation ${correlation.toFixed(3)} was below ${PROBE_MIN_CORRELATION.toFixed(3)}`,
-      nowMs,
-    );
-    return;
-  }
-
-  const leg = { targetSample: analysis.targetSample, actualSample, correlation };
-
-  if (analysis.target === 'mic') {
-    bootProbeRuntime.setMicLeg({
-      ...leg,
-      sessionGeneration: session.generation,
-      micGeneration: analysis.generation,
-      micSourceRate: micRuntime.sampleRate,
-    });
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  const micLeg = bootProbeRuntime.takeMicLegForContext({
-    sessionGeneration: session.generation,
-    micGeneration: session.micGeneration,
-    micSourceRate: micRuntime.sampleRate,
-  });
-  if (micLeg === null) return;
-
-  const result = combineBootCalibration({
-    mic: micLeg,
-    backing: leg,
-    deltaMs: currentDeltaMs(nowMs),
-    sampleRate: MIX_SAMPLE_RATE,
-    playbackRate: currentPlaybackRate(nowMs),
-  });
-
-  if (PROBE_DEBUG) {
-    console.log(
-      `[probe] combined advanceMs=${result.advanceMs.toFixed(0)}`
-      + ` (mic ${result.micLatencyMs.toFixed(0)} - backing ${result.backingLatencyMs.toFixed(0)}`
-      + ` + delta ${result.deltaMs.toFixed(0)}) confidence=${result.confidence.toFixed(3)}`,
-    );
-  }
-
-  promoteBootProbeCalibration(
-    () => bootProbeRuntime.recordCalibration(bootProbeContext(), result),
-    () => ({
-      micLagMs: result.advanceMs,
-      confidence: Math.max(0, Math.min(1, result.confidence)),
-    }),
-  );
+  relayBootProbe.stepAnalysis(nowMs);
 }
 
 function currentDeltaMs(nowMs: number) {
@@ -2695,36 +1841,7 @@ function currentDeltaMs(nowMs: number) {
  * and for a fresh delta, since the total is only meaningful with one.
  */
 function maybeReapplyBootCalibration(nowMs: number) {
-  if (takeBlocksCalibration()) return;
-  if (!robotRouteActive()) return;
-  const appliedKind = appliedCalibrationKind();
-  const applied = session.alignment.calibratedMicLagMs;
-  const decision = decideBootProbeReapplication({
-    appliedKind,
-    replacementApplicability: appliedKind === 'boot-probe'
-      ? null
-      : calibrationApplicability(appliedKind),
-    roomHasSong: roomHasSong(nowMs),
-    pathDifferenceReady: bootProbeRuntime.pathDifferenceMs !== null,
-    calibrationCollecting: calibration.collecting,
-    calibrationTransactionActive: calibration.transactionActive,
-    robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
-    advanceMs: bootProbeAdvanceMs(nowMs),
-    appliedMicLagMs: applied,
-    reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS,
-  });
-  if (decision.kind === 'none') return;
-
-  const advanceMs = decision.advanceMs;
-  if (PROBE_DEBUG) {
-    const why = decision.reason === 'reclaim' ? 'reclaimed by boot baseline' : 'delta moved';
-    console.log(`[probe] ${why}; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
-  }
-  promoteBootProbeCalibration(
-    () => bootProbeRuntime.reapplyCalibration(advanceMs, currentDeltaMs(nowMs)),
-    () => ({ micLagMs: advanceMs, confidence: bootProbeRuntime.confidence ?? 0 }),
-  );
+  relayBootProbe.stepReapply(nowMs);
 }
 
 /**
@@ -2737,38 +1854,17 @@ function maybeReapplyBootCalibration(nowMs: number) {
  * discards the confirmed boot result, dropping the live mixer to its network
  * estimate mid-upgrade.
  */
-const robotLegacyCalibrationDropCoordinator = createRelayRobotLegacyCalibrationDropCoordinator({
-  robotRouteActive: () => robotRouteActive(),
-  calibrationKind: () => timingRuntime.calibrationKind,
-  bootProbeSettled: () => bootProbeSettled(),
-  clearContentValidationBaseline: () => clearContentValidationBaseline(),
-  resetCalibration: () => calibration.reset(),
-  clearCalibrationKind: () => timingRuntime.clearCalibrationKind(),
-  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-});
-
 function dropLegacyCalibrationForRobot() {
-  robotLegacyCalibrationDropCoordinator.drop();
+  relayRobotMapping.dropLegacyCalibration();
 }
 
 // Command authority and product action availability stay in the command handler.
 // Calibration, timing and probe state authority stay in their existing runtimes;
 // this seam owns only the already-authorized manual transaction ordering.
-const manualBootRecalibrationCoordinator = createRelayManualBootRecalibrationCoordinator({
-  clearContentValidation: () => clearContentValidationBaseline(),
-  beginExternalRecalibration: () => calibration.beginExternalRecalibration(),
-  beginManualBootProbe: () => timingRuntime.beginBootProbe(false),
-  abandonProbeRun: () => abandonProbeRun(),
-  resetProbeCorrelations: () => bootProbeRuntime.resetCorrelations(),
-  syncAppliedCalibration: () => syncAppliedCalibration(),
-  maybeStartProbeCalibration: (nowMs) => maybeStartProbeCalibration(nowMs),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-});
+
 
 function restartManualBootCalibration(nowMs: number) {
-  manualBootRecalibrationCoordinator.restart(nowMs);
+  relayCalibrationLifecycle.restartManualBootCalibration(nowMs);
 }
 
 const youtubeTimelineTimer = setInterval(() => {
@@ -2782,11 +1878,7 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
   }
 
-  const expiredRoomSongCommand = roomSongCommands.sweep(nowMs);
-  if (expiredRoomSongCommand) {
-    broadcastRoomSongCommandFailure(expiredRoomSongCommand.commandId, 'command-timeout', nowMs);
-    broadcastJson(roomSongCommandStatusPayload(nowMs));
-  }
+  relaySongCommands.stepExpiry(nowMs);
 
   if (calibration.collecting) {
     const silent = silentSides(nowMs - COLLECTION_SILENCE_GRACE_MS);
@@ -2877,25 +1969,6 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
   timingCalibrationStatusPayload: () => timingCalibrationStatusPayload(),
 });
 
-const micReleaseCoordinator = createRelayMicReleaseCoordinator<
-  RelaySocket,
-  Parameters<typeof applyMicOwnerTransitionEffects>[0]
->({
-  publisherParticipantId: () => micRuntime.publisher?.participantId ?? null,
-  mediaOwnerId: () => micRuntime.mediaOwnerId,
-  revokePublisherTransport: (message) => revokePublisherTransport(message),
-  clearMediaAuthority: () => clearMicMediaAuthority(),
-  cancelTransportGrace: () => micTransportGrace.cancel(),
-  applyOwnershipEffects: (effects, hooks) => {
-    applyMicOwnerEffects(effects, performance.now(), {
-      afterQualityEvent: hooks.afterQualityEvent,
-      beforeTimingInvalidation: hooks.beforeTimingInvalidation,
-    });
-  },
-  broadcastSessionStatus: () => broadcastSessionStatus(),
-  sendReleased: (socket) => sendJson(socket, { type: 'mic-released' }),
-});
-
 // Participant/product admission and take-id validation stay in the command handler.
 // TakeController remains recording/storage authority; this seam owns only admitted
 // command ordering around the authoritative mix-frame boundary.
@@ -2927,101 +2000,6 @@ const takeCommandCoordinator = createRelayTakeCommandCoordinator<
       command: 'stop',
       takeId,
       duplicate,
-    });
-  },
-});
-
-// Room-song admission and intent/revision authority stay in the command handler
-// and RoomSongCommandRuntime. This seam starts only after begin() accepts and
-// owns the acknowledgement -> pending recheck -> delivery -> status ordering.
-const roomSongCommandAcceptanceCoordinator = createRelayRoomSongCommandAcceptanceCoordinator<
-  RelaySocket,
-  PlaybackIdentity,
-  AcceptedRoomSongCommand
->({
-  sendAccepted: (socket, commandId, revision, duplicate) => {
-    sendJson(socket, {
-      type: 'room-song-command-accepted',
-      commandId,
-      revision,
-      duplicate,
-    });
-  },
-  pendingForTarget: (target, nowMs) => roomSongCommands.pendingForTarget(target, nowMs),
-  sendApply: (target, command) => playbackTransport.send(target, roomSongCommandApplyPayload(command)),
-  reportStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
-});
-
-// Playback identity resolution remains in the command handler and SongSession
-// remains authoritative behind these callbacks. This seam owns only the
-// ready/failed handoff result ordering and publication sequence.
-const songHandoffResultCoordinator = createRelaySongHandoffResultCoordinator<
-  PlaybackIdentity,
-  SongHandoffPlan
->({
-  markReady: (identity, handoffId, micOwnerId) => youtubeTimeline.markHandoffReady(identity, handoffId, micOwnerId),
-  defer: (identity, handoffId) => youtubeTimeline.deferHandoff(identity, handoffId),
-  sendCommit: (plan) => { sendHandoffPlan('song-handoff-commit', plan); },
-  reportTimelineStatus: () => broadcastJson(youtubeTimeline.statusPayload()),
-  reportRoomStatus: () => broadcastJson(youtubeTimeline.roomStatusPayload()),
-});
-
-// Playback identity validation and registration stay in the command handler/runtime.
-// This seam begins only after register() commits that identity and owns the
-// registration snapshots plus pending handoff/command continuation ordering.
-const playbackRegistrationContinuationCoordinator = createRelayPlaybackRegistrationContinuationCoordinator<
-  RelaySocket,
-  PlaybackIdentity,
-  SongHandoffPlan,
-  AcceptedRoomSongCommand
->({
-  sendRegistered: (socket, identity) => {
-    sendJson(socket, {
-      type: 'playback-registered',
-      playbackTransportId: identity.transportId,
-      playbackGeneration: identity.generation,
-    });
-  },
-  sendRoomStatus: (socket) => sendJson(socket, youtubeTimeline.roomStatusPayload()),
-  sendCommandStatus: (socket) => sendJson(socket, roomSongCommandStatusPayload()),
-  handoffPlanForTarget: (identity) => youtubeTimeline.handoffPlanForTarget(identity),
-  sendHandoffPrepare: (plan) => { sendHandoffPlan('song-handoff-prepare', plan); },
-  now: () => performance.now(),
-  pendingCommandForTarget: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
-  sendCommandApply: (identity, command) => playbackTransport.send(identity, roomSongCommandApplyPayload(command)),
-});
-
-const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAcceptanceCoordinator<RelaySocket, PlaybackIdentity>({
-  registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
-  clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
-  cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
-  revokeContentMappingOnRateChange: (playbackRate) => revokeContentMappingOnRateChange(playbackRate),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportTimelineStatus: (status) => {
-    lastTelemetryTimelineBroadcastAtMs = performance.now();
-    broadcastJson(status);
-  },
-  reportRoomStatus: (nowMs) => broadcastJson(youtubeTimeline.roomStatusPayload(nowMs)),
-  completeRoomSongCommand: (commandId) => roomSongCommands.complete(commandId),
-  reportRoomSongCommandComplete: (commandId) => {
-    broadcastJson({
-      type: 'room-song-command-complete',
-      commandId,
-      revision: roomSongCommands.revision,
-    });
-  },
-  reportRoomSongCommandStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
-  releasePreviousLeader: (previousLeader, handoffId, videoId) => {
-    playbackTransport.send(previousLeader, {
-      type: 'song-handoff-release',
-      handoffId,
-      videoId,
-    });
-  },
-  completeHandoff: (identity, handoffId) => {
-    playbackTransport.send(identity, {
-      type: 'song-handoff-complete',
-      handoffId,
     });
   },
 });
@@ -3125,7 +2103,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const result = participants.releaseMic(socket.participantId);
     if (!result.ok) return;
 
-    micReleaseCoordinator.release({
+    relayMicLifecycle.release({
       socket,
       participantId: socket.participantId,
       effects: result.effects,
@@ -3163,7 +2141,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    roomSongCommandAcceptanceCoordinator.accept({
+    relaySongCommands.accept({
       socket,
       command: decision.command,
       duplicate: decision.duplicate,
@@ -3174,20 +2152,12 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
     const nowMs = performance.now();
-    const pendingCommand = roomSongCommands.pendingForTarget(playbackIdentity, nowMs);
-    if (
-      pendingCommand
-      && payload.commandId === pendingCommand.commandId
-      && roomSongCommands.fail(playbackIdentity, pendingCommand.commandId)
-    ) {
-      broadcastRoomSongCommandFailure(pendingCommand.commandId, 'playback-failed', nowMs);
-      broadcastJson(roomSongCommandStatusPayload(nowMs));
-    }
+    relaySongCommands.failPending(playbackIdentity, payload.commandId, nowMs);
   },
   songHandoffReady: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    songHandoffResultCoordinator.ready({
+    relaySongLifecycle.ready({
       identity: playbackIdentity,
       handoffId: payload.handoffId,
       micOwnerId: participants.micOwnerId,
@@ -3196,7 +2166,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   songHandoffFailed: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    songHandoffResultCoordinator.failed({
+    relaySongLifecycle.failed({
       identity: playbackIdentity,
       handoffId: payload.handoffId,
     });
@@ -3235,7 +2205,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       transportId,
       generation,
     });
-    playbackRegistrationContinuationCoordinator.continueRegistration({
+    relaySongLifecycle.continueRegistration({
       socket,
       identity: playbackIdentity,
     });
@@ -3287,7 +2257,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     );
     if (result.accepted) {
       const timelineStatus = youtubeTimeline.statusPayload(nowMs);
-      youtubeTelemetryAcceptanceCoordinator.accept({
+      relaySongLifecycle.acceptTelemetry({
         socket,
         acceptedIdentity,
         nowMs,
@@ -3439,27 +2409,6 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
 
 });
 
-// Infrastructure capability and Source/mapping classification stay in the
-// infrastructure handler. This seam begins only after the seek is accepted and
-// follower-correction mapping has been classified by the authoritative runtimes.
-const sourceSeekTransactionCoordinator = createRelaySourceSeekTransactionCoordinator<CalibrationContext>({
-  resetPlayerOffset: () => robotPlayerOffset.reset(),
-  beginContentTransition: (fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs) => {
-    beginRobotContentTransition(
-      fromMediaTime,
-      toMediaTime,
-      preDeltaMs,
-      referenceDeltaMs,
-      context,
-      nowMs,
-    );
-  },
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  revokeContentMapping: (reason) => revokeRobotContentMapping({ reason }),
-});
-
 const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({
   backingSampleBoundary: (socket, payload) => {
     if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
@@ -3564,7 +2513,7 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
         nowMs,
       );
 
-    sourceSeekTransactionCoordinator.handle({
+    relayRobotMapping.handleSourceSeek({
       mappedFollowerCorrection,
       fromMediaTime,
       toMediaTime,
@@ -3610,92 +2559,6 @@ const authenticationProtocol = createRelayAuthenticationProtocol<RelaySocket>({
     });
     return;
   },
-});
-
-const publisherActivationCoordinator = createRelayPublisherActivationCoordinator<
-  RelaySocket,
-  Parameters<typeof applyMicOwnerTransitionEffects>[0]
->({
-  now: () => performance.now(),
-  participantId: (socket) => socket.participantId ?? null,
-  applyOwnershipEffects: (effects, hooks) => {
-    applyMicOwnerEffects(effects, performance.now(), {
-      invalidateTiming: hooks.invalidateTiming,
-      prepareSongHandoff: hooks.prepareSongHandoff,
-    });
-  },
-  bindPublisher: (registration) => micRuntime.bindPublisher(registration),
-  retireReplacedCapture: () => {
-    clearRobotContentTransition();
-    session.retireMicCapture();
-    takeController.noteQualityEvent('mic-capture-restarted');
-  },
-  retirePrevious: (previousPublisher, nextPublisher, sameParticipantReplacement) => {
-    const newOwnerName = nextPublisher.participantId
-      ? participantPayload(nextPublisher.participantId)?.nickname ?? 'Another participant'
-      : 'Another microphone';
-    retirePublisherTransport(
-      previousPublisher,
-      sameParticipantReplacement ? 'publisher-superseded' : 'mic-revoked',
-      sameParticipantReplacement
-        ? 'A newer microphone capture from this participant became active.'
-        : `${newOwnerName} took over the microphone.`,
-    );
-  },
-  cancelTransportGrace: () => micTransportGrace.cancel(),
-  setMicExpected: () => session.setMicExpected(true),
-  sessionActive: () => session.active,
-  noteTransportConnected: () => takeController.noteQualityEvent('mic-transport-connected'),
-  invalidateTiming: (reason) => invalidateMicTiming(reason),
-  restartLiveSource: () => restartLiveSourceAfterMicReconnect(),
-  directMediaOffer: () => micRuntime.directMediaOffer(),
-  sendRegistered: (socket, result) => {
-    sendJson(socket, {
-      type: 'registered',
-      role: 'publisher',
-      takeover: result.takeover,
-      ...(result.mediaTransport ? { mediaTransport: result.mediaTransport } : {}),
-    });
-  },
-  sendInitialState: (socket) => {
-    sendJson(socket, mixSettingsPayload());
-    sendJson(socket, youtubeTimeline.statusPayload());
-    sendJson(socket, youtubeTimeline.roomStatusPayload());
-    sendJson(socket, roomSongCommandStatusPayload());
-    sendJson(socket, takeController.statusPayload());
-    sendJson(socket, sourceStatusPayload());
-    sendJson(socket, timingCalibrationStatusPayload());
-  },
-  broadcastStatus: () => broadcastStatus(),
-  broadcastSessionStatus: () => broadcastSessionStatus(),
-  beginPreparedSongHandoff: (participantId) => beginPreparedSongHandoff(participantId),
-});
-
-const backingActivationCoordinator = createRelayBackingActivationCoordinator<RelaySocket>({
-  previousBacking: () => backingRuntime.socket,
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  retireReplacedCapture: () => session.retireBackingCapture(),
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  retirePrevious: (previous, next) => {
-    replacePrevious(previous, next, 'Replaced by a newer tab capture.');
-  },
-  setSocketSampleRate: (socket, sampleRate) => {
-    socket.sampleRate = sampleRate;
-  },
-  bindBacking: (registration) => backingRuntime.bind(registration),
-  setBackingExpected: () => session.setBackingExpected(true),
-  sessionActive: () => session.active,
-  dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
-  onReplacedCaptureActivated: () => {
-    backingCaptureRestartCoordinator.restart({
-      calibrationCollecting: calibration.collecting,
-    });
-  },
-  activeBackingIsRobot: () => backingRuntime.isRobot,
-  sendRegistered: (socket, robot) => {
-    sendJson(socket, { type: 'registered', role: 'backing', robot });
-  },
-  startLiveSource: () => startLiveSource(),
 });
 
 const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
@@ -3796,7 +2659,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
     commitSocketRole(socket, 'publisher');
 
 
-    publisherActivationCoordinator.activate({
+    relayMicLifecycle.activate({
       socket,
       ownershipEffects,
       previousOwnerId,
@@ -3847,7 +2710,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
 
     commitSocketRole(socket, 'backing');
 
-    backingActivationCoordinator.activate({
+    relayBackingLifecycle.activate({
       socket,
       sampleRate,
       robot: payload.robot === true,
@@ -3909,27 +2772,6 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   },
 });
 
-const robotActivationCoordinator = createRelayRobotActivationCoordinator<RelaySocket>({
-  notifyPreviousReplaced: (previous) => {
-    sendJson(previous, { type: 'robot-source-replaced' });
-  },
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  abandonProbeRun: () => abandonProbeRun(),
-  sessionActive: () => session.active,
-  resetPlayerOffset: () => robotPlayerOffset.reset(),
-  resetContentTimeline: () => robotContentTimeline.reset(),
-  clearContentTransition: () => clearRobotContentTransition(),
-  failCalibrationIfCollecting: () => {
-    if (calibration.collecting) {
-      calibration.fail('The Robot source changed during calibration. Start calibration again.');
-    }
-  },
-  dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-});
-
 const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   robotSourceHello: (socket, payload) => {
     if (!infrastructureCapability.authorized(socket)) {
@@ -3939,26 +2781,15 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
     if (sourceRuntime.isActive(socket)) return;
 
     const { previous, replaced } = sourceRuntime.attachRobot(socket);
-    robotActivationCoordinator.activate({ previous, replaced });
+    relayRobotMapping.activateSource({ previous, replaced });
     return;
   },
-});
-
-const backingCaptureRestartCoordinator = createRelayBackingCaptureRestartCoordinator({
-  clearContentTransition: () => clearRobotContentTransition(),
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  abandonProbeRun: () => abandonProbeRun(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  failCalibration: (message) => calibration.fail(message),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
 });
 
 const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
   isMicPublisher: (socket) => micRuntime.isPublisher(socket),
   receiveMic: (socket, data, nowMs) => {
-    deliverMicPackets(micRuntime.receivePublisher(socket, data, nowMs));
+    relayMixPump.deliver(micRuntime.receivePublisher(socket, data, nowMs));
   },
   isBackingActive: (socket) => (
     backingRuntime.isSocket(socket) && socket.role === 'backing' && session.active
@@ -3974,7 +2805,7 @@ const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
     backingRuntime.isRobot,
   ),
   onBackingCaptureRestarted: () => {
-    backingCaptureRestartCoordinator.restart({
+    relayBackingLifecycle.restartCapture({
       calibrationCollecting: calibration.collecting,
     });
   },
@@ -3986,84 +2817,6 @@ const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
     feedContentBackingEvidence(samples, start, nowMs);
   },
 });
-const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySocket>({
-  isActive: (socket) => sourceRuntime.isActive(socket),
-  noteDisconnected: () => takeController.noteQualityEvent('robot-source-disconnected'),
-  detach: (socket) => sourceRuntime.detachRobot(socket),
-  resetPlayerOffset: () => robotPlayerOffset.reset(),
-  resetContentTimeline: () => robotContentTimeline.reset(),
-  clearContentTransition: () => clearRobotContentTransition(),
-  abandonProbeRun: () => abandonProbeRun(),
-  failCalibrationIfCollecting: () => {
-    if (calibration.collecting) {
-      calibration.fail('The Robot source changed during calibration. Start calibration again.');
-    }
-  },
-  syncAppliedCalibration: () => syncAppliedCalibration(),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-});
-const micDisconnectCoordinator = createRelayMicDisconnectCoordinator<RelaySocket>({
-  isPublisher: (socket) => micRuntime.isPublisher(socket),
-  noteDisconnected: () => takeController.noteQualityEvent('mic-transport-disconnected'),
-  reconnectingOwnerId: (socket) => socket.participantId
-    && participants.micOwnerId === socket.participantId
-    ? socket.participantId
-    : null,
-  detachPublisher: (socket) => micRuntime.detachPublisher(socket),
-  clearMediaAuthority: () => clearMicMediaAuthority(),
-  preserveMediaForReconnect: (ownerId) => {
-    // The control plane may reconnect while an independent HTTP/3 media
-    // session is still carrying the same capture. Keep the capture and
-    // sample rate authoritative until the existing grace expires.
-    const directMediaStillLive = webTransportMicConnected();
-    session.setMicExpected(directMediaStillLive);
-    micTransportGrace.schedule(ownerId);
-  },
-  maybeStopLiveSourceWhenUnarmed: () => maybeStopLiveSourceWhenUnarmed(),
-  failCalibrationIfCollecting: () => {
-    if (calibration.collecting) {
-      calibration.fail('Microphone disconnected during calibration.');
-    }
-  },
-  cancelContentValidationAndReport: () => {
-    if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-  },
-  reportStatus: () => broadcastStatus(),
-});
-const backingDisconnectCoordinator = createRelayBackingDisconnectCoordinator<RelaySocket>({
-  isBacking: (socket) => backingRuntime.isSocket(socket),
-  noteDisconnected: () => takeController.noteQualityEvent('backing-transport-disconnected'),
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  detach: (socket) => backingRuntime.detach(socket),
-  clearBackingExpectation: () => session.setBackingExpected(false),
-  failCalibrationIfCollecting: () => {
-    if (calibration.collecting) {
-      calibration.fail('Desktop Source disconnected during calibration.');
-    }
-  },
-  cancelContentValidationAndReport: () => {
-    if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-  },
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportStatus: () => broadcastStatus(),
-});
-const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
-  identity: (socket) => playbackTransport.identity(socket),
-  now: () => performance.now(),
-  pendingCommand: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
-  failPending: (identity, commandId) => roomSongCommands.fail(identity, commandId),
-  reportCommandFailure: (commandId, nowMs) => {
-    broadcastRoomSongCommandFailure(commandId, 'playback-disconnected', nowMs);
-    broadcastJson(roomSongCommandStatusPayload(nowMs));
-  },
-  detachTimeline: (identity) => youtubeTimeline.detach(identity),
-  reportTimelineChanged: () => {
-    broadcastJson(youtubeTimeline.statusPayload());
-    broadcastJson(youtubeTimeline.roomStatusPayload());
-  },
-});
-
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -4117,14 +2870,14 @@ wss.on('connection', (rawSocket, request) => {
   });
 
   socket.on('close', () => {
-    playbackDisconnectCoordinator.handle(socket);
+    relaySongLifecycle.disconnect(socket);
     let micTransportChanged = false;
 
     if (!socket.replaced) {
-      robotDisconnectCoordinator.handle(socket);
-      micTransportChanged = micDisconnectCoordinator.handle(socket);
+      relayRobotMapping.disconnectSource(socket);
+      micTransportChanged = relayMicLifecycle.disconnect(socket);
 
-      backingDisconnectCoordinator.handle(socket);
+      relayBackingLifecycle.disconnect(socket);
     }
 
     const presenceChanged = socket.participantConnectionId
@@ -4137,7 +2890,7 @@ wss.on('connection', (rawSocket, request) => {
 wss.on('close', () => {
   micTransportGrace.cancel();
   clearMicMediaAuthority();
-  clearInterval(mixerTimer);
+  relayMixPump.stop();
   clearInterval(youtubeTimelineTimer);
 });
 
@@ -4170,7 +2923,7 @@ if (directMediaConfig) {
         return micRuntime.authorizeDirectMedia(ticket);
       },
       onDatagram(ticket, packet, nowMs) {
-        deliverMicPackets(micRuntime.receiveDirectMedia(ticket, packet, nowMs));
+        relayMixPump.deliver(micRuntime.receiveDirectMedia(ticket, packet, nowMs));
       },
     });
     if (webTransportMedia.available) {
@@ -4202,7 +2955,7 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
 
     // Freeze the sample frontier first. Any Take finalized below is therefore
     // closed at the last full mixed frame that production actually accepted.
-    clearInterval(mixerTimer);
+    relayMixPump.stop();
     clearInterval(youtubeTimelineTimer);
     micTransportGrace.cancel();
     backingRuntime.cancelGrace();

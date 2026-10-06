@@ -5,6 +5,7 @@ import test from 'node:test';
 import { AudioSession } from '../src/audio-session.js';
 import {
   classMethodCode,
+  functionCode,
   parseTypeScriptSource,
   sourceCode,
   variableInitializerCode,
@@ -43,9 +44,26 @@ test('server owns Mic gain command policy while AudioSession owns the applied va
 
   assert.doesNotMatch(serverCode, /let\s+micGainDb\s*=/);
   assert.doesNotMatch(serverCode, /session\.setMicGainDb\(micGainDb\)/);
-  // Read through, never copied: mix health, mix settings, the Mic level
-  // monitor's per-window context, and its diagnostics status.
-  assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 4);
+  // Read through, never copied: two server projections plus the diagnostics
+  // collector and the lazy mix-pump level context. Check production bindings separately, rather
+  // than concatenating sources and accepting an unconnected lookalike.
+  assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 2);
+  const facts = parseTypeScriptSource(
+    new URL('../src/relay-status-facts.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-status-facts.ts', import.meta.url), 'utf8'),
+  );
+  assert.equal((functionCode(facts, 'remote').match(/micGainDb:\s*readers\.mix\.micGainDb/g) ?? []).length, 1);
+  assert.doesNotMatch(sourceCode(facts), /let\s+micGainDb\s*=/);
+  const statusWiring = variableInitializerCode(server, 'relayStatusFacts');
+  assert.match(statusWiring, /createRelayStatusFacts\(\{/);
+  assert.match(statusWiring, /\bmix:\s*session\b/);
+  const pump = parseTypeScriptSource(
+    new URL('../src/relay-mix-pump.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-mix-pump.ts', import.meta.url), 'utf8'),
+  );
+  assert.equal((functionCode(pump, 'tick').match(/micGainDb:\s*dependencies\.mix\.micGainDb/g) ?? []).length, 1);
+  assert.doesNotMatch(sourceCode(pump), /let\s+micGainDb\s*=/);
+  assert.match(variableInitializerCode(server, 'relayMixPump'), /\bmix:\s*session\b/);
 
   const commands = variableInitializerCode(server, 'commandProtocol');
   const setMix = commands.indexOf('setMix: (socket, payload) => {');
@@ -62,15 +80,27 @@ test('server owns Mic gain command policy while AudioSession owns the applied va
   assert.ok(applyGain > parseGain, 'server command policy must clamp before storing the DSP value');
   assert.ok(publishMix > applyGain, 'accepted gain mutation must publish the resulting mix settings');
 
-  assert.ok(audioCode.includes('private micGainDbValue = 24;'));
+  assert.ok(audioCode.includes('private readonly micGain: MicGainRamp;'));
+  assert.ok(audioCode.includes('this.micGain = new MicGainRamp(options.sampleRate);'));
   const getter = classMethodCode(audio, 'AudioSession', 'micGainDb');
-  assert.ok(getter.includes('return this.micGainDbValue;'));
+  assert.ok(getter.includes('return this.micGain.targetDb;'));
 
   const setter = classMethodCode(audio, 'AudioSession', 'setMicGainDb');
-  assert.ok(setter.includes('this.micGainDbValue = value;'));
+  assert.ok(setter.includes('this.micGain.setTargetDb(value, this.running);'));
   assert.doesNotMatch(
     setter,
     /Math\.min|Math\.max|MAX_MIC_GAIN_DB|requireMicOwnerCommand/,
     'AudioSession must store the DSP value, not absorb command authorization or clamping policy',
+  );
+
+  const gain = parseTypeScriptSource(
+    new URL('../src/mic-gain-ramp.ts', import.meta.url),
+    readFileSync(new URL('../src/mic-gain-ramp.ts', import.meta.url), 'utf8'),
+  );
+  const gainSetter = classMethodCode(gain, 'MicGainRamp', 'setTargetDb');
+  assert.doesNotMatch(
+    gainSetter,
+    /Math\.min|Math\.max|MAX_MIC_GAIN_DB|requireMicOwnerCommand/,
+    'the sample gain ramp must not absorb server command policy either',
   );
 });

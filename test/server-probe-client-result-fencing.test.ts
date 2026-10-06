@@ -8,14 +8,14 @@ import {
   parseTypeScriptSource,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
 );
 
 test('accepted probe client results share one current-generation fence', () => {
-  assert.ok(importSources(server).includes('./boot-probe-run-identity-policy.js'));
-  const fence = functionCode(server, 'acceptCurrentProbeClientResult');
+  assert.ok(importSources(workflow).includes('./boot-probe-run-identity-policy.js'));
+  const fence = functionCode(workflow, 'acceptCurrentProbeClientResult');
 
   const claim = fence.indexOf('bootProbeRuntime.acceptClientReply(');
   const sessionFact = fence.indexOf('const sessionCurrent =');
@@ -24,7 +24,7 @@ test('accepted probe client results share one current-generation fence', () => {
   const abandonBranch = fence.indexOf("if (identity.kind === 'abandon')");
   const abandon = fence.indexOf('abandonProbeRun()', abandonBranch);
   const report = fence.indexOf(
-    'broadcastJson(timingCalibrationStatusPayload())',
+    'effects.reportTimingStatus()',
     abandonBranch,
   );
 
@@ -47,7 +47,7 @@ test('accepted probe client results share one current-generation fence', () => {
   );
   assert.match(
     fence,
-    /decideBootProbeRunIdentity\(\{\s*sessionCurrent,\s*captureGenerationMatches,\s*\}\)/,
+    /decideBootProbeRunIdentity\(\{\s*sessionCurrent,\s*captureGenerationMatches,?\s*\}\)/,
   );
 
   // The reply's own capture generation is fenced one layer down, in
@@ -75,8 +75,8 @@ test('accepted probe client results share one current-generation fence', () => {
 });
 
 test('probe reply and failure handlers delegate fencing instead of duplicating it', () => {
-  const reply = functionCode(server, 'handleProbeReply');
-  const failure = functionCode(server, 'handleProbeFailure');
+  const reply = functionCode(workflow, 'handleProbeReply');
+  const failure = functionCode(workflow, 'handleProbeFailure');
 
   assert.match(reply, /acceptCurrentProbeClientResult\(reply, \{/);
   assert.match(reply, /logCaptureGenerationMismatch: true/);

@@ -18,6 +18,10 @@ const micRuntime = parseTypeScriptSource(
   new URL('../src/mic-runtime.ts', import.meta.url),
   readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8'),
 );
+const statusFacts = parseTypeScriptSource(
+  new URL('../src/relay-status-facts.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-status-facts.ts', import.meta.url), 'utf8'),
+);
 const serverCode = sourceCode(server);
 const micRuntimeCode = sourceCode(micRuntime);
 
@@ -48,10 +52,15 @@ test('server bounds connected Mic startup through the MicRuntime readiness owner
     assert.ok(startupTimedOut.includes(expected), `MicRuntime startup deadline must retain ${expected}`);
   }
 
-  const serverDeadline = functionCode(server, 'micStartupTimedOut');
-  assert.ok(
-    serverDeadline.includes('return micRuntime.startupTimedOut(nowMs)'),
-    'server readiness must consume the runtime deadline result instead of duplicating its timer state',
-  );
-  assert.ok(serverCode.includes('micStartupTimedOut: micStartupTimedOut(nowMs)'));
+  const readiness = functionCode(statusFacts, 'readiness');
+  assert.match(readiness, /micStartupTimedOut: readers\.mic\.runtime\.startupTimedOut\(nowMs\)/,
+    'readiness must consume the live runtime deadline instead of duplicating its timer state');
+  assert.match(readiness, /micFlowObserved: readers\.mic\.runtime\.flowObserved\(\)/);
+  assert.match(variableInitializerCode(server, 'relayStatusFacts'),
+    /mic:\s*\{\s*runtime: micRuntime,/,
+    'production collection must use the canonical MicRuntime, not an independent deadline owner');
+  assert.match(functionCode(server, 'readinessPayload'),
+    /return relayStatusFacts\.readiness\(nowMs\)/);
+  assert.doesNotMatch(sourceCode(statusFacts), /firstFrameWaitStartedAt|firstFrameTimeoutMs/,
+    'the collector must not become a second startup-deadline authority');
 });

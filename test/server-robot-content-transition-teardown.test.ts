@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 
@@ -12,8 +13,12 @@ test('server exposes one whole-transition clear seam distinct from request-only 
   );
   assert.match(
     server,
-    /function clearRobotContentTransition\(\) \{[\s\S]*?robotContentTransitionRuntime\.clear\(\);[\s\S]*?\n\}/,
+    /function clearRobotContentTransition\(\) \{\s*relayRobotMapping\.clearTransition\(\);\s*\}/,
   );
+  const mapping = parseTypeScriptSource(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+    readFileSync(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url), 'utf8'));
+  assert.match(functionCode(mapping, 'clearTransition'), /dependencies\.transition\.clear\(\)/);
+  assert.doesNotMatch(functionCode(mapping, 'clearTransition'), /clearPendingBoundary/);
   assert.doesNotMatch(server, /clearRobotBackingBoundaryRequest|clearBackingBoundaryRequest/);
   assert.match(
     server,

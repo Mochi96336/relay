@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { functionCode, parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
 
 import { SongSession } from '../src/song-session.js';
 
@@ -62,9 +63,17 @@ test('a failed-handoff holdover is retired by the next Mic ownership epoch', () 
 test('server adapter passes current Mic ownership into sweep and retires holdover on every real owner transition', async () => {
   const source = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
 
+  const serverSource = parseTypeScriptSource(new URL('../src/server.ts', import.meta.url), source);
+  const lifecycle = parseTypeScriptSource(new URL('../src/relay-song-orchestration.ts', import.meta.url),
+    await readFile(new URL('../src/relay-song-orchestration.ts', import.meta.url), 'utf8'));
+  const binding = variableInitializerCode(serverSource, 'relaySongLifecycle');
+  assert.match(binding, /song: youtubeTimeline/);
+  assert.match(binding, /playback: playbackTransport/);
+  assert.match(binding, /participants/);
+  assert.match(functionCode(serverSource, 'sweepPreparedSongHandoff'), /return relaySongLifecycle\.stepHandoff\(nowMs\)/);
   assert.match(
-    source,
-    /youtubeTimeline\.sweepHandoff\([\s\S]*?playbackTransport\.connected\(target\),[\s\S]*?nowMs,[\s\S]*?participants\.micOwnerId,[\s\S]*?\)/,
+    functionCode(lifecycle, 'stepHandoff'),
+    /song\.sweepHandoff\(playback\.connected\(target\), nowMs, participants\.micOwnerId\)/,
     'watchdog failure must decide holdover from current ownership, not only the historical target',
   );
   assert.match(

@@ -18,6 +18,10 @@ const coordinator = parseTypeScriptSource(
   new URL('../src/relay-mic-release-coordinator.ts', import.meta.url),
   readFileSync(new URL('../src/relay-mic-release-coordinator.ts', import.meta.url), 'utf8'),
 );
+const lifecycle = parseTypeScriptSource(
+  new URL('../src/relay-mic-lifecycle.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-mic-lifecycle.ts', import.meta.url), 'utf8'),
+);
 
 test('Mic release keeps ParticipantSession lease authority in server', () => {
   const release = objectArrowCallbackCode(server, 'commandProtocol', 'releaseMic');
@@ -26,7 +30,7 @@ test('Mic release keeps ParticipantSession lease authority in server', () => {
   assert.match(release, /if \(!result\.ok\) return/);
   assert.match(
     release,
-    /micReleaseCoordinator\.release\(\{[\s\S]*socket,[\s\S]*participantId: socket\.participantId,[\s\S]*effects: result\.effects,[\s\S]*\}\)/,
+    /relayMicLifecycle\.release\(\{[\s\S]*socket,[\s\S]*participantId: socket\.participantId,[\s\S]*effects: result\.effects,[\s\S]*\}\)/,
   );
 
   assert.doesNotMatch(release, /micRuntime\./);
@@ -39,20 +43,23 @@ test('Mic release keeps ParticipantSession lease authority in server', () => {
 });
 
 test('server composition retains Mic transport, timing, session, and ack effects', () => {
-  assert.ok(importSources(server).includes('./relay-mic-release-coordinator.js'));
-  const composition = variableInitializerCode(server, 'micReleaseCoordinator');
+  assert.ok(importSources(server).includes('./relay-mic-lifecycle.js'));
+  const composition = variableInitializerCode(lifecycle, 'micReleaseCoordinator');
   assert.match(composition, /^createRelayMicReleaseCoordinator/);
   assert.match(composition, /publisherParticipantId: \(\) => micRuntime\.publisher\?\.participantId \?\? null/);
   assert.match(composition, /mediaOwnerId: \(\) => micRuntime\.mediaOwnerId/);
   assert.match(composition, /revokePublisherTransport: \(message\) => revokePublisherTransport\(message\)/);
   assert.match(composition, /clearMediaAuthority: \(\) => clearMicMediaAuthority\(\)/);
   assert.match(composition, /cancelTransportGrace: \(\) => micTransportGrace\.cancel\(\)/);
-  assert.match(composition, /applyOwnershipEffects: \(effects, hooks\) => \{/);
-  assert.match(composition, /applyMicOwnerEffects\(effects, performance\.now\(\), \{/);
+  assert.match(composition, /applyOwnershipEffects: \(current, hooks\) => \{/);
+  assert.match(composition, /commands\.applyOwnershipEffects\(current, performance\.now\(\), \{/);
   assert.match(composition, /afterQualityEvent: hooks\.afterQualityEvent/);
   assert.match(composition, /beforeTimingInvalidation: hooks\.beforeTimingInvalidation/);
-  assert.match(composition, /broadcastSessionStatus: \(\) => broadcastSessionStatus\(\)/);
-  assert.match(composition, /sendReleased: \(socket\) => sendJson\(socket, \{ type: 'mic-released' \}\)/);
+  assert.match(composition, /broadcastSessionStatus: \(\) => effects\.reportSessionStatus\(\)/);
+  assert.match(composition, /sendReleased: \(socket\) => effects\.sendReleased\(socket\)/);
+  const wiring = variableInitializerCode(server, 'relayMicLifecycle');
+  assert.match(wiring, /sendReleased: \(socket\) => sendJson\(socket, \{ type: 'mic-released' \}\)/);
+  assert.match(wiring, /reportSessionStatus: \(\) => broadcastSessionStatus\(\)/);
 });
 
 test('Mic release coordinator owns ordering only, not participant or media authority', () => {

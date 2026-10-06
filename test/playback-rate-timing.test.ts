@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 import {
   findUniqueFunctionSource,
@@ -30,8 +31,9 @@ function body(name: string) {
 test('every media-time quantity reaches wall-time arithmetic through the rate', () => {
   // The boot total: measured pipeline path (wall) plus player delta (media).
   assert.match(
-    body('bootProbeAdvanceMs'),
-    /mediaToWallMs\(currentDeltaMs\(nowMs\), currentPlaybackRate\(nowMs\)\)/,
+    functionCode(parseTypeScriptSource(new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+      readRepositoryTextFile('src/relay-calibration-orchestration.ts')), 'bootProbeAdvanceMs'),
+    /mediaToWallMs\(queries\.currentDeltaMs\(nowMs\), queries\.currentPlaybackRate\(nowMs\)\)/,
   );
 
   const boot = readRepositoryTextFile('src/boot-calibration.ts');
@@ -80,12 +82,15 @@ test('the room has one playback-rate source and it defaults to 1x, never to zero
  * rather than growing a second, partial teardown.
  */
 test('a playback-rate change revokes the content mapping through the one transaction', () => {
-  const revoke = body('revokeContentMappingOnRateChange');
-  assert.match(revoke, /robotContentTimeline\.matchesPlaybackRate\(rate\)/);
-  assert.match(revoke, /revokeRobotContentMapping\(\{/);
+  const mapping = parseTypeScriptSource(new URL('../src/relay-robot-mapping-orchestration.ts', import.meta.url),
+    readRepositoryTextFile('src/relay-robot-mapping-orchestration.ts'));
+  const revoke = functionCode(mapping, 'revokeOnRateChange');
+  assert.match(revoke, /dependencies\.timeline\.matchesPlaybackRate\(rate\)/);
+  assert.match(revoke, /revoke\(/);
+  assert.match(body('revokeContentMappingOnRateChange'), /relayRobotMapping\.revokeOnRateChange\(playbackRate\)/);
   assert.doesNotMatch(
     revoke,
-    /robotContentTimeline\.reset\(\)|sourceRuntime\.invalidateMapping\(\)|calibration\.fail\(/,
+    /(?:robotContentTimeline|dependencies\.timeline)\.reset\(\)|(?:sourceRuntime|dependencies\.source)\.invalidateMapping\(\)|(?:calibration|dependencies\.calibration)\.fail\(/,
     'a rate change must not re-spell the teardown the shared revocation owns',
   );
 
@@ -116,7 +121,9 @@ test('the Robot follows the room rate, so Relay must not assume its player is at
   // its player, and the server converts the deltas that player then reports.
   const source = readRepositoryTextFile('public/source.js');
   assert.match(source, /player\.setPlaybackRate\(desiredRate\)/);
-  assert.match(server, /playbackRate: currentPlaybackRate\(nowMs\)/);
+  const workflow = parseTypeScriptSource(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+    readRepositoryTextFile('src/relay-boot-probe-orchestration.ts'));
+  assert.match(functionCode(workflow, 'maybeFinishProbeAnalysis'), /playbackRate: queries\.currentPlaybackRate\(nowMs\)/);
   assert.match(
     server,
     /currentPlaybackRate\(nowMs\),\s*\n\s*\);/,

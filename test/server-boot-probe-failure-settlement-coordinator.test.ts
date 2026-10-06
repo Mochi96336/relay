@@ -10,9 +10,9 @@ import {
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
 );
 const coordinator = parseTypeScriptSource(
   new URL('../src/relay-boot-probe-failure-settlement-coordinator.ts', import.meta.url),
@@ -23,7 +23,7 @@ const coordinator = parseTypeScriptSource(
 );
 
 test('failProbeAttempt keeps probe authority local and delegates only its nullable decision', () => {
-  const failure = functionCode(server, 'failProbeAttempt');
+  const failure = functionCode(workflow, 'failProbeAttempt');
   assert.match(
     failure,
     /const failure = bootProbeRuntime\.failAttempt\(target, reason, nowMs\);[\s\S]*bootProbeFailureSettlementCoordinator\.settle\(failure\);/,
@@ -36,9 +36,9 @@ test('failProbeAttempt keeps probe authority local and delegates only its nullab
 
 test('server composition retains terminal settlement authorities', () => {
   assert.ok(
-    importSources(server).includes('./relay-boot-probe-failure-settlement-coordinator.js'),
+    importSources(workflow).includes('./relay-boot-probe-failure-settlement-coordinator.js'),
   );
-  const composition = variableInitializerCode(server, 'bootProbeFailureSettlementCoordinator');
+  const composition = variableInitializerCode(workflow, 'bootProbeFailureSettlementCoordinator');
   assert.match(composition, /^createRelayBootProbeFailureSettlementCoordinator\(\{/);
   assert.match(
     composition,
@@ -46,11 +46,11 @@ test('server composition retains terminal settlement authorities', () => {
   );
   assert.match(
     composition,
-    /failPreservingPrimed: \(message\) => calibration\.failPreservingPrimed\(message\)/,
+    /failPreservingPrimed: message => calibration\.failPreservingPrimed\(message\)/,
   );
   assert.match(
     composition,
-    /reportTimingStatus: \(\) => broadcastJson\(timingCalibrationStatusPayload\(\)\)/,
+    /reportTimingStatus: \(\) => effects\.reportTimingStatus\(\)/,
   );
 });
 

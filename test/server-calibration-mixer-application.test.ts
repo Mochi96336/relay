@@ -9,21 +9,21 @@ import {
   sourceCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+const application = parseTypeScriptSource(
+  new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'),
 );
 const policy = parseTypeScriptSource(
   new URL('../src/calibration-mixer-application.ts', import.meta.url),
   readFileSync(new URL('../src/calibration-mixer-application.ts', import.meta.url), 'utf8'),
 );
 
-test('server derives live calibration facts and delegates non-Boot mixer policy', () => {
-  assert.ok(importSources(server).includes('./calibration-mixer-application.js'));
+test('calibration orchestration derives live calibration facts and delegates non-Boot mixer policy', () => {
+  assert.ok(importSources(application).includes('./calibration-mixer-application.js'));
 
-  const sync = functionCode(server, 'syncAppliedCalibration');
+  const sync = functionCode(application, 'syncAppliedCalibration');
   assert.match(sync, /const applicability = calibrationApplicability\(calibrationKind\)/);
-  assert.match(sync, /const robotContentAuthority = robotRouteActive\(\) && calibrationKind === 'content'/);
+  assert.match(sync, /const robotContentAuthority = queries\.robotRouteActive\(\) && calibrationKind === 'content'/);
   assert.match(sync, /nextMicLagMs = contentLiveLagMs\(nextMicLagMs, performance\.now\(\)\)/);
   assert.match(sync, /decideCalibrationMixerApplication\(\{/);
   assert.match(sync, /activeMicLagMs: active/);

@@ -70,7 +70,7 @@ test('server fences source-seeked before classification and mapped corrections r
     handlerStart,
   );
   const mappingAttempt = infrastructure.indexOf('robotContentTimeline.noteFollowerCorrection(', staleRobotFence);
-  const delegation = infrastructure.indexOf('sourceSeekTransactionCoordinator.handle({', mappingAttempt);
+  const delegation = infrastructure.indexOf('relayRobotMapping.handleSourceSeek({', mappingAttempt);
 
   assert.ok(handlerStart >= 0, 'source-seeked handler must exist');
   assert.ok(staleRobotFence > handlerStart, 'stale Robot source must be fenced before seek semantics are evaluated');

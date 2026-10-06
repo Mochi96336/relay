@@ -8,9 +8,9 @@ import {
   parseTypeScriptSource,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
 );
 const readinessSource = readFileSync(
   new URL('../src/boot-probe-analysis-readiness-policy.ts', import.meta.url),
@@ -18,15 +18,15 @@ const readinessSource = readFileSync(
 );
 
 test('accepted probe replies delegate the same run-identity fence without eager generation sampling', () => {
-  assert.ok(importSources(server).includes('./boot-probe-run-identity-policy.js'));
-  const accept = functionCode(server, 'acceptCurrentProbeClientResult');
+  assert.ok(importSources(workflow).includes('./boot-probe-run-identity-policy.js'));
+  const accept = functionCode(workflow, 'acceptCurrentProbeClientResult');
   const claim = accept.indexOf('bootProbeRuntime.acceptClientReply(');
   const sessionFact = accept.indexOf('const sessionCurrent =');
   const generationFact = accept.indexOf('const captureGenerationMatches =');
   const decision = accept.indexOf('decideBootProbeRunIdentity({');
   const abandon = accept.indexOf("if (identity.kind === 'abandon')");
   const effect = accept.indexOf('abandonProbeRun()', abandon);
-  const report = accept.indexOf('broadcastJson(timingCalibrationStatusPayload())', abandon);
+  const report = accept.indexOf('effects.reportTimingStatus()', abandon);
 
   assert.ok(claim >= 0);
   assert.ok(sessionFact > claim, 'request ownership is resolved before server run identity');

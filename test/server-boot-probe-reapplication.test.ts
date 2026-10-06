@@ -13,35 +13,43 @@ const server = parseTypeScriptSource(
   new URL('../src/server.ts', import.meta.url),
   readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
 );
+const workflow = parseTypeScriptSource(
+  new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-boot-probe-orchestration.ts', import.meta.url), 'utf8'),
+);
+const application = parseTypeScriptSource(
+  new URL('../src/relay-calibration-orchestration.ts', import.meta.url),
+  readFileSync(new URL('../src/relay-calibration-orchestration.ts', import.meta.url), 'utf8'),
+);
 const policy = parseTypeScriptSource(
   new URL('../src/boot-probe-reapplication.ts', import.meta.url),
   readFileSync(new URL('../src/boot-probe-reapplication.ts', import.meta.url), 'utf8'),
 );
 
 test('server keeps Robot and Take hard guards while delegating boot reapply policy', () => {
-  assert.ok(importSources(server).includes('./boot-probe-reapplication.js'));
-  const reapply = functionCode(server, 'maybeReapplyBootCalibration');
+  assert.ok(importSources(workflow).includes('./boot-probe-reapplication.js'));
+  const reapply = functionCode(workflow, 'maybeReapplyBootCalibration');
 
-  const takeGuard = reapply.indexOf('if (takeBlocksCalibration()) return;');
-  const routeGuard = reapply.indexOf('if (!robotRouteActive()) return;');
+  const takeGuard = reapply.indexOf('if (queries.takeBlocksCalibration()) return;');
+  const routeGuard = reapply.indexOf('if (!queries.robotRouteActive()) return;');
   const decisionCall = reapply.indexOf('decideBootProbeReapplication({');
   assert.ok(takeGuard >= 0 && routeGuard > takeGuard && decisionCall > routeGuard);
 
   assert.match(reapply, /appliedKind/);
   assert.match(
     reapply,
-    /replacementApplicability: appliedKind === 'boot-probe'[\s\S]*?\? null[\s\S]*?: calibrationApplicability\(appliedKind\)/,
+    /replacementApplicability: appliedKind === 'boot-probe'[\s\S]*?\? null[\s\S]*?: queries\.calibrationApplicability\(appliedKind\)/,
   );
-  assert.match(reapply, /roomHasSong: roomHasSong\(nowMs\)/);
+  assert.match(reapply, /roomHasSong: queries\.roomHasSong\(nowMs\)/);
   assert.match(reapply, /pathDifferenceReady: bootProbeRuntime\.pathDifferenceMs !== null/);
   assert.match(reapply, /calibrationCollecting: calibration\.collecting/);
   assert.match(reapply, /calibrationTransactionActive: calibration\.transactionActive/);
-  assert.match(reapply, /robotDeltaFresh: robotDeltaIsFresh\(nowMs\)/);
+  assert.match(reapply, /robotDeltaFresh: queries\.robotDeltaIsFresh\(nowMs\)/);
   assert.match(
     reapply,
     /completedContextMatches: bootProbeRuntime\.completedContextMatches\(bootProbeContext\(\)\)/,
   );
-  assert.match(reapply, /advanceMs: bootProbeAdvanceMs\(nowMs\)/);
+  assert.match(reapply, /advanceMs: queries\.bootProbeAdvanceMs\(nowMs\)/);
   assert.match(reapply, /appliedMicLagMs: applied/);
   assert.match(reapply, /reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS/);
   assert.match(reapply, /if \(decision\.kind === 'none'\) return;/);
@@ -51,12 +59,13 @@ test('server keeps Robot and Take hard guards while delegating boot reapply poli
 });
 
 test('server retains rate arithmetic, mutation, promotion ordering, and debug effects', () => {
-  const reapply = functionCode(server, 'maybeReapplyBootCalibration');
-  const advance = functionCode(server, 'bootProbeAdvanceMs');
+  const reapply = functionCode(workflow, 'maybeReapplyBootCalibration');
+  const advance = functionCode(application, 'bootProbeAdvanceMs');
+  assert.match(functionCode(server, 'bootProbeAdvanceMs'), /return relayCalibration\.bootAdvance\(nowMs\)/);
 
   assert.match(
     advance,
-    /mediaToWallMs\(currentDeltaMs\(nowMs\), currentPlaybackRate\(nowMs\)\)/,
+    /mediaToWallMs\(queries\.currentDeltaMs\(nowMs\), queries\.currentPlaybackRate\(nowMs\)\)/,
   );
   assert.match(reapply, /const advanceMs = decision\.advanceMs/);
   assert.match(
@@ -65,7 +74,7 @@ test('server retains rate arithmetic, mutation, promotion ordering, and debug ef
   );
   assert.match(
     reapply,
-    /promoteBootProbeCalibration\([\s\S]*bootProbeRuntime\.reapplyCalibration\(advanceMs, currentDeltaMs\(nowMs\)\)[\s\S]*micLagMs: advanceMs[\s\S]*confidence: bootProbeRuntime\.confidence \?\? 0/,
+    /promoteBootProbeCalibration\([\s\S]*bootProbeRuntime\.reapplyCalibration\(advanceMs, queries\.currentDeltaMs\(nowMs\)\)[\s\S]*micLagMs: advanceMs[\s\S]*confidence: bootProbeRuntime\.confidence \?\? 0/,
   );
 });
 

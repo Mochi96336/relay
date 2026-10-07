@@ -83,8 +83,6 @@ import { createRelayPublisherActivationCoordinator } from './relay-publisher-act
 import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
-import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
-import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
 import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
 import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
 import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
@@ -125,7 +123,6 @@ import {
   type ParticipantIdentityResult,
 } from './participant-identity.js';
 import { PlaybackTransportRuntime } from './playback-transport-runtime.js';
-import { createRelayPlaybackDisconnectCoordinator } from './relay-playback-disconnect-coordinator.js';
 import { InfrastructureCapabilityRuntime } from './infrastructure-capability-runtime.js';
 import { parseRoomSongCommand } from './room-song-command.js';
 import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
@@ -4032,55 +4029,65 @@ const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
     feedContentBackingEvidence(samples, start, nowMs);
   },
 });
-const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySocket>({
-  isActive: (socket) => sourceRuntime.isActive(socket),
-  noteDisconnected: () => takeController.noteQualityEvent('robot-source-disconnected'),
-  detach: (socket) => sourceRuntime.detachRobot(socket),
-  resetPlayerOffset: () => robotPlayerOffset.reset(),
-  resetContentTimeline: () => robotContentTimeline.reset(),
-  clearContentTransition: () => clearRobotContentTransition(),
-  abandonProbeRun: () => abandonProbeRun(),
-  failCalibrationIfCollecting: () => {
-    if (calibration.collecting) {
-      calibration.fail('The Robot source changed during calibration. Start calibration again.');
-    }
-  },
-  syncAppliedCalibration: () => syncAppliedCalibration(),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-});
-const backingDisconnectCoordinator = createRelayBackingDisconnectCoordinator<RelaySocket>({
-  isBacking: (socket) => backingRuntime.isSocket(socket),
-  noteDisconnected: () => takeController.noteQualityEvent('backing-transport-disconnected'),
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  detach: (socket) => backingRuntime.detach(socket),
-  clearBackingExpectation: () => session.setBackingExpected(false),
-  failCalibrationIfCollecting: () => {
-    if (calibration.collecting) {
-      calibration.fail('Desktop Source disconnected during calibration.');
-    }
-  },
-  cancelContentValidationAndReport: () => {
-    if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-  },
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportStatus: () => broadcastStatus(),
-});
-const playbackDisconnectCoordinator = createRelayPlaybackDisconnectCoordinator<RelaySocket>({
-  identity: (socket) => playbackTransport.identity(socket),
-  now: () => performance.now(),
-  pendingCommand: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
-  failPending: (identity, commandId) => roomSongCommands.fail(identity, commandId),
-  reportCommandFailure: (commandId, nowMs) => {
-    broadcastRoomSongCommandFailure(commandId, 'playback-disconnected', nowMs);
+/**
+ * A playback tab closed. A room command still waiting on it fails now
+ * instead of at its timeout, and the tab leaves the Song timeline.
+ */
+function playbackClosed(socket: RelaySocket) {
+  const identity = playbackTransport.identity(socket);
+  if (!identity) return;
+
+  const nowMs = performance.now();
+  const pending = roomSongCommands.pendingForTarget(identity, nowMs);
+  if (pending && roomSongCommands.fail(identity, pending.commandId)) {
+    broadcastRoomSongCommandFailure(pending.commandId, 'playback-disconnected', nowMs);
     broadcastJson(roomSongCommandStatusPayload(nowMs));
-  },
-  detachTimeline: (identity) => youtubeTimeline.detach(identity),
-  reportTimelineChanged: () => {
+  }
+
+  if (youtubeTimeline.detach(identity)) {
     broadcastJson(youtubeTimeline.statusPayload());
     broadcastJson(youtubeTimeline.roomStatusPayload());
-  },
-});
+  }
+}
+
+/** The Robot source closed: everything measured against it goes with it. */
+function robotSourceClosed(socket: RelaySocket) {
+  if (!sourceRuntime.isActive(socket)) return;
+
+  takeController.noteQualityEvent('robot-source-disconnected');
+  sourceRuntime.detachRobot(socket);
+  robotPlayerOffset.reset();
+  robotContentTimeline.reset();
+  clearRobotContentTransition();
+  abandonProbeRun();
+  // Detaching the Robot source bumps the source generation, so any calibration
+  // still in flight was measured in a reference frame that no longer exists.
+  // Its analysis runs asynchronously and is stamped with the context that is
+  // live when the worker answers, so leaving it alive lets evidence from the
+  // old generation be promoted under the new one.
+  if (calibration.collecting) {
+    calibration.fail('The Robot source changed during calibration. Start calibration again.');
+  }
+  syncAppliedCalibration();
+  broadcastJson(sourceStatusPayload());
+  broadcastJson(timingCalibrationStatusPayload());
+}
+
+/** The Desktop Source (backing) closed: the mix stops expecting the song. */
+function backingClosed(socket: RelaySocket) {
+  if (!backingRuntime.isSocket(socket)) return;
+
+  takeController.noteQualityEvent('backing-transport-disconnected');
+  clearRobotContentTransition();
+  backingRuntime.detach(socket);
+  session.setBackingExpected(false);
+  if (calibration.collecting) {
+    calibration.fail('Desktop Source disconnected during calibration.');
+  }
+  if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
+  broadcastJson(sourceStatusPayload());
+  broadcastStatus();
+}
 
 let shuttingDown = false;
 
@@ -4135,14 +4142,13 @@ wss.on('connection', (rawSocket, request) => {
   });
 
   socket.on('close', () => {
-    playbackDisconnectCoordinator.handle(socket);
+    playbackClosed(socket);
     let micTransportChanged = false;
 
     if (!socket.replaced) {
-      robotDisconnectCoordinator.handle(socket);
+      robotSourceClosed(socket);
       micTransportChanged = micControlClosed(socket);
-
-      backingDisconnectCoordinator.handle(socket);
+      backingClosed(socket);
     }
 
     const presenceChanged = socket.participantConnectionId

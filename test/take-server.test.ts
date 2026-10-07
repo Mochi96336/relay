@@ -592,6 +592,45 @@ test('a sustained backing outage is attached to the Take and degrades the final 
   }
 });
 
+test('a Robot source that closes during a Take is recorded on the Take', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-robot-close-'));
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
+  try {
+    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+    await establishRoomSong(control, 'robot-close-playback-a');
+
+    const backing = await startBacking(server);
+    feedMic(control, 60);
+    feedBacking(backing, 60);
+    await sleep(80);
+
+    control.send({ type: 'start-take' });
+    const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
+    const takeId = String(start.takeId);
+    await control.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
+
+    const robot = await RelayClient.connect(server);
+    robot.send({ type: 'robot-source-hello' });
+    await sleep(100);
+    robot.close();
+    feedMic(control, 20);
+    feedBacking(backing, 20);
+    await sleep(100);
+
+    control.send({ type: 'stop-take', takeId });
+    const ready = await waitReady(control, takeId);
+    assert.equal(ready.take.quality.evidence.events['robot-source-disconnected'], 1);
+
+    backing.close();
+    control.close();
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('ending the authoritative live mix auto-finalizes the active Take instead of leaving fake recording state', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-mix-end-'));
   const server = await startRelay({

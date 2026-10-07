@@ -41,7 +41,7 @@ test('close callback keeps replacement fence and Robot, Mic, Backing dispatch or
   const close = closeBlock();
   const fence = close.indexOf('if (!socket.replaced) {');
   const robot = close.indexOf('robotDisconnectCoordinator.handle(socket);');
-  const mic = close.indexOf('micDisconnectCoordinator.handle(socket);');
+  const mic = close.indexOf('micTransportChanged = micControlClosed(socket);');
   const backing = close.indexOf('backingDisconnectCoordinator.handle(socket);');
 
   assert.ok(fence >= 0 && robot > fence, 'replacement fence must remain outside Robot disconnect seam');

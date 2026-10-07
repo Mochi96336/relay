@@ -4,7 +4,6 @@ import test from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
 import {
-  classMethodCode,
   parseTypeScriptSource,
   sourceCode,
   variableInitializerCode,
@@ -27,19 +26,24 @@ test('AudioSession is the single source of truth for the applied Mic gain', () =
 
   session.setMicGainDb(12.5);
   assert.equal(session.micGainDb, 12.5);
+
+  session.setMicGainDb(-6);
+  assert.equal(session.micGainDb, -6);
+
+  session.setMicGainDb(123);
+  assert.equal(session.micGainDb, 123);
+
+  session.start(0);
+  session.setMicGainDb(7.25);
+  assert.equal(session.micGainDb, 7.25);
 });
 
-test('server owns Mic gain command policy while AudioSession owns the applied value', () => {
+test('server owns Mic gain command authorization, clamping and publication', () => {
   const server = parseTypeScriptSource(
     new URL('../src/server.ts', import.meta.url),
     readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
   );
-  const audio = parseTypeScriptSource(
-    new URL('../src/audio-session.ts', import.meta.url),
-    readFileSync(new URL('../src/audio-session.ts', import.meta.url), 'utf8'),
-  );
   const serverCode = sourceCode(server);
-  const audioCode = sourceCode(audio);
 
   assert.doesNotMatch(serverCode, /let\s+micGainDb\s*=/);
   assert.doesNotMatch(serverCode, /session\.setMicGainDb\(micGainDb\)/);
@@ -61,16 +65,4 @@ test('server owns Mic gain command policy while AudioSession owns the applied va
   assert.ok(parseGain > authority, 'gain parsing must remain behind command authority');
   assert.ok(applyGain > parseGain, 'server command policy must clamp before storing the DSP value');
   assert.ok(publishMix > applyGain, 'accepted gain mutation must publish the resulting mix settings');
-
-  assert.ok(audioCode.includes('private micGainDbValue = 24;'));
-  const getter = classMethodCode(audio, 'AudioSession', 'micGainDb');
-  assert.ok(getter.includes('return this.micGainDbValue;'));
-
-  const setter = classMethodCode(audio, 'AudioSession', 'setMicGainDb');
-  assert.ok(setter.includes('this.micGainDbValue = value;'));
-  assert.doesNotMatch(
-    setter,
-    /Math\.min|Math\.max|MAX_MIC_GAIN_DB|requireMicOwnerCommand/,
-    'AudioSession must store the DSP value, not absorb command authorization or clamping policy',
-  );
 });

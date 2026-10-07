@@ -66,6 +66,7 @@ function harness(input: {
     sessionActive: () => input.sessionActive === true,
     noteTransportConnected: () => events.push('transport-connected'),
     invalidateTiming: (reason) => events.push(`invalidate:${reason}`),
+    retireCaptureTiming: () => events.push('retire-capture-timing'),
     restartLiveSource: () => events.push('restart-live'),
     directMediaOffer: () => {
       events.push('media-offer');
@@ -148,7 +149,7 @@ test('same-participant replacement invalidates changed capture after bind', () =
 
   assert.ok(events.indexOf('bind') < events.indexOf('retire-capture'));
   assert.ok(events.indexOf('retire-capture') < events.indexOf('retire:superseded'));
-  assert.ok(events.indexOf('retire:superseded') < events.indexOf('invalidate:Microphone capture changed.'));
+  assert.ok(events.indexOf('retire:superseded') < events.indexOf('retire-capture-timing'));
   assert.equal(events.includes('ownership-effects'), false);
   assert.equal(getRegistered()?.takeover, false);
 });
@@ -170,7 +171,7 @@ test('capture replacement invalidates timing even without participant identity',
     takeoverRequested: false,
   });
 
-  assert.ok(events.indexOf('retire-capture') < events.indexOf('invalidate:Microphone capture changed.'));
+  assert.ok(events.indexOf('retire-capture') < events.indexOf('retire-capture-timing'));
   assert.equal(events.includes('session-status'), false);
 });
 

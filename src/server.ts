@@ -87,8 +87,6 @@ import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boo
 import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
 import { createRelayRobotLegacyCalibrationDropCoordinator } from './relay-robot-legacy-calibration-drop-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
-import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
-import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
@@ -1869,22 +1867,37 @@ function revokePublisherTransport(message: string) {
   return hadMedia;
 }
 
-const micTimingInvalidationCoordinator = createRelayMicTimingInvalidationCoordinator({
-  clearBootCalibration: () => clearBootCalibrationState(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  invalidateCalibration: (message) => {
-    if (calibration.collecting) calibration.fail(message);
-    else calibration.reset();
-  },
-  clearTimingKind: () => timingRuntime.clearCalibrationKind(),
-  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-});
-
+/**
+ * The room's Mic timing no longer holds: the owner or the route changed. A
+ * calibration in progress fails with `message`; a settled one is cleared,
+ * along with the timing kind and the auto-calibration schedule.
+ */
 function invalidateMicTiming(message: string) {
-  micTimingInvalidationCoordinator.invalidate(message);
+  clearBootCalibrationState();
+  clearContentValidationBaseline();
+  if (calibration.collecting) calibration.fail(message);
+  else calibration.reset();
+  timingRuntime.clearCalibrationKind();
+  timingRuntime.resetAutoCalibrationSchedule();
+  syncAppliedCalibration();
+  broadcastJson(timingCalibrationStatusPayload());
+  broadcastJson(sourceStatusPayload());
+}
+
+/**
+ * The Mic's capture was replaced. This is narrower than invalidateMicTiming:
+ * the old confirmed measurement is still useful history, but its capture
+ * context is stale and must stop driving the mixer immediately. Capture-scoped
+ * Boot probe and validation state are retired, while the confirmed
+ * calibration result, timing strategy and retry schedule remain available to
+ * explain what changed.
+ */
+function retireMicCaptureTiming() {
+  clearBootCalibrationState();
+  clearContentValidationBaseline();
+  syncAppliedCalibration();
+  broadcastJson(timingCalibrationStatusPayload());
+  broadcastJson(sourceStatusPayload());
 }
 
 function refreshLiveMicNetworkCompensation() {
@@ -1932,27 +1945,31 @@ function clearBootCalibrationState() {
   bootProbeRuntime.clear();
 }
 
-const liveSourceStopCoordinator = createRelayLiveSourceStopCoordinator({
-  cancelBackingGrace: () => backingRuntime.cancelGrace(),
-  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
-  sessionActive: () => session.active,
-  endTakeMix: () => takeController.endMix(),
-  clearBootCalibration: () => clearBootCalibrationState(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  resetRobotPlayerOffset: () => robotPlayerOffset.reset(),
-  resetRobotContentTimeline: () => robotContentTimeline.reset(),
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  stopSession: () => session.stop(),
-  resetCalibration: () => calibration.reset(),
-  clearTimingKind: () => timingRuntime.clearCalibrationKind(),
-  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportStatus: () => broadcastStatus(),
-});
-
+/**
+ * Stops the live mix once a caller has decided the route should end.
+ *
+ * Backing grace and Robot-route retirement deliberately happen even when the
+ * audio session is already inactive. That keeps a stale route from remaining
+ * armed just because there is no active mixer to stop.
+ */
 function stopLiveSource() {
-  liveSourceStopCoordinator.stop();
+  backingRuntime.cancelGrace();
+  backingRuntime.retireRobotRoute();
+  if (session.active) {
+    takeController.endMix();
+    clearBootCalibrationState();
+    clearContentValidationBaseline();
+    robotPlayerOffset.reset();
+    robotContentTimeline.reset();
+    clearRobotContentTransition();
+    session.stop();
+    calibration.reset();
+    timingRuntime.clearCalibrationKind();
+    timingRuntime.resetAutoCalibrationSchedule();
+    broadcastJson(timingCalibrationStatusPayload());
+    broadcastJson(sourceStatusPayload());
+    broadcastStatus();
+  }
   resetMicAudibility();
   micLevel.reset();
 }
@@ -3700,6 +3717,7 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
   sessionActive: () => session.active,
   noteTransportConnected: () => takeController.noteQualityEvent('mic-transport-connected'),
   invalidateTiming: (reason) => invalidateMicTiming(reason),
+  retireCaptureTiming: () => retireMicCaptureTiming(),
   restartLiveSource: () => restartLiveSourceAfterMicReconnect(),
   directMediaOffer: () => micRuntime.directMediaOffer(),
   sendRegistered: (socket, result) => {

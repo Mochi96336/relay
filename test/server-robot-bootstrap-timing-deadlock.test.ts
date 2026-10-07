@@ -125,19 +125,16 @@ test('every Robot mapping revocation goes through one teardown transaction', () 
   );
 });
 
-test('losing the Robot source aborts a calibration measured in the old reference frame', () => {
-  // `detachRobot()` / a replacing `attachRobot()` bump the source generation,
-  // while `CalibrationSession` stamps its promotion with the context that is
-  // live when the async worker answers. Without an explicit abort, evidence
-  // measured under the old generation is promoted under the new one.
-  const disconnect = readFileSync(
-    new URL('../src/relay-robot-disconnect-coordinator.ts', import.meta.url),
-    'utf8',
-  );
+test('replacing the Robot source aborts a calibration measured in the old reference frame', () => {
+  // A replacing `attachRobot()` bumps the source generation, while
+  // `CalibrationSession` stamps its promotion with the context that is live
+  // when the async worker answers. Without an explicit abort, evidence
+  // measured under the old generation is promoted under the new one. Losing
+  // the Robot source is covered against a real server in
+  // socket-close-server.test.ts.
   const activation = readFileSync(
     new URL('../src/relay-robot-activation-coordinator.ts', import.meta.url),
     'utf8',
   );
-  assert.match(disconnect, /options\.failCalibrationIfCollecting\(\)/);
   assert.match(activation, /dependencies\.failCalibrationIfCollecting\(\)/);
 });

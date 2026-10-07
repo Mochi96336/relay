@@ -47,7 +47,7 @@ test('server composition retains audio uplink authority and domain effects', () 
   assert.match(restartComposition, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
   assert.match(restartComposition, /failCalibration: \(message\) => calibration\.fail\(message\)/);
 
-  const disconnectStart = server.indexOf('const robotDisconnectCoordinator =', uplinkStart);
+  const disconnectStart = server.indexOf('function playbackClosed(', uplinkStart);
   assert.ok(disconnectStart > uplinkStart, 'audio uplink composition must remain identifiable');
   const uplinkComposition = server.slice(uplinkStart, disconnectStart);
   assert.match(

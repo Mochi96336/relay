@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-  functionCode,
   parseTypeScriptSource,
   sourceCode,
   variableInitializerCode,
@@ -39,12 +38,6 @@ test('BackingRuntime owns transport lifecycle without absorbing domain authority
   assert.doesNotMatch(serverCode, /backingAbsenceTimer/);
 
   // BackingRuntime owns only expiry timing; room-level consequences remain
-  // outside the transport runtime behind the server adapter.
+  // outside the transport runtime, in the server.
   assert.match(backingRuntime, /onGraceExpired:\s*expireBackingGrace/);
-  const expireBackingGrace = functionCode(server, 'expireBackingGrace');
-  assert.match(expireBackingGrace, /backingGraceExpiryCoordinator\.expire\(\{/);
-  assert.doesNotMatch(expireBackingGrace, /backingRuntime\.retireRobotRoute\(\)/);
-  assert.doesNotMatch(expireBackingGrace, /clearRobotContentTransition\(\)/);
-  assert.doesNotMatch(expireBackingGrace, /invalidateMicTiming\(/);
-  assert.doesNotMatch(expireBackingGrace, /broadcastStatus\(\)/);
 });

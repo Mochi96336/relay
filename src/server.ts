@@ -83,15 +83,12 @@ import { createRelayPublisherActivationCoordinator } from './relay-publisher-act
 import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
-import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
 import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
 import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
 import { createRelayRobotLegacyCalibrationDropCoordinator } from './relay-robot-legacy-calibration-drop-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelayLiveSourceStopCoordinator } from './relay-live-source-stop-coordinator.js';
 import { createRelayMicTimingInvalidationCoordinator } from './relay-mic-timing-invalidation-coordinator.js';
-import { createRelayMicCaptureRestartCoordinator } from './relay-mic-capture-restart-coordinator.js';
-import { createRelayBackingCaptureRestartCoordinator } from './relay-backing-capture-restart-coordinator.js';
 import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
@@ -1997,34 +1994,49 @@ function maybeStopLiveSourceWhenUnarmed() {
   if (!micArmed && !backingArmed) stopLiveSource();
 }
 
-const backingGraceExpiryCoordinator = createRelayBackingGraceExpiryCoordinator({
-  stopLiveSource: () => stopLiveSource(),
-  retireRobotRoute: () => backingRuntime.retireRobotRoute(),
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  invalidateMicTiming: (message) => invalidateMicTiming(message),
-  reportStatus: () => broadcastStatus(),
-});
-
+/**
+ * The Desktop Source did not come back within its grace. A room with a Song,
+ * or with no Mic left either, stops; a room whose singer is still there
+ * carries on voice-only.
+ */
 function expireBackingGrace() {
   const micArmed = micRuntime.controlConnected()
     || webTransportMicConnected()
     || micTransportGrace.pending;
-  backingGraceExpiryCoordinator.expire({
-    roomHasSong: roomHasSong(),
-    micArmed,
-  });
+  if (roomHasSong() || !micArmed) {
+    stopLiveSource();
+    return;
+  }
+
+  backingRuntime.retireRobotRoute();
+  clearRobotContentTransition();
+  invalidateMicTiming('Backing route ended while the room continued voice-only.');
+  broadcastStatus();
 }
 
+/**
+ * AudioSession has seen the Mic start a new capture. A calibration, probe or
+ * content validation still measuring the old capture is abandoned.
+ */
+function micCaptureRestarted() {
+  takeController.noteQualityEvent('mic-capture-restarted');
+  abandonProbeRun();
+  clearContentValidationBaseline();
 
-const micCaptureRestartCoordinator = createRelayMicCaptureRestartCoordinator({
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  abandonProbeRun: () => abandonProbeRun(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  failCalibration: (message) => calibration.fail(message),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-});
+  if (calibration.collecting) {
+    // CalibrationSession.fail() owns its settled publication callback, so
+    // do not publish the same transition a second time from this path.
+    calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
+    return;
+  }
+
+  syncAppliedCalibration();
+  // Timing must be visible before source status for a new capture
+  // generation, otherwise observers can briefly pair the new source with
+  // stale applied timing.
+  broadcastJson(timingCalibrationStatusPayload());
+  broadcastJson(sourceStatusPayload());
+}
 
 function processPublisherFrame(frame: PcmFrame) {
   // Physical media can outlive the control WebSocket during its reconnect
@@ -2064,9 +2076,7 @@ function processPublisherFrame(frame: PcmFrame) {
   if (captureRestarted) {
     resetMicAudibility();
     micLevel.reset();
-    micCaptureRestartCoordinator.restart({
-      calibrationCollecting: calibration.collecting,
-    });
+    micCaptureRestarted();
   }
   if (robotContentFallbackPrimingActive()) {
     calibration.primeMic(samples, start);
@@ -3730,9 +3740,7 @@ const backingActivationCoordinator = createRelayBackingActivationCoordinator<Rel
   sessionActive: () => session.active,
   dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
   onReplacedCaptureActivated: () => {
-    backingCaptureRestartCoordinator.restart({
-      calibrationCollecting: calibration.collecting,
-    });
+    backingCaptureRestarted();
   },
   activeBackingIsRobot: () => backingRuntime.isRobot,
   sendRegistered: (socket, robot) => {
@@ -3987,16 +3995,26 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   },
 });
 
-const backingCaptureRestartCoordinator = createRelayBackingCaptureRestartCoordinator({
-  clearContentTransition: () => clearRobotContentTransition(),
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  abandonProbeRun: () => abandonProbeRun(),
-  clearContentValidation: () => clearContentValidationBaseline(),
-  failCalibration: (message) => calibration.fail(message),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-});
+/**
+ * The Desktop Source started a new capture, either inside its own stream or
+ * as a replacement tab. A calibration, probe or content validation still
+ * measuring the old capture is abandoned.
+ */
+function backingCaptureRestarted() {
+  clearRobotContentTransition();
+  takeController.noteQualityEvent('backing-capture-restarted');
+  abandonProbeRun();
+  clearContentValidationBaseline();
+
+  if (calibration.collecting) {
+    calibration.fail('Backing capture restarted during calibration. Start calibration again.');
+    return;
+  }
+
+  syncAppliedCalibration();
+  broadcastJson(timingCalibrationStatusPayload());
+  broadcastJson(sourceStatusPayload());
+}
 
 const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
   isMicPublisher: (socket) => micRuntime.isPublisher(socket),
@@ -4017,9 +4035,7 @@ const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
     backingRuntime.isRobot,
   ),
   onBackingCaptureRestarted: () => {
-    backingCaptureRestartCoordinator.restart({
-      calibrationCollecting: calibration.collecting,
-    });
+    backingCaptureRestarted();
   },
   noteRobotTransitionBackingFrame: (frame, samples, start, nowMs) => {
     noteRobotTransitionBackingFrame(frame, samples, start, nowMs);

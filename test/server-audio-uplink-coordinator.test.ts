@@ -37,22 +37,15 @@ test('server composition retains audio uplink authority and domain effects', () 
   assert.match(server, /noteBackingFrame: \(socket, nowMs\) => backingRuntime\.noteFrame\(socket, nowMs\)/);
   assert.match(server, /session\.ingestBacking\(\s*frame,\s*backingRuntime\.sampleRate,\s*nowMs,\s*backingRuntime\.isRobot,?\s*\)/);
 
-  const restartStart = server.indexOf('const backingCaptureRestartCoordinator =');
-  const uplinkStart = server.indexOf('const audioUplinkCoordinator =', restartStart);
-  assert.ok(
-    restartStart >= 0 && uplinkStart > restartStart,
-    'Backing restart composition must remain immediately upstream of audio uplink composition',
-  );
-  const restartComposition = server.slice(restartStart, uplinkStart);
-  assert.match(restartComposition, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
-  assert.match(restartComposition, /failCalibration: \(message\) => calibration\.fail\(message\)/);
+  const uplinkStart = server.indexOf('const audioUplinkCoordinator =');
+  assert.ok(uplinkStart >= 0, 'audio uplink composition must remain identifiable');
 
   const disconnectStart = server.indexOf('function playbackClosed(', uplinkStart);
   assert.ok(disconnectStart > uplinkStart, 'audio uplink composition must remain identifiable');
   const uplinkComposition = server.slice(uplinkStart, disconnectStart);
   assert.match(
     uplinkComposition,
-    /onBackingCaptureRestarted: \(\) => \{\s*backingCaptureRestartCoordinator\.restart\(\{\s*calibrationCollecting: calibration\.collecting,\s*\}\);\s*\}/,
+    /onBackingCaptureRestarted: \(\) => \{\s*backingCaptureRestarted\(\);\s*\}/,
   );
 
   assert.match(server, /noteRobotTransitionBackingFrame\(frame, samples, start, nowMs\)/);

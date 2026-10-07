@@ -51,7 +51,7 @@ test('server composition retains Backing activation domain effects', () => {
   assert.match(composition, /dropLegacyCalibrationForRobot: \(\) => dropLegacyCalibrationForRobot\(\)/);
   assert.match(
     composition,
-    /onReplacedCaptureActivated: \(\) => \{[\s\S]*backingCaptureRestartCoordinator\.restart\(\{[\s\S]*calibrationCollecting: calibration\.collecting/ ,
+    /onReplacedCaptureActivated: \(\) => \{\s*backingCaptureRestarted\(\);/,
   );
   assert.match(composition, /activeBackingIsRobot: \(\) => backingRuntime\.isRobot/);
   assert.match(composition, /type: 'registered', role: 'backing', robot/);

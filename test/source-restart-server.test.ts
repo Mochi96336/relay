@@ -168,14 +168,18 @@ test('a Desktop Source that does not come back stops a room nobody is singing in
   const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '250' });
   try {
     const backing = await RelayClient.connect(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     await backing.waitForType('registered');
     await sendPcmInChunks(backing, tone(0.5, 0.8));
-    assert.equal((await statusz(server)).mix.active, true);
+    const before = await statusz(server);
+    assert.equal(before.mix.active, true);
+    assert.equal(before.robot.route, true);
 
     backing.close();
     await sleep(600);
-    assert.equal((await statusz(server)).mix.active, false);
+    const after = await statusz(server);
+    assert.equal(after.mix.active, false);
+    assert.equal(after.robot.route, false, 'a stopped room does not stay armed for the Robot');
   } finally {
     await server.stop();
   }

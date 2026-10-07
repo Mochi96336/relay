@@ -1,4 +1,3 @@
-import { MIC_CAPTURE_CHANGED_TIMING_REASON } from './relay-mic-timing-invalidation-coordinator.js';
 
 export type PublisherActivationRequest<TSocket, TOwnershipEffects> = {
   socket: TSocket;
@@ -48,6 +47,8 @@ type PublisherActivationOptions<TSocket, TOwnershipEffects> = {
   sessionActive(): boolean;
   noteTransportConnected(): void;
   invalidateTiming(reason: string): void;
+  /** The capture was replaced: retire its timing context, keep the calibration result. */
+  retireCaptureTiming(): void;
   restartLiveSource(): void;
   directMediaOffer(): unknown;
   sendRegistered(socket: TSocket, result: {
@@ -122,7 +123,7 @@ export function createRelayPublisherActivationCoordinator<TSocket, TOwnershipEff
       } else if (captureReplaced) {
         // captureReplaced is deliberately independent of participant identity;
         // an anonymous or cross-owner replacement is still a timing discontinuity.
-        options.invalidateTiming(MIC_CAPTURE_CHANGED_TIMING_REASON);
+        options.retireCaptureTiming();
       }
 
       options.restartLiveSource();

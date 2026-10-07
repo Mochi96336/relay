@@ -80,12 +80,10 @@ import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-e
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
-import { createRelayMicReleaseCoordinator } from './relay-mic-release-coordinator.js';
 import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
 import { createRelayRobotDisconnectCoordinator } from './relay-robot-disconnect-coordinator.js';
-import { createRelayMicDisconnectCoordinator } from './relay-mic-disconnect-coordinator.js';
 import { createRelayBackingDisconnectCoordinator } from './relay-backing-disconnect-coordinator.js';
 import { createRelayBackingGraceExpiryCoordinator } from './relay-backing-grace-expiry-coordinator.js';
 import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
@@ -561,6 +559,76 @@ function expireMicTransportGrace(expectedOwnerId: string) {
   clearMicMediaAuthority();
   applyMicOwnerEffects(released.effects);
   broadcastSessionStatus();
+}
+
+/**
+ * The Mic control socket closed. The lease owner keeps the microphone for
+ * the transport grace, so a reconnect continues the same capture; any other
+ * publisher (one whose lease already went) gives up its media at once.
+ *
+ * Returns whether the socket was the Mic publisher.
+ */
+function micControlClosed(socket: RelaySocket) {
+  if (!micRuntime.isPublisher(socket)) return false;
+
+  takeController.noteQualityEvent('mic-transport-disconnected');
+  const reconnectingOwnerId = socket.participantId
+    && participants.micOwnerId === socket.participantId
+    ? socket.participantId
+    : null;
+  micRuntime.detachPublisher(socket);
+
+  if (reconnectingOwnerId) {
+    // The control plane may reconnect while an independent HTTP/3 media
+    // session is still carrying the same capture. Keep the capture and
+    // sample rate authoritative until the existing grace expires.
+    session.setMicExpected(webTransportMicConnected());
+    micTransportGrace.schedule(reconnectingOwnerId);
+  } else {
+    clearMicMediaAuthority();
+    maybeStopLiveSourceWhenUnarmed();
+  }
+
+  if (calibration.collecting) {
+    calibration.fail('Microphone disconnected during calibration.');
+  }
+  if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
+  broadcastStatus();
+  return true;
+}
+
+/**
+ * Applies a Mic release that ParticipantSession has already committed.
+ *
+ * Keeps the order an explicit release has always had: the Take records the
+ * owner change and the transport grace is cancelled, then the released
+ * owner's transport is cleaned, exactly once, then timing is invalidated. A
+ * release whose effects skip timing invalidation still gets its transport
+ * cleaned.
+ */
+function releaseMicLease(
+  socket: RelaySocket,
+  participantId: string,
+  effects: Parameters<typeof applyMicOwnerTransitionEffects>[0],
+) {
+  let transportCleaned = false;
+  const cleanReleasedTransport = () => {
+    if (transportCleaned) return;
+    transportCleaned = true;
+    if (micRuntime.publisher?.participantId === participantId) {
+      revokePublisherTransport('You released the microphone.');
+    } else if (micRuntime.mediaOwnerId === participantId) {
+      clearMicMediaAuthority();
+    }
+  };
+
+  applyMicOwnerEffects(effects, performance.now(), {
+    afterQualityEvent: () => micTransportGrace.cancel(),
+    beforeTimingInvalidation: cleanReleasedTransport,
+  });
+  cleanReleasedTransport();
+  broadcastSessionStatus();
+  sendJson(socket, { type: 'mic-released' });
 }
 
 function calibrationContext(): CalibrationContext {
@@ -2877,24 +2945,6 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
   timingCalibrationStatusPayload: () => timingCalibrationStatusPayload(),
 });
 
-const micReleaseCoordinator = createRelayMicReleaseCoordinator<
-  RelaySocket,
-  Parameters<typeof applyMicOwnerTransitionEffects>[0]
->({
-  publisherParticipantId: () => micRuntime.publisher?.participantId ?? null,
-  mediaOwnerId: () => micRuntime.mediaOwnerId,
-  revokePublisherTransport: (message) => revokePublisherTransport(message),
-  clearMediaAuthority: () => clearMicMediaAuthority(),
-  cancelTransportGrace: () => micTransportGrace.cancel(),
-  applyOwnershipEffects: (effects, hooks) => {
-    applyMicOwnerEffects(effects, performance.now(), {
-      afterQualityEvent: hooks.afterQualityEvent,
-      beforeTimingInvalidation: hooks.beforeTimingInvalidation,
-    });
-  },
-  broadcastSessionStatus: () => broadcastSessionStatus(),
-  sendReleased: (socket) => sendJson(socket, { type: 'mic-released' }),
-});
 
 // Participant/product admission and take-id validation stay in the command handler.
 // TakeController remains recording/storage authority; this seam owns only admitted
@@ -3125,11 +3175,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const result = participants.releaseMic(socket.participantId);
     if (!result.ok) return;
 
-    micReleaseCoordinator.release({
-      socket,
-      participantId: socket.participantId,
-      effects: result.effects,
-    });
+    releaseMicLease(socket, socket.participantId, result.effects);
   },
   roomSongCommand: (socket, payload) => {
     if (!socket.participantId) {
@@ -4003,34 +4049,6 @@ const robotDisconnectCoordinator = createRelayRobotDisconnectCoordinator<RelaySo
   reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
   reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
 });
-const micDisconnectCoordinator = createRelayMicDisconnectCoordinator<RelaySocket>({
-  isPublisher: (socket) => micRuntime.isPublisher(socket),
-  noteDisconnected: () => takeController.noteQualityEvent('mic-transport-disconnected'),
-  reconnectingOwnerId: (socket) => socket.participantId
-    && participants.micOwnerId === socket.participantId
-    ? socket.participantId
-    : null,
-  detachPublisher: (socket) => micRuntime.detachPublisher(socket),
-  clearMediaAuthority: () => clearMicMediaAuthority(),
-  preserveMediaForReconnect: (ownerId) => {
-    // The control plane may reconnect while an independent HTTP/3 media
-    // session is still carrying the same capture. Keep the capture and
-    // sample rate authoritative until the existing grace expires.
-    const directMediaStillLive = webTransportMicConnected();
-    session.setMicExpected(directMediaStillLive);
-    micTransportGrace.schedule(ownerId);
-  },
-  maybeStopLiveSourceWhenUnarmed: () => maybeStopLiveSourceWhenUnarmed(),
-  failCalibrationIfCollecting: () => {
-    if (calibration.collecting) {
-      calibration.fail('Microphone disconnected during calibration.');
-    }
-  },
-  cancelContentValidationAndReport: () => {
-    if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
-  },
-  reportStatus: () => broadcastStatus(),
-});
 const backingDisconnectCoordinator = createRelayBackingDisconnectCoordinator<RelaySocket>({
   isBacking: (socket) => backingRuntime.isSocket(socket),
   noteDisconnected: () => takeController.noteQualityEvent('backing-transport-disconnected'),
@@ -4122,7 +4140,7 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!socket.replaced) {
       robotDisconnectCoordinator.handle(socket);
-      micTransportChanged = micDisconnectCoordinator.handle(socket);
+      micTransportChanged = micControlClosed(socket);
 
       backingDisconnectCoordinator.handle(socket);
     }

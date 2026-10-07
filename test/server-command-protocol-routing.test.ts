@@ -54,7 +54,7 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /productStatusPayload\(nowMs\)/);
   assert.match(server, /participants\.releaseMic\(socket\.participantId\)/);
   assert.match(server, /applyMicOwnerEffects\(effects, performance\.now\(\), \{/);
-  assert.match(server, /revokePublisherTransport: \(message\) => revokePublisherTransport\(message\)/);
+  assert.match(server, /revokePublisherTransport\('You released the microphone\.'\)/);
   assert.match(server, /clearMicMediaAuthority\(\)/);
   assert.match(server, /micTransportGrace\.cancel\(\)/);
   assert.match(server, /parseRoomSongCommand\(payload\)/);

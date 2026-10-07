@@ -40,7 +40,7 @@ test('Robot, Mic and Backing dispatch plus participant close authority remain in
 
   assert.match(close, /if \(!socket\.replaced\) \{/);
   assert.match(close, /robotDisconnectCoordinator\.handle\(socket\)/);
-  assert.match(close, /micDisconnectCoordinator\.handle\(socket\)/);
+  assert.match(close, /micControlClosed\(socket\)/);
   assert.match(close, /backingDisconnectCoordinator\.handle\(socket\)/);
   assert.match(close, /participants\.detach\(socket\.participantConnectionId, Date\.now\(\)\)/);
 });

@@ -57,6 +57,23 @@ async function primeStreams(backing: RelayClient, publisher: RelayClient) {
   ]);
 }
 
+/**
+ * Starts both captures with one frame each, back to back, and waits until the
+ * Relay has answered after them. Each capture is anchored to the mix clock when
+ * its first frame is processed, and a measured lag includes the gap between
+ * the two anchors: when the first frames ride in front of bursts, that gap was
+ * 7 to 12 ms idle and more under load. Sent alone it is small idle, but CPU
+ * load can still skew it.
+ */
+async function anchorTogether(backing: RelayClient, publisher: RelayClient, monitor: RelayClient) {
+  const frame = tone(0.02, 0.1);
+  backing.sendPcm(frame);
+  publisher.sendPcm(frame);
+  const from = monitor.messages.length;
+  monitor.send({ type: 'source-status-request' });
+  await waitForNewMessage(monitor, from, (m) => m.type === 'source-status');
+}
+
 async function liveSession(server: RelayServer) {
   const backing = await RelayClient.connect(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
@@ -782,6 +799,7 @@ describe('timing calibration', () => {
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       publisher.send(playingTelemetry);
+      await anchorTogether(backing, publisher, monitor);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
@@ -794,11 +812,20 @@ describe('timing calibration', () => {
         sendPcmInChunks(backing, song),
         sendPcmInChunks(publisher, mic),
       ]);
+      // Both streams keep arriving while the windows are analysed, as in a
+      // live room: the Relay stops a calibration whose streams have been quiet
+      // for 2.5 s, and under CPU load the analysis takes longer than that.
+      const silence = Buffer.alloc(960 * 2);
+      const keepStreaming = setInterval(() => {
+        publisher.send(playingTelemetry);
+        backing.sendPcm(silence);
+        publisher.sendPcm(silence);
+      }, 100);
 
       const complete = await monitor.waitFor(
         (m) => m.type === 'timing-calibration-status' && m.state === 'complete',
         15_000,
-      );
+      ).finally(() => clearInterval(keepStreaming));
       assert.ok(Math.abs(complete.micLagMs - 260) <= 15, `got ${complete.micLagMs} ms`);
       assert.equal(complete.windowsNeeded, 2);
 

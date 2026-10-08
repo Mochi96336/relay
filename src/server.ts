@@ -83,8 +83,6 @@ import { createRelayPublisherActivationCoordinator } from './relay-publisher-act
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
-import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
-import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -2982,61 +2980,90 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
 });
 
 
-// Participant/product admission and take-id validation stay in the command handler.
-// TakeController remains recording/storage authority; this seam owns only admitted
-// command ordering around the authoritative mix-frame boundary.
-const takeCommandCoordinator = createRelayTakeCommandCoordinator<
-  RelaySocket,
-  ReturnType<typeof takeFrameBoundary>['position'],
-  TakeSongSnapshot
->({
-  frameBoundary: (nowMs) => takeFrameBoundary(nowMs),
-  songSnapshot: (atMs) => takeSongSnapshot(atMs),
-  cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
-  standDownContentCalibration: () => calibration.abandon(),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  startTake: (participantId, song, position, wallClockMs) =>
-    takeController.start(participantId, song, position, wallClockMs),
-  stopTake: (takeId, participantId, position, reason, wallClockMs) =>
-    takeController.stop(takeId, participantId, position, reason, wallClockMs),
-  reject: (socket, command, reason) => rejectTakeCommand(socket, command, reason),
-  acceptStart: (socket, takeId) => {
-    sendJson(socket, {
-      type: 'take-command-accepted',
-      command: 'start',
-      takeId,
-    });
-  },
-  acceptStop: (socket, takeId, duplicate) => {
-    sendJson(socket, {
-      type: 'take-command-accepted',
-      command: 'stop',
-      takeId,
-      duplicate,
-    });
-  },
-});
+/**
+ * Starts a Take the command handler has already admitted, at the mix's
+ * authoritative frame boundary.
+ */
+function startTakeAtFrame(socket: RelaySocket, participantId: string, commandWallClockMs: number, nowMs: number) {
+  const boundary = takeFrameBoundary(nowMs);
+  const song = takeSongSnapshot(boundary.atMs);
 
-// Room-song admission and intent/revision authority stay in the command handler
-// and RoomSongCommandRuntime. This seam starts only after begin() accepts and
-// owns the acknowledgement -> pending recheck -> delivery -> status ordering.
-const roomSongCommandAcceptanceCoordinator = createRelayRoomSongCommandAcceptanceCoordinator<
-  RelaySocket,
-  PlaybackIdentity,
-  AcceptedRoomSongCommand
->({
-  sendAccepted: (socket, commandId, revision, duplicate) => {
-    sendJson(socket, {
-      type: 'room-song-command-accepted',
-      commandId,
-      revision,
-      duplicate,
-    });
-  },
-  pendingForTarget: (target, nowMs) => roomSongCommands.pendingForTarget(target, nowMs),
-  sendApply: (target, command) => playbackTransport.send(target, roomSongCommandApplyPayload(command)),
-  reportStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
-});
+  const result = takeController.start(
+    participantId,
+    song,
+    boundary.position,
+    commandWallClockMs + (boundary.atMs - nowMs),
+  );
+  if (!result.ok) {
+    rejectTakeCommand(socket, 'start', result.reason);
+    return;
+  }
+
+  // Background timing work may only be stood down after Take admission.
+  // A rejected command must not discard either a validator confirmation
+  // window or content-calibration evidence the room had already gathered.
+  // `takeController.start` is synchronous, so no analysis callback can
+  // interleave between admission and these stand-down effects.
+  if (cancelActiveContentValidation(nowMs)) {
+    broadcastJson(timingCalibrationStatusPayload());
+  }
+  // Stands a background content measurement down; true when one was running.
+  if (calibration.abandon()) {
+    broadcastJson(timingCalibrationStatusPayload());
+  }
+
+  sendJson(socket, { type: 'take-command-accepted', command: 'start', takeId: result.takeId });
+}
+
+/** Stops a Take at the mix's authoritative frame boundary. */
+function stopTakeAtFrame(
+  socket: RelaySocket,
+  participantId: string,
+  takeId: string,
+  commandWallClockMs: number,
+  nowMs: number,
+) {
+  const boundary = takeFrameBoundary(nowMs);
+  const result = takeController.stop(
+    takeId,
+    participantId,
+    boundary.position,
+    'user',
+    commandWallClockMs + (boundary.atMs - nowMs),
+  );
+  if (!result.ok) {
+    rejectTakeCommand(socket, 'stop', result.reason);
+    return;
+  }
+
+  sendJson(socket, { type: 'take-command-accepted', command: 'stop', takeId, duplicate: result.duplicate });
+}
+
+/**
+ * RoomSongCommandRuntime has accepted a room command. The sender hears so
+ * first; the target tab is asked to apply it only if it is still the one
+ * pending for that tab.
+ */
+function roomSongCommandAccepted(
+  socket: RelaySocket,
+  command: AcceptedRoomSongCommand,
+  duplicate: boolean,
+  nowMs: number,
+) {
+  sendJson(socket, {
+    type: 'room-song-command-accepted',
+    commandId: command.commandId,
+    revision: command.revision,
+    duplicate,
+  });
+
+  const stillPending = roomSongCommands.pendingForTarget(command.target, nowMs);
+  if (stillPending?.commandId === command.commandId) {
+    playbackTransport.send(command.target, roomSongCommandApplyPayload(command));
+  }
+
+  broadcastJson(roomSongCommandStatusPayload(nowMs));
+}
 
 /**
  * A playback tab reports it is ready for a song handoff. SongSession decides
@@ -3178,12 +3205,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    takeCommandCoordinator.start({
-      socket,
-      participantId: socket.participantId,
-      commandWallClockMs,
-      nowMs,
-    });
+    startTakeAtFrame(socket, socket.participantId, commandWallClockMs, nowMs);
     return;
   },
   stopTake: (socket, payload) => {
@@ -3199,13 +3221,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
 
     const commandWallClockMs = Date.now();
     const nowMs = performance.now();
-    takeCommandCoordinator.stop({
-      socket,
-      participantId: socket.participantId,
-      takeId,
-      commandWallClockMs,
-      nowMs,
-    });
+    stopTakeAtFrame(socket, socket.participantId, takeId, commandWallClockMs, nowMs);
     return;
   },
   releaseMic: (socket) => {
@@ -3247,12 +3263,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    roomSongCommandAcceptanceCoordinator.accept({
-      socket,
-      command: decision.command,
-      duplicate: decision.duplicate,
-      nowMs,
-    });
+    roomSongCommandAccepted(socket, decision.command, decision.duplicate, nowMs);
   },
   roomSongCommandFailed: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);

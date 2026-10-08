@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -182,5 +182,48 @@ test('a running content measurement leaves the room live and recordable', async 
   } finally {
     await server.stop();
     await rm(takeDirectory, { recursive: true, force: true });
+  }
+});
+
+test('a Take the recorder refuses leaves the content measurement running', async () => {
+  // A regular file where the take directory should be: the room is live and
+  // recordable by every product fact, but the recorder cannot open storage.
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'relay-content-refused-take-'));
+  const notADirectory = path.join(scratch, 'takes');
+  await writeFile(notADirectory, 'not a directory');
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: notADirectory });
+  try {
+    const { backing, singer, monitor, songStartedAtMs } = await liveRoom(server);
+
+    const collecting = await startCalibrationCollecting(singer, monitor, async () => {
+      singer.send(playing(songStartedAtMs));
+      await primeStreams(backing, singer);
+    });
+    assert.equal(collecting.state, 'collecting');
+    singer.send(playing(songStartedAtMs));
+    await primeStreams(backing, singer);
+
+    const from = singer.messages.length;
+    singer.send({ type: 'start-take' });
+    const rejected = await waitForNewMessage(singer, from, (message) => (
+      message.type === 'take-command-rejected' || message.type === 'take-command-accepted'
+    ), 8_000);
+    assert.equal(rejected.type, 'take-command-rejected');
+    assert.equal(rejected.reason, 'storage-unavailable');
+
+    // Only an admitted Take may stand background timing work down.
+    const statusFrom = monitor.messages.length;
+    monitor.send({ type: 'timing-calibration-status-request' });
+    const status = await waitForNewMessage(monitor, statusFrom, (message) => (
+      message.type === 'timing-calibration-status'
+    ));
+    assert.equal(status.state, 'collecting');
+
+    backing.close();
+    singer.close();
+    monitor.close();
+  } finally {
+    await server.stop();
+    await rm(scratch, { recursive: true, force: true });
   }
 });

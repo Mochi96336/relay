@@ -16,7 +16,7 @@ function noDroppedSamples() {
 
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = noDroppedSamples();
-let lastUplinkWarningAt = 0;
+let lastUplinkWarningAt = Number.NEGATIVE_INFINITY;
 let latestCaptureDispatchLagMs = null;
 let maxCaptureDispatchLagMs = null;
 let captureDispatchBacklogActive = false;

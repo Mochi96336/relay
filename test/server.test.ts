@@ -269,11 +269,21 @@ describe('live mix', () => {
 
       const health = await waitForNewMessage(monitor, mixing, (m) => m.type === 'mix-health', 3_000);
       assert.equal(health.active, true);
-      assert.equal(health.micStarvedFrames, 0, 'a primed buffer must not starve');
       assert.equal(health.monitorDroppedFrames, 0);
       assert.equal(health.monitorRecentDroppedFrames, 0);
       assert.equal(health.monitorRecentDroppingListeners, 0);
       assert.ok(health.micHeadroomMs > 0, `headroom ${health.micHeadroomMs} ms`);
+
+      // The starved count runs from the session's start, and frames mixed
+      // while the registered phone's first audio was still on its way count
+      // too: under CPU load one did. Once primed, it must not grow.
+      const later = await waitForNewMessage(
+        monitor,
+        monitor.messages.indexOf(health) + 1,
+        (m) => m.type === 'mix-health',
+        3_000,
+      );
+      assert.equal(later.micStarvedFrames, health.micStarvedFrames, 'a primed buffer must not starve');
 
       backing.close();
       publisher.close();

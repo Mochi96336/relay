@@ -433,7 +433,15 @@ async function installProductionDomHarness(page) {
       },
       emitSilentPcm() {
         if (!captureNode?.port?.onmessage) throw new Error('capture worklet is not ready');
-        captureNode.port.onmessage({ data: new ArrayBuffer(1_920) });
+        // As the production worklet posts it: stamped with when its oldest
+        // sample was captured. A bare buffer makes the page date it from
+        // samples counted, and a timer that falls behind the real-time clock
+        // then reads as a backlog and every chunk is dropped.
+        captureNode.port.onmessage({ data: {
+          type: 'pcm',
+          buffer: new ArrayBuffer(1_920),
+          capturedAtContextTime: Math.max(0, captureNode.context.currentTime - 0.02),
+        } });
       },
       /** The capture worklet's processor throws, as Web Audio reports it. */
       failCaptureProcessor() {

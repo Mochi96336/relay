@@ -79,7 +79,6 @@ import { createRelayCommandProtocol } from './relay-command-protocol.js';
 import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-event-protocol.js';
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
-import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import {
   createMonitorSocketTransport,
@@ -3734,27 +3733,62 @@ const authenticationProtocol = createRelayAuthenticationProtocol<RelaySocket>({
   },
 });
 
-const publisherActivationCoordinator = createRelayPublisherActivationCoordinator<
-  RelaySocket,
-  Parameters<typeof applyMicOwnerTransitionEffects>[0]
->({
-  now: () => performance.now(),
-  participantId: (socket) => socket.participantId ?? null,
-  applyOwnershipEffects: (effects, hooks) => {
-    applyMicOwnerEffects(effects, performance.now(), {
-      invalidateTiming: hooks.invalidateTiming,
-      prepareSongHandoff: hooks.prepareSongHandoff,
+/**
+ * A Mic publisher has been admitted, its lease decided and its role
+ * committed. Binds it as the media authority, retires whatever it replaces,
+ * and only then applies the ownership change's timing and handoff effects.
+ */
+function publisherActivated(request: {
+  socket: RelaySocket;
+  ownershipEffects: Parameters<typeof applyMicOwnerTransitionEffects>[0] | null;
+  previousOwnerId: string | null;
+  takeoverRequested: boolean;
+  sampleRate: number;
+  captureGeneration: number | null;
+  initialSequence?: number;
+  audioPacketVersion: 1 | 2;
+}) {
+  // The ownership change's timing invalidation and handoff preparation wait
+  // until the new publisher is bound.
+  let deferredOwnershipTimingReason: string | null = null;
+  let deferredHandoffParticipantId: string | null = null;
+
+  if (request.ownershipEffects) {
+    applyMicOwnerEffects(request.ownershipEffects, performance.now(), {
+      invalidateTiming: (reason) => {
+        deferredOwnershipTimingReason = reason;
+      },
+      prepareSongHandoff: (participantId) => {
+        deferredHandoffParticipantId = participantId;
+      },
     });
-  },
-  bindPublisher: (registration) => micRuntime.bindPublisher(registration),
-  retireReplacedCapture: () => {
+  }
+
+  const {
+    previousPublisher,
+    sameParticipantReplacement,
+    captureReplaced,
+  } = micRuntime.bindPublisher({
+    socket: request.socket,
+    sampleRate: request.sampleRate,
+    captureGeneration: request.captureGeneration,
+    initialSequence: request.initialSequence,
+    audioPacketVersion: request.audioPacketVersion,
+    nowMs: performance.now(),
+  });
+
+  // bindPublisher is the canonical point where media authority changes.
+  // Retire capture-scoped async work in the same synchronous call stack,
+  // before an old worker completion can be observed under the new capture.
+  if (captureReplaced) {
     clearRobotContentTransition();
     session.retireMicCapture();
     takeController.noteQualityEvent('mic-capture-restarted');
-  },
-  retirePrevious: (previousPublisher, nextPublisher, sameParticipantReplacement) => {
-    const newOwnerName = nextPublisher.participantId
-      ? participantPayload(nextPublisher.participantId)?.nickname ?? 'Another participant'
+  }
+
+  if (previousPublisher && previousPublisher !== request.socket) {
+    const newOwnerName = request.socket.participantId
+      ? participantPayload(request.socket.participantId)?.nickname ?? 'Another participant'
       : 'Another microphone';
     retirePublisherTransport(
       previousPublisher,
@@ -3763,36 +3797,45 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
         ? 'A newer microphone capture from this participant became active.'
         : `${newOwnerName} took over the microphone.`,
     );
-  },
-  cancelTransportGrace: () => micTransportGrace.cancel(),
-  setMicExpected: () => session.setMicExpected(true),
-  sessionActive: () => session.active,
-  noteTransportConnected: () => takeController.noteQualityEvent('mic-transport-connected'),
-  invalidateTiming: (reason) => invalidateMicTiming(reason),
-  retireCaptureTiming: () => retireMicCaptureTiming(),
-  restartLiveSource: () => restartLiveSourceAfterMicReconnect(),
-  directMediaOffer: () => micRuntime.directMediaOffer(),
-  sendRegistered: (socket, result) => {
-    sendJson(socket, {
-      type: 'registered',
-      role: 'publisher',
-      takeover: result.takeover,
-      ...(result.mediaTransport ? { mediaTransport: result.mediaTransport } : {}),
-    });
-  },
-  sendInitialState: (socket) => {
-    sendJson(socket, mixSettingsPayload());
-    sendJson(socket, youtubeTimeline.statusPayload());
-    sendJson(socket, youtubeTimeline.roomStatusPayload());
-    sendJson(socket, roomSongCommandStatusPayload());
-    sendJson(socket, takeController.statusPayload());
-    sendJson(socket, sourceStatusPayload());
-    sendJson(socket, timingCalibrationStatusPayload());
-  },
-  broadcastStatus: () => broadcastStatus(),
-  broadcastSessionStatus: () => broadcastSessionStatus(),
-  beginPreparedSongHandoff: (participantId) => beginPreparedSongHandoff(participantId),
-});
+  }
+
+  micTransportGrace.cancel();
+  session.setMicExpected(true);
+  if (!previousPublisher && session.active) {
+    takeController.noteQualityEvent('mic-transport-connected');
+  }
+
+  if (deferredOwnershipTimingReason) {
+    invalidateMicTiming(deferredOwnershipTimingReason);
+  } else if (captureReplaced) {
+    // captureReplaced is deliberately independent of participant identity;
+    // an anonymous or cross-owner replacement is still a timing discontinuity.
+    retireMicCaptureTiming();
+  }
+
+  restartLiveSourceAfterMicReconnect();
+  const participantId = request.socket.participantId ?? null;
+  const mediaTransport = micRuntime.directMediaOffer();
+  sendJson(request.socket, {
+    type: 'registered',
+    role: 'publisher',
+    takeover: request.takeoverRequested && request.previousOwnerId !== participantId,
+    ...(mediaTransport ? { mediaTransport } : {}),
+  });
+  sendJson(request.socket, mixSettingsPayload());
+  sendJson(request.socket, youtubeTimeline.statusPayload());
+  sendJson(request.socket, youtubeTimeline.roomStatusPayload());
+  sendJson(request.socket, roomSongCommandStatusPayload());
+  sendJson(request.socket, takeController.statusPayload());
+  sendJson(request.socket, sourceStatusPayload());
+  sendJson(request.socket, timingCalibrationStatusPayload());
+  broadcastStatus();
+
+  if (participantId) {
+    broadcastSessionStatus();
+    if (deferredHandoffParticipantId) beginPreparedSongHandoff(deferredHandoffParticipantId);
+  }
+}
 
 /**
  * A Desktop Source (backing) has been admitted and its role committed: it
@@ -3924,8 +3967,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
 
     commitSocketRole(socket, 'publisher');
 
-
-    publisherActivationCoordinator.activate({
+    publisherActivated({
       socket,
       ownershipEffects,
       previousOwnerId,

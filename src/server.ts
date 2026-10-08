@@ -85,8 +85,6 @@ import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordina
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
-import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
-import { createRelaySongHandoffResultCoordinator } from './relay-song-handoff-result-coordinator.js';
 import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
@@ -3040,44 +3038,46 @@ const roomSongCommandAcceptanceCoordinator = createRelayRoomSongCommandAcceptanc
   reportStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
 });
 
-// Playback identity resolution remains in the command handler and SongSession
-// remains authoritative behind these callbacks. This seam owns only the
-// ready/failed handoff result ordering and publication sequence.
-const songHandoffResultCoordinator = createRelaySongHandoffResultCoordinator<
-  PlaybackIdentity,
-  SongHandoffPlan
->({
-  markReady: (identity, handoffId, micOwnerId) => youtubeTimeline.markHandoffReady(identity, handoffId, micOwnerId),
-  defer: (identity, handoffId) => youtubeTimeline.deferHandoff(identity, handoffId),
-  sendCommit: (plan) => { sendHandoffPlan('song-handoff-commit', plan); },
-  reportTimelineStatus: () => broadcastJson(youtubeTimeline.statusPayload()),
-  reportRoomStatus: () => broadcastJson(youtubeTimeline.roomStatusPayload()),
-});
+/**
+ * A playback tab reports it is ready for a song handoff. SongSession decides
+ * whether the handoff id is current; if it is, the commit goes out.
+ */
+function songHandoffReady(identity: PlaybackIdentity, handoffId: unknown) {
+  const plan = youtubeTimeline.markHandoffReady(identity, handoffId, participants.micOwnerId);
+  if (!plan) return;
 
-// Playback identity validation and registration stay in the command handler/runtime.
-// This seam begins only after register() commits that identity and owns the
-// registration snapshots plus pending handoff/command continuation ordering.
-const playbackRegistrationContinuationCoordinator = createRelayPlaybackRegistrationContinuationCoordinator<
-  RelaySocket,
-  PlaybackIdentity,
-  SongHandoffPlan,
-  AcceptedRoomSongCommand
->({
-  sendRegistered: (socket, identity) => {
-    sendJson(socket, {
-      type: 'playback-registered',
-      playbackTransportId: identity.transportId,
-      playbackGeneration: identity.generation,
-    });
-  },
-  sendRoomStatus: (socket) => sendJson(socket, youtubeTimeline.roomStatusPayload()),
-  sendCommandStatus: (socket) => sendJson(socket, roomSongCommandStatusPayload()),
-  handoffPlanForTarget: (identity) => youtubeTimeline.handoffPlanForTarget(identity),
-  sendHandoffPrepare: (plan) => { sendHandoffPlan('song-handoff-prepare', plan); },
-  now: () => performance.now(),
-  pendingCommandForTarget: (identity, nowMs) => roomSongCommands.pendingForTarget(identity, nowMs),
-  sendCommandApply: (identity, command) => playbackTransport.send(identity, roomSongCommandApplyPayload(command)),
-});
+  sendHandoffPlan('song-handoff-commit', plan);
+  broadcastJson(youtubeTimeline.statusPayload());
+  broadcastJson(youtubeTimeline.roomStatusPayload());
+}
+
+/** A playback tab could not take the handoff; SongSession defers it. */
+function songHandoffFailed(identity: PlaybackIdentity, handoffId: unknown) {
+  if (!youtubeTimeline.deferHandoff(identity, handoffId)) return;
+
+  broadcastJson(youtubeTimeline.statusPayload());
+  broadcastJson(youtubeTimeline.roomStatusPayload());
+}
+
+/**
+ * A playback tab's identity is registered. It gets the room as it is, then
+ * anything still waiting on it: a prepared handoff, and a room command.
+ */
+function playbackRegistered(socket: RelaySocket, identity: PlaybackIdentity) {
+  sendJson(socket, {
+    type: 'playback-registered',
+    playbackTransportId: identity.transportId,
+    playbackGeneration: identity.generation,
+  });
+  sendJson(socket, youtubeTimeline.roomStatusPayload());
+  sendJson(socket, roomSongCommandStatusPayload());
+
+  const pendingPlan = youtubeTimeline.handoffPlanForTarget(identity);
+  if (pendingPlan) sendHandoffPlan('song-handoff-prepare', pendingPlan);
+
+  const pendingCommand = roomSongCommands.pendingForTarget(identity, performance.now());
+  if (pendingCommand) playbackTransport.send(identity, roomSongCommandApplyPayload(pendingCommand));
+}
 
 const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAcceptanceCoordinator<RelaySocket, PlaybackIdentity>({
   registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
@@ -3271,19 +3271,12 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   songHandoffReady: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    songHandoffResultCoordinator.ready({
-      identity: playbackIdentity,
-      handoffId: payload.handoffId,
-      micOwnerId: participants.micOwnerId,
-    });
+    songHandoffReady(playbackIdentity, payload.handoffId);
   },
   songHandoffFailed: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    songHandoffResultCoordinator.failed({
-      identity: playbackIdentity,
-      handoffId: payload.handoffId,
-    });
+    songHandoffFailed(playbackIdentity, payload.handoffId);
   },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;
@@ -3319,10 +3312,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       transportId,
       generation,
     });
-    playbackRegistrationContinuationCoordinator.continueRegistration({
-      socket,
-      identity: playbackIdentity,
-    });
+    playbackRegistered(socket, playbackIdentity);
     return;
   },
   youtubeTelemetry: (socket, payload) => {

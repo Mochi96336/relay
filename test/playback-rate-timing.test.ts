@@ -98,11 +98,11 @@ test('a playback-rate change revokes the content mapping through the one transac
   assert.doesNotMatch(revocation, /bootProbe/i);
 });
 
-test('the telemetry seam checks the rate before anything reads the mapping', () => {
-  const coordinator = readRepositoryTextFile('src/relay-youtube-telemetry-acceptance-coordinator.ts');
-  const revoked = coordinator.indexOf('const revoked = dependencies.revokeContentMappingOnRateChange(');
-  const validation = coordinator.indexOf('dependencies.cancelActiveContentValidation(');
-  const timeline = coordinator.indexOf('dependencies.reportTimelineStatus(');
+test('accepted telemetry checks the rate before anything reads the mapping', () => {
+  const coordinator = server.match(/function youtubeTelemetryAccepted\([\s\S]*?\n\}\n/)?.[0] ?? '';
+  const revoked = coordinator.indexOf('const revoked = revokeContentMappingOnRateChange(');
+  const validation = coordinator.indexOf('cancelActiveContentValidation(input.nowMs)');
+  const timeline = coordinator.indexOf('broadcastJson(input.timelineStatus)');
 
   assert.ok(revoked >= 0, 'accepted telemetry must check the rate');
   assert.ok(validation > revoked, 'validation must not be cancelled against a mapping already being retired');

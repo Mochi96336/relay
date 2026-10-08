@@ -1591,8 +1591,11 @@ test('production DOM: an error from a capture processor that was already replace
 
 test('production DOM: audio the page delivers too late is not sent and leaves its hole in place', async ({ page }) => {
   await livePhone(page);
-  // The page's AudioContext has to have run longer than the stall below.
-  await page.waitForFunction(() => window.__relayInteractionHarness.captureContextTime() > 1.5, null, { timeout: 5_000 });
+  // The page's AudioContext has to have run longer than the stall below, and
+  // the page shows at most one uplink warning per 2 s counted from page load.
+  await page.waitForFunction(() => (
+    window.__relayInteractionHarness.captureContextTime() > 1.5 && performance.now() > 2_100
+  ), null, { timeout: 5_000 });
   const sent = await page.evaluate(() => {
     clearInterval(window.__keepCapturing);
     const harness = window.__relayInteractionHarness;

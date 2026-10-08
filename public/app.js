@@ -3,13 +3,12 @@ import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
-import { DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS, classifyCaptureDispatch } from './capture-dispatch.js';
+import { classifyCaptureDispatch } from './capture-dispatch.js';
 import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
 import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
 import {
   captureClippingSnapshot,
-  captureRecentInputClippingDetected,
   captureLevelSnapshot,
   enforceUnprocessedCapture,
   readCaptureSettings,
@@ -33,6 +32,16 @@ import {
   updateVocalFineTuneLabel,
   vocalFineTuneMs,
 } from './mix-controls.js';
+import {
+  countUplinkDrop,
+  forgetUnsettledUplinkHealth,
+  noteCaptureClipping,
+  noteCaptureDispatch,
+  noteUplinkHealthSent,
+  resetUplinkEvidence,
+  settleCaptureClippingHealth,
+  uplinkEvidenceReport,
+} from './uplink-evidence.js';
 
 const publisherButton = document.querySelector('#start-publisher');
 const releaseButton = document.querySelector('#release-mic');
@@ -99,34 +108,18 @@ let activeCalibrationProbeRequestId = null;
 let activeCalibrationProbePlayback = null;
 let publisherSessionEpoch = 0;
 
-let uplinkDroppedSamples = 0;
-let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0, captureBacklog: 0 };
-let latestCaptureDispatchLagMs = null;
-let maxCaptureDispatchLagMs = null;
-let captureDispatchBacklogActive = false;
 let captureInputGapSamples = 0;
-/**
- * Null means the active worklet does not expose interval clipping evidence
- * (rollout-compatible legacy). Once observed, this is the OR of clipped 20 ms
- * windows since the last server-acknowledged uplink-health report.
- */
-let captureInputClippingSinceHealth = null;
-let captureInputClippingRevision = 0;
-const pendingCaptureClippingHealth = new Map();
 
 function resetPublisherHealthRequestCorrelation() {
   // Once command-channel authority resets, no ACK from an older socket can be
-  // accepted by handleServerMessage(). Keep the interval evidence itself, but
-  // discard request ids that can no longer settle it so repeated failed
-  // reconnect cycles cannot grow this map indefinitely.
+  // accepted by handleServerMessage().
   publisherCommandLiveness.reset();
-  pendingCaptureClippingHealth.clear();
+  forgetUnsettledUplinkHealth();
 }
 
 let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
-let lastUplinkWarningAt = 0;
 // Seeded from the clock, not 0: a page reload starts a new module scope and
 // would otherwise reuse the same first-ever generation number, which the
 // server take as "nothing changed" and skip re-anchoring the mic timeline to
@@ -172,65 +165,11 @@ function framePcm(pcm, generation, sequence, firstSampleIndex) {
 }
 
 function recordUplinkDrop(sampleCount, reason) {
-  if (!Number.isFinite(sampleCount) || sampleCount <= 0) return;
-  uplinkDroppedSamples += sampleCount;
-  if (reason === 'disconnected') uplinkDroppedSamplesByReason.disconnected += sampleCount;
-  else if (reason === 'congested') uplinkDroppedSamplesByReason.congested += sampleCount;
-  else if (reason === 'packet-too-large') uplinkDroppedSamplesByReason.packetTooLarge += sampleCount;
-  else if (reason === 'capture-backlog') uplinkDroppedSamplesByReason.captureBacklog += sampleCount;
-  if (reason === 'disconnected') return;
-
-  const now = performance.now();
-  if (now - lastUplinkWarningAt <= 2000) return;
-  lastUplinkWarningAt = now;
-  const sampleRate = audioContext?.sampleRate ?? 48000;
-  const droppedMs = Math.round((uplinkDroppedSamples * 1000) / sampleRate);
-  const title = reason === 'packet-too-large'
-    ? 'Microphone datagram budget changed'
-    : reason === 'capture-backlog'
-      ? 'Microphone capture caught up to live audio'
-      : 'Microphone uplink congested';
-  setStatus(
-    title,
-    `Dropped about ${droppedMs} ms of microphone audio. ` +
-    'The sample timeline keeps the hole in the right place instead of pulling later audio earlier.',
-  );
-}
-
-function captureClippingHealthSnapshot() {
-  const clipping = captureClippingSnapshot(latestLocalMicLevel);
-  if (!clipping) return null;
-  const {
-    windowMaxConsecutiveRailSamples: _windowMaxConsecutiveRailSamples,
-    ...lifetime
-  } = clipping;
-  return {
-    ...lifetime,
-    ...(captureInputClippingSinceHealth === null
-      ? {}
-      : { recentDetected: captureInputClippingSinceHealth }),
-  };
-}
-
-function settleCaptureClippingHealth(healthRequestId) {
-  const accepted = pendingCaptureClippingHealth.get(healthRequestId);
-  if (!accepted) return false;
-
-  // Mirror PublisherCommandLiveness supersession: once this request is
-  // acknowledged, any older clipping snapshot can never become authoritative.
-  for (const [requestId, pending] of pendingCaptureClippingHealth) {
-    if (pending.sentAtMs <= accepted.sentAtMs) pendingCaptureClippingHealth.delete(requestId);
-  }
-
-  // Do not let an older ACK erase a clipped window that occurred after that
-  // request was sent.
-  if (
-    captureInputClippingSinceHealth !== null
-    && accepted.revision === captureInputClippingRevision
-  ) {
-    captureInputClippingSinceHealth = false;
-  }
-  return true;
+  const warning = countUplinkDrop(sampleCount, reason, {
+    nowMs: performance.now(),
+    sampleRate: audioContext?.sampleRate ?? 48000,
+  });
+  if (warning) setStatus(warning.title, warning.detail);
 }
 
 function audioUplinkHealthPayload(healthRequestId) {
@@ -246,14 +185,7 @@ function audioUplinkHealthPayload(healthRequestId) {
     // Browser/worklet observations only; none of these fields is a calibration gate.
     capture: captureAppliedSettings,
     captureLevel: captureLevelSnapshot(latestLocalMicLevel),
-    captureClipping: captureClippingHealthSnapshot(),
-    captureDispatch: latestCaptureDispatchLagMs === null ? null : {
-      lagMs: latestCaptureDispatchLagMs,
-      maxLagMs: maxCaptureDispatchLagMs,
-      backlogMs: DEFAULT_CAPTURE_DISPATCH_BACKLOG_MS,
-      backlogActive: captureDispatchBacklogActive,
-    },
-    droppedSamples: { total: uplinkDroppedSamples, ...uplinkDroppedSamplesByReason },
+    ...uplinkEvidenceReport(latestLocalMicLevel),
     controlReconnects: Math.max(0, publisherControlConnections - 1),
     transport: audioTransport.stats(),
   };
@@ -269,13 +201,7 @@ function sendAudioUplinkHealth() {
   if (!result.sent) {
     publisherCommandLiveness.cancelHealthRequest(healthRequestId);
   } else {
-    // Keep interval evidence until the server ACK proves this exact health
-    // report was accepted. The revision prevents a late ACK from clearing
-    // clipping that happened after this request left the page.
-    pendingCaptureClippingHealth.set(healthRequestId, {
-      revision: captureInputClippingRevision,
-      sentAtMs,
-    });
+    noteUplinkHealthSent(healthRequestId, sentAtMs);
   }
   return result.sent;
 }
@@ -329,16 +255,9 @@ function advanceCaptureGeneration(reason) {
   captureSampleCursor = 0;
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
-  captureInputClippingSinceHealth = null;
-  captureInputClippingRevision = 0;
-  pendingCaptureClippingHealth.clear();
+  resetUplinkEvidence();
   captureInputMuted = mediaStream?.getAudioTracks?.()[0]?.muted === true;
   latestLocalMicLevel = null;
-  uplinkDroppedSamples = 0;
-  uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0, captureBacklog: 0 };
-  latestCaptureDispatchLagMs = null;
-  maxCaptureDispatchLagMs = null;
-  captureDispatchBacklogActive = false;
   audioTransport.resetStats();
   dispatchRelayEvent('relay-microphone-capture-generation', {
     captureGeneration: captureGeneration >>> 0,
@@ -528,13 +447,7 @@ function handleCaptureWorkletMessage(event, graph) {
       if (Number.isFinite(peakDbfs) && Number.isFinite(rmsDbfs) && analysis) {
         const { spectrumBands, f0Hz, pitchConfidence } = analysis;
         const clipping = captureClippingSnapshot(event.data);
-        if (clipping?.windowMaxConsecutiveRailSamples !== undefined) {
-          if (captureInputClippingSinceHealth === null) captureInputClippingSinceHealth = false;
-          if (captureRecentInputClippingDetected(clipping)) {
-            captureInputClippingSinceHealth = true;
-            captureInputClippingRevision += 1;
-          }
-        }
+        noteCaptureClipping(clipping);
         latestLocalMicLevel = {
           peakDbfs,
           rmsDbfs,
@@ -608,14 +521,7 @@ function handleCaptureWorkletMessage(event, graph) {
     fallbackCapturedAtContextTimeSeconds:
       graph.captureClockOriginContextTime + (chunkFirstSampleIndex / graph.context.sampleRate),
   });
-  if (dispatch.measurable) {
-    latestCaptureDispatchLagMs = Math.round(dispatch.lagMs);
-    maxCaptureDispatchLagMs = Math.max(
-      maxCaptureDispatchLagMs ?? 0,
-      latestCaptureDispatchLagMs,
-    );
-    captureDispatchBacklogActive = dispatch.stale;
-  }
+  noteCaptureDispatch(dispatch);
 
   const recovery = micCaptureRecovery.observe(captureSnapshot(), {
     freshPcm: !dispatch.stale && captureInputMuted !== true,
@@ -1695,8 +1601,7 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
     f0Hz: null,
     pitchConfidence: 0,
   });
-  uplinkDroppedSamples = 0;
-  uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0 };
+  resetUplinkEvidence();
   captureInputGapSamples = 0;
   captureInputMuted = false;
   publisherControlConnections = 0;

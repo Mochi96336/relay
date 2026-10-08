@@ -1186,6 +1186,23 @@ test('production DOM: a command the Relay refuses puts the control back and says
   await expect(page.locator('#details')).toHaveText('Bob has the mic and controls this.');
 });
 
+test('production DOM: a vocal timing the Relay refuses goes back to the one it last confirmed', async ({ page }) => {
+  await livePhone(page);
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'source-status', active: true, vocalFineTuneMs: 30,
+  }));
+  const fineTune = page.locator('#vocal-fine-tune');
+  await expect(fineTune).toHaveValue('30');
+  await setRange(page, '#vocal-fine-tune', -40);
+  await expect(fineTune).toHaveValue('-40');
+
+  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
+    type: 'command-rejected', command: 'set-vocal-fine-tune', reason: 'not-mic-owner', owner: { nickname: 'Bob' },
+  }));
+  await expect(fineTune).toHaveValue('30');
+  await expect(page.locator('#vocal-fine-tune-value')).toHaveText('+30 ms');
+});
+
 for (const [type, reason, title] of [
   ['mic-revoked', 'revoked', 'Microphone handed off'],
   ['publisher-superseded', 'superseded', 'Microphone moved to another tab'],

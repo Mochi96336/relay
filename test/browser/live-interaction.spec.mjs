@@ -1259,3 +1259,65 @@ test('production DOM: a capture that keeps delivering audio is left alone', asyn
   expect(registrations).toHaveLength(1);
   expect(registrations[0].captureGeneration).toBe(first.captureGeneration);
 });
+
+test('production DOM: taking over the Mic names the owner it expects to replace', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-request-microphone', {
+    detail: { takeoverExpectedOwnerId: 'participant-bob' },
+  })));
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'register' && command.role === 'publisher',
+  ), null, { timeout: 5_000 });
+  const register = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .find((command) => command.type === 'register' && command.role === 'publisher'));
+  expect(register.takeoverExpectedOwnerId).toBe('participant-bob');
+});
+
+test('production DOM: releasing the Mic tells the Relay and ends the session', async ({ page }) => {
+  await livePhone(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-release-microphone')));
+  await page.waitForFunction(() => window.__microphoneEnded.includes('released'), null, { timeout: 5_000 });
+  expect(await countOf(page, 'release-mic')).toBe(1);
+  await expect(page.locator('#status')).toHaveText('Microphone released');
+});
+
+test('production DOM: retrying a damaged Mic keeps the Mic instead of releasing it', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-retry-microphone')));
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length >= 2,
+  null, { timeout: 10_000 });
+  expect(await countOf(page, 'release-mic')).toBe(0);
+  const [, again] = await publisherRegistrations(page);
+  expect(again.captureGeneration).not.toBe(first.captureGeneration);
+});
+
+test('production DOM: a backgrounded phone does not play a timing probe', async ({ page }) => {
+  await livePhone(page);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: 77, leadMs: 20 });
+  });
+  await page.waitForTimeout(600);
+  expect(await probeReplies(page)).toEqual([]);
+  expect(await page.evaluate(() => window.__oscillatorsCreated ?? 0)).toBe(0);
+});
+
+test('production DOM: going to the background drops a probe that had not played yet', async ({ page }) => {
+  await livePhone(page);
+  // The request arrives, then the page is hidden before the AudioContext has
+  // resumed: that probe is no longer this page's to answer at all.
+  await page.evaluate(() => {
+    window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: 78, leadMs: 20 });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(600);
+  expect(await probeReplies(page)).toEqual([]);
+});

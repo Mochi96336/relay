@@ -324,10 +324,15 @@ async function installProductionDomHarness(page) {
       createMediaStreamSource() { return new FakeAudioNode(); }
       createGain() { return new FakeGainNode(); }
       createOscillator() {
+        if (window.__failProbeOscillators) throw new Error('test: the speaker is unavailable');
+        window.__oscillatorsCreated = (window.__oscillatorsCreated ?? 0) + 1;
         const node = new FakeAudioNode();
+        const events = new EventTarget();
         node.frequency = { value: 0 };
+        node.addEventListener = events.addEventListener.bind(events);
+        node.removeEventListener = events.removeEventListener.bind(events);
         node.start = () => {};
-        node.stop = () => {};
+        node.stop = () => queueMicrotask(() => events.dispatchEvent(new Event('ended')));
         return node;
       }
     }
@@ -975,4 +980,99 @@ test('production DOM: uplink health reports a clipped window once, until the Rel
     .filter((command) => command.type === 'audio-uplink-health')
     .slice(from)
     .some((command) => command.captureClipping?.recentDetected === false), reported, { timeout: 5_000 });
+});
+
+function probeReplies(page) {
+  return page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'calibration-probe-played' || command.type === 'calibration-probe-failed')
+    .map(({ type, requestId, generation, target }) => ({ type, requestId, generation, target })));
+}
+
+test('production DOM: the phone plays a Mic timing probe and says which one', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => window.__relayInteractionHarness.emitSilentPcm(), 20);
+  });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health',
+  ), null, { timeout: 5_000 });
+  const generation = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .findLast((command) => command.type === 'audio-uplink-health').captureGeneration);
+
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'play-calibration-probe', target: 'mic', requestId: 41, leadMs: 20,
+  }));
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'calibration-probe-played' && command.requestId === 41,
+  ), null, { timeout: 5_000 });
+  expect(await probeReplies(page)).toEqual([
+    { type: 'calibration-probe-played', requestId: 41, generation, target: 'mic' },
+  ]);
+});
+
+test('production DOM: the phone leaves backing probes and malformed probes alone', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => window.__relayInteractionHarness.emitSilentPcm(), 20);
+  });
+
+  // The backing leg is the Robot's to play; a phone reply there could be
+  // mistaken for the Robot's.
+  await page.evaluate(() => {
+    window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'backing', requestId: 7, leadMs: 20 });
+    window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: -1, leadMs: 20 });
+  });
+  await page.waitForTimeout(600);
+  expect(await probeReplies(page)).toEqual([]);
+});
+
+test('production DOM: a newer probe request replaces one still being prepared', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => window.__relayInteractionHarness.emitSilentPcm(), 20);
+  });
+
+  await page.evaluate(() => {
+    window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: 5, leadMs: 20 });
+    window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: 6, leadMs: 20 });
+  });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'calibration-probe-played' && command.requestId === 6,
+  ), null, { timeout: 5_000 });
+  await page.waitForTimeout(300);
+  expect((await probeReplies(page)).map((reply) => reply.requestId)).toEqual([6]);
+  // Overlapping probe waveforms are not valid calibration evidence: only the
+  // newer request's three notes were ever scheduled.
+  expect(await page.evaluate(() => window.__oscillatorsCreated)).toBe(3);
+});
+
+test('production DOM: a probe the phone cannot play is reported as failed, with why', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => window.__relayInteractionHarness.emitSilentPcm(), 20);
+    window.__failProbeOscillators = true;
+  });
+
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'play-calibration-probe', target: 'mic', requestId: 12, leadMs: 20,
+  }));
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'calibration-probe-failed' && command.requestId === 12,
+  ), null, { timeout: 5_000 });
+  const failed = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .find((command) => command.type === 'calibration-probe-failed'));
+  expect(failed.reason).toBe('test: the speaker is unavailable');
+  expect((await probeReplies(page)).length).toBe(1);
 });

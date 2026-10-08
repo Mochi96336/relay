@@ -126,7 +126,7 @@ test('every Robot mapping revocation goes through one teardown transaction', () 
   );
   assert.match(
     server,
-    /revokeContentMapping: \(reason\) => revokeRobotContentMapping\(\{ reason \}\)/,
+    /function sourceSeekClassified\([\s\S]*?revokeRobotContentMapping\(\{/,
     'a destructive Source seek must revoke through the shared transaction',
   );
 });

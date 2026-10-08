@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay, type RelayServer } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -700,6 +700,15 @@ test('a Desktop Source or Robot that is replaced during a Take is recorded on th
     await sleep(100);
 
     control.send({ type: 'stop-take', takeId });
+    const stopped = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'stop');
+    assert.equal(stopped.duplicate, false);
+    // A second Stop for the same Take is the same request, not a new one.
+    const againFrom = control.messages.length;
+    control.send({ type: 'stop-take', takeId });
+    const again = await waitForNewMessage(control, againFrom, (message) => (
+      message.type === 'take-command-accepted' && message.command === 'stop'
+    ));
+    assert.equal(again.duplicate, true);
     const ready = await waitReady(control, takeId);
     const events = ready.take.quality.evidence.events;
     assert.equal(events['backing-transport-replaced'], 1);

@@ -90,9 +90,11 @@ test('a playback-rate change revokes the content mapping through the one transac
   );
 
   // The boot baseline is a wall-time pipeline measurement and deliberately
-  // survives media mapping revocation. The ordering-only coordinator must not
-  // grow boot-probe authority or a callback that clears it.
-  const revocation = readRepositoryTextFile('src/relay-robot-content-mapping-revocation-coordinator.ts');
+  // survives media mapping revocation. The shared revocation must not grow
+  // boot-probe authority or a step that clears it.
+  const revocation = readRepositoryTextFile('src/server.ts')
+    .match(/function revokeRobotContentMapping\([\s\S]*?\n\}/)?.[0] ?? '';
+  assert.ok(revocation.length > 0, 'revokeRobotContentMapping must remain identifiable');
   assert.doesNotMatch(revocation, /bootProbe/i);
 });
 

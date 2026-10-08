@@ -1,0 +1,72 @@
+name: Mutation check
+
+# Push a branch named mutation/<anything> carrying mutation/spec.json. Every
+# mutation in the spec runs on its own runner, so a 20-mutation check takes
+# about as long as one test run instead of twenty in a row.
+on:
+  push:
+    branches: ['mutation/**']
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      indices: ${{ steps.plan.outputs.indices }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - id: plan
+        run: |
+          echo "indices=$(node -e "const s=require('./mutation/spec.json');console.log(JSON.stringify([-1,...s.mutations.map((_, i) => i)]))")" >> "$GITHUB_OUTPUT"
+
+  mutate:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        index: ${{ fromJSON(needs.plan.outputs.indices) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - run: npm ci
+      - name: Apply mutation and run its tests
+        run: node scripts/mutation-check.mjs mutation/spec.json ${{ matrix.index }} | tee result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutation-result-${{ matrix.index }}
+          path: result.json
+
+  report:
+    needs: mutate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutation-result-*
+      - name: Summarise
+        run: |
+          node -e '
+            const fs = require("fs");
+            const rows = fs.readdirSync(".").filter((d) => d.startsWith("mutation-result-"))
+              .map((d) => JSON.parse(fs.readFileSync(`${d}/result.json`, "utf8")))
+              .sort((a, b) => a.index - b.index);
+            const lines = ["| # | mutation | caught | failures | failed tests |", "| --- | --- | --- | --- | --- |"];
+            for (const r of rows) {
+              const caught = r.error ? `error: ${r.error}` : r.index < 0 ? (r.caught ? "BASELINE RED" : "baseline green") : (r.caught ? "yes" : "**no**");
+              lines.push(`| ${r.index} | \`${String(r.label).replace(/\|/g, "\\|")}\` | ${caught} | ${r.failures ?? ""} | ${(r.failedTests ?? []).slice(0, 3).join("; ").replace(/\|/g, "\\|")} |`);
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+            console.log(lines.join("\n"));
+          '

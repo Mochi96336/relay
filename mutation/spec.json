@@ -1,0 +1,112 @@
+{
+  "file": "src/server.ts",
+  "tests": [
+    "test/participant-server.test.ts",
+    "test/mic-lifecycle-server.test.ts",
+    "test/mic-timing-server.test.ts",
+    "test/take-owner-release-evidence-server.test.ts",
+    "test/playback-reload-continuation.test.ts",
+    "test/take-server.test.ts",
+    "test/mic-flow-semantics-server.test.ts",
+    "test/mic-boundary-hardening-server.test.ts",
+    "test/mic-gain-handoff-server.test.ts",
+    "test/song-handoff-server.test.ts"
+  ],
+  "mutations": [
+    {
+      "function": "publisherActivated",
+      "find": "        deferredOwnershipTimingReason = reason;",
+      "replace": "        invalidateMicTiming(reason);"
+    },
+    {
+      "function": "publisherActivated",
+      "find": "        deferredHandoffParticipantId = participantId;",
+      "replace": "        beginPreparedSongHandoff(participantId);"
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    clearRobotContentTransition();\n    session.retireMicCapture();",
+      "replace": "    clearRobotContentTransition();"
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    takeController.noteQualityEvent('mic-capture-restarted');",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "  if (previousPublisher && previousPublisher !== request.socket) {",
+      "replace": "  if (false) {"
+    },
+    {
+      "function": "publisherActivated",
+      "find": "      sameParticipantReplacement ? 'publisher-superseded' : 'mic-revoked',",
+      "replace": "      'mic-revoked',"
+    },
+    {
+      "function": "publisherActivated",
+      "find": "  micTransportGrace.cancel();",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "  session.setMicExpected(true);",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    takeController.noteQualityEvent('mic-transport-connected');",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    invalidateMicTiming(deferredOwnershipTimingReason);",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    retireMicCaptureTiming();",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "  restartLiveSourceAfterMicReconnect();",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    takeover: request.takeoverRequested && request.previousOwnerId !== participantId,",
+      "replace": "    takeover: false,"
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    ...(mediaTransport ? { mediaTransport } : {}),",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "  sendJson(request.socket, mixSettingsPayload());",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "  sendJson(request.socket, takeController.statusPayload());",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "  broadcastStatus();",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    broadcastSessionStatus();",
+      "replace": ""
+    },
+    {
+      "function": "publisherActivated",
+      "find": "    if (deferredHandoffParticipantId) beginPreparedSongHandoff(deferredHandoffParticipantId);",
+      "replace": ""
+    }
+  ]
+}

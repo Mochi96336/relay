@@ -13,6 +13,7 @@ async function installProductionDomHarness(page) {
   await page.addInitScript(() => {
     const timeline = {};
     const commands = [];
+    const packets = [];
     const sockets = [];
     let captureNode = null;
     let recorderReplayDelayMs = 0;
@@ -154,6 +155,19 @@ async function installProductionDomHarness(page) {
         }
 
         if (typeof data !== 'string') {
+          const bytes = data instanceof ArrayBuffer ? data : data.buffer;
+          const offset = data instanceof ArrayBuffer ? 0 : data.byteOffset;
+          const view = new DataView(bytes, offset);
+          packets.push({
+            socketKind: this.kind,
+            magic: view.getUint16(0, true),
+            version: view.getUint8(2),
+            source: view.getUint8(3),
+            generation: view.getUint32(4, true),
+            sequence: view.getUint32(8, true),
+            sampleCount: view.getUint32(12, true),
+            firstSampleIndex: view.getFloat64(16, true),
+          });
           if (this.kind !== 'publisher') return;
           mark('T5');
           setTimeout(() => {
@@ -377,6 +391,8 @@ async function installProductionDomHarness(page) {
     window.__relayInteractionHarness = {
       timeline,
       commands,
+      /** AudioPacket headers of every binary frame the page sent. */
+      packets,
       mark,
       /** Sends one server message to every open socket, as a Relay broadcast does. */
       broadcast(payload) {
@@ -1320,4 +1336,115 @@ test('production DOM: going to the background drops a probe that had not played 
   });
   await page.waitForTimeout(600);
   expect(await probeReplies(page)).toEqual([]);
+});
+
+test('production DOM: the phone frames its audio as AudioPacket v2 on one continuous timeline', async ({ page }) => {
+  await livePhone(page);
+  // Past startup, where packets captured before the media path is chosen may
+  // be kept for repair rather than sent.
+  await page.waitForTimeout(1_000);
+  const [registration] = await publisherRegistrations(page);
+  const packets = await page.evaluate(() => window.__relayInteractionHarness.packets
+    .filter((packet) => packet.socketKind === 'publisher').slice(-10));
+  expect(packets).toHaveLength(10);
+
+  for (const packet of packets) {
+    expect(packet).toMatchObject({
+      magic: 0x4c52, version: 2, source: 1, generation: registration.captureGeneration,
+    });
+  }
+  for (let index = 1; index < packets.length; index += 1) {
+    expect(packets[index].sequence).toBe(packets[index - 1].sequence + 1);
+    expect(packets[index].firstSampleIndex)
+      .toBe(packets[index - 1].firstSampleIndex + packets[index - 1].sampleCount);
+  }
+});
+
+test('production DOM: audio lost while the connection is down leaves a hole in the timeline', async ({ page }) => {
+  await livePhone(page);
+  await page.waitForFunction(() => window.__relayInteractionHarness.packets
+    .filter((packet) => packet.socketKind === 'publisher').length >= 5, null, { timeout: 5_000 });
+
+  // The replacement connection takes a while to open; audio captured
+  // meanwhile cannot be sent.
+  await page.evaluate(() => {
+    window.__relayInteractionHarness.holdSocketOpens();
+    window.__relayInteractionHarness.closeSockets('publisher');
+  });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.__relayInteractionHarness.releaseSocketOpens());
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length === 2,
+  null, { timeout: 10_000 });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health' && command.droppedSamples?.disconnected > 0,
+  ), null, { timeout: 5_000 });
+  await page.waitForTimeout(300);
+
+  const packets = await page.evaluate(() => window.__relayInteractionHarness.packets
+    .filter((packet) => packet.socketKind === 'publisher'));
+  const health = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .findLast((command) => command.type === 'audio-uplink-health'));
+  // The capture timeline jumps over exactly the audio that did not go out
+  // (as the health report counts it), so later audio is never pulled earlier.
+  // Packets kept for repair are part of that audio and still spend their
+  // sequence numbers, so the Relay can see them missing and ask for them.
+  let skippedSamples = 0;
+  let keptSamples = 0;
+  for (let index = 1; index < packets.length; index += 1) {
+    const previous = packets[index - 1];
+    skippedSamples += packets[index].firstSampleIndex - (previous.firstSampleIndex + previous.sampleCount);
+    keptSamples += (packets[index].sequence - previous.sequence - 1) * previous.sampleCount;
+  }
+  expect(health.droppedSamples.disconnected).toBeGreaterThan(0);
+  expect(skippedSamples).toBe(health.droppedSamples.disconnected);
+  expect(keptSamples).toBeGreaterThan(0);
+  expect(keptSamples).toBeLessThanOrEqual(skippedSamples);
+});
+
+test('production DOM: a missing Mic input is reported at once and rebuilds the capture', async ({ page }) => {
+  await livePhone(page);
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health',
+  ), null, { timeout: 5_000 });
+  const [first] = await publisherRegistrations(page);
+
+  const reportedAt = await page.evaluate(() => {
+    window.__relayInteractionHarness.emitCaptureMessage({
+      type: 'input-gap', samples: 4_800, quanta: 37, recovered: false,
+    });
+    return performance.now();
+  });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health' && command.inputGapActive === true,
+  ), null, { timeout: 2_000 });
+  const report = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .find((command) => command.type === 'audio-uplink-health' && command.inputGapActive === true));
+  // Straight away, not at the next one-second health tick, so the Relay can
+  // fail the Mic closed at once.
+  expect(report.at - reportedAt).toBeLessThan(200);
+  expect(report.inputGapSamples).toBe(4_800);
+  expect(report.captureGeneration).toBe(first.captureGeneration);
+
+  // A missing input channel is positive evidence the capture is broken.
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length >= 2,
+  null, { timeout: 5_000 });
+  const [, rebuilt] = await publisherRegistrations(page);
+  expect(rebuilt.captureGeneration).toBe((first.captureGeneration + 1) >>> 0);
+});
+
+test('production DOM: exact digital silence is not counted as a missing Mic input', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  await page.evaluate(() => window.__relayInteractionHarness.emitCaptureMessage({
+    type: 'input-gap', reason: 'digital-silence', samples: 4_800, quanta: 37, recovered: false,
+  }));
+  await page.waitForTimeout(1_500);
+  const health = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .findLast((command) => command.type === 'audio-uplink-health'));
+  expect(health.inputGapSamples).toBe(0);
+  expect(health.inputGapActive).toBe(false);
+  // A headset noise gate can render exact zeros on a healthy track: no rebuild.
+  expect(await publisherRegistrations(page)).toEqual([first]);
 });

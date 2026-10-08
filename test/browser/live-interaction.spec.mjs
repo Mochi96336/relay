@@ -384,6 +384,11 @@ async function installProductionDomHarness(page) {
         if (!captureNode?.port?.onmessage) throw new Error('capture worklet is not ready');
         captureNode.port.onmessage({ data: new ArrayBuffer(1_920) });
       },
+      /** Delivers any message the capture worklet could post. */
+      emitCaptureMessage(data) {
+        if (!captureNode?.port?.onmessage) throw new Error('capture worklet is not ready');
+        captureNode.port.onmessage({ data });
+      },
       /** New sockets stay CONNECTING until released, like a slow network. */
       holdSocketOpens() {
         holdSocketOpens = true;
@@ -871,4 +876,103 @@ test('production DOM: the Mic owner can nudge the vocal timing', async ({ page }
     (command) => command.type === 'set-vocal-fine-tune' && command.valueMs === -25,
   ));
   await expect(page.locator('#vocal-fine-tune-value')).toHaveText('-25 ms');
+});
+
+function healthReports(page) {
+  return page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'audio-uplink-health')
+    .map(({ captureGeneration, healthRequestId, capturedSamples, controlReconnects }) => (
+      { captureGeneration, healthRequestId, capturedSamples, controlReconnects }
+    )));
+}
+
+test('production DOM: uplink health counts the capture it reports on', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  // prepareReadyMic emitted one 960-sample frame; 49 more make one second.
+  await page.evaluate(() => {
+    for (let frame = 0; frame < 49; frame += 1) window.__relayInteractionHarness.emitSilentPcm();
+  });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health' && command.capturedSamples === 48_000,
+  ), null, { timeout: 5_000 });
+
+  const reports = await healthReports(page);
+  expect(new Set(reports.map((report) => report.captureGeneration)).size).toBe(1);
+  for (let index = 1; index < reports.length; index += 1) {
+    expect(reports[index].healthRequestId).toBeGreaterThan(reports[index - 1].healthRequestId);
+    expect(reports[index].capturedSamples).toBeGreaterThanOrEqual(reports[index - 1].capturedSamples);
+  }
+});
+
+test('production DOM: uplink health reports a dropped control connection', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health',
+  ), null, { timeout: 5_000 });
+  expect((await healthReports(page)).at(-1).controlReconnects).toBe(0);
+
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => window.__relayInteractionHarness.emitSilentPcm(), 20);
+    window.__relayInteractionHarness.closeSockets('publisher');
+  });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health' && command.controlReconnects === 1,
+  ), null, { timeout: 10_000 });
+});
+
+function inputLevel(windowMaxConsecutiveRailSamples, lifetimeMax) {
+  return {
+    type: 'input-level',
+    peakDbfs: windowMaxConsecutiveRailSamples > 0 ? 0 : -12,
+    rmsDbfs: -18,
+    spectrumBands: [0, 0, 0, 0, 0],
+    f0Hz: null,
+    pitchConfidence: 0,
+    railSamples: lifetimeMax,
+    maxConsecutiveRailSamples: lifetimeMax,
+    windowMaxConsecutiveRailSamples,
+  };
+}
+
+test('production DOM: uplink health reports a clipped window once, until the Relay has it', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+  // A live phone keeps capturing; without frames the capture watchdog rebuilds
+  // the capture, and a new capture starts its clipping evidence afresh.
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => window.__relayInteractionHarness.emitSilentPcm(), 20);
+  });
+  const recent = () => page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'audio-uplink-health')
+    .map((command) => command.captureClipping?.recentDetected));
+
+  await page.evaluate((level) => window.__relayInteractionHarness.emitCaptureMessage(level), inputLevel(0, 0));
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'audio-uplink-health' && command.captureClipping?.recentDetected === false,
+  ), null, { timeout: 5_000 });
+
+  // One flat-topped window.
+  const before = (await recent()).length;
+  await page.evaluate((level) => window.__relayInteractionHarness.emitCaptureMessage(level), inputLevel(8, 8));
+  await page.evaluate((level) => window.__relayInteractionHarness.emitCaptureMessage(level), inputLevel(0, 8));
+  await page.waitForFunction((from) => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'audio-uplink-health')
+    .slice(from)
+    .some((command) => command.captureClipping?.recentDetected === true), before, { timeout: 5_000 });
+
+  // The Relay acknowledged that report; with no new clipping the next one is clean.
+  const reported = (await recent()).length;
+  await page.waitForFunction((from) => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'audio-uplink-health')
+    .slice(from)
+    .some((command) => command.captureClipping?.recentDetected === false), reported, { timeout: 5_000 });
 });

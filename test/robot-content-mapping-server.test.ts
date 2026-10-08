@@ -67,3 +67,45 @@ test('a Robot player that jumps away from the room timeline loses its delta, the
     await server.stop();
   }
 });
+
+test('a room playback rate change rebuilds the Robot mapping', async () => {
+  const server = await startRelay(FAST);
+  let feed: NodeJS.Timeout | undefined;
+  try {
+    const backing = await RelayClient.connect(server);
+    const publisher = await RelayClient.connect(server);
+    const monitor = await RelayClient.connect(server);
+    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
+    publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
+    monitor.send({ type: 'register', role: 'monitor' });
+    await Promise.all([
+      backing.waitForType('registered'),
+      publisher.waitForType('registered'),
+      monitor.waitForType('registered'),
+    ]);
+    const robot = await RelayClient.connect(server);
+    robot.send({ type: 'robot-source-hello' });
+    const frame = toInt16(pulseTrain(960, RATE, 5), 0.5);
+    feed = setInterval(() => {
+      backing.sendPcm(frame);
+      publisher.sendPcm(frame);
+    }, 20);
+    const telemetry = (playbackRate: number) => ({
+      type: 'youtube-telemetry', videoId: 'dQw4w9WgXcQ', state: 1,
+      currentTime: 42, duration: 200, playbackRate, networkRttMs: 40,
+    });
+    publisher.send(telemetry(1));
+    robot.send({ type: 'robot-player-offset', offsetMs: 35 });
+    await sleep(200);
+    assert.equal(Math.round((await timingStatus(monitor)).robotPlayerOffsetMs), 35);
+
+    // Deltas were converted to wall time at 1x; at 1.25x they mean something else.
+    publisher.send(telemetry(1.25));
+    await sleep(200);
+    const rebuilt = await timingStatus(monitor);
+    assert.equal(rebuilt.robotPlayerOffsetMs, null);
+  } finally {
+    if (feed) clearInterval(feed);
+    await server.stop();
+  }
+});

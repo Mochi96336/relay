@@ -102,6 +102,18 @@ async function establishBaseline(
   );
 }
 
+/**
+ * Keeps the Mic and Desktop Source streaming, as a live room does, until the
+ * returned function is called. After a burst both streams go stale within a
+ * second, and the server cancels a validation whose worker analysis is still
+ * running when they do; under CPU load that analysis outlasts the second.
+ * Stop it before the next window so its frames never enter that window.
+ */
+function keepLivePathFresh(backing: RelayClient, publisher: RelayClient) {
+  const timer = setInterval(() => refreshLivePath(backing, publisher), 100);
+  return () => clearInterval(timer);
+}
+
 async function waitForValidationCollection(
   monitor: RelayClient,
   fromIndex: number,
@@ -135,6 +147,7 @@ async function waitForValidationCollection(
 describe('continuous content calibration validation server policy', () => {
   test('baseline seed and stable completion are published without a status request', async () => {
     const server = await startRelay(FAST);
+    let stopStreaming = () => {};
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       const baseline = await establishBaseline(backing, publisher, monitor);
@@ -160,6 +173,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, stablePair.backing),
         sendPcmInChunks(publisher, stablePair.mic),
       ]);
+      stopStreaming = keepLivePathFresh(backing, publisher);
 
       const stable = await waitForNewMessage(
         monitor,
@@ -175,12 +189,14 @@ describe('continuous content calibration validation server policy', () => {
       publisher.close();
       monitor.close();
     } finally {
+      stopStreaming();
       await server.stop();
     }
   });
 
   test('analyser rejection publishes invalid immediately and preserves the baseline', async () => {
     const server = await startRelay(FAST);
+    let stopStreaming = () => {};
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       const baseline = await establishBaseline(backing, publisher, monitor);
@@ -195,6 +211,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, silence),
         sendPcmInChunks(publisher, silence),
       ]);
+      stopStreaming = keepLivePathFresh(backing, publisher);
 
       const invalid = await waitForNewMessage(
         monitor,
@@ -210,12 +227,14 @@ describe('continuous content calibration validation server policy', () => {
       publisher.close();
       monitor.close();
     } finally {
+      stopStreaming();
       await server.stop();
     }
   });
 
   test('inconclusive second evidence is published immediately and never changes authority', async () => {
     const server = await startRelay(FAST);
+    let stopStreaming = () => {};
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       const baseline = await establishBaseline(backing, publisher, monitor);
@@ -230,6 +249,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
+      stopStreaming = keepLivePathFresh(backing, publisher);
       await waitForNewMessage(
         monitor,
         suspectFrom,
@@ -241,6 +261,7 @@ describe('continuous content calibration validation server policy', () => {
       // A real Live path keeps both PCM flow evidence and YouTube leadership
       // fresh while the synchronous analyser finishes. Refresh both before the
       // retry scheduler decides whether a second validation window may start.
+      stopStreaming();
       const confirmStart = monitor.messages.length;
       refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, confirmStart, backing, publisher);
@@ -250,6 +271,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, secondDrift.backing),
         sendPcmInChunks(publisher, secondDrift.mic),
       ]);
+      stopStreaming = keepLivePathFresh(backing, publisher);
       const inconclusive = await waitForNewMessage(
         monitor,
         inconclusiveFrom,
@@ -265,12 +287,14 @@ describe('continuous content calibration validation server policy', () => {
       publisher.close();
       monitor.close();
     } finally {
+      stopStreaming();
       await server.stop();
     }
   });
 
   test('single drift evidence cannot move alignment; a second agreeing window slews toward it', async () => {
     const server = await startRelay(FAST);
+    let stopStreaming = () => {};
     try {
       const { backing, publisher, monitor } = await liveSession(server);
       const baseline = await establishBaseline(backing, publisher, monitor);
@@ -287,6 +311,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
+      stopStreaming = keepLivePathFresh(backing, publisher);
 
       const suspect = await waitForNewMessage(
         monitor,
@@ -309,6 +334,7 @@ describe('continuous content calibration validation server policy', () => {
         'one deviating window must not change mixer alignment',
       );
 
+      stopStreaming();
       const confirmFrom = monitor.messages.length;
       refreshLivePath(backing, publisher);
       await waitForValidationCollection(monitor, confirmFrom, backing, publisher);
@@ -318,6 +344,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, secondDrift.backing),
         sendPcmInChunks(publisher, secondDrift.mic),
       ]);
+      stopStreaming = keepLivePathFresh(backing, publisher);
 
       const promoted = await waitForNewMessage(
         monitor,
@@ -366,6 +393,7 @@ describe('continuous content calibration validation server policy', () => {
       publisher.close();
       monitor.close();
     } finally {
+      stopStreaming();
       await server.stop();
     }
   });

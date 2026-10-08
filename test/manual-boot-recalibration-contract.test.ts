@@ -11,7 +11,8 @@ const server = parseTypeScriptSource(
 
 test('manual Robot recalibration is explicit and does not masquerade as the automatic path', () => {
   const restart = functionCode(server, 'restartManualBootCalibration');
-  assert.match(restart, /manualBootRecalibrationCoordinator\.restart\(nowMs\)/);
+  assert.match(restart, /calibration\.beginExternalRecalibration\(\)/);
+  assert.match(restart, /timingRuntime\.beginBootProbe\(false\)/);
   assert.doesNotMatch(restart, /automatic/);
   assert.doesNotMatch(restart, /calibration\.reset\(\)/);
   assert.doesNotMatch(restart, /clearBootCalibrationState\(\)/);

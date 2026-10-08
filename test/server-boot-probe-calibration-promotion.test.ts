@@ -2,64 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import {
-  functionCode,
-  importSources,
-  parseTypeScriptSource,
-  sourceCode,
-  variableInitializerCode,
-} from './support/source-contract.js';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 const server = parseTypeScriptSource(
   new URL('../src/server.ts', import.meta.url),
   readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
 );
-const coordinator = parseTypeScriptSource(
-  new URL('../src/relay-boot-probe-calibration-promotion-coordinator.ts', import.meta.url),
-  readFileSync(
-    new URL('../src/relay-boot-probe-calibration-promotion-coordinator.ts', import.meta.url),
-    'utf8',
-  ),
-);
 
-test('boot-probe promotion delegates synchronous ordering through the coordinator seam', () => {
-  const promotion = functionCode(server, 'promoteBootProbeCalibration');
-  assert.match(
-    promotion,
-    /bootProbeCalibrationPromotionCoordinator\.promote\(mutateProbe, result\)/,
-  );
-  assert.doesNotMatch(promotion, /mutateProbe\(\)/);
-  assert.doesNotMatch(promotion, /timingRuntime\./);
-  assert.doesNotMatch(promotion, /calibration\.applyExternalResult\(/);
-  assert.doesNotMatch(promotion, /result\(\)/);
-});
-
-test('server composition retains Boot Probe timing and calibration authorities', () => {
-  assert.ok(
-    importSources(server).includes('./relay-boot-probe-calibration-promotion-coordinator.js'),
-  );
-  const composition = variableInitializerCode(server, 'bootProbeCalibrationPromotionCoordinator');
-  assert.match(composition, /^createRelayBootProbeCalibrationPromotionCoordinator\(\{/);
-  assert.match(
-    composition,
-    /markBootProbeAuthority: \(\) => timingRuntime\.markBootProbeAuthority\(\)/,
-  );
-  assert.match(
-    composition,
-    /applyExternalResult: \(result\) => calibration\.applyExternalResult\(result\)/,
-  );
-});
-
-test('Boot Probe promotion coordinator owns ordering only, not runtime authority', () => {
-  const code = sourceCode(coordinator);
-  assert.doesNotMatch(code, /^import /m);
-  assert.doesNotMatch(
-    code,
-    /bootProbeRuntime\.|timingRuntime\.|calibration\.|BootProbeRuntime|TimingRuntime|CalibrationSession|AudioSession/,
-  );
-});
-
-test('fresh two-leg probe result delegates ordered promotion without duplicating settlement effects', () => {
+test('fresh two-leg probe result is promoted through promoteBootProbeCalibration', () => {
   const finish = functionCode(server, 'maybeFinishProbeAnalysis');
 
   assert.match(
@@ -88,7 +38,7 @@ test('backing completion consumes Mic evidence through the BootProbeRuntime cont
   assert.ok(combine > consume, 'context-validated Mic evidence must be consumed before calibration combination');
 });
 
-test('delta reapply reads probe confidence only through the ordered promotion seam', () => {
+test('delta reapply reads probe confidence only through promoteBootProbeCalibration', () => {
   const reapply = functionCode(server, 'maybeReapplyBootCalibration');
 
   assert.match(

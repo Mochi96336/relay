@@ -83,11 +83,7 @@ import { createRelayPublisherActivationCoordinator } from './relay-publisher-act
 import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
-import { createRelayBootProbeCalibrationPromotionCoordinator } from './relay-boot-probe-calibration-promotion-coordinator.js';
-import { createRelayBootProbeFailureSettlementCoordinator } from './relay-boot-probe-failure-settlement-coordinator.js';
-import { createRelayRobotLegacyCalibrationDropCoordinator } from './relay-robot-legacy-calibration-drop-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
-import { createRelayManualBootRecalibrationCoordinator } from './relay-manual-boot-recalibration-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
 import { createRelayRobotContentMappingRevocationCoordinator } from './relay-robot-content-mapping-revocation-coordinator.js';
@@ -2450,16 +2446,18 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
     && sourceRuntime.connected();
 }
 
-const bootProbeFailureSettlementCoordinator =
-  createRelayBootProbeFailureSettlementCoordinator({
-    restoreCandidateKindToAuthority: () => timingRuntime.restoreCandidateKindToAuthority(),
-    failPreservingPrimed: (message) => calibration.failPreservingPrimed(message),
-    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  });
-
+/**
+ * BootProbeRuntime decides whether a failed attempt retries or ends the run.
+ * A run that ends hands timing back to whatever it was before the probe.
+ */
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
   const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
-  bootProbeFailureSettlementCoordinator.settle(failure);
+  if (failure) {
+    timingRuntime.restoreCandidateKindToAuthority();
+    calibration.failPreservingPrimed(failure.message);
+    return;
+  }
+  broadcastJson(timingCalibrationStatusPayload());
 }
 
 function sendProbeRequest(target: ProbeTarget, nowMs: number) {
@@ -2604,17 +2602,18 @@ function handleProbeFailure(
   failProbeAttempt(pending.target, reason, nowMs);
 }
 
-const bootProbeCalibrationPromotionCoordinator =
-  createRelayBootProbeCalibrationPromotionCoordinator({
-    markBootProbeAuthority: () => timingRuntime.markBootProbeAuthority(),
-    applyExternalResult: (result) => calibration.applyExternalResult(result),
-  });
-
+/**
+ * Makes a completed Boot Probe the room's calibration. `result` is read only
+ * after `mutateProbe` has run, because some callers read probe state that the
+ * mutation itself produces.
+ */
 function promoteBootProbeCalibration(
   mutateProbe: () => void,
   result: () => { micLagMs: number; confidence: number },
 ) {
-  bootProbeCalibrationPromotionCoordinator.promote(mutateProbe, result);
+  mutateProbe();
+  timingRuntime.markBootProbeAuthority();
+  calibration.applyExternalResult(result());
 }
 
 function maybeFinishProbeAnalysis(nowMs: number) {
@@ -2829,38 +2828,36 @@ function maybeReapplyBootCalibration(nowMs: number) {
  * discards the confirmed boot result, dropping the live mixer to its network
  * estimate mid-upgrade.
  */
-const robotLegacyCalibrationDropCoordinator = createRelayRobotLegacyCalibrationDropCoordinator({
-  robotRouteActive: () => robotRouteActive(),
-  calibrationKind: () => timingRuntime.calibrationKind,
-  bootProbeSettled: () => bootProbeSettled(),
-  clearContentValidationBaseline: () => clearContentValidationBaseline(),
-  resetCalibration: () => calibration.reset(),
-  clearCalibrationKind: () => timingRuntime.clearCalibrationKind(),
-  resetAutoCalibrationSchedule: () => timingRuntime.resetAutoCalibrationSchedule(),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-});
-
 function dropLegacyCalibrationForRobot() {
-  robotLegacyCalibrationDropCoordinator.drop();
+  if (!robotRouteActive() || timingRuntime.calibrationKind !== 'content') return;
+  if (bootProbeSettled()) return;
+
+  clearContentValidationBaseline();
+  calibration.reset();
+  timingRuntime.clearCalibrationKind();
+  timingRuntime.resetAutoCalibrationSchedule();
+  syncAppliedCalibration();
 }
 
-// Command authority and product action availability stay in the command handler.
-// Calibration, timing and probe state authority stay in their existing runtimes;
-// this seam owns only the already-authorized manual transaction ordering.
-const manualBootRecalibrationCoordinator = createRelayManualBootRecalibrationCoordinator({
-  clearContentValidation: () => clearContentValidationBaseline(),
-  beginExternalRecalibration: () => calibration.beginExternalRecalibration(),
-  beginManualBootProbe: () => timingRuntime.beginBootProbe(false),
-  abandonProbeRun: () => abandonProbeRun(),
-  resetProbeCorrelations: () => bootProbeRuntime.resetCorrelations(),
-  syncAppliedCalibration: () => syncAppliedCalibration(),
-  maybeStartProbeCalibration: (nowMs) => maybeStartProbeCalibration(nowMs),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-});
-
+/**
+ * A manual recalibration on the Robot route: a fresh Boot Probe run. The
+ * command handler has already checked authority and that calibration is
+ * available.
+ */
 function restartManualBootCalibration(nowMs: number) {
-  manualBootRecalibrationCoordinator.restart(nowMs);
+  clearContentValidationBaseline();
+  calibration.beginExternalRecalibration();
+  // Keep the previously confirmed authority interpreted under its own
+  // strategy before the replacement candidate switches orchestration kind.
+  // The candidate must not revoke a known-good content alignment merely by
+  // announcing that the next measurement will use boot probes.
+  syncAppliedCalibration();
+  timingRuntime.beginBootProbe(false);
+  abandonProbeRun();
+  bootProbeRuntime.resetCorrelations();
+  maybeStartProbeCalibration(nowMs);
+  broadcastJson(timingCalibrationStatusPayload());
+  broadcastJson(sourceStatusPayload());
 }
 
 const youtubeTimelineTimer = setInterval(() => {

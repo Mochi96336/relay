@@ -370,6 +370,16 @@ async function installProductionDomHarness(page) {
       timeline,
       commands,
       mark,
+      /** Sends one server message to every open socket, as a Relay broadcast does. */
+      broadcast(payload) {
+        broadcast(payload);
+      },
+      /** Closes the open sockets of one kind, as a dropped connection does. */
+      closeSockets(kind) {
+        for (const candidate of sockets) {
+          if (candidate.kind === kind && candidate.readyState === FakeWebSocket.OPEN) candidate.close();
+        }
+      },
       emitSilentPcm() {
         if (!captureNode?.port?.onmessage) throw new Error('capture worklet is not ready');
         captureNode.port.onmessage({ data: new ArrayBuffer(1_920) });
@@ -771,4 +781,94 @@ test('production DOM: a locale switch keeps the Technical details connection sta
   await expect(state).toHaveText('Connected');
   await setLocale('zh-Hant');
   await expect(state).toHaveText('已連線');
+});
+
+async function setRange(page, selector, value) {
+  await page.locator(selector).evaluate((element, next) => {
+    element.value = String(next);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  }, value);
+}
+
+test('production DOM: an echoed Mic gain does not move the slider the singer is holding', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  // The phone keeps capturing while the singer adjusts, which is what keeps
+  // its control channel fresh.
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => window.__relayInteractionHarness.emitSilentPcm(), 20);
+  });
+  const micGain = page.locator('#mic-gain');
+  await expect(micGain).toBeEnabled();
+  await micGain.focus();
+  await setRange(page, '#mic-gain', 10);
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'set-mix' && command.micGainDb === 10,
+  ));
+
+  // Another client's setting arrives while this singer still has the slider,
+  // both right after the change and after holding it longer than the
+  // post-change grace.
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'mix-settings', micGainDb: 30, songLevel: 100,
+  }));
+  await page.waitForTimeout(100);
+  await expect(micGain).toHaveValue('10');
+  await page.waitForTimeout(2_100);
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'mix-settings', micGainDb: 30, songLevel: 100,
+  }));
+  await page.waitForTimeout(100);
+  await expect(micGain).toHaveValue('10');
+
+  // Once they have let go, the room's value is the one shown.
+  await micGain.blur();
+  await page.waitForTimeout(2_100);
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'mix-settings', micGainDb: 30, songLevel: 100,
+  }));
+  await expect(micGain).toHaveValue('30');
+});
+
+test('production DOM: a Mic gain the Relay cannot take goes back to the confirmed value', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'mix-settings', micGainDb: 20, songLevel: 100,
+  }));
+  const micGain = page.locator('#mic-gain');
+  await expect(micGain).toHaveValue('20');
+
+  await page.evaluate(() => window.__relayInteractionHarness.closeSockets('publisher'));
+  const sentBefore = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'set-mix').length);
+  await setRange(page, '#mic-gain', 5);
+
+  await expect(micGain).toHaveValue('20');
+  const sentAfter = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'set-mix').length);
+  expect(sentAfter).toBe(sentBefore);
+});
+
+test('production DOM: the Mic owner can nudge the vocal timing', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+
+  const fineTune = page.locator('#vocal-fine-tune');
+  await expect(fineTune).toBeDisabled();
+  await prepareReadyMic(page);
+  await expect(fineTune).toBeEnabled();
+
+  await setRange(page, '#vocal-fine-tune', -25);
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'set-vocal-fine-tune' && command.valueMs === -25,
+  ));
+  await expect(page.locator('#vocal-fine-tune-value')).toHaveText('-25 ms');
 });

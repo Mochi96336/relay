@@ -16,7 +16,7 @@ const PATH_LAG_MS = 250;
 const INITIAL_DELTA_MS = 500;
 const REFERENCE_LAG_MS = PATH_LAG_MS + INITIAL_DELTA_MS;
 const POST_PROOF_SAMPLES = Math.round(RATE * 8.5);
-const TOTAL_SAMPLES = Math.round(RATE * 15.5);
+const TOTAL_SAMPLES = Math.round(RATE * 20.5);
 
 /**
  * This regression models the actual production discontinuity, not merely
@@ -188,6 +188,39 @@ async function sendRange(
   }
 }
 
+/**
+ * Sends a range one 20 ms frame per 20 ms, as a live Robot and phone deliver
+ * it, until the range ends or `stop()` is called. The server fails a
+ * collecting calibration whose streams go quiet for 2.5 s, and under CPU load
+ * the transition worker's comparisons after a burst take longer than that.
+ */
+function streamRange(
+  room: Session,
+  mic: Buffer,
+  master: Float64Array,
+  startSample: number,
+  endSample: number,
+  deltaMs: number,
+) {
+  let stopped = false;
+  const done = (async () => {
+    const startedAt = Date.now();
+    let frame = 0;
+    for (let start = startSample; start < endSample && !stopped; start += FRAME_SAMPLES) {
+      const end = Math.min(endSample, start + FRAME_SAMPLES);
+      room.backing.sendPcm(makeBackingFrame(master, start, end, deltaMs));
+      room.publisher.sendPcm(mic.subarray(start * 2, end * 2));
+      frame += 1;
+      const dueAt = startedAt + frame * (FRAME_SAMPLES * 1_000) / RATE;
+      await sleep(Math.max(0, dueAt - Date.now()));
+    }
+  })();
+  return {
+    done,
+    stop: () => { stopped = true; },
+  };
+}
+
 function backingBoundaryRequestCount(backing: RelayClient) {
   return backing.messages.filter((message) => message.type === 'backing-sample-boundary-request').length;
 }
@@ -218,6 +251,7 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
   const server = await startRelay(PROBE_FAST);
   const room = await robotRoom(server);
   let keepMappingFresh: NodeJS.Timeout | null = null;
+  let liveContent: ReturnType<typeof streamRange> | null = null;
   try {
     room.publisher.send(playingTelemetry);
 
@@ -392,6 +426,9 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
       POST_PROOF_SAMPLES,
       0,
     );
+    // The rest of the song keeps arriving live while the worker proves the
+    // segment, as it does from a real Robot.
+    liveContent = streamRange(room, mic, master, POST_PROOF_SAMPLES, TOTAL_SAMPLES, 0);
     const afterEvidenceEpochRestart = await waitForEvidenceEpochRestart(
       room.monitor,
       restartStatusFrom,
@@ -401,11 +438,9 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
     assert.equal(Number(afterEvidenceEpochRestart.progress), 0);
     assert.notEqual(afterEvidenceEpochRestart.timingMode, 'acoustic-calibration');
 
-    // Seven raw seconds after the restart provide comfortably more than the
-    // six shared reference-frame seconds needed by the unchanged analyzer.
-    await sendRange(room, mic, master, POST_PROOF_SAMPLES, TOTAL_SAMPLES, 0);
-
     const settled = await waitForAcousticCalibration(room.monitor, 30_000);
+    liveContent.stop();
+    await liveContent.done;
     assert.equal(settled.timingMode, 'acoustic-calibration');
     assert.ok(
       Math.abs(Number(settled.micLagMs) - REFERENCE_LAG_MS) <= 60,
@@ -421,6 +456,8 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
     );
   } finally {
     if (keepMappingFresh) clearInterval(keepMappingFresh);
+    liveContent?.stop();
+    await liveContent?.done;
     room.close();
     await server.stop();
   }

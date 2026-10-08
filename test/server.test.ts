@@ -828,6 +828,13 @@ describe('timing calibration', () => {
       ).finally(() => clearInterval(keepStreaming));
       assert.ok(Math.abs(complete.micLagMs - 260) <= 15, `got ${complete.micLagMs} ms`);
       assert.equal(complete.windowsNeeded, 2);
+      const beforeComplete = monitor.messages.slice(0, monitor.messages.indexOf(complete));
+      assert.ok(
+        beforeComplete.some((m) => (
+          m.type === 'timing-calibration-status' && m.state === 'collecting' && m.windowsAgreed === 1
+        )),
+        'one measured window is reported as not yet enough',
+      );
 
       backing.close();
       publisher.close();

@@ -35,9 +35,8 @@ test('SourceRuntime owns source identity without absorbing mapping or product ef
   assert.doesNotMatch(serverCode, /let sourceGeneration =/);
   assert.doesNotMatch(serverCode, /sourceGeneration \+= 1/);
 
-  // Domain consequences remain explicit in server orchestration, even when
-  // their ordering is delegated through a coordinator callback seam.
-  assert.match(serverCode, /noteQualityEvent: \(event\) => takeController\.noteQualityEvent\(event\)/);
+  // Domain consequences remain explicit in server orchestration.
+  assert.match(serverCode, /takeController\.noteQualityEvent\('robot-source-replaced'\)/);
   assert.match(serverCode, /robotPlayerOffset\.reset\(\)/);
   assert.match(serverCode, /robotContentTimeline\.reset\(\)/);
   assert.match(serverCode, /calibration\.discardPrimedContent\(\)/);

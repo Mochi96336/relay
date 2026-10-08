@@ -669,6 +669,52 @@ test('a Mic or Desktop Source that restarts its capture during a Take is recorde
   }
 });
 
+test('a Desktop Source or Robot that is replaced during a Take is recorded on the Take', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-source-replaced-'));
+  const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
+  try {
+    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
+    await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+    await establishRoomSong(control, 'source-replaced-playback-a');
+
+    const backing = await startBacking(server);
+    feedMic(control, 60);
+    feedBacking(backing, 60);
+    await sleep(80);
+
+    control.send({ type: 'start-take' });
+    const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
+    const takeId = String(start.takeId);
+    await control.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
+
+    const newerTab = await startBacking(server);
+    const firstRobot = await RelayClient.connect(server);
+    firstRobot.send({ type: 'robot-source-hello' });
+    await sleep(100);
+    const secondRobot = await RelayClient.connect(server);
+    secondRobot.send({ type: 'robot-source-hello' });
+    await firstRobot.waitForType('robot-source-replaced');
+    feedMic(control, 20);
+    feedBacking(newerTab, 20);
+    await sleep(100);
+
+    control.send({ type: 'stop-take', takeId });
+    const ready = await waitReady(control, takeId);
+    const events = ready.take.quality.evidence.events;
+    assert.equal(events['backing-transport-replaced'], 1);
+    assert.equal(events['robot-source-connected'], 1);
+    assert.equal(events['robot-source-replaced'], 1);
+
+    secondRobot.close();
+    newerTab.close();
+    control.close();
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('ending the authoritative live mix auto-finalizes the active Take instead of leaving fake recording state', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-mix-end-'));
   const server = await startRelay({

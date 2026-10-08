@@ -310,7 +310,7 @@ async function installProductionDomHarness(page) {
         super();
         this.sampleRate = 48_000;
         this.state = 'running';
-        this.currentTime = 0;
+        this.createdAtMs = performance.now();
         this.destination = new FakeAudioNode();
         this.audioWorklet = {
           addModule: async (url) => {
@@ -318,6 +318,9 @@ async function installProductionDomHarness(page) {
           },
         };
       }
+
+      // Like a real context, the clock runs while the context is running.
+      get currentTime() { return (performance.now() - this.createdAtMs) / 1000; }
 
       async resume() { this.state = 'running'; }
       async close() { this.state = 'closed'; }
@@ -1224,4 +1227,35 @@ test('production DOM: the publisher subscribes to its broadcasts before it regis
   expect(before.types).toEqual(expect.arrayContaining([
     'mix-settings', 'timing-calibration-status', 'play-calibration-probe', 'mix-health', 'audio-retransmit-request',
   ]));
+});
+
+test('production DOM: a capture that stops delivering audio is rebuilt as a new capture', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    window.__captureGenerations = [];
+    window.addEventListener('relay-microphone-capture-generation', (event) => window.__captureGenerations.push(event.detail));
+  });
+  await prepareReadyMic(page);
+  const [first] = await publisherRegistrations(page);
+
+  // No more frames after the first: the capture has stalled.
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length >= 2,
+  null, { timeout: 15_000 });
+  const [, rebuilt] = await publisherRegistrations(page);
+  expect(rebuilt.captureGeneration).toBe((first.captureGeneration + 1) >>> 0);
+  expect(rebuilt.initialSequence).toBe(0);
+  const generations = await page.evaluate(() => window.__captureGenerations);
+  expect(generations.at(-1).captureGeneration).toBe(rebuilt.captureGeneration);
+});
+
+test('production DOM: a capture that keeps delivering audio is left alone', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  await page.waitForTimeout(4_000);
+  const registrations = await publisherRegistrations(page);
+  expect(registrations).toHaveLength(1);
+  expect(registrations[0].captureGeneration).toBe(first.captureGeneration);
 });

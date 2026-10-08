@@ -81,7 +81,6 @@ import { createRelayAuthenticationProtocol } from './relay-authentication-protoc
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
-import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -4099,35 +4098,41 @@ function backingCaptureRestarted() {
   broadcastJson(sourceStatusPayload());
 }
 
-const audioUplinkCoordinator = createRelayAudioUplinkCoordinator<RelaySocket>({
-  isMicPublisher: (socket) => micRuntime.isPublisher(socket),
-  receiveMic: (socket, data, nowMs) => {
-    deliverMicPackets(micRuntime.receivePublisher(socket, data, nowMs));
-  },
-  isBackingActive: (socket) => (
-    backingRuntime.isSocket(socket) && socket.role === 'backing' && session.active
-  ),
-  decodeBacking: (data) => decodePcmFrame(data),
-  backingGeneration: () => session.backingGeneration,
-  now: () => performance.now(),
-  noteBackingFrame: (socket, nowMs) => backingRuntime.noteFrame(socket, nowMs),
-  ingestBacking: (frame, nowMs) => session.ingestBacking(
+/**
+ * A binary audio frame arrived: Mic packets go to the Mic path; a Desktop
+ * Source frame is ingested, and then feeds the Robot transition and content
+ * timing in that order.
+ */
+function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
+  if (micRuntime.isPublisher(socket)) {
+    deliverMicPackets(micRuntime.receivePublisher(socket, data, performance.now()));
+    return;
+  }
+
+  if (!(backingRuntime.isSocket(socket) && socket.role === 'backing' && session.active)) return;
+
+  const frame = decodePcmFrame(data);
+  const previousGeneration = session.backingGeneration;
+  const nowMs = performance.now();
+  const { samples, start, captureRestarted } = session.ingestBacking(
     frame,
     backingRuntime.sampleRate,
     nowMs,
     backingRuntime.isRobot,
-  ),
-  onBackingCaptureRestarted: () => {
+  );
+  if (samples.length > 0) backingRuntime.noteFrame(socket, nowMs);
+  if (
+    captureRestarted
+    || (previousGeneration !== null && session.backingGeneration !== previousGeneration)
+  ) {
     backingCaptureRestarted();
-  },
-  noteRobotTransitionBackingFrame: (frame, samples, start, nowMs) => {
-    noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
-  },
-  mappedContentBackingStart: (start, nowMs) => mappedContentBackingStart(start, nowMs),
-  feedContentBackingEvidence: (samples, start, nowMs) => {
-    feedContentBackingEvidence(samples, start, nowMs);
-  },
-});
+  }
+
+  noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
+  const contentTimingStart = mappedContentBackingStart(start, nowMs);
+  if (contentTimingStart !== null) feedContentBackingEvidence(samples, contentTimingStart, nowMs);
+}
+
 /**
  * A playback tab closed. A room command still waiting on it fails now
  * instead of at its timeout, and the tab leaves the Song timeline.
@@ -4210,7 +4215,7 @@ wss.on('connection', (rawSocket, request) => {
   socket.on('message', (data, isBinary) => {
     if (shuttingDown) return;
     if (isBinary) {
-      audioUplinkCoordinator.handle(socket, data as Buffer);
+      audioUplinkReceived(socket, data as Buffer);
       return;
     }
 

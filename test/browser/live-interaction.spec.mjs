@@ -1183,3 +1183,45 @@ test('production DOM: an echoed vocal timing does not move the slider the singer
   await expect(fineTune).toHaveValue('-40');
   await expect(page.locator('#vocal-fine-tune-value')).toHaveText('-40 ms');
 });
+
+function publisherRegistrations(page) {
+  return page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher')
+    .map(({ sampleRate, captureGeneration, initialSequence, audioPacketVersion }) => (
+      { sampleRate, captureGeneration, initialSequence, audioPacketVersion }
+    )));
+}
+
+test('production DOM: a dropped control connection comes back with the same capture', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  expect(first).toMatchObject({ sampleRate: 48_000, audioPacketVersion: 2 });
+  expect(Number.isInteger(first.captureGeneration)).toBe(true);
+
+  await page.evaluate(() => window.__relayInteractionHarness.closeSockets('publisher'));
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length === 2,
+  null, { timeout: 10_000 });
+
+  // The capture never stopped, so the Relay is told it is the same one: a new
+  // generation would be a capture restart and re-anchor the Mic timeline.
+  const [, again] = await publisherRegistrations(page);
+  expect(again.captureGeneration).toBe(first.captureGeneration);
+  expect(again.initialSequence).toBeGreaterThan(first.initialSequence);
+});
+
+test('production DOM: the publisher subscribes to its broadcasts before it registers', async ({ page }) => {
+  await livePhone(page);
+  const [before, register] = await page.evaluate(() => {
+    const commands = window.__relayInteractionHarness.commands;
+    const index = commands.findIndex((command) => command.type === 'register' && command.role === 'publisher');
+    return [commands[index - 1], commands[index]];
+  });
+  expect(register.role).toBe('publisher');
+  // Relay sends a publisher socket only what it asked for, so the subscription
+  // has to be in place before registration starts the publisher broadcasts.
+  expect(before.type).toBe('broadcast-subscribe');
+  expect(before.types).toEqual(expect.arrayContaining([
+    'mix-settings', 'timing-calibration-status', 'play-calibration-probe', 'mix-health', 'audio-retransmit-request',
+  ]));
+});

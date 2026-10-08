@@ -1645,4 +1645,36 @@ test('production DOM: audio the page delivers too late is not sent and leaves it
   await page.waitForFunction(() => window.__relayInteractionHarness.commands.some((command) => (
     command.type === 'audio-uplink-health' && command.droppedSamples?.captureBacklog === 960
   )), null, { timeout: 5_000 });
+  const report = await page.evaluate(() => window.__relayInteractionHarness.commands.findLast((command) => (
+    command.type === 'audio-uplink-health'
+  )));
+  expect(report.captureDispatch.maxLagMs).toBeGreaterThanOrEqual(900);
+  expect(report.captureDispatch.backlogMs).toBe(400);
+});
+
+test('production DOM: a rebuilt capture reports only its own dropped audio', async ({ page }) => {
+  await livePhone(page);
+  await page.waitForFunction(() => window.__relayInteractionHarness.captureContextTime() > 1.5, null, { timeout: 5_000 });
+  const [first] = await publisherRegistrations(page);
+  await page.evaluate(() => {
+    const harness = window.__relayInteractionHarness;
+    harness.emitCaptureMessage({
+      type: 'pcm', buffer: new ArrayBuffer(1_920), capturedAtContextTime: harness.captureContextTime() - 1,
+    });
+  });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some((command) => (
+    command.type === 'audio-uplink-health' && command.droppedSamples?.captureBacklog === 960
+  )), null, { timeout: 5_000 });
+
+  await page.evaluate(() => window.__relayInteractionHarness.failCaptureProcessor());
+  const rebuilt = (first.captureGeneration + 1) >>> 0;
+  await page.waitForFunction((generation) => window.__relayInteractionHarness.commands.some((command) => (
+    command.type === 'audio-uplink-health' && command.captureGeneration === generation
+  )), rebuilt, { timeout: 5_000 });
+  const report = await page.evaluate((generation) => window.__relayInteractionHarness.commands.find((command) => (
+    command.type === 'audio-uplink-health' && command.captureGeneration === generation
+  )), rebuilt);
+  expect(report.droppedSamples.captureBacklog).toBe(0);
+  expect(report.droppedSamples.total).toBe(0);
+  expect(report.captureDispatch?.maxLagMs ?? 0).toBeLessThan(400);
 });

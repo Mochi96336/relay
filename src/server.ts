@@ -80,9 +80,7 @@ import { createRelayInfrastructureEventProtocol } from './relay-infrastructure-e
 import { createRelayAuthenticationProtocol } from './relay-authentication-protocol.js';
 import { createRelayRegistrationProtocol } from './relay-registration-protocol.js';
 import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
-import { createRelayBackingActivationCoordinator } from './relay-backing-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
-import { createRelayRobotActivationCoordinator } from './relay-robot-activation-coordinator.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
 import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
@@ -3739,30 +3737,38 @@ const publisherActivationCoordinator = createRelayPublisherActivationCoordinator
   beginPreparedSongHandoff: (participantId) => beginPreparedSongHandoff(participantId),
 });
 
-const backingActivationCoordinator = createRelayBackingActivationCoordinator<RelaySocket>({
-  previousBacking: () => backingRuntime.socket,
-  clearRobotContentTransition: () => clearRobotContentTransition(),
-  retireReplacedCapture: () => session.retireBackingCapture(),
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  retirePrevious: (previous, next) => {
-    replacePrevious(previous, next, 'Replaced by a newer tab capture.');
-  },
-  setSocketSampleRate: (socket, sampleRate) => {
-    socket.sampleRate = sampleRate;
-  },
-  bindBacking: (registration) => backingRuntime.bind(registration),
-  setBackingExpected: () => session.setBackingExpected(true),
-  sessionActive: () => session.active,
-  dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
-  onReplacedCaptureActivated: () => {
-    backingCaptureRestarted();
-  },
-  activeBackingIsRobot: () => backingRuntime.isRobot,
-  sendRegistered: (socket, robot) => {
-    sendJson(socket, { type: 'registered', role: 'backing', robot });
-  },
-  startLiveSource: () => startLiveSource(),
-});
+/**
+ * A Desktop Source (backing) has been admitted and its role committed: it
+ * replaces any previous one and the mix starts expecting the song.
+ */
+function backingActivated(
+  socket: RelaySocket,
+  sampleRate: number,
+  robot: boolean,
+  captureReplaced: boolean,
+) {
+  const previousBacking = backingRuntime.socket;
+
+  clearRobotContentTransition();
+  if (captureReplaced) session.retireBackingCapture();
+  if (previousBacking && previousBacking !== socket) {
+    takeController.noteQualityEvent('backing-transport-replaced');
+  }
+
+  replacePrevious(previousBacking, socket, 'Replaced by a newer tab capture.');
+  socket.sampleRate = sampleRate;
+  backingRuntime.bind({ socket, sampleRate, robot });
+  session.setBackingExpected(true);
+
+  if (!previousBacking && session.active) {
+    takeController.noteQualityEvent('backing-transport-connected');
+  }
+
+  dropLegacyCalibrationForRobot();
+  if (captureReplaced) backingCaptureRestarted();
+  sendJson(socket, { type: 'registered', role: 'backing', robot: backingRuntime.isRobot });
+  startLiveSource();
+}
 
 const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   publisher: (socket, payload) => {
@@ -3913,12 +3919,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
 
     commitSocketRole(socket, 'backing');
 
-    backingActivationCoordinator.activate({
-      socket,
-      sampleRate,
-      robot: payload.robot === true,
-      captureReplaced,
-    });
+    backingActivated(socket, sampleRate, payload.robot === true, captureReplaced);
     return;
   },
   monitor: (socket, payload) => {
@@ -3975,26 +3976,35 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   },
 });
 
-const robotActivationCoordinator = createRelayRobotActivationCoordinator<RelaySocket>({
-  notifyPreviousReplaced: (previous) => {
+/**
+ * SourceRuntime has attached a Robot source, possibly replacing another.
+ * Everything measured against the previous Robot starts over.
+ */
+function robotSourceActivated(previous: RelaySocket | null, replaced: boolean) {
+  if (replaced && previous) {
     sendJson(previous, { type: 'robot-source-replaced' });
-  },
-  noteQualityEvent: (event) => takeController.noteQualityEvent(event),
-  abandonProbeRun: () => abandonProbeRun(),
-  sessionActive: () => session.active,
-  resetPlayerOffset: () => robotPlayerOffset.reset(),
-  resetContentTimeline: () => robotContentTimeline.reset(),
-  clearContentTransition: () => clearRobotContentTransition(),
-  failCalibrationIfCollecting: () => {
+    takeController.noteQualityEvent('robot-source-replaced');
+    abandonProbeRun();
+    // Replacing the active Robot source bumps the source generation, so a
+    // calibration still in flight belongs to a reference frame that is gone.
+    // Its async analysis is stamped with the context live at completion, so
+    // it has to be aborted here rather than allowed to promote under the new
+    // generation.
     if (calibration.collecting) {
       calibration.fail('The Robot source changed during calibration. Start calibration again.');
     }
-  },
-  dropLegacyCalibrationForRobot: () => dropLegacyCalibrationForRobot(),
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-});
+  } else if (!previous && session.active) {
+    takeController.noteQualityEvent('robot-source-connected');
+  }
+
+  robotPlayerOffset.reset();
+  robotContentTimeline.reset();
+  clearRobotContentTransition();
+  dropLegacyCalibrationForRobot();
+  syncAppliedCalibration();
+  broadcastJson(sourceStatusPayload());
+  broadcastJson(timingCalibrationStatusPayload());
+}
 
 const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   robotSourceHello: (socket, payload) => {
@@ -4005,7 +4015,7 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
     if (sourceRuntime.isActive(socket)) return;
 
     const { previous, replaced } = sourceRuntime.attachRobot(socket);
-    robotActivationCoordinator.activate({ previous, replaced });
+    robotSourceActivated(previous, replaced);
     return;
   },
 });

@@ -356,12 +356,16 @@ async function installProductionDomHarness(page) {
 
     const track = new EventTarget();
     track.muted = false;
+    track.readyState = 'live';
     track.stop = () => {};
+    // The input the live track is routed from; tests can move it.
+    track.getSettings = () => ({ deviceId: window.__inputDeviceId ?? 'mic-a' });
     const stream = {
       getTracks: () => [track],
       getAudioTracks: () => [track],
     };
 
+    const deviceEvents = new EventTarget();
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       value: {
@@ -370,6 +374,14 @@ async function installProductionDomHarness(page) {
           mark('T1');
           return stream;
         },
+        // What the platform lists; tests can change it or make it fail.
+        enumerateDevices: async () => {
+          if (window.__enumerateDevicesFails) throw new Error('test: enumeration refused');
+          return window.__audioInputs ?? [{ kind: 'audioinput', deviceId: 'mic-a' }];
+        },
+        addEventListener: deviceEvents.addEventListener.bind(deviceEvents),
+        removeEventListener: deviceEvents.removeEventListener.bind(deviceEvents),
+        dispatchEvent: deviceEvents.dispatchEvent.bind(deviceEvents),
       },
     });
 
@@ -1446,5 +1458,61 @@ test('production DOM: exact digital silence is not counted as a missing Mic inpu
   expect(health.inputGapSamples).toBe(0);
   expect(health.inputGapActive).toBe(false);
   // A headset noise gate can render exact zeros on a healthy track: no rebuild.
+  expect(await publisherRegistrations(page)).toEqual([first]);
+});
+
+async function deviceChange(page, { inputDeviceId, audioInputs, enumerateFails } = {}) {
+  await page.evaluate(({ inputDeviceId, audioInputs, enumerateFails }) => {
+    if (inputDeviceId !== undefined) window.__inputDeviceId = inputDeviceId;
+    if (audioInputs !== undefined) window.__audioInputs = audioInputs;
+    if (enumerateFails !== undefined) window.__enumerateDevicesFails = enumerateFails;
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+  }, { inputDeviceId, audioInputs, enumerateFails });
+}
+
+test('production DOM: the same track moved to another input is a new capture, not a lost Mic', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  // Earphones plugged in: the browser routes the live track from mic-a to mic-b.
+  await deviceChange(page, {
+    inputDeviceId: 'mic-b',
+    audioInputs: [{ kind: 'audioinput', deviceId: 'mic-a' }, { kind: 'audioinput', deviceId: 'mic-b' }],
+  });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length >= 2,
+  null, { timeout: 5_000 });
+  const [, rebuilt] = await publisherRegistrations(page);
+  expect(rebuilt.captureGeneration).toBe((first.captureGeneration + 1) >>> 0);
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
+});
+
+test('production DOM: an input that really disappeared ends the session but keeps the Mic', async ({ page }) => {
+  await livePhone(page);
+  await deviceChange(page, { audioInputs: [{ kind: 'audioinput', deviceId: 'mic-other' }] });
+  await page.waitForFunction(() => window.__microphoneEnded.includes('input-device-removed'), null, { timeout: 5_000 });
+  await expect(page.locator('#status')).toHaveText('Microphone interrupted');
+  // Pulled-out hardware is not the singer giving up the room's Mic.
+  expect(await countOf(page, 'release-mic')).toBe(0);
+});
+
+test('production DOM: an empty or failed device list is not taken as a removed input', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  await deviceChange(page, { audioInputs: [] });
+  await page.waitForTimeout(400);
+  await deviceChange(page, { audioInputs: [{ kind: 'audioinput', deviceId: 'mic-a' }], enumerateFails: true });
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
+  expect(await publisherRegistrations(page)).toEqual([first]);
+});
+
+test('production DOM: another input appearing leaves the live Mic alone', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  await deviceChange(page, {
+    audioInputs: [{ kind: 'audioinput', deviceId: 'mic-a' }, { kind: 'audioinput', deviceId: 'usb-mic' }],
+  });
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
   expect(await publisherRegistrations(page)).toEqual([first]);
 });

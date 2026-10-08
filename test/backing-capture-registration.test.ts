@@ -102,6 +102,6 @@ test('server validates capture metadata as a pair and retires only proven replac
   assert.match(server, /validCaptureGeneration\(payload\.captureGeneration\)/);
   assert.match(server, /validSampleCursor\(payload\.captureSampleCursor\)/);
   assert.match(server, /session\.backingCaptureReplacedBy\(\{/);
-  assert.match(server, /retireReplacedCapture: \(\) => session\.retireBackingCapture\(\)/);
-  assert.match(server, /captureReplaced,/);
+  assert.match(server, /if \(captureReplaced\) session\.retireBackingCapture\(\);/);
+  assert.match(server, /backingActivated\(socket, sampleRate, payload\.robot === true, captureReplaced\)/);
 });

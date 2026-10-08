@@ -16,6 +16,7 @@ async function installProductionDomHarness(page) {
     const packets = [];
     const sockets = [];
     let captureNode = null;
+    const captureNodes = [];
     let recorderReplayDelayMs = 0;
     let startResponseDelayMs = 20;
     let currentTake = {
@@ -310,12 +311,20 @@ async function installProductionDomHarness(page) {
     class FakeAudioWorkletNode extends FakeAudioNode {
       constructor(_context, name) {
         super();
+        const events = new EventTarget();
+        this.addEventListener = events.addEventListener.bind(events);
+        this.removeEventListener = events.removeEventListener.bind(events);
+        this.dispatchEvent = events.dispatchEvent.bind(events);
         this.name = name;
         this.port = {
           onmessage: null,
           postMessage() {},
         };
-        if (name === 'capture-processor') captureNode = this;
+        if (name === 'capture-processor') {
+          captureNode = this;
+          captureNode.context = _context;
+          captureNodes.push(this);
+        }
       }
     }
 
@@ -425,6 +434,21 @@ async function installProductionDomHarness(page) {
       emitSilentPcm() {
         if (!captureNode?.port?.onmessage) throw new Error('capture worklet is not ready');
         captureNode.port.onmessage({ data: new ArrayBuffer(1_920) });
+      },
+      /** The capture worklet's processor throws, as Web Audio reports it. */
+      failCaptureProcessor() {
+        if (!captureNode) throw new Error('capture worklet is not ready');
+        captureNode.dispatchEvent(new Event('processorerror'));
+      },
+      /** The capture graph's AudioContext clock, in seconds. */
+      captureContextTime() {
+        if (!captureNode) throw new Error('capture worklet is not ready');
+        return captureNode.context.currentTime;
+      },
+      /** A capture worklet the page has already replaced throws. */
+      failRetiredCaptureProcessor() {
+        if (captureNodes.length < 2) throw new Error('no capture worklet has been replaced');
+        captureNodes[0].dispatchEvent(new Event('processorerror'));
       },
       /** Delivers any message the capture worklet could post. */
       emitCaptureMessage(data) {
@@ -1515,4 +1539,82 @@ test('production DOM: another input appearing leaves the live Mic alone', async 
   await page.waitForTimeout(400);
   expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
   expect(await publisherRegistrations(page)).toEqual([first]);
+});
+
+test('production DOM: a failed capture processor is rebuilt as a new capture', async ({ page }) => {
+  await livePhone(page);
+  const [first] = await publisherRegistrations(page);
+  await page.evaluate(() => window.__relayInteractionHarness.failCaptureProcessor());
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length >= 2,
+  null, { timeout: 5_000 });
+  const [, rebuilt] = await publisherRegistrations(page);
+  expect(rebuilt.captureGeneration).toBe((first.captureGeneration + 1) >>> 0);
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
+});
+
+test('production DOM: a processor that fails again before fresh audio ends the session but keeps the Mic', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    window.__microphoneEnded = [];
+    window.addEventListener('relay-microphone-ended', (event) => window.__microphoneEnded.push(event.detail.reason));
+  });
+  await prepareReadyMic(page);
+
+  await page.evaluate(() => window.__relayInteractionHarness.failCaptureProcessor());
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length >= 2,
+  null, { timeout: 5_000 });
+  // The replacement fails too, before it has delivered any audio: one rebuild
+  // is the budget, so this one needs the singer's Retry.
+  await page.evaluate(() => window.__relayInteractionHarness.failCaptureProcessor());
+  await page.waitForFunction(() => window.__microphoneEnded.includes('processor-error-repeated'), null, { timeout: 5_000 });
+  await expect(page.locator('#status')).toHaveText('Microphone interrupted');
+  expect(await countOf(page, 'release-mic')).toBe(0);
+  expect(await publisherRegistrations(page)).toHaveLength(2);
+});
+
+test('production DOM: an error from a capture processor that was already replaced changes nothing', async ({ page }) => {
+  await livePhone(page);
+  await page.evaluate(() => window.__relayInteractionHarness.failCaptureProcessor());
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length >= 2,
+  null, { timeout: 5_000 });
+
+  await page.evaluate(() => window.__relayInteractionHarness.failRetiredCaptureProcessor());
+  await page.waitForTimeout(500);
+  expect(await publisherRegistrations(page)).toHaveLength(2);
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
+});
+
+test('production DOM: audio the page delivers too late is not sent and leaves its hole in place', async ({ page }) => {
+  await livePhone(page);
+  // The page's AudioContext has to have run longer than the stall below.
+  await page.waitForFunction(() => window.__relayInteractionHarness.captureContextTime() > 1.5, null, { timeout: 5_000 });
+  const sent = await page.evaluate(() => {
+    clearInterval(window.__keepCapturing);
+    const harness = window.__relayInteractionHarness;
+    const now = () => harness.captureContextTime();
+    const chunk = (capturedAtContextTime) => harness.emitCaptureMessage({
+      type: 'pcm', buffer: new ArrayBuffer(1_920), capturedAtContextTime,
+    });
+    const publisherPackets = () => harness.packets.filter((packet) => packet.socketKind === 'publisher');
+    chunk(now());
+    const before = publisherPackets().length;
+    // A main-thread stall: this chunk was captured a second ago.
+    chunk(now() - 1);
+    const afterStale = publisherPackets().length;
+    chunk(now());
+    return { before, afterStale, packets: publisherPackets().slice(before - 1) };
+  });
+  expect(sent.afterStale).toBe(sent.before);
+  const [lastFresh, nextFresh] = sent.packets;
+  expect(nextFresh.firstSampleIndex - lastFresh.firstSampleIndex).toBe(2 * 960);
+
+  await expect(page.locator('#status')).toHaveText('Microphone capture caught up to live audio');
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some((command) => (
+    command.type === 'audio-uplink-health' && command.droppedSamples?.captureBacklog === 960
+  )), null, { timeout: 5_000 });
 });

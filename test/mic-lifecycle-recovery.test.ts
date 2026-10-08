@@ -35,7 +35,7 @@ test('Release tears down local capture even if the Presence websocket cannot sen
     'local teardown must not depend on the Presence send succeeding');
 
   const appReleaseStart = app.indexOf("window.addEventListener('relay-release-microphone'");
-  const slidersStart = app.indexOf('for (const slider', appReleaseStart);
+  const slidersStart = app.indexOf('listenForSingerInput(', appReleaseStart);
   assert.ok(appReleaseStart >= 0 && slidersStart > appReleaseStart);
   const appRelease = app.slice(appReleaseStart, slidersStart);
   assert.match(appRelease, /finishMicrophoneSession\('released', \{[\s\S]*releaseMic: true/);

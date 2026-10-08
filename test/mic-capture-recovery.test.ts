@@ -270,7 +270,7 @@ test('app rebuild failure terminates local capture into bounded Mic reconnect gr
   assert.match(stop, /micCaptureRecovery\.stop\(\)/);
 
   const releaseStart = app.indexOf("window.addEventListener('relay-release-microphone'");
-  const sliderStart = app.indexOf('for (const slider', releaseStart);
+  const sliderStart = app.indexOf('listenForSingerInput(', releaseStart);
   assert.ok(releaseStart >= 0 && sliderStart > releaseStart);
   const explicitRelease = app.slice(releaseStart, sliderStart);
   assert.match(

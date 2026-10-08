@@ -19,24 +19,31 @@ const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
 import { wsUrl } from './ws-url.js';
+import {
+  FIXED_SONG_LEVEL,
+  acceptMixSettings,
+  acceptVocalFineTune,
+  lastKnownControls,
+  listenForSingerInput,
+  micGainDb,
+  restoreLastKnownControl,
+  setSingerControlsEnabled,
+  signed,
+  updateMixLabels,
+  updateVocalFineTuneLabel,
+  vocalFineTuneMs,
+} from './mix-controls.js';
 
 const publisherButton = document.querySelector('#start-publisher');
 const releaseButton = document.querySelector('#release-mic');
 const status = document.querySelector('#status');
 const details = document.querySelector('#details');
-const micGain = document.querySelector('#mic-gain');
-const micGainValue = document.querySelector('#mic-gain-value');
-const songLevel = document.querySelector('#song-level');
-const songLevelValue = document.querySelector('#song-level-value');
-const vocalFineTune = document.querySelector('#vocal-fine-tune');
-const vocalFineTuneValue = document.querySelector('#vocal-fine-tune-value');
 const calibrateButton = document.querySelector('#calibrate-timing');
 const calibrateStatus = document.querySelector('#calibrate-status');
 
 // Mic audio on a WebSocket-only page rides this socket: reconnect fast, back
 // off only while it keeps failing. See reconnect-backoff.js.
 const publisherReconnectBackoff = createReconnectBackoff();
-const SLIDER_HOLD_MS = 2000;
 const AUDIO_UPLINK_HEALTH_INTERVAL_MS = 1000;
 // Every message type the publisher socket's readers take: handleServerMessage
 // and the audio transport's repeat-request and health handlers. Relay
@@ -60,7 +67,6 @@ const PUBLISHER_BROADCAST_TYPES = [
   'audio-retransmit-request',
 ];
 const MIC_CAPTURE_WATCHDOG_INTERVAL_MS = 250;
-const FIXED_SONG_LEVEL = 100;
 
 let socket = null;
 let socketReconnectTimer = null;
@@ -92,10 +98,6 @@ let pendingPublisherTakeoverOwnerId = null;
 let activeCalibrationProbeRequestId = null;
 let activeCalibrationProbePlayback = null;
 let publisherSessionEpoch = 0;
-let lastKnownControlSnapshot = {
-  micGainDb: Number(micGain.value) || 24,
-  vocalFineTuneMs: Number(vocalFineTune.value) || 0,
-};
 
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = { disconnected: 0, congested: 0, packetTooLarge: 0, captureBacklog: 0 };
@@ -854,7 +856,7 @@ function publisherCommandAuthority(serverAllowed = true) {
     authorityFresh: publisherAuthorityFresh
       && publisherMixSettingsFresh
       && publisherSourceStatusFresh,
-    lastKnownSnapshot: lastKnownControlSnapshot,
+    lastKnownSnapshot: lastKnownControls(),
     commandChannelFresh: publisherCommandChannelFresh(),
     authorized: publisherActive,
     serverAllowed,
@@ -901,17 +903,6 @@ function maintainPublisherCommandChannel() {
   return refreshPublisherCommandChannel();
 }
 
-function restoreLastKnownControl(command = null) {
-  if (command === null || command === 'set-mix') {
-    micGain.value = String(lastKnownControlSnapshot.micGainDb);
-    updateMixLabels();
-  }
-  if (command === null || command === 'set-vocal-fine-tune') {
-    vocalFineTune.value = String(lastKnownControlSnapshot.vocalFineTuneMs);
-    updateVocalFineTuneLabel();
-  }
-}
-
 function resetPublisherCommandFreshness() {
   publisherAuthorityFresh = false;
   publisherMixSettingsFresh = false;
@@ -935,34 +926,6 @@ function setPublisherActive(active) {
   publishPublisherCommandAuthority();
 }
 
-function signed(value, suffix) {
-  const number = Number(value);
-  return `${number > 0 ? '+' : ''}${number}${suffix}`;
-}
-
-// Server broadcasts echo every mix change back to every client. Without this an
-// incoming echo rewrites the slider the user is still dragging.
-const sliderTouchedAt = new WeakMap();
-
-function markSliderTouched(element) {
-  sliderTouchedAt.set(element, performance.now());
-}
-
-function sliderIsBusy(element) {
-  if (document.activeElement === element) return true;
-  const touchedAt = sliderTouchedAt.get(element);
-  return touchedAt !== undefined && performance.now() - touchedAt < SLIDER_HOLD_MS;
-}
-
-function updateMixLabels() {
-  micGainValue.value = signed(micGain.value, ' dB');
-  songLevelValue.value = `${Math.round(Number(songLevel.value) || 0)}%`;
-}
-
-function updateVocalFineTuneLabel() {
-  vocalFineTuneValue.value = signed(vocalFineTune.value, ' ms');
-}
-
 function sendVocalFineTune() {
   if (!publisherCommandAuthority().actionable) {
     restoreLastKnownControl('set-vocal-fine-tune');
@@ -971,7 +934,7 @@ function sendVocalFineTune() {
   try {
     const result = audioTransport.sendControlJson({
       type: 'set-vocal-fine-tune',
-      valueMs: Number(vocalFineTune.value),
+      valueMs: vocalFineTuneMs(),
     });
     if (!result.sent) {
       restoreLastKnownControl('set-vocal-fine-tune');
@@ -995,7 +958,7 @@ function sendMixSettings() {
   try {
     const result = audioTransport.sendControlJson({
       type: 'set-mix',
-      micGainDb: Number(micGain.value),
+      micGainDb: micGainDb(),
       // Retain the old field on the wire while the server owns its only valid
       // value. It is no longer a second product control.
       songLevel: FIXED_SONG_LEVEL,
@@ -1015,12 +978,7 @@ function sendMixSettings() {
 }
 
 function updateSingerControls() {
-  const actionable = publisherCommandAuthority().actionable;
-  micGain.disabled = !actionable;
-  // Compatibility only: Song is a fixed server-owned reference, never an
-  // interactive singer control even while this participant owns the Mic.
-  songLevel.disabled = true;
-  vocalFineTune.disabled = !actionable;
+  setSingerControlsEnabled(publisherCommandAuthority().actionable);
   updateCalibrateButton();
 }
 
@@ -1389,35 +1347,14 @@ function handleServerMessage(
 
   if (message.type === 'source-status') {
     liveMixActive = Boolean(message.active);
-    const nextFineTune = Number(message.vocalFineTuneMs);
-    if (Number.isFinite(nextFineTune)) {
-      lastKnownControlSnapshot = {
-        ...lastKnownControlSnapshot,
-        vocalFineTuneMs: nextFineTune,
-      };
-      publisherSourceStatusFresh = true;
-      if (!sliderIsBusy(vocalFineTune)) {
-        vocalFineTune.value = String(nextFineTune);
-        updateVocalFineTuneLabel();
-      }
-    }
+    if (acceptVocalFineTune(message)) publisherSourceStatusFresh = true;
     publishPublisherCommandAuthority();
     updateSingerControls();
     return;
   }
 
   if (message.type === 'mix-settings') {
-    const nextGain = Number(message.micGainDb ?? 24);
-    if (Number.isFinite(nextGain)) {
-      lastKnownControlSnapshot = {
-        ...lastKnownControlSnapshot,
-        micGainDb: nextGain,
-      };
-      publisherMixSettingsFresh = true;
-      if (!sliderIsBusy(micGain)) micGain.value = String(nextGain);
-    }
-    songLevel.value = String(FIXED_SONG_LEVEL);
-    updateMixLabels();
+    if (acceptMixSettings(message)) publisherMixSettingsFresh = true;
     publishPublisherCommandAuthority();
     updateSingerControls();
     return;
@@ -2047,19 +1984,7 @@ window.addEventListener('relay-release-microphone', () => {
   }).catch(console.error);
 });
 
-for (const slider of [micGain, songLevel]) {
-  slider.addEventListener('input', () => {
-    markSliderTouched(slider);
-    sendMixSettings();
-  });
-  slider.addEventListener('change', () => markSliderTouched(slider));
-}
-
-vocalFineTune.addEventListener('input', () => {
-  markSliderTouched(vocalFineTune);
-  sendVocalFineTune();
-});
-vocalFineTune.addEventListener('change', () => markSliderTouched(vocalFineTune));
+listenForSingerInput({ onMix: sendMixSettings, onVocalFineTune: sendVocalFineTune });
 
 window.addEventListener('relay-locale-changed', () => {
   updateCalibrateButton();

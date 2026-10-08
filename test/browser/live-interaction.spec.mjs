@@ -691,6 +691,32 @@ test('production DOM: the local Mic owner can change Mic gain', async ({ page })
   await expect(micGain).toBeVisible();
 });
 
+test('production DOM: Song stays a fixed 100% reference whatever the Relay echoes', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
+    type: 'mix-settings', micGainDb: 18, songLevel: 40,
+  }));
+  await expect(page.locator('#mic-gain')).toHaveValue('18');
+  await expect(page.locator('#mic-gain-value')).toHaveText('+18 dB');
+  await expect(page.locator('#song-level')).toHaveValue('100');
+  await expect(page.locator('#song-level-value')).toHaveText('100%');
+  await expect(page.locator('#song-level')).toBeDisabled();
+  await expect(page.locator('#mic-gain')).toBeEnabled();
+
+  await page.locator('#mic-gain').focus();
+  await page.locator('#mic-gain').press('Home');
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'set-mix' && command.micGainDb === 0,
+  ));
+  const sent = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'set-mix').map((command) => command.songLevel));
+  expect(sent.every((level) => level === 100)).toBe(true);
+});
+
 test('production DOM: one desktop Change song click survives a transient playback-role refresh', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.setViewportSize({ width: 1280, height: 800 });

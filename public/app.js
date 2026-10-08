@@ -124,7 +124,7 @@ function resetPublisherHealthRequestCorrelation() {
 let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
-let lastUplinkWarningAt = 0;
+let lastUplinkWarningAt = Number.NEGATIVE_INFINITY;
 // Seeded from the clock, not 0: a page reload starts a new module scope and
 // would otherwise reuse the same first-ever generation number, which the
 // server take as "nothing changed" and skip re-anchoring the mic timeline to

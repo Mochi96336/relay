@@ -64,12 +64,11 @@ test('server still owns infrastructure observation authority and effects', () =>
   assert.match(serverFlow, /sourceRuntime\.canReportSeek\(socket\)/);
   assert.match(serverFlow, /robotContentTransitionRuntime\.clearPendingBoundary\(\)/);
   assert.match(serverFlow, /robotContentTimeline\.noteFollowerCorrection\(/);
-  assert.match(serverFlow, /sourceSeekTransactionCoordinator\.handle\(\{/);
-  assert.match(serverFlow, /beginContentTransition: \(fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs\) => \{/);
+  assert.match(serverFlow, /sourceSeekClassified\(\{/);
   assert.match(serverFlow, /beginRobotContentTransition\(/);
   // The destructive branch's teardown is the server's one revocation
-  // transaction, so the composition supplies that rather than each step.
-  assert.match(serverFlow, /revokeContentMapping: \(reason\) => revokeRobotContentMapping\(\{ reason \}\)/);
+  // transaction, not a re-spelling of its steps.
+  assert.match(serverFlow, /revokeRobotContentMapping\(\{\s*reason: 'The desktop player seeked during calibration\./);
 
   assert.doesNotMatch(
     factory,

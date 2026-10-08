@@ -17,10 +17,6 @@ const server = parseTypeScriptSource(
   new URL('../src/server.ts', import.meta.url),
   readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
 );
-const seekCoordinator = parseTypeScriptSource(
-  new URL('../src/relay-source-seek-transaction-coordinator.ts', import.meta.url),
-  readFileSync(new URL('../src/relay-source-seek-transaction-coordinator.ts', import.meta.url), 'utf8'),
-);
 
 test('an unarmed Source preview cannot announce or chase authoritative seek discontinuities', () => {
   const applyTimeline = functionCode(source, 'applyTimeline');
@@ -70,7 +66,7 @@ test('server fences source-seeked before classification and mapped corrections r
     handlerStart,
   );
   const mappingAttempt = infrastructure.indexOf('robotContentTimeline.noteFollowerCorrection(', staleRobotFence);
-  const delegation = infrastructure.indexOf('sourceSeekTransactionCoordinator.handle({', mappingAttempt);
+  const delegation = infrastructure.indexOf('sourceSeekClassified({', mappingAttempt);
 
   assert.ok(handlerStart >= 0, 'source-seeked handler must exist');
   assert.ok(staleRobotFence > handlerStart, 'stale Robot source must be fenced before seek semantics are evaluated');
@@ -82,10 +78,10 @@ test('server fences source-seeked before classification and mapped corrections r
     'classification must not perform post-seek destructive lifecycle effects',
   );
 
-  const coordinator = functionCode(seekCoordinator, 'createRelaySourceSeekTransactionCoordinator');
+  const coordinator = functionCode(server, 'sourceSeekClassified');
   const mappedBranch = coordinator.indexOf('if (input.mappedFollowerCorrection) {');
-  const mappedReturn = coordinator.indexOf("return 'mapped-follower-correction'", mappedBranch);
-  const revocation = coordinator.indexOf('dependencies.revokeContentMapping(', mappedReturn);
+  const mappedReturn = coordinator.indexOf('return;', mappedBranch);
+  const revocation = coordinator.indexOf('revokeRobotContentMapping({', mappedReturn);
   assert.ok(
     mappedBranch >= 0 && mappedReturn > mappedBranch && revocation > mappedReturn,
     'valid mapped follower correction must return before the destructive revocation',

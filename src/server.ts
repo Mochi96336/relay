@@ -82,8 +82,6 @@ import { createRelayRegistrationProtocol } from './relay-registration-protocol.j
 import { createRelayPublisherActivationCoordinator } from './relay-publisher-activation-coordinator.js';
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
-import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
-import { createRelayYoutubeTelemetryAcceptanceCoordinator } from './relay-youtube-telemetry-acceptance-coordinator.js';
 import {
   createMonitorSocketTransport,
   createRelaySocketTransport,
@@ -3106,40 +3104,62 @@ function playbackRegistered(socket: RelaySocket, identity: PlaybackIdentity) {
   if (pendingCommand) playbackTransport.send(identity, roomSongCommandApplyPayload(pendingCommand));
 }
 
-const youtubeTelemetryAcceptanceCoordinator = createRelayYoutubeTelemetryAcceptanceCoordinator<RelaySocket, PlaybackIdentity>({
-  registerPlayback: (socket, identity) => { playbackTransport.register(socket, identity); },
-  clearTelemetryRejection: (socket) => { socket.telemetryRejectedReason = undefined; },
-  cancelActiveContentValidation: (nowMs) => cancelActiveContentValidation(nowMs),
-  revokeContentMappingOnRateChange: (playbackRate) => revokeContentMappingOnRateChange(playbackRate),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  reportTimelineStatus: (status) => {
-    lastTelemetryTimelineBroadcastAtMs = performance.now();
-    broadcastJson(status);
-  },
-  reportRoomStatus: (nowMs) => broadcastJson(youtubeTimeline.roomStatusPayload(nowMs)),
-  completeRoomSongCommand: (commandId) => roomSongCommands.complete(commandId),
-  reportRoomSongCommandComplete: (commandId) => {
+/**
+ * SongSession has accepted a playback tab's telemetry. Publishes what changed
+ * and finishes whatever the telemetry completed: a room command, a handoff.
+ */
+function youtubeTelemetryAccepted(input: {
+  socket: RelaySocket;
+  acceptedIdentity: PlaybackIdentity;
+  nowMs: number;
+  timelineStatus: ReturnType<typeof youtubeTimeline.statusPayload>;
+  completesCommandId?: string | null;
+  handoffCompleted?: boolean;
+  handoffId?: string | null;
+  previousLeader?: PlaybackIdentity | null;
+}) {
+  playbackTransport.register(input.socket, input.acceptedIdentity);
+  input.socket.telemetryRejectedReason = undefined;
+
+  // Before anything reads the mapping: a rate change invalidates it, and the
+  // revocation publishes its own timing status.
+  const revoked = revokeContentMappingOnRateChange(input.timelineStatus.playbackRate);
+
+  if (
+    !revoked
+    && Number(input.timelineStatus.state) !== 1
+    && cancelActiveContentValidation(input.nowMs)
+  ) {
+    broadcastJson(timingCalibrationStatusPayload());
+  }
+
+  lastTelemetryTimelineBroadcastAtMs = performance.now();
+  broadcastJson(input.timelineStatus);
+  broadcastJson(youtubeTimeline.roomStatusPayload(input.nowMs));
+
+  if (input.completesCommandId && roomSongCommands.complete(input.completesCommandId)) {
     broadcastJson({
       type: 'room-song-command-complete',
-      commandId,
+      commandId: input.completesCommandId,
       revision: roomSongCommands.revision,
     });
-  },
-  reportRoomSongCommandStatus: (nowMs) => broadcastJson(roomSongCommandStatusPayload(nowMs)),
-  releasePreviousLeader: (previousLeader, handoffId, videoId) => {
-    playbackTransport.send(previousLeader, {
-      type: 'song-handoff-release',
-      handoffId,
-      videoId,
-    });
-  },
-  completeHandoff: (identity, handoffId) => {
-    playbackTransport.send(identity, {
+    broadcastJson(roomSongCommandStatusPayload(input.nowMs));
+  }
+
+  if (input.handoffCompleted && input.handoffId) {
+    if (input.previousLeader) {
+      playbackTransport.send(input.previousLeader, {
+        type: 'song-handoff-release',
+        handoffId: input.handoffId,
+        videoId: input.timelineStatus.videoId ?? null,
+      });
+    }
+    playbackTransport.send(input.acceptedIdentity, {
       type: 'song-handoff-complete',
-      handoffId,
+      handoffId: input.handoffId,
     });
-  },
-});
+  }
+}
 
 type RecordingMicGapHealthBaseline = {
   takeId: string;
@@ -3372,7 +3392,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     );
     if (result.accepted) {
       const timelineStatus = youtubeTimeline.statusPayload(nowMs);
-      youtubeTelemetryAcceptanceCoordinator.accept({
+      youtubeTelemetryAccepted({
         socket,
         acceptedIdentity,
         nowMs,
@@ -3524,26 +3544,44 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
 
 });
 
-// Infrastructure capability and Source/mapping classification stay in the
-// infrastructure handler. This seam begins only after the seek is accepted and
-// follower-correction mapping has been classified by the authoritative runtimes.
-const sourceSeekTransactionCoordinator = createRelaySourceSeekTransactionCoordinator<CalibrationContext>({
-  resetPlayerOffset: () => robotPlayerOffset.reset(),
-  beginContentTransition: (fromMediaTime, toMediaTime, preDeltaMs, referenceDeltaMs, context, nowMs) => {
-    beginRobotContentTransition(
-      fromMediaTime,
-      toMediaTime,
-      preDeltaMs,
-      referenceDeltaMs,
-      context,
-      nowMs,
-    );
-  },
-  syncAppliedCalibration: () => { syncAppliedCalibration(); },
-  reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-  reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  revokeContentMapping: (reason) => revokeRobotContentMapping({ reason }),
-});
+/**
+ * A Source seek that infrastructure authority accepted and the mapping
+ * runtimes have classified. A follower correction Relay could map keeps the
+ * mapping and starts a content transition; any other seek is destructive and
+ * takes the single Robot mapping revocation, never a re-spelling of it.
+ */
+function sourceSeekClassified(input: {
+  mappedFollowerCorrection: boolean;
+  fromMediaTime: number;
+  toMediaTime: number;
+  preDeltaMs: number | null;
+  referenceDeltaMs: number | null;
+  context: CalibrationContext;
+  nowMs: number;
+}) {
+  robotPlayerOffset.reset();
+
+  if (input.mappedFollowerCorrection) {
+    if (input.preDeltaMs !== null && input.referenceDeltaMs !== null) {
+      beginRobotContentTransition(
+        input.fromMediaTime,
+        input.toMediaTime,
+        input.preDeltaMs,
+        input.referenceDeltaMs,
+        input.context,
+        input.nowMs,
+      );
+    }
+    syncAppliedCalibration();
+    broadcastJson(sourceStatusPayload());
+    broadcastJson(timingCalibrationStatusPayload());
+    return;
+  }
+
+  revokeRobotContentMapping({
+    reason: 'The desktop player seeked during calibration. Start calibration again.',
+  });
+}
 
 const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({
   backingSampleBoundary: (socket, payload) => {
@@ -3636,7 +3674,7 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     const referenceDeltaMs = robotContentTimeline.referenceDeltaMs;
     // Source always converges gross media-time error. Only preserve the old
     // mapping through that seek when Relay already has a proven content anchor;
-    // otherwise the existing coordinator deliberately treats it as a
+    // otherwise sourceSeekClassified() deliberately treats it as a
     // destructive bootstrap remap and clears stale transition state.
     const mappedFollowerCorrection = requestedFollowerCorrection
       && sourceRuntime.isActiveRobot(socket)
@@ -3649,7 +3687,7 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
         nowMs,
       );
 
-    sourceSeekTransactionCoordinator.handle({
+    sourceSeekClassified({
       mappedFollowerCorrection,
       fromMediaTime,
       toMediaTime,

@@ -379,6 +379,12 @@ async function installProductionDomHarness(page) {
       broadcast(payload) {
         broadcast(payload);
       },
+      /** Sends one server message to the open sockets of one kind. */
+      sendTo(kind, payload) {
+        for (const candidate of sockets) {
+          if (candidate.kind === kind && candidate.readyState === FakeWebSocket.OPEN) deliver(candidate, payload);
+        }
+      },
       /** Closes the open sockets of one kind, as a dropped connection does. */
       closeSockets(kind) {
         for (const candidate of sockets) {
@@ -1075,4 +1081,105 @@ test('production DOM: a probe the phone cannot play is reported as failed, with 
     .find((command) => command.type === 'calibration-probe-failed'));
   expect(failed.reason).toBe('test: the speaker is unavailable');
   expect((await probeReplies(page)).length).toBe(1);
+});
+
+async function livePhone(page) {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    window.__microphoneEnded = [];
+    window.addEventListener('relay-microphone-ended', (event) => window.__microphoneEnded.push(event.detail.reason));
+  });
+  await prepareReadyMic(page);
+  await page.evaluate(() => {
+    window.__keepCapturing = setInterval(() => {
+      try { window.__relayInteractionHarness.emitSilentPcm(); } catch {}
+    }, 20);
+  });
+}
+
+function countOf(page, type) {
+  return page.evaluate((wanted) => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === wanted).length, type);
+}
+
+test('production DOM: a command the Relay refuses puts the control back and says who has the Mic', async ({ page }) => {
+  await livePhone(page);
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'mix-settings', micGainDb: 20, songLevel: 100,
+  }));
+  const micGain = page.locator('#mic-gain');
+  await expect(micGain).toHaveValue('20');
+  await setRange(page, '#mic-gain', 5);
+  await micGain.blur();
+
+  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
+    type: 'command-rejected', command: 'set-mix', reason: 'not-mic-owner', owner: { nickname: 'Bob' },
+  }));
+  await expect(micGain).toHaveValue('20');
+  await expect(micGain).toBeDisabled();
+  await expect(page.locator('#status')).toHaveText('Mix is controlled by the singer');
+  await expect(page.locator('#details')).toHaveText('Bob has the mic and controls this.');
+});
+
+for (const [type, reason, title] of [
+  ['mic-revoked', 'revoked', 'Microphone handed off'],
+  ['publisher-superseded', 'superseded', 'Microphone moved to another tab'],
+  ['mic-busy', 'busy', 'Microphone is in use'],
+]) {
+  test(`production DOM: ${type} ends this phone's microphone session`, async ({ page }) => {
+    await livePhone(page);
+    await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+      (command) => command.type === 'audio-uplink-health',
+    ), null, { timeout: 5_000 });
+
+    await page.evaluate((payload) => window.__relayInteractionHarness.sendTo('publisher', payload), {
+      type, message: undefined, owner: { nickname: 'Bob' },
+    });
+    await page.waitForFunction((wanted) => window.__microphoneEnded.includes(wanted), reason, { timeout: 5_000 });
+    await expect(page.locator('#status')).toHaveText(title);
+
+    // An ended session stops reporting on a capture it no longer has.
+    const reports = await countOf(page, 'audio-uplink-health');
+    await page.waitForTimeout(2_500);
+    expect(await countOf(page, 'audio-uplink-health')).toBe(reports);
+  });
+}
+
+test('production DOM: a protocol error is shown and does not make the phone reconnect', async ({ page }) => {
+  await livePhone(page);
+  const registrations = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length);
+
+  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
+    type: 'error', message: 'Invalid playback transport identity.',
+  }));
+  await expect(page.locator('#status')).toHaveText('Error');
+  await expect(page.locator('#details')).toHaveText('Invalid playback transport identity.');
+  await page.waitForTimeout(1_500);
+  expect(await page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher').length)).toBe(registrations);
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
+});
+
+test('production DOM: an echoed vocal timing does not move the slider the singer is holding', async ({ page }) => {
+  await livePhone(page);
+  const fineTune = page.locator('#vocal-fine-tune');
+  await expect(fineTune).toBeEnabled();
+  await fineTune.focus();
+  await setRange(page, '#vocal-fine-tune', 30);
+  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
+    type: 'source-status', active: true, vocalFineTuneMs: -40,
+  }));
+  await page.waitForTimeout(100);
+  await expect(fineTune).toHaveValue('30');
+
+  await fineTune.blur();
+  await page.waitForTimeout(2_100);
+  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
+    type: 'source-status', active: true, vocalFineTuneMs: -40,
+  }));
+  await expect(fineTune).toHaveValue('-40');
+  await expect(page.locator('#vocal-fine-tune-value')).toHaveText('-40 ms');
 });

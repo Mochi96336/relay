@@ -275,7 +275,7 @@ test('publisher command authority waits for correlated ACKs plus registration an
   );
   assert.match(
     publisherSource,
-    /function sendAudioUplinkHealth\(\) \{[\s\S]*const sentAtMs = performance\.now\(\);[\s\S]*publisherCommandLiveness\.beginHealthRequest\(sentAtMs\)[\s\S]*audioUplinkHealthPayload\(healthRequestId\)[\s\S]*if \(!result\.sent\) \{[\s\S]*publisherCommandLiveness\.cancelHealthRequest\(healthRequestId\);[\s\S]*\} else \{[\s\S]*pendingCaptureClippingHealth\.set\(healthRequestId,/,
+    /function sendAudioUplinkHealth\(\) \{[\s\S]*const sentAtMs = performance\.now\(\);[\s\S]*publisherCommandLiveness\.beginHealthRequest\(sentAtMs\)[\s\S]*audioUplinkHealthPayload\(healthRequestId\)[\s\S]*if \(!result\.sent\) \{[\s\S]*publisherCommandLiveness\.cancelHealthRequest\(healthRequestId\);[\s\S]*\} else \{[\s\S]*noteUplinkHealthSent\(healthRequestId,/,
     'failed health sends must cancel command freshness evidence, while success-only state may retain the correlated request',
   );
   assert.match(
@@ -310,7 +310,7 @@ test('publisher command authority waits for correlated ACKs plus registration an
   );
   assert.match(
     publisherSource,
-    /function resetPublisherHealthRequestCorrelation\(\)[\s\S]*publisherCommandLiveness\.reset\(\)[\s\S]*pendingCaptureClippingHealth\.clear\(\)/,
+    /function resetPublisherHealthRequestCorrelation\(\)[\s\S]*publisherCommandLiveness\.reset\(\)[\s\S]*forgetUnsettledUplinkHealth\(\)/,
     'command route reset must revoke both freshness authority and ACK correlation owned by the retired socket',
   );
   assert.match(

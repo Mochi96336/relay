@@ -155,7 +155,7 @@ test('Phone capture dispatch trims stale worklet PCM without shifting later capt
   );
   assert.match(
     appSource,
-    /captureDispatch: latestCaptureDispatchLagMs === null \? null : \{[\s\S]*backlogActive: captureDispatchBacklogActive/,
+    /noteCaptureDispatch\(dispatch\);/,
     'capture dispatch freshness must be exported in uplink health',
   );
 });

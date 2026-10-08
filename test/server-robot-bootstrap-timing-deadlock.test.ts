@@ -97,15 +97,21 @@ test('content gates ask whether the boot probe settled, not whether it failed', 
 });
 
 test('every Robot mapping revocation goes through one teardown transaction', () => {
-  // Cross-runtime teardown ordering is proved by the coordinator behavior test.
-  // The server adapter and every destructive caller must only delegate to that
-  // one transaction rather than re-spelling any subset of its effects.
+  // revokeRobotContentMapping is the one teardown transaction. Every
+  // destructive caller must delegate to it rather than re-spelling any subset
+  // of its effects.
   const revoke = functionBlock('revokeRobotContentMapping');
-  assert.match(revoke, /robotContentMappingRevocationCoordinator\.revoke\(reason\)/);
-  assert.doesNotMatch(
-    revoke,
-    /robotPlayerOffset\.reset\(\)|robotContentTimeline\.reset\(\)|sourceRuntime\.invalidateMapping\(\)|calibration\.discardPrimedContent\(\)|clearContentValidationBaseline\(\)|calibration\.fail\(|syncAppliedCalibration\(\)|broadcastJson\(/,
-  );
+  for (const step of [
+    /robotPlayerOffset\.reset\(\)/,
+    /robotContentTimeline\.reset\(\)/,
+    /sourceRuntime\.invalidateMapping\(\)/,
+    /calibration\.discardPrimedContent\(\)/,
+    /clearContentValidationBaseline\(\)/,
+    /calibration\.fail\(reason\)/,
+    /syncAppliedCalibration\(\)/,
+  ]) {
+    assert.match(revoke, step);
+  }
 
   // The two inline fences must delegate rather than re-spell the checklist.
   assert.match(

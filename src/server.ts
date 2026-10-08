@@ -83,8 +83,6 @@ import { createRelayPublisherActivationCoordinator } from './relay-publisher-act
 import { createRelayRobotLifecycleProtocol } from './relay-robot-lifecycle-protocol.js';
 import { createRelayAudioUplinkCoordinator } from './relay-audio-uplink-coordinator.js';
 import { createRelaySourceSeekTransactionCoordinator } from './relay-source-seek-transaction-coordinator.js';
-import { createRelayRobotContentTransitionCommitCoordinator } from './relay-robot-content-transition-commit-coordinator.js';
-import { createRelayRobotContentMappingRevocationCoordinator } from './relay-robot-content-mapping-revocation-coordinator.js';
 import { createRelayTakeCommandCoordinator } from './relay-take-command-coordinator.js';
 import { createRelayRoomSongCommandAcceptanceCoordinator } from './relay-room-song-command-acceptance-coordinator.js';
 import { createRelayPlaybackRegistrationContinuationCoordinator } from './relay-playback-registration-continuation-coordinator.js';
@@ -373,22 +371,35 @@ const ROBOT_CONTENT_TRANSITION_BOUNDS_CONFIG = {
   maxWorkerFailures: ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES,
 };
 
-// RobotContentTransitionRuntime remains plan and state authority. Timeline,
-// calibration and validation authority remain behind these server-owned callbacks;
-// this seam owns only the accepted commit effect ordering.
-const robotContentTransitionCommitCoordinator =
-  createRelayRobotContentTransitionCommitCoordinator<CalibrationContext>({
-    noteBackingBoundary: (boundarySample, context, nowMs) =>
-      robotContentTimeline.noteBackingBoundary(boundarySample, context, nowMs),
-    restartWorkingEvidence: (nowMs) => calibration.restartWorkingEvidence(nowMs),
-    contentValidationCollecting: () => contentCalibrationValidator.collecting,
-    cancelContentValidation: (nowMs) => contentCalibrationValidator.cancel(nowMs),
-    feedBackingEvidence: (samples, start, nowMs) => {
-      feedContentBackingEvidence(samples, start, nowMs);
-    },
-    mapBackingStart: (start, context, nowMs) =>
-      robotContentTimeline.mapBackingStart(start, context, nowMs),
-  });
+type RobotContentTransitionCommitPlan = {
+  context: CalibrationContext;
+  boundarySample: number;
+  discardWorkingEvidence: boolean;
+  confirmedPreChunks: Array<{ start: number; samples: Int16Array }>;
+  postChunks: Array<{ start: number; samples: Int16Array }>;
+};
+
+/**
+ * Applies a Robot content-transition plan that RobotContentTransitionRuntime
+ * has already accepted. Returns false when the timeline refuses the boundary.
+ */
+function commitRobotContentTransition(plan: RobotContentTransitionCommitPlan, nowMs: number) {
+  if (!robotContentTimeline.noteBackingBoundary(plan.boundarySample, plan.context, nowMs)) return false;
+
+  if (plan.discardWorkingEvidence) {
+    calibration.restartWorkingEvidence(nowMs);
+    if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
+  }
+
+  for (const chunk of plan.confirmedPreChunks) {
+    feedContentBackingEvidence(chunk.samples, chunk.start, nowMs);
+  }
+  for (const chunk of plan.postChunks) {
+    const mapped = robotContentTimeline.mapBackingStart(chunk.start, plan.context, nowMs);
+    if (mapped !== null) feedContentBackingEvidence(chunk.samples, mapped, nowMs);
+  }
+  return true;
+}
 
 const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
   sampleRate: MIX_SAMPLE_RATE,
@@ -409,7 +420,7 @@ const robotContentTransitionRuntime = new RobotContentTransitionRuntime({
     readBackingEvidence: (start, length) => session.readBackingEvidence(start, length),
     readMicEvidence: (start, length) => session.readMicEvidence(start, length),
     transitionEvidence: (maxSamples) => calibration.transitionEvidence(maxSamples),
-    commit: (plan, nowMs) => robotContentTransitionCommitCoordinator.commit(plan, nowMs),
+    commit: (plan, nowMs) => commitRobotContentTransition(plan, nowMs),
     onDegraded: (status) => {
       console.warn(
         '[robot-content-transition] degraded fail-closed:'
@@ -787,22 +798,6 @@ function clearRobotContentTransition() {
   robotContentTransitionRuntime.clear();
 }
 
-const robotContentMappingRevocationCoordinator =
-  createRelayRobotContentMappingRevocationCoordinator({
-    resetPlayerOffset: () => robotPlayerOffset.reset(),
-    resetContentTimeline: () => robotContentTimeline.reset(),
-    clearContentTransition: () => clearRobotContentTransition(),
-    invalidateSourceMapping: () => sourceRuntime.invalidateMapping(),
-    discardPrimedContent: () => calibration.discardPrimedContent(),
-    clearContentValidation: () => clearContentValidationBaseline(),
-    abortCalibrationIfCollecting: (reason) => {
-      if (calibration.collecting) calibration.fail(reason);
-    },
-    syncAppliedCalibration: () => { syncAppliedCalibration(); },
-    reportSourceStatus: () => broadcastJson(sourceStatusPayload()),
-    reportTimingStatus: () => broadcastJson(timingCalibrationStatusPayload()),
-  });
-
 /**
  * The single way to revoke Robot content mapping.
  *
@@ -815,7 +810,31 @@ const robotContentMappingRevocationCoordinator =
  * write at the call site.
  */
 function revokeRobotContentMapping({ reason }: { reason: string }) {
-  robotContentMappingRevocationCoordinator.revoke(reason);
+  robotPlayerOffset.reset();
+  robotContentTimeline.reset();
+  clearRobotContentTransition();
+
+  // Clearing the current mapping is not enough: the reference frame itself
+  // is void. The Source generation must advance before old content evidence
+  // can become eligible again, otherwise a previously confirmed result can
+  // still match the live context and be re-applied after a fresh delta.
+  sourceRuntime.invalidateMapping();
+
+  // Discard an idle primed backup before aborting a collecting run. A
+  // collecting CalibrationSession keeps its own working evidence; the
+  // generation fence above already prevents any primed evidence from being
+  // reused in a reference frame where it was not measured.
+  calibration.discardPrimedContent();
+  clearContentValidationBaseline();
+
+  // Analysis is asynchronous. A worker that survives this generation change
+  // would otherwise promote evidence captured in the retired frame while
+  // stamping it with the context that is live when analysis completes.
+  if (calibration.collecting) calibration.fail(reason);
+
+  syncAppliedCalibration();
+  broadcastJson(sourceStatusPayload());
+  broadcastJson(timingCalibrationStatusPayload());
 }
 
 /**

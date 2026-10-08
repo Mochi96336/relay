@@ -74,6 +74,32 @@ async function liveSession(server: RelayServer) {
   return { backing, publisher, monitor };
 }
 
+/**
+ * Returns the message index from which a mix-health report describes mixed
+ * audio. Audio leaving this client is not the Relay having it, and a report
+ * sent before the mix has produced a frame has measured nothing (headroom 0):
+ * so wait for the Relay to report both sides streaming, then for a mixed
+ * frame after that.
+ */
+async function mixingReceivedAudio(monitor: RelayClient, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  let streaming = false;
+  while (!streaming && Date.now() < deadline) {
+    const from = monitor.messages.length;
+    monitor.send({ type: 'source-status-request' });
+    const status = await waitForNewMessage(monitor, from, (m) => m.type === 'source-status', 1_000);
+    streaming = status.micStreaming === true && status.backingStreaming === true;
+    if (!streaming) await sleep(20);
+  }
+  if (!streaming) throw new Error('The Relay never reported both sides streaming.');
+  const framesAtStreaming = monitor.binaryFrames;
+  while (monitor.binaryFrames === framesAtStreaming) {
+    if (Date.now() >= deadline) throw new Error('No mixed frame followed the audio.');
+    await sleep(10);
+  }
+  return monitor.messages.length;
+}
+
 describe('http surface', () => {
   let server: RelayServer;
   before(async () => { server = await startRelay(FAST); });
@@ -230,19 +256,34 @@ describe('live mix', () => {
       assert.equal(live?.active, true, 'the live session describes itself');
       assert.equal(live?.mixSampleRate, RATE);
 
-      await sendPcmInChunks(backing, tone(3, 0.8));
-      await sendPcmInChunks(publisher, tone(3, 0.4));
+      // Both sides primed together. Sent one after the other, the Mic starved
+      // a frame in runs with the CPU loaded.
+      await Promise.all([
+        sendPcmInChunks(backing, tone(3, 0.8)),
+        sendPcmInChunks(publisher, tone(3, 0.4)),
+      ]);
+      const mixing = await mixingReceivedAudio(monitor);
       await sleep(1_200);
 
       assert.ok(monitor.binaryFrames > 20, `only ${monitor.binaryFrames} mixed frames`);
 
-      const health = await monitor.waitForType('mix-health', 3_000);
+      const health = await waitForNewMessage(monitor, mixing, (m) => m.type === 'mix-health', 3_000);
       assert.equal(health.active, true);
-      assert.equal(health.micStarvedFrames, 0, 'a primed buffer must not starve');
       assert.equal(health.monitorDroppedFrames, 0);
       assert.equal(health.monitorRecentDroppedFrames, 0);
       assert.equal(health.monitorRecentDroppingListeners, 0);
       assert.ok(health.micHeadroomMs > 0, `headroom ${health.micHeadroomMs} ms`);
+
+      // The starved count runs from the session's start, and frames mixed
+      // while the registered phone's first audio was still on its way count
+      // too: under CPU load one did. Once primed, it must not grow.
+      const later = await waitForNewMessage(
+        monitor,
+        monitor.messages.indexOf(health) + 1,
+        (m) => m.type === 'mix-health',
+        3_000,
+      );
+      assert.equal(later.micStarvedFrames, health.micStarvedFrames, 'a primed buffer must not starve');
 
       backing.close();
       publisher.close();

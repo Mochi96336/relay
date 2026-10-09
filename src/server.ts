@@ -518,8 +518,9 @@ function micMediaConnected() {
   return micRuntime.connected();
 }
 
-function micMediaPath() {
-  return micRuntime.mediaPath();
+/** Where Mic audio is arriving, for status and logs (MicRuntime.mediaArrivalPath). */
+function micMediaPath(nowMs = performance.now()) {
+  return micRuntime.mediaArrivalPath(nowMs);
 }
 
 function clearMicMediaAuthority() {

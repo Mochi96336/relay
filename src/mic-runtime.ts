@@ -100,6 +100,8 @@ export class MicRuntime {
   private currentUplinkHealth: AudioUplinkHealth | null = null;
   private currentUplinkHealthAt = -Infinity;
   private uplinkHealthDeadline: ReturnType<typeof setTimeout> | null = null;
+  /** The path the current transport's latest Mic packet arrived on. */
+  private lastMediaArrival: { path: 'websocket' | 'webtransport'; atMs: number } | null = null;
   private lastFrameAt = -Infinity;
   private lastFrameOwnerId: string | null = null;
   private lastFrameGeneration: number | null = null;
@@ -201,6 +203,22 @@ export class MicRuntime {
     return null;
   }
 
+  /**
+   * The path Mic audio is actually arriving on: that of the latest packet,
+   * while packets are fresh, and otherwise the connected path (mediaPath).
+   *
+   * mediaPath says which sessions are up, and the phone's media recovery reads
+   * it from every health ACK. It is no account of the audio: on 2026-10-09 an
+   * iPhone opened a WebTransport session, failed to finish setting it up, and
+   * sent everything over WebSocket, while status and Technical details said
+   * the Mic was on WebTransport.
+   */
+  mediaArrivalPath(nowMs: number): 'websocket' | 'webtransport' | null {
+    const arrival = this.lastMediaArrival;
+    if (arrival && nowMs - arrival.atMs <= this.options.streamLiveMs) return arrival.path;
+    return this.mediaPath();
+  }
+
   bindPublisher(registration: MicPublisherRegistration): MicPublisherBindResult {
     const {
       socket,
@@ -260,6 +278,7 @@ export class MicRuntime {
     this.armUplinkHealthDeadline(socket, captureGeneration, audioPacketVersion);
 
     if (!preservedAudioTransport) {
+      this.lastMediaArrival = null;
       this.currentUplinkHealth = null;
       this.currentUplinkHealthAt = -Infinity;
       if (audioPacketVersion === 2) {
@@ -301,6 +320,7 @@ export class MicRuntime {
   }
 
   clearMediaAuthority(nowMs = 0) {
+    this.lastMediaArrival = null;
     this.currentAudioTransport = null;
     this.currentMediaTicket = null;
     this.currentMediaOwnerId = null;
@@ -314,6 +334,7 @@ export class MicRuntime {
 
   receivePublisher(socket: RelaySocket, buffer: Buffer, nowMs: number): PcmFrame[] {
     if (!this.isPublisher(socket) || !this.currentAudioTransport) return [];
+    this.lastMediaArrival = { path: 'websocket', atMs: nowMs };
     return this.currentAudioTransport.receive(buffer, nowMs);
   }
 
@@ -327,6 +348,7 @@ export class MicRuntime {
 
   receiveDirectMedia(ticket: string | null, packet: Buffer, nowMs: number): PcmFrame[] {
     if (!this.authorizeDirectMedia(ticket) || !this.currentAudioTransport) return [];
+    this.lastMediaArrival = { path: 'webtransport', atMs: nowMs };
     return this.currentAudioTransport.receive(packet, nowMs);
   }
 

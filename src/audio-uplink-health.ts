@@ -39,6 +39,8 @@ export type AudioUplinkTransportHealth = {
   datagramPacketBytesCeiling: number | null;
   /** Relay's bounded local outstanding-write budget, in packets. */
   datagramQueuePackets: number | null;
+  /** outgoingMaxAge as the browser reports it after the page set it; null if unsupported. Older pages omit it. */
+  datagramOutgoingMaxAgeMs?: number | null;
   /** Browser media recovery exhausted its bounded same-capture actions. Older v1 pages omit it. */
   mediaRecoveryDegraded?: boolean;
   webTransportAttempts: number;
@@ -342,6 +344,10 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const datagramQueuePackets = transport.datagramQueuePackets === undefined
     ? null
     : positiveSafeIntegerOrNull(transport.datagramQueuePackets);
+  const outgoingMaxAge = transport.datagramOutgoingMaxAgeMs;
+  const datagramOutgoingMaxAgeMs = typeof outgoingMaxAge === 'number' && Number.isFinite(outgoingMaxAge) && outgoingMaxAge > 0
+    ? outgoingMaxAge
+    : null;
   // Added after v1 shipped. Older pages omit it and are healthy by default;
   // a supplied non-boolean value is malformed rather than truthy telemetry.
   const mediaRecoveryDegraded = transport.mediaRecoveryDegraded === undefined
@@ -418,6 +424,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling,
       datagramQueuePackets,
+      datagramOutgoingMaxAgeMs,
       mediaRecoveryDegraded,
       ...counters as Record<(typeof counterNames)[number], number>,
       ...backlogCounters,

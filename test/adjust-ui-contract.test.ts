@@ -48,7 +48,6 @@ test('Song is a fixed 100% reference while Mic is the only live mix variable', (
     source,
     /id="source-volume"[^>]*type="range"[^>]*min="100"[^>]*max="100"[^>]*value="100"[^>]*hidden/,
   );
-  assert.equal(app.includes('const FIXED_SONG_LEVEL = 100;'), true);
 });
 
 test('Mic exposes +40 dB manual headroom with no automatic gain recommendation', () => {

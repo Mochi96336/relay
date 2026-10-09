@@ -691,6 +691,32 @@ test('production DOM: the local Mic owner can change Mic gain', async ({ page })
   await expect(micGain).toBeVisible();
 });
 
+test('production DOM: Song stays a fixed 100% reference whatever the Relay echoes', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', (route) => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await prepareReadyMic(page);
+
+  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
+    type: 'mix-settings', micGainDb: 18, songLevel: 40,
+  }));
+  await expect(page.locator('#mic-gain')).toHaveValue('18');
+  await expect(page.locator('#mic-gain-value')).toHaveText('+18 dB');
+  await expect(page.locator('#song-level')).toHaveValue('100');
+  await expect(page.locator('#song-level-value')).toHaveText('100%');
+  await expect(page.locator('#song-level')).toBeDisabled();
+  await expect(page.locator('#mic-gain')).toBeEnabled();
+
+  await page.locator('#mic-gain').focus();
+  await page.locator('#mic-gain').press('Home');
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
+    (command) => command.type === 'set-mix' && command.micGainDb === 0,
+  ));
+  const sent = await page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'set-mix').map((command) => command.songLevel));
+  expect(sent.every((level) => level === 100)).toBe(true);
+});
+
 test('production DOM: one desktop Change song click survives a transient playback-role refresh', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -1616,11 +1642,8 @@ test('production DOM: an error from a capture processor that was already replace
 
 test('production DOM: audio the page delivers too late is not sent and leaves its hole in place', async ({ page }) => {
   await livePhone(page);
-  // The page's AudioContext has to have run longer than the stall below, and
-  // the page shows at most one uplink warning per 2 s counted from page load.
-  await page.waitForFunction(() => (
-    window.__relayInteractionHarness.captureContextTime() > 1.5 && performance.now() > 2_100
-  ), null, { timeout: 5_000 });
+  // The page's AudioContext has to have run longer than the stall below.
+  await page.waitForFunction(() => window.__relayInteractionHarness.captureContextTime() > 1.5, null, { timeout: 5_000 });
   const sent = await page.evaluate(() => {
     clearInterval(window.__keepCapturing);
     const harness = window.__relayInteractionHarness;
@@ -1677,4 +1700,20 @@ test('production DOM: a rebuilt capture reports only its own dropped audio', asy
   expect(report.droppedSamples.captureBacklog).toBe(0);
   expect(report.droppedSamples.total).toBe(0);
   expect(report.captureDispatch?.maxLagMs ?? 0).toBeLessThan(400);
+});
+
+test('production DOM: audio dropped in the first seconds after page load is still shown', async ({ page }) => {
+  await livePhone(page);
+  // 0.55 s of capture clock is enough to date a chunk 500 ms late, past the
+  // 400 ms backlog budget, while the page is under 2 s old.
+  await page.waitForFunction(() => window.__relayInteractionHarness.captureContextTime() > 0.55, null, { timeout: 5_000 });
+  const droppedAtMs = await page.evaluate(() => {
+    const harness = window.__relayInteractionHarness;
+    harness.emitCaptureMessage({
+      type: 'pcm', buffer: new ArrayBuffer(1_920), capturedAtContextTime: harness.captureContextTime() - 0.5,
+    });
+    return performance.now();
+  });
+  expect(droppedAtMs, 'the drop has to land inside the first 2 s for this test to mean anything').toBeLessThan(2_000);
+  await expect(page.locator('#status')).toHaveText('Microphone capture caught up to live audio');
 });

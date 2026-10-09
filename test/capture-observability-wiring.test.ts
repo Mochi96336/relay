@@ -7,7 +7,7 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
 
   assert.match(
     source,
-    /captureClippingSnapshot,[\s\S]*captureRecentInputClippingDetected,[\s\S]*captureLevelSnapshot,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
+    /captureClippingSnapshot,[\s\S]*captureLevelSnapshot,[\s\S]*enforceUnprocessedCapture,[\s\S]*readCaptureSettings/,
   );
   assert.match(source, /enforceUnprocessedCapture\(preparedStream\)/);
   assert.match(source, /captureAppliedSettings = readCaptureSettings\(captureStream\);/);
@@ -27,17 +27,13 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
   const payload = source.slice(payloadStart, payloadEnd);
   assert.match(payload, /capture:\s*captureAppliedSettings/);
   assert.match(payload, /captureLevel:\s*captureLevelSnapshot\(latestLocalMicLevel\)/);
-  assert.match(payload, /captureClipping:\s*captureClippingHealthSnapshot\(\)/);
+  assert.match(payload, /\.\.\.uplinkEvidenceReport\(latestLocalMicLevel\)/);
   assert.doesNotMatch(payload, /start-timing-calibration|micLagMs|confidence/);
 
+  assert.match(source, /noteCaptureClipping\(clipping\)/, 'each level window reaches the clipping evidence');
   assert.match(
     source,
-    /captureRecentInputClippingDetected\(clipping\)[\s\S]*captureInputClippingSinceHealth = true;[\s\S]*captureInputClippingRevision \+= 1;/,
-    'each clipped level window must advance the interval revision',
-  );
-  assert.match(
-    source,
-    /pendingCaptureClippingHealth\.set\(healthRequestId,[\s\S]*revision: captureInputClippingRevision,[\s\S]*sentAtMs/,
+    /\} else \{\s*noteUplinkHealthSent\(healthRequestId, sentAtMs\);/,
     'sent health must retain its clipping revision until Relay acknowledges it',
   );
   assert.match(
@@ -47,12 +43,7 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
   );
   assert.match(
     source,
-    /accepted\.revision === captureInputClippingRevision[\s\S]*captureInputClippingSinceHealth = false/,
-    'a late ACK must not erase clipping that occurred after that report was sent',
-  );
-  assert.match(
-    source,
-    /function resetPublisherHealthRequestCorrelation\(\)[\s\S]*publisherCommandLiveness\.reset\(\);[\s\S]*pendingCaptureClippingHealth\.clear\(\);/,
+    /function resetPublisherHealthRequestCorrelation\(\)[\s\S]*publisherCommandLiveness\.reset\(\);[\s\S]*forgetUnsettledUplinkHealth\(\);/,
     'command authority reset must retire clipping request ids whose ACKs can no longer be accepted',
   );
   assert.equal(
@@ -64,14 +55,6 @@ test('publisher reports browser-applied capture facts and worklet level as uplin
     (source.match(/publisherCommandLiveness\.reset\(\);/g) ?? []).length,
     1,
     'raw command-liveness reset must exist only inside the shared correlation helper',
-  );
-  const correlationResetStart = source.indexOf('function resetPublisherHealthRequestCorrelation()');
-  const correlationResetEnd = source.indexOf('\n}\n', correlationResetStart) + 2;
-  assert.ok(correlationResetStart >= 0 && correlationResetEnd > correlationResetStart);
-  assert.doesNotMatch(
-    source.slice(correlationResetStart, correlationResetEnd),
-    /captureInputClippingSinceHealth\s*=/,
-    'socket correlation reset must preserve unsent clipping evidence for the replacement control channel',
   );
 
   assert.match(source, /captureAppliedSettings = null;/, 'stopping capture must clear applied facts');

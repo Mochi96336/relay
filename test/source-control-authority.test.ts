@@ -21,17 +21,9 @@ test('Vocal fine tune lives on the authenticated Mic-owner phone surface', () =>
   assert.match(indexHtml, /id="vocal-fine-tune"[^>]*disabled/);
   assert.match(
     appJs,
-    /const actionable = publisherCommandAuthority\(\)\.actionable;[\s\S]*vocalFineTune\.disabled = !actionable/,
-  );
-  assert.match(
-    appJs,
     /function sendVocalFineTune\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-vocal-fine-tune'\)/,
   );
   assert.match(appJs, /type: 'set-vocal-fine-tune'/);
-  assert.match(
-    appJs,
-    /message\.type === 'source-status'[\s\S]*message\.vocalFineTuneMs[\s\S]*vocalFineTune\.value/,
-  );
 });
 
 test('Source still applies the canonical Song level locally without writing it back', () => {

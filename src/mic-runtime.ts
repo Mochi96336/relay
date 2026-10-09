@@ -207,11 +207,13 @@ export class MicRuntime {
    * The path Mic audio is actually arriving on: that of the latest packet,
    * while packets are fresh, and otherwise the connected path (mediaPath).
    *
-   * mediaPath says which sessions are up, and the phone's media recovery reads
-   * it from every health ACK. It is no account of the audio: on 2026-10-09 an
-   * iPhone opened a WebTransport session, failed to finish setting it up, and
-   * sent everything over WebSocket, while status and Technical details said
-   * the Mic was on WebTransport.
+   * mediaPath says which sessions are up. It is no account of the audio: on
+   * 2026-10-09 an iPhone opened a WebTransport session, failed to finish
+   * setting it up, and sent everything over WebSocket, while status and
+   * Technical details said the Mic was on WebTransport. The health ACK carries
+   * this path too: after demoting WebTransport, the phone starts proving the
+   * WebSocket path only once the ACK says Relay is receiving on it, which a
+   * WebTransport session still open on Relay's side would hold off.
    */
   mediaArrivalPath(nowMs: number): 'websocket' | 'webtransport' | null {
     const arrival = this.lastMediaArrival;
@@ -511,7 +513,7 @@ export class MicRuntime {
             acceptedFrameSerial: this.currentAcceptedFrameSerial,
             receivedPacketSerial: this.currentAudioTransport?.stats()?.emittedPackets ?? 0,
             receivedSampleSerial: this.currentAudioTransport?.stats()?.emittedSamples ?? 0,
-            mediaPath: this.mediaPath(),
+            mediaPath: this.mediaArrivalPath(nowMs),
           },
         }));
       } catch {}

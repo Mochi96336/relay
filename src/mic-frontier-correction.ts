@@ -37,7 +37,7 @@ const MIC_TIMELINE_FOLD_ROOM_MS = 1_000;
  */
 const MIC_TIMELINE_FOLD_MIN_MS = 250;
 
-/** One fold of confirmed Mic capture loss into the timeline. */
+/** One fold of confirmed Mic capture loss into the timeline, or the undoing of one. */
 export type MicTimelineFold = {
   shiftMs: number;
   correctionBeforeMs: number;
@@ -133,6 +133,10 @@ export class MicFrontierCorrection {
   private foldedSamples = 0;
   private foldCountValue = 0;
   private lastFoldValue: MicTimelineFold | null = null;
+  /** How far folds have moved the current capture's timeline, net of unfolds. */
+  private timelineFoldedSamples = 0;
+  private unfoldCountValue = 0;
+  private lastUnfoldValue: MicTimelineFold | null = null;
   /**
    * Whether the phone has captured audio that has not reached Relay yet, by
    * more than ordinary network delay (see MicUplinkBacklog). While it has, the
@@ -171,6 +175,15 @@ export class MicFrontierCorrection {
 
   get lastFold(): MicTimelineFold | null {
     return this.lastFoldValue;
+  }
+
+  /** Folds undone because the loss they folded turned out not to be capture loss. */
+  get unfoldCount() {
+    return this.unfoldCountValue;
+  }
+
+  get lastUnfold(): MicTimelineFold | null {
+    return this.lastUnfoldValue;
   }
 
   /**
@@ -220,6 +233,7 @@ export class MicFrontierCorrection {
     this.recentSlack.length = 0;
     this.inTransit = false;
     this.quietCorrection = 0;
+    this.timelineFoldedSamples = 0;
     // A fresh anchor already places the capture where it is now, so whatever
     // it had lost up to here is accounted for and must not be folded again.
     this.foldedSamples = this.captureLossGeneration !== null
@@ -409,6 +423,39 @@ export class MicFrontierCorrection {
   }
 
   /**
+   * Folded loss to take back out of the timeline, in samples, or zero when none
+   * is due.
+   *
+   * Loss the phone never captured cannot come back, so confirmed loss that
+   * falls again was never capture loss. On 2026-10-09 the Mic was on the
+   * WebSocket path, where uplink health queues behind the audio: a 0.8 s queue
+   * delayed the reports with it, read as 767 ms of capture loss, and was
+   * folded. Two seconds later the loss read 34 ms again, but the timeline kept
+   * the voice 767 ms behind the song until the Mic was taken again. Undoing the
+   * fold moves the timeline back and holds the same amount as correction, so
+   * the read head does not move; the correction is then given back like any
+   * other once there is slack.
+   */
+  unfoldDue(expected: boolean, generation: number | null, capSamples: number) {
+    if (!expected || this.timelineFoldedSamples <= 0) return 0;
+    if (
+      this.captureLossGeneration === null
+      || this.captureLossGeneration !== generation
+    ) return 0;
+    const shift = Math.min(
+      this.timelineFoldedSamples,
+      Math.floor(this.foldedSamples - this.captureLossSamples),
+      capSamples - this.correction,
+    );
+    if (shift <= 0) return 0;
+    // Partly fallen loss is undone past the same noise floor a fold needs. Loss
+    // that has fallen back to nothing undoes what is left, however small: the
+    // floor would otherwise keep up to 250 ms of the voice behind the song.
+    if (shift < this.foldMinSamples && this.captureLossSamples >= this.frameSamples) return 0;
+    return shift;
+  }
+
+  /**
    * Moves this correction's positions `shift` samples later with the timeline,
    * taking the same amount off the correction, so the read head lands on
    * exactly the audio it would have read anyway.
@@ -425,8 +472,21 @@ export class MicFrontierCorrection {
   /** Records a fold of `shift` samples, taken while the correction stood at `correctionBefore`. */
   folded(shift: number, correctionBefore: number) {
     this.foldedSamples += shift;
+    this.timelineFoldedSamples += shift;
     this.foldCountValue += 1;
     this.lastFoldValue = {
+      shiftMs: Math.round((shift / this.sampleRate) * 1000),
+      correctionBeforeMs: Math.round((correctionBefore / this.sampleRate) * 1000),
+      captureLossMs: Math.round((this.captureLossSamples / this.sampleRate) * 1000),
+    };
+  }
+
+  /** Records an unfold of `shift` samples, taken while the correction stood at `correctionBefore`. */
+  unfolded(shift: number, correctionBefore: number) {
+    this.foldedSamples -= shift;
+    this.timelineFoldedSamples -= shift;
+    this.unfoldCountValue += 1;
+    this.lastUnfoldValue = {
       shiftMs: Math.round((shift / this.sampleRate) * 1000),
       correctionBeforeMs: Math.round((correctionBefore / this.sampleRate) * 1000),
       captureLossMs: Math.round((this.captureLossSamples / this.sampleRate) * 1000),

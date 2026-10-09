@@ -211,3 +211,86 @@ test('loss confirmed for another capture is not folded into this one', () => {
   });
   assert.equal(session.micTimelineFoldCount, 0);
 });
+
+/**
+ * A phone on the WebSocket media path: its packets and its uplink health
+ * reports leave through one ordered socket, so a congested uplink delays both.
+ * The phone captures in real time throughout. `serviceMs(startsAtMs)` is how
+ * long the link takes to carry one 10 ms packet that starts crossing then.
+ */
+function simulateSharedQueue(
+  session: AudioSession,
+  seconds: number,
+  serviceMs: (startsAtMs: number) => number,
+) {
+  const frames: Frame[] = [];
+  const monitor = new MicCaptureDeliveryMonitor();
+  type Sent = { atMs: number; kind: 'audio'; first: number } | { atMs: number; kind: 'health'; captured: number };
+  const inFlight: Sent[] = [];
+  let cursor = 0;
+  let capturedUntilMs = 0;
+  let linkFreeAt = 0;
+  let nextHealthAtMs = 1_000;
+
+  for (let nowMs = 0; nowMs <= seconds * 1_000; nowMs += 5) {
+    while (capturedUntilMs + 10 <= nowMs) {
+      capturedUntilMs += 10;
+      const startsAt = Math.max(linkFreeAt, capturedUntilMs);
+      linkFreeAt = startsAt + serviceMs(startsAt);
+      inFlight.push({ atMs: linkFreeAt + NETWORK_MS, kind: 'audio', first: cursor });
+      cursor += CHUNK;
+      if (capturedUntilMs >= nextHealthAtMs) {
+        // A few hundred bytes behind the queued audio, in the same socket.
+        inFlight.push({ atMs: linkFreeAt + NETWORK_MS, kind: 'health', captured: cursor });
+        nextHealthAtMs += 1_000;
+      }
+    }
+    while (inFlight.length > 0 && inFlight[0]!.atMs <= nowMs) {
+      const sent = inFlight.shift()!;
+      if (sent.kind === 'audio') {
+        session.ingestMic(chunk(sent.first), RATE, nowMs);
+      } else {
+        monitor.observe({ generation: GENERATION, capturedSamples: sent.captured, sampleRate: RATE, atMs: nowMs });
+        const status = monitor.status();
+        if (status) session.noteMicCaptureLoss(status.generation, status.lossMs);
+      }
+    }
+    session.drain((pcm, evidence) => {
+      frames.push({
+        pcm: Buffer.from(pcm),
+        evidence: { ...evidence },
+        playable: session.micPlayable,
+        headroomMs: session.liveMicHeadroomMs,
+      });
+    }, nowMs);
+  }
+  return frames;
+}
+
+test('a queue that delayed the health reports with the audio is not left folded into the timeline', () => {
+  // As on 2026-10-09 at 21:05, longer: from 20 s to 40 s the uplink carries
+  // 85% of real time, so audio and its health reports queue together and fall
+  // 3.5 s behind; afterwards it drains at more than three times real time. The
+  // phone never lost any capture, so once the queue has drained the voice must
+  // be read exactly where a mixer that never folded reads it.
+  const congested = (startsAtMs: number) => (startsAtMs > 20_000 && startsAtMs <= 40_000 ? 11.8 : 3);
+  const folding = makeSession(3_000);
+  const unbounded = makeSession(60_000);
+  const foldingFrames = simulateSharedQueue(folding, 90, congested);
+  const unboundedFrames = simulateSharedQueue(unbounded, 90, congested);
+
+  assert.ok(folding.micTimelineFoldCount >= 1, 'the delayed reports read as capture loss and were folded');
+  assert.equal(unbounded.micTimelineFoldCount, 0);
+  assert.ok(folding.micTimelineUnfoldCount >= 1, 'the fold is undone once the reports are on time again');
+
+  const settledFrom = Math.ceil(60_000 / 20);
+  for (let index = settledFrom; index < foldingFrames.length; index += 1) {
+    const a = foldingFrames[index]!;
+    const b = unboundedFrames[index]!;
+    if (!a.pcm.equals(b.pcm)) {
+      assert.fail(`frame ${index} (${(index * 20) / 1000} s) differs: headroom ${a.headroomMs} vs ${b.headroomMs} ms`);
+    }
+    assert.equal(a.headroomMs, b.headroomMs, `headroom of frame ${index}`);
+  }
+  assert.equal(Math.round(folding.appliedMicAdvanceMs), 137);
+});

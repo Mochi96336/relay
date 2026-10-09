@@ -171,6 +171,62 @@ test('confirmed capture loss is due to fold only for its own capture, near the b
   assert.equal(subject.foldCount, 1);
 });
 
+/** A correction pinned near its bound with `lossMs` confirmed and folded. */
+function foldedAfterLoss(lossMs: number) {
+  const subject = correction();
+  let start = 100_000;
+  for (let index = 0; index < 60; index += 1, start += FRAME) subject.update(frame(subject, start, 4_800));
+  subject.update({ ...frame(subject, start, -100_000) });
+  subject.noteCaptureLoss(7, lossMs);
+  const shift = subject.foldDue(true, 7, CAP);
+  assert.ok(shift > 0);
+  subject.rebase(shift);
+  subject.folded(shift, subject.correctionSamples + shift);
+  return { subject, shift };
+}
+
+test('loss that falls again was not capture loss, and its fold is undone', () => {
+  const { subject, shift } = foldedAfterLoss(1_000);
+  assert.equal(shift, 48_000);
+  subject.noteCaptureLoss(7, 1_000);
+  assert.equal(subject.unfoldDue(true, 7, CAP), 0, 'loss that stays is capture loss');
+
+  subject.noteCaptureLoss(7, 900);
+  assert.equal(subject.unfoldDue(true, 7, CAP), 0, 'below the 250 ms noise floor');
+  subject.noteCaptureLoss(7, 600);
+  assert.equal(subject.unfoldDue(true, 8, CAP), 0, 'another capture');
+  assert.equal(subject.unfoldDue(false, 7, CAP), 0, 'a Mic nobody expects');
+  assert.equal(subject.unfoldDue(true, 7, CAP), 19_200);
+
+  const correctionBefore = subject.correctionSamples;
+  subject.rebase(-19_200);
+  subject.unfolded(19_200, correctionBefore);
+  assert.equal(subject.correctionSamples, correctionBefore + 19_200, 'the read head stays where it was');
+  assert.equal(subject.unfoldCount, 1);
+  assert.deepEqual(subject.lastUnfold, {
+    shiftMs: 400,
+    correctionBeforeMs: Math.round((correctionBefore / RATE) * 1000),
+    captureLossMs: 600,
+  });
+
+  // Fallen back to nothing: what is left goes too, under the noise floor.
+  subject.noteCaptureLoss(7, 0);
+  assert.equal(subject.unfoldDue(true, 7, CAP), 28_800);
+});
+
+test('an unfold never takes the correction past its bound, and never undoes more than was folded', () => {
+  const { subject } = foldedAfterLoss(1_000);
+  subject.noteCaptureLoss(7, 0);
+  const room = 10_000;
+  assert.equal(subject.unfoldDue(true, 7, subject.correctionSamples + room), room);
+
+  const anchored = correction();
+  anchored.noteCaptureLoss(7, 2_000);
+  anchored.reset(7);
+  anchored.noteCaptureLoss(7, 0);
+  assert.equal(anchored.unfoldDue(true, 7, CAP), 0, 'loss a fresh anchor absorbed was never folded');
+});
+
 test('a fresh anchor has already absorbed the loss it was told about', () => {
   const subject = correction();
   subject.noteCaptureLoss(7, 500);

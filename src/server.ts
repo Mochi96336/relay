@@ -284,6 +284,7 @@ const micCaptureDelivery = new MicCaptureDeliveryMonitor();
 const micUplinkBacklog = new MicUplinkBacklog();
 let micCaptureFallingBehind = false;
 let reportedMicTimelineFolds = 0;
+let reportedMicTimelineUnfolds = 0;
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
 
 // Read here rather than beside the other calibration constants because the
@@ -1667,6 +1668,8 @@ function remoteStatusFacts(nowMs: number): RemoteStatusFacts {
       frontierCorrectionMs: session.micFrontierCorrectionMs,
       timelineFolds: session.micTimelineFoldCount,
       lastTimelineFold: session.lastMicTimelineFold,
+      timelineUnfolds: session.micTimelineUnfoldCount,
+      lastTimelineUnfold: session.lastMicTimelineUnfold,
       captureDelivery: micCaptureDelivery.status(),
       uplinkBacklog: micUplinkBacklog.status(),
     },
@@ -2201,22 +2204,35 @@ function noteMicUplinkBacklog(health: AudioUplinkHealth, sampleRate: number, now
 }
 
 /**
- * A fold is inaudible in the mix, but it moves the Mic timeline under every
- * measurement that holds Mic positions; evidence collected across it would
- * splice two placements of the same audio. Applied timing stays: the fold does
- * not change what is heard when.
+ * A fold, or the undoing of one, is inaudible in the mix, but it moves the Mic
+ * timeline under every measurement that holds Mic positions; evidence collected
+ * across it would splice two placements of the same audio. Applied timing
+ * stays: the move does not change what is heard when.
  */
 function reportMicTimelineFolds(nowMs = performance.now()) {
   const folds = session.micTimelineFoldCount;
-  if (folds === reportedMicTimelineFolds) return;
-  reportedMicTimelineFolds = folds;
-  console.warn('[mic-timeline]', JSON.stringify({
-    reason: 'capture-loss-folded',
-    folds,
-    ...session.lastMicTimelineFold,
-    correctionAfterMs: Math.round(session.micFrontierCorrectionMs),
-    delivery: micCaptureDelivery.status(),
-  }));
+  const unfolds = session.micTimelineUnfoldCount;
+  if (folds === reportedMicTimelineFolds && unfolds === reportedMicTimelineUnfolds) return;
+  if (folds !== reportedMicTimelineFolds) {
+    reportedMicTimelineFolds = folds;
+    console.warn('[mic-timeline]', JSON.stringify({
+      reason: 'capture-loss-folded',
+      folds,
+      ...session.lastMicTimelineFold,
+      correctionAfterMs: Math.round(session.micFrontierCorrectionMs),
+      delivery: micCaptureDelivery.status(),
+    }));
+  }
+  if (unfolds !== reportedMicTimelineUnfolds) {
+    reportedMicTimelineUnfolds = unfolds;
+    console.warn('[mic-timeline]', JSON.stringify({
+      reason: 'capture-loss-unfolded',
+      unfolds,
+      ...session.lastMicTimelineUnfold,
+      correctionAfterMs: Math.round(session.micFrontierCorrectionMs),
+      delivery: micCaptureDelivery.status(),
+    }));
+  }
   calibration.restartWorkingEvidence(nowMs);
   if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
   // Only a run in flight: resetting an idle or failed one would play the probe

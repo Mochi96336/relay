@@ -111,6 +111,11 @@ describe('Mic uplink backlog', () => {
     const backlog = new MicUplinkBacklog();
     backlog.noteArrived(7, samplesAt(1_000));
     backlog.noteArrived(7, samplesAt(400));
+    assert.equal(
+      backlog.observeHealth({ generation: 7, capturedSamples: samplesAt(40), sampleRate: RATE, atMs: 50 }),
+      null,
+    );
+    assert.equal(backlog.status(), null, 'the first report of a capture is warm-up');
     backlog.observeHealth({ generation: 7, capturedSamples: samplesAt(1_050), sampleRate: RATE, atMs: 1_060 });
     assert.equal(backlog.status()?.backlogMs, 50);
   });
@@ -118,20 +123,84 @@ describe('Mic uplink backlog', () => {
   test('a new capture says nothing until its first packet, and does not end the old episode', () => {
     const backlog = new MicUplinkBacklog();
     backlog.noteArrived(7, samplesAt(1_000));
+    backlog.observeHealth({ generation: 7, capturedSamples: samplesAt(2_000), sampleRate: RATE, atMs: 2_010 });
     const start = backlog.observeHealth({ generation: 7, capturedSamples: samplesAt(3_000), sampleRate: RATE, atMs: 3_010 });
     assert.equal(start?.edge, 'start');
 
+    // The new capture started at 3 400 ms: its warm-up report, then one before any packet.
     assert.equal(
       backlog.observeHealth({ generation: 8, capturedSamples: samplesAt(100), sampleRate: RATE, atMs: 3_500 }),
       null,
     );
+    assert.equal(
+      backlog.observeHealth({ generation: 8, capturedSamples: samplesAt(200), sampleRate: RATE, atMs: 3_600 }),
+      null,
+    );
     assert.equal(backlog.status()?.generation, 7, 'a report without packets leaves the last reading alone');
 
-    backlog.noteArrived(8, samplesAt(200));
+    backlog.noteArrived(8, samplesAt(550));
     assert.equal(
-      backlog.observeHealth({ generation: 8, capturedSamples: samplesAt(250), sampleRate: RATE, atMs: 4_000 }),
+      backlog.observeHealth({ generation: 8, capturedSamples: samplesAt(600), sampleRate: RATE, atMs: 4_000 }),
       null,
     );
     assert.deepEqual(backlog.status(), { generation: 8, backlogMs: 50, maxBacklogMs: 50 });
+  });
+  test('reports that lag with the network do not hide audio in transit', () => {
+    // On time until 10 s. Then the audio queues, falling behind by half of real
+    // time, and the reports lag 3 s on their own path.
+    const backlog = new MicUplinkBacklog();
+    const arrival = (sentMs: number) => sentMs + 40 + Math.max(0, sentMs - 10_000) * 0.5;
+    const events: { atMs: number; run: () => void }[] = [];
+    for (let sentMs = 10; sentMs <= 15_000; sentMs += 10) {
+      events.push({ atMs: arrival(sentMs), run: () => backlog.noteArrived(7, samplesAt(sentMs)) });
+      if (sentMs % 1_000 === 0) {
+        const atMs = sentMs + (sentMs > 10_000 ? 3_000 : 30);
+        events.push({
+          atMs,
+          run: () => backlog.observeHealth({ generation: 7, capturedSamples: samplesAt(sentMs), sampleRate: RATE, atMs }),
+        });
+      }
+    }
+    events.sort((a, b) => a.atMs - b.atMs);
+    for (const event of events) if (event.atMs <= 15_000) event.run();
+
+    // By 15 s, audio sent up to about 13.3 s has arrived: 1.7 s is in transit.
+    const estimate = backlog.estimate(15_000);
+    assert.ok(estimate);
+    assert.ok(Math.abs(estimate.backlogMs - 1_664) <= 60, `estimated ${estimate.backlogMs} ms in transit`);
+    // The latest report to arrive was sent at 12 s: read alone, it says less
+    // was captured than has already arrived.
+  });
+
+  test('while neither reports nor audio arrive, the audio in transit keeps growing', () => {
+    const backlog = new MicUplinkBacklog();
+    for (let sentMs = 10; sentMs <= 10_000; sentMs += 10) {
+      backlog.noteArrived(7, samplesAt(sentMs));
+      if (sentMs % 1_000 === 0) {
+        backlog.observeHealth({ generation: 7, capturedSamples: samplesAt(sentMs), sampleRate: RATE, atMs: sentMs + 30 });
+      }
+    }
+    assert.ok(Math.abs(backlog.estimate(14_000)!.backlogMs - 3_970) <= 1);
+  });
+
+  test('a capture that loses time reads high by no more than it lost within the window', () => {
+    // 4% of real time lost, as a phone losing render time does, with the
+    // audio itself arriving on time.
+    const backlog = new MicUplinkBacklog();
+    const captured = (wallMs: number) => wallMs * 0.96;
+    for (let wallMs = 10; wallMs <= 60_000; wallMs += 10) {
+      backlog.noteArrived(7, samplesAt(captured(wallMs)));
+      if (wallMs % 1_000 === 0) {
+        const edge = backlog.observeHealth({
+          generation: 7,
+          capturedSamples: samplesAt(captured(wallMs)),
+          sampleRate: RATE,
+          atMs: wallMs + 30,
+        });
+        assert.equal(edge, null, `an episode started at ${wallMs} ms`);
+      }
+    }
+    const estimate = backlog.estimate(60_030)!;
+    assert.ok(estimate.backlogMs > 0 && estimate.backlogMs <= 200, `estimated ${estimate.backlogMs} ms`);
   });
 });

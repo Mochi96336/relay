@@ -239,7 +239,9 @@ test('statusz reports captured Mic audio that has not reached Relay yet', async 
     });
     await publisher.waitForType('registered');
 
-    // One second of audio arrives; the phone reports two seconds captured.
+    // One second of audio arrives; the phone reports two seconds captured,
+    // after the report a capture's estimate skips as warm-up.
+    publisher.send({ ...uplinkHealth(publisher.generationId), capturedSamples: 48_000 });
     for (let packet = 0; packet < 100; packet += 1) publisher.sendAudioPacket(Buffer.alloc(480 * 2));
     await sleep(50);
     publisher.send({ ...uplinkHealth(publisher.generationId), capturedSamples: 96_000 });

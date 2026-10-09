@@ -151,6 +151,13 @@
   transition: transform 120ms ease;
 }
 .diagnostics-advanced[open] > summary::after { transform: rotate(90deg); }
+/* Names when a calibration runs, so its rows are not read as another one's. */
+.diagnostic-group {
+  margin: 14px 0 2px;
+  color: #9a9ca2;
+  font-size: 10px;
+  font-weight: 600;
+}
 .diagnostic-ledger {
   margin: 0;
   display: grid;

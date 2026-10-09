@@ -24,45 +24,68 @@ function initialize() {
   const heading = document.createElement('summary');
   heading.className = 'diagnostics-subheading';
   heading.textContent = t('diag.cal.heading');
+  // Every node whose text is copy, re-read when the locale changes.
   const labels = [];
+  function copyNode(node, key) {
+    node.textContent = t(key);
+    labels.push([node, key]);
+    return node;
+  }
 
-  const ledger = document.createElement('dl');
-  ledger.className = 'diagnostic-ledger';
+  let ledger = null;
+  /** Starts a ledger under a title naming when that calibration runs. */
+  function group(titleKey) {
+    if (titleKey) {
+      const title = copyNode(document.createElement('p'), titleKey);
+      title.className = 'diagnostic-group';
+      section.append(title);
+    }
+    ledger = document.createElement('dl');
+    ledger.className = 'diagnostic-ledger';
+    section.append(ledger);
+  }
 
+  /** One row as the readable tabs show it: the value, then a plain-language note. */
   function pair(labelKey, id) {
     const row = document.createElement('div');
     row.className = 'diagnostic-pair';
-    const term = document.createElement('dt');
-    term.textContent = t(labelKey);
-    labels.push([term, labelKey]);
-    const value = document.createElement('dd');
+    const term = copyNode(document.createElement('dt'), labelKey);
+    const described = document.createElement('dd');
+    described.dataset.tone = 'neutral';
+    const value = document.createElement('span');
+    value.className = 'diagnostic-value';
     value.id = id;
     value.textContent = '—';
-    row.append(term, value);
+    const note = copyNode(document.createElement('span'), `${labelKey}Note`);
+    note.className = 'diagnostic-note';
+    described.append(value, note);
+    row.append(term, described);
     ledger.append(row);
     return value;
   }
 
-  const nodes = {
-    applied: pair('diag.cal.applied', 'diag-calibration-applied'),
-    contentState: pair('diag.cal.contentState', 'diag-content-state'),
-    contentProgress: pair('diag.cal.contentProgress', 'diag-content-progress'),
-    contentAgreement: pair('diag.cal.contentAgreement', 'diag-content-agreement'),
-    contentCandidate: pair('diag.cal.contentCandidate', 'diag-content-candidate'),
-    contentConfidence: pair('diag.cal.contentConfidence', 'diag-content-confidence'),
-    contentLevels: pair('diag.cal.contentLevels', 'diag-content-levels'),
-    contentSegments: pair('diag.cal.contentSegments', 'diag-content-segments'),
-    validation: pair('diag.cal.validation', 'diag-content-validation'),
-    validationLast: pair('diag.cal.validationLast', 'diag-content-validation-last'),
-    pathState: pair('diag.cal.pathState', 'diag-path-state'),
-    pathCorrelations: pair('diag.cal.pathCorrelations', 'diag-path-correlations'),
-    pathDifference: pair('diag.cal.pathDifference', 'diag-path-difference'),
-    playerDelta: pair('diag.cal.playerDelta', 'diag-path-player-delta'),
-    effective: pair('diag.cal.effective', 'diag-path-effective'),
-  };
+  section.append(heading);
+  const nodes = {};
+  group(null);
+  nodes.applied = pair('diag.cal.applied', 'diag-calibration-applied');
+  group('diag.cal.group.probe');
+  nodes.pathState = pair('diag.cal.pathState', 'diag-path-state');
+  nodes.pathCorrelations = pair('diag.cal.pathCorrelations', 'diag-path-correlations');
+  nodes.pathDifference = pair('diag.cal.pathDifference', 'diag-path-difference');
+  nodes.effective = pair('diag.cal.effective', 'diag-path-effective');
+  group('diag.cal.group.content');
+  nodes.contentState = pair('diag.cal.contentState', 'diag-content-state');
+  nodes.contentProgress = pair('diag.cal.contentProgress', 'diag-content-progress');
+  nodes.contentAgreement = pair('diag.cal.contentAgreement', 'diag-content-agreement');
+  nodes.contentCandidate = pair('diag.cal.contentCandidate', 'diag-content-candidate');
+  nodes.contentConfidence = pair('diag.cal.contentConfidence', 'diag-content-confidence');
+  nodes.contentLevels = pair('diag.cal.contentLevels', 'diag-content-levels');
+  nodes.contentSegments = pair('diag.cal.contentSegments', 'diag-content-segments');
+  group('diag.cal.group.validation');
+  nodes.validation = pair('diag.cal.validation', 'diag-content-validation');
+  nodes.validationLast = pair('diag.cal.validationLast', 'diag-content-validation-last');
   let latestTiming = null;
 
-  section.append(heading, ledger);
   timingPanel.append(section);
 
   let socket = null;
@@ -184,7 +207,6 @@ function initialize() {
     }
 
     const liveDelta = finite(timing.robotPlayerOffsetMs);
-    nodes.playerDelta.textContent = liveDelta === null ? t('diag.cal.waitingPlayback') : ms(liveDelta);
     nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null
       ? t('diag.cal.effectiveValue', { ms: ms(pathDifference + liveDelta), confidence: confidence(boot.confidence) })
       : boot ? t('diag.cal.pathReady') : '—';

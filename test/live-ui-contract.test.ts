@@ -74,7 +74,7 @@ test('input ribbon follows the authoritative Room Mic without fabricated animati
 test('Mic gain is contextual and generic Adjust no longer exists', () => {
   assert.match(html, /id="mic-live-control"/);
   assert.doesNotMatch(html, /class="adjust-panel"|id="open-adjust"/);
-  assert.match(liveIa, /micLiveLabel\.textContent = 'Mic'/);
+  assert.match(html, /id="mic-live-control" class="mic-live-control">\s*<summary>\s*<span>Mic<\/span>/);
   assert.match(liveIa, /relay-microphone-local-state/);
 });
 

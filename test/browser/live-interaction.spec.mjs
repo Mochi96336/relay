@@ -961,6 +961,14 @@ test('production DOM: a Mic gain the Relay cannot take goes back to the confirme
   expect(sentAfter).toBe(sentBefore);
 });
 
+function healthReports(page) {
+  return page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'audio-uplink-health')
+    .map(({ captureGeneration, healthRequestId, capturedSamples, controlReconnects }) => (
+      { captureGeneration, healthRequestId, capturedSamples, controlReconnects }
+    )));
+}
+
 test('production DOM: uplink health counts the capture it reports on', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.route('https://www.youtube.com/**', (route) => route.abort());
@@ -1202,6 +1210,14 @@ test('production DOM: a protocol error is shown and does not make the phone reco
     .filter((command) => command.type === 'register' && command.role === 'publisher').length)).toBe(registrations);
   expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
 });
+
+function publisherRegistrations(page) {
+  return page.evaluate(() => window.__relayInteractionHarness.commands
+    .filter((command) => command.type === 'register' && command.role === 'publisher')
+    .map(({ sampleRate, captureGeneration, initialSequence, audioPacketVersion }) => (
+      { sampleRate, captureGeneration, initialSequence, audioPacketVersion }
+    )));
+}
 
 test('production DOM: a dropped control connection comes back with the same capture', async ({ page }) => {
   await livePhone(page);

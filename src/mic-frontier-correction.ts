@@ -1,3 +1,8 @@
+import {
+  DEFAULT_MIC_UPLINK_BACKLOG_END_MS,
+  DEFAULT_MIC_UPLINK_BACKLOG_START_MS,
+} from './mic-uplink-backlog.js';
+
 /**
  * When a Mic frontier overrun counts as gradual: the frontier has stayed
  * within this much of the read window for a whole window of frames. A capture
@@ -7,6 +12,15 @@
  */
 const MIC_FRONTIER_GRADUAL_WINDOW_MS = 1_000;
 const MIC_FRONTIER_GRADUAL_SLACK_MS = 60;
+
+/**
+ * A correction that slack past the safety margin could give back by at least
+ * this much is given back in one step rather than at the slew rate: delayed
+ * audio has caught up, and holding the read head back keeps the voice that far
+ * behind the song. Less than this is given back at the slew rate as before.
+ * The step is a read-head jump, which the mixer crossfades.
+ */
+const MIC_FRONTIER_PROMPT_RELEASE_MS = 100;
 
 /**
  * Confirmed Mic capture loss is folded into the timeline only once the frontier
@@ -89,6 +103,7 @@ export class MicFrontierCorrection {
   private readonly slewStepSamples: number;
   private readonly foldRoomSamples: number;
   private readonly foldMinSamples: number;
+  private readonly promptReleaseSamples: number;
 
   /** Samples the read head is held back to stay inside arrived microphone audio. */
   private correction = 0;
@@ -118,6 +133,14 @@ export class MicFrontierCorrection {
   private foldedSamples = 0;
   private foldCountValue = 0;
   private lastFoldValue: MicTimelineFold | null = null;
+  /**
+   * Whether the phone has captured audio that has not reached Relay yet, by
+   * more than ordinary network delay (see MicUplinkBacklog). While it has, the
+   * read head is not held back for it: that audio can only be heard late.
+   */
+  private inTransit = false;
+  /** The correction at the last uplink report that showed nothing in transit. */
+  private quietCorrection = 0;
 
   constructor(options: MicFrontierCorrectionOptions) {
     const { sampleRate, frameMs, safetyMs } = options;
@@ -134,6 +157,7 @@ export class MicFrontierCorrection {
     );
     this.foldRoomSamples = Math.round((MIC_TIMELINE_FOLD_ROOM_MS * sampleRate) / 1000);
     this.foldMinSamples = Math.round((MIC_TIMELINE_FOLD_MIN_MS * sampleRate) / 1000);
+    this.promptReleaseSamples = Math.round((MIC_FRONTIER_PROMPT_RELEASE_MS * sampleRate) / 1000);
   }
 
   get correctionSamples() {
@@ -160,6 +184,30 @@ export class MicFrontierCorrection {
   }
 
   /**
+   * How much captured audio of the current capture had not reached Relay at
+   * its latest uplink report (MicUplinkBacklog). Starting a transit episode
+   * drops the correction back to what it was before the audio started queueing:
+   * whatever it grew by since was holding the voice back for audio in transit.
+   */
+  noteTransit(backlogMs: number) {
+    if (!Number.isFinite(backlogMs)) return;
+    if (!this.inTransit) {
+      if (backlogMs < DEFAULT_MIC_UPLINK_BACKLOG_START_MS) {
+        if (backlogMs < DEFAULT_MIC_UPLINK_BACKLOG_END_MS) this.quietCorrection = this.correction;
+        return;
+      }
+      this.inTransit = true;
+      this.correction = Math.min(this.correction, this.quietCorrection);
+      this.slewTarget = null;
+      return;
+    }
+    if (backlogMs < DEFAULT_MIC_UPLINK_BACKLOG_END_MS) {
+      this.inTransit = false;
+      this.quietCorrection = this.correction;
+    }
+  }
+
+  /**
    * Starts over for timeline positions that no longer mean what they did: a
    * new mix epoch, a retired capture, or a fresh anchor for `generation`.
    */
@@ -170,6 +218,8 @@ export class MicFrontierCorrection {
     this.resumeGuardFrames = 0;
     this.slewTarget = null;
     this.recentSlack.length = 0;
+    this.inTransit = false;
+    this.quietCorrection = 0;
     // A fresh anchor already places the capture where it is now, so whatever
     // it had lost up to here is accounted for and must not be folded again.
     this.foldedSamples = this.captureLossGeneration !== null
@@ -277,7 +327,7 @@ export class MicFrontierCorrection {
       return;
     }
 
-    if (overrun > 0 && !this.stalled()) {
+    if (overrun > 0 && !this.stalled() && !this.inTransit) {
       // Bounded by the retained history: growing the correction past what the
       // read head can actually move would let it climb without changing
       // anything, and reading before retention is silence just the same.
@@ -320,7 +370,10 @@ export class MicFrontierCorrection {
     }
 
     if (this.correction > 0 && -overrun > marginSamples) {
-      this.correction = Math.max(0, this.correction - step);
+      const releasable = Math.min(this.correction, -overrun - marginSamples);
+      this.correction -= releasable >= this.promptReleaseSamples
+        ? releasable
+        : Math.min(this.correction, step);
     }
   }
 

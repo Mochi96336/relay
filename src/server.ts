@@ -2187,6 +2187,10 @@ function noteMicUplinkBacklog(health: AudioUplinkHealth, sampleRate: number, now
     sampleRate,
     atMs: nowMs,
   });
+  const backlog = micUplinkBacklog.status();
+  if (backlog?.generation === health.captureGeneration) {
+    session.noteMicTransitBacklog(backlog.generation, backlog.backlogMs);
+  }
   if (!edge) return;
   console.warn('[mic-uplink-backlog]', JSON.stringify({
     ...edge,

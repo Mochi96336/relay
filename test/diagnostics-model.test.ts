@@ -123,7 +123,7 @@ describe('Timing', () => {
     assert.doesNotMatch(rows.offset.note, /RELAY_/, 'no environment variable names in what a singer reads');
     const zhRows = clamped({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 }, zh);
     assert.equal(zhRows.alignment.value, '緩衝不足');
-    assert.deepEqual([zhRows.offset.value, zhRows.offset.note], ['人聲可能晚 45 ms', '主機的緩衝設定最多只能補 200 ms。']);
+    assert.deepEqual([zhRows.offset.value, zhRows.offset.note], ['人聲可能晚 45 ms', '主機緩衝設定最多補償 200 ms。']);
   });
 
   it('blames late Mic audio, not the buffer, for a frontier hold-back', () => {
@@ -142,7 +142,7 @@ describe('Timing', () => {
 
     const zhRows = clamped(facts, zh);
     assert.equal(zhRows.alignment.value, 'Mic 音訊晚到');
-    assert.equal(zhRows.offset.note, 'Mic 音訊晚到，Relay 多等了 50 ms 才播放。人聲聽起來變晚的話，請重試 Mic。');
+    assert.equal(zhRows.offset.note, 'Mic 音訊晚到，Relay 延後 50 ms 播放。若人聲聽起來偏晚，請重試 Mic。');
     assert.doesNotMatch(zhRows.offset.note, /緩衝/);
   });
 
@@ -173,7 +173,7 @@ describe('Timing', () => {
     assert.doesNotMatch(rows.offset.note, /late|PREBUFFER/);
     assert.deepEqual(
       [clamped(facts, zh).offset.value, clamped(facts, zh).offset.note],
-      ['人聲可能早 200 ms', 'Relay 只保留 300 ms 的 Mic 音訊可以往回讀。'],
+      ['人聲可能早 200 ms', 'Relay 僅保留 300 ms 的 Mic 音訊可供回讀。'],
     );
   });
 
@@ -186,7 +186,7 @@ describe('Timing', () => {
     const measured = byKey(describeTiming({ source: source({ activeCalibrationKind: 'content' }) }, en));
     assert.deepEqual([measured.method.value, measured.method.note], ['Song content', 'From the song itself, while it plays.']);
     const probe = byKey(describeTiming({ source: source({ activeCalibrationKind: 'boot-probe' }) }, zh));
-    assert.deepEqual([probe.method.value, probe.method.note], ['測試音', 'Mic 開始時，用手機播放的測試音量出延遲。']);
+    assert.deepEqual([probe.method.value, probe.method.note], ['測試音', 'Mic 開始時，以手機播放的測試音量測延遲。']);
     const estimated = byKey(describeTiming({
       product: { timing: { state: 'fallback' } },
       source: source({ timingMode: 'network-estimate' }),
@@ -339,7 +339,7 @@ describe('locales', () => {
       source: source({ requestedMicAdvanceMs: 245, appliedMicAdvanceMs: 200 }),
     }, zh));
     assert.equal(rows.alignment.value, '緩衝不足');
-    assert.equal(rows.offset.note, '主機的緩衝設定最多只能補 200 ms。');
+    assert.equal(rows.offset.note, '主機緩衝設定最多補償 200 ms。');
     const overview = byKey(describeOverview({
       readiness: readiness({ ready: false, reasons: ['backing-not-streaming', 'robot-source-not-connected'] }),
     }, zh));

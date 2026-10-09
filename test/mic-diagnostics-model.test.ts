@@ -302,7 +302,7 @@ describe('Mic diagnostics model', () => {
     assert.doesNotMatch(row.note, /0 ms|Lower the Mic gain/);
     assert.equal(
       levelRow(calm, diagnosticsTranslator('zh-Hant')).note,
-      '這一秒沒被壓，但前幾秒有。已連續 3/10 秒，滿了就解除。',
+      '本秒未被壓，但前幾秒有；已連續 3/10 秒，達到即解除。',
     );
 
     // Held down 50 ms: below what counts as a hot second, so it is calm for
@@ -319,7 +319,7 @@ describe('Mic diagnostics model', () => {
     assert.doesNotMatch(briefRow.note, /not held down/i);
     assert.equal(
       levelRow(brief, diagnosticsTranslator('zh-Hant')).note,
-      '這一秒只被壓 50 ms，太短不算；前幾秒壓得更久。已連續 3/10 秒，滿了就解除。',
+      '本秒僅被壓 50 ms，過短不計；前幾秒壓得更久。已連續 3/10 秒，達到即解除。',
     );
     assert.doesNotMatch(levelRow(brief, diagnosticsTranslator('zh-Hant')).note, /沒被壓|沒有被壓/);
 
@@ -346,7 +346,7 @@ describe('Mic diagnostics model', () => {
     );
     assert.equal(
       levelRow(moved, diagnosticsTranslator('zh-Hant')).note,
-      '這是 +24 dB 時量的；+16 dB 的結果下一秒顯示。',
+      '此為 +24 dB 時的量測；+16 dB 的結果於下一秒顯示。',
     );
     assert.equal(levelRow({ ...moved, warning: 'too-loud' }).tone, 'warn');
   });

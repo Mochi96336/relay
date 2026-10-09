@@ -554,6 +554,53 @@ describe('browser AudioTransport', () => {
     assert.equal(transport.stats().webTransportCongestedRejects, 0);
   });
 
+  it('asks the browser to drop datagrams queued past 300 ms, only where it defines outgoingMaxAge', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    class MaxAgeWebTransport extends QueueingWebTransport {
+      override readonly datagrams = Object.assign(Object.create({ outgoingMaxAge: null }), {
+        maxDatagramSize: 65_535,
+        outgoingHighWaterMark: 1,
+        writable: { getWriter: () => this.writer },
+      });
+    }
+    for (const [WebTransportClass, expected] of [
+      [MaxAgeWebTransport, 300],
+      [QueueingWebTransport, null],
+    ] as const) {
+      const transport = new PreferredAudioTransport({ minimumPacketBytes: 26, WebTransportClass });
+      transport.bind(new FakeSocket());
+      await transport.prefer({ preferred: 'webtransport', url: 'https://media.example.test:4433/media?ticket=age' });
+      const instance = (WebTransportClass as typeof QueueingWebTransport).instances.at(-1)!;
+      assert.equal(transport.stats().datagramOutgoingMaxAgeMs, expected, WebTransportClass.name);
+      if (expected === null) {
+        assert.equal('outgoingMaxAge' in instance.datagrams, false, 'nothing is stored where the browser has no such setting');
+      }
+    }
+  });
+
+  it('keeps the WebTransport path when the browser throws on outgoingMaxAge', async () => {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    class ThrowingMaxAgeWebTransport extends QueueingWebTransport {
+      override readonly datagrams = Object.assign(Object.create(Object.defineProperty({}, 'outgoingMaxAge', {
+        get() { throw new Error('NotSupportedError'); },
+        set() { throw new Error('NotSupportedError'); },
+      })), {
+        maxDatagramSize: 65_535,
+        outgoingHighWaterMark: 1,
+        writable: { getWriter: () => this.writer },
+      });
+    }
+    const transport = new PreferredAudioTransport({ minimumPacketBytes: 26, WebTransportClass: ThrowingMaxAgeWebTransport });
+    transport.bind(new FakeSocket());
+    assert.equal(
+      await transport.prefer({ preferred: 'webtransport', url: 'https://media.example.test:4433/media?ticket=throws' }),
+      true,
+    );
+    assert.equal(transport.stats().path, 'webtransport');
+    assert.equal(transport.stats().webTransportConnections, 1);
+    assert.equal(transport.stats().datagramOutgoingMaxAgeMs, null);
+  });
+
   it('refuses a preferred path whose datagram budget cannot hold one application packet', async () => {
     const { PreferredAudioTransport } = await import(moduleUrl.href);
     const transport = new PreferredAudioTransport({

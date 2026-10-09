@@ -94,6 +94,56 @@ test('the correction is given back at the bounded rate once there is slack again
   assert.equal(subject.correctionSamples, held - 10); // 1% of a 20 ms frame
 });
 
+test('slack well past the margin is delayed audio that caught up, and is given back at once', () => {
+  const subject = correction();
+  let start = 100_000;
+  for (let index = 0; index < 60; index += 1, start += FRAME) subject.update(frame(subject, start, 4_800));
+  subject.update(frame(subject, start, -19_200));
+  start += FRAME;
+  // 150 ms of slack past the margin: holding on would keep the voice that late.
+  subject.update(frame(subject, start, MARGIN + 7_200));
+  assert.equal(subject.correctionSamples, 19_200 + MARGIN - 7_200);
+});
+
+test('audio still in transit is not held back for, but lateness from before it is kept', () => {
+  const subject = correction();
+  let start = 100_000;
+  for (let index = 0; index < 60; index += 1, start += FRAME) subject.update(frame(subject, start, 4_800));
+  // A capture that is steadily 400 ms late, with nothing in transit.
+  subject.update(frame(subject, start, -19_200));
+  start += FRAME;
+  const steady = subject.correctionSamples;
+  subject.noteTransit(40);
+
+  // The uplink starts queueing: the frontier falls a further second behind
+  // before a report says how much is in transit.
+  for (let index = 0; index < 60; index += 1, start += FRAME) {
+    subject.update(frame(subject, start, index === 0 ? -48_000 : 0));
+  }
+  assert.ok(subject.correctionSamples > steady, 'without evidence the read head is held back as before');
+
+  subject.noteTransit(1_000);
+  assert.equal(subject.correctionSamples, steady, 'only the lateness from before the queueing is kept');
+  for (let index = 0; index < 60; index += 1, start += FRAME) {
+    subject.update(frame(subject, start, -24_000));
+  }
+  assert.equal(subject.correctionSamples, steady, 'audio in transit is not waited for');
+
+  // The queue drains and live audio arrives: ordinary correction again.
+  subject.noteTransit(100);
+  subject.update(frame(subject, start, -4_800));
+  assert.equal(subject.correctionSamples, steady + 4_800 + MARGIN);
+});
+
+test('a report below the start of a transit episode does not start one', () => {
+  const subject = correction();
+  let start = 100_000;
+  for (let index = 0; index < 60; index += 1, start += FRAME) subject.update(frame(subject, start, 4_800));
+  subject.noteTransit(300);
+  subject.update(frame(subject, start, -19_200));
+  assert.equal(subject.correctionSamples, 19_200 + MARGIN);
+});
+
 test('confirmed capture loss is due to fold only for its own capture, near the bound', () => {
   const subject = correction();
   let start = 100_000;

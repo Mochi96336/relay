@@ -595,7 +595,7 @@ test('golden: late, stalled, recovered and silent Mic arrival', () => {
   const { digest, exercises } = lateStalledRecovered();
   assert.ok(exercises.maxCorrectionMs > 0, 'holds a late stream back');
   assert.ok(exercises.micStarvedSamples > 0, 'reports the outage as starvation');
-  assert.equal(digest, '17cb840cfa38193ae5ac6498e739d9d7764058cff061e878c48684cda5291078');
+  assert.equal(digest, 'd8e8d4bc180e85f26c8e51c5cf8124f048dfdcaca287396f7f2d1f0ac9095473');
 });
 
 test('golden: a slow capture clock spending the headroom', () => {

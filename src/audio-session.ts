@@ -593,6 +593,15 @@ export class AudioSession {
     this.micFrontier.noteCaptureLoss(generation, lossMs);
   }
 
+  /**
+   * Captured Mic audio of capture `generation` that had not reached Relay at
+   * its latest uplink report (MicUplinkBacklog). Only the current capture uses it.
+   */
+  noteMicTransitBacklog(generation: number, backlogMs: number) {
+    if (generation !== this.mic.generation) return;
+    this.micFrontier.noteTransit(backlogMs);
+  }
+
   /** Folds of confirmed capture loss into the Mic timeline since this mixer was created. */
   get micTimelineFoldCount() {
     return this.micFrontier.foldCount;

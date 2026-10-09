@@ -217,3 +217,54 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     await server.stop();
   }
 });
+
+test('statusz reports captured Mic audio that has not reached Relay yet', async () => {
+  const server = await startRelay({
+    RELAY_AUTO_CALIBRATE: '0',
+    RELAY_HEARTBEAT_MS: '60000',
+  });
+
+  try {
+    const publisher = await RelayClient.connect(
+      server,
+      participantQuery('participant-uplink-backlog', 'Uplink Backlog'),
+    );
+    publisher.send({
+      type: 'register',
+      role: 'publisher',
+      sampleRate: 48_000,
+      captureGeneration: publisher.generationId,
+      initialSequence: publisher.packetSequenceId,
+      audioPacketVersion: 2,
+    });
+    await publisher.waitForType('registered');
+
+    // One second of audio arrives; the phone reports two seconds captured.
+    for (let packet = 0; packet < 100; packet += 1) publisher.sendAudioPacket(Buffer.alloc(480 * 2));
+    await sleep(50);
+    publisher.send({ ...uplinkHealth(publisher.generationId), capturedSamples: 96_000 });
+    await sleep(50);
+
+    const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    assert.deepEqual(status.audio.micUplinkBacklog, {
+      generation: publisher.generationId,
+      backlogMs: 1_000,
+      maxBacklogMs: 1_000,
+    });
+    const logged = server.stderr().split('\n').find((line) => line.includes('[mic-uplink-backlog]'));
+    assert.ok(logged, 'a backlog past the start threshold is logged');
+    const { micHeadroomMs, ...edge } = JSON.parse(logged.slice(logged.indexOf('{')));
+    assert.equal(typeof micHeadroomMs, 'number');
+    assert.deepEqual(edge, {
+      edge: 'start',
+      generation: publisher.generationId,
+      backlogMs: 1_000,
+      episodeMaxBacklogMs: 1_000,
+      durationMs: 0,
+      mediaPath: 'websocket',
+      frontierCorrectionMs: 0,
+    });
+  } finally {
+    await server.stop();
+  }
+});

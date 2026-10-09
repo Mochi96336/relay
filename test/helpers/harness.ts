@@ -16,6 +16,8 @@ export type RelayServer = {
   httpUrl: (pathname?: string) => string;
   signal: (signal?: NodeJS.Signals) => Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   stop: () => Promise<void>;
+  /** Everything the server has written to stderr so far, where its diagnostic lines go. */
+  stderr: () => string;
 };
 
 /**
@@ -88,6 +90,7 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         httpUrl: (pathname = '/') => `http://127.0.0.1:${port}${pathname}`,
         signal,
         stop,
+        stderr: () => stderr,
       });
     });
   });

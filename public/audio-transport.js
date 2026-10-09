@@ -70,6 +70,13 @@ export const DEFAULT_RETRANSMIT_BUFFER_PACKETS = 128;
  * healthy for a while (see DEFAULT_WEBTRANSPORT_QUARANTINE_RELEASE_OBSERVATIONS).
  */
 export const DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 15_000, 30_000]);
+/** A short, bounded name for a WebTransport failure, for uplink health. */
+function webTransportErrorName(error) {
+  const name = typeof error?.name === 'string' && error.name ? error.name : 'Error';
+  const source = typeof error?.source === 'string' && error.source ? `/${error.source}` : '';
+  return `${name}${source}`.replace(/[^A-Za-z0-9/_-]/g, '').slice(0, 48) || 'Error';
+}
+
 const AUDIO_PACKET_MAGIC = 0x4c52;
 const AUDIO_PACKET_HEADER_BYTES = 24;
 
@@ -258,7 +265,13 @@ export class PreferredAudioTransport extends AudioTransport {
     datagramBacklogMs = DEFAULT_DATAGRAM_BACKLOG_MS,
     retransmitBufferPackets = DEFAULT_RETRANSMIT_BUFFER_PACKETS,
     webTransportRetryDelaysMs = DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS,
-    setTimer = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+    // A retry is no reason to keep a process alive: under Node a pending
+    // retry kept a test file from ever exiting (browsers have no unref).
+    setTimer = (callback, delayMs) => {
+      const timer = globalThis.setTimeout(callback, delayMs);
+      timer?.unref?.();
+      return timer;
+    },
     clearTimer = (handle) => globalThis.clearTimeout(handle),
     holdMediaUntilPreference = false,
     initialPreferenceHoldMs = 1_500,
@@ -332,6 +345,14 @@ export class PreferredAudioTransport extends AudioTransport {
     this.retryableOffer = null;
     this.webTransportRetryAttempt = 0;
     this.webTransportRetryTimer = null;
+    /**
+     * Why the latest WebTransport attempt did not become the media path, or
+     * null while none has failed: `connect:<error>` (ready rejected),
+     * `setup:<error>` (failed after ready), or `packet-budget:<bytes>`. On
+     * 2026-10-09 an iPhone repeatedly opened a session Relay saw and then fell
+     * back to WebSocket, and nothing said which step failed.
+     */
+    this.lastWebTransportFailure = null;
     this.holdMediaUntilPreference = holdMediaUntilPreference;
     this.initialPreferenceHoldMs = initialPreferenceHoldMs;
     // Phone publisher capture starts before Relay's registered/media offer can
@@ -544,6 +565,7 @@ export class PreferredAudioTransport extends AudioTransport {
       maxWebTransportMaxPacketBytes: this.maxWebTransportMaxPacketBytes,
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
       datagramQueuePackets: this.datagramQueuePackets,
+      webTransportLastFailure: this.lastWebTransportFailure,
       datagramBacklogPackets: this.datagramBacklogPackets,
       datagramBacklogMs: this.datagramBacklogMs,
       retransmitBufferPackets: this.retransmitBufferPackets,
@@ -846,9 +868,11 @@ export class PreferredAudioTransport extends AudioTransport {
     };
 
     let transport;
+    let stage = 'connect';
     try {
       transport = new this.WebTransportClass(offer.url, options);
       await transport.ready;
+      stage = 'setup';
       if (generation !== this.preferenceGeneration) {
         try { transport.close(); } catch {}
         return false;
@@ -857,7 +881,11 @@ export class PreferredAudioTransport extends AudioTransport {
       const maxPacketBytes = Number(transport.datagrams?.maxDatagramSize);
       if (!Number.isInteger(maxPacketBytes) || maxPacketBytes < this.minimumPacketBytes) {
         try { transport.close(); } catch {}
-        if (generation === this.preferenceGeneration) this.resolveInitialPreference();
+        this.lastWebTransportFailure = `packet-budget:${Number.isFinite(maxPacketBytes) ? maxPacketBytes : 'unknown'}`;
+        if (generation === this.preferenceGeneration) {
+          this.resolveInitialPreference();
+          if (!retry) this.scheduleWebTransportRetry();
+        }
         return false;
       }
 
@@ -896,7 +924,8 @@ export class PreferredAudioTransport extends AudioTransport {
         () => this.demoteWebTransport(transport),
       );
       return true;
-    } catch {
+    } catch (error) {
+      this.lastWebTransportFailure = `${stage}:${webTransportErrorName(error)}`;
       // A candidate can become a live HTTP/3 session before its datagram writer
       // is installed. If setup fails after `ready`, it is not `this.webTransport`
       // yet, so demoting the active slot alone would leave that candidate alive
@@ -907,6 +936,10 @@ export class PreferredAudioTransport extends AudioTransport {
       if (generation === this.preferenceGeneration) {
         this.demoteWebTransport();
         this.resolveInitialPreference();
+        // Demotion schedules a retry only for a path that was carrying audio.
+        // A first attempt that never got there was not retried at all, and the
+        // capture stayed on WebSocket until the control socket re-registered.
+        if (!retry) this.scheduleWebTransportRetry();
       }
       return false;
     }

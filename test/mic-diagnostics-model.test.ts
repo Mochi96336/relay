@@ -194,6 +194,19 @@ describe('Mic diagnostics model', () => {
     assert.deepEqual([described.input.value, described.input.tone], ['Muted', 'bad']);
   });
 
+  it('says why direct did not start, in words and as the page reported it', () => {
+    const described = rows(liveStatus((s) => {
+      s.audio.micMediaPath = 'websocket';
+      s.audio.captureAndSender.transport.webTransportLastFailure = 'setup:TypeError';
+    }));
+    assert.equal(described.path.value, 'Fallback (WebSocket)');
+    assert.match(described.path.note, /Direct did not start: it connected but could not be set up \(setup:TypeError\)\./);
+    const direct = rows(liveStatus((s) => {
+      s.audio.captureAndSender.transport.webTransportLastFailure = 'connect:Error';
+    }));
+    assert.doesNotMatch(direct.path.note, /did not start/, 'a failure already overcome is not news on the direct path');
+  });
+
   it('turns clock drift into what it does to the performance', () => {
     const slow = rows(liveStatus((s) => { s.audio.timeline.micClockDrift = { ppm: 80, windows: 24, spanMs: 115_000 }; })).drift;
     assert.equal(slow.value, '+80 ppm');

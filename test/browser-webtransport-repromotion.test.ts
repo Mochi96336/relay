@@ -150,3 +150,58 @@ describe('WebTransport re-promotion after a transport-level demotion', () => {
     assert.equal(ClosableWebTransport.instances.length, 1, 'a closed capture never reconnects');
   });
 });
+
+describe('a first WebTransport attempt that never connects', () => {
+  async function failingFirst(WebTransportClass: typeof ClosableWebTransport = ClosableWebTransport) {
+    const { PreferredAudioTransport } = await import(moduleUrl.href);
+    ClosableWebTransport.instances.length = 0;
+    ClosableWebTransport.failNext = 0;
+    const timers = manualTimers();
+    const transport = new PreferredAudioTransport({
+      minimumPacketBytes: 26,
+      WebTransportClass,
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
+    });
+    transport.bind(new FakeSocket());
+    return { transport, timers };
+  }
+
+  it('is retried on the backoff schedule, and says why it failed', async () => {
+    // 2026-10-09: each reload made one attempt, connected none and stayed on
+    // WebSocket until the page was reloaded again.
+    const { transport, timers } = await failingFirst();
+    ClosableWebTransport.failNext = 1;
+    assert.equal(await transport.prefer(offer), false);
+    assert.equal(transport.stats().path, 'websocket');
+    assert.equal(transport.stats().webTransportLastFailure, 'connect:Error');
+
+    assert.equal(timers.fireNext(), 2_000);
+    await settle();
+    assert.equal(transport.stats().path, 'webtransport');
+    assert.equal(transport.stats().webTransportConnections, 1);
+    assert.equal(transport.stats().webTransportRetries, 1);
+  });
+
+  it('names a failure after the session is up as a setup failure', async () => {
+    class UnwritableWebTransport extends ClosableWebTransport {
+      override readonly datagrams = {
+        maxDatagramSize: 1200,
+        writable: { getWriter: () => { throw new TypeError('no writer'); } },
+      } as unknown as ClosableWebTransport['datagrams'];
+    }
+    const { transport, timers } = await failingFirst(UnwritableWebTransport);
+    assert.equal(await transport.prefer(offer), false);
+    assert.equal(transport.stats().webTransportLastFailure, 'setup:TypeError');
+    assert.equal(timers.pending.length, 1, 'a retry is scheduled');
+  });
+
+  it('a newer offer is not a failure and schedules nothing of its own', async () => {
+    const { transport, timers } = await failingFirst();
+    const first = transport.prefer(offer);
+    transport.closeWebTransport();
+    assert.equal(await first, false);
+    assert.equal(transport.stats().webTransportLastFailure, null);
+    assert.equal(timers.pending.length, 0);
+  });
+});

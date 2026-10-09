@@ -132,11 +132,19 @@ function describePath(status, t) {
       'ok',
     );
   }
+  const failure = typeof transport?.webTransportLastFailure === 'string' ? transport.webTransportLastFailure : '';
+  const stage = failure.split(':')[0];
+  const failureKey = stage === 'connect' || stage === 'setup' || stage === 'packet-budget'
+    ? `diag.mic.path.failure.${stage}`
+    : null;
+  const failureNote = failureKey
+    ? `${t('diag.sentenceGap')}${t('diag.mic.path.failure', { reason: t(failureKey), code: failure })}`
+    : '';
   return row(
     'path',
     t('diag.mic.path'),
     t('diag.mic.path.fallback'),
-    `${t('diag.mic.path.fallbackNote')}${suffix}`,
+    `${t('diag.mic.path.fallbackNote')}${failureNote}${suffix}`,
     'neutral',
   );
 }

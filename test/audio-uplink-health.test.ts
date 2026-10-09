@@ -78,6 +78,17 @@ describe('audio uplink health', () => {
     });
   });
 
+  it('keeps the page\'s WebTransport failure reason short and plain', () => {
+    const health: any = validHealth();
+    health.transport.webTransportLastFailure = 'connect:WebTransportError/session';
+    assert.equal(parseAudioUplinkHealth(health)?.transport.webTransportLastFailure, 'connect:WebTransportError/session');
+    health.transport.webTransportLastFailure = `setup:<b>${'x'.repeat(200)}`;
+    const cleaned = parseAudioUplinkHealth(health)?.transport.webTransportLastFailure;
+    assert.ok(cleaned && cleaned.length <= 64 && !/[<>]/.test(cleaned), String(cleaned));
+    delete health.transport.webTransportLastFailure;
+    assert.equal(parseAudioUplinkHealth(health)?.transport.webTransportLastFailure, null, 'older pages omit it');
+  });
+
   it('accepts capture dispatch evidence and cumulative pre-transport drops', () => {
     const input: any = validHealth();
     input.captureDispatch = {

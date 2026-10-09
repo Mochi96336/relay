@@ -2211,6 +2211,25 @@ function noteMicTransit(nowMs: number) {
   session.noteMicTransitBacklog(transit.generation, transit.backlogMs);
 }
 
+let reportedMicWebTransportFailure: { generation: number; failure: string | null } | null = null;
+
+/** Logs each new reason the page gives for a WebTransport attempt that did not take. */
+function reportMicWebTransportFailure(health: AudioUplinkHealth) {
+  const failure = health.transport.webTransportLastFailure ?? null;
+  const previous = reportedMicWebTransportFailure;
+  if (previous?.generation === health.captureGeneration && previous.failure === failure) return;
+  reportedMicWebTransportFailure = { generation: health.captureGeneration, failure };
+  if (failure === null) return;
+  console.warn('[mic-webtransport]', JSON.stringify({
+    generation: health.captureGeneration,
+    failure,
+    path: health.transport.path,
+    attempts: health.transport.webTransportAttempts,
+    connections: health.transport.webTransportConnections,
+    retries: health.transport.webTransportRetries,
+  }));
+}
+
 /**
  * Logs captured Mic audio that has not reached Relay yet (see MicUplinkBacklog)
  * when it builds up, while it lasts, and when it clears.
@@ -3523,6 +3542,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (accepted) noteRecordingMicGapHealth(health);
     if (accepted) reportMicDevice(health);
     if (accepted) noteMicCaptureDelivery(health, nowMs);
+    if (accepted) reportMicWebTransportFailure(health);
     return;
   },
   micPresenceTelemetry: (socket, payload) => {

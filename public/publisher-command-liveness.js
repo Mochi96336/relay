@@ -1,5 +1,15 @@
 export const DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS = 3_000;
 export const DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS = 4_000;
+/**
+ * A stale ACK alone does not prove the socket is dead. On 2026-10-09 a
+ * congested uplink kept ACKs over 4 s late; closing the socket every time
+ * reconnected ten times in 2.5 minutes over the same congested path and lost
+ * 37 s of voice. The socket is replaced only once nothing at all has arrived
+ * on it for this long - it carries the room broadcasts, so a live one is never
+ * quiet - or once no ACK has come back for the give-up time.
+ */
+export const DEFAULT_PUBLISHER_CONTROL_SILENCE_MS = 10_000;
+export const DEFAULT_PUBLISHER_COMMAND_GIVE_UP_MS = 30_000;
 
 function uint32(value) {
   const number = Number(value);
@@ -12,6 +22,8 @@ export class PublisherCommandLiveness {
   constructor({
     freshMs = DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS,
     reconnectMs = DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS,
+    silenceMs = DEFAULT_PUBLISHER_CONTROL_SILENCE_MS,
+    giveUpMs = DEFAULT_PUBLISHER_COMMAND_GIVE_UP_MS,
   } = {}) {
     if (!Number.isFinite(freshMs) || freshMs <= 0) {
       throw new Error('Publisher command freshMs must be positive.');
@@ -19,8 +31,16 @@ export class PublisherCommandLiveness {
     if (!Number.isFinite(reconnectMs) || reconnectMs <= freshMs) {
       throw new Error('Publisher command reconnectMs must be greater than freshMs.');
     }
+    if (!Number.isFinite(silenceMs) || silenceMs < reconnectMs) {
+      throw new Error('Publisher control silenceMs must be at least reconnectMs.');
+    }
+    if (!Number.isFinite(giveUpMs) || giveUpMs < silenceMs) {
+      throw new Error('Publisher command giveUpMs must be at least silenceMs.');
+    }
     this.freshMs = freshMs;
     this.reconnectMs = reconnectMs;
+    this.silenceMs = silenceMs;
+    this.giveUpMs = giveUpMs;
     this.nextHealthRequestId = 0;
     this.pendingHealthRequests = new Map();
     this.reset();
@@ -30,7 +50,14 @@ export class PublisherCommandLiveness {
     this.generation = null;
     this.startedAtMs = -Infinity;
     this.lastAckAtMs = -Infinity;
+    this.lastInboundAtMs = -Infinity;
     this.pendingHealthRequests.clear();
+  }
+
+  /** Anything arrived on the command socket. */
+  noteInbound(nowMs) {
+    if (!Number.isFinite(nowMs)) return;
+    this.lastInboundAtMs = Math.max(this.lastInboundAtMs, nowMs);
   }
 
   begin(generation, nowMs) {
@@ -40,6 +67,8 @@ export class PublisherCommandLiveness {
     this.generation = normalizedGeneration;
     this.startedAtMs = nowMs;
     this.lastAckAtMs = -Infinity;
+    // A new socket has said nothing yet: its silence starts now.
+    this.lastInboundAtMs = nowMs;
     this.pendingHealthRequests.clear();
   }
 
@@ -93,9 +122,10 @@ export class PublisherCommandLiveness {
     const acknowledged = Number.isFinite(this.lastAckAtMs);
     const referenceAt = acknowledged ? this.lastAckAtMs : this.startedAtMs;
     const ageMs = Math.max(0, nowMs - referenceAt);
+    const silentMs = Math.max(0, nowMs - this.lastInboundAtMs);
     return {
       fresh: acknowledged && ageMs < this.freshMs,
-      reconnect: ageMs >= this.reconnectMs,
+      reconnect: (ageMs >= this.reconnectMs && silentMs >= this.silenceMs) || ageMs >= this.giveUpMs,
       ackAgeMs: acknowledged ? Math.round(ageMs) : null,
     };
   }

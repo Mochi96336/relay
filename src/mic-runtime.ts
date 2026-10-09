@@ -26,12 +26,26 @@ const RETRANSMIT_MIN_MIX_HEADROOM_MS = 60;
 const RETRANSMIT_PATH_GRACE_MS = 500;
 
 export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
+/**
+ * A v2 publisher control socket is closed only once nothing at all has arrived
+ * on it for this long. Health that is merely late is not a dead socket: on
+ * 2026-10-09 a congested uplink delayed health past 4 s, the socket was closed
+ * as stale, and the reconnect over the same congested path dropped audio. Ten
+ * reconnects in 2.5 minutes cost 37 s of voice.
+ */
+export const DEFAULT_PUBLISHER_CONTROL_SILENCE_MS = 10_000;
+/** A socket that keeps talking but never sends health Relay accepts is closed after this. */
+export const DEFAULT_PUBLISHER_HEALTH_GIVE_UP_MS = 30_000;
 
 export type MicRuntimeOptions = {
   audioTransportConfig: AudioTransportConfig;
   firstFrameTimeoutMs: number;
   streamLiveMs: number;
   uplinkHealthTimeoutMs?: number;
+  /** Never shorter than uplinkHealthTimeoutMs. */
+  publisherControlSilenceMs?: number;
+  /** Never shorter than publisherControlSilenceMs. */
+  publisherHealthGiveUpMs?: number;
   createDirectMediaTicket?: () => string | null;
   directMediaConnected?: (ticket: string | null) => boolean;
   /** Best-effort datagram to the page over its direct media session. */
@@ -69,6 +83,12 @@ export type MicPublisherBindResult = {
 export class MicRuntime {
   private readonly options: MicRuntimeOptions;
   private readonly uplinkHealthTimeoutMs: number;
+  private readonly publisherControlSilenceMs: number;
+  private readonly publisherHealthGiveUpMs: number;
+  /** When anything last arrived on the current publisher socket. */
+  private publisherInboundAt = -Infinity;
+  /** When the current publisher socket was bound or last sent health Relay accepted. */
+  private publisherHealthAt = -Infinity;
   private currentPublisher: RelaySocket | null = null;
   private currentSampleRate: number | null = null;
   private currentAudioTransport: AudioTransport | null = null;
@@ -116,6 +136,19 @@ export class MicRuntime {
       throw new Error('MicRuntime uplinkHealthTimeoutMs must be positive.');
     }
     this.uplinkHealthTimeoutMs = uplinkHealthTimeoutMs;
+    this.publisherControlSilenceMs = Math.max(
+      uplinkHealthTimeoutMs,
+      options.publisherControlSilenceMs ?? DEFAULT_PUBLISHER_CONTROL_SILENCE_MS,
+    );
+    this.publisherHealthGiveUpMs = Math.max(
+      this.publisherControlSilenceMs,
+      options.publisherHealthGiveUpMs ?? DEFAULT_PUBLISHER_HEALTH_GIVE_UP_MS,
+    );
+  }
+
+  /** Something arrived on `socket`: if it is the publisher's, it is not silent. */
+  noteInbound(socket: RelaySocket, nowMs = performance.now()) {
+    if (socket === this.currentPublisher) this.publisherInboundAt = Math.max(this.publisherInboundAt, nowMs);
   }
 
   get publisher() {
@@ -221,6 +254,9 @@ export class MicRuntime {
     socket.audioPacketVersion = audioPacketVersion;
     this.currentPublisher = socket;
     this.currentSampleRate = sampleRate;
+    // A new physical socket has said nothing yet: its silence starts now.
+    this.publisherInboundAt = -Infinity;
+    this.publisherHealthAt = -Infinity;
     this.armUplinkHealthDeadline(socket, captureGeneration, audioPacketVersion);
 
     if (!preservedAudioTransport) {
@@ -439,6 +475,8 @@ export class MicRuntime {
     this.latestUplinkHealthCapturedSamples = health.capturedSamples;
     this.currentUplinkHealth = health;
     this.currentUplinkHealthAt = nowMs;
+    this.publisherHealthAt = performance.now();
+    this.publisherInboundAt = Math.max(this.publisherInboundAt, this.publisherHealthAt);
     this.armUplinkHealthDeadline(socket, health.captureGeneration, 2);
     if (socket.readyState === WebSocket.OPEN && typeof socket.send === 'function') {
       try {
@@ -491,9 +529,13 @@ export class MicRuntime {
   ) {
     this.clearUplinkHealthDeadline();
     if (audioPacketVersion !== 2 || captureGeneration === null) return;
+    if (!Number.isFinite(this.publisherHealthAt)) {
+      // Bound now: silence and the health give-up both count from here.
+      this.publisherHealthAt = performance.now();
+      this.publisherInboundAt = this.publisherHealthAt;
+    }
 
-    const timer = setTimeout(() => {
-      if (this.uplinkHealthDeadline !== timer) return;
+    const check = () => {
       this.uplinkHealthDeadline = null;
       if (
         this.currentPublisher !== socket
@@ -501,6 +543,16 @@ export class MicRuntime {
         || socket.audioPacketVersion !== 2
         || socket.captureGeneration !== captureGeneration
       ) return;
+      const nowMs = performance.now();
+      const silentForMs = nowMs - this.publisherInboundAt;
+      const healthAgeMs = nowMs - this.publisherHealthAt;
+      if (silentForMs < this.publisherControlSilenceMs && healthAgeMs < this.publisherHealthGiveUpMs) {
+        schedule(Math.min(
+          this.publisherControlSilenceMs - silentForMs,
+          this.publisherHealthGiveUpMs - healthAgeMs,
+        ));
+        return;
+      }
       try {
         socket.close(4000, 'publisher uplink health stale');
       } catch {
@@ -508,9 +560,18 @@ export class MicRuntime {
           socket.terminate();
         } catch {}
       }
-    }, this.uplinkHealthTimeoutMs);
-    timer.unref?.();
-    this.uplinkHealthDeadline = timer;
+    };
+    const schedule = (delayMs: number) => {
+      const timer = setTimeout(() => {
+        if (this.uplinkHealthDeadline === timer) check();
+      }, Math.max(1, delayMs));
+      timer.unref?.();
+      this.uplinkHealthDeadline = timer;
+    };
+    schedule(Math.min(
+      this.publisherControlSilenceMs - (performance.now() - this.publisherInboundAt),
+      this.publisherHealthGiveUpMs - (performance.now() - this.publisherHealthAt),
+    ));
   }
 
   resetFlowEvidence(nowMs: number) {

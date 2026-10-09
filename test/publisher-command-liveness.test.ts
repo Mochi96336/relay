@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS,
+  DEFAULT_PUBLISHER_COMMAND_GIVE_UP_MS,
   DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS,
+  DEFAULT_PUBLISHER_CONTROL_SILENCE_MS,
   PublisherCommandLiveness,
 } from '../public/publisher-command-liveness.js';
 
@@ -10,7 +12,7 @@ test('publisher command channel stays stale until a correlated current-generatio
   const liveness = new PublisherCommandLiveness();
   liveness.begin(7, 1_000);
   assert.deepEqual(liveness.status(1_000), { fresh: false, reconnect: false, ackAgeMs: null });
-  assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
+  assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_CONTROL_SILENCE_MS).reconnect, true);
 });
 
 test('current-generation ACK freshness is measured from the request send time', () => {
@@ -21,7 +23,7 @@ test('current-generation ACK freshness is measured from the request send time', 
   assert.equal(liveness.noteAck(11, requestId!, 1_200), true);
   assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS - 1).fresh, true);
   assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS).fresh, false);
-  assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
+  assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_CONTROL_SILENCE_MS).reconnect, true);
 });
 
 test('a delayed health ACK cannot renew command freshness from its arrival time', () => {
@@ -35,7 +37,7 @@ test('a delayed health ACK cannot renew command freshness from its arrival time'
   // evidence: the command channel has not proven a recent round trip.
   assert.equal(liveness.noteAck(17, requestId!, 3_500), true);
   assert.equal(liveness.status(3_500).fresh, false);
-  assert.equal(liveness.status(DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS).reconnect, true);
+  assert.equal(liveness.status(DEFAULT_PUBLISHER_CONTROL_SILENCE_MS).reconnect, true);
 });
 
 test('failed health sends cannot later become command freshness evidence', () => {
@@ -112,3 +114,42 @@ test('reset revokes command freshness and pending correlation without creating a
   assert.equal(liveness.noteAck(3, pendingRequestId!, 250), false);
   assert.deepEqual(liveness.status(100_000), { fresh: false, reconnect: false, ackAgeMs: null });
 });
+
+test('a late ACK on a socket that keeps receiving is stale but not a reason to reconnect', () => {
+  // As on 2026-10-09: congestion holds ACKs over 4 s while broadcasts still
+  // trickle in. The controls go stale; the socket is kept.
+  const liveness = new PublisherCommandLiveness();
+  liveness.begin(21, 0);
+  const requestId = liveness.beginHealthRequest(0)!;
+  liveness.noteAck(21, requestId, 200);
+  for (let nowMs = 500; nowMs <= 20_000; nowMs += 500) liveness.noteInbound(nowMs);
+
+  const status = liveness.status(20_000);
+  assert.equal(status.fresh, false);
+  assert.equal(status.reconnect, false);
+});
+
+test('a socket on which nothing arrives is replaced once it has been silent long enough', () => {
+  const liveness = new PublisherCommandLiveness();
+  liveness.begin(22, 0);
+  const requestId = liveness.beginHealthRequest(0)!;
+  liveness.noteAck(22, requestId, 100);
+  liveness.noteInbound(1_000);
+  assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_CONTROL_SILENCE_MS - 1).reconnect, false);
+  assert.equal(liveness.status(1_000 + DEFAULT_PUBLISHER_CONTROL_SILENCE_MS).reconnect, true);
+});
+
+test('a socket that keeps receiving but never gets an ACK is replaced at the give-up', () => {
+  const liveness = new PublisherCommandLiveness();
+  liveness.begin(23, 0);
+  for (let nowMs = 500; nowMs <= DEFAULT_PUBLISHER_COMMAND_GIVE_UP_MS; nowMs += 500) liveness.noteInbound(nowMs);
+  assert.equal(liveness.status(DEFAULT_PUBLISHER_COMMAND_GIVE_UP_MS - 1).reconnect, false);
+  assert.equal(liveness.status(DEFAULT_PUBLISHER_COMMAND_GIVE_UP_MS).reconnect, true);
+});
+
+test('the reconnect limits keep their order', () => {
+  assert.ok(DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS <= DEFAULT_PUBLISHER_CONTROL_SILENCE_MS);
+  assert.throws(() => new PublisherCommandLiveness({ silenceMs: 1_000 }), /silenceMs/);
+  assert.throws(() => new PublisherCommandLiveness({ giveUpMs: 5_000 }), /giveUpMs/);
+});
+

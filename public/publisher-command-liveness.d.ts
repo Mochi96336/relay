@@ -1,9 +1,13 @@
 export const DEFAULT_PUBLISHER_COMMAND_ACK_FRESH_MS: number;
 export const DEFAULT_PUBLISHER_COMMAND_RECONNECT_MS: number;
+export const DEFAULT_PUBLISHER_CONTROL_SILENCE_MS: number;
+export const DEFAULT_PUBLISHER_COMMAND_GIVE_UP_MS: number;
 
 export type PublisherCommandLivenessOptions = {
   freshMs?: number;
   reconnectMs?: number;
+  silenceMs?: number;
+  giveUpMs?: number;
 };
 
 export type PublisherCommandLivenessStatus = {
@@ -15,6 +19,7 @@ export type PublisherCommandLivenessStatus = {
 export class PublisherCommandLiveness {
   constructor(options?: PublisherCommandLivenessOptions);
   reset(): void;
+  noteInbound(nowMs: number): void;
   begin(generation: number, nowMs: number): void;
   beginHealthRequest(nowMs: number): number | null;
   cancelHealthRequest(requestId: number): boolean;

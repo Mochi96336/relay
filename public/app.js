@@ -796,7 +796,7 @@ function maintainPublisherCommandChannel() {
     updateSingerControls();
     setStatus(
       'Reconnecting microphone…',
-      'Relay control acknowledgement stopped; restarting the control connection.',
+      'Relay stopped answering; restarting the control connection.',
     );
     const staleSocket = socket;
     try {
@@ -1424,6 +1424,7 @@ async function connectPublisherSocket(
   publisherControlConnections += 1;
 
   ws.addEventListener('message', (event) => {
+    if (socket === ws) publisherCommandLiveness.noteInbound(performance.now());
     if (
       socket !== ws
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)

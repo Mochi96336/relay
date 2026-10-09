@@ -4314,6 +4314,7 @@ wss.on('connection', (rawSocket, request) => {
 
   socket.on('message', (data, isBinary) => {
     if (shuttingDown) return;
+    micRuntime.noteInbound(socket);
     if (isBinary) {
       audioUplinkReceived(socket, data as Buffer);
       return;

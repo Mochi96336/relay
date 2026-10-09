@@ -56,6 +56,7 @@ import { MicLevelMonitor } from './mic-level-monitor.js';
 import { MicGainMemory } from './mic-gain-memory.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
+import { MicUplinkBacklog } from './mic-uplink-backlog.js';
 import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
@@ -280,6 +281,7 @@ const micClockDrift = new MicClockDriftEstimator();
  * what lets AudioSession fold a growing frontier correction into the timeline.
  */
 const micCaptureDelivery = new MicCaptureDeliveryMonitor();
+const micUplinkBacklog = new MicUplinkBacklog();
 let micCaptureFallingBehind = false;
 let reportedMicTimelineFolds = 0;
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
@@ -1666,6 +1668,7 @@ function remoteStatusFacts(nowMs: number): RemoteStatusFacts {
       timelineFolds: session.micTimelineFoldCount,
       lastTimelineFold: session.lastMicTimelineFold,
       captureDelivery: micCaptureDelivery.status(),
+      uplinkBacklog: micUplinkBacklog.status(),
     },
   };
 }
@@ -2070,6 +2073,9 @@ function processPublisherFrame(frame: PcmFrame) {
   // session is always running.
   if (!session.active) startLiveSource();
 
+  if (frame.generation !== null && frame.firstSampleIndex !== null) {
+    micUplinkBacklog.noteArrived(frame.generation, frame.firstSampleIndex + frame.pcm.byteLength / 2);
+  }
   const nowMs = performance.now();
   const { samples, start, captureRestarted } = session.ingestMic(
     frame,
@@ -2156,6 +2162,7 @@ function noteMicCaptureDelivery(health: AudioUplinkHealth, nowMs: number) {
     sampleRate: micRuntime.sampleRate,
     atMs: nowMs,
   });
+  noteMicUplinkBacklog(health, micRuntime.sampleRate, nowMs);
   const delivery = micCaptureDelivery.status();
   if (!delivery) return;
   session.noteMicCaptureLoss(delivery.generation, delivery.lossMs);
@@ -2167,6 +2174,26 @@ function noteMicCaptureDelivery(health: AudioUplinkHealth, nowMs: number) {
     micCaptureFallingBehind = fallingBehind;
     console.warn('[mic-capture]', JSON.stringify({ fallingBehind, ...delivery }));
   }
+}
+
+/**
+ * Logs captured Mic audio that has not reached Relay yet (see MicUplinkBacklog)
+ * when it builds up, while it lasts, and when it clears.
+ */
+function noteMicUplinkBacklog(health: AudioUplinkHealth, sampleRate: number, nowMs: number) {
+  const edge = micUplinkBacklog.observeHealth({
+    generation: health.captureGeneration,
+    capturedSamples: health.capturedSamples,
+    sampleRate,
+    atMs: nowMs,
+  });
+  if (!edge) return;
+  console.warn('[mic-uplink-backlog]', JSON.stringify({
+    ...edge,
+    mediaPath: micMediaPath(),
+    frontierCorrectionMs: Math.round(session.micFrontierCorrectionMs),
+    micHeadroomMs: session.health().micHeadroomMs,
+  }));
 }
 
 /**
@@ -2282,6 +2309,7 @@ function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
     mediaPath: micMediaPath(),
     micStreaming: micStreaming(nowMs),
     micFrameAgeMs: micRuntime.frameAgeMs(nowMs),
+    uplinkBacklogMs: micUplinkBacklog.status()?.backlogMs ?? null,
     receiverWindow: receiver ? {
       received: delta('receivedPackets'),
       emitted: delta('emittedPackets'),

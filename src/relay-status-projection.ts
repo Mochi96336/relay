@@ -2,6 +2,7 @@ import type { MicTimelineFold, MixHealth } from './audio-session.js';
 import type { MicAudibilityMonitor } from './mic-audibility-monitor.js';
 import type { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import type { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
+import type { MicUplinkBacklog } from './mic-uplink-backlog.js';
 import type { MicLevelMonitor, MicLevelWarning } from './mic-level-monitor.js';
 import type { MicRuntime } from './mic-runtime.js';
 import type { TakeControllerStatusPayload } from './take-controller.js';
@@ -62,6 +63,7 @@ export type RemoteStatusFacts = {
     timelineFolds: number;
     lastTimelineFold: MicTimelineFold | null;
     captureDelivery: ReturnType<MicCaptureDeliveryMonitor['status']>;
+    uplinkBacklog: ReturnType<MicUplinkBacklog['status']>;
   };
 };
 
@@ -151,6 +153,7 @@ export function projectRemoteStatus(facts: RemoteStatusFacts) {
         lastMicTimelineFold: mic.lastTimelineFold,
       },
       micCaptureDelivery: mic.captureDelivery,
+      micUplinkBacklog: mic.uplinkBacklog,
     },
   };
 }

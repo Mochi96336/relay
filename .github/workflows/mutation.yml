@@ -1,0 +1,94 @@
+name: Mutation check
+
+# Push a branch named mutation/<anything> carrying mutation/spec.json. Every
+# mutation in the spec runs on its own runner, so a 20-mutation check takes
+# about as long as one test run instead of twenty in a row. A spec with
+# "runner": "playwright" gets Chromium and public/ served on 127.0.0.1:4173,
+# as the CI browser job has, so the page loads the mutated file.
+on:
+  push:
+    branches: ['mutation/**']
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      indices: ${{ steps.plan.outputs.indices }}
+      runner: ${{ steps.plan.outputs.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - id: plan
+        run: |
+          echo "indices=$(node -e "const s=require('./mutation/spec.json');console.log(JSON.stringify([-1,...s.mutations.map((_, i) => i)]))")" >> "$GITHUB_OUTPUT"
+          echo "runner=$(node -e "console.log(require('./mutation/spec.json').runner ?? 'node')")" >> "$GITHUB_OUTPUT"
+
+  mutate:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        index: ${{ fromJSON(needs.plan.outputs.indices) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium and the Playwright runner
+        if: needs.plan.outputs.runner == 'playwright'
+        run: |
+          npx -y playwright@1.55.0 install chromium
+          npm install --no-save --package-lock=false @playwright/test@1.55.0
+      - name: Serve public/ from the working tree
+        if: needs.plan.outputs.runner == 'playwright'
+        run: |
+          ln -s ../shared public/shared
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory public > /tmp/relay-http.log 2>&1 &
+          for attempt in {1..20}; do
+            curl --fail --silent http://127.0.0.1:4173/shared/playback-policy.js > /dev/null && exit 0
+            sleep 0.25
+          done
+          cat /tmp/relay-http.log
+          exit 1
+      - name: Apply mutation and run its tests
+        env:
+          RELAY_INTERACTION_URL: http://127.0.0.1:4173/
+        run: node scripts/mutation-check.mjs mutation/spec.json ${{ matrix.index }} | tee result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutation-result-${{ matrix.index }}
+          path: result.json
+
+  report:
+    needs: mutate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutation-result-*
+      - name: Summarise
+        run: |
+          node -e '
+            const fs = require("fs");
+            const rows = fs.readdirSync(".").filter((d) => d.startsWith("mutation-result-"))
+              .map((d) => JSON.parse(fs.readFileSync(`${d}/result.json`, "utf8")))
+              .sort((a, b) => a.index - b.index);
+            const lines = ["| # | mutation | caught | failures | failed tests |", "| --- | --- | --- | --- | --- |"];
+            for (const r of rows) {
+              const caught = r.error ? `error: ${r.error}` : r.index < 0 ? (r.caught ? "BASELINE RED" : "baseline green") : (r.caught ? "yes" : "**no**");
+              lines.push(`| ${r.index} | \`${String(r.label).replace(/\|/g, "\\|")}\` | ${caught} | ${r.failures ?? ""} | ${(r.failedTests ?? []).slice(0, 3).join("; ").replace(/\|/g, "\\|")} |`);
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+            console.log(lines.join("\n"));
+          '

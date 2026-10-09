@@ -64,12 +64,14 @@ function fakeSocket(participantId = 'participant-alice') {
   return { socket, sent, closed, terminated: () => terminated };
 }
 
-function runtime(timeoutMs = 40) {
+function runtime(timeoutMs = 40, giveUpMs = timeoutMs * 4) {
   return new MicRuntime({
     audioTransportConfig: DEFAULT_AUDIO_TRANSPORT_CONFIG,
     firstFrameTimeoutMs: 3_000,
     streamLiveMs: 1_000,
     uplinkHealthTimeoutMs: timeoutMs,
+    publisherControlSilenceMs: timeoutMs,
+    publisherHealthGiveUpMs: giveUpMs,
   });
 }
 
@@ -107,7 +109,7 @@ test('accepted current-generation uplink health renews the lease and gets an app
   mic.detachPublisher(current.socket);
 });
 
-test('a v2 publisher control socket is closed when application health stops advancing', async () => {
+test('a v2 publisher control socket is closed once nothing arrives on it', async () => {
   const mic = runtime(25);
   const current = fakeSocket();
   bindV2(mic, current.socket, 9);
@@ -150,4 +152,48 @@ test('replacing a publisher moves the liveness lease to the new physical socket'
   assert.equal(first.closed.length, 0, 'an old deadline must never close a replacement socket');
   assert.deepEqual(replacement.closed, [{ code: 4000, reason: 'publisher uplink health stale' }]);
   mic.detachPublisher(replacement.socket);
+});
+
+test('a publisher socket that keeps receiving is not closed while its health is merely late', async () => {
+  // A congested uplink: health is seconds late, but the socket is not dead.
+  const mic = runtime(40, 1_000);
+  const current = fakeSocket();
+  bindV2(mic, current.socket, 14);
+
+  const until = performance.now() + 200;
+  while (performance.now() < until) {
+    mic.noteInbound(current.socket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(current.closed, [], 'five silence windows passed, but something kept arriving');
+  mic.detachPublisher(current.socket);
+});
+
+test('a publisher socket that keeps receiving but never sends accepted health is closed at the give-up', async () => {
+  const mic = runtime(40, 150);
+  const current = fakeSocket();
+  bindV2(mic, current.socket, 15);
+
+  const until = performance.now() + 300;
+  while (performance.now() < until && current.closed.length === 0) {
+    mic.noteInbound(current.socket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(current.closed, [{ code: 4000, reason: 'publisher uplink health stale' }]);
+  mic.detachPublisher(current.socket);
+});
+
+test('messages on another socket do not keep the publisher socket open', async () => {
+  const mic = runtime(30, 1_000);
+  const current = fakeSocket();
+  const other = fakeSocket();
+  bindV2(mic, current.socket, 16);
+
+  const until = performance.now() + 120;
+  while (performance.now() < until) {
+    mic.noteInbound(other.socket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(current.closed, [{ code: 4000, reason: 'publisher uplink health stale' }]);
+  mic.detachPublisher(current.socket);
 });

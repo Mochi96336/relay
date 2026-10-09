@@ -260,6 +260,12 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
   assert.equal(window.relayTimingAuthority.valueMs, 42);
   assert.equal(timingValue.textContent, '+42 ms');
 
+  // The frontier correction holds the read head behind late audio; the value
+  // beside Realign stays the calibration (2026-10-09 showed -2800 ms here).
+  socket.message({ type: 'source-status', active: true, appliedMicAdvanceMs: -2_758, micFrontierCorrectionMs: 2_800 });
+  assert.equal(window.relayTimingAuthority.valueMs, 42);
+  assert.equal(timingValue.textContent, '+42 ms');
+
   clock.advance(1_000);
   socket.message({ type: 'source-status', active: true, appliedMicAdvanceMs: 43 });
   assert.equal(window.relayTimingAuthority.authorityFresh, true);

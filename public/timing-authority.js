@@ -91,7 +91,15 @@ function waitingForRobotPlayerDelta(message) {
 function acceptSourceStatus(message) {
   if (message?.type !== 'source-status') return;
   observeSourceStatus();
-  const applied = message.appliedMicAdvanceMs;
+  // The value beside Realign is the alignment calibration asked for. The
+  // frontier correction holds the read head behind audio that has not arrived
+  // (capture slip, a late anchor); added in, it showed -2800 ms beside Realign
+  // on 2026-10-09 while the calibration was +15 ms and, for capture slip, the
+  // voice was not late at all.
+  const correction = Number.isFinite(message.micFrontierCorrectionMs) ? message.micFrontierCorrectionMs : 0;
+  const applied = typeof message.appliedMicAdvanceMs === 'number'
+    ? message.appliedMicAdvanceMs + correction
+    : message.appliedMicAdvanceMs;
   // A completed Robot path probe without a fresh player delta is not a 0 ms
   // user alignment. The mixer temporarily falls back to its network estimate
   // until advance = Lmic - Lbacking + playerDelta can be completed. Do not

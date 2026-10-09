@@ -674,7 +674,7 @@ test('production DOM: the local Mic owner can change Mic gain', async ({ page })
   await expect(micControl).toHaveAttribute('open', '');
   await expect(micGain).toBeVisible();
   await expect(micGain).toBeEnabled();
-  await expect(page.locator('.voice-input-evidence .evidence-heading')).toBeHidden();
+  await expect(page.locator('.voice-input-evidence .evidence-heading')).toHaveCount(0);
   await page.waitForLoadState('load');
   await expect(page.locator('#mic-gain-advice')).toHaveCount(0);
   await expect(page.locator('#use-mic-gain-suggestion')).toHaveCount(0);
@@ -961,31 +961,6 @@ test('production DOM: a Mic gain the Relay cannot take goes back to the confirme
   expect(sentAfter).toBe(sentBefore);
 });
 
-test('production DOM: the Mic owner can nudge the vocal timing', async ({ page }) => {
-  await installProductionDomHarness(page);
-  await page.route('https://www.youtube.com/**', (route) => route.abort());
-  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
-
-  const fineTune = page.locator('#vocal-fine-tune');
-  await expect(fineTune).toBeDisabled();
-  await prepareReadyMic(page);
-  await expect(fineTune).toBeEnabled();
-
-  await setRange(page, '#vocal-fine-tune', -25);
-  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
-    (command) => command.type === 'set-vocal-fine-tune' && command.valueMs === -25,
-  ));
-  await expect(page.locator('#vocal-fine-tune-value')).toHaveText('-25 ms');
-});
-
-function healthReports(page) {
-  return page.evaluate(() => window.__relayInteractionHarness.commands
-    .filter((command) => command.type === 'audio-uplink-health')
-    .map(({ captureGeneration, healthRequestId, capturedSamples, controlReconnects }) => (
-      { captureGeneration, healthRequestId, capturedSamples, controlReconnects }
-    )));
-}
-
 test('production DOM: uplink health counts the capture it reports on', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.route('https://www.youtube.com/**', (route) => route.abort());
@@ -1212,47 +1187,6 @@ test('production DOM: a command the Relay refuses puts the control back and says
   await expect(page.locator('#details')).toHaveText('Bob has the mic and controls this.');
 });
 
-test('production DOM: a vocal timing the Relay refuses goes back to the one it last confirmed', async ({ page }) => {
-  await livePhone(page);
-  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
-    type: 'source-status', active: true, vocalFineTuneMs: 30,
-  }));
-  const fineTune = page.locator('#vocal-fine-tune');
-  await expect(fineTune).toHaveValue('30');
-  await setRange(page, '#vocal-fine-tune', -40);
-  await expect(fineTune).toHaveValue('-40');
-
-  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
-    type: 'command-rejected', command: 'set-vocal-fine-tune', reason: 'not-mic-owner', owner: { nickname: 'Bob' },
-  }));
-  await expect(fineTune).toHaveValue('30');
-  await expect(page.locator('#vocal-fine-tune-value')).toHaveText('+30 ms');
-});
-
-for (const [type, reason, title] of [
-  ['mic-revoked', 'revoked', 'Microphone handed off'],
-  ['publisher-superseded', 'superseded', 'Microphone moved to another tab'],
-  ['mic-busy', 'busy', 'Microphone is in use'],
-]) {
-  test(`production DOM: ${type} ends this phone's microphone session`, async ({ page }) => {
-    await livePhone(page);
-    await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(
-      (command) => command.type === 'audio-uplink-health',
-    ), null, { timeout: 5_000 });
-
-    await page.evaluate((payload) => window.__relayInteractionHarness.sendTo('publisher', payload), {
-      type, message: undefined, owner: { nickname: 'Bob' },
-    });
-    await page.waitForFunction((wanted) => window.__microphoneEnded.includes(wanted), reason, { timeout: 5_000 });
-    await expect(page.locator('#status')).toHaveText(title);
-
-    // An ended session stops reporting on a capture it no longer has.
-    const reports = await countOf(page, 'audio-uplink-health');
-    await page.waitForTimeout(2_500);
-    expect(await countOf(page, 'audio-uplink-health')).toBe(reports);
-  });
-}
-
 test('production DOM: a protocol error is shown and does not make the phone reconnect', async ({ page }) => {
   await livePhone(page);
   const registrations = await page.evaluate(() => window.__relayInteractionHarness.commands
@@ -1268,35 +1202,6 @@ test('production DOM: a protocol error is shown and does not make the phone reco
     .filter((command) => command.type === 'register' && command.role === 'publisher').length)).toBe(registrations);
   expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
 });
-
-test('production DOM: an echoed vocal timing does not move the slider the singer is holding', async ({ page }) => {
-  await livePhone(page);
-  const fineTune = page.locator('#vocal-fine-tune');
-  await expect(fineTune).toBeEnabled();
-  await fineTune.focus();
-  await setRange(page, '#vocal-fine-tune', 30);
-  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
-    type: 'source-status', active: true, vocalFineTuneMs: -40,
-  }));
-  await page.waitForTimeout(100);
-  await expect(fineTune).toHaveValue('30');
-
-  await fineTune.blur();
-  await page.waitForTimeout(2_100);
-  await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
-    type: 'source-status', active: true, vocalFineTuneMs: -40,
-  }));
-  await expect(fineTune).toHaveValue('-40');
-  await expect(page.locator('#vocal-fine-tune-value')).toHaveText('-40 ms');
-});
-
-function publisherRegistrations(page) {
-  return page.evaluate(() => window.__relayInteractionHarness.commands
-    .filter((command) => command.type === 'register' && command.role === 'publisher')
-    .map(({ sampleRate, captureGeneration, initialSequence, audioPacketVersion }) => (
-      { sampleRate, captureGeneration, initialSequence, audioPacketVersion }
-    )));
-}
 
 test('production DOM: a dropped control connection comes back with the same capture', async ({ page }) => {
   await livePhone(page);

@@ -24,8 +24,6 @@ const copy: Record<string, string> = {
 
 function harness(options: { selfMic?: 'live' | 'off' } = {}) {
   const windowListeners = new Map<string, Listener[]>();
-  let visibleButton: any = null;
-  let visibleStatus: any = null;
   let commandCount = 0;
   let preflightCommandCount = 0;
 
@@ -40,20 +38,9 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
 
     constructor(id: string) { this.id = id; }
 
-    cloneNode() {
-      const clone = new Element(this.id);
-      clone.hidden = this.hidden;
-      clone.disabled = this.disabled;
-      clone.textContent = this.textContent;
-      clone.tabIndex = this.tabIndex;
-      clone.attributes = new Map(this.attributes);
-      return clone;
-    }
+    children = new Map<string, Element>();
 
-    replaceWith(replacement: Element) {
-      if (this === legacyButton) visibleButton = replacement;
-      if (this === legacyStatus) visibleStatus = replacement;
-    }
+    querySelector(selector: string) { return this.children.get(selector) ?? null; }
 
     addEventListener(type: string, listener: (event: any) => void) {
       const current = this.listeners.get(type) ?? [];
@@ -75,19 +62,21 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   }
 
-  const legacyButton = new Element('calibrate-timing');
-  legacyButton.textContent = 'Recalibrate';
-  legacyButton.attributes.set('data-i18n', 'adjust.recalibrate');
-  legacyButton.addEventListener('click', () => { commandCount += 1; });
-  const legacyStatus = new Element('calibrate-status');
-  legacyStatus.textContent = 'legacy status';
+  // index.html's Realign action: the button with its label and value, and
+  // the status line below it.
+  const button = new Element('calibrate-timing');
+  const label = new Element('');
+  button.children.set('.calibrate-timing-label', label);
+  const value = new Element('timing-active-value');
+  const status = new Element('calibrate-status');
 
   const body = { dataset: { selfMic: options.selfMic ?? 'off' } };
   const document = {
     body,
     querySelector(selector: string) {
-      if (selector === '#calibrate-timing') return legacyButton;
-      if (selector === '#calibrate-status') return legacyStatus;
+      if (selector === '#calibrate-timing') return button;
+      if (selector === '#calibrate-status') return status;
+      if (selector === '#timing-active-value') return value;
       return null;
     },
   };
@@ -103,17 +92,24 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
       current.push(listener);
       windowListeners.set(type, current);
     },
+    // app.js sends the command when the presenter asks for it.
+    dispatchEvent(event: { type: string }) {
+      if (event.type === 'relay-start-timing-calibration') commandCount += 1;
+      return true;
+    },
   };
 
   class Event {
     type: string;
     constructor(type: string) { this.type = type; }
   }
+  class CustomEvent extends Event {}
 
   runInNewContext(source, {
     window,
     document,
     Event,
+    CustomEvent,
     authorityState,
     formatTimingValueMs,
     sendPreflightCalibrationCommand: () => {
@@ -164,10 +160,10 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
   }
 
   return {
-    legacyButton,
-    legacyStatus,
-    get button() { return visibleButton; },
-    get status() { return visibleStatus; },
+    button,
+    label,
+    value,
+    status,
     emit,
     emitCommandAuthority,
     emitProductAuthority,
@@ -177,18 +173,13 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
   };
 }
 
-test('calibration presenter replaces painted legacy nodes instead of racing them', () => {
+test('calibration presenter paints the Realign markup it is given', () => {
   const ui = harness({ selfMic: 'live' });
-  assert.ok(ui.button, 'visible calibration button should be a replacement node');
-  assert.ok(ui.status, 'visible calibration status should be a replacement node');
-  assert.notEqual(ui.button, ui.legacyButton);
-  assert.notEqual(ui.status, ui.legacyStatus);
-  assert.equal(ui.legacyButton.id, 'calibrate-timing-command');
-  assert.equal(ui.legacyStatus.id, 'calibrate-status-command');
-  assert.equal(ui.legacyButton.hidden, true);
-  assert.equal(ui.legacyStatus.hidden, true);
-  assert.doesNotMatch(source, /MutationObserver/);
+  assert.equal(ui.label.textContent, '重新對齊');
+  assert.equal(ui.value.textContent, '—', 'no fresh timing authority yet');
+  assert.doesNotMatch(source, /cloneNode|replaceWith|MutationObserver/);
 });
+
 
 test('content calibration availability comes from fresh ProductStatus authority', () => {
   const ui = harness({ selfMic: 'live' });
@@ -199,7 +190,7 @@ test('content calibration availability comes from fresh ProductStatus authority'
   });
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.label.textContent, '重新對齊');
   // The server said exactly why; repeating a generic "unavailable" would throw
   // that away and leave the user with no idea what to do next.
   assert.equal(ui.status.textContent, '播放歌曲後才能重新對齊');
@@ -209,7 +200,7 @@ test('content calibration availability comes from fresh ProductStatus authority'
     startCalibrationBlockedReason: null,
     startCalibrationMode: 'content',
   });
-  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.label.textContent, '重新對齊');
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, false);
   assert.equal(ui.status.textContent, '');
@@ -233,7 +224,7 @@ test('Robot ready follows server calibration authority', () => {
     startCalibrationBlockedReason: null,
     startCalibrationMode: 'boot-probe',
   });
-  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.label.textContent, '重新對齊');
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, false);
   assert.equal(ui.status.textContent, '');
@@ -260,7 +251,7 @@ test('technical block reasons collapse to the normal unavailable consequence', (
     });
     assert.equal(ui.button.hidden, false, reason);
     assert.equal(ui.button.disabled, true, reason);
-    assert.equal(ui.button.textContent, '重新對齊', reason);
+    assert.equal(ui.label.textContent, '重新對齊', reason);
     assert.equal(ui.status.textContent, '目前無法重新對齊', reason);
   }
 });
@@ -274,7 +265,7 @@ test('active calibration keeps the action label stable and presents aligning sep
   }, { state: 'calibrating' });
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.label.textContent, '重新對齊');
   assert.equal(ui.status.textContent, '對齊中…');
 });
 
@@ -328,7 +319,7 @@ test('visible Song calibration click reaches the already-installed authenticated
     startCalibrationMode: 'boot-probe',
   }, { state: 'calibrating' });
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.label.textContent, '重新對齊');
   assert.equal(ui.status.textContent, '對齊中…');
 });
 
@@ -354,7 +345,7 @@ test('calibration command rejection stays product-generic', () => {
   });
   ui.emit('relay-calibration-command-rejected', { reason: 'take-active' });
   assert.equal(ui.button.disabled, true);
-  assert.equal(ui.button.textContent, '重新對齊');
+  assert.equal(ui.label.textContent, '重新對齊');
   assert.equal(ui.status.textContent, '目前無法重新對齊');
 });
 

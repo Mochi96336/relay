@@ -6,15 +6,15 @@ const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
 const songLevel = document.querySelector('#song-level');
 const songLevelValue = document.querySelector('#song-level-value');
-const vocalFineTune = document.querySelector('#vocal-fine-tune');
-const vocalFineTuneValue = document.querySelector('#vocal-fine-tune-value');
 
 const SLIDER_HOLD_MS = 2000;
 export const FIXED_SONG_LEVEL = 100;
 
 let lastKnownControlSnapshot = {
   micGainDb: Number(micGain.value) || 24,
-  vocalFineTuneMs: Number(vocalFineTune.value) || 0,
+  // The vocal timing the Relay last reported. The Mic page has no control for
+  // it; it is part of the confirmed snapshot command authority reads.
+  vocalFineTuneMs: 0,
 };
 
 export function lastKnownControls() {
@@ -45,26 +45,14 @@ export function updateMixLabels() {
   songLevelValue.value = `${Math.round(Number(songLevel.value) || 0)}%`;
 }
 
-export function updateVocalFineTuneLabel() {
-  vocalFineTuneValue.value = signed(vocalFineTune.value, ' ms');
-}
-
 export function micGainDb() {
   return Number(micGain.value);
-}
-
-export function vocalFineTuneMs() {
-  return Number(vocalFineTune.value);
 }
 
 export function restoreLastKnownControl(command = null) {
   if (command === null || command === 'set-mix') {
     micGain.value = String(lastKnownControlSnapshot.micGainDb);
     updateMixLabels();
-  }
-  if (command === null || command === 'set-vocal-fine-tune') {
-    vocalFineTune.value = String(lastKnownControlSnapshot.vocalFineTuneMs);
-    updateVocalFineTuneLabel();
   }
 }
 
@@ -92,10 +80,6 @@ export function acceptVocalFineTune(message) {
     ...lastKnownControlSnapshot,
     vocalFineTuneMs: nextFineTune,
   };
-  if (!sliderIsBusy(vocalFineTune)) {
-    vocalFineTune.value = String(nextFineTune);
-    updateVocalFineTuneLabel();
-  }
   return true;
 }
 
@@ -104,11 +88,10 @@ export function setSingerControlsEnabled(actionable) {
   // Compatibility only: Song is a fixed server-owned reference, never an
   // interactive singer control even while this participant owns the Mic.
   songLevel.disabled = true;
-  vocalFineTune.disabled = !actionable;
 }
 
-/** Calls `onMix` or `onVocalFineTune` each time the singer moves a slider. */
-export function listenForSingerInput({ onMix, onVocalFineTune }) {
+/** Calls `onMix` each time the singer moves a slider. */
+export function listenForSingerInput({ onMix }) {
   for (const slider of [micGain, songLevel]) {
     slider.addEventListener('input', () => {
       markSliderTouched(slider);
@@ -117,9 +100,4 @@ export function listenForSingerInput({ onMix, onVocalFineTune }) {
     slider.addEventListener('change', () => markSliderTouched(slider));
   }
 
-  vocalFineTune.addEventListener('input', () => {
-    markSliderTouched(vocalFineTune);
-    onVocalFineTune();
-  });
-  vocalFineTune.addEventListener('change', () => markSliderTouched(vocalFineTune));
 }

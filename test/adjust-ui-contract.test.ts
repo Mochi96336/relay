@@ -34,7 +34,7 @@ test('Mic gain belongs to the live singing task and expands in place', () => {
   assert.match(html, /id="mic-live-control" class="mic-live-control"/);
   assert.match(iaCss, /body\[data-self-mic="live"\] \.mic-live-control[\s\S]*?display: block;/);
   assert.match(iaCss, /\.mic-live-control > summary \{[\s\S]*?min-height: 48px;/);
-  assert.equal(ia.includes("micLiveLabel.textContent = 'Mic';"), true,
+  assert.match(html, /id="mic-live-control" class="mic-live-control">\s*<summary>\s*<span>Mic<\/span>/,
     'the performance control must use the same Mic term as take/release');
 });
 
@@ -57,25 +57,22 @@ test('Mic exposes +40 dB manual headroom with no automatic gain recommendation',
   assert.equal(html.includes('use-mic-gain-suggestion'), false);
 });
 
-test('realignment stays a direct More task while manual timing tweak is compatibility-only', () => {
+test('realignment stays a direct More task and the Mic page has no manual timing tweak', () => {
   const more = html.indexOf('id="room-more"');
   const calibrate = html.indexOf('id="calibrate-timing"');
   const system = html.indexOf('id="open-system"');
   assert.ok(more >= 0 && more < calibrate && calibrate < system);
-  assert.match(html, /class="more-timing"/,
-    'legacy DOM may remain while app.js compatibility is retained');
-  assert.match(actionLanguage, /\.more-timing \{\n  display: none !important;/,
-    'manual timing tweak must not be a visible Live product control');
-  assert.match(app, /type: 'set-vocal-fine-tune'/,
-    'presentation cleanup must not accidentally delete the compatibility protocol');
+  assert.doesNotMatch(html, /more-timing|vocal-fine-tune/,
+    'manual timing tweak is not a Live product control, so it is not in the markup');
+  assert.doesNotMatch(actionLanguage, /\.more-timing/);
   assert.match(ia, /calibrateTiming\?\.addEventListener\('click'/);
   assert.match(ia, /import\('\.\/calibration-ui\.js'\)/);
   assert.equal(ia.includes('adjustPanel'), false);
 });
 
-test('calibration presenter waits until app module scripts have installed command transport', () => {
-  assert.match(calibrationUi, /window\.addEventListener\('load', initialize, \{ once: true \}\)/);
-  assert.match(calibrationUi, /document\.readyState === 'complete'/);
+test('calibration presenter asks app.js for a calibration by event, with no handshake', () => {
+  assert.match(calibrationUi, /window\.dispatchEvent\(new CustomEvent\('relay-start-timing-calibration'\)\)/);
+  assert.match(app, /window\.addEventListener\('relay-start-timing-calibration'/);
   assert.doesNotMatch(calibrationUi, /relayCalibrationCommandReady|relay-calibration-command-ready/,
     'timing presenter must not require a second app/live-ia handshake contract');
 });
@@ -100,10 +97,8 @@ test('calibration visible presenter follows ProductStatus and has one painted ow
     'visible calibration copy must not maintain a private locale switch');
   assert.doesNotMatch(calibrationUi, /'重新對齊'|'對齊中…'|'Realign'|'Aligning…'/,
     'visible copy belongs to shared i18n rather than a local bilingual table');
-  assert.match(calibrationUi, /legacyFineTuneSurface\.hidden = true/);
-  assert.match(calibrationUi, /takeVisibleOwnership/);
-  assert.match(calibrationUi, /cloneNode/);
-  assert.match(calibrationUi, /calibrate-timing-command/);
+  assert.doesNotMatch(calibrationUi, /cloneNode|replaceWith|calibrate-timing-command/,
+    'the presenter paints the Realign markup itself rather than a copy of it');
   assert.doesNotMatch(calibrationUi, /MutationObserver/,
     'visible product state must not be resolved by last-writer-wins DOM observation');
   assert.doesNotMatch(calibrationUi, /roomSongAvailable/,
@@ -123,14 +118,13 @@ test('timing calibration copy is concise and contains no singing restriction', (
 
 test('locale changes rerender the one visible calibration presenter', () => {
   assert.match(calibrationUi, /window\.addEventListener\('relay-locale-changed', render\)/);
-  assert.match(calibrationUi, /calibrateButton\.removeAttribute\?\.\('data-i18n'\)/);
-  assert.match(calibrationUi, /button\.id = 'calibrate-timing-command'/);
-  assert.match(calibrationUi, /button\.hidden = true/);
+  assert.doesNotMatch(html, /id="calibrate-timing"[^>]*data-i18n/,
+    'the Realign label is painted by the presenter, so the shared i18n pass must not own it');
 });
 
 test('app remains authenticated command transport while ProductStatus owns visible result', () => {
   assert.match(app, /type: 'start-timing-calibration'/);
-  assert.match(calibrationUi, /commandTarget\.dispatchEvent/);
+  assert.match(calibrationUi, /'relay-start-timing-calibration'/);
   assert.doesNotMatch(ia, /product-status/);
 });
 

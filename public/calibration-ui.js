@@ -10,80 +10,12 @@ function initialize() {
   if (initialized) return;
   initialized = true;
 
-  const legacyCalibrateButton = document.querySelector('#calibrate-timing');
-  const legacyCalibrateStatus = document.querySelector('#calibrate-status');
-  const legacyFineTuneSurface = document.querySelector('.more-timing');
+  const calibrateButton = document.querySelector('#calibrate-timing');
+  const calibrateStatus = document.querySelector('#calibrate-status');
+  const calibrateLabel = calibrateButton?.querySelector?.('.calibrate-timing-label') ?? null;
+  // The authoritative mixer value qualifies the action it belongs to.
+  const activeTimingValue = document.querySelector('#timing-active-value');
   const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
-
-  // Compatibility DOM remains available to app.js and the wire protocol, but
-  // manual fine tune is no longer a normal Live product control.
-  if (legacyFineTuneSurface) {
-    legacyFineTuneSurface.hidden = true;
-    legacyFineTuneSurface.setAttribute?.('aria-hidden', 'true');
-  }
-
-  function takeVisibleOwnership(button, status) {
-    if (
-      !button || !status
-      || typeof button.cloneNode !== 'function'
-      || typeof status.cloneNode !== 'function'
-      || typeof button.replaceWith !== 'function'
-      || typeof status.replaceWith !== 'function'
-    ) {
-      return { button, status, commandTarget: null };
-    }
-
-    const visibleButton = button.cloneNode(true);
-    const visibleStatus = status.cloneNode(true);
-
-    button.id = 'calibrate-timing-command';
-    button.hidden = true;
-    button.disabled = true;
-    button.setAttribute?.('aria-hidden', 'true');
-    button.tabIndex = -1;
-
-    status.id = 'calibrate-status-command';
-    status.hidden = true;
-    status.setAttribute?.('aria-hidden', 'true');
-
-    button.replaceWith(visibleButton);
-    status.replaceWith(visibleStatus);
-
-    return { button: visibleButton, status: visibleStatus, commandTarget: button };
-  }
-
-  function installTimingButtonSurface(button) {
-    if (
-      !button
-      || typeof document.createElement !== 'function'
-      || typeof button.replaceChildren !== 'function'
-    ) {
-      return { label: button, value: null };
-    }
-
-    const label = document.createElement('span');
-    label.className = 'calibrate-timing-label';
-
-    const value = document.createElement('span');
-    value.id = 'timing-active-value';
-    value.className = 'calibrate-timing-value';
-    value.setAttribute?.('aria-live', 'polite');
-    value.textContent = '—';
-
-    // The existing .more-action flex row already owns spacing. Keep the
-    // authoritative mixer value on the action it qualifies instead of adding
-    // a separate pseudo-setting above it.
-    button.replaceChildren(label, value);
-    return { label, value };
-  }
-
-  const ownership = takeVisibleOwnership(legacyCalibrateButton, legacyCalibrateStatus);
-  const calibrateButton = ownership.button;
-  const calibrateStatus = ownership.status;
-  const commandTarget = ownership.commandTarget;
-  const timingSurface = installTimingButtonSurface(calibrateButton);
-  const calibrateLabel = timingSurface.label;
-  const activeTimingValue = timingSurface.value;
 
   let latestProductStatus = window.relayProductAuthority?.lastKnownSnapshot ?? null;
   let latestAction = latestProductStatus?.actions ?? null;
@@ -172,7 +104,6 @@ function initialize() {
     renderTimingAuthority();
     if (!calibrateButton) return;
 
-    calibrateButton.removeAttribute?.('data-i18n');
     setText(calibrateLabel, t('timing.realign'));
 
     const authority = calibrationAuthority();
@@ -263,12 +194,12 @@ function initialize() {
   window.addEventListener('relay-locale-changed', render);
 
   calibrateButton?.addEventListener?.('click', () => {
-    if (!commandTarget || !calibrationAuthority().actionable) return;
+    if (!calibrationAuthority().actionable) return;
 
-    // app.js still owns the historical publisher command listener, but that
-    // listener incorrectly requires a Song. Use a narrow authenticated command
-    // socket only for the no-Song Robot preflight case; all normal commands keep
-    // flowing through the established publisher transport.
+    // app.js sends the command over the publisher transport, but its check
+    // requires a Song. Use a narrow authenticated command socket only for the
+    // no-Song Robot preflight case; all normal commands keep flowing through
+    // the established publisher transport.
     if (needsPreflightCommandPath()) {
       preflightCommandPending = true;
       render();
@@ -281,7 +212,7 @@ function initialize() {
       return;
     }
 
-    commandTarget.dispatchEvent(new Event('click', { cancelable: true }));
+    window.dispatchEvent(new CustomEvent('relay-start-timing-calibration'));
   });
 
   setHidden(true);
@@ -289,12 +220,4 @@ function initialize() {
   render();
 }
 
-// live-ia may import this module at DOMContentLoaded, while app.js is a later
-// module script and still needs to capture/install the authenticated command
-// listener on the legacy node. Window load is the simple deterministic fence:
-// only after it fires may the presenter detach that node and become visible.
-if (document.readyState === 'complete' || typeof document.readyState !== 'string') {
-  initialize();
-} else {
-  window.addEventListener('load', initialize, { once: true });
-}
+initialize();

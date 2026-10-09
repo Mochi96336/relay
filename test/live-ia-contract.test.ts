@@ -37,7 +37,7 @@ test('People owns identity and presence while secondary tasks live in More', () 
 
   assert.equal(more.includes('data-relay-locale="zh-Hant"'), true);
   assert.equal(more.includes('id="calibrate-timing"'), true);
-  assert.equal(more.includes('id="vocal-fine-tune"'), true);
+  assert.equal(more.includes('id="vocal-fine-tune"'), false, 'there is no fine tune on the Mic page');
   assert.equal(more.includes('id="open-system"'), true);
   assert.equal(more.includes('id="open-adjust"'), false);
 });
@@ -51,7 +51,8 @@ test('Live keeps Song then one performance task with Record before Mic adjustmen
   assert.equal(html.includes('id="youtube-player"'), true);
   assert.equal(css.includes('.performance-stage > .section-label'), true);
   assert.equal(css.includes('body[data-self-mic="live"] .mic-live-control'), true);
-  assert.equal(script.includes("micLiveLabel.textContent = 'Mic';"), true);
+  assert.match(html, /<details id="mic-live-control" class="mic-live-control">\s*<summary>\s*<span>Mic<\/span>/,
+    'the Mic adjustment reads Mic in the markup itself');
   assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
   assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
   assert.doesNotMatch(script, /performanceStage\.insertBefore\(lastTake|append(?:Child)?\(lastTake/);
@@ -155,7 +156,7 @@ test('Live IA alone arbitrates System and Take history visibility', () => {
 test('recalibration is a direct task but app retains command authority', () => {
   assert.match(script, /calibrateTiming\?\.addEventListener\('click'/);
   assert.doesNotMatch(script, /start-timing-calibration|WebSocket/);
-  assert.match(app, /calibrateButton\.addEventListener\('click'/);
+  assert.match(app, /window\.addEventListener\('relay-start-timing-calibration'/);
   assert.match(app, /type: 'start-timing-calibration'/);
 });
 
@@ -165,8 +166,10 @@ test('Traditional Chinese remains recording-oriented while Mic stays a literal p
   const chinese = i18n.slice(chineseStart);
   assert.equal(chinese.includes("'take.record': '開始錄音'"), true);
   assert.equal(chinese.includes("'take.lastReady': '上一段錄音'"), true);
-  assert.equal(script.includes("removeAttribute('data-i18n')"), true);
-  assert.equal(script.includes("micLiveLabel.textContent = 'Mic'"), true);
+  // Mic is literal in both locales: the markup says it, with no key to translate.
+  assert.match(html, /<div class="section-label">Mic<\/div>/);
+  assert.doesNotMatch(script, /removeAttribute\('data-i18n'\)/,
+    'labels are written in the markup, not rewritten at runtime');
 });
 
 test('Live IA does not reconstruct room or audio authority', () => {

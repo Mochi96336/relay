@@ -326,7 +326,6 @@ test('publisher command authority waits for correlated ACKs plus registration an
   assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /function sendMixSettings\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-mix'\)/);
-  assert.match(publisherSource, /function sendVocalFineTune\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-vocal-fine-tune'\)/);
   assert.match(publisherSource, /message\.type === 'command-rejected'[\s\S]*restoreLastKnownControl\(message\.command\)[\s\S]*resetPublisherCommandFreshness\(\)/);
 });
 

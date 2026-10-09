@@ -33,19 +33,11 @@
             <summary aria-label="Menu / 選項"><span aria-hidden="true">•••</span></summary>
             <div class="more-popover">
               <div class="more-actions">
-                <button id="calibrate-timing" class="more-action" type="button" data-i18n="adjust.recalibrate">Recalibrate</button>
+                <button id="calibrate-timing" class="more-action" type="button" hidden disabled>
+                  <span class="calibrate-timing-label">Realign</span>
+                  <span id="timing-active-value" class="calibrate-timing-value" aria-live="polite">—</span>
+                </button>
                 <span id="calibrate-status" class="more-action-note" aria-live="polite"></span>
-
-                <details class="more-timing">
-                  <summary>
-                    <span data-i18n="adjust.vocalFineTune">Vocal fine tune</span>
-                    <output id="vocal-fine-tune-value" for="vocal-fine-tune">0 ms</output>
-                  </summary>
-                  <label class="more-timing-control" for="vocal-fine-tune">
-                    <input id="vocal-fine-tune" class="adjust-range" type="range" min="-100" max="100" step="5" value="0" disabled aria-label="Vocal fine tune" data-i18n-aria-label="adjust.vocalFineTuneAria" />
-                    <span data-i18n="adjust.vocalFineTuneHelp">Negative moves voice earlier; positive moves it later.</span>
-                  </label>
-                </details>
 
                 <button id="open-system" class="more-action" type="button">
                   <span data-i18n="system.summary">System</span><span aria-hidden="true">›</span>
@@ -99,13 +91,9 @@
       </section>
 
       <section class="performance-stage">
-        <div class="section-label" data-i18n="voice.label">Voice</div>
+        <div class="section-label">Mic</div>
 
         <div class="voice-input-evidence" aria-live="off">
-          <div class="evidence-heading">
-            <span data-i18n="adjust.input">Input</span>
-            <output id="mic-input-value" data-i18n="adjust.listening">Listening…</output>
-          </div>
           <div id="mic-input-meter" class="voice-input-meter" aria-hidden="true"></div>
         </div>
 
@@ -129,7 +117,7 @@
 
         <details id="mic-live-control" class="mic-live-control">
           <summary>
-            <span data-i18n="adjust.voice">Mic</span>
+            <span>Mic</span>
             <output id="mic-gain-value" for="mic-gain">+24 dB</output>
           </summary>
           <div class="mic-live-control-body">

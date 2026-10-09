@@ -27,13 +27,6 @@
   background: transparent;
 }
 
-/* index.html still carries the legacy localization hook as its no-JS fallback.
-   Keep that retired word out of the painted product until the semantic
-   calibration presenter takes ownership of the visible action. */
-#calibrate-timing[data-i18n="adjust.recalibrate"] {
-  visibility: hidden;
-}
-
 /* Inline typography keeps its visual rhythm while the transparent hit halo
    gives a finger more room. Keep the halo narrow enough that neighboring
    actions do not compete for the same tap. */
@@ -70,11 +63,6 @@
   border-bottom: 0;
 }
 
-/* Manual vocal fine tune remains only as compatibility DOM for app.js and the
-   legacy wire command. It is not a normal Live product control anymore. */
-.more-timing {
-  display: none !important;
-}
 
 /* This-phone sound is the only persistent local control left on Live. */
 #listen-toggle {

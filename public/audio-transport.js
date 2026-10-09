@@ -53,6 +53,19 @@ export const DEFAULT_DATAGRAM_BACKLOG_PACKETS = 48;
 export const DEFAULT_DATAGRAM_BACKLOG_MS = 200;
 
 /**
+ * Oldest an accepted datagram may wait inside the browser before it is dropped
+ * there (WebTransportDatagramDuplexStream.outgoingMaxAge).
+ *
+ * Writes resolve once the browser has queued a datagram, so a congested QUIC
+ * path can hold audio there that nothing above sees. On 2026-10-09 an iPhone
+ * submitted every packet while Relay received about half and its captured
+ * audio queued up to 6 s. Relay's mix reads 400 ms behind arrival, so audio
+ * queued past 300 ms cannot be heard on time. Best effort: whether Safari
+ * honours it is what the reported value and [mic-uplink-backlog] are for.
+ */
+export const DEFAULT_DATAGRAM_OUTGOING_MAX_AGE_MS = 300;
+
+/**
  * Recently sent media packets kept to answer Relay's retransmission requests.
  * About 1.3 s of 48 kHz audio at two datagrams per 20 ms chunk - longer than
  * Relay will ever hold a hole, so a request never names a packet already gone.
@@ -263,6 +276,7 @@ export class PreferredAudioTransport extends AudioTransport {
     datagramWriteTimeoutMs = DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS,
     datagramBacklogPackets = DEFAULT_DATAGRAM_BACKLOG_PACKETS,
     datagramBacklogMs = DEFAULT_DATAGRAM_BACKLOG_MS,
+    datagramOutgoingMaxAgeMs = DEFAULT_DATAGRAM_OUTGOING_MAX_AGE_MS,
     retransmitBufferPackets = DEFAULT_RETRANSMIT_BUFFER_PACKETS,
     webTransportRetryDelaysMs = DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS,
     // A retry is no reason to keep a process alive: under Node a pending
@@ -325,6 +339,9 @@ export class PreferredAudioTransport extends AudioTransport {
     this.datagramWriteTimeoutMs = datagramWriteTimeoutMs;
     this.datagramBacklogPackets = datagramBacklogPackets;
     this.datagramBacklogMs = datagramBacklogMs;
+    this.datagramOutgoingMaxAgeMs = datagramOutgoingMaxAgeMs;
+    /** What the browser reports for outgoingMaxAge after it was set, or null. */
+    this.webTransportOutgoingMaxAgeMs = null;
     /** @type {{ bytes: Uint8Array, enqueuedAt: number, retransmit?: boolean, release?: () => void }[]} */
     this.datagramBacklog = [];
     this.retransmitBufferPackets = retransmitBufferPackets;
@@ -566,6 +583,7 @@ export class PreferredAudioTransport extends AudioTransport {
       datagramPacketBytesCeiling: this.datagramPacketBytesCeiling,
       datagramQueuePackets: this.datagramQueuePackets,
       webTransportLastFailure: this.lastWebTransportFailure,
+      datagramOutgoingMaxAgeMs: this.webTransportOutgoingMaxAgeMs,
       datagramBacklogPackets: this.datagramBacklogPackets,
       datagramBacklogMs: this.datagramBacklogMs,
       retransmitBufferPackets: this.retransmitBufferPackets,
@@ -906,6 +924,21 @@ export class PreferredAudioTransport extends AudioTransport {
       // backpressure is now counted here instead of read from the stream.
       try {
         transport.datagrams.outgoingHighWaterMark = this.datagramQueuePackets;
+      } catch {}
+      // Only where the browser defines it: assigning an unknown property to
+      // the datagrams object would just store it and read back as though it
+      // were honoured.
+      // Nothing here may fail the path: whatever the browser does with this
+      // setting, an exception from it must leave WebTransport up.
+      this.webTransportOutgoingMaxAgeMs = null;
+      try {
+        if (transport.datagrams && 'outgoingMaxAge' in transport.datagrams) {
+          transport.datagrams.outgoingMaxAge = this.datagramOutgoingMaxAgeMs;
+          const reportedMaxAge = Number(transport.datagrams.outgoingMaxAge);
+          if (Number.isFinite(reportedMaxAge) && reportedMaxAge > 0) {
+            this.webTransportOutgoingMaxAgeMs = reportedMaxAge;
+          }
+        }
       } catch {}
 
       const writable = transport.datagrams.writable ?? transport.datagrams.createWritable();

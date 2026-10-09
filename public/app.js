@@ -29,8 +29,6 @@ import {
   setSingerControlsEnabled,
   signed,
   updateMixLabels,
-  updateVocalFineTuneLabel,
-  vocalFineTuneMs,
 } from './mix-controls.js';
 import {
   countUplinkDrop,
@@ -47,8 +45,6 @@ const publisherButton = document.querySelector('#start-publisher');
 const releaseButton = document.querySelector('#release-mic');
 const status = document.querySelector('#status');
 const details = document.querySelector('#details');
-const calibrateButton = document.querySelector('#calibrate-timing');
-const calibrateStatus = document.querySelector('#calibrate-status');
 
 // Mic audio on a WebSocket-only page rides this socket: reconnect fast, back
 // off only while it keeps failing. See reconnect-backoff.js.
@@ -97,10 +93,8 @@ const micCaptureRecovery = new MicCaptureRecoveryWatchdog();
 const micLifecycle = new MicLifecycleTransaction();
 const publisherCommandLiveness = new PublisherCommandLiveness();
 let publishedPublisherCommandChannelFresh = false;
-let liveMixActive = false;
 let latestLocalMicLevel = null;
 let captureAppliedSettings = null;
-let latestCalibration = null;
 let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
@@ -748,7 +742,6 @@ function setStatus(title, body = '') {
 
 const COMMAND_LABELS = {
   'set-mix': 'Mix is controlled by the singer',
-  'set-vocal-fine-tune': 'Vocal timing is controlled by the singer',
   'start-timing-calibration': 'Calibration is controlled by the singer',
 };
 
@@ -832,30 +825,6 @@ function setPublisherActive(active) {
   publishPublisherCommandAuthority();
 }
 
-function sendVocalFineTune() {
-  if (!publisherCommandAuthority().actionable) {
-    restoreLastKnownControl('set-vocal-fine-tune');
-    return false;
-  }
-  try {
-    const result = audioTransport.sendControlJson({
-      type: 'set-vocal-fine-tune',
-      valueMs: vocalFineTuneMs(),
-    });
-    if (!result.sent) {
-      restoreLastKnownControl('set-vocal-fine-tune');
-      if (result.reason === 'disconnected') markPublisherAuthorityStale();
-      return false;
-    }
-  } catch {
-    restoreLastKnownControl('set-vocal-fine-tune');
-    markPublisherAuthorityStale();
-    return false;
-  }
-  updateVocalFineTuneLabel();
-  return true;
-}
-
 function sendMixSettings() {
   if (!publisherCommandAuthority().actionable) {
     restoreLastKnownControl('set-mix');
@@ -885,79 +854,6 @@ function sendMixSettings() {
 
 function updateSingerControls() {
   setSingerControlsEnabled(publisherCommandAuthority().actionable);
-  updateCalibrateButton();
-}
-
-/**
- * Calibration runs itself, but the singer is the one who can hear that it got
- * it wrong, and they are not at the machine the other button is on.
- */
-function updateCalibrateButton() {
-  const collecting = latestCalibration?.state === 'collecting';
-  const probeActive = latestCalibration?.probeActive === true;
-  calibrateButton.disabled = !publisherCommandAuthority(
-    roomSongAvailable === true && roomCanStartCalibration === true,
-  ).actionable;
-
-  if (roomSongAvailable === false) {
-    calibrateStatus.textContent = 'No song to align.';
-    return;
-  }
-
-  if (roomSongAvailable === null) {
-    calibrateStatus.textContent = 'Waiting for room state.';
-    return;
-  }
-
-  if (!liveMixActive) {
-    calibrateStatus.textContent = t('adjust.calibration.auto');
-    return;
-  }
-
-  if (probeActive) {
-    const phase = String(latestCalibration?.probePhase ?? '');
-    const attempts = latestCalibration?.probeAttempts ?? {};
-    const max = Number(latestCalibration?.probeMaxAttempts) || 1;
-    const target = phase.startsWith('backing') ? 'Song path' : 'Mic';
-    const attempt = Number(phase.startsWith('backing') ? attempts.backing : attempts.mic) || 1;
-    calibrateStatus.textContent = `Calibrating · ${target} ${Math.min(attempt, max)}/${max}`;
-    return;
-  }
-
-  if (collecting) {
-    const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
-    const need = Number(latestCalibration.windowsNeeded) || 1;
-    // A window is not fully trusted until agreement confirms it, so say how
-    // far the run has got - otherwise repeated windows look like it is stuck.
-    // A confident single window may already be applied underneath this (see
-    // provisionalNote); that does not end the run, it just means singing does
-    // not have to wait on it.
-    const rounds = need > 1
-      ? t('adjust.calibration.rounds', { agreed: Number(latestCalibration.windowsAgreed) || 0, need })
-      : '';
-    const provisionalNote = latestCalibration.provisional
-      ? t('adjust.calibration.provisional', { lag: signed(latestCalibration.micLagMs, ' ms') })
-      : '';
-    calibrateStatus.textContent = t('adjust.calibration.collecting', { progress, rounds, provisional: provisionalNote });
-    return;
-  }
-
-  if (latestCalibration?.state === 'complete') {
-    const stale = latestCalibration.calibrationStale ? t('adjust.calibration.stale') : '';
-    calibrateStatus.textContent = t('adjust.calibration.complete', { lag: signed(latestCalibration.micLagMs, ' ms'), stale });
-    return;
-  }
-
-  if (latestCalibration?.state === 'failed') {
-    calibrateStatus.textContent = latestCalibration.probeError
-      ? t('adjust.calibration.failed', { error: latestCalibration.probeError })
-      : latestCalibration.automatic
-        ? t('adjust.calibration.autoRetry')
-        : t('adjust.calibration.failed', { error: latestCalibration.error ?? t('adjust.calibration.noSignal') });
-    return;
-  }
-
-  calibrateStatus.textContent = t('adjust.calibration.fallback');
 }
 
 function connectSocket() {
@@ -1187,9 +1083,6 @@ function handleServerMessage(
   }
 
   if (message.type === 'calibration-command-rejected') {
-    calibrateStatus.textContent = message.reason === 'take-active'
-      ? 'Finish the current Take before calibrating.'
-      : `Calibration unavailable: ${message.reason ?? 'unknown reason'}`;
     dispatchRelayEvent('relay-calibration-command-rejected', {
       reason: message.reason ?? 'unknown',
     });
@@ -1252,7 +1145,6 @@ function handleServerMessage(
   }
 
   if (message.type === 'source-status') {
-    liveMixActive = Boolean(message.active);
     if (acceptVocalFineTune(message)) publisherSourceStatusFresh = true;
     publishPublisherCommandAuthority();
     updateSingerControls();
@@ -1267,14 +1159,12 @@ function handleServerMessage(
   }
 
   if (message.type === 'timing-calibration-status') {
-    latestCalibration = message;
     if (
       activeCalibrationProbeRequestId !== null
       && (message.probeActive !== true || message.probePhase !== 'mic-requested')
     ) {
       activeCalibrationProbeRequestId = null;
     }
-    updateCalibrateButton();
     return;
   }
 
@@ -1590,7 +1480,6 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   }
   setPublisherActive(false);
 
-  liveMixActive = false;
   latestLocalMicLevel = null;
   captureAppliedSettings = null;
   dispatchRelayEvent('relay-local-mic-level', {
@@ -1841,7 +1730,6 @@ window.addEventListener('relay-product-status', (event) => {
   const videoId = event.detail?.room?.song?.videoId;
   roomSongAvailable = typeof videoId === 'string' && videoId.length > 0;
   roomCanStartCalibration = event.detail?.actions?.canStartCalibration === true;
-  updateCalibrateButton();
 });
 
 publisherButton.addEventListener('click', () => {
@@ -1890,27 +1778,19 @@ window.addEventListener('relay-release-microphone', () => {
   }).catch(console.error);
 });
 
-listenForSingerInput({ onMix: sendMixSettings, onVocalFineTune: sendVocalFineTune });
+listenForSingerInput({ onMix: sendMixSettings });
 
-window.addEventListener('relay-locale-changed', () => {
-  updateCalibrateButton();
-});
-
-calibrateButton.addEventListener('click', () => {
+// The Realign action (calibration-ui.js) asks for a calibration; the command
+// goes out over this page's publisher transport.
+window.addEventListener('relay-start-timing-calibration', () => {
   if (!publisherCommandAuthority(
     roomSongAvailable === true && roomCanStartCalibration === true,
   ).actionable) return;
   const result = audioTransport.sendControlJson({ type: 'start-timing-calibration' });
-  if (!result.sent) {
-    if (result.reason === 'disconnected') markPublisherAuthorityStale();
-    calibrateStatus.textContent = result.reason === 'congested'
-      ? 'Calibration not started: microphone uplink congested.'
-      : 'Calibration not started: Relay is disconnected.';
-  }
+  if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
 });
 
 updateMixLabels();
-updateCalibrateButton();
 updateSingerControls();
 publishPublisherCommandAuthority();
 setStatus('Idle', 'Take the mic when you are ready.');

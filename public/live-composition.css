@@ -22,7 +22,6 @@
    Five-band evidence stays in the data path for timbre, but is deliberately not
    presented as musical pitch until a real F0 estimate exists. */
 .voice-input-evidence { width: 100vw; min-height: 60px; margin: 10px calc(50% - 50vw) 2px; display: flex; align-items: center; }
-.evidence-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 .voice-input-meter { position: relative; width: 100%; max-width: none; height: 56px; overflow: hidden; border-radius: 0; -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 6%, #000 94%, transparent 100%); mask-image: linear-gradient(to right, transparent 0%, #000 6%, #000 94%, transparent 100%); }
 .voice-presence-svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .voice-presence-baseline { fill: none; stroke: rgba(238,234,226,.14); stroke-width: 1; vector-effect: non-scaling-stroke; }

@@ -35,7 +35,8 @@ test('browser geometry fixture uses the production i18n provider', () => {
 test('product surfaces localize while Technical details and Raw stay technical', () => {
   const html = read('public/index.html');
   assert.equal(html.includes('data-i18n="song.label"'), true);
-  assert.equal(html.includes('data-i18n="voice.label"'), true);
+  // The Mic section label reads Mic in both locales, so it carries no key.
+  assert.equal(html.includes('<div class="section-label">Mic</div>'), true);
   assert.equal(html.includes('data-i18n="take.record"'), true);
   assert.equal(html.includes('data-i18n="system.summary"'), true);
   assert.equal(html.includes('>Technical details<'), true);
@@ -53,7 +54,6 @@ test('dynamic visible presenters rerender when locale changes', () => {
     'public/take-history.js',
     'public/song-surface.js',
     'public/youtube.js',
-    'public/app.js',
     'public/system-details.js',
   ]) {
     assert.equal(read(path).includes('relay-locale-changed'), true, path);

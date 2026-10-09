@@ -214,7 +214,9 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
   }
 
   const document = new FakeDocument();
-  document.attach(new FakeElement({ id: 'calibrate-timing', textContent: 'Recalibrate' }));
+  // index.html's Realign action: the button, its value and its status line.
+  document.attach(new FakeElement({ id: 'calibrate-timing' }));
+  document.attach(new FakeElement({ id: 'timing-active-value', className: 'calibrate-timing-value', textContent: '—' }));
   document.attach(new FakeElement({ id: 'calibrate-status' }));
   document.attach(new FakeElement({ className: 'more-timing' }));
 

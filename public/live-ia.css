@@ -112,43 +112,6 @@
   line-height: 1.35;
 }
 
-.more-timing {
-  border-bottom: 1px solid #202227;
-}
-
-.more-timing > summary {
-  min-height: 44px;
-  list-style: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: #aeb0b5;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.more-timing > summary::-webkit-details-marker {
-  display: none;
-}
-
-.more-timing > summary output {
-  color: #85888f;
-  font-variant-numeric: tabular-nums;
-}
-
-.more-timing-control {
-  display: grid;
-  gap: 5px;
-  padding: 0 0 12px;
-}
-
-.more-timing-control > span {
-  color: #696c73;
-  font-size: 10px;
-  line-height: 1.35;
-}
-
 /* Voice is not navigation. The state headline already answers who has the Mic
    and whether this phone is live. */
 .performance-stage > .section-label {

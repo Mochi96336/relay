@@ -45,14 +45,14 @@ test('calibration presenter changes the number only from timing-authority snapsh
   assert.match(calibrationUi, /relay-timing-authority/);
   assert.doesNotMatch(calibrationUi, /activeMicLagMs|micLagMs|requestedMicAdvanceMs|robot-player-offset|source-seeked|provisional/,
     'visible number must not consume calibration candidates or player observations');
-  assert.match(calibrationUi, /window\.addEventListener\('load', initialize, \{ once: true \}\)/,
-    'presenter must wait until app.js has installed the legacy command transport');
+  assert.match(calibrationUi, /window\.dispatchEvent\(new CustomEvent\('relay-start-timing-calibration'\)\)/,
+    'Realign asks app.js for a calibration by event, not by clicking a hidden node');
   assert.doesNotMatch(calibrationUi, /getLocale/,
     'visible timing copy belongs to shared i18n rather than a private locale switch');
 });
 
-test('normal Live hides fine tune and timing copy has no singing restriction', () => {
-  assert.match(actionLanguage, /\.more-timing \{\n  display: none !important;/);
+test('normal Live has no fine tune and timing copy has no singing restriction', () => {
+  assert.doesNotMatch(actionLanguage, /\.more-timing/);
   assert.match(i18n, /'timing\.label': 'Timing'/);
   assert.match(i18n, /'timing\.label': '時間對齊'/);
   assert.match(i18n, /'timing\.realign': 'Realign'/);

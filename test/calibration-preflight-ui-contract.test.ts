@@ -19,8 +19,8 @@ test('no-Song Robot boot-probe bypasses only the legacy Song-gated command liste
   assert.match(ui, /latestAction\?\.startCalibrationMode === 'boot-probe'/);
   assert.match(ui, /latestProductStatus\?\.room\?\.song\?\.videoId == null/);
   assert.match(ui, /sendPreflightCalibrationCommand\(\)/);
-  assert.match(ui, /commandTarget\.dispatchEvent/,
-    'normal calibration must keep using the established publisher command transport');
+  assert.match(ui, /window\.dispatchEvent\(new CustomEvent\('relay-start-timing-calibration'\)\)/,
+    'normal calibration must keep using the established publisher command transport, through app.js');
 });
 
 test('preflight command authenticates the Mic owner before sending calibration', () => {

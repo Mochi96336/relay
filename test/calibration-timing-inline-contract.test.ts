@@ -4,11 +4,14 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8');
 const actionLanguage = readFileSync(new URL('../public/action-language.css', import.meta.url), 'utf8');
+const indexHtml = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 test('applied timing value is part of the Realign action instead of a separate row', () => {
-  assert.match(source, /function installTimingButtonSurface\(button\)/);
-  assert.match(source, /button\.replaceChildren\(label, value\)/);
-  assert.match(source, /value\.id = 'timing-active-value'/);
+  // The markup is the Realign action as painted: its label, then its value.
+  assert.match(indexHtml,
+    /<button id="calibrate-timing"[^>]*>\s*<span class="calibrate-timing-label">[^<]*<\/span>\s*<span id="timing-active-value" class="calibrate-timing-value"/);
+  assert.doesNotMatch(source, /cloneNode|replaceWith|replaceChildren/,
+    'the presenter paints the markup it is given rather than rebuilding it');
   assert.match(source, /setText\(calibrateLabel, t\('timing\.realign'\)\)/);
   assert.match(source, /setText\(activeTimingValue, formatted \?\? '—'\)/);
 

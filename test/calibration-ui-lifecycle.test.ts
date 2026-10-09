@@ -117,6 +117,12 @@ class FakeElement extends EventTarget {
     this.ownerDocument?.replace(this, replacement);
   }
 
+  querySelector(selector: string) {
+    if (!selector.startsWith('.')) return null;
+    const className = selector.slice(1);
+    return this.children.find((child) => child.className.split(/\s+/).includes(className)) ?? null;
+  }
+
   setAttribute(name: string, value: string) {
     this.attributes.set(name, String(value));
   }
@@ -140,17 +146,16 @@ test('timing presenter keeps applied authority through blocked, active, failure,
   const previousWindow = (globalThis as any).window;
   const previousDocument = (globalThis as any).document;
 
+  // index.html's Realign action: the button with its label and value, and
+  // the status line below it.
   const document = new FakeDocument();
-  const legacyButton = document.add(new FakeElement({
-    id: 'calibrate-timing',
-    textContent: 'Recalibrate',
-    attributes: { 'data-i18n': 'adjust.recalibrate' },
-  }));
+  const button = new FakeElement({ id: 'calibrate-timing' });
+  button.append(
+    new FakeElement({ className: 'calibrate-timing-label', textContent: 'Realign' }),
+    new FakeElement({ id: 'timing-active-value', className: 'calibrate-timing-value', textContent: '—' }),
+  );
+  document.add(button);
   document.add(new FakeElement({ id: 'calibrate-status' }));
-  const fineTune = document.add(new FakeElement({ className: 'more-timing' }));
-
-  let forwardedClicks = 0;
-  legacyButton.addEventListener('click', () => { forwardedClicks += 1; });
 
   let locale: 'en' | 'zh-Hant' = 'en';
   const messages = {
@@ -188,6 +193,8 @@ test('timing presenter keeps applied authority through blocked, active, failure,
   window.relayCommandAuthority = {
     commandChannelFresh: true,
   };
+  let calibrationRequests = 0;
+  window.addEventListener('relay-start-timing-calibration', () => { calibrationRequests += 1; });
 
   (globalThis as any).window = window;
   (globalThis as any).document = document;
@@ -204,14 +211,7 @@ test('timing presenter keeps applied authority through blocked, active, failure,
     assert.ok(visibleButton && visibleStatus && timingLabel && timingValue);
     assert.equal(timingLabel.textContent, 'Realign');
     assert.equal(timingValue.textContent, '+237 ms');
-    assert.notEqual(visibleButton, legacyButton,
-      'presenter must replace the app-captured command node instead of sharing it');
-    assert.equal(document.elements.includes(legacyButton), false,
-      'command transport node must be detached from painted DOM');
-    assert.equal(legacyButton.hidden, true);
-    assert.equal(legacyButton.id, 'calibrate-timing-command');
-    assert.equal(fineTune.hidden, true);
-    assert.equal(fineTune.getAttribute('aria-hidden'), 'true');
+    assert.equal(visibleButton, button, 'the presenter paints the markup it is given');
 
     window.dispatchEvent(detailEvent('relay-product-status', {
       type: 'product-status',
@@ -260,8 +260,7 @@ test('timing presenter keeps applied authority through blocked, active, failure,
     assert.equal(timingLabel.textContent, '重新對齊');
     assert.equal(timingValue.textContent, '+237 ms');
     assert.equal(visibleStatus.textContent, '對齊中…');
-    assert.equal(document.elements.filter((element) => element.id === 'calibrate-timing').length, 1,
-      'locale switching must never revive the legacy command node');
+    assert.equal(document.elements.filter((element) => element.id === 'calibrate-timing').length, 1);
 
     window.dispatchEvent(detailEvent('relay-product-status', {
       type: 'product-status',
@@ -288,8 +287,8 @@ test('timing presenter keeps applied authority through blocked, active, failure,
     assert.equal(visibleButton.hidden, false);
     assert.equal(visibleButton.disabled, false);
     visibleButton.dispatchEvent(new Event('click', { cancelable: true }));
-    assert.equal(forwardedClicks, 1,
-      'the sole visible presenter must forward the user action to the detached authenticated transport');
+    assert.equal(calibrationRequests, 1,
+      'Realign asks app.js, which owns the authenticated transport, for a calibration');
 
     window.dispatchEvent(detailEvent('relay-timing-authority', {
       authorityFresh: false,

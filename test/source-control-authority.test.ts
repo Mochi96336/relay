@@ -17,13 +17,11 @@ test('Desktop Source no longer exposes authority-bearing singer commands', () =>
   assert.match(sourceHtml, /id="start-timing-calibration"[^>]*hidden[^>]*disabled/);
 });
 
-test('Vocal fine tune lives on the authenticated Mic-owner phone surface', () => {
-  assert.match(indexHtml, /id="vocal-fine-tune"[^>]*disabled/);
-  assert.match(
-    appJs,
-    /function sendVocalFineTune\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-vocal-fine-tune'\)/,
-  );
-  assert.match(appJs, /type: 'set-vocal-fine-tune'/);
+test('The Mic page has no vocal fine tune control and sends no fine-tune command', () => {
+  // It was hidden on the phone and only compatibility DOM; Relay still accepts
+  // the command and reports the value in source-status.
+  assert.doesNotMatch(indexHtml, /id="vocal-fine-tune/);
+  assert.doesNotMatch(appJs, /type: 'set-vocal-fine-tune'/);
 });
 
 test('Source still applies the canonical Song level locally without writing it back', () => {

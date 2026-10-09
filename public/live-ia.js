@@ -4,26 +4,7 @@ const systemPanel = document.querySelector('#system-panel');
 const openSystem = document.querySelector('#open-system');
 const closeSystem = document.querySelector('#close-system');
 const calibrateTiming = document.querySelector('#calibrate-timing');
-const micSectionLabel = document.querySelector('.performance-stage > .section-label');
-const micInputDiagnostics = document.querySelector('.voice-input-evidence .evidence-heading');
 const micLiveControl = document.querySelector('#mic-live-control');
-const micLiveLabel = micLiveControl?.querySelector('summary span');
-
-if (micSectionLabel) {
-  micSectionLabel.removeAttribute('data-i18n');
-  micSectionLabel.textContent = 'Mic';
-}
-if (micLiveLabel) {
-  micLiveLabel.removeAttribute('data-i18n');
-  micLiveLabel.textContent = 'Mic';
-}
-
-// Raw capture dBFS stays available to capture/diagnostics code through its DOM
-// nodes, but it is not normal Live product copy.
-if (micInputDiagnostics) {
-  micInputDiagnostics.style.display = 'none';
-  micInputDiagnostics.setAttribute('aria-hidden', 'true');
-}
 
 function closeHeaderMenus(except = null) {
   for (const menu of [peopleMenu, moreMenu]) {

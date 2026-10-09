@@ -13,7 +13,7 @@ test('failed Mic startup cleans up before releasing Listen AudioSession ownershi
   const failureStart = request.indexOf("if (error?.code === 'mic-startup-cancelled') return;");
   assert.ok(failureStart >= 0);
   const failure = request.slice(failureStart);
-  const cleanupAt = failure.indexOf("await stop(false, { releaseMic: false });");
+  const cleanupAt = failure.indexOf("await stop({ releaseMic: false });");
   const terminalAt = failure.indexOf("dispatchRelayEvent('relay-microphone-start-failed'");
 
   assert.ok(cleanupAt >= 0 && terminalAt > cleanupAt,

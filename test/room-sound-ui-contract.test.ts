@@ -63,11 +63,11 @@ test('Room sound keeps phase-aware full state reasons off layout while preservin
   assert.match(html, /id="listen-note"[^>]*aria-live="polite"/);
 });
 
-test('Room sound installs one stable vector icon instead of rebuilding it on every state update', () => {
-  assert.match(ui, /function installRoomSoundIcon\(\)/);
-  assert.match(ui, /toggle\.querySelector\('\.room-sound-icon'\)/);
-  assert.match(ui, /toggle\.insertAdjacentHTML\('afterbegin', roomSoundIconMarkup\(\)\)/);
-  assert.doesNotMatch(ui, /renderState[\s\S]*?toggle\.innerHTML/);
+test('Room sound paints one stable vector icon in the page instead of rebuilding it on state updates', () => {
+  assert.match(html, /id="listen-toggle"[^>]*>\s*<svg class="room-sound-icon"/);
+  assert.doesNotMatch(html, /id="listen-toggle"[^>]*data-i18n=/,
+    'a data-i18n on the toggle would replace the icon with text on every locale change');
+  assert.doesNotMatch(ui, /toggle\.(innerHTML|textContent|insertAdjacentHTML)/);
   assert.match(css, /#listen-toggle\[data-icon="muted"\]/);
   assert.match(css, /#listen-toggle\[data-icon="retry"\]/);
 });

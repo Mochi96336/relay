@@ -1176,7 +1176,7 @@ function countOf(page, type) {
     .filter((command) => command.type === wanted).length, type);
 }
 
-test('production DOM: a command the Relay refuses puts the control back and says who has the Mic', async ({ page }) => {
+test('production DOM: a command the Relay refuses puts the control back', async ({ page }) => {
   await livePhone(page);
   await page.evaluate(() => window.__relayInteractionHarness.broadcast({
     type: 'mix-settings', micGainDb: 20, songLevel: 100,
@@ -1191,20 +1191,18 @@ test('production DOM: a command the Relay refuses puts the control back and says
   }));
   await expect(micGain).toHaveValue('20');
   await expect(micGain).toBeDisabled();
-  await expect(page.locator('#status')).toHaveText('Mix is controlled by the singer');
-  await expect(page.locator('#details')).toHaveText('Bob has the mic and controls this.');
 });
 
-test('production DOM: a protocol error is shown and does not make the phone reconnect', async ({ page }) => {
+test('production DOM: a protocol error does not make the phone reconnect', async ({ page }) => {
   await livePhone(page);
   const registrations = await page.evaluate(() => window.__relayInteractionHarness.commands
     .filter((command) => command.type === 'register' && command.role === 'publisher').length);
 
+  const warned = page.waitForEvent('console', (entry) => entry.text().includes('Invalid playback transport identity.'));
   await page.evaluate(() => window.__relayInteractionHarness.sendTo('publisher', {
     type: 'error', message: 'Invalid playback transport identity.',
   }));
-  await expect(page.locator('#status')).toHaveText('Error');
-  await expect(page.locator('#details')).toHaveText('Invalid playback transport identity.');
+  await warned;
   await page.waitForTimeout(1_500);
   expect(await page.evaluate(() => window.__relayInteractionHarness.commands
     .filter((command) => command.type === 'register' && command.role === 'publisher').length)).toBe(registrations);
@@ -1306,7 +1304,6 @@ test('production DOM: releasing the Mic tells the Relay and ends the session', a
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-release-microphone')));
   await page.waitForFunction(() => window.__microphoneEnded.includes('released'), null, { timeout: 5_000 });
   expect(await countOf(page, 'release-mic')).toBe(1);
-  await expect(page.locator('#status')).toHaveText('Microphone released');
 });
 
 test('production DOM: retrying a damaged Mic keeps the Mic instead of releasing it', async ({ page }) => {
@@ -1486,7 +1483,6 @@ test('production DOM: an input that really disappeared ends the session but keep
   await livePhone(page);
   await deviceChange(page, { audioInputs: [{ kind: 'audioinput', deviceId: 'mic-other' }] });
   await page.waitForFunction(() => window.__microphoneEnded.includes('input-device-removed'), null, { timeout: 5_000 });
-  await expect(page.locator('#status')).toHaveText('Microphone interrupted');
   // Pulled-out hardware is not the singer giving up the room's Mic.
   expect(await countOf(page, 'release-mic')).toBe(0);
 });
@@ -1543,7 +1539,6 @@ test('production DOM: a processor that fails again before fresh audio ends the s
   // is the budget, so this one needs the singer's Retry.
   await page.evaluate(() => window.__relayInteractionHarness.failCaptureProcessor());
   await page.waitForFunction(() => window.__microphoneEnded.includes('processor-error-repeated'), null, { timeout: 5_000 });
-  await expect(page.locator('#status')).toHaveText('Microphone interrupted');
   expect(await countOf(page, 'release-mic')).toBe(0);
   expect(await publisherRegistrations(page)).toHaveLength(2);
 });
@@ -1585,7 +1580,6 @@ test('production DOM: audio the page delivers too late is not sent and leaves it
   const [lastFresh, nextFresh] = sent.packets;
   expect(nextFresh.firstSampleIndex - lastFresh.firstSampleIndex).toBe(2 * 960);
 
-  await expect(page.locator('#status')).toHaveText('Microphone capture caught up to live audio');
   await page.waitForFunction(() => window.__relayInteractionHarness.commands.some((command) => (
     command.type === 'audio-uplink-health' && command.droppedSamples?.captureBacklog === 960
   )), null, { timeout: 5_000 });
@@ -1636,5 +1630,7 @@ test('production DOM: audio dropped in the first seconds after page load is stil
     return performance.now();
   });
   expect(droppedAtMs, 'the drop has to land inside the first 2 s for this test to mean anything').toBeLessThan(2_000);
-  await expect(page.locator('#status')).toHaveText('Microphone capture caught up to live audio');
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some((command) => (
+    command.type === 'audio-uplink-health' && command.droppedSamples?.captureBacklog === 960
+  )), null, { timeout: 5_000 });
 });

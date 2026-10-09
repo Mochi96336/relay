@@ -21,8 +21,8 @@ test('System keeps compatibility equipment rows behind one product surface befor
     assert.match(html, new RegExp(`class="system-item" data-system-scope="${scope}"`));
   }
 
-  assert.match(system, /productSurface\.id = 'system-product'/);
-  assert.match(system, /systemSheet\.insertBefore\(productSurface, diagnosticsPanel\)/);
+  assert.match(html, /<section id="system-product" class="system-product" aria-live="polite">[\s\S]*?id="system-product-issues"[\s\S]*?<\/section>\s*<details id="diagnostics-panel"/);
+  assert.doesNotMatch(system, /createElement\('section'\)/);
 
   const systemStart = position('id="system-panel"');
   const diagnosticsStart = position('id="diagnostics-panel"');

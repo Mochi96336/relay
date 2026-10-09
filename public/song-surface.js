@@ -20,6 +20,8 @@ const observer = document.querySelector('#song-observer');
 const observerArtwork = document.querySelector('#room-song-artwork');
 const observerState = document.querySelector('#room-song-state');
 const observerTimeline = document.querySelector('#room-song-timeline');
+const observerAuthor = document.querySelector('#room-song-author');
+const observerPlaybackState = document.querySelector('#room-song-playback');
 
 const ROLES = new Set(['empty', 'holder', 'preparing', 'observer']);
 const STATE_LABELS = new Map([
@@ -68,7 +70,7 @@ function cleanMetadata(value) {
 if (
   stage && form && input && playerShell && localReadout && localNote
   && deviceNote && changeButton && headingTitle && observer && observerArtwork
-  && observerState && observerTimeline
+  && observerState && observerTimeline && observerAuthor && observerPlaybackState
 ) {
   let role = 'connecting';
   let editing = false;
@@ -78,16 +80,6 @@ if (
   // The Robot said it cannot play this video. Only product status carries it.
   let robotCannotPlay = false;
   let canEditCurrentSong = false;
-
-  const observerAuthor = document.createElement('span');
-  observerAuthor.className = 'song-observer-author';
-  observerAuthor.hidden = true;
-  observerTimeline.insertAdjacentElement('beforebegin', observerAuthor);
-
-  const observerPlaybackState = document.createElement('span');
-  observerPlaybackState.className = 'song-observer-status';
-  observerPlaybackState.hidden = true;
-  observerTimeline.insertAdjacentElement('afterend', observerPlaybackState);
 
   function roomSnapshot(detail) {
     const timeline = detail?.timeline && typeof detail.timeline === 'object' ? detail.timeline : {};

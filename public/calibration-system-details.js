@@ -13,80 +13,27 @@ let initialized = false;
 function initialize() {
   if (initialized) return;
   const diagnosticsPanel = document.querySelector('#diagnostics-panel');
-  const timingPanel = document.querySelector('[data-diagnostics-panel="timing"]');
-  if (!diagnosticsPanel || !timingPanel) return;
+  if (!diagnosticsPanel) return;
+
+  const nodes = {
+    applied: document.querySelector('#diag-calibration-applied'),
+    pathState: document.querySelector('#diag-path-state'),
+    pathCorrelations: document.querySelector('#diag-path-correlations'),
+    pathDifference: document.querySelector('#diag-path-difference'),
+    effective: document.querySelector('#diag-path-effective'),
+    contentState: document.querySelector('#diag-content-state'),
+    contentProgress: document.querySelector('#diag-content-progress'),
+    contentAgreement: document.querySelector('#diag-content-agreement'),
+    contentCandidate: document.querySelector('#diag-content-candidate'),
+    contentConfidence: document.querySelector('#diag-content-confidence'),
+    contentLevels: document.querySelector('#diag-content-levels'),
+    contentSegments: document.querySelector('#diag-content-segments'),
+    validation: document.querySelector('#diag-content-validation'),
+    validationLast: document.querySelector('#diag-content-validation-last'),
+  };
+  if (Object.values(nodes).some((node) => node === null)) return;
   initialized = true;
-
-  // Raw calibration figures are for whoever is debugging timing, so they sit
-  // closed under the readable rows instead of doubling the tab's length.
-  const section = document.createElement('details');
-  section.className = 'diagnostics-advanced';
-  const heading = document.createElement('summary');
-  heading.className = 'diagnostics-subheading';
-  heading.textContent = t('diag.cal.heading');
-  // Every node whose text is copy, re-read when the locale changes.
-  const labels = [];
-  function copyNode(node, key) {
-    node.textContent = t(key);
-    labels.push([node, key]);
-    return node;
-  }
-
-  let ledger = null;
-  /** Starts a ledger under a title naming when that calibration runs. */
-  function group(titleKey) {
-    if (titleKey) {
-      const title = copyNode(document.createElement('p'), titleKey);
-      title.className = 'diagnostic-group';
-      section.append(title);
-    }
-    ledger = document.createElement('dl');
-    ledger.className = 'diagnostic-ledger';
-    section.append(ledger);
-  }
-
-  /** One row as the readable tabs show it: the value, then a plain-language note. */
-  function pair(labelKey, id) {
-    const row = document.createElement('div');
-    row.className = 'diagnostic-pair';
-    const term = copyNode(document.createElement('dt'), labelKey);
-    const described = document.createElement('dd');
-    described.dataset.tone = 'neutral';
-    const value = document.createElement('span');
-    value.className = 'diagnostic-value';
-    value.id = id;
-    value.textContent = '—';
-    const note = copyNode(document.createElement('span'), `${labelKey}Note`);
-    note.className = 'diagnostic-note';
-    described.append(value, note);
-    row.append(term, described);
-    ledger.append(row);
-    return value;
-  }
-
-  section.append(heading);
-  const nodes = {};
-  group(null);
-  nodes.applied = pair('diag.cal.applied', 'diag-calibration-applied');
-  group('diag.cal.group.probe');
-  nodes.pathState = pair('diag.cal.pathState', 'diag-path-state');
-  nodes.pathCorrelations = pair('diag.cal.pathCorrelations', 'diag-path-correlations');
-  nodes.pathDifference = pair('diag.cal.pathDifference', 'diag-path-difference');
-  nodes.effective = pair('diag.cal.effective', 'diag-path-effective');
-  group('diag.cal.group.content');
-  nodes.contentState = pair('diag.cal.contentState', 'diag-content-state');
-  nodes.contentProgress = pair('diag.cal.contentProgress', 'diag-content-progress');
-  nodes.contentAgreement = pair('diag.cal.contentAgreement', 'diag-content-agreement');
-  nodes.contentCandidate = pair('diag.cal.contentCandidate', 'diag-content-candidate');
-  nodes.contentConfidence = pair('diag.cal.contentConfidence', 'diag-content-confidence');
-  nodes.contentLevels = pair('diag.cal.contentLevels', 'diag-content-levels');
-  nodes.contentSegments = pair('diag.cal.contentSegments', 'diag-content-segments');
-  group('diag.cal.group.validation');
-  nodes.validation = pair('diag.cal.validation', 'diag-content-validation');
-  nodes.validationLast = pair('diag.cal.validationLast', 'diag-content-validation-last');
   let latestTiming = null;
-
-  timingPanel.append(section);
 
   let socket = null;
   let reconnectTimer = null;
@@ -268,11 +215,7 @@ function initialize() {
     if (diagnosticsPanel.open) connect();
     else stop();
   });
-  window.addEventListener('relay-locale-changed', () => {
-    heading.textContent = t('diag.cal.heading');
-    for (const [term, key] of labels) term.textContent = t(key);
-    render(latestTiming);
-  });
+  window.addEventListener('relay-locale-changed', () => render(latestTiming));
   if (diagnosticsPanel.open) connect();
 }
 

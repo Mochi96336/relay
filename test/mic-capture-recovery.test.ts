@@ -260,7 +260,6 @@ test('app rebuild failure terminates local capture into bounded Mic reconnect gr
     'damaged local capture must close its publisher transport without bypassing server Mic reconnect grace',
   );
   assert.doesNotMatch(rebuild, /noteGraphRebuildFailed|rearmRebuild/);
-  assert.match(rebuild, /Retry Mic to start a fresh capture/);
 
   const stopStart = app.indexOf('async function stop(');
   const stopEnd = app.indexOf('async function startPublisher', stopStart);
@@ -601,13 +600,13 @@ test('foreground and unmute do not claim recovery before fresh PCM', () => {
   const endedAt = app.indexOf("track?.addEventListener('ended'", unmuteAt);
   assert.ok(unmuteAt >= 0 && endedAt > unmuteAt);
   const unmute = app.slice(unmuteAt, endedAt);
-  assert.doesNotMatch(unmute, /setStatus\('Microphone is live'/);
+  assert.doesNotMatch(unmute, /announceCaptureRecovered\(/);
   assert.match(unmute, /beginCaptureRecovery\('input-unmuted'/);
 
   const foregroundAt = app.indexOf('function recoverPublisherAudio');
   const reconnectAt = app.indexOf('function schedulePublisherReconnect', foregroundAt);
   assert.ok(foregroundAt >= 0 && reconnectAt > foregroundAt);
   const foreground = app.slice(foregroundAt, reconnectAt);
-  assert.doesNotMatch(foreground, /setStatus\('Microphone is live'/);
+  assert.doesNotMatch(foreground, /announceCaptureRecovered\(/);
   assert.match(foreground, /micCaptureRecovery\.noteForeground/);
 });

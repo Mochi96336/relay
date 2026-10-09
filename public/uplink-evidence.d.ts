@@ -5,11 +5,7 @@ export type UplinkDropReason = 'disconnected' | 'congested' | 'packet-too-large'
 
 export function resetUplinkEvidence(): void;
 
-export function countUplinkDrop(
-  sampleCount: number,
-  reason: UplinkDropReason | string,
-  clock: { nowMs: number; sampleRate: number },
-): { title: string; detail: string } | null;
+export function countUplinkDrop(sampleCount: number, reason: UplinkDropReason | string): void;
 
 export function noteCaptureDispatch(dispatch: CaptureDispatchClassification): void;
 

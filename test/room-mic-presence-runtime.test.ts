@@ -38,8 +38,11 @@ class FakeSvgNode {
     this.children.push(...nodes);
   }
 
-  replaceChildren(...nodes: FakeSvgNode[]) {
-    this.children = [...nodes];
+  /** The meter's waveform path, painted by index.html. */
+  querySelector(selector: string): FakeSvgNode | null {
+    if (selector !== '.voice-presence-wave') return null;
+    this.children[0] ??= new FakeSvgNode();
+    return this.children[0];
   }
 }
 
@@ -70,9 +73,6 @@ test('late Room Mic frame cannot revive a superseded owner waveform or surface',
     body,
     querySelector(selector: string) {
       return selector === '#mic-input-meter' ? meter : null;
-    },
-    createElementNS() {
-      return new FakeSvgNode();
     },
   };
 

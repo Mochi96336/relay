@@ -9,6 +9,7 @@ const roomUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.ur
 const roomPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
 const liveCopy = readFileSync(new URL('../public/live-i18n.js', import.meta.url), 'utf8');
 const fixture = readFileSync(new URL('./fixtures/live-p0-layout.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 test('P0 layout repair is render-blocking and owns one shared Live inline track', () => {
   assert.match(stateCss, /@import url\('\/live-p0-layout\.css'\);/);
@@ -59,11 +60,8 @@ test('Room sound projection preserves recovery semantics and local-only authorit
   assert.match(liveCopy, /'roomSound\.label': 'Room sound'/);
   assert.match(liveCopy, /'roomSound\.label': '房間聲音'/);
   assert.match(roomUi, /gain\.disabled = forced/);
-  assert.match(roomUi, /function roomSoundIconMarkup\(\)/);
-  assert.match(roomUi, /class="room-sound-icon"/);
-  assert.match(roomUi, /stroke="currentColor"/);
+  assert.match(html, /id="listen-toggle"[^>]*>\s*<svg class="room-sound-icon"[^>]*stroke="currentColor"/);
   assert.match(roomUi, /toggle\.dataset\.icon = controlPresentation\.iconState/);
-  assert.match(roomUi, /installRoomSoundIcon\(\)/);
   assert.doesNotMatch(roomUi, /renderState[\s\S]*?toggle\.innerHTML/);
   assert.doesNotMatch(roomUi, /🔊|🔇/);
   assert.doesNotMatch(roomUi, /dataset\.roomSoundState|dataset\.roomSoundValue|dataset\.listenNote/,

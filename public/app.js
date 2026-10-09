@@ -43,8 +43,6 @@ import {
 
 const publisherButton = document.querySelector('#start-publisher');
 const releaseButton = document.querySelector('#release-mic');
-const status = document.querySelector('#status');
-const details = document.querySelector('#details');
 
 // Mic audio on a WebSocket-only page rides this socket: reconnect fast, back
 // off only while it keeps failing. See reconnect-backoff.js.
@@ -159,11 +157,7 @@ function framePcm(pcm, generation, sequence, firstSampleIndex) {
 }
 
 function recordUplinkDrop(sampleCount, reason) {
-  const warning = countUplinkDrop(sampleCount, reason, {
-    nowMs: performance.now(),
-    sampleRate: audioContext?.sampleRate ?? 48000,
-  });
-  if (warning) setStatus(warning.title, warning.detail);
+  countUplinkDrop(sampleCount, reason);
 }
 
 function audioUplinkHealthPayload(healthRequestId) {
@@ -332,12 +326,6 @@ function rebuildCaptureForInputDeviceChange(graph) {
 }
 
 function announceCaptureRecovered() {
-  const connected = socket?.readyState === WebSocket.OPEN;
-  if (connected) {
-    setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM · fresh capture confirmed`);
-  } else {
-    setStatus('Microphone capture recovered', 'Fresh PCM resumed; reconnecting the Relay transport.');
-  }
   dispatchRelayEvent('relay-microphone-recovered', {
     captureGeneration: captureGeneration >>> 0,
     sampleCursor: captureSampleCursor,
@@ -637,12 +625,6 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
       // require the existing user-gesture Retry Mic path.
       void finishMicrophoneSession('processor-error-repeated', {
         releaseMic: false,
-        afterEnded: () => {
-          setStatus(
-            'Microphone interrupted',
-            'The microphone processor failed repeatedly. Retry Mic to reconnect it.',
-          );
-        },
       }).catch(console.error);
     };
     capture.addEventListener('processorerror', graph.processorErrorListener);
@@ -699,12 +681,6 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
           // ended / graph-rebuild failure and require a user-gesture Retry Mic
           // to obtain the replacement capture.
           releaseMic: false,
-          afterEnded: () => {
-            setStatus(
-              'Microphone interrupted',
-              'The active input device disappeared. Retry Mic to reconnect it.',
-            );
-          },
         });
       }).catch((error) => {
         // Device enumeration is opportunistic evidence only. Permission or
@@ -734,16 +710,6 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
 // recorder.js reads this so it can warn when Solo recording is started on the
 // same device that is publishing the microphone.
 window.relayActiveRole = null;
-
-function setStatus(title, body = '') {
-  status.textContent = title;
-  details.textContent = body;
-}
-
-const COMMAND_LABELS = {
-  'set-mix': 'Mix is controlled by the singer',
-  'start-timing-calibration': 'Calibration is controlled by the singer',
-};
 
 function publisherCommandChannelFresh(nowMs = performance.now()) {
   return socket?.readyState === WebSocket.OPEN
@@ -787,10 +753,6 @@ function maintainPublisherCommandChannel() {
   ) {
     publishPublisherCommandAuthority();
     updateSingerControls();
-    setStatus(
-      'Reconnecting microphone…',
-      'Relay stopped answering; restarting the control connection.',
-    );
     const staleSocket = socket;
     try {
       staleSocket.close(4000, 'publisher command ack stale');
@@ -1022,14 +984,11 @@ function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
 
-function finishMicrophoneSession(reason, { releaseMic = false, afterEnded = null } = {}) {
+function finishMicrophoneSession(reason, { releaseMic = false } = {}) {
   return micLifecycle.run({
-    stop: () => stop(false, { releaseMic }),
+    stop: () => stop({ releaseMic }),
     isCurrent: (stoppedEpoch) => publisherSessionEpoch === stoppedEpoch,
-    onEnded: () => {
-      dispatchRelayEvent('relay-microphone-ended', { reason });
-      afterEnded?.();
-    },
+    onEnded: () => dispatchRelayEvent('relay-microphone-ended', { reason }),
   });
 }
 
@@ -1039,9 +998,9 @@ function handleServerMessage(
   expectedGeneration = captureGeneration >>> 0,
 ) {
   if (message.type === 'error') {
-    setStatus('Error', message.message);
     // Protocol errors are not transport failures. Retrying the publisher after
     // a semantic rejection used to make superseded tabs fight forever.
+    console.warn('[relay] server error:', message.message);
     return;
   }
 
@@ -1066,19 +1025,12 @@ function handleServerMessage(
   }
 
   if (message.type === 'command-rejected') {
-    // The rejection is visible, and it also invalidates the local claim that
-    // this socket is currently authorized to mutate server-owned controls.
-    const owner = message.owner ?? null;
+    // The control goes back to the Relay's value, and the rejection invalidates
+    // the local claim that this socket may mutate server-owned controls.
     restoreLastKnownControl(message.command);
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
     updateSingerControls();
-    setStatus(
-      COMMAND_LABELS[message.command] ?? 'Command refused',
-      message.reason === 'not-mic-owner'
-        ? `${owner ? owner.nickname : 'Another participant'} has the mic and controls this.`
-        : 'Join the room with a name before changing this.',
-    );
     return;
   }
 
@@ -1091,7 +1043,6 @@ function handleServerMessage(
 
   if (message.type === 'mic-busy') {
     const owner = message.owner ?? null;
-    setStatus('Microphone is in use', owner ? `${owner.nickname} has the mic.` : 'Another participant has the mic.');
     dispatchRelayEvent('relay-mic-busy', { owner });
     finishMicrophoneSession('busy').catch(console.error);
     return;
@@ -1099,20 +1050,17 @@ function handleServerMessage(
 
   if (message.type === 'mic-takeover-rejected') {
     const owner = message.owner ?? null;
-    setStatus('Takeover changed', owner ? `${owner.nickname} has the mic now.` : 'The mic state changed.');
     dispatchRelayEvent('relay-mic-takeover-rejected', { owner, reason: message.reason });
     finishMicrophoneSession('takeover-rejected').catch(console.error);
     return;
   }
 
   if (message.type === 'mic-revoked') {
-    setStatus('Microphone handed off', message.message ?? 'Another participant now has the mic.');
     finishMicrophoneSession('revoked').catch(console.error);
     return;
   }
 
   if (message.type === 'publisher-superseded') {
-    setStatus('Microphone moved to another tab', message.message ?? 'A newer microphone capture is active.');
     finishMicrophoneSession('superseded').catch(console.error);
     return;
   }
@@ -1126,17 +1074,8 @@ function handleServerMessage(
     publisherAuthorityFresh = true;
     publishPublisherCommandAuthority();
     updateSingerControls();
-    void audioTransport.prefer(message.mediaTransport ?? null).then((preferred) => {
+    void audioTransport.prefer(message.mediaTransport ?? null).then(() => {
       if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
-      const path = preferred ? 'WebTransport datagrams' : 'WebSocket fallback';
-      if (micCaptureRecovery.status().recovering) {
-        setStatus(
-          'Microphone connected',
-          `${audioContext?.sampleRate ?? '--'} Hz · ${path} · waiting for fresh PCM`,
-        );
-      } else {
-        setStatus('Microphone is live', `${audioContext?.sampleRate ?? '--'} Hz mono PCM · ${path}`);
-      }
       sendAudioUplinkHealth();
     });
     updateMixLabels();
@@ -1228,20 +1167,12 @@ function resumePublisherAudioContext() {
 function beginCaptureRecovery(reason) {
   if (!publisherActive || !audioContext) return;
   micCaptureRecovery.beginRecovery(captureSnapshot(), reason);
-  setStatus(
-    'Recovering microphone…',
-    'Waiting for the audio clock and fresh microphone samples before declaring recovery.',
-  );
   resumePublisherAudioContext();
 }
 
 function recoverPublisherAudio() {
   if (!publisherActive) return;
   const foreground = micCaptureRecovery.noteForeground(captureSnapshot());
-  setStatus(
-    'Recovering microphone…',
-    'Foregrounded; waiting for the audio clock and fresh microphone samples.',
-  );
   resumePublisherAudioContext();
   if (foreground.rebuild) void rebuildPublisherCaptureGraph('foreground-discontinuity');
 }
@@ -1258,7 +1189,6 @@ function schedulePublisherReconnect(
     if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
     connectPublisherSocket(sessionEpoch, expectedGeneration).catch(() => {
       if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
-      setStatus('Reconnecting microphone…', 'Relay is still unavailable; retrying automatically.');
       schedulePublisherReconnect(sessionEpoch, expectedGeneration);
     });
   }, publisherReconnectBackoff.nextDelayMs());
@@ -1334,7 +1264,6 @@ async function connectPublisherSocket(
     publishPublisherCommandAuthority();
     updateSingerControls();
     if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
-    setStatus('Reconnecting microphone…', 'Relay connection closed; microphone capture stays active.');
     schedulePublisherReconnect(sessionEpoch, expectedGeneration);
   });
 
@@ -1364,7 +1293,6 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   publisherReconnectBackoff.reset();
   connectPublisherSocket(sessionEpoch, generation).catch(() => {
     if (!isCurrentPublisherCapture(sessionEpoch, generation)) return;
-    setStatus('Reconnecting microphone…', 'Capture restarted; reconnecting the new sample generation.');
     schedulePublisherReconnect(sessionEpoch, generation);
   });
 }
@@ -1397,10 +1325,6 @@ function rebuildPublisherCaptureGraph(reason) {
     installCaptureGraph(sessionEpoch, captureStream, captureContext);
     micCaptureRecovery.noteGraphRebuilt(captureSnapshot());
     startCaptureWatchdog(sessionEpoch, generation);
-    setStatus(
-      'Recovering microphone…',
-      'Capture graph rebuilt; waiting for fresh PCM before declaring recovery.',
-    );
     return true;
   }).catch((error) => {
     console.warn('Microphone capture graph rebuild failed', error);
@@ -1410,12 +1334,6 @@ function rebuildPublisherCaptureGraph(reason) {
         // hardware-ended track. Do not bypass the server reconnect grace with
         // an explicit room-Mic release.
         releaseMic: false,
-        afterEnded: () => {
-          setStatus(
-            'Microphone interrupted',
-            'Capture recovery failed. Retry Mic to start a fresh capture.',
-          );
-        },
       }).catch(console.error);
     }
     return false;
@@ -1427,7 +1345,7 @@ function rebuildPublisherCaptureGraph(reason) {
   return promise;
 }
 
-async function stop(setIdle = true, { releaseMic = true } = {}) {
+async function stop({ releaseMic = true } = {}) {
   // Revoke this session before any asynchronous close can yield. Everything
   // after the first await is allowed to touch only captured old resources.
   const stoppedEpoch = ++publisherSessionEpoch;
@@ -1497,7 +1415,6 @@ async function stop(setIdle = true, { releaseMic = true } = {}) {
   publisherControlConnections = 0;
   publisherButton.disabled = false;
   updateSingerControls();
-  if (setIdle) setStatus('Idle', 'Take the mic when you are ready.');
 
   if (closingContext) {
     try {
@@ -1517,7 +1434,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   publisherButton.disabled = true;
   updateSingerControls();
   pendingPublisherTakeoverOwnerId = takeoverExpectedOwnerId;
-  setStatus('Starting microphone…');
 
   let preparedStream = null;
   let preparedContext = null;
@@ -1562,12 +1478,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         // preserve the bounded server Mic grace for a user-gesture retry.
         finishMicrophoneSession('context-closed', {
           releaseMic: false,
-          afterEnded: () => {
-            setStatus(
-              'Microphone interrupted',
-              'The microphone audio engine closed. Retry Mic to reconnect it.',
-            );
-          },
         }).catch(console.error);
         return;
       }
@@ -1657,9 +1567,6 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         // ownership briefly, so a user-gesture Retry Mic can restore the local
         // capture without another participant racing into the lease.
         releaseMic: false,
-        afterEnded: () => {
-          setStatus('Microphone interrupted', 'The audio input ended. Retry Mic to reconnect it.');
-        },
       }).catch(console.error);
     });
 
@@ -1669,17 +1576,12 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
 
     publisherButton.disabled = true;
     updateSingerControls();
-    setStatus(
-      'Connecting microphone…',
-      `${captureContext.sampleRate} Hz capture graph started; waiting for fresh PCM and Relay.`,
-    );
 
     publisherReconnectBackoff.reset();
     try {
       await connectPublisherSocket(sessionEpoch, generation);
     } catch {
       if (!isCurrentPublisherCapture(sessionEpoch, generation)) return;
-      setStatus('Reconnecting microphone…', 'Initial Relay connection failed; retrying automatically.');
       schedulePublisherReconnect(sessionEpoch, generation);
     }
   } finally {
@@ -1703,14 +1605,13 @@ async function requestPublisherStart(
       // A self-owner recovery must replace the damaged local capture without
       // opening a room-ownership race. Ordinary Take Mic/takeover still releases
       // any prior local Mic before acquiring through the normal server path.
-      await stop(false, { releaseMic: !preserveMicOwnership });
+      await stop({ releaseMic: !preserveMicOwnership });
       await startPublisher(takeoverExpectedOwnerId);
     } catch (error) {
       if (error?.code === 'mic-startup-cancelled') return;
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
-      setStatus('Could not start microphone', message);
-      await stop(false, { releaseMic: false });
+      await stop({ releaseMic: false });
       dispatchRelayEvent('relay-microphone-start-failed', {
         message,
         takeoverExpectedOwnerId,
@@ -1772,9 +1673,6 @@ window.addEventListener('relay-release-microphone', () => {
   if (!publisherActive) return;
   finishMicrophoneSession('released', {
     releaseMic: true,
-    afterEnded: () => {
-      setStatus('Microphone released', 'This phone is no longer using the microphone.');
-    },
   }).catch(console.error);
 });
 
@@ -1793,4 +1691,3 @@ window.addEventListener('relay-start-timing-calibration', () => {
 updateMixLabels();
 updateSingerControls();
 publishPublisherCommandAuthority();
-setStatus('Idle', 'Take the mic when you are ready.');

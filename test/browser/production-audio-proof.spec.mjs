@@ -228,8 +228,6 @@ async function printReadinessDiagnostics(page, relay) {
     micAction: window.relayMicActionState ?? null,
     activeRole: window.relayActiveRole ?? null,
     proof: window.__relayAudioProofDiagnostics ?? null,
-    status: document.querySelector('#status')?.textContent ?? null,
-    details: document.querySelector('#details')?.textContent ?? null,
     publisherDisabled: document.querySelector('#start-publisher')?.disabled ?? null,
     recordDisabled: document.querySelector('#start-recording')?.disabled ?? null,
   }));

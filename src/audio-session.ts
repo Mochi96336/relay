@@ -611,6 +611,15 @@ export class AudioSession {
     return this.micFrontier.lastFold;
   }
 
+  /** Folds undone since this mixer was created (see MicFrontierCorrection.unfoldDue). */
+  get micTimelineUnfoldCount() {
+    return this.micFrontier.unfoldCount;
+  }
+
+  get lastMicTimelineUnfold() {
+    return this.micFrontier.lastUnfold;
+  }
+
   /** The most frontier correction the retained history lets the read head use. */
   private micFrontierCorrectionCapSamples() {
     const budgeted = Math.round((this.budgetedMicAdvanceMs() * this.sampleRate) / 1000);
@@ -621,7 +630,8 @@ export class AudioSession {
   /**
    * Folds Mic capture loss the phone has confirmed into the timeline before the
    * frontier correction covering it runs out of room (see
-   * MicFrontierCorrection.foldDue for why).
+   * MicFrontierCorrection.foldDue for why), and takes a fold back out when the
+   * loss it folded falls again (MicFrontierCorrection.unfoldDue).
    *
    * Runs before a frame reads any of the previous frame's read state, so that
    * state moves with the timeline.
@@ -633,9 +643,19 @@ export class AudioSession {
       this.mic.generation,
       this.micFrontierCorrectionCapSamples(),
     );
-    if (shift === 0) return;
-    this.rebaseMicTimeline(shift);
-    this.micFrontier.folded(shift, correctionBefore);
+    if (shift > 0) {
+      this.rebaseMicTimeline(shift);
+      this.micFrontier.folded(shift, correctionBefore);
+      return;
+    }
+    const unfold = this.micFrontier.unfoldDue(
+      this.bus.micExpected,
+      this.mic.generation,
+      this.micFrontierCorrectionCapSamples(),
+    );
+    if (unfold === 0) return;
+    this.rebaseMicTimeline(-unfold);
+    this.micFrontier.unfolded(unfold, correctionBefore);
   }
 
   /**

@@ -89,6 +89,8 @@ function remoteFacts(overrides: Partial<RemoteStatusFacts> = {}): RemoteStatusFa
       frontierCorrectionMs: 1_250.6,
       timelineFolds: 2,
       lastTimelineFold: { shiftMs: 400, correctionBeforeMs: 1_650, captureLossMs: 420 },
+      timelineUnfolds: 1,
+      lastTimelineUnfold: { shiftMs: 300, correctionBeforeMs: 0, captureLossMs: 120 },
       captureDelivery: { generation: 7, lossMs: 420, ratio: 0.97, windowMs: 30_000 },
       uplinkBacklog: { generation: 7, backlogMs: 2_400, maxBacklogMs: 3_100 },
     },
@@ -177,6 +179,8 @@ test('/statusz reports the sampled mix and Mic timeline in its own units', () =>
     micFrontierCorrectionMs: 1_251,
     micTimelineFolds: 2,
     lastMicTimelineFold: { shiftMs: 400, correctionBeforeMs: 1_650, captureLossMs: 420 },
+    micTimelineUnfolds: 1,
+    lastMicTimelineUnfold: { shiftMs: 300, correctionBeforeMs: 0, captureLossMs: 120 },
   });
   assert.deepEqual(status.audio.micCaptureDelivery, facts.mic.captureDelivery);
   assert.deepEqual(status.audio.micUplinkBacklog, facts.mic.uplinkBacklog);

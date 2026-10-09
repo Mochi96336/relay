@@ -62,6 +62,8 @@ export type RemoteStatusFacts = {
     frontierCorrectionMs: number;
     timelineFolds: number;
     lastTimelineFold: MicTimelineFold | null;
+    timelineUnfolds: number;
+    lastTimelineUnfold: MicTimelineFold | null;
     captureDelivery: ReturnType<MicCaptureDeliveryMonitor['status']>;
     uplinkBacklog: ReturnType<MicUplinkBacklog['status']>;
   };
@@ -151,6 +153,8 @@ export function projectRemoteStatus(facts: RemoteStatusFacts) {
         micFrontierCorrectionMs: Math.round(mic.frontierCorrectionMs),
         micTimelineFolds: mic.timelineFolds,
         lastMicTimelineFold: mic.lastTimelineFold,
+        micTimelineUnfolds: mic.timelineUnfolds,
+        lastMicTimelineUnfold: mic.lastTimelineUnfold,
       },
       micCaptureDelivery: mic.captureDelivery,
       micUplinkBacklog: mic.uplinkBacklog,

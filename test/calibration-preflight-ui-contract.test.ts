@@ -36,17 +36,15 @@ test('System timing diagnostics expose content, validation, and path evidence se
   const english = DIAGNOSTICS_MESSAGES.en;
   const keyFor = (text: string) => Object.keys(english).find((key) => key.startsWith('diag.cal.') && english[key] === text);
   for (const marker of [
-    'Content progress',
-    'Content agreement',
-    'Content candidate',
-    'Content confidence',
-    'Content segments',
-    'Runtime validation',
-    'Test tone',
-    'Test tone correlation',
+    'Progress',
+    'Agreeing measurements',
+    'Measured delay',
+    'Confidence',
+    'Segment delays',
+    'Validation state',
+    'Test tone detection',
     'Path difference',
-    'Robot player offset',
-    'Effective calibration',
+    'Test tone result',
   ]) {
     const key = keyFor(marker);
     assert.ok(key, `missing System calibration copy: ${marker}`);

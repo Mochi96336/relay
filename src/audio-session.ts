@@ -39,7 +39,7 @@ import { SourceOutputEdge } from './source-output-edge.js';
  * alignment was measured - and decides for itself what that does to the audio.
  */
 
-export type { MicTimelineFold } from './mic-frontier-correction.js';
+export type { MicTimelineFold, MicTimelineUnfold } from './mic-frontier-correction.js';
 export { HEAVY_LIMIT_DB, LIMITER_THRESHOLD_DBFS } from './mic-limiter.js';
 
 export type AlignmentState = {
@@ -236,6 +236,12 @@ export class AudioSession {
   };
   /** Desired live drift correction while the currently applied lag slews there. */
   private calibratedMicLagTargetMs: number | null = null;
+  /**
+   * Folded Mic loss taken back out of the timeline from under the calibration
+   * in force, which was measured with it in place: the calibration reads that
+   * much too far ahead until the next measurement (see foldConfirmedMicCaptureLoss).
+   */
+  private calibrationUnfoldedSamples = 0;
   /**
    * Actual Mic advance trajectory emitted at the end of the previous frame.
    * This is deliberately separate from alignmentState: an immediate authority
@@ -445,6 +451,7 @@ export class AudioSession {
     this.running = false;
     this.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
     this.calibratedMicLagTargetMs = null;
+    this.calibrationUnfoldedSamples = 0;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     this.resetHealth();
@@ -526,7 +533,10 @@ export class AudioSession {
 
   /** What the alignment asks for, before the buffer's limits are applied. */
   get requestedMicAdvanceMs() {
-    const base = this.alignmentState.calibratedMicLagMs ?? this.alignmentState.networkCompensationMs;
+    const calibrated = this.alignmentState.calibratedMicLagMs;
+    const base = calibrated === null
+      ? this.alignmentState.networkCompensationMs
+      : calibrated - (this.calibrationUnfoldedSamples / this.sampleRate) * 1000;
     return base - this.alignmentState.fineTuneMs;
   }
 
@@ -625,6 +635,21 @@ export class AudioSession {
     return this.micFrontier.lastUnfold;
   }
 
+  /** How far folds have moved the current capture's timeline, net of unfolds, in ms. */
+  get micTimelineFoldedMs() {
+    return (this.micFrontier.timelineFoldedSamplesNow / this.sampleRate) * 1000;
+  }
+
+  /**
+   * A calibration measured from the Mic timeline as it stands now is in force.
+   * The server calls this for each new measurement, not when it reapplies an
+   * old one.
+   */
+  noteMicCalibrationMeasured() {
+    this.calibrationUnfoldedSamples = 0;
+    this.micFrontier.noteCalibrationMeasured();
+  }
+
   /** The most frontier correction the retained history lets the read head use. */
   private micFrontierCorrectionCapSamples() {
     const budgeted = Math.round((this.budgetedMicAdvanceMs() * this.sampleRate) / 1000);
@@ -636,7 +661,9 @@ export class AudioSession {
    * Folds Mic capture loss the phone has confirmed into the timeline before the
    * frontier correction covering it runs out of room (see
    * MicFrontierCorrection.foldDue for why), and takes a fold back out when the
-   * loss it folded falls again (MicFrontierCorrection.unfoldDue).
+   * loss it folded falls again (MicFrontierCorrection.unfoldDue). A calibration
+   * measured across that fold gives it up too (unfoldMeasuredAcross), and the
+   * correction keeps the read head on the audio it was reading.
    *
    * Runs before a frame reads any of the previous frame's read state, so that
    * state moves with the timeline.
@@ -659,8 +686,15 @@ export class AudioSession {
       this.micFrontierCorrectionCapSamples(),
     );
     if (unfold === 0) return;
+    const measuredAcross = this.micFrontier.unfoldMeasuredAcross(unfold);
+    const advanceBefore = this.budgetedMicAdvanceMs();
+    this.calibrationUnfoldedSamples += measuredAcross;
+    const advanceAfter = this.budgetedMicAdvanceMs();
     this.rebaseMicTimeline(-unfold);
-    this.micFrontier.unfolded(unfold, correctionBefore);
+    // The advance itself moved back by up to the part measured across, so the
+    // correction holds only what the advance did not.
+    this.micFrontier.release(Math.round(((advanceBefore - advanceAfter) * this.sampleRate) / 1000));
+    this.micFrontier.unfolded(unfold, correctionBefore, measuredAcross);
   }
 
   /**

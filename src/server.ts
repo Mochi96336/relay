@@ -287,6 +287,8 @@ const productMic = new ProductMicSteadiness();
 let micCaptureFallingBehind = false;
 let reportedMicTimelineFolds = 0;
 let reportedMicTimelineUnfolds = 0;
+/** The confirmed calibration revision last handed to the mixer as a new Mic measurement. */
+let micMeasuredCalibrationRevision = 0;
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
 
 // Read here rather than beside the other calibration constants because the
@@ -971,6 +973,7 @@ const calibration = new CalibrationSession({
       confirmedRevision: calibration.confirmedRevision,
       hasConfirmedResult: calibration.confirmedResult !== null,
     });
+    noteContentMicMeasurement();
     syncAppliedCalibration();
     broadcastJson(timingCalibrationStatusPayload());
     broadcastJson(sourceStatusPayload());
@@ -1003,6 +1006,17 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
     timingRuntime.markContentValidationBaseline(calibration.confirmedRevision);
   },
 });
+
+/**
+ * Tells the mixer a content calibration was just measured from the Mic
+ * timeline. A Boot Probe promotion also lands here, but only a fresh probe is a
+ * new measurement (see maybeFinishProbeAnalysis); a reapply reuses an old one.
+ */
+function noteContentMicMeasurement() {
+  if (calibration.confirmedRevision === micMeasuredCalibrationRevision) return;
+  micMeasuredCalibrationRevision = calibration.confirmedRevision;
+  if (appliedCalibrationKind() !== 'boot-probe') session.noteMicCalibrationMeasured();
+}
 
 function clearContentValidationBaseline() {
   timingRuntime.clearContentValidationBaseline();
@@ -2857,7 +2871,10 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   }
 
   promoteBootProbeCalibration(
-    () => bootProbeRuntime.recordCalibration(bootProbeContext(), result),
+    () => {
+      bootProbeRuntime.recordCalibration(bootProbeContext(), result);
+      session.noteMicCalibrationMeasured();
+    },
     () => ({
       micLagMs: result.advanceMs,
       confidence: Math.max(0, Math.min(1, result.confidence)),

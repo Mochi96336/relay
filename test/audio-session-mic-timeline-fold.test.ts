@@ -222,6 +222,7 @@ function simulateSharedQueue(
   session: AudioSession,
   seconds: number,
   serviceMs: (startsAtMs: number) => number,
+  afterTick?: (nowMs: number) => void,
 ) {
   const frames: Frame[] = [];
   const monitor = new MicCaptureDeliveryMonitor();
@@ -263,6 +264,7 @@ function simulateSharedQueue(
         headroomMs: session.liveMicHeadroomMs,
       });
     }, nowMs);
+    afterTick?.(nowMs);
   }
   return frames;
 }
@@ -293,4 +295,55 @@ test('a queue that delayed the health reports with the audio is not left folded 
     assert.equal(a.headroomMs, b.headroomMs, `headroom of frame ${index}`);
   }
   assert.equal(Math.round(folding.appliedMicAdvanceMs), 137);
+});
+
+test('a calibration measured across a mistaken fold gives the fold up when it is undone', () => {
+  // The same queue, but a calibration completes while the delayed reports are
+  // still folded into the timeline. It measures the voice where the fold put
+  // it; once the fold is undone, the voice must still be read exactly where a
+  // mixer that never folded, calibrated without the fold, reads it.
+  const congested = (startsAtMs: number) => (startsAtMs > 20_000 && startsAtMs <= 40_000 ? 11.8 : 3);
+  const run = (noteMeasured: boolean) => {
+    const session = makeSession(3_000);
+    let measured = false;
+    const frames = simulateSharedQueue(session, 90, congested, () => {
+      if (measured || session.micTimelineFoldCount === 0) return;
+      measured = true;
+      session.setAlignment({ calibratedMicLagMs: 137 + session.micTimelineFoldedMs });
+      if (noteMeasured) session.noteMicCalibrationMeasured();
+    });
+    assert.ok(measured, 'the delayed reports were folded');
+    assert.ok(session.micTimelineUnfoldCount >= 1, 'and the loss fell again');
+    return { session, frames };
+  };
+  const unbounded = makeSession(60_000);
+  unbounded.setAlignment({ calibratedMicLagMs: 137 });
+  const reference = simulateSharedQueue(unbounded, 90, congested);
+  assert.equal(unbounded.micTimelineFoldCount, 0);
+
+  const noted = run(true);
+  assert.equal(
+    noted.session.lastMicTimelineUnfold!.calibrationMs,
+    noted.session.lastMicTimelineUnfold!.shiftMs,
+    JSON.stringify(noted.session.lastMicTimelineUnfold),
+  );
+  const settledFrom = Math.ceil(60_000 / 20);
+  for (let index = settledFrom; index < reference.length; index += 1) {
+    const a = noted.frames[index]!;
+    const b = reference[index]!;
+    if (!a.pcm.equals(b.pcm)) {
+      assert.fail(`frame ${index} (${(index * 20) / 1000} s) differs: headroom ${a.headroomMs} vs ${b.headroomMs} ms`);
+    }
+    assert.equal(a.headroomMs, b.headroomMs, `headroom of frame ${index}`);
+  }
+  assert.equal(Math.round(noted.session.appliedMicAdvanceMs), 137);
+
+  // Without the note, as before: the voice is no longer where the reference reads it.
+  const unnoted = run(false);
+  assert.equal(unnoted.session.lastMicTimelineUnfold!.calibrationMs, 0);
+  const settled = unnoted.frames.slice(settledFrom);
+  assert.ok(
+    settled.some((frame, offset) => !frame.pcm.equals(reference[settledFrom + offset]!.pcm)),
+    'the gap this closes must show without it',
+  );
 });

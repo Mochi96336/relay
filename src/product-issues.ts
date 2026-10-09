@@ -32,6 +32,7 @@ export type ProductIssueCause =
   | 'mic-audio-stalled'
   | 'mic-audio-intermittent'
   | 'mic-timeline-behind'
+  | 'mic-uplink-delayed'
   | 'mic-input-clipping'
   | 'mic-too-loud'
   | 'mic-too-quiet'
@@ -100,6 +101,8 @@ export type ProductIssueFacts = {
      * silence. The room Mic state stays live; this is its audible quality.
      */
     audibilityDegraded?: boolean;
+    /** Captured audio is in transit beyond ordinary delay: the network, not the capture. */
+    inTransit?: boolean;
     /** Sustained heavy limiting, or a post-gain peak too low to hear over the song. */
     levelWarning?: MicLevelWarning | null;
   };
@@ -222,11 +225,15 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       // An interrupted Mic whose PCM still arrives has fallen behind the live
       // mix rather than stopped; saying "stopped arriving" sent people to the
       // network. A fresh capture re-anchors it, so the recovery is the same.
-      cause: facts.mic.state === 'interrupted' && facts.mic.arriving === true
-        ? 'mic-timeline-behind'
-        : 'mic-audio-stalled',
+      // Audio still in transit is the network's: the voice returns on time
+      // once it gets through, and a new capture would not get it there sooner.
+      cause: facts.mic.inTransit === true
+        ? 'mic-uplink-delayed'
+        : facts.mic.state === 'interrupted' && facts.mic.arriving === true
+          ? 'mic-timeline-behind'
+          : 'mic-audio-stalled',
       affects: ['voice', 'recording'],
-      recovery: 'retry-mic',
+      recovery: facts.mic.inTransit === true ? 'automatic' : 'retry-mic',
     });
   } else if (
     facts.mic.ownerId !== null
@@ -239,9 +246,9 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       code: 'mic-audio-stalled',
       scope: 'mic',
       severity: 'warning',
-      cause: 'mic-audio-intermittent',
+      cause: facts.mic.inTransit === true ? 'mic-uplink-delayed' : 'mic-audio-intermittent',
       affects: ['voice', 'recording'],
-      recovery: 'retry-mic',
+      recovery: facts.mic.inTransit === true ? 'automatic' : 'retry-mic',
     });
   } else if (facts.mic.ownerId !== null && facts.mic.state === 'reconnecting') {
     issues.push({

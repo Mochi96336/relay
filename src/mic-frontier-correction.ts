@@ -168,6 +168,11 @@ export class MicFrontierCorrection {
     return this.correction;
   }
 
+  /** Whether captured audio is in transit beyond ordinary delay (see noteTransit). */
+  get transitActive() {
+    return this.inTransit;
+  }
+
   /** Folds of confirmed capture loss into the Mic timeline since this mixer was created. */
   get foldCount() {
     return this.foldCountValue;

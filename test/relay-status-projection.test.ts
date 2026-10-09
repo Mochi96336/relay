@@ -248,6 +248,7 @@ function productFacts(overrides: Partial<ProductStatusFacts> = {}): ProductStatu
     participantCount: 2,
     micOwnerId: 'participant-a',
     micOwnerNickname: 'A',
+    micAudioInTransit: false,
     publisherControlConnected: true,
     freshMicUplink: null,
     micAudibilityDegraded: false,

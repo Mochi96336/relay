@@ -900,19 +900,16 @@ export class PreferredAudioTransport extends AudioTransport {
       // Only where the browser defines it: assigning an unknown property to
       // the datagrams object would just store it and read back as though it
       // were honoured.
-      // Nothing here may fail the path: on 2026-10-09 the first build read the
-      // value back outside any guard, and the reloaded iPhone then made one
-      // WebTransport attempt, connected none and stayed on WebSocket.
       this.webTransportOutgoingMaxAgeMs = null;
-      try {
-        if (transport.datagrams && 'outgoingMaxAge' in transport.datagrams) {
+      if (transport.datagrams && 'outgoingMaxAge' in transport.datagrams) {
+        try {
           transport.datagrams.outgoingMaxAge = this.datagramOutgoingMaxAgeMs;
-          const reportedMaxAge = Number(transport.datagrams.outgoingMaxAge);
-          if (Number.isFinite(reportedMaxAge) && reportedMaxAge > 0) {
-            this.webTransportOutgoingMaxAgeMs = reportedMaxAge;
-          }
+        } catch {}
+        const reportedMaxAge = Number(transport.datagrams.outgoingMaxAge);
+        if (Number.isFinite(reportedMaxAge) && reportedMaxAge > 0) {
+          this.webTransportOutgoingMaxAgeMs = reportedMaxAge;
         }
-      } catch {}
+      }
 
       const writable = transport.datagrams.writable ?? transport.datagrams.createWritable();
       const writer = writable.getWriter();

@@ -2127,6 +2127,7 @@ const mixerTimer = setInterval(() => {
     micRuntime.serviceRetransmits(nowMs, session.liveMicHeadroomMs);
     deliverMicPackets(micRuntime.flush(nowMs));
   }
+  noteMicTransit(performance.now());
 
   session.drain((frame, evidence, position) => {
     const nowMs = performance.now();
@@ -2180,6 +2181,19 @@ function noteMicCaptureDelivery(health: AudioUplinkHealth, nowMs: number) {
 }
 
 /**
+ * Tells the mixer, every tick, how much of the publishing capture's audio is in
+ * transit. Every tick rather than per report: while reports lag or stop, the
+ * estimate keeps growing, and that is when the mixer must not wait for it.
+ */
+function noteMicTransit(nowMs: number) {
+  const generation = micRuntime.mediaGeneration;
+  if (generation === null) return;
+  const transit = micUplinkBacklog.estimate(nowMs);
+  if (transit?.generation !== generation) return;
+  session.noteMicTransitBacklog(transit.generation, transit.backlogMs);
+}
+
+/**
  * Logs captured Mic audio that has not reached Relay yet (see MicUplinkBacklog)
  * when it builds up, while it lasts, and when it clears.
  */
@@ -2190,10 +2204,6 @@ function noteMicUplinkBacklog(health: AudioUplinkHealth, sampleRate: number, now
     sampleRate,
     atMs: nowMs,
   });
-  const backlog = micUplinkBacklog.status();
-  if (backlog?.generation === health.captureGeneration) {
-    session.noteMicTransitBacklog(backlog.generation, backlog.backlogMs);
-  }
   if (!edge) return;
   console.warn('[mic-uplink-backlog]', JSON.stringify({
     ...edge,

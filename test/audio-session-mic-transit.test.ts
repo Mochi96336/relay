@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
+import { MicUplinkBacklog } from '../src/mic-uplink-backlog.js';
 
 const RATE = 48_000;
 const PACKET = 480; // 10 ms, as the phone sends
@@ -19,12 +20,20 @@ function packet(firstSampleIndex: number) {
 type Second = { atS: number; appliedMs: number; headroomMs: number; starvedFrames: number };
 
 /**
- * A phone capturing in real time whose packets reach the mixer at
- * `arrivalMs(sentMs)`. With `reports`, it also sends an uplink health report
- * every second over a path that is not queued, and the mixer is told how much
- * captured audio has not arrived yet, as the server does from MicUplinkBacklog.
+ * How the mixer learns what is in transit: `exact` tells it once a second from
+ * the true capture position, as from a report on a path that never lags;
+ * `none` never tells it; `lagMs` sends a report every second that reaches
+ * Relay `lagMs(sentMs)` later, in order, and the mixer is told every tick from
+ * MicUplinkBacklog's estimate, as the server does.
  */
-function run(seconds: number, arrivalMs: (sentMs: number) => number, { reports = true } = {}) {
+type Reports = 'exact' | 'none' | { lagMs: (sentMs: number) => number };
+
+/** A phone capturing in real time whose packets reach the mixer at `arrivalMs(sentMs)`. */
+function run(
+  seconds: number,
+  arrivalMs: (sentMs: number) => number,
+  { reports = 'exact' as Reports } = {},
+) {
   const session = new AudioSession({
     sampleRate: RATE,
     frameMs: 20,
@@ -37,6 +46,8 @@ function run(seconds: number, arrivalMs: (sentMs: number) => number, { reports =
   session.setAlignment({ calibratedMicLagMs: CALIBRATED_MS });
 
   const inFlight: { at: number; index: number }[] = [];
+  const backlog = new MicUplinkBacklog();
+  const reportsInFlight: { at: number; captured: number }[] = [];
   let next = 0;
   let newestArrivedEnd = 0;
   let starved = 0;
@@ -51,10 +62,23 @@ function run(seconds: number, arrivalMs: (sentMs: number) => number, { reports =
       const { at, index } = inFlight.shift()!;
       session.ingestMic(packet(index), RATE, at);
       newestArrivedEnd = Math.max(newestArrivedEnd, index + PACKET);
+      backlog.noteArrived(7, index + PACKET);
     }
-    if (reports && nowMs % 1_000 === 0 && newestArrivedEnd > 0) {
+    if (reports === 'exact' && nowMs % 1_000 === 0 && newestArrivedEnd > 0) {
       const capturedSamples = Math.floor((nowMs * RATE) / 1_000);
       session.noteMicTransitBacklog(7, ((capturedSamples - newestArrivedEnd) / RATE) * 1_000);
+    }
+    if (typeof reports === 'object') {
+      if (nowMs > 0 && nowMs % 1_000 === 0) {
+        const at = Math.max(reportsInFlight.at(-1)?.at ?? 0, nowMs + reports.lagMs(nowMs));
+        reportsInFlight.push({ at, captured: Math.floor((nowMs * RATE) / 1_000) });
+      }
+      while (reportsInFlight.length > 0 && reportsInFlight[0].at <= nowMs) {
+        const { at, captured } = reportsInFlight.shift()!;
+        backlog.observeHealth({ generation: 7, capturedSamples: captured, sampleRate: RATE, atMs: at });
+      }
+      const transit = backlog.estimate(nowMs);
+      if (transit) session.noteMicTransitBacklog(transit.generation, transit.backlogMs);
     }
     session.drain((_frame, evidence) => {
       if (evidence.micStarvedSamples > 0 || evidence.micGapSamples > 0) starved += 1;
@@ -111,7 +135,7 @@ describe('Mic audio still in transit', () => {
   test('without transit reports, delayed audio that catches up is given back at once, not over minutes', () => {
     // The WebSocket path: health shares the queued socket, so nothing says
     // the audio is in transit and the read head is held back as before.
-    const seconds = run(90, halfThroughputQueue(), { reports: false });
+    const seconds = run(90, halfThroughputQueue(), { reports: 'none' });
     const held = Math.min(...seconds.filter(({ atS }) => atS <= 40).map(({ appliedMs }) => appliedMs));
     assert.ok(held < CALIBRATED_MS - 1_000, `expected the old hold while queued, saw ${held} ms`);
     for (const second of seconds.filter(({ atS }) => atS >= 42)) {
@@ -119,6 +143,25 @@ describe('Mic audio still in transit', () => {
         Math.abs(second.appliedMs - CALIBRATED_MS) <= 10,
         `at ${second.atS} s the voice was still read ${CALIBRATED_MS - second.appliedMs} ms behind`,
       );
+    }
+  });
+  test('reports that lag seconds behind on their own path do not hide it', () => {
+    // As on 2026-10-09 at 21:08-21:09: while the audio queues, the reports lag
+    // 3 s too, so the latest report says little is in transit.
+    const lagging = { lagMs: (sentMs: number) => (sentMs > 20_000 && sentMs <= 40_000 ? 3_000 : 30) };
+    const seconds = run(90, halfThroughputQueue(), { reports: lagging });
+    const during = seconds.filter(({ atS }) => atS > 20 && atS <= 40);
+    const worstDuring = Math.min(...during.map(({ appliedMs }) => appliedMs));
+    assert.ok(
+      worstDuring >= CALIBRATED_MS - 500,
+      `the read head was held ${CALIBRATED_MS - worstDuring} ms behind the song while audio queued`,
+    );
+    for (const second of seconds.filter(({ atS }) => atS >= 46)) {
+      assert.ok(
+        Math.abs(second.appliedMs - CALIBRATED_MS) <= 10,
+        `at ${second.atS} s the voice was read ${CALIBRATED_MS - second.appliedMs} ms off the song`,
+      );
+      assert.equal(second.starvedFrames, 0, `at ${second.atS} s the voice still had holes`);
     }
   });
 });

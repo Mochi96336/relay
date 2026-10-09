@@ -265,7 +265,13 @@ export class PreferredAudioTransport extends AudioTransport {
     datagramBacklogMs = DEFAULT_DATAGRAM_BACKLOG_MS,
     retransmitBufferPackets = DEFAULT_RETRANSMIT_BUFFER_PACKETS,
     webTransportRetryDelaysMs = DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS,
-    setTimer = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+    // A retry is no reason to keep a process alive: under Node a pending
+    // retry kept a test file from ever exiting (browsers have no unref).
+    setTimer = (callback, delayMs) => {
+      const timer = globalThis.setTimeout(callback, delayMs);
+      timer?.unref?.();
+      return timer;
+    },
     clearTimer = (handle) => globalThis.clearTimeout(handle),
     holdMediaUntilPreference = false,
     initialPreferenceHoldMs = 1_500,

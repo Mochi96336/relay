@@ -287,6 +287,12 @@ const micUplinkBacklog = new MicUplinkBacklog();
 // raised after 1 s, cleared after 3 s (see SteadyFlag).
 const productMicUnplayable = new SteadyFlag({ raiseMs: 1_000, clearMs: 3_000 });
 const productMicAudibilityDegraded = new SteadyFlag({ raiseMs: 1_000, clearMs: 3_000 });
+// A capture still starting up is not a Mic problem to hold: until it has been
+// playable once, product status reads it raw, as it always did. Held from the
+// start, the startup gap was raised as a problem and kept the Mic from reading
+// live, and so a voice-only Take from starting, for 3 s after it was playable.
+let productMicCapture: number | null = null;
+let productMicSeenPlayable = false;
 let micCaptureFallingBehind = false;
 let reportedMicTimelineFolds = 0;
 let reportedMicTimelineUnfolds = 0;
@@ -1815,7 +1821,18 @@ function productStatusPayload(nowMs = performance.now()) {
 
 function productStatusFacts(nowMs: number): ProductStatusFacts {
   const rawReadiness = readinessPayload(nowMs);
-  const micStreaming = !productMicUnplayable.update(!rawReadiness.components.mic.streaming, nowMs);
+  const capture = micRuntime.mediaGeneration;
+  if (capture !== productMicCapture) {
+    productMicCapture = capture;
+    productMicSeenPlayable = false;
+    productMicUnplayable.reset();
+    productMicAudibilityDegraded.reset();
+  }
+  const rawMicStreaming = rawReadiness.components.mic.streaming;
+  if (rawMicStreaming) productMicSeenPlayable = true;
+  const micStreaming = productMicSeenPlayable
+    ? !productMicUnplayable.update(!rawMicStreaming, nowMs)
+    : rawMicStreaming;
   const readiness = {
     ...rawReadiness,
     components: {
@@ -1842,7 +1859,9 @@ function productStatusFacts(nowMs: number): ProductStatusFacts {
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
     freshMicUplink: micRuntime.freshUplinkHealthPayload(nowMs),
-    micAudibilityDegraded: productMicAudibilityDegraded.update(micAudibility.degraded, nowMs),
+    micAudibilityDegraded: productMicSeenPlayable
+      ? productMicAudibilityDegraded.update(micAudibility.degraded, nowMs)
+      : micAudibility.degraded,
     micAudioInTransit: session.micAudioInTransit,
     micLevelWarning: micLevel.warning,
     robotPlayerError,

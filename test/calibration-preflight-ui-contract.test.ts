@@ -41,10 +41,10 @@ test('System timing diagnostics expose content, validation, and path evidence se
     'Measured delay',
     'Confidence',
     'Segment delays',
-    'Check state',
-    'Test tone clarity',
+    'Validation state',
+    'Test tone detection',
     'Path difference',
-    'Delay from the test tone',
+    'Test tone result',
   ]) {
     const key = keyFor(marker);
     assert.ok(key, `missing System calibration copy: ${marker}`);

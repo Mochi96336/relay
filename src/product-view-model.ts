@@ -56,6 +56,8 @@ export type ProductViewModelInput = {
   robotVideoUnplayable?: boolean;
   /** Relay's own sustained verdict that a live Mic is not reaching the mix. */
   micAudibilityDegraded?: boolean;
+  /** Captured Mic audio is in transit beyond ordinary delay: the network, not the capture. */
+  micAudioInTransit?: boolean;
   /** Recent raw-input flat-top evidence from the active Mic capture. */
   micInputClipping?: boolean;
   /** Relay's sustained verdict that the live Mic gain is too high or too low. */
@@ -275,6 +277,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
       arriving: input.readiness.components.mic.arriving === true,
       inputClipping: mic === 'live' && input.micInputClipping === true,
       audibilityDegraded: mic === 'live' && input.micAudibilityDegraded === true,
+      inTransit: input.micAudioInTransit === true,
       levelWarning: mic === 'live' ? input.micLevelWarning ?? null : null,
     },
     takeLifecycle: input.take.lifecycle,

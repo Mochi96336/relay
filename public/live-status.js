@@ -206,6 +206,8 @@ if (
       && stalledIssues.every((issue) => issue?.cause === 'mic-audio-intermittent');
     const micAudioBehind = stalledIssues.length > 0
       && stalledIssues.every((issue) => issue?.cause === 'mic-timeline-behind');
+    const micNetworkDelayed = stalledIssues.length > 0
+      && stalledIssues.every((issue) => issue?.cause === 'mic-uplink-delayed');
 
     if (status.lifecycle === 'preparing') {
       if (selfOwner && status.timing?.state === 'calibrating') {
@@ -237,6 +239,9 @@ if (
     }
 
     if (selfOwner) {
+      if (micNetworkDelayed) {
+        return { title: t('voice.networkDelayedYours'), detail: t('voice.networkDelayedDetail') };
+      }
       if (micAudioIntermittent) {
         return { title: t('voice.droppingOutYours'), detail: t('voice.audioNotReachingRoom') };
       }
@@ -265,6 +270,9 @@ if (
     }
 
     const owner = mic.ownerNickname || t('voice.someone');
+    if (micNetworkDelayed) {
+      return { title: owner, detail: t('voice.networkDelayedOther') };
+    }
     if (micAudioIntermittent) {
       return { title: owner, detail: t('voice.droppingOutOther') };
     }

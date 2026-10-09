@@ -188,6 +188,33 @@ describe('product issue contract', () => {
     assert.deepEqual(issues.map((issue) => issue.code), ['mic-audio-stalled']);
   });
 
+  test('a Mic held up by audio still in transit is the network, and recovers by itself', () => {
+    for (const mic of [
+      { state: 'interrupted' as const, arriving: true },
+      { state: 'interrupted' as const, arriving: false },
+      { state: 'live' as const, audibilityDegraded: true },
+    ]) {
+      const issues = buildProductIssues({
+        ...HEALTHY_ISSUES,
+        mic: { ownerId: 'participant-a', ...mic, inTransit: true },
+      });
+      assert.deepEqual(
+        issues.map(({ code, cause, recovery }) => ({ code, cause, recovery })),
+        [{ code: 'mic-audio-stalled', cause: 'mic-uplink-delayed', recovery: 'automatic' }],
+        JSON.stringify(mic),
+      );
+    }
+    const behind = buildProductIssues({
+      ...HEALTHY_ISSUES,
+      mic: { ownerId: 'participant-a', state: 'interrupted', arriving: true, inTransit: false },
+    });
+    assert.deepEqual(
+      behind.map(({ cause, recovery }) => ({ cause, recovery })),
+      [{ cause: 'mic-timeline-behind', recovery: 'retry-mic' }],
+      'without audio in transit, a Mic behind the mix is still a capture to retry',
+    );
+  });
+
   test('surfaces Mic level as a non-blocking gain warning', () => {
     for (const [levelWarning, code, recovery] of [
       ['too-loud', 'mic-too-loud', 'lower-mic-gain'],

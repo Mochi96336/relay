@@ -238,6 +238,7 @@ export type ProductStatusFacts = {
    */
   freshMicUplink: ReturnType<MicRuntime['freshUplinkHealthPayload']>;
   micAudibilityDegraded: boolean;
+  micAudioInTransit: boolean;
   micLevelWarning: MicLevelWarning | null;
   robotPlayerError: RobotPlayerError | null;
   room: { videoId?: unknown; connected?: unknown; state?: unknown; handoffState?: unknown };
@@ -284,6 +285,7 @@ export function projectProductStatus(facts: ProductStatusFacts) {
       && room.videoId === robotPlayerError.videoId
       && youtubeErrorMeansUnplayable(robotPlayerError.code),
     micAudibilityDegraded: facts.micAudibilityDegraded,
+    micAudioInTransit: facts.micAudioInTransit,
     micInputClipping: freshMicUplink?.captureClipping?.recentDetected === true,
     micLevelWarning: facts.micLevelWarning,
     roomSong: {

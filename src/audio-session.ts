@@ -597,6 +597,11 @@ export class AudioSession {
    * Captured Mic audio of capture `generation` that had not reached Relay at
    * its latest uplink report (MicUplinkBacklog). Only the current capture uses it.
    */
+  /** Whether the current capture's audio is in transit beyond ordinary delay. */
+  get micAudioInTransit() {
+    return this.micFrontier.transitActive;
+  }
+
   noteMicTransitBacklog(generation: number, backlogMs: number) {
     if (generation !== this.mic.generation) return;
     this.micFrontier.noteTransit(backlogMs);

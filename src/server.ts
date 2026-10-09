@@ -57,6 +57,7 @@ import { MicGainMemory } from './mic-gain-memory.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import { MicUplinkBacklog } from './mic-uplink-backlog.js';
+import { SteadyFlag } from './steady-flag.js';
 import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
@@ -282,6 +283,16 @@ const micClockDrift = new MicClockDriftEstimator();
  */
 const micCaptureDelivery = new MicCaptureDeliveryMonitor();
 const micUplinkBacklog = new MicUplinkBacklog();
+// What product status says about the Mic, held against once-a-second flicker:
+// raised after 1 s, cleared after 3 s (see SteadyFlag).
+const productMicUnplayable = new SteadyFlag({ raiseMs: 1_000, clearMs: 3_000 });
+const productMicAudibilityDegraded = new SteadyFlag({ raiseMs: 1_000, clearMs: 3_000 });
+// A capture still starting up is not a Mic problem to hold: until it has been
+// playable once, product status reads it raw, as it always did. Held from the
+// start, the startup gap was raised as a problem and kept the Mic from reading
+// live, and so a voice-only Take from starting, for 3 s after it was playable.
+let productMicCapture: number | null = null;
+let productMicSeenPlayable = false;
 let micCaptureFallingBehind = false;
 let reportedMicTimelineFolds = 0;
 let reportedMicTimelineUnfolds = 0;
@@ -1809,7 +1820,26 @@ function productStatusPayload(nowMs = performance.now()) {
 }
 
 function productStatusFacts(nowMs: number): ProductStatusFacts {
-  const readiness = readinessPayload(nowMs);
+  const rawReadiness = readinessPayload(nowMs);
+  const capture = micRuntime.mediaGeneration;
+  if (capture !== productMicCapture) {
+    productMicCapture = capture;
+    productMicSeenPlayable = false;
+    productMicUnplayable.reset();
+    productMicAudibilityDegraded.reset();
+  }
+  const rawMicStreaming = rawReadiness.components.mic.streaming;
+  if (rawMicStreaming) productMicSeenPlayable = true;
+  const micStreaming = productMicSeenPlayable
+    ? !productMicUnplayable.update(!rawMicStreaming, nowMs)
+    : rawMicStreaming;
+  const readiness = {
+    ...rawReadiness,
+    components: {
+      ...rawReadiness.components,
+      mic: { ...rawReadiness.components.mic, streaming: micStreaming },
+    },
+  };
   const participantSnapshot = participants.snapshot();
   const micOwner = participantSnapshot.micOwnerId
     ? participantSnapshot.participants.find((participant) => participant.id === participantSnapshot.micOwnerId) ?? null
@@ -1829,7 +1859,10 @@ function productStatusFacts(nowMs: number): ProductStatusFacts {
     micOwnerNickname: micOwner?.nickname ?? null,
     publisherControlConnected: micRuntime.controlConnected(),
     freshMicUplink: micRuntime.freshUplinkHealthPayload(nowMs),
-    micAudibilityDegraded: micAudibility.degraded,
+    micAudibilityDegraded: productMicSeenPlayable
+      ? productMicAudibilityDegraded.update(micAudibility.degraded, nowMs)
+      : micAudibility.degraded,
+    micAudioInTransit: session.micAudioInTransit,
     micLevelWarning: micLevel.warning,
     robotPlayerError,
     room,

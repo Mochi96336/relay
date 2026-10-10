@@ -94,6 +94,8 @@ const timer = setInterval(async () => {
       lastPhaseCorrectionMs: timeline?.lastPhaseCorrectionMs ?? null,
       backingFrameAgeMs: status.source?.backingFrameAgeMs ?? null,
       calibrationKind: timing?.activeCalibrationKind ?? null,
+      confirmedCalibrationRevision: timing?.confirmedCalibrationRevision ?? null,
+      mixerCalibrationAuthority: timing?.mixerCalibrationAuthority ?? null,
       takeLifecycle: takeStatus?.lifecycle ?? null,
       fresh: !!fresh, timingAgeMs: Math.round(now - timingAt), timelineAgeMs: Math.round(now - timelineAt),
       shadowMs: fresh ? timing.sampleSongFallback?.candidateMs ?? null : null,

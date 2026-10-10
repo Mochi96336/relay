@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
+import { AudioSession } from '../src/audio-session.js';
+import { decideCalibrationMixerApplication } from '../src/calibration-mixer-application.js';
 
 import {
   functionCode,
@@ -17,6 +20,56 @@ const policy = parseTypeScriptSource(
   new URL('../src/calibration-mixer-application.ts', import.meta.url),
   readFileSync(new URL('../src/calibration-mixer-application.ts', import.meta.url), 'utf8'),
 );
+
+test('production synchronizer applies new Content authority and retains it across Take and mapping holds', () => {
+  const session = new AudioSession({ sampleRate: 48000, frameMs: 20, prebufferMs: 400,
+    backingGain: .65, retentionMs: 3000 });
+  session.start(0);
+  session.setAlignment({ calibratedMicLagMs: -131.59 });
+  let blocked = false;
+  let applicability = 'apply';
+  let target = -86.06;
+  const calibration = { confirmedRevision: 2, result: { micLagMs: -80 } };
+  const context = vm.createContext({ session, calibration,
+    appliedCalibrationAuthority: { revision: 1, kind: 'boot-probe' },
+    takeBlocksCalibration: () => blocked, appliedCalibrationKind: () => 'content',
+    robotRouteActive: () => true, calibrationApplicability: () => applicability,
+    contentLiveLagMs: () => target, performance: { now: () => 0 },
+    BOOT_DELTA_REAPPLY_MS: 150, decideCalibrationMixerApplication,
+    timingRuntime: { contentValidationSlewRevision: null,
+      contentValidationSlewMatches: () => false, clearContentValidationSlew: () => {} },
+  });
+  // Erase the function's type-only non-null assertion for the JavaScript VM.
+  vm.runInContext(functionCode(server, 'syncAppliedCalibration')
+    .replace('calibration.result!', 'calibration.result'), context);
+  const sync = () => vm.runInContext('syncAppliedCalibration();', context);
+  assert.equal(sync(), true);
+  assert.equal(session.alignment.calibratedMicLagMs, -86.06);
+  target = -80;
+  assert.equal(sync(), false, 'same authority retains the ordinary jitter hold');
+  assert.equal(session.alignment.calibratedMicLagMs, -86.06);
+
+  blocked = true; calibration.confirmedRevision = 3; target = -60;
+  assert.equal(sync(), false);
+  assert.equal(context.appliedCalibrationAuthority.revision, 2);
+  blocked = false;
+  assert.equal(sync(), true, 'ending Take must not lose a pending new revision');
+  assert.equal(session.alignment.calibratedMicLagMs, -60);
+
+  applicability = 'hold'; calibration.confirmedRevision = 4; target = -40;
+  assert.equal(sync(), false);
+  assert.equal(context.appliedCalibrationAuthority.revision, 3);
+  applicability = 'apply';
+  assert.equal(sync(), true);
+  assert.equal(session.alignment.calibratedMicLagMs, -40);
+
+  applicability = 'revoke';
+  assert.equal(sync(), true);
+  assert.equal(context.appliedCalibrationAuthority, null);
+  applicability = 'apply';
+  assert.equal(sync(), true);
+  assert.equal(session.alignment.calibratedMicLagMs, -40);
+});
 
 test('server derives live calibration facts and delegates non-Boot mixer policy', () => {
   assert.ok(importSources(server).includes('./calibration-mixer-application.js'));

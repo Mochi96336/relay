@@ -1483,6 +1483,10 @@ function desiredCalibratedMicLagMs(nowMs: number): number | null {
   return contentLiveLagMs(result.micLagMs, nowMs);
 }
 
+// Record authority only when its target reaches the mixer; Take/mapping holds
+// must leave a new confirmation pending for the next eligible synchronization.
+let appliedCalibrationAuthority: { revision: number; kind: ReturnType<typeof appliedCalibrationKind> } | null = null;
+
 /**
  * Synchronizes measurement validity into the mixer's active alignment.
  *
@@ -1505,6 +1509,9 @@ function syncAppliedCalibration() {
   if (takeBlocksCalibration()) return false;
   const active = session.alignment.calibratedMicLagMs;
   const calibrationKind = appliedCalibrationKind();
+  const authority = { revision: calibration.confirmedRevision, kind: calibrationKind };
+  const newCalibrationAuthority = appliedCalibrationAuthority?.revision !== authority.revision
+    || appliedCalibrationAuthority?.kind !== authority.kind;
 
   if (robotRouteActive() && calibrationKind === 'boot-probe') {
     const nowMs = performance.now();
@@ -1522,6 +1529,7 @@ function syncAppliedCalibration() {
     });
     if (decision.kind === 'hold') return false;
     session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
+    appliedCalibrationAuthority = decision.micLagMs === null ? null : authority;
     return true;
   }
   const applicability = calibrationApplicability(calibrationKind);
@@ -1542,8 +1550,11 @@ function syncAppliedCalibration() {
       timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision),
     calibratedMicLagTarget: session.calibratedMicLagTarget,
     jitterThresholdMs: BOOT_DELTA_REAPPLY_MS,
+    newCalibrationAuthority,
   });
   if (decision.clearContentValidationSlew) timingRuntime.clearContentValidationSlew();
+  if (applicability === 'apply' && nextMicLagMs !== null) appliedCalibrationAuthority = authority;
+  else if (applicability === 'revoke') appliedCalibrationAuthority = null;
   if (decision.kind === 'none') return false;
   if (decision.kind === 'slew') return session.slewCalibratedMicLagTo(decision.micLagMs);
   session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
@@ -1743,6 +1754,8 @@ function timingCalibrationStatusPayload() {
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,
     activeCalibrationKind: appliedCalibrationKind(),
+    confirmedCalibrationRevision: calibration.confirmedRevision,
+    mixerCalibrationAuthority: appliedCalibrationAuthority,
     robotRoute: robotRouteActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),

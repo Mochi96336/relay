@@ -104,6 +104,7 @@ if (!/^[0-9a-f]{64}$/.test(INFRASTRUCTURE_KEY)) {
 
 const generation = randomBytes(4).readUInt32LE(0);
 let sampleCursor = 0;
+let lastSongClockAt = 0;
 let socket: WebSocket | null = null;
 let registered = false;
 let everRegistered = false;
@@ -241,6 +242,12 @@ function sendPcm(pcm: Buffer) {
   // everything that follows earlier on the timeline.
   if (!registered || socket?.readyState !== WebSocket.OPEN) return;
 
+  const observedAtUnixMs = Date.now();
+  if (ROBOT_BACKING && observedAtUnixMs - lastSongClockAt >= 250) {
+    lastSongClockAt = observedAtUnixMs;
+    socket.send(JSON.stringify({ type: 'backing-song-clock', generation,
+      sampleIndex: firstSampleIndex + pcm.byteLength / 2, sampleRate: SAMPLE_RATE, observedAtUnixMs }));
+  }
   const frame = encodePcmFrame(generation, firstSampleIndex, pcm);
   if (realtimeFrameWouldExceedBacklog(
     socket.bufferedAmount,

@@ -6,6 +6,7 @@ type RelayInfrastructureEventHandler<TSocket> = (
 ) => void;
 
 type RelayInfrastructureEventProtocolHandlers<TSocket> = {
+  backingSongClock?: RelayInfrastructureEventHandler<TSocket>;
   backingSampleBoundary: RelayInfrastructureEventHandler<TSocket>;
   robotPlayerOffset: RelayInfrastructureEventHandler<TSocket>;
   robotPlayerStatus: RelayInfrastructureEventHandler<TSocket>;
@@ -24,6 +25,9 @@ export function createRelayInfrastructureEventProtocol<TSocket>(
   return {
     dispatch(socket: TSocket, payload: RelayInfrastructureEventPayload) {
       switch (payload.type) {
+        case 'backing-song-clock':
+          handlers.backingSongClock?.(socket, payload);
+          return true;
         case 'backing-sample-boundary':
           handlers.backingSampleBoundary(socket, payload);
           return true;

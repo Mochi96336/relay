@@ -1,3 +1,4 @@
+import { SampleSongFallback } from './sample-song-fallback.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -1739,6 +1740,8 @@ function timingCalibrationStatusPayload() {
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     robotContentTransition: robotContentTransitionStatus(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
+    sampleSongFallback: { mode: relayConfig.sampleSongFallback, candidateMs: sampleSongCandidateMs,
+      selected: sampleSongSelected, active: sampleSongSelected && alignment.calibratedMicLagMs === null, approximate: true },
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
@@ -1943,14 +1946,39 @@ function retireMicCaptureTiming() {
   broadcastJson(sourceStatusPayload());
 }
 
+const sampleSongFallback = new SampleSongFallback();
+let sampleSongCandidateMs: number | null = null;
+let sampleSongSelected = false;
+let sampleSongLastAppliedAt = performance.now();
+let robotSongObservation: Record<string, unknown> | null = null;
+let sampleSongEpoch: number | null = null;
+let sampleSongMicOwner: string | null = null;
+
 function refreshLiveMicNetworkCompensation() {
+  if (sampleSongEpoch !== session.generation || sampleSongMicOwner !== participants.micOwnerId) {
+    sampleSongFallback.clear();
+    sampleSongEpoch = session.generation;
+    sampleSongMicOwner = participants.micOwnerId;
+  }
   const timeline = currentTimelineStatus();
   const transportEstimateMs = Number(timeline.transportEstimateMs);
-  session.setAlignment({
-    networkCompensationMs: Number.isFinite(transportEstimateMs)
-      ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs))
-      : 0,
-  });
+  const mode = relayConfig.sampleSongFallback;
+  sampleSongCandidateMs = robotRouteActive() && timeline.connected && timeline.state === 1
+    ? sampleSongFallback.estimate(performance.now(), String(timeline.videoId),
+      (side, a) => session.sampleSongPosition(side, a.generation, a.sampleIndex, a.sampleRate), session.sampleRate)
+    : null;
+  const selected = mode === 'sample-song' && sampleSongCandidateMs !== null;
+  const now = performance.now();
+  const elapsed = Math.max(0, Math.min(100, now - sampleSongLastAppliedAt));
+  sampleSongLastAppliedAt = now;
+  if (mode === 'sample-song' && takeBlocksCalibration()) return;
+  sampleSongSelected = selected;
+  const target = selected ? sampleSongCandidateMs! : Number.isFinite(transportEstimateMs)
+    ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs)) : 0;
+  const current = session.alignment.networkCompensationMs;
+  const applied = mode === 'sample-song' && session.active
+    ? current + Math.max(-elapsed * .01, Math.min(elapsed * .01, target - current)) : target;
+  session.setAlignment({ networkCompensationMs: applied });
 }
 
 function startLiveSource() {
@@ -3502,6 +3530,17 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     );
     if (result.accepted) {
       const timelineStatus = youtubeTimeline.statusPayload(nowMs);
+      const a = payload.captureAnchor as Record<string, unknown> | null;
+      if (socket.participantId === participants.micOwnerId && a) {
+        sampleSongFallback.observe('mic', {
+          videoId: String(payload.videoId), state: Number(payload.state),
+          playbackRate: Number(payload.playbackRate),
+          mediaSeconds: Number(payload.currentTime) + Number(a.mediaDeltaSeconds) * Number(payload.playbackRate),
+          generation: Number(a.generation), sampleRate: Number(a.sampleRate),
+          sampleIndex: Number(a.sampleIndex), uncertaintyMs: Number(a.uncertaintyMs),
+        }, nowMs);
+      }
+      refreshLiveMicNetworkCompensation();
       youtubeTelemetryAccepted({
         socket,
         acceptedIdentity,
@@ -3695,6 +3734,26 @@ function sourceSeekClassified(input: {
 }
 
 const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<RelaySocket>({
+  backingSongClock: (socket, payload) => {
+    if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
+    const observation = robotSongObservation;
+    if (!observation) return;
+    const at = Number(payload.observedAtUnixMs), observed = Number(observation.observedAtUnixMs);
+    const delta = at - observed;
+    // Chromium and bridge share this host's wall clock. Bound both age and skew;
+    // no server arrival timestamp is used to pair their sample/media coordinates.
+    if (!Number.isFinite(delta) || Math.abs(delta) > 500 || Math.abs(Date.now() - at) > 1000) {
+      sampleSongFallback.clear('backing'); return;
+    }
+    sampleSongFallback.observe('backing', {
+      videoId: String(observation.videoId), state: Number(observation.state),
+      playbackRate: Number(observation.playbackRate),
+      mediaSeconds: Number(observation.mediaSeconds) + delta / 1000 * Number(observation.playbackRate),
+      generation: Number(payload.generation), sampleRate: Number(payload.sampleRate),
+      sampleIndex: Number(payload.sampleIndex), uncertaintyMs: 75,
+    }, performance.now());
+    refreshLiveMicNetworkCompensation();
+  },
   backingSampleBoundary: (socket, payload) => {
     if (!backingRuntime.isSocket(socket) || socket.role !== 'backing' || !backingRuntime.isRobot) return;
     const requestId = Number(payload.requestId);
@@ -3725,6 +3784,8 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
   robotPlayerOffset: (socket, payload) => {
     const offsetMs = Number(payload.offsetMs);
     if (!sourceRuntime.isActiveRobot(socket) || !Number.isFinite(offsetMs)) return;
+    robotSongObservation = payload.songObservation && typeof payload.songObservation === 'object'
+      ? payload.songObservation as Record<string, unknown> : null;
     const nowMs = performance.now();
     if (Math.abs(offsetMs) > ROBOT_PLAYER_OFFSET_MAX_ABS_MS) {
       // A minutes-wide media-position gap is a convergence problem, never an
@@ -3775,6 +3836,8 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     // the Robot source lifecycle. Replacement clears the active flag to
     // false, but must not restore seek authority to that old socket.
     if (!sourceRuntime.canReportSeek(socket)) return;
+    sampleSongFallback.clear('backing');
+    robotSongObservation = null;
     const nowMs = performance.now();
     robotContentTransitionRuntime.clearPendingBoundary();
     const requestedFollowerCorrection = payload.reason === 'follower-correction';
@@ -4276,6 +4339,7 @@ function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
     backingRuntime.isRobot,
   );
   if (samples.length > 0) backingRuntime.noteFrame(socket, nowMs);
+  refreshLiveMicNetworkCompensation();
   if (
     captureRestarted
     || (previousGeneration !== null && session.backingGeneration !== previousGeneration)

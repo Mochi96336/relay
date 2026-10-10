@@ -120,6 +120,26 @@ let audioUplinkHealthTimer = null;
 // millisecond as a previous one, which a real reload never is.
 let captureGeneration = Date.now() >>> 0;
 let captureSampleCursor = 0;
+let sampleSongCapture = null;
+window.addEventListener('relay:sample-song-anchor-request', (event) => {
+  const request = event.detail;
+  const anchor = sampleSongCapture;
+  if (!request || !anchor || !publisherActive || !audioContext
+      || audioContext.state !== 'running' || anchor.generation !== captureGeneration) return;
+  const age = performance.now() - anchor.observedAt;
+  if (age < 0 || age > 250) return;
+  const sampledAt = Number(request.sampledAtPerformanceMs);
+  const contextAtObservation = audioContext.currentTime;
+  const now = performance.now();
+  if (!Number.isFinite(sampledAt) || now - sampledAt < 0 || now - sampledAt > 100) return;
+  const index = anchor.firstSampleIndex
+    + (contextAtObservation - anchor.contextTime + (sampledAt - now) / 1000) * audioContext.sampleRate;
+  if (!Number.isFinite(index)) return;
+  request.captureAnchor = {
+    generation: captureGeneration, sampleRate: audioContext.sampleRate,
+    sampleIndex: anchor.firstSampleIndex, mediaDeltaSeconds: (anchor.firstSampleIndex - index) / audioContext.sampleRate, uncertaintyMs: 40,
+  };
+});
 let capturePacketSequence = 0;
 
 // AudioPacket v2 keeps transport order (`sequence`) separate from capture time
@@ -241,6 +261,7 @@ function advanceCaptureGeneration(reason) {
   retireCalibrationProbePlayback();
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
   captureSampleCursor = 0;
+  sampleSongCapture = null;
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
   resetUplinkEvidence();
@@ -496,6 +517,12 @@ function handleCaptureWorkletMessage(event, graph) {
   const pcm = pcmMessage.buffer;
   const chunkFirstSampleIndex = captureSampleCursor;
   captureSampleCursor += pcm.byteLength / 2;
+  if (Number.isFinite(pcmMessage.capturedAtContextTime)) {
+    sampleSongCapture = {
+      generation: captureGeneration, firstSampleIndex: chunkFirstSampleIndex,
+      contextTime: pcmMessage.capturedAtContextTime, observedAt: performance.now(),
+    };
+  }
 
   const dispatch = classifyCaptureDispatch({
     currentContextTimeSeconds: graph.context.currentTime,

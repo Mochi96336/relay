@@ -329,3 +329,29 @@ That is not the same as a Pi/Robot proof. Full phone microphone + robot backing 
 automatic calibration still needs an integrated real-device sung Take rehearsal,
 and automatic recovery additionally needs the injected-fault cases above. Those
 real-device checks remain the gate on enabling the recovery timer unattended.
+
+## Experimental sample/song fallback
+
+`RELAY_SAMPLE_SONG_FALLBACK=rtt` preserves the default. `shadow` collects and
+reports the new estimate without applying it. `sample-song` uses valid matching
+phone/Robot sample-to-YouTube observations when no acoustic calibration is
+applied; missing evidence falls back to RTT/2. Boot/content authority retains
+priority. Existing YouTube room-clock RTT estimation is unchanged.
+
+The phone pairs Worklet capture timestamps with the local player observation.
+The Robot pairs Chromium and stdin observations using their shared host wall
+clock, bounded to 500 ms separation. This requires Chromium, bridge and Relay on
+the same host. The mapping is approximate: player output latency and
+PipeWire/FIFO buffering remain unmeasured. `uncertaintyMs` bounds the observation
+pairing allowance, not the total acoustic-path error. It is not a replacement
+for Boot/content calibration.
+
+Three consistent observations per side are required. Stale evidence, changed
+capture/rate/song or a player-clock discontinuity withdraws the estimate.
+Recent source coordinates are mapped through the current ingest frontier;
+historical coordinates more than one second old are rejected. Within that
+short interval, individual sample insertions/removals are approximated by the
+current transform. The fallback moves at at most 1% of real time and freezes
+during a Take. Diagnostics in `timing-calibration-status.sampleSongFallback`
+include mode, candidate, selected and active (no acoustic calibration).
+Reload the phone after updating so it publishes capture anchors.

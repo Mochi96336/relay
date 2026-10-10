@@ -541,7 +541,10 @@ function applyTimeline() {
       && Number.isFinite(errorSeconds)
     ) {
       offsetReportedSinceSeek = true;
-      send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000 });
+      send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000,
+        songObservation: { videoId: loadedVideoId, mediaSeconds: player.getCurrentTime(),
+          playbackRate: player.getPlaybackRate(), state: player.getPlayerState(), observedAtUnixMs: Date.now() },
+      });
     }
 
     if (!armed) {

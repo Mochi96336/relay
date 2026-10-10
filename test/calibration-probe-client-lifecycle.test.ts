@@ -1,6 +1,51 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
+
+async function hiddenProbe(afterResume = false, stale = false) {
+  const url = new URL('../public/app.js', import.meta.url);
+  const source = parseTypeScriptSource(url, await readFile(url, 'utf8'));
+  const messages: any[] = [];
+  let resumes = 0;
+  const document = { visibilityState: afterResume ? 'visible' : 'hidden' };
+  const context = vm.createContext({
+    performance: { now: () => 100 }, publisherSessionEpoch: 1, captureGeneration: 2,
+    activeCalibrationProbeRequestId: 3, activeCalibrationProbePlayback: null,
+    isCurrentPublisherCapture: () => !stale, document,
+    socket: { readyState: 1 }, WebSocket: { OPEN: 1 },
+    audioContext: { state: 'running', resume: async () => { resumes++; document.visibilityState = 'hidden'; } },
+    audioTransport: { sendControlJson: (message: any) => { messages.push(message); return { sent: true }; } },
+    console: { warn: () => {} },
+  });
+  await vm.runInContext('async ' + functionCode(source, 'playCalibrationProbe') + '\nplayCalibrationProbe(3, 200);', context);
+  return { messages, resumes, context };
+}
+
+test('hidden publisher reports why Boot cannot play instead of silently timing out', async () => {
+  const result = await hiddenProbe();
+  assert.equal(result.resumes, 0);
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.messages[0].type, 'calibration-probe-failed');
+  assert.equal(result.messages[0].requestId, 3);
+  assert.equal(result.messages[0].generation, 2);
+  assert.match(result.messages[0].reason, /page is hidden/);
+  assert.equal(result.context.activeCalibrationProbeRequestId, null);
+});
+
+test('publisher hidden during resume reports the visibility cause with no oscillator scheduled', async () => {
+  const result = await hiddenProbe(true);
+  assert.equal(result.resumes, 1);
+  assert.equal(result.messages.length, 1);
+  assert.match(result.messages[0].reason, /page is hidden/);
+});
+
+test('hidden stale publisher cannot fail another capture probe', async () => {
+  const result = await hiddenProbe(false, true);
+  assert.equal(result.resumes, 0);
+  assert.equal(result.messages.length, 0);
+});
 
 test('phone calibration probe stays capture-scoped before and after future playback is scheduled', async () => {
   const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');

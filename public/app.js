@@ -915,11 +915,13 @@ async function playCalibrationProbe(requestId, leadMs) {
   if (
     !context
     || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    || document.visibilityState === 'hidden'
     || activeCalibrationProbeRequestId !== requestId
   ) return;
 
   try {
+    if (document.visibilityState === 'hidden') {
+      throw new Error('Phone probe cannot play while the page is hidden.');
+    }
     // Mobile Safari may leave resume() pending while a page is suspended. The
     // server can retire this request meanwhile, so every continuation has to
     // re-prove request and capture ownership before it may create audible nodes.
@@ -929,11 +931,11 @@ async function playCalibrationProbe(requestId, leadMs) {
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
       || socket?.readyState !== WebSocket.OPEN
     ) return;
-    if (
-      audioContext !== context
-      || document.visibilityState === 'hidden'
-      || context.state !== 'running'
-    ) {
+    if (audioContext !== context) throw new Error('Phone probe AudioContext was replaced.');
+    if (document.visibilityState === 'hidden') {
+      throw new Error('Phone probe cannot play while the page is hidden.');
+    }
+    if (context.state !== 'running') {
       throw new Error(`Phone probe AudioContext is ${context.state}.`);
     }
 

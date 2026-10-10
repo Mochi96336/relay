@@ -533,3 +533,10 @@ backlog and fresh Mixer playability/headroom. Last action survives routine
 observations. Freshness-dependent fields expire after 1.5 seconds; negative
 headroom is valid evidence. The server logs unseen action sequences under
 `[mic-recovery]`, rather than treating each health tick as a new action.
+
+
+### Robot 追趕回報與校準權限
+
+Robot seek門檻仍為嚴格大於450ms，seek後一次回報仍可讓下一次追趕繼續。Relay只讓絕對值不超過450ms的播放器殘餘偏差進入校準tracker與content mapping；更大的回報保留timing diagnostics，但清除tracker的歷史與新鮮度，不更新mapping。這不刪除Boot路徑測量，也不把追趕誤認為聲學延遲。回到範圍內可重新建立權限，不沿用追趕前median。原本大於5秒的reference撤銷保護保留。
+
+實測−2800ms那筆的來源是Robot Δ=−3215.527ms，加Boot路徑差90−140=−50ms，要求−3265.527ms被限制到−2800ms；當筆frontier correction=0，不能將它歸因於網路回讀。負Δ表示Robot落後手機，負advance表示讀較舊Mic座標，兩者都不是封包早到的測量。

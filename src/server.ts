@@ -356,6 +356,7 @@ const ROBOT_PLAYER_OFFSET_MAX_ABS_MS = 5_000;
 const robotPlayerOffset = new RobotPlayerOffsetTracker({
   freshForMs: ROBOT_OFFSET_FRESH_MS,
   windowMs: ROBOT_OFFSET_WINDOW_MS,
+  maxAbsOffsetMs: 450,
 });
 const robotContentTimeline = new RobotContentTimelineMapper({
   sampleRate: MIX_SAMPLE_RATE,
@@ -3872,7 +3873,10 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
       robotOffsetTimingEvidence[key] = typeof value === 'number' && Number.isFinite(value)
         && Math.abs(value) <= 1e12 ? value : null;
     }
-    robotPlayerOffset.record(offsetMs, nowMs);
+    // The source must report once after seek to permit its next correction.
+    // Accept that control progress without granting alignment authority to a
+    // still-converging player. Diagnostics above remain available either way.
+    if (!robotPlayerOffset.record(offsetMs, nowMs)) return;
     const mapped = robotContentTimeline.notePlayerOffset(
       robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
       calibrationContext(),

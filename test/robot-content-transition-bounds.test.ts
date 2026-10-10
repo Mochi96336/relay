@@ -159,7 +159,7 @@ test('server treats an unanchored follower correction as destructive bootstrap i
     monitor.send({ type: 'register', role: 'monitor' });
     await monitor.waitForType('registered');
 
-    robot.send({ type: 'robot-player-offset', offsetMs: 500 });
+    robot.send({ type: 'robot-player-offset', offsetMs: 450 });
     await sleep(50);
     const requestsBeforeSeek = boundaryRequestCount(backing);
     robot.send({

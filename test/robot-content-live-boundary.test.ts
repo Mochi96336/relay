@@ -13,7 +13,7 @@ import {
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
 const PATH_LAG_MS = 250;
-const INITIAL_DELTA_MS = 500;
+const INITIAL_DELTA_MS = 450; // Largest usable residual; larger reports are convergence.
 const REFERENCE_LAG_MS = PATH_LAG_MS + INITIAL_DELTA_MS;
 const INITIAL_CONFIRMED_END = Math.round(RATE * 7.0);
 const PRE_SEEK_LIVE_END = Math.round(RATE * 7.2);
@@ -219,7 +219,7 @@ test('confirmed Robot content keeps pre-seek live lag until post-seek PCM commit
     room.robot.send({
       type: 'source-seeked',
       reason: 'follower-correction',
-      fromMediaTime: 100.5,
+      fromMediaTime: 100.45,
       toMediaTime: 100,
     });
 

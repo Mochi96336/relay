@@ -19,6 +19,24 @@ function tracker() {
   return new RobotPlayerOffsetTracker({ freshForMs: 2_000, windowMs: 2_000 });
 }
 
+test('convergence reports cannot grant or renew residual authority, in either direction', () => {
+  const offset = new RobotPlayerOffsetTracker({ freshForMs: 2_000, windowMs: 2_000, maxAbsOffsetMs: 450 });
+  for (const gap of [-3215.5269807888944, 3215.5269807888944, -450.001, 450.001]) {
+    assert.equal(offset.record(-100, 0), true);
+    assert.equal(offset.record(gap, 250), false);
+    assert.equal(offset.isFresh(250), false);
+    assert.equal(offset.offsetMs(250), null);
+    assert.equal(offset.rawOffsetMs(250), null);
+    assert.equal(offset.record(120, 500), true);
+    assert.equal(offset.offsetMs(500), 120, 'old median must not survive convergence');
+  }
+  for (const boundary of [-450, 450]) {
+    offset.reset();
+    assert.equal(offset.record(boundary, 750), true);
+    assert.equal(offset.offsetMs(750), boundary);
+  }
+});
+
 test('a single report is usable immediately', () => {
   const offset = tracker();
   assert.equal(offset.offsetMs(0), null);
@@ -105,6 +123,7 @@ test('a report that is not a number is refused rather than stored', () => {
 
 test('the server aligns against the tracker and only then requests a backing boundary', () => {
   assert.ok(variableInitializerCode(server, 'robotPlayerOffset').includes('new RobotPlayerOffsetTracker({'));
+  assert.match(variableInitializerCode(server, 'robotPlayerOffset'), /maxAbsOffsetMs: 450/);
 
   const infrastructure = variableInitializerCode(server, 'infrastructureEventProtocol');
   const recorded = infrastructure.indexOf('robotPlayerOffset.record(offsetMs, nowMs)');
@@ -115,6 +134,8 @@ test('the server aligns against the tracker and only then requests a backing bou
     'gross media-position gaps must be rejected before they enter timing authority',
   );
   assert.ok(recorded >= 0, 'Robot offset reports must enter RobotPlayerOffsetTracker');
+  assert.ok(infrastructure.includes('if (!robotPlayerOffset.record(offsetMs, nowMs)) return;'),
+    'rejected convergence must not reach content mapping');
   assert.ok(mapped > recorded, 'timeline mapping must consume the tracked offset after it is recorded');
   assert.ok(requested > mapped, 'backing-boundary requests must follow accepted timeline mapping');
   assert.ok(infrastructure.includes('robotPlayerOffset.offsetMs(nowMs) ?? offsetMs'));

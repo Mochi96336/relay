@@ -319,6 +319,30 @@ test('boot baseline promotes to content authority, reaches the mixer, and arms d
   }
 });
 
+test('post-seek convergence reports cannot become Boot timing authority and bounded reports recover', async () => {
+  const server = await startRelay(BOOT_ROOM);
+  const room = await bootedRobotRoom(server);
+  room.stopHeartbeat();
+  try {
+    for (const offsetMs of [-3215.5269807888944, 3215.5269807888944]) {
+      room.robot.send({ type: 'robot-player-offset', offsetMs });
+      const rejected = await requestTimingStatus(room.monitor, m => m.robotDeltaFresh === false);
+      assert.equal(rejected.robotPlayerOffsetMs, null);
+      assert.notEqual(rejected.appliedMicAdvanceMs, -2800);
+      assert.ok(Math.abs(Number(rejected.requestedMicAdvanceMs)) < 1000,
+        'convergence must not become a multi-second Boot request');
+      room.robot.send({ type: 'robot-player-offset', offsetMs: 120 });
+      const resumed = await requestTimingStatus(room.monitor,
+        m => m.robotDeltaFresh === true && m.robotPlayerOffsetMs === 120);
+      assert.equal(resumed.robotPlayerOffsetMs, 120,
+        'bounded reports must recover without pre-convergence median history');
+    }
+  } finally {
+    room.close();
+    await server.stop();
+  }
+});
+
 test('a quiet Robot offset heartbeat holds the measured alignment instead of guessing', async () => {
   const server = await startRelay(BOOT_ROOM);
   const room = await bootedRobotRoom(server);

@@ -3,6 +3,8 @@ export interface RobotPlayerOffsetOptions {
   freshForMs: number;
   /** How much recent history the reported value is drawn from. */
   windowMs: number;
+  /** Reports outside the follower's residual range are convergence, not alignment. */
+  maxAbsOffsetMs?: number;
 }
 
 interface OffsetSample {
@@ -31,19 +33,28 @@ interface OffsetSample {
 export class RobotPlayerOffsetTracker {
   private readonly freshForMs: number;
   private readonly windowMs: number;
+  private readonly maxAbsOffsetMs: number;
   private samples: OffsetSample[] = [];
   private lastAtMs = -Infinity;
 
   constructor(options: RobotPlayerOffsetOptions) {
     this.freshForMs = options.freshForMs;
     this.windowMs = options.windowMs;
+    this.maxAbsOffsetMs = options.maxAbsOffsetMs ?? Infinity;
   }
 
   record(offsetMs: number, nowMs: number) {
-    if (!Number.isFinite(offsetMs)) return;
+    if (!Number.isFinite(offsetMs)) return false;
+    if (Math.abs(offsetMs) > this.maxAbsOffsetMs) {
+      // Do not keep a previous residual fresh while the player is catching up,
+      // or mix pre-convergence history into the first usable report afterwards.
+      this.reset();
+      return false;
+    }
     this.samples.push({ offsetMs, atMs: nowMs });
     this.lastAtMs = nowMs;
     this.prune(nowMs);
+    return true;
   }
 
   reset() {

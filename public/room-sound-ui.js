@@ -19,15 +19,6 @@ const actionNote = document.querySelector('#listen-note');
 
 let latestState = window.relayListenState ?? null;
 
-function roomSoundIconMarkup() {
-  return '<svg class="room-sound-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10h3l4-3v10l-4-3H5z" /><g data-room-sound-signal="audible"><path d="M15 9.5c1.4 1.4 1.4 3.6 0 5" /><path d="M17.7 7.4c2.6 2.6 2.6 6.6 0 9.2" /></g><g data-room-sound-signal="muted"><path d="M15.5 9.5l4 5m0-5l-4 5" /></g><g data-room-sound-signal="retry"><path d="M19.5 8.5v-3l-2 2" /><path d="M19.4 6.1a5 5 0 1 0 1.2 6.7" /></g></svg>';
-}
-
-function installRoomSoundIcon() {
-  if (!toggle || toggle.querySelector('.room-sound-icon')) return;
-  toggle.textContent = '';
-  toggle.insertAdjacentHTML('afterbegin', roomSoundIconMarkup());
-}
 
 function localized(key) {
   return key ? t(key) : '';
@@ -74,12 +65,11 @@ function renderState(detail = latestState) {
 }
 
 function render() {
-  installRoomSoundIcon();
   renderLabels(latestState);
   renderState(latestState);
 }
 
-for (const node of [title, scope, volumeLabel, toggle, stateNote, actionNote]) {
+for (const node of [title, scope, volumeLabel, stateNote, actionNote]) {
   node?.removeAttribute('data-i18n');
 }
 

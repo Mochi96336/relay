@@ -7,6 +7,7 @@ import { DIAGNOSTICS_MESSAGES } from '../public/diagnostics-copy.js';
 const ui = readFileSync(new URL('../public/calibration-ui.js', import.meta.url), 'utf8');
 const command = readFileSync(new URL('../public/calibration-command.js', import.meta.url), 'utf8');
 const system = readFileSync(new URL('../public/calibration-system-details.js', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 test('normal timing value follows fresh mixer authority independently of ProductStatus lifecycle', () => {
   assert.doesNotMatch(ui, /timingIsProductRelevant|timing\?\.state !== 'idle'/,
@@ -48,7 +49,7 @@ test('System timing diagnostics expose content, validation, and path evidence se
   ]) {
     const key = keyFor(marker);
     assert.ok(key, `missing System calibration copy: ${marker}`);
-    assert.ok(system.includes(`'${key}'`), `missing System calibration field: ${marker}`);
+    assert.ok(html.includes(`data-i18n="${key}"`), `missing System calibration field: ${marker}`);
   }
   assert.match(system, /value === null \|\| value === undefined \|\| value === ''/,
     'diagnostics must not coerce unknown/null timing evidence to numeric zero');

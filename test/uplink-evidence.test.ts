@@ -13,8 +13,6 @@ import {
 } from '../public/uplink-evidence.js';
 import { captureClippingSnapshot } from '../public/capture-observability.js';
 
-const RATE = 48_000;
-
 function level(windowMaxConsecutiveRailSamples: number) {
   return { railSamples: 10, maxConsecutiveRailSamples: 6, windowMaxConsecutiveRailSamples };
 }
@@ -29,36 +27,18 @@ function recentClipping() {
   return uplinkEvidenceReport(CLEAN).captureClipping?.recentDetected;
 }
 
-test('dropped audio is counted by reason, and a disconnect is not a warning', () => {
+test('dropped audio is counted by reason', () => {
   resetUplinkEvidence();
-  assert.equal(countUplinkDrop(960, 'disconnected', { nowMs: 10_000, sampleRate: RATE }), null);
-  countUplinkDrop(480, 'congested', { nowMs: 10_000, sampleRate: RATE });
-  countUplinkDrop(240, 'packet-too-large', { nowMs: 20_000, sampleRate: RATE });
-  countUplinkDrop(960, 'capture-backlog', { nowMs: 30_000, sampleRate: RATE });
-  assert.equal(countUplinkDrop(0, 'congested', { nowMs: 40_000, sampleRate: RATE }), null);
-  assert.equal(countUplinkDrop(Number.NaN, 'congested', { nowMs: 50_000, sampleRate: RATE }), null);
+  countUplinkDrop(960, 'disconnected');
+  countUplinkDrop(480, 'congested');
+  countUplinkDrop(240, 'packet-too-large');
+  countUplinkDrop(960, 'capture-backlog');
+  countUplinkDrop(0, 'congested');
+  countUplinkDrop(Number.NaN, 'congested');
 
   assert.deepEqual(uplinkEvidenceReport(null).droppedSamples, {
     total: 2_640, disconnected: 960, congested: 480, packetTooLarge: 240, captureBacklog: 960,
   });
-});
-
-test('a drop warning names its cause and the audio lost so far, at most once every 2 s', () => {
-  resetUplinkEvidence();
-  const first = countUplinkDrop(4_800, 'congested', { nowMs: 100_000, sampleRate: RATE });
-  assert.deepEqual(first, {
-    title: 'Microphone uplink congested',
-    detail: 'Dropped about 100 ms of microphone audio. '
-      + 'The sample timeline keeps the hole in the right place instead of pulling later audio earlier.',
-  });
-  assert.equal(countUplinkDrop(960, 'capture-backlog', { nowMs: 102_000, sampleRate: RATE }), null);
-  const later = countUplinkDrop(960, 'capture-backlog', { nowMs: 102_001, sampleRate: RATE });
-  assert.equal(later?.title, 'Microphone capture caught up to live audio');
-  assert.match(later?.detail ?? '', /^Dropped about 140 ms/);
-  assert.equal(
-    countUplinkDrop(1, 'packet-too-large', { nowMs: 200_000, sampleRate: RATE })?.title,
-    'Microphone datagram budget changed',
-  );
 });
 
 test('how late chunks reach the page is reported, and an unmeasurable chunk changes nothing', () => {
@@ -128,7 +108,7 @@ test('reports from a connection that is gone can no longer settle anything, and 
 
 test('a new capture starts with no evidence', () => {
   resetUplinkEvidence();
-  countUplinkDrop(960, 'capture-backlog', { nowMs: 500_000, sampleRate: RATE });
+  countUplinkDrop(960, 'capture-backlog');
   noteCaptureDispatch({ measurable: true, lagMs: 600, stale: true });
   windowSeen(CLIPPED);
   noteUplinkHealthSent(1, 1_000);

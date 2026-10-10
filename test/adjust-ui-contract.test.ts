@@ -129,7 +129,7 @@ test('app remains authenticated command transport while ProductStatus owns visib
 });
 
 test('Listen defaults at unity and exposes mute rather than enable', () => {
-  assert.match(html, /id="listen-toggle"[^>]*data-i18n="listen\.mute"[^>]*>Mute<\/button>/);
+  assert.match(html, /id="listen-toggle"[^>]*aria-pressed="false"[^>]*aria-label="Mute"/);
   assert.match(html, /id="listen-gain-value"[^>]*>100%<\/output>/);
   assert.match(html, /id="listen-gain"[^>]*value="100"/);
   assert.equal(listen.includes('let userMuted = false;'), true);

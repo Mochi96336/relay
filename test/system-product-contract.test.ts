@@ -84,8 +84,8 @@ test('backend-shaped System rows are compatibility-only while product surface st
   const html = read('public/index.html');
 
   assert.match(css, /\.system-item \{\s*display: none;/);
-  assert.match(system, /productSurface\.id = 'system-product'/);
-  assert.match(system, /systemSheet\.insertBefore\(productSurface, diagnosticsPanel\)/);
+  assert.match(html, /<section id="system-product" class="system-product" aria-live="polite">[\s\S]*?id="system-product-issues"[\s\S]*?<\/section>\s*<details id="diagnostics-panel"/);
+  assert.doesNotMatch(system, /createElement\('section'\)/);
   assert.doesNotMatch(system, /renderL2|focusSystemScope|system-relay-detail/);
 
   // Compatibility nodes remain available to the existing Live owner for this focused PR.
@@ -132,7 +132,7 @@ test('retry-mic recovery becomes a self-owner user-gesture action without wideni
   );
   assert.match(
     app,
-    /stop\(false, \{ releaseMic: !preserveMicOwnership \}\)/,
+    /stop\(\{ releaseMic: !preserveMicOwnership \}\)/,
     'ordinary Mic starts and self retry must share one lifecycle with explicit ownership semantics',
   );
   assert.match(

@@ -33,7 +33,7 @@ test('listen owns audio state while room-sound-ui owns visible room-sound presen
   assert.match(listen, /relay-mic-action-state/);
 
   assert.match(roomSoundUi, /relay-listen-state/);
-  assert.match(roomSoundUi, /toggle\.textContent\s*=/);
+  assert.match(roomSoundUi, /toggle\.setAttribute\('aria-label'/);
   assert.match(roomSoundUi, /stateNote\.textContent\s*=/);
   assert.match(roomSoundUi, /actionNote\.textContent\s*=/);
   assert.match(roomSoundUi, /document\.body\.dataset\.listen\s*=/);

@@ -54,7 +54,7 @@ test('Mic terminal lifecycle tears down before Listen is allowed to recover', ()
 
   assert.match(
     app,
-    /function finishMicrophoneSession\(reason,[\s\S]*micLifecycle\.run\(\{[\s\S]*stop: \(\) => stop\(false, \{ releaseMic \}\),[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch,[\s\S]*dispatchRelayEvent\('relay-microphone-ended', \{ reason \}\)/,
+    /function finishMicrophoneSession\(reason,[\s\S]*micLifecycle\.run\(\{[\s\S]*stop: \(\) => stop\(\{ releaseMic \}\),[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch,[\s\S]*dispatchRelayEvent\('relay-microphone-ended', \{ reason \}\)/,
     'ended must be emitted only by the shared post-stop transaction',
   );
   assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMicBoundary/);
@@ -137,7 +137,6 @@ test('capture AudioWorklet processorerror uses one bounded current-graph rebuild
     /if \(!decision\.exhausted\) return;[\s\S]*finishMicrophoneSession\('processor-error-repeated', \{[\s\S]*releaseMic: false/,
     'a replacement processor that crashes again before fresh PCM must enter bounded reconnect grace instead of looping generations',
   );
-  assert.match(install, /Retry Mic to reconnect it/);
 
   const disposeAt = app.indexOf('function disposeCaptureGraph');
   const currentAt = app.indexOf('function captureGraphIsCurrent', disposeAt);
@@ -181,7 +180,6 @@ test('unexpected capture AudioContext closure enters bounded Mic reconnect grace
     /finishMicrophoneSession\('context-closed', \{[\s\S]*releaseMic: false/,
     'terminal unexpected context closure must use reconnect grace, not explicit room-Mic release',
   );
-  assert.match(stateHandler, /Retry Mic to reconnect it/);
   assert.match(
     stateHandler,
     /captureContext\.state === 'closed'[\s\S]*return;[\s\S]*shouldRequestAudioResume/,
@@ -210,7 +208,6 @@ test('hardware input ending uses Mic reconnect grace instead of explicit release
     /finishMicrophoneSession\('input-ended', \{[\s\S]*releaseMic: false/,
     'unexpected hardware/route loss must close transport into reconnect grace, not send terminal release',
   );
-  assert.match(handler, /Retry Mic to reconnect it/);
   assert.doesNotMatch(handler, /dispatchRelayEvent\('relay-microphone-ended'/);
 });
 
@@ -248,7 +245,6 @@ test('confirmed active input removal enters Mic reconnect grace without guessing
     /finishMicrophoneSession\('input-device-removed', \{[\s\S]*releaseMic: false/,
     'only confirmed active-input disappearance may enter the bounded reconnect grace',
   );
-  assert.match(install, /Retry Mic to reconnect it/);
   assert.match(
     install,
     /catch\(\(error\) => \{[\s\S]*presence check failed/,
@@ -327,7 +323,6 @@ test('capture rebuild failure also falls back to bounded Mic reconnect grace', (
     /finishMicrophoneSession\('capture-rebuild-failed', \{[\s\S]*releaseMic: false/,
     'local capture recovery failure must preserve server grace instead of explicitly releasing room ownership',
   );
-  assert.match(rebuild, /Retry Mic to start a fresh capture/);
 });
 
 test('reconnecting self owner gets a user-gesture Retry Mic without minting playback intent', () => {

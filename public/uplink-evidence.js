@@ -8,15 +8,12 @@ import {
   captureRecentInputClippingDetected,
 } from './capture-observability.js';
 
-const UPLINK_WARNING_INTERVAL_MS = 2000;
-
 function noDroppedSamples() {
   return { disconnected: 0, congested: 0, packetTooLarge: 0, captureBacklog: 0 };
 }
 
 let uplinkDroppedSamples = 0;
 let uplinkDroppedSamplesByReason = noDroppedSamples();
-let lastUplinkWarningAt = Number.NEGATIVE_INFINITY;
 let latestCaptureDispatchLagMs = null;
 let maxCaptureDispatchLagMs = null;
 let captureDispatchBacklogActive = false;
@@ -41,32 +38,14 @@ export function resetUplinkEvidence() {
   pendingCaptureClippingHealth.clear();
 }
 
-/**
- * Counts audio that never left the page. Returns the warning to show, or
- * null: a disconnect is not one, and the page shows at most one every 2 s.
- */
-export function countUplinkDrop(sampleCount, reason, { nowMs, sampleRate }) {
-  if (!Number.isFinite(sampleCount) || sampleCount <= 0) return null;
+/** Counts audio that never left the page, by why it did not. */
+export function countUplinkDrop(sampleCount, reason) {
+  if (!Number.isFinite(sampleCount) || sampleCount <= 0) return;
   uplinkDroppedSamples += sampleCount;
   if (reason === 'disconnected') uplinkDroppedSamplesByReason.disconnected += sampleCount;
   else if (reason === 'congested') uplinkDroppedSamplesByReason.congested += sampleCount;
   else if (reason === 'packet-too-large') uplinkDroppedSamplesByReason.packetTooLarge += sampleCount;
   else if (reason === 'capture-backlog') uplinkDroppedSamplesByReason.captureBacklog += sampleCount;
-  if (reason === 'disconnected') return null;
-
-  if (nowMs - lastUplinkWarningAt <= UPLINK_WARNING_INTERVAL_MS) return null;
-  lastUplinkWarningAt = nowMs;
-  const droppedMs = Math.round((uplinkDroppedSamples * 1000) / sampleRate);
-  const title = reason === 'packet-too-large'
-    ? 'Microphone datagram budget changed'
-    : reason === 'capture-backlog'
-      ? 'Microphone capture caught up to live audio'
-      : 'Microphone uplink congested';
-  return {
-    title,
-    detail: `Dropped about ${droppedMs} ms of microphone audio. `
-      + 'The sample timeline keeps the hole in the right place instead of pulling later audio earlier.',
-  };
 }
 
 /** How late one worklet chunk reached the page, from classifyCaptureDispatch. */

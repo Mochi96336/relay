@@ -16,15 +16,18 @@ window.relayI18n?.registerMessages?.(DIAGNOSTICS_MESSAGES);
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const systemPanel = document.querySelector('#system-panel');
-const systemSheet = systemPanel?.querySelector('.system-sheet');
+const healthyNode = document.querySelector('#system-product .system-healthy');
+const healthyTitle = document.querySelector('#system-healthy-title');
+const healthyDetail = document.querySelector('#system-healthy-detail');
+const issuesNode = document.querySelector('#system-product-issues');
 const diagnosticsPanel = document.querySelector('#diagnostics-panel');
 const diagnosticsState = document.querySelector('#diagnostics-state');
 const copyButton = document.querySelector('#copy-diagnostics');
 const rawNode = document.querySelector('#diagnostics-raw');
 
 if (
-  systemPanel && systemSheet && diagnosticsPanel
-  && diagnosticsState && copyButton && rawNode
+  systemPanel && healthyNode && healthyTitle && healthyDetail && issuesNode
+  && diagnosticsPanel && diagnosticsState && copyButton && rawNode
 ) {
   const READINESS_REFRESH_MS = 1_000;
   let latestProduct = null;
@@ -115,23 +118,6 @@ if (
     if (impact === 'timing') return t('system.timing');
     return impact;
   }
-
-  const productSurface = document.createElement('section');
-  productSurface.id = 'system-product';
-  productSurface.className = 'system-product';
-  productSurface.setAttribute('aria-live', 'polite');
-
-  const healthyNode = document.createElement('div');
-  healthyNode.className = 'system-healthy';
-  const healthyTitle = document.createElement('strong');
-  const healthyDetail = document.createElement('span');
-  healthyNode.append(healthyTitle, healthyDetail);
-
-  const issuesNode = document.createElement('div');
-  issuesNode.id = 'system-product-issues';
-  issuesNode.className = 'system-product-issues';
-  productSurface.append(healthyNode, issuesNode);
-  systemSheet.insertBefore(productSurface, diagnosticsPanel);
 
   function canRetryMicHere(issue) {
     const participantId = typeof window.relayParticipantId === 'string'

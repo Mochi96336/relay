@@ -45,6 +45,13 @@ class FakeNode {
     this.children = [...nodes];
   }
 
+  /** The meter's waveform path, painted by index.html. */
+  querySelector(selector: string): FakeNode | null {
+    if (selector !== '.voice-presence-wave') return null;
+    this.children[0] ??= new FakeNode();
+    return this.children[0];
+  }
+
   addEventListener() {}
 }
 
@@ -172,9 +179,6 @@ test('late Room Mic telemetry cannot poison live-status owner cache and clear th
     body,
     querySelector(selector: string) {
       return nodes.get(selector) ?? null;
-    },
-    createElementNS() {
-      return new FakeNode();
     },
   };
 

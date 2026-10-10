@@ -10,34 +10,16 @@ import {
 } from './mic-presence-model.js';
 
 const meter = document.querySelector('#mic-input-meter');
+const wave = meter?.querySelector('.voice-presence-wave') ?? null;
 
-if (meter) {
-  const SVG_NS = 'http://www.w3.org/2000/svg';
+if (meter && wave) {
+  // The viewBox of the meter's SVG in index.html.
   const VIEWBOX_WIDTH = 320;
   const VIEWBOX_HEIGHT = 56;
   const CENTER_Y = VIEWBOX_HEIGHT / 2;
   const MAX_AMPLITUDE = 18;
   const PITCH_MODULATION_DEPTH = 0.18;
   const ROOM_EVIDENCE_STALE_MS = 320;
-
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.classList.add('voice-presence-svg');
-  svg.setAttribute('viewBox', `0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`);
-  svg.setAttribute('preserveAspectRatio', 'none');
-  svg.setAttribute('aria-hidden', 'true');
-
-  const baseline = document.createElementNS(SVG_NS, 'path');
-  baseline.classList.add('voice-presence-baseline');
-  baseline.setAttribute('d', `M 0 ${CENTER_Y} L ${VIEWBOX_WIDTH} ${CENTER_Y}`);
-
-  const wave = document.createElementNS(SVG_NS, 'path');
-  wave.classList.add('voice-presence-wave');
-  wave.setAttribute('aria-hidden', 'true');
-
-  svg.append(baseline, wave);
-  meter.classList.add('voice-presence');
-  meter.setAttribute('aria-hidden', 'true');
-  meter.replaceChildren(svg);
 
   let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
   let sourceKey = null;

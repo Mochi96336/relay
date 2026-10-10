@@ -2371,12 +2371,13 @@ let lastMicDeviceReportKey: string | null = null;
  */
 function reportMicDevice(health: AudioUplinkHealth) {
   const ownerId = participants.micOwnerId;
-  const key = JSON.stringify([ownerId, health.captureGeneration, health.capture]);
+  const key = JSON.stringify([ownerId, health.captureGeneration, health.captureGenerationReason, health.capture]);
   if (key === lastMicDeviceReportKey) return;
   lastMicDeviceReportKey = key;
   console.log('[mic-device]', JSON.stringify({
     participant: ownerId ? participantLogLabel(ownerId) : null,
     captureGeneration: health.captureGeneration,
+    captureGenerationReason: health.captureGenerationReason ?? null,
     device: health.capture?.device ?? null,
     inputLabel: health.capture?.inputLabel ?? null,
     sampleRate: micRuntime.sampleRate,

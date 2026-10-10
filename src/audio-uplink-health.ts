@@ -76,6 +76,8 @@ export type AudioUplinkTransportHealth = {
 export type AudioUplinkHealth = {
   version: 1;
   captureGeneration: number;
+  /** Why the current capture clock began; absent on older pages. Observation only. */
+  captureGenerationReason?: string;
   /** Optional browser-generated correlation token. Older v1 pages omit it. */
   healthRequestId?: number;
   /** Sender monotonic time paired with capturedSamples, independent of network delay. */
@@ -284,6 +286,9 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   if (!payload || Number(payload.version) !== 1) return null;
 
   const captureGeneration = uint32(payload.captureGeneration);
+  const captureGenerationReason = payload.captureGenerationReason;
+  if (captureGenerationReason !== undefined && (typeof captureGenerationReason !== 'string'
+    || !/^[a-z][a-z-]{0,63}$/.test(captureGenerationReason))) return null;
   const healthRequestId = payload.healthRequestId === undefined
     ? undefined
     : strictUint32(payload.healthRequestId);
@@ -433,6 +438,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const parsed: AudioUplinkHealth = {
     version: 1,
     captureGeneration,
+    ...(captureGenerationReason === undefined ? {} : { captureGenerationReason }),
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     ...(capturedAtPerformanceMs === undefined ? {} : { capturedAtPerformanceMs }),

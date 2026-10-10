@@ -418,3 +418,15 @@ it('accepts staged capture clocks without accepting arbitrary or invalid clock d
   const startup = Object.fromEntries(Object.keys(captureClock).map(key => [key, null]));
   assert.deepEqual(parseAudioUplinkHealth({ ...validHealth(), captureClock: startup })?.captureClock, startup);
 });
+
+it('retains capture restart provenance while accepting legacy reports and rejecting malformed reasons', () => {
+  assert.equal(parseAudioUplinkHealth(validHealth())?.captureGenerationReason, undefined);
+  for (const reason of ['publisher-start', 'context-clock-underfed', 'input-gap', 'processor-error']) {
+    const parsed = parseAudioUplinkHealth({ ...validHealth(), captureGenerationReason: reason });
+    assert.equal(parsed?.captureGenerationReason, reason);
+    assert.equal(parsed?.captureGeneration, 7);
+  }
+  for (const reason of ['', null, 7, {}, 'x'.repeat(65), 'input\ngap']) {
+    assert.equal(parseAudioUplinkHealth({ ...validHealth(), captureGenerationReason: reason }), null);
+  }
+});

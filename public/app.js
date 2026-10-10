@@ -122,6 +122,7 @@ let audioUplinkHealthTimer = null;
 // component keeps this unique across any reload that is not the same
 // millisecond as a previous one, which a real reload never is.
 let captureGeneration = Date.now() >>> 0;
+let captureGenerationReason = 'page-initialized';
 let captureSampleCursor = 0;
 let sampleSongCapture = null;
 window.addEventListener('relay:sample-song-anchor-request', (event) => {
@@ -189,6 +190,7 @@ function audioUplinkHealthPayload(healthRequestId) {
     version: 1,
     captureGeneration: captureGeneration >>> 0,
     healthRequestId,
+    captureGenerationReason,
     capturedSamples: captureSampleCursor,
     capturedAtPerformanceMs: performance.now(),
     captureClock: {
@@ -275,6 +277,7 @@ function advanceCaptureGeneration(reason) {
   activeCalibrationProbeRequestId = null;
   retireCalibrationProbePlayback();
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
+  captureGenerationReason = reason;
   captureSampleCursor = 0;
   sampleSongCapture = null;
   capturePacketSequence = 0;

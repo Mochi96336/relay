@@ -461,7 +461,8 @@ export class MicRuntime {
     return this.currentAudioTransport?.stats() ?? null;
   }
 
-  noteUplinkHealth(socket: RelaySocket, health: AudioUplinkHealth, nowMs: number) {
+  noteUplinkHealth(socket: RelaySocket, health: AudioUplinkHealth, nowMs: number,
+    mix?: { playable: boolean; headroomMs: number }) {
     if (
       !this.isPublisher(socket)
       || socket.audioPacketVersion !== 2
@@ -510,6 +511,7 @@ export class MicRuntime {
           captureGeneration: health.captureGeneration,
           ...(health.healthRequestId === undefined ? {} : { healthRequestId: health.healthRequestId }),
           pcm: {
+            ...(mix === undefined ? {} : { mix }),
             acceptedFrameSerial: this.currentAcceptedFrameSerial,
             receivedEndSample: this.latestAcceptedFrameEndSample,
             sampleRate: this.currentSampleRate,

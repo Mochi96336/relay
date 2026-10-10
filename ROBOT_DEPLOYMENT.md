@@ -458,3 +458,78 @@ eligible capture, requests the same bounded socket replacement without waiting
 for a health ACK. The byte budget remains in force. This watchdog does not claim
 to observe or cancel packets already handed to TCP or the network, and it does
 not repeatedly reconnect a capture that has exhausted its recovery budget.
+
+
+### Poor-network control recovery and acceptance
+
+The 2026-10-10 retest did not establish stable recovery. A bounded reconnect
+may restore flow temporarily while repeated jitter still makes Mic unplayable.
+The control recovery changes below are implemented. Acoustic calibration and
+Robot's 450 ms follow threshold remain outside the transport policy. Mixer
+starvation is exposed as separate evidence; sustained-bandwidth adaptation is
+not implemented by these control recovery changes.
+
+1. Correlate health ACKs by `healthRequestId` within capture/socket/eligibility
+   epochs. The server already echoes this optional ID; browser recovery still
+   consumes the first queued health record. Bound pending records and retain
+   explicit legacy FIFO behavior only for legacy ACKs. Unmatched, duplicate and
+   retired-epoch ACKs must not consume a current observation or recovery budget.
+2. Carry bounded diagnostic evidence in the existing transport health/status:
+   recovery action/reason/sequence, phase and spent budgets, ACK round-trip age,
+   local queue oldest-byte age, source-coordinate backlog and its availability.
+   Distinguish unknown freshness from zero backlog. Preserve the last action
+   separately from routine `none` observations. Server logging should record
+   action changes rather than every health tick. Avoid expanding normal UI.
+3. Add a capture-scoped control-progress watchdog that does not require a new
+   ACK to execute. Local capture/source eligibility and socket epochs still
+   fence actions. Control silence is evidence about the control path, not proof
+   that audio is queued; combine it with available transport/PCM evidence and
+   retain the bounded recovery budget. Never treat a delayed ACK as a new live
+   measurement merely to bypass the freshness guard.
+4. Evaluate repeated Mixer starvation independently of the severe 1.5-second
+   transit threshold. Separate short jitter tolerance, sustained missing media,
+   source clock failure and exhausted recovery. Do not lower thresholds or
+   repeatedly reconnect solely because a status snapshot shows negative
+   headroom. Persistent insufficient bandwidth requires a separate microphone
+   bitrate/codec decision; socket replacement cannot create capacity.
+
+Required production-code test scenarios:
+
+| Scenario | Required outcome |
+|---|---|
+| Healthy audio; ACK delayed 2–5 s | No false upstream-lateness verdict or reconnect storm |
+| Capture continues; both control and media stop | Watchdog executes without waiting for ACK, within its explicit deadline |
+| One missing, duplicate or unmatched ACK ID | Later matching ACK uses its own snapshot; no FIFO age contamination |
+| Same-capture reconnect; late old socket ACK | No consumption of current state or budget |
+| Full throughput with constant 8 s lateness | Not considered recovered while freshness is still bad |
+| 300–1000 ms jitter with repeated Mixer starvation | Recorded as such, not mislabeled healthy or automatically treated as clock loss |
+| Hidden, muted, input-gap or stopped source | No transport recovery budget spent on source failure |
+| Old browser/server without new fields | Unknown evidence remains explicit; compatible bounded behavior |
+| Recovery budget exhausted; media later resumes | No infinite reconnect; recovery requires fresh usable evidence |
+
+On Pi, run typecheck and the affected parser, runtime, browser-adapter and
+recovery tests only. Deploy the receiver when Take is idle, then run the full
+GitHub CI. For the next handset trial, load the new frontend and preserve one
+read-only run in the existing evidence directory. Report action reasons and
+stable usable intervals; raw sample counts or a successful reconnect alone are
+not an acceptance criterion. Do not compare trials with different impairment
+strength as a controlled A/B result.
+
+Implementation details: at most 64 pending health records are retained. ACKs
+with an ID match that record within the current capture/socket/source epoch;
+a later matching ACK retires preceding requests whose replies are missing.
+Legacy FIFO matching is suspended after eviction makes it ambiguous, until a
+new physical socket binds. Missing or old evidence stays unknown.
+
+While eligible capture continues, six seconds without health-ACK progress can
+spend the existing one-socket-replacement budget without waiting for a reply.
+A stopped source, source boundary or stale local capture observation resets or
+pauses this control episode. This diagnoses control silence, not upstream
+lateness. It does not guarantee service on a link without enough bandwidth.
+
+`captureAndSender.transport.recovery` retains up to eight sequenced action
+records, ACK round-trip time, control silence, queue age, optional fresh source
+backlog and fresh Mixer playability/headroom. Last action survives routine
+observations. Freshness-dependent fields expire after 1.5 seconds; negative
+headroom is valid evidence. The server logs unseen action sequences under
+`[mic-recovery]`, rather than treating each health tick as a new action.

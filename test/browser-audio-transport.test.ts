@@ -779,3 +779,125 @@ it('old ACKs cannot turn downstream control delay into an upstream lateness verd
   }
   assert.equal(transport.mediaPathRecovery.status().webSocketReplacementUsed, false);
 });
+
+it('ACK IDs skip missing replies without consuming snapshots on unmatched or duplicate replies', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({ nowMs: () => now });
+  const socket = new FakeSocket(); transport.bind(socket);
+  const send = (id: number) => transport.sendControlJson({type: 'audio-uplink-health', version: 1,
+    healthRequestId: id, captureGeneration: 7, capturedSamples: id * 48000});
+  const ack = (id: number) => transport.observePublisherSocketMessage(socket, transport.publisherSocketEpoch,
+    {data: JSON.stringify({type: 'audio-uplink-health-ack', version: 1, captureGeneration: 7,
+      healthRequestId: id, pcm: {acceptedFrameSerial: id, mediaPath: 'websocket'}})});
+  send(1); now = 1000; send(2);
+  ack(99); assert.equal(transport.pendingPublisherHealth.length, 2);
+  now = 1100; ack(2);
+  assert.equal(transport.pendingPublisherHealth.length, 0);
+  assert.equal(transport.stats().recovery.ackRoundTripMs, 100);
+  send(3); ack(2);
+  assert.equal(transport.pendingPublisherHealth.length, 1);
+  assert.equal(transport.stats().recovery.unmatchedHealthAcks, 2);
+});
+
+it('control silence watchdog works without ACKs, preserves the capture and bounds replacement', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({ nowMs: () => now });
+  class TimeoutSocket extends FakeSocket { closes = 0; close() { this.closes++; } }
+  const socket = new TimeoutSocket(); transport.bind(socket);
+  for (let i = 0; i <= 6; i++) {
+    now = i * 1000;
+    transport.sendControlJson({type:'audio-uplink-health',version:1,healthRequestId:i,
+      captureGeneration:7,capturedSamples:48000+i*48000});
+    transport.send(new Uint8Array(30));
+    if (i < 6) assert.equal(socket.closes, 0);
+  }
+  assert.equal(socket.closes, 1);
+  assert.equal(transport.stats().recovery.reason, 'control-ack-timeout');
+  assert.equal(transport.mediaPathRecovery.status().captureGeneration, 7);
+  now += 1000;
+  transport.sendControlJson({type:'audio-uplink-health',version:1,captureGeneration:7,capturedSamples:480000});
+  transport.send(new Uint8Array(30));
+  assert.equal(socket.closes, 1);
+  assert.equal(transport.stats().mediaRecoveryDegraded, true);
+});
+
+it('stopped or ineligible capture cannot spend a control timeout recovery action', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  for (const muted of [false, true]) {
+    let now = 0;
+    const transport = new PreferredAudioTransport({ nowMs: () => now });
+    const socket = new FakeSocket(); transport.bind(socket);
+    for (let i = 0; i < 8; i++) {
+      now = i * 1000;
+      transport.sendControlJson({type:'audio-uplink-health',version:1,captureGeneration:7,
+        capturedSamples:muted ? 48000+i*48000 : 48000,inputMuted:muted});
+      transport.send(new Uint8Array(30));
+    }
+    assert.equal(transport.mediaPathRecovery.status().webSocketReplacementUsed, false);
+  }
+});
+
+it('pending health is bounded and normal observations preserve the last recovery action', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport(); transport.bind(new FakeSocket());
+  for (let i = 0; i < 100; i++) transport.sendControlJson({type:'audio-uplink-health',version:1,
+    healthRequestId:i,captureGeneration:7,capturedSamples:48000+i*48000});
+  assert.equal(transport.pendingPublisherHealth.length, 64);
+  transport.observePublisherSocketMessage(transport.fallback.socket, transport.publisherSocketEpoch,
+    {data:JSON.stringify({type:'audio-uplink-health-ack',version:1,captureGeneration:7,
+      pcm:{acceptedFrameSerial:1,mediaPath:'websocket'}})});
+  assert.equal(transport.pendingPublisherHealth.length, 64, 'evicted legacy FIFO cannot manufacture a match');
+  transport.recordRecoveryDecision({action:'replace-websocket',reason:'control-ack-timeout'});
+  transport.recordRecoveryDecision({action:'none',reason:'baseline'});
+  assert.equal(transport.stats().recovery.action, 'replace-websocket');
+  assert.equal(transport.stats().recovery.sequence, 1);
+});
+
+it('ACKs delayed five seconds cannot cause a control timeout replacement', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({ nowMs: () => now });
+  const socket = new FakeSocket(); transport.bind(socket);
+  for (let i = 0; i < 15; i++) {
+    now = i * 1000;
+    transport.sendControlJson({type:'audio-uplink-health',version:1,healthRequestId:i,
+      captureGeneration:7,capturedSamples:48000+i*48000});
+    if (i >= 5) transport.observePublisherSocketMessage(socket, transport.publisherSocketEpoch,
+      {data:JSON.stringify({type:'audio-uplink-health-ack',version:1,healthRequestId:i-5,
+        captureGeneration:7,pcm:{acceptedFrameSerial:i,mediaPath:'websocket'}})});
+    transport.send(new Uint8Array(30));
+  }
+  assert.equal(transport.mediaPathRecovery.status().webSocketReplacementUsed, false);
+  assert.equal(transport.stats().recovery.ackRoundTripMs, 5000);
+});
+
+it('recent action history survives later terminal and healthy observations with a hard bound', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport();
+  transport.recordRecoveryDecision({action:'replace-websocket',reason:'control-ack-timeout'});
+  transport.recordRecoveryDecision({action:'degraded-latched',reason:'control-ack-timeout-after-bounded-recovery'});
+  transport.recordRecoveryDecision({action:'none',reason:'baseline'});
+  assert.deepEqual(transport.stats().recovery.events.map((e: any) => e.action), ['replace-websocket','degraded-latched']);
+  for (let i=0;i<20;i++) transport.recordRecoveryDecision({action:i%2?'recovered':'degraded-latched',reason:'test-event'});
+  assert.equal(transport.stats().recovery.events.length, 8);
+});
+
+it('Mixer starvation stays visible independently of throughput recovery and expires with its ACK', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({nowMs:()=>now});
+  const socket = new FakeSocket(); transport.bind(socket);
+  transport.sendControlJson({type:'audio-uplink-health',version:1,healthRequestId:1,captureGeneration:7,capturedSamples:48000});
+  transport.observePublisherSocketMessage(socket, transport.publisherSocketEpoch,
+    {data:JSON.stringify({type:'audio-uplink-health-ack',version:1,healthRequestId:1,captureGeneration:7,
+      pcm:{acceptedFrameSerial:1,receivedEndSample:24000,sampleRate:48000,
+        mix:{playable:false,headroomMs:-300},mediaPath:'websocket'}})});
+  assert.equal(transport.stats().recovery.audioBacklogMs, 500);
+  assert.equal(transport.stats().recovery.mixPlayable, false);
+  assert.equal(transport.mediaPathRecovery.status().webSocketReplacementUsed, false);
+  now = 1501;
+  assert.equal(transport.stats().recovery.audioBacklogMs, null);
+  assert.equal(transport.stats().recovery.mixPlayable, null);
+});

@@ -2362,6 +2362,24 @@ function participantLogLabel(participantId: string) {
   return { id: participantId.replace(/^participant-/, '').slice(0, 8), nickname };
 }
 
+let micRecoveryLogGeneration: number | null = null;
+let micRecoveryLogSequence = 0;
+function reportMicRecovery(health: AudioUplinkHealth) {
+  const recovery = health.transport.recovery;
+  if (!recovery || recovery.sequence === 0) return;
+  if (micRecoveryLogGeneration !== health.captureGeneration) {
+    micRecoveryLogGeneration = health.captureGeneration;
+    micRecoveryLogSequence = 0;
+  }
+  for (const event of recovery.events ?? []) {
+    if (event.sequence <= micRecoveryLogSequence) continue;
+    console.warn('[mic-recovery]', JSON.stringify({ captureGeneration: health.captureGeneration,
+      ...recovery, ...event, events: undefined }));
+    micRecoveryLogSequence = event.sequence;
+  }
+}
+
+
 let lastMicDeviceReportKey: string | null = null;
 
 /**
@@ -2369,6 +2387,7 @@ let lastMicDeviceReportKey: string | null = null;
  * and again if either changes, so the level and probe lines around it can be
  * traced to a singer's phone or headset.
  */
+
 function reportMicDevice(health: AudioUplinkHealth) {
   const ownerId = participants.micOwnerId;
   const key = JSON.stringify([ownerId, health.captureGeneration, health.captureGenerationReason, health.capture]);
@@ -3638,9 +3657,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (!health) return;
 
     const nowMs = performance.now();
-    const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs);
+    const accepted = micRuntime.noteUplinkHealth(socket, health, nowMs, {
+      playable: micPlayable(nowMs), headroomMs: session.health().micHeadroomMs,
+    });
     if (accepted) noteRecordingMicGapHealth(health);
-    if (accepted) reportMicDevice(health);
+    if (accepted) { reportMicDevice(health); reportMicRecovery(health); }
     if (accepted) noteMicCaptureDelivery(health, nowMs);
     if (accepted) reportMicWebTransportFailure(health);
     return;

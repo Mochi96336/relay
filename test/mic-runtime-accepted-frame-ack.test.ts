@@ -197,7 +197,8 @@ test('receiver packet progress is distinct from AudioSession accepted-frame prog
     mediaPath: 'websocket',
   });
   mic.noteFrame(140, frames[0]);
-  assert.equal(mic.noteUplinkHealth(current, health(7, 960), 150), true);
+  assert.equal(mic.noteUplinkHealth(current, health(7, 960), 150, { playable: false, headroomMs: -300 }), true);
+  assert.deepEqual(lastAck(current).pcm.mix, { playable: false, headroomMs: -300 });
   assert.equal(lastAck(current).pcm.receivedEndSample, 480, 'ACK names accepted source coordinates, not a cumulative sample count');
 });
 

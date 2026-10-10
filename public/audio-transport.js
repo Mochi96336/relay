@@ -166,6 +166,7 @@ export class WebSocketAudioTransport extends AudioTransport {
   constructor({
     maxBufferedBytes = 256 * 1024,
     realtimeBufferedBytes = realtimeWebSocketBacklogBytes(),
+    nowMs = monotonicNowMs,
   } = {}) {
     super();
     if (!Number.isFinite(maxBufferedBytes) || maxBufferedBytes < 0) {
@@ -178,6 +179,9 @@ export class WebSocketAudioTransport extends AudioTransport {
     this.realtimeBufferedBytes = realtimeBufferedBytes;
     this.maxBufferedBytes = Math.min(maxBufferedBytes, realtimeBufferedBytes);
     this.socket = null;
+    this.nowMs = nowMs;
+    this.lastBufferedAmount = 0;
+    this.queueProgressAt = null;
   }
 
   setRealtimePcmSampleRate(sampleRate) {
@@ -190,6 +194,8 @@ export class WebSocketAudioTransport extends AudioTransport {
   bind(socket, { sampleRate } = {}) {
     if (sampleRate !== undefined) this.setRealtimePcmSampleRate(sampleRate);
     this.socket = socket;
+    this.lastBufferedAmount = 0;
+    this.queueProgressAt = null;
   }
 
   unbind(socket = this.socket) {
@@ -209,10 +215,18 @@ export class WebSocketAudioTransport extends AudioTransport {
     }
 
     const bufferedAmount = Number(socket.bufferedAmount) || 0;
-    if (bufferedAmount >= this.maxBufferedBytes) {
+    const now = Number(this.nowMs());
+    if (bufferedAmount === 0) this.queueProgressAt = null;
+    else if (this.queueProgressAt === null || bufferedAmount < this.lastBufferedAmount) {
+      this.queueProgressAt = now;
+    }
+    this.lastBufferedAmount = bufferedAmount;
+    const queueStalled = this.queueProgressAt !== null && now - this.queueProgressAt > 1000;
+    if (queueStalled || bufferedAmount >= this.maxBufferedBytes) {
       return {
         ready: false,
         reason: 'congested',
+        queueStalled,
         bufferedAmount,
         maxPacketBytes: this.maxPacketBytes(),
         path: 'websocket',
@@ -332,7 +346,7 @@ export class PreferredAudioTransport extends AudioTransport {
     if (typeof nowMs !== 'function') {
       throw new TypeError('nowMs must be a function');
     }
-    this.fallback = new WebSocketAudioTransport({ maxBufferedBytes });
+    this.fallback = new WebSocketAudioTransport({ maxBufferedBytes, nowMs });
     this.minimumPacketBytes = minimumPacketBytes;
     this.datagramPacketBytesCeiling = datagramPacketBytesCeiling;
     this.datagramQueuePackets = datagramQueuePackets;
@@ -393,6 +407,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.publisherSocketEpoch = 0;
     this.publisherSocketListener = null;
     this.pendingPublisherHealth = [];
+    this.latestCaptureHealth = null;
     this.sourceEligibilityEpoch = 0;
     this.lastMediaRecoveryDecision = null;
     this.resetStats();
@@ -425,6 +440,7 @@ export class PreferredAudioTransport extends AudioTransport {
     this.maxWebTransportMaxPacketBytes = null;
     this.mediaPathRecovery?.reset();
     this.pendingPublisherHealth = [];
+    this.latestCaptureHealth = null;
     this.lastMediaRecoveryDecision = null;
   }
 
@@ -686,7 +702,17 @@ export class PreferredAudioTransport extends AudioTransport {
       || message.pcm?.mediaPath === 'websocket'
       ? message.pcm.mediaPath
       : null;
+    const newestHealth = this.latestCaptureHealth;
+    const endSample = nonNegativeSafeInteger(message.pcm?.receivedEndSample);
+    const sampleRate = Number(message.pcm?.sampleRate);
+    const audioBacklogMs = Number(this.nowMs()) - publisherHealth.sentAtMs < 1500
+      && newestHealth?.captureGeneration === ackGeneration
+      && Number(this.nowMs()) - newestHealth.atMs < 1500
+      && endSample !== null && Number.isFinite(sampleRate) && sampleRate > 0
+      ? Math.max(0, (newestHealth.capturedSamples - endSample) * 1000 / sampleRate)
+      : null;
     const decision = this.mediaPathRecovery.observe({
+      audioBacklogMs,
       captureGeneration: ackGeneration,
       capturedSamples: publisherHealth.capturedSamples,
       serverAcceptedFrameSerial: acceptedFrameSerial,
@@ -698,7 +724,7 @@ export class PreferredAudioTransport extends AudioTransport {
       serverMediaPath,
       path: publisherHealth.path,
       socketEpoch: epoch,
-      eligible: publisherHealth.eligible,
+      eligible: publisherHealth.eligible && newestHealth?.eligible !== false,
     });
     this.lastMediaRecoveryDecision = decision;
 
@@ -725,6 +751,14 @@ export class PreferredAudioTransport extends AudioTransport {
   }
 
   sendControlJson(payload) {
+    if (payload?.type === 'audio-uplink-health' && payload?.version === 1) {
+      this.latestCaptureHealth = {
+        captureGeneration: payload.captureGeneration, capturedSamples: payload.capturedSamples,
+        atMs: Number(this.nowMs()), eligible: globalThis.document?.visibilityState !== 'hidden'
+          && payload.inputMuted !== true && payload.inputGapActive !== true
+          && payload.captureDispatch?.backlogActive !== true,
+      };
+    }
     const result = this.fallback.send(JSON.stringify(payload));
     this.recordControlFallbackResult(result);
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
@@ -756,6 +790,7 @@ export class PreferredAudioTransport extends AudioTransport {
       ) {
         this.pendingPublisherHealth.push({
           captureGeneration,
+          sentAtMs: Number(this.nowMs()),
           capturedSamples,
           captureBacklogDroppedSamples,
           senderSubmittedPackets,
@@ -1266,6 +1301,19 @@ export class PreferredAudioTransport extends AudioTransport {
       }
     }
 
+    if (!this.datagramWriter && this.latestCaptureHealth?.eligible
+      && Number(this.nowMs()) - this.latestCaptureHealth.atMs < 1500
+      && globalThis.document?.visibilityState !== 'hidden'
+      && this.fallback.state().queueStalled) {
+      this.mediaPathRecovery.beginGeneration(this.latestCaptureHealth.captureGeneration);
+      const decision = this.mediaPathRecovery.recoverLatePath('websocket');
+      this.lastMediaRecoveryDecision = decision;
+      if (decision.action === 'replace-websocket') {
+        this.publisherSocketEpoch += 1;
+        try { this.fallback.socket?.close(4001, 'audio queue stalled'); } catch {}
+      }
+      return { sent: false, ready: false, reason: 'congested', path: 'websocket', maxPacketBytes: this.fallback.maxPacketBytes(), bufferedAmount: this.fallback.socket?.bufferedAmount ?? 0 };
+    }
     if (this.demoteStalledWebTransport()) {
       const result = this.fallback.send(packet);
       this.recordFallbackResult(result);

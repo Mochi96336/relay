@@ -693,3 +693,89 @@ describe('browser AudioTransport', () => {
     assert.doesNotMatch(app, /framePcm\(event\.data/);
   });
 });
+
+it('WebSocket queue age bounds small stalled queues while allowing drain progress', async () => {
+  const { WebSocketAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new WebSocketAudioTransport({ nowMs: () => now });
+  const socket = new FakeSocket();
+  transport.bind(socket);
+  socket.bufferedAmount = 100;
+  assert.equal(transport.state().ready, true);
+  now = 1001;
+  assert.equal(transport.state().queueStalled, true);
+  socket.bufferedAmount = 50;
+  assert.equal(transport.state().ready, true);
+  socket.bufferedAmount = 0;
+  now = 5000;
+  assert.equal(transport.state().ready, true);
+});
+
+it('health ACK sample frontier drives bounded late-audio recovery through the browser adapter', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({ WebTransportClass: undefined, nowMs: () => now });
+  class AckSocket extends FakeSocket {
+    closes = 0;
+    close() { this.closes++; this.readyState = 3; }
+  }
+  const socket = new AckSocket();
+  transport.bind(socket);
+  for (let i = 0; i < 4; i++) {
+    now += 1000;
+    transport.sendControlJson({ type: 'audio-uplink-health', version: 1,
+      captureGeneration: 7, capturedSamples: 480000 + i * 48000, transport: { path: 'websocket' } });
+    transport.observePublisherSocketMessage(socket, transport.publisherSocketEpoch, {
+      data: JSON.stringify({ type: 'audio-uplink-health-ack', version: 1, captureGeneration: 7,
+        pcm: { acceptedFrameSerial: 100 + i * 100, receivedPacketSerial: 100 + i * 100,
+          receivedSampleSerial: 96000 + i * 48000, receivedEndSample: 96000 + i * 48000,
+          sampleRate: 48000, mediaPath: 'websocket' } }),
+    });
+  }
+  assert.equal(socket.closes, 1);
+  assert.equal(transport.lastMediaRecoveryDecision.reason, 'server-pcm-late');
+});
+
+it('stalled WebSocket queue can recover without an ACK and spends only one replacement', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({ WebTransportClass: undefined, nowMs: () => now });
+  class QueueSocket extends FakeSocket {
+    closes = 0;
+    close() { this.closes++; }
+  }
+  const socket = new QueueSocket();
+  transport.bind(socket);
+  socket.bufferedAmount = 100;
+  const health = () => transport.sendControlJson({ type: 'audio-uplink-health', version: 1,
+    captureGeneration: 7, capturedSamples: 48000 + now * 48 });
+  health();
+  now = 1001;
+  health();
+  transport.send(new Uint8Array(30));
+  assert.equal(socket.closes, 1);
+  now = 2002;
+  health();
+  transport.send(new Uint8Array(30));
+  assert.equal(socket.closes, 1);
+  assert.equal(transport.lastMediaRecoveryDecision.action, 'degraded-latched');
+});
+
+it('old ACKs cannot turn downstream control delay into an upstream lateness verdict', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({ WebTransportClass: undefined, nowMs: () => now });
+  const socket = new FakeSocket();
+  transport.bind(socket);
+  for (let i = 0; i < 5; i++) {
+    transport.sendControlJson({ type: 'audio-uplink-health', version: 1,
+      captureGeneration: 7, capturedSamples: 480000 + i * 48000, transport: { path: 'websocket' } });
+    now += 2000;
+    transport.observePublisherSocketMessage(socket, transport.publisherSocketEpoch, {
+      data: JSON.stringify({ type: 'audio-uplink-health-ack', version: 1, captureGeneration: 7,
+        pcm: { acceptedFrameSerial: 100 + i, receivedEndSample: 96000 + i * 48000,
+          sampleRate: 48000, mediaPath: 'websocket' } }),
+    });
+  }
+  assert.equal(transport.mediaPathRecovery.status().webSocketReplacementUsed, false);
+});

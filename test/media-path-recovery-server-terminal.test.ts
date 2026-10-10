@@ -220,6 +220,8 @@ test('same-generation websocket replacement is bounded, then spontaneous PCM can
   assert.equal(mic.acceptedFrameSerial, 1);
   const baseline = sendHealth(first, PACKET_SAMPLES);
   assert.deepEqual(baseline.pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 1,
     receivedPacketSerial: 1,
     receivedSampleSerial: PACKET_SAMPLES,

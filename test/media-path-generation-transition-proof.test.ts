@@ -289,6 +289,8 @@ test('capture-generation advance clears recovery/FIFO authority and fences every
   await Promise.resolve();
   assert.equal(mic.acceptedFrameSerial, 1);
   assert.deepEqual(sendHealth(generation7, PACKET_SAMPLES).pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 1,
     receivedPacketSerial: 1,
     receivedSampleSerial: PACKET_SAMPLES,
@@ -390,6 +392,8 @@ test('capture-generation advance clears recovery/FIFO authority and fences every
   const generation8Ack = sendHealth(generation8, PACKET_SAMPLES);
   assert.equal(generation8Ack.captureGeneration, 8);
   assert.deepEqual(generation8Ack.pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 1,
     receivedPacketSerial: 1,
     receivedSampleSerial: PACKET_SAMPLES,

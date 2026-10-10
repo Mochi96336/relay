@@ -391,9 +391,70 @@ Timing diagnostics also expose `desiredCalibratedMicLagMs` (live-coordinate
 calibration target before jitter hold, Take freeze and slew) and
 `calibratedMicLagTargetMs` (the mixer's slew target). The collector saves the
 Content target as `contentLiveTargetMs`, which the offline comparison prefers.
-A Content authority label alone does not prove the read head moved: the Robot
-jitter policy can retain the prior Boot advance. For old logs without a live
+A Content authority label alone does not prove the read head moved. A newly
+confirmed calibration revision now bypasses the Robot jitter hold once, while
+Take freezes and mapping holds retain the pending revision until it can apply.
+The same authority continues to use the normal jitter policy. Diagnostics expose
+`confirmedCalibrationRevision` and `mixerCalibrationAuthority` so the confirmed
+revision can be compared with the applied revision. For old logs without a live
 Content target, the report conservatively excludes rows whose applied advance
 still exactly equals the stored Boot result, rather than comparing Boot with
 itself. An explicitly unavailable Content target is never replaced with the
 applied value.
+
+### Robot follow and Boot probe timing
+
+Robot follow uses the publisher-projected `youtubeTime`, falling back to
+`serverTime` when it is unavailable. A player error strictly greater than
+450 media milliseconds triggers a seek when the route is armed and the seek
+settling/report gates permit it. Exactly 450 ms does not trigger a seek. After
+a seek, offset reports are suppressed for one second; a fresh eligible report
+is required before the next correction. Sustained room-clock phase errors are
+corrected after three fresh, advancing, same-sign observations beyond 450 ms.
+The threshold is media time, including when playback rate differs from 1×.
+
+Boot probe scheduling separates browser preparation from network transit:
+`sent + (RTT - processing) / 2 + schedulingDelay + lead`. Browser durations must
+satisfy `0 <= schedulingDelay <= processing <= RTT`; missing or inconsistent
+evidence uses the explicitly labeled `legacy-rtt-half` method. This still assumes
+symmetric network transit. Completed probe evidence is retained separately from
+the current attempt so probe IDs and capture generations do not label an older
+measurement. Hidden publisher pages explicitly reject a probe instead of silently
+waiting for an ACK timeout.
+
+### Timing diagnostics and capture restart evidence
+
+The main timing surface shows the applied alignment and YouTube playback clocks.
+The existing collapsed sound comparison contains Boot, Content, sample/YouTube
+fallback and ongoing validation. Stored Boot results, current-coordinate
+projections, raw Content lag, requested targets and actual Mixer advance are
+different facts. Expired playback observations do not provide a current Boot
+projection. The comparison UI omits the RTT/2 row and names the sample/YouTube
+estimate by its method; `shadow` remains an internal configuration value.
+
+Microphone health can include `captureGenerationReason` (for example
+`publisher-start`, `context-clock-underfed`, `input-gap` or `processor-error`).
+The server retains it in capture diagnostics and device logs. Older pages may
+omit it; a generation change alone cannot establish whether the user retried
+Mic or the browser rebuilt capture automatically. The field does not change
+calibration or trigger recovery.
+
+
+### Bounded recovery for late microphone audio
+
+Health ACKs optionally carry the newest accepted source `receivedEndSample` and
+its `sampleRate`. The browser compares that source coordinate with a recent local
+capture snapshot, using only ACKs received within 1.5 seconds of their health
+request. Three consecutive eligible, advancing-capture observations more than
+1.5 seconds behind trigger the existing bounded WT demotion / WS replacement
+ladder even when throughput coverage is healthy. Hidden, muted and input-gap
+captures are excluded. Legacy ACKs without coordinates retain coverage recovery.
+This is an operational late-audio threshold, separate from the Robot's 450 ms
+media seek threshold; it does not alter acoustic calibration or sample mapping.
+
+WebSocket audio also checks for a nonempty browser send queue making no drain
+progress for more than one second. It rejects more audio and, for a recent
+eligible capture, requests the same bounded socket replacement without waiting
+for a health ACK. The byte budget remains in force. This watchdog does not claim
+to observe or cancel packets already handed to TCP or the network, and it does
+not repeatedly reconnect a capture that has exhausted its recovery budget.

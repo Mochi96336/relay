@@ -44,6 +44,11 @@ export type MicTimelineFold = {
   captureLossMs: number;
 };
 
+export type MicTimelineUnfold = MicTimelineFold & {
+  /** The part of the unfold the calibration in force was measured across, and gave up. */
+  calibrationMs: number;
+};
+
 export type MicFrontierCorrectionOptions = {
   sampleRate: number;
   frameMs: number;
@@ -135,8 +140,10 @@ export class MicFrontierCorrection {
   private lastFoldValue: MicTimelineFold | null = null;
   /** How far folds have moved the current capture's timeline, net of unfolds. */
   private timelineFoldedSamples = 0;
+  /** The part of it the calibration in force was measured across (see noteCalibrationMeasured). */
+  private calibratedFoldedSamples = 0;
   private unfoldCountValue = 0;
-  private lastUnfoldValue: MicTimelineFold | null = null;
+  private lastUnfoldValue: MicTimelineUnfold | null = null;
   /**
    * Whether the phone has captured audio that has not reached Relay yet, by
    * more than ordinary network delay (see MicUplinkBacklog). While it has, the
@@ -187,8 +194,12 @@ export class MicFrontierCorrection {
     return this.unfoldCountValue;
   }
 
-  get lastUnfold(): MicTimelineFold | null {
+  get lastUnfold(): MicTimelineUnfold | null {
     return this.lastUnfoldValue;
+  }
+
+  get timelineFoldedSamplesNow() {
+    return this.timelineFoldedSamples;
   }
 
   /**
@@ -239,6 +250,7 @@ export class MicFrontierCorrection {
     this.inTransit = false;
     this.quietCorrection = 0;
     this.timelineFoldedSamples = 0;
+    this.calibratedFoldedSamples = 0;
     // A fresh anchor already places the capture where it is now, so whatever
     // it had lost up to here is accounted for and must not be folded again.
     this.foldedSamples = this.captureLossGeneration !== null
@@ -461,6 +473,40 @@ export class MicFrontierCorrection {
   }
 
   /**
+   * A calibration measured from the current capture's timeline as it stands
+   * now is in force. The server restarts Mic evidence whenever the timeline
+   * moves (reportMicTimelineFolds), so the measurement saw every fold already
+   * in place and none since.
+   */
+  noteCalibrationMeasured() {
+    this.calibratedFoldedSamples = this.timelineFoldedSamples;
+  }
+
+  /**
+   * How much of an unfold of `shift` samples the calibration in force was
+   * measured across, and must give up with it.
+   *
+   * A calibration measured across a fold places the voice by the folded
+   * timeline. Moving the timeline back from under it leaves the read head
+   * ahead of the voice by the fold once the correction is given back, the gap
+   * #534 left open. Folds made after the measurement go first, since a loss
+   * that falls again within seconds is most likely the one folded last.
+   */
+  unfoldMeasuredAcross(shift: number) {
+    const sinceMeasured = this.timelineFoldedSamples - this.calibratedFoldedSamples;
+    return Math.min(this.calibratedFoldedSamples, Math.max(0, shift - sinceMeasured));
+  }
+
+  /**
+   * Gives back `samples` of correction at once, for a read head moved back by
+   * the advance itself, so the frame still reads the audio it would have.
+   */
+  release(samples: number) {
+    this.correction = Math.max(0, this.correction - samples);
+    if (this.slewTarget !== null && this.slewTarget <= this.correction) this.slewTarget = null;
+  }
+
+  /**
    * Moves this correction's positions `shift` samples later with the timeline,
    * taking the same amount off the correction, so the read head lands on
    * exactly the audio it would have read anyway.
@@ -486,15 +532,21 @@ export class MicFrontierCorrection {
     };
   }
 
-  /** Records an unfold of `shift` samples, taken while the correction stood at `correctionBefore`. */
-  unfolded(shift: number, correctionBefore: number) {
+  /**
+   * Records an unfold of `shift` samples, taken while the correction stood at
+   * `correctionBefore`, of which the calibration in force gave up
+   * `measuredAcross` (see unfoldMeasuredAcross).
+   */
+  unfolded(shift: number, correctionBefore: number, measuredAcross = 0) {
     this.foldedSamples -= shift;
     this.timelineFoldedSamples -= shift;
+    this.calibratedFoldedSamples -= measuredAcross;
     this.unfoldCountValue += 1;
     this.lastUnfoldValue = {
       shiftMs: Math.round((shift / this.sampleRate) * 1000),
       correctionBeforeMs: Math.round((correctionBefore / this.sampleRate) * 1000),
       captureLossMs: Math.round((this.captureLossSamples / this.sampleRate) * 1000),
+      calibrationMs: Math.round((measuredAcross / this.sampleRate) * 1000),
     };
   }
 }

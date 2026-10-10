@@ -1,4 +1,4 @@
-import type { MicTimelineFold, MixHealth } from './audio-session.js';
+import type { MicTimelineFold, MicTimelineUnfold, MixHealth } from './audio-session.js';
 import type { MicAudibilityMonitor } from './mic-audibility-monitor.js';
 import type { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import type { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
@@ -63,7 +63,7 @@ export type RemoteStatusFacts = {
     timelineFolds: number;
     lastTimelineFold: MicTimelineFold | null;
     timelineUnfolds: number;
-    lastTimelineUnfold: MicTimelineFold | null;
+    lastTimelineUnfold: MicTimelineUnfold | null;
     captureDelivery: ReturnType<MicCaptureDeliveryMonitor['status']>;
     uplinkBacklog: ReturnType<MicUplinkBacklog['status']>;
   };

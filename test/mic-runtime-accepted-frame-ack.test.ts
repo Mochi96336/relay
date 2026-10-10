@@ -192,6 +192,47 @@ test('receiver packet progress is distinct from AudioSession accepted-frame prog
   });
 });
 
+test('the ACK names the path Mic audio arrives on, not the sessions that are up', () => {
+  const tickets = new Set<string>();
+  const mic = new MicRuntime({
+    audioTransportConfig: DEFAULT_AUDIO_TRANSPORT_CONFIG,
+    firstFrameTimeoutMs: 3_000,
+    streamLiveMs: 1_000,
+    createDirectMediaTicket: () => 'ticket-1',
+    directMediaConnected: (ticket) => Boolean(ticket && tickets.has(ticket)),
+  });
+  const current = socket('alice');
+  mic.bindPublisher({
+    socket: current,
+    sampleRate: 48_000,
+    captureGeneration: 7,
+    audioPacketVersion: 2,
+    nowMs: 100,
+  });
+  tickets.add(mic.mediaTicket!);
+  const packet = (sequence: number) => encodeAudioPacket({
+    source: 'mic',
+    generation: 7,
+    sequence,
+    firstSampleIndex: sequence * 480,
+    pcm: Buffer.alloc(480 * 2),
+  });
+
+  // A phone that demoted WebTransport sends over WebSocket while Relay still
+  // holds the WebTransport session open.
+  mic.receivePublisher(current, packet(0), 120);
+  assert.equal(mic.noteUplinkHealth(current, health(7, 480), 130), true);
+  assert.equal(lastAck(current).pcm.mediaPath, 'websocket');
+
+  mic.receiveDirectMedia(mic.mediaTicket, packet(1), 140);
+  assert.equal(mic.noteUplinkHealth(current, health(7, 960), 150), true);
+  assert.equal(lastAck(current).pcm.mediaPath, 'webtransport');
+
+  // With no fresh packet, the connected path is all there is to go on.
+  assert.equal(mic.noteUplinkHealth(current, health(7, 1_440), 1_500), true);
+  assert.equal(lastAck(current).pcm.mediaPath, 'webtransport');
+});
+
 test('older v1 health without a request token still receives a compatible ACK', () => {
   const mic = new MicRuntime({
     audioTransportConfig: DEFAULT_AUDIO_TRANSPORT_CONFIG,

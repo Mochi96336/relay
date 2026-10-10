@@ -207,11 +207,63 @@ test('loss that falls again was not capture loss, and its fold is undone', () =>
     shiftMs: 400,
     correctionBeforeMs: Math.round((correctionBefore / RATE) * 1000),
     captureLossMs: 600,
+    calibrationMs: 0,
   });
 
   // Fallen back to nothing: what is left goes too, under the noise floor.
   subject.noteCaptureLoss(7, 0);
   assert.equal(subject.unfoldDue(true, 7, CAP), 28_800);
+});
+
+test('a calibration measured across a fold gives it up when it is undone, folds made since first', () => {
+  const { subject, shift } = foldedAfterLoss(1_000);
+  subject.noteCalibrationMeasured();
+  assert.equal(subject.unfoldMeasuredAcross(shift), shift, 'the calibration placed the voice by the folded timeline');
+
+  // Loss confirmed after the measurement is folded on top, then falls again.
+  subject.noteCaptureLoss(7, 1_600);
+  assert.equal(subject.foldDue(true, 7, subject.correctionSamples + 4_800), 28_800);
+  subject.rebase(28_800);
+  subject.folded(28_800, subject.correctionSamples + 28_800);
+  subject.noteCaptureLoss(7, 1_000);
+  assert.equal(subject.unfoldDue(true, 7, CAP), 28_800);
+  assert.equal(subject.unfoldMeasuredAcross(28_800), 0, 'the fold made since the measurement goes first');
+  subject.rebase(-28_800);
+  subject.unfolded(28_800, subject.correctionSamples - 28_800, 0);
+
+  subject.noteCaptureLoss(7, 0);
+  const due = subject.unfoldDue(true, 7, CAP);
+  assert.equal(due, shift);
+  assert.equal(subject.unfoldMeasuredAcross(due), shift);
+  const correctionBefore = subject.correctionSamples;
+  subject.rebase(-due);
+  subject.unfolded(due, correctionBefore, due);
+  assert.deepEqual(subject.lastUnfold, {
+    shiftMs: 1_000,
+    correctionBeforeMs: Math.round((correctionBefore / RATE) * 1000),
+    captureLossMs: 0,
+    calibrationMs: 1_000,
+  });
+  assert.equal(subject.timelineFoldedSamplesNow, 0);
+
+  // A fresh anchor starts over: nothing it folds was measured across.
+  subject.reset(7);
+  assert.equal(subject.unfoldMeasuredAcross(48_000), 0);
+});
+
+test('a calibration measured before a fold gives none of it up', () => {
+  const subject = correction();
+  subject.noteCalibrationMeasured();
+  let start = 100_000;
+  for (let index = 0; index < 60; index += 1, start += FRAME) subject.update(frame(subject, start, 4_800));
+  subject.update({ ...frame(subject, start, -100_000) });
+  subject.noteCaptureLoss(7, 1_000);
+  const shift = subject.foldDue(true, 7, CAP);
+  subject.rebase(shift);
+  subject.folded(shift, subject.correctionSamples + shift);
+  subject.noteCaptureLoss(7, 0);
+  assert.equal(subject.unfoldDue(true, 7, CAP), shift);
+  assert.equal(subject.unfoldMeasuredAcross(shift), 0);
 });
 
 test('an unfold never takes the correction past its bound, and never undoes more than was folded', () => {

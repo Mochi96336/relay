@@ -289,7 +289,7 @@ function clampCause(shortfall) {
   return null;
 }
 
-export function describeTiming({ product, readiness, source } = {}, t = english) {
+export function describeTiming({ product, readiness, source, timing, timeline } = {}, t = english) {
   const rows = [];
   const shortfall = source ? readAheadShortfall(source) : null;
 
@@ -322,8 +322,8 @@ export function describeTiming({ product, readiness, source } = {}, t = english)
         kindValue === `${kindKey}.value` ? t('diag.timing.method.measured') : kindValue,
         kindNote === kindKey ? t('diag.timing.method.other') : kindNote, 'ok'));
     } else {
-      rows.push(row('method', t('diag.timing.method'), t('diag.timing.method.estimate'),
-        t('diag.timing.method.estimateNote')));
+      rows.push(row('method', t('diag.timing.method'), t(timing?.sampleSongFallback?.active ? 'diag.timing.shadow' : 'diag.timing.method.estimate'),
+        t(timing?.sampleSongFallback?.active ? 'diag.timing.shadowActive' : 'diag.timing.method.estimateNote')));
     }
 
     const applied = finite(source.appliedMicAdvanceMs);
@@ -381,6 +381,44 @@ export function describeTiming({ product, readiness, source } = {}, t = english)
         offset === null ? '' : t('diag.timing.robotDelta.freshNote', { ms: Math.round(offset) }), 'ok'));
     } else {
       rows.push(row('robotDelta', label, t('diag.timing.robotDelta.stale'), t('diag.timing.robotDelta.staleNote'), 'warn'));
+    }
+  }
+  if (timeline) {
+    const connected = timeline.connected === true;
+    const seconds = (value) => finite(value) === null ? '—' : `${Number(value).toFixed(3)} s`;
+    rows.push(row('youtubePhone', t('diag.timing.ytPhone'), connected ? seconds(timeline.youtubeTime) : '—', t('diag.timing.ytPhoneNote')));
+    rows.push(row('youtubeServer', t('diag.timing.ytServer'), connected ? seconds(timeline.serverTime) : '—', t('diag.timing.ytServerNote')));
+    if (source?.robotRoute || timing?.robotRoute) {
+      const evidence = timing?.robotOffsetTimingEvidence;
+      const fresh = connected && timing?.robotDeltaFresh === true;
+      rows.push(row('youtubeRobot', t('diag.timing.ytRobot'), fresh ? seconds(evidence?.playerSeconds) : '—',
+        fresh ? t('diag.timing.ytRobotNote') : t('diag.timing.ytStale'), fresh ? 'neutral' : 'warn'));
+    }
+    const stateKeys = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
+    const stateName = stateKeys[timeline.state];
+    rows.push(row('youtubeRate', t('diag.timing.ytRate'),
+      `${stateName ? t(`diag.timing.ytState.${stateName}`) : '—'} · ${finite(timeline.playbackRate) === null ? '—' : `${timeline.playbackRate}×`}`,
+      t('diag.timing.ytRateNote', { state: timeline.state ?? '—' })));
+  }
+  if (timing) {
+    const value = (v) => finite(v) === null ? '—' : signedMs(Number(v));
+    rows.push(row('mixerTarget', t('diag.timing.mixerTarget'), value(timing.calibratedMicLagTargetMs), t('diag.timing.mixerTargetNote')));
+    if (timing.activeCalibrationKind === 'content') {
+      rows.push(row('contentTarget', t('diag.timing.contentTarget'), value(timing.desiredCalibratedMicLagMs), t('diag.timing.contentTargetNote')));
+    }
+    const boot = timing.bootCalibration;
+    if (boot) {
+      rows.push(row('bootStored', t('diag.timing.bootStored'), value(boot.advanceMs), t('diag.timing.bootStoredNote')));
+      const rate = finite(timeline?.playbackRate);
+      const delta = finite(timing.robotPlayerOffsetMs);
+      const mic = finite(boot.micLatencyMs), backing = finite(boot.backingLatencyMs);
+      rows.push(row('bootLive', t('diag.timing.bootLive'), timing.robotDeltaFresh && rate > 0 && delta !== null && mic !== null && backing !== null
+        ? value(mic - backing + delta / rate) : '—', t('diag.timing.bootLiveNote')));
+    }
+    const fallback = timing.sampleSongFallback;
+    if (fallback) {
+      rows.push(row('shadow', t('diag.timing.shadow'), value(fallback.candidateMs),
+        t(fallback.active ? 'diag.timing.shadowActive' : 'diag.timing.shadowStandby')));
     }
   }
   return rows;

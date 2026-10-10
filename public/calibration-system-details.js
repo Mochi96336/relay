@@ -34,6 +34,7 @@ function initialize() {
   if (Object.values(nodes).some((node) => node === null)) return;
   initialized = true;
   let latestTiming = null;
+  let latestTimeline = null;
 
   let socket = null;
   let reconnectTimer = null;
@@ -84,7 +85,7 @@ function initialize() {
     latestTiming = timing;
 
     const applied = finite(timing.appliedMicAdvanceMs);
-    const requested = finite(timing.requestedMicAdvanceMs);
+    const requested = finite(timing.calibratedMicLagTargetMs) ?? finite(timing.requestedMicAdvanceMs);
     nodes.applied.textContent = applied === null && requested === null
       ? '—'
       : `${ms(applied)} / ${ms(requested)}`;
@@ -134,7 +135,10 @@ function initialize() {
       ? `${named('probe', timing.probePhase)} · ${named('kind', timing.calibrationKind)}`
       : t(boot ? 'diag.cal.pathComplete' : 'diag.cal.pathIdle');
 
-    const correlations = timing.probeCorrelation;
+    const completed = timing.completedBootProbeTimingEvidence;
+    const correlations = completed
+      ? { mic: completed.mic?.correlation, backing: completed.backing?.correlation }
+      : timing.probeCorrelation;
     nodes.pathCorrelations.textContent = correlations && typeof correlations === 'object'
       ? micSong(confidence(correlations.mic), confidence(correlations.backing))
       : '—';
@@ -154,14 +158,16 @@ function initialize() {
     }
 
     const liveDelta = finite(timing.robotPlayerOffsetMs);
-    nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null
-      ? t('diag.cal.effectiveValue', { ms: ms(pathDifference + liveDelta), confidence: confidence(boot.confidence) })
+    const rate = finite(latestTimeline?.playbackRate);
+    nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null && rate > 0 && timing.robotDeltaFresh
+      ? t('diag.cal.effectiveValue', { ms: ms(pathDifference + liveDelta / rate), confidence: confidence(boot.confidence) })
       : boot ? t('diag.cal.pathReady') : '—';
   }
 
   function request() {
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: 'timing-calibration-status-request' }));
+      socket.send(JSON.stringify({ type: 'youtube-timeline-request' }));
     }
   }
 
@@ -200,6 +206,7 @@ function initialize() {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
       if (message?.type === 'timing-calibration-status') render(message);
+      if (message?.type === 'youtube-timeline-status') { latestTimeline = message; render(latestTiming); }
     });
     next.addEventListener('close', () => {
       if (socket !== next) return;

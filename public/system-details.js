@@ -390,7 +390,7 @@ if (
     const timeline = snapshots.get('youtube-timeline-status');
     const playbackClient = snapshots.get('playback-client');
     const playbackClientLastRejection = snapshots.get('playback-client-last-rejection');
-    const facts = { product, readiness, source, statusz: latestStatusz };
+    const facts = { product, readiness, source, timing, timeline, statusz: latestStatusz };
 
     renderLedger('diag-overview-ledger', describeOverview(facts, t));
     renderLedger('diag-session-ledger', describeSession(facts, t));

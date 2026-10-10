@@ -404,3 +404,17 @@ it('preserves optional sender monotonic sample timestamps and rejects malformed 
     assert.equal(parseAudioUplinkHealth({ ...validHealth(), capturedAtPerformanceMs }), null);
   }
 });
+
+
+it('accepts staged capture clocks without accepting arbitrary or invalid clock data', () => {
+  const captureClock = { contextSeconds: 12.2, originContextSeconds: 2,
+    lastChunkContextSeconds: 12.18, lastChunkSampleIndex: 480000,
+    lastChunkObservedAtMs: 14000, sampleRate: 48000 };
+  assert.deepEqual(parseAudioUplinkHealth({ ...validHealth(), captureClock })?.captureClock, captureClock);
+  assert.equal(parseAudioUplinkHealth(validHealth())?.captureClock, undefined);
+  for (const bad of [NaN, -1, '12', Infinity]) {
+    assert.equal(parseAudioUplinkHealth({ ...validHealth(), captureClock: { ...captureClock, contextSeconds: bad } }), null);
+  }
+  const startup = Object.fromEntries(Object.keys(captureClock).map(key => [key, null]));
+  assert.deepEqual(parseAudioUplinkHealth({ ...validHealth(), captureClock: startup })?.captureClock, startup);
+});

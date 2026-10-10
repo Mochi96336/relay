@@ -88,6 +88,8 @@ const timer = setInterval(async () => {
       micCaptureDelivery: status.audio?.micCaptureDelivery ?? null,
       micUplinkBacklog: status.audio?.micUplinkBacklog ?? null,
       captureSenderClockMs: status.audio?.captureAndSender?.capturedAtPerformanceMs ?? null,
+      capturedSamples: status.audio?.captureAndSender?.capturedSamples ?? null,
+      captureClock: status.audio?.captureAndSender?.captureClock ?? null,
       phaseCorrections: timeline?.phaseCorrections ?? null,
       lastPhaseCorrectionMs: timeline?.lastPhaseCorrectionMs ?? null,
       backingFrameAgeMs: status.source?.backingFrameAgeMs ?? null,

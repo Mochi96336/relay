@@ -80,6 +80,10 @@ export type AudioUplinkHealth = {
   healthRequestId?: number;
   /** Sender monotonic time paired with capturedSamples, independent of network delay. */
   capturedAtPerformanceMs?: number;
+  /** Optional capture-stage clocks; observation only, never calibration authority. */
+  captureClock?: Partial<Record<'contextSeconds' | 'originContextSeconds'
+    | 'lastChunkContextSeconds' | 'lastChunkSampleIndex'
+    | 'lastChunkObservedAtMs' | 'sampleRate', number | null>>;
   capturedSamples: number;
   inputGapSamples: number;
   /** True while the capture worklet has positively identified a sustained missing input channel. */
@@ -286,6 +290,18 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const capturedAtPerformanceMs = payload.capturedAtPerformanceMs;
   if (capturedAtPerformanceMs !== undefined && (typeof capturedAtPerformanceMs !== 'number'
     || !Number.isFinite(capturedAtPerformanceMs) || capturedAtPerformanceMs < 0)) return null;
+  let captureClock: AudioUplinkHealth['captureClock'];
+  if (payload.captureClock !== undefined) {
+    const raw = record(payload.captureClock);
+    if (!raw) return null;
+    captureClock = {};
+    for (const key of ['contextSeconds', 'originContextSeconds', 'lastChunkContextSeconds',
+      'lastChunkSampleIndex', 'lastChunkObservedAtMs', 'sampleRate'] as const) {
+      const n = raw[key];
+      if (n !== null && (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1e12)) return null;
+      captureClock[key] = n;
+    }
+  }
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   // Added after health v1 shipped. Missing means an older page that cannot
@@ -420,6 +436,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
     ...(capturedAtPerformanceMs === undefined ? {} : { capturedAtPerformanceMs }),
+    ...(captureClock === undefined ? {} : { captureClock }),
     inputGapSamples,
     inputGapActive,
     inputMuted,

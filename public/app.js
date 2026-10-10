@@ -1,3 +1,4 @@
+import { CaptureClockRecovery } from './capture-clock-recovery.js';
 import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
@@ -78,6 +79,7 @@ let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
 let activeCaptureGraph = null;
+const captureClockRecovery = new CaptureClockRecovery();
 let captureGraphEpoch = 0;
 let captureGraphRebuildPromise = null;
 let captureWatchdogTimer = null;
@@ -260,6 +262,9 @@ function startCaptureWatchdog(
     const decision = micCaptureRecovery.observe(captureSnapshot());
     if (decision.resume) resumePublisherAudioContext();
     if (decision.rebuild) void rebuildPublisherCaptureGraph('pcm-stall');
+    if (!captureGraphRebuildPromise && captureClockRecovery.observe(captureSnapshot())) {
+      void rebuildPublisherAudioContext();
+    }
   }, MIC_CAPTURE_WATCHDOG_INTERVAL_MS);
 }
 
@@ -1336,6 +1341,73 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   });
 }
 
+// A Worklet replacement preserves the old context clock. Sustained clock loss
+// needs a new context and a new capture generation; keep the existing track.
+function rebuildPublisherAudioContext() {
+  if (captureGraphRebuildPromise) return captureGraphRebuildPromise;
+  const sessionEpoch = publisherSessionEpoch;
+  const expectedGeneration = captureGeneration >>> 0;
+  const oldContext = audioContext;
+  const stream = mediaStream;
+  const graph = activeCaptureGraph;
+  let replacement = null;
+  let timeout;
+  const current = () => isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    && audioContext === oldContext && mediaStream === stream && activeCaptureGraph === graph;
+  const promise = Promise.resolve().then(async () => {
+    if (!current()) return false;
+    replacement = new AudioContext({ latencyHint: 'interactive' });
+    const prepared = replacement;
+    await Promise.race([
+      (async () => {
+        await prepared.audioWorklet.addModule('/capture-worklet.js');
+        if (!current()) return;
+        await prepared.resume();
+      })(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('AudioContext recovery timed out')), 3000);
+      }),
+    ]);
+    if (!current()) return false;
+    if (prepared.state !== 'running') throw new Error('Replacement AudioContext is not running');
+    disposeCaptureGraph(graph);
+    activeCaptureGraph = null;
+    activeNode = null;
+    audioContext = prepared;
+    replacement = null;
+    // The old context's state handler no longer owns the current publisher.
+    void oldContext?.close().catch(() => {});
+    prepared.addEventListener('statechange', () => {
+      if (!publisherActive || audioContext !== prepared) return;
+      if (prepared.state === 'closed') {
+        void finishMicrophoneSession('context-closed', { releaseMic: false }).catch(console.error);
+      } else if (shouldRequestAudioResume(prepared.state)) {
+        beginCaptureRecovery(`context-${prepared.state}`);
+      }
+    });
+    const generation = advanceCaptureGeneration('context-clock-underfed');
+    installCaptureGraph(sessionEpoch, stream, prepared);
+    micCaptureRecovery.noteGraphRebuilt(captureSnapshot());
+    restartPublisherConnectionForGeneration(sessionEpoch, generation);
+    startCaptureWatchdog(sessionEpoch, generation);
+    console.warn('Microphone AudioContext replaced after sustained clock loss');
+    return true;
+  }).catch((error) => {
+    console.warn('Microphone AudioContext recovery failed', error);
+    // A failure from a retired session must not stop a newer Mic session.
+    if (isCurrentPublisherSession(sessionEpoch)) {
+      void finishMicrophoneSession('context-rebuild-failed', { releaseMic: false }).catch(console.error);
+    }
+    return false;
+  }).finally(() => {
+    clearTimeout(timeout);
+    if (replacement) void replacement.close().catch(() => {});
+    if (captureGraphRebuildPromise === promise) captureGraphRebuildPromise = null;
+  });
+  captureGraphRebuildPromise = promise;
+  return promise;
+}
+
 function rebuildPublisherCaptureGraph(reason) {
   if (captureGraphRebuildPromise) return captureGraphRebuildPromise;
 
@@ -1396,6 +1468,7 @@ async function stop({ releaseMic = true } = {}) {
   stopAudioUplinkHealthReporting();
   stopCaptureWatchdog();
   micCaptureRecovery.stop();
+  captureClockRecovery.reset();
 
   const closingSocket = socket;
   const closingStream = mediaStream;
@@ -1557,7 +1630,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     // Rebuilding a stuck worklet must not make later mute/unmute/ended events stale.
     const captureIsCurrent = () => isCurrentPublisherSession(sessionEpoch)
       && mediaStream === captureStream
-      && audioContext === captureContext;
+      && audioContext !== null;
     const [track] = captureStream.getAudioTracks();
     let captureConfigurationRefreshPromise = null;
     const refreshCaptureConfiguration = () => {
@@ -1609,6 +1682,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       }).catch(console.error);
     });
 
+    captureClockRecovery.reset();
     micCaptureRecovery.start(captureSnapshot(), 'startup');
     installCaptureGraph(sessionEpoch, captureStream, captureContext);
     startCaptureWatchdog(sessionEpoch, generation);

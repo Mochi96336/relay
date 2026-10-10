@@ -372,3 +372,17 @@ tracker, not an exact decomposition of the two raw anchor pairs. The existing
 content validator's window results are preserved, including their age and
 outcome; an old result retained after an invalid window is not fresh proof.
 No raw PCM is exported by this tool.
+
+For a run where listening confirms Content alignment, compare the same stable
+rows against that Content live advance with
+`node scripts/sample-song-shadow-report.mjs run1.jsonl run2.jsonl > comparison.json`.
+The offline report requires complete, nonprovisional Content and a matching
+stable/drift-confirmed validation baseline no more than 60 seconds old. It
+excludes recording/finalization, new gaps/folds, frontier correction, buffer
+clamps and read-head movement, then waits five seconds for settling. All three
+estimators use the same paired observations. It reports signed/absolute median,
+absolute P95, worst deviation and the fraction within 25 ms. This threshold is
+reported for comparison; it does not change runtime acceptance.
+
+Capture/song counts are separate from row counts. Thirty-second block summaries
+show persistence over time and are not claimed to be independent trials.

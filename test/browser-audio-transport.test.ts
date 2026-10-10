@@ -694,7 +694,7 @@ describe('browser AudioTransport', () => {
   });
 });
 
-it('WebSocket queue age bounds small stalled queues while allowing drain progress', async () => {
+it('WebSocket queue age bounds old bytes even while the queue slowly drains', async () => {
   const { WebSocketAudioTransport } = await import(moduleUrl.href);
   let now = 0;
   const transport = new WebSocketAudioTransport({ nowMs: () => now });
@@ -705,7 +705,7 @@ it('WebSocket queue age bounds small stalled queues while allowing drain progres
   now = 1001;
   assert.equal(transport.state().queueStalled, true);
   socket.bufferedAmount = 50;
-  assert.equal(transport.state().ready, true);
+  assert.equal(transport.state().queueStalled, true, 'partial drain does not renew the remaining bytes');
   socket.bufferedAmount = 0;
   now = 5000;
   assert.equal(transport.state().ready, true);

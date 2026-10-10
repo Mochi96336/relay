@@ -180,8 +180,8 @@ export class WebSocketAudioTransport extends AudioTransport {
     this.maxBufferedBytes = Math.min(maxBufferedBytes, realtimeBufferedBytes);
     this.socket = null;
     this.nowMs = nowMs;
-    this.lastBufferedAmount = 0;
-    this.queueProgressAt = null;
+    this.queuedWrites = [];
+    this.queuedBytes = 0;
   }
 
   setRealtimePcmSampleRate(sampleRate) {
@@ -194,8 +194,8 @@ export class WebSocketAudioTransport extends AudioTransport {
   bind(socket, { sampleRate } = {}) {
     if (sampleRate !== undefined) this.setRealtimePcmSampleRate(sampleRate);
     this.socket = socket;
-    this.lastBufferedAmount = 0;
-    this.queueProgressAt = null;
+    this.queuedWrites = [];
+    this.queuedBytes = 0;
   }
 
   unbind(socket = this.socket) {
@@ -216,12 +216,25 @@ export class WebSocketAudioTransport extends AudioTransport {
 
     const bufferedAmount = Number(socket.bufferedAmount) || 0;
     const now = Number(this.nowMs());
-    if (bufferedAmount === 0) this.queueProgressAt = null;
-    else if (this.queueProgressAt === null || bufferedAmount < this.lastBufferedAmount) {
-      this.queueProgressAt = now;
+    // bufferedAmount is bytes still owned by the browser. Reconcile it with
+    // accepted writes in FIFO order so slow drain cannot keep old bytes alive
+    // forever just by making occasional progress. Include untracked control
+    // writes conservatively from the first observation that can see them.
+    let drained = Math.max(0, this.queuedBytes - bufferedAmount);
+    while (drained > 0 && this.queuedWrites.length) {
+      const entry = this.queuedWrites[0];
+      const amount = Math.min(drained, entry.bytes);
+      entry.bytes -= amount;
+      drained -= amount;
+      this.queuedBytes -= amount;
+      if (entry.bytes === 0) this.queuedWrites.shift();
     }
-    this.lastBufferedAmount = bufferedAmount;
-    const queueStalled = this.queueProgressAt !== null && now - this.queueProgressAt > 1000;
+    if (bufferedAmount > this.queuedBytes) {
+      this.queuedWrites.push({ bytes: bufferedAmount - this.queuedBytes, atMs: now });
+      this.queuedBytes = bufferedAmount;
+    }
+    const queueStalled = this.queuedWrites.length > 0
+      && now - this.queuedWrites[0].atMs > 1000;
     if (queueStalled || bufferedAmount >= this.maxBufferedBytes) {
       return {
         ready: false,
@@ -258,6 +271,10 @@ export class WebSocketAudioTransport extends AudioTransport {
 
     try {
       this.socket.send(packet);
+      if (packetBytes > 0) {
+        this.queuedWrites.push({ bytes: packetBytes, atMs: Number(this.nowMs()) });
+        this.queuedBytes += packetBytes;
+      }
       return { ...state, sent: true };
     } catch {
       return {

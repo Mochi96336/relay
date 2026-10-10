@@ -452,8 +452,8 @@ captures are excluded. Legacy ACKs without coordinates retain coverage recovery.
 This is an operational late-audio threshold, separate from the Robot's 450 ms
 media seek threshold; it does not alter acoustic calibration or sample mapping.
 
-WebSocket audio also checks for a nonempty browser send queue making no drain
-progress for more than one second. It rejects more audio and, for a recent
+WebSocket audio also checks for the oldest bytes remaining in the browser send queue
+for more than one second (including while the queue slowly drains). It rejects more audio and, for a recent
 eligible capture, requests the same bounded socket replacement without waiting
 for a health ACK. The byte budget remains in force. This watchdog does not claim
 to observe or cancel packets already handed to TCP or the network, and it does

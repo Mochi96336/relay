@@ -386,3 +386,14 @@ reported for comparison; it does not change runtime acceptance.
 
 Capture/song counts are separate from row counts. Thirty-second block summaries
 show persistence over time and are not claimed to be independent trials.
+
+Timing diagnostics also expose `desiredCalibratedMicLagMs` (live-coordinate
+calibration target before jitter hold, Take freeze and slew) and
+`calibratedMicLagTargetMs` (the mixer's slew target). The collector saves the
+Content target as `contentLiveTargetMs`, which the offline comparison prefers.
+A Content authority label alone does not prove the read head moved: the Robot
+jitter policy can retain the prior Boot advance. For old logs without a live
+Content target, the report conservatively excludes rows whose applied advance
+still exactly equals the stored Boot result, rather than comparing Boot with
+itself. An explicitly unavailable Content target is never replaced with the
+applied value.

@@ -44,6 +44,7 @@ test('does not call boot periods, stale validation or frozen recording a Content
     (r: any) => { r.validation.baselineLagMs = -100; },
     (r: any) => { r.takeLifecycle = 'recording'; },
     (r: any) => { r.micArriving = false; },
+    (r: any) => { r.contentLiveTargetMs = null; },
   ]) assert.equal(analyze(patch).segments[0].matchedSamples, 0);
 });
 test('segments capture resets and excludes slewed read heads until settled', () => {
@@ -54,4 +55,16 @@ test('segments capture resets and excludes slewed read heads until settled', () 
   assert.equal(report.segments.length, 2);
   assert.equal(report.independentTrials.captures, 2);
   assert.ok(report.segments[0].excluded.settling >= 15);
+});
+
+
+test('does not compare Boot with itself when a Content label inherits its read head', () => {
+  const ambiguous = analyze(r => { r.bootStoredMs = r.appliedMs; });
+  assert.equal(ambiguous.segments[0].matchedSamples, 0);
+  assert.equal(ambiguous.segments[0].ambiguousInheritedBootSamples, 40);
+  const explicit = analyze(r => { r.bootStoredMs = r.appliedMs; r.contentLiveTargetMs = -30; });
+  assert.equal(explicit.segments[0].matchedSamples, 35);
+  assert.equal(explicit.segments[0].errorsVsContent.shadow.signedMedianMs, 5);
+  assert.equal(explicit.segments[0].errorsVsContent.boot.signedMedianMs, -70);
+  assert.equal(explicit.segments[0].targetReferenceSamples, 35);
 });

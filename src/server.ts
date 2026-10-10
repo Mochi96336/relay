@@ -1731,6 +1731,9 @@ function timingCalibrationStatusPayload() {
     sessionGeneration: session.generation,
     ...status,
     activeMicLagMs: alignment.calibratedMicLagMs,
+    // Same live coordinates as the mixer, before jitter hold / Take freeze / slew.
+    desiredCalibratedMicLagMs: desiredCalibratedMicLagMs(nowMs),
+    calibratedMicLagTargetMs: session.calibratedMicLagTarget,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
     calibrationStale: calibrationIsStale(),
     calibrationKind: timingRuntime.calibrationKind,

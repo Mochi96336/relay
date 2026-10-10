@@ -90,6 +90,9 @@ const timer = setInterval(async () => {
       shadowActive: timing?.sampleSongFallback?.active ?? false,
       rttHalfMs: fresh ? timeline.transportEstimateMs ?? null : null,
       appliedMs: fresh ? timing.appliedMicAdvanceMs ?? null : null,
+      contentLiveTargetMs: fresh && timing.activeCalibrationKind === 'content'
+        ? timing.desiredCalibratedMicLagMs ?? null : null,
+      calibrationSlewTargetMs: timing?.calibratedMicLagTargetMs ?? null,
       requestedMs: fresh ? timing.requestedMicAdvanceMs ?? null : null,
       referenceMeasurementMs: timing?.micLagMs ?? null, confidence: timing?.confidence ?? null,
       calibrationState: timing?.state ?? null, calibrationStale: timing?.calibrationStale ?? null,

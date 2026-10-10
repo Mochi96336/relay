@@ -23,9 +23,16 @@ function identity(r) {
   return JSON.stringify([r.sessionGeneration, r.micGeneration, r.videoId, r.playbackRate,
     r.calibrationKind, r.referenceMeasurementMs, r.calibrationState, r.provisional, r.takeLifecycle ?? 'unknown']);
 }
+function contentReference(r) {
+  if (Object.hasOwn(r, 'contentLiveTargetMs')) return Number.isFinite(r.contentLiveTargetMs) ? r.contentLiveTargetMs : null;
+  // Old telemetry cannot distinguish a Content target from an inherited Boot read head.
+  if (Number.isFinite(r.bootStoredMs) && Math.abs(r.appliedMs - r.bootStoredMs) < .001) return null;
+  return Number.isFinite(r.appliedMs) ? r.appliedMs : null;
+}
 function eligible(r) {
   return r.fresh && r.playing && r.calibrationKind === 'content' && r.calibrationState === 'complete'
     && r.calibrationStale === false && r.provisional === false
+    && contentReference(r) !== null
     && ['stable', 'drift-confirmed'].includes(r.validation?.lastOutcome)
     && Number.isFinite(r.validation?.lastValidationAgeMs) && r.validation.lastValidationAgeMs <= 60000
     && r.validation.baselineLagMs === r.referenceMeasurementMs
@@ -73,22 +80,25 @@ for (const group of segments) {
     block.push(r); blocks.set(bucket, block);
   }
   const summarize = rows => ({
-    shadow: errorStats(rows.map(r => r.shadowMs - r.appliedMs)),
-    boot: errorStats(rows.map(r => r.liveBootEstimateMs - r.appliedMs)),
-    rtt: errorStats(rows.map(r => r.rttHalfMs - r.appliedMs)),
+    shadow: errorStats(rows.map(r => r.shadowMs - contentReference(r))),
+    boot: errorStats(rows.map(r => r.liveBootEstimateMs - contentReference(r))),
+    rtt: errorStats(rows.map(r => r.rttHalfMs - contentReference(r))),
   });
   result.push({ source: group.source, identity: JSON.parse(group.key), from: group.rows[0].at, to: group.rows.at(-1).at,
     samples: group.rows.length, eligibleStableSamples: accepted.length, shadowAvailable: accepted.filter(r => Number.isFinite(r.shadowMs)).length,
     matchedSamples: matched.length, excluded, contentAppliedMs: { min: quantile(accepted.map(r => r.appliedMs), 0),
       median: quantile(accepted.map(r => r.appliedMs), .5), max: quantile(accepted.map(r => r.appliedMs), 1) },
+    contentReferenceMs: { min: quantile(accepted.map(contentReference), 0), median: quantile(accepted.map(contentReference), .5), max: quantile(accepted.map(contentReference), 1) },
+    targetReferenceSamples: accepted.filter(r => Number.isFinite(r.contentLiveTargetMs)).length,
+    ambiguousInheritedBootSamples: group.rows.filter(r => r.calibrationKind === 'content' && contentReference(r) === null).length,
     errorsVsContent: summarize(matched), blocks30s: [...blocks.values()].filter(b => b.length >= 15).map(b => ({
       from: b[0].at, to: b.at(-1).at, samples: b.length, ...summarize(b),
     })),
   });
 }
 const eligibleRows = result.filter(s => s.matchedSamples >= 15);
-console.log(JSON.stringify({ reference: 'Content live advance, confirmed by user listening',
-  filters: 'complete nonprovisional Content with matching baseline and stable/drift-confirmed validation <=60s old; fresh playing streams; no frontier/buffer clamp; idle Take; no new gap/fold; 5s settled read head at <=1ms/s',
+console.log(JSON.stringify({ reference: 'Content live-coordinate target when available; otherwise settled audible Content advance excluding ambiguous inherited Boot values',
+  filters: 'Content live target or unambiguous audible Content; complete nonprovisional Content with matching baseline and stable/drift-confirmed validation <=60s old; fresh playing streams; no frontier/buffer clamp; idle Take; no new gap/fold; 5s settled read head at <=1ms/s',
   independentTrials: { captures: new Set(eligibleRows.map(s => `${s.identity[0]}:${s.identity[1]}`)).size,
     songs: new Set(eligibleRows.map(s => s.identity[2])).size,
     note: 'Samples and 30s blocks are temporally correlated; no independence or significance claim.' },

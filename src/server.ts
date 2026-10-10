@@ -1,3 +1,4 @@
+import { sanitizeProbeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { SampleSongFallback } from './sample-song-fallback.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -1720,6 +1721,9 @@ function takeBlocksCalibration() {
   return takeController.lifecycle === 'recording' || takeController.lifecycle === 'finalizing';
 }
 
+const bootProbeTimingEvidence: Partial<Record<ProbeTarget, Record<string, unknown>>> = {};
+let robotOffsetTimingEvidence: Record<string, number | null> | null = null;
+
 function timingCalibrationStatusPayload() {
   const alignment = session.alignment;
   const status = calibration.status();
@@ -1755,6 +1759,8 @@ function timingCalibrationStatusPayload() {
     probeMaxAttempts: probe.maxAttempts,
     probeError: probe.error,
     bootCalibration: bootProbeRuntime.calibrationResult,
+    bootProbeTimingEvidence,
+    robotOffsetTimingEvidence,
     robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs) : null,
     automatic: timingRuntime.automatic,
     autoCalibrate: AUTO_CALIBRATE,
@@ -2623,6 +2629,7 @@ function sendProbeRequest(target: ProbeTarget, nowMs: number) {
     generation: probeGeneration(target),
   };
   if (!bootProbeRuntime.beginRequest(request)) return;
+  delete bootProbeTimingEvidence[target];
 
   if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${requestId} generation=${request.generation}`);
 
@@ -2718,10 +2725,16 @@ function acceptCurrentProbeClientResult(
   return pending;
 }
 
-function handleProbeReply(reply: { requestId: unknown; generation: unknown }, nowMs: number) {
+function handleProbeReply(reply: { requestId: unknown; generation: unknown; timingDiagnostics?: unknown }, nowMs: number) {
   const pending = acceptCurrentProbeClientResult(reply, { logCaptureGenerationMismatch: true });
   if (!pending) return;
 
+  bootProbeTimingEvidence[pending.target] = {
+    requestId: pending.requestId, sessionGeneration: pending.sessionGeneration,
+    captureGeneration: pending.generation, serverReceivedAtMs: nowMs,
+    roundTripMs: nowMs - pending.serverSentAtMs,
+    client: sanitizeProbeTimingDiagnostics(reply.timingDiagnostics),
+  };
   const oneWayMs = (nowMs - pending.serverSentAtMs) / 2;
   const targetSample = Math.round(session.sessionSampleAt(pending.serverSentAtMs + oneWayMs + PROBE_LEAD_MS));
   const marginSamples = Math.round((MIX_SAMPLE_RATE * PROBE_SEARCH_MARGIN_MS) / 1000);
@@ -2866,6 +2879,12 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   }
 
   const leg = { targetSample: analysis.targetSample, actualSample, correlation };
+  const evidence = bootProbeTimingEvidence[analysis.target];
+  if (evidence && evidence.sessionGeneration === analysis.sessionGeneration
+    && evidence.captureGeneration === analysis.generation) {
+    Object.assign(evidence, { targetSample: analysis.targetSample, actualSample,
+      latencyMs, correlation, serverAnalyzedAtMs: nowMs });
+  }
 
   if (analysis.target === 'mic') {
     bootProbeRuntime.setMicLeg({
@@ -3803,6 +3822,14 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
       });
       return;
     }
+    const diagnostic = payload.timingDiagnostics as Record<string, unknown> | undefined;
+    robotOffsetTimingEvidence = { serverReceivedAtMs: nowMs, sessionGeneration: session.generation };
+    for (const key of ['playerSeconds', 'targetSeconds', 'youtubeSeconds',
+      'timelineDifferenceMs', 'timelineAgeMs', 'transportEstimateMs']) {
+      const value = diagnostic?.[key];
+      robotOffsetTimingEvidence[key] = typeof value === 'number' && Number.isFinite(value)
+        && Math.abs(value) <= 1e12 ? value : null;
+    }
     robotPlayerOffset.record(offsetMs, nowMs);
     const mapped = robotContentTimeline.notePlayerOffset(
       robotPlayerOffset.offsetMs(nowMs) ?? offsetMs,
@@ -3820,7 +3847,8 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     if (target === 'mic' ? fromPublisher : fromActiveRobot) {
       const nowMs = performance.now();
       if (payload.type === 'calibration-probe-played') {
-        handleProbeReply({ requestId: payload.requestId, generation: payload.generation }, nowMs);
+        handleProbeReply({ requestId: payload.requestId, generation: payload.generation,
+          timingDiagnostics: payload.timingDiagnostics }, nowMs);
       } else {
         handleProbeFailure(
           { requestId: payload.requestId, generation: payload.generation, reason: payload.reason },

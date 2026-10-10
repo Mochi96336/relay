@@ -102,6 +102,11 @@ const timer = setInterval(async () => {
       provisional: timing?.provisional ?? null,
       bootStoredMs: boot?.advanceMs ?? null, bootMicMs: boot?.micLatencyMs ?? null, bootBackingMs: boot?.backingLatencyMs ?? null,
       robotDeltaMs: timing?.robotPlayerOffsetMs ?? null,
+      bootProbeTimingEvidence: timing?.bootProbeTimingEvidence ?? null,
+      robotOffsetTimingEvidence: timing?.robotOffsetTimingEvidence ?? null,
+      timelineServerSeconds: timeline?.serverTime ?? null,
+      timelineYoutubeSeconds: timeline?.youtubeTime ?? null,
+      timelineDifferenceMs: timeline?.differenceMs ?? null,
       liveBootEstimateMs: fresh && boot && Number.isFinite(timing.robotPlayerOffsetMs) && rate > 0
         ? boot.micLatencyMs - boot.backingLatencyMs + timing.robotPlayerOffsetMs / rate : null,
       validation: timing?.validation ?? null,

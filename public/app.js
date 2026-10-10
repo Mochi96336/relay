@@ -1,3 +1,4 @@
+import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
@@ -894,6 +895,7 @@ function retireCalibrationProbePlayback() {
  * measured.
  */
 async function playCalibrationProbe(requestId, leadMs) {
+  const receivedAtMs = performance.now();
   const context = audioContext;
   const sessionEpoch = publisherSessionEpoch;
   const expectedGeneration = captureGeneration >>> 0;
@@ -975,6 +977,7 @@ async function playCalibrationProbe(requestId, leadMs) {
       // The same truncation framePcm applies. The server compares this against
       // the generation it read off a PCM frame header, which is a uint32.
       generation: expectedGeneration,
+      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime),
     });
     if (!result.sent) {
       retireCalibrationProbePlayback();

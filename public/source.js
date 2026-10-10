@@ -1,3 +1,4 @@
+import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { wsUrl } from './ws-url.js';
 
 const armButton = document.querySelector('#arm-source');
@@ -252,6 +253,7 @@ function probeContext() {
  * Nothing here is audible to anyone. The sink has no speaker behind it.
  */
 async function playBackingProbe(requestId, leadMs) {
+  const receivedAtMs = performance.now();
   if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
   try {
     const context = probeContext();
@@ -285,7 +287,8 @@ async function playBackingProbe(requestId, leadMs) {
     // this browser side effect even while the old resume promise is unresolved.
     if (activeBackingProbeRequestId !== requestId) return;
     activeBackingProbeRequestId = null;
-    send({ type: 'calibration-probe-played', target: 'backing', requestId });
+    send({ type: 'calibration-probe-played', target: 'backing', requestId,
+      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime) });
   } catch (error) {
     console.warn('backing probe failed', error);
     if (activeBackingProbeRequestId !== requestId) return;
@@ -542,6 +545,9 @@ function applyTimeline() {
     ) {
       offsetReportedSinceSeek = true;
       send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000,
+        timingDiagnostics: { playerSeconds: current, targetSeconds: target,
+          youtubeSeconds: timeline.youtubeTime, timelineDifferenceMs: timeline.differenceMs,
+          timelineAgeMs: timeline.ageMs, transportEstimateMs: timeline.transportEstimateMs },
         songObservation: { videoId: loadedVideoId, mediaSeconds: player.getCurrentTime(),
           playbackRate: player.getPlaybackRate(), state: player.getPlayerState(), observedAtUnixMs: Date.now() },
       });

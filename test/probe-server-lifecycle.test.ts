@@ -71,6 +71,28 @@ async function waitForProbeCount(client: RelayClient, target: 'mic' | 'backing',
   throw new Error(`Timed out waiting for ${count} ${target} probes`);
 }
 
+test('accepted probe separates publisher preparation from network transit in its actual analysis target', async () => {
+  const server = await startRelay({ ...PROBE_FAST, RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '1000' });
+  const clients = await robotSession(server);
+  try {
+    const probe = (await waitForProbeCount(clients.publisher, 'mic', 1))[0];
+    await sleep(150);
+    clients.publisher.send({ type: 'calibration-probe-played', target: 'mic',
+      requestId: probe.requestId, generation: clients.publisher.generationId,
+      timingDiagnostics: { processingMs: 120, schedulingDelayMs: 100 } });
+    const status = await clients.monitor.waitFor(m => m.type === 'timing-calibration-status'
+      && m.bootProbeTimingEvidence?.mic?.requestId === probe.requestId, 2000);
+    const evidence = status.bootProbeTimingEvidence.mic;
+    assert.equal(evidence.schedule.method, 'processing-separated');
+    assert.equal(evidence.schedule.transportOneWayMs, (evidence.roundTripMs - 120) / 2);
+    const legacyTarget = evidence.serverReceivedAtMs - evidence.roundTripMs / 2 + probe.leadMs;
+    assert.ok(Math.abs(evidence.schedule.targetAtMs - legacyTarget - 40) < .001);
+  } finally {
+    clients.close();
+    await server.stop();
+  }
+});
+
 test('probe acknowledgement retries stop at the configured limit and block Take while active', async () => {
   const takeDirectory = await mkdtemp(path.join(os.tmpdir(), 'relay-probe-lifecycle-'));
   const server = await startRelay({ ...PROBE_FAST, RELAY_TAKE_DIR: takeDirectory });

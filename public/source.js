@@ -267,6 +267,7 @@ async function playBackingProbe(requestId, leadMs) {
       throw new Error(`Robot probe AudioContext is ${context.state}.`);
     }
 
+    const scheduledAtMs = performance.now();
     const startTime = context.currentTime + leadMs / 1000;
     for (const note of PROBE_NOTES) {
       const at = startTime + note.offsetMs / 1000;
@@ -288,7 +289,7 @@ async function playBackingProbe(requestId, leadMs) {
     if (activeBackingProbeRequestId !== requestId) return;
     activeBackingProbeRequestId = null;
     send({ type: 'calibration-probe-played', target: 'backing', requestId,
-      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime) });
+      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs) });
   } catch (error) {
     console.warn('backing probe failed', error);
     if (activeBackingProbeRequestId !== requestId) return;

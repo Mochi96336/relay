@@ -1,10 +1,11 @@
-// Optional evidence only: browser clocks never become mixer authority here.
-export function probeTimingDiagnostics(context, receivedAtMs, scheduledContextSeconds) {
+// Local durations describe preparation; absolute browser clocks remain diagnostic evidence.
+export function probeTimingDiagnostics(context, receivedAtMs, scheduledContextSeconds, scheduledAtMs) {
   try {
     const acknowledgedAtMs = performance.now();
     const stamp = context.getOutputTimestamp?.();
     return {
       processingMs: acknowledgedAtMs - receivedAtMs,
+      schedulingDelayMs: Number.isFinite(scheduledAtMs) ? scheduledAtMs - receivedAtMs : undefined,
       acknowledgedAtMs,
       contextSeconds: context.currentTime,
       scheduledContextSeconds,

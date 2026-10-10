@@ -1,4 +1,4 @@
-import { sanitizeProbeTimingDiagnostics } from './probe-timing-diagnostics.js';
+import { probeScheduleTime, sanitizeProbeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { SampleSongFallback } from './sample-song-fallback.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -2734,14 +2734,15 @@ function handleProbeReply(reply: { requestId: unknown; generation: unknown; timi
   const pending = acceptCurrentProbeClientResult(reply, { logCaptureGenerationMismatch: true });
   if (!pending) return;
 
+  const client = sanitizeProbeTimingDiagnostics(reply.timingDiagnostics);
+  const schedule = probeScheduleTime(pending.serverSentAtMs, nowMs, PROBE_LEAD_MS, client);
   bootProbeTimingEvidence[pending.target] = {
     requestId: pending.requestId, sessionGeneration: pending.sessionGeneration,
     captureGeneration: pending.generation, serverReceivedAtMs: nowMs,
     roundTripMs: nowMs - pending.serverSentAtMs,
-    client: sanitizeProbeTimingDiagnostics(reply.timingDiagnostics),
+    client, schedule,
   };
-  const oneWayMs = (nowMs - pending.serverSentAtMs) / 2;
-  const targetSample = Math.round(session.sessionSampleAt(pending.serverSentAtMs + oneWayMs + PROBE_LEAD_MS));
+  const targetSample = Math.round(session.sessionSampleAt(schedule.targetAtMs));
   const marginSamples = Math.round((MIX_SAMPLE_RATE * PROBE_SEARCH_MARGIN_MS) / 1000);
   const referenceSamples = Math.round((MIX_SAMPLE_RATE * PROBE_REFERENCE_MS) / 1000);
 

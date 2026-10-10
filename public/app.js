@@ -903,10 +903,9 @@ function retireCalibrationProbePlayback() {
 
 /**
  * Plays the probe out of the phone speaker so the phone's own microphone hears
- * it. The reply says only that it played and for which request - the server
- * derives the timing from its own round trip, because the client's clock is
- * not on the session's timeline and mapping it would be the very thing being
- * measured.
+ * it. The reply identifies the request and reports local preparation durations.
+ * The server separates those durations from the transport round trip; absolute
+ * browser timestamps are never treated as session time.
  */
 async function playCalibrationProbe(requestId, leadMs) {
   const receivedAtMs = performance.now();
@@ -939,6 +938,7 @@ async function playCalibrationProbe(requestId, leadMs) {
     }
 
     retireCalibrationProbePlayback();
+    const scheduledAtMs = performance.now();
     const startTime = context.currentTime + leadMs / 1000;
     const playback = {
       requestId,
@@ -991,7 +991,7 @@ async function playCalibrationProbe(requestId, leadMs) {
       // The same truncation framePcm applies. The server compares this against
       // the generation it read off a PCM frame header, which is a uint32.
       generation: expectedGeneration,
-      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime),
+      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs),
     });
     if (!result.sent) {
       retireCalibrationProbePlayback();

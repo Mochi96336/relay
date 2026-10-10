@@ -204,3 +204,27 @@ describe('Mic uplink backlog', () => {
     assert.ok(estimate.backlogMs > 0 && estimate.backlogMs <= 200, `estimated ${estimate.backlogMs} ms`);
   });
 });
+
+test('sender-confirmed slow capture is not misclassified as seconds of network backlog', () => {
+  const backlog = new MicUplinkBacklog();
+  for (let ms = 1000; ms <= 120000; ms += 1000) {
+    const capturedSamples = samplesAt(ms * .75);
+    backlog.noteArrived(7, capturedSamples);
+    backlog.observeHealth({ generation: 7, capturedSamples, sampleRate: RATE,
+      capturedAtPerformanceMs: ms, atMs: ms + 30 });
+  }
+  assert.ok(Math.abs(backlog.status()!.backlogMs) < 10);
+  assert.ok(backlog.estimate(120100)!.backlogMs < 100);
+});
+
+test('sender-confirmed capture loss does not conceal additional shared network queueing', () => {
+  const backlog = new MicUplinkBacklog();
+  for (let ms = 1000; ms <= 20000; ms += 1000) {
+    const delay = ms > 10000 ? 3000 : 30;
+    const capturedSamples = samplesAt(ms * .75);
+    backlog.noteArrived(7, capturedSamples);
+    backlog.observeHealth({ generation: 7, capturedSamples, sampleRate: RATE,
+      capturedAtPerformanceMs: ms, atMs: ms + delay });
+  }
+  assert.ok(backlog.status()!.backlogMs > 2000);
+});

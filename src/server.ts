@@ -2289,6 +2289,7 @@ function noteMicUplinkBacklog(health: AudioUplinkHealth, sampleRate: number, now
   const edge = micUplinkBacklog.observeHealth({
     generation: health.captureGeneration,
     capturedSamples: health.capturedSamples,
+    capturedAtPerformanceMs: health.capturedAtPerformanceMs,
     sampleRate,
     atMs: nowMs,
   });

@@ -401,7 +401,7 @@ function renderTimeline() {
   const timeline = latestTimeline;
   const connected = Boolean(timeline?.connected);
   const videoId = typeof timeline?.videoId === 'string' ? timeline.videoId : null;
-  const target = Number(timeline?.serverTime);
+  const target = Number(timeline?.youtubeTime ?? timeline?.serverTime);
   const state = Number(timeline?.state);
   const playerState = safePlayerState();
   const current = safePlayerTime();
@@ -458,7 +458,10 @@ function applyTimeline() {
     return;
   }
 
-  const target = Number(timeline.serverTime);
+  // Follow the holder's latest projected position, even while the stable
+  // room clock is accumulating phase error. The 450 ms fence must bound
+  // Robot versus the holder, not only Robot versus a free-running anchor.
+  const target = Number(timeline.youtubeTime ?? timeline.serverTime);
   const desiredState = Number(timeline.state);
   if (!Number.isFinite(target)) return;
 

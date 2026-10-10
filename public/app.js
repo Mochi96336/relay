@@ -188,6 +188,7 @@ function audioUplinkHealthPayload(healthRequestId) {
     captureGeneration: captureGeneration >>> 0,
     healthRequestId,
     capturedSamples: captureSampleCursor,
+    capturedAtPerformanceMs: performance.now(),
     inputGapSamples: captureInputGapSamples,
     inputGapActive: micCaptureRecovery.status().inputGapActive,
     inputMuted: captureInputMuted,

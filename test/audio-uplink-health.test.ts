@@ -395,3 +395,12 @@ describe('audio uplink health', () => {
     assert.equal(health.transport.maxPacketBytes, null);
   });
 });
+
+
+it('preserves optional sender monotonic sample timestamps and rejects malformed ones', () => {
+  assert.equal(parseAudioUplinkHealth({ ...validHealth(), capturedAtPerformanceMs: 123.5 })?.capturedAtPerformanceMs, 123.5);
+  assert.equal(parseAudioUplinkHealth(validHealth())?.capturedAtPerformanceMs, undefined);
+  for (const capturedAtPerformanceMs of [-1, NaN, Infinity, '123']) {
+    assert.equal(parseAudioUplinkHealth({ ...validHealth(), capturedAtPerformanceMs }), null);
+  }
+});

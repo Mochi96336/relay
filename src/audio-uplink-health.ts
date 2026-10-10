@@ -78,6 +78,8 @@ export type AudioUplinkHealth = {
   captureGeneration: number;
   /** Optional browser-generated correlation token. Older v1 pages omit it. */
   healthRequestId?: number;
+  /** Sender monotonic time paired with capturedSamples, independent of network delay. */
+  capturedAtPerformanceMs?: number;
   capturedSamples: number;
   inputGapSamples: number;
   /** True while the capture worklet has positively identified a sustained missing input channel. */
@@ -281,6 +283,9 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const healthRequestId = payload.healthRequestId === undefined
     ? undefined
     : strictUint32(payload.healthRequestId);
+  const capturedAtPerformanceMs = payload.capturedAtPerformanceMs;
+  if (capturedAtPerformanceMs !== undefined && (typeof capturedAtPerformanceMs !== 'number'
+    || !Number.isFinite(capturedAtPerformanceMs) || capturedAtPerformanceMs < 0)) return null;
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   // Added after health v1 shipped. Missing means an older page that cannot
@@ -414,6 +419,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     captureGeneration,
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
+    ...(capturedAtPerformanceMs === undefined ? {} : { capturedAtPerformanceMs }),
     inputGapSamples,
     inputGapActive,
     inputMuted,

@@ -3,9 +3,10 @@ export class CaptureClockRecovery {
   constructor() { this.reset(); }
   reset() { this.base = null; this.slowWindows = 0; this.spent = false; }
   observe(snapshot) {
-    const { nowMs, contextTime, visible, contextState, inputMuted } = snapshot;
+    const { nowMs, contextTime, contextState, inputMuted } = snapshot;
     if (this.spent) return false;
-    if (!visible || inputMuted || contextState !== 'running'
+    // A running publisher must keep producing audio while its tab is hidden.
+    if (inputMuted || contextState !== 'running'
       || !Number.isFinite(nowMs) || !Number.isFinite(contextTime)) {
       this.base = null; this.slowWindows = 0; return false;
     }

@@ -67,9 +67,9 @@ test('retired preparation closes its new context without modifying the newer Mic
   assert.equal(h.env.captureGeneration, 7);
 });
 
-test('failed context preparation follows bounded Mic retry and closes the failed context', async () => {
+test('failed context preparation preserves the existing Mic and closes the failed context', async () => {
   const h = harness(async () => { throw Error('load failed'); });
   assert.equal(await h.run(), false);
-  assert.deepEqual(h.events, ['stop','close-new']);
+  assert.deepEqual(h.events, ['close-new']);
   assert.equal(h.env.captureGeneration, 7);
 });

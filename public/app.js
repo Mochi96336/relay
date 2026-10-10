@@ -1351,6 +1351,7 @@ function rebuildPublisherAudioContext() {
   const stream = mediaStream;
   const graph = activeCaptureGraph;
   let replacement = null;
+  let committed = false;
   let timeout;
   const current = () => isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
     && audioContext === oldContext && mediaStream === stream && activeCaptureGraph === graph;
@@ -1370,6 +1371,7 @@ function rebuildPublisherAudioContext() {
     ]);
     if (!current()) return false;
     if (prepared.state !== 'running') throw new Error('Replacement AudioContext is not running');
+    committed = true;
     disposeCaptureGraph(graph);
     activeCaptureGraph = null;
     activeNode = null;
@@ -1395,7 +1397,9 @@ function rebuildPublisherAudioContext() {
   }).catch((error) => {
     console.warn('Microphone AudioContext recovery failed', error);
     // A failure from a retired session must not stop a newer Mic session.
-    if (isCurrentPublisherSession(sessionEpoch)) {
+    // Preparation failure leaves the existing capture intact. Only a failure
+    // after retiring its graph needs the bounded user-gesture Retry Mic path.
+    if (committed && isCurrentPublisherSession(sessionEpoch)) {
       void finishMicrophoneSession('context-rebuild-failed', { releaseMic: false }).catch(console.error);
     }
     return false;

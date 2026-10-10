@@ -902,13 +902,13 @@ it('Mixer starvation stays visible independently of throughput recovery and expi
   assert.equal(transport.stats().recovery.mixPlayable, null);
 });
 
-it('a stream of old ACKs cannot renew the control progress deadline', async () => {
+for (const delaySeconds of [6, 8]) it(`ACKs delayed ${delaySeconds}s cannot renew the control progress deadline`, async () => {
   const { PreferredAudioTransport } = await import(moduleUrl.href);
   let now = 0;
   const transport = new PreferredAudioTransport({nowMs:()=>now});
   class OldAckSocket extends FakeSocket { closes=0; close() { this.closes++; } }
   const socket = new OldAckSocket(); transport.bind(socket);
-  for(let i=0;i<=8;i++) {
+  for(let i=0;i<=delaySeconds;i++) {
     now=i*1000;
     transport.sendControlJson({type:'audio-uplink-health',version:1,healthRequestId:i,
       captureGeneration:7,capturedSamples:48000+i*48000});

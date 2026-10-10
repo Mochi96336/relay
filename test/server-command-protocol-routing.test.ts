@@ -111,7 +111,7 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /calibration\.start\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
   assert.match(server, /const nowMs = performance\.now\(\)/);
-  assert.match(server, /const accepted = micRuntime\.noteUplinkHealth\(socket, health, nowMs\)/);
+  assert.match(server, /const accepted = micRuntime\.noteUplinkHealth\(socket, health, nowMs, \{\s*playable: micPlayable\(nowMs\), headroomMs: session\.health\(\)\.micHeadroomMs,\s*\}\)/);
   assert.match(server, /if \(accepted\) noteRecordingMicGapHealth\(health\)/);
   assert.match(
     server,

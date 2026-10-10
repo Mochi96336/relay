@@ -763,9 +763,13 @@ export class PreferredAudioTransport extends AudioTransport {
     ) return;
     this.pendingPublisherHealth.splice(0, match + 1);
     this.ackRoundTripMs = Math.max(0, Number(this.nowMs()) - publisherHealth.sentAtMs);
-    if (this.ackRoundTripMs < 6000) this.lastControlAckAt = Number(this.nowMs());
-    this.controlWaitingSince = this.pendingPublisherHealth.length
-      ? this.pendingPublisherHealth[0].sentAtMs : null;
+    if (this.ackRoundTripMs < 6000) {
+      this.lastControlAckAt = Number(this.nowMs());
+      this.controlWaitingSince = this.pendingPublisherHealth.length
+        ? this.pendingPublisherHealth[0].sentAtMs : null;
+    }
+    // Retiring an old request is bookkeeping, not recent control progress.
+    // Keep the original deadline even if this was the final queued old ACK.
 
     if (publisherHealth.sourceEligibilityEpoch !== this.sourceEligibilityEpoch) {
       // This ACK describes a health snapshot captured before a synchronous

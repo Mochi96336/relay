@@ -763,7 +763,7 @@ export class PreferredAudioTransport extends AudioTransport {
     ) return;
     this.pendingPublisherHealth.splice(0, match + 1);
     this.ackRoundTripMs = Math.max(0, Number(this.nowMs()) - publisherHealth.sentAtMs);
-    this.lastControlAckAt = Number(this.nowMs());
+    if (this.ackRoundTripMs < 6000) this.lastControlAckAt = Number(this.nowMs());
     this.controlWaitingSince = this.pendingPublisherHealth.length
       ? this.pendingPublisherHealth[0].sentAtMs : null;
 

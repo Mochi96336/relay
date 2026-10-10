@@ -355,3 +355,20 @@ current transform. The fallback moves at at most 1% of real time and freezes
 during a Take. Diagnostics in `timing-calibration-status.sampleSongFallback`
 include mode, candidate, selected and active (no acoustic calibration).
 Reload the phone after updating so it publishes capture anchors.
+
+To capture concurrent shadow evidence without restarting services or changing
+calibration, run `node scripts/sample-song-shadow.mjs 180 /absolute/path/run.jsonl`
+with the deployment environment loaded. It requests read-only status once per
+second, writes a mode-0600 JSONL file and a summary, and never registers an audio
+role or starts a Take. Output paths must not already exist. The WebSocket URL is
+`RELAY_URL` or `ws://localhost:${PORT:-3100}/ws`; the script derives `/statusz`
+from that origin. It supports the shared outer key via `RELAY_KEY`.
+
+Summaries split on capture/session, song, rate and calibration measurement
+changes. `liveBootEstimateMs` recomputes the old measured path difference with
+the current smoothed Robot offset; it is a comparison, not renewed Boot
+validity. `shadowMinusRobotDeltaMs` is also only a comparison to that smoothed
+tracker, not an exact decomposition of the two raw anchor pairs. The existing
+content validator's window results are preserved, including their age and
+outcome; an old result retained after an invalid window is not fresh proof.
+No raw PCM is exported by this tool.

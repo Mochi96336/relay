@@ -1722,6 +1722,7 @@ function takeBlocksCalibration() {
 }
 
 const bootProbeTimingEvidence: Partial<Record<ProbeTarget, Record<string, unknown>>> = {};
+let completedBootProbeTimingEvidence: Partial<Record<ProbeTarget, Record<string, unknown>>> | null = null;
 let robotOffsetTimingEvidence: Record<string, number | null> | null = null;
 
 function timingCalibrationStatusPayload() {
@@ -1761,6 +1762,7 @@ function timingCalibrationStatusPayload() {
     probeError: probe.error,
     bootCalibration: bootProbeRuntime.calibrationResult,
     bootProbeTimingEvidence,
+    completedBootProbeTimingEvidence,
     robotOffsetTimingEvidence,
     robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs) : null,
     automatic: timingRuntime.automatic,
@@ -2024,6 +2026,7 @@ function abandonProbeRun() {
 
 function clearBootCalibrationState() {
   bootProbeRuntime.clear();
+  completedBootProbeTimingEvidence = null;
 }
 
 /**
@@ -2925,6 +2928,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   promoteBootProbeCalibration(
     () => {
       bootProbeRuntime.recordCalibration(bootProbeContext(), result);
+      completedBootProbeTimingEvidence = structuredClone(bootProbeTimingEvidence);
       session.noteMicCalibrationMeasured();
     },
     () => ({

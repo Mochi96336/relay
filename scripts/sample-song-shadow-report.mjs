@@ -28,9 +28,12 @@ function measuredValues(rows) {
   }));
 }
 function identity(r) {
+  const completed = r.completedBootProbeTimingEvidence;
+  const mic = completed?.mic ?? (r.bootProbeTimingEvidence?.mic && r.bootProbeTimingEvidence.mic.latencyMs === r.bootMicMs ? r.bootProbeTimingEvidence.mic : null);
+  const backing = completed?.backing ?? (r.bootProbeTimingEvidence?.backing && r.bootProbeTimingEvidence.backing.latencyMs === r.bootBackingMs ? r.bootProbeTimingEvidence.backing : null);
   return JSON.stringify([r.sessionGeneration, r.micGeneration, r.videoId, r.playbackRate,
     r.calibrationKind, r.referenceMeasurementMs, r.calibrationState, r.provisional, r.takeLifecycle ?? 'unknown', r.serverIncarnation ?? null,
-    r.bootProbeTimingEvidence?.mic?.requestId ?? null, r.bootProbeTimingEvidence?.backing?.requestId ?? null,
+    mic?.requestId ?? null, backing?.requestId ?? null,
     r.bootMicMs ?? null, r.bootBackingMs ?? null]);
 }
 function contentReference(r) {

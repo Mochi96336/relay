@@ -92,3 +92,16 @@ test('keeps each probe identity and its raw measurement separate from candidate 
   assert.equal(report.segments[0].measurements.robotDeltaMs.median, -220);
   assert.equal(report.segments[0].latestMatchedObservation.bootProbeTimingEvidence.mic.requestId, 57);
 });
+
+test('pending probe evidence cannot rename the retained completed Boot result', () => {
+  const report = analyze((r, i) => {
+    r.bootMicMs = 205; r.bootBackingMs = 95;
+    r.completedBootProbeTimingEvidence = { mic: { requestId: 57, latencyMs: 205 },
+      backing: { requestId: 58, latencyMs: 95 } };
+    r.bootProbeTimingEvidence = { mic: { requestId: i < 20 ? 57 : 59 },
+      backing: { requestId: 60 } };
+  });
+  assert.equal(report.segments.length, 1);
+  assert.equal(report.segments[0].identity[10], 57);
+  assert.equal(report.segments[0].identity[11], 58);
+});

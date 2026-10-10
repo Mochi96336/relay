@@ -27,6 +27,28 @@ test('playback rate is used once when comparing different song positions', () =>
   f.observe('mic', { ...base, playbackRate: 2, sampleIndex: .85 * 48000, mediaSeconds: 11.5 }, 1750);
   assert.ok(Math.abs(f.estimate(1750, base.videoId, map, 48000)! + 400) < .001);
 });
+
+test('sample/song anchors cannot observe speaker-to-microphone latency', () => {
+  const f = new SampleSongFallback();
+  // Both players are observed at the same wall instant. Capture timestamps
+  // contain 20 ms Mic versus 30 ms backing placement delay, while the Robot
+  // player is 200 ms ahead. These facts do not encode either output path.
+  for (let i = 0; i < 3; i++) {
+    const wall = 1 + i * .25;
+    f.observe('mic', { ...base, sampleIndex: (wall + .02) * 48000,
+      mediaSeconds: wall }, 1000 + i * 250);
+    f.observe('backing', { ...base, sampleIndex: (wall + .03) * 48000,
+      mediaSeconds: wall + .2 }, 1000 + i * 250);
+  }
+  const candidate = f.estimate(1500, base.videoId, map, 48000)!;
+  assert.ok(Math.abs(candidate - 190) < .001);
+  // A singer hears the phone's output, not its IFrame position. A 120 ms
+  // phone output path versus 20 ms Robot output adds 100 ms to the actual
+  // acoustic alignment, with exactly the same sample/song reports above.
+  const acousticAdvance = 20 - 30 + 200 + 120 - 20;
+  assert.equal(acousticAdvance, 290);
+  assert.ok(Math.abs(acousticAdvance - candidate - 100) < .001);
+});
 test('stale, unavailable capture coordinates and different songs cannot drive fallback', () => {
   const f = new SampleSongFallback(); feed(f, 'mic', .1); feed(f, 'backing', .5);
   assert.equal(f.estimate(2501, base.videoId, map, 48000), null);

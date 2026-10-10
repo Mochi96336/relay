@@ -112,6 +112,7 @@ const timer = setInterval(async () => {
       bootStoredMs: boot?.advanceMs ?? null, bootMicMs: boot?.micLatencyMs ?? null, bootBackingMs: boot?.backingLatencyMs ?? null,
       robotDeltaMs: timing?.robotPlayerOffsetMs ?? null,
       bootProbeTimingEvidence: timing?.bootProbeTimingEvidence ?? null,
+      completedBootProbeTimingEvidence: timing?.completedBootProbeTimingEvidence ?? null,
       robotOffsetTimingEvidence: timing?.robotOffsetTimingEvidence ?? null,
       timelineServerSeconds: timeline?.serverTime ?? null,
       timelineYoutubeSeconds: timeline?.youtubeTime ?? null,

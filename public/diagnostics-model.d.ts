@@ -16,6 +16,8 @@ export type DiagnosticFacts = {
   readiness?: unknown;
   source?: unknown;
   statusz?: unknown;
+  timing?: unknown;
+  timeline?: unknown;
 };
 
 export function describeOverview(facts?: DiagnosticFacts, t?: DiagnosticsTranslator): DiagnosticRow[];

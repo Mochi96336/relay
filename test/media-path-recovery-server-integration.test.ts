@@ -288,6 +288,8 @@ test('browser media recovery follows real server accepted-PCM progress and prese
   assert.equal(mic.acceptedFrameSerial, 1);
   const baselineAck = sendHealth(PACKET_SAMPLES);
   assert.deepEqual(baselineAck.pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 1,
     receivedPacketSerial: 1,
     receivedSampleSerial: PACKET_SAMPLES,
@@ -323,6 +325,8 @@ test('browser media recovery follows real server accepted-PCM progress and prese
   assert.equal(mic.acceptedFrameSerial, 2);
   const wsBaselineAck = sendHealth(PACKET_SAMPLES * 5);
   assert.deepEqual(wsBaselineAck.pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 2,
     receivedPacketSerial: 2,
     receivedSampleSerial: PACKET_SAMPLES * 2,
@@ -336,6 +340,8 @@ test('browser media recovery follows real server accepted-PCM progress and prese
   assert.equal(mic.acceptedFrameSerial, 3);
   const recoveredAck = sendHealth(PACKET_SAMPLES * 6);
   assert.deepEqual(recoveredAck.pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 3,
     receivedPacketSerial: 3,
     receivedSampleSerial: PACKET_SAMPLES * 3,

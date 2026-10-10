@@ -94,6 +94,8 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.equal(lastAck(first).healthRequestId, 41,
     'current-generation ACK must echo the browser health request correlation token');
   assert.deepEqual(lastAck(first).pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 0,
     receivedPacketSerial: 0,
     receivedSampleSerial: 0,
@@ -133,6 +135,8 @@ test('health ACK reports only server-accepted frame progress and preserves it ac
   assert.equal(mic.noteUplinkHealth(replacement, health(7, 4_000, 1), 210), true);
   assert.equal(lastAck(replacement).healthRequestId, 1);
   assert.deepEqual(lastAck(replacement).pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 2,
     receivedPacketSerial: 0,
     receivedSampleSerial: 0,
@@ -185,11 +189,17 @@ test('receiver packet progress is distinct from AudioSession accepted-frame prog
 
   assert.equal(mic.noteUplinkHealth(current, health(7, 480), 130), true);
   assert.deepEqual(lastAck(current).pcm, {
+    receivedEndSample: null,
+    sampleRate: 48000,
     acceptedFrameSerial: 0,
     receivedPacketSerial: 1,
     receivedSampleSerial: 480,
     mediaPath: 'websocket',
   });
+  mic.noteFrame(140, frames[0]);
+  assert.equal(mic.noteUplinkHealth(current, health(7, 960), 150, { playable: false, headroomMs: -300 }), true);
+  assert.deepEqual(lastAck(current).pcm.mix, { playable: false, headroomMs: -300 });
+  assert.equal(lastAck(current).pcm.receivedEndSample, 480, 'ACK names accepted source coordinates, not a cumulative sample count');
 });
 
 test('the ACK names the path Mic audio arrives on, not the sessions that are up', () => {

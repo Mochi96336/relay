@@ -629,3 +629,35 @@ test('quarantine release budget is per capture', () => {
   recovery.observe(observation({ captureGeneration: 8, capturedSamples: 1_000 }));
   assert.equal(recovery.status().quarantineReleasesUsed, 0);
 });
+
+test('constant late PCM triggers bounded recovery even with full throughput', () => {
+  const recovery = new MicMediaPathRecovery();
+  let decision;
+  for (let i = 0; i < 5; i++) {
+    decision = recovery.observe({ ...observation(), capturedSamples: 480000 + i * 48000,
+      serverAcceptedFrameSerial: 100 + i * 100,
+      senderSubmittedPackets: 1000 + i * 100, senderFailedPackets: 0,
+      serverReceivedPacketSerial: 200 + i * 100, serverReceivedSampleSerial: 96000 + i * 48000,
+      audioBacklogMs: 8000 });
+    if (decision.action === 'demote-webtransport') break;
+  }
+  assert.equal(decision?.action, 'demote-webtransport');
+  assert.equal(decision?.reason, 'server-pcm-late');
+});
+
+test('transient lateness and ineligible capture do not consume recovery budget', () => {
+  const recovery = new MicMediaPathRecovery();
+  for (let i = 0; i < 10; i++) {
+    const decision = recovery.observe({ ...observation(), capturedSamples: 1000 + i * 100,
+      serverAcceptedFrameSerial: 10 + i, audioBacklogMs: i % 2 ? 0 : 8000 });
+    assert.equal(decision.action, 'none');
+  }
+  for (let i = 0; i < 5; i++) recovery.observe({ ...observation(), eligible: false, audioBacklogMs: 8000 });
+  assert.equal(recovery.status().webTransportDemotionUsed, false);
+});
+
+test('late-path actions cannot repeatedly replace sockets', () => {
+  const recovery = new MicMediaPathRecovery();
+  assert.equal(recovery.recoverLatePath('websocket').action, 'replace-websocket');
+  assert.equal(recovery.recoverLatePath('websocket').action, 'degraded-latched');
+});

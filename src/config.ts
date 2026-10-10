@@ -110,6 +110,11 @@ export function loadRelayConfig(env: Env = process.env) {
       'RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES',
       3,
     ),
+    sampleSongFallback: (() => {
+      const mode = env.RELAY_SAMPLE_SONG_FALLBACK || 'rtt';
+      if (!['rtt', 'shadow', 'sample-song'].includes(mode)) throw new Error('RELAY_SAMPLE_SONG_FALLBACK must be rtt, shadow, or sample-song.');
+      return mode;
+    })(),
     livePrebufferMs: envNumber(env, 'RELAY_LIVE_PREBUFFER_MS', 400, { min: 1 }),
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),

@@ -57,7 +57,7 @@ test('server still owns infrastructure observation authority and effects', () =>
 
   assert.match(serverFlow, /micRuntime\.isPublisher\(socket\)/);
   assert.match(serverFlow, /payload\.target === 'backing' \? 'backing' : 'mic'/);
-  assert.match(serverFlow, /handleProbeReply\(\{ requestId: payload\.requestId, generation: payload\.generation \}, nowMs\)/);
+  assert.match(serverFlow, /handleProbeReply\(\{ requestId: payload\.requestId, generation: payload\.generation,\s*timingDiagnostics: payload\.timingDiagnostics \}, nowMs\)/);
   assert.match(serverFlow, /handleProbeFailure\(/);
 
   assert.match(serverFlow, /infrastructureCapability\.authorized\(socket\)/);

@@ -1,3 +1,4 @@
+import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { wsUrl } from './ws-url.js';
 
 const armButton = document.querySelector('#arm-source');
@@ -252,6 +253,7 @@ function probeContext() {
  * Nothing here is audible to anyone. The sink has no speaker behind it.
  */
 async function playBackingProbe(requestId, leadMs) {
+  const receivedAtMs = performance.now();
   if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
   try {
     const context = probeContext();
@@ -265,6 +267,7 @@ async function playBackingProbe(requestId, leadMs) {
       throw new Error(`Robot probe AudioContext is ${context.state}.`);
     }
 
+    const scheduledAtMs = performance.now();
     const startTime = context.currentTime + leadMs / 1000;
     for (const note of PROBE_NOTES) {
       const at = startTime + note.offsetMs / 1000;
@@ -285,7 +288,8 @@ async function playBackingProbe(requestId, leadMs) {
     // this browser side effect even while the old resume promise is unresolved.
     if (activeBackingProbeRequestId !== requestId) return;
     activeBackingProbeRequestId = null;
-    send({ type: 'calibration-probe-played', target: 'backing', requestId });
+    send({ type: 'calibration-probe-played', target: 'backing', requestId,
+      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs) });
   } catch (error) {
     console.warn('backing probe failed', error);
     if (activeBackingProbeRequestId !== requestId) return;
@@ -398,7 +402,7 @@ function renderTimeline() {
   const timeline = latestTimeline;
   const connected = Boolean(timeline?.connected);
   const videoId = typeof timeline?.videoId === 'string' ? timeline.videoId : null;
-  const target = Number(timeline?.serverTime);
+  const target = Number(timeline?.youtubeTime ?? timeline?.serverTime);
   const state = Number(timeline?.state);
   const playerState = safePlayerState();
   const current = safePlayerTime();
@@ -455,7 +459,10 @@ function applyTimeline() {
     return;
   }
 
-  const target = Number(timeline.serverTime);
+  // Follow the holder's latest projected position, even while the stable
+  // room clock is accumulating phase error. The 450 ms fence must bound
+  // Robot versus the holder, not only Robot versus a free-running anchor.
+  const target = Number(timeline.youtubeTime ?? timeline.serverTime);
   const desiredState = Number(timeline.state);
   if (!Number.isFinite(target)) return;
 
@@ -541,7 +548,13 @@ function applyTimeline() {
       && Number.isFinite(errorSeconds)
     ) {
       offsetReportedSinceSeek = true;
-      send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000 });
+      send({ type: 'robot-player-offset', offsetMs: errorSeconds * 1000,
+        timingDiagnostics: { playerSeconds: current, targetSeconds: target,
+          youtubeSeconds: timeline.youtubeTime, timelineDifferenceMs: timeline.differenceMs,
+          timelineAgeMs: timeline.ageMs, transportEstimateMs: timeline.transportEstimateMs },
+        songObservation: { videoId: loadedVideoId, mediaSeconds: player.getCurrentTime(),
+          playbackRate: player.getPlaybackRate(), state: player.getPlayerState(), observedAtUnixMs: Date.now() },
+      });
     }
 
     if (!armed) {

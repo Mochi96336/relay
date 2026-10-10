@@ -383,3 +383,56 @@ describe('locales', () => {
     }
   });
 });
+
+it('Timing keeps reported YT positions and calibration coordinates distinct without RTT/2', () => {
+  const timing = {
+    activeCalibrationKind: 'content', robotRoute: true, robotDeltaFresh: true,
+    calibratedMicLagTargetMs: -160, desiredCalibratedMicLagMs: -184,
+    robotPlayerOffsetMs: -300, robotOffsetTimingEvidence: { playerSeconds: 90.1 },
+    bootCalibration: { advanceMs: -180, micLatencyMs: 225, backingLatencyMs: 100 },
+    sampleSongFallback: { candidateMs: -286, active: false },
+  };
+  const rows = byKey(describeTiming({ source: source(), timing,
+    timeline: { connected: true, youtubeTime: 90.4, serverTime: 90.5, playbackRate: .5, state: 1, transportEstimateMs: 12 },
+  }, en));
+  assert.equal(rows.youtubePhone.value, '90.400 s');
+  assert.equal(rows.youtubeServer.value, '90.500 s');
+  assert.equal(rows.youtubeRobot.value, '90.100 s');
+  assert.match(rows.youtubeRobot.note, /not projected/);
+  assert.equal(rows.bootLive.value, '-475 ms');
+  assert.equal(rows.bootStored.value, '-180 ms');
+  assert.equal(rows.contentTarget.value, '-184 ms');
+  assert.equal(rows.mixerTarget.value, '-160 ms');
+  assert.equal(rows.shadow.value, '-286 ms');
+  assert.equal(rows.rttHalf, undefined);
+  const stale = byKey(describeTiming({ source: source(), timing: { ...timing, robotDeltaFresh: false },
+    timeline: { connected: true, playbackRate: 1 },
+  }, zh));
+  assert.equal(stale.youtubeRobot.value, '—');
+  assert.equal(stale.bootLive.value, '—');
+});
+
+it('Timing names sample/song when it actually controls fallback', () => {
+  const rows = byKey(describeTiming({ source: source({ timingMode: 'network-estimate' }),
+    timing: { sampleSongFallback: { active: true, candidateMs: -250 } },
+  }, en));
+  assert.equal(rows.method.value, 'Sample / YouTube time estimate');
+  assert.match(rows.shadow.note, /Active fallback/);
+});
+
+
+it('Timing hides expired YT state and Boot projection but retains historical measurements', () => {
+  const rows = byKey(describeTiming({ source: source(),
+    timeline: { connected: false, youtubeTime: 90, serverTime: 90, state: 1, playbackRate: 1 },
+    timing: { robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: 200,
+      robotOffsetTimingEvidence: { playerSeconds: 90 }, requestedMicAdvanceMs: 20,
+      bootCalibration: { advanceMs: 100, micLatencyMs: 200, backingLatencyMs: 100 } },
+  }, en));
+  assert.equal(rows.youtubePhone.value, '—');
+  assert.equal(rows.youtubeServer.value, '—');
+  assert.equal(rows.youtubeRobot.value, '—');
+  assert.equal(rows.youtubeRate.value, 'Not connected');
+  assert.equal(rows.bootLive.value, '—');
+  assert.equal(rows.bootStored.value, '+100 ms');
+  assert.equal(rows.mixerTarget.value, '+20 ms');
+});

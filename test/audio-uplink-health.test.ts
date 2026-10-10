@@ -395,3 +395,69 @@ describe('audio uplink health', () => {
     assert.equal(health.transport.maxPacketBytes, null);
   });
 });
+
+
+it('preserves optional sender monotonic sample timestamps and rejects malformed ones', () => {
+  assert.equal(parseAudioUplinkHealth({ ...validHealth(), capturedAtPerformanceMs: 123.5 })?.capturedAtPerformanceMs, 123.5);
+  assert.equal(parseAudioUplinkHealth(validHealth())?.capturedAtPerformanceMs, undefined);
+  for (const capturedAtPerformanceMs of [-1, NaN, Infinity, '123']) {
+    assert.equal(parseAudioUplinkHealth({ ...validHealth(), capturedAtPerformanceMs }), null);
+  }
+});
+
+
+it('accepts staged capture clocks without accepting arbitrary or invalid clock data', () => {
+  const captureClock = { contextSeconds: 12.2, originContextSeconds: 2,
+    lastChunkContextSeconds: 12.18, lastChunkSampleIndex: 480000,
+    lastChunkObservedAtMs: 14000, sampleRate: 48000 };
+  assert.deepEqual(parseAudioUplinkHealth({ ...validHealth(), captureClock })?.captureClock, captureClock);
+  assert.equal(parseAudioUplinkHealth(validHealth())?.captureClock, undefined);
+  for (const bad of [NaN, -1, '12', Infinity]) {
+    assert.equal(parseAudioUplinkHealth({ ...validHealth(), captureClock: { ...captureClock, contextSeconds: bad } }), null);
+  }
+  const startup = Object.fromEntries(Object.keys(captureClock).map(key => [key, null]));
+  assert.deepEqual(parseAudioUplinkHealth({ ...validHealth(), captureClock: startup })?.captureClock, startup);
+});
+
+it('retains capture restart provenance while accepting legacy reports and rejecting malformed reasons', () => {
+  assert.equal(parseAudioUplinkHealth(validHealth())?.captureGenerationReason, undefined);
+  for (const reason of ['publisher-start', 'context-clock-underfed', 'input-gap', 'processor-error']) {
+    const parsed = parseAudioUplinkHealth({ ...validHealth(), captureGenerationReason: reason });
+    assert.equal(parsed?.captureGenerationReason, reason);
+    assert.equal(parsed?.captureGeneration, 7);
+  }
+  for (const reason of ['', null, 7, {}, 'x'.repeat(65), 'input\ngap']) {
+    assert.equal(parseAudioUplinkHealth({ ...validHealth(), captureGenerationReason: reason }), null);
+  }
+});
+
+describe('media recovery evidence', () => {
+  it('preserves bounded action evidence and explicit unknown timing', () => {
+    const input: any = validHealth();
+    input.transport.recovery = {sequence:1,action:'replace-websocket',reason:'control-ack-timeout',
+      phase:'reconnect-proving',webTransportDemotionUsed:false,webSocketReplacementUsed:true,
+      ackRoundTripMs:null,controlSilenceMs:6000,audioBacklogMs:null,queueAgeMs:0,pendingHealth:6,unmatchedHealthAcks:0};
+    assert.deepEqual(parseAudioUplinkHealth(input)?.transport.recovery, input.transport.recovery);
+    input.transport.recovery.pendingHealth = 65;
+    assert.equal(parseAudioUplinkHealth(input), null);
+    input.transport.recovery.pendingHealth = 6;
+    input.transport.recovery.reason = '<bad>';
+    assert.equal(parseAudioUplinkHealth(input), null);
+    delete input.transport.recovery;
+    assert.equal(parseAudioUplinkHealth(input)?.transport.recovery, undefined);
+  });
+});
+
+it('recovery history rejects unbounded or non-monotonic events and keeps negative Mixer headroom', () => {
+  const input: any = validHealth();
+  input.transport.recovery = {sequence:2,action:'degraded-latched',reason:'control-ack-timeout-after-bounded-recovery',
+    phase:'degraded-latched',webTransportDemotionUsed:false,webSocketReplacementUsed:true,
+    ackRoundTripMs:null,controlSilenceMs:7000,audioBacklogMs:null,queueAgeMs:0,pendingHealth:7,unmatchedHealthAcks:0,
+    mixPlayable:false,mixHeadroomMs:-300,events:[{sequence:1,action:'replace-websocket',reason:'control-ack-timeout'},
+      {sequence:2,action:'degraded-latched',reason:'control-ack-timeout-after-bounded-recovery'}]};
+  assert.equal(parseAudioUplinkHealth(input)?.transport.recovery?.mixHeadroomMs, -300);
+  input.transport.recovery.events[1].sequence = 1;
+  assert.equal(parseAudioUplinkHealth(input), null);
+  input.transport.recovery.events = Array(9).fill({sequence:1,action:'recovered',reason:'test'});
+  assert.equal(parseAudioUplinkHealth(input), null);
+});

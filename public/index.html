@@ -274,6 +274,8 @@
 
               <section class="diagnostics-view" data-diagnostics-panel="timing" hidden>
                 <dl id="diag-timing-ledger" class="diagnostic-ledger"></dl>
+                <p class="diagnostic-group" data-i18n="diag.timing.ytHeading">YouTube playback</p>
+                <dl id="diag-youtube-ledger" class="diagnostic-ledger"></dl>
                 <!-- Raw calibration figures are for whoever is debugging timing, so they
                      sit closed under the readable rows instead of doubling the tab's length. -->
                 <details class="diagnostics-advanced">
@@ -303,6 +305,7 @@
                       <dd data-tone="neutral"><span id="diag-path-effective" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.effectiveNote">The path difference plus the current Robot player position.</span></dd>
                     </div>
                   </dl>
+                  <dl id="diag-boot-stored-ledger" class="diagnostic-ledger"></dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.content">During playback: content comparison</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">
@@ -334,6 +337,9 @@
                       <dd data-tone="neutral"><span id="diag-content-segments" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.contentSegmentsNote">Delays measured per segment in this comparison; a large spread indicates an unstable result.</span></dd>
                     </div>
                   </dl>
+                  <dl id="diag-content-target-ledger" class="diagnostic-ledger"></dl>
+                  <p class="diagnostic-group" data-i18n="diag.cal.group.shadow">Fallback: sample / YouTube time estimate</p>
+                  <dl id="diag-shadow-ledger" class="diagnostic-ledger"></dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.validation">After calibration: ongoing validation</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">

@@ -100,6 +100,7 @@ export class MicMediaPathRecovery {
     this.lastSampleCoverage = null;
     this.incompletePacketSemanticStalls = 0;
     this.staleCount = 0;
+    this.lateCount = 0;
     this.sourceEligibilityBlocked = false;
     this.phase = 'observing';
     this.proofBaselineSerial = null;
@@ -237,6 +238,7 @@ export class MicMediaPathRecovery {
     serverReceivedSampleSerial,
     localCaptureBacklogDroppedSamples,
   } = {}) {
+    this.lateCount = 0;
     this.lastCapturedSamples = nonNegativeInteger(capturedSamples);
     this.lastServerAcceptedFrameSerial = nonNegativeInteger(serverAcceptedFrameSerial);
     const normalizedEpoch = nonNegativeInteger(socketEpoch);
@@ -423,6 +425,25 @@ export class MicMediaPathRecovery {
     };
   }
 
+  recoverLatePath(path) {
+    this.lateCount = 0;
+    this.webTransportQuarantined = true;
+    this.proofBaselineSerial = null;
+    this.proofServerWebSocketReady = false;
+    if (path === 'webtransport' && !this.webTransportDemotionUsed) {
+      this.webTransportDemotionUsed = true;
+      this.phase = 'fallback-proving';
+      return { action: 'demote-webtransport', reason: 'server-pcm-late', ...this.status() };
+    }
+    if (path === 'websocket' && !this.webSocketReplacementUsed) {
+      this.webSocketReplacementUsed = true;
+      this.phase = 'reconnect-proving';
+      return { action: 'replace-websocket', reason: 'server-pcm-late', ...this.status() };
+    }
+    this.phase = 'degraded-latched';
+    return { action: 'degraded-latched', reason: 'server-pcm-late-after-bounded-recovery', ...this.status() };
+  }
+
   observe({
     captureGeneration,
     capturedSamples,
@@ -436,6 +457,7 @@ export class MicMediaPathRecovery {
     path,
     socketEpoch,
     eligible = true,
+    audioBacklogMs = null,
   }) {
     const generation = uint32(captureGeneration);
     const captured = nonNegativeInteger(capturedSamples);
@@ -503,6 +525,7 @@ export class MicMediaPathRecovery {
     this.currentSocketEpoch = normalizedEpoch;
 
     if (!eligible) {
+      this.lateCount = 0;
       this.sourceEligibilityBlocked = true;
       this.rebaseline({
         capturedSamples: captured,
@@ -559,6 +582,23 @@ export class MicMediaPathRecovery {
         });
         return { action: 'none', reason: 'media-path-rebaseline', ...this.status() };
       }
+    }
+
+    // Throughput can be healthy while every arriving sample is seconds old.
+    // Require consecutive fresh observations, and use the existing bounded
+    // transport actions; never alter capture or absorb transit into calibration.
+    const late = Number.isFinite(audioBacklogMs) && audioBacklogMs > 1500
+      && this.lastCapturedSamples !== null && captured > this.lastCapturedSamples;
+    this.lateCount = late ? this.lateCount + 1 : 0;
+    if (late) {
+      this.rebaselineCoverage(coverageCounters);
+      this.lastCapturedSamples = captured;
+      this.lastServerAcceptedFrameSerial = acceptedSerial;
+      this.healthyFallbackObservations = 0;
+      if (this.lateCount < this.staleObservations) {
+        return { action: 'none', reason: 'server-pcm-late-observation', ...this.status() };
+      }
+      return this.recoverLatePath(localPath);
     }
 
     if (this.phase === 'degraded-latched') {

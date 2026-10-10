@@ -41,6 +41,20 @@ test('Robot content jitter strictly below the threshold is ignored', () => {
   );
 });
 
+test('newly confirmed Content replaces the Boot read head even below the jitter threshold', () => {
+  assert.deepEqual(decideCalibrationMixerApplication(input({
+    activeMicLagMs: -131.59, nextMicLagMs: -86.06, jitterThresholdMs: 150,
+    newCalibrationAuthority: true,
+  })), { kind: 'set', micLagMs: -86.06, clearContentValidationSlew: true });
+});
+
+test('a new Content revision is applied but the same authority retains jitter protection', () => {
+  const facts = input({ activeMicLagMs: -100, nextMicLagMs: -80, jitterThresholdMs: 150 });
+  assert.equal(decideCalibrationMixerApplication({ ...facts, newCalibrationAuthority: true }).kind, 'set');
+  assert.equal(decideCalibrationMixerApplication({ ...facts, newCalibrationAuthority: false }).kind, 'none');
+  assert.equal(decideCalibrationMixerApplication({ ...facts, newCalibrationAuthority: true, applicability: 'hold' }).kind, 'none');
+});
+
 test('Robot content movement exactly at the threshold is applied', () => {
   assert.deepEqual(
     decideCalibrationMixerApplication(input({ nextMicLagMs: 120 })),

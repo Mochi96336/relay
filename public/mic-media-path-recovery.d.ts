@@ -24,6 +24,7 @@ export type MicMediaPathRecoveryObservation = {
   path: 'webtransport' | 'websocket';
   socketEpoch: number;
   eligible?: boolean;
+  audioBacklogMs?: number | null;
 };
 
 export type MicMediaPathRecoveryStatus = {
@@ -69,5 +70,6 @@ export class MicMediaPathRecovery {
     serverReceivedSampleSerial?: number | null;
     localCaptureBacklogDroppedSamples?: number | null;
   }): void;
+  recoverLatePath(path: 'webtransport' | 'websocket'): MicMediaPathRecoveryDecision;
   observe(input: MicMediaPathRecoveryObservation): MicMediaPathRecoveryDecision;
 }

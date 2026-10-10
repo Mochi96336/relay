@@ -76,6 +76,7 @@ export class MicUplinkBacklog {
   private healthGeneration: number | null = null;
   private sampleRate: number | null = null;
   private reportsSeen = 0;
+  private clientPoint: { atMs: number; samples: number } | null = null;
   /** Arrival time minus captured time of recent reports, oldest first. */
   private readonly recentOffsetsMs: number[] = [];
   /** Arrival time minus captured time of where the capture is taken to be. */
@@ -144,6 +145,7 @@ export class MicUplinkBacklog {
   observeHealth(report: {
     generation: number;
     capturedSamples: number;
+    capturedAtPerformanceMs?: number;
     sampleRate: number;
     atMs: number;
   }): MicUplinkBacklogEdge | null {
@@ -153,9 +155,33 @@ export class MicUplinkBacklog {
       this.healthGeneration = generation;
       this.sampleRate = sampleRate;
       this.reportsSeen = 0;
+      this.clientPoint = null;
       this.recentOffsetsMs.length = 0;
       this.envelopeOffsetMs = null;
       this.envelopeAtMs = null;
+    }
+    // Sender wall time and sender sample count share no network transit time.
+    // Proven capture loss may exceed the legacy 5% allowance without being an
+    // uplink queue. A delayed control path still raises the server-side offset.
+    let clientLossMs = 0;
+    const clientAtMs = report.capturedAtPerformanceMs;
+    if (typeof clientAtMs === 'number' && Number.isFinite(clientAtMs) && clientAtMs >= 0) {
+      const previous = this.clientPoint;
+      if (previous && clientAtMs > previous.atMs && capturedSamples >= previous.samples) {
+        clientLossMs = Math.max(0, clientAtMs - previous.atMs
+          - (capturedSamples - previous.samples) * 1000 / sampleRate);
+      }
+      if (!previous || clientAtMs > previous.atMs) {
+        this.clientPoint = { atMs: clientAtMs, samples: capturedSamples };
+      }
+    }
+    // Move historical report offsets by proven source loss too; otherwise the
+    // five-report minimum would retain a false queue even after each update.
+    if (clientLossMs > 0) {
+      for (let i = 0; i < this.recentOffsetsMs.length; i += 1) {
+        this.recentOffsetsMs[i]! += clientLossMs;
+      }
+      if (this.envelopeOffsetMs !== null) this.envelopeOffsetMs += clientLossMs;
     }
     this.reportsSeen += 1;
     if (this.reportsSeen > this.warmupReports) {

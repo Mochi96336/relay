@@ -471,8 +471,11 @@ window.addEventListener('relay:youtube-telemetry', (event) => {
   const detail = event.detail;
   if (!detail || typeof detail !== 'object') return;
 
+  const anchorRequest = { sampledAtPerformanceMs: detail.sampledAtPerformanceMs, captureAnchor: null };
+  window.dispatchEvent(new CustomEvent('relay:sample-song-anchor-request', { detail: anchorRequest }));
   send({
     type: 'youtube-telemetry',
+    captureAnchor: anchorRequest.captureAnchor,
     ...detail,
     playbackTransportId: transportId,
     playbackGeneration,

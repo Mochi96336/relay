@@ -497,6 +497,17 @@ export class AudioSession {
     this.micGain.setTargetDb(value, this.running);
   }
 
+  /** Recent capture coordinate mapped through the current ingest transform.
+   * Only a short neighborhood is valid: historical trim/fold transforms differ. */
+  sampleSongPosition(source: 'mic' | 'backing', generation: number, index: number, rate: number) {
+    const timeline = source === 'mic' ? this.mic : this.backing;
+    if (timeline.generation !== generation || timeline.sourceRate !== rate
+        || timeline.sourceFrontier === null || !Number.isFinite(index)
+        || index < 0 || index > timeline.sourceFrontier
+        || timeline.sourceFrontier - index > rate) return null;
+    return timeline.totalSamples - (timeline.sourceFrontier - index) * this.sampleRate / rate;
+  }
+
   get alignment(): AlignmentState {
     return { ...this.alignmentState };
   }

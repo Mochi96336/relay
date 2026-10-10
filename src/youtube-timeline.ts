@@ -7,6 +7,8 @@ const DISCONTINUITY_THRESHOLD_MS = 750;
 const MIN_PLAYING_PROGRESS_SECONDS = 0.005;
 const DRIFT_WINDOW_MS = 30_000;
 const MIN_DRIFT_SPAN_MS = 8_000;
+const PHASE_CORRECTION_THRESHOLD_MS = 450;
+const PHASE_CORRECTION_CONFIRMATIONS = 3;
 
 type TimelineAnchor = {
   videoId: string;
@@ -64,6 +66,10 @@ export class YouTubeTimelineTracker {
   private reanchors = 0;
   private corrections = 0;
   private lastReason = 'waiting';
+  private phaseDirection = 0;
+  private phaseConfirmations = 0;
+  private phaseCorrections = 0;
+  private lastPhaseCorrectionMs: number | null = null;
   /**
    * Last evidence that a PLAYING media clock itself moved.
    *
@@ -147,9 +153,24 @@ export class YouTubeTimelineTracker {
     }
 
     const discontinuity = continuityErrorMs !== null && Math.abs(continuityErrorMs) > DISCONTINUITY_THRESHOLD_MS;
-    const correction = explicitJump || discontinuity;
+    const abruptCorrection = explicitJump || discontinuity;
     const mediaPositionChanged = previous === null
       || Math.abs(currentTime - previous.currentTime) >= MIN_PLAYING_PROGRESS_SECONDS;
+    // Small per-packet rate errors can accumulate indefinitely without a seek.
+    // Require fresh, advancing evidence on the same side of the room clock;
+    // a frozen player or a single late/noisy report must not move its anchor.
+    const phaseDirection = !videoChanged && !stateChanged && !rateChanged
+      && !abruptCorrection && state === PLAYING && previous
+      && nowMs > previous.receivedAtServerMs
+      && nowMs - previous.receivedAtServerMs <= STALE_AFTER_MS
+      && currentTime - previous.currentTime >= MIN_PLAYING_PROGRESS_SECONDS
+      && phaseErrorMs !== null && Math.abs(phaseErrorMs) > PHASE_CORRECTION_THRESHOLD_MS
+      ? Math.sign(phaseErrorMs) : 0;
+    this.phaseConfirmations = phaseDirection === 0 ? 0
+      : phaseDirection === this.phaseDirection ? this.phaseConfirmations + 1 : 1;
+    this.phaseDirection = phaseDirection;
+    const phaseCorrection = this.phaseConfirmations >= PHASE_CORRECTION_CONFIRMATIONS;
+    const correction = abruptCorrection || phaseCorrection;
     this.trackClockProgress({
       state,
       currentTime,
@@ -177,10 +198,17 @@ export class YouTubeTimelineTracker {
         state,
         playbackRate,
       };
-      this.rateHistory = [];
+      this.phaseConfirmations = 0;
+      this.phaseDirection = 0;
+      if (phaseCorrection) {
+        this.phaseCorrections += 1;
+        this.lastPhaseCorrectionMs = phaseErrorMs;
+      } else this.rateHistory = [];
       if (state === PLAYING) this.pushRateSample(nowMs, currentTime);
       this.lastReason = videoChanged
         ? 'video'
+        : phaseCorrection
+          ? 'phase-drift'
         : correction
           ? 'seek/jump'
           : stateChanged
@@ -265,6 +293,8 @@ export class YouTubeTimelineTracker {
       reanchors: this.reanchors,
       corrections: this.corrections,
       hardResyncs: this.corrections,
+      phaseCorrections: this.phaseCorrections,
+      lastPhaseCorrectionMs: this.lastPhaseCorrectionMs,
       lastReason: this.lastReason,
     };
   }

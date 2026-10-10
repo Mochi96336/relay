@@ -1,3 +1,5 @@
+import { CaptureClockRecovery } from './capture-clock-recovery.js';
+import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
@@ -77,6 +79,7 @@ let audioContext = null;
 let mediaStream = null;
 let activeNode = null;
 let activeCaptureGraph = null;
+const captureClockRecovery = new CaptureClockRecovery();
 let captureGraphEpoch = 0;
 let captureGraphRebuildPromise = null;
 let captureWatchdogTimer = null;
@@ -119,7 +122,28 @@ let audioUplinkHealthTimer = null;
 // component keeps this unique across any reload that is not the same
 // millisecond as a previous one, which a real reload never is.
 let captureGeneration = Date.now() >>> 0;
+let captureGenerationReason = 'page-initialized';
 let captureSampleCursor = 0;
+let sampleSongCapture = null;
+window.addEventListener('relay:sample-song-anchor-request', (event) => {
+  const request = event.detail;
+  const anchor = sampleSongCapture;
+  if (!request || !anchor || !publisherActive || !audioContext
+      || audioContext.state !== 'running' || anchor.generation !== captureGeneration) return;
+  const age = performance.now() - anchor.observedAt;
+  if (age < 0 || age > 250) return;
+  const sampledAt = Number(request.sampledAtPerformanceMs);
+  const contextAtObservation = audioContext.currentTime;
+  const now = performance.now();
+  if (!Number.isFinite(sampledAt) || now - sampledAt < 0 || now - sampledAt > 100) return;
+  const index = anchor.firstSampleIndex
+    + (contextAtObservation - anchor.contextTime + (sampledAt - now) / 1000) * audioContext.sampleRate;
+  if (!Number.isFinite(index)) return;
+  request.captureAnchor = {
+    generation: captureGeneration, sampleRate: audioContext.sampleRate,
+    sampleIndex: anchor.firstSampleIndex, mediaDeltaSeconds: (anchor.firstSampleIndex - index) / audioContext.sampleRate, uncertaintyMs: 40,
+  };
+});
 let capturePacketSequence = 0;
 
 // AudioPacket v2 keeps transport order (`sequence`) separate from capture time
@@ -166,7 +190,17 @@ function audioUplinkHealthPayload(healthRequestId) {
     version: 1,
     captureGeneration: captureGeneration >>> 0,
     healthRequestId,
+    captureGenerationReason,
     capturedSamples: captureSampleCursor,
+    capturedAtPerformanceMs: performance.now(),
+    captureClock: {
+      contextSeconds: audioContext?.currentTime ?? null,
+      originContextSeconds: activeCaptureGraph?.captureClockOriginContextTime ?? null,
+      lastChunkContextSeconds: sampleSongCapture?.contextTime ?? null,
+      lastChunkSampleIndex: sampleSongCapture?.firstSampleIndex ?? null,
+      lastChunkObservedAtMs: sampleSongCapture?.observedAt ?? null,
+      sampleRate: audioContext?.sampleRate ?? null,
+    },
     inputGapSamples: captureInputGapSamples,
     inputGapActive: micCaptureRecovery.status().inputGapActive,
     inputMuted: captureInputMuted,
@@ -230,6 +264,9 @@ function startCaptureWatchdog(
     const decision = micCaptureRecovery.observe(captureSnapshot());
     if (decision.resume) resumePublisherAudioContext();
     if (decision.rebuild) void rebuildPublisherCaptureGraph('pcm-stall');
+    if (!captureGraphRebuildPromise && captureClockRecovery.observe(captureSnapshot())) {
+      void rebuildPublisherAudioContext();
+    }
   }, MIC_CAPTURE_WATCHDOG_INTERVAL_MS);
 }
 
@@ -240,7 +277,9 @@ function advanceCaptureGeneration(reason) {
   activeCalibrationProbeRequestId = null;
   retireCalibrationProbePlayback();
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
+  captureGenerationReason = reason;
   captureSampleCursor = 0;
+  sampleSongCapture = null;
   capturePacketSequence = 0;
   captureInputGapSamples = 0;
   resetUplinkEvidence();
@@ -496,6 +535,12 @@ function handleCaptureWorkletMessage(event, graph) {
   const pcm = pcmMessage.buffer;
   const chunkFirstSampleIndex = captureSampleCursor;
   captureSampleCursor += pcm.byteLength / 2;
+  if (Number.isFinite(pcmMessage.capturedAtContextTime)) {
+    sampleSongCapture = {
+      generation: captureGeneration, firstSampleIndex: chunkFirstSampleIndex,
+      contextTime: pcmMessage.capturedAtContextTime, observedAt: performance.now(),
+    };
+  }
 
   const dispatch = classifyCaptureDispatch({
     currentContextTimeSeconds: graph.context.currentTime,
@@ -861,23 +906,25 @@ function retireCalibrationProbePlayback() {
 
 /**
  * Plays the probe out of the phone speaker so the phone's own microphone hears
- * it. The reply says only that it played and for which request - the server
- * derives the timing from its own round trip, because the client's clock is
- * not on the session's timeline and mapping it would be the very thing being
- * measured.
+ * it. The reply identifies the request and reports local preparation durations.
+ * The server separates those durations from the transport round trip; absolute
+ * browser timestamps are never treated as session time.
  */
 async function playCalibrationProbe(requestId, leadMs) {
+  const receivedAtMs = performance.now();
   const context = audioContext;
   const sessionEpoch = publisherSessionEpoch;
   const expectedGeneration = captureGeneration >>> 0;
   if (
     !context
     || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    || document.visibilityState === 'hidden'
     || activeCalibrationProbeRequestId !== requestId
   ) return;
 
   try {
+    if (document.visibilityState === 'hidden') {
+      throw new Error('Phone probe cannot play while the page is hidden.');
+    }
     // Mobile Safari may leave resume() pending while a page is suspended. The
     // server can retire this request meanwhile, so every continuation has to
     // re-prove request and capture ownership before it may create audible nodes.
@@ -887,15 +934,16 @@ async function playCalibrationProbe(requestId, leadMs) {
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
       || socket?.readyState !== WebSocket.OPEN
     ) return;
-    if (
-      audioContext !== context
-      || document.visibilityState === 'hidden'
-      || context.state !== 'running'
-    ) {
+    if (audioContext !== context) throw new Error('Phone probe AudioContext was replaced.');
+    if (document.visibilityState === 'hidden') {
+      throw new Error('Phone probe cannot play while the page is hidden.');
+    }
+    if (context.state !== 'running') {
       throw new Error(`Phone probe AudioContext is ${context.state}.`);
     }
 
     retireCalibrationProbePlayback();
+    const scheduledAtMs = performance.now();
     const startTime = context.currentTime + leadMs / 1000;
     const playback = {
       requestId,
@@ -948,6 +996,7 @@ async function playCalibrationProbe(requestId, leadMs) {
       // The same truncation framePcm applies. The server compares this against
       // the generation it read off a PCM frame header, which is a uint32.
       generation: expectedGeneration,
+      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs),
     });
     if (!result.sent) {
       retireCalibrationProbePlayback();
@@ -1297,6 +1346,77 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   });
 }
 
+// A Worklet replacement preserves the old context clock. Sustained clock loss
+// needs a new context and a new capture generation; keep the existing track.
+function rebuildPublisherAudioContext() {
+  if (captureGraphRebuildPromise) return captureGraphRebuildPromise;
+  const sessionEpoch = publisherSessionEpoch;
+  const expectedGeneration = captureGeneration >>> 0;
+  const oldContext = audioContext;
+  const stream = mediaStream;
+  const graph = activeCaptureGraph;
+  let replacement = null;
+  let committed = false;
+  let timeout;
+  const current = () => isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
+    && audioContext === oldContext && mediaStream === stream && activeCaptureGraph === graph;
+  const promise = Promise.resolve().then(async () => {
+    if (!current()) return false;
+    replacement = new AudioContext({ latencyHint: 'interactive' });
+    const prepared = replacement;
+    await Promise.race([
+      (async () => {
+        await prepared.audioWorklet.addModule('/capture-worklet.js');
+        if (!current()) return;
+        await prepared.resume();
+      })(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('AudioContext recovery timed out')), 3000);
+      }),
+    ]);
+    if (!current()) return false;
+    if (prepared.state !== 'running') throw new Error('Replacement AudioContext is not running');
+    committed = true;
+    disposeCaptureGraph(graph);
+    activeCaptureGraph = null;
+    activeNode = null;
+    audioContext = prepared;
+    replacement = null;
+    // The old context's state handler no longer owns the current publisher.
+    void oldContext?.close().catch(() => {});
+    prepared.addEventListener('statechange', () => {
+      if (!publisherActive || audioContext !== prepared) return;
+      if (prepared.state === 'closed') {
+        void finishMicrophoneSession('context-closed', { releaseMic: false }).catch(console.error);
+      } else if (shouldRequestAudioResume(prepared.state)) {
+        beginCaptureRecovery(`context-${prepared.state}`);
+      }
+    });
+    const generation = advanceCaptureGeneration('context-clock-underfed');
+    installCaptureGraph(sessionEpoch, stream, prepared);
+    micCaptureRecovery.noteGraphRebuilt(captureSnapshot());
+    restartPublisherConnectionForGeneration(sessionEpoch, generation);
+    startCaptureWatchdog(sessionEpoch, generation);
+    console.warn('Microphone AudioContext replaced after sustained clock loss');
+    return true;
+  }).catch((error) => {
+    console.warn('Microphone AudioContext recovery failed', error);
+    // A failure from a retired session must not stop a newer Mic session.
+    // Preparation failure leaves the existing capture intact. Only a failure
+    // after retiring its graph needs the bounded user-gesture Retry Mic path.
+    if (committed && isCurrentPublisherSession(sessionEpoch)) {
+      void finishMicrophoneSession('context-rebuild-failed', { releaseMic: false }).catch(console.error);
+    }
+    return false;
+  }).finally(() => {
+    clearTimeout(timeout);
+    if (replacement) void replacement.close().catch(() => {});
+    if (captureGraphRebuildPromise === promise) captureGraphRebuildPromise = null;
+  });
+  captureGraphRebuildPromise = promise;
+  return promise;
+}
+
 function rebuildPublisherCaptureGraph(reason) {
   if (captureGraphRebuildPromise) return captureGraphRebuildPromise;
 
@@ -1357,6 +1477,7 @@ async function stop({ releaseMic = true } = {}) {
   stopAudioUplinkHealthReporting();
   stopCaptureWatchdog();
   micCaptureRecovery.stop();
+  captureClockRecovery.reset();
 
   const closingSocket = socket;
   const closingStream = mediaStream;
@@ -1518,7 +1639,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     // Rebuilding a stuck worklet must not make later mute/unmute/ended events stale.
     const captureIsCurrent = () => isCurrentPublisherSession(sessionEpoch)
       && mediaStream === captureStream
-      && audioContext === captureContext;
+      && audioContext !== null;
     const [track] = captureStream.getAudioTracks();
     let captureConfigurationRefreshPromise = null;
     const refreshCaptureConfiguration = () => {
@@ -1570,6 +1691,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       }).catch(console.error);
     });
 
+    captureClockRecovery.reset();
     micCaptureRecovery.start(captureSnapshot(), 'startup');
     installCaptureGraph(sessionEpoch, captureStream, captureContext);
     startCaptureWatchdog(sessionEpoch, generation);

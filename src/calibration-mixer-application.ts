@@ -11,6 +11,7 @@ export type CalibrationMixerApplicationInput = {
   contentValidationSlewMatchesRevision: boolean;
   calibratedMicLagTarget: number | null;
   jitterThresholdMs: number;
+  newCalibrationAuthority?: boolean;
 };
 
 export type CalibrationMixerApplicationDecision =
@@ -40,6 +41,7 @@ export function decideCalibrationMixerApplication(
   // an ordinary player-offset wobble.
   if (
     input.robotContentAuthority
+    && !input.newCalibrationAuthority
     && !input.hasContentValidationSlew
     && input.activeMicLagMs !== null
     && input.nextMicLagMs !== null

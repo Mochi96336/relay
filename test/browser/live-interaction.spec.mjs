@@ -1318,15 +1318,19 @@ test('production DOM: retrying a damaged Mic keeps the Mic instead of releasing 
   expect(again.captureGeneration).not.toBe(first.captureGeneration);
 });
 
-test('production DOM: a backgrounded phone does not play a timing probe', async ({ page }) => {
+test('production DOM: a backgrounded phone reports probe rejection without playing audio', async ({ page }) => {
   await livePhone(page);
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     document.dispatchEvent(new Event('visibilitychange'));
     window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: 77, leadMs: 20 });
   });
-  await page.waitForTimeout(600);
-  expect(await probeReplies(page)).toEqual([]);
+  await expect.poll(() => probeReplies(page)).toEqual([{
+    type: 'calibration-probe-failed', requestId: 77, generation: expect.any(Number), target: 'mic',
+  }]);
+  expect(await page.evaluate(() => window.__relayInteractionHarness.commands.find(
+    command => command.type === 'calibration-probe-failed' && command.requestId === 77,
+  )?.reason)).toMatch(/page is hidden/);
   expect(await page.evaluate(() => window.__oscillatorsCreated ?? 0)).toBe(0);
 });
 

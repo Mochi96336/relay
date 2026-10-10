@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 
 const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 const protocol = readFileSync(new URL('../src/relay-command-protocol.ts', import.meta.url), 'utf8');
@@ -111,7 +112,7 @@ test('the server composition boundary still owns the extracted message effects',
   assert.match(server, /calibration\.start\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
   assert.match(server, /const nowMs = performance\.now\(\)/);
-  assert.match(server, /const accepted = micRuntime\.noteUplinkHealth\(socket, health, nowMs\)/);
+  assert.match(server, /const accepted = micRuntime\.noteUplinkHealth\(socket, health, nowMs, \{\s*playable: micPlayable\(nowMs\), headroomMs: session\.health\(\)\.micHeadroomMs,\s*\}\)/);
   assert.match(server, /if \(accepted\) noteRecordingMicGapHealth\(health\)/);
   assert.match(
     server,
@@ -136,4 +137,25 @@ test('registration and Robot lifecycle are not command authority', () => {
   assert.doesNotMatch(protocol, /case 'register'|robot-source-hello/);
   assert.match(server, /registrationProtocol\.dispatch\(socket, payload\)/);
   assert.match(server, /robotLifecycleProtocol\.dispatch\(socket, payload\)/);
+});
+
+test('production recovery logger retains unseen actions once and separates capture generations', () => {
+  const start = server.indexOf('let micRecoveryLogGeneration:');
+  const end = server.indexOf('let lastMicDeviceReportKey:', start);
+  assert.ok(start >= 0 && end > start);
+  const production = server.slice(start, end)
+    .replace(': number | null', '').replace(': AudioUplinkHealth', '');
+  const logs: any[] = [];
+  const report = runInNewContext(`${production}\nreportMicRecovery`, {
+    console: { warn: (_tag: string, payload: string) => logs.push(JSON.parse(payload)) },
+  });
+  const events = [{sequence:1,action:'replace-websocket',reason:'control-ack-timeout',ageMs:1000},
+    {sequence:2,action:'degraded-latched',reason:'control-ack-timeout-after-bounded-recovery',ageMs:0}];
+  const health = {captureGeneration:7,transport:{recovery:{sequence:2,events}}};
+  report(health); report(health);
+  assert.deepEqual(logs.map(x => x.sequence), [1,2]);
+  report({captureGeneration:8,transport:{recovery:{sequence:1,events:events.slice(0,1)}}});
+  assert.equal(logs.length,3);
+  assert.equal(logs[2].captureGeneration,8);
+  assert.equal(logs[0].ageMs,1000);
 });

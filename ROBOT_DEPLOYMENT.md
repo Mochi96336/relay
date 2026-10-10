@@ -329,3 +329,207 @@ That is not the same as a Pi/Robot proof. Full phone microphone + robot backing 
 automatic calibration still needs an integrated real-device sung Take rehearsal,
 and automatic recovery additionally needs the injected-fault cases above. Those
 real-device checks remain the gate on enabling the recovery timer unattended.
+
+## Experimental sample/song fallback
+
+`RELAY_SAMPLE_SONG_FALLBACK=rtt` preserves the default. `shadow` collects and
+reports the new estimate without applying it. `sample-song` uses valid matching
+phone/Robot sample-to-YouTube observations when no acoustic calibration is
+applied; missing evidence falls back to RTT/2. Boot/content authority retains
+priority. Existing YouTube room-clock RTT estimation is unchanged.
+
+The phone pairs Worklet capture timestamps with the local player observation.
+The Robot pairs Chromium and stdin observations using their shared host wall
+clock, bounded to 500 ms separation. This requires Chromium, bridge and Relay on
+the same host. The mapping is approximate: player output latency and
+PipeWire/FIFO buffering remain unmeasured. `uncertaintyMs` bounds the observation
+pairing allowance, not the total acoustic-path error. It is not a replacement
+for Boot/content calibration.
+
+Three consistent observations per side are required. Stale evidence, changed
+capture/rate/song or a player-clock discontinuity withdraws the estimate.
+Recent source coordinates are mapped through the current ingest frontier;
+historical coordinates more than one second old are rejected. Within that
+short interval, individual sample insertions/removals are approximated by the
+current transform. The fallback moves at at most 1% of real time and freezes
+during a Take. Diagnostics in `timing-calibration-status.sampleSongFallback`
+include mode, candidate, selected and active (no acoustic calibration).
+Reload the phone after updating so it publishes capture anchors.
+
+To capture concurrent shadow evidence without restarting services or changing
+calibration, run `node scripts/sample-song-shadow.mjs 180 /absolute/path/run.jsonl`
+with the deployment environment loaded. It requests read-only status once per
+second, writes a mode-0600 JSONL file and a summary, and never registers an audio
+role or starts a Take. Output paths must not already exist. The WebSocket URL is
+`RELAY_URL` or `ws://localhost:${PORT:-3100}/ws`; the script derives `/statusz`
+from that origin. It supports the shared outer key via `RELAY_KEY`.
+
+Summaries split on capture/session, song, rate and calibration measurement
+changes. `liveBootEstimateMs` recomputes the old measured path difference with
+the current smoothed Robot offset; it is a comparison, not renewed Boot
+validity. `shadowMinusRobotDeltaMs` is also only a comparison to that smoothed
+tracker, not an exact decomposition of the two raw anchor pairs. The existing
+content validator's window results are preserved, including their age and
+outcome; an old result retained after an invalid window is not fresh proof.
+No raw PCM is exported by this tool.
+
+For a run where listening confirms Content alignment, compare the same stable
+rows against that Content live advance with
+`node scripts/sample-song-shadow-report.mjs run1.jsonl run2.jsonl > comparison.json`.
+The offline report requires complete, nonprovisional Content and a matching
+stable/drift-confirmed validation baseline no more than 60 seconds old. It
+excludes recording/finalization, new gaps/folds, frontier correction, buffer
+clamps and read-head movement, then waits five seconds for settling. All three
+estimators use the same paired observations. It reports signed/absolute median,
+absolute P95, worst deviation and the fraction within 25 ms. This threshold is
+reported for comparison; it does not change runtime acceptance.
+
+Capture/song counts are separate from row counts. Thirty-second block summaries
+show persistence over time and are not claimed to be independent trials.
+
+Timing diagnostics also expose `desiredCalibratedMicLagMs` (live-coordinate
+calibration target before jitter hold, Take freeze and slew) and
+`calibratedMicLagTargetMs` (the mixer's slew target). The collector saves the
+Content target as `contentLiveTargetMs`, which the offline comparison prefers.
+A Content authority label alone does not prove the read head moved. A newly
+confirmed calibration revision now bypasses the Robot jitter hold once, while
+Take freezes and mapping holds retain the pending revision until it can apply.
+The same authority continues to use the normal jitter policy. Diagnostics expose
+`confirmedCalibrationRevision` and `mixerCalibrationAuthority` so the confirmed
+revision can be compared with the applied revision. For old logs without a live
+Content target, the report conservatively excludes rows whose applied advance
+still exactly equals the stored Boot result, rather than comparing Boot with
+itself. An explicitly unavailable Content target is never replaced with the
+applied value.
+
+### Robot follow and Boot probe timing
+
+Robot follow uses the publisher-projected `youtubeTime`, falling back to
+`serverTime` when it is unavailable. A player error strictly greater than
+450 media milliseconds triggers a seek when the route is armed and the seek
+settling/report gates permit it. Exactly 450 ms does not trigger a seek. After
+a seek, offset reports are suppressed for one second; a fresh eligible report
+is required before the next correction. Sustained room-clock phase errors are
+corrected after three fresh, advancing, same-sign observations beyond 450 ms.
+The threshold is media time, including when playback rate differs from 1×.
+
+Boot probe scheduling separates browser preparation from network transit:
+`sent + (RTT - processing) / 2 + schedulingDelay + lead`. Browser durations must
+satisfy `0 <= schedulingDelay <= processing <= RTT`; missing or inconsistent
+evidence uses the explicitly labeled `legacy-rtt-half` method. This still assumes
+symmetric network transit. Completed probe evidence is retained separately from
+the current attempt so probe IDs and capture generations do not label an older
+measurement. Hidden publisher pages explicitly reject a probe instead of silently
+waiting for an ACK timeout.
+
+### Timing diagnostics and capture restart evidence
+
+The main timing surface shows the applied alignment and YouTube playback clocks.
+The existing collapsed sound comparison contains Boot, Content, sample/YouTube
+fallback and ongoing validation. Stored Boot results, current-coordinate
+projections, raw Content lag, requested targets and actual Mixer advance are
+different facts. Expired playback observations do not provide a current Boot
+projection. The comparison UI omits the RTT/2 row and names the sample/YouTube
+estimate by its method; `shadow` remains an internal configuration value.
+
+Microphone health can include `captureGenerationReason` (for example
+`publisher-start`, `context-clock-underfed`, `input-gap` or `processor-error`).
+The server retains it in capture diagnostics and device logs. Older pages may
+omit it; a generation change alone cannot establish whether the user retried
+Mic or the browser rebuilt capture automatically. The field does not change
+calibration or trigger recovery.
+
+
+### Bounded recovery for late microphone audio
+
+Health ACKs optionally carry the newest accepted source `receivedEndSample` and
+its `sampleRate`. The browser compares that source coordinate with a recent local
+capture snapshot, using only ACKs received within 1.5 seconds of their health
+request. Three consecutive eligible, advancing-capture observations more than
+1.5 seconds behind trigger the existing bounded WT demotion / WS replacement
+ladder even when throughput coverage is healthy. Hidden, muted and input-gap
+captures are excluded. Legacy ACKs without coordinates retain coverage recovery.
+This is an operational late-audio threshold, separate from the Robot's 450 ms
+media seek threshold; it does not alter acoustic calibration or sample mapping.
+
+WebSocket audio also checks for the oldest bytes remaining in the browser send queue
+for more than one second (including while the queue slowly drains). It rejects more audio and, for a recent
+eligible capture, requests the same bounded socket replacement without waiting
+for a health ACK. The byte budget remains in force. This watchdog does not claim
+to observe or cancel packets already handed to TCP or the network, and it does
+not repeatedly reconnect a capture that has exhausted its recovery budget.
+
+
+### Poor-network control recovery and acceptance
+
+The 2026-10-10 retest did not establish stable recovery. A bounded reconnect
+may restore flow temporarily while repeated jitter still makes Mic unplayable.
+The control recovery changes below are implemented. Acoustic calibration and
+Robot's 450 ms follow threshold remain outside the transport policy. Mixer
+starvation is exposed as separate evidence; sustained-bandwidth adaptation is
+not implemented by these control recovery changes.
+
+1. Correlate health ACKs by `healthRequestId` within capture/socket/eligibility
+   epochs. The server already echoes this optional ID; browser recovery still
+   consumes the first queued health record. Bound pending records and retain
+   explicit legacy FIFO behavior only for legacy ACKs. Unmatched, duplicate and
+   retired-epoch ACKs must not consume a current observation or recovery budget.
+2. Carry bounded diagnostic evidence in the existing transport health/status:
+   recovery action/reason/sequence, phase and spent budgets, ACK round-trip age,
+   local queue oldest-byte age, source-coordinate backlog and its availability.
+   Distinguish unknown freshness from zero backlog. Preserve the last action
+   separately from routine `none` observations. Server logging should record
+   action changes rather than every health tick. Avoid expanding normal UI.
+3. Add a capture-scoped control-progress watchdog that does not require a new
+   ACK to execute. Local capture/source eligibility and socket epochs still
+   fence actions. Control silence is evidence about the control path, not proof
+   that audio is queued; combine it with available transport/PCM evidence and
+   retain the bounded recovery budget. Never treat a delayed ACK as a new live
+   measurement merely to bypass the freshness guard.
+4. Evaluate repeated Mixer starvation independently of the severe 1.5-second
+   transit threshold. Separate short jitter tolerance, sustained missing media,
+   source clock failure and exhausted recovery. Do not lower thresholds or
+   repeatedly reconnect solely because a status snapshot shows negative
+   headroom. Persistent insufficient bandwidth requires a separate microphone
+   bitrate/codec decision; socket replacement cannot create capacity.
+
+Required production-code test scenarios:
+
+| Scenario | Required outcome |
+|---|---|
+| Healthy audio; ACK delayed 2–5 s | No false upstream-lateness verdict or reconnect storm |
+| Capture continues; both control and media stop | Watchdog executes without waiting for ACK, within its explicit deadline |
+| One missing, duplicate or unmatched ACK ID | Later matching ACK uses its own snapshot; no FIFO age contamination |
+| Same-capture reconnect; late old socket ACK | No consumption of current state or budget |
+| Full throughput with constant 8 s lateness | Not considered recovered while freshness is still bad |
+| 300–1000 ms jitter with repeated Mixer starvation | Recorded as such, not mislabeled healthy or automatically treated as clock loss |
+| Hidden, muted, input-gap or stopped source | No transport recovery budget spent on source failure |
+| Old browser/server without new fields | Unknown evidence remains explicit; compatible bounded behavior |
+| Recovery budget exhausted; media later resumes | No infinite reconnect; recovery requires fresh usable evidence |
+
+On Pi, run typecheck and the affected parser, runtime, browser-adapter and
+recovery tests only. Deploy the receiver when Take is idle, then run the full
+GitHub CI. For the next handset trial, load the new frontend and preserve one
+read-only run in the existing evidence directory. Report action reasons and
+stable usable intervals; raw sample counts or a successful reconnect alone are
+not an acceptance criterion. Do not compare trials with different impairment
+strength as a controlled A/B result.
+
+Implementation details: at most 64 pending health records are retained. ACKs
+with an ID match that record within the current capture/socket/source epoch;
+a later matching ACK retires preceding requests whose replies are missing.
+Legacy FIFO matching is suspended after eviction makes it ambiguous, until a
+new physical socket binds. Missing or old evidence stays unknown.
+
+While eligible capture continues, six seconds without health-ACK progress can
+spend the existing one-socket-replacement budget without waiting for a reply.
+A stopped source, source boundary or stale local capture observation resets or
+pauses this control episode. This diagnoses control silence, not upstream
+lateness. It does not guarantee service on a link without enough bandwidth.
+
+`captureAndSender.transport.recovery` retains up to eight sequenced action
+records, ACK round-trip time, control silence, queue age, optional fresh source
+backlog and fresh Mixer playability/headroom. Last action survives routine
+observations. Freshness-dependent fields expire after 1.5 seconds; negative
+headroom is valid evidence. The server logs unseen action sequences under
+`[mic-recovery]`, rather than treating each health tick as a new action.

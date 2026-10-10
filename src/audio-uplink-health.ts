@@ -30,7 +30,28 @@ export type AudioCaptureDispatchHealth = {
   backlogActive: boolean;
 };
 
+export type MicRecoveryEvent = { sequence: number; action: string; reason: string; ageMs?: number };
+export type MicRecoveryEvidence = {
+  events?: MicRecoveryEvent[];
+  mixPlayable?: boolean | null;
+  mixHeadroomMs?: number | null;
+  sequence: number;
+  action: string | null;
+  reason: string | null;
+  phase: string;
+  webTransportDemotionUsed: boolean;
+  webSocketReplacementUsed: boolean;
+  ackRoundTripMs: number | null;
+  controlSilenceMs: number | null;
+  audioBacklogMs: number | null;
+  queueAgeMs: number | null;
+  pendingHealth: number;
+  unmatchedHealthAcks: number;
+};
+
 export type AudioUplinkTransportHealth = {
+  recovery?: MicRecoveryEvidence;
+
   path: 'websocket' | 'webtransport';
   maxPacketBytes: number | null;
   minWebTransportMaxPacketBytes: number | null;
@@ -76,8 +97,16 @@ export type AudioUplinkTransportHealth = {
 export type AudioUplinkHealth = {
   version: 1;
   captureGeneration: number;
+  /** Why the current capture clock began; absent on older pages. Observation only. */
+  captureGenerationReason?: string;
   /** Optional browser-generated correlation token. Older v1 pages omit it. */
   healthRequestId?: number;
+  /** Sender monotonic time paired with capturedSamples, independent of network delay. */
+  capturedAtPerformanceMs?: number;
+  /** Optional capture-stage clocks; observation only, never calibration authority. */
+  captureClock?: Partial<Record<'contextSeconds' | 'originContextSeconds'
+    | 'lastChunkContextSeconds' | 'lastChunkSampleIndex'
+    | 'lastChunkObservedAtMs' | 'sampleRate', number | null>>;
   capturedSamples: number;
   inputGapSamples: number;
   /** True while the capture worklet has positively identified a sustained missing input channel. */
@@ -273,14 +302,77 @@ function parseCaptureDispatch(value: unknown): AudioCaptureDispatchHealth | null
   return { lagMs, maxLagMs, backlogMs, backlogActive };
 }
 
+function parseRecoveryEvidence(value: unknown): MicRecoveryEvidence | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const actions = ['none', 'demote-webtransport', 'replace-websocket', 'recovered', 'retry-webtransport', 'degraded-latched'];
+  if (v.action !== null && !actions.includes(String(v.action))) return null;
+  if (v.reason !== null && (typeof v.reason !== 'string' || !/^[a-z][a-z-]{0,95}$/.test(v.reason))) return null;
+  if (typeof v.phase !== 'string' || !/^[a-z][a-z-]{0,47}$/.test(v.phase)) return null;
+  for (const k of ['sequence', 'pendingHealth', 'unmatchedHealthAcks']) {
+    if (!Number.isSafeInteger(v[k]) || (v[k] as number) < 0) return null;
+  }
+  if ((v.pendingHealth as number) > 64) return null;
+  for (const k of ['ackRoundTripMs', 'controlSilenceMs', 'audioBacklogMs', 'queueAgeMs']) {
+    if (v[k] !== null && (typeof v[k] !== 'number' || !Number.isFinite(v[k]) || (v[k] as number) < 0)) return null;
+  }
+  if (typeof v.webTransportDemotionUsed !== 'boolean' || typeof v.webSocketReplacementUsed !== 'boolean') return null;
+  if (v.mixPlayable !== undefined && v.mixPlayable !== null && typeof v.mixPlayable !== 'boolean') return null;
+  if (v.mixHeadroomMs !== undefined && v.mixHeadroomMs !== null
+    && (typeof v.mixHeadroomMs !== 'number' || !Number.isFinite(v.mixHeadroomMs))) return null;
+  let events: MicRecoveryEvent[] | undefined;
+  if (v.events !== undefined) {
+    if (!Array.isArray(v.events) || v.events.length > 8) return null;
+    events = [];
+    let previous = 0;
+    for (const entry of v.events) {
+      if (!entry || typeof entry !== 'object' || !Number.isSafeInteger(entry.sequence)
+        || entry.sequence <= previous || entry.sequence > (v.sequence as number)
+        || typeof entry.action !== 'string' || !actions.includes(entry.action)
+        || typeof entry.reason !== 'string' || !/^[a-z][a-z-]{0,95}$/.test(entry.reason)) return null;
+      if (entry.ageMs !== undefined && (typeof entry.ageMs !== 'number'
+        || !Number.isFinite(entry.ageMs) || entry.ageMs < 0)) return null;
+      events.push({ sequence: entry.sequence, action: entry.action, reason: entry.reason,
+        ...(entry.ageMs === undefined ? {} : { ageMs: entry.ageMs }) });
+      previous = entry.sequence;
+    }
+  }
+
+  return { ...(events === undefined ? {} : { events }),
+    ...(v.mixPlayable === undefined ? {} : { mixPlayable: v.mixPlayable }),
+    ...(v.mixHeadroomMs === undefined ? {} : { mixHeadroomMs: v.mixHeadroomMs }), sequence: v.sequence, action: v.action, reason: v.reason, phase: v.phase,
+    webTransportDemotionUsed: v.webTransportDemotionUsed, webSocketReplacementUsed: v.webSocketReplacementUsed,
+    ackRoundTripMs: v.ackRoundTripMs, controlSilenceMs: v.controlSilenceMs,
+    audioBacklogMs: v.audioBacklogMs, queueAgeMs: v.queueAgeMs,
+    pendingHealth: v.pendingHealth, unmatchedHealthAcks: v.unmatchedHealthAcks } as MicRecoveryEvidence;
+}
+
 export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null {
   const payload = record(value);
   if (!payload || Number(payload.version) !== 1) return null;
 
   const captureGeneration = uint32(payload.captureGeneration);
+  const captureGenerationReason = payload.captureGenerationReason;
+  if (captureGenerationReason !== undefined && (typeof captureGenerationReason !== 'string'
+    || !/^[a-z][a-z-]{0,63}$/.test(captureGenerationReason))) return null;
   const healthRequestId = payload.healthRequestId === undefined
     ? undefined
     : strictUint32(payload.healthRequestId);
+  const capturedAtPerformanceMs = payload.capturedAtPerformanceMs;
+  if (capturedAtPerformanceMs !== undefined && (typeof capturedAtPerformanceMs !== 'number'
+    || !Number.isFinite(capturedAtPerformanceMs) || capturedAtPerformanceMs < 0)) return null;
+  let captureClock: AudioUplinkHealth['captureClock'];
+  if (payload.captureClock !== undefined) {
+    const raw = record(payload.captureClock);
+    if (!raw) return null;
+    captureClock = {};
+    for (const key of ['contextSeconds', 'originContextSeconds', 'lastChunkContextSeconds',
+      'lastChunkSampleIndex', 'lastChunkObservedAtMs', 'sampleRate'] as const) {
+      const n = raw[key];
+      if (n !== null && (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1e12)) return null;
+      captureClock[key] = n;
+    }
+  }
   const capturedSamples = nonNegativeSafeInteger(payload.capturedSamples);
   const inputGapSamples = nonNegativeSafeInteger(payload.inputGapSamples);
   // Added after health v1 shipped. Missing means an older page that cannot
@@ -356,6 +448,8 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     : null;
   // Added after v1 shipped. Older pages omit it and are healthy by default;
   // a supplied non-boolean value is malformed rather than truthy telemetry.
+  const recovery = transport.recovery === undefined ? undefined : parseRecoveryEvidence(transport.recovery);
+  if (recovery === null) return null;
   const mediaRecoveryDegraded = transport.mediaRecoveryDegraded === undefined
     ? false
     : transport.mediaRecoveryDegraded;
@@ -412,8 +506,11 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
   const parsed: AudioUplinkHealth = {
     version: 1,
     captureGeneration,
+    ...(captureGenerationReason === undefined ? {} : { captureGenerationReason }),
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
     capturedSamples,
+    ...(capturedAtPerformanceMs === undefined ? {} : { capturedAtPerformanceMs }),
+    ...(captureClock === undefined ? {} : { captureClock }),
     inputGapSamples,
     inputGapActive,
     inputMuted,
@@ -433,6 +530,7 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
       webTransportLastFailure,
       datagramOutgoingMaxAgeMs,
       mediaRecoveryDegraded,
+      ...(recovery === undefined ? {} : { recovery }),
       ...counters as Record<(typeof counterNames)[number], number>,
       ...backlogCounters,
     },

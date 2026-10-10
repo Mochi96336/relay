@@ -511,6 +511,7 @@ function renderSnapshot(snapshot) {
       playbackRate: snapshot.playbackRate,
       bufferedFraction: snapshot.bufferedFraction,
       sampledAtMs: snapshot.sampledAtMs,
+      sampledAtPerformanceMs: snapshot.sampledAtPerformanceMs,
       timelineDeltaSeconds: snapshot.timelineDeltaSeconds,
     },
   }));

@@ -567,7 +567,7 @@ test('capture graph rebuild is single-flight and stop tears down the installed g
 });
 
 test('track callbacks survive graph-generation changes but stay fenced to the Mic session', () => {
-  assert.match(app, /const captureIsCurrent = \(\) => isCurrentPublisherSession\(sessionEpoch\)[\s\S]*mediaStream === captureStream[\s\S]*audioContext === captureContext/);
+  assert.match(app, /const captureIsCurrent = \(\) => isCurrentPublisherSession\(sessionEpoch\)[\s\S]*mediaStream === captureStream[\s\S]*audioContext !== null/);
   assert.doesNotMatch(app, /const captureIsCurrent = \(\) => isCurrentPublisherCapture\(sessionEpoch, generation\)/);
 });
 

@@ -3011,6 +3011,7 @@ function restartManualBootCalibration(nowMs: number) {
 
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
+  if (relayConfig.sampleSongFallback !== 'rtt') refreshLiveMicNetworkCompensation();
 
   if (
     youtubeTimeline.hasTelemetry

@@ -397,12 +397,12 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
     const stateKeys = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
     const stateName = stateKeys[timeline.state];
     rows.push(row('youtubeRate', t('diag.timing.ytRate'),
-      `${stateName ? t(`diag.timing.ytState.${stateName}`) : '—'} · ${finite(timeline.playbackRate) === null ? '—' : `${timeline.playbackRate}×`}`,
+      connected ? `${stateName ? t(`diag.timing.ytState.${stateName}`) : '—'} · ${finite(timeline.playbackRate) === null ? '—' : `${timeline.playbackRate}×`}` : t('diag.timing.clock.disconnected'),
       t('diag.timing.ytRateNote', { state: timeline.state ?? '—' })));
   }
   if (timing) {
     const value = (v) => finite(v) === null ? '—' : signedMs(Number(v));
-    rows.push(row('mixerTarget', t('diag.timing.mixerTarget'), value(timing.calibratedMicLagTargetMs), t('diag.timing.mixerTargetNote')));
+    rows.push(row('mixerTarget', t('diag.timing.mixerTarget'), value(timing.calibratedMicLagTargetMs ?? timing.requestedMicAdvanceMs), t('diag.timing.mixerTargetNote')));
     if (timing.activeCalibrationKind === 'content') {
       rows.push(row('contentTarget', t('diag.timing.contentTarget'), value(timing.desiredCalibratedMicLagMs), t('diag.timing.contentTargetNote')));
     }
@@ -412,7 +412,7 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
       const rate = finite(timeline?.playbackRate);
       const delta = finite(timing.robotPlayerOffsetMs);
       const mic = finite(boot.micLatencyMs), backing = finite(boot.backingLatencyMs);
-      rows.push(row('bootLive', t('diag.timing.bootLive'), timing.robotDeltaFresh && rate > 0 && delta !== null && mic !== null && backing !== null
+      rows.push(row('bootLive', t('diag.timing.bootLive'), timeline?.connected === true && timing.robotDeltaFresh && rate > 0 && delta !== null && mic !== null && backing !== null
         ? value(mic - backing + delta / rate) : '—', t('diag.timing.bootLiveNote')));
     }
     const fallback = timing.sampleSongFallback;

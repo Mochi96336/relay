@@ -419,3 +419,20 @@ it('Timing names sample/song when it actually controls fallback', () => {
   assert.equal(rows.method.value, 'Shadow · sample/song');
   assert.match(rows.shadow.note, /Active fallback/);
 });
+
+
+it('Timing hides expired YT state and Boot projection but retains historical measurements', () => {
+  const rows = byKey(describeTiming({ source: source(),
+    timeline: { connected: false, youtubeTime: 90, serverTime: 90, state: 1, playbackRate: 1 },
+    timing: { robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: 200,
+      robotOffsetTimingEvidence: { playerSeconds: 90 }, requestedMicAdvanceMs: 20,
+      bootCalibration: { advanceMs: 100, micLatencyMs: 200, backingLatencyMs: 100 } },
+  }, en));
+  assert.equal(rows.youtubePhone.value, '—');
+  assert.equal(rows.youtubeServer.value, '—');
+  assert.equal(rows.youtubeRobot.value, '—');
+  assert.equal(rows.youtubeRate.value, 'Not connected');
+  assert.equal(rows.bootLive.value, '—');
+  assert.equal(rows.bootStored.value, '+100 ms');
+  assert.equal(rows.mixerTarget.value, '+20 ms');
+});

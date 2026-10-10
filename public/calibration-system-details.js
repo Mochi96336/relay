@@ -159,7 +159,7 @@ function initialize() {
 
     const liveDelta = finite(timing.robotPlayerOffsetMs);
     const rate = finite(latestTimeline?.playbackRate);
-    nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null && rate > 0 && timing.robotDeltaFresh
+    nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null && rate > 0 && latestTimeline?.connected === true && timing.robotDeltaFresh
       ? t('diag.cal.effectiveValue', { ms: ms(pathDifference + liveDelta / rate), confidence: confidence(boot.confidence) })
       : boot ? t('diag.cal.pathReady') : '—';
   }

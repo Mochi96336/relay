@@ -8,6 +8,14 @@ type Observation = SongSampleAnchor & { receivedAt: number; agreements: number }
 export class SampleSongFallback {
   private mic: Observation | null = null;
   private backing: Observation | null = null;
+  private calculation: Record<string, unknown> | null = null;
+  diagnostics(now: number) {
+    return {
+      mic: this.mic ? { ...this.mic, ageMs: now - this.mic.receivedAt } : null,
+      backing: this.backing ? { ...this.backing, ageMs: now - this.backing.receivedAt } : null,
+      calculation: this.calculation,
+    };
+  }
   observe(side: 'mic' | 'backing', value: SongSampleAnchor, now: number) {
     const previous = this[side];
     if (!/^[\w-]{11}$/.test(value.videoId) || value.state !== 1
@@ -29,6 +37,7 @@ export class SampleSongFallback {
     return true;
   }
   estimate(now: number, videoId: string, map: (side: 'mic' | 'backing', a: SongSampleAnchor) => number | null, rate: number) {
+    this.calculation = null;
     const mic = this.mic, backing = this.backing;
     if (!mic || !backing || mic.agreements < 3 || backing.agreements < 3
       || mic.videoId !== videoId || backing.videoId !== videoId
@@ -38,9 +47,15 @@ export class SampleSongFallback {
     if (m === null || b === null) return null;
     const advanceMs = (m - b) * 1000 / rate
       + (backing.mediaSeconds - mic.mediaSeconds) * 1000 / mic.playbackRate;
+    this.calculation = { observedAtMs: now, mic: { ...mic }, backing: { ...backing },
+      sessionSampleRate: rate, micSessionSample: m, backingSessionSample: b,
+      sampleDifferenceMs: (m - b) * 1000 / rate,
+      songDifferenceMs: (backing.mediaSeconds - mic.mediaSeconds) * 1000 / mic.playbackRate,
+      advanceMs, accepted: Number.isFinite(advanceMs) && Math.abs(advanceMs) <= 2000 };
     return Number.isFinite(advanceMs) && Math.abs(advanceMs) <= 2000 ? advanceMs : null;
   }
   clear(side?: 'mic' | 'backing') {
+    this.calculation = null;
     if (side) this[side] = null;
     else { this.mic = null; this.backing = null; }
   }

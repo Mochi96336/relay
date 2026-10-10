@@ -12,6 +12,15 @@ const map = (_: string, a: SongSampleAnchor) => a.sampleIndex;
 test('pairs content independently of report arrival delay, including negative advances', () => {
   const f = new SampleSongFallback(); feed(f, 'mic', .1, 300); feed(f, 'backing', .5);
   assert.ok(Math.abs(f.estimate(1800, base.videoId, map, 48000)! + 400) < .001);
+  const evidence = f.diagnostics(1800);
+  assert.equal(evidence.mic?.sampleIndex, .6 * 48000);
+  assert.equal(evidence.backing?.sampleIndex, 48000);
+  assert.equal(evidence.mic?.ageMs, 0);
+  assert.equal(evidence.backing?.ageMs, 300);
+  assert.ok(Math.abs(Number(evidence.calculation?.sampleDifferenceMs) + 400) < .001);
+  assert.equal(evidence.calculation?.songDifferenceMs, 0);
+  f.estimate(2600, base.videoId, map, 48000);
+  assert.equal(f.diagnostics(2600).calculation, null, 'expired candidate cannot retain a valid calculation');
 });
 test('playback rate is used once when comparing different song positions', () => {
   const f = new SampleSongFallback(); feed(f, 'mic', .1, 0, 2); feed(f, 'backing', .5, 0, 2);

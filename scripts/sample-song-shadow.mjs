@@ -97,6 +97,7 @@ const timer = setInterval(async () => {
       takeLifecycle: takeStatus?.lifecycle ?? null,
       fresh: !!fresh, timingAgeMs: Math.round(now - timingAt), timelineAgeMs: Math.round(now - timelineAt),
       shadowMs: fresh ? timing.sampleSongFallback?.candidateMs ?? null : null,
+      shadowEvidence: fresh ? timing.sampleSongFallback?.evidence ?? null : null,
       shadowSelected: timing?.sampleSongFallback?.selected ?? false,
       shadowActive: timing?.sampleSongFallback?.active ?? false,
       rttHalfMs: fresh ? timeline.transportEstimateMs ?? null : null,

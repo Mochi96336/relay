@@ -19,6 +19,7 @@ const ws = new WebSocket(url);
 let timeline, timing, timelineAt = 0, timingAt = 0, stopped = false;
 const rows = [];
 let takeStatus = null;
+let sessionStatus = null;
 const start = performance.now();
 let busy = false;
 function percentile(values, fraction) {
@@ -36,7 +37,7 @@ function finish(error) {
   ws.close(); fs.closeSync(fd);
   const segments = new Map();
   for (const r of rows) {
-    const key = JSON.stringify([r.sessionGeneration, r.micGeneration, r.videoId, r.playbackRate, r.calibrationKind, r.playing, r.referenceMeasurementMs, r.calibrationState, r.provisional]);
+    const key = JSON.stringify([r.sessionGeneration, r.micGeneration, r.videoId, r.playbackRate, r.calibrationKind, r.playing, r.referenceMeasurementMs, r.calibrationState, r.provisional, r.serverIncarnation ?? null]);
     const last = [...segments.values()].at(-1);
     const group = last?.key === key ? last : { key, from: r.at, to: r.at, rows: [] };
     if (group !== last) segments.set(segments.size, group);
@@ -64,6 +65,7 @@ const timer = setInterval(async () => {
     ws.send(JSON.stringify({ type: 'youtube-timeline-request' }));
     ws.send(JSON.stringify({ type: 'timing-calibration-status-request' }));
     ws.send(JSON.stringify({ type: 'take-status-request' }));
+    ws.send(JSON.stringify({ type: 'session-status-request' }));
     const response = await fetch(http, { signal: AbortSignal.timeout(1500) });
     if (!response.ok) throw new Error(`statusz HTTP ${response.status}`);
     const status = await response.json();
@@ -74,6 +76,7 @@ const timer = setInterval(async () => {
     const boot = timing?.bootCalibration;
     const row = {
       at: new Date().toISOString(), elapsedMs: Math.round(now - start),
+      serverIncarnation: sessionStatus?.serverIncarnation ?? null,
       sessionGeneration: timing?.sessionGeneration ?? null,
       micGeneration: status.audio?.captureAndSender?.captureGeneration ?? null,
       videoId: timeline?.videoId ?? null, playbackRate: rate ?? null, playing: timeline?.state === 1,
@@ -118,6 +121,7 @@ ws.on('message', data => {
   try {
     const m = JSON.parse(data.toString());
     if (m.type === 'take-status') takeStatus = m;
+    if (m.type === 'session-status') sessionStatus = m;
     if (m.type === 'youtube-timeline-status') { timeline = m; timelineAt = performance.now(); }
     if (m.type === 'timing-calibration-status') { timing = m; timingAt = performance.now(); }
   } catch { /* Binary or unrelated messages are not evidence. */ }

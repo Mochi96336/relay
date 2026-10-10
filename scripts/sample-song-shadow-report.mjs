@@ -21,7 +21,7 @@ function errorStats(values) {
 }
 function identity(r) {
   return JSON.stringify([r.sessionGeneration, r.micGeneration, r.videoId, r.playbackRate,
-    r.calibrationKind, r.referenceMeasurementMs, r.calibrationState, r.provisional, r.takeLifecycle ?? 'unknown']);
+    r.calibrationKind, r.referenceMeasurementMs, r.calibrationState, r.provisional, r.takeLifecycle ?? 'unknown', r.serverIncarnation ?? null]);
 }
 function contentReference(r) {
   if (Object.hasOwn(r, 'contentLiveTargetMs')) return Number.isFinite(r.contentLiveTargetMs) ? r.contentLiveTargetMs : null;
@@ -99,7 +99,7 @@ for (const group of segments) {
 const eligibleRows = result.filter(s => s.matchedSamples >= 15);
 console.log(JSON.stringify({ reference: 'Content live-coordinate target when available; otherwise settled audible Content advance excluding ambiguous inherited Boot values',
   filters: 'Content live target or unambiguous audible Content; complete nonprovisional Content with matching baseline and stable/drift-confirmed validation <=60s old; fresh playing streams; no frontier/buffer clamp; idle Take; no new gap/fold; 5s settled read head at <=1ms/s',
-  independentTrials: { captures: new Set(eligibleRows.map(s => `${s.identity[0]}:${s.identity[1]}`)).size,
+  independentTrials: { captures: new Set(eligibleRows.map(s => `${s.identity[9] ?? 'legacy-unknown'}:${s.identity[0]}:${s.identity[1]}`)).size,
     songs: new Set(eligibleRows.map(s => s.identity[2])).size,
     note: 'Samples and 30s blocks are temporally correlated; no independence or significance claim.' },
   segments: result }, null, 2));

@@ -68,3 +68,10 @@ test('does not compare Boot with itself when a Content label inherits its read h
   assert.equal(explicit.segments[0].errorsVsContent.boot.signedMedianMs, -70);
   assert.equal(explicit.segments[0].targetReferenceSamples, 35);
 });
+
+
+test('server restarts cannot merge captures that reuse generation numbers', () => {
+  const report = analyze((r, i) => { r.serverIncarnation = i < 40 ? 'server-one' : 'server-two'; }, 80);
+  assert.equal(report.segments.length, 2);
+  assert.equal(report.independentTrials.captures, 2);
+});

@@ -72,7 +72,9 @@ async function waitForProbeCount(client: RelayClient, target: 'mic' | 'backing',
 }
 
 test('accepted probe separates publisher preparation from network transit in its actual analysis target', async () => {
-  const server = await startRelay({ ...PROBE_FAST, RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '1000' });
+  const takeDirectory = await mkdtemp(path.join(os.tmpdir(), 'relay-probe-lifecycle-'));
+  const server = await startRelay({ ...PROBE_FAST, RELAY_TAKE_DIR: takeDirectory,
+    RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '1000' });
   const clients = await robotSession(server);
   try {
     const probe = (await waitForProbeCount(clients.publisher, 'mic', 1))[0];
@@ -90,6 +92,7 @@ test('accepted probe separates publisher preparation from network transit in its
   } finally {
     clients.close();
     await server.stop();
+    await rm(takeDirectory, { recursive: true, force: true });
   }
 });
 

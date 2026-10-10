@@ -19,9 +19,19 @@ function errorStats(values) {
     absoluteP95Ms: quantile(abs, .95), worstAbsoluteMs: quantile(abs, 1),
     within25Ms: values.length ? Math.round(abs.filter(v => v <= 25).length / values.length * 1000) / 10 : null };
 }
+function measuredValues(rows) {
+  const fields = ['bootMicMs', 'bootBackingMs', 'robotDeltaMs', 'liveBootEstimateMs',
+    'referenceMeasurementMs', 'contentLiveTargetMs', 'shadowMs', 'rttHalfMs', 'appliedMs'];
+  return Object.fromEntries(fields.map(field => {
+    const values = rows.map(r => r[field]).filter(Number.isFinite);
+    return [field, { n: values.length, min: quantile(values, 0), median: quantile(values, .5), max: quantile(values, 1) }];
+  }));
+}
 function identity(r) {
   return JSON.stringify([r.sessionGeneration, r.micGeneration, r.videoId, r.playbackRate,
-    r.calibrationKind, r.referenceMeasurementMs, r.calibrationState, r.provisional, r.takeLifecycle ?? 'unknown', r.serverIncarnation ?? null]);
+    r.calibrationKind, r.referenceMeasurementMs, r.calibrationState, r.provisional, r.takeLifecycle ?? 'unknown', r.serverIncarnation ?? null,
+    r.bootProbeTimingEvidence?.mic?.requestId ?? null, r.bootProbeTimingEvidence?.backing?.requestId ?? null,
+    r.bootMicMs ?? null, r.bootBackingMs ?? null]);
 }
 function contentReference(r) {
   if (Object.hasOwn(r, 'contentLiveTargetMs')) return Number.isFinite(r.contentLiveTargetMs) ? r.contentLiveTargetMs : null;
@@ -91,13 +101,39 @@ for (const group of segments) {
     contentReferenceMs: { min: quantile(accepted.map(contentReference), 0), median: quantile(accepted.map(contentReference), .5), max: quantile(accepted.map(contentReference), 1) },
     targetReferenceSamples: accepted.filter(r => Number.isFinite(r.contentLiveTargetMs)).length,
     ambiguousInheritedBootSamples: group.rows.filter(r => r.calibrationKind === 'content' && contentReference(r) === null).length,
+    measurements: measuredValues(matched),
+    latestMatchedObservation: matched.at(-1) ?? null,
     errorsVsContent: summarize(matched), blocks30s: [...blocks.values()].filter(b => b.length >= 15).map(b => ({
       from: b[0].at, to: b.at(-1).at, samples: b.length, ...summarize(b),
     })),
   });
 }
 const eligibleRows = result.filter(s => s.matchedSamples >= 15);
+const probes = new Map();
+for (const { rows } of chunks) for (const r of rows) {
+  for (const side of ['mic', 'backing']) {
+    const evidence = r.bootProbeTimingEvidence?.[side];
+    if (!evidence) continue;
+    const key = JSON.stringify([r.serverIncarnation ?? null, evidence.sessionGeneration, side,
+      evidence.captureGeneration, evidence.requestId]);
+    const previous = probes.get(key);
+    probes.set(key, { side, serverIncarnation: r.serverIncarnation ?? null,
+      firstSeen: previous?.firstSeen ?? r.at, lastSeen: r.at, ...evidence });
+  }
+}
 console.log(JSON.stringify({ reference: 'Content live-coordinate target when available; otherwise settled audible Content advance excluding ambiguous inherited Boot values',
+  measurementDefinitions: {
+    bootMicMs: 'Server correlation of the publisher probe against captured microphone PCM, milliseconds',
+    bootBackingMs: 'Server correlation of the Robot probe against captured backing PCM, milliseconds',
+    robotDeltaMs: 'Robot player seconds minus projected publisher YouTube seconds, multiplied by 1000',
+    liveBootEstimateMs: 'bootMicMs - bootBackingMs + robotDeltaMs / playbackRate',
+    referenceMeasurementMs: 'Content correlation lag in reference coordinates; not directly the live advance',
+    contentLiveTargetMs: 'Content lag mapped by server into the current live microphone advance',
+    shadowMs: 'Server candidate from publisher and Robot sample/song anchors; individual anchors are not retained in these historical rows',
+    rttHalfMs: 'Server transport estimate from publisher RTT / 2',
+    appliedMs: 'Advance actually applied to the mixer; distinct from each candidate and the Content target',
+  },
+  bootProbeMeasurements: [...probes.values()],
   filters: 'Content live target or unambiguous audible Content; complete nonprovisional Content with matching baseline and stable/drift-confirmed validation <=60s old; fresh playing streams; no frontier/buffer clamp; idle Take; no new gap/fold; 5s settled read head at <=1ms/s',
   independentTrials: { captures: new Set(eligibleRows.map(s => `${s.identity[9] ?? 'legacy-unknown'}:${s.identity[0]}:${s.identity[1]}`)).size,
     songs: new Set(eligibleRows.map(s => s.identity[2])).size,

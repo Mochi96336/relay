@@ -75,3 +75,20 @@ test('server restarts cannot merge captures that reuse generation numbers', () =
   assert.equal(report.segments.length, 2);
   assert.equal(report.independentTrials.captures, 2);
 });
+
+test('keeps each probe identity and its raw measurement separate from candidate errors', () => {
+  const report = analyze((r, i) => {
+    r.bootMicMs = i < 40 ? 205 : 235;
+    r.bootBackingMs = 95;
+    r.robotDeltaMs = -220;
+    r.bootProbeTimingEvidence = { mic: { requestId: i < 40 ? 57 : 59,
+      captureGeneration: 1, sessionGeneration: 1, latencyMs: r.bootMicMs },
+      backing: { requestId: 58, captureGeneration: 2, sessionGeneration: 1, latencyMs: 95 } };
+  }, 80);
+  assert.equal(report.segments.length, 2);
+  assert.equal(report.bootProbeMeasurements.length, 3);
+  assert.equal(report.segments[0].measurements.bootMicMs.median, 205);
+  assert.equal(report.segments[1].measurements.bootMicMs.median, 235);
+  assert.equal(report.segments[0].measurements.robotDeltaMs.median, -220);
+  assert.equal(report.segments[0].latestMatchedObservation.bootProbeTimingEvidence.mic.requestId, 57);
+});

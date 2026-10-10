@@ -154,7 +154,7 @@ test('timing revoked by an in-band Mic capture restart does not splice the retai
 
 test('real Mic frontier correction acquire and release stays continuous on a tone', () => {
   const session = makeSession();
-  session.setAlignment({ networkCompensationMs: 140 });
+  session.setAlignment({ fallbackMicLagMs: 140 });
 
   // Begin with only 100 ms of capture. The requested +140 ms live read head
   // cannot fit, so the normal production frontier policy must acquire a hold.

@@ -145,6 +145,8 @@ export function loadRelayConfig(env: Env = process.env) {
     probeDebug: envBoolean(env, 'RELAY_CALIBRATION_PROBE_DEBUG', false),
     probeAnalysisTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000, { min: 1 }),
     calibrationDeltaReapplyMs: envNumber(env, 'RELAY_CALIBRATION_DELTA_REAPPLY_MS', 40, { min: 1 }),
+    // The median of 107 Boot Probe path differences, 2026-09-29..10-10 (MicPathDifferenceMemory).
+    timingFallbackPathDifferenceMs: envNumber(env, 'RELAY_TIMING_FALLBACK_PATH_DIFFERENCE_MS', 40),
     backingGraceMs: envNumber(env, 'RELAY_BACKING_GRACE_MS', 10_000, { min: 1 }),
     calibrationAgreement: envNumber(env, 'RELAY_CALIBRATION_AGREEMENT', 3, { min: 1, max: 20, integer: true }),
     calibrationToleranceMs: envNumber(env, 'RELAY_CALIBRATION_TOLERANCE_MS', 25, { min: 1 }),

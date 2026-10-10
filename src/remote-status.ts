@@ -50,7 +50,7 @@ export function deriveRemoteStatusHealth(readiness: ReadinessSnapshot): RemoteSt
 
   const warnings: string[] = [];
   if (robotRoute && components.robotSource.connected && !components.player.offsetFresh) {
-    warnings.push('robot player delta is stale; alignment fell back to the network estimate');
+    warnings.push('robot player delta is stale; alignment fell back to the estimate');
   }
   if (components.calibration.stale) {
     warnings.push('timing calibration no longer matches the current capture');

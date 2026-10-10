@@ -139,7 +139,7 @@ describe('remote status health projection', () => {
     assert.equal(stale.ok, true);
     assert.equal(stale.state, 'degraded');
     assert.deepEqual(stale.warnings, [
-      'robot player delta is stale; alignment fell back to the network estimate',
+      'robot player delta is stale; alignment fell back to the estimate',
     ]);
   });
 

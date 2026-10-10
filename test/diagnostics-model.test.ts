@@ -191,7 +191,7 @@ describe('Timing', () => {
       product: { timing: { state: 'fallback' } },
       source: source({ timingMode: 'network-estimate' }),
     }, en));
-    assert.equal(estimated.method.value, 'Network estimate');
+    assert.equal(estimated.method.value, 'Estimate');
     assert.equal(estimated.alignment.tone, 'warn');
   });
 

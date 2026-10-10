@@ -115,7 +115,7 @@ describe('timing validity boundary', () => {
       assert.equal(stale.activeCalibratedMicLagMs, null, 'stale calibration is not applied');
       assert.equal(
         stale.requestedMicAdvanceMs,
-        stale.micNetworkCompensationMs - stale.vocalFineTuneMs,
+        stale.micFallbackLagMs - stale.vocalFineTuneMs,
         'the mixer has fallen back to the network estimate',
       );
 

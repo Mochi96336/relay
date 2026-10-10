@@ -323,7 +323,7 @@ function steadyRoom() {
     signal: song,
     seed: 1,
   });
-  room.at(1_000, () => session.setAlignment({ networkCompensationMs: 137 }));
+  room.at(1_000, () => session.setAlignment({ fallbackMicLagMs: 137 }));
   room.at(3_000, () => session.setMicExpected(true));
   // The singer belts from 8 s to 12 s, hard enough to flatten the capture.
   const loud = voice(46_000);
@@ -364,7 +364,7 @@ function lateStalledRecovered() {
   room.at(0, (nowMs) => {
     session.start(nowMs);
     session.setMicExpected(true);
-    session.setAlignment({ networkCompensationMs: 137 });
+    session.setAlignment({ fallbackMicLagMs: 137 });
   });
   room.capture({
     source: 'mic',
@@ -397,7 +397,7 @@ function slowCaptureClock() {
   room.at(0, (nowMs) => {
     session.start(nowMs);
     session.setMicExpected(true);
-    session.setAlignment({ networkCompensationMs: 137 });
+    session.setAlignment({ fallbackMicLagMs: 137 });
   });
   room.capture({
     source: 'mic',
@@ -423,7 +423,7 @@ function captureLossFolded() {
   room.at(0, (nowMs) => {
     session.start(nowMs);
     session.setMicExpected(true);
-    session.setAlignment({ networkCompensationMs: 137 });
+    session.setAlignment({ fallbackMicLagMs: 137 });
   });
   const loss = { everyMs: 4_000, lossMs: 220 };
   room.capture({
@@ -458,7 +458,7 @@ function restartsAndHandovers() {
     session.start(nowMs);
     session.setBackingExpected(true);
     session.setMicExpected(true);
-    session.setAlignment({ networkCompensationMs: 120 });
+    session.setAlignment({ fallbackMicLagMs: 120 });
   });
   const backing = (generation: number, startMs: number, endMs: number, firstIndex = 0) => room.capture({
     source: 'backing',
@@ -535,7 +535,7 @@ function resampledCaptures() {
     session.start(nowMs);
     session.setBackingExpected(true);
     session.setMicExpected(true);
-    session.setAlignment({ networkCompensationMs: 140 });
+    session.setAlignment({ fallbackMicLagMs: 140 });
   });
   room.capture({
     source: 'backing',
@@ -588,26 +588,26 @@ test('golden: a steady Robot room with everything a singer does to it', () => {
   assert.ok(exercises.backingClockCorrections > 0, 'corrects the slow song clock');
   assert.ok(exercises.backingGapSamples > 0, 'declicks lost song packets');
   assert.ok(exercises.trimSamples > 0, 'trims the Mic capture clock');
-  assert.equal(digest, '1db4a3c9284107ded6020560f49b092734d2b68eecbfeb92b581fd344529e50f');
+  assert.equal(digest, 'fdf81b20d8d49dc3c6d2eedf7ba46b023c3af50986985b9a81e659ab5bd1bacf');
 });
 
 test('golden: late, stalled, recovered and silent Mic arrival', () => {
   const { digest, exercises } = lateStalledRecovered();
   assert.ok(exercises.maxCorrectionMs > 0, 'holds a late stream back');
   assert.ok(exercises.micStarvedSamples > 0, 'reports the outage as starvation');
-  assert.equal(digest, 'd8e8d4bc180e85f26c8e51c5cf8124f048dfdcaca287396f7f2d1f0ac9095473');
+  assert.equal(digest, '1b97f38f6f5991fe9ee7a282c2189d9be095fd3a70b0210ed671253a5a2a334c');
 });
 
 test('golden: a slow capture clock spending the headroom', () => {
   const { digest, exercises } = slowCaptureClock();
   assert.ok(exercises.maxCorrectionMs > 0, 'takes the gradual overrun');
-  assert.equal(digest, 'e1a01da9048815515a9b63dcec4aa4bdfca1dcfcd7da6f45d53ff65b375670fb');
+  assert.equal(digest, '4d370e71e464e1f317c6d423718b0bf3a8e5276dc0ebccd5ebdd916f6448b7a2');
 });
 
 test('golden: confirmed capture loss folded into the timeline', () => {
   const { digest, exercises } = captureLossFolded();
   assert.ok(exercises.folds >= 2, 'folds confirmed loss more than once');
-  assert.equal(digest, 'a28a6bc646df5a84048cb25288af7489490bd997a9a30da4eeca7f43c69cf3f4');
+  assert.equal(digest, 'fe22f911626ca9f36c578f0aaa8d912b8d6b6ce02bea7ff845d9be3093665d0e');
 });
 
 test('golden: capture restarts, replacements and handovers', () => {
@@ -616,7 +616,7 @@ test('golden: capture restarts, replacements and handovers', () => {
   assert.ok(exercises.backingRestarts >= 1, 'restarts the song capture in band');
   assert.ok(exercises.unheaderedSamples > 0, 'mixes unheadered PCM');
   assert.equal(exercises.maxCorrectionMs, 0, 'a Mic expected again is not chased into retained audio');
-  assert.equal(digest, 'f5f6b12ae1e86e008157bcbc626cf7178f26cadbe013e68d75477806add5c641');
+  assert.equal(digest, '8fa796e2efb6cc293b5fb0aa904c0acf97f6dcaef481d58f315dddb17cbf92c4');
 });
 
 test('golden: captures resampled to the mix rate', () => {
@@ -624,5 +624,5 @@ test('golden: captures resampled to the mix rate', () => {
   assert.ok(exercises.micRestarts >= 1, 'changes capture rate mid-room');
   assert.ok(exercises.concealedSamples > 0, 'conceals loss at a resampled rate');
   assert.ok(exercises.unheaderedSamples > 0, 'resamples headerless PCM packet by packet');
-  assert.equal(digest, '0debe6de941646694db894f2fb4eb63cfdacc0f589e717ae7bb1c5adbe9addb2');
+  assert.equal(digest, '440a4ac56d694fa5832e5ff60afb6a4bdeb2121c942bf17ca4cf9eb4f026a8a1');
 });

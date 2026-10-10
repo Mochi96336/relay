@@ -44,7 +44,7 @@ function simulate(outage: Outage, untilMs = 30_000) {
   });
   session.start(0);
   session.setMicExpected(true);
-  session.setAlignment({ networkCompensationMs: NETWORK_COMPENSATION_MS });
+  session.setAlignment({ fallbackMicLagMs: NETWORK_COMPENSATION_MS });
 
   const frames: Array<{ atMs: number; peak: number; correctionMs: number; appliedMs: number }> = [];
   let capturedUntilMs = 0;
@@ -127,7 +127,7 @@ test('a phone whose packets merely stall is still not chased, with or without ex
   });
   session.start(0);
   session.setMicExpected(true);
-  session.setAlignment({ networkCompensationMs: NETWORK_COMPENSATION_MS });
+  session.setAlignment({ fallbackMicLagMs: NETWORK_COMPENSATION_MS });
   let capturedUntilMs = 0;
   let maxCorrectionMs = 0;
   for (let nowMs = 0; nowMs <= 20_000; nowMs += 5) {

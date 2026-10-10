@@ -387,10 +387,10 @@ function renderCalibration() {
       ? '手機開始播放後會自動校正，不需要有人在這台電腦前面。'
       : '手機播放 YouTube 後即可按 Calibrate timing。';
   } else {
-    const estimate = signed(latestSourceStatus?.micNetworkCompensationMs, ' ms');
+    const estimate = signed(latestSourceStatus?.micFallbackLagMs, ' ms');
     timingStatus.textContent = latestCalibration?.autoCalibrate
-      ? `即將自動校正 · 目前先用 network estimate ${estimate}。`
-      : `Ready · 目前先用 network estimate ${estimate}。`;
+      ? `即將自動校正 · 目前先用估計值 ${estimate}。`
+      : `Ready · 目前先用估計值 ${estimate}。`;
   }
 }
 
@@ -567,7 +567,7 @@ function renderSourceStatus(message) {
   const micState = message.micConnected ? 'Mic connected' : 'Mic disconnected';
   const timing = message.timingMode === 'acoustic-calibration'
     ? `calibrated ${signed(message.calibratedMicLagMs, ' ms')}`
-    : `network ${signed(message.micNetworkCompensationMs, ' ms')}`;
+    : `estimate ${signed(message.micFallbackLagMs, ' ms')}`;
 
   captureState.textContent = !message.connected
     ? 'Capture not connected · click the Relay extension icon on this tab.'

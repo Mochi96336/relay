@@ -54,6 +54,7 @@ import { applyMicOwnerTransitionEffects } from './mic-owner-transition-applicati
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
 import { MicLevelMonitor } from './mic-level-monitor.js';
 import { MicGainMemory } from './mic-gain-memory.js';
+import { MicPathDifferenceMemory } from './mic-path-difference-memory.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import { MicUplinkBacklog } from './mic-uplink-backlog.js';
@@ -154,7 +155,6 @@ const MONITOR_OPUS_BACKLOG_BYTES = Math.max(
 );
 const LIVE_MIX_PREBUFFER_MS = relayConfig.livePrebufferMs;
 const LIVE_BACKING_GAIN = 0.65;
-const MAX_OFFSET_MS = 500;
 const MIC_RETENTION_MS = relayConfig.micRetentionMs;
 /**
  * How far either side of the estimated position a probe is searched for.
@@ -275,6 +275,9 @@ const micAudibility = new MicAudibilityMonitor({ sampleRate: MIX_SAMPLE_RATE });
 const micLevel = new MicLevelMonitor({ sampleRate: MIX_SAMPLE_RATE });
 /** Each participant's last Mic gain, so a handoff does not inherit the previous singer's. */
 const micGains = new MicGainMemory({ defaultGainDb: session.micGainDb });
+const micPathDifferences = new MicPathDifferenceMemory({
+  defaultMs: relayConfig.timingFallbackPathDifferenceMs,
+});
 /** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
 const micClockDrift = new MicClockDriftEstimator();
 /**
@@ -1015,7 +1018,17 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
 function noteContentMicMeasurement() {
   if (calibration.confirmedRevision === micMeasuredCalibrationRevision) return;
   micMeasuredCalibrationRevision = calibration.confirmedRevision;
-  if (appliedCalibrationKind() !== 'boot-probe') session.noteMicCalibrationMeasured();
+  const kind = appliedCalibrationKind();
+  if (kind === 'boot-probe') return;
+  session.noteMicCalibrationMeasured();
+  // Content results had no log line, so how often content rescued a failed
+  // Boot Probe could not be counted from the journal.
+  const result = calibration.confirmedResult;
+  console.log('[calibration]', JSON.stringify({
+    kind,
+    micLagMs: result === null ? null : Math.round(result.micLagMs),
+    confidence: result?.confidence == null ? null : Number(result.confidence.toFixed(3)),
+  }));
 }
 
 function clearContentValidationBaseline() {
@@ -1570,7 +1583,7 @@ function sourceStatusPayload() {
     active: session.active,
     prebufferMs: session.prebufferMs,
     mixSampleRate: MIX_SAMPLE_RATE,
-    micNetworkCompensationMs: alignment.networkCompensationMs,
+    micFallbackLagMs: alignment.fallbackMicLagMs,
     calibratedMicLagMs: calibrationStatus.micLagMs,
     activeCalibratedMicLagMs: alignment.calibratedMicLagMs,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
@@ -1738,7 +1751,7 @@ function timingCalibrationStatusPayload() {
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     robotContentTransition: robotContentTransitionStatus(nowMs),
-    fallbackNetworkMs: alignment.networkCompensationMs,
+    fallbackMicLagMs: alignment.fallbackMicLagMs,
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
@@ -1943,28 +1956,64 @@ function retireMicCaptureTiming() {
   broadcastJson(sourceStatusPayload());
 }
 
-function refreshLiveMicNetworkCompensation() {
-  const timeline = currentTimelineStatus();
-  const transportEstimateMs = Number(timeline.transportEstimateMs);
-  session.setAlignment({
-    networkCompensationMs: Number.isFinite(transportEstimateMs)
-      ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs))
-      : 0,
-  });
+/** The input the current Mic owner captures from, as its uplink health names it. */
+function micInputLabel(nowMs: number) {
+  return micRuntime.uplinkHealthPayload(nowMs)?.capture?.inputLabel ?? null;
+}
+
+/**
+ * The Mic lag the mixer uses while no calibration applies: the path difference
+ * this Mic device measured before (MicPathDifferenceMemory, or the room-wide
+ * default), plus where the Robot's player stands against the room timeline.
+ * It is bootProbeAdvanceMs with a remembered path difference in place of a
+ * measured one. The Robot term is media time from the two players and needs no
+ * sound, so a probe the Mic could not hear does not lose it.
+ *
+ * The fallback used to be half the round trip of the holder's timeline
+ * reports, read once when the mix started. It read 0 in every observer
+ * recording of 2026-10-09 and 10-10, while the Boot Probe totals applied from
+ * 2026-09-29 to 10-10 ranged from -564 to +268 ms, most of it the Robot term.
+ */
+function fallbackMicLagMs(nowMs: number) {
+  if (!robotRouteActive()) return 0;
+  const prior = micPathDifferences.priorFor(participants.micOwnerId, micInputLabel(nowMs));
+  return prior.pathDifferenceMs + mediaToWallMs(currentDeltaMs(nowMs), currentPlaybackRate(nowMs));
+}
+
+/**
+ * Keeps the fallback lag current. Robot offset noise below the reapply
+ * threshold is left alone, as maybeReapplyBootCalibration leaves it: every
+ * change moves the read head. Returns whether it changed.
+ */
+function refreshFallbackMicLag(nowMs = performance.now()) {
+  const next = fallbackMicLagMs(nowMs);
+  const current = session.alignment.fallbackMicLagMs;
+  if (Math.abs(next - current) < BOOT_DELTA_REAPPLY_MS) return false;
+  session.setAlignment({ fallbackMicLagMs: next });
+  const prior = micPathDifferences.priorFor(participants.micOwnerId, micInputLabel(nowMs));
+  console.log('[timing-fallback]', JSON.stringify({
+    fallbackMicLagMs: Math.round(next),
+    previousMs: Math.round(current),
+    pathDifferenceMs: Math.round(prior.pathDifferenceMs),
+    measurements: prior.measurements,
+    robotDeltaFresh: robotDeltaIsFresh(nowMs),
+    inUse: session.alignment.calibratedMicLagMs === null,
+  }));
+  return true;
 }
 
 function startLiveSource() {
   backingRuntime.cancelGrace();
 
   if (session.active) {
-    refreshLiveMicNetworkCompensation();
+    refreshFallbackMicLag();
     broadcastJson(sourceStatusPayload());
     broadcastJson(timingCalibrationStatusPayload());
     return;
   }
 
   session.start();
-  refreshLiveMicNetworkCompensation();
+  refreshFallbackMicLag();
   broadcastJson(sourceStatusPayload());
   broadcastJson(mixSettingsPayload());
   broadcastJson(timingCalibrationStatusPayload());
@@ -1972,7 +2021,7 @@ function startLiveSource() {
 
 function restartLiveSourceAfterMicReconnect() {
   if (!session.active || !backingRuntime.connected()) return;
-  refreshLiveMicNetworkCompensation();
+  refreshFallbackMicLag();
   if (calibration.collecting) {
     calibration.fail('Microphone reconnected during calibration. Start calibration again.');
   }
@@ -2874,6 +2923,10 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     () => {
       bootProbeRuntime.recordCalibration(bootProbeContext(), result);
       session.noteMicCalibrationMeasured();
+      const ownerId = participants.micOwnerId;
+      if (ownerId !== null) {
+        micPathDifferences.remember(ownerId, micInputLabel(nowMs), result.micLatencyMs - result.backingLatencyMs);
+      }
     },
     () => ({
       micLagMs: result.advanceMs,
@@ -3028,6 +3081,7 @@ const youtubeTimelineTimer = setInterval(() => {
   maybeFinishProbeAnalysis(nowMs);
   maybeStartProbeCalibration(nowMs);
   maybeReapplyBootCalibration(nowMs);
+  if (refreshFallbackMicLag(nowMs)) broadcastJson(sourceStatusPayload());
   sweepRobotContentTransition(nowMs);
   maybeAutoCalibrate(nowMs);
   maybeValidateContentCalibration(nowMs);

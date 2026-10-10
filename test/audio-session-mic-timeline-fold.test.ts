@@ -52,7 +52,7 @@ function makeSession(retentionMs: number) {
   });
   session.start(0);
   session.setMicExpected(true);
-  session.setAlignment({ networkCompensationMs: 137 });
+  session.setAlignment({ fallbackMicLagMs: 137 });
   return session;
 }
 

@@ -534,7 +534,7 @@ describe('AudioSession alignment', () => {
   test('falls back to the network estimate until a calibration lands', () => {
     // Roomy enough that nothing here is clamped; affordability is its own test.
     const session = makeSession({ prebufferMs: 2_000 });
-    session.setAlignment({ networkCompensationMs: 80 });
+    session.setAlignment({ fallbackMicLagMs: 80 });
     assert.equal(session.appliedMicAdvanceMs, 80);
 
     session.setAlignment({ calibratedMicLagMs: 300 });
@@ -1140,13 +1140,13 @@ describe('AudioSession clock', () => {
   test('stopping drops the alignment with the session that measured it', () => {
     const session = makeSession();
     session.start(0);
-    session.setAlignment({ calibratedMicLagMs: 250, networkCompensationMs: 40, fineTuneMs: 10 });
+    session.setAlignment({ calibratedMicLagMs: 250, fallbackMicLagMs: 40, fineTuneMs: 10 });
 
     session.stop();
 
     assert.equal(session.active, false);
     assert.deepEqual(session.alignment, {
-      networkCompensationMs: 0,
+      fallbackMicLagMs: 0,
       calibratedMicLagMs: null,
       fineTuneMs: 0,
     });
@@ -1165,7 +1165,7 @@ describe('AudioSession microphone frontier', () => {
     session.start(0);
     session.setMicExpected(true);
     session.setBackingExpected(true);
-    session.setAlignment({ networkCompensationMs: 150 });
+    session.setAlignment({ fallbackMicLagMs: 150 });
 
     const frameSamples = Math.round(RATE * 0.02);
     const totalMs = deficitMs + tailMs;
@@ -1300,7 +1300,7 @@ describe('AudioSession microphone frontier', () => {
     session.setMicGainDb(0);
     session.start(0);
     session.setMicExpected(true);
-    session.setAlignment({ networkCompensationMs: 200 });
+    session.setAlignment({ fallbackMicLagMs: 200 });
 
     const samples = RATE * 2;
     const tone = new Array(samples);
@@ -1391,7 +1391,7 @@ describe('AudioSession microphone frontier', () => {
     session.start(0);
     session.setMicExpected(true);
     session.setBackingExpected(true);
-    session.setAlignment({ networkCompensationMs: 140 });
+    session.setAlignment({ fallbackMicLagMs: 140 });
 
     const initialMicSamples = Math.round(RATE * 0.5);
     const droppedBacklogSamples = Math.round(RATE * 3);
@@ -1457,7 +1457,7 @@ describe('AudioSession microphone frontier', () => {
     session.start(0);
     session.setMicExpected(true);
     session.setBackingExpected(true);
-    session.setAlignment({ networkCompensationMs: 140 });
+    session.setAlignment({ fallbackMicLagMs: 140 });
 
     const frameSamples = Math.round(RATE * 0.02);
     const doubleFrameSamples = frameSamples * 2;
@@ -1509,7 +1509,7 @@ describe('AudioSession microphone frontier', () => {
     session.start(0);
     session.setMicExpected(true);
     session.setBackingExpected(true);
-    session.setAlignment({ networkCompensationMs: 140 });
+    session.setAlignment({ fallbackMicLagMs: 140 });
 
     const frameSamples = Math.round(RATE * 0.02);
     const backingSamples = Math.round(RATE * 5);
@@ -1586,7 +1586,7 @@ describe('AudioSession microphone frontier', () => {
     const total = Math.round(RATE * 3);
     session.ingestBacking(frame(0, pcmOf(new Array(total).fill(1_000))), RATE, 0);
     session.ingestMic(frame(0, pcmOf(new Array(total).fill(8_000))), RATE, 0);
-    session.setAlignment({ networkCompensationMs: 150 });
+    session.setAlignment({ fallbackMicLagMs: 150 });
 
     drainAll(session, 2_000);
     assert.equal(

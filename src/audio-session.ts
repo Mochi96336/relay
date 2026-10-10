@@ -43,8 +43,12 @@ export type { MicTimelineFold, MicTimelineUnfold } from './mic-frontier-correcti
 export { HEAVY_LIMIT_DB, LIMITER_THRESHOLD_DBFS } from './mic-limiter.js';
 
 export type AlignmentState = {
-  /** RTT/2 fallback used until an acoustic calibration succeeds. */
-  networkCompensationMs: number;
+  /**
+   * Mic lag used while no calibration applies: an estimate from the device's
+   * earlier measurements and the Robot player's position (server
+   * fallbackMicLagMs).
+   */
+  fallbackMicLagMs: number;
   calibratedMicLagMs: number | null;
   fineTuneMs: number;
 };
@@ -230,7 +234,7 @@ export class AudioSession {
 
   private readonly micGain: MicGainRamp;
   private alignmentState: AlignmentState = {
-    networkCompensationMs: 0,
+    fallbackMicLagMs: 0,
     calibratedMicLagMs: null,
     fineTuneMs: 0,
   };
@@ -449,7 +453,7 @@ export class AudioSession {
 
   stop() {
     this.running = false;
-    this.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
+    this.alignmentState = { fallbackMicLagMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
     this.calibratedMicLagTargetMs = null;
     this.calibrationUnfoldedSamples = 0;
     this.clearTimeline(this.mic);
@@ -535,7 +539,7 @@ export class AudioSession {
   get requestedMicAdvanceMs() {
     const calibrated = this.alignmentState.calibratedMicLagMs;
     const base = calibrated === null
-      ? this.alignmentState.networkCompensationMs
+      ? this.alignmentState.fallbackMicLagMs
       : calibrated - (this.calibrationUnfoldedSamples / this.sampleRate) * 1000;
     return base - this.alignmentState.fineTuneMs;
   }
@@ -1549,7 +1553,7 @@ export class AudioSession {
     const previousCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
     const previousFrontierCorrectionSamples = this.micFrontier.correctionSamples;
     const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
-      ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
+      ? this.alignmentState.fallbackMicLagMs - this.alignmentState.fineTuneMs
       : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;
     const modeledPreviousAdvanceSamplesExact = (
       this.appliedMicAdvanceForRequestedMs(

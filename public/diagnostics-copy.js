@@ -307,7 +307,7 @@ const en = {
   'diag.cal.contentSegmentsNote': 'Delays measured per segment in this comparison; a large spread indicates an unstable result.',
   'diag.cal.contentLevelsNote': 'Both sides need sufficient level for comparison.',
   'diag.cal.contentConfidenceNote': 'Closer to 1 is more reliable.',
-  'diag.cal.contentCandidateNote': 'Raw lag in the comparison reference coordinates; see the live Content candidate above for current mixer coordinates.',
+  'diag.cal.contentCandidateNote': 'Raw lag in the comparison reference coordinates; the live candidate in this group uses current mixer coordinates.',
   'diag.cal.contentAgreementNote': 'A result is used only after the required number of measurements agree; provisional means the first one is applied meanwhile.',
   'diag.cal.contentProgressNote': 'Collection progress for the song segments this comparison needs.',
   'diag.cal.contentStateNote': 'Compares the Mic recording with the song to measure the voice delay. Runs during playback and is computed separately from the test tone at Mic start.',
@@ -664,7 +664,7 @@ const zhHant = {
   'diag.cal.contentSegmentsNote': '各分段量得的延遲；差異大表示結果不穩定。',
   'diag.cal.contentLevelsNote': '兩側音量皆須足夠才能比對。',
   'diag.cal.contentConfidenceNote': '越接近 1 越可靠。',
-  'diag.cal.contentCandidateNote': '比對參考座標中的原始延遲；目前 Mixer 座標請看上方 Content 換算值。',
+  'diag.cal.contentCandidateNote': '比對參考座標中的原始延遲；目前 Mixer 座標請看本組的換算值。',
   'diag.cal.contentAgreementNote': '須達指定次數的一致量測才採用；「暫定」表示已先套用第一次結果。',
   'diag.cal.contentProgressNote': '所需歌曲片段的收集進度。',
   'diag.cal.contentStateNote': '比對 Mic 收音與歌曲內容以量測人聲延遲；於播放中進行，與起始的測試音校正分開計算。',
@@ -731,6 +731,8 @@ const zhHant = {
 };
 
 Object.assign(en, {
+  "diag.timing.ytHeading": "YouTube playback",
+  "diag.cal.group.shadow": "Fallback: sample / YouTube time estimate",
   "diag.timing.ytPhone": "YouTube · phone",
   "diag.timing.ytPhoneNote": "Publisher position projected to this server snapshot.",
   "diag.timing.ytServer": "YouTube · room clock",
@@ -748,12 +750,14 @@ Object.assign(en, {
   "diag.timing.bootStoredNote": "Saved result with the Robot position at confirmation time.",
   "diag.timing.bootLive": "Boot · current estimate",
   "diag.timing.bootLiveNote": "Mic latency − Robot latency + current player offset ÷ playback rate. Requires a fresh offset.",
-  "diag.timing.shadow": "Shadow · sample/song",
+  "diag.timing.shadow": "Sample / YouTube time estimate",
   "diag.timing.shadowActive": "Active fallback. Approximate; physical output and capture delays are not fully measured.",
   "diag.timing.shadowStandby": "Comparison only. Not currently controlling the mixer; — means insufficient or expired anchors.",
 });
 
 Object.assign(zhHant, {
+  "diag.timing.ytHeading": "YouTube 播放時間",
+  "diag.cal.group.shadow": "備援：樣本／YouTube 時間估計",
   "diag.timing.ytPhone": "YouTube · 手機",
   "diag.timing.ytPhoneNote": "手機播放位置推算至本次伺服器快照時間。",
   "diag.timing.ytServer": "YouTube · 房間時間",
@@ -771,9 +775,9 @@ Object.assign(zhHant, {
   "diag.timing.bootStoredNote": "保留確認當時的 Robot 位置與校正結果。",
   "diag.timing.bootLive": "Boot · 目前換算值",
   "diag.timing.bootLiveNote": "Mic 延遲 − Robot 延遲 + 目前播放器偏移 ÷ 播放速度；需有最新偏移。",
-  "diag.timing.shadow": "Shadow · 樣本／歌曲",
-  "diag.timing.shadowActive": "目前使用的備援；近似值，未完整量到實體輸出與擷取延遲。",
-  "diag.timing.shadowStandby": "僅供比較，目前未控制 Mixer；— 表示錨點不足或已過期。",
+  "diag.timing.shadow": "樣本／YouTube 時間估計",
+  "diag.timing.shadowActive": "備援使用中；近似值，未完整量到實體輸出與擷取延遲。",
+  "diag.timing.shadowStandby": "待命比較，未套用；— 表示錨點不足或已過期。",
 });
 
 Object.assign(en, {

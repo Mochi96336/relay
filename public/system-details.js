@@ -396,7 +396,17 @@ if (
     renderLedger('diag-session-ledger', describeSession(facts, t));
     renderLedger('diag-mic-ledger', describeMicTransport(latestStatusz, t));
     renderLedger('diag-audio-ledger', describeAudio(facts, t));
-    renderLedger('diag-timing-ledger', describeTiming(facts, t));
+    const timingRows = describeTiming(facts, t);
+    const timingSummary = new Set(['alignment', 'method', 'offset', 'fineTune']);
+    const youtubeRows = new Set(['youtubePhone', 'youtubeServer', 'youtubeRobot', 'youtubeRate', 'robotDelta']);
+    renderLedger('diag-timing-ledger', timingRows.filter((row) => timingSummary.has(row.key)));
+    renderLedger('diag-youtube-ledger', timingRows.filter((row) => youtubeRows.has(row.key)
+      || (!timeline && row.key === 'clock')));
+    // The existing Audio comparison fold owns calibration detail. Its current /
+    // target and live Boot rows already exist, so do not duplicate those here.
+    renderLedger('diag-boot-stored-ledger', timingRows.filter((row) => row.key === 'bootStored'));
+    renderLedger('diag-content-target-ledger', timingRows.filter((row) => row.key === 'contentTarget'));
+    renderLedger('diag-shadow-ledger', timingRows.filter((row) => row.key === 'shadow'));
     renderLedger('diag-robot-ledger', describeRobot(facts, t));
 
     rawNode.textContent = JSON.stringify({

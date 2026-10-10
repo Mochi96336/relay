@@ -416,7 +416,7 @@ it('Timing names sample/song when it actually controls fallback', () => {
   const rows = byKey(describeTiming({ source: source({ timingMode: 'network-estimate' }),
     timing: { sampleSongFallback: { active: true, candidateMs: -250 } },
   }, en));
-  assert.equal(rows.method.value, 'Shadow · sample/song');
+  assert.equal(rows.method.value, 'Sample / YouTube time estimate');
   assert.match(rows.shadow.note, /Active fallback/);
 });
 

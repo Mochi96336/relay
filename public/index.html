@@ -281,10 +281,6 @@
                      sit closed under the readable rows instead of doubling the tab's length. -->
                 <details class="diagnostics-advanced">
                   <summary class="diagnostics-subheading" data-i18n="diag.cal.heading">Audio comparison</summary>
-                  <details id="diag-youtube-details" class="diagnostics-advanced">
-                    <summary class="diagnostics-subheading" data-i18n="diag.timing.ytHeading">YouTube playback</summary>
-                    <dl id="diag-youtube-ledger" class="diagnostic-ledger"></dl>
-                  </details>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">
                       <dt data-i18n="diag.cal.applied">Voice delay compensation (now / target)</dt>
@@ -343,8 +339,6 @@
                     </div>
                   </dl>
                   <dl id="diag-content-target-ledger" class="diagnostic-ledger"></dl>
-                  <p class="diagnostic-group" data-i18n="diag.cal.group.shadow">Fallback: sample / YouTube time estimate</p>
-                  <dl id="diag-shadow-ledger" class="diagnostic-ledger"></dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.validation">After calibration: ongoing validation</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">
@@ -356,6 +350,10 @@
                       <dd data-tone="neutral"><span id="diag-content-validation-last" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.validationLastNote">The last measured delay, its difference from the value in use, and the verdict.</span></dd>
                     </div>
                   </dl>
+                  <p class="diagnostic-group" data-i18n="diag.cal.group.shadow">Fallback: sample / YouTube time estimate</p>
+                  <dl id="diag-shadow-ledger" class="diagnostic-ledger"></dl>
+                  <p class="diagnostic-group" data-i18n="diag.timing.ytHeading">YouTube playback</p>
+                  <dl id="diag-youtube-ledger" class="diagnostic-ledger"></dl>
                 </details>
               </section>
 

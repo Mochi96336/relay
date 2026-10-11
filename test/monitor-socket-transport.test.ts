@@ -307,14 +307,14 @@ test('listener playback reports stay per socket and expire without repeated ACK 
   });
   const payload = (end: number, sequence = 1) => ({ type: 'monitor-ack', generation: 1,
     receivedEndSampleIndex: end, playbackHealth: { sequence, ageMs: 100, underruns: 3,
-      concealedMs: 40, queuedMs: 80, sampleRate: 44100, playing: true, contextState: 'running',
+      concealedMs: 40, queuedMs: 80, sampleRate: 44100, receivedKbps: 105.4, playing: true, contextState: 'running',
       arbitrary: 'discard', droppedMs: Infinity, trimmedMs: -1 } });
   transport.acknowledge(a.socket, payload(960));
   const first = transport.playbackHealth();
   assert.equal(first[0].connectionIncarnation, 11);
   assert.equal(first[0].reportAgeMs, 100);
   assert.deepEqual(first[0].health, { queuedMs: 80, underruns: 3, concealedMs: 40,
-    sampleRate: 44100, playing: true, contextState: 'running' });
+    sampleRate: 44100, receivedKbps: 105.4, playing: true, contextState: 'running' });
   assert.equal(first[1].health, null, 'another listener never inherits this report');
   now = 3101;
   transport.acknowledge(a.socket, payload(1920));

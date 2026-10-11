@@ -436,7 +436,7 @@ export function createMonitorSocketTransport(
         && typeof ageMs === 'number' && Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= 5_000) {
         const values: Record<string, number | boolean | string> = {};
         for (const key of ['queuedMs', 'targetPrebufferMs', 'jitterTargetMs', 'arrivalJitterMs',
-          'arrivalDeviationMs', 'underruns', 'droppedMs', 'trimmedMs', 'starvedMs', 'concealedMs', 'sampleRate']) {
+          'arrivalDeviationMs', 'underruns', 'droppedMs', 'trimmedMs', 'starvedMs', 'concealedMs', 'sampleRate', 'receivedKbps']) {
           const value = input[key];
           if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e12) values[key] = value;
         }

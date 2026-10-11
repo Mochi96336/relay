@@ -32,7 +32,7 @@ test('capture gaps are reported as exact sample deltas without changing the padd
     'both sustained-gap and recovery edges must reach server source authority immediately',
   );
   assert.match(appCode, /type: 'audio-uplink-health'/);
-  assert.match(appCode, /transport: audioTransport\.stats\(\)/);
+  assert.match(appCode, /transport: \{ \.\.\.audioTransport\.stats\(\), codec: micOpus \? 'opus' : 'pcm16'/);
 });
 
 test('readiness samples media connectivity rather than only the control websocket', () => {

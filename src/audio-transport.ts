@@ -6,6 +6,8 @@ import {
   type AudioPacketRetransmitStats,
 } from './audio-packet-receiver.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
+import { Decoder } from '@evan/opus';
+import type { AudioPacket } from './audio-packet.js';
 
 export type AudioPacketVersion = 1 | 2;
 
@@ -48,17 +50,46 @@ class SequencedWebSocketAudioTransport implements AudioTransport {
   readonly kind = 'websocket' as const;
   readonly packetVersion = 2 as const;
   private readonly receiver: AudioPacketReceiver;
+  private opusDecoder: Decoder | null = null;
+  private opusEnd: number | null = null;
 
   constructor(options: AudioPacketReceiverOptions) {
     this.receiver = new AudioPacketReceiver(options);
   }
 
   receive(buffer: Buffer, nowMs: number): PcmFrame[] {
-    return this.receiver.receive(buffer, nowMs);
+    return this.decodeOrdered(this.receiver.receive(buffer, nowMs));
   }
 
   flush(nowMs: number): PcmFrame[] {
-    return this.receiver.flush(nowMs);
+    return this.decodeOrdered(this.receiver.flush(nowMs));
+  }
+
+  private decodeOrdered(packets: AudioPacket[]): PcmFrame[] {
+    const output: PcmFrame[] = [];
+    for (const packet of packets) {
+      if (packet.opusDelaySamples === undefined) {
+        this.opusDecoder = null;
+        this.opusEnd = null;
+        output.push(packet);
+        continue;
+      }
+      try {
+        this.opusDecoder ??= new Decoder({ channels: 1, sample_rate: 48_000 });
+        if (this.opusEnd !== null && this.opusEnd !== packet.firstSampleIndex) this.opusDecoder.reset();
+        const pcm = Buffer.from(this.opusDecoder.decode(packet.pcm));
+        if (pcm.byteLength !== packet.sampleCount * 2) throw new Error('Opus sample count mismatch');
+        const start = packet.firstSampleIndex - packet.opusDelaySamples;
+        const trim = Math.max(0, -start);
+        output.push({ generation: packet.generation, firstSampleIndex: Math.max(0, start), pcm: pcm.subarray(trim * 2) });
+        this.opusEnd = packet.firstSampleIndex + packet.sampleCount;
+      } catch {
+        // Corrupt codec data is a timeline hole, never raw PCM or stale decoder output.
+        this.opusDecoder = null;
+        this.opusEnd = null;
+      }
+    }
+    return output;
   }
 
   stats() {

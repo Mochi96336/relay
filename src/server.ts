@@ -209,6 +209,7 @@ const server = createRelayHttpServer({
   remoteStatus: () => remoteStatusPayload(),
   observationStatusV1: () => observationStatusV1Payload(),
   readiness: () => readinessPayload(),
+  micOpusTrial: relayConfig.micOpusTrial,
 });
 const wss = createRelayWebSocketServer(server, {
   relayKey,

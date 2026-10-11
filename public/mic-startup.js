@@ -97,18 +97,26 @@ export class MicStartupGate {
     if (!this.isCurrent(attempt)) throw new MicStartupCancelledError();
     if (stage) attempt.stage = stage;
 
+    // Both the late-result observer and the race continuation can see the
+    // same cancelled resource. Share cleanup ownership before either runs.
+    let disposal = null;
+    const disposeOnce = (value) => {
+      if (typeof dispose !== 'function') return;
+      if (!disposal) disposal = Promise.resolve().then(() => dispose(value)).catch(() => {});
+      return disposal;
+    };
     const pending = Promise.resolve(operation);
     pending.then(
       (value) => {
         if (this.isCurrent(attempt) || typeof dispose !== 'function') return;
-        Promise.resolve(dispose(value)).catch(() => {});
+        return disposeOnce(value);
       },
       () => {},
     );
 
     const value = await Promise.race([pending, attempt.cancelled]);
     if (!this.isCurrent(attempt)) {
-      if (typeof dispose === 'function') await dispose(value);
+      await disposeOnce(value);
       throw new MicStartupCancelledError();
     }
     return value;

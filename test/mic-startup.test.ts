@@ -153,3 +153,38 @@ test('does not hand the native timers a receiver they will refuse', () => {
 
   assert.equal(refusals, 0, 'the gate called a native timer with itself as the receiver');
 });
+
+test('cancelling an already-resolved resource before adoption disposes it exactly once', async () => {
+  const timers = fakeTimers();
+  const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  const attempt = gate.begin();
+  const resource = {};
+  let disposals = 0;
+  const waiting = gate.wait(attempt, Promise.resolve(resource), {
+    dispose: value => { assert.equal(value, resource); disposals += 1; },
+  });
+  gate.cancel(attempt);
+  await assert.rejects(waiting, (error: any) => error?.code === 'mic-startup-cancelled');
+  await flushPromises();
+  assert.equal(disposals, 1);
+});
+
+for (const failure of ['throw', 'reject']) {
+  test(`cleanup ${failure} preserves cancellation and does not retry disposal`, async () => {
+    const timers = fakeTimers();
+    const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+    const attempt = gate.begin();
+    let disposals = 0;
+    const waiting = gate.wait(attempt, Promise.resolve({}), {
+      dispose: () => {
+        disposals += 1;
+        if (failure === 'throw') throw new Error('cleanup failed');
+        return Promise.reject(new Error('cleanup failed'));
+      },
+    });
+    gate.cancel(attempt);
+    await assert.rejects(waiting, (error: any) => error?.code === 'mic-startup-cancelled');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(disposals, 1);
+  });
+}

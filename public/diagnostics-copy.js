@@ -798,6 +798,54 @@ Object.assign(zhHant, {
   "diag.timing.ytState.cued": "已就緒",
 });
 
+
+Object.assign(en, {
+  "diag.listen.heading": "Room playback · by receiver",
+  "diag.listen.receiver": "Receiver",
+  "diag.listen.here": "This device",
+  "diag.listen.unknown": "No report",
+  "diag.listen.stale": "Report expired",
+  "diag.listen.playing": "Playing",
+  "diag.listen.buffering": "Playback waiting",
+  "diag.listen.status": "Playback",
+  "diag.listen.format": "Format",
+  "diag.listen.buffer": "Buffer / target",
+  "diag.listen.bufferNote": "Available audio / current playback target.",
+  "diag.listen.jitter": "Arrival jitter",
+  "diag.listen.underruns": "Underrun count",
+  "diag.listen.conceal": "Repeated audio",
+  "diag.listen.trim": "Latency trimmed",
+  "diag.listen.drop": "Overflow dropped",
+  "diag.listen.cumulative": "Cumulative for this playback processor; not a current fault verdict.",
+  "diag.listen.age": "Reported {age} ago.",
+  "diag.listen.unknownNote": "Playback health is unavailable; an older receiving page may need refreshing.",
+  "diag.listen.unavailable": "Receiver diagnostics unavailable.",
+  "diag.listen.none": "No connected room listeners."
+});
+Object.assign(zhHant, {
+  "diag.listen.heading": "房間播放 · 各收聽端",
+  "diag.listen.receiver": "收聽端",
+  "diag.listen.here": "本機",
+  "diag.listen.unknown": "尚未回報",
+  "diag.listen.stale": "回報已過期",
+  "diag.listen.playing": "播放中",
+  "diag.listen.buffering": "播放等待中",
+  "diag.listen.status": "播放狀態",
+  "diag.listen.format": "音訊格式",
+  "diag.listen.buffer": "緩衝／目標",
+  "diag.listen.bufferNote": "可播放音訊／目前播放緩衝目標。",
+  "diag.listen.jitter": "送達抖動",
+  "diag.listen.underruns": "欠料次數",
+  "diag.listen.conceal": "重複補聲",
+  "diag.listen.trim": "延遲裁切",
+  "diag.listen.drop": "溢位丟棄",
+  "diag.listen.cumulative": "此播放處理器累計，不代表目前仍有異常。",
+  "diag.listen.age": "{age} 前回報。",
+  "diag.listen.unknownNote": "尚無可用播放數據；舊版收聽頁面可能需要重新整理。",
+  "diag.listen.unavailable": "尚無收聽端診斷資料。",
+  "diag.listen.none": "目前沒有房間收聽連線。"
+});
+
 export const DIAGNOSTICS_MESSAGES = { en, 'zh-Hant': zhHant };
 
 function format(template, vars) {

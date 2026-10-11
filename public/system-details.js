@@ -8,6 +8,7 @@ import {
   describeSession,
   describeTiming,
 } from './diagnostics-model.js';
+import { describeListeners } from './listener-diagnostics-model.js';
 import { describeMicTransport } from './mic-diagnostics-model.js';
 import { wsUrl } from './ws-url.js';
 await window.relayIdentityReady;
@@ -223,7 +224,7 @@ if (
 
   /** Technical details renders every tab the same way: model rows into a ledger. */
   function renderLedger(id, rows) {
-    const ledger = document.querySelector(`#${id}`);
+    const ledger = typeof id === 'string' ? document.querySelector(`#${id}`) : id;
     if (!ledger) return;
     ledger.replaceChildren(...rows.map((described) => {
       const pair = document.createElement('div');
@@ -236,6 +237,38 @@ if (
       pair.append(label, value);
       return pair;
     }));
+  }
+
+  function renderListeners(session) {
+    const container = document.querySelector('#diag-listeners');
+    if (!container) return;
+    const groups = describeListeners({ statusz: latestStatusz, session, selfId: window.relayParticipantId }, t);
+    if (!groups?.length) {
+      const note = document.createElement('p');
+      note.className = 'diagnostics-intro';
+      note.textContent = t(groups === null ? 'diag.listen.unavailable' : 'diag.listen.none');
+      container.replaceChildren(note);
+      return;
+    }
+    const retained = new Set();
+    for (const group of groups) {
+      let fold = [...container.children].find(node => node.dataset.listener === group.id);
+      if (!fold) {
+        fold = document.createElement('details');
+        fold.className = 'diagnostics-advanced';
+        fold.dataset.listener = group.id;
+        const summary = document.createElement('summary');
+        summary.className = 'diagnostics-subheading';
+        const ledger = document.createElement('dl');
+        ledger.className = 'diagnostic-ledger';
+        fold.append(summary, ledger);
+        container.append(fold);
+      }
+      fold.firstElementChild.textContent = `${group.title} · ${group.summary}`;
+      renderLedger(fold.lastElementChild, group.rows);
+      retained.add(fold);
+    }
+    for (const node of [...container.children]) if (!retained.has(node)) node.remove();
   }
 
   function readyzUrl() {
@@ -396,6 +429,7 @@ if (
     renderLedger('diag-session-ledger', describeSession(facts, t));
     renderLedger('diag-mic-ledger', describeMicTransport(latestStatusz, t));
     renderLedger('diag-audio-ledger', describeAudio(facts, t));
+    renderListeners(session);
     const timingRows = describeTiming(facts, t);
     const timingSummary = new Set(['alignment', 'method', 'offset', 'fineTune']);
     const youtubeRows = new Set(['youtubePhone', 'youtubeServer', 'youtubeRobot', 'youtubeRate', 'robotDelta']);

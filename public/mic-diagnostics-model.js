@@ -114,6 +114,11 @@ function describePath(status, t) {
   const transport = status?.audio?.captureAndSender?.transport;
   if (!status?.source?.micConnected || !path) return unknown(t, 'path', 'diag.mic.path');
 
+  const codec = transport?.codec === 'opus' ? 'Opus' : transport?.codec === 'pcm16' ? 'PCM16' : '';
+  const bitrate = finite(transport?.codecBitrate);
+  const codecNote = codec && finite(status.audio.captureAndSender.reportAgeMs) !== null
+    && status.audio.captureAndSender.reportAgeMs <= 2000
+    ? `${codec}${bitrate !== null ? ` · ${Math.round(bitrate / 1000)} kbps` : ''} · ` : '';
   const retries = count(transport?.webTransportRetries);
   const demotions = count(transport?.webTransportDemotions);
   const history = [];
@@ -128,7 +133,7 @@ function describePath(status, t) {
       'path',
       t('diag.mic.path'),
       t('diag.mic.path.direct'),
-      `${t('diag.mic.path.directNote')}${suffix}`,
+      `${codecNote}${t('diag.mic.path.directNote')}${suffix}`,
       'ok',
     );
   }
@@ -144,7 +149,7 @@ function describePath(status, t) {
     'path',
     t('diag.mic.path'),
     t('diag.mic.path.fallback'),
-    `${t('diag.mic.path.fallbackNote')}${failureNote}${suffix}`,
+    `${codecNote}${t('diag.mic.path.fallbackNote')}${failureNote}${suffix}`,
     'neutral',
   );
 }

@@ -472,3 +472,27 @@ describe('browser Mic retransmission', () => {
     assert.equal(socket.sent.length, 4, 'a closed capture answers nothing');
   });
 });
+
+it('separates evicted repair requests from transport rejects without counting invalid generations', async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  const transport = new PreferredAudioTransport({retransmitBufferPackets:1});
+  const socket = new FakeSocket(); transport.bind(socket);
+  transport.send(mediaPacket(700,1));
+  transport.send(mediaPacket(700,2));
+  transport.answerRetransmitRequest({captureGeneration:701,sequences:[1]});
+  assert.equal(transport.stats().retransmitCacheMisses,0);
+  transport.answerRetransmitRequest({captureGeneration:700,sequences:[1]});
+  assert.equal(transport.stats().retransmitCacheMisses,1);
+  assert.equal(transport.stats().retransmitSendRejects,0);
+  socket.readyState=3;
+  transport.answerRetransmitRequest({captureGeneration:700,sequences:[2]});
+  assert.equal(transport.stats().retransmitSendRejects,1);
+  assert.equal(transport.stats().retransmittedPackets,0);
+  socket.readyState=1;
+  transport.answerRetransmitRequest({captureGeneration:700,sequences:[2]});
+  assert.equal(transport.stats().retransmittedPackets,1,'a reject must not consume the repeat attempt');
+  transport.answerRetransmitRequest({captureGeneration:700,sequences:[2]});
+  assert.equal(transport.stats().retransmittedPackets,1,'duplicate success is not a second send');
+  assert.equal(transport.stats().retransmitSendRejects,1);
+  transport.close();
+});

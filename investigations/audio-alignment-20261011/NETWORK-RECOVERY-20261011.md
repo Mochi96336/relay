@@ -59,3 +59,15 @@ WT 的現場 failure=connect:TimeoutError，程式 stage=connect 對應 transpor
 
 結論：先完成#560的真實恢復判定修正；不為累計0-recovered直接拉長音訊等待、增加重傳流量或改校準秒數。
 若後續要補診斷，優先提供有界且不含錄音的cache miss/late-repair統計與probe最終失敗原因；不是宣稱本次已證實新runtime defect。
+
+## 後續診斷補強
+
+#560 已合併。後續補上手機 transport health 的兩個可選累計欄位：
+- `retransmitCacheMisses`：合法重送請求的序號已不在手機快取；重複未命中請求可以再次計數，不能直接當作唯一遺失包數。
+- `retransmitSendRejects`：快取仍有資料，但所選傳輸同步拒絕提交；不包含之後的非同步寫入失敗或網路遺失。
+
+兩欄由既有 health 回報送到伺服器；舊手機頁面未提供時保持缺省。
+接收端 `latePackets` 仍可能包含原包或重送，不能據此宣稱逐包重送失敗。
+Probe 每次失敗新增 `[probe-attempt-failed]` 結構化日誌，包含 target、reason、attempt、maxAttempts、terminal，區分重試與耗盡；不記錄音訊。
+這些補強用於下一次事件歸因，不會改變音訊等待期限或補回已過播放時間的聲音。
+驗證：53 項針對性測試與 TypeScript 檢查通過；完整 CI 交由 GitHub 執行。

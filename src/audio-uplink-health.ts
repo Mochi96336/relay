@@ -89,6 +89,10 @@ export type AudioUplinkTransportHealth = {
   retransmitBufferPackets?: number;
   /** Packets repeated in answer to retransmission requests. Older pages omit it. */
   retransmittedPackets?: number;
+  /** Valid requested sequences missing from cache; repeated requests can count again. */
+  retransmitCacheMisses?: number;
+  /** Cached repeats refused synchronously by the selected transport, not later network loss. */
+  retransmitSendRejects?: number;
   /** WebTransport re-offers attempted after a transport-level demotion. Older pages omit it. */
   webTransportRetries?: number;
   /** Retransmission requests that arrived on the direct session. Older pages omit it. */
@@ -497,6 +501,8 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     'webTransportBacklogExpired',
     'retransmitBufferPackets',
     'retransmittedPackets',
+    'retransmitCacheMisses',
+    'retransmitSendRejects',
     'webTransportRetries',
     'retransmitDatagramRequests',
   ] as const;

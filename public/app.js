@@ -1,5 +1,6 @@
+import { createMicCaptureGraph, parseMicVisualAnalysis } from './mic-capture-graph.js';
 import { CaptureClockRecovery } from './capture-clock-recovery.js';
-import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
+import { CalibrationProbePlayback } from './calibration-probe-playback.js';
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
@@ -105,8 +106,13 @@ let captureAppliedSettings = null;
 let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
-let activeCalibrationProbeRequestId = null;
-let activeCalibrationProbePlayback = null;
+const calibrationProbePlayback = new CalibrationProbePlayback({
+  getCapture: () => ({ context: audioContext, sessionEpoch: publisherSessionEpoch, generation: captureGeneration >>> 0 }),
+  isCurrentCapture: isCurrentPublisherCapture,
+  isControlOpen: () => socket?.readyState === WebSocket.OPEN,
+  sendControl: (message) => audioTransport.sendControlJson(message),
+  onDisconnected: markPublisherAuthorityStale,
+});
 let publisherSessionEpoch = 0;
 
 let captureInputGapSamples = 0;
@@ -302,8 +308,7 @@ function advanceCaptureGeneration(reason) {
   // Calibration probe playback is capture-scoped. Retire both a pending
   // AudioContext.resume() continuation and nodes already scheduled into the
   // future before changing the capture-clock identity.
-  activeCalibrationProbeRequestId = null;
-  retireCalibrationProbePlayback();
+  calibrationProbePlayback.retire();
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
   captureGenerationReason = reason;
   captureSampleCursor = 0;
@@ -325,32 +330,7 @@ function advanceCaptureGeneration(reason) {
 }
 
 function disposeCaptureGraph(graph) {
-  if (!graph) return;
-  try {
-    graph.capture.port.onmessage = null;
-  } catch {}
-  try {
-    if (graph.deviceChangeListener) {
-      navigator.mediaDevices?.removeEventListener?.('devicechange', graph.deviceChangeListener);
-    }
-  } catch {}
-  graph.deviceChangeListener = null;
-  graph.deviceChangeCheckPending = false;
-  try {
-    if (graph.processorErrorListener) {
-      graph.capture?.removeEventListener?.('processorerror', graph.processorErrorListener);
-    }
-  } catch {}
-  graph.processorErrorListener = null;
-  try {
-    graph.visualAnalysisWorker?.terminate();
-  } catch {}
-  graph.visualAnalysisWorker = null;
-  for (const node of [graph.source, graph.capture, graph.silent]) {
-    try {
-      node?.disconnect();
-    } catch {}
-  }
+  graph?.dispose();
 }
 
 function captureGraphIsCurrent(graph) {
@@ -364,35 +344,8 @@ function captureGraphIsCurrent(graph) {
   );
 }
 
-function captureTrackDeviceId(track) {
-  try {
-    const deviceId = track?.getSettings?.().deviceId;
-    return typeof deviceId === 'string' && deviceId.length > 0 ? deviceId : null;
-  } catch {
-    return null;
-  }
-}
-
 function rebuildCaptureForInputDeviceChange(graph) {
-  if (!captureGraphIsCurrent(graph)) return false;
-  const track = graph.stream.getAudioTracks?.()[0] ?? null;
-  const currentDeviceId = captureTrackDeviceId(track);
-  if (currentDeviceId === null) return false;
-
-  // Some browsers reveal deviceId only after the first post-permission
-  // configuration event. Establishing that first known identity is not itself
-  // a route change.
-  if (graph.inputDeviceId === null) {
-    graph.inputDeviceId = currentDeviceId;
-    return false;
-  }
-  if (currentDeviceId === graph.inputDeviceId) return false;
-
-  // The physical input authority changed while the track stayed live. Treat
-  // this as a capture-clock boundary: a fresh generation lets the server retire
-  // old positioned PCM and invalidate timing calibrated against the old device.
-  void rebuildPublisherCaptureGraph('input-device-changed');
-  return true;
+  return graph?.checkInputDeviceChange() ?? false;
 }
 
 function announceCaptureRecovered() {
@@ -403,76 +356,13 @@ function announceCaptureRecovered() {
   sendAudioUplinkHealth();
 }
 
-function parseMicVisualAnalysis(payload) {
-  const rawSpectrumBands = Array.isArray(payload?.spectrumBands)
-    ? payload.spectrumBands.slice(0, 5).map(Number)
-    : [];
-  const spectrumBands = rawSpectrumBands.length === 5 && rawSpectrumBands.every(Number.isFinite)
-    ? rawSpectrumBands
-    : null;
-  const rawF0Hz = payload?.f0Hz;
-  const f0Hz = rawF0Hz === null ? null : Number(rawF0Hz);
-  const pitchConfidence = Number(payload?.pitchConfidence);
-  if (
-    spectrumBands === null
-    || (f0Hz !== null && !Number.isFinite(f0Hz))
-    || !Number.isFinite(pitchConfidence)
-    || pitchConfidence < 0
-    || pitchConfidence > 1
-  ) return null;
-  return { spectrumBands, f0Hz, pitchConfidence };
-}
-
-function attachMicVisualAnalysisWorker(graph) {
-  if (typeof Worker !== 'function') return;
-  try {
-    const worker = new Worker('/mic-visual-analysis-worker.js', {
-      name: 'relay-mic-visual-analysis',
-    });
-    graph.visualAnalysisWorker = worker;
-    worker.onmessage = (event) => {
-      if (!captureGraphIsCurrent(graph) || event.data?.type !== 'analysis') return;
-      const analysis = parseMicVisualAnalysis(event.data);
-      if (analysis) graph.visualAnalysis = analysis;
-    };
-    worker.onerror = () => {
-      if (graph.visualAnalysisWorker !== worker) return;
-      try { worker.terminate(); } catch {}
-      graph.visualAnalysisWorker = null;
-    };
-    worker.postMessage({
-      type: 'configure',
-      sampleRate: graph.context.sampleRate,
-    });
-  } catch {
-    graph.visualAnalysisWorker = null;
-  }
-}
-
 function submitMicVisualAnalysis(graph, pcm) {
-  const worker = graph.visualAnalysisWorker;
-  if (!worker) return;
-  try {
-    // PCM transport owns the original buffer. Visual analysis gets a tiny
-    // bounded copy on the page thread, then all FFT/YIN work happens in its own
-    // Worker so no visual computation can consume an AudioWorklet deadline.
-    const analysisBuffer = pcm.slice(0);
-    worker.postMessage({ type: 'pcm', buffer: analysisBuffer }, [analysisBuffer]);
-  } catch {
-    try { worker.terminate(); } catch {}
-    graph.visualAnalysisWorker = null;
-  }
+  graph.submitVisualAnalysis(pcm);
 }
 
-/**
- * Hands a chunk buffer back for the worklet to reuse, sparing its audio thread
- * an allocation per chunk. Only once nothing here still reads it: every packet
- * is framed into its own buffer and visual analysis works on a copy.
- */
+// Return only after framing/encoding no longer reads the capture buffer.
 function returnCaptureBuffer(graph, buffer) {
-  try {
-    graph.capture.port.postMessage({ type: 'pcm-buffer-return', buffer }, [buffer]);
-  } catch {}
+  graph.returnBuffer(buffer);
 }
 
 function handleCaptureWorkletMessage(event, graph) {
@@ -661,133 +551,36 @@ function handleCaptureWorkletMessage(event, graph) {
   returnCaptureBuffer(graph, pcm);
 }
 
+function handleCaptureProcessorError(graph) {
+  if (!captureGraphIsCurrent(graph)) return;
+  // Spend the existing one-shot recovery budget; a repeated terminal failure
+  // enters reconnect grace rather than looping capture generations.
+  const decision = micCaptureRecovery.noteProcessorError(captureSnapshot());
+  if (decision.rebuild) {
+    void rebuildPublisherCaptureGraph('processor-error');
+    return;
+  }
+  if (!decision.exhausted) return;
+  void finishMicrophoneSession('processor-error-repeated', {
+    releaseMic: false,
+  }).catch(console.error);
+}
+
 function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
-  const source = captureContext.createMediaStreamSource(captureStream);
-  const capture = new AudioWorkletNode(captureContext, 'capture-processor', {
-    numberOfInputs: 1,
-    numberOfOutputs: 1,
-    outputChannelCount: [1],
+  const graph = createMicCaptureGraph({
+    epoch: captureGraphEpoch + 1,
+    sessionEpoch, stream: captureStream, context: captureContext,
+    isCurrent: captureGraphIsCurrent,
+    onCaptureMessage: handleCaptureWorkletMessage,
+    onProcessorError: handleCaptureProcessorError,
+    onInputDeviceChanged: () => { void rebuildPublisherCaptureGraph('input-device-changed'); },
+    onInputDeviceRemoved: () => finishMicrophoneSession('input-device-removed', { releaseMic: false }),
   });
-  const silent = captureContext.createGain();
-  silent.gain.value = 0;
-  const graph = {
-    epoch: ++captureGraphEpoch,
-    sessionEpoch,
-    stream: captureStream,
-    context: captureContext,
-    source,
-    capture,
-    silent,
-    visualAnalysisWorker: null,
-    visualAnalysis: null,
-    deviceChangeListener: null,
-    deviceChangeCheckPending: false,
-    processorErrorListener: null,
-    inputDeviceId: captureTrackDeviceId(captureStream.getAudioTracks?.()[0] ?? null),
-    // Raw PCM from a cached pre-envelope worklet has no per-chunk timestamp.
-    // Anchor its positioned sample clock at graph installation so old worklet
-    // compatibility cannot bypass the same realtime backlog budget.
-    captureClockOriginContextTime: captureContext.currentTime,
-  };
-
-  if (typeof capture.addEventListener === 'function') {
-    graph.processorErrorListener = () => {
-      if (!captureGraphIsCurrent(graph)) return;
-      // Per Web Audio, a processorerror leaves this AudioWorkletNode producing
-      // silence for the rest of its lifetime. Spend the same one-shot rebuild
-      // budget as the generic watchdog so a deterministic worklet bug cannot
-      // create an unbounded generation/rebuild loop.
-      const decision = micCaptureRecovery.noteProcessorError(captureSnapshot());
-      if (decision.rebuild) {
-        void rebuildPublisherCaptureGraph('processor-error');
-        return;
-      }
-      if (!decision.exhausted) return;
-
-      // A replacement processor failed again before fresh PCM could re-arm the
-      // budget. Stop local capture into the bounded server reconnect grace and
-      // require the existing user-gesture Retry Mic path.
-      void finishMicrophoneSession('processor-error-repeated', {
-        releaseMic: false,
-      }).catch(console.error);
-    };
-    capture.addEventListener('processorerror', graph.processorErrorListener);
-  }
-
-  const mediaDevices = navigator.mediaDevices;
-  if (
-    typeof mediaDevices?.enumerateDevices === 'function'
-    && typeof mediaDevices?.addEventListener === 'function'
-  ) {
-    graph.deviceChangeListener = () => {
-      if (!captureGraphIsCurrent(graph) || graph.deviceChangeCheckPending) return;
-
-      const track = graph.stream.getAudioTracks?.()[0] ?? null;
-      // A terminal track has its own ended lifecycle and already enters Mic
-      // reconnect grace. Device presence is only extra evidence for a track
-      // that still claims to be live.
-      if (!track || track.readyState === 'ended') return;
-
-      // A browser can auto-route the same live track from input A to input B.
-      // That is a capture replacement, not proof that the Mic is dead.
-      if (rebuildCaptureForInputDeviceChange(graph)) return;
-
-      const deviceId = captureTrackDeviceId(track);
-      if (deviceId === null) return;
-
-      graph.deviceChangeCheckPending = true;
-      Promise.resolve(mediaDevices.enumerateDevices()).then((devices) => {
-        if (!captureGraphIsCurrent(graph) || track.readyState === 'ended') return;
-
-        // devicechange may fire before WebKit updates getSettings(). Re-check
-        // after enumerateDevices() settles so A→B auto-routing cannot be
-        // mistaken for "A disappeared" and torn down.
-        if (rebuildCaptureForInputDeviceChange(graph)) return;
-        const confirmedDeviceId = captureTrackDeviceId(track);
-        if (confirmedDeviceId !== deviceId) return;
-
-        const audioInputs = Array.isArray(devices)
-          ? devices.filter((device) => device?.kind === 'audioinput')
-          : [];
-        // Some constrained browsers can resolve enumerateDevices() with an
-        // empty/filtered list instead of rejecting. That is not positive device
-        // removal evidence. Prefer a missed recovery over tearing down a live
-        // Mic on an ambiguous platform response.
-        if (audioInputs.length === 0) return;
-        const inputStillPresent = audioInputs.some(
-          (device) => device.deviceId === deviceId,
-        );
-        if (inputStillPresent) return;
-
-        return finishMicrophoneSession('input-device-removed', {
-          // A confirmed hardware removal is not a user intent to give up the
-          // room Mic. Reuse the same bounded server reconnect grace as track
-          // ended / graph-rebuild failure and require a user-gesture Retry Mic
-          // to obtain the replacement capture.
-          releaseMic: false,
-        });
-      }).catch((error) => {
-        // Device enumeration is opportunistic evidence only. Permission or
-        // platform errors must never tear down an otherwise live capture.
-        console.warn('Microphone device presence check failed', error);
-      }).finally(() => {
-        graph.deviceChangeCheckPending = false;
-      });
-    };
-    mediaDevices.addEventListener('devicechange', graph.deviceChangeListener);
-  }
-
-  capture.port.onmessage = (event) => handleCaptureWorkletMessage(event, graph);
-  attachMicVisualAnalysisWorker(graph);
-  // New app + new worklet opts into timestamped PCM. Old worklets ignore this
-  // message and keep sending raw ArrayBuffer, which this app still accepts.
-  // More importantly, a newly deployed worklet defaults to raw PCM until it
-  // sees this, so a page whose old app.js stayed open across a deploy remains
-  // able to publish audio.
-  capture.port.postMessage({ type: 'capture-protocol', pcmEnvelope: true });
-  source.connect(capture).connect(silent).connect(captureContext.destination);
+  // No callback is admitted until all graph resources are installed. Neither
+  // failed preparation nor graph disposal owns publisher stream/context teardown.
+  captureGraphEpoch = graph.epoch;
   activeCaptureGraph = graph;
-  activeNode = capture;
+  activeNode = graph.capture;
   return graph;
 }
 
@@ -921,152 +714,6 @@ function clearSocketReconnect() {
   socketReconnectTimer = null;
 }
 
-// Must match src/calibration-probe.ts, which builds the reference the server
-// correlates against. Irregular offsets are the point: no shift other than the
-// true one lines all three notes up at once, which is exactly the ambiguity
-// correlating against a song's own beat cannot escape.
-const PROBE_NOTES = [
-  { offsetMs: 0, frequencyHz: 1046.5, gain: 0.24 },
-  { offsetMs: 125, frequencyHz: 1318.5, gain: 0.27 },
-  { offsetMs: 330, frequencyHz: 1568, gain: 0.32 },
-];
-const PROBE_NOTE_SECONDS = 0.105;
-
-function retireCalibrationProbePlayback() {
-  const playback = activeCalibrationProbePlayback;
-  activeCalibrationProbePlayback = null;
-  if (!playback) return;
-  for (const { oscillator, gain } of playback.nodes) {
-    try { oscillator?.disconnect(); } catch {}
-    try { gain?.disconnect(); } catch {}
-    try { oscillator?.stop(); } catch {}
-  }
-}
-
-/**
- * Plays the probe out of the phone speaker so the phone's own microphone hears
- * it. The reply identifies the request and reports local preparation durations.
- * The server separates those durations from the transport round trip; absolute
- * browser timestamps are never treated as session time.
- */
-async function playCalibrationProbe(requestId, leadMs) {
-  const receivedAtMs = performance.now();
-  const context = audioContext;
-  const sessionEpoch = publisherSessionEpoch;
-  const expectedGeneration = captureGeneration >>> 0;
-  if (
-    !context
-    || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    || activeCalibrationProbeRequestId !== requestId
-  ) return;
-
-  try {
-    if (document.visibilityState === 'hidden') {
-      throw new Error('Phone probe cannot play while the page is hidden.');
-    }
-    // Mobile Safari may leave resume() pending while a page is suspended. The
-    // server can retire this request meanwhile, so every continuation has to
-    // re-prove request and capture ownership before it may create audible nodes.
-    await context.resume();
-    if (
-      activeCalibrationProbeRequestId !== requestId
-      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-      || socket?.readyState !== WebSocket.OPEN
-    ) return;
-    if (audioContext !== context) throw new Error('Phone probe AudioContext was replaced.');
-    if (document.visibilityState === 'hidden') {
-      throw new Error('Phone probe cannot play while the page is hidden.');
-    }
-    if (context.state !== 'running') {
-      throw new Error(`Phone probe AudioContext is ${context.state}.`);
-    }
-
-    retireCalibrationProbePlayback();
-    const scheduledAtMs = performance.now();
-    const startTime = context.currentTime + leadMs / 1000;
-    const playback = {
-      requestId,
-      sessionEpoch,
-      generation: expectedGeneration,
-      context,
-      nodes: [],
-    };
-    activeCalibrationProbePlayback = playback;
-    let remainingNotes = PROBE_NOTES.length;
-    for (const note of PROBE_NOTES) {
-      const at = startTime + note.offsetMs / 1000;
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.frequency.value = note.frequencyHz;
-      // A slightly softened attack avoids a sharp test-beep edge. The decay is
-      // close to the reference envelope used by the server's correlation.
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
-      oscillator.connect(gain).connect(context.destination);
-      playback.nodes.push({ oscillator, gain });
-      oscillator.addEventListener('ended', () => {
-        remainingNotes -= 1;
-        if (remainingNotes === 0 && activeCalibrationProbePlayback === playback) {
-          activeCalibrationProbePlayback = null;
-        }
-      }, { once: true });
-      oscillator.start(at);
-      oscillator.stop(at + PROBE_NOTE_SECONDS);
-    }
-
-    // Scheduling the nodes is the irreversible side effect. Retire the local
-    // request before acknowledging it so a later status/retry cannot revive the
-    // same identity on this page. The separate playback owner remains live
-    // until every scheduled node ends or a capture/session boundary retires it.
-    if (
-      activeCalibrationProbeRequestId !== requestId
-      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    ) return;
-    activeCalibrationProbeRequestId = null;
-    if (socket?.readyState !== WebSocket.OPEN) {
-      retireCalibrationProbePlayback();
-      return;
-    }
-    const result = audioTransport.sendControlJson({
-      type: 'calibration-probe-played',
-      target: 'mic',
-      requestId,
-      // The same truncation framePcm applies. The server compares this against
-      // the generation it read off a PCM frame header, which is a uint32.
-      generation: expectedGeneration,
-      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs),
-    });
-    if (!result.sent) {
-      retireCalibrationProbePlayback();
-      if (result.reason === 'disconnected') markPublisherAuthorityStale();
-    }
-  } catch (error) {
-    console.warn('phone calibration probe failed', error);
-    if (
-      activeCalibrationProbePlayback?.requestId === requestId
-      && activeCalibrationProbePlayback?.sessionEpoch === sessionEpoch
-      && activeCalibrationProbePlayback?.generation === expectedGeneration
-      && activeCalibrationProbePlayback?.context === context
-    ) {
-      retireCalibrationProbePlayback();
-    }
-    if (
-      activeCalibrationProbeRequestId !== requestId
-      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    ) return;
-    activeCalibrationProbeRequestId = null;
-    if (socket?.readyState !== WebSocket.OPEN) return;
-    const result = audioTransport.sendControlJson({
-      type: 'calibration-probe-failed',
-      target: 'mic',
-      requestId,
-      generation: expectedGeneration,
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
-  }
-}
 
 function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
@@ -1187,10 +834,9 @@ function handleServerMessage(
 
   if (message.type === 'timing-calibration-status') {
     if (
-      activeCalibrationProbeRequestId !== null
-      && (message.probeActive !== true || message.probePhase !== 'mic-requested')
+      message.probeActive !== true || message.probePhase !== 'mic-requested'
     ) {
-      activeCalibrationProbeRequestId = null;
+      calibrationProbePlayback.cancelPending();
     }
     return;
   }
@@ -1205,9 +851,7 @@ function handleServerMessage(
       // A new authoritative request supersedes any future playback left by an
       // older request in this same capture; overlapping probe waveforms are not
       // valid calibration evidence.
-      retireCalibrationProbePlayback();
-      activeCalibrationProbeRequestId = requestId;
-      void playCalibrationProbe(requestId, Number(message.leadMs) || 200);
+      void calibrationProbePlayback.play(requestId, Number(message.leadMs) || 200);
     }
     return;
   }
@@ -1344,7 +988,7 @@ async function connectPublisherSocket(
   ws.addEventListener('close', () => {
     if (socket !== ws) return;
     publisherReconnectBackoff.noteClosed(performance.now());
-    activeCalibrationProbeRequestId = null;
+    calibrationProbePlayback.cancelPending();
     audioTransport.unbind(ws);
     socket = null;
     resetPublisherHealthRequestCorrelation();
@@ -1510,8 +1154,7 @@ async function stop({ releaseMic = true } = {}) {
   const stoppedEpoch = ++publisherSessionEpoch;
   micStartup.cancel();
   publisherStarting = false;
-  activeCalibrationProbeRequestId = null;
-  retireCalibrationProbePlayback();
+  calibrationProbePlayback.retire();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
   stopCaptureWatchdog();
@@ -1835,8 +1478,7 @@ window.addEventListener('relay-retry-microphone', () => {
 });
 
 function notePublisherBackgrounded() {
-  activeCalibrationProbeRequestId = null;
-  retireCalibrationProbePlayback();
+  calibrationProbePlayback.retire();
   if (!publisherActive) return;
 
   // iOS may freeze timers immediately after the lifecycle edge, so do not

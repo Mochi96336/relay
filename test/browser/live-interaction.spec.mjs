@@ -292,8 +292,9 @@ async function installProductionDomHarness(page) {
     }
 
     class FakeAudioNode {
+      disconnects = 0;
       connect(target) { return target; }
-      disconnect() {}
+      disconnect() { this.disconnects++; }
     }
 
     class FakeGainNode extends FakeAudioNode {
@@ -324,6 +325,7 @@ async function installProductionDomHarness(page) {
           captureNode = this;
           captureNode.context = _context;
           captureNodes.push(this);
+          (window.__captureResourceNodes ??= []).push({ kind: 'worklet', node: this });
         }
       }
     }
@@ -347,8 +349,15 @@ async function installProductionDomHarness(page) {
 
       async resume() { this.state = 'running'; }
       async close() { this.state = 'closed'; }
-      createMediaStreamSource() { return new FakeAudioNode(); }
-      createGain() { return new FakeGainNode(); }
+      createMediaStreamSource() {
+        const node = new FakeAudioNode();
+        (window.__captureResourceNodes ??= []).push({ kind: 'source', node });
+        return node;
+      }
+      createGain() {
+        if (window.__failCaptureGain) throw new Error('test: capture gain setup failed');
+        return new FakeGainNode();
+      }
       createOscillator() {
         if (window.__failProbeOscillators) throw new Error('test: the speaker is unavailable');
         window.__oscillatorsCreated = (window.__oscillatorsCreated ?? 0) + 1;
@@ -357,8 +366,19 @@ async function installProductionDomHarness(page) {
         node.frequency = { value: 0 };
         node.addEventListener = events.addEventListener.bind(events);
         node.removeEventListener = events.removeEventListener.bind(events);
+        const evidence = { disconnects: 0, immediateStops: 0 };
+        (window.__probeNodes ??= []).push(evidence);
+        node.disconnect = () => { evidence.disconnects++; };
         node.start = () => {};
-        node.stop = () => queueMicrotask(() => events.dispatchEvent(new Event('ended')));
+        let endTimer;
+        node.stop = (at) => {
+          clearTimeout(endTimer);
+          // Scheduling a future stop must not claim the note has already ended.
+          // Otherwise the page cannot exercise cancellation of scheduled audio.
+          if (at === undefined) evidence.immediateStops++;
+          endTimer = setTimeout(() => events.dispatchEvent(new Event('ended')),
+            at === undefined ? 0 : Math.max(0, at - this.currentTime) * 1000);
+        };
         return node;
       }
     }
@@ -1347,6 +1367,33 @@ test('production DOM: going to the background drops a probe that had not played 
   expect(await probeReplies(page)).toEqual([]);
 });
 
+for (const boundary of ['background', 'release', 'capture replacement']) {
+  test(`production DOM: ${boundary} silences an acknowledged future probe`, async ({ page }) => {
+    await livePhone(page);
+    await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+      type: 'play-calibration-probe', target: 'mic', requestId: 79, leadMs: 5000,
+    }));
+    await expect.poll(() => probeReplies(page)).toEqual([{
+      type: 'calibration-probe-played', requestId: 79, generation: expect.any(Number), target: 'mic',
+    }]);
+    expect(await page.evaluate(() => window.__probeNodes)).toEqual([
+      { disconnects: 0, immediateStops: 0 },
+      { disconnects: 0, immediateStops: 0 },
+      { disconnects: 0, immediateStops: 0 },
+    ]);
+    await page.evaluate((edge) => {
+      if (edge === 'background') window.dispatchEvent(new Event('pagehide'));
+      if (edge === 'release') window.dispatchEvent(new Event('relay-release-microphone'));
+      if (edge === 'capture replacement') window.__relayInteractionHarness.failCaptureProcessor();
+    }, boundary);
+    await expect.poll(() => page.evaluate(() => window.__probeNodes)).toEqual([
+      { disconnects: 1, immediateStops: 1 },
+      { disconnects: 1, immediateStops: 1 },
+      { disconnects: 1, immediateStops: 1 },
+    ]);
+  });
+}
+
 test('production DOM: the phone frames its audio as AudioPacket v2 on one continuous timeline', async ({ page }) => {
   await livePhone(page);
   // Past startup, where packets captured before the media path is chosen may
@@ -1637,4 +1684,50 @@ test('production DOM: audio dropped in the first seconds after page load is stil
   await page.waitForFunction(() => window.__relayInteractionHarness.commands.some((command) => (
     command.type === 'audio-uplink-health' && command.droppedSamples?.captureBacklog === 960
   )), null, { timeout: 5_000 });
+});
+
+test('production DOM: partial capture installation disconnects acquired nodes', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true);
+  await expect(page.locator('#start-publisher')).toBeEnabled();
+  await page.evaluate(() => { window.__failCaptureGain = true; });
+  await page.locator('#start-publisher').click();
+  await expect.poll(() => page.evaluate(() => (window.__captureResourceNodes ?? [])
+    .map(({ kind, node }) => ({ kind, disconnects: node.disconnects })))).toEqual([
+    { kind: 'source', disconnects: 1 }, { kind: 'worklet', disconnects: 1 },
+  ]);
+  await expect(page.locator('#start-publisher')).toBeEnabled();
+  expect(await page.evaluate(() => window.relayActiveRole)).not.toBe('publisher');
+});
+
+test('production DOM: failed visual worker configuration terminates the worker while Mic stays live', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    const NativeWorker = window.Worker;
+    window.__failedVisualWorkers = [];
+    window.Worker = class extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        if (String(url).includes('mic-visual-analysis-worker')) {
+          this.evidence = { terminations: 0 };
+          window.__failedVisualWorkers.push(this.evidence);
+        }
+      }
+      postMessage(...args) {
+        if (this.evidence && args[0]?.type === 'configure') throw new Error('test: visual configure failed');
+        return super.postMessage(...args);
+      }
+      terminate() {
+        if (this.evidence) this.evidence.terminations++;
+        return super.terminate();
+      }
+    };
+  });
+  await prepareReadyMic(page);
+  expect(await page.evaluate(() => window.__failedVisualWorkers)).toEqual([{ terminations: 1 }]);
+  expect(await page.evaluate(() => window.relayActiveRole)).toBe('publisher');
 });

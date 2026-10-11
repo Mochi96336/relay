@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
+import { parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
 
 const moduleUrl = new URL('../public/audio-transport.js', import.meta.url).href;
 const appUrl = new URL('../public/app.js', import.meta.url);
@@ -176,8 +178,6 @@ test('active publisher JSON is bounded while admission and terminal release rema
   assert.match(app, /sendAudioUplinkHealth\(\)[\s\S]*audioTransport\.sendControlJson\(audioUplinkHealthPayload\(healthRequestId\)\)/);
   assert.match(app, /'relay-start-timing-calibration'[\s\S]*audioTransport\.sendControlJson\(\{ type: 'start-timing-calibration' \}\)/);
   assert.match(app, /function sendMixSettings\(\)[\s\S]*audioTransport\.sendControlJson\(\{\s*type: 'set-mix'/);
-  assert.match(app, /audioTransport\.sendControlJson\(\{\s*type: 'calibration-probe-played'/);
-  assert.match(app, /audioTransport\.sendControlJson\(\{\s*type: 'calibration-probe-failed'/);
   assert.match(app, /audioTransport\.sendControlJson\(\{ type: 'start-timing-calibration' \}\)/);
   assert.match(
     app,
@@ -204,3 +204,55 @@ test('invalid realtime websocket budgets fail closed', async () => {
     /sampleRate must be positive/,
   );
 });
+// Execute the production app binding, the real probe owner and the real bounded
+// transport together; moving the reply code cannot weaken this queue contract.
+for (const reply of ['played', 'failed']) {
+  for (const congested of [false, true]) {
+    test(`production probe ${reply} reply obeys the socket budget (${congested ? 'full' : 'free'})`, async () => {
+      const { PreferredAudioTransport } = await import(moduleUrl);
+      const { CalibrationProbePlayback } = await import(new URL('../public/calibration-probe-playback.js', import.meta.url).href);
+      const socket = new FakeSocket();
+      const audioTransport = new PreferredAudioTransport({ WebTransportClass: null });
+      audioTransport.bind(socket, { sampleRate: 48000 });
+      if (congested) socket.bufferedAmount = 19200;
+      const nodes: { disconnects: number }[] = [];
+      const context = {
+        currentTime: 1, state: 'running',
+        async resume() { if (reply === 'failed') throw new Error('speaker unavailable'); },
+        createOscillator() {
+          const node = { frequency: { value: 0 }, disconnects: 0,
+            connect(target: unknown) { return target; }, start() {}, stop() {},
+            addEventListener() {}, disconnect() { this.disconnects++; } };
+          nodes.push(node);
+          return node;
+        },
+        createGain: () => ({ gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }),
+        destination: {},
+      };
+      const scope = vm.createContext({
+        CalibrationProbePlayback: class extends CalibrationProbePlayback {
+          constructor(ports: object) { super({ ...ports, isHidden: () => false, warn() {} }); }
+        },
+        audioContext: context, publisherSessionEpoch: 1, captureGeneration: 2,
+        isCurrentPublisherCapture: () => true, socket, WebSocket: { OPEN: 1 }, audioTransport,
+        markPublisherAuthorityStale() { throw new Error('congestion is not loss of authority'); },
+      });
+      const source = parseTypeScriptSource(appUrl, await readFile(appUrl, 'utf8'));
+      vm.runInContext(`const probe = ${variableInitializerCode(source, 'calibrationProbePlayback')}`, scope);
+      try {
+        await vm.runInContext('probe.play(3, 200)', scope);
+        assert.equal(socket.sent.length, congested ? 0 : 1);
+        if (!congested) {
+          const message = JSON.parse(String(socket.sent[0]));
+          assert.equal(message.type, `calibration-probe-${reply}`);
+          assert.equal(message.requestId, 3);
+          assert.equal(message.generation, 2);
+        }
+        if (reply === 'played') assert.ok(nodes.every(n => n.disconnects === (congested ? 1 : 0)));
+      } finally {
+        vm.runInContext('probe.retire()', scope);
+        audioTransport.close();
+      }
+    });
+  }
+}

@@ -29,3 +29,33 @@ Mixer 欄位缺省的舊 peer 仍保留新鮮 ACK 的 legacy progress 行為。
 transport 回歸測試先在舊程式重現 delayed ACK／明確 unplayable Mixer 解除 degraded 失敗，修正後通過。
 另涵蓋 quantitative/legacy WS proof、WT quarantine release、fresh playable recovery 與額度不重置。
 84 項相關局部測試、型別通過；完整 CI 在 GitHub 驗收，未在 Pi 執行。
+
+## 後續重傳調查
+
+現場累計 requested=112、phone retransmitted=52、receiver recovered=0、receiver late=52。
+不能用這些累計值做逐包配對：requested 是已發請求的不同 sequence；phone retransmitted 是交給傳輸層的重送次數（含重試），不是接收成功；recovered 只有尚未放棄的 sequence 最終被 emit 才計數。
+因此 late=52 與重送52吻合是支持晚到的旁證，不是52包身分相同的證明。
+
+核對正式程序2318185，四個 reorder/retransmit deadline/window/request-budget 環境鍵沒有覆寫。
+預設普通 reorder 40 ms；有 Mixer headroom（>60 ms）時最多 hold 400 ms；hold window 48包。
+缺口一旦過期，就會記 lost 並推進 sequence，之後原包／重送到達會記 late（更久超出 finalized 歷史時為 replay），不再回插。
+手機快取128包；本次 Opus每包20 ms，連續送出下約2.56秒。請求落後超過這段快取時，手機可能無包可答。
+
+以真正 AudioPacketReceiver + DEFAULT_AUDIO_TRANSPORT_CONFIG 與 PreferredAudioTransport cache 做 stdout-only 可控重播：
+- request後100 ms回來：requested1/recovered1/late0。
+- request後500 ms回來：requested1/recovered0/late1；快取仍在，但接收期限已過。
+- request後8000 ms回來：recovered0，手機快取已淘汰該包；接收器 finalized 歷史也可淘汰，因此很晚的重送不一定仍算 late。
+並跑現有 audio-packet-receiver-retransmit、mic-retransmit-server 22項測試全通過，涵蓋真server補包成功。
+沒有逐包現場 trace，不能斷言112個請求中每包的確切失敗原因；沒有重現新的重傳接線錯誤。
+
+## 另外兩項現象的證據界線
+
+Probe 預設等待 playback ACK 3000 ms、最多3次；現場#5/#6/#7相隔約4秒、無相關成功分析紀錄，符合有限重試耗盡的行為。
+failProbeAttempt 最終失敗會回報校準狀態，但沒有對應結構化journal，故無法從既有日誌證明這三次的具體拒絕／逾時理由。
+正常網路後Content自行成功，不能說校準永遠卡死；也不宜因此盲目放大Probe等待時間。
+WT 的現場 failure=connect:TimeoutError，程式 stage=connect 對應 transport.ready 尚未完成、writer尚未接管。
+因此能定位到HTTP/3 session準備階段，不是已建立writer後的Opus重送／封包過大錯誤。
+沒有手機QUIC診斷與逐次handshake證據，不能再細分UDP路徑、網路切換或瀏覽器因素。
+
+結論：先完成#560的真實恢復判定修正；不為累計0-recovered直接拉長音訊等待、增加重傳流量或改校準秒數。
+若後續要補診斷，優先提供有界且不含錄音的cache miss/late-repair統計與probe最終失敗原因；不是宣稱本次已證實新runtime defect。

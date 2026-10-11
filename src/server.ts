@@ -1651,7 +1651,8 @@ function frameAgeMs(atMs: number, nowMs: number) {
 
 /** /statusz; see projectRemoteStatus for what it promises. */
 function remoteStatusPayload() {
-  return projectRemoteStatus(remoteStatusFacts(performance.now()));
+  const status = projectRemoteStatus(remoteStatusFacts(performance.now()));
+  return { ...status, audio: { ...status.audio, listenerPlayback: monitorTransport.playbackHealth() } };
 }
 
 /**

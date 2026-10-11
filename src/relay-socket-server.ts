@@ -30,6 +30,7 @@ export type RelaySocket = WebSocket & {
   audioPacketVersion?: 1 | 2;
   monitorPacketVersion?: 1;
   monitorDelivery?: MonitorDelivery;
+  monitorPlaybackHealth?: { sequence: number; observedAtMs: number; values: Record<string, number | boolean | string> };
   /** Codec this positioned monitor negotiated for PCM frames; absent is PCM. */
   monitorCodec?: 'opus';
   /**
@@ -425,12 +426,48 @@ export function createMonitorSocketTransport(
       && previous.endSampleIndex >= endSampleIndex
     ) return true;
     socket.monitorDelivery.acknowledged = { generation, endSampleIndex };
+    const health = payload.playbackHealth;
+    if (health && typeof health === 'object') {
+      const input = health as Record<string, unknown>;
+      const sequence = input.sequence;
+      const ageMs = input.ageMs;
+      if (typeof sequence === 'number' && Number.isSafeInteger(sequence) && sequence > 0
+        && sequence > (socket.monitorPlaybackHealth?.sequence ?? 0)
+        && typeof ageMs === 'number' && Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= 5_000) {
+        const values: Record<string, number | boolean | string> = {};
+        for (const key of ['queuedMs', 'targetPrebufferMs', 'jitterTargetMs', 'arrivalJitterMs',
+          'arrivalDeviationMs', 'underruns', 'droppedMs', 'trimmedMs', 'starvedMs', 'concealedMs', 'sampleRate']) {
+          const value = input[key];
+          if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e12) values[key] = value;
+        }
+        if (typeof input.playing === 'boolean') values.playing = input.playing;
+        if (['running', 'suspended', 'interrupted', 'closed'].includes(String(input.contextState))) {
+          values.contextState = String(input.contextState);
+        }
+        socket.monitorPlaybackHealth = { sequence, observedAtMs: nowMs() - ageMs, values };
+      }
+    }
     return true;
   }
 
   return {
     broadcast,
     acknowledge,
+    playbackHealth() {
+      const atMs = nowMs();
+      return [...wss.clients].filter(client => {
+        const socket = client as RelaySocket;
+        return socket.role === 'monitor' && socket.readyState === WebSocket.OPEN;
+      }).map(client => {
+        const socket = client as RelaySocket;
+        const report = socket.monitorPlaybackHealth;
+        const reportAgeMs = report ? Math.max(0, atMs - report.observedAtMs) : null;
+        return { connectionIncarnation: socket.connectionIncarnation,
+          participantId: socket.participantId ?? null, codec: socket.monitorCodec ?? 'pcm16',
+          reportAgeMs, sequence: report?.sequence ?? null,
+          health: report && reportAgeMs! <= 2_000 ? { ...report.values } : null };
+      });
+    },
     /** Starts offering Opus frames to monitors that negotiate them. */
     enableOpus(encoder: MonitorOpusEncoder) {
       opusEncoder = encoder;

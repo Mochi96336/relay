@@ -39,6 +39,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   // one-second allowance, cheap enough to ignore.
   const MONITOR_ACK_INTERVAL_MS = 100;
   let lastMonitorAckAt = Number.NEGATIVE_INFINITY;
+  let playbackHealthSequence = 0;
+  let latestPlaybackHealth = null;
   const monitorPcmReceiver = createMonitorPcmReceiver();
   const listenResampler = createStreamingResampler();
   // Opus is offered only when this browser can decode it, and never again in
@@ -197,6 +199,12 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
         type: 'monitor-ack',
         generation: frame.generation,
         receivedEndSampleIndex: frame.firstSampleIndex + frame.sampleCount,
+        ...(latestPlaybackHealth ? { playbackHealth: {
+          ...latestPlaybackHealth,
+          ageMs: Math.max(0, performance.now() - latestPlaybackHealth.observedAt),
+          sampleRate: audioContext?.sampleRate,
+          contextState: audioContext?.state,
+        } } : {}),
       }));
     } catch {}
   }
@@ -509,6 +517,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       observedAt: performance.now(),
     };
     window.relayListenHealth = detail;
+    latestPlaybackHealth = { ...detail, sequence: ++playbackHealthSequence };
     window.dispatchEvent(new CustomEvent('relay-listen-health', { detail }));
   }
 

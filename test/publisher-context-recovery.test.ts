@@ -12,7 +12,7 @@ function harness(load: () => Promise<void> = async () => {}) {
   const old = { close: async () => { events.push('close-old'); } };
   const stream = { id: 'retained-track' }, graph = {};
   const env: any = { captureGraphRebuildPromise: null, publisherSessionEpoch: 1,
-    captureGeneration: 7, audioContext: old, mediaStream: stream, activeCaptureGraph: graph,
+    captureGeneration: 7, micCodecConfig: { opus: false }, audioContext: old, mediaStream: stream, activeCaptureGraph: graph,
     activeNode: {}, publisherActive: true, owns: true,
     setTimeout, clearTimeout, console: { warn() {}, error() {} },
     isCurrentPublisherCapture: (_epoch: number, gen: number) => env.owns && gen === env.captureGeneration,

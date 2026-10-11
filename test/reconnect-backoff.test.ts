@@ -62,6 +62,6 @@ describe('publisher reconnect backoff', () => {
     assert.match(schedule, /reconnectBackoff\.nextDelayMs\(\)/);
     assert.doesNotMatch(listen, /RECONNECT_MS/, 'no fixed one-second wait remains');
     assert.match(listen, /socket = next;[\s\S]{0,120}previous\.close\(\); \} catch \{\}\s*\}\s*reconnectBackoff\.noteConnected\(/);
-    assert.match(listen, /socket = null;\s*reconnectBackoff\.noteClosed\(/);
+    assert.match(listen, /socket = null;\s*resetPlaybackHealth\(\);\s*reconnectBackoff\.noteClosed\(/);
   });
 });

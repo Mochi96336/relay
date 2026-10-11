@@ -31,8 +31,8 @@ const FRAME_SAMPLES = Math.round(RATE * 0.02);
 const PATH_LAG_MS = 120;
 const INITIAL_DELTA_MS = 150;
 const REFERENCE_LAG_MS = PATH_LAG_MS + INITIAL_DELTA_MS;
-/** Well past the 40 ms the mixer itself treats as a real delta movement. */
-const DRIFTED_DELTA_MS = 550;
+/** Inside the residual fence, but 300 ms beyond the initial alignment. */
+const DRIFTED_DELTA_MS = 450;
 const MASTER_SECONDS = 60;
 const VIDEO = 'dQw4w9WgXcQ';
 
@@ -196,13 +196,13 @@ async function waitForContentAuthority(monitor: RelayClient, expectedMs: number,
   throw new Error(`Timed out waiting for content authority. Last=${JSON.stringify(last ?? null)}`);
 }
 
-test('a Take whose Robot mapping drifts under its frozen alignment is not published as clean', async () => {
+async function verifyTakeTimingQuality(driftedDeltaMs: number, withinResidualRange: boolean) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-divergence-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   const room = await robotRoom(server);
   let stream: { driftTo: (ms: number) => void; stop: () => void } | null = null;
   try {
-    const advanceSamples = Math.round((RATE * (PATH_LAG_MS + DRIFTED_DELTA_MS)) / 1_000);
+    const advanceSamples = Math.round((RATE * (PATH_LAG_MS + driftedDeltaMs)) / 1_000);
     const totalSamples = RATE * MASTER_SECONDS;
     const master = pulseTrain(totalSamples + advanceSamples + RATE, RATE, 73);
     const mic = toInt16(master.subarray(0, totalSamples), 0.45, 0.004, 137);
@@ -220,9 +220,9 @@ test('a Take whose Robot mapping drifts under its frozen alignment is not publis
     const takeId = String(accepted.takeId);
 
     // The player drifts away from the room while the recording holds its
-    // alignment. This is ordinary Robot behaviour, not a fault: nothing here
-    // invalidates the measurement or touches a transport.
-    stream.driftTo(DRIFTED_DELTA_MS);
+    // alignment. Within-range drift changes mapping; beyond-range convergence
+    // removes residual authority. Neither may be published as a clean Take.
+    stream.driftTo(driftedDeltaMs);
     await sleep(2_500);
 
     room.singer.send({ type: 'stop-take', takeId });
@@ -240,42 +240,48 @@ test('a Take whose Robot mapping drifts under its frozen alignment is not publis
       0,
       'a preserved mapping must not be reported as a stale calibration',
     );
-    assert.ok(
-      quality.evidence.timingDivergedMs > 0,
-      `expected recorded divergence, got ${JSON.stringify(quality.evidence)}`,
-    );
-    assert.equal(
-      quality.evidence.timingDivergenceToleranceMs,
-      150,
-      'the Take policy must apply the mixer configured threshold, not a constant of its own',
-    );
-    assert.ok(
-      quality.evidence.peakTimingDivergenceMs >= 150,
-      `expected a peak past the mixer own re-apply threshold, got ${quality.evidence.peakTimingDivergenceMs}`,
-    );
-    assert.ok(
-      codes.includes('timing-diverged'),
-      `expected a timing-diverged issue, got ${codes.join(',')}`,
-    );
+    if (withinResidualRange) {
+      assert.ok(
+        quality.evidence.timingDivergedMs > 0,
+        `expected recorded divergence, got ${JSON.stringify(quality.evidence)}`,
+      );
+      assert.equal(
+        quality.evidence.timingDivergenceToleranceMs,
+        150,
+        'the Take policy must apply the mixer configured threshold, not a constant of its own',
+      );
+      assert.ok(
+        quality.evidence.peakTimingDivergenceMs >= 150,
+        `expected a peak past the mixer own re-apply threshold, got ${quality.evidence.peakTimingDivergenceMs}`,
+      );
+      assert.ok(
+        codes.includes('timing-diverged'),
+        `expected a timing-diverged issue, got ${codes.join(',')}`,
+      );
+      // The drift is charged at its real size rather than as a flag.
+      assert.equal(
+        Math.round(quality.evidence.peakTimingDivergenceMs),
+        driftedDeltaMs - INITIAL_DELTA_MS,
+      );
+
+      // None of the signals a reader would expect to catch this actually fire:
+      // the measurement stayed valid, the Robot kept reporting, and the mixer
+      // never fell back. That is precisely why the divergence needs its own
+      // evidence rather than being inferable from what was already recorded.
+      assert.equal(Number(quality.evidence.robotDeltaMissingMs), 0);
+    } else {
+      assert.ok(quality.evidence.robotDeltaMissingMs > 0, 'convergence must lose residual authority');
+      assert.ok(codes.includes('robot-delta-missing'));
+      assert.equal(quality.evidence.timingDivergedMs, 0, 'an unusable delta is not a measured divergence');
+      assert.equal(quality.evidence.peakTimingDivergenceMs, 0);
+      assert.ok(!codes.includes('timing-diverged'));
+    }
     assert.notEqual(quality.verdict, 'clean');
-
-    // The drift is charged at its real size rather than as a flag.
-    assert.equal(
-      Math.round(quality.evidence.peakTimingDivergenceMs),
-      DRIFTED_DELTA_MS - INITIAL_DELTA_MS,
-    );
-
-    // None of the signals a reader would expect to catch this actually fire:
-    // the measurement stayed valid, the Robot kept reporting, and the mixer
-    // never fell back. That is precisely why the divergence needs its own
-    // evidence rather than being inferable from what was already recorded.
-    assert.equal(Number(quality.evidence.robotDeltaMissingMs), 0);
     assert.equal(Number(quality.evidence.networkEstimateMs), 0);
     assert.equal(quality.evidence.events['robot-source-replaced'], 0);
     assert.equal(quality.evidence.events['backing-capture-restarted'], 0);
 
-    // The divergence is desired-minus-applied, so a non-zero reading is itself
-    // proof the recording held `appliedAtStart` while the mapping moved on.
+    // Starting authority was measured before drift or convergence began.
     assert.ok(Number.isFinite(appliedAtStart));
   } finally {
     stream?.stop();
@@ -283,4 +289,10 @@ test('a Take whose Robot mapping drifts under its frozen alignment is not publis
     await server.stop();
     await rm(directory, { recursive: true, force: true });
   }
-});
+}
+
+test('a Take whose Robot mapping drifts under its frozen alignment is not published as clean',
+  () => verifyTakeTimingQuality(DRIFTED_DELTA_MS, true));
+
+test('a Take whose Robot leaves the residual range records missing authority instead of a false drift measurement',
+  () => verifyTakeTimingQuality(550, false));

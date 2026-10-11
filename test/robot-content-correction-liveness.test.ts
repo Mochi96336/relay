@@ -14,7 +14,7 @@ import {
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
 const PATH_LAG_MS = 250;
-const INITIAL_DELTA_MS = 500;
+const INITIAL_DELTA_MS = 450; // Largest usable residual; larger reports are convergence.
 const REFERENCE_LAG_MS = PATH_LAG_MS + INITIAL_DELTA_MS;
 const INITIAL_CONFIRMED_END = Math.round(RATE * 7.0);
 const PRE_LOOP_END = Math.round(RATE * 7.2);
@@ -301,10 +301,10 @@ test('repeated 700 ms corrections stay quarantined and recover after the first f
       room.robot.send({
         type: 'source-seeked',
         reason: 'follower-correction',
-        // The Source sees the player 500 ms ahead again at each correction.
+        // The Source sees the player 450 ms ahead again at each correction.
         // Because 700 ms < the 1000 ms suppression window, no intervening
         // robot-player-offset packet is possible in the production loop.
-        fromMediaTime: target + 0.5,
+        fromMediaTime: target + 0.45,
         toMediaTime: target,
       });
 
@@ -352,7 +352,7 @@ test('repeated 700 ms corrections stay quarantined and recover after the first f
     }, 250);
 
     // The transport frontier still is not a content boundary. Keep the old
-    // relation for another 600 ms and prove live authority remains at 750 ms.
+    // relation for another 600 ms and prove live authority remains at 700 ms.
     const queuedPreEnd = cursor + QUEUED_PRE_SEEK_SAMPLES;
     await sendRange(room, mic, master, cursor, queuedPreEnd, INITIAL_DELTA_MS);
     cursor = queuedPreEnd;

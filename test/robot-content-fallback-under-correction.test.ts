@@ -13,21 +13,21 @@ import {
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
 const PATH_LAG_MS = 250;
-const INITIAL_DELTA_MS = 500;
+const INITIAL_DELTA_MS = 450; // Largest usable residual; larger reports are convergence.
 const REFERENCE_LAG_MS = PATH_LAG_MS + INITIAL_DELTA_MS;
 const POST_PROOF_SAMPLES = Math.round(RATE * 8.5);
 const TOTAL_SAMPLES = Math.round(RATE * 20.5);
 
 /**
  * This regression models the actual production discontinuity, not merely
- * the `source-seeked` event. Before correction the Robot is 500 ms ahead,
- * so captured backing content produces a 750 ms raw Mic/backing lag. A
- * follower seek then jumps the backing MEDIA CONTENT backward by 500 ms,
+ * the `source-seeked` event. Before correction the Robot is 450 ms ahead,
+ * so captured backing content produces a 700 ms raw Mic/backing lag. A
+ * follower seek then jumps the backing MEDIA CONTENT backward by 450 ms,
  * making the live raw lag 250 ms while capture sample indices keep moving.
  *
  * Relay must preserve source/capture identity but map those two PCM segments
  * onto their real media-time coordinates. The analyzer may keep a stable
- * 750 ms reference-frame result; the live mixer must end at 250 ms.
+ * 700 ms reference-frame result; the live mixer must end at 250 ms.
  */
 
 const PROBE_FAST = {
@@ -260,7 +260,7 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
     const mic = toInt16(master.subarray(0, TOTAL_SAMPLES), 0.45, 0.004, 11);
 
     // Establish the reference media mapping before any backup evidence is
-    // eligible. In this frame, raw content correlation is 250 + 500 = 750 ms.
+    // eligible. In this frame, raw content correlation is 250 + 450 = 700 ms.
     await sendRange(room, mic, master, 0, FRAME_SAMPLES, INITIAL_DELTA_MS);
     room.robot.send({ type: 'robot-player-offset', offsetMs: INITIAL_DELTA_MS });
     await sleep(30);
@@ -282,7 +282,7 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
     assert.ok(Number(collecting.progress) < 1);
     assert.notEqual(collecting.timingMode, 'acoustic-calibration');
 
-    // Still +500 ms: reference-frame backing coordinates are unchanged.
+    // Still +450 ms: reference-frame backing coordinates are unchanged.
     await sendRange(room, mic, master, RATE * 4, Math.round(RATE * 4.7), INITIAL_DELTA_MS);
     const beforeFirst = await waitForCalibrationStatus(
       room.monitor,
@@ -291,12 +291,12 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
     );
     assert.equal(beforeFirst.state, 'collecting');
 
-    // Real backward seek: subsequent backing PCM is now 500 ms earlier in
+    // Real backward seek: subsequent backing PCM is now 450 ms earlier in
     // song time even though its capture sample cursor continues forward.
     room.robot.send({
       type: 'source-seeked',
       reason: 'follower-correction',
-      fromMediaTime: 100.5,
+      fromMediaTime: 100.45,
       toMediaTime: 100,
     });
     await sleep(100);
@@ -332,7 +332,7 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
       'ambiguous cross-socket PCM must not advance content collection',
     );
 
-    // Model the follower becoming +500 ms ahead again before a second real
+    // Model the follower becoming +450 ms ahead again before a second real
     // correction. The first fresh post-seek offset is also what authorizes Relay
     // to request an ordered cursor from the backing PCM transport.
     room.robot.send({ type: 'robot-player-offset', offsetMs: INITIAL_DELTA_MS });
@@ -355,8 +355,8 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
     room.robot.send({
       type: 'source-seeked',
       reason: 'follower-correction',
-      fromMediaTime: 101,
-      toMediaTime: 100.5,
+      fromMediaTime: 100.9,
+      toMediaTime: 100.45,
     });
     await sleep(100);
     const afterSecond = await waitForCalibrationStatus(
@@ -390,7 +390,7 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
 
     // Adversarial production ordering: the bridge ACKed its sampleCursor, but
     // 600 ms of pre-seek audio was still queued upstream and arrives afterward.
-    // These frames retain the old +500 ms raw relationship and must remain
+    // These frames retain the old +450 ms raw relationship and must remain
     // quarantined until the audio content itself proves the post-seek segment.
     await sendRange(
       room,

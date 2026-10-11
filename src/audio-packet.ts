@@ -32,6 +32,8 @@ export type AudioPacket = {
   firstSampleIndex: number;
   sampleCount: number;
   pcm: Buffer;
+  /** Version 3 carries an Opus payload; decode only after sequence ordering. */
+  opusDelaySamples?: number;
 };
 
 export type AudioPacketDecodeError =
@@ -71,10 +73,13 @@ function validSampleRange(firstSampleIndex: number, sampleCount: number) {
 export function decodeAudioPacket(buffer: Buffer): AudioPacketDecodeResult {
   if (buffer.byteLength < AUDIO_PACKET_HEADER_BYTES) return { ok: false, error: 'too-short' };
   if (buffer.readUInt16LE(0) !== AUDIO_PACKET_MAGIC) return { ok: false, error: 'bad-magic' };
-  if (buffer.readUInt8(2) !== AUDIO_PACKET_VERSION) return { ok: false, error: 'unsupported-version' };
+  const opus = buffer.readUInt8(2) === 3;
+  if (!opus && buffer.readUInt8(2) !== AUDIO_PACKET_VERSION) return { ok: false, error: 'unsupported-version' };
+  if (opus && buffer.byteLength < 29) return { ok: false, error: 'too-short' };
 
   const source = decodeSource(buffer.readUInt8(3));
   if (!source) return { ok: false, error: 'unknown-source' };
+  if (opus && source !== 'mic') return { ok: false, error: 'unknown-source' };
 
   const generation = buffer.readUInt32LE(4);
   const sequence = buffer.readUInt32LE(8);
@@ -89,7 +94,9 @@ export function decodeAudioPacket(buffer: Buffer): AudioPacketDecodeResult {
   }
 
   const payloadBytes = buffer.byteLength - AUDIO_PACKET_HEADER_BYTES;
-  if (payloadBytes !== sampleCount * 2) {
+  if (opus ? (sampleCount !== 960 || payloadBytes > 1279
+    || buffer.readUInt16LE(24) > 960 || buffer.readUInt16LE(26) !== 0)
+    : payloadBytes !== sampleCount * 2) {
     return { ok: false, error: 'payload-length-mismatch' };
   }
 
@@ -101,7 +108,8 @@ export function decodeAudioPacket(buffer: Buffer): AudioPacketDecodeResult {
       sequence,
       firstSampleIndex,
       sampleCount,
-      pcm: buffer.subarray(AUDIO_PACKET_HEADER_BYTES),
+      pcm: buffer.subarray(opus ? 28 : AUDIO_PACKET_HEADER_BYTES),
+      ...(opus ? { opusDelaySamples: buffer.readUInt16LE(24) } : {}),
     },
   };
 }

@@ -38,7 +38,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   // page back to the live edge. Frequent enough to stay well inside Relay's
   // one-second allowance, cheap enough to ignore.
   const MONITOR_ACK_INTERVAL_MS = 100;
+  let receiveWindow = { startedAt: performance.now(), bytes: 0, kbps: undefined, measuredAt: 0 };
   let lastMonitorAckAt = Number.NEGATIVE_INFINITY;
+  let playbackHealthSequence = 0;
+  let latestPlaybackHealth = null;
   const monitorPcmReceiver = createMonitorPcmReceiver();
   const listenResampler = createStreamingResampler();
   // Opus is offered only when this browser can decode it, and never again in
@@ -197,6 +200,12 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
         type: 'monitor-ack',
         generation: frame.generation,
         receivedEndSampleIndex: frame.firstSampleIndex + frame.sampleCount,
+        ...(latestPlaybackHealth ? { playbackHealth: {
+          ...latestPlaybackHealth,
+          ageMs: Math.max(0, performance.now() - latestPlaybackHealth.observedAt),
+          sampleRate: audioContext?.sampleRate,
+          contextState: audioContext?.state,
+        } } : {}),
       }));
     } catch {}
   }
@@ -335,6 +344,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       try { previous.close(); } catch {}
     }
     reconnectBackoff.noteConnected(performance.now());
+    receiveWindow = { startedAt: performance.now(), bytes: 0, kbps: undefined, measuredAt: 0 };
     lastMonitorAckAt = Number.NEGATIVE_INFINITY;
     // The first reconnect starts 100 ms after a drop, while up to 250 ms of
     // the old stream can still be playing. Discard it with the 2 ms de-click
@@ -362,6 +372,15 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       // Delivery, not playback: a frame counts as arrived even if a paused
       // audio graph then discards it.
       acknowledgeMonitorFrame(next, received.frame);
+      const receivedAt = performance.now();
+      receiveWindow.bytes += event.data.byteLength;
+      const elapsed = receivedAt - receiveWindow.startedAt;
+      if (elapsed >= 1000) {
+        receiveWindow.kbps = receiveWindow.bytes * 8 / elapsed;
+        receiveWindow.measuredAt = receivedAt;
+        receiveWindow.startedAt = receivedAt;
+        receiveWindow.bytes = 0;
+      }
 
       // Keep framing continuity if Safari leaves this page running in the
       // background, but never build a playback backlog while WebAudio is not
@@ -506,9 +525,12 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   function publishListenHealth(health) {
     const detail = {
       ...health,
+      ...(performance.now() - receiveWindow.measuredAt <= 2000 && receiveWindow.kbps !== undefined
+        ? { receivedKbps: receiveWindow.kbps } : {}),
       observedAt: performance.now(),
     };
     window.relayListenHealth = detail;
+    latestPlaybackHealth = { ...detail, sequence: ++playbackHealthSequence };
     window.dispatchEvent(new CustomEvent('relay-listen-health', { detail }));
   }
 

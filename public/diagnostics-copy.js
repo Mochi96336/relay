@@ -226,6 +226,9 @@ const en = {
   'diag.mic.episode.mix-unplayable': 'Playback hitting gaps',
   'diag.mic.episode.digital-silence': 'Exact digital silence',
   'diag.mic.episode.unknown': 'Unknown',
+  'diag.mic.encoding': 'Encoding / compression',
+  'diag.mic.encoding.opusNote': 'Lossy compression · encoder target bitrate.',
+  'diag.mic.encoding.pcmNote': 'Uncompressed PCM16 audio.',
   'diag.mic.path': 'Path',
   'diag.mic.path.direct': 'Direct (WebTransport)',
   'diag.mic.path.directNote': 'UDP straight to Relay, the best path for live voice.',
@@ -584,6 +587,9 @@ const zhHant = {
   'diag.mic.episode.mix-unplayable': '播放遇到斷點',
   'diag.mic.episode.digital-silence': '完全的數位靜音',
   'diag.mic.episode.unknown': '未知',
+  'diag.mic.encoding': '編碼／壓縮',
+  'diag.mic.encoding.opusNote': '有損壓縮 · 碼率為編碼目標。',
+  'diag.mic.encoding.pcmNote': 'PCM16 未壓縮音訊。',
   'diag.mic.path': '傳輸路徑',
   'diag.mic.path.direct': '直連（WebTransport）',
   'diag.mic.path.directNote': '以 UDP 直接送到 Relay，最適合即時人聲。',
@@ -796,6 +802,78 @@ Object.assign(zhHant, {
   "diag.timing.ytState.paused": "已暫停",
   "diag.timing.ytState.buffering": "緩衝中",
   "diag.timing.ytState.cued": "已就緒",
+});
+
+
+Object.assign(en, {
+  "diag.listen.heading": "Room playback · by receiver",
+  "diag.listen.receiver": "Receiver",
+  "diag.listen.connection": "Connection",
+  "diag.listen.connectionNote": "The name is the participant nickname. This number identifies a listening connection and changes on reconnect.",
+  "diag.listen.throughput": "Audio received",
+  "diag.listen.throughputNote": "Measured over about 1 second, including audio packet headers; excludes TLS/IP overhead. Not network capacity or the codec target bitrate.",
+  "diag.listen.jitterNote": "Variation in packet arrival timing.",
+  "diag.listen.here": "This device",
+  "diag.listen.unknown": "No report",
+  "diag.listen.stale": "Report expired",
+  "diag.listen.playing": "Playing",
+  "diag.listen.buffering": "Playback waiting",
+  "diag.listen.status": "Playback",
+  "diag.listen.format": "Format",
+  "diag.listen.buffer": "Buffer / target",
+  "diag.listen.bufferNote": "Available audio / current playback target.",
+  "diag.listen.jitter": "Arrival jitter",
+  "diag.listen.underruns": "Underrun count",
+  "diag.listen.conceal": "Repeated audio",
+  "diag.listen.trim": "Latency trimmed",
+  "diag.listen.drop": "Overflow dropped",
+  "diag.listen.cumulative": "Cumulative for this playback processor; not a current fault verdict.",
+  "diag.listen.age": "Reported {age} ago.",
+  "diag.listen.unknownNote": "Playback health is unavailable; an older receiving page may need refreshing.",
+  "diag.listen.unavailable": "Receiver diagnostics unavailable.",
+  "diag.listen.none": "No connected room listeners."
+});
+Object.assign(zhHant, {
+  "diag.listen.heading": "房間播放 · 各收聽端",
+  "diag.listen.receiver": "收聽端",
+  "diag.listen.connection": "連線",
+  "diag.listen.connectionNote": "名稱是使用者暱稱；編號代表這一次收聽連線，重新連線會換號。",
+  "diag.listen.throughput": "音訊接收速率",
+  "diag.listen.throughputNote": "約 1 秒實測，包含音訊封包標頭、不含 TLS/IP 開銷。不是網路總頻寬，也不是編碼目標位元率。",
+  "diag.listen.jitterNote": "封包送達時間的波動。",
+  "diag.listen.here": "本機",
+  "diag.listen.unknown": "尚未回報",
+  "diag.listen.stale": "回報已過期",
+  "diag.listen.playing": "播放中",
+  "diag.listen.buffering": "播放等待中",
+  "diag.listen.status": "播放狀態",
+  "diag.listen.format": "音訊格式",
+  "diag.listen.buffer": "緩衝／目標",
+  "diag.listen.bufferNote": "可播放音訊／目前播放緩衝目標。",
+  "diag.listen.jitter": "送達抖動",
+  "diag.listen.underruns": "欠料次數",
+  "diag.listen.conceal": "重複補聲",
+  "diag.listen.trim": "延遲裁切",
+  "diag.listen.drop": "溢位丟棄",
+  "diag.listen.cumulative": "此播放處理器累計，不代表目前仍有異常。",
+  "diag.listen.age": "{age} 前回報。",
+  "diag.listen.unknownNote": "尚無可用播放數據；舊版收聽頁面可能需要重新整理。",
+  "diag.listen.unavailable": "尚無收聽端診斷資料。",
+  "diag.listen.none": "目前沒有房間收聽連線。"
+});
+
+
+Object.assign(en, {
+  'diag.mic.bitrate.startup': 'Adaptive bitrate: high-quality startup.',
+  'diag.mic.bitrate.stable-delivery': 'Adaptive bitrate: raised after stable delivery.',
+  'diag.mic.bitrate.congestion': 'Adaptive bitrate: reduced after sustained congestion.',
+  'diag.mic.bitrate.media-backlog': 'Adaptive bitrate: reduced after sustained media backlog.',
+});
+Object.assign(zhHant, {
+  'diag.mic.bitrate.startup': '自動碼率：以高品質檔啟動。',
+  'diag.mic.bitrate.stable-delivery': '自動碼率：持續穩定後升檔。',
+  'diag.mic.bitrate.congestion': '自動碼率：持續壅塞後降檔。',
+  'diag.mic.bitrate.media-backlog': '自動碼率：音訊持續積壓後降檔。',
 });
 
 export const DIAGNOSTICS_MESSAGES = { en, 'zh-Hant': zhHant };

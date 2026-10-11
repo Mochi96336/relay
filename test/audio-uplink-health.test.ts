@@ -3,6 +3,15 @@ import { describe, it } from 'node:test';
 
 import { parseAudioUplinkHealth } from '../src/audio-uplink-health.js';
 
+it('preserves the actual Mic codec and bitrate in observation health', () => {
+  const health = validHealth();
+  const parsed = parseAudioUplinkHealth({ ...health,
+    transport: { ...health.transport, codec: 'opus', codecBitrate: 128000, codecBitrateReason: 'stable-delivery' } });
+  assert.equal(parsed?.transport.codec, 'opus');
+  assert.equal(parsed?.transport.codecBitrate, 128000);
+  assert.equal(parsed?.transport.codecBitrateReason, 'stable-delivery');
+});
+
 function validHealth() {
   return {
     type: 'audio-uplink-health',

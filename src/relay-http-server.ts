@@ -16,6 +16,7 @@ export type RelayHttpServerOptions = {
   remoteStatus: () => unknown;
   observationStatusV1: () => unknown;
   readiness: () => RelayHttpReadiness;
+  micOpusTrial?: boolean;
 };
 
 /**
@@ -26,6 +27,14 @@ export type RelayHttpServerOptions = {
 export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
   const app = express();
   app.disable('x-powered-by');
+  app.get('/mic-codec-config', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ opus: options.micOpusTrial === true, bitrate: 128_000 });
+  });
+  app.get('/mic-opus.wasm', (_req, res) => {
+    res.type('application/wasm');
+    res.sendFile(path.resolve(options.publicDir, '../node_modules/@evan/opus/wasm/opus.wasm'));
+  });
 
   app.get('/takes/:takeId.wav', (req, res) => {
     if (options.relayKey && req.query.key !== options.relayKey) {

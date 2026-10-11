@@ -114,13 +114,6 @@ function describePath(status, t) {
   const transport = status?.audio?.captureAndSender?.transport;
   if (!status?.source?.micConnected || !path) return unknown(t, 'path', 'diag.mic.path');
 
-  const codec = transport?.codec === 'opus' ? 'Opus' : transport?.codec === 'pcm16' ? 'PCM16' : '';
-  const bitrate = finite(transport?.codecBitrate);
-  const codecNote = codec && finite(status.audio.captureAndSender.reportAgeMs) !== null
-    && status.audio.captureAndSender.reportAgeMs <= 2000
-    ? `${codec}${bitrate !== null ? ` · ${Math.round(bitrate / 1000)} kbps` : ''} · ` : '';
-  const bitrateReason = codecNote && ['startup', 'stable-delivery', 'congestion', 'media-backlog'].includes(transport?.codecBitrateReason)
-    ? `${t(`diag.mic.bitrate.${transport.codecBitrateReason}`)}${t('diag.sentenceGap')}` : '';
   const retries = count(transport?.webTransportRetries);
   const demotions = count(transport?.webTransportDemotions);
   const history = [];
@@ -135,7 +128,7 @@ function describePath(status, t) {
       'path',
       t('diag.mic.path'),
       t('diag.mic.path.direct'),
-      `${codecNote}${bitrateReason}${t('diag.mic.path.directNote')}${suffix}`,
+      `${t('diag.mic.path.directNote')}${suffix}`,
       'ok',
     );
   }
@@ -151,9 +144,26 @@ function describePath(status, t) {
     'path',
     t('diag.mic.path'),
     t('diag.mic.path.fallback'),
-    `${codecNote}${bitrateReason}${t('diag.mic.path.fallbackNote')}${failureNote}${suffix}`,
+    `${t('diag.mic.path.fallbackNote')}${failureNote}${suffix}`,
     'neutral',
   );
+}
+
+function describeEncoding(status, t) {
+  const sender = status?.audio?.captureAndSender;
+  const transport = sender?.transport;
+  const age = finite(sender?.reportAgeMs);
+  const codec = transport?.codec === 'opus' ? 'Opus' : transport?.codec === 'pcm16' ? 'PCM16' : '';
+  if (!status?.source?.micConnected || !codec || age === null || age < 0 || age > 2000) {
+    return unknown(t, 'encoding', 'diag.mic.encoding');
+  }
+  const bitrate = finite(transport?.codecBitrate);
+  const value = codec + (bitrate !== null ? ` · ${Math.round(bitrate / 1000)} kbps` : '');
+  const reason = ['startup', 'stable-delivery', 'congestion', 'media-backlog'].includes(transport?.codecBitrateReason)
+    ? t(`diag.mic.bitrate.${transport.codecBitrateReason}`) : '';
+  const note = [t(codec === 'Opus' ? 'diag.mic.encoding.opusNote' : 'diag.mic.encoding.pcmNote'), reason]
+    .filter(Boolean).join(t('diag.sentenceGap'));
+  return row('encoding', t('diag.mic.encoding'), value, note);
 }
 
 function describeLossRepair(status, t) {
@@ -388,6 +398,7 @@ export function describeMicTransport(status, t = english) {
     describeLevel(status, t),
     describeProblems(status, t),
     describePath(status, t),
+    describeEncoding(status, t),
     describeLossRepair(status, t),
     describeBuffer(status, t),
     describeDeviceSend(status, t),

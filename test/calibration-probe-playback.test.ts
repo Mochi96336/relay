@@ -204,3 +204,42 @@ test('retired session cannot fail a probe when the page hides during resume', as
   await playing;
   assertSilent(f);
 });
+
+for (const failure of ['createGain', 'gain ramp', 'connect']) {
+  test(`partial note failure at ${failure} cleans every allocated node and reports once`, async () => {
+    const f = fixture();
+    const createGain = f.context.createGain;
+    f.context.createGain = () => {
+      if (failure === 'createGain' && f.oscillators.length === 2) throw new Error('speaker setup failed');
+      const gain = createGain();
+      if (f.oscillators.length === 2) {
+        if (failure === 'gain ramp') gain.gain.setValueAtTime = () => { throw new Error('speaker setup failed'); };
+        if (failure === 'connect') gain.connect = () => { throw new Error('speaker setup failed'); };
+      }
+      return gain;
+    };
+    await scheduled(f);
+    assert.equal(f.messages.length, 1);
+    assert.equal(f.messages[0].type, 'calibration-probe-failed');
+    assert.equal(f.messages[0].reason, 'speaker setup failed');
+    assert.equal(f.oscillators.length, 2);
+    assert.ok(f.oscillators.every(n => n.disconnects === 1 && n.stops.at(-1) === undefined));
+    assert.ok(f.gains.every(n => n.disconnects === 1));
+    f.retire();
+    assert.ok(f.oscillators.every(n => n.disconnects === 1), 'retiring again does not touch disposed nodes');
+  });
+}
+
+test('a retry with the same request ID still retires an older resume and rejection', async () => {
+  const f = fixture();
+  const old = f.play(3);
+  const retry = f.play(3);
+  f.resumes[1].resolve();
+  await retry;
+  f.resumes[0].reject(new Error('old resume failed'));
+  await old;
+  assert.equal(f.messages.length, 1);
+  assert.deepEqual(f.oscillators.map(n => n.disconnects), [0, 0, 0]);
+  f.retire();
+  assert.deepEqual(f.oscillators.map(n => n.disconnects), [1, 1, 1]);
+});

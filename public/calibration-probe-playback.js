@@ -92,7 +92,11 @@ export class CalibrationProbePlayback {
       for (const note of PROBE_NOTES) {
         const at = startTime + note.offsetMs / 1000;
         const oscillator = context.createOscillator();
-        const gain = context.createGain();
+        // Register each resource as soon as it exists. Gain creation, envelope
+        // setup and connect can all throw before a complete note is scheduled.
+        const nodes = { oscillator, gain: null };
+        playback.nodes.push(nodes);
+        const gain = nodes.gain = context.createGain();
         oscillator.frequency.value = note.frequencyHz;
         // A slightly softened attack avoids a sharp test-beep edge. The decay is
         // close to the reference envelope used by the server's correlation.
@@ -100,7 +104,6 @@ export class CalibrationProbePlayback {
         gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
         gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
         oscillator.connect(gain).connect(context.destination);
-        playback.nodes.push({ oscillator, gain });
         oscillator.addEventListener('ended', () => {
           remainingNotes -= 1;
           if (remainingNotes === 0 && this.#playback === playback) {

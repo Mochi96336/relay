@@ -357,8 +357,19 @@ async function installProductionDomHarness(page) {
         node.frequency = { value: 0 };
         node.addEventListener = events.addEventListener.bind(events);
         node.removeEventListener = events.removeEventListener.bind(events);
+        const evidence = { disconnects: 0, immediateStops: 0 };
+        (window.__probeNodes ??= []).push(evidence);
+        node.disconnect = () => { evidence.disconnects++; };
         node.start = () => {};
-        node.stop = () => queueMicrotask(() => events.dispatchEvent(new Event('ended')));
+        let endTimer;
+        node.stop = (at) => {
+          clearTimeout(endTimer);
+          // Scheduling a future stop must not claim the note has already ended.
+          // Otherwise the page cannot exercise cancellation of scheduled audio.
+          if (at === undefined) evidence.immediateStops++;
+          endTimer = setTimeout(() => events.dispatchEvent(new Event('ended')),
+            at === undefined ? 0 : Math.max(0, at - this.currentTime) * 1000);
+        };
         return node;
       }
     }
@@ -1346,6 +1357,33 @@ test('production DOM: going to the background drops a probe that had not played 
   await page.waitForTimeout(600);
   expect(await probeReplies(page)).toEqual([]);
 });
+
+for (const boundary of ['background', 'release', 'capture replacement']) {
+  test(`production DOM: ${boundary} silences an acknowledged future probe`, async ({ page }) => {
+    await livePhone(page);
+    await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+      type: 'play-calibration-probe', target: 'mic', requestId: 79, leadMs: 5000,
+    }));
+    await expect.poll(() => probeReplies(page)).toEqual([{
+      type: 'calibration-probe-played', requestId: 79, generation: expect.any(Number), target: 'mic',
+    }]);
+    expect(await page.evaluate(() => window.__probeNodes)).toEqual([
+      { disconnects: 0, immediateStops: 0 },
+      { disconnects: 0, immediateStops: 0 },
+      { disconnects: 0, immediateStops: 0 },
+    ]);
+    await page.evaluate((edge) => {
+      if (edge === 'background') window.dispatchEvent(new Event('pagehide'));
+      if (edge === 'release') window.dispatchEvent(new Event('relay-release-microphone'));
+      if (edge === 'capture replacement') window.__relayInteractionHarness.failCaptureProcessor();
+    }, boundary);
+    await expect.poll(() => page.evaluate(() => window.__probeNodes)).toEqual([
+      { disconnects: 1, immediateStops: 1 },
+      { disconnects: 1, immediateStops: 1 },
+      { disconnects: 1, immediateStops: 1 },
+    ]);
+  });
+}
 
 test('production DOM: the phone frames its audio as AudioPacket v2 on one continuous timeline', async ({ page }) => {
   await livePhone(page);

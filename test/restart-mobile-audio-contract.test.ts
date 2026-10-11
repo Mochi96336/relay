@@ -7,6 +7,7 @@ import { encodeAudioPacket } from '../src/audio-packet.js';
 import { parseAudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { AudioSessionPolicy, resolveAudioSessionType } from '../public/audio-session-policy.js';
 import { RelayClient, startRelay } from './helpers/harness.js';
+import { captureFixture } from './support/capture-graph-fixture.js';
 
 const serverSource = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
 const micRuntimeSource = readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8');
@@ -133,20 +134,14 @@ test('Listen treats OS interruption as recovery, not a user transport teardown',
 
 test('Phone capture dispatch trims stale worklet PCM without shifting later capture time', () => {
   assert.match(appSource, /classifyCaptureDispatch/);
-  assert.match(
-    appSource,
-    /capture\.port\.postMessage\(\{ type: 'capture-protocol', pcmEnvelope: true \}\)/,
-    'new app must explicitly opt into timestamp envelopes so a new worklet stays compatible with an old open page',
-  );
+  const fixture = captureFixture();
+  const graph = fixture.install();
+  assert.deepEqual(graph.capture.port.posted, [{ type: 'capture-protocol', pcmEnvelope: true }]);
+  assert.equal(graph.captureClockOriginContextTime, fixture.context.currentTime);
   assert.match(
     appSource,
     /const chunkFirstSampleIndex = captureSampleCursor;\s*captureSampleCursor \+= pcm\.byteLength \/ 2;[\s\S]*if \(dispatch\.stale\) \{[\s\S]*recordUplinkDrop\(pcm\.byteLength \/ 2, 'capture-backlog'\);[\s\S]*return;[\s\S]*splitPcmForPacketLimit\(\s*pcm,/,
     'stale worklet PCM must advance the sample clock, become a hole, and return before packetization',
-  );
-  assert.match(
-    appSource,
-    /captureClockOriginContextTime: captureContext\.currentTime/,
-    'each capture graph must anchor a fallback clock for rollout-compatible raw PCM',
   );
   assert.match(
     appSource,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { captureFixture } from './support/capture-graph-fixture.js';
 
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const presence = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
@@ -115,48 +116,18 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
 });
 
 test('capture AudioWorklet processorerror uses one bounded current-graph rebuild before grace fallback', () => {
-  const installAt = app.indexOf('function installCaptureGraph');
-  const roleAt = app.indexOf('// recorder.js reads this', installAt);
-  assert.ok(installAt >= 0 && roleAt > installAt);
-  const install = app.slice(installAt, roleAt);
-
-  assert.match(install, /processorErrorListener: null/);
-  assert.match(install, /capture\.addEventListener\('processorerror', graph\.processorErrorListener\)/);
-  assert.match(
-    install,
-    /graph\.processorErrorListener = \(\) => \{[\s\S]*if \(!captureGraphIsCurrent\(graph\)\) return;[\s\S]*micCaptureRecovery\.noteProcessorError\(captureSnapshot\(\)\)/,
-    'only the currently authoritative capture graph may spend processor-error recovery authority',
-  );
-  assert.match(
-    install,
-    /if \(decision\.rebuild\) \{[\s\S]*rebuildPublisherCaptureGraph\('processor-error'\)/,
-    'the first terminal processor error reuses the existing graph replacement path',
-  );
-  assert.match(
-    install,
-    /if \(!decision\.exhausted\) return;[\s\S]*finishMicrophoneSession\('processor-error-repeated', \{[\s\S]*releaseMic: false/,
-    'a replacement processor that crashes again before fresh PCM must enter bounded reconnect grace instead of looping generations',
-  );
-
-  const disposeAt = app.indexOf('function disposeCaptureGraph');
-  const currentAt = app.indexOf('function captureGraphIsCurrent', disposeAt);
-  assert.ok(disposeAt >= 0 && currentAt > disposeAt);
-  const dispose = app.slice(disposeAt, currentAt);
-  assert.match(
-    dispose,
-    /removeEventListener\?\.\('processorerror', graph\.processorErrorListener\)/,
-    'retired AudioWorklet nodes must lose processorerror authority',
-  );
-
-  const rebuildAt = app.indexOf('function rebuildPublisherCaptureGraph');
-  const stopAt = app.indexOf('async function stop(', rebuildAt);
-  assert.ok(rebuildAt >= 0 && stopAt > rebuildAt);
-  const rebuild = app.slice(rebuildAt, stopAt);
-  assert.match(
-    rebuild,
-    /if \(captureGraphRebuildPromise\) return captureGraphRebuildPromise/,
-    'processorerror recovery must still share the physical single-flight rebuild',
-  );
+  const f = captureFixture();
+  const graph = f.install();
+  const queued = [...graph.capture.listeners.get('processorerror')][0] as () => void;
+  graph.capture.emit('processorerror');
+  f.env.processorDecision = { rebuild: false, exhausted: true };
+  graph.capture.emit('processorerror');
+  f.dispose(graph);
+  queued();
+  assert.deepEqual(f.effects, ['processor-error', 'processor-error-repeated:false']);
+  const rebuild = app.slice(app.indexOf('function rebuildPublisherCaptureGraph'), app.indexOf('async function stop('));
+  assert.match(rebuild, /if \(captureGraphRebuildPromise\) return captureGraphRebuildPromise/,
+    'recovery still shares the existing physical single-flight rebuild');
 });
 
 test('unexpected capture AudioContext closure enters bounded Mic reconnect grace', () => {
@@ -211,96 +182,35 @@ test('hardware input ending uses Mic reconnect grace instead of explicit release
   assert.doesNotMatch(handler, /dispatchRelayEvent\('relay-microphone-ended'/);
 });
 
-test('confirmed active input removal enters Mic reconnect grace without guessing on generic devicechange', () => {
-  const installAt = app.indexOf('function installCaptureGraph');
-  const roleAt = app.indexOf('// recorder.js reads this', installAt);
-  assert.ok(installAt >= 0 && roleAt > installAt);
-  const install = app.slice(installAt, roleAt);
-
-  assert.match(install, /mediaDevices\?\.enumerateDevices/);
-  assert.match(install, /mediaDevices\?\.addEventListener/);
-  assert.match(install, /deviceChangeCheckPending/,
-    'bursty devicechange events must share one presence check');
-  assert.match(install, /track\.readyState === 'ended'/,
-    'track ended owns its existing terminal callback and must not double-trigger device removal');
-  assert.match(install, /captureTrackDeviceId\(track\)/,
-    'the active capture device id is the removal authority');
-  assert.match(
-    install,
-    /devices\.filter\(\(device\) => device\?\.kind === 'audioinput'\)/,
-    'device presence must be proved from the audio-input subset only',
-  );
-  assert.match(
-    install,
-    /if \(audioInputs\.length === 0\) return/,
-    'an empty or filtered enumerateDevices response is ambiguous, not removal authority',
-  );
-  assert.match(
-    install,
-    /audioInputs\.some\([\s\S]*device\.deviceId === deviceId/,
-    'unrelated output/input changes must leave the active Mic alone',
-  );
-  assert.match(
-    install,
-    /finishMicrophoneSession\('input-device-removed', \{[\s\S]*releaseMic: false/,
-    'only confirmed active-input disappearance may enter the bounded reconnect grace',
-  );
-  assert.match(
-    install,
-    /catch\(\(error\) => \{[\s\S]*presence check failed/,
-    'enumeration failure is diagnostic only and cannot tear down a live capture',
-  );
-
-  const disposeAt = app.indexOf('function disposeCaptureGraph');
-  const currentAt = app.indexOf('function captureGraphIsCurrent', disposeAt);
-  assert.ok(disposeAt >= 0 && currentAt > disposeAt);
-  const dispose = app.slice(disposeAt, currentAt);
-  assert.match(
-    dispose,
-    /removeEventListener\?\.\('devicechange', graph\.deviceChangeListener\)/,
-    'retired capture graphs must not keep devicechange authority',
-  );
+test('confirmed active input removal enters Mic reconnect grace without guessing on generic devicechange', async () => {
+  const f = captureFixture();
+  const graph = f.install();
+  f.track.readyState = 'ended';
+  f.mediaDevices.emit();
+  assert.equal(f.mediaDevices.enumerations, 0, 'ended track uses its own terminal authority');
+  f.track.readyState = 'live';
+  f.mediaDevices.enumerate = () => Promise.resolve([]);
+  f.mediaDevices.emit(); await f.flush();
+  assert.deepEqual(f.effects, [], 'empty permission-filtered list is not removal evidence');
+  f.mediaDevices.enumerate = () => Promise.resolve([{ kind: 'audioinput', deviceId: 'mic-b' }]);
+  f.mediaDevices.emit(); await f.flush();
+  assert.deepEqual(f.effects, ['input-device-removed:false']);
+  f.dispose(graph);
+  f.mediaDevices.emit();
+  assert.equal(f.mediaDevices.enumerations, 2, 'retired graph has no presence listener');
 });
 
 test('live Mic input A→B becomes a capture-generation boundary instead of false removal', () => {
-  const identityAt = app.indexOf('function captureTrackDeviceId');
-  const recoveredAt = app.indexOf('function announceCaptureRecovered', identityAt);
-  assert.ok(identityAt >= 0 && recoveredAt > identityAt);
-  const identity = app.slice(identityAt, recoveredAt);
-
-  assert.match(identity, /track\?\.getSettings\?\.\(\)\.deviceId/);
-  assert.match(identity, /graph\.inputDeviceId === null/);
-  assert.match(
-    identity,
-    /currentDeviceId === graph\.inputDeviceId/,
-    'same physical input must remain the same capture generation',
-  );
-  assert.match(
-    identity,
-    /rebuildPublisherCaptureGraph\('input-device-changed'\)/,
-    'a live track routed to a different physical input must advance capture generation',
-  );
-
-  const installAt = app.indexOf('function installCaptureGraph');
-  const roleAt = app.indexOf('// recorder.js reads this', installAt);
-  assert.ok(installAt >= 0 && roleAt > installAt);
-  const install = app.slice(installAt, roleAt);
-  assert.match(
-    install,
-    /inputDeviceId: captureTrackDeviceId\(captureStream\.getAudioTracks\?\.\(\)\[0\] \?\? null\)/,
-    'each graph must remember the physical input identity it was installed against',
-  );
-  const routeChecks = install.match(/rebuildCaptureForInputDeviceChange\(graph\)/g) ?? [];
-  assert.ok(
-    routeChecks.length >= 2,
-    'devicechange must compare track identity both before and after asynchronous enumeration',
-  );
-  assert.match(
-    install,
-    /const confirmedDeviceId = captureTrackDeviceId\(track\);[\s\S]*if \(confirmedDeviceId !== deviceId\) return/,
-    'A disappearing while the browser auto-routes to B cannot be misclassified as terminal removal',
-  );
-
+  const f = captureFixture();
+  f.track.deviceId = '';
+  const graph = f.install();
+  f.track.deviceId = 'mic-a';
+  assert.equal(graph.checkInputDeviceChange(), false, 'first revealed identity is not a replacement');
+  assert.equal(graph.checkInputDeviceChange(), false, 'same input does not replace capture');
+  f.track.deviceId = 'mic-b';
+  assert.equal(graph.checkInputDeviceChange(), true);
+  assert.deepEqual(f.effects, ['input-device-changed']);
+  f.dispose(graph);
   const refreshAt = app.indexOf('const refreshCaptureConfiguration = () => {');
   const mutedAt = app.indexOf('captureInputMuted =', refreshAt);
   assert.ok(refreshAt >= 0 && mutedAt > refreshAt);

@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { functionCode, parseTypeScriptSource } from './source-contract.js';
+import { functionCode, parseTypeScriptSource, variableInitializerCode } from './source-contract.js';
+const { classifyCaptureDispatch } = await import(new URL('../../public/capture-dispatch.js', import.meta.url).href);
+const { splitPcmForPacketLimit } = await import(new URL('../../public/audio-packetizer.js', import.meta.url).href);
+const { createMicCaptureGraph, parseMicVisualAnalysis } = await import(new URL('../../public/mic-capture-graph.js', import.meta.url).href);
 
 export function captureFixture(failure: string | null = null) {
   const effects: string[] = [];
@@ -30,7 +33,7 @@ export function captureFixture(failure: string | null = null) {
         postMessage(message: any, transfer: Transferable[] = []) {
           check('protocol'); this.posted.push(structuredClone(message, { transfer }));
         } },
-      connect(target: unknown) { check(`connect-${kind}`); this.connected = true; return target; },
+      connect(target: unknown) { env.beforeConnect?.(); check(`connect-${kind}`); this.connected = true; return target; },
       disconnect() { this.disconnects++; this.connected = false; },
       addEventListener(type: string, listener: (...args: any[]) => void) {
         const set = listeners.get(type) ?? new Set(); set.add(listener); listeners.set(type, set);
@@ -53,7 +56,7 @@ export function captureFixture(failure: string | null = null) {
       terminations = 0;
       onmessage: any = null; onerror: any = null;
       posted: any[] = [];
-      constructor() { check('worker-create'); workers.push(this); }
+      constructor(readonly url: string, readonly options: { name: string }) { check('worker-create'); workers.push(this); }
       postMessage(message: any, transfer: Transferable[] = []) {
         check(`worker-${message.type}`); this.posted.push(structuredClone(message, { transfer }));
       }
@@ -74,14 +77,37 @@ export function captureFixture(failure: string | null = null) {
   };
   const source = parseTypeScriptSource(new URL('../../public/app.js', import.meta.url),
     readFileSync(new URL('../../public/app.js', import.meta.url), 'utf8'));
+  env.createMicCaptureGraph = (options: any) => createMicCaptureGraph({
+    ...options, mediaDevices, AudioWorkletNodeClass: env.AudioWorkletNode,
+    WorkerClass: env.Worker, warn: env.console.warn,
+  });
+  env.parseMicVisualAnalysis = parseMicVisualAnalysis;
   const scope = vm.createContext(env);
-  for (const name of ['disposeCaptureGraph', 'captureGraphIsCurrent', 'captureTrackDeviceId',
-    'rebuildCaptureForInputDeviceChange', 'parseMicVisualAnalysis', 'attachMicVisualAnalysisWorker',
+  for (const name of ['disposeCaptureGraph', 'captureGraphIsCurrent',
+    'rebuildCaptureForInputDeviceChange', 'handleCaptureProcessorError',
     'submitMicVisualAnalysis', 'returnCaptureBuffer', 'installCaptureGraph']) {
     vm.runInContext(functionCode(source, name), scope);
   }
   return {
     env, nodes, workers, mediaDevices, context, stream, track, effects, events, messages,
+    setFailure(value: string | null) { failure = value; },
+    usePcmHandler(overrides: Record<string, unknown> = {}) {
+      Object.assign(env, {
+        ArrayBuffer, performance: { now: () => 100 },
+        captureSampleCursor: 0, capturePacketSequence: 0, captureGeneration: 7,
+        captureInputMuted: false, sampleSongCapture: null, micOpus: null,
+        classifyCaptureDispatch, splitPcmForPacketLimit,
+        noteCaptureDispatch() {}, recordUplinkDrop() {},
+        audioTransport: { maxPacketBytes: () => Infinity, send: () => ({ sent: true }) },
+        ...overrides,
+      });
+      env.micCaptureRecovery.observe = () => ({ recovered: false });
+      for (const name of ['AUDIO_PACKET_MAGIC', 'AUDIO_PACKET_VERSION', 'AUDIO_PACKET_HEADER_BYTES', 'AUDIO_PACKET_SOURCE_MIC']) {
+        vm.runInContext(`const ${name} = ${variableInitializerCode(source, name)}`, scope);
+      }
+      vm.runInContext(functionCode(source, 'framePcm'), scope);
+      vm.runInContext(functionCode(source, 'handleCaptureWorkletMessage'), scope);
+    },
     install() { return vm.runInContext('installCaptureGraph(1, mediaStream, audioContext)', scope); },
     dispose(graph = env.activeCaptureGraph) { env.target = graph; vm.runInContext('disposeCaptureGraph(target)', scope); },
     analyze(graph: any, pcm: ArrayBuffer) { env.target = graph; env.pcm = pcm; vm.runInContext('submitMicVisualAnalysis(target, pcm)', scope); },

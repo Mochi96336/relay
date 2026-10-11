@@ -292,8 +292,9 @@ async function installProductionDomHarness(page) {
     }
 
     class FakeAudioNode {
+      disconnects = 0;
       connect(target) { return target; }
-      disconnect() {}
+      disconnect() { this.disconnects++; }
     }
 
     class FakeGainNode extends FakeAudioNode {
@@ -324,6 +325,7 @@ async function installProductionDomHarness(page) {
           captureNode = this;
           captureNode.context = _context;
           captureNodes.push(this);
+          (window.__captureResourceNodes ??= []).push({ kind: 'worklet', node: this });
         }
       }
     }
@@ -347,8 +349,15 @@ async function installProductionDomHarness(page) {
 
       async resume() { this.state = 'running'; }
       async close() { this.state = 'closed'; }
-      createMediaStreamSource() { return new FakeAudioNode(); }
-      createGain() { return new FakeGainNode(); }
+      createMediaStreamSource() {
+        const node = new FakeAudioNode();
+        (window.__captureResourceNodes ??= []).push({ kind: 'source', node });
+        return node;
+      }
+      createGain() {
+        if (window.__failCaptureGain) throw new Error('test: capture gain setup failed');
+        return new FakeGainNode();
+      }
       createOscillator() {
         if (window.__failProbeOscillators) throw new Error('test: the speaker is unavailable');
         window.__oscillatorsCreated = (window.__oscillatorsCreated ?? 0) + 1;
@@ -1675,4 +1684,50 @@ test('production DOM: audio dropped in the first seconds after page load is stil
   await page.waitForFunction(() => window.__relayInteractionHarness.commands.some((command) => (
     command.type === 'audio-uplink-health' && command.droppedSamples?.captureBacklog === 960
   )), null, { timeout: 5_000 });
+});
+
+test('production DOM: partial capture installation disconnects acquired nodes', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true);
+  await expect(page.locator('#start-publisher')).toBeEnabled();
+  await page.evaluate(() => { window.__failCaptureGain = true; });
+  await page.locator('#start-publisher').click();
+  await expect.poll(() => page.evaluate(() => (window.__captureResourceNodes ?? [])
+    .map(({ kind, node }) => ({ kind, disconnects: node.disconnects })))).toEqual([
+    { kind: 'source', disconnects: 1 }, { kind: 'worklet', disconnects: 1 },
+  ]);
+  await expect(page.locator('#start-publisher')).toBeEnabled();
+  expect(await page.evaluate(() => window.relayActiveRole)).not.toBe('publisher');
+});
+
+test('production DOM: failed visual worker configuration terminates the worker while Mic stays live', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    const NativeWorker = window.Worker;
+    window.__failedVisualWorkers = [];
+    window.Worker = class extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        if (String(url).includes('mic-visual-analysis-worker')) {
+          this.evidence = { terminations: 0 };
+          window.__failedVisualWorkers.push(this.evidence);
+        }
+      }
+      postMessage(...args) {
+        if (this.evidence && args[0]?.type === 'configure') throw new Error('test: visual configure failed');
+        return super.postMessage(...args);
+      }
+      terminate() {
+        if (this.evidence) this.evidence.terminations++;
+        return super.terminate();
+      }
+    };
+  });
+  await prepareReadyMic(page);
+  expect(await page.evaluate(() => window.__failedVisualWorkers)).toEqual([{ terminations: 1 }]);
+  expect(await page.evaluate(() => window.relayActiveRole)).toBe('publisher');
 });

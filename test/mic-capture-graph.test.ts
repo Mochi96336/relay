@@ -19,6 +19,8 @@ test('graph installs silent output, timestamp protocol and worker configuration 
   assert.equal(f.env.activeCaptureGraph, graph);
   assert.equal(f.nodes.find(n => n.kind === 'gain').gain.value, 0);
   assert.deepEqual(graph.capture.port.posted, [{ type: 'capture-protocol', pcmEnvelope: true }]);
+  assert.equal(f.workers[0].url, '/mic-visual-analysis-worker.js');
+  assert.equal(f.workers[0].options.name, 'relay-mic-visual-analysis');
   assert.deepEqual(f.workers[0].posted, [{ type: 'configure', sampleRate: 48000 }]);
   graph.capture.port.onmessage({ data: 'current capture' });
   assert.deepEqual(f.messages, ['current capture']);
@@ -124,5 +126,119 @@ test('retired enumeration cannot stop a replacement graph or block its device ch
   assert.equal(f.mediaDevices.enumerations, 2, 'old finally cannot release the new pending guard');
   assert.deepEqual(f.effects, []);
   next.resolve([{ kind: 'audioinput', deviceId: 'mic-a' }]); await f.flush();
+  f.dispose(current);
+});
+
+for (const failure of ['source', 'worklet', 'gain', 'protocol', 'connect-source', 'connect-worklet', 'connect-gain']) {
+  test(`partial graph failure (${failure}) releases every acquired resource without activation`, () => {
+    const f = captureFixture(failure);
+    assert.throws(() => f.install(), new RegExp(failure));
+    assert.ok(f.nodes.every(n => n.disconnects === 1));
+    assert.ok(f.workers.every(w => w.terminations === 1));
+    assert.equal(f.events.get('devicechange')?.size ?? 0, 0);
+    assert.ok(f.nodes.every(n => (n.listeners.get('processorerror')?.size ?? 0) === 0));
+    assert.equal(f.env.activeCaptureGraph, null);
+    assert.equal(f.env.captureGraphEpoch, 0);
+    assert.equal(f.context.closes, 0);
+    assert.equal(f.track.stops, 0);
+  });
+}
+
+for (const failure of ['worker-create', 'worker-configure', 'worker-pcm']) {
+  test(`optional visualization failure (${failure}) leaves capture live and terminates any worker`, () => {
+    const f = captureFixture(failure);
+    const graph = f.install();
+    if (failure === 'worker-pcm') f.analyze(graph, new ArrayBuffer(8));
+    assert.ok(f.workers.every(w => w.terminations === 1));
+    graph.capture.port.onmessage({ data: 'capture survives visual failure' });
+    assert.deepEqual(f.messages, ['capture survives visual failure']);
+    f.dispose(graph);
+    assert.ok(f.workers.every(w => w.terminations === 1), 'worker closes exactly once');
+  });
+}
+
+test('queued callbacks and PCM writes after disposal cannot regain authority while app still references graph', () => {
+  const f = captureFixture();
+  const graph = f.install();
+  const pcm = graph.capture.port.onmessage;
+  const processor = [...graph.capture.listeners.get('processorerror')][0] as () => void;
+  const device = [...f.events.get('devicechange')!][0];
+  const workerMessage = f.workers[0].onmessage;
+  f.dispose(graph);
+  pcm({ data: 'retired' }); processor(); device(); workerMessage({ data: analysis });
+  const buffer = new ArrayBuffer(8);
+  f.analyze(graph, buffer); f.returnBuffer(graph, buffer);
+  assert.equal(buffer.byteLength, 8);
+  assert.equal(graph.capture.port.posted.length, 1);
+  assert.equal(f.workers[0].posted.length, 1);
+  assert.equal(graph.visualAnalysis, null);
+  assert.deepEqual(f.effects, []);
+  assert.deepEqual(f.messages, []);
+  assert.equal(f.mediaDevices.enumerations, 0);
+  assert.ok(f.nodes.every(n => n.disconnects === 1));
+});
+
+test('late message from a failed visual worker cannot replace current analysis', () => {
+  const f = captureFixture();
+  const graph = f.install();
+  const workerMessage = f.workers[0].onmessage;
+  workerMessage({ data: analysis });
+  assert.equal(graph.visualAnalysis.f0Hz, 220);
+  f.workers[0].onerror();
+  workerMessage({ data: { ...analysis, f0Hz: 440 } });
+  assert.equal(graph.visualAnalysis.f0Hz, 220);
+  f.dispose(graph);
+  assert.equal(f.workers[0].terminations, 1);
+});
+
+for (const synchronous of [false, true]) {
+  test(`enumeration ${synchronous ? 'throws' : 'rejects'} without ending Mic or wedging later checks`, async () => {
+    const f = captureFixture(); const graph = f.install();
+    f.mediaDevices.enumerate = () => {
+      if (synchronous) throw new Error('enumeration unavailable');
+      return Promise.reject(new Error('enumeration unavailable'));
+    };
+    assert.doesNotThrow(() => f.mediaDevices.emit());
+    await f.flush();
+    assert.deepEqual(f.effects, []);
+    f.mediaDevices.enumerate = () => Promise.resolve([{ kind: 'audioinput', deviceId: 'mic-b' }]);
+    f.mediaDevices.emit(); await f.flush();
+    assert.deepEqual(f.effects, ['input-device-removed:false']);
+    f.dispose(graph);
+  });
+}
+
+test('construction callbacks are not admitted before publisher activates the completed graph', () => {
+  const f = captureFixture();
+  f.env.beforeConnect = () => {
+    const capture = f.nodes.find(n => n.kind === 'worklet');
+    capture.port.onmessage({ data: 'too early' });
+    capture.emit('processorerror');
+    f.mediaDevices.emit();
+    f.workers[0].onmessage({ data: analysis });
+  };
+  const graph = f.install();
+  assert.deepEqual(f.effects, []);
+  assert.deepEqual(f.messages, []);
+  assert.equal(graph.visualAnalysis, null);
+  assert.equal(f.mediaDevices.enumerations, 0);
+  graph.capture.port.onmessage({ data: 'active' });
+  assert.deepEqual(f.messages, ['active']);
+  f.dispose(graph);
+});
+
+test('failed replacement preparation cleans its own nodes without disposing the current graph', () => {
+  const f = captureFixture();
+  const current = f.install();
+  const oldNodes = [...f.nodes];
+  f.setFailure('gain');
+  assert.throws(() => f.install(), /gain/);
+  assert.equal(f.env.activeCaptureGraph, current);
+  assert.equal(f.env.captureGraphEpoch, 1);
+  assert.ok(oldNodes.every(n => n.disconnects === 0));
+  assert.ok(f.nodes.slice(oldNodes.length).every(n => n.disconnects === 1));
+  assert.equal(f.workers[0].terminations, 0);
+  current.capture.port.onmessage({ data: 'existing graph' });
+  assert.deepEqual(f.messages, ['existing graph']);
   f.dispose(current);
 });

@@ -32,7 +32,9 @@ const liveStatusCode = sourceCode(liveStatus);
 const presenceCode = sourceCode(presence);
 
 test('local capture telemetry remains available without owning the visible waveform', () => {
-  assert.match(appCode, /mic-visual-analysis-worker\.js/);
+  // Graph behavior tests verify the actual Worker URL/configuration; the page
+  // keeps telemetry projection while its graph owns the visualization resource.
+  assert.match(appCode, /createMicCaptureGraph/);
   assert.match(appCode, /parseMicVisualAnalysis/);
   assert.match(appCode, /pitchConfidence/);
   assert.match(appCode, /dispatchRelayEvent\('relay-local-mic-level'/);

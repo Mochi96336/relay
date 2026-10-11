@@ -920,3 +920,28 @@ for (const delaySeconds of [6, 8]) it(`ACKs delayed ${delaySeconds}s cannot rene
   assert.equal(socket.closes,1);
   assert.equal(transport.stats().recovery.reason,'control-ack-timeout');
 });
+
+for (const scenario of ['delayed-ack', 'unplayable-mixer']) it(`${scenario} cannot clear latched media recovery`, async () => {
+  const { PreferredAudioTransport } = await import(moduleUrl.href);
+  let now = 0;
+  const transport = new PreferredAudioTransport({ nowMs: () => now });
+  const socket = new FakeSocket(); transport.bind(socket);
+  const report = (id: number) => transport.sendControlJson({type:'audio-uplink-health',version:1,
+    healthRequestId:id,captureGeneration:7,capturedSamples:id*48000});
+  const ack = (id: number, mix?: {playable:boolean;headroomMs:number}) =>
+    transport.observePublisherSocketMessage(socket,transport.publisherSocketEpoch,{data:JSON.stringify({
+      type:'audio-uplink-health-ack',version:1,healthRequestId:id,captureGeneration:7,
+      pcm:{acceptedFrameSerial:id,mediaPath:'websocket',mix}})});
+  report(1); ack(1);
+  transport.mediaPathRecovery.recoverLatePath('websocket');
+  transport.mediaPathRecovery.recoverLatePath('websocket');
+  assert.equal(transport.mediaPathRecovery.status().phase,'degraded-latched');
+  now=1000; report(2);
+  if(scenario==='delayed-ack') now=9000;
+  ack(2,scenario==='unplayable-mixer'?{playable:false,headroomMs:-398}:undefined);
+  assert.equal(transport.mediaPathRecovery.status().phase,'degraded-latched');
+  assert.equal(transport.stats().recovery.events.some((e:any)=>e.action==='recovered'),false);
+  now+=100; report(3); ack(3,{playable:true,headroomMs:400});
+  assert.equal(transport.mediaPathRecovery.status().phase,'observing','fresh playable delivery can recover');
+  assert.equal(transport.mediaPathRecovery.status().webSocketReplacementUsed,true,'recovery never replenishes the replacement budget');
+});

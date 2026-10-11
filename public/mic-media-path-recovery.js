@@ -458,6 +458,7 @@ export class MicMediaPathRecovery {
     socketEpoch,
     eligible = true,
     audioBacklogMs = null,
+    recoveryAllowed = true,
   }) {
     const generation = uint32(captureGeneration);
     const captured = nonNegativeInteger(capturedSamples);
@@ -611,7 +612,7 @@ export class MicMediaPathRecovery {
       );
       this.lastCapturedSamples = captured;
       this.lastServerAcceptedFrameSerial = acceptedSerial;
-      if (recovered) {
+      if (recovered && recoveryAllowed) {
         this.phase = 'observing';
         this.staleCount = 0;
         return { action: 'recovered', reason: 'server-pcm-resumed', ...this.status() };
@@ -711,6 +712,7 @@ export class MicMediaPathRecovery {
           return { action: 'none', reason: 'packet-window-accumulating', ...this.status() };
         }
         if (coverageEvidence.healthy && semanticProofAdvanced) {
+          if (!recoveryAllowed) return { action: 'none', reason: 'recovery-evidence-not-current', ...this.status() };
           this.phase = 'observing';
           this.staleCount = 0;
           this.proofBaselineSerial = null;
@@ -721,6 +723,7 @@ export class MicMediaPathRecovery {
         this.proofBaselineSerial !== null
         && acceptedSerial > this.proofBaselineSerial
       ) {
+        if (!recoveryAllowed) return { action: 'none', reason: 'recovery-evidence-not-current', ...this.status() };
         this.phase = 'observing';
         this.staleCount = 0;
         this.proofBaselineSerial = null;
@@ -753,10 +756,18 @@ export class MicMediaPathRecovery {
       }
       if (coverageEvidence.healthy && serverAdvanced) {
         this.staleCount = 0;
+        if (!recoveryAllowed) {
+          this.healthyFallbackObservations = 0;
+          return { action: 'none', reason: 'recovery-evidence-not-current', ...this.status() };
+        }
         return this.noteHealthyFallback(localPath, 'server-pcm-coverage-healthy');
       }
     } else if (serverAdvanced) {
       this.staleCount = 0;
+      if (!recoveryAllowed) {
+        this.healthyFallbackObservations = 0;
+        return { action: 'none', reason: 'recovery-evidence-not-current', ...this.status() };
+      }
       return this.noteHealthyFallback(localPath, 'server-pcm-advancing');
     }
 

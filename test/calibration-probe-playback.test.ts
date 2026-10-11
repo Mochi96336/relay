@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import vm from 'node:vm';
-import { functionCode, parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
+const { CalibrationProbePlayback } = await import(new URL('../public/calibration-probe-playback.js', import.meta.url).href);
 
 function deferred() {
   let resolve!: () => void;
@@ -50,29 +48,29 @@ function fixture() {
   };
   const env = {
     performance: { now: () => 100 }, publisherSessionEpoch: 1, captureGeneration: 2,
-    activeCalibrationProbeRequestId: null as number | null, activeCalibrationProbePlayback: null,
     isCurrentPublisherCapture: (epoch: number, generation: number) => epoch === env.publisherSessionEpoch && generation === env.captureGeneration,
     document: { visibilityState: 'visible' }, socket: { readyState: 1 }, WebSocket: { OPEN: 1 },
     audioContext: context, audioTransport: { sendControlJson: (message: any) => { messages.push(message); return send; } },
     markPublisherAuthorityStale: () => { staleCalls++; },
     probeTimingDiagnostics: () => ({ processingMs: 0 }), console: { warn() {} },
   };
-  const source = parseTypeScriptSource(new URL('../public/app.js', import.meta.url), readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'));
-  const scope = vm.createContext(env);
-  vm.runInContext(`const PROBE_NOTES = ${variableInitializerCode(source, 'PROBE_NOTES')};
-    const PROBE_NOTE_SECONDS = ${variableInitializerCode(source, 'PROBE_NOTE_SECONDS')};
-    ${functionCode(source, 'retireCalibrationProbePlayback')}
-    async ${functionCode(source, 'playCalibrationProbe')}`, scope);
+  const player = new CalibrationProbePlayback({
+    getCapture: () => ({ context: env.audioContext, sessionEpoch: env.publisherSessionEpoch, generation: env.captureGeneration }),
+    isCurrentCapture: env.isCurrentPublisherCapture,
+    isControlOpen: () => env.socket.readyState === 1,
+    sendControl: env.audioTransport.sendControlJson,
+    onDisconnected: env.markPublisherAuthorityStale,
+    isHidden: () => env.document.visibilityState === 'hidden',
+    nowMs: env.performance.now,
+    timingDiagnostics: env.probeTimingDiagnostics,
+    warn: env.console.warn,
+  });
   return {
     env, context, messages, resumes, oscillators, gains, send,
     staleCalls: () => staleCalls,
-    play(requestId = 3) {
-      vm.runInContext('retireCalibrationProbePlayback()', scope);
-      env.activeCalibrationProbeRequestId = requestId;
-      return vm.runInContext(`playCalibrationProbe(${requestId}, 200)`, scope) as Promise<void>;
-    },
-    cancelPending() { env.activeCalibrationProbeRequestId = null; },
-    retire() { env.activeCalibrationProbeRequestId = null; vm.runInContext('retireCalibrationProbePlayback()', scope); },
+    play: (requestId = 3) => player.play(requestId, 200),
+    cancelPending: () => player.cancelPending(),
+    retire: () => player.retire(),
   };
 }
 
@@ -176,4 +174,33 @@ test('server advancement cancels only preparation, not an acknowledged playback'
   assert.deepEqual(f.oscillators.map(n => n.disconnects), [0, 0, 0]);
   f.retire();
   assert.deepEqual(f.oscillators.map(n => n.disconnects), [1, 1, 1]);
+});
+
+for (const afterResume of [false, true]) {
+  test(`hidden ${afterResume ? 'during resume' : 'before preparation'} fails with no audible nodes`, async () => {
+    const f = fixture();
+    if (!afterResume) f.env.document.visibilityState = 'hidden';
+    const playing = f.play();
+    if (afterResume) {
+      f.env.document.visibilityState = 'hidden';
+      f.resumes[0].resolve();
+    }
+    await playing;
+    assert.equal(f.resumes.length, afterResume ? 1 : 0);
+    assert.equal(f.oscillators.length, 0);
+    assert.equal(f.messages.length, 1);
+    assert.equal(f.messages[0].type, 'calibration-probe-failed');
+    assert.equal(f.messages[0].reason, 'Phone probe cannot play while the page is hidden.');
+    assert.equal(f.messages[0].generation, 2);
+  });
+}
+
+test('retired session cannot fail a probe when the page hides during resume', async () => {
+  const f = fixture();
+  const playing = f.play();
+  f.env.publisherSessionEpoch++;
+  f.env.document.visibilityState = 'hidden';
+  f.resumes[0].resolve();
+  await playing;
+  assertSilent(f);
 });

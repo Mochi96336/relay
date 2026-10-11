@@ -1,5 +1,5 @@
 import { CaptureClockRecovery } from './capture-clock-recovery.js';
-import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
+import { CalibrationProbePlayback } from './calibration-probe-playback.js';
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
@@ -105,8 +105,13 @@ let captureAppliedSettings = null;
 let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
-let activeCalibrationProbeRequestId = null;
-let activeCalibrationProbePlayback = null;
+const calibrationProbePlayback = new CalibrationProbePlayback({
+  getCapture: () => ({ context: audioContext, sessionEpoch: publisherSessionEpoch, generation: captureGeneration >>> 0 }),
+  isCurrentCapture: isCurrentPublisherCapture,
+  isControlOpen: () => socket?.readyState === WebSocket.OPEN,
+  sendControl: (message) => audioTransport.sendControlJson(message),
+  onDisconnected: markPublisherAuthorityStale,
+});
 let publisherSessionEpoch = 0;
 
 let captureInputGapSamples = 0;
@@ -302,8 +307,7 @@ function advanceCaptureGeneration(reason) {
   // Calibration probe playback is capture-scoped. Retire both a pending
   // AudioContext.resume() continuation and nodes already scheduled into the
   // future before changing the capture-clock identity.
-  activeCalibrationProbeRequestId = null;
-  retireCalibrationProbePlayback();
+  calibrationProbePlayback.retire();
   captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
   captureGenerationReason = reason;
   captureSampleCursor = 0;
@@ -921,152 +925,6 @@ function clearSocketReconnect() {
   socketReconnectTimer = null;
 }
 
-// Must match src/calibration-probe.ts, which builds the reference the server
-// correlates against. Irregular offsets are the point: no shift other than the
-// true one lines all three notes up at once, which is exactly the ambiguity
-// correlating against a song's own beat cannot escape.
-const PROBE_NOTES = [
-  { offsetMs: 0, frequencyHz: 1046.5, gain: 0.24 },
-  { offsetMs: 125, frequencyHz: 1318.5, gain: 0.27 },
-  { offsetMs: 330, frequencyHz: 1568, gain: 0.32 },
-];
-const PROBE_NOTE_SECONDS = 0.105;
-
-function retireCalibrationProbePlayback() {
-  const playback = activeCalibrationProbePlayback;
-  activeCalibrationProbePlayback = null;
-  if (!playback) return;
-  for (const { oscillator, gain } of playback.nodes) {
-    try { oscillator?.disconnect(); } catch {}
-    try { gain?.disconnect(); } catch {}
-    try { oscillator?.stop(); } catch {}
-  }
-}
-
-/**
- * Plays the probe out of the phone speaker so the phone's own microphone hears
- * it. The reply identifies the request and reports local preparation durations.
- * The server separates those durations from the transport round trip; absolute
- * browser timestamps are never treated as session time.
- */
-async function playCalibrationProbe(requestId, leadMs) {
-  const receivedAtMs = performance.now();
-  const context = audioContext;
-  const sessionEpoch = publisherSessionEpoch;
-  const expectedGeneration = captureGeneration >>> 0;
-  if (
-    !context
-    || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    || activeCalibrationProbeRequestId !== requestId
-  ) return;
-
-  try {
-    if (document.visibilityState === 'hidden') {
-      throw new Error('Phone probe cannot play while the page is hidden.');
-    }
-    // Mobile Safari may leave resume() pending while a page is suspended. The
-    // server can retire this request meanwhile, so every continuation has to
-    // re-prove request and capture ownership before it may create audible nodes.
-    await context.resume();
-    if (
-      activeCalibrationProbeRequestId !== requestId
-      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-      || socket?.readyState !== WebSocket.OPEN
-    ) return;
-    if (audioContext !== context) throw new Error('Phone probe AudioContext was replaced.');
-    if (document.visibilityState === 'hidden') {
-      throw new Error('Phone probe cannot play while the page is hidden.');
-    }
-    if (context.state !== 'running') {
-      throw new Error(`Phone probe AudioContext is ${context.state}.`);
-    }
-
-    retireCalibrationProbePlayback();
-    const scheduledAtMs = performance.now();
-    const startTime = context.currentTime + leadMs / 1000;
-    const playback = {
-      requestId,
-      sessionEpoch,
-      generation: expectedGeneration,
-      context,
-      nodes: [],
-    };
-    activeCalibrationProbePlayback = playback;
-    let remainingNotes = PROBE_NOTES.length;
-    for (const note of PROBE_NOTES) {
-      const at = startTime + note.offsetMs / 1000;
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.frequency.value = note.frequencyHz;
-      // A slightly softened attack avoids a sharp test-beep edge. The decay is
-      // close to the reference envelope used by the server's correlation.
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(note.gain, at + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + PROBE_NOTE_SECONDS);
-      oscillator.connect(gain).connect(context.destination);
-      playback.nodes.push({ oscillator, gain });
-      oscillator.addEventListener('ended', () => {
-        remainingNotes -= 1;
-        if (remainingNotes === 0 && activeCalibrationProbePlayback === playback) {
-          activeCalibrationProbePlayback = null;
-        }
-      }, { once: true });
-      oscillator.start(at);
-      oscillator.stop(at + PROBE_NOTE_SECONDS);
-    }
-
-    // Scheduling the nodes is the irreversible side effect. Retire the local
-    // request before acknowledging it so a later status/retry cannot revive the
-    // same identity on this page. The separate playback owner remains live
-    // until every scheduled node ends or a capture/session boundary retires it.
-    if (
-      activeCalibrationProbeRequestId !== requestId
-      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    ) return;
-    activeCalibrationProbeRequestId = null;
-    if (socket?.readyState !== WebSocket.OPEN) {
-      retireCalibrationProbePlayback();
-      return;
-    }
-    const result = audioTransport.sendControlJson({
-      type: 'calibration-probe-played',
-      target: 'mic',
-      requestId,
-      // The same truncation framePcm applies. The server compares this against
-      // the generation it read off a PCM frame header, which is a uint32.
-      generation: expectedGeneration,
-      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs),
-    });
-    if (!result.sent) {
-      retireCalibrationProbePlayback();
-      if (result.reason === 'disconnected') markPublisherAuthorityStale();
-    }
-  } catch (error) {
-    console.warn('phone calibration probe failed', error);
-    if (
-      activeCalibrationProbePlayback?.requestId === requestId
-      && activeCalibrationProbePlayback?.sessionEpoch === sessionEpoch
-      && activeCalibrationProbePlayback?.generation === expectedGeneration
-      && activeCalibrationProbePlayback?.context === context
-    ) {
-      retireCalibrationProbePlayback();
-    }
-    if (
-      activeCalibrationProbeRequestId !== requestId
-      || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    ) return;
-    activeCalibrationProbeRequestId = null;
-    if (socket?.readyState !== WebSocket.OPEN) return;
-    const result = audioTransport.sendControlJson({
-      type: 'calibration-probe-failed',
-      target: 'mic',
-      requestId,
-      generation: expectedGeneration,
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    if (!result.sent && result.reason === 'disconnected') markPublisherAuthorityStale();
-  }
-}
 
 function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
@@ -1187,10 +1045,9 @@ function handleServerMessage(
 
   if (message.type === 'timing-calibration-status') {
     if (
-      activeCalibrationProbeRequestId !== null
-      && (message.probeActive !== true || message.probePhase !== 'mic-requested')
+      message.probeActive !== true || message.probePhase !== 'mic-requested'
     ) {
-      activeCalibrationProbeRequestId = null;
+      calibrationProbePlayback.cancelPending();
     }
     return;
   }
@@ -1205,9 +1062,7 @@ function handleServerMessage(
       // A new authoritative request supersedes any future playback left by an
       // older request in this same capture; overlapping probe waveforms are not
       // valid calibration evidence.
-      retireCalibrationProbePlayback();
-      activeCalibrationProbeRequestId = requestId;
-      void playCalibrationProbe(requestId, Number(message.leadMs) || 200);
+      void calibrationProbePlayback.play(requestId, Number(message.leadMs) || 200);
     }
     return;
   }
@@ -1344,7 +1199,7 @@ async function connectPublisherSocket(
   ws.addEventListener('close', () => {
     if (socket !== ws) return;
     publisherReconnectBackoff.noteClosed(performance.now());
-    activeCalibrationProbeRequestId = null;
+    calibrationProbePlayback.cancelPending();
     audioTransport.unbind(ws);
     socket = null;
     resetPublisherHealthRequestCorrelation();
@@ -1510,8 +1365,7 @@ async function stop({ releaseMic = true } = {}) {
   const stoppedEpoch = ++publisherSessionEpoch;
   micStartup.cancel();
   publisherStarting = false;
-  activeCalibrationProbeRequestId = null;
-  retireCalibrationProbePlayback();
+  calibrationProbePlayback.retire();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
   stopCaptureWatchdog();
@@ -1835,8 +1689,7 @@ window.addEventListener('relay-retry-microphone', () => {
 });
 
 function notePublisherBackgrounded() {
-  activeCalibrationProbeRequestId = null;
-  retireCalibrationProbePlayback();
+  calibrationProbePlayback.retire();
   if (!publisherActive) return;
 
   // iOS may freeze timers immediately after the lifecycle edge, so do not

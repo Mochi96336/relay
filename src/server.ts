@@ -2648,6 +2648,11 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
  */
 function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
   const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
+  const probe = bootProbeRuntime.status(nowMs);
+  console.log('[probe-attempt-failed]', JSON.stringify({
+    target, reason, attempt: probe.attempts[target], maxAttempts: probe.maxAttempts,
+    terminal: failure !== null,
+  }));
   if (failure) {
     timingRuntime.restoreCandidateKindToAuthority();
     calibration.failPreservingPrimed(failure.message);

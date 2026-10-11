@@ -467,6 +467,8 @@ export class PreferredAudioTransport extends AudioTransport {
       webTransportBacklogExpired: 0,
       webTransportRetries: 0,
       retransmittedPackets: 0,
+      retransmitCacheMisses: 0,
+      retransmitSendRejects: 0,
       retransmitDatagramRequests: 0,
       webSocketPacketsSent: 0,
       webSocketCongestedRejects: 0,
@@ -1402,7 +1404,10 @@ export class PreferredAudioTransport extends AudioTransport {
       const previous = this.retransmitAnswered.get(sequence);
       if (previous !== undefined && previous >= attempt) continue;
       const bytes = this.retransmitBuffer.get(sequence);
-      if (!bytes) continue;
+      if (!bytes) {
+        this.telemetry.retransmitCacheMisses += 1;
+        continue;
+      }
       this.retransmitAnswered.set(sequence, attempt);
       const release = () => {
         if (this.retransmitAnswered.get(sequence) !== attempt) return;
@@ -1413,6 +1418,7 @@ export class PreferredAudioTransport extends AudioTransport {
         answered += 1;
         this.telemetry.retransmittedPackets += 1;
       } else {
+        this.telemetry.retransmitSendRejects += 1;
         release();
       }
     }

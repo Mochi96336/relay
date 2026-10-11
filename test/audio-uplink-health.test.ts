@@ -542,3 +542,21 @@ it('full compressed health leaves room for voice and ACK correlation at every tr
     sender.close();
   }
 });
+
+it('preserves optional repair diagnostics and rejects malformed values without inventing legacy history', () => {
+  const legacy = parseAudioUplinkHealth(validHealth())!;
+  assert.equal(legacy.transport.retransmitCacheMisses,undefined);
+  assert.equal(legacy.transport.retransmitSendRejects,undefined);
+  const input:any = validHealth();
+  input.transport.retransmitCacheMisses=12;
+  input.transport.retransmitSendRejects=3;
+  const parsed=parseAudioUplinkHealth(input)!;
+  assert.equal(parsed.transport.retransmitCacheMisses,12);
+  assert.equal(parsed.transport.retransmitSendRejects,3);
+  for(const key of ['retransmitCacheMisses','retransmitSendRejects']) {
+    for(const value of [-1,1.5,'invalid',Number.MAX_SAFE_INTEGER+1]) {
+      const invalid:any=validHealth();invalid.transport[key]=value;
+      assert.equal(parseAudioUplinkHealth(invalid),null,`${key}: ${value}`);
+    }
+  }
+});

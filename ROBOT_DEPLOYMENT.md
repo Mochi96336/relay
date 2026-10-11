@@ -540,3 +540,11 @@ headroom is valid evidence. The server logs unseen action sequences under
 Robot seek門檻仍為嚴格大於450ms，seek後一次回報仍可讓下一次追趕繼續。Relay只讓絕對值不超過450ms的播放器殘餘偏差進入校準tracker與content mapping；更大的回報保留timing diagnostics，但清除tracker的歷史與新鮮度，不更新mapping。這不刪除Boot路徑測量，也不把追趕誤認為聲學延遲。回到範圍內可重新建立權限，不沿用追趕前median。原本大於5秒的reference撤銷保護保留。
 
 實測−2800ms那筆的來源是Robot Δ=−3215.527ms，加Boot路徑差90−140=−50ms，要求−3265.527ms被限制到−2800ms；當筆frontier correction=0，不能將它歸因於網路回讀。負Δ表示Robot落後手機，負advance表示讀較舊Mic座標，兩者都不是封包早到的測量。
+
+### Mic Opus 固定碼率試驗
+
+`RELAY_MIC_OPUS_TRIAL=1` 讓新載入的手機頁面使用 48 kHz、mono、32 kbps CBR Opus；預設關閉，仍使用 PCM16。先部署接收端，再開啟旗標。`/mic-codec-config` 回報開關；既有手機須重新載入才會套用，不強制重載。
+
+Opus 使用既有 sequenced v2 註冊與 v3 音訊封包，保留 generation、sequence、firstSampleIndex 和 960-sample frame。接收端先排序去重，再解碼，依封包附帶的 encoder lookahead 修正樣本位置；不以到達時間取代音訊時間。Worker 最多保留兩個待編碼 frame，超過 100 ms 的結果丟棄。WebSocket 壓縮音訊排隊預算約 200 ms，控制訊息另有有界寫入上限。這次沒有自適應碼率。
+
+實際模式見 `captureAndSender.transport.codec` 與 `codecBitrate`。32 kbps 加應用封包標頭約 43 kbps，尚未計入網路協定、控制訊息和重傳。關閉旗標並重新載入手機可回復 PCM。Pi 僅跑受影響測試與型別檢查；GitHub 執行完整 CI，包含實際瀏覽器 WebSocket/WebTransport 錄音驗證。

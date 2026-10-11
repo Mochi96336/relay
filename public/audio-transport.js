@@ -97,7 +97,7 @@ const AUDIO_PACKET_HEADER_BYTES = 24;
 function audioPacketIdentity(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength < AUDIO_PACKET_HEADER_BYTES) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (view.getUint16(0, true) !== AUDIO_PACKET_MAGIC || view.getUint8(2) !== 2) return null;
+  if (view.getUint16(0, true) !== AUDIO_PACKET_MAGIC || ![2, 3].includes(view.getUint8(2))) return null;
   return { generation: view.getUint32(4, true), sequence: view.getUint32(8, true) };
 }
 
@@ -185,10 +185,17 @@ export class WebSocketAudioTransport extends AudioTransport {
   }
 
   setRealtimePcmSampleRate(sampleRate) {
-    const realtimeBufferedBytes = realtimeWebSocketBacklogBytes(sampleRate);
+    const realtimeBufferedBytes = this.encodedBitrate
+      ? Math.ceil((this.encodedBitrate / 8 + 28 * 50) * DEFAULT_WEBSOCKET_BACKLOG_MS / 1000)
+      : realtimeWebSocketBacklogBytes(sampleRate);
     this.realtimeBufferedBytes = realtimeBufferedBytes;
     this.maxBufferedBytes = Math.min(this.configuredMaxBufferedBytes, realtimeBufferedBytes);
     return this.maxBufferedBytes;
+  }
+
+  setEncodedBitrate(bitrate = null) {
+    this.encodedBitrate = bitrate;
+    this.setRealtimePcmSampleRate(DEFAULT_WEBSOCKET_PCM_SAMPLE_RATE);
   }
 
   bind(socket, { sampleRate } = {}) {
@@ -257,12 +264,16 @@ export class WebSocketAudioTransport extends AudioTransport {
     };
   }
 
-  send(packet) {
+  send(packet, { control = false } = {}) {
     const state = this.state();
     if (!state.ready) return { ...state, sent: false };
 
     const packetBytes = outgoingByteLength(packet);
-    if (packetBytes > 0 && state.bufferedAmount + packetBytes > this.maxBufferedBytes) {
+    // A health report is larger than 200 ms of compressed audio. Allow one
+    // bounded control write while the realtime queue is below its limit;
+    // state() still prevents another write until that queue drains.
+    const byteLimit = control && this.encodedBitrate ? Math.max(this.maxBufferedBytes, 16384) : this.maxBufferedBytes;
+    if (packetBytes > 0 && state.bufferedAmount + packetBytes > byteLimit) {
       return {
         ...state,
         ready: false,
@@ -859,7 +870,7 @@ export class PreferredAudioTransport extends AudioTransport {
       this.controlWaitingSince = null;
       this.lastControlAckAt = null;
     }
-    const result = this.fallback.send(JSON.stringify(payload));
+    const result = this.fallback.send(JSON.stringify(payload), { control: true });
     this.recordControlFallbackResult(result);
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);

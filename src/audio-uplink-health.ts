@@ -50,6 +50,8 @@ export type MicRecoveryEvidence = {
 };
 
 export type AudioUplinkTransportHealth = {
+  codec?: 'pcm16' | 'opus';
+  codecBitrate?: number;
   recovery?: MicRecoveryEvidence;
 
   path: 'websocket' | 'webtransport';
@@ -521,6 +523,10 @@ export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null
     droppedSamples: { total, disconnected, congested, packetTooLarge, captureBacklog },
     controlReconnects,
     transport: {
+      ...(transport.codec === 'opus' || transport.codec === 'pcm16' ? { codec: transport.codec } : {}),
+      ...(typeof transport.codecBitrate === 'number' && Number.isFinite(transport.codecBitrate)
+        && transport.codecBitrate > 0 && transport.codecBitrate <= 2_000_000
+        ? { codecBitrate: transport.codecBitrate } : {}),
       path,
       maxPacketBytes,
       minWebTransportMaxPacketBytes,

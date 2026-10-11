@@ -117,5 +117,6 @@ test('the page returns each chunk buffer only after framing its PCM', async () =
   // Stale chunks go back without being sent; sent chunks only after the loop.
   assert.match(handler, /recordUplinkDrop\(pcm\.byteLength \/ 2, 'capture-backlog'\);\s*returnCaptureBuffer\(graph, pcm\);\s*return;/);
   assert.match(handler, /while \(pending\.length > 0\) \{[\s\S]*\r?\n  \}\r?\n  returnCaptureBuffer\(graph, pcm\);\r?\n\}/);
-  assert.equal(handler.match(/returnCaptureBuffer\(/g)?.length, 2);
+  assert.match(handler, /if \(micOpus\) \{[\s\S]*micOpus\.encode\(pcm,[\s\S]*returnCaptureBuffer\(graph, pcm\);\s*return;/);
+  assert.equal(handler.match(/returnCaptureBuffer\(/g)?.length, 3);
 });

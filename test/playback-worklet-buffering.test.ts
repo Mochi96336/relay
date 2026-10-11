@@ -725,3 +725,15 @@ test('audio that returns during concealment takes over without a click', async (
   rendered.push(...renderQuanta(processor, 20));
   assert.ok(largestStep(rendered) < 0.03, `recovery stepped by ${largestStep(rendered)}`);
 });
+
+test('worklet health echoes reset/configure epochs so pending old reports can be fenced', async () => {
+  const processor = await makeProcessor();
+  processor.port.onmessage({ data: { type: 'configure', healthEpoch: 3 } });
+  processor.reportCountdown = 1;
+  processor.report(0);
+  assert.equal(processor.port.messages.at(-1).healthEpoch, 3);
+  processor.port.onmessage({ data: { type: 'reset', deClick: true, healthEpoch: 4 } });
+  processor.reportCountdown = 1;
+  processor.report(0);
+  assert.equal(processor.port.messages.at(-1).healthEpoch, 4);
+});

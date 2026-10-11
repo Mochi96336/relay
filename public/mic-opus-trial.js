@@ -3,16 +3,30 @@ export async function createMicOpusTrial({ bitrate = 32000, onPacket, onDrop, on
   const pending = new Map();
   let generation = null, nextId = 0, closed = false, delaySamples = 0;
   let actualBitrate = bitrate, requestedBitrate = bitrate;
+  let timeout;
+  function close() {
+    if (closed) return;
+    closed = true;
+    clearTimeout(timeout);
+    pending.clear();
+    worker.terminate();
+  }
   const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => { worker.terminate(); reject(new Error('Opus startup timed out')); }, 8000);
-    worker.onerror = () => { clearTimeout(timeout); reject(new Error('Opus worker failed')); onError?.(); };
+    const fail = (error) => {
+      if (closed) return;
+      close();
+      reject(error);
+      onError?.(error);
+    };
+    timeout = setTimeout(() => fail(new Error('Opus startup timed out')), 8000);
+    worker.onerror = () => fail(new Error('Opus worker failed'));
     worker.onmessage = ({ data }) => {
       if (closed) return;
       if (data.type === 'ready') {
         clearTimeout(timeout); delaySamples = data.delaySamples; resolve(); return;
       }
       if (data.type === 'error') {
-        clearTimeout(timeout); reject(new Error(data.message)); onError?.(new Error(data.message)); return;
+        fail(new Error(data.message)); return;
       }
       if (data.type === 'bitrate') {
         actualBitrate = data.bitrate; onBitrate?.(actualBitrate); return;
@@ -31,8 +45,8 @@ export async function createMicOpusTrial({ bitrate = 32000, onPacket, onDrop, on
       new Uint8Array(packet, 28).set(new Uint8Array(data.encoded));
       onPacket(packet);
     };
+    try { worker.postMessage({ type: 'init', bitrate }); } catch (error) { fail(error); }
   });
-  worker.postMessage({ type: 'init', bitrate });
   await ready;
   return {
     get bitrate() { return actualBitrate; },
@@ -42,7 +56,7 @@ export async function createMicOpusTrial({ bitrate = 32000, onPacket, onDrop, on
       requestedBitrate = value;
       worker.postMessage({ type: 'bitrate', bitrate: value });
     },
-    reset(value) { generation = value; pending.clear(); worker.postMessage({ type: 'reset' }); },
+    reset(value) { if (closed) return; generation = value; pending.clear(); worker.postMessage({ type: 'reset' }); },
     encode(pcm, sequence, firstSampleIndex) {
       if (closed || pending.size >= 2) { onDrop(pcm.byteLength / 2, 'capture-backlog'); return false; }
       const id = nextId++;
@@ -51,6 +65,6 @@ export async function createMicOpusTrial({ bitrate = 32000, onPacket, onDrop, on
       worker.postMessage({ type: 'encode', id, pcm: copy }, [copy]);
       return true;
     },
-    close() { closed = true; pending.clear(); worker.terminate(); },
+    close,
   };
 }

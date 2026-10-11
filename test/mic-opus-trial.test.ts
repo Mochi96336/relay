@@ -76,8 +76,8 @@ test('compressed WebSocket byte budget remains 200 ms across rebinds', async () 
   sender.setEncodedBitrate(32000);
   sender.bind({ readyState: 1, bufferedAmount: 0, send() {} }, { sampleRate: 48000 });
   assert.equal(sender.maxBufferedBytes, 1080);
-  assert.equal(sender.send('x'.repeat(3000), { control: true }).sent, true,
-    'health reports must fit even when compressed media has a small byte budget');
+  assert.equal(sender.send('x'.repeat(3000), { control: true }).sent, false,
+    'control must not overfill the physical voice FIFO');
   assert.equal(sender.send(new Uint8Array(1081)).sent, false, 'media must retain the small budget');
   sender.bind({ readyState: 1, bufferedAmount: 0, send() {} }, { sampleRate: 48000 });
   assert.equal(sender.maxBufferedBytes, 1080);
@@ -128,3 +128,40 @@ test('browser encoder bounds queued work and fences outputs from a replaced capt
     Object.assign(globalThis, { Worker: original });
   }
 });
+
+for (const failure of ['message', 'worker', 'postMessage', 'timeout']) {
+  test(`Opus startup ${failure} failure terminates its inaccessible worker once`, async (t) => {
+    const original = globalThis.Worker;
+    let active: any;
+    let errors = 0;
+    if (failure === 'timeout') t.mock.timers.enable({ apis: ['setTimeout'] });
+    class FailingWorker {
+      onmessage?: (event: { data: any }) => void;
+      onerror?: () => void;
+      terminations = 0;
+      constructor() { active = this; }
+      postMessage() {
+        if (failure === 'postMessage') throw new Error('init refused');
+        if (failure === 'timeout') return;
+        queueMicrotask(() => {
+          if (failure === 'message') this.onmessage?.({ data: { type: 'error', message: 'init failed' } });
+          else this.onerror?.();
+        });
+      }
+      terminate() { this.terminations++; }
+    }
+    Object.assign(globalThis, { Worker: FailingWorker });
+    try {
+      const starting = createMicOpusTrial({ onPacket() { assert.fail('late output'); },
+        onDrop() {}, onError() { errors++; } });
+      const rejected = assert.rejects(starting, /failed|refused|timed out/);
+      if (failure === 'timeout') t.mock.timers.tick(8000);
+      await rejected;
+      active.onerror?.();
+      active.onmessage?.({ data: { type: 'error', message: 'duplicate' } });
+      active.onmessage?.({ data: { type: 'ready', delaySamples: 120 } });
+      assert.equal(active.terminations, 1);
+      assert.equal(errors, 1);
+    } finally { Object.assign(globalThis, { Worker: original }); }
+  });
+}

@@ -470,3 +470,75 @@ it('recovery history rejects unbounded or non-monotonic events and keeps negativ
   input.transport.recovery.events = Array(9).fill({sequence:1,action:'recovered',reason:'test'});
   assert.equal(parseAudioUplinkHealth(input), null);
 });
+
+it('compact health preserves capture clocks, recovery and legacy parser validation', async () => {
+  const { encodeAudioUplinkHealth, decodeAudioUplinkHealth } = await import('../shared/audio-uplink-health-wire.js');
+  const input: any = validHealth();
+  input.healthRequestId = 42;
+  input.captureGenerationReason = 'start';
+  input.capturedAtPerformanceMs = 12345.6789;
+  input.captureClock = { contextSeconds: 2.123456789, originContextSeconds: 0,
+    lastChunkContextSeconds: 2.1, lastChunkSampleIndex: 48000,
+    lastChunkObservedAtMs: 12344.12, sampleRate: 48000 };
+  input.captureDispatch = { lagMs: 20, maxLagMs: 50, backlogMs: 200, backlogActive: false };
+  const wire = JSON.parse(encodeAudioUplinkHealth(input));
+  assert.deepEqual(decodeAudioUplinkHealth(wire), input);
+  assert.ok(parseAudioUplinkHealth(input));
+  assert.deepEqual(parseAudioUplinkHealth(wire), parseAudioUplinkHealth(input));
+  input.droppedSamples.total++;
+  assert.equal(parseAudioUplinkHealth(JSON.parse(encodeAudioUplinkHealth(input))), null,
+    'compaction must not bypass normal semantic validation');
+  for (const bad of [ { ...wire, compact: 2 }, { ...wire, data: [-1] },
+    { ...wire, data: [2 ** 40] }, { ...wire, data: wire.data.slice(0, -1) },
+    { ...wire, data: [...wire.data, 123] } ]) assert.equal(parseAudioUplinkHealth(bad), null);
+});
+
+it('full compressed health leaves room for voice and ACK correlation at every trial bitrate', async () => {
+  const { PreferredAudioTransport } = await import(new URL('../public/audio-transport.js', import.meta.url).href);
+  for (const bitrate of [32000, 64000, 128000]) for (const longNames of [false, true]) {
+    const sent: any[] = [];
+    const socket = { readyState: 1, bufferedAmount: 0, send(data: any) {
+      sent.push(data);
+      this.bufferedAmount += typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength;
+    } };
+    const sender = new PreferredAudioTransport();
+    sender.bind(socket, { sampleRate: 48000 });
+    sender.fallback.setEncodedBitrate(bitrate);
+    const input: any = { ...validHealth(), healthRequestId: 42,
+      capturedAtPerformanceMs: 12345.6789,
+      captureClock: { contextSeconds: 12345.123456789, originContextSeconds: 12.123456789,
+        lastChunkContextSeconds: 12345.1, lastChunkSampleIndex: 48000,
+        lastChunkObservedAtMs: 12344.123456789, sampleRate: 48000 },
+      captureDispatch: { lagMs: 20, maxLagMs: 50,
+        backlogMs: 200, backlogActive: false },
+      transport: { ...sender.stats(), codec: 'opus', codecBitrate: bitrate,
+        codecBitrateReason: 'stable-delivery' } };
+    if (longNames) { input.capture.inputLabel = '麥'.repeat(64); input.capture.device = '機'.repeat(96); }
+    input.transport.recovery = { ...input.transport.recovery, sequence: 8,
+      events: Array.from({ length: 8 }, (_, i) => ({ sequence: i + 1,
+        action: 'replace-websocket', reason: 'a'.repeat(90), ageMs: 123456.789 })) };
+    const original = structuredClone(input);
+    assert.ok(parseAudioUplinkHealth(input), 'fixture must match the actual server contract');
+    assert.equal(sender.sendControlJson(input).sent, true, `${bitrate}: health must remain sendable`);
+    const parsed = parseAudioUplinkHealth(JSON.parse(sent[0]));
+    assert.ok(parsed);
+    assert.equal(parsed.healthRequestId, 42);
+    assert.equal(parsed.captureGeneration, input.captureGeneration);
+    assert.equal(sender.pendingPublisherHealth.length, 1);
+    sender.observePublisherSocketMessage(socket, sender.publisherSocketEpoch, { data: JSON.stringify({
+      type: 'audio-uplink-health-ack', version: 1, captureGeneration: parsed.captureGeneration, healthRequestId: parsed.healthRequestId, pcm: { acceptedFrameSerial: 0 },
+    }) });
+    assert.equal(sender.pendingPublisherHealth.length, 0, 'compact request ID must match its ACK');
+    assert.equal(parsed.transport.codecBitrate, bitrate);
+    assert.deepEqual(parsed.captureClock, input.captureClock);
+    assert.deepEqual(input, original, 'wire fitting cannot alter ACK/recovery bookkeeping');
+    const frameBytes = Math.ceil(bitrate / 8 / 50) + 28;
+    assert.equal(sender.fallback.send(new Uint8Array(frameBytes)).sent, true,
+      `${bitrate}: immediately following voice frame must fit the physical FIFO`);
+    assert.ok(socket.bufferedAmount <= sender.fallback.maxBufferedBytes);
+    const writes = sent.length;
+    assert.equal(sender.fallback.send('x'.repeat(16384), { control: true }).sent, false);
+    assert.equal(sent.length, writes, 'rejected control must not enter the browser queue');
+    sender.close();
+  }
+});

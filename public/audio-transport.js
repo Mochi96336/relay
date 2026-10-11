@@ -1,4 +1,5 @@
 import { MicMediaPathRecovery } from './mic-media-path-recovery.js';
+import { encodeAudioUplinkHealth } from '../shared/audio-uplink-health-wire.js';
 import {
   MAX_RETRANSMIT_REQUEST_SEQUENCES,
   decodeRetransmitRequest,
@@ -269,10 +270,9 @@ export class WebSocketAudioTransport extends AudioTransport {
     if (!state.ready) return { ...state, sent: false };
 
     const packetBytes = outgoingByteLength(packet);
-    // A health report is larger than 200 ms of compressed audio. Allow one
-    // bounded control write while the realtime queue is below its limit;
-    // state() still prevents another write until that queue drains.
-    const byteLimit = control && this.encodedBitrate ? Math.max(this.maxBufferedBytes, 16384) : this.maxBufferedBytes;
+    // Control shares the physical FIFO with voice. Keep space for the next
+    // 20 ms encoded frame instead of allowing a large report to overfill it.
+    const byteLimit = control ? this.controlByteLimit() : this.maxBufferedBytes;
     if (packetBytes > 0 && state.bufferedAmount + packetBytes > byteLimit) {
       return {
         ...state,
@@ -299,6 +299,11 @@ export class WebSocketAudioTransport extends AudioTransport {
         path: 'websocket',
       };
     }
+  }
+
+  controlByteLimit() {
+    return Math.max(0, this.maxBufferedBytes - (this.encodedBitrate
+      ? Math.ceil(this.encodedBitrate / 8 / 50) + 28 : 0));
   }
 }
 
@@ -870,7 +875,30 @@ export class PreferredAudioTransport extends AudioTransport {
       this.controlWaitingSince = null;
       this.lastControlAckAt = null;
     }
-    const result = this.fallback.send(JSON.stringify(payload), { control: true });
+    let wire = JSON.stringify(payload);
+    if (this.fallback.encodedBitrate && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
+      let snapshot = payload;
+      wire = encodeAudioUplinkHealth(payload);
+      // Event history is optional evidence. Keep the newest entries that fit;
+      // never omit the current recovery state or change the original snapshot
+      // used locally to correlate the server's ACK.
+      let events = payload.transport?.recovery?.events;
+      while (outgoingByteLength(wire) > this.fallback.controlByteLimit() && events?.length) {
+        events = events.slice(1);
+        snapshot = { ...payload, transport: { ...payload.transport,
+          recovery: { ...payload.transport.recovery, events } } };
+        wire = encodeAudioUplinkHealth(snapshot);
+      }
+      if (outgoingByteLength(wire) > this.fallback.controlByteLimit()) {
+        // Long UTF-8 device names are display-only. Keep all timing, drop,
+        // input-state and recovery facts sendable at the lowest trial bitrate.
+        snapshot = { ...snapshot, capture: snapshot.capture ? {
+          ...snapshot.capture, inputLabel: undefined, device: undefined,
+        } : snapshot.capture, transport: { ...snapshot.transport, webTransportLastFailure: undefined } };
+        wire = encodeAudioUplinkHealth(snapshot);
+      }
+    }
+    const result = this.fallback.send(wire, { control: true });
     this.recordControlFallbackResult(result);
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);

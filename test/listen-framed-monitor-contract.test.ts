@@ -100,7 +100,7 @@ test('transport boundaries reset both positioned continuity and the AudioWorklet
 
   assert.match(
     resetSection,
-    /monitorPcmReceiver\.reset\(\)[\s\S]*listenOpusDecoder\.reset\(\)[\s\S]*listenResampler\.reset\(\)[\s\S]*postMessage\(\{ type: 'reset', deClick \}\)/,
+    /monitorPcmReceiver\.reset\(\)[\s\S]*listenOpusDecoder\.reset\(\)[\s\S]*listenResampler\.reset\(\)[\s\S]*postMessage\(\{ type: 'reset', deClick, healthEpoch: playbackHealthEpoch \}\)/,
     'one helper must clear positioned continuity, resampler history and queued worklet audio together while preserving the requested de-click policy',
   );
   assert.match(abandonSection, /transportEpoch \+= 1;[\s\S]*resetPlaybackTemporalState\(deClickPlayback\)/,

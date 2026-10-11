@@ -1,4 +1,5 @@
 import { MicMediaPathRecovery } from './mic-media-path-recovery.js';
+import { encodeAudioUplinkHealth } from '../shared/audio-uplink-health-wire.js';
 import {
   MAX_RETRANSMIT_REQUEST_SEQUENCES,
   decodeRetransmitRequest,
@@ -269,10 +270,9 @@ export class WebSocketAudioTransport extends AudioTransport {
     if (!state.ready) return { ...state, sent: false };
 
     const packetBytes = outgoingByteLength(packet);
-    // A health report is larger than 200 ms of compressed audio. Allow one
-    // bounded control write while the realtime queue is below its limit;
-    // state() still prevents another write until that queue drains.
-    const byteLimit = control && this.encodedBitrate ? Math.max(this.maxBufferedBytes, 16384) : this.maxBufferedBytes;
+    // Control shares the physical FIFO with voice. Keep space for the next
+    // 20 ms encoded frame instead of allowing a large report to overfill it.
+    const byteLimit = control ? this.controlByteLimit() : this.maxBufferedBytes;
     if (packetBytes > 0 && state.bufferedAmount + packetBytes > byteLimit) {
       return {
         ...state,
@@ -300,6 +300,11 @@ export class WebSocketAudioTransport extends AudioTransport {
       };
     }
   }
+
+  controlByteLimit() {
+    return Math.max(0, this.maxBufferedBytes - (this.encodedBitrate
+      ? Math.ceil(this.encodedBitrate / 8 / 50) + 28 : 0));
+  }
 }
 
 /**
@@ -323,6 +328,7 @@ export class PreferredAudioTransport extends AudioTransport {
     datagramOutgoingMaxAgeMs = DEFAULT_DATAGRAM_OUTGOING_MAX_AGE_MS,
     retransmitBufferPackets = DEFAULT_RETRANSMIT_BUFFER_PACKETS,
     webTransportRetryDelaysMs = DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS,
+    webTransportHandshakeTimeoutMs = 5_000,
     // A retry is no reason to keep a process alive: under Node a pending
     // retry kept a test file from ever exiting (browsers have no unref).
     setTimer = (callback, delayMs) => {
@@ -370,6 +376,9 @@ export class PreferredAudioTransport extends AudioTransport {
     if (typeof holdMediaUntilPreference !== 'boolean') {
       throw new TypeError('holdMediaUntilPreference must be boolean');
     }
+    if (!Number.isFinite(webTransportHandshakeTimeoutMs) || webTransportHandshakeTimeoutMs <= 0) {
+      throw new RangeError('webTransportHandshakeTimeoutMs must be positive');
+    }
     if (!Number.isFinite(initialPreferenceHoldMs) || initialPreferenceHoldMs <= 0) {
       throw new RangeError('initialPreferenceHoldMs must be positive');
     }
@@ -406,6 +415,8 @@ export class PreferredAudioTransport extends AudioTransport {
     this.retryableOffer = null;
     this.webTransportRetryAttempt = 0;
     this.webTransportRetryTimer = null;
+    this.webTransportHandshakeTimeoutMs = webTransportHandshakeTimeoutMs;
+    this.pendingWebTransport = null;
     /**
      * Why the latest WebTransport attempt did not become the media path, or
      * null while none has failed: `connect:<error>` (ready rejected),
@@ -870,7 +881,30 @@ export class PreferredAudioTransport extends AudioTransport {
       this.controlWaitingSince = null;
       this.lastControlAckAt = null;
     }
-    const result = this.fallback.send(JSON.stringify(payload), { control: true });
+    let wire = JSON.stringify(payload);
+    if (this.fallback.encodedBitrate && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
+      let snapshot = payload;
+      wire = encodeAudioUplinkHealth(payload);
+      // Event history is optional evidence. Keep the newest entries that fit;
+      // never omit the current recovery state or change the original snapshot
+      // used locally to correlate the server's ACK.
+      let events = payload.transport?.recovery?.events;
+      while (outgoingByteLength(wire) > this.fallback.controlByteLimit() && events?.length) {
+        events = events.slice(1);
+        snapshot = { ...payload, transport: { ...payload.transport,
+          recovery: { ...payload.transport.recovery, events } } };
+        wire = encodeAudioUplinkHealth(snapshot);
+      }
+      if (outgoingByteLength(wire) > this.fallback.controlByteLimit()) {
+        // Long UTF-8 device names are display-only. Keep all timing, drop,
+        // input-state and recovery facts sendable at the lowest trial bitrate.
+        snapshot = { ...snapshot, capture: snapshot.capture ? {
+          ...snapshot.capture, inputLabel: undefined, device: undefined,
+        } : snapshot.capture, transport: { ...snapshot.transport, webTransportLastFailure: undefined } };
+        wire = encodeAudioUplinkHealth(snapshot);
+      }
+    }
+    const result = this.fallback.send(wire, { control: true });
     this.recordControlFallbackResult(result);
     if (result.sent && payload?.type === 'audio-uplink-health' && payload?.version === 1) {
       const captureGeneration = nonNegativeSafeInteger(payload.captureGeneration);
@@ -1075,15 +1109,34 @@ export class PreferredAudioTransport extends AudioTransport {
     };
 
     let transport;
+    let candidate;
     let stage = 'connect';
     try {
       transport = new this.WebTransportClass(offer.url, options);
-      await transport.ready;
+      // A cancelled handshake can reject `closed` before a writer is installed.
+      // The active-path demotion handler is attached only after setup succeeds.
+      Promise.resolve(transport.closed).catch(() => {});
+      // Keep the candidate cancellable before it has a writer. Closing the Mic
+      // or replacing an offer must also close sessions still in the handshake.
+      let cancel;
+      const cancelled = new Promise((resolve) => { cancel = () => resolve(false); });
+      candidate = { transport, cancel, timer: null };
+      this.pendingWebTransport = candidate;
+      const deadline = new Promise((_, reject) => {
+        candidate.timer = this.setTimer(() => {
+          const error = new Error('WebTransport handshake timed out');
+          error.name = 'TimeoutError';
+          reject(error);
+        }, this.webTransportHandshakeTimeoutMs);
+      });
+      const ready = await Promise.race([
+        transport.ready, cancelled, deadline,
+      ]);
+      if (ready === false || generation !== this.preferenceGeneration) return false;
+      this.clearTimer(candidate.timer);
+      candidate.timer = null;
+      if (this.pendingWebTransport === candidate) this.pendingWebTransport = null;
       stage = 'setup';
-      if (generation !== this.preferenceGeneration) {
-        try { transport.close(); } catch {}
-        return false;
-      }
 
       const maxPacketBytes = Number(transport.datagrams?.maxDatagramSize);
       if (!Number.isInteger(maxPacketBytes) || maxPacketBytes < this.minimumPacketBytes) {
@@ -1147,7 +1200,9 @@ export class PreferredAudioTransport extends AudioTransport {
       );
       return true;
     } catch (error) {
-      this.lastWebTransportFailure = `${stage}:${webTransportErrorName(error)}`;
+      if (generation === this.preferenceGeneration) {
+        this.lastWebTransportFailure = `${stage}:${webTransportErrorName(error)}`;
+      }
       // A candidate can become a live HTTP/3 session before its datagram writer
       // is installed. If setup fails after `ready`, it is not `this.webTransport`
       // yet, so demoting the active slot alone would leave that candidate alive
@@ -1164,6 +1219,11 @@ export class PreferredAudioTransport extends AudioTransport {
         if (!retry) this.scheduleWebTransportRetry();
       }
       return false;
+    } finally {
+      if (candidate?.timer !== null && candidate?.timer !== undefined) {
+        this.clearTimer(candidate.timer);
+      }
+      if (this.pendingWebTransport === candidate) this.pendingWebTransport = null;
     }
   }
 
@@ -1243,6 +1303,13 @@ export class PreferredAudioTransport extends AudioTransport {
 
   closeWebTransport(incrementGeneration = true, { flushBacklog = true } = {}) {
     if (incrementGeneration) this.preferenceGeneration += 1;
+    const candidate = this.pendingWebTransport;
+    this.pendingWebTransport = null;
+    if (candidate) {
+      this.clearTimer(candidate.timer);
+      candidate.cancel();
+      try { candidate.transport.close(); } catch {}
+    }
     const transport = this.webTransport;
     const writer = this.datagramWriter;
     this.webTransport = null;

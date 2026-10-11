@@ -42,6 +42,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let lastMonitorAckAt = Number.NEGATIVE_INFINITY;
   let playbackHealthSequence = 0;
   let latestPlaybackHealth = null;
+  let playbackHealthEpoch = 0;
   const monitorPcmReceiver = createMonitorPcmReceiver();
   const listenResampler = createStreamingResampler();
   // Opus is offered only when this browser can decode it, and never again in
@@ -229,11 +230,25 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     }
   }
 
+  function resetPlaybackHealth(resetReceiveWindow = true) {
+    playbackHealthEpoch += 1;
+    latestPlaybackHealth = null;
+    window.relayListenHealth = null;
+    // A same-connection PCM gap resets playback, not network throughput.
+    // Only retiring/replacing the transport owns the receive window and ACK clock.
+    if (resetReceiveWindow) {
+      receiveWindow = { startedAt: performance.now(), bytes: 0, kbps: undefined, measuredAt: 0 };
+      lastMonitorAckAt = Number.NEGATIVE_INFINITY;
+    }
+    window.dispatchEvent(new CustomEvent('relay-listen-health', { detail: null }));
+  }
+
   function resetPlaybackTemporalState(deClick = false) {
+    resetPlaybackHealth();
     monitorPcmReceiver.reset();
     listenOpusDecoder.reset();
     listenResampler.reset();
-    playbackNode?.port.postMessage({ type: 'reset', deClick });
+    playbackNode?.port.postMessage({ type: 'reset', deClick, healthEpoch: playbackHealthEpoch });
   }
 
   function abandonTransportConnection(deClickPlayback = false) {
@@ -369,6 +384,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
       const received = monitorPcmReceiver.receive(event.data);
       if (received.action !== 'accept') return;
+      if (received.reset) resetPlaybackHealth(false);
       // Delivery, not playback: a frame counts as arrived even if a paused
       // audio graph then discards it.
       acknowledgeMonitorFrame(next, received.frame);
@@ -406,7 +422,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       if (received.reset) {
         listenOpusDecoder.reset();
         listenResampler.reset();
-        playbackNode.port.postMessage({ type: 'reset', deClick: true });
+        playbackNode.port.postMessage({ type: 'reset', deClick: true, healthEpoch: playbackHealthEpoch });
       }
       if (received.frame.codec === 'opus') {
         try {
@@ -424,6 +440,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     next.addEventListener('close', () => {
       if (socket !== next || connectEpoch !== transportEpoch) return;
       socket = null;
+      resetPlaybackHealth();
       reconnectBackoff.noteClosed(performance.now());
       if (!transportEnabled || !monitorTransportWanted()) return;
       render('reconnecting');
@@ -523,6 +540,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   function publishListenHealth(health) {
+    if (health.healthEpoch !== playbackHealthEpoch) return;
     const detail = {
       ...health,
       ...(performance.now() - receiveWindow.measuredAt <= 2000 && receiveWindow.kbps !== undefined
@@ -580,11 +598,12 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       });
       node.port.postMessage({
         type: 'configure',
+        healthEpoch: playbackHealthEpoch,
         prebufferMs: PREBUFFER_MS,
         maxQueueMs: MAX_QUEUE_MS,
       });
       node.port.onmessage = (event) => {
-        if (!transportEnabled || effectiveMuted() || !audioRendering()) return;
+        if (node !== playbackNode || !transportEnabled || effectiveMuted() || !audioRendering()) return;
         if (event.data?.type === 'health') {
           publishListenHealth(event.data);
           return;

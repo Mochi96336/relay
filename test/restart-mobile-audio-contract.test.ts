@@ -123,7 +123,7 @@ test('Listen treats OS interruption as recovery, not a user transport teardown',
   assert.match(listenSource, /audioInterruption\.finish\(\)[\s\S]*recovery\.requiresLiveEdge[\s\S]*liveEdgeRecoveryRequired = true/);
   assert.match(listenSource, /resetPlaybackTemporalState\(deClick = false\)/);
   assert.match(listenSource, /monitorPcmReceiver\.reset\(\)/);
-  assert.match(listenSource, /playbackNode\?\.port\.postMessage\(\{ type: 'reset', deClick \}\)/);
+  assert.match(listenSource, /playbackNode\?\.port\.postMessage\(\{ type: 'reset', deClick, healthEpoch: playbackHealthEpoch \}\)/);
   assert.match(
     listenSource,
     /function closeTransport\(\)[\s\S]*abandonTransportConnection\(audioRendering\(\)\)/,

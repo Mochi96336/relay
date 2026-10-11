@@ -1,3 +1,5 @@
+import { decodeAudioUplinkHealth } from '../shared/audio-uplink-health-wire.js';
+
 export type AudioCaptureAppliedSettings = {
   echoCancellation: boolean | null;
   noiseSuppression: boolean | null;
@@ -351,7 +353,7 @@ function parseRecoveryEvidence(value: unknown): MicRecoveryEvidence | null {
 }
 
 export function parseAudioUplinkHealth(value: unknown): AudioUplinkHealth | null {
-  const payload = record(value);
+  const payload = record(decodeAudioUplinkHealth(value));
   if (!payload || Number(payload.version) !== 1) return null;
 
   const captureGeneration = uint32(payload.captureGeneration);

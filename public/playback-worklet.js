@@ -88,6 +88,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
     this.configure({});
 
+    this.healthEpoch = 0;
     this.port.onmessage = (event) => {
       const data = event.data;
 
@@ -96,6 +97,10 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         return;
       }
 
+      if ((data?.type === 'reset' || data?.type === 'configure')
+        && Number.isSafeInteger(data.healthEpoch) && data.healthEpoch >= 0) {
+        this.healthEpoch = data.healthEpoch;
+      }
       if (data?.type === 'reset') {
         this.reset(data.deClick === true);
         return;
@@ -649,6 +654,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
     this.port.postMessage({
       type: 'health',
+      healthEpoch: this.healthEpoch,
       queuedMs: (this.queuedSamples / sampleRate) * 1000,
       targetPrebufferMs: (this.prebufferSamples / sampleRate) * 1000,
       jitterTargetMs: (this.jitterTargetSamples() / sampleRate) * 1000,

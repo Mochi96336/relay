@@ -24,6 +24,7 @@ async function installBrowserAudioHarness(page) {
         this.playbackNode.port.onmessage({
           data: {
             type: 'health',
+            healthEpoch: this.playbackNode.healthEpoch,
             queuedMs: 160,
             targetPrebufferMs: 100,
             jitterTargetMs: 80,
@@ -100,9 +101,13 @@ async function installBrowserAudioHarness(page) {
       constructor(_context, name) {
         super();
         this.name = name;
+        this.healthEpoch = 0;
         this.port = {
           onmessage: null,
-          postMessage() {},
+          postMessage: (message) => {
+            if ((message?.type === 'configure' || message?.type === 'reset')
+              && Number.isSafeInteger(message.healthEpoch)) this.healthEpoch = message.healthEpoch;
+          },
         };
         if (name === 'playback-processor') harness.playbackNode = this;
       }
@@ -217,4 +222,24 @@ test('listener debug faults exercise starvation, reconnect, interruption and sil
   expect(eventTypes).toContain('fault-audio-interrupt-release');
   expect(eventTypes).toContain('fault-output-silence-start');
   expect(eventTypes).toContain('fault-output-silence-release');
+});
+
+
+test('listener reconnect rejects old worklet health and resumes with the current epoch', async ({ page }) => {
+  await installBrowserAudioHarness(page);
+  await startListener(page);
+  const before = await page.evaluate(() => ({
+    epoch: window.__listenerDebugBrowserHarness.playbackNode.healthEpoch,
+    connections: window.__relayListenerDiagnostics.snapshot().monitorConnectionCount,
+  }));
+  await page.evaluate(() => window.__relayListenerDiagnostics.faults.disconnectMonitor());
+  await page.waitForFunction(({ epoch, connections }) => (
+    window.__listenerDebugBrowserHarness.playbackNode.healthEpoch > epoch
+    && window.__relayListenerDiagnostics.snapshot().monitorConnectionCount > connections
+  ), before, { timeout: 2500 });
+  expect(await page.evaluate(() => window.__relayListenerDiagnostics.snapshot().workletHealth)).toBeNull();
+  await page.evaluate(epoch => window.__listenerDebugBrowserHarness.emitHealth({ healthEpoch: epoch, queuedMs: 999 }), before.epoch);
+  expect(await page.evaluate(() => window.__relayListenerDiagnostics.snapshot().workletHealth)).toBeNull();
+  await page.evaluate(() => window.__listenerDebugBrowserHarness.emitHealth({ queuedMs: 30 }));
+  expect(await page.evaluate(() => window.__relayListenerDiagnostics.snapshot().workletHealth.queuedMs)).toBe(30);
 });

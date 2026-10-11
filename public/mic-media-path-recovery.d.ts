@@ -25,6 +25,8 @@ export type MicMediaPathRecoveryObservation = {
   socketEpoch: number;
   eligible?: boolean;
   audioBacklogMs?: number | null;
+  /** Historical delivery may diagnose failure, but cannot certify current recovery. */
+  recoveryAllowed?: boolean;
 };
 
 export type MicMediaPathRecoveryStatus = {

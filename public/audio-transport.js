@@ -821,6 +821,9 @@ export class PreferredAudioTransport extends AudioTransport {
     this.lastAudioBacklogMs = audioBacklogMs;
     this.lastAudioBacklogAt = Number(this.nowMs());
     const decision = this.mediaPathRecovery.observe({
+      // Old ACKs still describe delivery history, but cannot certify recovery
+      // now. A current negative Mixer result also rules out recovery.
+      recoveryAllowed: this.ackRoundTripMs < 1500 && mix?.playable !== false,
       audioBacklogMs,
       captureGeneration: ackGeneration,
       capturedSamples: publisherHealth.capturedSamples,

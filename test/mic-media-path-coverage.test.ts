@@ -323,3 +323,27 @@ test('counter regression rebaselines instead of manufacturing packet loss', () =
   assert.equal(decision.reason, 'packet-window-accumulating');
   assert.equal(decision.staleObservations, 0);
 });
+
+for (const quantitative of [true, false]) test(`current recovery proof is required with ${quantitative ? 'quantitative' : 'legacy'} coverage`, () => {
+  const recovery = new MicMediaPathRecovery({ quarantineReleaseObservations: [1] });
+  const sample = (step: number, recoveryAllowed = true) => ({
+    ...observation({capturedSamples:step*48000,serverAcceptedFrameSerial:step,
+      senderSubmittedPackets:step*100,serverReceivedPacketSerial:step*100}),
+    ...(quantitative ? {} : {senderSubmittedPackets:undefined,serverReceivedPacketSerial:undefined}),
+    recoveryAllowed,
+  });
+  recovery.observe(sample(1));
+  recovery.recoverLatePath('websocket');
+  recovery.observe(sample(2)); // Server path proof baseline.
+  let decision = recovery.observe(sample(3,false));
+  assert.equal(decision.action,'none');
+  assert.equal(decision.phase,'reconnect-proving');
+  decision = recovery.observe(sample(4));
+  assert.equal(decision.action,'recovered');
+  assert.equal(decision.webSocketReplacementUsed,true);
+  decision = recovery.observe(sample(5,false));
+  assert.equal(decision.action,'none');
+  assert.equal(decision.webTransportQuarantined,true,'historical/negative Mixer proof cannot release quarantine');
+  decision = recovery.observe(sample(6));
+  assert.equal(decision.action,'retry-webtransport','fresh healthy proof can release quarantine');
+});

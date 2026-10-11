@@ -328,6 +328,7 @@ export class PreferredAudioTransport extends AudioTransport {
     datagramOutgoingMaxAgeMs = DEFAULT_DATAGRAM_OUTGOING_MAX_AGE_MS,
     retransmitBufferPackets = DEFAULT_RETRANSMIT_BUFFER_PACKETS,
     webTransportRetryDelaysMs = DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS,
+    webTransportHandshakeTimeoutMs = 5_000,
     // A retry is no reason to keep a process alive: under Node a pending
     // retry kept a test file from ever exiting (browsers have no unref).
     setTimer = (callback, delayMs) => {
@@ -375,6 +376,9 @@ export class PreferredAudioTransport extends AudioTransport {
     if (typeof holdMediaUntilPreference !== 'boolean') {
       throw new TypeError('holdMediaUntilPreference must be boolean');
     }
+    if (!Number.isFinite(webTransportHandshakeTimeoutMs) || webTransportHandshakeTimeoutMs <= 0) {
+      throw new RangeError('webTransportHandshakeTimeoutMs must be positive');
+    }
     if (!Number.isFinite(initialPreferenceHoldMs) || initialPreferenceHoldMs <= 0) {
       throw new RangeError('initialPreferenceHoldMs must be positive');
     }
@@ -411,6 +415,8 @@ export class PreferredAudioTransport extends AudioTransport {
     this.retryableOffer = null;
     this.webTransportRetryAttempt = 0;
     this.webTransportRetryTimer = null;
+    this.webTransportHandshakeTimeoutMs = webTransportHandshakeTimeoutMs;
+    this.pendingWebTransport = null;
     /**
      * Why the latest WebTransport attempt did not become the media path, or
      * null while none has failed: `connect:<error>` (ready rejected),
@@ -1103,15 +1109,34 @@ export class PreferredAudioTransport extends AudioTransport {
     };
 
     let transport;
+    let candidate;
     let stage = 'connect';
     try {
       transport = new this.WebTransportClass(offer.url, options);
-      await transport.ready;
+      // A cancelled handshake can reject `closed` before a writer is installed.
+      // The active-path demotion handler is attached only after setup succeeds.
+      Promise.resolve(transport.closed).catch(() => {});
+      // Keep the candidate cancellable before it has a writer. Closing the Mic
+      // or replacing an offer must also close sessions still in the handshake.
+      let cancel;
+      const cancelled = new Promise((resolve) => { cancel = () => resolve(false); });
+      candidate = { transport, cancel, timer: null };
+      this.pendingWebTransport = candidate;
+      const deadline = new Promise((_, reject) => {
+        candidate.timer = this.setTimer(() => {
+          const error = new Error('WebTransport handshake timed out');
+          error.name = 'TimeoutError';
+          reject(error);
+        }, this.webTransportHandshakeTimeoutMs);
+      });
+      const ready = await Promise.race([
+        transport.ready, cancelled, deadline,
+      ]);
+      if (ready === false || generation !== this.preferenceGeneration) return false;
+      this.clearTimer(candidate.timer);
+      candidate.timer = null;
+      if (this.pendingWebTransport === candidate) this.pendingWebTransport = null;
       stage = 'setup';
-      if (generation !== this.preferenceGeneration) {
-        try { transport.close(); } catch {}
-        return false;
-      }
 
       const maxPacketBytes = Number(transport.datagrams?.maxDatagramSize);
       if (!Number.isInteger(maxPacketBytes) || maxPacketBytes < this.minimumPacketBytes) {
@@ -1175,7 +1200,9 @@ export class PreferredAudioTransport extends AudioTransport {
       );
       return true;
     } catch (error) {
-      this.lastWebTransportFailure = `${stage}:${webTransportErrorName(error)}`;
+      if (generation === this.preferenceGeneration) {
+        this.lastWebTransportFailure = `${stage}:${webTransportErrorName(error)}`;
+      }
       // A candidate can become a live HTTP/3 session before its datagram writer
       // is installed. If setup fails after `ready`, it is not `this.webTransport`
       // yet, so demoting the active slot alone would leave that candidate alive
@@ -1192,6 +1219,11 @@ export class PreferredAudioTransport extends AudioTransport {
         if (!retry) this.scheduleWebTransportRetry();
       }
       return false;
+    } finally {
+      if (candidate?.timer !== null && candidate?.timer !== undefined) {
+        this.clearTimer(candidate.timer);
+      }
+      if (this.pendingWebTransport === candidate) this.pendingWebTransport = null;
     }
   }
 
@@ -1271,6 +1303,13 @@ export class PreferredAudioTransport extends AudioTransport {
 
   closeWebTransport(incrementGeneration = true, { flushBacklog = true } = {}) {
     if (incrementGeneration) this.preferenceGeneration += 1;
+    const candidate = this.pendingWebTransport;
+    this.pendingWebTransport = null;
+    if (candidate) {
+      this.clearTimer(candidate.timer);
+      candidate.cancel();
+      try { candidate.transport.close(); } catch {}
+    }
     const transport = this.webTransport;
     const writer = this.datagramWriter;
     this.webTransport = null;

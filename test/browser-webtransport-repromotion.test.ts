@@ -66,6 +66,8 @@ function manualTimers() {
     },
     clearTimer: (timer: { cancelled: boolean }) => {
       timer.cancelled = true;
+      const index = pending.indexOf(timer as typeof pending[number]);
+      if (index >= 0) pending.splice(index, 1);
     },
     fireNext() {
       const timer = pending.shift();
@@ -144,8 +146,10 @@ describe('WebTransport re-promotion after a transport-level demotion', () => {
     const { transport, timers } = await connected();
     ClosableWebTransport.instances[0]!.drop();
     await settle();
+    const retry = timers.pending[0]!;
     transport.close();
-    timers.fireNext();
+    assert.equal(timers.pending.length, 0);
+    retry.callback(); // Even an already queued callback must not revive capture.
     await settle();
     assert.equal(ClosableWebTransport.instances.length, 1, 'a closed capture never reconnects');
   });

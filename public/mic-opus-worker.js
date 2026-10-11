@@ -17,6 +17,7 @@ export function createOpusEncoder(bytes, bitrate = 32000) {
   const delaySamples = wasm.opus_encoder_ctl_get(encoder, 4027);
   return {
     delaySamples,
+    setBitrate(value) { check(wasm.opus_encoder_ctl_set(encoder, 4002, value)); },
     reset() { check(wasm.opus_encoder_ctl_set(encoder, 4028, 0)); },
     encode(pcm) {
       if (pcm.byteLength !== 1920) throw new Error('Opus requires a 20 ms / 48 kHz mono frame');
@@ -38,6 +39,9 @@ if (typeof self !== 'undefined') {
         self.postMessage({ type: 'ready', delaySamples: encoder.delaySamples });
       } else if (data.type === 'reset') {
         encoder.reset();
+      } else if (data.type === 'bitrate') {
+        encoder.setBitrate(data.bitrate);
+        self.postMessage({ type: 'bitrate', bitrate: data.bitrate });
       } else if (data.type === 'encode') {
         const encoded = encoder.encode(data.pcm);
         self.postMessage({ type: 'encoded', id: data.id, encoded: encoded.buffer }, [encoded.buffer]);

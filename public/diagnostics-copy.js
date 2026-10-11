@@ -846,6 +846,20 @@ Object.assign(zhHant, {
   "diag.listen.none": "目前沒有房間收聽連線。"
 });
 
+
+Object.assign(en, {
+  'diag.mic.bitrate.startup': 'Adaptive bitrate: high-quality startup.',
+  'diag.mic.bitrate.stable-delivery': 'Adaptive bitrate: raised after stable delivery.',
+  'diag.mic.bitrate.congestion': 'Adaptive bitrate: reduced after sustained congestion.',
+  'diag.mic.bitrate.media-backlog': 'Adaptive bitrate: reduced after sustained media backlog.',
+});
+Object.assign(zhHant, {
+  'diag.mic.bitrate.startup': '自動碼率：以高品質檔啟動。',
+  'diag.mic.bitrate.stable-delivery': '自動碼率：持續穩定後升檔。',
+  'diag.mic.bitrate.congestion': '自動碼率：持續壅塞後降檔。',
+  'diag.mic.bitrate.media-backlog': '自動碼率：音訊持續積壓後降檔。',
+});
+
 export const DIAGNOSTICS_MESSAGES = { en, 'zh-Hant': zhHant };
 
 function format(template, vars) {

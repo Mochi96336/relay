@@ -548,3 +548,11 @@ Robot seek門檻仍為嚴格大於450ms，seek後一次回報仍可讓下一次�
 Opus 使用既有 sequenced v2 註冊與 v3 音訊封包，保留 generation、sequence、firstSampleIndex 和 960-sample frame。接收端先排序去重，再解碼，依封包附帶的 encoder lookahead 修正樣本位置；不以到達時間取代音訊時間。Worker 最多保留兩個待編碼 frame，超過 100 ms 的結果丟棄。WebSocket 壓縮音訊排隊預算約 200 ms，控制訊息另有有界寫入上限。這次沒有自適應碼率。
 
 實際模式見 `captureAndSender.transport.codec` 與 `codecBitrate`。32 kbps 加應用封包標頭約 43 kbps，尚未計入網路協定、控制訊息和重傳。關閉旗標並重新載入手機可回復 PCM。Pi 僅跑受影響測試與型別檢查；GitHub 執行完整 CI，包含實際瀏覽器 WebSocket/WebTransport 錄音驗證。
+
+### Mic 自動碼率（接續固定碼率試驗）
+
+Mic Opus 試驗現在以 128 kbps 啟動，檔位 128 → 64 → 32 kbps。每秒觀察：新的壅塞拒送計數、有效 ACK 推算的媒體積壓與本地排隊年齡。連續三秒出現壅塞拒送、媒體積壓大於300ms或排隊年齡大於200ms，下降一檔；兩次調整至少隔五秒。連續30秒媒體積壓小於100ms、排隊年齡小於50ms、Mixer可播且沒有新的壅塞拒送，才升一檔。這些是試驗門檻，不代表已量到連線可用頻寬。
+
+RTT本身不觸發降檔。舊／缺少回報保持未知，不升檔；本地持續壅塞仍可降檔。切背景、輸入靜音／中斷、採集資料過期、傳輸路徑或capture generation變更會清除觀察窗口。新generation恢復128kbps。碼率透過Opus ctl在frame之間更新，無需重建編碼器、Mic或capture generation，lookahead與樣本座標不變。Worker確認後才回報實際碼率並更新WebSocket排隊預算。
+
+`captureAndSender.transport.codecBitrateReason` 顯示啟動、持續穩定升檔、壅塞降檔或媒體積壓降檔；Mic技術細節沿用原傳輸說明顯示。128kbps payload約為原PCM的1/6，加應用標頭約139.2kbps。此策略只調Mic上行；房間收聽仍為既有96kbps設定。

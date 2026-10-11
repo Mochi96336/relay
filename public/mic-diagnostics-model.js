@@ -119,6 +119,8 @@ function describePath(status, t) {
   const codecNote = codec && finite(status.audio.captureAndSender.reportAgeMs) !== null
     && status.audio.captureAndSender.reportAgeMs <= 2000
     ? `${codec}${bitrate !== null ? ` · ${Math.round(bitrate / 1000)} kbps` : ''} · ` : '';
+  const bitrateReason = codecNote && ['startup', 'stable-delivery', 'congestion', 'media-backlog'].includes(transport?.codecBitrateReason)
+    ? `${t(`diag.mic.bitrate.${transport.codecBitrateReason}`)}${t('diag.sentenceGap')}` : '';
   const retries = count(transport?.webTransportRetries);
   const demotions = count(transport?.webTransportDemotions);
   const history = [];
@@ -133,7 +135,7 @@ function describePath(status, t) {
       'path',
       t('diag.mic.path'),
       t('diag.mic.path.direct'),
-      `${codecNote}${t('diag.mic.path.directNote')}${suffix}`,
+      `${codecNote}${bitrateReason}${t('diag.mic.path.directNote')}${suffix}`,
       'ok',
     );
   }
@@ -149,7 +151,7 @@ function describePath(status, t) {
     'path',
     t('diag.mic.path'),
     t('diag.mic.path.fallback'),
-    `${codecNote}${t('diag.mic.path.fallbackNote')}${failureNote}${suffix}`,
+    `${codecNote}${bitrateReason}${t('diag.mic.path.fallbackNote')}${failureNote}${suffix}`,
     'neutral',
   );
 }

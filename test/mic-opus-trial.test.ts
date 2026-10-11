@@ -104,6 +104,11 @@ test('browser encoder bounds queued work and fences outputs from a replaced capt
   try {
     const packets: ArrayBuffer[] = [], drops: number[] = [];
     const encoder = await createMicOpusTrial({ onPacket: p => packets.push(p), onDrop: n => drops.push(n) });
+    assert.equal(encoder.bitrate, 32000);
+    encoder.setBitrate(128000);
+    assert.equal(encoder.bitrate, 32000, 'report only worker-confirmed bitrate');
+    active!.onmessage?.({ data: { type: 'bitrate', bitrate: 128000 } });
+    assert.equal(encoder.bitrate, 128000);
     encoder.reset(10);
     assert.equal(encoder.encode(new ArrayBuffer(1920), 0, 0), true);
     assert.equal(encoder.encode(new ArrayBuffer(1920), 1, 960), true);

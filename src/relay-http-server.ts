@@ -29,7 +29,7 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
   app.disable('x-powered-by');
   app.get('/mic-codec-config', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ opus: options.micOpusTrial === true, bitrate: 32_000 });
+    res.json({ opus: options.micOpusTrial === true, bitrate: 128_000 });
   });
   app.get('/mic-opus.wasm', (_req, res) => {
     res.type('application/wasm');

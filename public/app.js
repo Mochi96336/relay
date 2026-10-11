@@ -6,6 +6,8 @@ import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
 import { createMicOpusTrial } from './mic-opus-trial.js';
+import { MicBitratePolicy } from './mic-bitrate-policy.js';
+const micBitratePolicy = new MicBitratePolicy();
 const micCodecConfig = await fetch('/mic-codec-config', { cache: 'no-store', signal: AbortSignal.timeout(3000) })
   .then(response => response.ok ? response.json() : { opus: false }).catch(() => ({ opus: false }));
 let micOpus = null;
@@ -214,12 +216,33 @@ function audioUplinkHealthPayload(healthRequestId) {
     ...uplinkEvidenceReport(latestLocalMicLevel),
     controlReconnects: Math.max(0, publisherControlConnections - 1),
     transport: { ...audioTransport.stats(), codec: micOpus ? 'opus' : 'pcm16',
-      codecBitrate: micOpus ? micCodecConfig.bitrate : (audioContext?.sampleRate ?? 48000) * 16 },
+      codecBitrate: micOpus ? micOpus.bitrate : (audioContext?.sampleRate ?? 48000) * 16,
+      ...(micOpus ? { codecBitrateReason: micBitratePolicy.status().reason } : {}) },
   };
+}
+
+function adaptMicBitrate() {
+  if (!micOpus || !publisherActive) return;
+  const stats = audioTransport.stats();
+  const recovery = stats.recovery;
+  const nowMs = performance.now();
+  const decision = micBitratePolicy.observe({
+    nowMs, generation: captureGeneration, path: stats.path,
+    eligible: document.visibilityState !== 'hidden' && audioContext?.state === 'running'
+      && !captureInputMuted && !micCaptureRecovery.status().inputGapActive
+      && sampleSongCapture !== null && nowMs - sampleSongCapture.observedAt < 1500,
+    congestedRejects: stats.webSocketCongestedRejects + stats.webTransportCongestedRejects,
+    audioBacklogMs: recovery.audioBacklogMs,
+    // On WT this socket carries control only; its queue is not media backlog.
+    queueAgeMs: stats.path === 'websocket' ? recovery.queueAgeMs : 0,
+    mixPlayable: recovery.mixPlayable,
+  });
+  micOpus.setBitrate(decision.bitrate);
 }
 
 function sendAudioUplinkHealth() {
   maintainPublisherCommandChannel();
+  adaptMicBitrate();
   if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return false;
   const sentAtMs = performance.now();
   const healthRequestId = publisherCommandLiveness.beginHealthRequest(sentAtMs);
@@ -286,6 +309,8 @@ function advanceCaptureGeneration(reason) {
   captureSampleCursor = 0;
   sampleSongCapture = null;
   capturePacketSequence = 0;
+  micBitratePolicy.reset();
+  micOpus?.setBitrate(128000);
   micOpus?.reset(captureGeneration);
   captureInputGapSamples = 0;
   resetUplinkEvidence();
@@ -1613,6 +1638,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
           if (!result.sent) recordUplinkDrop(960, result.reason ?? 'disconnected');
         },
         onDrop: recordUplinkDrop,
+        onBitrate: bitrate => audioTransport.fallback.setEncodedBitrate(bitrate),
         onError: error => {
           console.error('Mic Opus failed', error);
           if (publisherActive) finishMicrophoneSession('opus-failed', { releaseMic: false }).catch(console.error);

@@ -66,7 +66,7 @@ test('production Mic WASM Opus reaches the mixer and a non-silent Take', async (
       return [status.audio?.captureAndSender?.transport?.codec, status.audio?.micMediaPath];
     }).toEqual(['opus', direct ? 'webtransport' : 'websocket']);
     const status = await (await fetch(`${base}/statusz`)).json();
-    expect(status.audio.captureAndSender.transport.codecBitrate).toBe(32000);
+    expect(status.audio.captureAndSender.transport.codecBitrate).toBe(128000);
     expect(status.audio.micSampleRate).toBe(48000);
     await page.locator('#start-recording').click();
     await page.waitForFunction(() => window.relayRecordingState?.lifecycle === 'recording');

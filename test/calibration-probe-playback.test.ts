@@ -230,16 +230,20 @@ for (const failure of ['createGain', 'gain ramp', 'connect']) {
   });
 }
 
-test('a retry with the same request ID still retires an older resume and rejection', async () => {
-  const f = fixture();
-  const old = f.play(3);
-  const retry = f.play(3);
-  f.resumes[1].resolve();
-  await retry;
-  f.resumes[0].reject(new Error('old resume failed'));
-  await old;
-  assert.equal(f.messages.length, 1);
-  assert.deepEqual(f.oscillators.map(n => n.disconnects), [0, 0, 0]);
-  f.retire();
-  assert.deepEqual(f.oscillators.map(n => n.disconnects), [1, 1, 1]);
-});
+for (const outcome of ['resolve', 'reject'] as const) {
+  test(`same request ID cannot revive an old resume (${outcome})`, async () => {
+    const f = fixture();
+    const old = f.play(3);
+    const retry = f.play(3);
+    f.resumes[1].resolve();
+    await retry;
+    if (outcome === 'resolve') f.resumes[0].resolve();
+    else f.resumes[0].reject(new Error('old resume failed'));
+    await old;
+    assert.equal(f.messages.length, 1);
+    assert.equal(f.oscillators.length, 3);
+    assert.deepEqual(f.oscillators.map(n => n.disconnects), [0, 0, 0]);
+    f.retire();
+    assert.deepEqual(f.oscillators.map(n => n.disconnects), [1, 1, 1]);
+  });
+}

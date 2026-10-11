@@ -230,12 +230,16 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     }
   }
 
-  function resetPlaybackHealth() {
+  function resetPlaybackHealth(resetReceiveWindow = true) {
     playbackHealthEpoch += 1;
     latestPlaybackHealth = null;
     window.relayListenHealth = null;
-    receiveWindow = { startedAt: performance.now(), bytes: 0, kbps: undefined, measuredAt: 0 };
-    lastMonitorAckAt = Number.NEGATIVE_INFINITY;
+    // A same-connection PCM gap resets playback, not network throughput.
+    // Only retiring/replacing the transport owns the receive window and ACK clock.
+    if (resetReceiveWindow) {
+      receiveWindow = { startedAt: performance.now(), bytes: 0, kbps: undefined, measuredAt: 0 };
+      lastMonitorAckAt = Number.NEGATIVE_INFINITY;
+    }
     window.dispatchEvent(new CustomEvent('relay-listen-health', { detail: null }));
   }
 
@@ -380,7 +384,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
       const received = monitorPcmReceiver.receive(event.data);
       if (received.action !== 'accept') return;
-      if (received.reset) resetPlaybackHealth();
+      if (received.reset) resetPlaybackHealth(false);
       // Delivery, not playback: a frame counts as arrived even if a paused
       // audio graph then discards it.
       acknowledgeMonitorFrame(next, received.frame);

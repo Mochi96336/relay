@@ -49,4 +49,16 @@ test('reconnect clears old health and rejects queued worklet reports until the n
   assert.equal(fresh.receivedKbps, undefined);
   assert.equal(fresh.sequence, 2, 'stale callbacks must not advance the diagnostic sequence');
   assert.equal(fresh.ageMs, 0);
+  // A hole within this same physical connection must not hide its receive rate
+  // or restart ACK throttling; it only retires the old playback observation.
+  vm.runInContext(`receiveWindow.kbps = 90; receiveWindow.measuredAt = performance.now();
+    resetPlaybackHealth(false);
+    publishListenHealth({ healthEpoch: 2, queuedMs: 10 });
+    acknowledgeMonitorFrame(target, frame);`, context);
+  assert.equal(acknowledgements.at(-1).playbackHealth.queuedMs, 30, 'gap cannot bypass ACK throttling');
+  now += 100;
+  vm.runInContext('acknowledgeMonitorFrame(target, frame);', context);
+  assert.equal(acknowledgements.at(-1).playbackHealth.receivedKbps, 90,
+    'frequent PCM gaps must not perpetually reset the throughput window');
+  assert.equal(acknowledgements.at(-1).playbackHealth.queuedMs, 10);
 });

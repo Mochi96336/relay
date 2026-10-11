@@ -291,6 +291,7 @@ export class MicRuntime {
             generation: captureGeneration!,
             initialSequence,
             ...this.options.audioTransportConfig,
+            allowOpus: sampleRate === 48_000,
           },
         });
         this.currentMediaGeneration = captureGeneration;

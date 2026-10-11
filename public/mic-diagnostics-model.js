@@ -149,6 +149,23 @@ function describePath(status, t) {
   );
 }
 
+function describeEncoding(status, t) {
+  const sender = status?.audio?.captureAndSender;
+  const transport = sender?.transport;
+  const age = finite(sender?.reportAgeMs);
+  const codec = transport?.codec === 'opus' ? 'Opus' : transport?.codec === 'pcm16' ? 'PCM16' : '';
+  if (!status?.source?.micConnected || !codec || age === null || age < 0 || age > 2000) {
+    return unknown(t, 'encoding', 'diag.mic.encoding');
+  }
+  const bitrate = finite(transport?.codecBitrate);
+  const value = codec + (bitrate !== null ? ` · ${Math.round(bitrate / 1000)} kbps` : '');
+  const reason = ['startup', 'stable-delivery', 'congestion', 'media-backlog'].includes(transport?.codecBitrateReason)
+    ? t(`diag.mic.bitrate.${transport.codecBitrateReason}`) : '';
+  const note = [t(codec === 'Opus' ? 'diag.mic.encoding.opusNote' : 'diag.mic.encoding.pcmNote'), reason]
+    .filter(Boolean).join(t('diag.sentenceGap'));
+  return row('encoding', t('diag.mic.encoding'), value, note);
+}
+
 function describeLossRepair(status, t) {
   const receiver = status?.audio?.receiverTransport;
   if (!status?.source?.micConnected || !receiver) return unknown(t, 'repair', 'diag.mic.repair');
@@ -381,6 +398,7 @@ export function describeMicTransport(status, t = english) {
     describeLevel(status, t),
     describeProblems(status, t),
     describePath(status, t),
+    describeEncoding(status, t),
     describeLossRepair(status, t),
     describeBuffer(status, t),
     describeDeviceSend(status, t),

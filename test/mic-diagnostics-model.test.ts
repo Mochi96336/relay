@@ -61,10 +61,25 @@ describe('Mic diagnostics model', () => {
     assert.equal(described.drift.value, 'Measuring…');
   });
 
+  it('separates fresh encoding and adaptation from the transport path', () => {
+    const status = liveStatus(s => {
+      s.audio.captureAndSender.reportAgeMs = 100;
+      Object.assign(s.audio.captureAndSender.transport, {
+        codec: 'opus', codecBitrate: 64000, codecBitrateReason: 'congestion',
+      });
+    });
+    const current = rows(status);
+    assert.equal(current.encoding.value, 'Opus · 64 kbps');
+    assert.match(current.encoding.note, /sustained congestion/);
+    assert.doesNotMatch(current.path.note, /Opus|kbps|bitrate/);
+    status.audio.captureAndSender.reportAgeMs = 2001;
+    assert.equal(rows(status).encoding.value, '—');
+  });
+
   it('keeps the order a person reads first: verdict, then what is wrong, then why', () => {
     assert.deepEqual(
       describeMicTransport(liveStatus()).map((row) => row.key),
-      ['audio', 'level', 'problems', 'path', 'repair', 'buffer', 'send', 'input', 'drift'],
+      ['audio', 'level', 'problems', 'path', 'encoding', 'repair', 'buffer', 'send', 'input', 'drift'],
     );
   });
 

@@ -5,6 +5,12 @@ import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
+import { createMicOpusTrial } from './mic-opus-trial.js';
+import { MicBitratePolicy } from './mic-bitrate-policy.js';
+const micBitratePolicy = new MicBitratePolicy();
+const micCodecConfig = await fetch('/mic-codec-config', { cache: 'no-store', signal: AbortSignal.timeout(3000) })
+  .then(response => response.ok ? response.json() : { opus: false }).catch(() => ({ opus: false }));
+let micOpus = null;
 import { classifyCaptureDispatch } from './capture-dispatch.js';
 import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
@@ -209,12 +215,34 @@ function audioUplinkHealthPayload(healthRequestId) {
     captureLevel: captureLevelSnapshot(latestLocalMicLevel),
     ...uplinkEvidenceReport(latestLocalMicLevel),
     controlReconnects: Math.max(0, publisherControlConnections - 1),
-    transport: audioTransport.stats(),
+    transport: { ...audioTransport.stats(), codec: micOpus ? 'opus' : 'pcm16',
+      codecBitrate: micOpus ? micOpus.bitrate : (audioContext?.sampleRate ?? 48000) * 16,
+      ...(micOpus ? { codecBitrateReason: micBitratePolicy.status().reason } : {}) },
   };
+}
+
+function adaptMicBitrate() {
+  if (!micOpus || !publisherActive) return;
+  const stats = audioTransport.stats();
+  const recovery = stats.recovery;
+  const nowMs = performance.now();
+  const decision = micBitratePolicy.observe({
+    nowMs, generation: captureGeneration, path: stats.path,
+    eligible: document.visibilityState !== 'hidden' && audioContext?.state === 'running'
+      && !captureInputMuted && !micCaptureRecovery.status().inputGapActive
+      && sampleSongCapture !== null && nowMs - sampleSongCapture.observedAt < 1500,
+    congestedRejects: stats.webSocketCongestedRejects + stats.webTransportCongestedRejects,
+    audioBacklogMs: recovery.audioBacklogMs,
+    // On WT this socket carries control only; its queue is not media backlog.
+    queueAgeMs: stats.path === 'websocket' ? recovery.queueAgeMs : 0,
+    mixPlayable: recovery.mixPlayable,
+  });
+  micOpus.setBitrate(decision.bitrate);
 }
 
 function sendAudioUplinkHealth() {
   maintainPublisherCommandChannel();
+  adaptMicBitrate();
   if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return false;
   const sentAtMs = performance.now();
   const healthRequestId = publisherCommandLiveness.beginHealthRequest(sentAtMs);
@@ -281,6 +309,9 @@ function advanceCaptureGeneration(reason) {
   captureSampleCursor = 0;
   sampleSongCapture = null;
   capturePacketSequence = 0;
+  micBitratePolicy.reset();
+  micOpus?.setBitrate(128000);
+  micOpus?.reset(captureGeneration);
   captureInputGapSamples = 0;
   resetUplinkEvidence();
   captureInputMuted = mediaStream?.getAudioTracks?.()[0]?.muted === true;
@@ -562,6 +593,14 @@ function handleCaptureWorkletMessage(event, graph) {
   }
 
   submitMicVisualAnalysis(graph, pcm);
+
+  if (micOpus) {
+    if (micOpus.encode(pcm, capturePacketSequence, chunkFirstSampleIndex)) {
+      capturePacketSequence = (capturePacketSequence + 1) >>> 0;
+    }
+    returnCaptureBuffer(graph, pcm);
+    return;
+  }
 
   const pending = splitPcmForPacketLimit(
     pcm,
@@ -1362,7 +1401,7 @@ function rebuildPublisherAudioContext() {
     && audioContext === oldContext && mediaStream === stream && activeCaptureGraph === graph;
   const promise = Promise.resolve().then(async () => {
     if (!current()) return false;
-    replacement = new AudioContext({ latencyHint: 'interactive' });
+    replacement = new AudioContext({ latencyHint: 'interactive', ...(micCodecConfig.opus ? { sampleRate: 48000 } : {}) });
     const prepared = replacement;
     await Promise.race([
       (async () => {
@@ -1495,6 +1534,9 @@ async function stop({ releaseMic = true } = {}) {
   captureGraphEpoch += 1;
   captureGraphRebuildPromise = null;
   audioContext = null;
+  micOpus?.close();
+  micOpus = null;
+  audioTransport.fallback.setEncodedBitrate(null);
 
   const shouldReleaseMic = releaseMic && wasPublisherActive;
   if (shouldReleaseMic && closingSocket?.readyState === WebSocket.OPEN) {
@@ -1588,7 +1630,24 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       { stage: 'configuring clean microphone input' },
     );
 
-    preparedContext = new AudioContext({ latencyHint: 'interactive' });
+    if (micCodecConfig.opus) {
+      micOpus = await micStartup.wait(startup, createMicOpusTrial({
+        bitrate: micCodecConfig.bitrate,
+        onPacket: packet => {
+          const result = audioTransport.send(packet);
+          if (!result.sent) recordUplinkDrop(960, result.reason ?? 'disconnected');
+        },
+        onDrop: recordUplinkDrop,
+        onBitrate: bitrate => audioTransport.fallback.setEncodedBitrate(bitrate),
+        onError: error => {
+          console.error('Mic Opus failed', error);
+          if (publisherActive) finishMicrophoneSession('opus-failed', { releaseMic: false }).catch(console.error);
+        },
+      }), { stage: 'preparing compressed microphone audio', dispose: encoder => encoder.close() });
+      audioTransport.fallback.setEncodedBitrate(micCodecConfig.bitrate);
+    }
+    preparedContext = new AudioContext({ latencyHint: 'interactive', ...(micCodecConfig.opus ? { sampleRate: 48000 } : {}) });
+    if (micCodecConfig.opus && preparedContext.sampleRate !== 48000) throw new Error('Opus trial requires 48 kHz capture');
     const captureContext = preparedContext;
     captureContext.addEventListener('statechange', () => {
       if (!publisherActive || audioContext !== captureContext) return;
@@ -1707,6 +1766,11 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       schedulePublisherReconnect(sessionEpoch, generation);
     }
   } finally {
+    if (!publisherActive) {
+      micOpus?.close();
+      micOpus = null;
+      audioTransport.fallback.setEncodedBitrate(null);
+    }
     if (preparedStream) preparedStream.getTracks().forEach((track) => track.stop());
     if (preparedContext) {
       try {

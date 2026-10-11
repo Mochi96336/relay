@@ -295,3 +295,32 @@ test('a held-back listener still gets one probe frame every 500 ms, and confirmi
   positionedFrame(transport, 62);
   assert.deepEqual(sentIndexes().slice(-2), [61, 62]);
 });
+
+test('listener playback reports stay per socket and expire without repeated ACK refresh', () => {
+  const a = fakeSocket({ monitorPacketVersion: 1 });
+  const b = fakeSocket({ monitorPacketVersion: 1 });
+  a.socket.connectionIncarnation = 11;
+  b.socket.connectionIncarnation = 12;
+  let now = 1000;
+  const transport = createMonitorSocketTransport(fakeServer(a.socket, b.socket), {
+    backlogBytes: 10000, nowMs: () => now,
+  });
+  const payload = (end: number, sequence = 1) => ({ type: 'monitor-ack', generation: 1,
+    receivedEndSampleIndex: end, playbackHealth: { sequence, ageMs: 100, underruns: 3,
+      concealedMs: 40, queuedMs: 80, sampleRate: 44100, receivedKbps: 105.4, playing: true, contextState: 'running',
+      arbitrary: 'discard', droppedMs: Infinity, trimmedMs: -1 } });
+  transport.acknowledge(a.socket, payload(960));
+  const first = transport.playbackHealth();
+  assert.equal(first[0].connectionIncarnation, 11);
+  assert.equal(first[0].reportAgeMs, 100);
+  assert.deepEqual(first[0].health, { queuedMs: 80, underruns: 3, concealedMs: 40,
+    sampleRate: 44100, receivedKbps: 105.4, playing: true, contextState: 'running' });
+  assert.equal(first[1].health, null, 'another listener never inherits this report');
+  now = 3101;
+  transport.acknowledge(a.socket, payload(1920));
+  assert.equal(transport.playbackHealth()[0].health, null, 'duplicate report sequence cannot make stale health fresh');
+  transport.acknowledge(a.socket, payload(2880, 2));
+  assert.equal(transport.playbackHealth()[0].health?.underruns, 3);
+  transport.acknowledge(a.socket, { ...payload(3840, 3), playbackHealth: { sequence: 3, ageMs: -1 } });
+  assert.equal(transport.playbackHealth()[0].sequence, 2, 'invalid freshness is rejected');
+});

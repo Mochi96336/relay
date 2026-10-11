@@ -12,6 +12,7 @@ const RESYNC_FORWARD_WINDOW_MULTIPLIER = 32;
 export type AudioPacketReceiverOptions = {
   source: AudioPacketSource;
   generation: number;
+  allowOpus?: boolean;
   /**
    * First sequence authorized for this receiver. When omitted, the first valid
    * packet establishes the sequence origin; this is required after a Relay
@@ -205,6 +206,7 @@ export class AudioPacketReceiver {
     invalidSampleRangePackets: 0,
   };
   private continuityCandidate: ContinuitySnapshot | null = null;
+  private readonly allowOpus: boolean;
   private continuityResolved = false;
   private readonly continuityKey: string;
   /** Wall time this receiver last changed the state a replacement would adopt. */
@@ -259,6 +261,7 @@ export class AudioPacketReceiver {
     }
 
     this.source = options.source;
+    this.allowOpus = options.allowOpus === true;
     this.generation = options.generation >>> 0;
     this.expectedSequence = initialSequence === undefined ? null : initialSequence >>> 0;
     this.reorderWindowPackets = options.reorderWindowPackets;
@@ -346,6 +349,10 @@ export class AudioPacketReceiver {
     }
 
     const packet = decoded.packet;
+    if (packet.opusDelaySamples !== undefined && !this.allowOpus) {
+      this.counters.malformedPackets += 1;
+      return [];
+    }
     if (packet.source !== this.source) {
       this.counters.wrongSourcePackets += 1;
       if (this.continuityResolved) this.rememberContinuity();

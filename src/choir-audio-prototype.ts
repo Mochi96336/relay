@@ -85,7 +85,7 @@ function sameIdentity(a: ChoirAudioIdentity, b: ChoirAudioIdentity): boolean {
 
 /** A fixed bounded ring; sample stamps prevent stale wraparound playback. */
 function bufferedSample(track: Track, index: number): number | null {
-  if (!nonnegativeSafe(index)) return null;
+  if (!nonnegativeSafe(index) || index < track.latestWrittenExclusive - track.value.length) return null;
   const slot = index % track.value.length;
   return track.stamps[slot] === index ? track.value[slot] / 32768 : null;
 }
@@ -177,7 +177,7 @@ export class ChoirAudioPrototype {
    */
   installAnchor(anchor: ChoirTrackAnchor, source: ChoirCalibrationSource): boolean {
     const track = this.tracks.get(anchor.participantId);
-    if (!track || source === 'none' || source === 'unavailable'
+    if (!track || source === 'unavailable'
       || source === 'content-held'
       || anchor.songEpoch !== track.identity.songEpoch
       || anchor.captureGeneration !== track.identity.captureGeneration

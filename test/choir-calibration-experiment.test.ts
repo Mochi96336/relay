@@ -1,0 +1,180 @@
+import assert from 'node:assert/strict';
+import test, { describe } from 'node:test';
+import { ChoirCalibrationExperiment, type ChoirCalibrationIdentity } from '../src/choir-calibration-experiment.js';
+import type { SongSampleAnchor } from '../src/sample-song-fallback.js';
+import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
+
+const RATE = 48_000;
+const VIDEO = 'abcdefghijk';
+const A: ChoirCalibrationIdentity = {
+  participantId: 'participant-a', videoId: VIDEO, songEpoch: 5,
+  micGeneration: 2, backingGeneration: 4,
+};
+const B: ChoirCalibrationIdentity = { ...A, participantId: 'participant-b', micGeneration: 3 };
+
+function int16(buffer: Buffer) {
+  return new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 2);
+}
+
+/**
+ * Produce two *different* singer tracks cut from ONE shared song, rather than
+ * unrelated backing fixtures. This makes the reported lag a known ground truth.
+ * A positive lag means the mic content starts earlier in the song than backing.
+ */
+function singerTrack(master: Buffer, backingStart: number, lagMs: number, singerHz: number) {
+  const sampleShift = Math.round(lagMs * RATE / 1000);
+  const start = backingStart - sampleShift;
+  const samples = RATE * 6;
+  const output = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) {
+    const music = master.readInt16LE((start + i) * 2) / 32768;
+    const seconds = i / RATE;
+    const envelope = 0.12 * (0.4 + 0.6 * Math.sin(2 * Math.PI * 1.7 * seconds) ** 2);
+    const voice = Math.sin(2 * Math.PI * singerHz * seconds) * envelope;
+    const value = Math.max(-1, Math.min(1, music * 0.62 + voice));
+    output.writeInt16LE(Math.round(value * 32767), i * 2);
+  }
+  return output;
+}
+
+function observation(side: 'mic' | 'backing', i: number, offsetSeconds: number): SongSampleAnchor {
+  return {
+    videoId: VIDEO, generation: side === 'mic' ? A.micGeneration : A.backingGeneration,
+    sampleRate: RATE, sampleIndex: Math.round((i * .25 + offsetSeconds) * RATE),
+    mediaSeconds: 10 + i * .25, playbackRate: 1, state: 1, uncertaintyMs: 20,
+  };
+}
+
+function seedSample(
+  model: ChoirCalibrationExperiment,
+  identity: ChoirCalibrationIdentity,
+  micOffsetSeconds: number,
+  backingOffsetSeconds = .5,
+) {
+  for (let i = 0; i < 3; i++) {
+    const nowMs = 1000 + i * 250;
+    assert.equal(model.observeSample(identity, 'backing', observation('backing', i, backingOffsetSeconds), nowMs), true);
+    assert.equal(model.observeSample(identity, 'mic', {
+      ...observation('mic', i, micOffsetSeconds), generation: identity.micGeneration,
+    }, nowMs), true);
+  }
+}
+
+function choice(model: ChoirCalibrationExperiment, identity: ChoirCalibrationIdentity, extra: {
+  contentApplicability?: 'apply' | 'hold' | 'revoke';
+  nowMs?: number;
+  preference?: 'sample-song' | 'boot-probe';
+  freshRobotDeltaMs?: number | null;
+  playbackRate?: number;
+} = {}) {
+  return model.resolve({
+    identity, nowMs: extra.nowMs ?? 1500,
+    contentApplicability: extra.contentApplicability ?? 'apply',
+    sampleMap: (_, anchor) => anchor.sampleIndex,
+    sessionSampleRate: RATE,
+    freshRobotDeltaMs: extra.freshRobotDeltaMs,
+    playbackRate: extra.playbackRate ?? 1,
+    preference: extra.preference,
+  });
+}
+
+describe('dual-singer real Content plus separate fallback strategies', () => {
+  test('real Content analyzer independently recovers +120 and -340 ms against one backing PCM', () => {
+    const model = new ChoirCalibrationExperiment();
+    model.activate(A);
+    model.activate(B);
+    const { backing: master } = laggedMultibandMusicPair(8, RATE, 0);
+    const start = RATE;
+    const backing = master.subarray(start * 2, (start + RATE * 6) * 2);
+    const micA = singerTrack(master, start, 120, 207);
+    const micB = singerTrack(master, start, -340, 293);
+    const a = model.analyzeContent(A, int16(micA), int16(backing), RATE);
+    const b = model.analyzeContent(B, int16(micB), int16(backing), RATE);
+    assert.equal(a.status, 'confirmed', JSON.stringify(a));
+    assert.equal(b.status, 'confirmed', JSON.stringify(b));
+    if (a.status !== 'confirmed' || b.status !== 'confirmed') return;
+    assert.ok(Math.abs(a.result.micLagMs - 120) <= 25, `A: ${a.result.micLagMs}`);
+    assert.ok(Math.abs(b.result.micLagMs + 340) <= 25, `B: ${b.result.micLagMs}`);
+    assert.equal(choice(model, A)?.source, 'content');
+    assert.equal(choice(model, B)?.source, 'content');
+  });
+
+  test('Sample/YouTube is separate for each singer and cannot overwrite confirmed Content', () => {
+    const model = new ChoirCalibrationExperiment();
+    model.activate(A);
+    model.activate(B);
+    seedSample(model, A, .62);  // +120 ms fallback
+    seedSample(model, B, .16);  // -340 ms fallback
+    assert.equal(choice(model, A)?.source, 'sample-song-estimate');
+    assert.ok(Math.abs(choice(model, A)!.advanceMs! - 120) < 1e-6);
+    assert.equal(choice(model, B)?.source, 'sample-song-estimate');
+    assert.ok(Math.abs(choice(model, B)!.advanceMs! + 340) < 1e-6);
+
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120);
+    const confirmed = model.analyzeContent(A, int16(mic), int16(backing), RATE);
+    assert.equal(confirmed.status, 'confirmed');
+    assert.equal(choice(model, A)?.source, 'content');
+    assert.ok(Math.abs(choice(model, A)!.sampleResidualMs!) <= 25);
+
+    // A failed retry must not destroy already confirmed content authority.
+    const retry = model.analyzeContent(A, new Int16Array(RATE * 6), int16(backing), RATE);
+    assert.equal(retry.status, 'rejected');
+    assert.equal(choice(model, A)?.source, 'content');
+    assert.equal(choice(model, A, { contentApplicability: 'hold' })?.source, 'content-held');
+
+    // Once authoritative mapping revokes Content, a *fresh* Sample candidate
+    // remains available, but is explicitly labeled as an estimate.
+    assert.equal(choice(model, A, { contentApplicability: 'revoke' })?.source, 'sample-song-estimate');
+    assert.equal(choice(model, B)?.source, 'sample-song-estimate');
+  });
+
+  test('Sample fallback expires and mismatched song/capture epochs cannot reuse it', () => {
+    const model = new ChoirCalibrationExperiment();
+    model.activate(A);
+    seedSample(model, A, .62);
+    assert.equal(choice(model, A, { nowMs: 2501 })?.source, 'unavailable');
+    assert.equal(model.observeSample(A, 'mic', { ...observation('mic', 3, .62), generation: 999 }, 1750), false);
+
+    const nextA = { ...A, songEpoch: 6, micGeneration: 5 };
+    assert.equal(model.activate(nextA), true);
+    assert.equal(choice(model, A), null, 'stale async result cannot reset newer active identity');
+    assert.equal(choice(model, nextA)?.source, 'unavailable');
+    assert.equal(model.observeSample(A, 'backing', observation('backing', 3, .5), 1750), false);
+  });
+
+  test('Boot arithmetic uses live Robot delta; backup order is explicit and device-specific', () => {
+    const model = new ChoirCalibrationExperiment();
+    model.activate(A);
+    model.activate(B);
+    seedSample(model, A, .62);
+    const leg = (actualMs: number) => ({
+      targetSample: RATE, actualSample: RATE + actualMs * RATE / 1000,
+      correlation: .9,
+    });
+    const boot = {
+      mic: leg(250), backing: leg(100), deltaMs: 20,
+      sampleRate: RATE, playbackRate: 1,
+    };
+    assert.equal(model.observeBoot(A, boot, false), false, 'unverified probe must not be used');
+    assert.equal(model.observeBoot(A, boot, true), true);
+    assert.equal(model.observeBoot(B, boot, true), true);
+    assert.equal(choice(model, A)?.source, 'sample-song-estimate');
+    assert.equal(choice(model, B)?.source, 'unavailable', 'no fresh Robot delta and no Sample');
+    assert.equal(choice(model, B, { freshRobotDeltaMs: 20 })?.source, 'boot-probe-estimate');
+    assert.ok(Math.abs(choice(model, B, { freshRobotDeltaMs: 20 })!.advanceMs! - 170) < 1e-6);
+    assert.equal(choice(model, A, { freshRobotDeltaMs: 20, preference: 'boot-probe' })?.source, 'boot-probe-estimate');
+    assert.equal(choice(model, A, { freshRobotDeltaMs: 20, preference: 'sample-song' })?.source, 'sample-song-estimate');
+    assert.equal(choice(model, A, { freshRobotDeltaMs: 40, preference: 'boot-probe', playbackRate: 2 })?.advanceMs, 170,
+      'live media delta must be divided by current playback rate');
+  });
+
+  test('primary loss does not alter secondary calibration evidence', () => {
+    const model = new ChoirCalibrationExperiment();
+    model.activate(A);
+    model.activate(B);
+    seedSample(model, B, .16);
+    assert.equal(model.remove(A), true);
+    assert.equal(choice(model, A), null);
+    assert.equal(choice(model, B)?.source, 'sample-song-estimate');
+  });
+});

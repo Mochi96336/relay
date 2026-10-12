@@ -759,7 +759,7 @@ Object.assign(zhHant, {
   "diag.timing.mixerTargetNote": "經凍結與防抖判斷後接受的目標；上方人聲延遲補償才是實際套用值。",
   "diag.timing.contentTarget": "內容比對 · 目前換算值",
   "diag.timing.contentTargetNote": "換算至目前 Mixer 座標，尚未經防抖、錄音凍結與漸進調整；不同於原始量測延遲。",
-  "diag.timing.bootStored": "Boot · 確認時結果",
+  "diag.timing.bootStored": "測試音 · 確認時結果",
   "diag.timing.bootStoredNote": "保留確認當時的 Robot 位置與校正結果。",
   "diag.timing.bootLive": "測試音 · 目前換算值",
   "diag.timing.bootLiveNote": "Mic 延遲 − Robot 延遲 + 目前播放器偏移 ÷ 播放速度；需有最新偏移。",

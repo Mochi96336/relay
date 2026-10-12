@@ -96,7 +96,8 @@ test('new Mic evidence stays at exact center while one stored history mirrors ou
   assert.match(model, /left: safeWidth \/ 2 - distance/);
   assert.match(model, /right: safeWidth \/ 2 \+ distance/);
   assert.match(model, /const next = \[\.\.\.previous, createPresenceSlice/);
-  assert.match(presence, /const right = history[\s\S]*?\.slice\(0, -1\)[\s\S]*?\.reverse\(\)/);
+  // Both halves are drawn from the one history, the newest slice shared at the centre.
+  assert.match(presence, /\[\.\.\.halfPoints\('left'\)\.reverse\(\), \.\.\.halfPoints\('right'\)\.slice\(1\)\]/);
 });
 
 test('performance actions stay in Sing -> Record -> Adjust -> Review order', () => {

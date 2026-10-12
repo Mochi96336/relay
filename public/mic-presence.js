@@ -20,11 +20,12 @@ if (meter && wave) {
   const MAX_AMPLITUDE = 22;
   // Lifts quiet and mid levels a little, so ordinary singing moves the band.
   const LEVEL_CURVE = 0.85;
-  const PITCH_MODULATION_DEPTH = 0.18;
-  // The band's centre follows the melody: a note above the singer's recent
-  // pitch lifts it, a note below lowers it, so high and low read at a glance.
-  const PITCH_LIFT_PX_PER_SEMITONE = 1.2;
-  const MAX_PITCH_LIFT = 6;
+  // Pitch shows as ripples along the edge, denser for higher notes
+  // (pitchLobeCount). Deep enough to see, and drawn with extra points between
+  // slices: at one point per slice a high note's ripples were lost between
+  // samples and every note looked alike.
+  const PITCH_MODULATION_DEPTH = 0.35;
+  const POINTS_PER_SLICE = 4;
   const ROOM_EVIDENCE_STALE_MS = 320;
   // Room telemetry arrives every ~80 ms; the drawn band eases toward each new
   // shape over about this long instead of jumping to it.
@@ -67,50 +68,43 @@ if (meter && wave) {
     return path;
   }
 
-  /** The singer's recent pitch, in octaves above 1 Hz: the median of the voiced slices shown. */
-  function referencePitch() {
-    const voiced = history
-      .filter((slice) => presenceSliceGeometry(slice).pitchStrength > 0)
-      .map((slice) => Math.log2(slice.f0Hz))
-      .sort((a, b) => a - b);
-    return voiced.length > 0 ? voiced[Math.floor(voiced.length / 2)] : null;
-  }
-
-  function visualPoint(slice, index, side, reference) {
-    const geometry = presenceSliceGeometry(slice);
-    const positions = centerOriginX(index, history.length, VIEWBOX_WIDTH);
-    const x = side === 'left' ? positions.left : positions.right;
-    const distance = Math.abs(x - VIEWBOX_WIDTH / 2) / (VIEWBOX_WIDTH / 2);
-    const pitchTexture = geometry.pitchStrength > 0
-      ? Math.sin(2 * Math.PI * geometry.density * distance) * geometry.pitchStrength * PITCH_MODULATION_DEPTH
-      : 0;
-    const lift = reference !== null && geometry.pitchStrength > 0
-      ? clamp((Math.log2(slice.f0Hz) - reference) * 12 * PITCH_LIFT_PX_PER_SEMITONE, -MAX_PITCH_LIFT, MAX_PITCH_LIFT)
-        * geometry.pitchStrength
-      : 0;
-    // Lifted or lowered, the band still fits inside the meter.
-    const amplitude = clamp(
-      Math.pow(geometry.amplitude, LEVEL_CURVE) * MAX_AMPLITUDE * (1 + pitchTexture),
-      0,
-      Math.min(MAX_AMPLITUDE, CENTER_Y - 1 - Math.abs(lift)),
-    );
-    return { x, amplitude, lift };
+  /** One half of the band, from the newest slice at the centre out to the oldest edge. */
+  function halfPoints(side) {
+    const slices = history.slice().reverse();
+    const last = slices.length - 1;
+    // centerOriginX places each slice; points between two slices interpolate.
+    const xOf = (index) => centerOriginX(last - index, history.length, VIEWBOX_WIDTH)[side];
+    const points = [];
+    let phase = 0;
+    for (let index = 0; index <= last; index += 1) {
+      const here = presenceSliceGeometry(slices[index]);
+      const next = index < last ? presenceSliceGeometry(slices[index + 1]) : here;
+      const steps = index < last ? POINTS_PER_SLICE : 1;
+      for (let step = 0; step < steps; step += 1) {
+        const t = step / POINTS_PER_SLICE;
+        const x = xOf(index) + ((index < last ? xOf(index + 1) : xOf(index)) - xOf(index)) * t;
+        const level = Math.pow(here.amplitude + (next.amplitude - here.amplitude) * t, LEVEL_CURVE);
+        const density = here.density + (next.density - here.density) * t;
+        const strength = here.pitchStrength + (next.pitchStrength - here.pitchStrength) * t;
+        const ripple = strength > 0 ? Math.sin(phase) * strength * PITCH_MODULATION_DEPTH : 0;
+        points.push({
+          x,
+          amplitude: clamp(level * MAX_AMPLITUDE * (1 + ripple), 0, CENTER_Y - 1),
+        });
+        phase += (2 * Math.PI * density) / (last * POINTS_PER_SLICE);
+      }
+    }
+    return points;
   }
 
   /** Left half from the oldest edge to the centre, then the right half back out. */
   function targetPoints() {
-    const reference = referencePitch();
-    const left = history.map((slice, index) => visualPoint(slice, index, 'left', reference));
-    const right = history
-      .slice(0, -1)
-      .map((slice, index) => visualPoint(slice, index, 'right', reference))
-      .reverse();
-    return [...left, ...right];
+    return [...halfPoints('left').reverse(), ...halfPoints('right').slice(1)];
   }
 
   function envelopePath(samples) {
-    const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.lift - point.amplitude }));
-    const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.lift + point.amplitude })).reverse();
+    const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.amplitude }));
+    const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y + point.amplitude })).reverse();
 
     const upperPath = smoothPath(upper);
     const lowerPath = smoothPath(lower);
@@ -126,7 +120,7 @@ if (meter && wave) {
   function step(now) {
     frame = null;
     const targets = targetPoints();
-    if (!drawn || drawn.length !== targets.length) drawn = targets.map((point) => ({ ...point, amplitude: 0, lift: 0 }));
+    if (!drawn || drawn.length !== targets.length) drawn = targets.map((point) => ({ ...point, amplitude: 0 }));
     const elapsed = lastFrameAt === null ? 16 : Math.min(100, now - lastFrameAt);
     lastFrameAt = now;
     const blend = 1 - Math.exp(-elapsed / EASE_MS);
@@ -134,10 +128,9 @@ if (meter && wave) {
     drawn = drawn.map((point, index) => {
       const target = targets[index];
       const amplitude = point.amplitude + (target.amplitude - point.amplitude) * blend;
-      const lift = point.lift + (target.lift - point.lift) * blend;
-      const arrived = Math.abs(target.amplitude - amplitude) <= 0.05 && Math.abs(target.lift - lift) <= 0.05;
+      const arrived = Math.abs(target.amplitude - amplitude) <= 0.05;
       if (!arrived) moving = true;
-      return arrived ? target : { x: target.x, amplitude, lift };
+      return arrived ? target : { x: target.x, amplitude };
     });
     draw();
     if (moving) frame = animationFrame(step);

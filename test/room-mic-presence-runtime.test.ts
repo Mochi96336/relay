@@ -140,7 +140,7 @@ test('late Room Mic frame cannot revive a superseded owner waveform or surface',
   }
 });
 
-test('a note above the singer\'s recent pitch lifts the band; an unpitched one leaves it centred', async () => {
+test('a higher note draws denser ripples along the band; an unpitched one draws none', async () => {
   const fakeWindow = new FakeWindow();
   const meter = new FakeSvgNode();
   fakeWindow.relayProductAuthority = {
@@ -152,35 +152,33 @@ test('a note above the singer\'s recent pitch lifts the band; an unpitched one l
   globals.window = fakeWindow;
   globals.document = { body: { dataset: {} }, querySelector: (s: string) => (s === '#mic-input-meter' ? meter : null) };
 
-  // How far the newest slice, drawn at the centre (x = 160), reaches above
-  // and below the centre line (y = 28): the path's two anchors at x = 160.
-  const reach = () => {
+  // Ripples on the band's upper edge: local tops of the path's anchor points.
+  const ripples = () => {
     const d = meter.querySelector('.voice-presence-wave')!.attributes.get('d') ?? '';
-    const anchors = [...d.matchAll(/(?:M|, |L) ?(-?[\d.]+) (-?[\d.]+)(?= C| L| Z|$)/g)]
-      .map((match) => ({ x: Number(match[1]), y: Number(match[2]) }))
-      .filter((point) => Math.abs(point.x - 160) < 0.01)
-      .map((point) => point.y);
-    assert.equal(anchors.length, 2, d);
-    return { above: 28 - Math.min(...anchors), below: Math.max(...anchors) - 28 };
+    const ys = [...d.matchAll(/(?:M|, ) ?(-?[\d.]+) (-?[\d.]+)(?= C| L| Z|$)/g)]
+      .map((match) => Number(match[2]))
+      .filter((y) => y < 28);
+    let tops = 0;
+    for (let i = 1; i < ys.length - 1; i += 1) if (ys[i] < ys[i - 1] - 0.05 && ys[i] <= ys[i + 1] - 0.05) tops += 1;
+    return tops;
   };
-  const frame = (f0Hz: number | null, pitchConfidence: number) => ({
-    ...presenceFrame('owner-a', 1), f0Hz, pitchConfidence,
-  });
+  const steady = (f0Hz: number | null, pitchConfidence: number) => {
+    for (let i = 0; i < 24; i += 1) {
+      fakeWindow.emit('relay-room-mic-presence', { ...presenceFrame('owner-a', 1), f0Hz, pitchConfidence });
+    }
+    return ripples();
+  };
 
   try {
     const moduleUrl = new URL('../public/mic-presence.js', import.meta.url);
     moduleUrl.searchParams.set('runtime-test', `${Date.now()}-${Math.random()}`);
     await import(moduleUrl.href);
 
-    for (let i = 0; i < 6; i += 1) fakeWindow.emit('relay-room-mic-presence', frame(null, 0));
-    const flat = reach();
-    assert.ok(Math.abs(flat.above - flat.below) < 0.01, 'no pitch: symmetric about the centre');
-
-    for (let i = 0; i < 6; i += 1) fakeWindow.emit('relay-room-mic-presence', frame(130.8, 0.95));
-    fakeWindow.emit('relay-room-mic-presence', frame(261.6, 0.95));
-    const high = reach();
-    assert.ok(high.above - high.below > 10, `an octave up lifts the band (above ${high.above}, below ${high.below})`);
-    assert.ok(high.above <= 27 && high.below <= 27, 'still inside the meter');
+    assert.equal(steady(null, 0), 0, 'no pitch: a smooth edge');
+    const low = steady(130.8, 0.95);
+    const high = steady(523.3, 0.95);
+    assert.ok(low >= 2, `a low note still ripples (${low})`);
+    assert.ok(high >= low * 2, `two octaves up at least doubles the ripples (${low} -> ${high})`);
   } finally {
     globals.window = previous.window;
     globals.document = previous.document;

@@ -116,7 +116,7 @@ A real ownership change invalidates microphone timing evidence before it can aff
 
 ## Mic gain
 
-Mic gain follows the participant, because capture level differs widely between devices. Every gain the owner sets is remembered against their participant ID, and a real ownership change applies the new owner's remembered gain, or the default for a participant who never set one. A release leaves the last gain in place. The memory lasts for the server's lifetime; a restart forgets it.
+Mic gain follows the device, because capture level differs widely between devices. The Mic page stores each gain its owner sets in its own browser storage and sends it as `micGainDb` when it registers. A real ownership change applies the gain the new owner's registration named, clamped like `set-mix`, or the default when it named none. A release leaves the last gain in place. Relay keeps no per-participant gain, so a restart forgets nothing the device remembers.
 
 ## Scope boundary
 

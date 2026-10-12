@@ -14,6 +14,7 @@ import {
 } from './monitor-pcm-continuity.js';
 import { createStreamingResampler } from './streaming-resampler.js';
 import { createListenOpusDecoder, listenOpusDecodingSupported } from './listen-opus-decoder.js';
+import { LISTEN_VOLUME_KEY, storeNumber, storedNumber } from './device-preferences.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
@@ -25,6 +26,8 @@ const publisherButton = document.querySelector('#start-publisher');
 const takeoverButton = document.querySelector('#confirm-takeover');
 
 if (toggle && gainControl && publisherButton && takeoverButton) {
+  const storedVolume = storedNumber(LISTEN_VOLUME_KEY, 0, 100);
+  if (storedVolume !== null) gainControl.value = String(storedVolume);
   const MIX_SAMPLE_RATE = 48_000;
   // The room mix stops the moment this socket drops: reconnect fast, back off
   // only while it keeps failing. See reconnect-backoff.js.
@@ -833,6 +836,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   });
 
   gainControl.addEventListener('input', () => {
+    storeNumber(LISTEN_VOLUME_KEY, volumePercent());
     updateGain();
     render('volume-change');
   });

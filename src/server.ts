@@ -55,7 +55,6 @@ import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-cl
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
 import { MicLevelMonitor } from './mic-level-monitor.js';
-import { MicGainMemory } from './mic-gain-memory.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import { MicUplinkBacklog } from './mic-uplink-backlog.js';
@@ -279,8 +278,12 @@ const session = new AudioSession({
  */
 const micAudibility = new MicAudibilityMonitor({ sampleRate: MIX_SAMPLE_RATE });
 const micLevel = new MicLevelMonitor({ sampleRate: MIX_SAMPLE_RATE });
-/** Each participant's last Mic gain, so a handoff does not inherit the previous singer's. */
-const micGains = new MicGainMemory({ defaultGainDb: session.micGainDb });
+/**
+ * A new Mic owner starts from the gain its own device last chose, sent with
+ * its registration, so a handoff does not inherit the previous singer's.
+ * The device keeps that choice, so a Relay restart does not forget it.
+ */
+const DEFAULT_MIC_GAIN_DB = session.micGainDb;
 /** Diagnostic only: how far the phone capture clock drifts from the mix clock. */
 const micClockDrift = new MicClockDriftEstimator();
 /**
@@ -1276,6 +1279,8 @@ function applyMicOwnerEffects(
     publishFullHandoffStatus?: boolean;
     invalidateTiming?: (reason: string) => void;
     prepareSongHandoff?: (participantId: string) => void;
+    /** The gain the registering owner's device asked for, if it named one. */
+    requestedMicGainDb?: number | null;
   } = {},
 ) {
   if (effects.changed) youtubeTimeline.retireFailedHandoffHoldover();
@@ -1297,7 +1302,7 @@ function applyMicOwnerEffects(
       if (options.invalidateTiming) options.invalidateTiming(reason);
       else invalidateMicTiming(reason);
     },
-    restoreMicGain: (participantId) => restoreMicGainFor(participantId),
+    restoreMicGain: (participantId) => restoreMicGainFor(participantId, options.requestedMicGainDb ?? null),
     prepareSongHandoff: (participantId) => {
       if (options.prepareSongHandoff) options.prepareSongHandoff(participantId);
       else beginPreparedSongHandoff(participantId, nowMs);
@@ -2422,16 +2427,22 @@ function reportMicDevice(health: AudioUplinkHealth) {
   }));
 }
 
-/** Gives the new Mic owner the gain they last chose, or the default for a device never seen. */
-function restoreMicGainFor(participantId: string) {
-  const { gainDb, remembered } = micGains.gainFor(participantId);
+/** A registration's Mic gain, clamped like set-mix; null when it names none. */
+function requestedMicGainDb(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(MAX_MIC_GAIN_DB, value));
+}
+
+/** Gives the new Mic owner the gain its device asked for, or the default for a device with none. */
+function restoreMicGainFor(participantId: string, requestedGainDb: number | null) {
+  const gainDb = requestedGainDb ?? DEFAULT_MIC_GAIN_DB;
   const previousGainDb = session.micGainDb;
   console.log('[mic-gain]', JSON.stringify({
     reason: 'owner-changed',
     participant: participantLogLabel(participantId),
     previousGainDb,
     gainDb,
-    remembered,
+    fromDevice: requestedGainDb !== null,
   }));
   if (gainDb === previousGainDb) return;
   // Not `micLevel.noteMicGainChanged`: the level history still describes the
@@ -3655,7 +3666,6 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     if (Number.isFinite(nextGain)) {
       const previousGainDb = session.micGainDb;
       session.setMicGainDb(Math.max(0, Math.min(MAX_MIC_GAIN_DB, nextGain)));
-      if (participants.micOwnerId) micGains.remember(participants.micOwnerId, session.micGainDb);
       // A gain change is the fix the level warning asks for; answer it now
       // rather than on the next periodic product status.
       if (micLevel.noteMicGainChanged(previousGainDb, session.micGainDb)) {
@@ -4020,6 +4030,7 @@ function publisherActivated(request: {
   captureGeneration: number | null;
   initialSequence?: number;
   audioPacketVersion: 1 | 2;
+  requestedMicGainDb: number | null;
 }) {
   // The ownership change's timing invalidation and handoff preparation wait
   // until the new publisher is bound.
@@ -4034,6 +4045,7 @@ function publisherActivated(request: {
       prepareSongHandoff: (participantId) => {
         deferredHandoffParticipantId = participantId;
       },
+      requestedMicGainDb: request.requestedMicGainDb,
     });
   }
 
@@ -4249,6 +4261,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       captureGeneration,
       initialSequence: initialSequence ?? undefined,
       audioPacketVersion,
+      requestedMicGainDb: requestedMicGainDb(payload.micGainDb),
     });
     return;
   },

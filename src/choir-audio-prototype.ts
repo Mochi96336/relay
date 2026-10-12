@@ -274,7 +274,7 @@ export class ChoirAudioPrototype {
 
     const voices = new Float64Array(this.frameSamples);
     const evidence: SingerFrameEvidence[] = [];
-    let anyRealMic = false;
+    const micRealAt = new Uint8Array(this.frameSamples);
 
     for (const track of this.tracks.values()) {
       const request: ChoirReadRequest = {
@@ -292,7 +292,7 @@ export class ChoirAudioPrototype {
         const sample = plan ? readInterpolated(track, sourcePosition) : null;
         if (sample !== null) {
           availableSamples++;
-          anyRealMic = true;
+          micRealAt[i] = 1;
           track.fade = Math.min(1, track.fade + this.fadeStep);
           track.lastVoice = sample;
           voices[i] += sample * track.fade * 0.45;
@@ -324,7 +324,7 @@ export class ChoirAudioPrototype {
       const songContribution = (input.backing[i] / 32768) * this.bus.songGain;
       const value = this.bus.mixSample(
         voices[i], songContribution, this.bus.twoSourceOwnership,
-        !anyRealMic, false,
+        micRealAt[i] === 0, false,
       );
       if (Math.abs(value) > 1) outputClippedSamples++;
       pcm[i] = Math.round(Math.max(-1, Math.min(32767 / 32768, value)) * 32768);

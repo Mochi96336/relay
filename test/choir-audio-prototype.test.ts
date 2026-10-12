@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import { ChoirAudioPrototype, type ChoirAudioIdentity } from '../src/choir-audio-prototype.js';
+import { ChoirSession } from '../src/choir-session.js';
+import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 import { choirAnchorFromDecision } from '../src/choir-alignment-bridge.js';
 import { ChoirCalibrationExperiment, type ChoirCalibrationIdentity } from '../src/choir-calibration-experiment.js';
 import type { SongSampleAnchor } from '../src/sample-song-fallback.js';
@@ -240,5 +242,79 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
     assert.equal(frame.singers[1].calibration, 'sample-song-estimate');
     assert.equal(frame.singers[1].availableSamples, FRAME);
     assert.ok(frame.pcm[300] > 1_000);
+  });
+});
+
+describe('end-to-end experimental Content > accepted calibration > native read > audio', () => {
+  test('real Content algorithm drives two audible Mic tracks while A remains controller', () => {
+    const seats = new ChoirSession();
+    assert.equal(seats.claimPrimary(A.participantId, null).ok, true);
+    assert.equal(seats.joinSecondary(B.participantId).ok, true);
+
+    const model = new ChoirCalibrationExperiment();
+    const aIdentity: ChoirCalibrationIdentity = {
+      participantId: A.participantId, videoId: 'abcdefghijk', songEpoch: SONG,
+      micGeneration: A.captureGeneration, backingGeneration: BACKING,
+      roomGeneration: 4, robotSourceGeneration: 9,
+      micSourceRate: RATE, backingSourceRate: RATE,
+    };
+    const bIdentity: ChoirCalibrationIdentity = {
+      ...aIdentity, participantId: B.participantId, micGeneration: B.captureGeneration,
+    };
+    assert.equal(model.activate(aIdentity), true);
+    assert.equal(model.activate(bIdentity), true);
+
+    const as = laggedMultibandMusicPair(6, RATE, 120, { singerGain: .12 });
+    const bs = laggedMultibandMusicPair(6, RATE, -340, { singerGain: .08 });
+    const view = (buf: Buffer) => new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2);
+    const ca = model.analyzeContent(aIdentity, view(as.mic), view(as.backing), RATE);
+    const cb = model.analyzeContent(bIdentity, view(bs.mic), view(bs.backing), RATE);
+    assert.equal(ca.status, 'candidate');
+    assert.equal(cb.status, 'candidate');
+    if (ca.status !== 'candidate' || cb.status !== 'candidate') return;
+    assert.ok(Math.abs(ca.candidate.result.micLagMs - 120) <= 25);
+    assert.ok(Math.abs(cb.candidate.result.micLagMs + 340) <= 25);
+    assert.equal(model.confirmContent(ca.candidate, true), true);
+    assert.equal(model.confirmContent(cb.candidate, true), true);
+
+    const room = subject();
+    assert.equal(room.addSinger(A), true);
+    assert.equal(room.addSinger(B), true);
+    for (const [id, identity] of [[A, aIdentity], [B, bIdentity]] as const) {
+      const decision = model.resolve({
+        identity, nowMs: 1800, contentApplicability: 'apply',
+        sampleMap: (_, x) => x.sampleIndex, sessionSampleRate: RATE, playbackRate: 1,
+      });
+      assert.equal(decision?.source, 'content');
+      const converted = choirAnchorFromDecision({
+        participantId: id.participantId, songEpoch: SONG,
+        captureGeneration: id.captureGeneration, backingGeneration: BACKING,
+        roomSampleRate: RATE, micSampleRate: RATE,
+        roomSampleAtAnchor: 0, zeroAdvanceNativeMicSample: RATE / 2,
+        decision: decision!,
+      });
+      assert.ok(converted);
+      assert.equal(room.installAnchor(converted!.anchor, converted!.source), true);
+      const signal = new Int16Array(FRAME);
+      signal[400] = 20_000;
+      // Fractional results can be sub-sample. The source reader handles them.
+      const nativeFirst = Math.floor(converted!.anchor.micSampleAtAnchor);
+      // Two input samples cover the interpolated output at the impulse.
+      signal[400] = 20_000;
+      assert.equal(packet(room, id, nativeFirst, signal), 'accepted');
+    }
+
+    const frame = ready(render(room, 0));
+    assert.deepEqual(frame.singers.map(s => s.calibration), ['content', 'content']);
+    assert.ok(frame.singers.every(s => s.availableSamples >= FRAME - 1));
+    assert.ok(Math.max(...frame.pcm) > 1_000);
+
+    assert.equal(seats.leaveSinger(A.participantId).ok, true);
+    room.removeSinger(A.participantId);
+    assert.equal(seats.snapshot().primaryMicId, null, 'no automatic main succession');
+    assert.equal(seats.seatOf(B.participantId), 'secondary');
+    assert.equal(seats.songControllerId, A.participantId, 'song control stays independent');
+    const next = ready(render(room, FRAME));
+    assert.deepEqual(next.singers.map(s => s.participantId), [B.participantId]);
   });
 });

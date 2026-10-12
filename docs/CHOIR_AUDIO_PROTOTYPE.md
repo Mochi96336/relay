@@ -54,3 +54,8 @@ rather than only calibration arithmetic:
 Follow-up boundary: integrate one MicTrack behind N=1 Golden PCM parity, then
 independent connection admission+source monitoring, then combine the tracks
 inside the canonical room Mixer, while retaining all mainline regression tests.
+
+The final test also runs both 6-second production Content analyses (+120/-340ms),
+explicitly confirms each candidate, converts the resulting independent lags
+into native capture read anchors, emits real PCM through one MixBus, and proves
+that a subsequent primary-Mic departure leaves B in the secondary seat.

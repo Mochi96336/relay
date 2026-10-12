@@ -52,7 +52,7 @@ test('input ribbon follows the authoritative Room Mic without fabricated animati
   assert.match(liveStatus, /document\.body\.dataset\.roomMic/);
   assert.match(liveState, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(liveState, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
-  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-glow-core/);
+  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-presence-wave/);
   assert.doesNotMatch(micPresence, /localActive/,
     'self capture must not outrank the authoritative room projection');
   assert.match(micPresence, /roomAuthorityFresh/);

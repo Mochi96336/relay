@@ -18,14 +18,11 @@ body[data-room-mic="live"] .voice-input-evidence {
 /* Every participant sees the same Room Mic evidence. The holder gets a slightly
    stronger local treatment because its evidence is direct capture rather than
    relayed telemetry, but the renderer and underlying room meaning stay shared. */
-body[data-room-mic="live"] .voice-glow-core {
-  stop-opacity: .46;
+body[data-room-mic="live"] .voice-presence-wave {
+  fill: rgba(240, 237, 229, .42);
 }
-body[data-self-mic="live"] .voice-glow-core {
-  stop-opacity: .64;
-}
-body[data-self-mic="live"] .voice-glow-mid {
-  stop-opacity: .15;
+body[data-self-mic="live"] .voice-presence-wave {
+  fill: rgba(240, 237, 229, .58);
 }
 
 /* On listener phones, the singer name and state are one room sentence rather

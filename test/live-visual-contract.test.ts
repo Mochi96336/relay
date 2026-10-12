@@ -10,6 +10,7 @@ const songSurface = readFileSync(new URL('../public/song-surface.js', import.met
 const state = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 const presence = readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8');
 const model = readFileSync(new URL('../public/mic-presence-model.js', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const capture = readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8');
 const micAnalysis = readFileSync(new URL('../public/mic-visual-analysis-worker.js', import.meta.url), 'utf8');
 const liveStatus = readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8');
@@ -41,12 +42,14 @@ test('holder Change song is visible as a real phone touch target instead of tiny
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('Room Mic is one centered full-bleed glow backed by one 32-sample measured history', () => {
+test('Room Mic is one centered full-bleed solid shape backed by one 32-sample measured history', () => {
   assert.match(composition, /\.voice-input-evidence \{[\s\S]*?width: 100vw;[\s\S]*?margin: 10px calc\(50% - 50vw\) 2px;/);
   assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: 100%;[\s\S]*?max-width: none;[\s\S]*?height: 56px;/);
-  // Older slices, further out, fade: the band leaves the centre like a ripple.
-  assert.match(composition, /-webkit-mask-image: linear-gradient\(to right, transparent 0%, rgba\(0,0,0,\.35\) 12%, #000 40%, #000 60%, rgba\(0,0,0,\.35\) 88%, transparent 100%\);/);
-  assert.match(composition, /\.voice-presence-wave \{ fill: url\(#voice-presence-glow\);/);
+  assert.match(composition, /-webkit-mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
+  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
+  // One solid shape: no outline and no gradient fill.
+  assert.match(composition, /\.voice-presence-wave \{ fill: rgba\(240,237,229,\.42\); stroke: none;/);
+  assert.doesNotMatch(html, /linearGradient/);
   assert.match(composition, /\.voice-input-meter\[data-active="true"\] \.voice-presence-baseline \{ opacity: 0; \}/);
   assert.doesNotMatch(composition, /\.voice-input-meter\s*\{[\s\S]{0,180}?width:\s*min\(100%,\s*(?:320|310)px\)/);
   assert.match(composition, /\.voice-presence-baseline/);
@@ -121,7 +124,7 @@ test('Room Mic presence is visible to listeners and self owners through the same
   assert.match(state, /font-size: clamp\(27px, 7vw, 34px\)/);
   assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
-  assert.match(state, /body\[data-self-mic="live"\] \.voice-glow-core[\s\S]*?stop-opacity: \.64;/);
+  assert.match(state, /body\[data-self-mic="live"\] \.voice-presence-wave[\s\S]*?fill: rgba\(240, 237, 229, \.58\);/);
   assert.match(presence, /`room:\$\{ownerId\}:\$\{generation\}`/);
   assert.doesNotMatch(presence, /if \(localActive\) return;/);
 });

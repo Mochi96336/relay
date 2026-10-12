@@ -2667,8 +2667,8 @@ function probePathReady(target: ProbeTarget, nowMs: number) {
  * BootProbeRuntime decides whether a failed attempt retries or ends the run.
  * A run that ends hands timing back to whatever it was before the probe.
  */
-function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number, unheard = false) {
-  const failure = bootProbeRuntime.failAttempt(target, reason, nowMs, { unheard });
+function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
+  const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
   const probe = bootProbeRuntime.status(nowMs);
   console.log('[probe-attempt-failed]', JSON.stringify({
     target, reason, attempt: probe.attempts[target], maxAttempts: probe.maxAttempts,
@@ -2938,11 +2938,13 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   }
 
   if (correlation < PROBE_MIN_CORRELATION) {
+    // The attempt ran and the chime was not in the capture: with headphones it
+    // never reaches the Mic, so trying again the same way will not find it.
+    bootProbeRuntime.markAttemptUnheard(analysis.target);
     failProbeAttempt(
       analysis.target,
       `correlation ${correlation.toFixed(3)} was below ${PROBE_MIN_CORRELATION.toFixed(3)}`,
       nowMs,
-      true,
     );
     return;
   }

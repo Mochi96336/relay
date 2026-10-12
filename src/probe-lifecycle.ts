@@ -63,6 +63,7 @@ export class ProbeLifecycle {
   private readonly attemptCounts: Record<ProbeTarget, number> = { mic: 0, backing: 0 };
   private readonly retryAfterMs: Record<ProbeTarget, number> = { mic: -Infinity, backing: -Infinity };
   private failure: ProbeFailure | null = null;
+  private readonly unheardAttempt: Record<ProbeTarget, boolean> = { mic: false, backing: false };
   private micMeasured = false;
 
   constructor(
@@ -85,6 +86,8 @@ export class ProbeLifecycle {
     this.retryAfterMs.mic = -Infinity;
     this.retryAfterMs.backing = -Infinity;
     this.failure = null;
+    this.unheardAttempt.mic = false;
+    this.unheardAttempt.backing = false;
     this.micMeasured = false;
   }
 
@@ -175,7 +178,14 @@ export class ProbeLifecycle {
       && nowMs >= this.retryAfterMs[target];
   }
 
-  failAttempt(target: ProbeTarget, reason: string, nowMs: number, { unheard = false } = {}) {
+  /** The attempt about to fail ran, but its chime was not found in the capture. */
+  markAttemptUnheard(target: ProbeTarget) {
+    this.unheardAttempt[target] = true;
+  }
+
+  failAttempt(target: ProbeTarget, reason: string, nowMs: number) {
+    const unheard = this.unheardAttempt[target];
+    this.unheardAttempt[target] = false;
     if (this.request?.target === target) this.request = null;
     if (this.analysis?.target === target) this.analysis = null;
     this.retryAfterMs[target] = nowMs + this.retryMs;

@@ -128,14 +128,14 @@ export class BootProbeRuntime {
     return this.lifecycle.canStart(target, nowMs);
   }
 
-  failAttempt(
-    target: ProbeTarget,
-    reason: string,
-    nowMs: number,
-    options: { unheard?: boolean } = {},
-  ): ProbeFailure | null {
+  failAttempt(target: ProbeTarget, reason: string, nowMs: number): ProbeFailure | null {
     if (target === 'mic') this.clearMicLeg();
-    return this.lifecycle.failAttempt(target, reason, nowMs, options);
+    return this.lifecycle.failAttempt(target, reason, nowMs);
+  }
+
+  /** The attempt about to fail ran, but its chime was not found in the capture. */
+  markAttemptUnheard(target: ProbeTarget) {
+    this.lifecycle.markAttemptUnheard(target);
   }
 
   setMicLeg(leg: BootProbeMicLeg) {

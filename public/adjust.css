@@ -55,12 +55,15 @@
 
 .gain-control { display: grid; gap: 9px; }
 .gain-rail { position: relative; }
+/* The input reaches 9px past its box on each side, into the gutter, and its
+   drawn track is inset by the same 9px (below). The track keeps its full
+   length while the 32px thumb's dot still reaches both ends. */
 .adjust-range {
   appearance: none;
   -webkit-appearance: none;
-  width: 100%;
+  width: calc(100% + 18px);
   height: 32px;
-  margin: 0;
+  margin: 0 -9px;
   background: transparent;
   cursor: pointer;
 }

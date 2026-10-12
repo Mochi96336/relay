@@ -92,15 +92,30 @@ describe('Overview', () => {
     );
   });
 
-  it('points at the System issues instead of repeating them', () => {
+  it('leaves overall health to the System panel heading instead of repeating it', () => {
     const rows = byKey(describeOverview({
       product: { health: 'degraded', lifecycle: 'live', issues: [{}, {}] },
     }, en));
-    assert.deepEqual(
-      [rows.health.value, rows.health.note, rows.health.tone],
-      ['Degraded', '2 problems are listed in System above.', 'warn'],
-    );
+    assert.equal(rows.health, undefined);
     assert.equal(rows.lifecycle.value, 'Live');
+  });
+
+  it('folds the room facts in, and shows Mic audio only while someone holds the Mic', () => {
+    const product = {
+      lifecycle: 'idle',
+      room: { participantCount: 2, mic: { state: 'free' }, song: { state: 'empty' } },
+      take: { lifecycle: 'idle' },
+    };
+    const free = describeOverview({ product, statusz: { source: { micConnected: false } } }, en);
+    assert.deepEqual(free.map((row) => row.key), ['lifecycle', 'people', 'mic', 'song', 'take', 'host', 'session']);
+    assert.equal(byKey(free).mic.value, 'Free');
+
+    const held = describeOverview({
+      product: { ...product, room: { ...product.room, mic: { state: 'live', ownerNickname: 'Mochi' } } },
+      statusz: { source: { micConnected: true, micStreaming: true } },
+    }, en);
+    assert.deepEqual(held.map((row) => row.key), ['lifecycle', 'people', 'mic', 'micAudio', 'song', 'take', 'host', 'session']);
+    assert.equal(byKey(held).mic.value, 'Mochi');
   });
 });
 

@@ -30,11 +30,14 @@ test('System keeps compatibility equipment rows behind one product surface befor
   assert.doesNotMatch(html.slice(systemStart, diagnosticsStart), /diagnostic-block/);
 });
 
-test('Technical details exposes Overview, Session, Mic, Audio, Timing, Robot, and Raw progressively', () => {
-  for (const tab of ['overview', 'session', 'mic', 'audio', 'timing', 'robot', 'raw']) {
+test('Technical details exposes Overview, Mic, Audio, Timing, Robot, and Raw progressively', () => {
+  for (const tab of ['overview', 'mic', 'audio', 'timing', 'robot', 'raw']) {
     assert.match(html, new RegExp(`data-diagnostics-tab="${tab}"`));
     assert.match(html, new RegExp(`data-diagnostics-panel="${tab}"`));
   }
+  // The room's people, Mic, song and Take live in Overview; a separate
+  // Session tab only repeated them.
+  assert.doesNotMatch(html, /data-diagnostics-tab="session"/);
   assert.match(html, /id="copy-diagnostics"/);
   assert.match(html, /id="diagnostics-raw"/);
 });
@@ -67,7 +70,7 @@ test('Mic transport evidence is sampled from statusz only on the Technical detai
   assert.match(system.slice(refreshStart, refreshEnd), /refreshStatusz\(\)/,
     'statusz rides the readiness refresh, which only runs while Technical details is open');
   assert.match(system, /statusz: latestStatusz \?\? null/, 'Copy diagnostics carries the Mic evidence');
-  for (const tab of ['overview', 'session', 'mic', 'audio', 'timing', 'robot']) {
+  for (const tab of ['overview', 'mic', 'audio', 'timing', 'robot']) {
     assert.match(html, new RegExp(`id="diag-${tab}-ledger"`));
     assert.match(system, new RegExp(`renderLedger\\('diag-${tab}-ledger'`));
   }

@@ -198,7 +198,7 @@ function describeLossRepair(status, t) {
     'repair',
     label,
     t('diag.mic.repair.value', { recovered, lost }),
-    sentence(t, notes),
+    `${sentence(t, notes)}${t('diag.sentenceGap')}${t('diag.mic.sinceStart')}`,
     tone,
   );
 }
@@ -247,7 +247,7 @@ function describeDeviceSend(status, t) {
     'send',
     label,
     t('diag.mic.send.dropped', { ms: totalMs }),
-    `${t('diag.sentence', { text: described })}${context}${smoothed}`,
+    `${t('diag.sentence', { text: described })}${t('diag.sentenceGap')}${t('diag.mic.sinceStart')}${context}${smoothed}`,
     totalMs >= 1000 && !onlyConnecting ? 'warn' : 'neutral',
   );
 }
@@ -375,7 +375,8 @@ function describeProblems(status, t) {
   }
   const label = t('diag.mic.problems');
   const episodes = status?.audio?.micAudibility?.activeEpisodes ?? [];
-  if (episodes.length === 0) return row('problems', label, t('diag.mic.problems.none'), '', 'ok');
+  // "No problems" only repeated the delivery row above it.
+  if (episodes.length === 0) return null;
   const described = episodes.map((episode) => {
     const kind = episode?.kind;
     const episodeLabel = typeof kind === 'string' && t(`diag.mic.episode.${kind}`) !== `diag.mic.episode.${kind}`
@@ -393,16 +394,18 @@ function describeProblems(status, t) {
 export function describeMicTransport(status, t = english) {
   // Without a Mic every other row could only say "—".
   if (status?.source && !status.source.micConnected) return [describeMicAudio(status, t)];
+  // The microphone's own level sits beside the level after gain: they are
+  // one signal measured on either side of the gain.
   return [
     describeMicAudio(status, t),
-    describeLevel(status, t),
     describeProblems(status, t),
+    describeMicInput(status, t),
+    describeLevel(status, t),
     describePath(status, t),
     describeEncoding(status, t),
     describeLossRepair(status, t),
     describeBuffer(status, t),
     describeDeviceSend(status, t),
-    describeMicInput(status, t),
     describeClockDrift(status, t),
-  ];
+  ].filter(Boolean);
 }

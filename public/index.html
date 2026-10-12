@@ -252,7 +252,6 @@
 
               <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics" data-i18n-aria-label="diag.tabsAria">
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true" data-i18n="diag.tab.overview">Overview</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="session" aria-selected="false" data-i18n="diag.tab.session">Session</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="mic" aria-selected="false" data-i18n="diag.tab.mic">Mic</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false" data-i18n="diag.tab.audio">Audio</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false" data-i18n="diag.tab.timing">Timing</button>
@@ -264,10 +263,6 @@
                 <dl id="diag-overview-ledger" class="diagnostic-ledger"></dl>
               </section>
 
-              <section class="diagnostics-view" data-diagnostics-panel="session" hidden>
-                <dl id="diag-session-ledger" class="diagnostic-ledger"></dl>
-              </section>
-
               <section class="diagnostics-view" data-diagnostics-panel="mic" hidden>
                 <p class="diagnostics-intro" data-i18n="diag.micIntro">Whether the voice is actually reaching the room, and what the device, network and Relay are doing about it. Updates every second while open.</p>
                 <dl id="diag-mic-ledger" class="diagnostic-ledger"></dl>
@@ -276,7 +271,7 @@
               <section class="diagnostics-view" data-diagnostics-panel="audio" hidden>
                 <dl id="diag-audio-ledger" class="diagnostic-ledger"></dl>
                 <p class="diagnostic-group" data-i18n="diag.listen.heading">Room playback · by receiver</p>
-                <p class="diagnostics-intro" data-i18n="diag.listen.cumulative">Underruns and audio handling figures are cumulative, not a current fault verdict.</p>
+                <p id="diag-listeners-cumulative" class="diagnostics-intro" data-i18n="diag.listen.cumulative">Underruns, repeated audio, latency trimmed and overflow dropped are totals since this playback started, not a sign of a current fault.</p>
                 <div id="diag-listeners"></div>
               </section>
 

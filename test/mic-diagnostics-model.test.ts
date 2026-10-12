@@ -52,7 +52,7 @@ describe('Mic diagnostics model', () => {
       { value: 'Reaching the room', tone: 'ok' },
     );
     assert.equal(described.audio.note, '100% of the last second arrived.');
-    assert.equal(described.problems.value, 'No problems');
+    assert.equal(described.problems, undefined, 'no "No problems" row repeating the verdict above');
     assert.equal(described.path.value, 'Direct (WebTransport)');
     assert.equal(described.repair.value, 'No loss');
     assert.equal(described.buffer.value, '180 ms');
@@ -77,9 +77,17 @@ describe('Mic diagnostics model', () => {
   });
 
   it('keeps the order a person reads first: verdict, then what is wrong, then why', () => {
+    // The microphone's own level sits beside the level after gain.
     assert.deepEqual(
       describeMicTransport(liveStatus()).map((row) => row.key),
-      ['audio', 'level', 'problems', 'path', 'encoding', 'repair', 'buffer', 'send', 'input', 'drift'],
+      ['audio', 'input', 'level', 'path', 'encoding', 'repair', 'buffer', 'send', 'drift'],
+    );
+    assert.deepEqual(
+      describeMicTransport(liveStatus((s) => {
+        s.audio.micAudibility.activeEpisodes = [{ kind: 'digital-silence', windows: 6, durationMs: 6_000 }];
+      })).map((row) => row.key).slice(0, 3),
+      ['audio', 'problems', 'input'],
+      'a current problem comes straight after the verdict',
     );
   });
 
@@ -120,7 +128,7 @@ describe('Mic diagnostics model', () => {
       s.audio.timeline.micConcealedMs = 20;
     })).repair;
     assert.equal(repaired.value, '40 resent · 2 lost');
-    assert.equal(repaired.note, '40 packets resent in time, 2 packets lost for good, 20 ms smoothed over.');
+    assert.equal(repaired.note, '40 packets resent in time, 2 packets lost for good, 20 ms smoothed over. Counted since this Mic started.');
 
     const retried = rows(liveStatus((s) => {
       s.audio.receiverTransport.lostPackets = 1;
@@ -134,7 +142,7 @@ describe('Mic diagnostics model', () => {
     })).repair;
     assert.equal(
       retried.note,
-      '11 packets resent in time (about 84 ms each), 3 packets needed a second resend, 1 packet lost for good.',
+      '11 packets resent in time (about 84 ms each), 3 packets needed a second resend, 1 packet lost for good. Counted since this Mic started.',
     );
 
     const legacy = rows(liveStatus((s) => {
@@ -183,7 +191,7 @@ describe('Mic diagnostics model', () => {
       s.audio.captureAndSender.transport.webTransportBacklogQueued = 12;
     })).send;
     assert.equal(send.value, '300 ms dropped');
-    assert.equal(send.note, 'network busy 100 ms · page stalled 200 ms. 12 packets waited briefly during network bursts instead of being dropped.');
+    assert.equal(send.note, 'network busy 100 ms · page stalled 200 ms. Counted since this Mic started. 12 packets waited briefly during network bursts instead of being dropped.');
   });
 
   it('treats drops while the Mic connects as the normal start-up they are', () => {
@@ -193,7 +201,7 @@ describe('Mic diagnostics model', () => {
       };
     })).send;
     assert.equal(send.value, '1200 ms dropped');
-    assert.equal(send.note, 'while connecting 1200 ms. Normal right after the Mic starts or reconnects.');
+    assert.equal(send.note, 'while connecting 1200 ms. Counted since this Mic started. Normal right after the Mic starts or reconnects.');
     assert.equal(send.tone, 'neutral');
   });
 
@@ -271,7 +279,7 @@ describe('Mic diagnostics model', () => {
     assert.deepEqual(
       [loud.label, loud.value, loud.note, loud.tone],
       [
-        'Level',
+        'Level (after gain)',
         '+7 dBFS before the limiter',
         'Held down >3 dB for 758 ms at +24 dB. Lower the Mic gain.',
         'warn',
@@ -291,7 +299,7 @@ describe('Mic diagnostics model', () => {
     }), zh).map((row) => [row.key, row])).level;
     assert.deepEqual(
       [zhLoud.label, zhLoud.value, zhLoud.note],
-      ['音量', '限幅前 +7 dBFS', '增益 +24 dB，被壓超過 3 dB 共 758 ms。請調低 Mic 增益。'],
+      ['音量（增益後）', '限幅前 +7 dBFS', '增益 +24 dB，被壓超過 3 dB 共 758 ms。請調低 Mic 增益。'],
     );
   });
 

@@ -14,7 +14,7 @@
  */
 
 import { describeMicAudio } from './mic-diagnostics-model.js';
-import { diagnosticsTranslator, plural } from './diagnostics-copy.js';
+import { diagnosticsTranslator } from './diagnostics-copy.js';
 
 /** A read-ahead shortfall smaller than this is rounding, not a clamp. */
 const SHORTFALL_MS = 5;
@@ -49,25 +49,14 @@ function signedMs(ms) {
   return `${rounded > 0 ? '+' : ''}${rounded} ms`;
 }
 
+/**
+ * The Overview tab: what the room is doing, who is in it, and whether it is
+ * ready to sing. Overall health is not repeated here; the System panel heads
+ * with it. The Mic's audio row appears only while someone holds the Mic,
+ * because the Mic row already says when nobody does.
+ */
 export function describeOverview({ product, readiness, statusz } = {}, t = english) {
   const rows = [];
-
-  const health = product?.health;
-  if (health === 'healthy') {
-    rows.push(row('health', t('diag.overview.health'), t('diag.overview.health.healthy'),
-      t('diag.overview.health.healthyNote'), 'ok'));
-  } else if (health === 'degraded' || health === 'blocked') {
-    const count = Array.isArray(product?.issues) ? product.issues.length : 0;
-    rows.push(row(
-      'health',
-      t('diag.overview.health'),
-      t(`diag.overview.health.${health}`),
-      count > 0 ? plural(t, 'diag.overview.health.issues', count) : '',
-      health === 'blocked' ? 'bad' : 'warn',
-    ));
-  } else {
-    rows.push(unknown(t, 'health', 'diag.overview.health'));
-  }
 
   const lifecycle = product?.lifecycle;
   if (['idle', 'ready', 'preparing', 'live', 'recording'].includes(lifecycle)) {
@@ -77,7 +66,13 @@ export function describeOverview({ product, readiness, statusz } = {}, t = engli
     rows.push(unknown(t, 'lifecycle', 'diag.overview.lifecycle'));
   }
 
-  rows.push({ ...describeMicAudio(statusz, t), key: 'mic' });
+  const session = describeSession({ product, readiness }, t);
+  const sessionRow = (key) => session.find((candidate) => candidate.key === key);
+  rows.push(sessionRow('people'), sessionRow('mic'));
+  if (statusz?.source?.micConnected !== false) {
+    rows.push({ ...describeMicAudio(statusz, t), key: 'micAudio' });
+  }
+  rows.push(sessionRow('song'), sessionRow('take'));
 
   if (!readiness) {
     rows.push(unknown(t, 'host', 'diag.overview.host'));
@@ -397,8 +392,7 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
     const stateKeys = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
     const stateName = stateKeys[timeline.state];
     rows.push(row('youtubeRate', t('diag.timing.ytRate'),
-      connected ? `${stateName ? t(`diag.timing.ytState.${stateName}`) : '—'} · ${finite(timeline.playbackRate) === null ? '—' : `${timeline.playbackRate}×`}` : t('diag.timing.clock.disconnected'),
-      t('diag.timing.ytRateNote', { state: timeline.state ?? '—' })));
+      connected ? `${stateName ? t(`diag.timing.ytState.${stateName}`) : '—'} · ${finite(timeline.playbackRate) === null ? '—' : `${timeline.playbackRate}×`}` : t('diag.timing.clock.disconnected')));
   }
   if (timing) {
     const value = (v) => finite(v) === null ? '—' : signedMs(Number(v));
@@ -424,13 +418,12 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
   return rows;
 }
 
-export function describeRobot({ readiness, statusz } = {}, t = english) {
+export function describeRobot({ readiness } = {}, t = english) {
   const components = readiness?.components;
   if (!components) {
     return [
       unknown(t, 'route', 'diag.robot.route'),
       unknown(t, 'source', 'diag.robot.source'),
-      unknown(t, 'backing', 'diag.robot.backing'),
     ];
   }
   const robot = components.route?.mode === 'robot';
@@ -443,15 +436,13 @@ export function describeRobot({ readiness, statusz } = {}, t = english) {
     : row('source', t('diag.robot.source'), t('diag.robot.source.disconnected'),
       t('diag.robot.source.disconnectedNote'), robot ? 'bad' : 'neutral'));
 
+  // Whether the song audio arrives is the Audio tab's backing row; repeating
+  // it here under another name read as a second, different stream. Only a
+  // backing that is not the Robot's capture is Robot-specific.
   const backing = components.backing ?? {};
   if (backing.connected && !backing.robot) {
     rows.push(row('backing', t('diag.robot.backing'), t('diag.audio.notConnected'), t('diag.robot.backing.notRobot'),
       robot ? 'bad' : 'neutral'));
-  } else {
-    rows.push(flow(t, 'backing', 'diag.robot.backing', backing.connected, backing.streaming, {
-      flowingNote: backingFlowNote(t, components, statusz),
-      absent: row('backing', t('diag.robot.backing'), t('diag.audio.notConnected'), '', robot ? 'bad' : 'neutral'),
-    }));
   }
   return rows;
 }

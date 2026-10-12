@@ -54,11 +54,11 @@ test('native controls can supersede a pending room intent but stable command eff
   const renderEnd = source.indexOf('function sampleNow', renderStart);
   assert.ok(renderStart >= 0 && renderEnd > renderStart);
   const renderSection = source.slice(renderStart, renderEnd);
-  const mutationIndex = renderSection.indexOf('localMutationForSnapshot(snapshot)');
+  const mutationIndex = renderSection.indexOf('localMutationsForSnapshot(snapshot)');
   const pendingIndex = renderSection.indexOf('if (localCommandPending) return');
   assert.ok(mutationIndex >= 0 && pendingIndex > mutationIndex, 'new native intent must be detected before stable pending telemetry is suppressed');
 
-  const mutationStart = source.indexOf('function localMutationForSnapshot');
+  const mutationStart = source.indexOf('function localMutationsForSnapshot');
   const mutationEnd = source.indexOf('function renderSnapshot', mutationStart);
   const mutationSection = source.slice(mutationStart, mutationEnd);
   assert.match(mutationSection, /snapshotMatchesDesired/);
@@ -150,10 +150,10 @@ test('a state-only command ignores room position but a large native jump still e
   assert.match(convergenceSection, /requirePosition: mutation\.desired\.mustApplyPosition !== false/);
   assert.match(convergenceSection, /roomSongCommandLocalDeltaEvidence/);
 
-  const mutationStart = source.indexOf('function localMutationForSnapshot');
+  const mutationStart = source.indexOf('function localMutationsForSnapshot');
   const mutationEnd = source.indexOf('function renderSnapshot', mutationStart);
   const mutationSection = source.slice(mutationStart, mutationEnd);
-  const seekIndex = mutationSection.indexOf("return { action: 'seek'");
+  const seekIndex = mutationSection.indexOf("mutations.push({ action: 'seek'");
   const stateIndex = mutationSection.indexOf('if (snapshot.state !== snapshot.previousState)');
   assert.ok(seekIndex >= 0 && stateIndex > seekIndex, 'a simultaneous large jump must not be hidden behind Play/Pause');
 });

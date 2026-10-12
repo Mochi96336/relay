@@ -508,6 +508,7 @@ test('legacy v2 health without explicit active-gap state cannot authorize Mic li
     false,
     'fresh PCM plus a compatibility default cannot prove that sustained input loss is absent',
   );
+  assert.equal(mic.pageOutdated(3_521), true, 'the missing field is named as an old page');
 
   assert.equal(
     mic.noteUplinkHealth(publisher, uplinkHealth(42, false, 256, false), 3_530),
@@ -523,6 +524,7 @@ test('legacy v2 health without explicit active-gap state cannot authorize Mic li
     true,
     'explicit current active-gap authority plus fresh PCM restores v2 live',
   );
+  assert.equal(mic.pageOutdated(3_541), false);
 });
 
 test('legacy v2 health without explicit mute state cannot authorize Mic live', () => {
@@ -552,6 +554,7 @@ test('legacy v2 health without explicit mute state cannot authorize Mic live', (
     false,
     'fresh legacy health without explicit source mute evidence cannot authorize v2 live',
   );
+  assert.equal(mic.pageOutdated(4_021), true);
 
   assert.equal(
     mic.noteUplinkHealth(publisher, uplinkHealth(34, false, 256), 4_030),
@@ -626,6 +629,7 @@ test('v2 waits for current source health while legacy v1 remains PCM-only', () =
     false,
     'v2 PCM cannot prove the browser source is unmuted before current health arrives',
   );
+  assert.equal(mic.pageOutdated(5_101), false, 'health not yet arrived is not an old page');
   assert.equal(
     mic.noteUplinkHealth(v2, uplinkHealth(36, false, 128), 5_110),
     true,
@@ -646,6 +650,7 @@ test('v2 waits for current source health while legacy v1 remains PCM-only', () =
     true,
     'legacy v1 keeps its existing PCM-only streaming contract',
   );
+  assert.equal(mic.pageOutdated(6_101), false, 'v1 never carried the health contract');
 });
 
 test('same-capture reconnect preserves receiver continuity while a new capture resets it', () => {

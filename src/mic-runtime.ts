@@ -668,6 +668,22 @@ export class MicRuntime {
       && nowMs - this.firstFrameWaitStartedAt >= this.options.firstFrameTimeoutMs;
   }
 
+  /**
+   * The v2 page's current health report omits source state this Relay requires
+   * (`inputMuted` / `inputGapActive`), so `streaming()` cannot hold. That is a
+   * page loaded before a Relay update that tightened the contract and still
+   * running its old JavaScript after reconnecting: audio may be arriving fine.
+   */
+  pageOutdated(nowMs: number) {
+    return this.connected()
+      && this.currentAudioTransport?.packetVersion === 2
+      && this.freshUplinkHealthPayload(nowMs) !== null
+      && (
+        this.currentUplinkHealth?.inputMutedObserved === false
+        || this.currentUplinkHealth?.inputGapActiveObserved === false
+      );
+  }
+
   streaming(nowMs: number) {
     return this.connected()
       && this.flowObserved()

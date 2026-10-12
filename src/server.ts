@@ -1833,6 +1833,7 @@ function readinessPayload(nowMs = performance.now()) {
     micArriving: micStreaming(nowMs),
     micFlowObserved: micFlowObserved(),
     micStartupTimedOut: micStartupTimedOut(nowMs),
+    micPageOutdated: micRuntime.pageOutdated(nowMs),
     robotSourceConnected: sourceRuntime.connected(),
     sessionActive: session.active,
     timelineConnected: Boolean(timeline.connected && timeline.videoId),

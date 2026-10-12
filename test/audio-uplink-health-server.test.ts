@@ -270,3 +270,50 @@ test('statusz reports captured Mic audio that has not reached Relay yet', async 
     await server.stop();
   }
 });
+
+test('statusz names an old page instead of calling its arriving audio silent (#487)', async () => {
+  const server = await startRelay({
+    RELAY_AUTO_CALIBRATE: '0',
+    RELAY_HEARTBEAT_MS: '60000',
+  });
+
+  try {
+    const publisher = await RelayClient.connect(
+      server,
+      participantQuery('participant-old-page', 'Old Page'),
+    );
+    publisher.send({
+      type: 'register',
+      role: 'publisher',
+      sampleRate: 48_000,
+      captureGeneration: publisher.generationId,
+      initialSequence: publisher.packetSequenceId,
+      audioPacketVersion: 2,
+    });
+    await publisher.waitForType('registered');
+
+    // The page loaded before the update never sends `inputGapActive`.
+    const oldHealth: Record<string, unknown> = { ...uplinkHealth(publisher.generationId), capturedSamples: 4_800 };
+    delete oldHealth.inputGapActive;
+    publisher.send(oldHealth);
+    for (let packet = 0; packet < 10; packet += 1) publisher.sendAudioPacket(Buffer.alloc(480 * 2));
+    await sleep(50);
+
+    const stale = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    assert.equal(stale.source.micStreaming, false);
+    assert.deepEqual(stale.faults, [
+      'microphone page is out of date and does not report its input state; reload the page',
+    ]);
+
+    // The reloaded page reports the field and goes live.
+    publisher.send({ ...uplinkHealth(publisher.generationId), capturedSamples: 9_600, inputGapActive: false });
+    for (let packet = 0; packet < 10; packet += 1) publisher.sendAudioPacket(Buffer.alloc(480 * 2));
+    await sleep(50);
+
+    const current = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    assert.equal(current.source.micStreaming, true);
+    assert.doesNotMatch(current.faults.join(' '), /out of date/);
+  } finally {
+    await server.stop();
+  }
+});

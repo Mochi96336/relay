@@ -21,6 +21,10 @@ body {
   margin: 0;
   min-height: 100vh;
   min-height: 100svh;
+  /* The full-bleed Room Mic band is 100vw wide, and on desktop 100vw includes
+     the vertical scrollbar. Clip that sliver instead of scrolling sideways;
+     the band already fades to nothing at both ends. */
+  overflow-x: clip;
   background:
     radial-gradient(circle at 50% -20%, rgba(255, 255, 255, .055), transparent 36rem),
     var(--bg);
@@ -456,10 +460,11 @@ body:has(#start-publisher:disabled) .voice-ribbon span:nth-child(6) { animation-
 .diagnostic-block p { margin: 0; color: var(--dim); font-size: 11px; line-height: 1.5; }
 
 @media (min-width: 700px) {
+  /* No top and bottom margin: with the shell at least one screen tall, 24 px
+     above and below always overflowed it, so a vertical scrollbar showed even
+     when everything fit. */
   .live-shell {
     min-height: 760px;
-    margin-top: 24px;
-    margin-bottom: 24px;
     border-left: 1px solid rgba(255, 255, 255, .025);
     border-right: 1px solid rgba(255, 255, 255, .025);
   }

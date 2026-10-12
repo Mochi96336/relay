@@ -59,7 +59,7 @@
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
-  height: 22px;
+  height: 32px;
   margin: 0;
   background: transparent;
   cursor: pointer;
@@ -68,23 +68,31 @@
   height: 2px;
   background: #3a3c42;
 }
+/* A phone can only drag the thumb itself, so the thumb is a 32px touch
+   target: a transparent border around a 14px visible dot. */
 .adjust-range::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  margin-top: -5px;
-  border: 1px solid #0d0e10;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  margin-top: -15px;
+  border: 9px solid transparent;
   border-radius: 50%;
   background: #e5e2db;
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px #0d0e10;
 }
 .adjust-range::-moz-range-track { height: 2px; background: #3a3c42; }
 .adjust-range::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
-  border: 1px solid #0d0e10;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  border: 9px solid transparent;
   border-radius: 50%;
   background: #e5e2db;
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px #0d0e10;
 }
 .adjust-range:disabled { opacity: .42; cursor: default; }
 

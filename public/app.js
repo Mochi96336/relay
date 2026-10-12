@@ -4,6 +4,7 @@ import { CalibrationProbePlayback } from './calibration-probe-playback.js';
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
+import { MIC_GAIN_KEY, storeNumber, storedNumber } from './device-preferences.js';
 await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
 import { createMicOpusTrial } from './mic-opus-trial.js';
@@ -687,6 +688,7 @@ function sendMixSettings() {
     markPublisherAuthorityStale();
     return false;
   }
+  storeNumber(MIC_GAIN_KEY, micGainDb());
   updateMixLabels();
   return true;
 }
@@ -965,6 +967,10 @@ async function connectPublisherSocket(
     initialSequence: capturePacketSequence >>> 0,
     audioPacketVersion: AUDIO_PACKET_VERSION,
   };
+  // This device's own last gain, so a new owner does not start from the
+  // previous singer's.
+  const rememberedGainDb = storedNumber(MIC_GAIN_KEY, 0, 40);
+  if (rememberedGainDb !== null) registration.micGainDb = rememberedGainDb;
   if (pendingPublisherTakeoverOwnerId) {
     registration.takeoverExpectedOwnerId = pendingPublisherTakeoverOwnerId;
   }

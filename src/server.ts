@@ -1628,6 +1628,13 @@ function takeQualityFrameState(nowMs = performance.now()) {
     timingDivergenceMs: desiredMicLagMs === null || alignment.calibratedMicLagMs === null
       ? null
       : desiredMicLagMs - alignment.calibratedMicLagMs,
+    // Provenance only matters to a recording; skip reading it on every idle frame.
+    ...(takeBlocksCalibration()
+      ? {
+          appliedCalibrationKind: alignment.calibratedMicLagMs === null ? 'none' as const : appliedCalibrationKind(),
+          estimateSource: sampleSongSelected ? 'sample-song' as const : 'transport' as const,
+        }
+      : {}),
   };
 }
 
@@ -3225,6 +3232,13 @@ function startTakeAtFrame(socket: RelaySocket, participantId: string, commandWal
     rejectTakeCommand(socket, 'start', result.reason);
     return;
   }
+  takeController.noteTimingAtStart({
+    appliedCalibrationKind: session.alignment.calibratedMicLagMs === null ? 'none' : appliedCalibrationKind(),
+    estimateSource: session.alignment.calibratedMicLagMs === null
+      ? (sampleSongSelected ? 'sample-song' : 'transport')
+      : null,
+    calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
+  });
 
   // Background timing work may only be stood down after Take admission.
   // A rejected command must not discard either a validator confirmation

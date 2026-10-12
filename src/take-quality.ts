@@ -37,6 +37,18 @@ export type TakeQualityFrameState = {
    * transport stays up, and the WAV still drifts.
    */
   timingDivergenceMs: number | null;
+  /** Which measurement the mixer applied for this frame, when it applied one. */
+  appliedCalibrationKind?: 'none' | 'content' | 'boot-probe';
+  /** Which estimate placed the voice when no measurement applied. */
+  estimateSource?: 'sample-song' | 'transport';
+};
+
+/** What the room's timing was when the Take started; it stays frozen until Stop. */
+export type TakeTimingAtStart = {
+  appliedCalibrationKind: 'none' | 'content' | 'boot-probe';
+  estimateSource: 'sample-song' | 'transport' | null;
+  /** The last measurement failure still standing, e.g. a probe that was never heard. */
+  calibrationError: string | null;
 };
 
 /**
@@ -65,6 +77,13 @@ export type TakeQualityEvidence = {
   micInputClippedMs: number;
   limitedSamples: number;
   limitedMs: number;
+  /**
+   * Mic samples held down by more than the limiter's heavy threshold: audible
+   * compression, where `limitedSamples` also counts protective touches.
+   * Optional keeps Takes stored before it was recorded readable.
+   */
+  heavyLimitedSamples?: number;
+  heavyLimitedMs?: number;
   unheaderedSamples: number;
   unheadered: boolean;
   micUnavailableSamples: number;
@@ -73,6 +92,20 @@ export type TakeQualityEvidence = {
   backingUnavailableMs: number;
   networkEstimateSamples: number;
   networkEstimateMs: number;
+  /**
+   * The part of `networkEstimateSamples` placed by the sample/song estimate
+   * rather than the transport (RTT) estimate. Both are approximate; this says
+   * which approximation a recording leaned on.
+   */
+  sampleSongEstimateSamples?: number;
+  sampleSongEstimateMs?: number;
+  /** Samples aligned by an applied boot (chime) measurement. */
+  bootProbeAlignedSamples?: number;
+  bootProbeAlignedMs?: number;
+  /** Samples aligned by an applied content measurement. */
+  contentAlignedSamples?: number;
+  contentAlignedMs?: number;
+  timingAtStart?: TakeTimingAtStart | null;
   calibrationStaleSamples: number;
   calibrationStaleMs: number;
   alignmentClampedSamples: number;
@@ -194,6 +227,14 @@ function addDurationIssue(
   });
 }
 
+/** Which approximation the estimated part leaned on, when the evidence says. */
+function estimateBreakdown(evidence: TakeQualityEvidence) {
+  if (evidence.sampleSongEstimateMs === undefined) return '';
+  const sampleSongMs = Math.round(evidence.sampleSongEstimateMs);
+  const transportMs = Math.round(Math.max(0, evidence.networkEstimateMs - evidence.sampleSongEstimateMs));
+  return ` (${sampleSongMs} ms sample/song estimate, ${transportMs} ms transport estimate)`;
+}
+
 export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAssessment {
   const issues: TakeQualityIssue[] = [];
 
@@ -280,7 +321,8 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
       severity: 'warning',
       value: evidence.networkEstimateMs,
       unit: 'ms',
-      message: 'Part of the Take used network-estimate timing instead of an applicable acoustic calibration.',
+      message: 'Part of the Take used network-estimate timing instead of an applicable acoustic calibration'
+        + estimateBreakdown(evidence) + '.',
     });
   }
 
@@ -399,10 +441,15 @@ export class TakeQualityTracker {
   private clippedSamples = 0;
   private micInputClippedSamples = 0;
   private limitedSamples = 0;
+  private heavyLimitedSamples = 0;
   private unheaderedSamples = 0;
   private micUnavailableSamples = 0;
   private backingUnavailableSamples = 0;
   private networkEstimateSamples = 0;
+  private sampleSongEstimateSamples = 0;
+  private bootProbeAlignedSamples = 0;
+  private contentAlignedSamples = 0;
+  private timingAtStart: TakeTimingAtStart | null = null;
   private calibrationStaleSamples = 0;
   private alignmentClampedSamples = 0;
   private robotDeltaMissingSamples = 0;
@@ -446,10 +493,18 @@ export class TakeQualityTracker {
     this.clippedSamples += audio.clippedSamples;
     this.micInputClippedSamples += audio.micInputClippedSamples;
     this.limitedSamples += audio.limitedSamples;
+    this.heavyLimitedSamples += audio.heavyLimitedSamples ?? 0;
     this.unheaderedSamples += audio.unheaderedSamples;
 
     if (this.options.timingExpected !== false) {
-      if (state.timingMode === 'network-estimate') this.networkEstimateSamples += sampleCount;
+      if (state.timingMode === 'network-estimate') {
+        this.networkEstimateSamples += sampleCount;
+        if (state.estimateSource === 'sample-song') this.sampleSongEstimateSamples += sampleCount;
+      } else if (state.appliedCalibrationKind === 'boot-probe') {
+        this.bootProbeAlignedSamples += sampleCount;
+      } else if (state.appliedCalibrationKind === 'content') {
+        this.contentAlignedSamples += sampleCount;
+      }
       if (state.calibrationStale) this.calibrationStaleSamples += sampleCount;
       if (state.alignmentClamped) this.alignmentClampedSamples += sampleCount;
       if (state.robotRoute && !state.robotDeltaFresh) this.robotDeltaMissingSamples += sampleCount;
@@ -462,6 +517,11 @@ export class TakeQualityTracker {
         }
       }
     }
+  }
+
+  /** Records the timing the Take started with; only the first call counts. */
+  noteTimingAtStart(timing: TakeTimingAtStart) {
+    if (this.timingAtStart === null) this.timingAtStart = { ...timing };
   }
 
   noteEvent(kind: TakeQualityEventKind) {
@@ -496,6 +556,8 @@ export class TakeQualityTracker {
       micInputClippedMs: toMs(this.micInputClippedSamples),
       limitedSamples: this.limitedSamples,
       limitedMs: toMs(this.limitedSamples),
+      heavyLimitedSamples: this.heavyLimitedSamples,
+      heavyLimitedMs: toMs(this.heavyLimitedSamples),
       unheaderedSamples: this.unheaderedSamples,
       unheadered: this.unheaderedSamples > 0,
       micUnavailableSamples: this.micUnavailableSamples,
@@ -504,6 +566,13 @@ export class TakeQualityTracker {
       backingUnavailableMs: toMs(this.backingUnavailableSamples),
       networkEstimateSamples: this.networkEstimateSamples,
       networkEstimateMs: toMs(this.networkEstimateSamples),
+      sampleSongEstimateSamples: this.sampleSongEstimateSamples,
+      sampleSongEstimateMs: toMs(this.sampleSongEstimateSamples),
+      bootProbeAlignedSamples: this.bootProbeAlignedSamples,
+      bootProbeAlignedMs: toMs(this.bootProbeAlignedSamples),
+      contentAlignedSamples: this.contentAlignedSamples,
+      contentAlignedMs: toMs(this.contentAlignedSamples),
+      timingAtStart: this.timingAtStart,
       calibrationStaleSamples: this.calibrationStaleSamples,
       calibrationStaleMs: toMs(this.calibrationStaleSamples),
       alignmentClampedSamples: this.alignmentClampedSamples,

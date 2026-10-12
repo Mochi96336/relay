@@ -188,8 +188,30 @@ function isTakeQualityEvidence(value: unknown, policyVersion: string) {
     if (!nonNegativeSafeInteger(evidence.micInputClippedSamples)) return false;
     if (!nonNegativeFinite(evidence.micInputClippedMs)) return false;
   }
+  // Provenance added within v5 without changing its verdict policy: absent on
+  // older Takes, well-formed whenever present.
+  for (const [samples, ms] of OPTIONAL_DURATION_PAIRS) {
+    if (evidence[samples] === undefined && evidence[ms] === undefined) continue;
+    if (!nonNegativeSafeInteger(evidence[samples]) || !nonNegativeFinite(evidence[ms])) return false;
+  }
+  if (evidence.timingAtStart !== undefined && evidence.timingAtStart !== null) {
+    const timing = recordValue(evidence.timingAtStart);
+    if (!timing) return false;
+    if (!TIMING_KINDS.has(timing.appliedCalibrationKind as string)) return false;
+    if (timing.estimateSource !== null && !ESTIMATE_SOURCES.has(timing.estimateSource as string)) return false;
+    if (timing.calibrationError !== null && typeof timing.calibrationError !== 'string') return false;
+  }
   return true;
 }
+
+const OPTIONAL_DURATION_PAIRS = [
+  ['heavyLimitedSamples', 'heavyLimitedMs'],
+  ['sampleSongEstimateSamples', 'sampleSongEstimateMs'],
+  ['bootProbeAlignedSamples', 'bootProbeAlignedMs'],
+  ['contentAlignedSamples', 'contentAlignedMs'],
+] as const;
+const TIMING_KINDS = new Set(['none', 'content', 'boot-probe']);
+const ESTIMATE_SOURCES = new Set(['sample-song', 'transport']);
 
 function isTakeQualityIssue(value: unknown, policyVersion: string) {
   const issue = recordValue(value);

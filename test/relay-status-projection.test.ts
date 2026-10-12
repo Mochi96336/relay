@@ -281,27 +281,33 @@ function withTiming(timing: Partial<ProductStatusFacts['timing']>, overrides: Pa
   return { ...facts, timing: { ...facts.timing, ...timing } };
 }
 
-test('product timing needs a fresh Robot delta only while a boot-probe alignment is serving', () => {
-  assert.equal(projectProductStatus(productFacts()).timing.state, 'aligned');
+test('a boot-probe alignment depends on a fresh Robot delta, and is held rather than lost while it is quiet', () => {
+  const fresh = projectProductStatus(productFacts());
+  assert.equal(fresh.timing.state, 'aligned');
+  assert.equal(fresh.timing.syncHeld, false);
 
-  // The probe measured against the Robot's player, so its alignment holds only
-  // while the player delta is fresh.
+  // The probe measured against the Robot's player. While that delta is quiet,
+  // calibration-applicability holds the result and the mixer keeps applying it
+  // (calibratedMicLagMs stays 210), so the room is still aligned - by a held
+  // measurement, which syncHeld says - not on the network estimate.
+  const held = projectProductStatus(withTiming({ robotDeltaFresh: false }));
+  assert.equal(held.timing.state, 'aligned');
+  assert.equal(held.timing.syncHeld, true);
+  // Once the mixer has actually dropped it, that is a fallback.
   assert.equal(
-    projectProductStatus(withTiming({ robotDeltaFresh: false })).timing.state,
+    projectProductStatus(withTiming({ robotDeltaFresh: false, calibratedMicLagMs: null })).timing.state,
     'fallback',
   );
   // A content alignment measured the song itself: the delta is irrelevant. The
   // fact is the kind applied to the mixer, so a replacement probe measuring in
   // the background cannot reclassify the alignment that is serving.
-  assert.equal(
-    projectProductStatus(withTiming({ robotDeltaFresh: false, appliedCalibrationKind: 'content' })).timing.state,
-    'aligned',
-  );
+  const content = projectProductStatus(withTiming({ robotDeltaFresh: false, appliedCalibrationKind: 'content' }));
+  assert.equal(content.timing.state, 'aligned');
+  assert.equal(content.timing.syncHeld, false);
   // Off the Robot route there is no player delta to need.
-  assert.equal(
-    projectProductStatus(withTiming({ robotDeltaFresh: false, robotRouteActive: false })).timing.state,
-    'aligned',
-  );
+  const offRoute = projectProductStatus(withTiming({ robotDeltaFresh: false, robotRouteActive: false }));
+  assert.equal(offRoute.timing.state, 'aligned');
+  assert.equal(offRoute.timing.syncHeld, false);
 });
 
 test('product timing calls a half-millisecond clamp clamped, and blames a lagging frontier on the Mic', () => {

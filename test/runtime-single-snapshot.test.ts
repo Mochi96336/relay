@@ -21,7 +21,8 @@ test('canonical readiness recognizes either Mic media transport, including WebTr
 test('Robot route identity stays separate from Robot player-delta timing dependency', () => {
   assert.doesNotThrow(() => functionBody('robotProbeTimingActive'));
   assert.match(product, /requiresRobotPlayerDelta: boolean/);
-  assert.match(product, /!input\.timing\.requiresRobotPlayerDelta \|\| input\.timing\.robotDeltaFresh/);
+  // A quiet delta marks a held alignment; it does not unseat the one serving.
+  assert.match(product, /input\.timing\.requiresRobotPlayerDelta\s*&& !input\.timing\.robotDeltaFresh/);
   assert.doesNotMatch(product, /timing\.robotRoute/);
   // Which alignment needs the delta is a ProductStatus projection rule, tested
   // as behaviour in relay-status-projection.test.ts.

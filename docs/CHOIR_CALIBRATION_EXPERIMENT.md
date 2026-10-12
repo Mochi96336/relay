@@ -23,8 +23,13 @@ magic bias in milliseconds.
 - `activate(identity)` is the only lifecycle entry that changes song/capture/
   backing epoch. Delayed evidence for an older identity is rejected; never
   automatically re-activate a singer from an incoming telemetry packet.
-- Individual singer has exactly one independent Content result, Sample pairing
-  history, and accepted Boot probe-path baseline.
+- Individual singer has exactly one independent confirmed Content result, Sample
+  pairing history, and accepted Boot probe-path baseline. Identity fences
+  include room generation, Robot source generation and mic/backing sample rates
+  in addition to participant/video/song/capture/backing generation.
+- The real analyzer produces a **candidate**, not confirmed authority. The
+  external CalibrationSession / validator must explicitly accept a candidate
+  via `confirmContent` before it can outrank fallback estimates.
 - A **failed Content retry within the same unchanged epoch does not erase**
   previously confirmed Content. External mapping decides `apply`, `hold`,
   or `revoke`. Hold means keep current applied read head; the experiment
@@ -39,8 +44,9 @@ magic bias in milliseconds.
 - No source silently overwrites measured Content authority. Where Content is
   unavailable or revoked, an explicitly configured fallback preference chooses
   between **fresh usable candidates**. Both remain labeled estimates.
-- Changing video/song epoch, mic capture generation, or backing generation
-  resets every prior candidate for that singer only.
+- Changing video/song epoch, mic capture generation, backing generation,
+  room generation, Robot source generation, or source rates resets all
+  evidence for that singer only.
 - When a singer leaves (including primary), other singers' states remain
   unchanged. This prototype does **not** promote a secondary.
 
@@ -49,6 +55,7 @@ magic bias in milliseconds.
 - The real production Content analyzer processes two independently offset
   singer tracks against **one shared synthetic song**: +120 and -340 ms, with
   added singer-tone interference. The test asserts the known signed answer.
+  Without an explicit external confirmation the result cannot drive alignment.
 - The real Sample/YouTube estimator runs with separate three-observation series
   for two singers and can return different signed advances.
 - A confirmed Content result wins over both fallback estimates. A rejected

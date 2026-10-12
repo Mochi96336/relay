@@ -9,6 +9,8 @@ const VIDEO = 'abcdefghijk';
 const A: ChoirCalibrationIdentity = {
   participantId: 'participant-a', videoId: VIDEO, songEpoch: 5,
   micGeneration: 2, backingGeneration: 4,
+  roomGeneration: 1, robotSourceGeneration: 6,
+  micSourceRate: RATE, backingSourceRate: RATE,
 };
 const B: ChoirCalibrationIdentity = { ...A, participantId: 'participant-b', micGeneration: 3 };
 
@@ -90,11 +92,15 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
     const micB = singerTrack(master, start, -340, 293);
     const a = model.analyzeContent(A, int16(micA), int16(backing), RATE);
     const b = model.analyzeContent(B, int16(micB), int16(backing), RATE);
-    assert.equal(a.status, 'confirmed', JSON.stringify(a));
-    assert.equal(b.status, 'confirmed', JSON.stringify(b));
-    if (a.status !== 'confirmed' || b.status !== 'confirmed') return;
-    assert.ok(Math.abs(a.result.micLagMs - 120) <= 25, `A: ${a.result.micLagMs}`);
-    assert.ok(Math.abs(b.result.micLagMs + 340) <= 25, `B: ${b.result.micLagMs}`);
+    assert.equal(a.status, 'candidate', JSON.stringify(a));
+    assert.equal(b.status, 'candidate', JSON.stringify(b));
+    if (a.status !== 'candidate' || b.status !== 'candidate') return;
+    assert.ok(Math.abs(a.candidate.result.micLagMs - 120) <= 25, `A: ${a.candidate.result.micLagMs}`);
+    assert.ok(Math.abs(b.candidate.result.micLagMs + 340) <= 25, `B: ${b.candidate.result.micLagMs}`);
+    assert.equal(choice(model, A)?.source, 'unavailable', 'analyzer output alone is not authority');
+    assert.equal(model.confirmContent(a.candidate, false), false, 'external validation is required');
+    assert.equal(model.confirmContent(a.candidate, true), true);
+    assert.equal(model.confirmContent(b.candidate, true), true);
     assert.equal(choice(model, A)?.source, 'content');
     assert.equal(choice(model, B)?.source, 'content');
   });
@@ -112,7 +118,9 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
 
     const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120);
     const confirmed = model.analyzeContent(A, int16(mic), int16(backing), RATE);
-    assert.equal(confirmed.status, 'confirmed');
+    assert.equal(confirmed.status, 'candidate');
+    if (confirmed.status !== 'candidate') return;
+    assert.equal(model.confirmContent(confirmed.candidate, true), true);
     assert.equal(choice(model, A)?.source, 'content');
     assert.ok(Math.abs(choice(model, A)!.sampleResidualMs!) <= 25);
 
@@ -140,6 +148,12 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
     assert.equal(choice(model, A), null, 'stale async result cannot reset newer active identity');
     assert.equal(choice(model, nextA)?.source, 'unavailable');
     assert.equal(model.observeSample(A, 'backing', observation('backing', 3, .5), 1750), false);
+    const reroutedA = { ...nextA, micSourceRate: 44_100 };
+    model.activate(reroutedA);
+    assert.equal(choice(model, nextA), null, 'device sample-rate change retires old calibration');
+    const refreshedA = { ...reroutedA, robotSourceGeneration: 7 };
+    model.activate(refreshedA);
+    assert.equal(choice(model, reroutedA), null, 'Robot source replacement retires old calibration');
   });
 
   test('Boot arithmetic uses live Robot delta; backup order is explicit and device-specific', () => {

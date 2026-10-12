@@ -15,6 +15,15 @@ export type ChoirCalibrationIdentity = {
   songEpoch: number;
   micGeneration: number;
   backingGeneration: number;
+  roomGeneration: number;
+  robotSourceGeneration: number;
+  micSourceRate: number;
+  backingSourceRate: number;
+};
+
+export type ChoirContentCandidate = {
+  identity: ChoirCalibrationIdentity;
+  result: TimingCalibrationResult;
 };
 
 export type ChoirFallbackPreference = 'sample-song' | 'boot-probe';
@@ -53,7 +62,11 @@ function validIdentity(identity: ChoirCalibrationIdentity) {
     && /^[A-Za-z0-9_-]{11}$/.test(identity.videoId)
     && validEpoch(identity.songEpoch)
     && validEpoch(identity.micGeneration)
-    && validEpoch(identity.backingGeneration);
+    && validEpoch(identity.backingGeneration)
+    && validEpoch(identity.roomGeneration)
+    && validEpoch(identity.robotSourceGeneration)
+    && Number.isFinite(identity.micSourceRate) && identity.micSourceRate >= 8_000 && identity.micSourceRate <= 192_000
+    && Number.isFinite(identity.backingSourceRate) && identity.backingSourceRate >= 8_000 && identity.backingSourceRate <= 192_000;
 }
 
 function sameIdentity(a: ChoirCalibrationIdentity, b: ChoirCalibrationIdentity) {
@@ -61,7 +74,11 @@ function sameIdentity(a: ChoirCalibrationIdentity, b: ChoirCalibrationIdentity) 
     && a.videoId === b.videoId
     && a.songEpoch === b.songEpoch
     && a.micGeneration === b.micGeneration
-    && a.backingGeneration === b.backingGeneration;
+    && a.backingGeneration === b.backingGeneration
+    && a.roomGeneration === b.roomGeneration
+    && a.robotSourceGeneration === b.robotSourceGeneration
+    && a.micSourceRate === b.micSourceRate
+    && a.backingSourceRate === b.backingSourceRate;
 }
 
 export class ChoirCalibrationExperiment {
@@ -98,7 +115,7 @@ export class ChoirCalibrationExperiment {
     backing: Int16Array,
     sampleRate: number,
     maxLagMs = 2_000,
-  ): { status: 'confirmed'; result: TimingCalibrationResult }
+  ): { status: 'candidate'; candidate: ChoirContentCandidate }
     | { status: 'rejected' | 'stale-identity'; reason: string } {
     const state = this.matching(identity);
     if (!state) return { status: 'stale-identity', reason: 'identity-not-active' };
@@ -107,11 +124,24 @@ export class ChoirCalibrationExperiment {
       if (!Number.isFinite(result.micLagMs) || !Number.isFinite(result.confidence)) {
         return { status: 'rejected', reason: 'nonfinite-content-result' };
       }
-      state.content = result;
-      return { status: 'confirmed', result };
+      // Correlation alone does not prove a safe mixer authority. The normal
+      // CalibrationSession / validator must accept this candidate explicitly.
+      return { status: 'candidate', candidate: { identity: { ...identity }, result } };
     } catch (error) {
       return { status: 'rejected', reason: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /** Confirmation is separate from analysis; never promote a raw correlation. */
+  confirmContent(candidate: ChoirContentCandidate, externallyAccepted: boolean): boolean {
+    const state = this.matching(candidate.identity);
+    if (!state || !externallyAccepted
+      || !Number.isFinite(candidate.result.micLagMs)
+      || !Number.isFinite(candidate.result.confidence)
+      || candidate.result.confidence <= 0
+      || candidate.result.confidence > 1) return false;
+    state.content = candidate.result;
+    return true;
   }
 
   /** Pair each singer's mic observations with shared Robot-side observations. */
@@ -123,7 +153,8 @@ export class ChoirCalibrationExperiment {
   ): boolean {
     const state = this.matching(identity);
     if (!state || anchor.videoId !== identity.videoId
-      || anchor.generation !== (side === 'mic' ? identity.micGeneration : identity.backingGeneration)) {
+      || anchor.generation !== (side === 'mic' ? identity.micGeneration : identity.backingGeneration)
+      || anchor.sampleRate !== (side === 'mic' ? identity.micSourceRate : identity.backingSourceRate)) {
       return false;
     }
     return state.sample.observe(side, anchor, nowMs);
